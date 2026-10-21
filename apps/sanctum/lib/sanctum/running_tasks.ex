@@ -6,17 +6,18 @@ defmodule Sanctum.RunningTasks do
   Tracks the process doing the work for an in-flight request, so the transport
   can stop it when the caller goes away.
 
-  Keyed by the server-minted `Sanctum.Context.request_id`, stamped by
-  `Emissary.Web.MCPController`. Client JSON-RPC ids may repeat across callers
-  and must not identify running tasks.
+  Keyed by the server-minted `Sanctum.Context.request_id`, minted at
+  ingress (`CyfrWeb.Plugs.CallIdentity` for the HTTP routes). Client
+  JSON-RPC ids may repeat across callers and must not identify running
+  tasks.
 
   ## Why one request may hold several tasks
 
   A server-minted id cannot collide *across* requests, but one request can
   hold more than one task at a time: an in-chain tool call inherits its
-  root's `request_id` rather than minting a new one (`Sanctum.Catalog` mints one
-  only when no transport did), which is what
-  keeps a whole chain attributable to the ingress that started it.
+  root's `request_id` rather than minting a new one (`Sanctum.Dispatch`
+  mints one only for a call that arrives with none), which is what keeps a
+  whole chain attributable to the ingress that started it.
 
   Each task under a request holds a claim of its own. The caller claims
   before it starts the task (`claim_request/1`), and the task registers
@@ -160,31 +161,18 @@ defmodule Sanctum.RunningTasks do
   @spec release_handle(handle()) :: :ok
   def release_handle(handle), do: GenServer.call(__MODULE__, {:release_handle, handle})
 
-  @doc false
-  # The tasks currently registered for a request — for tests and diagnostics.
-  @spec pids(String.t()) :: [pid()]
-  def pids(request_id) when is_binary(request_id) do
-    @table
-    |> :ets.lookup(request_id)
-    |> Enum.map(fn {^request_id, pid} -> pid end)
-  end
-
   # ============================================================================
   # GenServer Callbacks
   # ============================================================================
 
   @impl true
   def init(_opts) do
-    if :ets.whereis(@table) == :undefined do
-      # A `:bag` because one request may hold a chain of tasks, not a
-      # single one. Written only here, read from any process.
-      :ets.new(@table, [:named_table, :protected, :bag, read_concurrency: true])
-    end
-
-    if :ets.whereis(@handles) == :undefined do
-      # Written only here (`handle_call/3`), so each change is atomic.
-      :ets.new(@handles, [:named_table, :protected, :set, read_concurrency: true])
-    end
+    # A `:bag` because one request may hold a chain of tasks, not a single
+    # one. Written only here, read from any process; both tables die with
+    # this process.
+    :ets.new(@table, [:named_table, :protected, :bag, read_concurrency: true])
+    # Written only here (`handle_call/3`), so each change is atomic.
+    :ets.new(@handles, [:named_table, :protected, :set, read_concurrency: true])
 
     # requests: %{claim => %{request_id, status, claimer, task}}, status
     #           `:pending | :cancelled | pid`, claimer and task monitor refs
@@ -356,8 +344,6 @@ defmodule Sanctum.RunningTasks do
   @impl true
   def terminate(_reason, state) do
     Enum.each(state.monitors, fn {ref, _} -> Process.demonitor(ref, [:flush]) end)
-    if :ets.whereis(@table) != :undefined, do: :ets.delete(@table)
-    if :ets.whereis(@handles) != :undefined, do: :ets.delete(@handles)
     :ok
   end
 

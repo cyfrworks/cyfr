@@ -99,7 +99,7 @@ defmodule Sanctum.WebhookTest do
   describe "replay protection is a decision, not a default" do
     # `prof-handler` is seeded for `f:local.handler` in the setup above;
     # these call `Webhook.create/2` directly rather than through the
-    # `create/2` helper, which now supplies the decision by default.
+    # `create/2` helper, which supplies the decision by default.
     @profile "prof-handler"
 
     test "a webhook with no replay protection is refused unless it says so", %{ctx: ctx} do
@@ -263,16 +263,6 @@ defmodule Sanctum.WebhookTest do
                  name: "reserved",
                  target_ref: "f:local.handler",
                  input_template: %{"_webhook" => %{"foo" => "bar"}}
-               })
-    end
-
-    test "rejects input_template containing reserved key :_webhook (atom)", %{ctx: ctx} do
-      # Direct Elixir callers may pass atom-keyed maps; defense-in-depth check.
-      assert {:error, :reserved_key} =
-               create(ctx, %{
-                 name: "reserved-atom",
-                 target_ref: "f:local.handler",
-                 input_template: %{_webhook: %{"foo" => "bar"}}
                })
     end
 
@@ -709,7 +699,7 @@ defmodule Sanctum.WebhookTest do
       sig = "sha256=" <> hmac_hex(secret, body)
       tampered = ~s({"hello":"WORLD"})
 
-      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      {:ok, hook} = Webhook.resolve_ingress(slug)
 
       assert {:error, :signature_mismatch} =
                Webhook.verify_with_grace(hook, tampered, sig)
@@ -717,7 +707,7 @@ defmodule Sanctum.WebhookTest do
 
     test "rejects malformed signature header", %{ctx: ctx} do
       {:ok, %{slug: slug}} = create(ctx, %{name: "m", target_ref: "f:local.handler"})
-      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      {:ok, hook} = Webhook.resolve_ingress(slug)
 
       assert {:error, :malformed_signature} =
                Webhook.verify_with_grace(hook, "body", "no-prefix")
@@ -736,7 +726,7 @@ defmodule Sanctum.WebhookTest do
           timestamp_header: "X-Cyfr-Timestamp"
         })
 
-      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      {:ok, hook} = Webhook.resolve_ingress(slug)
       assert hook.timestamp_header == "x-cyfr-timestamp"
 
       body = ~s({"event":"x"})
@@ -755,7 +745,7 @@ defmodule Sanctum.WebhookTest do
           timestamp_header: "X-Cyfr-Timestamp"
         })
 
-      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      {:ok, hook} = Webhook.resolve_ingress(slug)
 
       body = "{}"
       stale_ts = (System.system_time(:second) - 600) |> Integer.to_string()
@@ -774,7 +764,7 @@ defmodule Sanctum.WebhookTest do
           timestamp_header: "X-Cyfr-Timestamp"
         })
 
-      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      {:ok, hook} = Webhook.resolve_ingress(slug)
 
       body = "{}"
       ts = (System.system_time(:second) - 600) |> Integer.to_string()
@@ -795,7 +785,7 @@ defmodule Sanctum.WebhookTest do
           timestamp_header: "X-Cyfr-Timestamp"
         })
 
-      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      {:ok, hook} = Webhook.resolve_ingress(slug)
 
       body = "{}"
       ts = System.system_time(:second) |> Integer.to_string()
@@ -813,7 +803,7 @@ defmodule Sanctum.WebhookTest do
       {:ok, %{slug: slug, secret: secret}} =
         create(ctx, %{name: "ts-bad", target_ref: "f:local.handler"})
 
-      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      {:ok, hook} = Webhook.resolve_ingress(slug)
 
       body = "{}"
       sig = "sha256=" <> hmac_hex(secret, "0." <> body)
@@ -827,7 +817,7 @@ defmodule Sanctum.WebhookTest do
       {:ok, %{slug: slug, secret: secret}} =
         create(ctx, %{name: "no-ts", target_ref: "f:local.handler"})
 
-      {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+      {:ok, hook} = Webhook.resolve_ingress(slug)
       body = ~s({"a":1})
       sig = "sha256=" <> hmac_hex(secret, body)
 
@@ -876,11 +866,6 @@ defmodule Sanctum.WebhookTest do
   end
 
   describe "decode_input_template/1" do
-    test "nil/empty default to empty map" do
-      assert {:ok, %{}} = Webhook.decode_input_template(nil)
-      assert {:ok, %{}} = Webhook.decode_input_template("")
-    end
-
     test "valid JSON object decodes" do
       assert {:ok, %{"k" => "v"}} = Webhook.decode_input_template(~s({"k":"v"}))
     end
@@ -904,18 +889,18 @@ defmodule Sanctum.WebhookTest do
   end
 
   defp verify_with_slug(slug, secret, body) do
-    {:ok, hook} = Arca.WebhookStorage.get_by_slug(slug)
+    {:ok, hook} = Webhook.resolve_ingress(slug)
     sig = "sha256=" <> hmac_hex(secret, body)
     Webhook.verify_with_grace(hook, body, sig)
   end
 
-  # Alias kept for tests that still emphasise the grace-window codepath.
+  # The same check, named for the cases that exercise the grace window.
   defp verify_grace_with_slug(slug, secret, body),
     do: verify_with_slug(slug, secret, body)
 
   defp verify_with_secret(ctx, name, secret, body) do
     {:ok, hook_meta} = Webhook.get(ctx, name)
-    {:ok, hook_row} = Arca.WebhookStorage.get_by_slug(hook_meta.slug)
+    {:ok, hook_row} = Webhook.resolve_ingress(hook_meta.slug)
     sig = "sha256=" <> hmac_hex(secret, body)
     Webhook.verify_with_grace(hook_row, body, sig)
   end

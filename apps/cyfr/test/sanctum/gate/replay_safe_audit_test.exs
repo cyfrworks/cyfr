@@ -67,7 +67,7 @@ defmodule Sanctum.Gate.ReplaySafeAuditTest do
   # Every `tool.action` the reader answers replay-safe, over `tools`.
   defp replay_safe(tools) do
     for tool <- tools,
-        {action, _annotation} <- Annotations.declared_actions(tool),
+        {action, _annotation} <- Annotations.actions_of(tool),
         Annotations.recovery(tool, action) == :replay_safe,
         do: "#{tool.name}.#{action}"
   end

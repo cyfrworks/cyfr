@@ -369,7 +369,7 @@ defmodule Compendium.ProviderTest do
           "scope" => "compendium"
         })
 
-      assert result.services.registry == "unknown"
+      assert result.services["registry"] == "unknown"
     end
   end
 
@@ -2298,7 +2298,6 @@ defmodule Compendium.ProviderTest do
         permissions: MapSet.new([:component_read]),
         scope: :athanor,
         auth_method: :api_key,
-        api_key_type: :application,
         authenticated: true
       }
 
@@ -2331,7 +2330,6 @@ defmodule Compendium.ProviderTest do
         permissions: MapSet.new([:*]),
         scope: :athanor,
         auth_method: :api_key,
-        api_key_type: :application,
         authenticated: true
       }
 
@@ -2362,7 +2360,6 @@ defmodule Compendium.ProviderTest do
         permissions: MapSet.new([:*]),
         scope: :athanor,
         auth_method: :api_key,
-        api_key_type: :application,
         authenticated: true
       }
 

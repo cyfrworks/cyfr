@@ -647,7 +647,7 @@ defmodule Cyfr.RetentionScheduler do
   # executes nothing.
   defp athanor_actor(athanor_id) do
     Sanctum.Context.actor(
-      Sanctum.internal_context(
+      Sanctum.Context.internal(
         user_id: "_retention",
         athanor_id: athanor_id,
         scope: :athanor,

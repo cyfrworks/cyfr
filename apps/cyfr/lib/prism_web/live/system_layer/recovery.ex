@@ -88,7 +88,7 @@ defmodule PrismWeb.SystemLayer.Recovery do
       {:ok, "person/enroll_holder",
        %{
          "recovery_secret" => signer,
-         "holder" => %{"kind" => "kit", "recovery_secret" => added},
+         "holder" => %{"recovery_secret" => added},
          "request_id" => request_id
        }, :recovery_resubmit}
     end

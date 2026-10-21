@@ -8,8 +8,8 @@ defmodule Cyfr.RosterLiteralTest do
 
   `Prima.CredentialKinds` owns the kinds (`all/0`, `instance/0`) and
   `Prima.SignInProviders` the sign-in providers (`all/0`, `device_flow/0`);
-  the identity domain's `Sanctum.Atoms.providers/0` and
-  `Sanctum.Auth.DeviceFlow.providers/0` derive from it. A second
+  the identity domain's `Sanctum.Auth.DeviceFlow.providers/0` derives
+  from it. A second
   spelling is a roster that stays behind when the owner moves: a surface
   offering a kind the vault refuses, or an operation enum refusing a
   provider sign-in accepts.
@@ -71,7 +71,6 @@ defmodule Cyfr.RosterLiteralTest do
     assert Prima.CredentialKinds.instance() == @instance_kinds
     assert Prima.SignInProviders.all() == @sign_in
     assert Prima.SignInProviders.device_flow() == @device_flow
-    assert Sanctum.Atoms.providers() == @sign_in
     assert Sanctum.Auth.DeviceFlow.providers() == @device_flow
   end
 

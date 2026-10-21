@@ -3,11 +3,9 @@
 
 defmodule Sanctum.ProviderVocabularyTest do
   @moduledoc """
-  Checks the literal compile-time provider atoms match the supported
-  sign-in roster, including :oidcc for generic OIDC.
-
-  A vocabulary that names three providers that do not exist and misses the
-  one that does is not an allowlist; it is a list.
+  The sign-in roster (`Prima.SignInProviders`) is the device-flow
+  providers and `oidcc` for generic OIDC, and every provider it names
+  mints identifiers under a canonical issuer.
   """
 
   use ExUnit.Case, async: true
@@ -19,24 +17,18 @@ defmodule Sanctum.ProviderVocabularyTest do
   # and the sign-in page's provider list).
   @oidc_provider "oidcc"
 
-  test "the atom vocabulary is exactly the device-flow roster plus OIDC" do
-    assert Enum.sort(Sanctum.Atoms.providers()) ==
+  test "the roster is exactly the device-flow providers plus OIDC" do
+    assert Enum.sort(Prima.SignInProviders.all()) ==
              Enum.sort([@oidc_provider | DeviceFlow.providers()])
   end
 
   test "every named provider has a canonical issuer or is the OIDC one" do
-    # A direct provider mints ids as `provider|issuer|subject`, so a name
-    # with no canonical issuer cannot mint one. OIDC brings its own issuer
-    # from the operator's configuration.
-    for provider <- Sanctum.Atoms.providers(), provider != @oidc_provider do
+    # A direct provider's identity key is `provider|issuer|subject`, so a
+    # name with no canonical issuer cannot make one. OIDC brings its own
+    # issuer from the operator's configuration.
+    for provider <- Prima.SignInProviders.all(), provider != @oidc_provider do
       assert is_binary(Sanctum.Auth.Identity.issuer(provider)),
-             "#{provider} is in the vocabulary but has no canonical issuer"
-    end
-  end
-
-  test "retired names are gone" do
-    for retired <- ~w(okta azure local oidc) do
-      refute retired in Sanctum.Atoms.providers()
+             "#{provider} is in the roster but has no canonical issuer"
     end
   end
 end

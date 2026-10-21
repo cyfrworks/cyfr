@@ -118,9 +118,8 @@ defmodule Sanctum.Consent.Normalize do
   @doc false
   # Declared needs: name + type, both required, with the projection they
   # read, and, each only when the need declares it, the attach rule, the
-  # hosts and paths it speaks to, and `disclose` when true — so a need that
-  # declares none of them normalizes as it did before they existed. The
-  # reason text is deliberately excluded — it is prose shown to the
+  # hosts and paths it speaks to, and `disclose` when true — a field the
+  # need does not declare is absent, never null or empty. The reason text is deliberately excluded — it is prose shown to the
   # operator, and editing it must not invalidate a consent.
   def needs(map, key, tag) do
     case Map.get(map, key, []) do
@@ -173,8 +172,6 @@ defmodule Sanctum.Consent.Normalize do
         {:ok, nil}
 
       %{} = rule when map_size(rule) == 3 ->
-        rule = Map.new(rule, fn {k, v} -> {to_string(k), v} end)
-
         if Enum.all?(~w(in name template), &(is_binary(rule[&1]) and rule[&1] != "")),
           do: {:ok, Map.take(rule, ~w(in name template))},
           else: {:error, {tag, :attach, "must name in, name and template as strings"}}
@@ -207,8 +204,7 @@ defmodule Sanctum.Consent.Normalize do
   # A publisher's provided configuration: dependency reference to need
   # name to `%{destination, values}`, the destination a canonical
   # `Prima.Destination` map and the values a map of strings. nil when the
-  # manifest carries none, so a shape without the block is the input it
-  # was before the block existed.
+  # manifest carries none, so the shape holds no `provides` key at all.
   def provides(map, key, tag) do
     case Map.get(map, key) do
       nil ->
@@ -245,8 +241,6 @@ defmodule Sanctum.Consent.Normalize do
     do: {:error, {tag, :provides, "each dependency names its provided needs"}}
 
   defp provided_entry(need, %{} = entry) when is_binary(need) and need != "" do
-    entry = Map.new(entry, fn {k, v} -> {to_string(k), v} end)
-
     with [] <- Map.keys(entry) -- ["destination", "values"],
          %{} = destination <- entry["destination"],
          {:ok, parsed} <- Prima.Destination.from_map(destination),
@@ -277,9 +271,6 @@ defmodule Sanctum.Consent.Normalize do
         {:error, {tag, key, "must be a map"}}
     end
   end
-
-  defp normalize_cap(key, value, tag) when is_atom(key),
-    do: normalize_cap(Atom.to_string(key), value, tag)
 
   defp normalize_cap(key, value, tag) when is_binary(key) do
     cond do

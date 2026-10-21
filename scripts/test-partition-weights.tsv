@@ -209,7 +209,6 @@
 0.0	apps/cyfr/test/cluster/frame_suspension_test.exs
 0.0	apps/cyfr/test/cluster/host_routing_test.exs
 0.0	apps/cyfr/test/cluster/provisioning_test.exs
-0.0	apps/cyfr/test/cluster/regrant_notice_test.exs
 0.0	apps/cyfr/test/cluster/revocation_test.exs
 0.0	apps/cyfr/test/cluster/schedule_notes_test.exs
 0.0	apps/cyfr/test/cluster/schedule_test.exs
@@ -922,7 +921,6 @@
 0.0	apps/sanctum/test/sanctum/consent/proof_test.exs
 0.1	apps/sanctum/test/sanctum/consent/read_entries_test.exs
 0.0	apps/sanctum/test/sanctum/consent/shape_digest_test.exs
-0.1	apps/sanctum/test/sanctum/consent/stored_grants_test.exs
 0.0	apps/sanctum/test/sanctum/context_plane_test.exs
 0.1	apps/sanctum/test/sanctum/context_test.exs
 6.7	apps/sanctum/test/sanctum/device_certs_test.exs
@@ -947,7 +945,6 @@
 0.0	apps/sanctum/test/sanctum/policy/ceiling_test.exs
 0.0	apps/sanctum/test/sanctum/policy/enforcement_audit_test.exs
 0.0	apps/sanctum/test/sanctum/provider_vocabulary_test.exs
-0.0	apps/sanctum/test/sanctum/query_redaction_test.exs
 2.4	apps/sanctum/test/sanctum/recovery_test.exs
 0.2	apps/sanctum/test/sanctum/redaction_roster_test.exs
 0.1	apps/sanctum/test/sanctum/registry_credentials_test.exs

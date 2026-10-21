@@ -147,7 +147,7 @@ defmodule Emissary.Web.WebhookController do
   @signature_headers ~w(x-hub-signature-256 stripe-signature x-twilio-signature)
 
   defp safe_headers(conn, signature_header) do
-    drop = [String.downcase(signature_header || Sanctum.Webhook.default_signature_header())]
+    drop = [String.downcase(signature_header || Prima.Webhook.default_signature_header())]
     drop = drop ++ @signature_headers
 
     conn.req_headers

@@ -5,10 +5,10 @@ defmodule Sanctum.Authority.BudgetGuard do
   @moduledoc """
   Makes an invoke-budget slot survive its holder's death.
 
-  Monitor slot owners so cancellation or an untrappable task exit releases
-  the root's budget even when the task cannot run cleanup.
+  It monitors slot holders, so cancellation or an untrappable task exit
+  releases the root's budget even when the task cannot run cleanup.
 
-  This process owns both release paths instead. A holder registers itself
+  This process owns both release paths. A holder registers itself
   after the charge (`guard/2`); the slot comes back either when the holder
   releases explicitly — which removes the guard — or when the holder dies
   (the `:DOWN` compensation). Exactly once, whichever comes first. The
@@ -31,7 +31,7 @@ defmodule Sanctum.Authority.BudgetGuard do
   @call_timeout_ms 5_000
 
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc """
@@ -84,14 +84,14 @@ defmodule Sanctum.Authority.BudgetGuard do
 
   A timeout is **not** a failed release: `GenServer.call` gives up on the
   reply, but the message is already in the guard's mailbox and `handle_call`
-  will release the slot. Releasing again here decremented the counter twice
+  releases the slot. Releasing again here would decrement the counter twice
   for one charge — freeing a concurrent sibling's slot and letting the root
   exceed the invoke cap it consented to. Under load is exactly when this
   call times out and exactly when the over-release matters.
 
   Any other exit means the call never landed (no such process, or the guard
-  died before handling it), so the slot is released directly as the
-  pre-guard code did and is never lost.
+  died before handling it), so the slot is released directly and is never
+  lost.
   """
   @spec release_after_exit(Budget.t(), term()) :: :ok
   def release_after_exit(%Budget{}, {:timeout, _}), do: :ok

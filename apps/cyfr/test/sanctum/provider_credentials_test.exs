@@ -64,7 +64,7 @@ defmodule Sanctum.ProviderCredentialsTest do
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
     end
 
-    test "a context that is no paired device's takes no device hold, and stores as before",
+    test "a context that is no paired device's takes no device hold, and stores",
          %{ctx: ctx} do
       confirmed =
         Sanctum.TestContext.confirmed_change(
@@ -132,17 +132,6 @@ defmodule Sanctum.ProviderCredentialsTest do
       ctx = narrow_ctx([:execute, :vault_read])
       assert {:error, _} = ProviderCredentials.delete(ctx, "google")
     end
-
-    test "configured? requires :vault_read" do
-      ctx = narrow_ctx([:execute])
-      assert {:error, _} = ProviderCredentials.configured?(ctx, "google")
-    end
-
-    test "configured? reports presence", %{ctx: ctx} do
-      refute ProviderCredentials.configured?(ctx, "google")
-      assert :ok = Sanctum.TestContext.put_provider_credentials(ctx, "google", "id", "sec")
-      assert ProviderCredentials.configured?(ctx, "google")
-    end
   end
 
   describe "the consent class" do
@@ -174,7 +163,7 @@ defmodule Sanctum.ProviderCredentialsTest do
 
     test "reads stay available to a key", %{ctx: ctx} do
       assert :ok = Sanctum.TestContext.put_provider_credentials(ctx, "google", "id", "sec")
-      assert ProviderCredentials.configured?(key_ctx(), "google")
+      assert {:ok, [%{provider: "google"}]} = ProviderCredentials.list(key_ctx())
     end
 
     test "both oauth mutations are annotated interactive" do
@@ -190,7 +179,6 @@ defmodule Sanctum.ProviderCredentialsTest do
     test "removes stored credentials", %{ctx: ctx} do
       assert :ok = Sanctum.TestContext.put_provider_credentials(ctx, "google", "id", "sec")
       assert :ok = ProviderCredentials.delete(ctx, "google")
-      refute ProviderCredentials.configured?(ctx, "google")
 
       assert {:error, :not_found} =
                Arca.ProviderCredentialStorage.get(Sanctum.Context.actor(ctx), "google")

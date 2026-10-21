@@ -13,6 +13,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
   alias Sanctum.Vault.Payload
   alias Sanctum.VaultReader
 
+  import Ecto.Query, only: [from: 2]
+
   @provider "google"
   @scopes ["https://www.googleapis.com/auth/gmail.readonly"]
 
@@ -22,6 +24,49 @@ defmodule Sanctum.Vault.OAuthGrantTest do
   @destination_text ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"})
   # A narrower destination, which the session alone moves.
   @narrower Map.put(@destination, "paths", ["/gmail/"])
+
+  # A provider no shipped preset is (`:sanctum, :scripted_oauth_provider`),
+  # standing in for its token endpoint, which a code exchange and a refresh
+  # both reach. It answers what the test scripts, in order, telling the
+  # test each request; an answer scripted as `{before, answer}` runs
+  # `before` first, so a write can land while a refresh is at the provider.
+  defmodule RaceIdp do
+    @moduledoc false
+
+    @hint "race-idp"
+    @endpoints %{
+      "authorize_url" => "https://idp.race.test/authorize",
+      "token_url" => "https://idp.race.test/token"
+    }
+
+    def hint, do: @hint
+    def endpoints, do: @endpoints
+
+    def preset(@hint), do: %{endpoints: @endpoints}
+    def preset(_hint), do: nil
+
+    def post(_url, _headers, body) do
+      {test, next} =
+        Agent.get_and_update(__MODULE__, fn
+          {test, [next | rest]} -> {{test, next}, {test, rest}}
+          {test, []} -> {{test, :unscripted}, {test, []}}
+        end)
+
+      send(test, {:token_request, URI.decode_query(body)})
+
+      case next do
+        :unscripted ->
+          {:error, "unscripted request"}
+
+        {before, answer} when is_function(before, 0) ->
+          before.()
+          answer
+
+        answer ->
+          answer
+      end
+    end
+  end
 
   setup tags do
     Arca.Cache.init()
@@ -39,42 +84,52 @@ defmodule Sanctum.Vault.OAuthGrantTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
+    # The scripted provider's token endpoint answers the grants' exchanges
+    # and the dispenses' refreshes (`RaceIdp`); restored by on_exit,
+    # registered before the change.
+    prior = Application.fetch_env(:sanctum, :scripted_oauth_provider)
+
+    on_exit(fn ->
+      case prior do
+        {:ok, value} -> Application.put_env(:sanctum, :scripted_oauth_provider, value)
+        :error -> Application.delete_env(:sanctum, :scripted_oauth_provider)
+      end
+    end)
+
+    Application.put_env(:sanctum, :scripted_oauth_provider, RaceIdp)
+
     ctx = Sanctum.TestContext.local()
 
-    :ok =
-      Sanctum.TestContext.put_provider_credentials(
-        ctx,
-        @provider,
-        "client-id-1",
-        "client-secret-1"
-      )
+    for provider <- [@provider, RaceIdp.hint()] do
+      :ok =
+        Sanctum.TestContext.put_provider_credentials(
+          ctx,
+          provider,
+          "client-id-1",
+          "client-secret-1"
+        )
+    end
 
     {:ok, ctx: ctx}
   end
 
-  # Binding endpoints whose token URL points at Bypass. Entries stored with
-  # these have Bypass as their *stored* binding, so a re-auth against the
-  # same endpoints exercises the same-binding (CAS) path for real. Endpoint
-  # https validation happens when an entry is created and at authorize
-  # time, on operator input; storage holds what was bound.
-  defp bypass_endpoints(bypass) do
-    %{
-      "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
-      "token_url" => "http://localhost:#{bypass.port}/token",
-      "auth_style" => "params"
-    }
-  end
-
-  # An oauth entry as the store holds one, its endpoints whatever the test
-  # binds: a create would refuse Bypass's plain-http token URL.
-  defp stored_entry!(ctx, name, endpoints, fields \\ %{}, oauth \\ %{"access_token" => "at-0"}) do
+  # An oauth entry as the store holds one, of `hint`'s provider at
+  # `endpoints`, holding `fields` and the bundle `oauth`.
+  defp stored_entry!(
+         ctx,
+         name,
+         hint,
+         endpoints,
+         fields \\ %{},
+         oauth \\ %{"access_token" => "at-0"}
+       ) do
     id = Prima.UUID7.generate_id("vlt")
-    aad = CipherAAD.vault_entry(ctx.athanor_id, id, @provider)
+    aad = CipherAAD.vault_entry(ctx.athanor_id, id, hint)
     {:ok, json} = Payload.encode_material(fields, oauth)
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
 
     binding = %{
-      provider_hint: @provider,
+      provider_hint: hint,
       field_names: Jason.encode!(Enum.sort(Map.keys(fields))),
       oauth_endpoints: Jason.encode!(endpoints),
       oauth_scopes: Jason.encode!(@scopes),
@@ -100,20 +155,24 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     entry
   end
 
+  # An entry of the scripted provider, at its endpoints.
+  defp idp_entry!(ctx, name, fields \\ %{}, oauth \\ %{"access_token" => "at-0"}),
+    do: stored_entry!(ctx, name, RaceIdp.hint(), RaceIdp.endpoints(), fields, oauth)
+
   # The pending record a passed authorize_url/2 would have minted. The
   # pending is server-minted state, so fabricating it here exercises the
-  # full fetch → validate → exchange → apply path without weakening the
-  # https validation that guards operator input.
+  # full fetch → validate → exchange → apply path.
   defp mint_pending!(ctx, target) do
     state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
-    # The pending record carries the actor the interactive check passed
-    # for; the callback has no context of its own and acts with that
-    # authority and no other.
+    # The pending record carries the context the interactive check passed
+    # for and the actor it projects; the callback has no context of its own
+    # and acts with that authority and no other.
     pending = %{
       target: target,
       redirect_uri: CyfrWeb.Endpoint.url() <> "/auth/oauth/callback",
       code_verifier: "verifier-1",
+      context: ctx,
       actor: Sanctum.Context.actor(ctx)
     }
 
@@ -121,41 +180,42 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     {state, pending}
   end
 
-  defp new_target(name, bypass) do
+  defp new_target(name) do
     %{
       kind: :new,
       entry_id: nil,
       name: name,
-      provider: @provider,
-      endpoints: bypass_endpoints(bypass),
+      provider: RaceIdp.hint(),
+      endpoints: RaceIdp.endpoints(),
       scopes: @scopes,
       destination: @destination_text,
       attach_only: false
     }
   end
 
-  defp existing_target(entry, bypass, scopes) do
+  defp existing_target(entry, scopes) do
     %{
       kind: :existing,
       entry_id: entry.id,
       name: entry.name,
-      provider: @provider,
-      endpoints: bypass_endpoints(bypass),
+      provider: entry.provider_hint,
+      endpoints: Jason.decode!(entry.oauth_endpoints),
       scopes: scopes
     }
   end
 
-  defp stub_token_endpoint(bypass, response) do
+  # The scripted token endpoint's answers, in order, replacing any a case
+  # scripted before.
+  defp script!(answers) do
     test = self()
+    _ = stop_supervised(RaceIdp)
 
-    Bypass.expect_once(bypass, "POST", "/token", fn conn ->
-      {:ok, body, conn} = Plug.Conn.read_body(conn)
-      send(test, {:token_request, URI.decode_query(body)})
+    start_supervised!(%{
+      id: RaceIdp,
+      start: {Agent, :start_link, [fn -> {test, answers} end, [name: RaceIdp]]}
+    })
 
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(200, Jason.encode!(response))
-    end)
+    :ok
   end
 
   defp unseal!(entry_id, athanor_id) do
@@ -353,7 +413,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
         "token_url" => "https://oauth2.googleapis.com/token"
       }
 
-      entry = stored_entry!(ctx, "G-stored", stored)
+      entry = stored_entry!(ctx, "G-stored", @provider, stored)
 
       assert {:ok, %{url: url, state: state}} =
                Sanctum.TestContext.authorize_vault(ctx, %{entry_id: entry.id})
@@ -503,19 +563,20 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
   describe "complete/3 — new entry" do
     test "mints an active oauth entry holding the bundle", %{ctx: ctx} do
-      bypass = Bypass.open()
+      script!([
+        {:ok,
+         %{
+           "access_token" => "at-1",
+           "refresh_token" => "rt-1",
+           "expires_in" => 3600,
+           "token_type" => "Bearer"
+         }}
+      ])
 
-      stub_token_endpoint(bypass, %{
-        "access_token" => "at-1",
-        "refresh_token" => "rt-1",
-        "expires_in" => 3600,
-        "token_type" => "Bearer"
-      })
-
-      {state, pending} = mint_pending!(ctx, new_target("My Google", bypass))
+      {state, pending} = mint_pending!(ctx, new_target("My Google"))
 
       assert {:ok, result} = OAuthGrant.complete(state, "code-1", pending.redirect_uri)
-      assert result.provider == @provider
+      assert result.provider == RaceIdp.hint()
       refute result.rebound
 
       # The exchange carried PKCE + the authorization code.
@@ -528,12 +589,18 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       {entry, payload} = unseal!(result.entry_id, ctx.athanor_id)
       assert entry.status == "active"
       assert entry.kind == "oauth"
-      assert entry.provider_hint == @provider
+      assert entry.provider_hint == RaceIdp.hint()
       assert entry.binding_digest != nil
       assert payload["v"] == 3
-      assert payload["oauth"]["access_token"] == "at-1"
-      assert payload["oauth"]["refresh_token"] == "rt-1"
-      assert payload["oauth"]["scopes"] == @scopes
+
+      # The bundle is the token, its refresh token and its expiry; the
+      # scopes it was granted for are the entry's binding column.
+      assert %{"access_token" => "at-1", "refresh_token" => "rt-1", "expires_at" => expires_at} =
+               payload["oauth"]
+
+      assert map_size(payload["oauth"]) == 3
+      assert is_binary(expires_at)
+      assert Jason.decode!(entry.oauth_scopes) == @scopes
 
       # The destination and the disclosure the grant was started with are
       # the new entry's, and its binding digest covers them.
@@ -610,39 +677,56 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert message =~ "rebind"
     end
 
-    test "an unknown state is distinguishable for legacy fall-through" do
+    test "an unknown state is its own refusal" do
       assert {:error, :unknown_state} = OAuthGrant.complete("no-such-state", "c", "r")
     end
 
     test "the state is single-use", %{ctx: ctx} do
-      bypass = Bypass.open()
-      stub_token_endpoint(bypass, %{"access_token" => "at", "token_type" => "bearer"})
-      {state, pending} = mint_pending!(ctx, new_target("Once", bypass))
+      script!([{:ok, %{"access_token" => "at"}}])
+      {state, pending} = mint_pending!(ctx, new_target("Once"))
 
       assert {:ok, _} = OAuthGrant.complete(state, "code", pending.redirect_uri)
       assert {:error, :unknown_state} = OAuthGrant.complete(state, "code", pending.redirect_uri)
     end
 
     test "a redirect_uri mismatch is refused before any provider contact", %{ctx: ctx} do
-      bypass = Bypass.open()
-      {state, _pending} = mint_pending!(ctx, new_target("Strict", bypass))
+      script!([])
+      {state, _pending} = mint_pending!(ctx, new_target("Strict"))
 
       assert {:error, "redirect_uri mismatch"} =
                OAuthGrant.complete(state, "code", "https://evil.example/callback")
+
+      refute_received {:token_request, _}
+    end
+
+    test "a token endpoint over plain http is never sent the code", %{ctx: ctx} do
+      script!([{:ok, %{"access_token" => "at-plain"}}])
+
+      plain = %{
+        new_target("Plain")
+        | endpoints: %{RaceIdp.endpoints() | "token_url" => "http://idp.race.test/token"}
+      }
+
+      {state, pending} = mint_pending!(ctx, plain)
+
+      assert {:error, "token_url must use https://"} =
+               OAuthGrant.complete(state, "code", pending.redirect_uri)
+
+      refute_received {:token_request, _}
+      assert entries_named(ctx, "Plain") == []
     end
   end
 
   describe "complete/3 — re-auth of an existing entry" do
     test "same binding replaces material under CAS and clears needs_reauth", %{ctx: ctx} do
-      bypass = Bypass.open()
-      view = stored_entry!(ctx, "G", bypass_endpoints(bypass), %{"note" => "kept"})
+      view = idp_entry!(ctx, "G", %{"note" => "kept"})
 
       :ok = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), view.id, "needs_reauth")
       {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
       digest_before = entry.binding_digest
 
-      stub_token_endpoint(bypass, %{"access_token" => "at-2", "refresh_token" => "rt-2"})
-      {state, pending} = mint_pending!(ctx, existing_target(entry, bypass, @scopes))
+      script!([{:ok, %{"access_token" => "at-2", "refresh_token" => "rt-2"}}])
+      {state, pending} = mint_pending!(ctx, existing_target(entry, @scopes))
 
       assert {:ok, result} = OAuthGrant.complete(state, "code-2", pending.redirect_uri)
       assert result.entry_id == view.id
@@ -656,9 +740,37 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert after_entry.binding_digest == digest_before
     end
 
-    test "changed scopes are a rebind: digest moves, bound profile flips", %{ctx: ctx} do
-      bypass = Bypass.open()
+    test "an entry whose stored payload does not open is refused, never rewritten as empty fields",
+         %{ctx: ctx} do
+      view = idp_entry!(ctx, "G-damaged", %{"note" => "kept"})
+      actor = Sanctum.Context.actor(ctx)
 
+      # The payload sealed under another entry's AAD: stored bytes this
+      # entry cannot open.
+      {:ok, other_json} = Payload.encode_material(%{}, %{"access_token" => "other"})
+      other_aad = CipherAAD.vault_entry(ctx.athanor_id, "vlt_other", RaceIdp.hint())
+      {:ok, foreign} = Sanctum.Cipher.encrypt(other_json, other_aad)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(v in Arca.Schemas.VaultEntry, where: v.id == ^view.id),
+          set: [sealed_payload: foreign]
+        )
+
+      {:ok, entry} = Arca.VaultStorage.get(actor, view.id)
+
+      script!([{:ok, %{"access_token" => "at-2", "refresh_token" => "rt-2"}}])
+      {state, pending} = mint_pending!(ctx, existing_target(entry, @scopes))
+
+      assert {:error, :unseal_failed} =
+               OAuthGrant.complete(state, "code-damaged", pending.redirect_uri)
+
+      {:ok, after_entry} = Arca.VaultStorage.get(actor, view.id)
+      assert after_entry.sealed_payload == foreign
+      assert after_entry.payload_rev == entry.payload_rev
+    end
+
+    test "changed scopes are a rebind: digest moves, bound profile flips", %{ctx: ctx} do
       # Bind a profile to the entry through the real consent walk.
       wasm = File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 
@@ -669,7 +781,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
           type: "reagent"
         })
 
-      view = stored_entry!(ctx, "G2", bypass_endpoints(bypass))
+      view = idp_entry!(ctx, "G2")
 
       {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: "reagent:local.grant-bound"})
 
@@ -692,10 +804,10 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
       digest_before = entry.binding_digest
 
-      stub_token_endpoint(bypass, %{"access_token" => "at-3"})
+      script!([{:ok, %{"access_token" => "at-3"}}])
 
       wider = @scopes ++ ["https://www.googleapis.com/auth/gmail.send"]
-      {state, pending} = mint_pending!(ctx, existing_target(entry, bypass, wider))
+      {state, pending} = mint_pending!(ctx, existing_target(entry, wider))
 
       assert {:ok, %{rebound: true}} =
                OAuthGrant.complete(state, "code-3", pending.redirect_uri)
@@ -712,57 +824,40 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert after_entry.oauth_endpoints == entry.oauth_endpoints
     end
 
-    test "a grant for other scopes rebinds them with its own bundle, which holds no narrower tokens",
-         %{ctx: ctx} do
-      bypass = Bypass.open()
-
-      held = %{
-        "access_token" => "at-0",
-        "refresh_token" => "rt-0",
-        "scopes" => @scopes,
-        "tokens" => %{"x.narrow" => %{"access_token" => "at-narrow", "expires_at" => nil}}
-      }
-
-      view = stored_entry!(ctx, "G-regrant", bypass_endpoints(bypass), %{}, held)
+    test "a grant for other scopes rebinds them with its own bundle", %{ctx: ctx} do
+      held = %{"access_token" => "at-0", "refresh_token" => "rt-0"}
+      view = idp_entry!(ctx, "G-regrant", %{}, held)
       {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
 
-      stub_token_endpoint(bypass, %{
-        "access_token" => "at-regrant",
-        "refresh_token" => "rt-regrant"
-      })
+      script!([{:ok, %{"access_token" => "at-regrant", "refresh_token" => "rt-regrant"}}])
 
       wider = @scopes ++ ["https://www.googleapis.com/auth/gmail.send"]
-      {state, pending} = mint_pending!(ctx, existing_target(entry, bypass, wider))
+      {state, pending} = mint_pending!(ctx, existing_target(entry, wider))
 
       assert {:ok, %{rebound: true}} = OAuthGrant.complete(state, "code-5", pending.redirect_uri)
 
       {after_entry, payload} = unseal!(view.id, ctx.athanor_id)
       assert Jason.decode!(after_entry.oauth_scopes) == wider
       assert after_entry.binding_digest != entry.binding_digest
-      assert payload["oauth"]["access_token"] == "at-regrant"
-      assert payload["oauth"]["scopes"] == wider
-      refute Map.has_key?(payload["oauth"], "tokens")
+
+      assert %{"access_token" => "at-regrant", "refresh_token" => "rt-regrant"} =
+               payload["oauth"]
     end
 
     test "a target whose endpoints are no longer the entry's is refused and writes nothing",
          %{ctx: ctx} do
-      bypass = Bypass.open()
-      view = stored_entry!(ctx, "G3", bypass_endpoints(bypass), %{"note" => "kept"})
+      view = idp_entry!(ctx, "G3", %{"note" => "kept"})
       {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
 
       # The grant was started against endpoints the entry does not hold:
       # the code is exchanged at the token endpoint the grant was started
       # with, and then nothing is written.
-      stub_token_endpoint(bypass, %{"access_token" => "at-moved", "refresh_token" => "rt-moved"})
+      script!([{:ok, %{"access_token" => "at-moved", "refresh_token" => "rt-moved"}}])
 
       moved = %{
-        existing_target(entry, bypass, @scopes)
+        existing_target(entry, @scopes)
         | endpoints:
-            Map.put(
-              bypass_endpoints(bypass),
-              "authorize_url",
-              "https://idp.elsewhere.example/auth"
-            )
+            Map.put(RaceIdp.endpoints(), "authorize_url", "https://idp.elsewhere.example/auth")
       }
 
       {state, pending} = mint_pending!(ctx, moved)
@@ -785,15 +880,12 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     # A new entry's grant for `requested`, answered `answer`, and the entry
     # it stored with its unsealed payload, or the refusal.
     defp grant_new(ctx, name, requested, answer) do
-      bypass = Bypass.open()
+      script!([
+        {:ok,
+         Map.merge(%{"access_token" => "at-#{name}", "refresh_token" => "rt-#{name}"}, answer)}
+      ])
 
-      stub_token_endpoint(
-        bypass,
-        Map.merge(%{"access_token" => "at-#{name}", "refresh_token" => "rt-#{name}"}, answer)
-      )
-
-      {state, pending} =
-        mint_pending!(ctx, %{new_target(name, bypass) | scopes: requested})
+      {state, pending} = mint_pending!(ctx, %{new_target(name) | scopes: requested})
 
       case OAuthGrant.complete(state, "code-#{name}", pending.redirect_uri) do
         {:ok, %{entry_id: id}} -> {:ok, unseal!(id, ctx.athanor_id), {state, pending}}
@@ -801,8 +893,11 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       end
     end
 
-    defp stored_scopes({entry, payload}),
-      do: {Jason.decode!(entry.oauth_scopes), payload["oauth"]["scopes"]}
+    # The scopes an entry binds: its binding column, the bundle holding none.
+    defp stored_scopes({entry, payload}) do
+      refute Map.has_key?(payload["oauth"], "scopes")
+      Jason.decode!(entry.oauth_scopes)
+    end
 
     defp entries_named(ctx, name) do
       {:ok, entries} = Arca.VaultStorage.list(Sanctum.Context.actor(ctx))
@@ -816,31 +911,30 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert {:ok, {entry, _payload} = stored, _} =
                grant_new(ctx, "G-narrow", requested, %{"scope" => "#{@send} #{@send}"})
 
-      assert stored_scopes(stored) == {[@send], [@send]}
+      assert stored_scopes(stored) == [@send]
       assert {:ok, entry.binding_digest} == VaultReader.binding_digest(entry)
 
       missing = @scopes
 
       assert {:error, {:scope_projection_unsatisfiable, ^missing}} =
-               VaultReader.oauth_token(ctx, edge(entry, requested), @provider, @dispense)
+               VaultReader.oauth_token(ctx, edge(entry, requested), RaceIdp.hint(), @dispense)
 
       assert {:ok, "at-G-narrow"} =
-               VaultReader.oauth_token(ctx, edge(entry, [@send]), @provider, @dispense)
+               VaultReader.oauth_token(ctx, edge(entry, [@send]), RaceIdp.hint(), @dispense)
     end
 
     test "a narrower answer to a re-authorization rebinds the entry to it", %{ctx: ctx} do
-      bypass = Bypass.open()
       requested = @scopes ++ [@send]
-      view = stored_entry!(ctx, "G-renarrow", bypass_endpoints(bypass))
+      view = idp_entry!(ctx, "G-renarrow")
       {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
 
-      stub_token_endpoint(bypass, %{"access_token" => "at-renarrow", "scope" => @send})
-      {state, pending} = mint_pending!(ctx, existing_target(entry, bypass, requested))
+      script!([{:ok, %{"access_token" => "at-renarrow", "scope" => @send}}])
+      {state, pending} = mint_pending!(ctx, existing_target(entry, requested))
 
       assert {:ok, %{rebound: true}} = OAuthGrant.complete(state, "code", pending.redirect_uri)
 
       {after_entry, _payload} = stored = unseal!(view.id, ctx.athanor_id)
-      assert stored_scopes(stored) == {[@send], [@send]}
+      assert stored_scopes(stored) == [@send]
       assert after_entry.binding_digest != entry.binding_digest
     end
 
@@ -854,13 +948,12 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       # The pending grant was spent as every refused exchange spends it.
       assert {:error, :unknown_state} = OAuthGrant.complete(state, "code", pending.redirect_uri)
 
-      bypass = Bypass.open()
-      view = stored_entry!(ctx, "G-rewide", bypass_endpoints(bypass), %{"note" => "kept"})
+      view = idp_entry!(ctx, "G-rewide", %{"note" => "kept"})
       :ok = Arca.VaultStorage.set_status(Sanctum.Context.actor(ctx), view.id, "needs_reauth")
       {:ok, entry} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), view.id)
 
-      stub_token_endpoint(bypass, %{"access_token" => "at-rewide", "scope" => "#{@send}"})
-      {state, pending} = mint_pending!(ctx, existing_target(entry, bypass, @scopes))
+      script!([{:ok, %{"access_token" => "at-rewide", "scope" => "#{@send}"}}])
+      {state, pending} = mint_pending!(ctx, existing_target(entry, @scopes))
 
       assert {:error, :scopes_not_requested} =
                OAuthGrant.complete(state, "code", pending.redirect_uri)
@@ -894,7 +987,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       answer = requested |> Enum.reverse() |> Enum.join(" ")
 
       assert {:ok, stored, _} = grant_new(ctx, "G-exact", requested, %{"scope" => answer})
-      assert stored_scopes(stored) == {requested, requested}
+      assert stored_scopes(stored) == requested
     end
 
     test "an answer naming no scope, absent or blank, stores the request", %{ctx: ctx} do
@@ -903,7 +996,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
         assert {:ok, {_entry, payload} = stored, _} =
                  grant_new(ctx, "G-omitted-#{n}", @scopes, answer)
 
-        assert stored_scopes(stored) == {@scopes, @scopes}
+        assert stored_scopes(stored) == @scopes
         assert payload["oauth"]["access_token"] == "at-G-omitted-#{n}"
         assert payload["oauth"]["refresh_token"] == "rt-G-omitted-#{n}"
       end
@@ -914,105 +1007,35 @@ defmodule Sanctum.Vault.OAuthGrantTest do
   # A dispense fenced on the binding it was validated at
   # ---------------------------------------------------------------------------
 
-  # A provider no shipped preset is (`:sanctum, :scripted_oauth_provider`),
-  # shown to attenuate a refresh. Its token endpoint answers what the test
-  # scripts, in order, telling the test each request; an answer scripted as
-  # `{before, answer}` runs `before` first, so a write can land while a
-  # refresh is at the provider.
-  defmodule RaceIdp do
-    @moduledoc false
-
-    @hint "race-idp"
-    @endpoints %{
-      "authorize_url" => "https://idp.race.test/authorize",
-      "token_url" => "https://idp.race.test/token"
-    }
-
-    def hint, do: @hint
-    def endpoints, do: @endpoints
-
-    def preset(@hint), do: %{endpoints: @endpoints, attenuates_scope: true}
-    def preset(_hint), do: nil
-
-    def post(_url, _headers, body) do
-      {test, next} =
-        Agent.get_and_update(__MODULE__, fn
-          {test, [next | rest]} -> {{test, next}, {test, rest}}
-          {test, []} -> {{test, :unscripted}, {test, []}}
-        end)
-
-      send(test, {:token_request, URI.decode_query(body)})
-
-      case next do
-        :unscripted ->
-          {:error, "unscripted request"}
-
-        {before, answer} when is_function(before, 0) ->
-          before.()
-          answer
-
-        answer ->
-          answer
-      end
-    end
-  end
-
   describe "a dispense is fenced on the binding it was validated at" do
     @a "race.a"
     @b "race.b"
     @c "race.c"
     @expired "2020-01-01T00:00:00Z"
 
-    setup %{ctx: ctx} do
-      prior = Application.fetch_env(:sanctum, :scripted_oauth_provider)
-      Application.put_env(:sanctum, :scripted_oauth_provider, RaceIdp)
-
-      on_exit(fn ->
-        case prior do
-          {:ok, value} -> Application.put_env(:sanctum, :scripted_oauth_provider, value)
-          :error -> Application.delete_env(:sanctum, :scripted_oauth_provider)
-        end
-      end)
-
-      :ok =
-        Sanctum.TestContext.put_provider_credentials(ctx, RaceIdp.hint(), "race-cid", "race-cs")
-
-      :ok
-    end
-
     test "a waiting dispense is never handed the token of a widening re-authorization",
          %{ctx: ctx} do
-      # The reviewer's race: a dispense validated at the old binding waits on
-      # the entry's refresh lock while a re-authorization for wider scopes
-      # commits; the token it brings is the new binding's alone.
-      bypass = Bypass.open()
+      # A dispense validated at the old binding waits on the entry's refresh
+      # lock while a re-authorization for wider scopes commits; the token it
+      # brings is the new binding's alone.
       narrow = @scopes
       wide = @scopes ++ ["https://www.googleapis.com/auth/gmail.send"]
-
-      entry =
-        put_entry!(ctx, @provider, bypass_endpoints(bypass), narrow, %{
-          "access_token" => "at-narrow",
-          "refresh_token" => "rt-1",
-          "expires_at" => @expired,
-          "scopes" => narrow
-        })
+      entry = race_entry!(ctx, narrow, expired_bundle("at-narrow", "rt-1"))
 
       lock = hold_refresh_lock!(ctx, entry)
 
       dispense =
         Task.async(fn ->
-          VaultReader.oauth_token(ctx, edge(entry, narrow), @provider, @dispense)
+          VaultReader.oauth_token(ctx, edge(entry, narrow), RaceIdp.hint(), @dispense)
         end)
 
       await_waiting!(lock)
 
-      stub_token_endpoint(bypass, %{
-        "access_token" => "at-wide",
-        "refresh_token" => "rt-2",
-        "expires_in" => 3600
-      })
+      script!([
+        {:ok, %{"access_token" => "at-wide", "refresh_token" => "rt-2", "expires_in" => 3600}}
+      ])
 
-      {state, pending} = mint_pending!(ctx, existing_target(entry, bypass, wide))
+      {state, pending} = mint_pending!(ctx, existing_target(entry, wide))
       assert {:ok, %{rebound: true}} = OAuthGrant.complete(state, "code", pending.redirect_uri)
       assert row!(ctx, entry).binding_digest != entry.binding_digest
 
@@ -1037,55 +1060,6 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       # The re-authorization's token has expired too, so no recheck finds a
       # fresh one: the dispense leads the next refresh, at the new binding.
       regrant!(ctx, entry, [@a, @b], expired_bundle("at-wide", "rt-2"))
-
-      release!(lock)
-      assert {:error, :binding_mismatch} = Task.await(dispense, 30_000)
-      refute_received {:token_request, _}
-    end
-
-    test "a narrower dispense waiting on the lock is never handed the new binding's held token",
-         %{ctx: ctx} do
-      entry = race_entry!(ctx, [@a, @b], live_bundle("at-wide", "rt-1"))
-      script!([])
-
-      lock = hold_refresh_lock!(ctx, entry)
-
-      dispense =
-        Task.async(fn ->
-          VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
-        end)
-
-      await_waiting!(lock)
-
-      regrant!(
-        ctx,
-        entry,
-        [@a, @b, @c],
-        Map.put(live_bundle("at-wider", "rt-2"), "tokens", %{
-          @a => %{"access_token" => "at-a-new", "expires_at" => nil}
-        })
-      )
-
-      release!(lock)
-      assert {:error, :binding_mismatch} = Task.await(dispense, 30_000)
-      refute_received {:token_request, _}
-    end
-
-    test "a narrower dispense that leads the refresh after the binding moved refreshes nothing",
-         %{ctx: ctx} do
-      entry = race_entry!(ctx, [@a, @b], live_bundle("at-wide", "rt-1"))
-      script!([{:ok, %{"access_token" => "at-a-refreshed", "scope" => @a, "expires_in" => 3600}}])
-
-      lock = hold_refresh_lock!(ctx, entry)
-
-      dispense =
-        Task.async(fn ->
-          VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
-        end)
-
-      await_waiting!(lock)
-
-      regrant!(ctx, entry, [@a, @b, @c], live_bundle("at-wider", "rt-2"))
 
       release!(lock)
       assert {:error, :binding_mismatch} = Task.await(dispense, 30_000)
@@ -1129,29 +1103,6 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert %{"access_token" => "at-old", "refresh_token" => "rt-1"} = bundle!(ctx, entry)
     end
 
-    test "a narrower refresh whose write loses to a re-authorization answers nothing of it",
-         %{ctx: ctx} do
-      entry = race_entry!(ctx, [@a, @b], live_bundle("at-wide", "rt-1"))
-
-      script!([
-        {fn ->
-           regrant!(
-             ctx,
-             entry,
-             [@a, @b, @c],
-             Map.put(live_bundle("at-wider", "rt-2"), "tokens", %{
-               @a => %{"access_token" => "at-a-new", "expires_at" => nil}
-             })
-           )
-         end, {:ok, %{"access_token" => "at-a-refreshed", "scope" => @a, "expires_in" => 3600}}}
-      ])
-
-      assert {:error, :binding_mismatch} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
-
-      assert_received {:token_request, %{"scope" => @a}}
-    end
-
     test "a refresh whose provider call is in flight when the entry is deleted writes nothing back",
          %{ctx: ctx} do
       entry = race_entry!(ctx, [@a], expired_bundle("at-old", "rt-1"))
@@ -1178,10 +1129,10 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
     test "a refresh refused for a moved binding keeps the refresh token the provider rotated",
          %{ctx: ctx} do
-      # The third review's case: the field schema is rebound and the
-      # bundle kept while the refresh is at the provider, which rotates the
-      # refresh token. Nothing is answered under the moved binding, but the
-      # entry is not left on the token the provider retired.
+      # The field schema is rebound and the bundle kept while the refresh is
+      # at the provider, which rotates the refresh token. Nothing is answered
+      # under the moved binding, but the entry is not left on the token the
+      # provider retired.
       entry = race_entry!(ctx, [@a], expired_bundle("at-old", "rt-1"))
 
       script!([
@@ -1199,10 +1150,9 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert kept["refresh_token"] == "rt-2"
       # Only the refresh token: the refused refresh's access token is not.
       assert kept["access_token"] == "at-old"
-      refute Map.has_key?(kept, "tokens")
     end
 
-    test "a full refresh answered for other scopes than the entry's is refused and keeps only the rotated token",
+    test "a refresh answered for other scopes than the entry's is refused and keeps only the rotated token",
          %{ctx: ctx} do
       for {held, answered} <- [{[@a, @b], @a}, {[@a], "#{@a} #{@c}"}] do
         entry = race_entry!(ctx, held, expired_bundle("at-old", "rt-1"))
@@ -1231,24 +1181,21 @@ defmodule Sanctum.Vault.OAuthGrantTest do
         kept = bundle!(ctx, entry)
         assert kept["refresh_token"] == "rt-2"
         assert kept["access_token"] == "at-old"
-        refute Map.has_key?(kept, "tokens")
         stop_supervised!(RaceIdp)
       end
     end
 
     # The scope the code exchange refuses as malformed, read by the one
     # parser both paths share.
-    for {path, requested} <- [whole: [@a, @b], narrower: [@a]],
-        {shape, scope} <- [
+    for {shape, scope} <- [
           number: 7,
           object: %{"granted" => [@a, @b]},
           string_array: [@a, @b],
           mixed_array: [@a, 7]
         ] do
-      test "a #{path} refresh answered with a #{shape} scope is refused and keeps only the rotated token",
+      test "a refresh answered with a #{shape} scope is refused and keeps only the rotated token",
            %{ctx: ctx} do
         held = [@a, @b]
-        requested = unquote(requested)
         entry = race_entry!(ctx, held, expired_bundle("at-old", "rt-1"))
 
         script!([
@@ -1263,18 +1210,17 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
         assert {:error,
                 {:authorization_required, "the token endpoint answered a malformed scope"}} =
-                 VaultReader.oauth_token(ctx, edge(entry, requested), RaceIdp.hint(), @dispense)
+                 VaultReader.oauth_token(ctx, edge(entry, held), RaceIdp.hint(), @dispense)
 
         kept = bundle!(ctx, entry)
         assert kept["access_token"] == "at-old"
         assert kept["refresh_token"] == "rt-2"
-        refute Map.has_key?(kept, "tokens")
         assert Jason.decode!(row!(ctx, entry).oauth_scopes) == held
       end
     end
 
     # Control: an answer naming the entry's own scopes, or none, refreshes.
-    test "a full refresh answered for the entry's own scopes, or none, is held", %{ctx: ctx} do
+    test "a refresh answered for the entry's own scopes, or none, is held", %{ctx: ctx} do
       for answer <- [%{"scope" => "#{@b} #{@a}"}, %{}, %{"scope" => " "}] do
         entry = race_entry!(ctx, [@a, @b], expired_bundle("at-old", "rt-1"))
 
@@ -1293,30 +1239,6 @@ defmodule Sanctum.Vault.OAuthGrantTest do
         assert bundle!(ctx, entry)["refresh_token"] == "rt-2"
         stop_supervised!(RaceIdp)
       end
-    end
-
-    test "a narrower refresh refused for a moved binding keeps the rotated token and holds nothing",
-         %{ctx: ctx} do
-      entry = race_entry!(ctx, [@a, @b], live_bundle("at-wide", "rt-1"))
-
-      script!([
-        {fn -> rebind_fields!(ctx, entry, ["note"]) end,
-         {:ok,
-          %{
-            "access_token" => "at-a-refreshed",
-            "scope" => @a,
-            "refresh_token" => "rt-2",
-            "expires_in" => 3600
-          }}}
-      ])
-
-      assert {:error, :binding_mismatch} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
-
-      kept = bundle!(ctx, entry)
-      assert kept["refresh_token"] == "rt-2"
-      assert kept["access_token"] == "at-wide"
-      refute Map.has_key?(kept, "tokens")
     end
 
     test "a re-authorization's own refresh token is never replaced by a refused refresh's rotation",
@@ -1381,26 +1303,6 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       # The refreshed bundle is stored, the same token family, for the
       # binding that now stands to answer under its own consent.
       assert bundle!(ctx, entry)["access_token"] == "at-refreshed"
-    end
-
-    test "a narrower refresh whose binding moves without a payload write answers nothing",
-         %{ctx: ctx} do
-      entry = race_entry!(ctx, [@a, @b], live_bundle("at-wide", "rt-1"))
-      test = self()
-
-      script!([
-        {fn ->
-           send(
-             test,
-             {:rebind, Sanctum.Vault.rebind(ctx, %{id: entry.id, destination: @narrower})}
-           )
-         end, {:ok, %{"access_token" => "at-a-refreshed", "scope" => @a, "expires_in" => 3600}}}
-      ])
-
-      assert {:error, :binding_mismatch} =
-               VaultReader.oauth_token(ctx, edge(entry, [@a]), RaceIdp.hint(), @dispense)
-
-      assert_received {:rebind, {:ok, _}}
     end
 
     test "a refresh whose entry is revoked while it is at the provider answers nothing",
@@ -1468,17 +1370,6 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       binding_digest: entry.binding_digest,
       projection: %{fields: [], scopes: scopes}
     }
-
-  defp script!(answers) do
-    test = self()
-
-    start_supervised!(%{
-      id: RaceIdp,
-      start: {Agent, :start_link, [fn -> {test, answers} end, [name: RaceIdp]]}
-    })
-
-    :ok
-  end
 
   # A refresh of the entry in flight: something leads its lock until
   # released.

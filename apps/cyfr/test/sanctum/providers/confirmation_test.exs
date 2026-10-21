@@ -76,7 +76,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
       )
 
     {:ok, session} = TestContext.create_session(built)
-    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
     ctx
   end
 
@@ -435,11 +435,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
                  refusal(call(session_ctx, "confirm", args))
       end
 
-      # A plain OAuth sign-in declares it proves no freshness, and no
-      # re-authentication method names one.
-      refute Sanctum.Auth.OAuth.proves_freshness?()
-      refute Sanctum.Auth.OIDC.proves_freshness?()
-
+      # No re-authentication method names a plain OAuth provider.
       assert {:error, _refused} =
                call(session_ctx, "reauth", %{"ref" => ref(id), "method" => "github"})
 
@@ -596,7 +592,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
     {:ok, invitation} =
       session_ctx
       |> TestContext.confirmed(:device_pairing, Sanctum.Pairing.invitation_change(key_digest))
-      |> Sanctum.Pairing.begin(%{key_digest: key_digest})
+      |> Sanctum.Pairing.begin(%{"key_digest" => key_digest})
 
     glass = Context.build(%{authenticated: false, client_ip: source})
     submission = %{device_key: device_key}
@@ -608,7 +604,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
       Sanctum.Pairing.complete(
         glass,
         invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.sign(challenge, private))
+        Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
       )
 
     {:ok, connect} =
@@ -629,7 +625,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
         connect
       )
 
-    {:ok, ctx} = Sanctum.DeviceCerts.verify_request(certificate, ctx, [])
+    {:ok, ctx} = Sanctum.DeviceCerts.verify_request(certificate, ctx)
     ctx
   end
 

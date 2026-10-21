@@ -288,19 +288,17 @@ defmodule Sanctum.Cipher.Rotation do
   end
 
   # planned: %{col => new_ct} for columns that needed rotation. A column is
-  # finished only when it is already sealed on the primary key in the current
-  # envelope version. Keys and plaintext stay in this function: what leaves
-  # it is a map of re-sealed ciphertext. `aad` is the row's one AAD, or a
-  # function of the column for a row whose columns each bind their own.
+  # finished only when it is already sealed on the primary key. Keys and
+  # plaintext stay in this function: what leaves it is a map of re-sealed
+  # ciphertext. `aad` is the row's one AAD, or a function of the column for
+  # a row whose columns each bind their own.
   defp classify(ciphertexts, aad, primary) do
-    current = Cipher.current_version()
-
     Enum.reduce_while(ciphertexts, :skip, fn {col, ct}, state ->
-      case Cipher.envelope(ct) do
-        {:ok, {^current, ^primary}} ->
+      case Cipher.label(ct) do
+        {:ok, ^primary} ->
           {:cont, state}
 
-        {:ok, {_version, _label}} ->
+        {:ok, _other_label} ->
           column_aad = aad_for(aad, col)
 
           case Cipher.decrypt(ct, column_aad) do

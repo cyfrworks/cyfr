@@ -24,15 +24,15 @@ defmodule Sanctum.VaultOAuthRefreshTest do
   @expired %{
     "access_token" => "tok-expired",
     "refresh_token" => "rt-1",
-    "expires_at" => "2020-01-01T00:00:00Z",
-    "token_type" => "bearer"
+    "expires_at" => "2020-01-01T00:00:00Z"
   }
 
   defp actor(ctx), do: Sanctum.Context.actor(ctx)
 
   defp mint_oauth_entry(ctx, oauth, over \\ %{}) do
     id = Prima.UUID7.generate_id("vlt")
-    aad = CipherAAD.vault_entry(ctx.athanor_id, id, "google")
+    hint = Map.get(over, :hint, "google")
+    aad = CipherAAD.vault_entry(ctx.athanor_id, id, hint)
 
     {:ok, json} = Payload.encode_material(%{}, oauth)
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
@@ -41,7 +41,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       Arca.VaultStorage.put(actor(ctx), %{
         id: id,
         name: "oauth-#{id}",
-        provider_hint: "google",
+        provider_hint: hint,
         kind: "oauth",
         oauth_endpoints: Map.get(over, :endpoints, ~s({"token_url":"https://127.0.0.1:1/tok"})),
         oauth_scopes: Jason.encode!(@scopes),
@@ -62,8 +62,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
   defp reseal_valid(ctx, entry, token) do
     aad = CipherAAD.vault_entry(ctx.athanor_id, entry.id, "google")
 
-    {:ok, json} =
-      Payload.encode_material(%{}, %{"access_token" => token, "token_type" => "bearer"})
+    {:ok, json} = Payload.encode_material(%{}, %{"access_token" => token})
 
     {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
     {:ok, fresh} = Arca.VaultStorage.get(actor(ctx), entry.id)
@@ -454,9 +453,8 @@ defmodule Sanctum.VaultOAuthRefreshTest do
       {_entry, resource} = mint_oauth_entry(ctx, no_rt)
       counter = attach_attempt_counter()
 
-      # A typed reason, not a string with a type spelled into its prefix:
-      # nothing anywhere parsed `"authorization_required: …"`, so the type was
-      # encoded where no consumer could branch on it.
+      # A typed reason, not a string with its type spelled into a prefix, so
+      # a consumer can branch on it.
       assert {:error, {:authorization_required, detail} = reason} =
                VaultReader.oauth_token(ctx, resource, "google", @dispense)
 
@@ -516,9 +514,9 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
   describe "compute_expires_at/1" do
     # RFC 6749 says expires_in is a number; providers send it as a JSON
-    # string often enough that reading one as "no expiry" is a live bug:
-    # token_valid?/1 answers true for a nil expiry forever, so the entry is
-    # never refreshed and simply starts returning 401s that nothing retries.
+    # string often enough that reading one as "no expiry" would strand an
+    # entry: token_valid?/1 answers true for a nil expiry forever, so it
+    # would never be refreshed and would answer 401s that nothing retries.
     test "a numeric string is an expiry, not an absence" do
       assert expiry = Sanctum.Vault.OAuth.compute_expires_at("3600")
       assert {:ok, dt, _} = DateTime.from_iso8601(expiry)
@@ -553,108 +551,162 @@ defmodule Sanctum.VaultOAuthRefreshTest do
     end
   end
 
-  describe "write_back/4 — a rotate landing mid-refresh" do
+  # A provider no shipped preset is, standing in for its token endpoint
+  # (`:sanctum, :scripted_oauth_provider`): the one answer a case scripts
+  # runs its `before` first, so a write lands on the entry while the
+  # refresh is at the provider, and tells the case each request it was sent.
+  defmodule MidRefreshProvider do
+    @moduledoc false
+
+    @hint "mid-refresh-idp"
+    @endpoints %{
+      "authorize_url" => "https://idp.mid-refresh.test/authorize",
+      "token_url" => "https://idp.mid-refresh.test/token"
+    }
+
+    def hint, do: @hint
+    def endpoints, do: @endpoints
+
+    def preset(@hint), do: %{endpoints: @endpoints}
+    def preset(_hint), do: nil
+
+    def post(_url, _headers, body) do
+      {test, before, answer} = Agent.get(__MODULE__, & &1)
+      send(test, {:token_request, URI.decode_query(body)})
+      before.()
+      answer
+    end
+  end
+
+  describe "a refresh whose write meets a write landing mid-refresh" do
+    setup %{ctx: ctx} do
+      # Restored by on_exit, registered before the change.
+      prior = Application.fetch_env(:sanctum, :scripted_oauth_provider)
+
+      on_exit(fn ->
+        case prior do
+          {:ok, value} -> Application.put_env(:sanctum, :scripted_oauth_provider, value)
+          :error -> Application.delete_env(:sanctum, :scripted_oauth_provider)
+        end
+      end)
+
+      Application.put_env(:sanctum, :scripted_oauth_provider, MidRefreshProvider)
+
+      :ok =
+        Sanctum.TestContext.put_provider_credentials(
+          ctx,
+          MidRefreshProvider.hint(),
+          "cid",
+          "csec"
+        )
+
+      :ok
+    end
+
+    defp mid_refresh_entry!(ctx) do
+      mint_oauth_entry(ctx, @expired, %{
+        hint: MidRefreshProvider.hint(),
+        endpoints: Jason.encode!(MidRefreshProvider.endpoints())
+      })
+    end
+
+    # The provider's answer, given once `before` has run.
+    defp answer_after!(before, answer) do
+      script = {self(), before, answer}
+
+      start_supervised!(%{
+        id: MidRefreshProvider,
+        start: {Agent, :start_link, [fn -> script end, [name: MidRefreshProvider]]}
+      })
+
+      :ok
+    end
+
     defp rotate_behind!(ctx, entry, fields, oauth) do
-      aad = CipherAAD.vault_entry(ctx.athanor_id, entry.id, "google")
+      aad = CipherAAD.vault_entry(ctx.athanor_id, entry.id, entry.provider_hint)
       {:ok, json} = Payload.encode_material(fields, oauth)
       {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
       {:ok, fresh} = Arca.VaultStorage.get(actor(ctx), entry.id)
       :ok = Arca.VaultStorage.rotate_payload(actor(ctx), entry.id, fresh.payload_rev, sealed)
     end
 
-    defp unseal!(ctx, entry_id) do
-      {:ok, row} = Arca.VaultStorage.get(actor(ctx), entry_id)
-      aad = CipherAAD.vault_entry(ctx.athanor_id, entry_id, "google")
+    defp unseal!(ctx, entry) do
+      {:ok, row} = Arca.VaultStorage.get(actor(ctx), entry.id)
+      aad = CipherAAD.vault_entry(ctx.athanor_id, entry.id, entry.provider_hint)
       {:ok, plaintext} = Sanctum.Cipher.decrypt(row.sealed_payload, aad)
       {:ok, payload} = Payload.decode(plaintext)
       payload
     end
 
-    test "a fields-only rotate keeps its fields AND the refreshed bundle — the rotated refresh token is not discarded",
+    test "a fields-only rotate keeps its fields and the refreshed bundle, the rotated refresh token included",
          %{ctx: ctx} do
-      {entry, _resource} = mint_oauth_entry(ctx, @expired)
+      {entry, resource} = mid_refresh_entry!(ctx)
 
-      # The concurrent vault.rotate: new fields, same oauth bundle.
-      rotate_behind!(ctx, entry, %{"api_key" => "rotated-field"}, @expired)
+      # The concurrent vault.rotate: new fields, the same oauth bundle.
+      answer_after!(
+        fn -> rotate_behind!(ctx, entry, %{"api_key" => "rotated-field"}, @expired) end,
+        {:ok, %{"access_token" => "tok-new", "refresh_token" => "rt-2", "expires_in" => 3600}}
+      )
 
-      refreshed =
-        Sanctum.Vault.OAuth.apply_refresh_response(
-          %{"fields" => %{}, "oauth" => @expired},
-          @expired,
-          %{"access_token" => "tok-new", "refresh_token" => "rt-2", "expires_in" => 3600}
-        )
-
-      # The provider has already rotated rt-1 → rt-2; losing this response
+      # The provider has already rotated rt-1 to rt-2; losing its answer
       # would strand the entry in re-consent.
       assert {:ok, "tok-new"} =
-               Sanctum.Vault.OAuth.write_back(actor(ctx), entry, refreshed, @expired)
+               VaultReader.oauth_token(ctx, resource, MidRefreshProvider.hint(), @dispense)
 
-      stored = unseal!(ctx, entry.id)
+      assert_received {:token_request, %{"refresh_token" => "rt-1"}}
+      stored = unseal!(ctx, entry)
       assert stored["fields"] == %{"api_key" => "rotated-field"}
       assert stored["oauth"]["access_token"] == "tok-new"
       assert stored["oauth"]["refresh_token"] == "rt-2"
     end
 
-    test "a rotate that brought its own bundle (fresh grant) wins outright", %{ctx: ctx} do
-      {entry, _resource} = mint_oauth_entry(ctx, @expired)
+    test "a rotate that brought its own bundle (a fresh grant) wins outright", %{ctx: ctx} do
+      {entry, resource} = mid_refresh_entry!(ctx)
+      fresh_grant = %{"access_token" => "tok-rotate", "refresh_token" => "rt-9"}
 
-      fresh_grant = %{
-        "access_token" => "tok-rotate",
-        "refresh_token" => "rt-9",
-        "token_type" => "bearer"
-      }
-
-      rotate_behind!(ctx, entry, %{}, fresh_grant)
-
-      refreshed =
-        Sanctum.Vault.OAuth.apply_refresh_response(
-          %{"fields" => %{}, "oauth" => @expired},
-          @expired,
-          %{"access_token" => "tok-new", "refresh_token" => "rt-2", "expires_in" => 3600}
-        )
+      answer_after!(
+        fn -> rotate_behind!(ctx, entry, %{}, fresh_grant) end,
+        {:ok, %{"access_token" => "tok-new", "refresh_token" => "rt-2", "expires_in" => 3600}}
+      )
 
       # The refresh descends from a token family the re-auth abandoned; the
       # rotate's material stands and its token is what the caller gets.
       assert {:ok, "tok-rotate"} =
-               Sanctum.Vault.OAuth.write_back(actor(ctx), entry, refreshed, @expired)
+               VaultReader.oauth_token(ctx, resource, MidRefreshProvider.hint(), @dispense)
 
-      stored = unseal!(ctx, entry.id)
+      stored = unseal!(ctx, entry)
       assert stored["oauth"]["access_token"] == "tok-rotate"
       assert stored["oauth"]["refresh_token"] == "rt-9"
     end
 
     test "an older refresh that finishes later cannot replace a newer binding", %{ctx: ctx} do
-      # What the cell's `oauth_refresh` claim exists to prevent, happening
-      # anyway: two members refreshed this entry, and the one that read the
-      # row first is the one that finishes last. The claim serializes the
+      # Two members refreshed this entry, and the one that read the row
+      # first finishes last. The cell's `oauth_refresh` claim serializes the
       # provider call; this compare-and-set is what decides the write, and
       # it names the revision rather than the lock.
-      {entry, _resource} = mint_oauth_entry(ctx, @expired)
+      {entry, resource} = mid_refresh_entry!(ctx)
 
-      # The newer refresh lands while the older one is still at the provider.
       newer = %{
         "access_token" => "tok-newer",
         "refresh_token" => "rt-newer",
-        "expires_at" =>
-          DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.to_iso8601(),
-        "token_type" => "bearer"
+        "expires_at" => DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.to_iso8601()
       }
 
-      rotate_behind!(ctx, entry, %{}, newer)
+      older = %{
+        "access_token" => "tok-older",
+        "refresh_token" => "rt-older",
+        "expires_in" => 3600
+      }
 
-      older =
-        Sanctum.Vault.OAuth.apply_refresh_response(
-          %{"fields" => %{}, "oauth" => @expired},
-          @expired,
-          %{"access_token" => "tok-older", "refresh_token" => "rt-older", "expires_in" => 3600}
-        )
+      # The newer refresh lands while the older one is still at the provider.
+      answer_after!(fn -> rotate_behind!(ctx, entry, %{}, newer) end, {:ok, older})
 
-      # `entry` still carries the payload_rev the older refresh read, so its
-      # write loses and it is answered the binding that stands.
+      # The older refresh's write is at the revision it read, so it loses and
+      # is answered the binding that stands.
       assert {:ok, "tok-newer"} =
-               Sanctum.Vault.OAuth.write_back(actor(ctx), entry, older, @expired)
+               VaultReader.oauth_token(ctx, resource, MidRefreshProvider.hint(), @dispense)
 
-      stored = unseal!(ctx, entry.id)
+      stored = unseal!(ctx, entry)
       assert stored["oauth"]["access_token"] == "tok-newer"
       assert stored["oauth"]["refresh_token"] == "rt-newer"
     end

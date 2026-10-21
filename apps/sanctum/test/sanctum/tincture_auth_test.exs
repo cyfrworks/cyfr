@@ -134,24 +134,16 @@ defmodule Sanctum.TinctureAuthTest do
       refute other == one
     end
 
-    test "a window of zero is refused, asked for or set", %{source: ctx} do
-      assert {:error, :invalid_window} =
-               TinctureAuth.mint_asset_credential(ctx, @digest, window_s: 0)
-
+    test "a window set to zero is refused", %{source: ctx} do
       settings!(0, 3_600)
       assert {:error, :invalid_window} = TinctureAuth.mint_asset_credential(ctx, @digest)
     end
 
-    test "a shorter window may be asked for, never a longer one", %{source: ctx} do
-      {:ok, %{credential: short}} = TinctureAuth.mint_asset_credential(ctx, @digest, window_s: 60)
+    test "the window is the setting's: a shorter one set is a shorter lifetime", %{source: ctx} do
+      settings!(60, 3_600)
+      {:ok, %{credential: short}} = TinctureAuth.mint_asset_credential(ctx, @digest)
       {:ok, %{remaining_s: left}} = TinctureAuth.verify_asset_credential(short)
       assert left > 30 and left <= 60
-
-      {:ok, %{credential: long}} =
-        TinctureAuth.mint_asset_credential(ctx, @digest, window_s: 86_400)
-
-      {:ok, %{remaining_s: capped}} = TinctureAuth.verify_asset_credential(long)
-      assert capped <= 3_600
     end
 
     test "never outlives its source's remaining life", %{source: ctx, session: session} do
@@ -608,30 +600,6 @@ defmodule Sanctum.TinctureAuthTest do
       assert frame_row(id) == nil
       assert {:error, :not_found} = TinctureAuth.resume_frame(ctx, id)
       assert {:error, :not_found} = TinctureAuth.renew_frame(ctx, id)
-    end
-
-    test "a bearer of the earlier format opens nothing", %{source: ctx} do
-      {:ok, %{id: id}} =
-        TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
-
-      basis = ctx.credential_binding.focus_basis
-
-      earlier =
-        Plug.Crypto.sign(
-          TinctureAuth.signing_secret(),
-          "tincture_frame_credential_v1",
-          [
-            1,
-            id,
-            "ath_acme",
-            ctx.credential_binding.user_generation,
-            ctx.credential_binding.athanor_generation,
-            basis
-          ],
-          max_age: 600
-        )
-
-      assert {:error, :invalid_credential} = TinctureAuth.verify_frame_credential(earlier)
     end
 
     test "a bearer this server did not sign as one opens nothing", %{source: ctx} do

@@ -459,7 +459,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       assert expires_at == renewed.expires_at
       assert state.cert == renewed
       assert %Context{auth_method: :device} = state.client
-      assert {:ok, _ctx} = Sanctum.DeviceCerts.verify_request(renewed, state.client, [])
+      assert {:ok, _ctx} = Sanctum.DeviceCerts.verify_request(renewed, state.client)
 
       # The gate decided the one renewal operation, under the client.
       assert [decision] = decisions_of(state.ctx.request_id)
@@ -653,7 +653,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       {:ok, invitation} =
         Sanctum.TestContext.confirming(
           session_ctx,
-          &Sanctum.Pairing.begin(&1, %{key_digest: Device.key_digest(device_key)})
+          &Sanctum.Pairing.begin(&1, %{"key_digest" => Device.key_digest(device_key)})
         )
 
       :ok = DirectoryServer.remote_person!(user.id, identity)
@@ -686,7 +686,7 @@ defmodule Emissary.Web.DeviceChannelTest do
         Sanctum.Pairing.complete(
           glass,
           invitation.invitation_secret,
-          Map.put(submission, :proof, Proof.sign(challenge, private))
+          Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
         )
 
       %{
@@ -807,7 +807,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       {:ok, invitation} =
         Sanctum.TestContext.confirming(
           session_ctx,
-          &Sanctum.Pairing.begin(&1, %{key_digest: Device.key_digest(device_key)})
+          &Sanctum.Pairing.begin(&1, %{"key_digest" => Device.key_digest(device_key)})
         )
 
       assert {:ok, %{challenge: _}} =
@@ -944,7 +944,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
       entry = Enum.find(entries, &(&1["ref"] == ref))
       assert entry["preview"]["operation"] == "pairing.begin"
-      assert entry["preview"]["details"]["device"] == Device.key_code(args.key_digest)
+      assert entry["preview"]["details"]["device"] == Device.key_code(args["key_digest"])
       assert entry["asker"]["kind"] == "session"
 
       # An addition, once the person holds a passkey: the paired device
@@ -1291,8 +1291,7 @@ defmodule Emissary.Web.DeviceChannelTest do
       {grant_id, _grant, state} = open_stream!(state, "s1")
       assert_received {:revoked_after_admission, {:ok, %{standing: "revoked"}}}
 
-      assert {:error, :revoked} =
-               Sanctum.DeviceCerts.verify_request(state.cert, state.client, [])
+      assert {:error, :revoked} = Sanctum.DeviceCerts.verify_request(state.cert, state.client)
 
       refute state.closed
       assert Map.has_key?(state.grants, grant_id)
@@ -2135,7 +2134,7 @@ defmodule Emissary.Web.DeviceChannelTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     %{user: user, athanor: athanor, session_ctx: session_ctx}
   end
@@ -2148,7 +2147,7 @@ defmodule Emissary.Web.DeviceChannelTest do
     {:ok, invitation} =
       Sanctum.TestContext.confirming(
         session_ctx,
-        &Sanctum.Pairing.begin(&1, %{key_digest: Device.key_digest(device_key)})
+        &Sanctum.Pairing.begin(&1, %{"key_digest" => Device.key_digest(device_key)})
       )
 
     source = "198.51.100.#{rem(System.unique_integer([:positive]), 250) + 1}"
@@ -2160,7 +2159,7 @@ defmodule Emissary.Web.DeviceChannelTest do
     {:ok, %{client_id: client_id, certificate: certificate}} =
       Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
         device_key: device_key,
-        proof: Proof.sign(challenge, private)
+        proof: Proof.encode(Proof.sign(challenge, private))
       })
 
     %{cert: certificate, client_id: client_id, private: private}
@@ -2170,7 +2169,7 @@ defmodule Emissary.Web.DeviceChannelTest do
   # first: that key's digest, the code the glass shows.
   defp begin_args do
     {device_key, _private} = :crypto.generate_key(:eddsa, :ed25519)
-    %{key_digest: Device.key_digest(device_key)}
+    %{"key_digest" => Device.key_digest(device_key)}
   end
 
   # A paired device's channel after its proof verified.

@@ -13,8 +13,9 @@ defmodule Sanctum.Provisioning do
   and filled the first time something reads its bundle
   (`start_provisioning/1`). Provisioning is idempotent — `provisioned_at`
   marks completion and every step tolerates being repeated — and loud: a
-  failure leaves the row unprovisioned with the reason in its settings,
-  and the next sign-in tries again.
+  failure leaves the row unprovisioned with its step and reason on the row
+  (`provisioning_failure`), and the next read of the bundle or the next
+  sign-in tries again.
 
   ## What this module does, and what it does not
 
@@ -996,7 +997,7 @@ defmodule Sanctum.Provisioning do
   @doc "The server's own context inside `athanor_id` — what a fill runs as."
   @spec seed_ctx(String.t()) :: Context.t()
   def seed_ctx(athanor_id) do
-    Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
+    Sanctum.Context.internal(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
   end
 
   # ---- the person's own athanor ----------------------------------------------
@@ -1018,14 +1019,23 @@ defmodule Sanctum.Provisioning do
   end
 
   # One personal athanor per owner is the store's invariant, so the owner
-  # is the lookup; a person with none yet is minted one. The slug is an
-  # address on this server, never an identity: the namespace is only a
-  # hint for it.
+  # is the lookup; a person with none yet is minted one. A mint the owner
+  # index refuses lost to a concurrent sign-in of the same person, whose
+  # athanor is the one. The slug is an address on this server, never an
+  # identity: the namespace is only a hint for it.
   defp find_or_create_personal(%{id: user_id} = user) do
     case Athanors.get_by_owner(user_id) do
-      {:ok, athanor} -> {:ok, athanor}
-      {:error, :not_found} -> mint_personal(user)
-      {:error, _} = err -> err
+      {:ok, athanor} ->
+        {:ok, athanor}
+
+      {:error, :not_found} ->
+        case mint_personal(user) do
+          {:error, {:invalid, %{owner_user_id: _taken}}} -> Athanors.get_by_owner(user_id)
+          minted -> minted
+        end
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -1090,8 +1100,8 @@ defmodule Sanctum.Provisioning do
   # nothing. Anything else that is not a bound refuses, never admits: a
   # store that cannot answer (a stale value included, which the setting
   # refuses), a count that fails, and a stored value outside the roster's
-  # range (a 0 written before 0 was refused, or a row written past the
-  # roster), since an invalid bound read as no bound would open the door.
+  # range (a row written past the roster, a 0 among them), since an
+  # invalid bound read as no bound would open the door.
   defp mint_allowed do
     case Arca.PlatformSettings.effective("mint_per_hour") do
       {:ok, nil} ->

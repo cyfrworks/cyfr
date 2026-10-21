@@ -10,12 +10,12 @@ defmodule Sanctum.Annotations do
   registry cache carries that same atom shape inside its `meta`, and the
   wire tool definition wraps it as `"annotations" => %{actions: ...}` — a
   string outer key with the provider's atom-keyed map inside. Reading the
-  wrong spelling does not crash, it returns nothing: one caller classified
-  every internal tool's kind as nil that way, silently. Every reader goes
-  through here so the spelling is decided once.
+  wrong spelling does not crash, it returns nothing, so a caller that
+  guessed would classify every internal tool's kind as nil, silently.
+  Every reader goes through here so the spelling is decided once.
 
   Absence stays fail-closed at the call sites: `planes/2` answers `[]`,
-  `auth/2` answers `:required`, the rest answer `nil`.
+  the rest answer `nil`.
   """
 
   @type source :: map()
@@ -56,28 +56,10 @@ defmodule Sanctum.Annotations do
   Whether a running chain reaches the action through the HOST rather than
   the catalog: the formula host intercepts the request and runs it under
   the chain's authority itself, so the catalog never dispatches it
-  in-chain and yet a chain can run it.
+  in-chain, though a chain can run it.
   """
   @spec host_intercepted?(source(), String.t() | nil) :: boolean()
   def host_intercepted?(source, action), do: field(source, action, :host) == :intercepted
-
-  @doc "The action's auth requirement; `:required` when undeclared."
-  @spec auth(source(), String.t() | nil) :: atom()
-  def auth(source, action) do
-    case annotation(source, action) do
-      %{} = annotation -> Map.get(annotation, :auth, :required)
-      _ -> :required
-    end
-  end
-
-  @spec permission(source(), String.t() | nil) :: atom() | nil
-  def permission(source, action), do: field(source, action, :permission)
-
-  @spec consent(source(), String.t() | nil) :: atom() | nil
-  def consent(source, action), do: field(source, action, :consent)
-
-  @spec scope(source(), String.t() | nil) :: atom() | nil
-  def scope(source, action), do: field(source, action, :scope)
 
   @doc """
   The action's standing rule — `:thread`, `false`, or nil when the
@@ -127,12 +109,4 @@ defmodule Sanctum.Annotations do
       _ -> nil
     end
   end
-
-  @doc """
-  The derived action map from a provider's atom-keyed `tools/0` definition.
-  `Prima.Operation` materializes it from the canonical operations.
-  """
-  @spec declared_actions(map()) :: %{optional(String.t()) => map()}
-  def declared_actions(%{annotations: %{actions: actions}}) when is_map(actions), do: actions
-  def declared_actions(_), do: %{}
 end

@@ -28,10 +28,6 @@ defmodule Compendium.Registry.IdentityTest do
         authenticated: true
       )
 
-    for slug <- ["alice", "stripe.com"] do
-      CredentialStore.delete(ctx, registry(), slug)
-    end
-
     {:ok, ctx: ctx}
   end
 

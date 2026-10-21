@@ -171,21 +171,6 @@ defmodule Sanctum.RegistryCredentialsTest do
     assert Enum.map(entries, & &1.namespace) == ["alice", "bob", "acme.io", "stripe.com"]
   end
 
-  test "delete removes one slot, is idempotent, and touches no one else's", %{
-    alice: alice,
-    bob: bob
-  } do
-    :ok = RegistryCredentials.put_push_token(alice, @registry, "alice", "a", "personal")
-    :ok = RegistryCredentials.put_push_token(alice, @registry, "stripe.com", "s", "member")
-    :ok = RegistryCredentials.put_push_token(bob, @registry, "alice", "b", "personal")
-
-    assert :ok = RegistryCredentials.delete(alice, @registry, "alice")
-    assert :ok = RegistryCredentials.delete(alice, @registry, "alice")
-    assert {:error, :not_found} = RegistryCredentials.get(alice, @registry, "alice")
-    assert {:ok, %{token: "s"}} = RegistryCredentials.get(alice, @registry, "stripe.com")
-    assert {:ok, %{token: "b"}} = RegistryCredentials.get(bob, @registry, "alice")
-  end
-
   @tag :capture_log
   test "a store that cannot answer is unavailable, never absent or empty", %{alice: alice} do
     :ok = RegistryCredentials.put_push_token(alice, @registry, "alice", "a", "personal")
@@ -193,7 +178,6 @@ defmodule Sanctum.RegistryCredentialsTest do
 
     assert {:error, :unavailable} = RegistryCredentials.get(alice, @registry, "alice")
     assert {:error, :unavailable} = RegistryCredentials.list(alice, @registry)
-    assert {:error, :unavailable} = RegistryCredentials.delete(alice, @registry, "alice")
 
     assert {:error, :unavailable} =
              RegistryCredentials.put_push_token(alice, @registry, "alice", "a2", "personal")
@@ -204,7 +188,6 @@ defmodule Sanctum.RegistryCredentialsTest do
 
     assert {:error, :forbidden} = RegistryCredentials.get(nobody, @registry, "alice")
     assert {:error, :forbidden} = RegistryCredentials.list(nobody, @registry)
-    assert {:error, :forbidden} = RegistryCredentials.delete(nobody, @registry, "alice")
 
     assert {:error, :forbidden} =
              RegistryCredentials.put_push_token(nobody, @registry, "alice", "a", "personal")

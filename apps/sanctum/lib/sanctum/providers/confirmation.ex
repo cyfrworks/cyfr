@@ -332,11 +332,20 @@ defmodule Sanctum.Providers.Confirmation do
 
   # Whether a passkey or a paired device ever existed for the person here:
   # the first-method latch, which nothing clears (`Arca.PersonIdentities`).
+  # The row is minted with the person row, so a person without one is
+  # damage; an id of another shape names no person and has latched nothing.
   defp latched(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{first_method_at: at}} -> {:ok, not is_nil(at)}
-      {:error, :not_found} -> {:ok, false}
-      {:error, _unanswered} -> {:error, :unavailable}
+      {:ok, %{first_method_at: at}} ->
+        {:ok, not is_nil(at)}
+
+      {:error, :not_found} ->
+        if Prima.PersonId.person?(user_id),
+          do: {:error, {:corrupt, :person_identity}},
+          else: {:ok, false}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
     end
   end
 

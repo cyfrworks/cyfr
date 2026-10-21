@@ -56,7 +56,7 @@ defmodule PrismWeb.SettingsLiveTest do
     refute has_element?(view, "button[phx-click=door_allow]")
 
     ops = test_user()
-    {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops.user_id)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
     {admin_view, admin_html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
     assert admin_html =~ "Server allowlist"
 
@@ -96,7 +96,7 @@ defmodule PrismWeb.SettingsLiveTest do
     refute html =~ "Platform settings"
 
     ops = test_user()
-    {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops.user_id)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
     {view, html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
 
     assert html =~ "Platform settings"
@@ -162,7 +162,7 @@ defmodule PrismWeb.SettingsLiveTest do
     # Settings page; `ctx` is their context there.
     defp admin!(conn) do
       ops = test_user(%{name: "Ops Person"})
-      {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops.user_id)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
       conn = log_in_user(conn, ops)
       ctx = admin_context(ops, seated_athanor().id)
       {view, html} = mount_athanor(conn, "/settings")
@@ -663,12 +663,12 @@ defmodule PrismWeb.SettingsLiveTest do
          %{conn: conn} do
       Cyfr.Test.SeedBundle.isolate!()
       ops = test_user()
-      {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops.user_id)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
       conn = log_in_user(conn, ops)
       athanor_id = seated_athanor().id
 
       seed_ctx =
-        Sanctum.internal_context(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
+        Sanctum.Context.internal(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
 
       ship = fn name, version, provider, need ->
         {:ok, _} =

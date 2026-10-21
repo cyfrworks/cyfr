@@ -172,13 +172,8 @@ defmodule Sanctum.TelemetryTest do
                :approval_resolved,
                :schedule_failed,
                :passkey_registered,
-               :passkey_recovered,
-               :regrant_required
+               :passkey_recovered
              ]
-
-      Code.ensure_loaded!(Sanctum.Notify)
-      refute function_exported?(Sanctum.Notify, :topic, 1)
-      refute function_exported?(Sanctum.Notify, :platform_topic, 0)
     end
 
     test "a membership change names the person, the athanor and the change" do
@@ -188,9 +183,6 @@ defmodule Sanctum.TelemetryTest do
 
       assert_receive {:announced, [:cyfr, :sanctum, :membership, :changed], %{count: 1},
                       %{user_id: "user_1", athanor_id: "ath_1", change: :joined}}
-
-      Code.ensure_loaded!(Sanctum.Tenancy.Members)
-      refute function_exported?(Sanctum.Tenancy.Members, :topic, 1)
     end
 
     test "a session minted carries nothing, and a revocation names only the person" do
@@ -204,9 +196,6 @@ defmodule Sanctum.TelemetryTest do
 
       assert_receive {:announced, [:cyfr, :sanctum, :sessions, :revoked], %{count: 1},
                       %{user_id: "user_1"}}
-
-      Code.ensure_loaded!(Sanctum.Session)
-      refute function_exported?(Sanctum.Session, :topic, 0)
     end
 
     test "a dropped caller memo names the session row key, never a token" do
@@ -221,9 +210,7 @@ defmodule Sanctum.TelemetryTest do
       assert Map.keys(meta) == [:hash]
     end
 
-    test "nothing in the identity domain names the PubSub server or a topic module" do
-      refute Code.ensure_loaded?(Sanctum.PubSub)
-
+    test "nothing in the identity domain names a PubSub server" do
       lib = Path.expand("../../lib", __DIR__)
 
       found =

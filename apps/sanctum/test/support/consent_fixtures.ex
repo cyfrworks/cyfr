@@ -375,7 +375,7 @@ defmodule Sanctum.Test.ConsentFixtures do
   reaches the column.
 
   This is the only way to express a stored row the storage layer refuses
-  to create (a NULL `blob_digest`, say). The loader's checks against those
+  to create (an empty `blob_digest`, say). The loader's checks against those
   rows exist precisely because the column can be reached without the
   writer, so a case that asserts on one has to reach it the same way.
   """

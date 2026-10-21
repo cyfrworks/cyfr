@@ -31,6 +31,8 @@ defmodule Sanctum.TinctureAccessTest do
     def shipped_nodes(_ctx, _rows), do: failed()
     @impl true
     def newer_shipped(_ctx, _row), do: failed()
+    @impl true
+    def tincture_placement(_ctx, _row), do: failed()
 
     defp failed, do: {:error, %RuntimeError{message: @canary}}
   end
@@ -57,18 +59,14 @@ defmodule Sanctum.TinctureAccessTest do
     def shipped_nodes(_ctx, _rows), do: failed()
     @impl true
     def newer_shipped(_ctx, _row), do: failed()
+    @impl true
+    def tincture_placement(_ctx, _row), do: failed()
 
     defp failed, do: {:error, %{__exception__: true, __struct__: RaisingFacts.canary()}}
   end
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-
-    # Public-ness reads the profiles table now; point the source at it.
-
-    on_exit(fn ->
-      nil
-    end)
 
     # Create temp tincture structure with one public and one private tincture,
     # under an isolated storage root.
@@ -350,7 +348,7 @@ defmodule Sanctum.TinctureAccessTest do
         real = Sanctum.Consent.Components.impl!()
         on_exit(fn -> Sanctum.Consent.Components.install!(real) end)
 
-        Sanctum.Consent.Components.reset()
+        Sanctum.TestContext.uninstall_port(Sanctum.Consent.Components)
 
         answer =
           try do

@@ -31,7 +31,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
   describe "init_device_flow/2" do
     test "returns error when github client_id not configured" do
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
 
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.init_device_flow("github", nil)
@@ -39,7 +38,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
     test "normalizes string provider to atom" do
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
 
       # Both string and atom should work the same way
       assert {:error, {:client_id_not_configured, :github}} =
@@ -53,7 +51,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
   describe "poll_for_session/3" do
     test "returns error when client_id not configured" do
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
 
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.poll_for_session("github", "fake_device_code", nil)
@@ -61,7 +58,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
     test "polls beyond the per-code budget answer slow_down without provider contact" do
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
       Prima.Test.RateLimiter.reset!()
       on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
 
@@ -94,7 +90,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
   describe "anonymous sign-in budgets are per-address, and the global sits above them" do
     setup do
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
       Prima.Test.RateLimiter.reset!()
       on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
       :ok
@@ -144,91 +139,26 @@ defmodule Sanctum.Auth.DeviceFlowTest do
                DeviceFlow.poll_for_session("github", "code_other", innocent)
     end
 
-    test "a surface with no address of its own still passes the global ceiling" do
-      # `nil` is the MCP route, metered per IP by its own plug. It must not
-      # crash and must not be exempt from the server-wide breaker.
+    test "a caller with no known address still passes the global ceiling" do
+      # `nil` is a context whose ingress knew no address. It must not crash
+      # and must not be exempt from the server-wide breaker.
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.init_device_flow("github", nil)
     end
   end
-
-  # Note: Full integration tests for device flow require mocking HTTP calls
-  # or actual OAuth provider setup. The tests above verify the configuration
-  # checking and error handling paths.
-
-  describe "provider normalization" do
-    test "handles both string and atom providers for github" do
-      Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
-
-      # Both should fail with same error
-      assert {:error, {:client_id_not_configured, :github}} =
-               DeviceFlow.init_device_flow("github", nil)
-
-      assert {:error, {:client_id_not_configured, :github}} =
-               DeviceFlow.init_device_flow(:github, nil)
-    end
-  end
-
-  # The post-door decision — what cyfr.run says about the person and what
-  # follows — is one function for the CLI and the browser:
-  # `Sanctum.SignIn.complete/3`, exercised in sign_in_complete_test.exs.
 
   describe "wire/1 — the CLI poll contract" do
     # `cyfr login` (apps/codex/cmd/login.go) reads these exact keys; every
     # change here is a cross-language wire change and must be deliberate.
     @user %{id: "u1", email: "u@example.com", name: "U"}
 
-    test "proceed" do
+    test "a signed-in result is its status, user and session token" do
       assert DeviceFlow.wire(%{
                status: "complete",
                user: @user,
                session_token: "tok",
-               outcome: {:proceed, %{unsynced: [], probe: :ok}}
-             }) == %{
-               status: "complete",
-               user: @user,
-               session_token: "tok",
-               needs_personal_namespace: false
-             }
-    end
-
-    test "proceed carries the report's warnings and probe error" do
-      wired =
-        DeviceFlow.wire(%{
-          status: "complete",
-          user: @user,
-          session_token: "tok",
-          outcome: {:proceed, %{unsynced: ["ns1"], probe: :failed}}
-        })
-
-      assert wired.credential_store_warnings == ["ns1"]
-      assert wired.probe_error == "probe_failed"
-    end
-
-    test "a policy owed or a namespace conflict is a probe error on a signed-in result" do
-      owed =
-        DeviceFlow.wire(%{
-          status: "complete",
-          user: @user,
-          session_token: "tok",
-          outcome: {:proceed, %{unsynced: [], probe: :legal_required}}
-        })
-
-      assert owed.session_token == "tok"
-      assert owed.needs_personal_namespace == false
-      assert owed.probe_error == "policy_acceptance_required"
-
-      conflict =
-        DeviceFlow.wire(%{
-          status: "complete",
-          user: @user,
-          session_token: "tok",
-          outcome: {:proceed, %{unsynced: [], probe: :namespace_conflict}}
-        })
-
-      assert conflict.probe_error == "namespace_conflict"
-      refute Map.has_key?(conflict, :access_token)
+               outcome: {:proceed, %{unsynced: [], probe: :skipped}}
+             }) == %{status: "complete", user: @user, session_token: "tok"}
     end
 
     test "outcome-less statuses pass through untouched" do
@@ -298,7 +228,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       prev_flow = Application.get_env(:sanctum, :device_flow)
       prev_provider = Application.get_env(:sanctum, :auth_provider)
       prev_client = Application.fetch_env(:sanctum, :github_client_id)
-      prev_client_env = System.get_env("CYFR_GITHUB_CLIENT_ID")
 
       on_exit(fn ->
         Prima.Test.RateLimiter.reset!()
@@ -307,8 +236,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           {:ok, id} -> Application.put_env(:sanctum, :github_client_id, id)
           :error -> Application.delete_env(:sanctum, :github_client_id)
         end
-
-        if prev_client_env, do: System.put_env("CYFR_GITHUB_CLIENT_ID", prev_client_env)
 
         if prev_flow,
           do: Application.put_env(:sanctum, :device_flow, prev_flow),
@@ -325,7 +252,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       # No client id, so an admitted init stops at the configuration and
       # never reaches a provider.
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
 
       # Spend this address's init budget, whatever its number is.
       outcomes = for _ <- 1..200, do: DeviceFlow.init_device_flow("github", ip)
@@ -426,7 +352,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           do: Application.put_env(:sanctum, :device_flow_endpoints, endpoints),
           else: Application.delete_env(:sanctum, :device_flow_endpoints)
 
-        Arca.Cache.delete_match({:established, :_, :_, :_})
+        Arca.Cache.delete_match({:established, :_, :_})
         Prima.Test.RateLimiter.reset!()
       end)
 
@@ -487,7 +413,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       %{user: user, ctx: ctx}
     end
@@ -595,7 +521,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           do: Application.put_env(:sanctum, :device_flow_endpoints, endpoints),
           else: Application.delete_env(:sanctum, :device_flow_endpoints)
 
-        Arca.Cache.delete_match({:established, :_, :_, :_})
+        Arca.Cache.delete_match({:established, :_, :_})
         Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
         Prima.Test.RateLimiter.reset!()
       end)
@@ -664,7 +590,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           do: Application.put_env(:sanctum, :device_flow_endpoints, endpoints),
           else: Application.delete_env(:sanctum, :device_flow_endpoints)
 
-        Arca.Cache.delete_match({:established, :_, :_, :_})
+        Arca.Cache.delete_match({:established, :_, :_})
         Prima.Test.RateLimiter.reset!()
       end)
 

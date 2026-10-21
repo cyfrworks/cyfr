@@ -72,18 +72,6 @@ defmodule Sanctum.ApiKeyTest do
     test "returns error without name", %{ctx: ctx} do
       assert {:error, "name is required"} = create_key(ctx, %{scope: []})
     end
-
-    test "creates key with rate limit", %{ctx: ctx} do
-      {:ok, result} =
-        create_key(ctx, %{
-          name: "limited-key",
-          type: :service,
-          scope: ["vault_read"],
-          rate_limit: "100/1m"
-        })
-
-      assert result.name == "limited-key"
-    end
   end
 
   describe "get/2" do
@@ -291,8 +279,7 @@ defmodule Sanctum.ApiKeyTest do
         create_key(ctx, %{
           name: "valid-key",
           type: :service,
-          scope: ["vault_read", "component_manage"],
-          rate_limit: "50/1m"
+          scope: ["vault_read", "component_manage"]
         })
 
       {:ok, validated} = ApiKey.validate(created.api_key)
@@ -300,7 +287,7 @@ defmodule Sanctum.ApiKeyTest do
       assert validated.name == "valid-key"
       assert validated.type == :service
       assert validated.scope == ["vault_read", "component_manage"]
-      assert validated.rate_limit == "50/1m"
+      refute Map.has_key?(validated, :rate_limit)
     end
 
     test "validates secret key and returns correct type", %{ctx: ctx} do
@@ -489,6 +476,11 @@ defmodule Sanctum.ApiKeyTest do
       refute ApiKey.ip_allowed?("2001:db8:abce::1", ["2001:db8:abcd::/48"])
     end
 
+    test "an IPv4-mapped IPv6 address is matched against an IPv4 range by its IPv4 form" do
+      assert ApiKey.ip_allowed?("::ffff:10.1.2.3", ["10.0.0.0/8"])
+      refute ApiKey.ip_allowed?("::ffff:11.0.0.1", ["10.0.0.0/8"])
+    end
+
     test "IPv6 loopback" do
       assert ApiKey.ip_allowed?("::1", ["::1"])
       refute ApiKey.ip_allowed?("::2", ["::1"])
@@ -616,7 +608,6 @@ defmodule Sanctum.ApiKeyTest do
           scope: :athanor,
           auth_method: :oidc,
           authenticated: true,
-          api_key_type: nil,
           request_id: nil
         })
 
@@ -687,7 +678,8 @@ defmodule Sanctum.ApiKeyTest do
     for {label, stored} <- [
           {"not JSON", ~s(["192.168.1.0/24")},
           {"not a list", ~s({"allow": "192.168.1.0/24"})},
-          {"not strings", "[1, 2]"}
+          {"not strings", "[1, 2]"},
+          {"empty", ""}
         ] do
       test "#{label} refuses every address", %{ctx: ctx} do
         stored = unquote(stored)
@@ -723,21 +715,19 @@ defmodule Sanctum.ApiKeyTest do
         assert log =~
                  ~r/\[Sanctum\.ApiKey\] stored ip_allowlist is not (valid JSON|a list of strings) \(#{byte_size(stored)} bytes\)/
 
-        refute log =~ stored
+        if stored != "", do: refute(log =~ stored)
       end
     end
 
-    test "an absent or empty column is no restriction", %{ctx: ctx} do
+    test "an absent column is no restriction", %{ctx: ctx} do
       name = "absent-allowlist-#{System.unique_integer([:positive])}"
       {:ok, %{api_key: key}} = create_key(ctx, %{name: name, ip_allowlist: ["192.168.1.0/24"]})
 
-      for stored <- [nil, ""] do
-        Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.name == ^name),
-          set: [ip_allowlist: stored]
-        )
+      Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.name == ^name),
+        set: [ip_allowlist: nil]
+      )
 
-        assert {:ok, _} = ApiKey.validate(key, client_ip: "10.0.0.1")
-      end
+      assert {:ok, _} = ApiKey.validate(key, client_ip: "10.0.0.1")
     end
   end
 

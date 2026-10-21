@@ -128,7 +128,7 @@ defmodule Emissary.Web.HealthController do
   # probe in Cyfr.Application only covers first start, not runtime decay.
   defp check_storage do
     ctx =
-      Sanctum.internal_context(
+      Sanctum.Context.internal(
         user_id: "_health_probe",
         permissions: [:storage_read, :storage_write]
       )

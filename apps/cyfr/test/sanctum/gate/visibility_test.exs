@@ -83,7 +83,7 @@ defmodule Sanctum.Gate.VisibilityTest do
   # What the action's own annotation declares, read apart from discovery.
   defp anonymous?(name, action) do
     {:ok, {_module, meta}} = Catalog.lookup(name)
-    Annotations.auth(meta, action) == :anonymous
+    match?(%{auth: :anonymous}, Annotations.annotation(meta, action))
   end
 
   defp action_enum(tool_def) do
@@ -132,7 +132,7 @@ defmodule Sanctum.Gate.VisibilityTest do
 
     test "sees every session action — the anonymous ones and `use`" do
       assert Enum.sort(visible_actions("session", ctx_with([:execute]))) ==
-               ~w(cli_begin cli_cancel cli_poll device_init device_poll login logout read_resource use whoami)
+               ~w(cli_begin cli_cancel cli_poll device_init device_poll logout read_resource use whoami)
     end
 
     test "operator-only actions are shown to platform admins alone" do
@@ -330,8 +330,7 @@ defmodule Sanctum.Gate.VisibilityTest do
       ctx_with([], :webhook),
       ctx_with([], :tincture),
       %{ctx_with([:execute], :tincture) | anonymous: true},
-      ctx_with([], :system),
-      ctx_with([], :session)
+      ctx_with([], :system)
     ]
 
     for kind <- kinds,
@@ -440,7 +439,6 @@ defmodule Sanctum.Gate.VisibilityTest do
           :webhook,
           :tincture,
           :system,
-          :session,
           nil
         ],
         client_id <- [nil, "pcl_probe"],
@@ -590,7 +588,7 @@ defmodule Sanctum.Gate.VisibilityTest do
 
       expected =
         MapSet.new(~w(
-          session.login session.logout session.whoami
+          session.logout session.whoami
           session.device_init session.device_poll session.read_resource
           session.cli_begin session.cli_poll session.cli_cancel
           system.status tincture.invoke_public pairing.complete

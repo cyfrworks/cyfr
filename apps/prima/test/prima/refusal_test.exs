@@ -173,6 +173,7 @@ defmodule Prima.RefusalTest do
     {{:corrupt, {:digest, "The artifact"}}, :corrupt},
     {{:corrupt, {:profile, "prof_1"}}, :corrupt},
     {{:corrupt, {:manifest, "c:local.x:1.0.0"}}, :corrupt},
+    {{:corrupt, :person_identity}, :corrupt},
     {{:corrupt, {:component_graph, "c:local.x:1.0.0"}}, :corrupt},
     {{:corrupt, {:artifact, "sha256:ab12"}}, :corrupt},
     {{:component_type_mismatch, :formula, :reagent}, :invalid_argument},
@@ -601,6 +602,9 @@ defmodule Prima.RefusalTest do
 
       assert Refusal.message({:corrupt, {:manifest, "c:local.x:1.0.0"}}) ==
                "The stored manifest is damaged."
+
+      assert Refusal.message({:corrupt, :person_identity}) ==
+               "This person's identity record is missing, so it cannot be used."
 
       assert Refusal.message({:corrupt, {:settings, :retention}}) ==
                "The stored retention settings are damaged."

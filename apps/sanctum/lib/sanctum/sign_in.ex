@@ -36,20 +36,23 @@ defmodule Sanctum.SignIn do
   assertion (`{:error, :stale_identity}`) — refuses the sign-in before
   any session is created.
 
-  `complete/3`: the one courtesy both sign-in paths (the browser callback
-  and the CLI device flow) extend after the door — a budgeted probe of
-  cyfr.run for the person's publisher namespace and push tokens. Whatever
-  the registry answers, the person proceeds; the report says how it
-  answered. A namespace is a publishing credential, claimed when the
-  person first publishes (`/claim-namespace`), never a gate on signing in.
+  `t:report/0`: how cyfr.run answered the courtesy after the door, a
+  budgeted probe for the person's publisher namespace and push tokens,
+  which the browser callback runs (`Compendium.SignInSync.complete/4`)
+  and the CLI device flow reports `:skipped`. Whatever the registry
+  answers, the person proceeds. A namespace is a publishing credential,
+  claimed when the person first publishes (`/claim-namespace`), never a
+  gate on signing in.
 
   `record_namespace/2`: the namespace lands on the `users` row the moment a
   probe or a claim yields it — before, and regardless of, the push tokens.
   That row is what every request reads (`Sanctum.Namespace`).
 
-  Providers call `admitted/2` between `Sanctum.Door.admit/3` and building
-  the context. `Sanctum.Caller.establish/2` — which runs per request —
-  only ever reads what this wrote.
+  The sign-in paths (the browser callback, the device flow and the `cyfr`
+  door) call `admitted/2` between the door's verdict
+  (`Sanctum.Door.admit_identity/2`) and building the context.
+  `Sanctum.Caller.establish/2` — which runs per request — only ever reads
+  what this wrote.
 
   ## Linking a door
 
@@ -97,7 +100,7 @@ defmodule Sanctum.SignIn do
   alias Sanctum.Slug
   alias Sanctum.Tenancy.{Members, Users}
 
-  @linkable Sanctum.Atoms.providers()
+  @linkable Prima.SignInProviders.all()
   @link_ticket_ms 600_000
   @link_refused "This sign-in link is not yours, has expired or was already used; sign in " <>
                   "with that door again"
@@ -166,23 +169,21 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  # The person's provenance, as their identity row records it: `remote`,
-  # `local`, or `nil` for a person with no identity row (a local person,
-  # who holds no key here yet). A store that cannot answer refuses.
+  # The person's provenance, as their identity row records it: `remote` or
+  # `local`. The row is minted with the person row, so one missing is
+  # damage; a store that cannot answer refuses.
   defp provenance(user_id) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, %{provenance: provenance}} -> {:ok, provenance}
-      {:error, :not_found} -> {:ok, nil}
+      {:error, :not_found} -> {:error, {:corrupt, :person_identity}}
       {:error, _unanswered} -> {:error, :unavailable}
     end
   end
 
-  @doc false
   # The identity half of `admitted/2`, which runs it first: the person's
   # row written from this assertion, then the platform grant reconciled
   # against exactly the facts this assertion carried — before the rest of
-  # the sign-in, and before any session. Public so the interleaving tests
-  # can race it without the provisioning that follows.
+  # the sign-in, and before any session.
   #
   # The facts are this assertion's, never another's: a concurrent first
   # sign-in that lost the race to mint the person is answered the winner's
@@ -190,9 +191,7 @@ defmodule Sanctum.SignIn do
   # upsert's answer is checked against them too, and the grant or revoke
   # checks them again under the person's lock. `{:error, :stale_identity}`
   # is this assertion having been overtaken; the person signs in again.
-  @spec identify(map(), :admin | :allowed) ::
-          {:ok, Sanctum.Tenancy.Users.user()} | {:error, term()}
-  def identify(user_info, verdict) when verdict in [:admin, :allowed] do
+  defp identify(user_info, verdict) do
     {remote, user_info} = Map.pop(user_info, :remote)
 
     with {:ok, user} <- Users.upsert_from_provider(user_info, remote: remote) do
@@ -208,12 +207,14 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  @doc false
-  # What one admitted assertion says about the person, as the `users` row
-  # stores it: the supplied email lowercased — the row's own only when the
-  # assertion carried none, since an absent claim leaves the stored one in
-  # place — and the verification claim as `true`, `false`, or `nil` for
-  # anything else.
+  @doc """
+  What one admitted assertion says about the person, as the `users` row
+  stores it: the supplied email lowercased — the row's own only when the
+  assertion carried none, since an absent claim leaves the stored one in
+  place — and the verification claim as `true`, `false`, or `nil` for
+  anything else. The facts a platform grant or revoke is reconciled
+  against (`Sanctum.Tenancy.Members.grant_platform/2`).
+  """
   @spec expected_identity(map(), Sanctum.Tenancy.Users.user()) :: Arca.Members.identity()
   def expected_identity(user_info, %{id: _} = user) do
     email =
@@ -278,7 +279,7 @@ defmodule Sanctum.SignIn do
           {:ok, Sanctum.Tenancy.Users.user()}
           | {:error, :not_found | :invalid_slug | :namespace_owned_by_another_identity | term()}
   def record_namespace(user_id, slug) when is_binary(user_id) and is_binary(slug) do
-    with true <- Prima.ComponentRef.valid_personal_slug?(slug) || {:error, :invalid_slug},
+    with :ok <- personal_slug(slug),
          {:ok, user} <- Users.get(user_id) do
       cond do
         user.namespace == slug ->
@@ -703,14 +704,8 @@ defmodule Sanctum.SignIn do
 
   defp ticket_key(ticket), do: {:link_ticket, :crypto.hash(:sha256, ticket)}
 
-  # Push tokens are cached best-effort: a failed write costs a re-probe,
-  # never the sign-in. `:skipped` (no token in the body) is not a failure —
-  # the identity was recorded from the slug regardless.
-  # What to put in the claim box. The provider's own screen name is the
-  # closest thing to what the person calls themselves — an
-  # `alice.smith+work@` address suggests `alice-smith-work` when the GitHub
-  # login next to it is simply `alice`. The address is the fallback, and the
-  # provider name the last resort.
+  # The row as reread after a write, or the row the write returned when
+  # the reread fails.
   defp or_user({:ok, user}, _fallback), do: {:ok, user}
   defp or_user(_, fallback), do: {:ok, fallback}
 
@@ -775,5 +770,9 @@ defmodule Sanctum.SignIn do
       %{count: 1},
       %{user_id: user_id}
     )
+  end
+
+  defp personal_slug(slug) do
+    if Prima.ComponentRef.valid_personal_slug?(slug), do: :ok, else: {:error, :invalid_slug}
   end
 end

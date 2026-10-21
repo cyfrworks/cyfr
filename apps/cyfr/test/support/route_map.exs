@@ -281,15 +281,6 @@
           pipe_through: ["directory"]
         },
         %{
-          verb: "GET",
-          path: "/directory/v1/:identifier/requests/:request_id",
-          plug: "Emissary.Web.DirectoryController",
-          plug_opts: ":outcome",
-          auth: "public_directory",
-          live_view: nil,
-          pipe_through: ["directory"]
-        },
-        %{
           verb: "POST",
           path: "/directory/v1/genesis",
           plug: "Emissary.Web.DirectoryController",

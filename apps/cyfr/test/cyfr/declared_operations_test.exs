@@ -91,7 +91,7 @@ defmodule Cyfr.DeclaredOperationsTest do
       sanitized =
         Prima.Sanitizer.sanitize(%{
           "recovery_secret" => @seed,
-          "holder" => %{"kind" => "kit", "recovery_secret" => @seed}
+          "holder" => %{"recovery_secret" => @seed}
         })
 
       refute inspect(sanitized) =~ @seed

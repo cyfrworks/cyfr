@@ -62,7 +62,7 @@ defmodule Sanctum.Providers.CliSignInTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     %{user: user, athanor: athanor, session_ctx: session_ctx, browser_token: session.token}
   end
@@ -97,7 +97,7 @@ defmodule Sanctum.Providers.CliSignInTest do
     status
   end
 
-  defp established(token), do: Sanctum.Caller.establish(token, task_supervisor: nil)
+  defp established(token), do: Sanctum.Caller.establish(token, refresh: false)
 
   defp sign_in_row!(token) do
     hash = Sanctum.Session.token_hash(token)
@@ -174,7 +174,6 @@ defmodule Sanctum.Providers.CliSignInTest do
 
   test "the action table names the approval a credential issuance, as an API key's",
        %{session_ctx: session_ctx} do
-    assert Sanctum.Pairing.action_for("session.cli_approve") == :credential_issuance
     assert Sanctum.Pairing.sensitive?(:credential_issuance)
 
     # A session's own approval, with no proof, opens a confirmation and

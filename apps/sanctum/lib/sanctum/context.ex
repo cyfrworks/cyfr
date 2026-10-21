@@ -64,9 +64,7 @@ defmodule Sanctum.Context do
           | :webhook
           | :tincture
           | :system
-          | :session
           | nil
-  @type api_key_type :: :application | :service | :admin | nil
   @type plane :: :external | :guest
 
   @typedoc """
@@ -167,7 +165,6 @@ defmodule Sanctum.Context do
           permissions: MapSet.t(atom()),
           scope: scope(),
           auth_method: auth_method(),
-          api_key_type: api_key_type(),
           request_id: String.t() | nil,
           call_id: String.t() | nil,
           api_key_id: String.t() | nil,
@@ -198,7 +195,6 @@ defmodule Sanctum.Context do
     :permissions,
     :scope,
     :auth_method,
-    :api_key_type,
     :request_id,
     :call_id,
     :api_key_id,
@@ -236,10 +232,9 @@ defmodule Sanctum.Context do
     :frame,
     # The caller's resolved address, where the ingress knew one
     # (`Sanctum.ClientIp`). It is not identity and authorizes nothing — it
-    # is what an anonymous, per-action budget can be charged to. Without
-    # it the `/mcp` device flows had no address of their own and rode the
-    # transport's shared 120/min bucket, so several addresses could still
-    # exhaust the global sign-in ceiling between them.
+    # is what an anonymous, per-action budget can be charged to: the
+    # `/mcp` device flows charge their per-address sign-in budget to it
+    # (`Sanctum.Providers.Session`, `Sanctum.Auth.DeviceFlow`).
     :client_ip,
     # The paired client the device channel authenticated this request
     # through (`auth_method: :device`), or nil for every other ingress.
@@ -342,7 +337,6 @@ defmodule Sanctum.Context do
   - `:scope` - Scope atom (`:athanor` default; `:platform` only through `internal/1`)
   - `:platform_admin` - Boolean (default: false); the operator capability
   - `:auth_method` - Authentication method atom
-  - `:api_key_type` - API key type atom
   - `:api_key_id` - API key identifier
   - `:session_token_hash` - session row key (SHA-256 of the session token)
   - `:door` - the identity key of the door that admitted a sign-in
@@ -363,7 +357,7 @@ defmodule Sanctum.Context do
     attrs |> Map.new() |> build()
   end
 
-  @valid_scopes Sanctum.Atoms.scope_atoms()
+  @valid_scopes Prima.TenancyScope.atoms()
 
   # Validate auth_method against its declared vocabulary at context construction.
   @valid_auth_methods [
@@ -374,7 +368,6 @@ defmodule Sanctum.Context do
     :webhook,
     :tincture,
     :system,
-    :session,
     nil
   ]
 
@@ -432,8 +425,8 @@ defmodule Sanctum.Context do
     # sets user_id (system tasks use "system"). A nil here is a construction
     # bug; catch it before it reaches authz/storage. namespace is NOT required:
     # it is a pure identity field (attribution/tincture tokens), not a storage
-    # primitive — an absent namespace is valid (e.g. a user who hasn't claimed
-    # a cyfr.run slug yet).
+    # primitive — an absent namespace is valid (e.g. a user with no claimed
+    # cyfr.run slug).
     if authenticated and is_nil(Map.get(attrs, :user_id)) do
       raise ArgumentError,
             "Sanctum.Context.build/1: authenticated contexts require :user_id " <>
@@ -472,7 +465,6 @@ defmodule Sanctum.Context do
       permissions: permissions,
       scope: scope,
       auth_method: Map.get(attrs, :auth_method),
-      api_key_type: Map.get(attrs, :api_key_type),
       request_id: Map.get(attrs, :request_id),
       call_id: Map.get(attrs, :call_id),
       api_key_id: Map.get(attrs, :api_key_id),
@@ -1051,17 +1043,15 @@ defmodule Sanctum.Context do
     {:error, :unauthenticated}
   end
 
-  def authorize(%__MODULE__{} = ctx, action, resource) do
+  def authorize(%__MODULE__{} = ctx, action, resource) when is_atom(action) do
     do_authorize(ctx, action, resource)
   end
 
-  # Permission-only check (no resource to verify ownership of). Also
+  # Permission-only check (no resource whose tenant to verify). Also
   # enforce the tenant scope (via `Sanctum.TenantPolicy`) so an athanor-less
   # context is rejected centrally rather than relying on storage-layer scoping.
   defp do_authorize(%__MODULE__{} = ctx, action, nil) do
-    permission = action_to_permission(action)
-
-    with :ok <- require_permission(ctx, permission),
+    with :ok <- require_permission(ctx, action),
          :ok <- tenant_ok(ctx) do
       :ok
     else
@@ -1089,7 +1079,7 @@ defmodule Sanctum.Context do
   # clauses above — e.g. `{:execution, record}` with no `:user_id`, or a
   # `{:tenant, non_map}` — is caller misuse. Fail closed rather than fall
   # through to the permission + tenant-presence-only path below, which would
-  # silently skip the ownership and per-record tenant checks the tag implies.
+  # silently skip the per-record tenant check the tag implies.
   defp do_authorize(%__MODULE__{} = ctx, action, {tag, _})
        when tag in [:execution, :tenant] do
     log_denial(ctx, action, {tag, :malformed_resource})
@@ -1112,7 +1102,8 @@ defmodule Sanctum.Context do
 
   # For resources without tenant identity, enforce permission and tenant
   # presence. Pass tenant-owned records as {:execution | :tenant, record}
-  # for ownership checks. Storage queries also enforce the context's athanor.
+  # for the per-record tenant check. Storage queries also enforce the
+  # context's athanor.
   defp do_authorize(%__MODULE__{} = ctx, action, _resource) do
     do_authorize(ctx, action, nil)
   end
@@ -1122,7 +1113,7 @@ defmodule Sanctum.Context do
   # {:execution|:tenant}. verify_tenant (Sanctum.TenantPolicy) logs any
   # tenant mismatch, so this does not re-log.
   defp verify_tenant_resource(%__MODULE__{} = ctx, action, record) do
-    with :ok <- require_permission(ctx, action_to_permission(action)),
+    with :ok <- require_permission(ctx, action),
          :ok <- verify_tenant(ctx, record) do
       :ok
     end
@@ -1134,9 +1125,6 @@ defmodule Sanctum.Context do
   defp verify_tenant(%__MODULE__{} = ctx, record) do
     Sanctum.TenantPolicy.verify(ctx, record)
   end
-
-  # Accept permission atoms from Sanctum.Atoms directly.
-  defp action_to_permission(action) when is_atom(action), do: action
 
   # user_id and auth_method ride the rostered Logger metadata — the
   # message carries only what the roster does not.

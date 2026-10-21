@@ -5,8 +5,6 @@ defmodule Sanctum.Providers.Webhook do
   @moduledoc """
   Webhook tool handlers for the Sanctum MCP provider — create, list, get,
   update, revoke, rotate, and re-enable inbound webhooks.
-
-  Extracted from `Sanctum.Provider`; behaviour preserved exactly.
   """
 
   require Logger

@@ -21,10 +21,11 @@ defmodule Sanctum.DeviceWriteWindowTest do
   session's. Each change still completes while the device stands.
 
   These need what only this suite has: the component domain a webhook's
-  target is checked in, and an HTTP stub for the grant's token endpoint.
-  The rotation and the vault's own writes are the sanctum suite's
-  (`Sanctum.IssuanceTest`), and two connections racing a consumption and
-  a revocation are `Sanctum.Consent.AuthzRaceTest`'s.
+  target is checked in. A grant's token endpoint is a scripted
+  provider's (`:sanctum, :scripted_oauth_provider`). The rotation and the
+  vault's own writes are the sanctum suite's (`Sanctum.IssuanceTest`),
+  and two connections racing a consumption and a revocation are
+  `Sanctum.Consent.AuthzRaceTest`'s.
   """
 
   use ExUnit.Case, async: false
@@ -98,7 +99,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
       )
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     {:ok, _component} =
       Sanctum.Test.ComponentHelpers.register_test_component(
@@ -138,7 +139,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
     {:ok, invitation} =
       session_ctx
       |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-      |> Pairing.begin(%{key_digest: digest})
+      |> Pairing.begin(%{"key_digest" => digest})
 
     glass = Context.build(%{authenticated: false, client_ip: @source})
     submission = %{device_key: device_key}
@@ -150,7 +151,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
       Pairing.complete(
         glass,
         invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.sign(pairing, private))
+        Map.put(submission, :proof, Proof.encode(Proof.sign(pairing, private)))
       )
 
     {:ok, challenge} =
@@ -171,7 +172,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
         challenge
       )
 
-    {:ok, ctx} = DeviceCerts.verify_request(certificate, ctx, [])
+    {:ok, ctx} = DeviceCerts.verify_request(certificate, ctx)
     {client_id, ctx}
   end
 
@@ -315,10 +316,31 @@ defmodule Sanctum.DeviceWriteWindowTest do
     )
   end
 
-  # The token endpoint answering once, and a grant pending under the
-  # device's context as `OAuthGrant.authorize_url/2` mints one. The pending
-  # record is server-minted state; fabricating it keeps the stub's http
-  # token URL past the https check that guards operator input.
+  # A provider no shipped preset is (`:sanctum, :scripted_oauth_provider`),
+  # standing in for its token endpoint: every code exchange is answered
+  # one bundle.
+  defmodule GrantIdp do
+    @moduledoc false
+
+    @hint "glass-idp"
+    @endpoints %{
+      "authorize_url" => "https://idp.glass.test/authorize",
+      "token_url" => "https://idp.glass.test/token"
+    }
+
+    def hint, do: @hint
+    def endpoints, do: @endpoints
+
+    def preset(@hint), do: %{endpoints: @endpoints}
+    def preset(_hint), do: nil
+
+    def post(_url, _headers, _body),
+      do: {:ok, %{"access_token" => "at-1", "refresh_token" => "rt-1", "expires_in" => 3600}}
+  end
+
+  # A grant pending under the device's context as
+  # `OAuthGrant.authorize_url/2` mints one; the pending record is
+  # server-minted state.
   defp pending_grant!(ctx, target) do
     state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
@@ -334,54 +356,36 @@ defmodule Sanctum.DeviceWriteWindowTest do
     {state, pending}
   end
 
-  defp token_endpoint!(bypass) do
-    Bypass.expect_once(bypass, "POST", "/token", fn conn ->
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(
-        200,
-        Jason.encode!(%{
-          "access_token" => "at-1",
-          "refresh_token" => "rt-1",
-          "expires_in" => 3600,
-          "token_type" => "Bearer"
-        })
-      )
-    end)
-  end
-
-  defp endpoints(bypass) do
-    %{
-      "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
-      "token_url" => "http://localhost:#{bypass.port}/token",
-      "auth_style" => "params"
-    }
-  end
-
-  defp new_target(name, bypass) do
+  defp new_target(name) do
     %{
       kind: :new,
       entry_id: nil,
       name: name,
-      provider: @provider,
-      endpoints: endpoints(bypass),
+      provider: GrantIdp.hint(),
+      endpoints: GrantIdp.endpoints(),
       scopes: @scopes,
       destination: @destination,
       attach_only: true
     }
   end
 
-  # An oauth entry already bound to the stub's endpoints, so a re-auth is
-  # the same-binding rotation.
-  defp existing_target!(ctx, name, bypass) do
+  # An oauth entry already bound to the scripted provider's endpoints and
+  # holding a bundle, so a re-auth is the same-binding rotation.
+  defp existing_target!(ctx, name) do
+    id = Prima.UUID7.generate_id("vlt")
+    aad = Sanctum.CipherAAD.vault_entry(ctx.athanor_id, id, GrantIdp.hint())
+    {:ok, json} = Sanctum.Vault.Payload.encode_material(%{}, %{"access_token" => "at-0"})
+    {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
+
     {:ok, entry} =
       Arca.VaultStorage.put(Context.actor(ctx), %{
+        id: id,
         name: name,
         kind: "oauth",
-        provider_hint: @provider,
-        oauth_endpoints: Jason.encode!(endpoints(bypass)),
+        provider_hint: GrantIdp.hint(),
+        oauth_endpoints: Jason.encode!(GrantIdp.endpoints()),
         oauth_scopes: Jason.encode!(@scopes),
-        sealed_payload: "sealed-v1",
+        sealed_payload: sealed,
         destination: @destination
       })
 
@@ -389,8 +393,8 @@ defmodule Sanctum.DeviceWriteWindowTest do
       kind: :existing,
       entry_id: entry.id,
       name: name,
-      provider: @provider,
-      endpoints: endpoints(bypass),
+      provider: GrantIdp.hint(),
+      endpoints: GrantIdp.endpoints(),
       scopes: @scopes
     }
 
@@ -482,12 +486,34 @@ defmodule Sanctum.DeviceWriteWindowTest do
   # ---------------------------------------------------------------------------
 
   describe "an OAuth grant a device started" do
+    setup %{session_ctx: session_ctx} do
+      # Restored by on_exit, registered before the change.
+      prior = Application.fetch_env(:sanctum, :scripted_oauth_provider)
+
+      on_exit(fn ->
+        case prior do
+          {:ok, value} -> Application.put_env(:sanctum, :scripted_oauth_provider, value)
+          :error -> Application.delete_env(:sanctum, :scripted_oauth_provider)
+        end
+      end)
+
+      Application.put_env(:sanctum, :scripted_oauth_provider, GrantIdp)
+
+      :ok =
+        Sanctum.TestContext.put_provider_credentials(
+          session_ctx,
+          GrantIdp.hint(),
+          "client-id-1",
+          "client-secret-1"
+        )
+
+      :ok
+    end
+
     test "creating an entry is refused by a revocation after its standing was read again: none is written",
          %{session_ctx: session_ctx} do
       {client_id, ctx} = paired!(session_ctx)
-      bypass = Bypass.open()
-      token_endpoint!(bypass)
-      {state, pending} = pending_grant!(ctx, new_target("Glass mail", bypass))
+      {state, pending} = pending_grant!(ctx, new_target("Glass mail"))
 
       assert {:error, :unauthenticated} =
                revoked_in_window(session_ctx, client_id, &regranted_point/2, fn ->
@@ -501,9 +527,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
     test "rotating an entry is refused the same way: its material stays at its revision",
          %{session_ctx: session_ctx} do
       {client_id, ctx} = paired!(session_ctx)
-      bypass = Bypass.open()
-      token_endpoint!(bypass)
-      {entry, target} = existing_target!(ctx, "Glass mail rotated", bypass)
+      {entry, target} = existing_target!(ctx, "Glass mail rotated")
       {state, pending} = pending_grant!(ctx, target)
 
       assert {:error, :unauthenticated} =
@@ -519,9 +543,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
 
     test "writes its entry while the device stands", %{session_ctx: session_ctx} do
       {_client_id, ctx} = paired!(session_ctx)
-      bypass = Bypass.open()
-      token_endpoint!(bypass)
-      {state, pending} = pending_grant!(ctx, new_target("Glass mail standing", bypass))
+      {state, pending} = pending_grant!(ctx, new_target("Glass mail standing"))
 
       assert {:ok, %{name: "Glass mail standing", rebound: false}} =
                OAuthGrant.complete(state, "code-3", pending.redirect_uri)
@@ -678,7 +700,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
   defp holder_args(signer, added, id) do
     %{
       "recovery_secret" => Encoding.b64(signer),
-      "holder" => %{"kind" => "kit", "recovery_secret" => Encoding.b64(added)},
+      "holder" => %{"recovery_secret" => Encoding.b64(added)},
       "request_id" => id
     }
   end
@@ -860,7 +882,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
                  session_ctx,
                  client_id,
                  ctx,
-                 &Person.sign_assertion(&1, request, [])
+                 &Person.sign_assertion(&1, request)
                )
 
       assert {:ok, %{assertion: nil}} =
@@ -874,7 +896,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
       {action, request} = carried!(user.id)
 
       assert {:ok, %{assertion: %Prima.PersonAssertion{}}} =
-               Sanctum.TestContext.confirming(ctx, &Person.sign_assertion(&1, request, []))
+               Sanctum.TestContext.confirming(ctx, &Person.sign_assertion(&1, request))
 
       assert {:ok, %{assertion: recorded}} =
                Arca.CarryActions.get(%Prima.Actor{user_id: user.id}, action.id)

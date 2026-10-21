@@ -6,10 +6,10 @@ defmodule Sanctum.Gate.ServicesTest do
   alias Sanctum.Services
   alias Sanctum.Catalog
 
-  test "every configured provider maps to a service the roster lists" do
+  test "every loaded provider maps to a service the roster lists" do
     names = Services.service_names()
 
-    for module <- Catalog.configured_providers() do
+    for module <- Catalog.available_providers() do
       assert Services.service_name(module) in names
     end
 
@@ -23,9 +23,5 @@ defmodule Sanctum.Gate.ServicesTest do
     assert Services.service_name(Arca.Providers.Records) == "arca"
     assert Services.service_name(Arca.Providers.Files) == "arca"
     assert Services.providers_for("arca") == [Arca.Providers.Records, Arca.Providers.Files]
-  end
-
-  test "an unlisted module is sanctum's" do
-    assert Services.service_name(UnknownProvider) == "sanctum"
   end
 end

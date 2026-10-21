@@ -227,9 +227,9 @@ defmodule Sanctum.ClientIp do
   # non-matching hop from the right is the client. If every hop is a trusted
   # proxy, the caller IS a proxy — return the innermost entry, which is the
   # socket peer appended by `extract_forwarded_ip/3` and the only hop in the
-  # chain the caller could not have written. `List.first(chain)` named the
-  # OUTERMOST hop instead: a caller whose own peer sits inside a trusted
-  # range could then choose the address every IP allowlist would see.
+  # chain the caller could not have written. The OUTERMOST hop would be the
+  # caller's to choose: a caller whose own peer sits inside a trusted range
+  # would pick the address every IP allowlist sees.
   defp strip_trusted(chain, cidrs) do
     chain
     |> Enum.reverse()

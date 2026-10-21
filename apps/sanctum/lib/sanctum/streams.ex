@@ -29,9 +29,9 @@ defmodule Sanctum.Streams do
   names no domain. Only the placement `canvas` admits; any other
   placement, a declaration today's rules refuse, a version the registry
   does not hold and a read that fails each refuse `forbidden`
-  (`canvas_stream`). A context without a frame is no frame's read and is
-  judged by the checks above alone, so a session, an MCP key and a paired
-  device open such a stream as before.
+  (`canvas_stream`). A context without a frame is no frame's read: a
+  session, an MCP key and a paired device open such a stream on the
+  checks above alone.
 
   Every open is one decision (`Sanctum.Decisions`) named
   `stream:<name>`, whose request-log row's method is `streams/open`,

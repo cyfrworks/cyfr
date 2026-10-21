@@ -16,17 +16,15 @@ defmodule Sanctum.Authority.BudgetCounter do
   @table __MODULE__
 
   @doc """
-  Create the counter table. Called once by `Cyfr.Application` from a
-  process that lives as long as the application — an ETS table dies with
-  its owner, and a budget table that vanished would count from zero again,
-  which is looser, never stricter. Public, so any process may charge.
+  Create the counter table. Called once, by `Sanctum.Supervisor.start/2`,
+  from the process that lives as long as the application: an ETS table
+  dies with its owner, and a budget table that vanished would count from
+  zero again, which is looser, never stricter. Public, so any process may
+  charge.
   """
   @spec ensure_table() :: :ok
   def ensure_table do
-    if :ets.whereis(@table) == :undefined do
-      :ets.new(@table, [:named_table, :public, :set, write_concurrency: true])
-    end
-
+    :ets.new(@table, [:named_table, :public, :set, write_concurrency: true])
     :ok
   end
 
@@ -46,18 +44,6 @@ defmodule Sanctum.Authority.BudgetCounter do
   @doc "Give a slot back."
   @spec release(Budget.t()) :: :ok
   def release(%Budget{id: id}), do: release_one(id)
-
-  @doc "What is in flight against the cap."
-  @spec snapshot(Budget.t()) :: %{in_flight: non_neg_integer(), cap: non_neg_integer()}
-  def snapshot(%Budget{id: id, cap: cap}) do
-    in_flight =
-      case :ets.lookup(@table, id) do
-        [{^id, n}] -> max(n, 0)
-        [] -> 0
-      end
-
-    %{in_flight: in_flight, cap: cap}
-  end
 
   # A count back at zero drops its row; `delete_object` only removes the
   # exact `{id, 0}`, so a concurrent acquire that already moved it on is

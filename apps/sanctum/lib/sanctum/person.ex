@@ -50,7 +50,7 @@ defmodule Sanctum.Person do
     * `:unavailable` — the keys cannot be opened: the store or the keyring
       cannot answer, or a sealed key does not open as its role.
 
-  A person assertion (`sign_assertion/3`) answers, besides these, the
+  A person assertion (`sign_assertion/2`) answers, besides these, the
   `confirmation_required` signal and the confirmation's other refusals,
   `{:invalid_argument, _}` for a sign-in no pending carry of theirs names,
   and `{:conflict, _}` for one that can no longer be signed.
@@ -364,18 +364,15 @@ defmodule Sanctum.Person do
 
   Answers `{:ok, %{assertion: %Prima.PersonAssertion{}, genesis: map}}`:
   what the browser carries back to the audience, the genesis beside the
-  assertion so that home can find the person's directory. `opts` takes
-  nothing yet.
+  assertion so that home can find the person's directory.
   """
-  @spec sign_assertion(Sanctum.Context.t(), assertion_request(), keyword()) ::
+  @spec sign_assertion(Sanctum.Context.t(), assertion_request()) ::
           {:ok, %{assertion: Prima.PersonAssertion.t(), genesis: map()}} | {:error, term()}
   def sign_assertion(
         %Sanctum.Context{user_id: user_id} = ctx,
-        %{audience: audience, challenge: challenge, action_id: action_id} = request,
-        opts
+        %{audience: audience, challenge: challenge, action_id: action_id} = request
       )
-      when is_binary(audience) and is_binary(challenge) and is_binary(action_id) and
-             is_list(opts) do
+      when is_binary(audience) and is_binary(challenge) and is_binary(action_id) do
     actor = Sanctum.Context.actor(ctx)
 
     with {:ok, row} <- assertion_signer(actor, user_id),

@@ -70,12 +70,8 @@ defmodule Sanctum.Gate.ProxyTest do
     assert Sanctum.Proxy in behaviours
   end
 
-  test "every proxied tool is in-chain by default" do
-    assert Proxy.default_planes() == [:in_chain]
-  end
-
   test "an uninstalled port raises where it is asked" do
-    Proxy.reset()
+    Sanctum.TestContext.uninstall_port(Proxy)
 
     error = assert_raise Proxy.NotInstalledError, fn -> Proxy.impl!() end
     assert error.message =~ "Sanctum.Proxy.install!/1"

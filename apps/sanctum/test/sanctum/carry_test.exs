@@ -30,7 +30,7 @@ defmodule Sanctum.CarryTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
-    on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_, :_}) end)
+    on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_}) end)
     :ok
   end
 
@@ -65,7 +65,7 @@ defmodule Sanctum.CarryTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(built)
-    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, refresh: false)
     %{user: user, ctx: ctx, token: session.token}
   end
 
@@ -160,11 +160,11 @@ defmodule Sanctum.CarryTest do
   defp cached?(identifier),
     do: Arca.Repo.exists?(from(h in DirectoryHead, where: h.identifier == ^identifier))
 
-  describe "begin/3" do
+  describe "begin/2" do
     test "signs one action for one destination, carrying the genesis, and stores it pending" do
       person = enrolled!()
 
-      assert {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      assert {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination)
       assert began.destination == @destination
       assert began.return_url == Sanctum.Person.home() <> "/carry"
       assert began.payload == %{"genesis" => Entry.encode(person.genesis)}
@@ -190,21 +190,17 @@ defmodule Sanctum.CarryTest do
       assert action.payload_digest == digest(began)
     end
 
-    test "refuses this home, a destination that is no origin, another operation, and an " <>
-           "unenrolled person" do
+    test "refuses this home, a destination that is no origin, and an unenrolled person" do
       person = enrolled!()
 
       assert {:error, {:invalid_argument, _}} =
-               Sanctum.Carry.begin(person.ctx, Sanctum.Person.home(), "join")
+               Sanctum.Carry.begin(person.ctx, Sanctum.Person.home())
 
       assert {:error, {:invalid_argument, _}} =
-               Sanctum.Carry.begin(person.ctx, "https://hub.example/path", "join")
-
-      assert {:error, {:invalid_argument, _}} =
-               Sanctum.Carry.begin(person.ctx, @destination, "transfer")
+               Sanctum.Carry.begin(person.ctx, "https://hub.example/path")
 
       unenrolled = seated!()
-      assert {:error, :not_enrolled} = Sanctum.Carry.begin(unenrolled.ctx, @destination, nil)
+      assert {:error, :not_enrolled} = Sanctum.Carry.begin(unenrolled.ctx, @destination)
       assert Arca.Repo.aggregate(CarryAction, :count) == 0
     end
 
@@ -213,12 +209,12 @@ defmodule Sanctum.CarryTest do
 
       began =
         for _ <- 1..Arca.CarryActions.max_pending() do
-          {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+          {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination)
           began
         end
 
       assert {:error, {:conflict, message}} =
-               Sanctum.Carry.begin(person.ctx, @destination, "join")
+               Sanctum.Carry.begin(person.ctx, @destination)
 
       assert message =~ "Twenty"
 
@@ -230,7 +226,7 @@ defmodule Sanctum.CarryTest do
           set: [expires_at: past]
         )
 
-      assert {:ok, _} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      assert {:ok, _} = Sanctum.Carry.begin(person.ctx, @destination)
       assert %{phase: "expired", payload: nil} = Arca.Repo.get!(CarryAction, oldest)
     end
   end
@@ -239,12 +235,12 @@ defmodule Sanctum.CarryTest do
     test "lists the person's own unexpired pending carries, and nothing a carry signs or carries" do
       person = enrolled!()
       other = enrolled!()
-      {:ok, first} = Sanctum.Carry.begin(person.ctx, @destination, "join")
-      {:ok, second} = Sanctum.Carry.begin(person.ctx, "https://other-hub.example", "join")
-      {:ok, theirs} = Sanctum.Carry.begin(other.ctx, @destination, "join")
-      {:ok, done} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, first} = Sanctum.Carry.begin(person.ctx, @destination)
+      {:ok, second} = Sanctum.Carry.begin(person.ctx, "https://other-hub.example")
+      {:ok, theirs} = Sanctum.Carry.begin(other.ctx, @destination)
+      {:ok, done} = Sanctum.Carry.begin(person.ctx, @destination)
       {:ok, _} = Sanctum.Carry.complete(person.ctx, done.action_id, "admitted")
-      {:ok, gone} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, gone} = Sanctum.Carry.begin(person.ctx, @destination)
 
       {1, _} =
         Arca.Repo.update_all(from(a in CarryAction, where: a.id == ^gone.action_id),
@@ -273,7 +269,7 @@ defmodule Sanctum.CarryTest do
 
     test "answers nobody without a person behind the context" do
       person = enrolled!()
-      {:ok, _} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, _} = Sanctum.Carry.begin(person.ctx, @destination)
 
       assert {:error, :unauthenticated} =
                Sanctum.Carry.pending(%{person.ctx | authenticated: false})
@@ -286,8 +282,8 @@ defmodule Sanctum.CarryTest do
     test "expires every person's carries past their expiry and clears their payloads; open ones stand" do
       person = enrolled!()
       other = enrolled!()
-      {:ok, gone} = Sanctum.Carry.begin(person.ctx, @destination, "join")
-      {:ok, open} = Sanctum.Carry.begin(other.ctx, @destination, "join")
+      {:ok, gone} = Sanctum.Carry.begin(person.ctx, @destination)
+      {:ok, open} = Sanctum.Carry.begin(other.ctx, @destination)
 
       {1, _} =
         Arca.Repo.update_all(from(a in CarryAction, where: a.id == ^gone.action_id),
@@ -305,7 +301,7 @@ defmodule Sanctum.CarryTest do
 
       # A person with a carry open: their head stays whatever its age.
       person = enrolled!()
-      {:ok, _open} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, _open} = Sanctum.Carry.begin(person.ctx, @destination)
       held = head!(Identity.identifier(person.genesis), 10 * lifetime)
 
       orphan = head!(nobody(), lifetime + 1_000)
@@ -334,7 +330,7 @@ defmodule Sanctum.CarryTest do
 
     test "sweeps only the kinds it names: heads alone move no carry, and carries alone no head" do
       person = enrolled!()
-      {:ok, gone} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, gone} = Sanctum.Carry.begin(person.ctx, @destination)
 
       {1, _} =
         Arca.Repo.update_all(from(a in CarryAction, where: a.id == ^gone.action_id),
@@ -360,7 +356,7 @@ defmodule Sanctum.CarryTest do
   describe "cancel/2" do
     test "ends the person's own open carry, clears its payload, and is the same again" do
       person = enrolled!()
-      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination)
 
       assert {:ok, %{action_id: action_id, phase: "cancelled"}} =
                Sanctum.Carry.cancel(person.ctx, began.action_id)
@@ -379,7 +375,7 @@ defmodule Sanctum.CarryTest do
     test "another person's carry, or none, is not found, and stays as it was" do
       person = enrolled!()
       other = enrolled!()
-      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination)
 
       assert {:error, {:not_found, "carry", _}} =
                Sanctum.Carry.cancel(other.ctx, began.action_id)
@@ -390,7 +386,7 @@ defmodule Sanctum.CarryTest do
 
     test "a carry whose outcome is recorded has nothing left to cancel" do
       person = enrolled!()
-      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination)
       {:ok, _} = Sanctum.Carry.complete(person.ctx, began.action_id, "refused")
 
       assert {:error, {:conflict, _}} = Sanctum.Carry.cancel(person.ctx, began.action_id)
@@ -403,7 +399,7 @@ defmodule Sanctum.CarryTest do
   describe "complete/3" do
     test "records the outcome once; an exact retry answers it and applies nothing again" do
       person = enrolled!()
-      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination)
 
       # It answers the destination this home's row names, where the
       # person's browser goes next.
@@ -429,7 +425,7 @@ defmodule Sanctum.CarryTest do
     test "another person's action, and an expired one, are refused" do
       person = enrolled!()
       other = enrolled!()
-      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination)
 
       assert {:error, {:not_found, "carry", _}} =
                Sanctum.Carry.complete(other.ctx, began.action_id, "admitted")
@@ -449,7 +445,7 @@ defmodule Sanctum.CarryTest do
 
     test "a retry after a lost reply reads the requester's standing again" do
       person = enrolled!()
-      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination)
       {:ok, _} = Sanctum.Carry.complete(person.ctx, began.action_id, "admitted")
 
       :ok = Sanctum.Session.destroy(person.token)
@@ -459,7 +455,7 @@ defmodule Sanctum.CarryTest do
 
     test "an action signed under keys a recovery since replaced is refused, as its envelope is" do
       person = enrolled!()
-      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination, "join")
+      {:ok, began} = Sanctum.Carry.begin(person.ctx, @destination)
       {:ok, envelope} = Envelope.decode(began.envelope)
 
       # A recovery elsewhere: new online keys, signed by the kit.

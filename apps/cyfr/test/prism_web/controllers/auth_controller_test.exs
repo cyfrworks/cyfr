@@ -199,7 +199,7 @@ defmodule PrismWeb.AuthControllerTest do
       assert redirected_to(conn) == "/"
       token = Plug.Conn.get_session(conn, :sanctum_session_token)
       assert is_binary(token)
-      assert {:ok, %{authenticated: true}} = Sanctum.Session.load(token, surface: :console)
+      assert {:ok, %{authenticated: true}} = Sanctum.Session.load(token)
       # The token travels in the cookie only.
       refute conn.resp_body =~ token
     end
@@ -367,7 +367,7 @@ defmodule PrismWeb.AuthControllerTest do
 
       # The session is a working one: the person is authenticated at once...
       assert {:ok, %{authenticated: true, namespace: ^ns} = loaded} =
-               Sanctum.Session.load(session_of(conn), surface: :console)
+               Sanctum.Session.load(session_of(conn))
 
       # ...and it names their own athanor, minted at admission. Its address
       # is the namespace only when the namespace was known first.
@@ -450,7 +450,7 @@ defmodule PrismWeb.AuthControllerTest do
                Sanctum.Tenancy.Athanors.get_by_owner(person_id("oidcc|https://idp.test|#{uid}"))
 
       assert {:ok, %{athanor_id: ^personal_id, platform_admin: true}} =
-               Sanctum.Session.load(session_of(conn), surface: :console)
+               Sanctum.Session.load(session_of(conn))
     end
 
     test "no personal namespace: signed in on their own athanor, IdP token kept for the claim",
@@ -472,7 +472,7 @@ defmodule PrismWeb.AuthControllerTest do
       assert is_binary(pid)
 
       assert {:ok, %{authenticated: true, namespace: nil, athanor_id: ^pid}} =
-               Sanctum.Session.load(session_of(conn), surface: :console)
+               Sanctum.Session.load(session_of(conn))
 
       assert {:error, :not_found} =
                CredentialStore.get(person_context(user_id), "registry.test", "alice")
@@ -859,7 +859,7 @@ defmodule PrismWeb.AuthControllerTest do
       key = "oidcc|https://idp.test|#{uid}"
       assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identity(key)
 
-      {:ok, ctx} = Sanctum.Caller.establish(session.token, task_supervisor: nil)
+      {:ok, ctx} = Sanctum.Caller.establish(session.token, refresh: false)
 
       assert {:ok, %{linked: true}} =
                Sanctum.TestContext.confirming(

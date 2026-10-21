@@ -107,22 +107,6 @@ defmodule Sanctum.Consent.ProofTest do
       # And it is gone, not merely refused.
       assert Proof.consume(token, @bindings) == {:error, :not_found}
     end
-
-    test "the default lifetime is short" do
-      assert Proof.default_ttl_ms() <= 300_000
-    end
-
-    test "the sweeper clears expired rows" do
-      before = Proof.Memory.outstanding()
-      {:ok, _} = Proof.mint(@bindings, ttl_ms: 1)
-
-      Process.sleep(15)
-      send(Process.whereis(Proof.Memory), :sweep)
-      # Round-trip a call so the sweep has been processed.
-      _ = Proof.Memory.outstanding()
-
-      assert Proof.Memory.outstanding() == before
-    end
   end
 
   # ============================================================================

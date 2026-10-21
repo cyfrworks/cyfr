@@ -78,54 +78,6 @@ defmodule Cyfr.Cluster.Fixtures do
     id |> String.split("_") |> List.last() |> String.replace("-", "") |> String.slice(0, 20)
   end
 
-  @doc """
-  A stored grant in `athanor_id` whose policy names a storage path the
-  grammar no longer admits (`data//secrets/`), as a head committed before
-  the grammar refused that spelling reads. Spelled `:revoked`, the same
-  grant leaves every list the boot check of stored grants reads. Answers
-  its reference.
-  """
-  @spec noncanonical_grant!(String.t(), String.t(), :active | :revoked) :: String.t()
-  def noncanonical_grant!(athanor_id, label, status \\ :active) do
-    id = "rg-#{label}-#{unique_of(athanor_id)}"
-    ref = "catalyst:local.#{id}"
-
-    policy =
-      Jason.encode!(%{
-        "canonical" => "jcs-1",
-        "nodes" => %{
-          ref => %{
-            "limits" => Prima.Test.AuthorityFixtures.limits_map(),
-            "edges" => %{
-              "@ingress" => %{
-                "storage" => %{"paths" => ["data/ok/", "data//secrets/"], "actions" => ["read"]}
-              }
-            }
-          }
-        }
-      })
-
-    :ok =
-      Sanctum.Test.ConsentFixtures.seed_head!(
-        %{Sanctum.TestContext.local() | athanor_id: athanor_id},
-        %{id: id, kind: :owner, source_ref: ref, label: "default", status: status},
-        %{
-          id: "cons-#{id}",
-          revision: 1,
-          scope: :versionless,
-          pinned_version: "",
-          invoke_mode: :open_inert,
-          shape_digest: "sha256:shape-#{id}",
-          commit_digest: "sha256:commit-#{id}",
-          resolved_policy: policy,
-          activation: %{ref => "sha256:act-#{id}"},
-          vault_refs: []
-        }
-      )
-
-    ref
-  end
-
   @doc "An actor in `athanor_id`, as every fixture here writes under."
   @spec actor(String.t()) :: struct()
   def actor(athanor_id), do: Prima.Actor.in_athanor(athanor_id)
@@ -235,7 +187,7 @@ defmodule Cyfr.Cluster.Fixtures do
   defp standing(athanor_id) do
     {:ok, grant} =
       Sanctum.ExecutionStanding.capture(
-        Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+        Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
       )
 
     [grant: grant, verify: &Sanctum.ExecutionStanding.verify/1]

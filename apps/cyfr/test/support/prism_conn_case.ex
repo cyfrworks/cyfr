@@ -232,7 +232,7 @@ defmodule PrismWeb.ConnCase do
 
         # Signed in on an athanor that is set up, which is what a console
         # test is about; filling one is `Sanctum.Provisioning`'s own suite.
-        {:ok, provisioned} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+        {:ok, provisioned} = Sanctum.TestContext.mark_provisioned(athanor)
         provisioned
     end
   end

@@ -13,25 +13,12 @@ defmodule Sanctum.AtomsTest do
       end
     end
 
-    test "retired permission names come back as strings" do
-      # These atoms all exist in the VM (old vocabulary, action verbs), but
-      # none is a permission. A stored grant naming one silently drops.
-      for retired <- ~w(read write publish build search audit secret_access) do
-        assert Atoms.safe_to_permission_atom(retired) == retired
-      end
-    end
-
     test "returns unknown permission strings as-is" do
       # Completely unknown strings should not be converted
       assert Atoms.safe_to_permission_atom("unknown_permission_xyz123") ==
                "unknown_permission_xyz123"
 
       assert Atoms.safe_to_permission_atom("malicious_input_attempt") == "malicious_input_attempt"
-    end
-
-    test "passes through existing atoms unchanged" do
-      assert Atoms.safe_to_permission_atom(:execute) == :execute
-      assert Atoms.safe_to_permission_atom(:custom) == :custom
     end
 
     test "a provider name is not a permission" do

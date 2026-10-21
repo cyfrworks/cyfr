@@ -550,9 +550,10 @@ defmodule Sanctum.Recovery do
   rotation in progress as `%{request_id, phase}`, or nil; and `doors`, each
   linked door as `%{key, provider, issuer, subject}`.
 
-  Nothing in it is a seed, a sealed value or a staged key. A person with
-  no identity row is local and unenrolled. Refusals: `:unauthenticated`,
-  `:guest_plane`, `:unavailable`.
+  Nothing in it is a seed, a sealed value or a staged key. Refusals:
+  `:unauthenticated`, `:guest_plane`, `:unavailable`, and `{:corrupt,
+  :person_identity}` for a person whose identity row, minted with their
+  person row, is missing.
   """
   @spec status(Context.t()) :: {:ok, map()} | {:error, term()}
   def status(%Context{} = ctx) do
@@ -581,8 +582,9 @@ defmodule Sanctum.Recovery do
       {:ok, row} ->
         {:ok, Map.take(row, [:provenance, :identifier, :enrollment, :head_hash])}
 
+      # Minted with the person row: one missing is damage.
       {:error, :not_found} ->
-        {:ok, %{provenance: "local", identifier: nil, enrollment: "none", head_hash: nil}}
+        {:error, {:corrupt, :person_identity}}
 
       {:error, _unanswered} ->
         {:error, :unavailable}
@@ -633,14 +635,14 @@ defmodule Sanctum.Recovery do
   @doc """
   Add another printed kit to the person's recovery set (the module doc):
   `args` holds an existing kit's seed under `"recovery_secret"`, which
-  signs the change, the added holder as `"holder" => %{"kind" => "kit",
-  "recovery_secret" => seed}`, and the attempt's `"request_id"`.
+  signs the change, the added kit as `"holder" => %{"recovery_secret" =>
+  seed}`, and the attempt's `"request_id"`.
 
   Answers as `enroll/3` does, the kit being the added one's, and
   `key_epoch` the person's new head.
 
-  Refusals: `{:invalid_argument, _}` (a holder of another kind, a missing
-  or malformed seed, the same seed twice), `:not_enrolled`, `:not_found`,
+  Refusals: `{:invalid_argument, _}` (a missing or malformed seed, the
+  same seed twice), `:not_enrolled`, `:not_found`,
   `:not_a_holder` (the signing seed is not a holder of the identity now),
   `:already_a_holder`, `:stale_head` (the identity's log has moved past
   the person's head here), `{:attempt_in_progress, _}`,
@@ -789,13 +791,7 @@ defmodule Sanctum.Recovery do
 
   defp continue_holder(_ctx, %{phase: "refused"}, _opts), do: {:error, :holder_refused}
 
-  defp holder(%{"kind" => "kit", "recovery_secret" => seed}), do: seed(seed)
-
-  defp holder(%{"kind" => _another}),
-    do:
-      {:error,
-       {:invalid_argument,
-        "A printed kit is the one kind of recovery holder; a device cannot hold one"}}
+  defp holder(%{"recovery_secret" => seed}), do: seed(seed)
 
   defp holder(_holder),
     do: {:error, {:invalid_argument, "The holder to add is a printed kit and its seed"}}

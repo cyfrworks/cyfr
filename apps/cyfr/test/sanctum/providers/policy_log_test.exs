@@ -127,7 +127,7 @@ defmodule Sanctum.Providers.PolicyLogTest do
                Sanctum.Providers.McpLog.correlation(actor(ctx), request_id)
     end
 
-    test "get finds the actor's athanor's row by its id or its request, never another's", %{
+    test "get finds the actor's athanor's row by its id alone, never another's", %{
       ctx: ctx,
       request_id: request_id,
       own: own,
@@ -138,8 +138,8 @@ defmodule Sanctum.Providers.PolicyLogTest do
 
       assert id == own.id
 
-      assert {:ok, %{id: ^id}} =
-               MCP.handle("policy_log", actor(ctx), %{"action" => "get", "id" => request_id})
+      assert MCP.handle("policy_log", actor(ctx), %{"action" => "get", "id" => request_id}) ==
+               {:error, {:not_found, "Policy log", request_id}}
 
       assert MCP.handle("policy_log", actor(ctx), %{"action" => "get", "id" => other.id}) ==
                {:error, {:not_found, "Policy log", other.id}}
@@ -209,7 +209,6 @@ defmodule Sanctum.Providers.PolicyLogTest do
         permissions: MapSet.new(),
         scope: :athanor,
         auth_method: :api_key,
-        api_key_type: :application,
         authenticated: true
       }
 

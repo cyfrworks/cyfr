@@ -185,7 +185,7 @@ defmodule Cyfr.Test.AttemptFixtures do
   def grant(athanor_id) when is_binary(athanor_id) do
     {:ok, grant} =
       Sanctum.ExecutionStanding.capture(
-        Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+        Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
       )
 
     grant

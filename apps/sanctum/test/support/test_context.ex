@@ -51,35 +51,11 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
-  Mark `athanor_id` filled — what a test says when it drives a turn —
-  with the shipped AQUA tree and bundle copied in, as a fill copies
-  them, so the athanor has a soul to answer with.
-
-  A turn pins the baseline consent provisioning mints, so an athanor a
-  test chats in is one that has been set up. Left off by default: the
-  seeded rows are bare athanors, as a fresh server's are, and a
-  server-wide sweep must not find work on every one of them.
-  """
-  def provisioned!(athanor_id) when is_binary(athanor_id) do
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
-    shipped!(athanor_id)
-
-    case athanor.provisioned_at do
-      nil ->
-        {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
-        filled
-
-      _ ->
-        athanor
-    end
-  end
-
-  @doc """
   Mark `athanor_id` filled, as a fill's last write marks it, and nothing
   more — what a test says when it roots a run, which `Opus.run_root/5`
   admits only in a ready athanor (`Sanctum.Provisioning.ready/1`). The
   row is made first when the test named an athanor no fixture made.
-  Unlike `provisioned!/1` it copies no shipped tree in.
+  It copies no shipped tree in.
   """
   def ready!(athanor_id) when is_binary(athanor_id) do
     Arca.Test.Actor.ensure_athanor_row(athanor_id)
@@ -87,7 +63,7 @@ defmodule Sanctum.TestContext do
 
     case athanor.provisioned_at do
       nil ->
-        {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+        {:ok, filled} = mark_provisioned(athanor)
         filled
 
       _ ->
@@ -96,11 +72,56 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
+  Record `athanor` provisioned and forget any failure on its row, as a
+  settled fill writes it (`Sanctum.Provisioning`), with no claim behind
+  it: a fixture's, never a server's. Members' open views hear of it.
+  """
+  def mark_provisioned(%{id: id}) do
+    now = DateTime.utc_now()
+
+    with :ok <-
+           Arca.Athanors.set(Prima.Actor.in_athanor(id),
+             provisioned_at: now,
+             provisioning_failed_at: nil,
+             provisioning_failure: nil,
+             updated_at: now
+           ),
+         {:ok, updated} <- Sanctum.Tenancy.Athanors.get(id) do
+      Sanctum.Notify.broadcast(id, :athanor_changed, %{name: updated.name})
+      {:ok, updated}
+    end
+  end
+
+  @doc """
+  Seat `user_id` as a platform admin with no sign-in behind it: a
+  fixture's operator, never one the door admitted
+  (`Sanctum.Tenancy.Members.grant_platform/2` is the server's).
+  """
+  def ensure_platform(user_id), do: Sanctum.Tenancy.Members.ensure(user_id, scope: "platform")
+
+  @doc """
+  Leave `port` (`Sanctum.Consent.Components`, `Sanctum.Proxy`) with no
+  implementation installed, as a boot that installed none leaves it.
+  """
+  def uninstall_port(port) when port in [Sanctum.Consent.Components, Sanctum.Proxy] do
+    :persistent_term.erase({port, :impl})
+    :ok
+  end
+
+  @doc "The tasks `Sanctum.RunningTasks` holds registered for `request_id`."
+  def running_pids(request_id) do
+    for {^request_id, pid} <- :ets.lookup(Sanctum.RunningTasks, request_id), do: pid
+  end
+
+  @doc "The membership row `id` names, as the server reads it."
+  def membership(id), do: Arca.Members.get(Prima.Actor.system(), id)
+
+  @doc """
   Copy every shipped unit the athanor lacks into `athanor_id` — the
   shipped AQUA tree and the bundle — without marking it provisioned.
   """
   def shipped!(athanor_id) when is_binary(athanor_id) do
-    ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
+    ctx = Sanctum.Context.internal(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
 
     for root <- Arca.Storage.overlay_roots() do
       {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), root)
@@ -132,16 +153,15 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
-  Build a permissive single-user test Context with namespace `"testns"`
-  (override via `:sanctum, :default_test_namespace`), working in the
-  `"ath_test"` athanor.
+  Build a permissive single-user test Context with namespace `"testns"`,
+  working in the `"ath_test"` athanor.
 
   Impersonates a logged-in user (`auth_method: :oidc`) so tests exercise
   the same authorization path production does.
   Use this in tests, factories and fixtures.
   """
   def local do
-    ns = Application.get_env(:sanctum, :default_test_namespace, "testns")
+    ns = "testns"
 
     Context.build(
       user_id: "local|local|#{ns}",
@@ -196,10 +216,6 @@ defmodule Sanctum.TestContext do
         ArgumentError,
         "no admission path #{inspect(path)}: one of #{inspect(Map.keys(@admission_paths))}"
       )
-
-  @doc "The admission paths `via/2` knows, each with the origin it gives."
-  @spec admission_paths() :: %{atom() => Prima.Origin.t()}
-  def admission_paths, do: @admission_paths
 
   @doc """
   The context's identity signed in: the `users` row minted (or found)
@@ -342,18 +358,28 @@ defmodule Sanctum.TestContext do
     end
   end
 
+  # The action each credential site this suite confirms decides under
+  # (`Sanctum.Pairing`'s table of actions).
+  @confirmed_actions %{
+    "key.create" => :credential_issuance,
+    "key.rotate" => :credential_issuance,
+    "webhook.create" => :credential_issuance,
+    "webhook.rotate" => :credential_issuance,
+    "vault.create" => :credential_entry,
+    "vault.rotate" => :credential_entry,
+    "vault.authorize" => :credential_entry,
+    "oauth.set_client" => :credential_entry
+  }
+
   @doc """
   `confirmed/3` for the change the deciding site of `operation`
-  (`tool.action`) passes for `arguments`, naming `resource`: the action is
-  the table's (`Sanctum.Pairing.action_for/1`). Every credential site
-  names its resource by name (the entry, the key, the webhook, the OAuth
-  provider).
+  (`tool.action`) passes for `arguments`, naming `resource`, under the
+  action that site decides. Every credential site names its resource by
+  name (the entry, the key, the webhook, the OAuth provider).
   """
   @spec confirmed_change(Context.t(), String.t(), map(), String.t() | nil) :: Context.t()
   def confirmed_change(%Context{} = ctx, operation, arguments, resource) do
-    action =
-      Sanctum.Pairing.action_for(operation) ||
-        raise ArgumentError, "#{operation} confirms nothing"
+    action = Map.fetch!(@confirmed_actions, operation)
 
     confirmed(ctx, action, %{operation: operation, arguments: arguments, resource: resource})
   end
@@ -482,6 +508,31 @@ defmodule Sanctum.TestContext do
 
         ctx
     end
+  end
+
+  @doc """
+  Remove `ctx`'s person's stored registry credential for one
+  `(registry, namespace_slug)`, as losing it would.
+  """
+  def drop_registry_credential!(%Context{user_id: user_id}, registry, namespace_slug),
+    do: :ok = Arca.RegistryTokenStorage.delete(user_id, registry, namespace_slug)
+
+  @doc """
+  The invoke-budget counter of `authority`'s root (or of a bare budget) on
+  this node: its slots in flight and its cap, read from the counter's
+  table (`Sanctum.Authority.BudgetCounter`), one row per budget id with
+  work in flight.
+  """
+  def invoke_budget(%Prima.Authority{budget: budget}), do: invoke_budget(budget)
+
+  def invoke_budget(%Prima.Authority.Budget{id: id, cap: cap}) do
+    in_flight =
+      case :ets.lookup(Sanctum.Authority.BudgetCounter, id) do
+        [{^id, n}] -> max(n, 0)
+        [] -> 0
+      end
+
+    %{in_flight: in_flight, cap: cap}
   end
 
   @doc """
@@ -688,7 +739,7 @@ defmodule Sanctum.TestContext do
       )
 
     {:ok, session} = Sanctum.Session.create(base, generation_snapshot: snapshot!(base))
-    {:ok, loaded} = Sanctum.Session.load(session.token, surface: :console)
+    {:ok, loaded} = Sanctum.Session.load(session.token)
     loaded
   end
 

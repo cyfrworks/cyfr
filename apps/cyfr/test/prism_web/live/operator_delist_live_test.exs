@@ -42,7 +42,7 @@ defmodule PrismWeb.OperatorDelistLiveTest do
     on_exit(fn ->
       # The memos this case primed are the node's, not its own: left
       # behind they make a neighbour's "no caller is memoized" read false.
-      Arca.Cache.delete_match({:established, :_, :_, :_})
+      Arca.Cache.delete_match({:established, :_, :_})
 
       for {{app, key}, value} <- prev do
         if is_nil(value),
@@ -64,7 +64,7 @@ defmodule PrismWeb.OperatorDelistLiveTest do
        %{conn: conn} do
     operator = test_user()
     Application.put_env(:sanctum, :platform_admin_emails, [operator.email])
-    {:ok, _} = Members.ensure_platform(operator.user_id)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(operator.user_id)
 
     conn = log_in_user(conn, operator)
     token = Plug.Conn.get_session(conn, session_key())

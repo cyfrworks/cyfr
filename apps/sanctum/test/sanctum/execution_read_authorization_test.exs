@@ -8,7 +8,7 @@ defmodule Sanctum.ExecutionReadAuthorizationTest do
   pins the exact decision the controller relies on: the :storage_read
   permission gate + per-record `verify_tenant` (athanor equality). There is
   no owner gate — athanor members are interchangeable, so any same-tenant member
-  with :storage_read may read the record; cross-tenant access is still rejected.
+  with :storage_read may read the record; cross-tenant access is rejected.
   Runtime-free (the HTTP route is exercised by the controller suite).
   """
   use ExUnit.Case, async: false
@@ -32,15 +32,15 @@ defmodule Sanctum.ExecutionReadAuthorizationTest do
 
   @exec %{user_id: "owner-1", athanor_id: "ath_a"}
 
-  test "owner with :storage_read is authorized" do
+  test "the record's creator with :storage_read is authorized" do
     assert Context.authorize(ctx([:storage_read]), :storage_read, {:execution, @exec}) == :ok
   end
 
-  test "an owner without :storage_read is refused" do
+  test "the record's creator without :storage_read is refused" do
     assert {:error, _} = Context.authorize(ctx([:execute]), :storage_read, {:execution, @exec})
   end
 
-  test "non-owner in the same tenant is authorized (members are interchangeable)" do
+  test "another member of the same tenant is authorized (members are interchangeable)" do
     other = ctx([:storage_read], user_id: "intruder")
     assert Context.authorize(other, :storage_read, {:execution, @exec}) == :ok
   end
@@ -49,10 +49,10 @@ defmodule Sanctum.ExecutionReadAuthorizationTest do
     assert Context.authorize(ctx([:*], user_id: "y"), :storage_read, {:execution, @exec}) == :ok
   end
 
-  test ":admin still requires the storage_read permission gate" do
+  test ":admin alone does not pass the storage_read permission gate" do
     # require_permission(:storage_read) runs first, so :admin alone (no
     # storage_read, not :*) is refused — the permission gate is independent of
-    # any role and of ownership.
+    # any role and of who created the record.
     assert {:error, _} =
              Context.authorize(ctx([:admin], user_id: "x"), :storage_read, {:execution, @exec})
 
@@ -70,9 +70,9 @@ defmodule Sanctum.ExecutionReadAuthorizationTest do
     assert {:error, _} = Context.authorize(unauth, :storage_read, {:execution, @exec})
   end
 
-  test "cross-tenant owner is refused (per-record verify_tenant)" do
-    # Same user_id, different athanor: ownership alone must not grant access —
-    # verify_tenant runs before the ownership check.
+  test "the record's creator in another tenant is refused (per-record verify_tenant)" do
+    # Same user_id, different athanor: the creator's id grants nothing —
+    # verify_tenant decides, and there is no owner gate after it.
     foreign = %{user_id: "owner-1", athanor_id: "ath_b"}
 
     assert {:error, _} =

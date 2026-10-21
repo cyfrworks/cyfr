@@ -7,7 +7,7 @@ defmodule Sanctum.Directory do
   (`Arca.IdentityLog`, `ARCHITECTURE.md` §9.1): registering a genesis,
   appending a rotation against the head it names, applying a recovery
   against the current policy revision, and answering a page of a log with
-  its head and a recorded request's outcome.
+  its head.
 
   Emissary's directory routes are the only caller
   (`Emissary.Web.DirectoryController`). Each function takes the caller's
@@ -173,25 +173,6 @@ defmodule Sanctum.Directory do
           length: pos_integer()
         }
 
-  @typedoc "A recorded recovery request's outcome."
-  @type outcome ::
-          %{
-            identifier: String.t(),
-            request_id: String.t(),
-            request_digest: String.t(),
-            outcome: :accepted,
-            seq: non_neg_integer(),
-            entry_hash: String.t(),
-            entry: binary()
-          }
-          | %{
-              identifier: String.t(),
-              request_id: String.t(),
-              request_digest: String.t(),
-              outcome: :stale_policy,
-              recorded: map()
-            }
-
   # ---- the entries -------------------------------------------------------------
 
   @doc """
@@ -284,15 +265,13 @@ defmodule Sanctum.Directory do
 
   @doc """
   One page of `identifier`'s log: the entries after position `after`
-  (nil or -1 for the start), with the head and length the page was read
-  against and `next`, the position to ask after next, while more remain.
+  (-1 for the start), with the head and length the page was read against
+  and `next`, the position to ask after next, while more remain.
   """
-  @spec resolve(%{identifier: String.t(), after: integer() | nil, source: source()}) ::
+  @spec resolve(%{identifier: String.t(), after: integer(), source: source()}) ::
           {:ok, page()} | {:error, reason()}
   def resolve(%{identifier: identifier, after: after_seq, source: source})
       when is_binary(identifier) and is_binary(source) do
-    after_seq = after_seq || -1
-
     with :ok <- serving(:read),
          :ok <- known(identifier),
          :ok <- position(after_seq),
@@ -300,35 +279,6 @@ defmodule Sanctum.Directory do
          {:ok, head} <- head(identifier),
          {:ok, rows} <- entries(identifier, after_seq) do
       {:ok, page(identifier, after_seq, Enum.filter(rows, &(&1.seq <= head.seq)), head)}
-    end
-  end
-
-  @doc "The recorded outcome of recovery request `request_id` under `identifier`."
-  @spec outcome(%{identifier: String.t(), request_id: String.t(), source: source()}) ::
-          {:ok, outcome()} | {:error, reason()}
-  def outcome(%{identifier: identifier, request_id: request_id, source: source})
-      when is_binary(identifier) and is_binary(request_id) and is_binary(source) do
-    with :ok <- serving(:read),
-         :ok <- known(identifier),
-         :ok <- request_id(request_id),
-         :ok <- admit(every_request(source)) do
-      case Arca.IdentityLog.outcome(system(), identifier, request_id) do
-        {:ok, %{outcome: "accepted"} = row} ->
-          {:ok, Map.merge(recorded_answer(identifier, row), accepted_outcome(row))}
-
-        {:ok, %{outcome: "stale_policy"} = row} ->
-          {:ok,
-           Map.merge(recorded_answer(identifier, row), %{
-             outcome: :stale_policy,
-             recorded: recorded_body(row)
-           })}
-
-        {:error, :not_found} ->
-          {:error, :not_found}
-
-        {:error, reason} ->
-          store_refusal(reason)
-      end
     end
   end
 
@@ -499,10 +449,6 @@ defmodule Sanctum.Directory do
 
   defp known(identifier) do
     if Encoding.identifier?(identifier), do: :ok, else: {:error, :not_found}
-  end
-
-  defp request_id(request_id) do
-    if Encoding.id?(request_id), do: :ok, else: {:error, :not_found}
   end
 
   # The store keeps a position as a 32-bit integer, so a position past it
@@ -811,12 +757,6 @@ defmodule Sanctum.Directory do
 
   defp accepted(identifier, row),
     do: %{identifier: identifier, seq: row.seq, entry_hash: row.entry_hash}
-
-  defp recorded_answer(identifier, row),
-    do: %{identifier: identifier, request_id: row.request_id, request_digest: row.request_digest}
-
-  defp accepted_outcome(row),
-    do: %{outcome: :accepted, seq: row.seq, entry_hash: row.entry_hash, entry: row.entry}
 
   defp recorded_body(row) do
     case Jason.decode(row.outcome_body || "") do

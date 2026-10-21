@@ -107,21 +107,19 @@ defmodule Sanctum.Resources do
 
   defp format_resource(resource) do
     %{
-      "uri" => Map.get(resource, :uri) || Map.get(resource, "uri"),
-      "name" => Map.get(resource, :name) || Map.get(resource, "name"),
-      "description" => Map.get(resource, :description) || Map.get(resource, "description"),
-      "mimeType" =>
-        Map.get(resource, :mimeType) || Map.get(resource, "mimeType") || Prima.MediaType.json()
+      "uri" => Map.get(resource, :uri),
+      "name" => Map.get(resource, :name),
+      "description" => Map.get(resource, :description),
+      "mimeType" => Map.get(resource, :mimeType) || Prima.MediaType.json()
     }
   end
 
   defp format_resource_template(template) do
     %{
-      "uriTemplate" => Map.get(template, :uriTemplate) || Map.get(template, "uriTemplate"),
-      "name" => Map.get(template, :name) || Map.get(template, "name"),
-      "description" => Map.get(template, :description) || Map.get(template, "description"),
-      "mimeType" =>
-        Map.get(template, :mimeType) || Map.get(template, "mimeType") || Prima.MediaType.json()
+      "uriTemplate" => Map.get(template, :uriTemplate),
+      "name" => Map.get(template, :name),
+      "description" => Map.get(template, :description),
+      "mimeType" => Map.get(template, :mimeType) || Prima.MediaType.json()
     }
   end
 end

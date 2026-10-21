@@ -12,14 +12,21 @@ defmodule Sanctum do
 
   ## Signing in
 
-  A session is minted at exactly two places, and the door
-  (`Sanctum.Door.admit_identity/2`) is asked first at both:
+  Every session is minted by `Sanctum.Session`, on one of these paths:
 
-  - the browser flow — `PrismWeb.AuthController.callback/2` after the
-    configured provider (`Sanctum.Auth.provider/0`: `Sanctum.Auth.OAuth`
-    or `Sanctum.Auth.OIDC`) proves the identity;
-  - the CLI flow — `Sanctum.Auth.DeviceFlow.poll_for_session/3` behind the
-    `session` MCP tool (`cyfr login`).
+  - the browser flow — `PrismWeb.AuthController.callback/2` asks the door
+    (`Sanctum.Door.admit_identity/2`) after the configured provider
+    (`Sanctum.Auth.provider/0`: `Sanctum.Auth.OAuth` or
+    `Sanctum.Auth.OIDC`) proves the identity;
+  - the CLI device flow — `Sanctum.Auth.DeviceFlow.poll_for_session/3`
+    behind the `session` MCP tool (`cyfr login`), which asks the door the
+    same way;
+  - a command line a signed-in person approves in Prism
+    (`Sanctum.CliSignIn`);
+  - the `cyfr` door (`Sanctum.Auth.CyfrDoor`), which asks the door for
+    the person's identity, and a passkey (`Sanctum.Passkeys`), which asks
+    it for each door identity the person holds and their verified email;
+  - the installation-authorized restore (`Sanctum.Recovery`).
 
   Providers prove who someone is; they never mint sessions themselves.
 
@@ -285,17 +292,6 @@ defmodule Sanctum do
   Thin facade over the single builder `Sanctum.Context.internal/1`.
   """
   def system_context, do: Context.internal([])
-
-  @doc """
-  Facade over the single server-internal context builder
-  `Sanctum.Context.internal/1`. See that function for the full option list.
-
-  Use this for any server-constructed context that needs non-default
-  coordinates — a per-user namespace/tenant for an audit write-back, a
-  narrower permission set, or an athanor scope.
-  """
-  @spec internal_context(keyword()) :: Context.t()
-  def internal_context(opts \\ []), do: Context.internal(opts)
 
   # Namespace for public (unauthenticated) tincture execution. A leading
   # underscore cannot be a real claimed namespace (claimed slugs match

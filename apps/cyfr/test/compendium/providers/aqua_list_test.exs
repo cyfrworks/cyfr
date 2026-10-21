@@ -92,7 +92,7 @@ defmodule Compendium.Providers.AquaListTest do
     n = System.unique_integer([:positive])
     user = "local|idp|aqua-list-#{n}"
     {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Aqua list #{n}")
-    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
     :ok = Sanctum.TestContext.shipped!(athanor.id)
     {:ok, ctx: %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}}
   end

@@ -410,13 +410,6 @@ defmodule Sanctum.Consent.FlowTest do
                })
     end
 
-    test "the tincture session surface can neither stage nor commit", %{ctx: ctx} do
-      session_ctx = %{ctx | auth_method: :session}
-
-      assert {:error, {:surface_not_permitted, :session}} =
-               Plan.plan(session_ctx, %{ref: "reagent:local.anything"})
-    end
-
     test "a guest-planed context is refused at staging", %{ctx: ctx} do
       guest = Sanctum.Context.enter_guest(ctx)
 

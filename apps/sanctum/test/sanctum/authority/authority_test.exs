@@ -75,7 +75,7 @@ defmodule Sanctum.AuthorityTest do
       limits = Authority.limits(auth)
       assert limits.timeout == "1m"
       assert limits.max_concurrent_tasks == 5
-      assert Sanctum.Authority.budget(auth) == %{in_flight: 0, cap: 5}
+      assert Sanctum.TestContext.invoke_budget(auth) == %{in_flight: 0, cap: 5}
     end
   end
 
@@ -109,7 +109,7 @@ defmodule Sanctum.AuthorityTest do
       # Root-keyed budget: same atomics ref, not a copy.
       assert child.budget == auth.budget
       assert Sanctum.Authority.try_acquire_invoke(child) == :ok
-      assert Sanctum.Authority.budget(auth).in_flight == 1
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 1
     end
   end
 
@@ -125,7 +125,7 @@ defmodule Sanctum.AuthorityTest do
       assert Sanctum.Authority.try_acquire_invoke(auth) == :ok
       assert Sanctum.Authority.try_acquire_invoke(auth) == :ok
       assert Sanctum.Authority.try_acquire_invoke(auth) == {:error, :invoke_budget_exhausted}
-      assert Sanctum.Authority.budget(auth) == %{in_flight: 2, cap: 2}
+      assert Sanctum.TestContext.invoke_budget(auth) == %{in_flight: 2, cap: 2}
 
       assert Sanctum.Authority.release_invoke(auth) == :ok
       assert Sanctum.Authority.try_acquire_invoke(auth) == :ok

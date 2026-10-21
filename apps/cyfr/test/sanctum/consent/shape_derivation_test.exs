@@ -148,7 +148,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     ref = "reagent:local.shape-unreadable"
     real = Components.impl!()
     on_exit(fn -> Components.install!(real) end)
-    Components.reset()
+    Sanctum.TestContext.uninstall_port(Components)
 
     refusal = {:error, {:unavailable, "Components"}}
     assert ShapeDerivation.dependency_releases(ctx, row, ref) == refusal
@@ -329,7 +329,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
   test "expand_tools is the bootstrap expansion, verbatim, but for what only an exact name grants",
        %{ctx: ctx} do
     _ = ctx
-    catalog = ShapeDerivation.all_tool_actions()
+    catalog = Sanctum.Catalog.tool_actions()
 
     assert ShapeDerivation.expand_tools(["*"]) ==
              Enum.sort(Enum.uniq(catalog -- Caps.agent_only_tools()))
@@ -340,7 +340,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
   describe "the layout's write" do
     test "is never granted by a pattern, and is by its exact name" do
-      catalog = ShapeDerivation.all_tool_actions()
+      catalog = Sanctum.Catalog.tool_actions()
       assert "layout.edit" in catalog and "layout.get" in catalog
 
       for patterns <- [["*"], ["layout.*"], ["layout.*", "*", "component.*"]] do
@@ -369,7 +369,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
                node
 
         assert {:ok, %{"tools" => ["layout.get"]}, _limits} =
-                 Sanctum.Consent.BlobBuilder.node_grant(ctx, node, stored)
+                 Sanctum.Consent.BlobBuilder.node_grant(node, stored)
       end
 
       # An agent's key keeps it, named exactly; a pattern grants it to none.
@@ -377,7 +377,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
                ShapeDerivation.declared_caps(stored, "agent:local.arranger")
 
       assert {:ok, %{"tools" => ["layout.edit", "layout.get"]}, _limits} =
-               Sanctum.Consent.BlobBuilder.node_grant(ctx, "agent:local.arranger", stored)
+               Sanctum.Consent.BlobBuilder.node_grant("agent:local.arranger", stored)
 
       for {node, type} <- [
             {"formula:local.arranger", "formula"},
@@ -387,7 +387,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
         manifest = %{"type" => type, "caps" => %{"tools" => tools}}
 
         assert {:ok, %{"tools" => granted}, _limits} =
-                 Sanctum.Consent.BlobBuilder.node_grant(ctx, node, manifest)
+                 Sanctum.Consent.BlobBuilder.node_grant(node, manifest)
 
         refute "layout.edit" in granted, "#{node} #{inspect(tools)}"
       end
@@ -396,7 +396,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
   describe "a schedule write" do
     test "is never granted by a pattern, and is by its exact name; the schedule's other actions follow their pattern" do
-      catalog = ShapeDerivation.all_tool_actions()
+      catalog = Sanctum.Catalog.tool_actions()
       writes = ["schedule.create", "schedule.update"]
       assert writes -- catalog == []
 
@@ -443,7 +443,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
         manifest = %{"type" => type, "caps" => %{"tools" => tools}}
 
         assert {:ok, %{"tools" => granted}, _limits} =
-                 Sanctum.Consent.BlobBuilder.node_grant(ctx, node, manifest)
+                 Sanctum.Consent.BlobBuilder.node_grant(node, manifest)
 
         refute "schedule.create" in granted, "#{node} #{inspect(tools)}"
         refute "schedule.update" in granted, "#{node} #{inspect(tools)}"
@@ -453,7 +453,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
   describe "a feed write" do
     test "is never granted by a pattern, and is by its exact name" do
-      catalog = ShapeDerivation.all_tool_actions()
+      catalog = Sanctum.Catalog.tool_actions()
       assert "feed.bind" in catalog and "feed.remove" in catalog
 
       for patterns <- [["*"], ["feed.*"], ["feed.*", "*", "component.*"]] do
@@ -525,7 +525,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert stored["type"] == "agent"
 
       assert {:ok, %{"tools" => ["feed.list"]}, _limits} =
-               Sanctum.Consent.BlobBuilder.node_grant(ctx, "formula:local.spoof", stored)
+               Sanctum.Consent.BlobBuilder.node_grant("formula:local.spoof", stored)
 
       assert {:ok, %{tools: ["feed.list"]}} =
                ShapeDerivation.declared_caps(stored, "formula:local.spoof")
@@ -545,7 +545,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
         assert :ok = Prima.Manifest.Caps.validate(manifest, &Arca.Storage.valid_guest_path?/1)
 
         assert {:ok, %{"tools" => granted}, _limits} =
-                 Sanctum.Consent.BlobBuilder.node_grant(ctx, node, manifest)
+                 Sanctum.Consent.BlobBuilder.node_grant(node, manifest)
 
         refute "feed.bind" in granted, "#{node} #{inspect(tools)}"
         refute "feed.remove" in granted, "#{node} #{inspect(tools)}"
@@ -555,7 +555,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       manifest = %{"type" => "agent", "caps" => %{"tools" => ["feed.bind", "feed.remove"]}}
 
       assert {:ok, %{"tools" => ["feed.bind", "feed.remove"]}, _limits} =
-               Sanctum.Consent.BlobBuilder.node_grant(ctx, "agent:local.feeder", manifest)
+               Sanctum.Consent.BlobBuilder.node_grant("agent:local.feeder", manifest)
     end
   end
 
@@ -610,7 +610,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert Map.delete(input, :source_ref) == Map.delete(explicit, :source_ref)
     end
 
-    test "a stored caps block the grammar no longer admits is refused, never read as empty",
+    test "a stored caps block the grammar does not admit is refused, never read as empty",
          %{ctx: ctx} do
       publish!(ctx, "shape-respelled", "1.0.0", %{
         manifest: Jason.encode!(%{"caps" => %{"storage" => %{"paths" => ["data/secrets/"]}}})
@@ -621,8 +621,8 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert {:ok, %{caps: %{"storage.paths" => ["data/secrets/"]}}} =
                ShapeDerivation.shape_input(ctx, ref)
 
-      # A release published before the grammar refused the spelling: its
-      # row reached past the publish check, as one written then is.
+      # A row the publish check refuses, written past it: the stored
+      # spelling is damage to every reader.
       stored = Jason.encode!(%{"caps" => %{"storage" => %{"paths" => ["data//secrets/"]}}})
 
       {1, _} =
@@ -638,7 +638,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
       # The builder reads the ask the same way: refused, not asked for nothing.
       assert {:error, {:corrupt, {:manifest, ^ref}}} =
-               Sanctum.Consent.BlobBuilder.node_grant(ctx, ref, Jason.decode!(stored))
+               Sanctum.Consent.BlobBuilder.node_grant(ref, Jason.decode!(stored))
     end
 
     test "the reason text is not shape — editing it keeps the digest", %{ctx: ctx} do
@@ -933,8 +933,8 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert bare_input.caps["tincture.connect"] == []
     end
 
-    test "a component that declares no flow and no origin still names both, so a consent made " <>
-           "before shapes named them asks again",
+    test "a component that declares no flow and no origin names both as empty, so a shape " <>
+           "without the two keys is another digest",
          %{ctx: ctx} do
       publish!(ctx, "shape-flowless", "1.0.0", %{
         manifest: %{"caps" => %{"egress" => %{"domains" => ["api.example.test"]}}}
@@ -944,17 +944,17 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert input.caps["flows"] == []
       assert input.caps["tincture.connect"] == []
 
-      # The shape as it was spelled before flows were shape: without the
-      # two keys. Its digest is not this shape's, so its consent asks again.
+      # The same shape without the two keys digests differently, so a
+      # consent to it does not answer for this shape.
       {:ok, digest} = Sanctum.Consent.ShapeDigest.compute(input)
 
-      {:ok, before_flows} =
+      {:ok, without_keys} =
         Sanctum.Consent.ShapeDigest.compute(%{
           input
           | caps: Map.drop(input.caps, ["flows", "tincture.connect"])
         })
 
-      refute digest == before_flows
+      refute digest == without_keys
     end
   end
 

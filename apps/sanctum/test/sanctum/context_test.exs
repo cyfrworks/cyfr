@@ -218,7 +218,7 @@ defmodule Sanctum.ContextTest do
   end
 
   describe "authorize/3" do
-    test "local context with wildcard always authorized" do
+    test "the local context is authorized for every permission it holds" do
       ctx = Sanctum.TestContext.local()
       assert :ok == Context.authorize(ctx, :execute)
       assert :ok == Context.authorize(ctx, :admin)
@@ -259,7 +259,7 @@ defmodule Sanctum.ContextTest do
       assert {:error, _} = Context.authorize(ctx, :execute)
     end
 
-    test "ownership check succeeds when user matches" do
+    test "a record of the caller's own in its athanor is authorized" do
       ctx =
         Context.build(
           user_id: "u1",
@@ -291,7 +291,7 @@ defmodule Sanctum.ContextTest do
       assert :ok == Context.authorize(ctx, :storage_read, {:execution, record})
     end
 
-    test "admin overrides ownership check" do
+    test "an admin is authorized for another member's record in its athanor" do
       ctx =
         Context.build(
           user_id: "admin",
@@ -431,7 +431,7 @@ defmodule Sanctum.ContextTest do
           auth_method: :oidc
         )
 
-      # Reject untagged tenant-owned records instead of skipping ownership checks.
+      # An untagged tenant-owned record is refused, never read as untenanted.
       record = %{athanor_id: "ath_other", user_id: "u1"}
       assert {:error, :untagged_tenant_resource} = Context.authorize(ctx, :storage_read, record)
 
@@ -819,7 +819,7 @@ defmodule Sanctum.ContextTest do
     test "projects the tenancy scope and the system provenance the stores authorize on" do
       # The server's own contexts: both authorities, so Arca reads across
       # athanors and may mutate the seed and global paths.
-      for ctx <- [Sanctum.system_context(), Sanctum.internal_context()] do
+      for ctx <- [Sanctum.system_context(), Sanctum.Context.internal([])] do
         actor = Context.actor(ctx)
 
         assert actor.scope == :platform
@@ -837,7 +837,7 @@ defmodule Sanctum.ContextTest do
       # An internal task working inside one athanor: system authority, one
       # tenant's rows.
       inside_one =
-        Context.actor(Sanctum.internal_context(athanor_id: "ath_1", scope: :athanor))
+        Context.actor(Sanctum.Context.internal(athanor_id: "ath_1", scope: :athanor))
 
       assert inside_one.scope == :athanor
       assert inside_one.system
@@ -852,7 +852,7 @@ defmodule Sanctum.ContextTest do
 
       # Provenance alone never grants the platform read.
       platform_scheduled =
-        Context.actor(Sanctum.internal_context(auth_method: :scheduled))
+        Context.actor(Sanctum.Context.internal(auth_method: :scheduled))
 
       assert platform_scheduled.scope == :platform
       refute platform_scheduled.system

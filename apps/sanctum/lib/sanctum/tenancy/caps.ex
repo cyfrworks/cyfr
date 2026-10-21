@@ -110,20 +110,6 @@ defmodule Sanctum.Tenancy.Caps do
     end
   end
 
-  @doc "`:ok` while `current` is below the cap (or the cap is off)."
-  @spec check(key(), non_neg_integer()) ::
-          :ok
-          | {:error, {:limit_reached, key(), pos_integer()}}
-          | {:error, {:cap_unverifiable, key()}}
-  def check(key, current) when key in @keys and is_integer(current) do
-    case get(key) do
-      {:ok, nil} -> :ok
-      {:ok, cap} when current < cap -> :ok
-      {:ok, cap} -> {:error, {:limit_reached, key, cap}}
-      {:error, :unavailable} -> unreadable(key)
-    end
-  end
-
   @doc """
   `check/2` over a current that must be counted first — and may not be
   countable. `count_fun` runs only while the cap is configured, and a
@@ -210,7 +196,7 @@ defmodule Sanctum.Tenancy.Caps do
   default (`Arca.put/4`'s `cap:` option), and `Arca.Overlay.commit_unit/4`
   checks whole units up front with the policy as a required argument.
   The uncapped-by-design set is whatever states `cap: :exempt` — grep it:
-  today the shipped copy (`Arca.Overlay.pull_shipped/2`), the serving of a
+  the shipped copy (`Arca.Overlay.pull_shipped/2`), the serving of a
   committed revision (`Arca.Overlay`), scaffold and fork's `commit_unit`
   calls, and the date the storage collector writes on an undated prefix
   (`Arca.StorageGC`) — each moving shipped or already-committed bytes,

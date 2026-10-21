@@ -78,7 +78,6 @@ defmodule Sanctum.Vault do
           kind: String.t(),
           provider_hint: String.t(),
           status: String.t(),
-          provenance: String.t(),
           field_names: [String.t()],
           oauth_scopes: [String.t()],
           destination: %{String.t() => term()} | nil,
@@ -274,7 +273,8 @@ defmodule Sanctum.Vault do
     * `:fields` — `%{name => value}` material map (default empty)
     * `:oauth` — token bundle map (see `Sanctum.Vault.Payload`)
     * `:provider_hint` — immutable; defaults `""`
-    * `:oauth_endpoints` / `:oauth_scopes` — binding fields
+    * `:oauth_endpoints` / `:oauth_scopes` — binding fields; another kind
+      than `oauth` stores no endpoints
     * `:destination` (required) — where the material may go, a
       `Prima.Destination` map (string or atom keys); absent is
       `:destination_required` and one outside the grammar
@@ -331,7 +331,6 @@ defmodule Sanctum.Vault do
                  id: id,
                  name: name,
                  kind: kind,
-                 provenance: Map.get(params, :provenance, "user"),
                  status: "active",
                  sealed_payload: sealed,
                  binding_digest: digest
@@ -546,7 +545,6 @@ defmodule Sanctum.Vault do
     end
   end
 
-  @doc false
   # Whether moving a binding from `entry` to `rebound` lets its material go
   # where it could not, or lets a component read what it could not: a
   # destination not within the stored one (a stored one that does not read
@@ -554,8 +552,7 @@ defmodule Sanctum.Vault do
   # did not disclose. Fields are compared as sets of names, so a name
   # repeated is no new field. An attach-only entry's fields are read by no
   # component, so its field schema widens nothing.
-  @spec rebind_widens?(map(), map()) :: boolean()
-  def rebind_widens?(entry, rebound) do
+  defp rebind_widens?(entry, rebound) do
     not destination_within?(rebound.destination, entry.destination) or
       (rebound.attach_only == false and
          (entry.attach_only != false or
@@ -685,7 +682,6 @@ defmodule Sanctum.Vault do
       kind: entry.kind,
       provider_hint: entry.provider_hint,
       status: entry.status,
-      provenance: entry.provenance,
       field_names: decode_list(entry.field_names, "field_names"),
       oauth_scopes: decode_list(entry.oauth_scopes, "oauth_scopes"),
       destination: decode_destination(entry.destination),
@@ -791,8 +787,8 @@ defmodule Sanctum.Vault do
 
   # The endpoints an entry is created with. An `oauth` entry's come from its
   # provider's preset or are named for a provider with none, never both and
-  # never neither; an empty map names none. Other kinds store what they are
-  # given, as they always have.
+  # never neither; an empty map names none. Another kind talks to no token
+  # endpoint, so it stores none, whatever it is given.
   defp create_endpoints("oauth", params) do
     hint = Map.get(params, :provider_hint, "")
     given = Map.get(params, :oauth_endpoints)
@@ -812,7 +808,7 @@ defmodule Sanctum.Vault do
     end
   end
 
-  defp create_endpoints(_kind, params), do: {:ok, Map.get(params, :oauth_endpoints)}
+  defp create_endpoints(_kind, _params), do: {:ok, nil}
 
   # An entry's OAuth endpoints are fixed when it is created: a rebind naming
   # them is refused whatever it names, before anything of the entry is read.
@@ -902,16 +898,15 @@ defmodule Sanctum.Vault do
     end
   end
 
-  # What the rotated payload's oauth block becomes. A supplied bundle wins,
-  # and with it go the tokens the old one held for narrower scope sets;
+  # What the rotated payload's oauth block becomes. A supplied bundle wins;
   # otherwise the current bundle is kept whole — rotating the secret fields
   # must not silently revoke a live grant.
-  defp rotation_oauth(%{"v" => 3} = current, nil), do: {:ok, current["oauth"]}
-  defp rotation_oauth(%{"v" => 3}, oauth) when is_map(oauth), do: {:ok, oauth}
+  defp rotation_oauth(current, nil), do: {:ok, current["oauth"]}
+  defp rotation_oauth(_current, oauth) when is_map(oauth), do: {:ok, oauth}
 
   # Total, like every validator here: a non-map :oauth is a typed refusal,
   # not a FunctionClauseError out of a public API.
-  defp rotation_oauth(%{"v" => 3}, _oauth),
+  defp rotation_oauth(_current, _oauth),
     do: {:error, "oauth must be an object when supplied"}
 
   defp put_change(changes, key, params, encoder) do
@@ -923,11 +918,9 @@ defmodule Sanctum.Vault do
 
   defp encode_optional_map(nil), do: nil
   defp encode_optional_map(map) when is_map(map), do: Jason.encode!(map)
-  defp encode_optional_map(json) when is_binary(json), do: json
 
   defp encode_optional_list(nil), do: nil
   defp encode_optional_list(list) when is_list(list), do: Jason.encode!(list)
-  defp encode_optional_list(json) when is_binary(json), do: json
 
   defp decode_list(nil, _field), do: []
 

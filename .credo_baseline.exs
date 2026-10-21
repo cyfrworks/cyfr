@@ -28,9 +28,5 @@
   {Credo.Check.Warning.UnsafeToAtom, "apps/cyfr/test/sanctum/gate/provider_contract_test.exs",
    "Module.concat", 1},
   {Credo.Check.Warning.UnsafeToAtom, "apps/cyfr/test/sanctum/permission_vocabulary_test.exs",
-   "String.to_atom", 2},
-  {Credo.Check.Warning.UnsafeToAtom, "apps/sanctum/lib/sanctum/atoms.ex", "String.to_atom", 1},
-  {Credo.Check.Warning.UnsafeToAtom, "apps/sanctum/lib/sanctum/providers/system.ex",
-   "String.to_atom", 2},
-  {Credo.Check.Warning.UnsafeToAtom, "apps/sanctum/lib/sanctum/webhook.ex", "String.to_atom", 1}
+   "String.to_atom", 2}
 ]

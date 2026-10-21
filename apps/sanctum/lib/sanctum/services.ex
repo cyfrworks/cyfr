@@ -11,62 +11,37 @@ defmodule Sanctum.Services do
 
   alias Sanctum.Catalog
 
-  require Logger
-
   @doc """
   The service a provider module belongs to — asked of the module itself
   (`c:Prima.Provider.service/0`), so a provider cannot be one
   service in the status report and another in the log, and a renamed
-  module cannot silently fall out of a central map. A module that answers
-  nothing is labeled sanctum's, LOUDLY — that fallback is a defect, not
-  a default.
+  module cannot silently fall out of a central map.
   """
   @spec service_name(module()) :: String.t()
   def service_name(module) do
     case :persistent_term.get({__MODULE__, module}, nil) do
       nil ->
-        case resolve_service_name(module) do
-          {:ok, name} ->
-            :persistent_term.put({__MODULE__, module}, name)
-            name
-
-          # The loud fallback is never pinned: a module that answers
-          # nothing NOW (a load-order gap) may answer on the next call.
-          {:fallback, name} ->
-            name
-        end
+        name = module.service()
+        :persistent_term.put({__MODULE__, module}, name)
+        name
 
       name ->
         name
     end
   end
 
-  # Cache the service label derived from the provider set fixed at boot.
-  defp resolve_service_name(module) do
-    if Code.ensure_loaded?(module) and function_exported?(module, :service, 0) do
-      {:ok, module.service()}
-    else
-      Logger.error(
-        "[Sanctum.Services] provider #{inspect(module)} exports no service/0 — " <>
-          "labeling as \"sanctum\"; declare `service/0` on the provider"
-      )
-
-      {:fallback, "sanctum"}
-    end
-  end
-
-  @doc "Every service with at least one configured provider, sorted."
+  @doc "Every service with at least one provider this boot loads, sorted."
   @spec service_names() :: [String.t()]
   def service_names do
-    Catalog.configured_providers()
+    Catalog.available_providers()
     |> Enum.map(&service_name/1)
     |> Enum.uniq()
     |> Enum.sort()
   end
 
-  @doc "The configured providers belonging to one service."
+  @doc "The providers this boot loads that belong to one service."
   @spec providers_for(String.t()) :: [module()]
   def providers_for(service) do
-    Enum.filter(Catalog.configured_providers(), &(service_name(&1) == service))
+    Enum.filter(Catalog.available_providers(), &(service_name(&1) == service))
   end
 end

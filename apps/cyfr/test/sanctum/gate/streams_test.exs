@@ -60,9 +60,8 @@ defmodule Sanctum.Gate.StreamsTest do
     defdelegate tincture_placement(ctx, row), to: Compendium.ConsentFacts
   end
 
-  # The component domain's facts, but for the optional placement, which
-  # this implementation does not answer.
-  defmodule FactsWithoutPlacement do
+  # The component domain's facts, but for a placement it cannot read.
+  defmodule PlacementUnavailable do
     @moduledoc false
     @behaviour Sanctum.Consent.Components
 
@@ -87,6 +86,9 @@ defmodule Sanctum.Gate.StreamsTest do
 
     @impl true
     defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
+
+    @impl true
+    def tincture_placement(_ctx, _row), do: {:error, :component_facts_unavailable}
   end
 
   defmodule Probe do
@@ -444,16 +446,14 @@ defmodule Sanctum.Gate.StreamsTest do
       assert [%{admission: "admitted"}] = decisions(ctx)
     end
 
-    test "is refused for a session, an MCP key and a paired device, before anything else", %{
+    test "is refused for an MCP key and a paired device, before anything else", %{
       ctx: ctx
     } do
       callers = [
-        session: %{ctx | auth_method: :session, origin: :interactive},
         mcp_key: %{
           ctx
           | auth_method: :api_key,
             api_key_id: "key_streams",
-            api_key_type: :application,
             origin: :programmatic
         },
         device: %{ctx | auth_method: :device, client_id: "cli_streams", origin: :interactive}
@@ -476,7 +476,7 @@ defmodule Sanctum.Gate.StreamsTest do
       # Each refusal is one decision, and a stream that declares a shape
       # but does not filter still opens for each of them, with no registry
       # read: a context without a frame is no frame's to judge.
-      assert length(decisions(ctx)) == 3
+      assert length(decisions(ctx)) == 2
       assert Enum.all?(decisions(ctx), &(&1.refusal_class == "forbidden"))
 
       with_facts(CountedFacts, fn ->
@@ -587,7 +587,7 @@ defmodule Sanctum.Gate.StreamsTest do
     test "is refused while the frame's placement cannot be read", %{ctx: ctx} do
       canvas = canvas_row!(ctx, "home-canvas")
 
-      with_facts(FactsWithoutPlacement, fn ->
+      with_facts(PlacementUnavailable, fn ->
         assert {:error, %Prima.Refusal{class: :forbidden, reason: :canvas_stream}} =
                  Sanctum.Gate.open_stream(framed(ctx, canvas), "runs.changes")
       end)

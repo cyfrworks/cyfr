@@ -38,6 +38,8 @@ defmodule Sanctum.Test.Components do
   def shipped_nodes(_ctx, _rows), do: unavailable()
   @impl true
   def newer_shipped(_ctx, _row), do: unavailable()
+  @impl true
+  def tincture_placement(_ctx, _row), do: unavailable()
 
   @impl true
   def fill(_athanor, _ctx, "provision"), do: {:error, :unavailable}

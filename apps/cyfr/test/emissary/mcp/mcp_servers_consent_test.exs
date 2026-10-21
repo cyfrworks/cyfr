@@ -27,7 +27,6 @@ defmodule Emissary.MCP.McpServersConsentTest do
     %{
       ctx
       | auth_method: :api_key,
-        api_key_type: :admin,
         permissions: MapSet.new(permissions)
     }
   end
@@ -158,21 +157,6 @@ defmodule Emissary.MCP.McpServersConsentTest do
     end
 
     assert shown_actions(ctx) == Enum.sort(@defining ++ @operating)
-  end
-
-  test "a tincture session cannot define a server", %{ctx: ctx} do
-    session = %{ctx | auth_method: :session}
-
-    assert {:error,
-            %Prima.Refusal{
-              stage: :admission,
-              reason: {:consent_class_required, {:surface_not_permitted, :session}}
-            }} =
-             Sanctum.Gate.call_external("mcp_servers", session, %{
-               "action" => "create",
-               "name" => "relay",
-               "config" => http_config("prod-db")
-             })
   end
 
   test "a signed-in person defines and changes a server", %{ctx: ctx} do

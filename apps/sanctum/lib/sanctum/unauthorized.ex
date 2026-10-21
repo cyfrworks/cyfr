@@ -113,8 +113,8 @@ defmodule Sanctum.Unauthorized do
   @doc """
   The JSON-RPC code name a reason answers with in place of its class's
   code, or `nil`: a connection to re-authorize is an identity answer
-  and keeps the code it has always carried; every other reason answers
-  with its class's code.
+  and carries `auth_required`; every other reason answers with its
+  class's code.
   """
   @spec code_override(reason()) :: atom() | nil
   def code_override({:authorization_required, _detail}), do: :auth_required

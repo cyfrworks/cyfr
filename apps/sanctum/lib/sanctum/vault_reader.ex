@@ -5,17 +5,14 @@ defmodule Sanctum.VaultReader do
   Resolve a consent edge's vault resource into credential material.
 
   This is the **only** path by which an authority execution reaches
-  credentials — the callee-keyed grant plane is never consulted. Every
-  check fails closed, in order:
+  credentials. Every check fails closed, in order:
 
   1. the caller is not anonymous (a public invocation must never reach
      operator credentials, whatever its edges say)
   2. the edge's projection names what it reads: a key or bundle edge its
-     non-empty `fields` (`fetch/2`), an OAuth edge its non-empty `scopes`
-     (`oauth_token/3`). An edge without one — including every edge stored
-     before projections named their fields — is corrupt and dispenses
-     nothing; re-consenting to the component's current version writes a
-     named projection
+     non-empty `fields` (`fetch/3`), an OAuth edge its non-empty `scopes`
+     (`oauth_token/4`). An edge without one is corrupt and dispenses
+     nothing; consenting to the component again writes a named projection
   3. the entry exists in the caller's tenant and is `active`
   4. the binding digest **derived from the row's binding fields** equals
      the consent's copy — the stored column is a cache, never an
@@ -54,10 +51,9 @@ defmodule Sanctum.VaultReader do
   itself: secret fields resolve from the sealed `fields` map, OAuth tokens
   dispense through `Sanctum.Vault.OAuth` with refresh single-flighted per
   entry. An OAuth `projection.scopes` is enforced at dispense: the
-  requested scopes must be a subset of what the entry was authorized for,
-  and a projection naming fewer is answered only by a token a refresh the
-  provider attenuates obtained for exactly those scopes, never by the
-  entry's broader token (`Sanctum.Vault.OAuth.dispense/5`).
+  requested scopes must be exactly the ones the entry was authorized for,
+  and a projection naming fewer is refused, never answered the entry's
+  broader token (`Sanctum.Vault.OAuth.dispense/5`).
   """
 
   require Logger
@@ -102,7 +98,6 @@ defmodule Sanctum.VaultReader do
           | :destination_mismatch
           | :disclosure_refused
           | :unseal_failed
-          | :invalid_payload
           | {:invalid_payload, atom() | tuple()}
           | {:provider_mismatch, String.t()}
           | {:scope_projection_unsatisfiable, [String.t()]}
@@ -151,8 +146,7 @@ defmodule Sanctum.VaultReader do
   for no provider (`{:provider_mismatch, provider}`) — a consent for one
   provider can never dispense another's token. Scopes the
   entry lacks are refused `{:scope_projection_unsatisfiable, missing}`,
-  and fewer than it holds are dispensed only where its provider
-  attenuates a refresh (`:scope_not_attenuable` otherwise). A token is
+  and fewer than it holds `:scope_not_attenuable`. A token is
   dispensed only from a disclosed entry: an attach-only one answers
   `{:error, :disclosure_refused}` before it is unsealed. The binding's
   lifetime is held as `fetch/3` holds it, after every other check, so a
@@ -265,12 +259,9 @@ defmodule Sanctum.VaultReader do
   # A by-name read records its use only once the material opened.
   defp unseal_fields(actor, entry) do
     case unseal_material(actor, entry) do
-      {:ok, %{"v" => 3, "fields" => fields}} when is_map(fields) ->
+      {:ok, %{"fields" => fields}} ->
         Arca.VaultStorage.touch_last_used(actor, entry.id)
         {:ok, fields}
-
-      {:ok, _other} ->
-        {:error, :invalid_payload}
 
       {:error, reason} ->
         {:error, reason}
@@ -472,7 +463,7 @@ defmodule Sanctum.VaultReader do
     aad = CipherAAD.vault_entry(athanor_id, entry.id, entry.provider_hint)
 
     case Sanctum.Cipher.decrypt(sealed, aad) do
-      {:ok, plaintext} -> decode_payload(plaintext)
+      {:ok, plaintext} -> Sanctum.Vault.Payload.decode(plaintext)
       {:error, _} -> {:error, :unseal_failed}
     end
   end
@@ -491,8 +482,6 @@ defmodule Sanctum.VaultReader do
     %Prima.Actor{athanor_id: athanor_id}
   end
 
-  defp decode_payload(plaintext), do: Sanctum.Vault.Payload.decode(plaintext)
-
   # ---------------------------------------------------------------------------
   # Secret material
   # ---------------------------------------------------------------------------
@@ -500,8 +489,7 @@ defmodule Sanctum.VaultReader do
   # Every projected field must be in the material: a partial projection
   # would hand the guest less than the operator consented to without saying
   # so, so the first absent field (in sorted order) refuses the whole read.
-  defp resolve_secrets(_ctx, _entry, %{"v" => 3, "fields" => material}, fields)
-       when is_map(material) do
+  defp resolve_secrets(_ctx, _entry, %{"fields" => material}, fields) do
     Enum.reduce_while(fields, {:ok, %{}}, fn name, {:ok, acc} ->
       case Map.fetch(material, name) do
         {:ok, value} -> {:cont, {:ok, Map.put(acc, name, value)}}
@@ -509,9 +497,6 @@ defmodule Sanctum.VaultReader do
       end
     end)
   end
-
-  # Exclude decrypted material from error tuples.
-  defp resolve_secrets(_ctx, _entry, _payload, _fields), do: {:error, :invalid_payload}
 
   # ---------------------------------------------------------------------------
   # OAuth
@@ -540,8 +525,8 @@ defmodule Sanctum.VaultReader do
 
   # A projection asking for scopes the entry was never authorized for is
   # unsatisfiable and refused, never silently served with a broader token.
-  # Whether fewer than the entry holds can be served is the dispense's to
-  # decide, by the provider's attenuation. `oauth_projection/1` has already
+  # One asking for fewer than the entry holds is the dispense's to refuse
+  # (`Sanctum.Vault.OAuth.dispense/5`). `oauth_projection/1` has already
   # refused an edge that names no scopes.
   defp check_scope_projection(entry, %{projection: %{scopes: scopes}}) do
     case scopes -- decode_list(entry.oauth_scopes, "oauth_scopes") do
@@ -550,7 +535,7 @@ defmodule Sanctum.VaultReader do
     end
   end
 
-  defp resolve_oauth(%Context{} = ctx, entry, %{"v" => 3} = payload, resource, provider) do
+  defp resolve_oauth(%Context{} = ctx, entry, payload, resource, provider) do
     case payload["oauth"] do
       %{} = oauth ->
         Sanctum.Vault.OAuth.dispense(
@@ -565,9 +550,6 @@ defmodule Sanctum.VaultReader do
         {:error, :no_oauth_material}
     end
   end
-
-  defp resolve_oauth(_ctx, _entry, _payload, _resource, _provider),
-    do: {:error, :invalid_payload}
 
   # ---------------------------------------------------------------------------
   # Helpers
@@ -588,7 +570,7 @@ defmodule Sanctum.VaultReader do
     Logger.warning(
       "[Sanctum.VaultReader] the consent edge for vault entry #{entry_label(resource)} " <>
         "names no projection and dispenses nothing; " <>
-        "re-consent to the component's current version"
+        "consent to the component again to write one"
     )
 
     {:error, :corrupt}

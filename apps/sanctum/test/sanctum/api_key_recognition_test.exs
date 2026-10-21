@@ -24,11 +24,11 @@ defmodule Sanctum.ApiKeyRecognitionTest do
     refute ApiKey.looks_like_key?(123)
   end
 
-  test "validate/2 still returns :invalid_key_format for a non-cyfr key (contract unchanged)" do
+  test "validate/2 returns :invalid_key_format for a non-cyfr key" do
     assert ApiKey.validate("definitely-not-a-key") == {:error, :invalid_key_format}
   end
 
-  test "validate/2 still returns :invalid_key for a well-formed but unknown key", tags do
+  test "validate/2 returns :invalid_key for a well-formed but unknown key", tags do
     Arca.Test.Sandbox.setup!(tags)
 
     assert ApiKey.validate("cyfr_ak_" <> String.duplicate("a", 32)) == {:error, :invalid_key}

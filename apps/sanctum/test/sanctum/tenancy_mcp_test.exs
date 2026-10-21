@@ -171,7 +171,7 @@ defmodule Sanctum.TenancyMCPTest do
       # so the router answers the gate's refusal as a JSON-RPC error rather
       # than an `isError` content result.
       assert Sanctum.Unauthorized.reason?(:platform_admin_required),
-             "the purge refusal is no longer on the shared authorization vocabulary"
+             "the purge refusal is not on the shared authorization vocabulary"
     end
 
     test "the operator may purge, but only what is archived", %{ctx: ctx, user: user} do

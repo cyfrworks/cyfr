@@ -639,7 +639,7 @@ defmodule Sanctum.Catalog do
     if String.contains?(name, ":") do
       :ok
     else
-      action = args["action"] || args[:action]
+      action = args["action"]
 
       case lookup(name) do
         {:ok, {_module, meta}} ->
@@ -680,7 +680,7 @@ defmodule Sanctum.Catalog do
              | {:unknown_action, String.t()}
              | Prima.Refusal.t()}
   def authorize_annotated_action(name, meta, ctx, args, in_chain? \\ false) do
-    action = args["action"] || args[:action]
+    action = args["action"]
     annotation = Annotations.annotation(meta, action)
 
     cond do
@@ -720,10 +720,10 @@ defmodule Sanctum.Catalog do
   end
 
   defp depleted_admits("confirmation", _operation, ctx, args) do
-    case {args["action"] || args[:action], args["request"] || args[:request]} do
+    case {args["action"], args["request"]} do
       {"pending", nil} -> :ok
       {"pending", request} -> flagged_admits(ctx, request)
-      {_proof_or_cancel, _request} -> flagged_admits(ctx, args["ref"] || args[:ref])
+      {_proof_or_cancel, _request} -> flagged_admits(ctx, args["ref"])
     end
   end
 
@@ -850,7 +850,7 @@ defmodule Sanctum.Catalog do
   declarations (the `mcp_servers` tool that manages the servers is, and
   is audited). They are classified as `:external` by
   `tool_kind/2` via namespacing, and get their plane from
-  `Sanctum.Proxy.default_planes/0`.
+  `Sanctum.Proxy`.
 
   Returns `:ok` when all tools are clean, or `{:error, [missing]}` where
   each entry is `%{provider: module, tool: name, action: verb, reason: r}`.
@@ -1045,7 +1045,7 @@ defmodule Sanctum.Catalog do
           {fun, key} <- [resources: :uri, resource_templates: :uriTemplate],
           function_exported?(module, fun, 0),
           entry <- apply(module, fun, []),
-          do: {module, Map.get(entry, key) || Map.get(entry, Atom.to_string(key))}
+          do: {module, Map.get(entry, key)}
 
     Enum.reduce(entries, {[], []}, fn {module, uri}, {advertised, malformed} ->
       case Prima.Provider.resource_scheme(uri) do
@@ -1068,15 +1068,9 @@ defmodule Sanctum.Catalog do
     do: Atom.to_string(permission) in Sanctum.Atoms.known_permissions()
 
   @doc """
-  The planes an action may be annotated with.
-  """
-  @spec valid_planes() :: [Prima.Provider.plane()]
-  defdelegate valid_planes(), to: Operation
-
-  @doc """
-  Every provider named in config, loaded or not. The status roster reads
-  this set, so a configured provider that failed to load is reported as
-  such rather than silently absent.
+  Every provider named in config, loaded or not: the boot refuses one that
+  cannot load unless it is lenient, and `available_providers/0` is the set
+  it then loads, which the services and their status read.
 
   The single reader of `:sanctum, :tool_providers` — config always sets the
   key, so the default is an empty list, never a hidden second roster.
@@ -1088,37 +1082,12 @@ defmodule Sanctum.Catalog do
   def configured_providers, do: Application.get_env(:sanctum, :tool_providers, [])
 
   @doc """
-  The configured tool providers that are actually loadable, warning about
-  any that aren't (an app-scoped test run without the sibling apps).
+  The configured tool providers this boot can load: every configured one,
+  less any a lenient boot skipped (`:tool_providers_lenient`), which the
+  boot names when it skips it.
   """
   @spec available_providers() :: [module()]
-  def available_providers do
-    configured_providers()
-    |> Enum.filter(fn module ->
-      if loadable?(module) do
-        true
-      else
-        Logger.warning(
-          "[Sanctum.Catalog] Tool provider #{inspect(module)} not available — skipping. " <>
-            "Check that the application is started and the module exists."
-        )
-
-        false
-      end
-    end)
-  end
-
-  @doc """
-  Every `tool.action` served outside a running chain: the declared
-  actions whose planes include `:external`.
-  """
-  @spec external_tool_actions() :: [String.t()]
-  def external_tool_actions do
-    for tool <- declared_tools(),
-        {action, annotation} <- Annotations.actions_of(tool),
-        :external in Map.get(annotation, :planes, []),
-        do: "#{tool.name}.#{action}"
-  end
+  def available_providers, do: Enum.filter(configured_providers(), &loadable?/1)
 
   @doc """
   Every `tool.action` annotated `host: :intercepted`: the actions a

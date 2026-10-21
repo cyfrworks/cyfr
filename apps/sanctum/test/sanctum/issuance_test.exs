@@ -9,8 +9,8 @@ defmodule Sanctum.IssuanceTest do
   and the seat, and stands only while the client, the certificate the
   context stands under and, for a person whose keys are at another home,
   the identity row they were resolved by still stand. A device context
-  without its own binding issues nothing, and a session or a key issues as
-  it did.
+  without its own binding issues nothing, and a session or a key issues
+  under its own credential.
 
   Every device here is paired through the real ceremony
   (`Sanctum.Pairing.begin/2` under a session, `complete/3` from a glass
@@ -82,7 +82,7 @@ defmodule Sanctum.IssuanceTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     %{user: user, athanor: athanor, session_ctx: session_ctx}
   end
@@ -94,7 +94,7 @@ defmodule Sanctum.IssuanceTest do
 
     session_ctx
     |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-    |> Pairing.begin(%{key_digest: digest})
+    |> Pairing.begin(%{"key_digest" => digest})
   end
 
   # A `pairing.begin` confirmation of the person `user_id` in `actor`'s
@@ -184,7 +184,7 @@ defmodule Sanctum.IssuanceTest do
       Pairing.complete(
         glass,
         invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.sign(challenge, private))
+        Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
       )
 
     %{client_id: client_id, certificate: certificate, device_key: device_key, private: private}
@@ -202,7 +202,7 @@ defmodule Sanctum.IssuanceTest do
         challenge
       )
 
-    {:ok, ctx} = DeviceCerts.verify_request(device.certificate, ctx, [])
+    {:ok, ctx} = DeviceCerts.verify_request(device.certificate, ctx)
     ctx
   end
 
@@ -282,7 +282,7 @@ defmodule Sanctum.IssuanceTest do
                identity: nil
              } = ctx.credential_binding
 
-      assert {:ok, %{athanor_id: athanor_id}} = Sanctum.Tenancy.Members.get(seat_id)
+      assert {:ok, %{athanor_id: athanor_id}} = Sanctum.TestContext.membership(seat_id)
       assert athanor_id == athanor.id
 
       assert {:ok, expectation} = Issuance.expectation(ctx, [])
@@ -425,7 +425,7 @@ defmodule Sanctum.IssuanceTest do
       refute minted?(other)
     end
 
-    test "the person's standing still answers first: a denied person issues nothing", %{
+    test "the person's standing answers first: a denied person issues nothing", %{
       session_ctx: session_ctx,
       user: user
     } do
@@ -558,7 +558,7 @@ defmodule Sanctum.IssuanceTest do
   # ---------------------------------------------------------------------------
 
   describe "a session's or a key's issuance" do
-    test "is unchanged: its source is its own credential, and it names no identity", %{
+    test "has its own credential as its source, and names no identity", %{
       session_ctx: session_ctx
     } do
       assert {:ok, expectation} = Issuance.expectation(session_ctx, [])
@@ -579,7 +579,7 @@ defmodule Sanctum.IssuanceTest do
       assert {:ok, %{source: {:api_key, id}, identity: nil}} = Issuance.expectation(key_ctx, [])
       assert id == key_ctx.api_key_id
 
-      # A session's issuance refuses a retired session as it did.
+      # A session's issuance refuses a retired session.
       :ok = Sanctum.Session.destroy_by_hash(session_ctx.session_token_hash)
       assert {{:error, :unauthenticated}, retired} = mint(session_ctx)
       refute minted?(retired)
@@ -617,7 +617,7 @@ defmodule Sanctum.IssuanceTest do
     athanor: athanor,
     session_ctx: session_ctx
   } do
-    {:ok, platform} = Members.ensure_platform(user.id)
+    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
     assert {platform.scope, platform.athanor_id} == {"platform", nil}
 
     # A live session focused on the athanor that names the person's
@@ -716,7 +716,7 @@ defmodule Sanctum.IssuanceTest do
     session_ctx: session_ctx
   } do
     device = pair!(session_ctx)
-    {:ok, platform} = Members.ensure_platform(user.id)
+    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
 
     # Seated, the device stands on the seat, and the platform row is only
     # the capability flag.
@@ -755,7 +755,7 @@ defmodule Sanctum.IssuanceTest do
     session_ctx: session_ctx
   } do
     device = pair!(session_ctx)
-    {:ok, platform} = Members.ensure_platform(user.id)
+    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
     {:ok, standing} = DeviceCerts.standing(user.id, athanor.id)
     {:ok, client} = DeviceCerts.paired_client(athanor.id, user.id, device.client_id)
 
@@ -787,7 +787,7 @@ defmodule Sanctum.IssuanceTest do
     athanor: athanor,
     session_ctx: session_ctx
   } do
-    {:ok, platform} = Members.ensure_platform(user.id)
+    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
 
     # What a tincture asset or frame credential minted from this session
     # names: its person, athanor, generations, source and focus basis.
@@ -811,7 +811,7 @@ defmodule Sanctum.IssuanceTest do
     user: user
   } do
     n = System.unique_integer([:positive])
-    {:ok, platform} = Members.ensure_platform(user.id)
+    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
 
     # A group the person holds no seat in, kept open by its own member.
     {:ok, other} =
@@ -864,7 +864,7 @@ defmodule Sanctum.IssuanceTest do
              Pairing.complete(
                glass,
                secret,
-               Map.put(submission, :proof, Proof.sign(challenge, private))
+               Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
              )
 
     assert {:ok, %{state: "pending"}} = Arca.PairingInvitations.lookup(secret_hash)
@@ -1084,7 +1084,7 @@ defmodule Sanctum.IssuanceTest do
 
       assert {:error, :not_standing} =
                revoked_in_window(session_ctx, device.client_id, &checked_point/2, fn ->
-                 Pairing.begin(confirmed, %{key_digest: digest})
+                 Pairing.begin(confirmed, %{"key_digest" => digest})
                end)
 
       assert count.() == opened
@@ -1117,7 +1117,10 @@ defmodule Sanctum.IssuanceTest do
         )
 
       on_exit(fn -> :telemetry.detach(handler) end)
-      assert {:ok, %{client_id: "pcl_" <> _}} = Pairing.begin(confirmed, %{key_digest: digest})
+
+      assert {:ok, %{client_id: "pcl_" <> _}} =
+               Pairing.begin(confirmed, %{"key_digest" => digest})
+
       :telemetry.detach(handler)
 
       statements = statements()
@@ -1249,7 +1252,7 @@ defmodule Sanctum.IssuanceTest do
         Pairing.complete(
           glass,
           invitation.invitation_secret,
-          Map.put(submission, :proof, Proof.sign(challenge, private))
+          Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
         )
 
       device = %{
@@ -1389,7 +1392,7 @@ defmodule Sanctum.IssuanceTest do
         in_window(
           first_client_read,
           fn ->
-            {:ok, verified} = DeviceCerts.verify_request(device.certificate, ctx, [])
+            {:ok, verified} = DeviceCerts.verify_request(device.certificate, ctx)
             mint(verified)
           end,
           fn ->

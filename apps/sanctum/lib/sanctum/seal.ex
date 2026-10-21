@@ -135,9 +135,9 @@ defmodule Sanctum.Seal do
   def for_system_layer(_ctx), do: :none
 
   @doc """
-  Set the first seal of the person behind `ctx` to `attrs` (`text`, and
-  optionally `glyph`, atom or string keys), from their own interactive
-  client, while none is set.
+  Set the first seal of the person behind `ctx` to `attrs` (`text:`, and
+  optionally `glyph:`), from their own interactive client, while none is
+  set.
   """
   @spec choose(Context.t(), map()) :: {:ok, t()} | {:error, refusal()}
   def choose(%Context{} = ctx, attrs) when is_map(attrs) do
@@ -233,7 +233,7 @@ defmodule Sanctum.Seal do
   end
 
   defp field(attrs, key) do
-    case Map.get(attrs, key, Map.get(attrs, Atom.to_string(key))) do
+    case Map.get(attrs, key) do
       "" -> nil
       value -> value
     end

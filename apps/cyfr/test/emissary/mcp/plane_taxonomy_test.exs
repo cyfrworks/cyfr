@@ -55,7 +55,6 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   alias Emissary.MCP.PlaneTaxonomyTest.Probes
   alias Sanctum.Catalog
-  alias Sanctum.Proxy
   alias Aqua.Hands
 
   # Sibling-app providers are unavailable when this app's suite runs alone.
@@ -151,7 +150,13 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       assert in_chain_only == MapSet.new(~w(source.tree source.read source.grep
                                             source.write source.edit source.delete))
 
-      external = MapSet.new(Catalog.external_tool_actions())
+      external =
+        MapSet.new(
+          for {tool, verb, %{planes: planes}} <- annotated_actions(),
+              :external in planes,
+              do: "#{tool}.#{verb}"
+        )
+
       assert MapSet.disjoint?(in_chain_only, external)
 
       ctx = Sanctum.TestContext.local()
@@ -197,7 +202,6 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       assert MapSet.equal?(
                anonymous,
                MapSet.new([
-                 {"session", "login"},
                  {"session", "logout"},
                  {"session", "whoami"},
                  {"session", "device_init"},
@@ -255,10 +259,6 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # ============================================================================
 
   describe "upstream external tools" do
-    test "the bucket default is in-chain" do
-      assert Proxy.default_planes() == [:in_chain]
-    end
-
     test "external tool names remain unreachable over HTTP" do
       # The wiring backstop still holds alongside the per-call gate: the
       # router rejects any name the registered-tool cache does not hold,

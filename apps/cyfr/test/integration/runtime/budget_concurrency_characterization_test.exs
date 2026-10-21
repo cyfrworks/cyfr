@@ -117,7 +117,7 @@ defmodule Locus.Runtime.BudgetConcurrencyCharacterizationTest do
                @spawns - @cap
              )
 
-    assert Sanctum.Authority.budget(authority).in_flight == @cap
+    assert Sanctum.TestContext.invoke_budget(authority).in_flight == @cap
     assert length(admitted(ctx, authority)) == @cap
 
     assert Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), authority.budget.id).charged ==
@@ -140,7 +140,7 @@ defmodule Locus.Runtime.BudgetConcurrencyCharacterizationTest do
       Prima.Slots.status(Opus.Slots).child_active == children_before
     end)
 
-    wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
+    wait_until(fn -> Sanctum.TestContext.invoke_budget(authority).in_flight == 0 end)
 
     assert {:ok, []} =
              Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), authority.budget.id)
@@ -172,7 +172,7 @@ defmodule Locus.Runtime.BudgetConcurrencyCharacterizationTest do
 
   defp sample_loop(ctx, authority, test_pid, seen) do
     seen = %{
-      in_flight: max(seen.in_flight, Sanctum.Authority.budget(authority).in_flight),
+      in_flight: max(seen.in_flight, Sanctum.TestContext.invoke_budget(authority).in_flight),
       admitted: max(seen.admitted, length(admitted(ctx, authority)))
     }
 

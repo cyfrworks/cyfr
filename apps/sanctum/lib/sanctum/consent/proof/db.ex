@@ -11,10 +11,10 @@ defmodule Sanctum.Consent.Proof.DB do
   consumption is `Arca.ConsentProofStorage.take/1`, whose delete count
   picks exactly one winner between concurrent commits.
 
-  Take-before-compare is preserved from the Memory store: a mismatched
-  attempt burns the token rather than revealing, over repeated tries,
-  which binding was wrong. Expiry is checked on read; expired rows are
-  purged opportunistically at mint.
+  Consumption takes the row before it compares, as every store does
+  (`Sanctum.Consent.Proof`): a mismatched attempt burns the token rather
+  than revealing, over repeated tries, which binding was wrong. Expiry is
+  checked on read; expired rows are purged opportunistically at mint.
   """
 
   @behaviour Sanctum.Consent.Proof
@@ -99,8 +99,8 @@ defmodule Sanctum.Consent.Proof.DB do
     })
   end
 
-  # A kind string whose atom does not exist on this node (tampered column,
-  # or a proof minted by a newer release) must fail the bindings compare,
+  # A kind string with no atom on this node (a tampered column, or a kind
+  # only another node's release defines) must fail the bindings compare,
   # never crash the consumer — the token is already burned either way.
   defp kind_atom(kind) do
     String.to_existing_atom(kind)

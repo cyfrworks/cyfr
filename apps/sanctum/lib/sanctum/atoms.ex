@@ -22,15 +22,29 @@ defmodule Sanctum.Atoms do
       "unknown_permission"
   """
 
-  # Known permission atoms — only scopes that are actually enforced via require_permission
-  @known_permissions ~w(vault_read admin * execute storage_read storage_write component_read component_manage)
+  # The permissions, each one a `Sanctum.Context.require_permission/2`
+  # check or an action annotation enforces. Declared as atoms, so the
+  # converter below maps a name to an atom that already exists and never
+  # makes one.
+  @permissions [
+    :vault_read,
+    :admin,
+    :*,
+    :execute,
+    :storage_read,
+    :storage_write,
+    :component_read,
+    :component_manage
+  ]
+  @by_name Map.new(@permissions, &{Atom.to_string(&1), &1})
+  @known_permissions Enum.map(@permissions, &Atom.to_string/1)
 
   @doc "The permission vocabulary — the one list every granted scope must appear in."
   @spec known_permissions() :: [String.t()]
   def known_permissions, do: @known_permissions
 
   # Every permission but the wildcard, which no sign-in path mints.
-  @person_permissions Enum.map(@known_permissions -- ["*"], &String.to_atom/1)
+  @person_permissions List.delete(@permissions, :*)
 
   @doc """
   The permissions a signed-in person holds: every declared permission. A
@@ -41,46 +55,10 @@ defmodule Sanctum.Atoms do
   @spec person_permissions() :: [atom()]
   def person_permissions, do: @person_permissions
 
-  # Pre-create atoms for the sign-in providers, `Prima.SignInProviders`'.
-  @known_providers Prima.SignInProviders.all()
-
-  @doc "The sign-in provider vocabulary as strings."
-  @spec providers() :: [String.t()]
-  def providers, do: @known_providers
-
-  # The tenancy scopes are `Prima.TenancyScope`'s: the stored membership row
-  # is held to the same list, so the two sides read one declaration.
-  @known_scopes Prima.TenancyScope.values()
-
-  # Force every allowlisted atom to exist at compile time so the
-  # membership-first converter below can use String.to_atom/1 without ever
-  # creating an atom that wasn't declared here. Scopes and providers are
-  # listed for the same guarantee even though only permissions convert —
-  # their consumers pattern-match string values directly.
-  @all_known_atoms Enum.map(
-                     @known_permissions ++ @known_providers ++ @known_scopes,
-                     &String.to_atom/1
-                   )
-  @doc false
-  def __known_atoms__, do: @all_known_atoms
-
-  @doc "The tenancy scope vocabulary as strings: `[\"platform\", \"athanor\"]`."
-  @spec scopes() :: [String.t()]
-  defdelegate scopes(), to: Prima.TenancyScope, as: :values
-
-  @doc "The tenancy scope vocabulary as atoms: `[:platform, :athanor]`."
-  @spec scope_atoms() :: [atom()]
-  defdelegate scope_atoms(), to: Prima.TenancyScope, as: :atoms
-
   @doc """
-  Convert a string to a permission atom safely.
-
-  Converts allowlisted permission names to atoms; leaves unknown names as strings.
+  The permission atom a stored permission name names; a name outside the
+  vocabulary stays a string, which no permission check matches.
   """
-  @spec safe_to_permission_atom(String.t() | atom()) :: atom() | String.t()
-  def safe_to_permission_atom(str) when is_binary(str) do
-    if str in @known_permissions, do: String.to_atom(str), else: str
-  end
-
-  def safe_to_permission_atom(atom) when is_atom(atom), do: atom
+  @spec safe_to_permission_atom(String.t()) :: atom() | String.t()
+  def safe_to_permission_atom(name) when is_binary(name), do: Map.get(@by_name, name, name)
 end

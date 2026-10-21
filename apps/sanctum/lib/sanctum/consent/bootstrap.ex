@@ -200,9 +200,8 @@ defmodule Sanctum.Consent.Bootstrap do
   # writes nothing, or after it has committed. With no claim, none.
   defp fenced(_ctx, nil), do: []
 
-  defp fenced(%Context{} = ctx, %{owner: owner, fence: fence} = claim) do
+  defp fenced(%Context{} = ctx, %{owner: owner, fence: fence, slot: slot}) do
     actor = Context.actor(ctx)
-    slot = Map.get(claim, :slot, :none)
 
     verify = fn ->
       if Arca.ProvisioningClaims.hold?(actor, owner, fence, slot),
@@ -436,7 +435,7 @@ defmodule Sanctum.Consent.Bootstrap do
          [entry] <-
            Enum.filter(offered, fn entry ->
              entry.kind == need.kind and entry.provider_hint == need.qualifier and
-               scopes_held?(entry, need) and Sanctum.InstanceEntries.admits?(ctx, entry, facts)
+               Sanctum.InstanceEntries.admits?(ctx, entry, facts)
            end),
          {:ok, view} <- entry_binding(ctx, entry.id, source_ref) do
       {:ok, instance_binding(view, need)}
@@ -491,13 +490,6 @@ defmodule Sanctum.Consent.Bootstrap do
     {:skip, {:unavailable, "Instance entries"}}
   end
 
-  # An OAuth need is met by an entry authorized for exactly its scopes:
-  # a bootstrap narrows nothing.
-  defp scopes_held?(%{kind: "oauth"} = entry, need),
-    do: Enum.sort(Enum.uniq(entry.oauth_scopes)) == Enum.sort(Enum.uniq(need.scopes))
-
-  defp scopes_held?(_entry, _need), do: true
-
   defp instance_binding(view, need) do
     with %{} = map <- view.destination,
          {:ok, destination} <- Prima.Destination.from_map(map),
@@ -542,7 +534,6 @@ defmodule Sanctum.Consent.Bootstrap do
          {:ok, view} <- entry_binding(ctx, id, source_ref),
          true <- is_binary(view.binding_digest) and view.binding_digest == digest,
          true <- view.kind == need.kind and view.provider_hint == need.qualifier,
-         true <- scopes_held?(view, need),
          true <-
            Sanctum.InstanceEntries.admits?(
              ctx,
@@ -627,15 +618,14 @@ defmodule Sanctum.Consent.Bootstrap do
 
   defp still_holds?(facts, need, digest) do
     facts.kind == need.kind and facts.provider_hint == need.qualifier and
-      scopes_held?(facts, need) and facts.status == "active" and is_binary(digest) and
-      facts.binding_digest == digest
+      facts.status == "active" and is_binary(digest) and facts.binding_digest == digest
   end
 
   # What a bootstrap-only head vouches for beside the seed: the nodes its
   # activation names, at those digests, and the ones its blob selects.
   defp vouched_by(head, blob, shipped_nodes) do
     named =
-      case Jason.decode(head.activation || "") do
+      case Jason.decode(head.activation) do
         {:ok, %{} = graph} -> graph
         _ -> %{}
       end
@@ -698,7 +688,7 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  defp release_digest(row), do: Map.get(row, :release_digest) || Map.get(row, "release_digest")
+  defp release_digest(row), do: Map.get(row, :release_digest)
 
   defp credential_needs(manifest) do
     case Prima.Manifest.Needs.from_manifest(manifest) do
@@ -791,8 +781,9 @@ defmodule Sanctum.Consent.Bootstrap do
     # does: it is what lets `Consent.Loader` refuse a `resolved_policy`
     # altered in place, and this path writes a policy over the whole
     # activation closure. This module inserts through its own `insert/6`
-    # and never reaches `Commit.persist/6`, so hashing there would have
-    # left every provisioning mint undigested.
+    # and never reaches `Commit.persist/6`, so it takes the digest here:
+    # a digest taken only there would leave every provisioning mint
+    # undigested.
     with {:ok, input} <- Sanctum.Consent.ShapeDerivation.shape_input(ctx, source_ref),
          {:ok, shape_digest} <- ShapeDigest.compute(input),
          {:ok, commit_digest} <-

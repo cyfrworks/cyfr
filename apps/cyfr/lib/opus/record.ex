@@ -893,7 +893,7 @@ defmodule Opus.Record do
   @spec reread(t()) :: {:ok, t()} | {:error, term()}
   def reread(%__MODULE__{} = record) do
     ctx =
-      Sanctum.internal_context(
+      Sanctum.Context.internal(
         user_id: record.user_id,
         athanor_id: record.athanor_id,
         permissions: [:storage_read],
@@ -1174,7 +1174,7 @@ defmodule Opus.Record do
     # (scope: :athanor + the record's athanor) so the row lands in the
     # correct partition. Routed through the single server-internal builder
     # (auth_method: :system).
-    Sanctum.internal_context(
+    Sanctum.Context.internal(
       user_id: record.user_id,
       athanor_id: record.athanor_id,
       permissions: [],

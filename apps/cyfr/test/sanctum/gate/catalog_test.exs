@@ -210,7 +210,7 @@ defmodule Sanctum.Gate.CatalogTest do
         Sanctum.Gate.call_external("system", ctx, %{"action" => "status", "scope" => "emissary"})
 
       assert result.status == "ok"
-      assert result.services.emissary == "ok"
+      assert result.services["emissary"] == "ok"
     end
   end
 
@@ -310,7 +310,7 @@ defmodule Sanctum.Gate.CatalogTest do
               fn -> Catalog.lookup("system") end,
               &Catalog.tool_actions/0,
               fn -> Catalog.action_declaration("system.status") end,
-              &Sanctum.Consent.ShapeDerivation.all_tool_actions/0,
+              fn -> Sanctum.Consent.ShapeDerivation.expand_tools([]) end,
               fn ->
                 Sanctum.ToolGrants.check_standing(
                   %{scope: "thread", effect: "allow", tool: "system", action: "status"},
@@ -532,7 +532,6 @@ defmodule Sanctum.Gate.CatalogTest do
         permissions: MapSet.new([:*]),
         scope: :athanor,
         auth_method: nil,
-        api_key_type: nil,
         request_id: nil
       }
 
@@ -790,7 +789,6 @@ defmodule Sanctum.Gate.CatalogTest do
         permissions: MapSet.new(),
         scope: nil,
         auth_method: nil,
-        api_key_type: nil,
         request_id: nil
       }
 
@@ -1161,7 +1159,6 @@ defmodule Sanctum.Gate.CatalogTest do
       key = %{
         ctx
         | auth_method: :api_key,
-          api_key_type: :application,
           permissions: MapSet.new([:storage_read, :storage_write])
       }
 

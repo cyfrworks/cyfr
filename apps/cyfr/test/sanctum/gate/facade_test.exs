@@ -6,7 +6,7 @@ defmodule Sanctum.Gate.FacadeTest do
   The gate's door for callers outside it is exactly its admission
   entries, an exact roster: a function added to the gate without a roster
   change fails here, and so does an entry the host's admission roster
-  names for the gate that the gate no longer defines. Everything else a
+  names for the gate that the gate does not define. Everything else a
   caller outside Sanctum reads of the gate it calls on the module that
   owns it, under one name; the annotation reads those callers share answer
   in either spelling, and the tool classification is the one rule every

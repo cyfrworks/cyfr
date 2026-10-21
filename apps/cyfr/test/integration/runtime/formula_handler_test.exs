@@ -582,7 +582,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
     test "blocks an external-only tool with no grant", %{ctx: ctx} do
       auth = authority()
-      json = mcp_request("session", "login", %{"user" => "admin"})
+      json = mcp_request("session", "logout", %{})
       parsed = Jason.decode!(execute(json, host!(ctx, auth), auth))
 
       assert parsed["error"]["type"] == "dispatch_error"
@@ -670,7 +670,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       # slot and no budget.
       parsed = Jason.decode!(spawn_fn.(execution_run_request(ref, %{"a" => 1, "b" => 2})))
       assert parsed["error"]["type"] == "tool_denied"
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
       assert Locus.Runtime.AsyncTracker.room?(tracker_pid)
 
       FormulaHandler.cleanup_registry(tracker_pid)
@@ -690,7 +690,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
       parsed = Jason.decode!(spawn_fn.(execution_run_request(ref, %{})))
       assert parsed["error"]["type"] == "resource_limit"
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
       assert Arca.Repo.all(
                from(e in Arca.Schemas.Execution,
@@ -772,7 +772,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       assert %{"op" => "echo"} = decoded(output)
 
       authority = TwoServices.entered(root_id)
-      wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
+      wait_until(fn -> Sanctum.TestContext.invoke_budget(authority).in_flight == 0 end)
       assert [%{status: "completed"}] = children(root_id)
     end
 
@@ -816,7 +816,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       authority = TwoServices.entered(root_id)
       [child] = children(root_id)
       wait_until(fn -> Arca.Repo.get!(Arca.Schemas.Execution, child.id).status == "failed" end)
-      wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
+      wait_until(fn -> Sanctum.TestContext.invoke_budget(authority).in_flight == 0 end)
       wait_until(fn -> Opus.Attempt.whereis(child.id) == nil end)
     end
 
@@ -837,7 +837,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       [{:held, ^root_id, root_call}] = for {:held, ^root_id, _} = call <- held, do: call
 
       authority = TwoServices.entered(root_id)
-      assert Sanctum.Authority.budget(authority).in_flight == 2
+      assert Sanctum.TestContext.invoke_budget(authority).in_flight == 2
       assert length(children(root_id)) == 2
 
       TwoServices.release!(root_call)
@@ -848,7 +848,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
         wait_until(fn -> Opus.Attempt.whereis(child.id) == nil end)
       end
 
-      wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
+      wait_until(fn -> Sanctum.TestContext.invoke_budget(authority).in_flight == 0 end)
     end
 
     @tag timeout: 180_000

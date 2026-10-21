@@ -212,7 +212,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
     Application.put_env(:sanctum, :caller_memo_ttl_ms, ms)
 
     on_exit(fn ->
-      Arca.Cache.delete_match({:established, :_, :_, :_})
+      Arca.Cache.delete_match({:established, :_, :_})
 
       case previous do
         {:ok, value} -> Application.put_env(:sanctum, :caller_memo_ttl_ms, value)

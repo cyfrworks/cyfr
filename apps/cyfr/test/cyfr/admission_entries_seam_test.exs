@@ -92,7 +92,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {Emissary.Web.DirectoryController, :resolve} => :directory_resolve_bad_position,
     {Emissary.Web.DirectoryController, :append} => :directory_append_unserved,
     {Emissary.Web.DirectoryController, :recover} => :directory_recover_unserved,
-    {Emissary.Web.DirectoryController, :outcome} => :directory_outcome_unserved,
     {Emissary.Web.RestoreController, :restore} => :restore_disabled,
     {Emissary.Web.RestoreController, :challenge} => :restore_challenge_disabled,
     {Emissary.Web.RestoreController, :reproof} => :restore_reproof_disabled,
@@ -522,9 +521,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
   def directory_recover_unserved(_conn, _ctx),
     do: directory_unserved(:post, "/directory/v1/per_seam/recover")
-
-  def directory_outcome_unserved(_conn, _ctx),
-    do: directory_unserved(:get, "/directory/v1/per_seam/requests/req_seam")
 
   def directory_resolve_bad_position(_conn, _ctx) do
     conn = get(build_conn(), "/directory/v1/per_seam?after=x")

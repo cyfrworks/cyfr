@@ -343,7 +343,7 @@ defmodule Sanctum.Dispatch do
   # descriptions from reaching an agent that holds no grant.
   defp prune_in_chain_discovery({:ok, %{tools: tools}}, "tools", args, ctx, authority)
        when is_list(tools) do
-    if (args["action"] || args[:action]) == "list" do
+    if args["action"] == "list" do
       {internal, external} =
         Enum.split_with(tools, fn t -> not String.contains?(t["name"] || "", ":") end)
 
@@ -436,7 +436,7 @@ defmodule Sanctum.Dispatch do
         {:ok, {:external_tool, %{server_digest: digest, tool: remote_tool}}, server}
 
       _ ->
-        case args["action"] || args[:action] do
+        case args["action"] do
           action when is_binary(action) and action != "" ->
             {:ok, {:tool, %{tool: name, action: action}}, nil}
 
@@ -539,7 +539,7 @@ defmodule Sanctum.Dispatch do
   # A declared action is authorized before its remaining fields are
   # validated. Missing or unknown action identity stays a cast error so
   # every ingress reports the same refusal. Remote `server:tool` names
-  # keep their existing proxied authorization, and while the storage
+  # take the proxied authorization, and while the storage
   # reserve is depleted an authenticated caller's are refused here, before
   # any budget is taken, as every operation that is no read and takes no
   # authority away is (`Sanctum.Catalog.undeclared_write_admission/0`); an
@@ -556,7 +556,7 @@ defmodule Sanctum.Dispatch do
   end
 
   defp authorize_declared_action(name, meta, ctx, args, in_chain?) when is_map(meta) do
-    action = args["action"] || args[:action]
+    action = args["action"]
 
     if is_binary(action) and match?(%{}, Annotations.annotation(meta, action)) do
       Catalog.authorize_annotated_action(name, meta, ctx, args, in_chain?)
@@ -594,7 +594,7 @@ defmodule Sanctum.Dispatch do
     ctx = if is_nil(ctx.request_id), do: %{ctx | request_id: Prima.UUID7.request_id()}, else: ctx
     ctx = %{ctx | call_id: call_id}
 
-    action = args["action"] || args[:action]
+    action = args["action"]
     # The request log never holds an argument's bulk content, only its
     # size and digest (`Sanctum.Catalog.logged_input/2`).
     logged_args = Catalog.logged_input(name, args)
@@ -644,7 +644,7 @@ defmodule Sanctum.Dispatch do
   # A decision's operation names, as stored (`Sanctum.Decisions.bounded/1`).
   defp bounded(value), do: Sanctum.Decisions.bounded(value)
 
-  defp action_of(args), do: bounded(args["action"] || args[:action])
+  defp action_of(args), do: bounded(args["action"])
 
   # The call admitted: its decision recorded, then the work run. The
   # duration is the work's alone.
@@ -936,15 +936,15 @@ defmodule Sanctum.Dispatch do
   # Internal
   # ============================================================================
 
-  # The handler runs under `async_nolink`, never `Task.async`. `Task.async` links,
-  # and the caller here is the request process, which does not trap exits — so a
-  # handler raising would propagate a link exit signal and kill the request
-  # outright, returning a bare 500 instead of a JSON-RPC error. A signal is not
-  # catchable by try/rescue, so the crash clauses below could never have fired for
-  # that case. Without a link, a crash arrives as `{:exit, reason}` from `yield/2`.
   # The adapter's runner. Inline is the in-process call: the handler on the
   # caller's own process, with a raised authorization refusal answered as
   # the refusal it is and any other crash contained to this call.
+  # Supervised runs the handler under `async_nolink`, never `Task.async`:
+  # the caller is the request process, which does not trap exits, so a
+  # linked handler that raised would kill the request with a link exit
+  # signal, which no try/rescue catches, and answer a bare 500 instead of a
+  # JSON-RPC error. Without a link, a crash arrives as `{:exit, reason}`
+  # from `yield/2`.
   # A handler that does not answer is answered by `unanswered/3`, on
   # either plane and under either runner.
   defp execute_tool_call(name, ctx, opts, execute_fn) do
@@ -994,19 +994,17 @@ defmodule Sanctum.Dispatch do
   end
 
   defp supervise({name, _action} = op, ctx, handle, execute_fn) do
-    # Registered under the server-minted request id, which is also the
-    # request's progress topic (`Cyfr.Bus.progress/2`) — one identity per
-    # request across both subsystems. The transport cancels through this when its caller hangs up;
-    # a context without one (an internal call that bypassed `do_call/4`'s
-    # minting) simply is not cancellable that way — its caller cancels by
-    # handle.
+    # Registered under the request id `do_call/4` guarantees, which is
+    # also the request's progress topic (`Cyfr.Bus.progress/2`) — one
+    # identity per request across both subsystems. The transport cancels
+    # through this when its caller hangs up.
     #
     # The claim is taken before the task exists and the task registers
     # against it from inside itself before the handler runs, so a cancel
     # that lands in between is seen at the registration and the handler
     # never runs.
     request_id = ctx.request_id
-    claim = if is_binary(request_id), do: Sanctum.RunningTasks.claim_request(request_id)
+    claim = Sanctum.RunningTasks.claim_request(request_id)
 
     logger_metadata = Prima.LoggerContext.capture()
 
@@ -1071,7 +1069,7 @@ defmodule Sanctum.Dispatch do
           )
       end
 
-    if claim, do: Sanctum.RunningTasks.unregister(request_id, claim)
+    Sanctum.RunningTasks.unregister(request_id, claim)
     if handle, do: Sanctum.RunningTasks.release_handle(handle)
     result
   end
@@ -1109,8 +1107,7 @@ defmodule Sanctum.Dispatch do
   # Run from inside the task. `:cancelled` or `:released` from either
   # registration means the handler must not run.
   defp register_task(request_id, claim, handle) do
-    with :ok <-
-           if(claim, do: Sanctum.RunningTasks.register(request_id, claim, self()), else: :ok) do
+    with :ok <- Sanctum.RunningTasks.register(request_id, claim, self()) do
       if handle, do: Sanctum.RunningTasks.register_handle(handle, self()), else: :ok
     end
   end

@@ -53,7 +53,7 @@ defmodule Sanctum.Consent do
   an existing owner profile whose shape has not moved, binding an entry
   to a need, with no plan, preview or proof: it re-issues the head's
   scope, invoke mode, origins and narrowing under the same revision
-  compare-and-set (`Sanctum.Consent.Commit.grant/3`).
+  compare-and-set (`Sanctum.Consent.Commit.grant/2`).
 
   `preview` exists so a proof can bind the exact commit digest that was
   rendered. Without it, a choice made after approval — a different vault
@@ -168,18 +168,6 @@ defmodule Sanctum.Consent do
           | {:consent_conflict, consent_conflict()}
           | {:restart_required, restart_required()}
           | {:confirmation_required, confirmation_required()}
-
-  @doc """
-  The scopes a consent may take.
-
-  `:versionless` applies to every release of a component line and is the
-  default — the resolved policy is an allowlist, so applying it to a newer
-  release can only ever grant less than it names, never more. `:pinned`
-  names one exact activation, and is forced for consents carrying an
-  override and for every public profile.
-  """
-  @spec scopes() :: [scope()]
-  def scopes, do: [:versionless, :pinned]
 
   @typedoc """
   One candidate profile of a source: decoded, or — when its stored kind or

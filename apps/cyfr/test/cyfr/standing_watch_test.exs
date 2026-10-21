@@ -26,7 +26,7 @@ defmodule Cyfr.StandingWatchTest do
     Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
 
     on_exit(fn ->
-      Arca.Cache.delete_match({:established, :_, :_, :_})
+      Arca.Cache.delete_match({:established, :_, :_})
 
       if original,
         do: Application.put_env(:sanctum, :caller_memo_ttl_ms, original),
@@ -81,7 +81,7 @@ defmodule Cyfr.StandingWatchTest do
     # copy; putting it back is what member B's table still holds, having
     # heard nothing yet.
     assert {:ok, %{status: "archived"}} = Athanors.archive(group)
-    Arca.Cache.put(Arca.Cache.Keys.established(hash, :console, nil), ctx, 60_000)
+    Arca.Cache.put(Arca.Cache.Keys.established(hash, nil), ctx, 60_000)
 
     assert {:ok, %Context{athanor_id: ^cached}} = Sanctum.Caller.establish(session.token),
            "the memo under test is not the one a cached caller is served from"

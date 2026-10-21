@@ -3,8 +3,7 @@
 
 defmodule Sanctum.ProseErrorInventoryTest do
   @moduledoc """
-  The prose errors Sanctum still answers, listed, so their number can only
-  fall.
+  The prose errors Sanctum answers, listed, so their number can only fall.
 
   A bare sentence, `{:error, "…"}`, is classed `internal` by the refusal
   vocabulary (`Prima.Refusal`): a person told a rate limit or a duplicate
@@ -45,7 +44,7 @@ defmodule Sanctum.ProseErrorInventoryTest do
      "Sanctum.ProviderCredentials.validate_provider/1"} => 2,
     {"apps/sanctum/lib/sanctum/providers/athanor.ex", "Sanctum.Providers.Athanor.handle/2"} => 1,
     {"apps/sanctum/lib/sanctum/providers/door.ex", "Sanctum.Providers.Door.handle/2"} => 1,
-    {"apps/sanctum/lib/sanctum/providers/key.ex", "Sanctum.Providers.Key.handle/2"} => 11,
+    {"apps/sanctum/lib/sanctum/providers/key.ex", "Sanctum.Providers.Key.handle/2"} => 10,
     {"apps/sanctum/lib/sanctum/providers/key.ex", "Sanctum.Providers.Key.parse_key_type_arg/1"} =>
       1,
     {"apps/sanctum/lib/sanctum/providers/oauth.ex", "Sanctum.Providers.OAuth.handle/2"} => 3,
@@ -55,8 +54,6 @@ defmodule Sanctum.ProseErrorInventoryTest do
      "Sanctum.Providers.Profile.decode_tool_servers/1"} => 1,
     {"apps/sanctum/lib/sanctum/providers/profile.ex", "Sanctum.Providers.Profile.enum/3"} => 1,
     {"apps/sanctum/lib/sanctum/providers/profile.ex", "Sanctum.Providers.Profile.handle/2"} => 6,
-    {"apps/sanctum/lib/sanctum/providers/profile.ex", "Sanctum.Providers.Profile.refuse_limits/1"} =>
-      1,
     {"apps/sanctum/lib/sanctum/providers/session.ex", "Sanctum.Providers.Session.handle/2"} => 4,
     {"apps/sanctum/lib/sanctum/providers/system.ex", "Sanctum.Providers.System.handle/3"} => 5,
     {"apps/sanctum/lib/sanctum/providers/system.ex", "Sanctum.Providers.System.handle_notify/2"} =>
@@ -71,8 +68,8 @@ defmodule Sanctum.ProseErrorInventoryTest do
      "Sanctum.Providers.TinctureVisibility.handle/2"} => 1,
     {"apps/sanctum/lib/sanctum/providers/webhook.ex", "Sanctum.Providers.Webhook.handle/2"} => 19,
     {"apps/sanctum/lib/sanctum/vault.ex", "Sanctum.Vault.rotation_oauth/2"} => 1,
-    {"apps/sanctum/lib/sanctum/vault/oauth.ex", "Sanctum.Vault.OAuth.http_post/4"} => 3,
-    {"apps/sanctum/lib/sanctum/vault/oauth.ex", "Sanctum.Vault.OAuth.https_or_refuse/1"} => 1,
+    {"apps/sanctum/lib/sanctum/vault/oauth.ex", "Sanctum.Vault.OAuth.http_post/3"} => 3,
+    {"apps/sanctum/lib/sanctum/vault/oauth.ex", "Sanctum.Vault.OAuth.require_https/1"} => 1,
     {"apps/sanctum/lib/sanctum/vault/oauth_grant.ex",
      "Sanctum.Vault.OAuthGrant.malformed_response/0"} => 1,
     {"apps/sanctum/lib/sanctum/vault/oauth_grant.ex", "Sanctum.Vault.OAuthGrant.seal/2"} => 1,

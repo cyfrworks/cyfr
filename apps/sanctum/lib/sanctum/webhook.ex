@@ -39,9 +39,6 @@ defmodule Sanctum.Webhook do
   # redaction.
   @default_signature_header Prima.Webhook.default_signature_header()
 
-  @doc false
-  defdelegate default_signature_header(), to: Prima.Webhook
-
   alias Arca.WebhookStorage
   alias Prima.ComponentRef
   alias Sanctum.Consent.Components
@@ -121,9 +118,8 @@ defmodule Sanctum.Webhook do
          url: build_url(slug),
          target_ref: target_ref,
          # A round-trip of the JSON `encode_input_template/1` just produced,
-         # not a read of a stored column: it normalizes the atom keys a direct
-         # Elixir caller may pass into the string keys every reader sees. The
-         # bang is safe precisely because the value was encoded two lines up.
+         # not a read of a stored column: the template as every reader sees
+         # it. The bang is safe because the value was encoded two lines up.
          input_template: Jason.decode!(input_template_json),
          signature_header: attrs.signature_header,
          replay_protection: replay_protection(attrs),
@@ -611,10 +607,9 @@ defmodule Sanctum.Webhook do
   defp do_verify(_source, _raw_body, _received, _timestamp),
     do: {:error, :malformed_signature}
 
-  # A secret an ingress row already opened, or a stored one to open now.
+  # A secret the ingress row opened.
   defp open_source({:opened, secret}) when is_binary(secret), do: {:ok, secret}
   defp open_source({:opened, _unreadable}), do: {:error, :secret_unreadable}
-  defp open_source({:sealed, secret_encrypted, aad}), do: decrypt_secret(secret_encrypted, aad)
 
   # Return stored-secret decryption failures separately from signature
   # mismatches. The rotation grace path may retry with the previous secret.
@@ -636,12 +631,10 @@ defmodule Sanctum.Webhook do
   in the future. After the grace window the previous secret is ignored, so
   a rotation isn't a hard cutover.
 
-  `webhook` is either a stored row, whose `secret_encrypted` and
-  `previous_secret_encrypted` are opened here with an AAD rebuilt from the
-  row's tenant tuple, or a `resolve_ingress/1` row, whose secrets were
-  opened under the same AAD when it was resolved. A secret that does not
-  open is `{:error, :secret_unreadable}`, and a timestamped delivery whose
-  skew window the store cannot answer is `{:error, :unavailable}`.
+  `webhook` is a `resolve_ingress/1` row, whose secrets open under the AAD
+  of the row's tenant tuple. A secret that does not open is
+  `{:error, :secret_unreadable}`, and a timestamped delivery whose skew
+  window the store cannot answer is `{:error, :unavailable}`.
   """
   @spec verify_with_grace(map(), binary(), binary(), binary() | nil) ::
           :ok | {:error, atom()}
@@ -671,14 +664,6 @@ defmodule Sanctum.Webhook do
   defp secret_sources(%{signing_secrets: opened}) when is_function(opened, 0) do
     %{current: current, previous: previous} = opened.()
     {{:opened, current}, if(previous != nil, do: {:opened, previous})}
-  end
-
-  defp secret_sources(webhook) do
-    aad = webhook_aad(webhook)
-    previous = Map.get(webhook, :previous_secret_encrypted)
-
-    {{:sealed, webhook.secret_encrypted, aad},
-     if(is_binary(previous), do: {:sealed, previous, aad})}
   end
 
   # The grace window is open while previous_secret_expires_at is in the future.
@@ -733,10 +718,7 @@ defmodule Sanctum.Webhook do
   Decode the stored JSON `input_template` to a map. Used by the controller
   to merge with the POST envelope at invoke time.
   """
-  @spec decode_input_template(String.t() | nil) :: {:ok, map()} | {:error, atom()}
-  def decode_input_template(nil), do: {:ok, %{}}
-  def decode_input_template(""), do: {:ok, %{}}
-
+  @spec decode_input_template(String.t()) :: {:ok, map()} | {:error, atom()}
   def decode_input_template(json) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, %{} = map} -> {:ok, map}
@@ -827,8 +809,8 @@ defmodule Sanctum.Webhook do
         :ok
 
       # A profile list or head the store could not answer, or one stored
-      # damaged, is refused in its own class; every other refusal keeps the
-      # binding's sentence as the webhook surface has always answered it.
+      # damaged, is refused in its own class; every other refusal answers
+      # the binding's sentence.
       {:error, reason} ->
         case Sanctum.Consent.RegistrationBinding.refusal(reason) do
           %Prima.Refusal{} = classed ->
@@ -953,15 +935,9 @@ defmodule Sanctum.Webhook do
 
   defp encode_input_template(_), do: {:error, :invalid_input_template}
 
-  # Check the map for reserved keys in BOTH string and atom forms. Direct
-  # Elixir callers can pass atom-keyed maps (e.g. `%{_webhook: "x"}`); we
-  # reject those upfront for a clean error rather than relying on the
-  # controller's `Map.put("_webhook", envelope)` to silently overwrite.
-  defp has_reserved_key?(map) do
-    Enum.any?(@reserved_input_keys, fn key ->
-      Map.has_key?(map, key) or Map.has_key?(map, String.to_atom(key))
-    end)
-  end
+  # Refused up front for a clean error rather than left for the
+  # controller's `Map.put("_webhook", envelope)` to overwrite.
+  defp has_reserved_key?(map), do: Enum.any?(@reserved_input_keys, &Map.has_key?(map, &1))
 
   defp generate_secret, do: {:ok, Prima.CredentialShape.mint(:webhook_secret)}
 
@@ -1005,13 +981,11 @@ defmodule Sanctum.Webhook do
     end
   end
 
-  # Webhook URLs are path-only — clients prepend the host they reach the
-  # deployment on.
   # The sender needs an absolute URL, and only the operator knows the host
   # this instance is reachable at — behind a proxy or a tunnel it is not the
-  # bind address. `CYFR_PUBLIC_URL` supplies it; without it the path alone is
-  # returned and both surfaces say what to set. The console and the CLI have
-  # been printing that instruction since before anything read the variable.
+  # bind address. `CYFR_PUBLIC_URL` supplies it; without it the URL is the
+  # path alone, which a client prefixes with the host it reaches the
+  # deployment on, and the console and the CLI say what to set.
   defp build_url(slug) when is_binary(slug) and slug != "" do
     path = "/hooks/" <> slug
 

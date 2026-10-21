@@ -10,9 +10,9 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   ## Usage
 
-  This module is typically called via MCP session tool actions:
-  - `device-init` - Start device flow, returns codes for user
-  - `device-poll` - Poll for completion, returns session when authorized
+  This module is called through the MCP session tool's actions:
+  - `device_init` - Start device flow, returns codes for user
+  - `device_poll` - Poll for completion, returns session when authorized
 
   ## Flow
 
@@ -118,9 +118,8 @@ defmodule Sanctum.Auth.DeviceFlow do
   Returns device code info that should be displayed to the user.
 
   `client_ip` is the address the budget is charged to, from
-  `Sanctum.ClientIp`. Pass `nil` only from a surface that is already
-  metered per address by the transport — today that is the MCP route
-  behind `CyfrWeb.Plugs.MCPRateLimit`, and nothing else. It is a
+  `Sanctum.ClientIp`. Pass `nil` only from a surface its transport
+  already meters per address. It is a
   required argument rather than an option because a caller that has no
   answer has to say so, and the next anonymous surface must not inherit
   "unbudgeted" by omission.
@@ -157,8 +156,8 @@ defmodule Sanctum.Auth.DeviceFlow do
     end
   end
 
-  # A surface with no address of its own (the MCP route, metered per IP by
-  # its own plug) has no bucket to charge; it still passes the global one.
+  # A caller whose ingress knew no address (a context with no `client_ip`)
+  # has no bucket to charge; it still passes the global one.
   defp check_ip_budget({_bucket, nil}, _max), do: :ok
 
   defp check_ip_budget({bucket, client_ip}, max) when is_binary(client_ip) do
@@ -166,8 +165,8 @@ defmodule Sanctum.Auth.DeviceFlow do
   end
 
   @doc """
-  Poll for the IdP token; once authorized, run the door, sign-in and the
-  one sign-in decision (`Sanctum.SignIn.complete/3`). `command_line:`
+  Poll for the IdP token; once authorized, run the door and the sign-in
+  (`Sanctum.SignIn.admitted/2`) and open the session. `command_line:`
   names the machine a command line's sign-in runs on
   (`Sanctum.CliSignIn.machine/1` checked it), which the session records
   so its person lists and revokes it; the browser's sign-in names none.
@@ -175,16 +174,10 @@ defmodule Sanctum.Auth.DeviceFlow do
   Returns one of:
   - `{:ok, %{status: "pending"}}` - User hasn't authorized yet
   - `{:ok, %{status: "complete", session_token: token, user: user_info,
-      needs_personal_namespace: false, probe_error: string (optional),
-      credential_store_warnings: [slug] (optional)}}` - Authorized and
-    signed in. `probe_error` says the cyfr.run courtesy probe did not
-    answer (`probe_failed`, `invalid_access_token`,
-    `policy_acceptance_required`, `namespace_conflict`) — the session is
-    good; `cyfr whoami` re-probes, and publishing asks for whatever is
-    still owed. `credential_store_warnings` lists namespaces whose push
-    tokens were issued but not cached locally. `needs_personal_namespace`
-    is always false: a publisher namespace is claimed at first publish,
-    never at the door.
+      outcome: {:proceed, report}}}` - Authorized and signed in. The
+    report (`t:Sanctum.SignIn.report/0`) names no unsynced namespace and
+    a skipped probe: a publisher namespace is claimed at first publish,
+    never at the door, and `cyfr whoami` probes cyfr.run.
   - `{:ok, %{status: "expired"}}` - Device code expired
   - `{:ok, %{status: "denied"}}` - User denied authorization, or the door
     refused them
@@ -209,17 +202,11 @@ defmodule Sanctum.Auth.DeviceFlow do
         {:ok, tokens} ->
           # Got tokens: user info, the door, what sign-in records, then the
           # one decision both sign-in paths take.
+          # A door refusal (`{:error, {:door, reason}}`) passes up as it
+          # is, and `Sanctum.Providers.Session` renders it uniformly.
           with {:ok, user_info} <- fetch_user_info(provider, tokens),
                {:ok, user, ctx} <- admit(user_info, provider) do
             {:ok, complete(user, ctx, user_info, Keyword.get(opts, :command_line))}
-          else
-            # `Sanctum.Door.admit_identity/2` answers `{:error, {:door, reason}}`;
-            # nothing produces a bare `:user_not_allowed`, so the arm that
-            # matched it never ran. The door refusal falls through to `error`
-            # and `Sanctum.Providers.Session` renders it uniformly, which is
-            # what a poller is meant to see.
-            error ->
-              error
           end
 
         {:error, :authorization_pending} ->
@@ -456,15 +443,8 @@ defmodule Sanctum.Auth.DeviceFlow do
     ]
 
     case http_post(urls.token, headers, body) do
-      {:ok, %{"access_token" => access_token} = resp} ->
-        {:ok,
-         %{
-           access_token: access_token,
-           token_type: normalize_token_type(resp["token_type"]),
-           scope: resp["scope"] || "",
-           refresh_token: resp["refresh_token"],
-           expires_in: resp["expires_in"]
-         }}
+      {:ok, %{"access_token" => access_token}} ->
+        {:ok, %{access_token: access_token}}
 
       {:ok, %{"error" => "authorization_pending"}} ->
         {:error, :authorization_pending}
@@ -606,8 +586,8 @@ defmodule Sanctum.Auth.DeviceFlow do
   end
 
   # What follows the door. The sign-in report travels intact on the result
-  # — surfaces read it, never a re-derived flag; `wire/1` flattens it for
-  # the CLI. The IdP token never travels: nothing after the door needs it.
+  # for the browser's page to read. The IdP token never travels: nothing
+  # after the door needs it.
   #
   # And nothing here probes cyfr.run. The probe is the component domain's
   # (`Compendium.SignInSync`), which sits above Sanctum and cannot be
@@ -633,27 +613,18 @@ defmodule Sanctum.Auth.DeviceFlow do
   end
 
   @doc """
-  The CLI poll response, field for field.
+  The CLI poll response, field for field: a signed-in result is its
+  `status`, `user` and `session_token`, and every other poll status passes
+  through as it is.
 
   `cyfr login` reads these exact keys (`apps/codex/cmd/login.go`), so this
   flattening is a wire contract: one adapter, byte-stable, exercised by
   its own test. The browser page consumes the rich result directly; only
-  the MCP session tool's `device_poll` flattens through here. Total over
-  every poll status — a result without an outcome passes through.
+  the MCP session tool's `device_poll` flattens through here.
   """
   @spec wire(map()) :: map()
-  def wire(%{outcome: outcome} = result) do
-    base = %{status: "complete", user: result.user}
-
-    base =
-      case result do
-        %{session_token: token} -> Map.put(base, :session_token, token)
-        _ -> base
-      end
-
-    {:proceed, report} = outcome
-    base |> Map.put(:needs_personal_namespace, false) |> put_report(report)
-  end
+  def wire(%{outcome: {:proceed, _report}, user: user, session_token: token}),
+    do: %{status: "complete", user: user, session_token: token}
 
   def wire(result), do: result
 
@@ -703,22 +674,6 @@ defmodule Sanctum.Auth.DeviceFlow do
             "The server could not read memberships just now. " <>
               "Run `cyfr login` again in a moment."
         }
-    end
-  end
-
-  # What the registry said, as stable client-facing fields: namespaces
-  # whose push tokens didn't land locally, and a probe that failed or was
-  # refused (`cyfr whoami` re-probes). Never an inspected internal error.
-  defp put_report(fields, %{unsynced: unsynced, probe: probe}) do
-    fields =
-      if unsynced == [], do: fields, else: Map.put(fields, :credential_store_warnings, unsynced)
-
-    case probe do
-      :failed -> Map.put(fields, :probe_error, "probe_failed")
-      :invalid_token -> Map.put(fields, :probe_error, "invalid_access_token")
-      :legal_required -> Map.put(fields, :probe_error, "policy_acceptance_required")
-      :namespace_conflict -> Map.put(fields, :probe_error, "namespace_conflict")
-      _ -> fields
     end
   end
 
@@ -793,17 +748,12 @@ defmodule Sanctum.Auth.DeviceFlow do
   defp normalize_provider(name) when is_binary(name), do: Map.get(@provider_by_name, name, name)
   defp normalize_provider(other), do: other
 
-  defp normalize_token_type(nil), do: "bearer"
-  defp normalize_token_type(type) when is_binary(type), do: String.downcase(type)
-
   # ============================================================================
   # HTTP Client
   # ============================================================================
   #
-  # Uses the `Sanctum.Auth.Finch` pool (started in `Cyfr.Application`) for
-  # outbound GitHub / Google OAuth calls, so the auth sliver's only permitted
-  # edge into Compendium stays the post-`Session.create/1` probe +
-  # CredentialStore.put handoff.
+  # Uses the `Sanctum.Auth.Finch` pool (`Sanctum.Supervisor` starts it) for
+  # outbound GitHub / Google OAuth calls.
   #
   # Success responses are parsed as JSON. Non-2xx responses are also parsed
   # as JSON when possible because OAuth surfaces structured errors
@@ -812,25 +762,19 @@ defmodule Sanctum.Auth.DeviceFlow do
 
   @finch_pool Sanctum.Auth.Finch
 
-  # One reader for the timeout, so the two verbs cannot come to disagree
-  # about how long an IdP is allowed to take. It was an
-  # `Application.get_env(:sanctum, :http_timeout_ms)` that nothing set — a
-  # constant under a name general enough that the next module to want an
-  # HTTP timeout would have read this one by accident.
+  # How long an IdP may take to answer either verb.
   @http_timeout_ms 30_000
-
-  defp http_timeout_ms, do: @http_timeout_ms
 
   defp http_post(url, headers, body) do
     :post
     |> Finch.build(url, headers, body)
-    |> finch_request_json(http_timeout_ms())
+    |> finch_request_json(@http_timeout_ms)
   end
 
   defp http_get(url, headers) do
     :get
     |> Finch.build(url, headers)
-    |> finch_request_json(http_timeout_ms())
+    |> finch_request_json(@http_timeout_ms)
   end
 
   defp finch_request_json(req, timeout) do
@@ -843,9 +787,6 @@ defmodule Sanctum.Auth.DeviceFlow do
           {:ok, json} -> {:ok, json}
           {:error, _} -> {:error, {:http_error, to_string(resp_body)}}
         end
-
-      {:error, %Mint.TransportError{reason: reason}} ->
-        {:error, {:request_failed, reason}}
 
       {:error, reason} ->
         {:error, {:request_failed, reason}}

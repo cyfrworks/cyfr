@@ -348,7 +348,6 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
   @oauth_dep "reagent:local.sel-oauth-dep"
   @oauth_source "reagent:local.sel-oauth-source"
-  @mail ~s({"hosts":["gmail.googleapis.com"],"methods":["GET"],"paths":["/gmail/"],"scheme":"https"})
 
   # A dependency whose one need attaches a Google token of exactly
   # `gmail.readonly`, and a source that depends on it.
@@ -408,28 +407,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     values
   end
 
-  test "an OAuth binding is lent by its scopes: an offered instance entry", %{ctx: ctx} do
-    {person, _user} = Sanctum.TestContext.person!(ctx)
-    oauth_lending!(ctx)
-
-    {:ok, offered} =
-      Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
-        name: "company mail",
-        kind: "oauth",
-        provider_hint: "google",
-        oauth_scopes: ~s(["gmail.readonly"]),
-        destination: @mail,
-        sealed_payload: "sealed",
-        binding_digest: "sha256:mail-#{System.unique_integer([:positive])}",
-        audience: "everyone",
-        created_by: "usr_admin"
-      })
-
-    values = lend_oauth!(person, %{instance_entry_id: offered.id})
-    assert values["source"] == "instance" and values["name"] == offered.name
-  end
-
-  test "an OAuth binding is lent by its scopes: the athanor's own entry", %{ctx: ctx} do
+  test "an OAuth binding is lent by its scopes", %{ctx: ctx} do
     {person, _user} = Sanctum.TestContext.person!(ctx)
     oauth_lending!(ctx)
 

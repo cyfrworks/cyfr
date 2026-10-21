@@ -13,11 +13,6 @@ defmodule Compendium.OCI.AuthTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-
-    for slug <- ["alice", "stripe.com"] do
-      CredentialStore.delete(ctx(), @registry, slug)
-    end
-
     :ok
   end
 

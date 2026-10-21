@@ -67,15 +67,25 @@ defmodule Sanctum.AnonymousIngressTest do
           created_by: "system"
         })
 
+      n = System.unique_integer([:positive])
+
+      {:ok, departed} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: "github|https://github.com|departed-#{n}",
+          provider: "github",
+          email: "departed-#{n}@example.com",
+          verified: true
+        })
+
       # Whoever created it — a member who left, a synthetic principal, nobody
       # in particular — the channel belongs to the athanor and keeps running.
-      assert Sanctum.Tenancy.channel_active?(athanor.id, "departed-user")
+      assert Sanctum.Tenancy.channel_active?(athanor.id, departed.id)
       assert Sanctum.Tenancy.channel_active?(athanor.id, "webhook:hook")
       assert Sanctum.Tenancy.channel_active?(athanor.id, nil)
 
       # An archived athanor closes every channel it owns.
       {:ok, _} = Sanctum.Tenancy.Athanors.archive(athanor)
-      refute Sanctum.Tenancy.channel_active?(athanor.id, "departed-user")
+      refute Sanctum.Tenancy.channel_active?(athanor.id, departed.id)
 
       # And no channel survives without an athanor.
       refute Sanctum.Tenancy.channel_active?(nil, "anyone")

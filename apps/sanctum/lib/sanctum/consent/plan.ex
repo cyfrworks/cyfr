@@ -13,10 +13,11 @@ defmodule Sanctum.Consent.Plan do
   bindings no longer match and the commit surfaces `consent_conflict`
   instead of granting against stale facts.
 
-  Needs vocabulary: until manifests declare named needs, every component
-  exposes the single ingress slot, spelled `"@ingress"` in decisions —
-  the edge the bound credential rides. The blob edge-key grammar reserves
-  `@`-prefixed names, so a future manifest need can never collide.
+  Needs vocabulary: a manifest's declared needs are its slots, and a
+  manifest that declares no needs exposes the single ingress slot,
+  spelled `"@ingress"` in decisions — the edge the bound credential
+  rides. The blob edge-key grammar reserves `@`-prefixed names, so a
+  declared need can never collide with it.
 
   A dependency edge of the closure whose target declares a credential
   need is a `dependency_needs` row: who lends, what it needs, and which
@@ -43,7 +44,7 @@ defmodule Sanctum.Consent.Plan do
   never wider, and a surface can offer to grant a consumed `once` binding
   again; `head_narrowing`, per consent-graph node the narrowing the head
   holds against the ask as it stands, in the decisions' `subset` shape
-  (`head_narrowing/4`, the one definition `Sanctum.Consent.Commit.grant/3`
+  (`head_narrowing/4`, the one definition `Sanctum.Consent.Commit.grant/2`
   re-issues too), so a re-grant opens as narrow as its head, and a method
   newly asked for, or a dependency a release added, opens off; and, when
   the component's shape moved since the head, `shape_diff`, the head as
@@ -57,11 +58,9 @@ defmodule Sanctum.Consent.Plan do
   policy fails its digest or does not parse, refuses the plan
   `{:corrupt, {:profile, profile_id}}`: its narrowing is unknown.
 
-  `candidates` are the athanor's active entries. An OAuth candidate answers
-  `narrowable`, whether a token for fewer of its scopes can be dispensed,
-  which is so only where its provider attenuates a refresh
-  (`Sanctum.Vault.OAuth.attenuates_scope?/1`); a need asking for fewer
-  scopes than a candidate that is not narrowable holds is not met by it.
+  `candidates` are the athanor's active entries. An OAuth entry's token is
+  dispensed for every scope the entry holds, never fewer, so a need is met
+  only by an OAuth candidate holding exactly its scopes.
 
   ## Each need's choice
 
@@ -72,8 +71,8 @@ defmodule Sanctum.Consent.Plan do
       entries offered to the person (`Sanctum.InstanceEntries.offered/1`)
       of the need's kind whose `provider_hint` is the need's qualifier,
       each `%{source: "own" | "instance", entry_id | instance_entry_id,
-      name, kind, provider, destination, disclosed}`, `narrowable` beside
-      an OAuth one, which must hold the need's scopes as above. An
+      name, kind, provider, destination, disclosed}`, an OAuth one
+      holding exactly the need's scopes, as above. An
       instance entry is a candidate only where its component policy
       admits the node the need is bound on (`admits?/3`, with the node's
       release digest in the closure). A need the component reads itself —
@@ -131,9 +130,6 @@ defmodule Sanctum.Consent.Plan do
   alias Sanctum.Consent.ShapeDerivation
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
-  alias Sanctum.Vault.OAuth
-
-  require Logger
 
   # Ten minutes: an operator reads candidates and decides. The commit
   # proof (120s) is the short-lived one; the plan token only pins facts.
@@ -261,11 +257,11 @@ defmodule Sanctum.Consent.Plan do
          {:ok, profile_id, expected_revision, head} <-
            ctx |> locate_head(source_ref, label, kind) |> read(:profiles),
          stored = if(head, do: {:ok, head, profile_id}, else: :none),
-         manifest = manifest(component, source_ref),
+         {:ok, manifest} <- manifest(component, source_ref),
          {:ok, resources, limits} <-
-           Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest),
+           Sanctum.Consent.BlobBuilder.node_grant(source_ref, manifest),
          {:ok, {closure, closure_rows}} <- closure(ctx, component),
-         {:ok, rows} <- ask_rows(ctx, closure, closure_rows),
+         {:ok, rows} <- ask_rows(closure, closure_rows),
          {:ok, candidates} <- ctx |> candidates() |> read(:vault),
          {:ok, sources} <- ctx |> choice_sources() |> read(:vault),
          needs =
@@ -279,6 +275,7 @@ defmodule Sanctum.Consent.Plan do
            dependency_needs(ctx, sources, closure, closure_rows),
          {:ok, asked} <- held_ask(ctx, stored, source_ref, {closure, closure_rows}),
          {:ok, head_narrowing} <- held_narrowing(stored, source_ref, asked),
+         {:ok, shape_diff} <- held_shape_diff(ctx, stored, shape_digest, source_ref, asked),
          {:ok, plan_token} <-
            mint_token(ctx, shape_digest, profile_id, expected_revision) do
       # A head binding is read as the commit reads it (`Commit.head_place/2`),
@@ -292,7 +289,7 @@ defmodule Sanctum.Consent.Plan do
            rows: closure_rows
          }}
 
-      head = head_facts(ctx, stored, shape_digest, {source_ref, asked}, reads)
+      head = head_facts(stored, reads)
 
       {:ok,
        %{
@@ -311,7 +308,7 @@ defmodule Sanctum.Consent.Plan do
          head_origins: head.origins,
          head_bindings: head.bindings,
          head_narrowing: head_narrowing,
-         shape_diff: head.shape_diff,
+         shape_diff: shape_diff,
          candidates: candidates,
          tool_server_candidates: Sanctum.Proxy.impl!().consent_candidates(ctx),
          warnings: need_warnings(needs, provided_notes),
@@ -453,16 +450,13 @@ defmodule Sanctum.Consent.Plan do
   # Internal
   # ---------------------------------------------------------------------------
 
-  # A manifest that does not decode declares nothing. The line names the
-  # component, never the manifest's bytes.
+  # A manifest that does not decode is a damaged row, refused by the ref it
+  # was read under and never by its bytes: read as declaring nothing, its
+  # needs would drop out of the grant and the plan.
   defp manifest(row, ref) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
-      {:ok, manifest} ->
-        manifest
-
-      {:error, :malformed_manifest} ->
-        Logger.warning("[Sanctum.Consent.Plan] manifest malformed: #{ref}")
-        %{}
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
+      {:ok, manifest} -> {:ok, manifest}
+      {:error, :malformed_manifest} -> {:error, {:corrupt, {:manifest, ref}}}
     end
   end
 
@@ -691,7 +685,6 @@ defmodule Sanctum.Consent.Plan do
         destination: canonical_destination(entry.destination),
         disclosed: not entry.attach_only
       }
-      |> put_narrowable(entry)
 
     if matches?(candidate, entry.oauth_scopes, need) and
          (candidate.disclosed or not reads_itself?(need)),
@@ -712,9 +705,8 @@ defmodule Sanctum.Consent.Plan do
         destination: canonical_destination(entry.destination),
         disclosed: false
       }
-      |> put_narrowable(entry)
 
-    if not reads_itself?(need) and matches?(candidate, entry.oauth_scopes, need) and
+    if not reads_itself?(need) and matches?(candidate, [], need) and
          Sanctum.InstanceEntries.admits?(ctx, entry, facts),
        do: [candidate],
        else: []
@@ -729,21 +721,12 @@ defmodule Sanctum.Consent.Plan do
       scopes_met?(candidate, scopes, need)
   end
 
-  # An OAuth candidate holds the need's scopes and either exactly them or
-  # can be narrowed to them, since a token for fewer scopes than an entry
-  # holds is dispensed only where its provider attenuates a refresh.
-  defp scopes_met?(%{kind: "oauth"} = candidate, scopes, need) do
-    held = scope_set(scopes)
-    wanted = scope_set(need.scopes)
-    wanted -- held == [] and (wanted == held or candidate.narrowable)
-  end
+  # An OAuth candidate holds exactly the need's scopes: its token is
+  # dispensed for every scope the entry holds, never fewer.
+  defp scopes_met?(%{kind: "oauth"}, scopes, need),
+    do: scope_set(scopes) == scope_set(need.scopes)
 
   defp scopes_met?(_candidate, _scopes, _need), do: true
-
-  defp put_narrowable(%{kind: "oauth"} = candidate, entry),
-    do: Map.put(candidate, :narrowable, OAuth.attenuates_scope?(entry.provider_hint))
-
-  defp put_narrowable(candidate, _entry), do: candidate
 
   defp canonical_destination(%{} = map) do
     case Prima.Destination.from_map(map) do
@@ -796,36 +779,39 @@ defmodule Sanctum.Consent.Plan do
   defp identity(%{source: "own", entry_id: id}), do: %{entry_id: id}
   defp identity(%{source: "instance", instance_entry_id: id}), do: %{instance_entry_id: id}
 
-  # The athanor's active entries, each OAuth one saying whether a token for
-  # fewer of its scopes can be dispensed (`narrowable`): only where its
-  # provider attenuates a refresh. Other kinds carry no such key.
+  # The athanor's active entries.
   defp candidates(ctx) do
-    with {:ok, entries} <- Sanctum.Vault.list(ctx) do
-      {:ok,
-       for %{status: "active"} = entry <- entries do
-         if entry.kind == "oauth",
-           do: Map.put(entry, :narrowable, OAuth.attenuates_scope?(entry.provider_hint)),
-           else: entry
-       end}
-    end
+    with {:ok, entries} <- Sanctum.Vault.list(ctx),
+         do: {:ok, Enum.filter(entries, &(&1.status == "active"))}
   end
 
-  # What the profile's head holds: the origins it admits, its bindings,
-  # and what changed against it when the shape moved. A first grant, or a
-  # profile with no head, holds none.
-  defp head_facts(_ctx, :none, _shape_digest, _ask, _reads),
-    do: %{origins: nil, bindings: [], shape_diff: []}
+  # What the profile's head holds: the origins it admits and its bindings.
+  # A first grant, or a profile with no head, holds none.
+  defp head_facts(:none, _reads), do: %{origins: nil, bindings: []}
 
-  defp head_facts(ctx, {:ok, head, _profile_id}, shape_digest, {source_ref, asked}, reads) do
+  defp head_facts({:ok, head, _profile_id}, reads) do
     %{
       origins: Prima.Origin.to_wire_list(head.admitted_origins),
-      bindings: Enum.map(head.vault_refs, &head_binding(&1, reads)),
-      shape_diff:
-        if(head.shape_digest == shape_digest,
-          do: [],
-          else: Sanctum.Consent.ShapeDiff.compute(ctx, source_ref, head.resolved_policy, asked)
-        )
+      bindings: Enum.map(head.vault_refs, &head_binding(&1, reads))
     }
+  end
+
+  # What changed against the head when the shape moved
+  # (`Sanctum.Consent.ShapeDiff`): nothing for a first grant or an
+  # unmoved shape; a side stored damaged refuses the plan as that damage,
+  # and a diff that cannot otherwise be shown is none, as the loader reads
+  # it.
+  defp held_shape_diff(_ctx, :none, _shape_digest, _source_ref, _asked), do: {:ok, []}
+
+  defp held_shape_diff(_ctx, {:ok, %{shape_digest: digest}, _id}, digest, _source_ref, _asked),
+    do: {:ok, []}
+
+  defp held_shape_diff(ctx, {:ok, head, _profile_id}, _shape_digest, source_ref, asked) do
+    case Sanctum.Consent.ShapeDiff.compute(ctx, source_ref, head.resolved_policy, asked) do
+      {:ok, diff} -> {:ok, diff}
+      {:error, {:corrupt, _what}} = damage -> damage
+      {:error, _unshown} -> {:ok, []}
+    end
   end
 
   @doc """
@@ -843,7 +829,7 @@ defmodule Sanctum.Consent.Plan do
   included): what the head granted that the ask no longer names opens as
   nothing, and a field that, so kept, equals the ask names nothing. Each
   limit is the narrower of the head's and the ask's: the ask's where it
-  is now lower, and for a rate limit, which bounds a burst and a rate at
+  is lower, and for a rate limit, which bounds a burst and a rate at
   once, the overlap, the smaller count over the longer window. Where the
   ask has not moved since the head, everything the head grants lies
   inside it, so the head's grant is named whole.
@@ -863,7 +849,7 @@ defmodule Sanctum.Consent.Plan do
 
   The one definition of what a re-grant keeps: a plan answers it as
   `head_narrowing`, which the grant sheet opens on, and
-  `Sanctum.Consent.Commit.grant/3` re-issues it.
+  `Sanctum.Consent.Commit.grant/2` re-issues it.
   """
   @spec head_narrowing(String.t(), map(), String.t(), String.t()) ::
           {:ok, map()} | {:error, {:corrupt, {:profile, String.t()}}}
@@ -1095,12 +1081,26 @@ defmodule Sanctum.Consent.Plan do
   # builds it with nothing narrowed (`BlobBuilder.build/5`,
   # `BlobBuilder.encode/1`), as JSON: what a head's narrowing and the shape
   # diff (`Sanctum.Consent.ShapeDiff`) are read against. `{:ok, nil}` for a
-  # closure that does not resolve, which has no ask to hold a head against.
+  # closure that does not resolve, which has no ask to hold a head against;
+  # a closure node whose stored manifest does not decode is that damage,
+  # `{:error, {:corrupt, {:manifest, node_key}}}`, never an ask of none.
   @spec asked_blob(Context.t(), String.t()) :: {:ok, String.t() | nil} | {:error, term()}
   def asked_blob(%Context{} = ctx, source_ref) do
-    with {:ok, component} <- fetch_component(ctx, source_ref),
-         {:ok, resolved} <- closure(ctx, component),
-         do: ask(ctx, source_ref, resolved)
+    with {:ok, component} <- fetch_component(ctx, source_ref) do
+      case resolve_closure(ctx, component) do
+        {:ok, {graph, rows}} ->
+          ask(ctx, source_ref, {{:ok, graph}, rows})
+
+        {:error, {:corrupt, {:manifest, _node_key}} = damage} ->
+          {:error, damage}
+
+        {:error, outage} when Components.is_outage(outage) ->
+          {:error, {:unavailable, "Components"}}
+
+        {:error, _unresolved} ->
+          {:ok, nil}
+      end
+    end
   end
 
   defp ask(_ctx, _source_ref, {{:unresolved, _}, _rows}), do: {:ok, nil}
@@ -1175,13 +1175,22 @@ defmodule Sanctum.Consent.Plan do
   # is walked refuses as the components unavailable: read as unresolved,
   # the walk would say to install components that exist.
   defp closure(ctx, component) do
-    with {:ok, %{graph: graph}} <- Components.resolve(ctx, component),
-         {:ok, rows} <- closure_rows(ctx, component, graph) do
-      {:ok, {{:ok, graph}, rows}}
-    else
-      {:error, outage} when Components.is_outage(outage) -> {:error, {:unavailable, "Components"}}
-      {:error, reason} -> {:ok, {{:unresolved, unresolved_reason(reason)}, %{}}}
+    case resolve_closure(ctx, component) do
+      {:ok, {graph, rows}} ->
+        {:ok, {{:ok, graph}, rows}}
+
+      {:error, outage} when Components.is_outage(outage) ->
+        {:error, {:unavailable, "Components"}}
+
+      {:error, reason} ->
+        {:ok, {{:unresolved, unresolved_reason(reason)}, %{}}}
     end
+  end
+
+  defp resolve_closure(ctx, component) do
+    with {:ok, %{graph: graph}} <- Components.resolve(ctx, component),
+         {:ok, rows} <- closure_rows(ctx, component, graph),
+         do: {:ok, {graph, rows}}
   end
 
   @doc false
@@ -1193,10 +1202,10 @@ defmodule Sanctum.Consent.Plan do
   # row the graph does not record at that digest is
   # `{:error, {:activation_moved, node_key}}`: the closure moved under the
   # read, and the plan or the commit is asked again. A dependency whose
-  # stored manifest does not decode is `{:error, {:corrupt, {:manifest,
-  # node_key}}}`: read as declaring nothing, its needs would drop out of
-  # the grant and the plan, and a grant would be made without its key.
-  # The source's own manifest is `ShapeDerivation`'s to refuse.
+  # stored manifest does not decode, the source's among them, is
+  # `{:error, {:corrupt, {:manifest, node_key}}}`: read as declaring
+  # nothing, its needs would drop out of the grant and the plan, and a
+  # grant would be made without its key.
   @spec closure_rows(Context.t(), map(), %{String.t() => String.t()}) ::
           {:ok, %{String.t() => map()}} | {:error, term()}
   def closure_rows(%Context{} = ctx, source_row, graph) when is_map(graph),
@@ -1213,37 +1222,40 @@ defmodule Sanctum.Consent.Plan do
         {:error, {:activation_moved, key}}
 
       true ->
-        row
-        |> manifest(key)
-        |> Prima.Manifest.Dependencies.from_manifest()
-        |> case do
-          {:ok, deps} -> deps
-          {:error, _} -> []
-        end
-        |> Enum.reduce_while({:ok, Map.put(rows, key, row)}, fn dep, {:ok, rows} ->
-          # As the activation walks: an optional dependency whose release is
-          # not installed is skipped, whether or not another path reaches
-          # its node at another release; any other that does not read
-          # leaves the closure incomplete.
-          with {:ok, dep_row} <- dependency_row(ctx, dep),
-               :ok <- intact_manifest(dep_row) do
-            case walk_rows(ctx, dep_row, graph, rows) do
-              {:ok, rows} -> {:cont, {:ok, rows}}
-              {:error, _} = refused -> {:halt, refused}
-            end
-          else
-            {:error, :not_found} when dep.optional == true ->
-              {:cont, {:ok, rows}}
-
-            {:error, :not_found} ->
-              dep_key = Prima.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name)
-              {:halt, {:error, {:incomplete, {:unresolvable_dependency, dep_key}}}}
-
-            {:error, _} = refused ->
-              {:halt, refused}
-          end
-        end)
+        with {:ok, manifest} <- manifest(row, key),
+             do: walk_dependencies(ctx, row, key, manifest, graph, rows)
     end
+  end
+
+  defp walk_dependencies(ctx, row, key, manifest, graph, rows) do
+    manifest
+    |> Prima.Manifest.Dependencies.from_manifest()
+    |> case do
+      {:ok, deps} -> deps
+      {:error, _} -> []
+    end
+    |> Enum.reduce_while({:ok, Map.put(rows, key, row)}, fn dep, {:ok, rows} ->
+      # As the activation walks: an optional dependency whose release is
+      # not installed is skipped, whether or not another path reaches
+      # its node at another release; any other that does not read
+      # leaves the closure incomplete.
+      with {:ok, dep_row} <- dependency_row(ctx, dep) do
+        case walk_rows(ctx, dep_row, graph, rows) do
+          {:ok, rows} -> {:cont, {:ok, rows}}
+          {:error, _} = refused -> {:halt, refused}
+        end
+      else
+        {:error, :not_found} when dep.optional == true ->
+          {:cont, {:ok, rows}}
+
+        {:error, :not_found} ->
+          dep_key = Prima.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name)
+          {:halt, {:error, {:incomplete, {:unresolvable_dependency, dep_key}}}}
+
+        {:error, _} = refused ->
+          {:halt, refused}
+      end
+    end)
   end
 
   defp dependency_row(ctx, %{dep_version: version} = dep) when is_binary(version),
@@ -1251,19 +1263,6 @@ defmodule Sanctum.Consent.Plan do
 
   defp dependency_row(ctx, dep),
     do: Components.get_latest(ctx, dep.dep_name, dep.dep_namespace, dep.dep_type)
-
-  # A dependency's row as the port hands it, its manifest as storage holds
-  # it (`Compendium.ConsentFacts.get_component/5`): one that does not
-  # decode is the damaged row it is.
-  defp intact_manifest(row) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
-      {:ok, _manifest} ->
-        :ok
-
-      {:error, :malformed_manifest} ->
-        {:error, {:corrupt, {:manifest, Prima.ComponentRow.node_key(row)}}}
-    end
-  end
 
   defp unresolved_reason({:activation_moved, key}),
     do: %{reason: "activation_moved", missing: key}
@@ -1289,10 +1288,10 @@ defmodule Sanctum.Consent.Plan do
   # The ask of every node of the closure, each row held to its shape, each
   # once. A closure that cannot be resolved has no ask to show: the
   # source's own rows would read as the whole of it.
-  defp ask_rows(_ctx, {:unresolved, _unresolved}, _closure_rows), do: {:ok, []}
+  defp ask_rows({:unresolved, _unresolved}, _closure_rows), do: {:ok, []}
 
-  defp ask_rows(ctx, {:ok, _graph}, closure_rows) do
-    with {:ok, rows} <- BlobBuilder.ask_rows(ctx, closure_rows) do
+  defp ask_rows({:ok, _graph}, closure_rows) do
+    with {:ok, rows} <- BlobBuilder.ask_rows(closure_rows) do
       rows = BlobBuilder.order_rows(rows)
 
       case BlobBuilder.check_rows(rows) do
@@ -1312,25 +1311,34 @@ defmodule Sanctum.Consent.Plan do
   defp dependency_needs(_ctx, _sources, {:unresolved, _unresolved}, _rows), do: {:ok, {[], []}}
 
   defp dependency_needs(ctx, sources, {:ok, graph}, rows) do
+    with {:ok, edges} <- dependency_edges(graph, rows) do
+      Enum.reduce_while(edges, {:ok, {[], []}}, fn {from, manifest, dep}, {:ok, {all, notes}} ->
+        case dependency_rows(ctx, sources, {from, manifest, graph, rows}, dep) do
+          {:ok, {dep_rows, dep_notes}} -> {:cont, {:ok, {all ++ dep_rows, notes ++ dep_notes}}}
+          {:error, _} = refused -> {:halt, refused}
+        end
+      end)
+    end
+  end
+
+  # Each closure node's edges to its dependencies, with the node's
+  # manifest; a node outside the rows has none, and one whose manifest
+  # does not decode refuses.
+  defp dependency_edges(graph, rows) do
     graph
     |> Map.keys()
     |> Enum.sort()
-    |> Enum.flat_map(fn from ->
+    |> Enum.reduce_while({:ok, []}, fn from, {:ok, acc} ->
       case node_manifest(rows, from) do
         {:ok, manifest} ->
-          manifest
-          |> BlobBuilder.dep_edges(graph, from)
-          |> Enum.sort()
-          |> Enum.map(&{from, manifest, &1})
+          edges = manifest |> BlobBuilder.dep_edges(graph, from) |> Enum.sort()
+          {:cont, {:ok, acc ++ Enum.map(edges, &{from, manifest, &1})}}
 
-        _ ->
-          []
-      end
-    end)
-    |> Enum.reduce_while({:ok, {[], []}}, fn {from, manifest, dep}, {:ok, {all, notes}} ->
-      case dependency_rows(ctx, sources, {from, manifest, graph, rows}, dep) do
-        {:ok, {dep_rows, dep_notes}} -> {:cont, {:ok, {all ++ dep_rows, notes ++ dep_notes}}}
-        {:error, _} = refused -> {:halt, refused}
+        {:error, :not_in_closure} ->
+          {:cont, {:ok, acc}}
+
+        {:error, _} = refused ->
+          {:halt, refused}
       end
     end)
   end
@@ -1364,14 +1372,14 @@ defmodule Sanctum.Consent.Plan do
   # A closure node's manifest at the release the closure resolved.
   defp node_manifest(rows, node_key) do
     case Map.fetch(rows, node_key) do
-      {:ok, row} -> {:ok, manifest(row, node_key)}
+      {:ok, row} -> manifest(row, node_key)
       :error -> {:error, :not_in_closure}
     end
   end
 
   defp dependency_rows(ctx, sources, {from, from_manifest, graph, rows}, dep) do
     with {:ok, row} <- Map.fetch(rows, dep),
-         dep_manifest = manifest(row, dep),
+         {:ok, dep_manifest} <- manifest(row, dep),
          {:ok, _caps} <- ShapeDerivation.declared_caps(dep_manifest, dep),
          needs = Prima.Manifest.Needs.from_manifest(dep_manifest) do
       provided = BlobBuilder.provided(from_manifest, dep, dep_manifest)
@@ -1410,6 +1418,7 @@ defmodule Sanctum.Consent.Plan do
           end
       end
     else
+      {:error, {:corrupt, _damage}} = refused -> refused
       _ -> {:ok, {[], []}}
     end
   end

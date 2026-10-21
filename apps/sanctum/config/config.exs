@@ -45,8 +45,7 @@ if config_env() == :test do
   }
 
   config :sanctum,
-    secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!",
-    default_test_namespace: "testns"
+    secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
   # Allow tests to inject a membership-resolution override
   # (`Sanctum.Tenancy`). Compile-time gate: production releases compile
@@ -63,11 +62,6 @@ if config_env() == :test do
   # the plane unless a case records otherwise, so a tincture credential can
   # be minted (`Sanctum.TinctureAuth`).
   config :arca, control_plane_claim_enabled: false
-
-  # The stored-grant check reads every athanor's consent heads at boot,
-  # outside any test's sandbox, as the umbrella's suite turns it off
-  # (`config/test.exs`); its tests drive `Sanctum.Consent.StoredGrants`.
-  config :sanctum, stored_grants_check_enabled: false
 
   # The caller bound is off: the establish memo keeps nothing, so tests
   # assert on the uncached pipeline, and a retained context is revalidated

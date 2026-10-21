@@ -7,9 +7,9 @@ defmodule Sanctum.Consent.Proof.Memory do
   Both mint and consume go through the server. Consent is human-scale
   traffic, so serializing costs nothing, and it buys the property that
   matters: take-and-verify is atomic, so two concurrent commits carrying
-  the same token cannot both succeed. A public table with caller-side reads
-  could not promise that — the OAuth pending-state store, which reads then
-  deletes, has exactly that race.
+  the same token cannot both succeed. A public table with a caller-side
+  read followed by a delete could not promise that: two concurrent
+  readers would both see the token.
 
   Expired rows are swept periodically; expiry is also checked on read, so a
   token is never accepted late even if the sweep has not run.
@@ -42,10 +42,6 @@ defmodule Sanctum.Consent.Proof.Memory do
     GenServer.call(__MODULE__, {:consume, token, bindings})
   end
 
-  @doc "Outstanding (unconsumed, unexpired) proof count — for tests and observability."
-  @spec outstanding() :: non_neg_integer()
-  def outstanding, do: GenServer.call(__MODULE__, :outstanding)
-
   # ============================================================================
   # GenServer
   # ============================================================================
@@ -53,9 +49,7 @@ defmodule Sanctum.Consent.Proof.Memory do
   @impl GenServer
   def init(_opts) do
     # Private: no other process may read a live proof, not even to count.
-    if :ets.whereis(@table) == :undefined do
-      :ets.new(@table, [:named_table, :private, :set])
-    end
+    :ets.new(@table, [:named_table, :private, :set])
 
     schedule_sweep()
     {:ok, %{}}
@@ -86,13 +80,6 @@ defmodule Sanctum.Consent.Proof.Memory do
       [] ->
         {:reply, {:error, :not_found}, state}
     end
-  end
-
-  @impl GenServer
-  def handle_call(:outstanding, _from, state) do
-    now = System.monotonic_time(:millisecond)
-    live = :ets.select_count(@table, [{{:_, :_, :"$1"}, [{:>, :"$1", now}], [true]}])
-    {:reply, live, state}
   end
 
   @impl GenServer

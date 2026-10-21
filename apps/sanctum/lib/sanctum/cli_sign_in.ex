@@ -253,7 +253,7 @@ defmodule Sanctum.CliSignIn do
   secret no pending sign-in names, `:expired`, `:approved` (already
   used), `:cancelled` (the command line stopped waiting),
   `:session_required` for a context that holds no session, the standing
-  refusals of the issuance (`Sanctum.Issuance.standing_refusals/0`) and
+  refusals of the issuance (`t:Sanctum.Issuance.standing_refusal/0`) and
   the confirmation's own.
   """
   @spec approve(Context.t(), term()) :: {:ok, map()} | {:error, term()}

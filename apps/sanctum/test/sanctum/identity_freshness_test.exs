@@ -58,7 +58,7 @@ defmodule Sanctum.IdentityFreshnessTest do
       restore(:private_egress_targets, targets)
       restore(:caller_memo_ttl_ms, ttl)
       :persistent_term.erase({Resolver, :observer})
-      Arca.Cache.delete_match({:established, :_, :_, :_})
+      Arca.Cache.delete_match({:established, :_, :_})
       Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
       Prima.Test.RateLimiter.reset!()
     end)
@@ -255,7 +255,7 @@ defmodule Sanctum.IdentityFreshnessTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(built)
-    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, refresh: false)
     ctx
   end
 
@@ -374,7 +374,7 @@ defmodule Sanctum.IdentityFreshnessTest do
   # The session behind `token`, established as a console does, with no
   # sliding refresh left running behind the case.
   defp establish(token, athanor),
-    do: Caller.establish(token, focus: athanor.id, task_supervisor: nil)
+    do: Caller.establish(token, focus: athanor.id, refresh: false)
 
   # A session row of `user_id`, bound to `epoch`, as a door at this home
   # mints one for a remote person, with a whole idle window ahead of it;
@@ -544,7 +544,7 @@ defmodule Sanctum.IdentityFreshnessTest do
       assert {identifier, directory} == {person.identifier, dir.url}
     end
 
-    test "with nothing cached and no genesis given, it pauses and asks no directory", context do
+    test "with nothing cached, it pauses and asks no directory", context do
       _dir = directory!(context)
       identifier = "per_" <> String.duplicate("c", 64)
 
@@ -554,23 +554,6 @@ defmodule Sanctum.IdentityFreshnessTest do
       end)
 
       assert requests() == []
-    end
-
-    test "the genesis passed is a locator only while nothing is cached", context do
-      dir = directory!(context)
-      person = remote!(context, dir.url)
-      other = remote!(context, dir.url)
-      stale!(person.identifier)
-
-      # Another genesis passed for a cached identifier is not read: the
-      # cached binding is the one resolved.
-      assert {:ok, %{identifier: identifier}} =
-               IdentityFreshness.fresh?(
-                 person.identifier,
-                 [genesis: Identity.canonical(other.genesis)] ++ opts(context)
-               )
-
-      assert identifier == person.identifier
     end
 
     test "a store that cannot answer is unavailable, never a verdict", context do
@@ -586,6 +569,11 @@ defmodule Sanctum.IdentityFreshnessTest do
     test "it takes only the locator and the client's options", context do
       assert_raise ArgumentError, fn ->
         IdentityFreshness.fresh?("per_" <> String.duplicate("d", 64), directory: "https://x.test")
+      end
+
+      # A bounded read takes no locator: with nothing cached it pauses.
+      assert_raise ArgumentError, fn ->
+        IdentityFreshness.fresh?("per_" <> String.duplicate("d", 64), genesis: %{})
       end
 
       assert_raise ArgumentError, fn ->
@@ -909,6 +897,23 @@ defmodule Sanctum.IdentityFreshnessTest do
   end
 
   describe "fresh!/2" do
+    test "the genesis passed is a locator only while nothing is cached", context do
+      dir = directory!(context)
+      person = remote!(context, dir.url)
+      other = remote!(context, dir.url)
+      stale!(person.identifier)
+
+      # Another genesis passed for a cached identifier is not read: the
+      # cached binding is the one resolved.
+      assert {:ok, %{identifier: identifier}} =
+               IdentityFreshness.fresh!(
+                 person.identifier,
+                 [genesis: Identity.canonical(other.genesis)] ++ opts(context)
+               )
+
+      assert identifier == person.identifier
+    end
+
     test "reads the directory however recently the head was verified", context do
       dir = directory!(context)
       person = remote!(context, dir.url)

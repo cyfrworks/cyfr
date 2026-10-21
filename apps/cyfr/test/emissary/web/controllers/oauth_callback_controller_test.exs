@@ -15,13 +15,45 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
   alias Sanctum.{Caller, Context}
   alias Sanctum.Vault.OAuthGrant
 
+  # A provider no shipped preset is, scripted for these grants
+  # (`:sanctum, :scripted_oauth_provider`): its token endpoint runs the
+  # test's `before` and answers its token.
+  defmodule CallbackIdp do
+    @moduledoc false
+
+    @hint "callback-idp"
+    @endpoints %{
+      "authorize_url" => "https://idp.callback.test/authorize",
+      "token_url" => "https://idp.callback.test/token"
+    }
+
+    def hint, do: @hint
+    def endpoints, do: @endpoints
+
+    def preset(@hint), do: %{endpoints: @endpoints}
+    def preset(_hint), do: nil
+
+    def post(_url, _headers, _body) do
+      {before, answer} = Agent.get(__MODULE__, & &1)
+      before.()
+      {:ok, Map.merge(%{"access_token" => "at-1", "expires_in" => 3600}, answer)}
+    end
+  end
+
   setup do
     Arca.Cache.init()
-    bypass = Bypass.open()
 
-    # The token endpoint is a local Bypass; plain HTTP is allowed only on a
-    # server with no sign-in configured (`Sanctum.Vault.OAuth.http_post/4`).
-    Application.delete_env(:sanctum, :auth_provider)
+    # Restored by on_exit, registered before the change.
+    prior = Application.fetch_env(:sanctum, :scripted_oauth_provider)
+
+    on_exit(fn ->
+      case prior do
+        {:ok, value} -> Application.put_env(:sanctum, :scripted_oauth_provider, value)
+        :error -> Application.delete_env(:sanctum, :scripted_oauth_provider)
+      end
+    end)
+
+    Application.put_env(:sanctum, :scripted_oauth_provider, CallbackIdp)
 
     person = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
     {:ok, session} = Sanctum.Session.create(person)
@@ -30,15 +62,15 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
     :ok =
       Sanctum.TestContext.put_provider_credentials(
         ctx,
-        "google",
+        CallbackIdp.hint(),
         "client-id-1",
         "client-secret-1"
       )
 
-    {:ok, bypass: bypass, ctx: ctx}
+    {:ok, ctx: ctx}
   end
 
-  defp pending!(ctx, bypass, name) do
+  defp pending!(ctx, name) do
     state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
     Arca.Cache.put(
@@ -48,12 +80,8 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
           kind: :new,
           entry_id: nil,
           name: name,
-          provider: "google",
-          endpoints: %{
-            "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
-            "token_url" => "http://localhost:#{bypass.port}/token",
-            "auth_style" => "params"
-          },
+          provider: CallbackIdp.hint(),
+          endpoints: CallbackIdp.endpoints(),
           scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
           # Where the new entry may go; attach-only, as the grant left it.
           destination: ~s({"hosts":["gmail.googleapis.com"],"scheme":"https"}),
@@ -70,17 +98,11 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
     state
   end
 
-  defp token_endpoint(bypass, before_answer, answer \\ %{}) do
-    Bypass.expect_once(bypass, "POST", "/token", fn conn ->
-      before_answer.()
-
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(
-        200,
-        Jason.encode!(Map.merge(%{"access_token" => "at-1", "expires_in" => 3600}, answer))
-      )
-    end)
+  defp token_endpoint(before_answer, answer \\ %{}) do
+    start_supervised!(%{
+      id: CallbackIdp,
+      start: {Agent, :start_link, [fn -> {before_answer, answer} end, [name: CallbackIdp]]}
+    })
   end
 
   defp entry_named?(ctx, name) do
@@ -91,10 +113,10 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
     )
   end
 
-  test "a standing session's grant is written", %{conn: conn, bypass: bypass, ctx: ctx} do
+  test "a standing session's grant is written", %{conn: conn, ctx: ctx} do
     name = "Mail #{System.unique_integer([:positive])}"
-    state = pending!(ctx, bypass, name)
-    token_endpoint(bypass, fn -> :ok end)
+    state = pending!(ctx, name)
+    token_endpoint(fn -> :ok end)
 
     conn = get(conn, "/auth/oauth/callback", %{"code" => "code-1", "state" => state})
 
@@ -104,13 +126,12 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
 
   test "a grant answered for scopes it did not ask for says so and writes nothing", %{
     conn: conn,
-    bypass: bypass,
     ctx: ctx
   } do
     name = "Mail #{System.unique_integer([:positive])}"
-    state = pending!(ctx, bypass, name)
+    state = pending!(ctx, name)
 
-    token_endpoint(bypass, fn -> :ok end, %{
+    token_endpoint(fn -> :ok end, %{
       "scope" =>
         "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send"
     })
@@ -128,14 +149,13 @@ defmodule Emissary.Web.OAuthCallbackControllerTest do
 
   test "a session revoked while the code was exchanged writes nothing", %{
     conn: conn,
-    bypass: bypass,
     ctx: ctx
   } do
     name = "Mail #{System.unique_integer([:positive])}"
-    state = pending!(ctx, bypass, name)
+    state = pending!(ctx, name)
     hash = ctx.session_token_hash
 
-    token_endpoint(bypass, fn ->
+    token_endpoint(fn ->
       Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
     end)
 

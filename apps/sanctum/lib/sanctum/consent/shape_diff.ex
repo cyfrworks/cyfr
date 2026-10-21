@@ -53,8 +53,6 @@ defmodule Sanctum.Consent.ShapeDiff do
   alias Prima.Authority.Blob
   alias Sanctum.Consent.BlobBuilder
 
-  require Logger
-
   @egress ~w(domains methods schemes private_ips)
   @storage ~w(paths actions)
 
@@ -83,18 +81,16 @@ defmodule Sanctum.Consent.ShapeDiff do
 
   @doc """
   Compare a head consent's granted shape against live capabilities, every
-  node of the source's closure as it resolves now. Returns the entries, or
-  `[]` when either side cannot be derived.
+  node of the source's closure as it resolves now. Returns `{:ok,
+  entries}`, or the refusal of the side that cannot be read: a stored
+  manifest that does not decode is `{:corrupt, {:manifest, ref}}`, never
+  an empty diff.
   """
-  @spec compute(Sanctum.Context.t(), String.t(), String.t()) :: [entry()]
+  @spec compute(Sanctum.Context.t(), String.t(), String.t()) ::
+          {:ok, [entry()]} | {:error, term()}
   def compute(ctx, source_ref, resolved_policy) do
-    asked =
-      case Sanctum.Consent.Plan.asked_blob(ctx, source_ref) do
-        {:ok, asked} -> asked
-        {:error, _underivable} -> nil
-      end
-
-    compute(ctx, source_ref, resolved_policy, asked)
+    with {:ok, asked} <- Sanctum.Consent.Plan.asked_blob(ctx, source_ref),
+         do: compute(ctx, source_ref, resolved_policy, asked)
   end
 
   @doc false
@@ -102,22 +98,21 @@ defmodule Sanctum.Consent.ShapeDiff do
   # (`Sanctum.Consent.Plan.asked_blob/2`'s, as JSON), so the closure is
   # resolved once; nil, for a closure that does not resolve, compares the
   # source alone.
-  @spec compute(Sanctum.Context.t(), String.t(), String.t(), String.t() | nil) :: [entry()]
+  @spec compute(Sanctum.Context.t(), String.t(), String.t(), String.t() | nil) ::
+          {:ok, [entry()]} | {:error, term()}
   def compute(ctx, source_ref, resolved_policy, asked) do
     with {:ok, blob} <- Blob.parse(resolved_policy),
          {:ok, edge} <- Blob.ingress(blob, source_ref),
          {:ok, component} <- Sanctum.Consent.Plan.fetch_component(ctx, source_ref),
-         manifest = manifest(component, source_ref),
-         {:ok, live} <- live_caps(ctx, source_ref, manifest) do
+         {:ok, manifest} <- manifest(component, source_ref),
+         {:ok, live} <- live_caps(source_ref, manifest) do
       own =
         Enum.map(
           diff_caps(flatten_edge(edge), live) ++ diff_provided(blob, source_ref, manifest),
           &on_node(&1, source_ref, :held)
         )
 
-      own ++ diff_dependencies(resolved_policy, source_ref, asked)
-    else
-      _ -> []
+      {:ok, own ++ diff_dependencies(resolved_policy, source_ref, asked)}
     end
   end
 
@@ -169,9 +164,9 @@ defmodule Sanctum.Consent.ShapeDiff do
     }
   end
 
-  defp live_caps(ctx, source_ref, manifest) do
+  defp live_caps(source_ref, manifest) do
     with {:ok, resources, _limits} <-
-           Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest) do
+           Sanctum.Consent.BlobBuilder.node_grant(source_ref, manifest) do
       {:ok,
        %{
          "tools" => resources["tools"] || [],
@@ -263,7 +258,7 @@ defmodule Sanctum.Consent.ShapeDiff do
 
   defp flatten_edge(edge) do
     %{
-      "tools" => edge.tools || [],
+      "tools" => edge.tools,
       "egress" => %{
         "domains" => get_in(edge.egress, [:domains]) || [],
         "methods" => get_in(edge.egress, [:methods]) || [],
@@ -357,16 +352,12 @@ defmodule Sanctum.Consent.ShapeDiff do
   defp normalize(list) when is_list(list), do: list |> Enum.filter(&is_binary/1) |> Enum.sort()
   defp normalize(_), do: []
 
-  # A manifest that does not decode declares nothing. The line names the
-  # component, never the manifest's bytes.
+  # A manifest that does not decode is a damaged row, refused by the ref it
+  # was read under and never by its bytes.
   defp manifest(row, ref) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
-      {:ok, manifest} ->
-        manifest
-
-      {:error, :malformed_manifest} ->
-        Logger.warning("[Sanctum.Consent.ShapeDiff] manifest malformed: #{ref}")
-        %{}
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
+      {:ok, manifest} -> {:ok, manifest}
+      {:error, :malformed_manifest} -> {:error, {:corrupt, {:manifest, ref}}}
     end
   end
 end

@@ -142,13 +142,6 @@ defmodule Sanctum.DirectoryTest do
                Directory.register(%{genesis: Entry.encode(alice.genesis), source: source()})
 
       assert {:error, :not_served} = page(alice.identifier)
-
-      assert {:error, :not_served} =
-               Directory.outcome(%{
-                 identifier: alice.identifier,
-                 request_id: "req_1",
-                 source: source()
-               })
     end
 
     test "a mirror answers read_only to every write, before it counts anything, and serves reads" do
@@ -458,12 +451,8 @@ defmodule Sanctum.DirectoryTest do
       assert {:ok, ^first} = recover(alice.identifier, req)
       assert length(log(alice.identifier)) == 2
 
-      assert {:ok, %{outcome: :accepted, seq: 1, entry: entry, request_digest: digest}} =
-               Directory.outcome(%{
-                 identifier: alice.identifier,
-                 request_id: req.request_id,
-                 source: source()
-               })
+      assert {:ok, %{outcome: "accepted", seq: 1, entry: entry, request_digest: digest}} =
+               recorded(alice.identifier, req.request_id)
 
       assert entry == first.entry
       assert digest == Identity.request_digest(req)
@@ -484,12 +473,10 @@ defmodule Sanctum.DirectoryTest do
 
       assert {:error, {:stale_policy, ^recorded}} = recover(alice.identifier, late)
 
-      assert {:ok, %{outcome: :stale_policy, recorded: ^recorded}} =
-               Directory.outcome(%{
-                 identifier: alice.identifier,
-                 request_id: late.request_id,
-                 source: source()
-               })
+      assert {:ok, %{outcome: "stale_policy", outcome_body: body}} =
+               recorded(alice.identifier, late.request_id)
+
+      assert Jason.decode!(body) == recorded
 
       assert length(log(alice.identifier)) == 3
     end
@@ -504,11 +491,7 @@ defmodule Sanctum.DirectoryTest do
       assert {:error, {:unverified, :wrong_signer}} = recover(alice.identifier, forged)
 
       assert {:error, :not_found} =
-               Directory.outcome(%{
-                 identifier: alice.identifier,
-                 request_id: forged.request_id,
-                 source: source()
-               })
+               recorded(alice.identifier, forged.request_id)
     end
 
     test "a request naming another directory is refused and not recorded" do
@@ -518,11 +501,7 @@ defmodule Sanctum.DirectoryTest do
       assert {:error, {:unverified, :directory_changed}} = recover(alice.identifier, req)
 
       assert {:error, :not_found} =
-               Directory.outcome(%{
-                 identifier: alice.identifier,
-                 request_id: req.request_id,
-                 source: source()
-               })
+               recorded(alice.identifier, req.request_id)
     end
 
     test "a request signed for another identifier is refused on this one" do
@@ -620,11 +599,7 @@ defmodule Sanctum.DirectoryTest do
                Arca.IdentityLog.head(Prima.Actor.system(), alice.identifier)
 
       assert {:error, :not_found} =
-               Directory.outcome(%{
-                 identifier: alice.identifier,
-                 request_id: req.request_id,
-                 source: source()
-               })
+               recorded(alice.identifier, req.request_id)
 
       assert {:ok, %{seq: seq}} = recover(alice.identifier, req)
       assert seq == moves + 1
@@ -811,16 +786,9 @@ defmodule Sanctum.DirectoryTest do
       assert windows(:directory_source, from) == []
       assert {:ok, %{entries: [], next: nil, length: 1}} = page(alice.identifier, 0)
     end
-
-    test "an unknown request is not found" do
-      alice = register!(person())
-
-      assert {:error, :not_found} =
-               Directory.outcome(%{
-                 identifier: alice.identifier,
-                 request_id: "req_x",
-                 source: source()
-               })
-    end
   end
+
+  # The request's outcome as the identity log records it.
+  defp recorded(identifier, request_id),
+    do: Arca.IdentityLog.outcome(Prima.Actor.system(), identifier, request_id)
 end

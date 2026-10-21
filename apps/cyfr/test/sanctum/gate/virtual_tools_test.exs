@@ -69,10 +69,10 @@ defmodule Sanctum.Gate.VirtualToolsTest do
 
   test "every action runs in-chain only; a pair the table lacks has no plane" do
     for tool <- VirtualTools.tools(), action <- VirtualTools.actions_of(tool) do
-      assert VirtualTools.planes(tool, action) == [:in_chain]
+      assert %{planes: [:in_chain]} = VirtualTools.action(tool, action)
     end
 
-    assert VirtualTools.planes("files", "nope") == []
+    assert VirtualTools.action("files", "nope") == nil
     assert VirtualTools.actions_of("component") == []
 
     assert length(VirtualTools.action_pairs()) == 23
@@ -115,8 +115,6 @@ defmodule Sanctum.Gate.VirtualToolsTest do
   end
 
   test "a read, write or execute may run without a card; nothing else may" do
-    assert VirtualTools.auto_permitted_kinds() == [:read, :write, :execute]
-
     for kind <- [:read, :write, :execute], do: assert(VirtualTools.auto_permitted_kind?(kind))
 
     for kind <- [:destructive, :external, nil, "read"],

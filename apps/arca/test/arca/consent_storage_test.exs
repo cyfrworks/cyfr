@@ -804,55 +804,6 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
-  describe "active_head_policies/2" do
-    defp head_in!(athanor, id, status) do
-      {:ok, _profile} =
-        Writers.put_profile(%{
-          id: id,
-          athanor_id: athanor,
-          source_ref: "reagent:local.#{id}",
-          kind: "owner",
-          label: "default",
-          status: "active"
-        })
-
-      {:ok, _consent} =
-        ConsentStorage.insert_revision(consent_attrs(athanor, id, 1), [], nil)
-
-      if status != "active",
-        do: :ok = ProfileStorage.transition(Prima.Actor.in_athanor(athanor), id, :any, status)
-
-      :ok
-    end
-
-    test "pages every athanor's active heads in profile-id order, each naming its own athanor",
-         %{athanor: athanor} do
-      :ok = head_in!(athanor, "prof_pol_a", "active")
-      :ok = head_in!("ath_pol_other", "prof_pol_b", "active")
-      :ok = head_in!(athanor, "prof_pol_c", "active")
-      :ok = head_in!(athanor, "prof_pol_d", "revoked")
-      :ok = head_in!("ath_pol_other", "prof_pol_e", "needs_consent")
-      _headless = profile!(athanor, "prof_pol_f")
-
-      assert {:ok, [first, second]} = ConsentStorage.active_head_policies(nil, 2)
-
-      assert %{
-               athanor_id: ^athanor,
-               profile_id: "prof_pol_a",
-               source_ref: "reagent:local.prof_pol_a",
-               revision: 1,
-               resolved_policy: "{}"
-             } = first
-
-      assert %{athanor_id: "ath_pol_other", profile_id: "prof_pol_b"} = second
-
-      assert {:ok, [%{athanor_id: ^athanor, profile_id: "prof_pol_c"}]} =
-               ConsentStorage.active_head_policies("prof_pol_b", 2)
-
-      assert {:ok, []} = ConsentStorage.active_head_policies("prof_pol_c", 2)
-    end
-  end
-
   describe "insert-only surface" do
     test "the module still exports no update function" do
       exported =

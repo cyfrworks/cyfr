@@ -421,7 +421,7 @@ defmodule Arca.Providers.RecordsTest do
   describe "retention through the gate" do
     test "an actor with no athanor is refused, whatever its scope" do
       platform =
-        Sanctum.internal_context(permissions: [:storage_read, :storage_write, :admin])
+        Sanctum.Context.internal(permissions: [:storage_read, :storage_write, :admin])
 
       tenantless = %Context{
         user_id: "no_tenant_user",
@@ -614,7 +614,6 @@ defmodule Arca.Providers.RecordsTest do
         permissions: MapSet.new([:execute, :storage_read]),
         scope: :athanor,
         auth_method: :api_key,
-        api_key_type: :application,
         authenticated: true
       }
 
@@ -654,7 +653,6 @@ defmodule Arca.Providers.RecordsTest do
         permissions: MapSet.new([:execute, :read, :write, :storage_read, :storage_write, :admin]),
         scope: :athanor,
         auth_method: :oidc,
-        api_key_type: nil,
         authenticated: true
       }
 
@@ -695,7 +693,6 @@ defmodule Arca.Providers.RecordsTest do
         permissions: MapSet.new([:execute, :storage_read]),
         scope: :athanor,
         auth_method: :api_key,
-        api_key_type: :application,
         authenticated: true
       }
 
@@ -897,7 +894,6 @@ defmodule Arca.Providers.RecordsTest do
         permissions: MapSet.new(),
         scope: :athanor,
         auth_method: :api_key,
-        api_key_type: :application,
         authenticated: true
       }
 

@@ -122,12 +122,4 @@ defmodule Compendium.Registry.CredentialStore do
        Enum.filter(entries, &match?(%{type: :push_token, token: token} when is_binary(token), &1))}
     end
   end
-
-  @doc """
-  Delete the caller's credential for one registry and namespace.
-
-  A failed delete is a failed REVOCATION — it surfaces, never reports `:ok`.
-  """
-  @spec delete(Context.t(), String.t(), String.t()) :: :ok | {:error, :unavailable | :forbidden}
-  defdelegate delete(ctx, registry, namespace_slug), to: RegistryCredentials
 end

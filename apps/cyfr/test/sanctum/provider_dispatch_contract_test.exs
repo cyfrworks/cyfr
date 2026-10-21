@@ -19,7 +19,6 @@ defmodule Sanctum.ProviderDispatchContractTest do
 
   @action_enums %{
     "session" => [
-      "login",
       "logout",
       "whoami",
       "device_init",

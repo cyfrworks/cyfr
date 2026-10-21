@@ -68,16 +68,33 @@ defmodule Sanctum.Auth.OIDCTest do
       assert {:error, :missing_email} = OIDC.authenticate(oidcc_auth(info: %{nickname: "alice"}))
     end
 
-    test "extracts email from extra.raw_info when info.email is nil" do
-      auth =
-        oidcc_auth(
-          info: %{nickname: "alice"},
-          extra: %{raw_info: %{"email" => "alice@extra.com"}}
-        )
+    test "refuses an issuer that names no email, as ueberauth_oidcc builds the auth" do
+      auth = %Ueberauth.Auth{
+        uid: "sub-123",
+        provider: :oidcc,
+        info: %Ueberauth.Auth.Info{email: nil, nickname: "alice"},
+        extra: %Ueberauth.Auth.Extra{
+          raw_info: %UeberauthOidcc.RawInfo{claims: %{"sub" => "sub-123"}, userinfo: nil}
+        }
+      }
 
-      {:ok, ctx} = OIDC.authenticate(auth)
+      assert {:error, :missing_email} = OIDC.authenticate(auth)
+    end
 
-      assert ctx.email == "alice@extra.com"
+    test "reads the email the strategy put on the auth's info" do
+      auth = %Ueberauth.Auth{
+        uid: "sub-123",
+        provider: :oidcc,
+        info: %Ueberauth.Auth.Info{email: "alice@example.com"},
+        extra: %Ueberauth.Auth.Extra{
+          raw_info: %UeberauthOidcc.RawInfo{
+            claims: %{"sub" => "sub-123", "email" => "alice@example.com"},
+            userinfo: %{"email_verified" => true}
+          }
+        }
+      }
+
+      assert {:ok, %{email: "alice@example.com"}} = OIDC.authenticate(auth)
     end
 
     test "grants the person's permissions" do

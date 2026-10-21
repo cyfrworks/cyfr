@@ -21,6 +21,10 @@ defmodule Sanctum.NetworkPrivatePolicyTest do
     :ok
   end
 
+  # The operator's targets as Sanctum reads them, matched by their owner.
+  defp allowed?(hostname, ip),
+    do: Prima.Network.private_allowed?(hostname, ip, Sanctum.Network.private_egress_targets())
+
   test "malformed private target configuration refuses instead of dropping entries" do
     for targets <- [
           nil,
@@ -60,7 +64,7 @@ defmodule Sanctum.NetworkPrivatePolicyTest do
     Application.put_env(:sanctum, :private_egress_targets, targets)
 
     assert Sanctum.Network.private_egress_targets() == targets
-    assert Sanctum.Network.private_allowed?("LOCALHOST.", {127, 0, 0, 1})
+    assert allowed?("LOCALHOST.", {127, 0, 0, 1})
   end
 
   test "an absent setting is an empty allowlist" do
@@ -77,7 +81,7 @@ defmodule Sanctum.NetworkPrivatePolicyTest do
              )
 
     assert msg =~ "private IP"
-    refute Sanctum.Network.private_allowed?("localhost", {127, 0, 0, 1})
+    refute allowed?("localhost", {127, 0, 0, 1})
   end
 
   test "a listed hostname, address or CIDR admits the target" do
@@ -87,10 +91,10 @@ defmodule Sanctum.NetworkPrivatePolicyTest do
       "192.168.1.5"
     ])
 
-    assert Sanctum.Network.private_allowed?("locus-backends", {172, 18, 0, 3})
-    assert Sanctum.Network.private_allowed?("db.internal", {10, 3, 4, 5})
-    assert Sanctum.Network.private_allowed?("lights.local", {192, 168, 1, 5})
-    refute Sanctum.Network.private_allowed?("other.internal", {192, 168, 1, 6})
+    assert allowed?("locus-backends", {172, 18, 0, 3})
+    assert allowed?("db.internal", {10, 3, 4, 5})
+    assert allowed?("lights.local", {192, 168, 1, 5})
+    refute allowed?("other.internal", {192, 168, 1, 6})
 
     Application.put_env(:sanctum, :private_egress_targets, ["127.0.0.1"])
 

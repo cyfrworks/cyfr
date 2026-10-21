@@ -547,11 +547,10 @@ defmodule Sanctum.Providers.Profile do
   # read: a store that cannot answer them refuses the whole read, and a
   # head row that does not decode is not among them (`active_heads/2`
   # drops it). A head the loader cannot trust (its validity, digest,
-  # parse, blob/refs equality or binding digests) refuses the whole read
-  # as that damage, in the loader's one reading of it
-  # (`Sanctum.Consent.Loader.damage_refusal/3`, the damaged head
-  # `{:head_corrupt, profile_id}`); a head asked again under the canonical
-  # spelling of its storage paths reaches nothing. A lender the store
+  # parse, storage-path spelling, blob/refs equality or binding digests)
+  # refuses the whole read as that damage, in the loader's one reading of
+  # it (`Sanctum.Consent.Loader.damage_refusal/3`, the damaged head
+  # `{:head_corrupt, profile_id}`). A lender the store
   # could not answer, or whose profile row or head does not decode, or
   # whose head's bytes fail their digest or do not parse, refuses the
   # whole read with that reason (`Sanctum.Unauthorized`'s sentence): an
@@ -699,9 +698,8 @@ defmodule Sanctum.Providers.Profile do
   # head the loader cannot trust refuses it as that damage, in the
   # loader's one reading of it (`Loader.damage?/1`, `damage_refusal/3`):
   # read as reaching nothing, a grant that exists would read as none. Any
-  # other refusal, a revision asked again under the canonical spelling of
-  # its paths or a lender that does not admit the origin, reaches nothing
-  # under that origin.
+  # other refusal, such as a lender that does not admit the origin,
+  # reaches nothing under that origin.
   defp reaching_edges(ctx, profile, consent, resource) do
     Enum.reduce_while(consent.admitted_origins, {:ok, []}, fn origin, none ->
       case Loader.admitted_blob(%{ctx | origin: origin}, profile, consent) do
@@ -729,7 +727,7 @@ defmodule Sanctum.Providers.Profile do
   # The app's own head refused: its damage as the loader names it, and,
   # defensively, an answer the consent vocabulary classes unavailable as
   # that head unanswered. `admitted_blob/3` reads no store for the app's
-  # own head today (the heads and their references arrive read, and a
+  # own head (the heads and their references arrive read, and a
   # store that cannot answer them refuses the whole read first), so no
   # such answer reaches here; one that did would be an outage, never a
   # grant reaching nothing.
@@ -817,8 +815,7 @@ defmodule Sanctum.Providers.Profile do
   # ---------------------------------------------------------------------------
 
   defp decode_decisions(raw) do
-    with :ok <- refuse_limits(raw),
-         {:ok, kind} <- kind(raw),
+    with {:ok, kind} <- kind(raw),
          {:ok, scope} <- enum(raw, "scope", %{"versionless" => :versionless, "pinned" => :pinned}),
          {:ok, invoke_mode} <-
            enum(raw, "invoke_mode", %{"open_inert" => :open_inert, "edge_only" => :edge_only}),
@@ -880,22 +877,6 @@ defmodule Sanctum.Providers.Profile do
       :error -> {:ok, nil}
       {:ok, subset} when is_map(subset) -> {:ok, subset}
       {:ok, _other} -> {:error, {:invalid_argument, "subset must be a map of node references"}}
-    end
-  end
-
-  # Reject a top-level limits override. Runtime limits come from manifest
-  # caps and defaults and are covered by the shape digest; a decision may
-  # only narrow them, per node, under `subset`.
-  defp refuse_limits(raw) do
-    case Map.get(raw, "limits") do
-      nil ->
-        :ok
-
-      _ ->
-        {:error,
-         "limits are not a consent decision — a component's limits come from its " <>
-           "manifest caps, which shape_digest already covers; a decision narrows " <>
-           "them per node under subset.<node>.limits"}
     end
   end
 
@@ -1027,7 +1008,7 @@ defmodule Sanctum.Providers.Profile do
   # could not be read, or whose profile row or head does not decode, or
   # whose head's bytes fail their digest or do not parse
   # (`Sanctum.Consent.Plan.plan/2`, `Sanctum.Consent.Commit.preview/2`,
-  # `commit/3` and `grant/3`), is answered typed, as `grants` answers it:
+  # `commit/3` and `grant/2`), is answered typed, as `grants` answers it:
   # the gate classes it `unavailable` or `corrupt` through
   # `Sanctum.Unauthorized`, whose sentence it reads as, and a client
   # branches on that class. So, in `Prima.Refusal`'s rows, are the

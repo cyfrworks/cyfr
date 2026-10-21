@@ -97,7 +97,7 @@ defmodule Locus.Runtime.CancelCascadeCharacterizationTest do
     assert [spawned_id, stream_id] = admitted(root_id)
     assert Enum.sort(held) == Enum.sort([spawned_id, stream_id])
 
-    assert Sanctum.Authority.budget(authority).in_flight == 2
+    assert Sanctum.TestContext.invoke_budget(authority).in_flight == 2
 
     holders = for charge <- charges(ctx, authority), do: charge.holder_execution_id
     assert Enum.sort(holders) == Enum.sort([spawned_id, stream_id])
@@ -137,7 +137,7 @@ defmodule Locus.Runtime.CancelCascadeCharacterizationTest do
     wait_until(fn -> reported_exit?(runner) end, 30_000, "the runner's exit report")
     wait_until(fn -> RuntimeService.status().attempts == [] end, 10_000)
     wait_until(fn -> Prima.Slots.status(Opus.Slots).active == slots_before end)
-    assert Sanctum.Authority.budget(authority).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(authority).in_flight == 0
 
     assert {:ok, _reclaimed} = Arca.BudgetReservations.sweep(Sanctum.Context.actor(ctx))
     assert charges(ctx, authority) == []

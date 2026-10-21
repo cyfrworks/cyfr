@@ -57,7 +57,7 @@ defmodule Arca.RetentionTest do
   # that one athanor.
   defp system_actor(athanor) do
     Sanctum.Context.actor(
-      Sanctum.internal_context(
+      Sanctum.Context.internal(
         user_id: "_retention",
         athanor_id: athanor,
         scope: :athanor,

@@ -53,10 +53,6 @@ defmodule Sanctum.Network do
     end
   end
 
-  @spec private_allowed?(String.t() | nil, :inet.ip_address()) :: boolean()
-  def private_allowed?(hostname, ip),
-    do: Prima.Network.private_allowed?(hostname, ip, private_egress_targets())
-
   @doc """
   The operator's hostnames, IPs and CIDRs from `CYFR_PRIVATE_EGRESS_TARGETS`.
   Host parses the environment into `:sanctum, :private_egress_targets`.

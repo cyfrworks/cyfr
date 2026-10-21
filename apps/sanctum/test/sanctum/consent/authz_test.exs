@@ -96,7 +96,7 @@ defmodule Sanctum.Consent.AuthzTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     %{user: user, athanor: athanor, session: session, session_ctx: session_ctx}
   end
@@ -140,7 +140,7 @@ defmodule Sanctum.Consent.AuthzTest do
         Sanctum.Pairing.invitation_change(digest)
       )
 
-    {:ok, invitation} = Sanctum.Pairing.begin(confirmed, %{key_digest: digest})
+    {:ok, invitation} = Sanctum.Pairing.begin(confirmed, %{"key_digest" => digest})
 
     {:ok, %{challenge: challenge}} =
       Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{device_key: device_key})
@@ -148,7 +148,7 @@ defmodule Sanctum.Consent.AuthzTest do
     {:ok, %{client_id: client_id, certificate: certificate}} =
       Sanctum.Pairing.complete(glass, invitation.invitation_secret, %{
         device_key: device_key,
-        proof: Prima.DeviceCert.Proof.sign(challenge, private)
+        proof: Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
       })
 
     {:ok, connect} =
@@ -404,7 +404,7 @@ defmodule Sanctum.Consent.AuthzTest do
       assert record(device_ctx, confirmed.confirmation_id).state == "confirmed"
     end
 
-    test "a session's takes no device hold, and goes ahead as before",
+    test "a session's takes no device hold, and goes ahead",
          %{session_ctx: session_ctx} do
       confirmed = Sanctum.TestContext.confirmed(session_ctx, :credential_entry, change())
 
@@ -435,7 +435,7 @@ defmodule Sanctum.Consent.AuthzTest do
     end
 
     test "a tincture credential, a session or a key claiming a client id is refused" do
-      for method <- [:tincture, :oidc, :api_key, :session] do
+      for method <- [:tincture, :oidc, :api_key] do
         claiming = ctx(auth_method: method, client_id: "pcl_1")
         refused = {:error, {:surface_not_permitted, method}}
 
@@ -557,9 +557,7 @@ defmodule Sanctum.Consent.AuthzTest do
     test "a key, a schedule and the system plane are refused exactly as at the door" do
       for method <- [:api_key, :scheduled, :system] do
         assert {:error, {:surface_not_permitted, ^method}} =
-                 Authz.authorize_interactive_in_chain(
-                   ctx(auth_method: method, plane: :guest, api_key_type: :admin)
-                 )
+                 Authz.authorize_interactive_in_chain(ctx(auth_method: method, plane: :guest))
       end
     end
 
@@ -575,7 +573,7 @@ defmodule Sanctum.Consent.AuthzTest do
       no_expiry = %{commit_digest: @digest}
 
       assert Authz.authorize(
-               ctx(auth_method: :api_key, api_key_type: :admin),
+               ctx(auth_method: :api_key),
                request(key_capability: no_expiry)
              ) ==
                {:error, :capability_expired}
@@ -598,13 +596,6 @@ defmodule Sanctum.Consent.AuthzTest do
   end
 
   describe "refused surfaces" do
-    test "the tincture session upgrade cannot consent" do
-      # `:session` is produced only by the tincture upgrade path — admitting
-      # it would put consent on the public tincture surface.
-      assert Authz.authorize(ctx(auth_method: :session), request()) ==
-               {:error, {:surface_not_permitted, :session}}
-    end
-
     test "no non-interactive surface can consent, nor the device channel's naming no client" do
       for method <- [:tincture, :webhook, :scheduled, :system, :device, nil] do
         assert {:error, {:surface_not_permitted, ^method}} =
@@ -639,7 +630,7 @@ defmodule Sanctum.Consent.AuthzTest do
 
   describe "api keys" do
     test "an admin key with no capability is rejected" do
-      admin = ctx(auth_method: :api_key, api_key_type: :admin)
+      admin = ctx(auth_method: :api_key)
       assert Authz.authorize(admin, request()) == {:error, :no_capability}
     end
 
@@ -758,7 +749,7 @@ defmodule Sanctum.Consent.AuthzTest do
       end
 
       for action <- Sanctum.Pairing.actions(), action not in [:grant, :approval] do
-        assert Sanctum.Pairing.fresh_required?(action, session_ctx), inspect(action)
+        assert Sanctum.Pairing.sensitive?(action), inspect(action)
       end
     end
 
@@ -767,10 +758,10 @@ defmodule Sanctum.Consent.AuthzTest do
       # Two contexts built from one session token: the thief's, which asks
       # first, and the person's, which asks for the identical change.
       {:ok, thief} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       {:ok, person} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       assert thief.session_token_hash == person.session_token_hash
 
@@ -922,7 +913,7 @@ defmodule Sanctum.Consent.AuthzTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, other} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       assert {:error, {:confirmation_required, %{id: own}}} =
                Authz.check(%{other | confirmation_id: id}, :credential_entry, change())
@@ -1117,7 +1108,7 @@ defmodule Sanctum.Consent.AuthzTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, stolen} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       refute stolen.session_token_hash == asking.session_token_hash
 
@@ -1322,7 +1313,7 @@ defmodule Sanctum.Consent.AuthzTest do
           else: [{String.duplicate("n", bound), :name}, {String.duplicate("n", bound + 1), :id}]
 
       for {name, shown} <- names do
-        {:ok, _} = Athanors.update(athanor, %{name: name})
+        {:ok, _} = Arca.Athanors.update(Prima.Actor.in_athanor(athanor.id), %{name: name})
         key = "k-#{byte_size(name)}"
 
         id =
@@ -1456,7 +1447,8 @@ defmodule Sanctum.Consent.AuthzRaceTest do
           subject: "consume-race#{n}",
           first_seen_at: now,
           last_seen_at: now
-        }
+        },
+        also: &Sanctum.Person.mint_keys/1
       )
 
     {:ok, _} =

@@ -74,7 +74,7 @@ defmodule Emissary.Web.PulledTinctureTest do
     {:ok, row} = Compendium.inspect_component(ctx, "tincture:acme.#{name}:1.0.0")
 
     {:ok, %{credential: credential}} =
-      Sanctum.TinctureAuth.mint_asset_credential(rctx, row["release_digest"], [])
+      Sanctum.TinctureAuth.mint_asset_credential(rctx, row["release_digest"])
 
     conn =
       get(build_conn(), Prima.TinctureUrl.asset_path(credential, ["acme", name, "1.0.0" | file]))

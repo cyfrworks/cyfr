@@ -258,13 +258,13 @@ defmodule Sanctum.SignInTest do
     test "an earlier operator assertion overtaken by a later one grants nothing" do
       n = System.unique_integer([:positive])
       ops = info(n, %{email: "ops#{n}@example.com"})
-      assert {:ok, user} = SignIn.identify(ops, :admin)
+      assert {:ok, user} = SignIn.admitted(ops, :admin)
       asserted = SignIn.expected_identity(ops, user)
 
       # A later assertion for the same identity carries another address, and
       # the door no longer calls it an operator.
       later = %{ops | email: "someone#{n}@example.com"}
-      assert {:ok, _} = SignIn.identify(later, :allowed)
+      assert {:ok, _} = SignIn.admitted(later, :allowed)
       refute platform?(user.id)
 
       # The earlier sign-in's delayed grant lands on facts that are gone.
@@ -275,10 +275,10 @@ defmodule Sanctum.SignInTest do
     test "an earlier non-operator assertion overtaken by an operator one revokes nothing" do
       n = System.unique_integer([:positive])
       plain = info(n, %{email: "plain#{n}@example.com"})
-      assert {:ok, user} = SignIn.identify(plain, :allowed)
+      assert {:ok, user} = SignIn.admitted(plain, :allowed)
       asserted = SignIn.expected_identity(plain, user)
 
-      assert {:ok, _} = SignIn.identify(%{plain | email: "ops#{n}@example.com"}, :admin)
+      assert {:ok, _} = SignIn.admitted(%{plain | email: "ops#{n}@example.com"}, :admin)
       assert platform?(user.id)
 
       assert {:error, :stale_identity} =
@@ -313,6 +313,28 @@ defmodule Sanctum.SignInTest do
   end
 
   describe "the person's keys, minted with the person" do
+    test "a person whose identity row is missing is damage, never a local person" do
+      i = info(21)
+      assert {:ok, user} = SignIn.admitted(i, :allowed)
+      {1, _} = Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id == ^user.id))
+
+      assert {:error, {:corrupt, :person_identity}} = SignIn.admitted(i, :allowed)
+
+      ctx =
+        Sanctum.Context.build(
+          user_id: user.id,
+          provider: "github",
+          email: user.email,
+          athanor_id: user.personal_athanor_id,
+          permissions: Sanctum.Atoms.person_permissions(),
+          auth_method: :oidc,
+          authenticated: true
+        )
+
+      assert {:error, {:corrupt, :person_identity}} = Sanctum.Session.create(ctx)
+      assert {:error, {:corrupt, :person_identity}} = Sanctum.Recovery.status(ctx)
+    end
+
     test "a first sign-in writes one local key set, and a later sign-in keeps it" do
       i = info(20)
       assert {:ok, user} = SignIn.admitted(i, :allowed)
@@ -413,8 +435,8 @@ defmodule Sanctum.SignInTest do
 
     test "refuses every first door, the operator's included, before a person or a key" do
       oidc = %{
-        id: "oidc|https://idp.example|31",
-        provider: :oidc,
+        id: "oidcc|https://idp.example|31",
+        provider: :oidcc,
         email: "ops31@example.com",
         verified: true
       }
@@ -505,7 +527,7 @@ defmodule Sanctum.SignInTest do
     setup do
       Arca.Cache.init()
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
-      on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_, :_}) end)
+      on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_}) end)
       :ok
     end
 
@@ -534,7 +556,7 @@ defmodule Sanctum.SignInTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       ctx
     end
@@ -587,7 +609,7 @@ defmodule Sanctum.SignInTest do
           :device_pairing,
           Sanctum.Pairing.invitation_change(digest)
         )
-        |> Sanctum.Pairing.begin(%{key_digest: digest})
+        |> Sanctum.Pairing.begin(%{"key_digest" => digest})
 
       source = "192.0.2.#{rem(System.unique_integer([:positive]), 250) + 1}"
       glass = Sanctum.Context.build(%{authenticated: false, client_ip: source})
@@ -596,11 +618,13 @@ defmodule Sanctum.SignInTest do
       {:ok, %{challenge: challenge}} =
         Sanctum.Pairing.complete(glass, invitation.invitation_secret, submission)
 
+      proof = Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
+
       {:ok, %{client_id: client_id}} =
         Sanctum.Pairing.complete(
           glass,
           invitation.invitation_secret,
-          Map.put(submission, :proof, Prima.DeviceCert.Proof.sign(challenge, private))
+          Map.put(submission, :proof, proof)
         )
 
       client_id
@@ -1049,7 +1073,7 @@ defmodule Sanctum.SignInTest do
           order
           |> Enum.map(fn verdict ->
             Task.async(fn ->
-              {verdict, unboxed(fn -> SignIn.identify(assertion[verdict], verdict) end)}
+              {verdict, unboxed(fn -> SignIn.admitted(assertion[verdict], verdict) end)}
             end)
           end)
           |> Enum.map(&Task.await(&1, 25_000))
@@ -1061,11 +1085,7 @@ defmodule Sanctum.SignInTest do
         # carries the operator's address.
         assert unboxed(fn -> platform?(user.id) end) == (user.email == ops.email)
 
-        # And no sign-in that went on did so on facts other than its own.
-        for {verdict, {:ok, row}} <- results do
-          assert row.email == assertion[verdict].email
-        end
-
+        # A sign-in overtaken by the other is refused as overtaken.
         for {_verdict, {:error, reason}} <- results, do: assert(reason == :stale_identity)
       end
     end
@@ -1093,7 +1113,7 @@ defmodule Sanctum.SignInTest do
       results =
         1..2
         |> Enum.map(fn _ ->
-          Task.async(fn -> unboxed(fn -> SignIn.identify(ops, :admin) end) end)
+          Task.async(fn -> unboxed(fn -> SignIn.admitted(ops, :admin) end) end)
         end)
         |> Enum.map(&Task.await(&1, 25_000))
 
@@ -1122,6 +1142,9 @@ defmodule Sanctum.SignInTest do
       Arca.Repo.delete_all(from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user_id))
 
       Arca.Repo.delete_all(from(u in Arca.Schemas.User, where: u.id == ^user_id))
+
+      # The person's own athanor a sign-in minted.
+      Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.owner_user_id == ^user_id))
     end)
   end
 

@@ -7,9 +7,9 @@ defmodule Sanctum.TenantScopeSSOTTest do
   (`Sanctum.Context.require_tenant!/1` → `Sanctum.TenantPolicy`), and the
   storage layer scopes every query through `Arca.QueryHelpers.where_tenant/2`.
 
-  Equivalence: normal-context behaviour is unchanged. Gap-closure: an
-  athanor-less (pre-resolution) context must be refused, never silently
-  scoped to some default bucket — there is none.
+  A resolved context reads and writes its own athanor's rows; an
+  athanor-less (pre-resolution) context is refused, never silently scoped
+  to some default bucket — there is none.
   """
   use ExUnit.Case, async: false
 
@@ -49,15 +49,15 @@ defmodule Sanctum.TenantScopeSSOTTest do
     {:ok, ctx: ctx, unresolved: unresolved}
   end
 
-  describe "equivalence — normal context behaviour unchanged" do
-    test "ApiKey create/get/list still work and are tenant-scoped", %{ctx: ctx} do
+  describe "a resolved context" do
+    test "ApiKey create/get/list work and are tenant-scoped", %{ctx: ctx} do
       {:ok, %{name: "k1"}} = Sanctum.TestContext.create_key(ctx, %{name: "k1"})
       assert {:ok, _} = ApiKey.get(ctx, "k1")
       {:ok, list} = ApiKey.list(ctx)
       assert Enum.any?(list, &(&1.name == "k1"))
     end
 
-    test "Webhook create/get/list still work", %{ctx: ctx} do
+    test "Webhook create/get/list work", %{ctx: ctx} do
       Sanctum.Test.ComponentHelpers.register_test_component("h", "1.0.0", "formula", %{}, ctx)
       profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "f:local.h")
 
@@ -89,7 +89,7 @@ defmodule Sanctum.TenantScopeSSOTTest do
       assert_raise Sanctum.UnauthorizedError, fn -> ApiKey.rotate(ctx, "x") end
     end
 
-    test "a resolved context still works", %{ctx: ctx} do
+    test "a resolved context works", %{ctx: ctx} do
       {:ok, _} = Sanctum.TestContext.create_key(ctx, %{name: "ok"})
       assert {:ok, _} = ApiKey.get(ctx, "ok")
       assert {:ok, _} = ApiKey.list(ctx)

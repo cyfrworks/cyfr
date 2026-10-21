@@ -88,7 +88,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
     publish_live!(ctx, "1.0.1", %{"egress" => %{"domains" => ["a.example", "b.example"]}})
 
     granted = blob(%{"egress" => %{"domains" => ["a.example"]}})
-    diff = ShapeDiff.compute(ctx, @source, granted)
+    {:ok, diff} = ShapeDiff.compute(ctx, @source, granted)
 
     assert %{capability: "egress.domains", change: :widened, added: ["b.example"], removed: []} =
              Enum.find(diff, &(&1.capability == "egress.domains"))
@@ -98,7 +98,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
     publish_live!(ctx, "1.0.2", %{"egress" => %{"domains" => ["a.example"]}})
 
     granted = blob(%{"egress" => %{"domains" => ["a.example", "gone.example"]}})
-    diff = ShapeDiff.compute(ctx, @source, granted)
+    {:ok, diff} = ShapeDiff.compute(ctx, @source, granted)
 
     assert %{change: :narrowed, added: [], removed: ["gone.example"]} =
              Enum.find(diff, &(&1.capability == "egress.domains"))
@@ -108,7 +108,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
     publish_live!(ctx, "1.0.3", %{"egress" => %{"domains" => ["new.example"]}})
 
     granted = blob(%{"egress" => %{"domains" => ["old.example"]}})
-    diff = ShapeDiff.compute(ctx, @source, granted)
+    {:ok, diff} = ShapeDiff.compute(ctx, @source, granted)
 
     assert %{change: :changed, added: ["new.example"], removed: ["old.example"]} =
              Enum.find(diff, &(&1.capability == "egress.domains"))
@@ -118,7 +118,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
     publish_live!(ctx, "1.0.4", %{"egress" => %{"domains" => ["same.example"]}})
 
     granted = blob(%{"egress" => %{"domains" => ["same.example"]}})
-    diff = ShapeDiff.compute(ctx, @source, granted)
+    {:ok, diff} = ShapeDiff.compute(ctx, @source, granted)
 
     refute Enum.any?(diff, &(&1.capability == "egress.domains"))
   end
@@ -129,7 +129,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
     })
 
     granted = blob(%{"storage" => %{"paths" => ["data/"], "actions" => ["read"]}})
-    diff = ShapeDiff.compute(ctx, @source, granted)
+    {:ok, diff} = ShapeDiff.compute(ctx, @source, granted)
 
     assert %{change: :widened, added: ["write"]} =
              Enum.find(diff, &(&1.capability == "storage.actions"))
@@ -152,7 +152,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
         "flows" => [%{"from" => "filed", "to" => "a.example"}]
       })
 
-    diff = ShapeDiff.compute(ctx, @source, granted)
+    {:ok, diff} = ShapeDiff.compute(ctx, @source, granted)
 
     assert %{change: :widened, added: ["vault_disclosed to a.example"], removed: []} =
              Enum.find(diff, &(&1.capability == "flows"))
@@ -168,7 +168,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
         "egress" => %{"domains" => ["api.covered.example", "gone.elsewhere.example"]}
       })
 
-    diff = ShapeDiff.compute(ctx, @source, granted)
+    {:ok, diff} = ShapeDiff.compute(ctx, @source, granted)
     entry = Enum.find(diff, &(&1.capability == "egress.domains"))
 
     assert entry.removed == ["gone.elsewhere.example"]
@@ -176,7 +176,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
     assert entry.added == ["*.covered.example"]
 
     # A grant every host of which the ask still covers drops nothing.
-    covered =
+    {:ok, covered} =
       ShapeDiff.compute(
         ctx,
         @source,
@@ -362,7 +362,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
              ]
 
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
-      assert ShapeDiff.compute(ctx, @user, head.resolved_policy) == moved.shape_diff
+      assert {:ok, moved.shape_diff} == ShapeDiff.compute(ctx, @user, head.resolved_policy)
 
       # A run the head's origins admit, so what refuses it is the moved shape.
       assert {:error, {:consent_required, payload}} =
@@ -374,11 +374,35 @@ defmodule Sanctum.Consent.ShapeDiffTest do
 
       assert payload.profile_id == profile_id
       assert payload.shape_diff == moved.shape_diff
+
+      # The library's stored manifest damaged, the source's intact: the
+      # diff refuses as that damage rather than comparing the source alone.
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, [lib]} = Arca.ComponentStorage.list_components(actor, name: "diffed-lib")
+      {:ok, _} = Arca.ComponentStorage.put_component(actor, Map.put(lib, :manifest, "not json"))
+
+      assert {:error, {:corrupt, {:manifest, @lib}}} =
+               ShapeDiff.compute(ctx, @user, head.resolved_policy)
     end
   end
 
-  test "an underivable side yields no diff, never a wrong one", %{ctx: ctx} do
-    assert ShapeDiff.compute(ctx, @source, "not a blob") == []
-    assert ShapeDiff.compute(ctx, "reagent:local.never-published", blob(%{})) == []
+  test "a side that cannot be read is refused, never a diff", %{ctx: ctx} do
+    assert {:error, _unparsed} = ShapeDiff.compute(ctx, @source, "not a blob")
+    assert {:error, _absent} = ShapeDiff.compute(ctx, "reagent:local.never-published", blob(%{}))
+  end
+
+  test "a component whose stored manifest does not decode is refused as that damage", %{
+    ctx: ctx
+  } do
+    actor = Sanctum.Context.actor(ctx)
+    {:ok, [row]} = Arca.ComponentStorage.list_components(actor, name: "diffed")
+    {:ok, _} = Arca.ComponentStorage.put_component(actor, Map.put(row, :manifest, "not json"))
+
+    granted = blob(%{"egress" => %{"domains" => ["a.example"]}})
+
+    assert {:error, {:corrupt, {:manifest, @source}}} = ShapeDiff.compute(ctx, @source, granted)
+
+    assert {:error, {:corrupt, {:manifest, @source}}} =
+             ShapeDiff.compute(ctx, @source, granted, nil)
   end
 end

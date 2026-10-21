@@ -84,15 +84,9 @@ defmodule Sanctum.Providers.PolicyLog do
 
   @impl true
   def handle("policy_log", %Prima.Actor{} = actor, %{"action" => "get", "id" => id}) do
-    with :ok <- tenant_ok(actor) do
-      # A log is found by its own id, or by the request it was made under.
-      # Both reads are db-rescued and answer a tuple on an outage: the
-      # storage refusal here rather than a row.
-      case Arca.PolicyLog.get_tenant(actor, id) do
-        nil -> by_request(actor, id)
-        found -> answer(found, id)
-      end
-    end
+    # The read is db-rescued and answers a tuple on an outage: the storage
+    # refusal here rather than a row.
+    with :ok <- tenant_ok(actor), do: answer(Arca.PolicyLog.get_tenant(actor, id), id)
   end
 
   def handle("policy_log", %Prima.Actor{}, %{"action" => "get"}) do
@@ -141,8 +135,6 @@ defmodule Sanctum.Providers.PolicyLog do
 
   def handle(tool, %Prima.Actor{}, _args), do: {:error, {:not_found, "tool", tool}}
 
-  defp by_request(actor, id), do: answer(Arca.PolicyLog.get_by_request_id_tenant(actor, id), id)
-
   defp answer(nil, id), do: {:error, {:not_found, "Policy log", id}}
   defp answer({:error, :database_error}, _id), do: {:error, {:unavailable, "Storage"}}
   defp answer(record, _id), do: {:ok, policy_log_to_map(record)}
@@ -188,8 +180,6 @@ defmodule Sanctum.Providers.PolicyLog do
   # pass through as a string where a map was recorded.
   defp decode_json(str, field) when is_binary(str),
     do: decode_stored(str, %{"_decode_error" => "stored snapshot was not valid JSON"}, field)
-
-  defp decode_json(val, _field), do: val
 
   # A stored JSON column that does not decode reads as its default. The
   # line names the column and its size, never its bytes. `decode_json/2`

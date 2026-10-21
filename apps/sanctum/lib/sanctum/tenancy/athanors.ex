@@ -170,18 +170,13 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   The canonical key for a pair of people: order-independent, so
-  `{alice, bob}` and `{bob, alice}` name the same athanor. Exactly two ids
-  — a pair is what a frozen athanor holds, and a key over any other number
-  would name nothing `create_pair/2` can find.
+  `{alice, bob}` and `{bob, alice}` name the same athanor.
 
   Hashes the JSON encoding of sorted member ids, preserving unambiguous boundaries.
   """
-  @spec pair_key([String.t()] | String.t(), String.t() | nil) :: String.t()
-  def pair_key(user_a, user_b) when is_binary(user_a) and is_binary(user_b),
-    do: pair_key([user_a, user_b], nil)
-
-  def pair_key([a, b] = user_ids, nil) when is_binary(a) and is_binary(b) do
-    user_ids
+  @spec pair_key(String.t(), String.t()) :: String.t()
+  def pair_key(user_a, user_b) when is_binary(user_a) and is_binary(user_b) do
+    [user_a, user_b]
     |> Enum.sort()
     |> Jason.encode!()
     |> then(&:crypto.hash(:sha256, &1))
@@ -263,31 +258,6 @@ defmodule Sanctum.Tenancy.Athanors do
     |> String.slice(0, 80)
   end
 
-  @doc """
-  How an athanor is named to one of its members: a frozen pair by the
-  OTHER person — to `user_id`, a DM is whoever they are talking to, never
-  the stored "A & B" — and any other athanor by its own name. The stored
-  name stands in when the other seat cannot be read (an ended pair holds
-  one member).
-  """
-  @spec pair_label(athanor(), String.t() | nil) :: String.t()
-  def pair_label(%{roster: "frozen", id: id, name: name}, user_id)
-      when is_binary(user_id) do
-    with {:ok, rows} <- Sanctum.Tenancy.Members.list_by_athanor(id),
-         %{user_id: other} <- Enum.find(rows, &other_seat?(&1, user_id)) do
-      Sanctum.Tenancy.Users.display_name(other)
-    else
-      _ -> name
-    end
-  end
-
-  def pair_label(%{name: name}, _user_id), do: name
-
-  defp other_seat?(%{user_id: other, status: "active"}, user_id) when is_binary(other),
-    do: other != user_id
-
-  defp other_seat?(_row, _user_id), do: false
-
   @spec get(String.t()) :: {:ok, athanor()} | {:error, :not_found | :database_error}
   def get(id) when is_binary(id), do: Arca.Athanors.get(server(), id)
 
@@ -329,16 +299,13 @@ defmodule Sanctum.Tenancy.Athanors do
   def route_slug(%{kind: "person", slug: slug}), do: "@" <> slug
   def route_slug(%{slug: slug}), do: slug
 
-  @spec update(athanor(), map()) :: {:ok, athanor()} | {:error, term()}
-  def update(%{id: id}, attrs), do: Arca.Athanors.update(in_athanor(id), Map.new(attrs))
-
   @doc "Rename an athanor. The slug stays: it is an address."
   @spec rename(athanor(), String.t()) :: {:ok, athanor()} | {:error, term()}
   def rename(%{id: _} = athanor, name) when is_binary(name) do
     name = String.trim(name)
 
     with :ok <- validate_name(name) do
-      update(athanor, %{name: name})
+      Arca.Athanors.update(in_athanor(athanor.id), %{name: name})
     end
   end
 
@@ -437,7 +404,7 @@ defmodule Sanctum.Tenancy.Athanors do
   def purge_storage(%{id: _} = athanor) do
     with {:ok, current} <- get(athanor.id) do
       if current.status == "archived" do
-        ctx = Sanctum.internal_context(athanor_id: current.id, scope: :athanor)
+        ctx = Sanctum.Context.internal(athanor_id: current.id, scope: :athanor)
 
         with :ok <- Arca.delete_tree(Sanctum.Context.actor(ctx), []) do
           # The write gate invalidates the whole-tree counter, but the
@@ -454,13 +421,12 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   Erase an archived athanor: its blobs AND its rows. Final.
 
-  The one verb that actually deletes a tenant's data.
-  `purge_storage/1` above reclaims the volume and leaves every row
-  standing; retention (`Cyfr.RetentionScheduler`) skips archived athanors
-  because purging is supposed to be the reclaim. So nothing deleted rows
-  at all, and after archive + purge every sealed vault payload, webhook
-  secret, OAuth ciphertext, execution, message and log stayed in the
-  database and in every backup taken afterwards.
+  The one verb that deletes a tenant's rows. `purge_storage/1` above
+  reclaims the volume and leaves every row standing, and retention
+  (`Cyfr.RetentionScheduler`) skips archived athanors, so after archive
+  and purge alone every sealed vault payload, webhook secret, OAuth
+  ciphertext, execution, message and log stays in the database and in
+  every backup taken afterwards.
 
   ## What it keeps, and why
 
@@ -546,39 +512,6 @@ defmodule Sanctum.Tenancy.Athanors do
 
   defp reopenable(_rows), do: :ok
 
-  @doc """
-  Record that provisioning (seed + consents) completed — and forget any
-  earlier failure recorded on the row.
-  """
-  @spec mark_provisioned(athanor()) :: {:ok, athanor()} | {:error, term()}
-  def mark_provisioned(%{id: _} = athanor) do
-    now = DateTime.utc_now()
-
-    set_provisioning(athanor,
-      provisioned_at: now,
-      provisioning_failed_at: nil,
-      provisioning_failure: nil,
-      updated_at: now
-    )
-  end
-
-  @doc """
-  Record that a fill failed: when, at which `step`, and `detail`. The
-  record is the server's own — no settings patch writes or clears it — and
-  a completed fill clears it. Members' open views hear of the change.
-  """
-  @spec record_provisioning_failure(athanor(), atom() | String.t(), String.t()) ::
-          {:ok, athanor()} | {:error, term()}
-  def record_provisioning_failure(%{id: _} = athanor, step, detail) when is_binary(detail) do
-    now = DateTime.utc_now()
-
-    set_provisioning(athanor,
-      provisioning_failed_at: now,
-      provisioning_failure: Jason.encode!(%{"step" => to_string(step), "detail" => detail}),
-      updated_at: now
-    )
-  end
-
   @doc "The last failed fill on the row, or nil: `%{step, detail, at}`."
   @spec provisioning_failure(athanor()) ::
           %{step: String.t(), detail: String.t(), at: DateTime.t()} | nil
@@ -590,14 +523,6 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   def provisioning_failure(%{}), do: nil
-
-  defp set_provisioning(%{id: id}, set) do
-    with :ok <- Arca.Athanors.set(in_athanor(id), set),
-         {:ok, updated} <- get(id) do
-      Sanctum.Notify.broadcast(id, :athanor_changed, %{name: updated.name})
-      {:ok, updated}
-    end
-  end
 
   @spec list_by_ids([String.t()]) :: [athanor()]
   def list_by_ids([]), do: []

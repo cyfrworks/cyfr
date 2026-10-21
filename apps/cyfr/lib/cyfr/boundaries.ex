@@ -358,7 +358,7 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/aqua/**/*.ex", "apps/cyfr/lib/aqua.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
+        Sanctum.Annotations Sanctum.Catalog Sanctum.Consent Sanctum.Context
         Sanctum.ExecutionStanding Sanctum.Gate Sanctum.Notify Sanctum.Provisioning
         Sanctum.Refusals Sanctum.RunningTasks Sanctum.Tenancy Sanctum.ToolGrants
         Sanctum.VirtualTools
@@ -454,8 +454,8 @@ defmodule Cyfr.Boundaries do
         "the glue and application namespace: boot wiring, the operation table, " <>
           "admission, the invoke budget, the vault edge a run is attached with, and " <>
           "the policy record of every admission. `Sanctum` bare is the domain's own " <>
-          "front door — `internal_context/1` and `system_context/0` mint the contexts " <>
-          "the server's own work runs under, `auth_configured?/0` says whether this " <>
+          "front door — `system_context/0` mints the context the server's own work " <>
+          "runs under, `auth_configured?/0` says whether this " <>
           "deployment has sign-in, and `build_tincture_context/2` is a tincture " <>
           "invocation's. A call on the root is a reach like any other and is rostered " <>
           "like one. `Sanctum.Caller` is " <>
@@ -1842,7 +1842,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum" => [
       auth_configured?: 0,
       build_tincture_context: 2,
-      internal_context: 1,
       origin: 0,
       reconcile_platform_admins: 2,
       system_context: 0
@@ -1956,8 +1955,8 @@ defmodule Cyfr.Boundaries do
       purge_global: 2,
       refused: 3
     ],
-    "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
-    "Sanctum.Directory" => [append: 2, outcome: 1, recover: 2, register: 1, resolve: 1],
+    "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 2],
+    "Sanctum.Directory" => [append: 2, recover: 2, register: 1, resolve: 1],
     "Sanctum.Door" => [admit_identity: 2, platform_admin_emails: 0, refusal_message: 0],
     "Sanctum.Door.Store" => [requests: 0],
     "Sanctum.Egress" => [pinned_request: 5],
@@ -2011,7 +2010,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Refusals" => [classify: 1, classify: 2, code_override: 1, known?: 1, render: 1],
     "Sanctum.RegistryCredentials" => [
       confirm_issuance: 4,
-      delete: 3,
       get: 3,
       list: 2,
       put_push_token: 6
@@ -2119,7 +2117,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Visibility" => [filter_for_context: 2],
     "Sanctum.Webhook" => [
       decode_input_template: 1,
-      default_signature_header: 0,
       disable_for_component: 2,
       resolve_ingress: 1,
       verify_with_grace: 4
@@ -2339,7 +2336,6 @@ defmodule Cyfr.Boundaries do
     {:get, "/auth/:provider"},
     {:post, "/auth/logout"},
     {:get, "/directory/v1/:identifier"},
-    {:get, "/directory/v1/:identifier/requests/:request_id"},
     {:post, "/directory/v1/genesis"},
     {:get, "/login"},
     {:get, "/pair"},
@@ -2461,10 +2457,10 @@ defmodule Cyfr.Boundaries do
     # scripted directory through paths that pass no options; a caller's
     # options win, and a release never sets it, so it uses the system's.
     directory_client: :seam,
-    # An OAuth provider shown to attenuate a refresh (`Sanctum.Vault.OAuth`):
-    # a suite sets it to script a preset for a hint no shipped preset holds,
-    # and that preset's token endpoint, never replacing a shipped one; a
-    # release never sets it, so only the shipped presets are read.
+    # An OAuth provider a suite scripts (`Sanctum.Vault.OAuth`): a preset for
+    # a hint no shipped preset holds and that preset's token endpoint, which
+    # a code exchange and a refresh both reach, never replacing a shipped
+    # one; a release never sets it, so only the shipped presets are read.
     scripted_oauth_provider: :seam,
     # Compiled in by `config/test.exs` alone; with the runtime switch off it
     # lets the sandboxed suite boot omit `Cyfr.Bootstrap`
@@ -2850,7 +2846,6 @@ defmodule Cyfr.Boundaries do
     %{module: Emissary.Web.DirectoryController, site: :resolve, plane: :external, origin: :none},
     %{module: Emissary.Web.DirectoryController, site: :append, plane: :external, origin: :none},
     %{module: Emissary.Web.DirectoryController, site: :recover, plane: :external, origin: :none},
-    %{module: Emissary.Web.DirectoryController, site: :outcome, plane: :external, origin: :none},
     # Restore, an entry path because no person exists yet to admit an
     # operation, and the recovery kit, its own ingress: the installation
     # capability, the kit, its proof and the kit credential. The kit

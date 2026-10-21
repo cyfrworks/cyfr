@@ -5,7 +5,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
   @moduledoc """
   A grant writes a credential only for an actor that still stands where
   it started the grant (`Sanctum.Vault.OAuthGrant.complete/3`): the
-  session that authorized it is revalidated, and an actor with no session
+  session that authorized it is revalidated, and a context with no session
   is held to the rule an athanor-owned channel stands by. A refusal is
   answered before the provider is asked for anything.
   """
@@ -210,9 +210,10 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
     :ok
   end
 
-  test "an actor with no session is held to the channel rule: an archived athanor writes nothing" do
+  test "a context with no session is held to the channel rule: an archived athanor writes nothing" do
     ctx = person!()
-    state = pending!(%{actor: Context.actor(ctx)})
+    sessionless = %{ctx | session_token_hash: nil, credential_binding: nil}
+    state = pending!(%{context: sessionless, actor: Context.actor(sessionless)})
 
     Arca.Repo.update_all(from(a in Arca.Schemas.Athanor, where: a.id == ^ctx.athanor_id),
       set: [status: "archived"]

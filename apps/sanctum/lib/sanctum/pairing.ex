@@ -171,15 +171,14 @@ defmodule Sanctum.Pairing do
   | `:restore_close` | a fresh confirmation, the platform administrator's |
 
   `sensitive?/1` answers the table. `vault_unlock` and `home_transfer`
-  have no operation until their features land, and stay sensitive.
-  `action_for/1` maps each operation that confirms something to its
-  action. `credential_sharing` is a widening of who or what may use an
+  are sensitive, and no operation makes either (each is *Not built yet*
+  in ARCHITECTURE.md). `credential_sharing` is a widening of who or what may use an
   instance entry (`instance_entry.set_audience`,
   `instance_entry.set_component_policy`); whether a request widens is
   decided from the stored entry by `Sanctum.InstanceEntries`, which asks
   for the confirmation only then.
 
-  `fresh_required?/2` is what the deciding sites ask
+  `sensitive?/1` is what the deciding sites ask
   (`Sanctum.Consent.Authz.confirm/3`): the table's answer, so a sensitive
   change needs a pending confirmation proven by a passkey assertion or a
   fresh re-authentication, whoever makes it. No setting or client turns a
@@ -221,51 +220,6 @@ defmodule Sanctum.Pairing do
     seal_change: :fresh,
     restore_reenable: :fresh,
     restore_close: :fresh
-  }
-
-  # Each operation that confirms something, as `tool.action`, the spelling
-  # a pending confirmation records (`Prima.Confirmation`). The two rebinds
-  # confirm a widening only: their deciding site decides which rebind
-  # widens and asks there (`Sanctum.Vault.rebind_confirmation/5`), so this
-  # table makes no narrowing rebind confirm anything. `seal.change` is the
-  # spelling of the seal's change (`Sanctum.Seal.change/2`), which the
-  # system layer makes and no gate operation exposes.
-  @operations %{
-    "vault.create" => :credential_entry,
-    "vault.rotate" => :credential_entry,
-    "vault.rebind" => :credential_entry,
-    "vault.authorize" => :credential_entry,
-    "oauth.set_client" => :credential_entry,
-    "instance_entry.create" => :credential_entry,
-    "instance_entry.rotate" => :credential_entry,
-    "instance_entry.rebind" => :credential_entry,
-    "instance_entry.set_audience" => :credential_sharing,
-    "instance_entry.set_component_policy" => :credential_sharing,
-    "key.create" => :credential_issuance,
-    "key.rotate" => :credential_issuance,
-    "webhook.create" => :credential_issuance,
-    "webhook.rotate" => :credential_issuance,
-    "registry.tokens_issue" => :credential_issuance,
-    "session.cli_approve" => :credential_issuance,
-    "pairing.revoke" => :pairing_revocation,
-    "person.enroll" => :recovery_material,
-    "person.kit" => :recovery_material,
-    "person.enroll_holder" => :recovery_material,
-    "passkey.register" => :passkey_registration,
-    "passkey.revoke" => :passkey_registration,
-    "passkey.recover_admin" => :passkey_registration,
-    "pairing.begin" => :device_pairing,
-    "person.certify" => :device_pairing,
-    "person.assert" => :remote_sign_in,
-    "person.rotate" => :key_rotation,
-    "person.link_door" => :sign_in_methods,
-    "person.unlink_door" => :sign_in_methods,
-    "seal.change" => :seal_change,
-    "key.reenable" => :restore_reenable,
-    "webhook.reenable" => :restore_reenable,
-    "pairing.reenable" => :restore_reenable,
-    "passkey.reenable" => :restore_reenable,
-    "person.close_recovery" => :restore_close
   }
 
   # A pairing invitation: 128 random bits, alive five minutes.
@@ -316,13 +270,14 @@ defmodule Sanctum.Pairing do
 
   @typedoc """
   What the new glass submits to `complete/3`: its device public key
-  (32 raw bytes), once it holds the `pair` challenge its `proof`, and,
-  for a remote person's invitation, the `certificate` their own home
-  issued for the reserved client (with both calls).
+  (32 raw bytes), once it holds the `pair` challenge its `proof` as the
+  glass sends it (`Prima.DeviceCert.Proof`'s JSON map), and, for a remote
+  person's invitation, the `certificate` their own home issued for the
+  reserved client (with both calls).
   """
   @type submission :: %{
           required(:device_key) => binary(),
-          optional(:proof) => Proof.t() | map() | nil,
+          optional(:proof) => map() | nil,
           optional(:certificate) => DeviceCert.t() | nil
         }
 
@@ -335,11 +290,14 @@ defmodule Sanctum.Pairing do
   @typedoc "A paired client and the certificate it connects under."
   @type paired :: %{client_id: String.t(), certificate: DeviceCert.t()}
 
-  @typedoc "What a device submits to `renew/2`: its client, its device key and its proof."
+  @typedoc """
+  What a device submits to `renew/2`: its client, its device key and its
+  proof, as its channel forwards it (`Prima.DeviceCert.Proof`'s JSON map).
+  """
   @type renewal :: %{
           required(:client_id) => String.t(),
           required(:device_key) => binary(),
-          required(:proof) => Proof.t() | map()
+          required(:proof) => map()
         }
 
   @typedoc """
@@ -376,6 +334,8 @@ defmodule Sanctum.Pairing do
       their current live key, or has expired.
     * `:identity_stale` — a remote person's directory could not be read
       fresh.
+    * `{:corrupt, :person_identity}` — the invitation's person has no
+      identity row, which every person is minted with: damage.
     * `:remote_identity_unavailable` — a renewal of a remote person's
       certificate, which their own home certifies again instead.
     * `:not_standing` — the person is denied, the athanor archived or the
@@ -399,6 +359,7 @@ defmodule Sanctum.Pairing do
           | :certificate_unexpected
           | :certificate_refused
           | :identity_stale
+          | {:corrupt, :person_identity}
           | :remote_identity_unavailable
           | :not_standing
           | :revoked
@@ -414,9 +375,8 @@ defmodule Sanctum.Pairing do
 
   @doc """
   Open a pairing invitation for the person of `ctx` in the athanor in
-  focus (the module doc). `args` names `key_digest` (or `"key_digest"`),
-  the digest of the device key the new glass shows
-  (`Prima.Device.key_digest/1`).
+  focus (the module doc). `args` names `"key_digest"`, the digest of the
+  device key the new glass shows (`Prima.Device.key_digest/1`).
 
   The `device_pairing` confirmation is asked first, for exactly that key
   digest (`Sanctum.Consent.Authz.check/3`), and consumed inside the
@@ -489,7 +449,7 @@ defmodule Sanctum.Pairing do
   end
 
   defp key_digest_argument(args) do
-    digest = Map.get(args, :key_digest, Map.get(args, "key_digest"))
+    digest = Map.get(args, "key_digest")
 
     if Prima.Device.key_digest?(digest),
       do: {:ok, digest},
@@ -624,7 +584,9 @@ defmodule Sanctum.Pairing do
   # with no certificate offered; or the person's own home, whose
   # certificate for exactly this invitation's client, the device key, this
   # home and the athanor is verified under the head their directory names
-  # now (`Sanctum.DeviceCerts.remote_subject/3`, read live).
+  # now (`Sanctum.DeviceCerts.remote_subject/3`, read live). Every person
+  # is minted with their identity row (`Sanctum.Tenancy.Users`), so a
+  # person with none is damage, never a local person.
   defp issuer(invitation, device_key, certificate, now) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), invitation.user_id) do
       {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
@@ -637,7 +599,7 @@ defmodule Sanctum.Pairing do
         local_issuer(invitation.user_id, certificate)
 
       {:error, :not_found} ->
-        local_issuer(invitation.user_id, certificate)
+        {:error, {:corrupt, :person_identity}}
 
       {:error, _unanswered} ->
         {:error, :unavailable}
@@ -809,7 +771,7 @@ defmodule Sanctum.Pairing do
 
   defp redeemed({:error, :database_error}), do: {:error, :unavailable}
   defp redeemed({:error, :first_method_used}), do: {:error, addition_refusal()}
-  defp redeemed({:error, :no_identity}), do: {:error, :unavailable}
+  defp redeemed({:error, :no_identity}), do: {:error, {:corrupt, :person_identity}}
   defp redeemed({:error, reason}), do: {:error, reason}
 
   @doc """
@@ -1185,16 +1147,14 @@ defmodule Sanctum.Pairing do
   # Proofs
   # ---------------------------------------------------------------------------
 
-  defp read_proof(%Proof{} = proof), do: {:ok, proof}
-
-  defp read_proof(map) when is_map(map) do
-    case Proof.decode(map) do
+  # The proof as the glass or the channel sends it, its JSON map
+  # (`Prima.DeviceCert.Proof.decode/1`, which refuses anything else).
+  defp read_proof(proof) do
+    case Proof.decode(proof) do
       {:ok, proof} -> {:ok, proof}
       {:error, _malformed} -> {:error, :proof_refused}
     end
   end
-
-  defp read_proof(_proof), do: {:error, :proof_refused}
 
   # A challenge this home issued expires at most one lifetime from now: one
   # that expires later was not issued here.
@@ -1425,23 +1385,6 @@ defmodule Sanctum.Pairing do
   """
   @spec sensitive?(action()) :: boolean()
   def sensitive?(action) when is_map_key(@table, action), do: Map.fetch!(@table, action) == :fresh
-
-  @doc """
-  The action the operation `operation` (`tool.action`) confirms, or `nil`
-  for an operation that confirms nothing.
-  """
-  @spec action_for(String.t()) :: action() | nil
-  def action_for(operation) when is_binary(operation), do: Map.get(@operations, operation)
-
-  @doc """
-  Whether `action`, asked for under `ctx`, needs a fresh confirmation
-  before it is decided: the table's answer, the same for every person and
-  every client. A local person's first passkey registration may instead
-  rest on a recent local sign-in, which `Sanctum.Passkeys.register/2`
-  decides before it asks.
-  """
-  @spec fresh_required?(action(), Context.t()) :: boolean()
-  def fresh_required?(action, %Context{}) when is_map_key(@table, action), do: sensitive?(action)
 
   @doc """
   Whether the client behind `ctx` has a person behind it who can give a

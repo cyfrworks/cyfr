@@ -93,21 +93,6 @@ defmodule Sanctum.Providers.McpLog do
           ),
           Operation.new(
             "mcp_log",
-            "fan_outs",
-            "Fan outs mcp log",
-            [
-              Arg.new("request_ids", {:array, Arg.new(nil, :string)},
-                required: true,
-                description: "Batch of request IDs for fan_outs action"
-              )
-            ],
-            kind: :read,
-            recorded: false,
-            planes: [:external],
-            permission: :storage_read
-          ),
-          Operation.new(
-            "mcp_log",
             "stats",
             "Stats mcp log",
             [
@@ -121,7 +106,7 @@ defmodule Sanctum.Providers.McpLog do
             permission: :storage_read
           )
         ],
-        description: "Query MCP request logs - list, get, correlate, fan_outs, or view stats",
+        description: "Query MCP request logs - list, get, correlate, or view stats",
         title: "MCP Request Logs"
       )
     ]
@@ -190,32 +175,6 @@ defmodule Sanctum.Providers.McpLog do
 
   def handle("mcp_log", %Prima.Actor{}, %{"action" => "correlate"}) do
     {:error, {:invalid_argument, "Missing required argument: request_id"}}
-  end
-
-  # Batched fan-out counts: for each request_id, how many executions were
-  # recorded against it? Used by ActivitiesLive to render the EXECS column
-  # for a page of MCP log rows in a single GROUP BY instead of N correlate
-  # queries.
-  def handle("mcp_log", %Prima.Actor{} = actor, %{"action" => "fan_outs", "request_ids" => ids})
-      when is_list(ids) do
-    with :ok <- tenant_ok(actor) do
-      ids = Enum.filter(ids, &is_binary/1)
-
-      # `count_by_request/2` refuses rather than defaulting, so an outage
-      # answers `{:error, :database_error}` — which was being wrapped and
-      # shipped as `counts: ["error", "database_error"]`, a structured
-      # falsehood a client would render as a fan-out count. Same refusal
-      # the other arms give.
-      case Arca.Execution.count_by_request(actor, ids) do
-        counts when is_map(counts) -> {:ok, %{counts: counts}}
-        {:error, :database_error} -> {:error, {:unavailable, "Storage"}}
-      end
-    end
-  end
-
-  def handle("mcp_log", %Prima.Actor{}, %{"action" => "fan_outs"}) do
-    {:error,
-     {:invalid_argument, "Missing or invalid argument: request_ids (must be a list of strings)"}}
   end
 
   def handle("mcp_log", %Prima.Actor{} = actor, %{"action" => "stats"} = args) do
@@ -348,8 +307,6 @@ defmodule Sanctum.Providers.McpLog do
   # pass through as a string where a map was recorded.
   defp decode_json(str, field) when is_binary(str),
     do: decode_stored(str, %{"_decode_error" => "stored snapshot was not valid JSON"}, field)
-
-  defp decode_json(val, _field), do: val
 
   # A stored JSON column that does not decode reads as its default. The
   # line names the column and its size, never its bytes. `decode_json/2`

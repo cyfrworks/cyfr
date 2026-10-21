@@ -61,7 +61,7 @@ defmodule Opus.ArchiveWatch do
 
   defp cancel_running(athanor_id) do
     if Opus.available?() do
-      ctx = Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+      ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
 
       case Opus.list(ctx, status: :running, limit: @cancel_limit) do
         {:ok, running} ->

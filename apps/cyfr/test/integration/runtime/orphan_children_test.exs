@@ -113,7 +113,7 @@ defmodule Locus.Runtime.OrphanChildrenTest do
     assert_receive {:held, stream_id, stream}, 30_000
     authority = TwoServices.entered(root_id)
 
-    assert Sanctum.Authority.budget(authority).in_flight == 1
+    assert Sanctum.TestContext.invoke_budget(authority).in_flight == 1
 
     assert [%{holder_execution_id: ^stream_id, admitted_at: %DateTime{}}] =
              charges(ctx, authority)
@@ -125,7 +125,7 @@ defmodule Locus.Runtime.OrphanChildrenTest do
       30_000
     )
 
-    wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
+    wait_until(fn -> Sanctum.TestContext.invoke_budget(authority).in_flight == 0 end)
     wait_until(fn -> charges(ctx, authority) == [] end)
 
     TwoServices.release!(close)
@@ -189,7 +189,7 @@ defmodule Locus.Runtime.OrphanChildrenTest do
 
     assert spawned_answer =~ ~r/Execution timeout after \d+ms/
 
-    wait_until(fn -> Sanctum.Authority.budget(authority).in_flight == 0 end)
+    wait_until(fn -> Sanctum.TestContext.invoke_budget(authority).in_flight == 0 end)
     assert charges(ctx, authority) == []
   end
 
@@ -270,7 +270,7 @@ defmodule Locus.Runtime.OrphanChildrenTest do
       from(e in Arca.Schemas.Execution, where: e.parent_execution_id == ^root_id, select: e.id)
 
     assert Arca.Repo.all(children) == []
-    assert Sanctum.Authority.budget(authority).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(authority).in_flight == 0
     assert charges(Sanctum.TestContext.local(:api), authority) == []
   end
 

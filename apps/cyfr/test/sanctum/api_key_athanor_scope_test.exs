@@ -43,7 +43,7 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
       )
 
     {:ok, session} = TestContext.create_session(built)
-    {:ok, session_ctx} = Caller.establish(session.token, focus: a.id, task_supervisor: nil)
+    {:ok, session_ctx} = Caller.establish(session.token, focus: a.id, refresh: false)
 
     name = "scope-key-#{n}"
     opts = %{name: name}

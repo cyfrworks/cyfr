@@ -20,7 +20,7 @@ defmodule Sanctum.ContextFocusTest do
     ops = "github|https://github.com|ops-#{System.unique_integer([:positive])}"
     {:ok, a} = Athanors.create_group(alice, "A group")
     {:ok, b} = Athanors.create_group("github|https://github.com|someone", "B group")
-    {:ok, _} = Members.ensure_platform(ops)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops)
 
     ctx = fn user_id, athanor_id, admin? ->
       Context.build(
@@ -116,7 +116,7 @@ defmodule Sanctum.ContextFocusTest do
     assert {:error, :unavailable} = Context.focus(c, a.id)
     assert {:error, :unavailable} = Context.focus(c, a)
 
-    sys = Sanctum.internal_context(user_id: "_test", athanor_id: a.id, scope: :athanor)
+    sys = Sanctum.Context.internal(user_id: "_test", athanor_id: a.id, scope: :athanor)
     assert {:error, :unavailable} = Context.refocus(sys, a.id)
   end
 
@@ -131,7 +131,7 @@ defmodule Sanctum.ContextFocusTest do
     # The system plane crosses tenants by design (recovery resolving a
     # stored agent has no member to speak as) — but a closed furnace stays
     # closed to it too.
-    sys = Sanctum.internal_context(user_id: "_test", athanor_id: a.id, scope: :athanor)
+    sys = Sanctum.Context.internal(user_id: "_test", athanor_id: a.id, scope: :athanor)
     assert {:ok, %{athanor_id: bid, scope: :athanor} = crossed} = Context.refocus(sys, b.id)
     assert bid == b.id
 
@@ -230,7 +230,7 @@ defmodule Sanctum.ContextFocusTest do
 
     {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: own.id)
     {:ok, _} = Users.set_personal_athanor(user, own.id)
-    {:ok, _} = Members.ensure_platform(user.id)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(user.id)
     {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: a.id)
 
     admin = ctx.(user.id, nil, true)

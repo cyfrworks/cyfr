@@ -185,7 +185,7 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert denied.status == "denied"
     assert denied.denied_at
 
-    assert {:error, _} = Sanctum.Session.load(session.token, surface: :console)
+    assert {:error, _} = Sanctum.Session.load(session.token)
     assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: uid}
     assert uid == u.id
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])

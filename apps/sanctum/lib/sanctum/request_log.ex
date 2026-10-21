@@ -92,7 +92,7 @@ defmodule Sanctum.RequestLog do
       tool: decision.tool,
       action: decision.action,
       method: Map.get(projection, :method) || "tools/call",
-      input: encode_json(sanitize_input(Map.get(projection, :input) || %{}))
+      input: encode_json(Prima.Sanitizer.sanitize(Map.get(projection, :input) || %{}))
     }
 
     case decision.admission do
@@ -201,18 +201,6 @@ defmodule Sanctum.RequestLog do
   defp other_athanor?(value, home),
     do: Sanctum.Tenancy.Athanors.athanor_id?(value) and value != home
 
-  # ============================================================================
-  # Input Sanitization
-  # ============================================================================
-
-  @doc """
-  Sanitize input data to redact sensitive values.
-
-  Delegates to `Prima.Sanitizer.sanitize/1`.
-  """
-  @spec sanitize_input(term()) :: term()
-  defdelegate sanitize_input(input), to: Prima.Sanitizer, as: :sanitize
-
   # The tools/call wire shape re-encodes the tool's structured result as an
   # opaque JSON string under `"content"[]."text"`. Key-based redaction cannot
   # see inside a string, so a credential a tool legitimately returns to its
@@ -226,16 +214,16 @@ defmodule Sanctum.RequestLog do
 
   defp sanitize_output(%{"content" => blocks} = output) when is_list(blocks) do
     %{output | "content" => Enum.map(blocks, &sanitize_text_block/1)}
-    |> sanitize_input()
+    |> Prima.Sanitizer.sanitize()
   end
 
-  defp sanitize_output(output), do: sanitize_input(output)
+  defp sanitize_output(output), do: Prima.Sanitizer.sanitize(output)
 
   defp sanitize_text_block(%{"type" => "text", "text" => text} = block)
        when is_binary(text) do
     case Jason.decode(text) do
       {:ok, decoded} when is_map(decoded) or is_list(decoded) ->
-        %{block | "text" => Jason.encode!(sanitize_input(decoded))}
+        %{block | "text" => Jason.encode!(Prima.Sanitizer.sanitize(decoded))}
 
       _ ->
         block

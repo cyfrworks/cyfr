@@ -70,8 +70,9 @@ defmodule Sanctum.Consent.BlobBuilder do
   domain the ask names, or a plain host one of its patterns admits
   (`Prima.Network.domain_allowed?/2`); a private range the ask names, or an
   address or narrower range inside one of its ranges; a storage path the
-  ask names, or a guest path the ask admits, read as
-  `Opus.GuestStorage` enforces a grant
+  ask names, or a guest path spelled as the storage door reaches it
+  (`Prima.Manifest.Caps.canonical_storage_path?/1`) that the ask admits,
+  read as `Opus.GuestStorage` enforces a grant
   (`Prima.ComponentPath.path_granted?/2`); and exactly one of the ask's
   values for every other field.
 
@@ -95,8 +96,6 @@ defmodule Sanctum.Consent.BlobBuilder do
   alias Prima.Manifest.Tincture
   alias Sanctum.Consent.Components
   alias Prima.JCS
-
-  require Logger
 
   @type vault_fn ::
           (node_key :: String.t(), row :: map(), manifest :: map() -> map() | nil)
@@ -150,6 +149,8 @@ defmodule Sanctum.Consent.BlobBuilder do
   # lifetime is the binding's row's.
   @decision "__decision__"
 
+  @ingress Blob.ingress_key()
+
   @typedoc "A preview row in its JSON form (`Prima.ConsentPreview.Row.encode/1`)."
   @type row :: %{required(String.t()) => term()}
 
@@ -199,7 +200,7 @@ defmodule Sanctum.Consent.BlobBuilder do
       place = {graph, rows}
 
       Enum.reduce_while(Map.keys(graph), {:ok, %{}}, fn node_key, {:ok, acc} ->
-        case build_node(ctx, place, node_key, source_ref, vault_fns, extras, narrowing) do
+        case build_node(place, node_key, source_ref, vault_fns, extras, narrowing) do
           {:ok, node} -> {:cont, {:ok, Map.put(acc, node_key, node)}}
           # A refused narrowing names its node already.
           {:error, {:invalid_argument, _sentence} = refusal} -> {:halt, {:error, refusal}}
@@ -342,15 +343,14 @@ defmodule Sanctum.Consent.BlobBuilder do
       Map.new(nodes, fn {node_key, node} ->
         edges =
           Map.new(node.edges, fn
-            {"@ingress" = key, resources} ->
+            {@ingress = key, resources} ->
               {key, resources |> finalize_edge() |> bind_flows() |> place_vault(node_key, key)}
 
             {dep_key, %{"__dep__" => dep_key} = placeholder} ->
               # A dep key the activation graph does not carry is a
-              # construction bug, not a `nil.resources` UndefinedFunctionError
-              # raised out of `Consent.Bootstrap` — whose `run_components/2`
-              # catches only typed skips and refusals, so provisioning
-              # crashed the whole supervised task instead of recording one.
+              # construction bug, thrown as a typed refusal: `Consent.Bootstrap`'s
+              # `run_components/2` catches only typed skips and refusals, and
+              # records this one rather than crashing its supervised task.
               case nodes[dep_key] do
                 nil ->
                   throw({:dangling_dep, dep_key})
@@ -370,7 +370,7 @@ defmodule Sanctum.Consent.BlobBuilder do
         {node_key, %{"limits" => node.limits, "edges" => edges}}
       end)
 
-    JCS.encode(%{"canonical" => "jcs-1", "nodes" => encoded_nodes})
+    JCS.encode(%{"canonical" => Blob.canonical(), "nodes" => encoded_nodes})
   end
 
   # A bound entry's key names where it sits: the node, the edge and the
@@ -707,12 +707,12 @@ defmodule Sanctum.Consent.BlobBuilder do
     end
   end
 
-  defp build_node(ctx, {graph, rows}, node_key, source_ref, vault_fns, extras, {subset, ceiling}) do
+  defp build_node({graph, rows}, node_key, source_ref, vault_fns, extras, {subset, ceiling}) do
     {vault_fn, edge_vault_fn} = vault_fns
 
     with {:ok, row} <- closure_row(rows, node_key),
-         manifest = manifest(row, node_key),
-         {:ok, asked, asked_limits} <- node_grant(ctx, node_key, manifest),
+         {:ok, manifest} <- manifest(row, node_key),
+         {:ok, asked, asked_limits} <- node_grant(node_key, manifest),
          {:ok, resources, limits, narrowed} <-
            narrow(node_key, asked, asked_limits, Map.get(subset, node_key), ceiling) do
       vault = vault_fn.(node_key, row, manifest)
@@ -750,23 +750,24 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   defp edge_vault(nil, _from, _dep, _rows), do: nil
 
+  # A dependency outside the rows, or one whose manifest does not decode,
+  # places no vault here: building that dependency's own node refuses the
+  # whole build first or after, so no blob is made with this edge.
   defp edge_vault(edge_vault_fn, {from, from_manifest}, dep, rows) do
-    case closure_row(rows, dep) do
-      {:ok, row} ->
-        manifest = manifest(row, dep)
-        edge_vault_fn.(from, dep, row, manifest, provided(from_manifest, dep, manifest))
-
-      {:error, _} ->
-        nil
+    with {:ok, row} <- closure_row(rows, dep),
+         {:ok, manifest} <- manifest(row, dep) do
+      edge_vault_fn.(from, dep, row, manifest, provided(from_manifest, dep, manifest))
+    else
+      {:error, _} -> nil
     end
   end
 
   @doc false
   # The manifest's declared caps are the grant; an absent block is the
-  # empty ask, and a block that no longer meets the grammar is refused
+  # empty ask, and a block that does not meet the grammar is refused
   # (`ShapeDerivation.declared_caps/2`). Public for the plan verb, which
   # must show the same grant this builder would freeze.
-  def node_grant(_ctx, node_key, manifest) do
+  def node_grant(node_key, manifest) do
     with {:ok, caps} <- Sanctum.Consent.ShapeDerivation.declared_caps(manifest, node_key) do
       {:ok, resource_map_from_caps(caps), limits_map_from_caps(node_key, caps)}
     end
@@ -1015,11 +1016,14 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   # A narrowed path is itself a grant, and it lies inside the ask when
   # every path it admits the ask admits too; read by the one reading of a
-  # storage grant, that is the ask admitting it as a path.
+  # storage grant, that is the ask admitting it as a path. It is granted
+  # as the storage door reaches it, so another spelling of a path inside
+  # the ask (`data//x/`) is outside it.
   defp inside?("storage", "paths", value, asked),
     do:
       value in asked or
-        (guest_path?(value) and Prima.ComponentPath.path_granted?(value, asked))
+        (guest_path?(value) and Prima.Manifest.Caps.canonical_storage_path?(value) and
+           Prima.ComponentPath.path_granted?(value, asked))
 
   defp inside?(_kind, _field, value, asked), do: value in asked
 
@@ -1181,8 +1185,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   # The one clamp (`Prima.Limits.Ceiling.clamp/2`) decides: a limit the
   # narrowing names is inside the ceiling when clamping leaves it as named.
   defp under_ceiling(node_key, limits, record, ceiling) do
-    clamped =
-      Prima.Limits.Ceiling.clamp(limits, ceiling || Sanctum.Policy.Ceiling.platform_ceiling())
+    clamped = Prima.Limits.Ceiling.clamp(limits, ceiling)
 
     above =
       record
@@ -1235,13 +1238,12 @@ defmodule Sanctum.Consent.BlobBuilder do
   resources and limits its manifest declares, every flow it declares to
   each of its exits, none narrowed, and a tincture's declarations.
   """
-  @spec ask_rows(Sanctum.Context.t(), %{String.t() => map()}) ::
-          {:ok, [row()]} | {:error, term()}
-  def ask_rows(ctx, rows) when is_map(rows) do
+  @spec ask_rows(%{String.t() => map()}) :: {:ok, [row()]} | {:error, term()}
+  def ask_rows(rows) when is_map(rows) do
     collect_rows(rows |> Map.keys() |> Enum.sort(), fn node_key ->
       with {:ok, row} <- closure_row(rows, node_key),
-           manifest = manifest(row, node_key),
-           {:ok, resources, limits} <- node_grant(ctx, node_key, manifest),
+           {:ok, manifest} <- manifest(row, node_key),
+           {:ok, resources, limits} <- node_grant(node_key, manifest),
            {:ok, wildcard} <- wildcard_ask(node_key, manifest),
            {:ok, declared} <- tincture_rows(node_key, manifest) do
         exits = {Tincture.connect(manifest), flows_of(resources)}
@@ -1265,7 +1267,7 @@ defmodule Sanctum.Consent.BlobBuilder do
       when is_map(nodes) and is_map(narrowed) and is_map(rows) do
     collect_rows(nodes |> Map.keys() |> Enum.sort(), fn node_key ->
       with {:ok, row} <- closure_row(rows, node_key),
-           manifest = manifest(row, node_key),
+           {:ok, manifest} <- manifest(row, node_key),
            {:ok, caps} <- Sanctum.Consent.ShapeDerivation.declared_caps(manifest, node_key),
            {:ok, wildcard} <- wildcard_ask(node_key, manifest),
            {:ok, declared} <- tincture_rows(node_key, manifest) do
@@ -1379,7 +1381,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   end
 
   # An ask that names every tool, granted whole, is shown as the grant
-  # states it: one wildcard, not the catalog it expands to today.
+  # states it: one wildcard, not the catalog it currently expands to.
   defp tools_row(node_key, tools, narrowed, wildcard) do
     cond do
       is_list(wildcard) and "tools" not in narrowed and (tools || []) == wildcard ->
@@ -1493,16 +1495,13 @@ defmodule Sanctum.Consent.BlobBuilder do
     end
   end
 
-  # A manifest that does not decode declares nothing. The line names the
-  # component, never the manifest's bytes.
+  # A manifest that does not decode is a damaged row, refused by the ref it
+  # was read under and never by its bytes: read as declaring nothing, its
+  # needs would drop out of the grant.
   defp manifest(row, ref) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
-      {:ok, manifest} ->
-        manifest
-
-      {:error, :malformed_manifest} ->
-        Logger.warning("[Sanctum.Consent.BlobBuilder] manifest malformed: #{ref}")
-        %{}
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
+      {:ok, manifest} -> {:ok, manifest}
+      {:error, :malformed_manifest} -> {:error, {:corrupt, {:manifest, ref}}}
     end
   end
 end

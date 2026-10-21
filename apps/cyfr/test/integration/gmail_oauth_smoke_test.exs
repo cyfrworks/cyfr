@@ -179,7 +179,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     entry =
       mint_entry!(
         ctx,
-        %{"access_token" => "ya29.live", "refresh_token" => "1//rt", "token_type" => "Bearer"}
+        %{"access_token" => "ya29.live", "refresh_token" => "1//rt"}
       )
 
     committed = grant!(ctx, entry.id)
@@ -188,7 +188,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     resource = edge_resource!(ctx, committed.profile_id)
     assert resource.entry_id == entry.id
 
-    # Dispensing goes through the vault, not the legacy grant plane.
+    # Dispensing goes through the vault.
     assert {:ok, "ya29.live"} =
              VaultReader.oauth_token(ctx, resource, @provider, use!(ctx, committed.profile_id))
 
@@ -201,71 +201,6 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     assert committed.profile_id in affected
 
     assert {:error, {:entry_unavailable, "revoked"}} =
-             VaultReader.oauth_token(ctx, resource, @provider, use!(ctx, committed.profile_id))
-  end
-
-  test "the entry can arrive through the real grant flow", %{ctx: ctx} do
-    # The operator arc end to end: provider client credentials stored,
-    # a browser grant completed against the token endpoint, the minted
-    # entry bound through the consent walk, and the token dispensed from
-    # the vault path. The pending is fabricated exactly as vault.authorize
-    # mints it (endpoint https validation happens there, on operator
-    # input), with the token URL pointed at Bypass.
-    :ok = Sanctum.TestContext.put_provider_credentials(ctx, @provider, "smoke-cid", "smoke-cs")
-
-    bypass = Bypass.open()
-
-    Bypass.expect_once(bypass, "POST", "/token", fn conn ->
-      {:ok, body, conn} = Plug.Conn.read_body(conn)
-      params = URI.decode_query(body)
-      assert params["grant_type"] == "authorization_code"
-      assert params["code_verifier"] == "smoke-verifier"
-
-      conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.resp(
-        200,
-        Jason.encode!(%{
-          "access_token" => "ya29.granted",
-          "refresh_token" => "1//rt2",
-          "expires_in" => 3600,
-          "token_type" => "Bearer"
-        })
-      )
-    end)
-
-    state = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    redirect_uri = CyfrWeb.Endpoint.url() <> "/auth/oauth/callback"
-
-    pending = %{
-      target: %{
-        kind: :new,
-        entry_id: nil,
-        name: "my-gmail-granted",
-        provider: @provider,
-        endpoints: %{
-          "authorize_url" => "https://accounts.google.com/o/oauth2/v2/auth",
-          "token_url" => "http://localhost:#{bypass.port}/token",
-          "auth_style" => "params"
-        },
-        scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
-        destination: @destination_text,
-        attach_only: false
-      },
-      redirect_uri: redirect_uri,
-      code_verifier: "smoke-verifier",
-      actor: Sanctum.Context.actor(ctx)
-    }
-
-    Arca.Cache.put({:vault_oauth_pending, state}, pending, 120_000)
-
-    {:ok, result} = Sanctum.Vault.OAuthGrant.complete(state, "smoke-code", redirect_uri)
-
-    committed = grant!(ctx, result.entry_id)
-    resource = edge_resource!(ctx, committed.profile_id)
-    assert resource.entry_id == result.entry_id
-
-    assert {:ok, "ya29.granted"} =
              VaultReader.oauth_token(ctx, resource, @provider, use!(ctx, committed.profile_id))
   end
 

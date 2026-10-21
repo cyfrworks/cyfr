@@ -172,7 +172,7 @@ defmodule Emissary.Web.HealthControllerTest do
       # Bust the result cache so this request runs a real probe.
       Arca.Cache.invalidate({Emissary.Web.HealthController, :ready_cache})
 
-      ctx = Sanctum.internal_context(user_id: "_test", permissions: [:storage_write])
+      ctx = Sanctum.Context.internal(user_id: "_test", permissions: [:storage_write])
 
       :ok =
         Arca.put(

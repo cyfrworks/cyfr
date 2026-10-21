@@ -18,8 +18,6 @@ defmodule Emissary.Web.DirectoryController do
     * `POST /directory/v1/:identifier/entries` — a signed rotate entry.
     * `POST /directory/v1/:identifier/recover` — a signed recover request,
       which must name the path's identifier.
-    * `GET /directory/v1/:identifier/requests/:request_id` — a recovery
-      request's recorded outcome.
 
   A POST's body is the JSON object itself, at most 16 KiB: a larger one is
   refused `413` before it is decoded (`CyfrWeb.Plugs.RawBodyReader`), in
@@ -30,9 +28,7 @@ defmodule Emissary.Web.DirectoryController do
   `200` with `{"identifier", "seq", "entry_hash"}` for an accepted write,
   and `"entry"` too for a recovery; `{"identifier", "from", "entries",
   "next", "head", "length"}` for a page, whose entries are the stored
-  canonical entries; `{"identifier", "request_id", "request_digest",
-  "outcome"}` for an outcome, with `"seq"`, `"entry_hash"` and `"entry"`
-  when it is `"accepted"` and `"recorded"` when it is `"stale_policy"`.
+  canonical entries.
 
   ## Refusals
 
@@ -100,18 +96,6 @@ defmodule Emissary.Web.DirectoryController do
     )
   end
 
-  @doc "`GET /directory/v1/:identifier/requests/:request_id`."
-  def outcome(conn, _params) do
-    answer(
-      conn,
-      Sanctum.Directory.outcome(%{
-        identifier: identifier(conn),
-        request_id: conn.path_params["request_id"],
-        source: source(conn)
-      })
-    )
-  end
-
   # ---- the request ---------------------------------------------------------------
 
   # The path's identifier, never a body field of the same name: a recover
@@ -153,28 +137,6 @@ defmodule Emissary.Web.DirectoryController do
       "next" => page.next,
       "head" => page.head,
       "length" => page.length
-    }
-  end
-
-  defp wire(%{outcome: :accepted} = outcome) do
-    %{
-      "identifier" => outcome.identifier,
-      "request_id" => outcome.request_id,
-      "request_digest" => outcome.request_digest,
-      "outcome" => "accepted",
-      "seq" => outcome.seq,
-      "entry_hash" => outcome.entry_hash,
-      "entry" => Jason.Fragment.new(outcome.entry)
-    }
-  end
-
-  defp wire(%{outcome: :stale_policy} = outcome) do
-    %{
-      "identifier" => outcome.identifier,
-      "request_id" => outcome.request_id,
-      "request_digest" => outcome.request_digest,
-      "outcome" => "stale_policy",
-      "recorded" => outcome.recorded
     }
   end
 

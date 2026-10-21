@@ -38,7 +38,7 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
   ]
 
   # The one row whose JSON-RPC code is not its class's: a connection to
-  # re-authorize keeps the identity code it has always carried. Every other
+  # re-authorize answers with the identity code `auth_required`. Every other
   # reason answers with its class's code.
   @overrides %{
     {:authorization_required, "grant expired"} => :auth_required
@@ -93,16 +93,6 @@ defmodule Sanctum.UnauthorizedVocabularyTest do
   test "the rows whose wire code is not their class's carry it as an override" do
     for {reason, _class} <- @exemplars do
       assert Unauthorized.code_override(reason) == Map.get(@overrides, reason)
-    end
-
-    for reason <- [
-          :malformed_record,
-          :untagged_tenant_resource,
-          {:malformed_resource, :tenant},
-          {:consent_class_required, :not_authenticated}
-        ] do
-      assert Unauthorized.code_override(reason) == nil,
-             "#{inspect(reason)} still overrides its class's code"
     end
   end
 

@@ -19,7 +19,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   source releases remain versionless when consent is versionless.
 
   The canonical caps encoding is dotted flat keys (`"egress.domains"`,
-  `"limits.rate_limit.requests"`, …) over the digest's existing flat caps
+  `"limits.rate_limit.requests"`, …) over the digest's flat caps
   vocabulary — one spelling, no nesting grammar. Empty lists and absent
   limits are omitted: declaring nothing and asking for nothing are the
   same shape.
@@ -30,9 +30,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   tincture's frame may reach (`Prima.Manifest.Tincture.connect/1`), which
   are exits of that frame. Both keys are in every shape, empty for a
   component that declares none: flows are part of what a person consents
-  to, so every consent made before the shape named them asks again (no
-  release carries consents across that change), and a version that
-  declares another flow or origin asks again.
+  to, so a version that declares another flow or origin asks again.
 
   A stored manifest that does not decode has no shape: every entry here
   answers `{:error, {:corrupt, {:manifest, source_ref}}}` for it, never the
@@ -41,15 +39,14 @@ defmodule Sanctum.Consent.ShapeDerivation do
   A tincture that declares a frame, a canvas, streams or system actions
   (`Prima.Manifest.Tincture`) carries that declaration's digest as
   `tincture_digest`, so a version that declares more changes the shape and
-  asks again; one that declares none carries no digest, and its shape is
-  what it was before tinctures declared anything.
+  asks again; one that declares none carries no `tincture_digest`.
 
   A credential need's attach rule, its `hosts` and `paths` and a true
   `disclose` join its need row, and a manifest's `provides` block (each
   entry's destination canonical) joins the shape, each only where the
   manifest declares it: a version that attaches where its predecessor
-  disclosed, or provides another address, asks again, and a manifest that
-  declares none keeps the digest it had.
+  disclosed, or provides another address, asks again, and each is absent
+  from the shape of a manifest that declares none.
 
   A vault need names what its projection reads: every derived `api_key`
   or `bundle` need row carries a non-empty `fields` list and every
@@ -77,7 +74,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # The live shape is a function of the athanor's registered manifests: it
   # is cached briefly and swept when the registry changes. EVERY mutation
   # of the registry must run `Compendium.Registry.invalidate_executor_caches/1`
-  # — register, delete, and the auto-indexer's stale sweep do today — or a
+  # — register, delete, and the auto-indexer's stale sweep do — or a
   # commit (which derives fresh) and the loader (which reads this cache)
   # would answer different shapes for up to a minute.
   @live_cache_ttl_ms :timer.seconds(60)
@@ -236,8 +233,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
   end
 
   # The publisher's provided configuration, each entry's destination in
-  # its canonical form: nil for a manifest without the block, so its shape
-  # is the one it had before the block existed.
+  # its canonical form: nil for a manifest without the block, which the
+  # shape then leaves out.
   defp provides(manifest) do
     case Prima.Manifest.Provides.from_manifest(manifest) do
       provides when is_map(provides) and provides != %{} ->
@@ -309,13 +306,13 @@ defmodule Sanctum.Consent.ShapeDerivation do
 
   ## Why the source is excluded, and why that keeps versionless working
 
-  Include dependency releases in the shape so changed dependency code requires consent.
+  Dependency releases are in the shape, so changed dependency code asks
+  for consent again.
 
-  Excluding the source's own release is what preserves the point of a
-  versionless consent: re-publishing the source itself still moves the
-  activation digest while leaving the shape alone, so it still lands on
-  `{:allow_record, …}`. That arm stays live and load-bearing — only the
-  DEPENDENCY case moves to `:needs_consent`.
+  Excluding the source's own release is what keeps a versionless consent
+  meaningful: re-publishing the source itself moves the activation digest
+  while leaving the shape alone, so it lands on `{:allow_record, …}`; only
+  a changed DEPENDENCY lands on `:needs_consent`.
 
   A closure that is incomplete contributes nothing rather than
   failing the shape: the loader has its own `{:incomplete, …}` path for an
@@ -352,7 +349,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   The declared manifest blocks for a source ref's latest release:
   `{:ok, needs, caps}` with `nil` for an absent block, or an error when
   the row cannot be read, its manifest does not decode, or its caps block
-  no longer meets the grammar (`declared_caps/2`).
+  does not meet the grammar (`declared_caps/2`).
   """
   @spec manifest_blocks(Sanctum.Context.t(), String.t()) ::
           {:ok, [map()] | nil, map() | nil} | {:error, term()}
@@ -367,9 +364,9 @@ defmodule Sanctum.Consent.ShapeDerivation do
   What a stored manifest's `caps` block asks for: the block normalized,
   `Prima.Manifest.Caps.empty/0` for a manifest that declares none, and
   `{:error, {:corrupt, {:manifest, source_ref}}}` for a block that is
-  present but does not meet the grammar — a release published before a
-  rule it now breaks (a storage path spelled other than the door reaches
-  it, say). Such a block is refused, never read as asking for nothing.
+  present but does not meet the grammar this release enforces (a storage
+  path spelled other than the door reaches it, say). Such a block is
+  refused, never read as asking for nothing.
 
   Only an agent asks for `#{Enum.join(@exact_only, "`, `")}`, and what a
   node is is its registered type, read from `source_ref`, never the type
@@ -439,15 +436,12 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @spec expand_tools([String.t()]) :: [String.t()]
   def expand_tools(patterns) when is_list(patterns) do
     patterns
-    |> ToolPattern.expand(all_tool_actions())
+    # The operation table's own roster, so a shape derived here can only
+    # name actions the table can serve; an unloaded table raises
+    # `Sanctum.Catalog.NotLoadedError` rather than answer none.
+    |> ToolPattern.expand(Sanctum.Catalog.tool_actions())
     |> Enum.reject(&(&1 in @exact_only and &1 not in patterns))
   end
-
-  @doc false
-  # The operation table's own roster, so a shape derived here can only name
-  # actions the table can serve. An unloaded table raises
-  # `Sanctum.Catalog.NotLoadedError` here rather than answer none.
-  def all_tool_actions, do: Sanctum.Catalog.tool_actions()
 
   # ---------------------------------------------------------------------------
   # Internal
@@ -473,8 +467,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # The digest's need rows: name/type/fields/scopes, and the attach rule,
   # hosts, paths and a true `disclose` where the need declares them — the
   # reason is prose and required-ness surfaces on the sheet, neither is
-  # shape. A need that declares none of the four is the row it was before
-  # they existed.
+  # shape. A field the need does not declare is left out of its row.
   defp digest_needs(needs) do
     Enum.map(needs, fn need ->
       %{
@@ -526,7 +519,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # A manifest that does not decode is a damaged row, refused by the ref it
   # was read under and never by its bytes.
   defp manifest(row, ref) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
       {:ok, manifest} -> {:ok, manifest}
       {:error, :malformed_manifest} -> {:error, {:corrupt, {:manifest, ref}}}
     end

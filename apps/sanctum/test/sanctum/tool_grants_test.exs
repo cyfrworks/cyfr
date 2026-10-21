@@ -147,8 +147,9 @@ defmodule Sanctum.ToolGrantsTest do
   @tag :unloaded_table
   test "an unloaded table is refused by name, never read as no actions", %{ctx: ctx} do
     unloaded(fn ->
-      assert_raise Sanctum.Catalog.NotLoadedError,
-                   &Sanctum.Consent.ShapeDerivation.all_tool_actions/0
+      assert_raise Sanctum.Catalog.NotLoadedError, fn ->
+        Sanctum.Consent.ShapeDerivation.expand_tools([])
+      end
 
       assert_raise Sanctum.Catalog.NotLoadedError, fn ->
         ToolGrants.check_standing(decision(), DateTime.utc_now())
@@ -415,10 +416,7 @@ defmodule Sanctum.ToolGrantsTest do
 
       assert :ok =
                ToolGrants.check_standing(
-                 Map.put(write, :constraint, %{
-                   "kind" => "storage_path",
-                   "patterns" => ["data/a.md"]
-                 }),
+                 Map.put(write, :constraint, %{kind: "storage_path", patterns: ["data/a.md"]}),
                  now
                )
 
@@ -445,6 +443,8 @@ defmodule Sanctum.ToolGrantsTest do
             %{kind: "storage_path", patterns: ["data/*"]},
             %{kind: "storage_path", patterns: ["data/notes/", "data/*.md"]},
             %{patterns: ["data/"]},
+            %{kind: :storage_path, patterns: ["data/"]},
+            %{"kind" => "storage_path", "patterns" => ["data/"]},
             :corrupt
           ] do
         assert {:error, {:scope_not_permitted, :invalid_constraint}} =
@@ -465,7 +465,7 @@ defmodule Sanctum.ToolGrantsTest do
 
       assert :ok =
                ToolGrants.check_standing(
-                 Map.put(fetch, :constraint, %{kind: :egress_domain, patterns: ["*.example.com"]}),
+                 Map.put(fetch, :constraint, %{kind: "egress_domain", patterns: ["*.example.com"]}),
                  now
                )
 

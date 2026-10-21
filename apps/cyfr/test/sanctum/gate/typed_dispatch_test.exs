@@ -159,14 +159,14 @@ defmodule Sanctum.Gate.TypedDispatchTest do
   } do
     Catalog.with_providers([Probe.Typed], fn ->
       Sanctum.Test.AuthorityFixtures.reserve!(authority, ctx.athanor_id, ctx.origin)
-      before = Sanctum.Authority.budget(authority)
+      before = Sanctum.TestContext.invoke_budget(authority)
 
       assert {:error, %Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
                chain(ctx, %{"action" => "echo", "values" => "not-an-array"}, authority,
                  guest_fn: :spawn
                )
 
-      assert Sanctum.Authority.budget(authority) == before
+      assert Sanctum.TestContext.invoke_budget(authority) == before
 
       assert {:ok, []} =
                Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), authority.budget.id)

@@ -3,10 +3,10 @@
 
 defmodule Sanctum.Providers.Session do
   @moduledoc """
-  Session tool handlers for the Sanctum MCP provider — login, logout,
-  whoami, device-flow OAuth, signing a command line in by approving it in
-  Prism (`Sanctum.CliSignIn`), and the caller's self-description
-  resources.
+  Session tool handlers for the Sanctum MCP provider — logout, whoami,
+  focusing another athanor (`use`), device-flow OAuth, signing a command
+  line in by approving it in Prism (`Sanctum.CliSignIn`), and the caller's
+  self-description resources.
 
   `cli_begin`, `cli_poll` and `cli_cancel` are `auth: :anonymous`, as
   the device flow's actions are: the command line that calls them holds
@@ -36,14 +36,8 @@ defmodule Sanctum.Providers.Session do
     # Anonymous-allowed: `whoami` and the device-flow login actions need
     # to work before a credential exists, and `logout` only ever
     # destroys the caller's own session.
-    # Point the session at another athanor the caller may work in.
     Operation.tool(
       [
-        Operation.new("session", "login", "Login session", [],
-          auth: :anonymous,
-          kind: :write,
-          planes: [:external]
-        ),
         Operation.new("session", "logout", "Logout session", [],
           auth: :anonymous,
           reduces_authority: true,
@@ -194,7 +188,7 @@ defmodule Sanctum.Providers.Session do
         )
       ],
       description:
-        "Manage user sessions — login, logout, get local identity, run device-flow OAuth, or sign a command line in by approving it in Prism and list or revoke command-line sessions. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
+        "Manage user sessions — logout, get local identity, focus another athanor, run device-flow OAuth, or sign a command line in by approving it in Prism and list or revoke command-line sessions. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
       title: "Session Management"
     )
   end
@@ -286,9 +280,6 @@ defmodule Sanctum.Providers.Session do
         {:error,
          {:invalid_argument, "session.use needs a session — a key is bound to one athanor"}}
 
-      {:error, reason} when is_binary(reason) ->
-        {:error, reason}
-
       {:error, _} ->
         {:error, {:unavailable, "Storage"}}
     end
@@ -296,11 +287,6 @@ defmodule Sanctum.Providers.Session do
 
   def handle(_ctx, %{"action" => "use"}),
     do: {:error, {:invalid_argument, "Missing required argument: athanor"}}
-
-  def handle(%Context{} = _ctx, %{"action" => "login"}) do
-    # Login requires browser redirect in Sanctum
-    {:ok, %{message: "Login requires browser authentication", redirect: "/auth/login"}}
-  end
 
   # Revoke the Sanctum session authenticated by this request.
   def handle(%Context{session_token_hash: hash}, %{"action" => "logout"})
@@ -466,7 +452,7 @@ defmodule Sanctum.Providers.Session do
   end
 
   def handle(%Context{} = ctx, %{"action" => "read_resource", "uri" => "sanctum://permissions"}) do
-    self_description(%{permissions: Sanctum.Providers.Shared.format_permissions(ctx.permissions)})
+    self_description(%{permissions: permission_names(ctx.permissions)})
   end
 
   def handle(_ctx, %{"action" => "read_resource", "uri" => uri}) when is_binary(uri) do
@@ -628,10 +614,6 @@ defmodule Sanctum.Providers.Session do
   # Auth-provider-gated helpers (shared across session handlers)
   # ============================================================================
 
-  # `Sanctum.Session.use_athanor/2` answers `:not_found` when the SESSION
-  # row is gone — the athanor resolved a line earlier. Two sources for one
-  # tag made the refusal a structured falsehood a client could branch on;
-  # this names the one that is actually missing.
   # An archived athanor resolves like an open one, so `focus/2` decides
   # what the caller hears of it; a store that cannot answer is unavailable.
   defp resolve_athanor(segment) do
@@ -660,5 +642,10 @@ defmodule Sanctum.Providers.Session do
     "Device-flow CLI auth requires the GitHub/Google OAuth provider. " <>
       "This deployment is configured with a different auth provider; " <>
       "use the web flow at `/auth/oidcc` instead."
+  end
+
+  # The caller's permissions as the wire names them, sorted.
+  defp permission_names(permissions) do
+    permissions |> MapSet.to_list() |> Enum.map(&to_string/1) |> Enum.sort()
   end
 end

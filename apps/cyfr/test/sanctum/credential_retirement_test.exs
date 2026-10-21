@@ -230,7 +230,7 @@ defmodule Sanctum.CredentialRetirementTest do
 
       # And the session itself stays retired: the allow restores no
       # credential, and signing in again mints a different one.
-      assert {:error, _} = Session.load(session.token, surface: :console)
+      assert {:error, _} = Session.load(session.token)
       {fresh, _ctx} = signed_in!(user)
       refute fresh.token == session.token
     end
@@ -314,7 +314,7 @@ defmodule Sanctum.CredentialRetirementTest do
       refute_receive {:telemetry, _, _}, 100
       assert {:ok, %{status: "active"}} = Users.get(user.id)
       assert {:ok, %{status: "active"}} = Athanors.get(own.id)
-      assert {:ok, _} = Session.load(session.token, surface: :console)
+      assert {:ok, _} = Session.load(session.token)
 
       clear!(failure)
     end

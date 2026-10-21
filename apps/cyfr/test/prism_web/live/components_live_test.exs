@@ -60,7 +60,7 @@ defmodule PrismWeb.ComponentsLiveTest do
     # Signing in copied the shipped version into the athanor the view
     # will mount; the scan mints its row.
     ctx =
-      Sanctum.internal_context(
+      Sanctum.Context.internal(
         user_id: "_test",
         athanor_id: seated_athanor().id,
         scope: :athanor

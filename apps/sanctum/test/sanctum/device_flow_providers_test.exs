@@ -3,10 +3,9 @@
 
 defmodule Sanctum.DeviceFlowProvidersTest do
   @moduledoc """
-  `provider` on `session.device_init` comes straight from the caller, and
-  nothing validated it. `normalize_provider/1` passes an unrecognised name
-  through unchanged, so it reached a `get_client_id/1` with clauses only for
-  `:github` and `:google` — a FunctionClauseError out of an MCP tool.
+  `provider` on `session.device_init` comes straight from the caller, so
+  a name outside the device-flow roster is refused as `unknown_provider`
+  before any client id is read.
 
   Provider availability requires credentials sufficient for token exchange,
   including both a client id and secret for Google.
@@ -46,7 +45,7 @@ defmodule Sanctum.DeviceFlowProvidersTest do
             fn p -> DeviceFlow.poll_for_session(p, "dc", nil) end,
             fn p -> DeviceFlow.poll_for_access_token(p, "dc", nil) end
           ] do
-        assert {:error, {:unknown_provider, "okta"}} = verb.("okta")
+        assert {:error, {:unknown_provider, "acme"}} = verb.("acme")
       end
     end
 
@@ -56,7 +55,7 @@ defmodule Sanctum.DeviceFlowProvidersTest do
       assert {:error, {:client_id_not_configured, :google}} =
                DeviceFlow.init_device_flow("google", nil)
 
-      assert {:error, {:unknown_provider, "azure"}} = DeviceFlow.init_device_flow("azure", nil)
+      assert {:error, {:unknown_provider, "acme"}} = DeviceFlow.init_device_flow("acme", nil)
     end
   end
 
@@ -64,8 +63,8 @@ defmodule Sanctum.DeviceFlowProvidersTest do
     test "accepts both spellings of a known name and nothing else" do
       assert DeviceFlow.provider?("github")
       assert DeviceFlow.provider?(:github)
-      refute DeviceFlow.provider?("okta")
-      refute DeviceFlow.provider?(:okta)
+      refute DeviceFlow.provider?("acme")
+      refute DeviceFlow.provider?(:acme)
       refute DeviceFlow.provider?(%{"provider" => "github"})
       refute DeviceFlow.provider?(nil)
     end

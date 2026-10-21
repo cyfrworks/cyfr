@@ -73,7 +73,7 @@ defmodule Sanctum.Providers.PersonTest do
       )
 
     {:ok, session} = TestContext.create_session(built)
-    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
     %{user: user, ctx: ctx}
   end
 
@@ -344,25 +344,6 @@ defmodule Sanctum.Providers.PersonTest do
 
       assert identifier == person.identifier
       assert %{kind: "enrollment", phase: "accepted", deliverable: true} = kit
-    end
-  end
-
-  describe "person.enroll_holder" do
-    test "a device as holder is refused by the declaration; only a printed kit is one" do
-      person = enrolled!()
-
-      args = %{
-        "action" => "enroll_holder",
-        "recovery_secret" => Encoding.b64(:crypto.strong_rand_bytes(32)),
-        "holder" => %{
-          "kind" => "device",
-          "recovery_secret" => Encoding.b64(:crypto.strong_rand_bytes(32))
-        },
-        "request_id" => request_id()
-      }
-
-      assert %Prima.Refusal{class: :invalid_argument} = refusal(call(person.ctx, args))
-      assert attempts(person.user.id, "holder") == []
     end
   end
 

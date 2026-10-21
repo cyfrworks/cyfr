@@ -199,9 +199,9 @@ defmodule Sanctum.Tenancy.Users do
   email, else the raw id.
 
   Here rather than beside a caller because it is a fact about the `users`
-  row, and it is now read by two domains that must not depend on each
-  other — the agent harness prefixing a group turn's lines, and tenancy
-  naming a pair athanor after the two people in it.
+  row, read by domains that must not depend on each other: the agent
+  harness prefixing a group turn's lines, tenancy naming a pair athanor
+  after the two people in it, and the console naming people.
   """
   @spec display_name(String.t() | nil) :: String.t()
   def display_name(nil), do: "someone"

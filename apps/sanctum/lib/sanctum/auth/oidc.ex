@@ -217,23 +217,10 @@ defmodule Sanctum.Auth.OIDC do
   # Private Helpers
   # ============================================================================
 
-  defp get_email(auth) do
-    cond do
-      auth.info && is_map(auth.info) && Map.get(auth.info, :email) ->
-        Map.get(auth.info, :email)
-
-      auth.extra && is_map(auth.extra) && is_map(auth.extra[:raw_info]) &&
-          auth.extra[:raw_info]["email"] ->
-        auth.extra[:raw_info]["email"]
-
-      auth.extra && is_map(auth.extra) && is_map(Map.get(auth.extra, :raw_info)) &&
-          Map.get(auth.extra, :raw_info)["email"] ->
-        Map.get(auth.extra, :raw_info)["email"]
-
-      true ->
-        nil
-    end
-  end
+  # The strategy fills `Ueberauth.Auth.Info.email` from the issuer's
+  # claims and userinfo; nothing else of the auth names an address.
+  defp get_email(%{info: %{email: email}}), do: email
+  defp get_email(_auth), do: nil
 
   @doc """
   The operator-configured issuer (`:sanctum, :oidc_issuer`, pinned at boot
@@ -241,15 +228,6 @@ defmodule Sanctum.Auth.OIDC do
   """
   @spec issuer() :: String.t() | nil
   def issuer, do: Application.get_env(:sanctum, :oidc_issuer)
-
-  @doc """
-  A plain sign-in through this issuer proves who someone is, never that
-  they are present now: an issuer may answer it from its own session. It
-  is no fresh proof; only a re-authentication its person then approves
-  is (`reauth_callback/1`, `reauth_decide/3`).
-  """
-  @spec proves_freshness?() :: false
-  def proves_freshness?, do: false
 
   @doc """
   The client id and secret of the configured `oidcc` Ueberauth provider,
@@ -453,7 +431,7 @@ defmodule Sanctum.Auth.OIDC do
   # The answering browser's own session names the record's person and
   # still stands.
   defp answering_person(token, user_id) when is_binary(token) and token != "" do
-    case Sanctum.Caller.establish(token, task_supervisor: nil) do
+    case Sanctum.Caller.establish(token, refresh: false) do
       {:ok, %Context{user_id: ^user_id, authenticated: true}} -> :ok
       {:ok, _another} -> {:error, :another_person}
       {:error, :unavailable} -> {:error, :unavailable}

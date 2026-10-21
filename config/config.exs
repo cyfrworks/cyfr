@@ -74,13 +74,6 @@ config :sanctum,
     Cyfr.Providers.Settings
   ]
 
-# The boot check of stored grants (`Sanctum.Consent.StoredGrants`): every
-# member's boot logs the grants that name a storage path the grammar no
-# longer admits, and the cell announces them to their athanors once per
-# cell, only when the list changes. A notice; the loader refuses such a
-# grant whether or not it runs. The suite turns it off.
-config :sanctum, :stored_grants_check_enabled, true
-
 # The proxies whose forwarded headers the proxy listener trusts
 # (`Sanctum.ClientIp`): none, as a local home has no proxy listener.
 # `config/runtime.exs` writes the access settings'.

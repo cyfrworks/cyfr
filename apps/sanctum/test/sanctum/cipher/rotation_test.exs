@@ -77,7 +77,7 @@ defmodule Sanctum.Cipher.RotationTest do
 
   defp put_vault_row(name, plaintext, over \\ %{}) do
     id = Map.get(over, :id, "vlt_" <> uuid())
-    hint = Map.get(over, :provider_hint, "legacy")
+    hint = Map.get(over, :provider_hint, "example.com")
     aad = Sanctum.CipherAAD.vault_entry(@athanor, id, hint)
 
     sealed =
@@ -148,32 +148,6 @@ defmodule Sanctum.Cipher.RotationTest do
 
     {:ok, row} = Arca.ProviderCredentialStorage.get(Prima.Actor.in_athanor(@athanor), provider)
     row.id
-  end
-
-  # Seals a v3 envelope as the pre-athanor writer did (production has no v3
-  # writer and no v3 read path left; legacy rows are fabricated here).
-  defp seal_v3(plaintext, %{purpose: purpose, name: name}, label, master) do
-    info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)
-    # Mirrors Sanctum.Cipher's fixed iteration count (no knob may change it).
-    key = :crypto.pbkdf2_hmac(:sha256, master, info, 100_000, 32)
-    iv = :crypto.strong_rand_bytes(12)
-
-    fields =
-      for v <- ["project", "org_a", "default", name, "", ""] do
-        <<byte_size(v)::32, v::binary>>
-      end
-
-    aad =
-      IO.iodata_to_binary([
-        "cyfrv3",
-        <<0x03>>,
-        <<byte_size(label)::32, label::binary>>,
-        <<byte_size(Atom.to_string(purpose))::32, Atom.to_string(purpose)::binary>>
-        | fields
-      ])
-
-    {ct, tag} = :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, aad, 16, true)
-    <<0x03, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>
   end
 
   defp col(table, id, field) do
@@ -284,10 +258,10 @@ defmodule Sanctum.Cipher.RotationTest do
 
   defp person_key(frame, role), do: Sanctum.CipherAAD.person_key(frame, role)
 
-  describe "T-REENCRYPT: happy path + idempotency" do
+  describe "rotation: happy path + idempotency" do
     test "migrates every table onto the new primary; plaintext preserved" do
       w = put_webhook_row("hook1", "whsec_aaa", "whsec_old")
-      v = put_vault_row("legacy:probe", ~s({"v":2,"fields":{}}))
+      v = put_vault_row("probe:probe", ~s({"v":3,"fields":{}}))
 
       rt_aad = Sanctum.CipherAAD.registry_token("user_1", "registry.test", "alice")
       {:ok, rt_ct} = Cipher.encrypt(~s({"token":"cyfr_pt_x"}), rt_aad)
@@ -326,9 +300,9 @@ defmodule Sanctum.Cipher.RotationTest do
 
       assert {:ok, "k2"} = Cipher.label(col("vault_entries", v, :sealed_payload))
 
-      vault_aad = Sanctum.CipherAAD.vault_entry(@athanor, v, "legacy")
+      vault_aad = Sanctum.CipherAAD.vault_entry(@athanor, v, "example.com")
 
-      assert {:ok, ~s({"v":2,"fields":{}})} =
+      assert {:ok, ~s({"v":3,"fields":{}})} =
                Cipher.decrypt(col("vault_entries", v, :sealed_payload), vault_aad)
 
       assert {:ok, "k2"} = Cipher.label(col("registry_tokens", rt_row.id, :credential_ciphertext))
@@ -346,7 +320,7 @@ defmodule Sanctum.Cipher.RotationTest do
     end
 
     test "re-running is a no-op (idempotent / resumable)" do
-      put_vault_row("legacy:s", "v")
+      put_vault_row("probe:s", "v")
       put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
 
       assert {:ok, %{vault_entries: %{rotated: 1, skipped: 0}}} = Rotation.reencrypt_all()
@@ -356,7 +330,7 @@ defmodule Sanctum.Cipher.RotationTest do
     end
 
     test "rows already on the primary are skipped, byte-unchanged" do
-      v = put_vault_row("legacy:s", "v")
+      v = put_vault_row("probe:s", "v")
       before = col("vault_entries", v, :sealed_payload)
 
       # primary is still k1 (what the row was written under)
@@ -367,9 +341,9 @@ defmodule Sanctum.Cipher.RotationTest do
     end
   end
 
-  describe "T-REENCRYPT: dry-run" do
+  describe "rotation: dry-run" do
     test "reports work but writes nothing" do
-      v = put_vault_row("legacy:s", "v")
+      v = put_vault_row("probe:s", "v")
       before = col("vault_entries", v, :sealed_payload)
       put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
 
@@ -381,18 +355,18 @@ defmodule Sanctum.Cipher.RotationTest do
     end
   end
 
-  describe "T-REENCRYPT: an interrupted run" do
+  describe "rotation: an interrupted run" do
     test "leaves every row whole, and resuming finishes it" do
       # Three rows in a known id order. The middle one is sealed under a
       # key the rotation will not be given, so the run aborts on it: the
       # first row is already re-sealed, the third has not been touched.
-      a = put_vault_row("legacy:a", "plain-a", %{id: "vlt_aaa"})
+      a = put_vault_row("probe:a", "plain-a", %{id: "vlt_aaa"})
 
       put_keyring(%{primary: "k0", keys: %{"k0" => @k0}})
-      b = put_vault_row("legacy:b", "plain-b", %{id: "vlt_bbb"})
+      b = put_vault_row("probe:b", "plain-b", %{id: "vlt_bbb"})
 
       put_keyring(%{primary: "k1", keys: %{"k1" => @k1}})
-      c = put_vault_row("legacy:c", "plain-c", %{id: "vlt_ccc"})
+      c = put_vault_row("probe:c", "plain-c", %{id: "vlt_ccc"})
 
       put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
 
@@ -408,7 +382,7 @@ defmodule Sanctum.Cipher.RotationTest do
       assert {:ok, "plain-a"} =
                Cipher.decrypt(
                  col("vault_entries", a, :sealed_payload),
-                 Sanctum.CipherAAD.vault_entry(@athanor, a, "legacy")
+                 Sanctum.CipherAAD.vault_entry(@athanor, a, "example.com")
                )
 
       assert {:ok, "k1"} = Cipher.label(col("vault_entries", c, :sealed_payload))
@@ -416,7 +390,7 @@ defmodule Sanctum.Cipher.RotationTest do
       assert {:ok, "plain-c"} =
                Cipher.decrypt(
                  col("vault_entries", c, :sealed_payload),
-                 Sanctum.CipherAAD.vault_entry(@athanor, c, "legacy")
+                 Sanctum.CipherAAD.vault_entry(@athanor, c, "example.com")
                )
 
       # Give the run the key it was missing and rerun: `a` is already on
@@ -431,23 +405,23 @@ defmodule Sanctum.Cipher.RotationTest do
         assert {:ok, {4, "k2"}} = Cipher.envelope(ct)
 
         assert {:ok, ^plain} =
-                 Cipher.decrypt(ct, Sanctum.CipherAAD.vault_entry(@athanor, id, "legacy"))
+                 Cipher.decrypt(ct, Sanctum.CipherAAD.vault_entry(@athanor, id, "example.com"))
       end
     end
   end
 
-  describe "T-REENCRYPT: the compare-and-set" do
+  describe "rotation: the compare-and-set" do
     test "a row written between the read and the write is not overwritten" do
       # Both rows come back in one page, so the second row's ciphertext is
       # already in hand when the first row's write completes. The handler
       # rewrites the second row there — a legitimate concurrent re-seal —
       # which is exactly the write a plain update would discard.
-      a = put_vault_row("legacy:a", "plain-a", %{id: "vlt_aaa"})
-      b = put_vault_row("legacy:b", "plain-b", %{id: "vlt_bbb"})
+      a = put_vault_row("probe:a", "plain-a", %{id: "vlt_aaa"})
+      b = put_vault_row("probe:b", "plain-b", %{id: "vlt_bbb"})
 
       put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
 
-      b_aad = Sanctum.CipherAAD.vault_entry(@athanor, b, "legacy")
+      b_aad = Sanctum.CipherAAD.vault_entry(@athanor, b, "example.com")
       {:ok, concurrent} = Cipher.encrypt("written-by-someone-else", b_aad)
 
       handler = "rotation-cas-#{System.unique_integer([:positive])}"
@@ -485,9 +459,9 @@ defmodule Sanctum.Cipher.RotationTest do
     end
   end
 
-  describe "T-REENCRYPT: fail-closed" do
+  describe "rotation: fail-closed" do
     test "aborts the table run on an undecryptable row (never silently skips)" do
-      id = put_vault_row("legacy:s", "v")
+      id = put_vault_row("probe:s", "v")
       # Retire k1 entirely: the row can no longer be decrypted → must abort.
       put_keyring(%{primary: "k2", keys: %{"k2" => @k2}})
 
@@ -498,7 +472,7 @@ defmodule Sanctum.Cipher.RotationTest do
     end
   end
 
-  describe "T-REENCRYPT: audit/0" do
+  describe "rotation: audit/0" do
     test "reports the key-label distribution without decrypting" do
       put_webhook_row("hook_a", "1", nil)
       put_webhook_row("hook_b", "2", nil)
@@ -514,7 +488,7 @@ defmodule Sanctum.Cipher.RotationTest do
     end
 
     test "covers vault_entries and excludes tombstoned rows" do
-      put_vault_row("legacy:a", ~s({"v":1,"legacy":{}}))
+      put_vault_row("probe:a", ~s({"v":3,"fields":{}}))
       put_vault_row("gone", "irrelevant", %{sealed_payload: nil, status: "tombstoned"})
 
       assert {:ok, report} = Rotation.audit()
@@ -535,7 +509,7 @@ defmodule Sanctum.Cipher.RotationTest do
     end
   end
 
-  describe "T-REENCRYPT: a person's keys" do
+  describe "rotation: a person's keys" do
     test "each sealed key moves to the new primary and still opens as its own role" do
       user = person!()
       seed = :crypto.strong_rand_bytes(32)
@@ -783,7 +757,7 @@ defmodule Sanctum.Cipher.RotationTest do
     end
   end
 
-  describe "T-REENCRYPT: roster binding" do
+  describe "rotation: roster binding" do
     # Every AAD purpose is a table of sealed rows somewhere; a purpose the
     # rotation tool does not walk is a key an operator retires while it still
     # seals live secrets. `reencrypt_all/1` and `audit/0` walk one roster —
@@ -831,19 +805,9 @@ defmodule Sanctum.Cipher.RotationTest do
     end
   end
 
-  describe "T-REENCRYPT-V4: retired envelope versions" do
-    test "a pre-v4 row aborts the run fail-closed instead of being skipped" do
-      aad = %{purpose: :webhook_secret, name: "V3ROW"}
-      v3_ct = seal_v3("legacy-plain", aad, "k1", @k1)
-      _id = put_webhook_row("V3ROW", "ignored", nil, %{secret_encrypted: v3_ct})
-
-      # Unreadable version-3 envelopes must cause a rotation error.
-      assert {:error, {:webhooks, {:not_a_cipher_envelope, _col}, _sample}} =
-               Rotation.reencrypt_all()
-    end
-
+  describe "each table rotates under its own AAD" do
     test "vault entries rotate onto the new primary; payload_rev is never bumped" do
-      id = put_vault_row("legacy:probe", ~s({"v":1,"legacy":{"secrets":[]}}))
+      id = put_vault_row("probe:probe", ~s({"v":3,"fields":{}}))
       put_vault_row("gone", "x", %{sealed_payload: nil, status: "tombstoned"})
 
       put_keyring(%{primary: "k2", keys: %{"k1" => @k1, "k2" => @k2}})
@@ -854,8 +818,8 @@ defmodule Sanctum.Cipher.RotationTest do
       new_ct = col("vault_entries", id, :sealed_payload)
       assert {:ok, {4, "k2"}} = Cipher.envelope(new_ct)
 
-      aad = Sanctum.CipherAAD.vault_entry(@athanor, id, "legacy")
-      assert {:ok, ~s({"v":1,"legacy":{"secrets":[]}})} = Cipher.decrypt(new_ct, aad)
+      aad = Sanctum.CipherAAD.vault_entry(@athanor, id, "example.com")
+      assert {:ok, ~s({"v":3,"fields":{}})} = Cipher.decrypt(new_ct, aad)
 
       assert col("vault_entries", id, :payload_rev) == 0
     end

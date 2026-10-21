@@ -191,7 +191,7 @@ defmodule Sanctum.Consent.BootstrapTest do
 
     # The server's own context a boot's seed sync runs under: no person.
     defp seed(ctx),
-      do: Sanctum.internal_context(user_id: "_seed", athanor_id: ctx.athanor_id, scope: :athanor)
+      do: Sanctum.Context.internal(user_id: "_seed", athanor_id: ctx.athanor_id, scope: :athanor)
 
     # What a first mint that could not read the instance entries skips.
     @unavailable {:unavailable, "Instance entries"}
@@ -366,7 +366,7 @@ defmodule Sanctum.Consent.BootstrapTest do
       offer!()
 
       seed_ctx =
-        Sanctum.internal_context(user_id: "_seed", athanor_id: ctx.athanor_id, scope: :athanor)
+        Sanctum.Context.internal(user_id: "_seed", athanor_id: ctx.athanor_id, scope: :athanor)
 
       assert {:ok, %{minted: minted}} = Bootstrap.run(seed_ctx)
       assert @model in minted
@@ -418,7 +418,7 @@ defmodule Sanctum.Consent.BootstrapTest do
     end
 
     # The binding read's other refusals say nothing usable is offered:
-    # the catalyst is minted without the entry, as before.
+    # the catalyst is minted without the entry.
     @tag :capture_log
     test "a chosen entry its binding read answers not offered mints the catalyst without it",
          %{person: person} do
@@ -719,6 +719,9 @@ defmodule Sanctum.Consent.BootstrapTest do
       {:ok, stale} =
         Arca.ProvisioningClaims.claim(actor, "boot_elsewhere/own_walk", "sign_in", 1, :none)
 
+      # A claim as provisioning hands it on: with the slot it was taken under.
+      stale = Map.put(stale, :slot, :none)
+
       after_read!("instance_entries", fn ->
         Prima.Test.Wait.wait_until(
           fn -> not Arca.ProvisioningClaims.live?(stale) end,
@@ -911,50 +914,6 @@ defmodule Sanctum.Consent.BootstrapTest do
       # Still active and still of the need's provider, but no longer at the
       # digest the head bound: the revision binds none.
       ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
-      assert {:ok, %{revised: [@model]}} = Bootstrap.run(seed(ctx))
-      {head, vault} = model_head!(person)
-      assert head.revision == 2
-      assert vault == nil and head.vault_refs == []
-    end
-
-    # A shipped catalyst whose one need attaches a token of an OAuth entry
-    # authorized for `scopes`.
-    defp ship_oauth_model!(ctx, version, scopes) do
-      {:ok, component} =
-        Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "boot-model", version,
-          manifest: %{
-            "name" => "boot-model",
-            "type" => "catalyst",
-            "version" => version,
-            "publisher" => "local",
-            "needs" => %{
-              "calendar" => %{
-                "type" => "oauth:openai.com",
-                "reason" => "to read the calendar",
-                "scopes" => scopes,
-                "attach" => %{"in" => "header", "name" => "Authorization"}
-              }
-            }
-          },
-          wasm: @wasm
-        )
-
-      component
-    end
-
-    test "a boot's revision carries nothing to a release whose OAuth need asks for scopes " <>
-           "the entry does not hold",
-         %{ctx: ctx, person: person} do
-      ship_oauth_model!(person, "1.0.0", ["calendar.read"])
-      offered = offer!(%{kind: "oauth", oauth_scopes: ~s(["calendar.read"])})
-      {:ok, _} = Bootstrap.run(person)
-      {_first, bound} = model_head!(person)
-      assert bound.entry_id == offered.id
-
-      # The same need, now asking for a scope the entry was never authorized
-      # for: a first binding would not take the entry, so the revision with
-      # no person carries it no further.
-      ship_oauth_model!(person, "1.1.0", ["calendar.read", "calendar.write"])
       assert {:ok, %{revised: [@model]}} = Bootstrap.run(seed(ctx))
       {head, vault} = model_head!(person)
       assert head.revision == 2

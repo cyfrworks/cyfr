@@ -19,9 +19,10 @@ defmodule Sanctum.Consent.Loader do
   5. the resolved policy blob parses (`Prima.Authority.Blob.parse/1`)
   6. **canonical storage paths** — every storage path the blob grants is
      spelled as the storage door reaches it
-     (`Prima.ComponentPath.door_path/1`, `"*"` aside); a revision that
-     names another spelling answers `consent_required`, and is never
-     rewritten here
+     (`Prima.ComponentPath.door_path/1`, `"*"` aside), as every commit
+     writes it; a blob that names another spelling is damaged
+     (`{:invalid_blob, {:invalid_resource, node, edge, :storage, _}}`),
+     and is never rewritten here
   7. **blob/refs equality** — every bound vault reference inside the blob
      must exactly equal the consent's stored `vault_refs`; any asymmetry
      means the blob and the reverse index disagree about what was
@@ -256,7 +257,7 @@ defmodule Sanctum.Consent.Loader do
     with :ok <- check_consent_validity(consent),
          :ok <- check_blob_digest(consent),
          {:ok, blob} <- parse_blob(consent),
-         :ok <- check_canonical_paths(blob, profile, consent),
+         :ok <- check_canonical_paths(blob),
          :ok <- check_blob_refs_equality(blob, consent),
          {:ok, blob} <- resolve_selections(ctx, Context.actor(ctx), blob),
          :ok <- check_entry_digest_conflicts(blob) do
@@ -304,19 +305,25 @@ defmodule Sanctum.Consent.Loader do
       %{profile_id: profile.id, current_revision: consent.revision, shape_diff: []}}}
   end
 
-  # A storage path is granted as the door reaches it. A revision written
-  # before the manifest grammar refused other spellings (`data//secrets/`)
-  # still runs nothing: it is asked again, under the canonical spelling,
-  # and never rewritten here.
-  defp check_canonical_paths(%Blob{nodes: nodes}, profile, consent) do
-    canonical? =
-      Enum.all?(nodes, fn {_ref, node} ->
-        Enum.all?(node.edges, fn {_key, edge} ->
-          Enum.all?(Blob.Edge.paths(edge), &Prima.Manifest.Caps.canonical_storage_path?/1)
-        end)
-      end)
+  # A storage path is granted as the door reaches it, and a commit
+  # refuses every other spelling (`Sanctum.Consent.BlobBuilder`), so a
+  # blob naming one (`data//secrets/`) is damage: it runs nothing and is
+  # never rewritten here.
+  defp check_canonical_paths(%Blob{nodes: nodes}) do
+    Enum.find_value(nodes, :ok, fn {ref, node} ->
+      Enum.find_value(node.edges, fn {key, edge} ->
+        case Enum.reject(Blob.Edge.paths(edge), &Prima.Manifest.Caps.canonical_storage_path?/1) do
+          [] ->
+            nil
 
-    if canonical?, do: :ok, else: regrant(profile, consent)
+          [path | _] ->
+            {:error,
+             {:invalid_blob,
+              {:invalid_resource, ref, key, :storage,
+               "path #{inspect(path)} is not spelled as the storage door reaches it"}}}
+        end
+      end)
+    end)
   end
 
   defp check_consent_validity(consent) do
@@ -350,7 +357,6 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  defp check_blob_digest(%{blob_digest: nil}), do: {:error, {:invalid_consent, :blob_digest}}
   defp check_blob_digest(_), do: {:error, {:invalid_consent, :blob_digest}}
 
   defp parse_blob(consent) do
@@ -815,16 +821,20 @@ defmodule Sanctum.Consent.Loader do
 
           # The diff arrives as a thunk so the loader stays inert data
           # logic: it is computed only when re-consent is actually
-          # required, and never influences the decision above.
-          shape_diff = Keyword.get(opts, :shape_diff, fn -> [] end)
+          # required. It never admits: a diff that cannot be shown leaves
+          # the refusal as it is, and one that finds a side stored damaged
+          # refuses as that damage.
+          shape_diff = Keyword.get(opts, :shape_diff, fn -> {:ok, []} end)
 
-          {:error,
-           {:consent_required,
-            %{
-              profile_id: profile.id,
-              current_revision: consent.revision,
-              shape_diff: safe_diff(shape_diff)
-            }}}
+          case safe_diff(shape_diff) do
+            {:ok, diff} ->
+              {:error,
+               {:consent_required,
+                %{profile_id: profile.id, current_revision: consent.revision, shape_diff: diff}}}
+
+            {:error, damage} ->
+              {:error, damage}
+          end
 
         {:integrity_alarm, nodes} ->
           Logger.error(
@@ -857,8 +867,9 @@ defmodule Sanctum.Consent.Loader do
 
   defp safe_diff(fun) when is_function(fun, 0) do
     case fun.() do
-      diff when is_list(diff) -> diff
-      _ -> []
+      {:ok, diff} when is_list(diff) -> {:ok, diff}
+      {:error, {:corrupt, _what} = damage} -> {:error, damage}
+      _unshown -> {:ok, []}
     end
   rescue
     e ->
@@ -867,10 +878,8 @@ defmodule Sanctum.Consent.Loader do
         "[Consent.Loader] shape diff failed: #{Prima.LogFilter.exception_message(e)}"
       )
 
-      []
+      {:ok, []}
   end
-
-  defp safe_diff(_), do: []
 
   defp compare_shape(nil, _stored), do: :unknown
   defp compare_shape(live, stored) when live == stored, do: :match

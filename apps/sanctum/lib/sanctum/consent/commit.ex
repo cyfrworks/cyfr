@@ -105,7 +105,6 @@ defmodule Sanctum.Consent.Commit do
   change its new row shows, never a removal.
   """
 
-  require Logger
   require Sanctum.Consent.Components
 
   alias Sanctum.Consent.Authz
@@ -149,6 +148,9 @@ defmodule Sanctum.Consent.Commit do
                    {key, value} ->
                      {Atom.to_string(key), value}
                  end)
+
+  @canonical Prima.Authority.Blob.canonical()
+  @ingress Prima.Authority.Blob.ingress_key()
 
   @readonly_storage_actions ~w(read list exists)
 
@@ -251,8 +253,8 @@ defmodule Sanctum.Consent.Commit do
   the caller learns which of the app's bindings a grant for another need
   replaced.
   """
-  @spec grant(Context.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def grant(%Context{} = ctx, %{profile_id: profile_id} = params, _opts \\ []) do
+  @spec grant(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  def grant(%Context{} = ctx, %{profile_id: profile_id} = params) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, profile} <- Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id),
          :ok <- check_grantable_profile(profile),
@@ -536,7 +538,7 @@ defmodule Sanctum.Consent.Commit do
   # A tincture whose row stores no manifest is as damaged as one whose
   # manifest does not decode: neither holds a declaration to publish.
   defp check_declaration_parses(component, source_ref, tincture?) do
-    stored = Map.get(component, :manifest) || Map.get(component, "manifest")
+    stored = Map.get(component, :manifest)
 
     if tincture? and is_nil(stored),
       do: {:error, {:corrupt, {:manifest, source_ref}}},
@@ -584,7 +586,7 @@ defmodule Sanctum.Consent.Commit do
          {:ok, shape_digest} <- shape_for_scope(shape_input, scope, component),
          {:ok, profile_id, expected_revision} <-
            Plan.locate_profile(ctx, source_ref, label, kind),
-         declared = declared_needs(component, source_ref),
+         {:ok, declared} <- declared_needs(component, source_ref),
          place = %{
            source_ref: source_ref,
            graph: activation.graph,
@@ -828,6 +830,9 @@ defmodule Sanctum.Consent.Commit do
 
               %{covered: [{one, _}, {other, _} | _]} ->
                 {:halt, {:error, one_credential(dep, one, other)}}
+
+              {:error, _} = refused ->
+                {:halt, refused}
             end
           end)
           |> case do
@@ -835,16 +840,23 @@ defmodule Sanctum.Consent.Commit do
             error -> {:halt, error}
           end
 
-        _unreadable ->
+        {:error, :not_in_closure} ->
           {:cont, {:ok, acc}}
+
+        {:error, _} = refused ->
+          {:halt, refused}
       end
     end)
   end
 
+  # What `from` provides on its edge to `dep`: nothing for a dependency
+  # outside the closure's rows; a dependency whose manifest does not decode
+  # refuses.
   defp edge_provided(rows, from_manifest, dep) do
     case node_row_manifest(rows, dep) do
       {:ok, _row, dep_manifest} -> BlobBuilder.provided(from_manifest, dep, dep_manifest)
-      _unreadable -> %{covered: [], unprovidable: []}
+      {:error, :not_in_closure} -> %{covered: [], unprovidable: []}
+      {:error, _} = refused -> refused
     end
   end
 
@@ -1255,7 +1267,7 @@ defmodule Sanctum.Consent.Commit do
   # that version, never at its latest.
   defp node_row_manifest(rows, node_key) do
     case Map.fetch(rows, node_key) do
-      {:ok, row} -> {:ok, row, manifest(row, node_key)}
+      {:ok, row} -> with {:ok, manifest} <- manifest(row, node_key), do: {:ok, row, manifest}
       :error -> {:error, :not_in_closure}
     end
   end
@@ -1384,21 +1396,17 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp declared_needs(component, source_ref) do
-    component
-    |> manifest(source_ref)
-    |> Prima.Manifest.Needs.from_manifest()
+    with {:ok, manifest} <- manifest(component, source_ref),
+         do: {:ok, Prima.Manifest.Needs.from_manifest(manifest)}
   end
 
-  # A manifest that does not decode declares nothing. The line names the
-  # component, never the manifest's bytes.
+  # A manifest that does not decode is a damaged row, refused by the ref it
+  # was read under and never by its bytes: read as declaring nothing, its
+  # needs would drop out of the grant.
   defp manifest(row, ref) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
-      {:ok, manifest} ->
-        manifest
-
-      {:error, :malformed_manifest} ->
-        Logger.warning("[Sanctum.Consent.Commit] manifest malformed: #{ref}")
-        %{}
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
+      {:ok, manifest} -> {:ok, manifest}
+      {:error, :malformed_manifest} -> {:error, {:corrupt, {:manifest, ref}}}
     end
   end
 
@@ -1411,7 +1419,7 @@ defmodule Sanctum.Consent.Commit do
 
     lifetimes = Map.new(owner_consent.vault_refs, &{&1.binding_key, &1.lifetime_kind})
 
-    with {:ok, %{"canonical" => "jcs-1", "nodes" => nodes}} <-
+    with {:ok, %{"canonical" => @canonical, "nodes" => nodes}} <-
            Jason.decode(owner_consent.resolved_policy),
          :ok <- publishable(nodes, need_ids, lifetimes) do
       transformed =
@@ -1828,7 +1836,7 @@ defmodule Sanctum.Consent.Commit do
         {:ok, %{kind: "standing", until: nil}}
 
       %{} = lifetime when not is_struct(lifetime) ->
-        kind = lifetime_kind(Map.get(lifetime, :kind))
+        kind = Map.get(lifetime, :kind)
         until = Map.get(lifetime, :until)
 
         cond do
@@ -1852,9 +1860,6 @@ defmodule Sanctum.Consent.Commit do
         lifetime_refusal(subject, "names a lifetime that is not a record of kind and until")
     end
   end
-
-  defp lifetime_kind(kind) when is_atom(kind) and not is_nil(kind), do: Atom.to_string(kind)
-  defp lifetime_kind(kind), do: kind
 
   defp until_instant(until, subject, now) when is_binary(until) do
     utc? = String.ends_with?(until, "Z") or String.ends_with?(until, "+00:00")
@@ -1930,7 +1935,7 @@ defmodule Sanctum.Consent.Commit do
            disclosed: false,
            policy: view,
            field_names: [],
-           oauth_scopes: view.oauth_scopes,
+           oauth_scopes: [],
            destination: view.destination
          }}
 
@@ -1998,7 +2003,7 @@ defmodule Sanctum.Consent.Commit do
   # The needs an entry meets; the others name a component.
   @credential_kinds Prima.CredentialKinds.all()
 
-  defp check_known_need("@ingress", nil), do: {:ok, nil}
+  defp check_known_need(@ingress, nil), do: {:ok, nil}
   defp check_known_need(need, nil), do: {:error, {:unknown_need, need}}
 
   defp check_known_need(need, declared) when is_list(declared) do
@@ -2010,9 +2015,9 @@ defmodule Sanctum.Consent.Commit do
         {:ok, declared_need}
 
       %{kind: kind} ->
-        # Component-typed needs bind at the child edge, which no fixture
-        # exercises yet; refusing beats binding somewhere surprising, and
-        # the unbound edge fails safe to ZeroAuthority at dispatch.
+        # A component-typed need takes no credential binding: one named
+        # here is refused rather than bound somewhere surprising, and its
+        # unbound child edge fails safe to ZeroAuthority at dispatch.
         {:error, {:component_typed_need_binding_unsupported, need, kind}}
     end
   end
@@ -2065,9 +2070,9 @@ defmodule Sanctum.Consent.Commit do
 
   # An OAuth projection is held to what its entry can dispense, here and
   # not first at a run: scopes the entry lacks are refused as the reader
-  # refuses them, and fewer than it holds only where its provider
-  # attenuates a refresh (`Sanctum.Vault.OAuth.attenuates_scope?/1`), since
-  # otherwise the person would be shown a narrowing no token honours.
+  # refuses them, and fewer than it holds are refused too, since a token is
+  # dispensed for every scope its entry holds and the person would be
+  # shown a narrowing no token honours.
   defp check_scope_projection(%{kind: "oauth"} = bound, [_ | _] = scopes) do
     held = bound.oauth_scopes |> Enum.uniq() |> Enum.sort()
     projected = scopes |> Enum.uniq() |> Enum.sort()
@@ -2077,9 +2082,7 @@ defmodule Sanctum.Consent.Commit do
         :ok
 
       [] ->
-        if Sanctum.Vault.OAuth.attenuates_scope?(bound.provider),
-          do: :ok,
-          else: {:error, :scope_not_attenuable}
+        {:error, :scope_not_attenuable}
 
       missing ->
         {:error, {:scope_projection_unsatisfiable, missing}}
@@ -2322,7 +2325,7 @@ defmodule Sanctum.Consent.Commit do
   # the edge names, the dependency's one credential need, or the one of
   # its several whose candidates hold the entry; a lender's label names
   # none of several.
-  defp head_need({ctx, sources, built}, {node, "@ingress"}, identity)
+  defp head_need({ctx, sources, built}, {node, @ingress}, identity)
        when node == built.source_ref do
     case identity do
       {:label, _label} ->
@@ -2588,7 +2591,7 @@ defmodule Sanctum.Consent.Commit do
       |> Enum.uniq_by(& &1.binding_key)
 
     with {:ok, nodes, narrowed} <- BlobBuilder.narrow_nodes(nodes, prep.source_ref, prep.subset),
-         {:ok, blob_json} <- JCS.encode(%{"canonical" => "jcs-1", "nodes" => nodes}),
+         {:ok, blob_json} <- JCS.encode(%{"canonical" => @canonical, "nodes" => nodes}),
          :ok <- check_binding_digests(blob_json, prep) do
       {:ok, blob_json, refs, narrowed}
     end

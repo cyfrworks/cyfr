@@ -10,7 +10,7 @@ defmodule Sanctum.Authority.ZeroAuthorityTest do
   test "zero budget admits exactly one spawn" do
     zero = Authority.zero()
 
-    assert Sanctum.Authority.budget(zero) == %{in_flight: 0, cap: 1}
+    assert Sanctum.TestContext.invoke_budget(zero) == %{in_flight: 0, cap: 1}
     assert Sanctum.Authority.try_acquire_invoke(zero) == :ok
     assert Sanctum.Authority.try_acquire_invoke(zero) == {:error, :invoke_budget_exhausted}
     assert Sanctum.Authority.release_invoke(zero) == :ok

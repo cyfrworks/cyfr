@@ -35,7 +35,7 @@ defmodule Sanctum.DeviceCerts do
 
   ## On every request
 
-  `verify_request/3` takes only a device context `verify_connect/3`
+  `verify_request/2` takes only a device context `verify_connect/3`
   produced, and a certificate for it: the one that context was
   established under (its credential deadline is the certificate's
   expiry), or, for the renewal exchange's context, the replacement the
@@ -448,23 +448,16 @@ defmodule Sanctum.DeviceCerts do
   the certificate's expiry and `validated_at` now, its request
   correlation and address carried on; any other context is refused
   `:client_mismatch`.
-
-  `opts`: `:now`, this home's clock in Unix milliseconds, which defaults
-  to the system's.
   """
-  @spec verify_request(DeviceCert.t(), Context.t(), keyword()) ::
-          {:ok, Context.t()} | {:error, refusal()}
+  @spec verify_request(DeviceCert.t(), Context.t()) :: {:ok, Context.t()} | {:error, refusal()}
   def verify_request(
         %DeviceCert{} = certificate,
-        %Context{auth_method: :device, authenticated: true, client_id: client_id} = ctx,
-        opts
+        %Context{auth_method: :device, authenticated: true, client_id: client_id} = ctx
       )
-      when is_binary(client_id) and is_list(opts) do
-    now = Keyword.get(opts, :now) || now_ms()
-
+      when is_binary(client_id) do
     with :ok <- names_context(certificate, ctx),
          {:ok, %Context{user_id: user_id} = checked} <-
-           checked_request(certificate, ctx, now,
+           checked_request(certificate, ctx, now_ms(),
              request_id: ctx.request_id,
              client_ip: ctx.client_ip
            ) do
@@ -474,8 +467,7 @@ defmodule Sanctum.DeviceCerts do
     end
   end
 
-  def verify_request(%DeviceCert{}, _not_a_device_context, opts) when is_list(opts),
-    do: {:error, :client_mismatch}
+  def verify_request(%DeviceCert{}, _not_a_device_context), do: {:error, :client_mismatch}
 
   # A certificate and the client it is presented for: the context's, or,
   # inside `verify_connect/3` once the proof verified, the client the
@@ -693,21 +685,19 @@ defmodule Sanctum.DeviceCerts do
 
   @doc """
   The paired-client row `client_id` in the athanor `athanor_id`, of the
-  person `user_id` (any person's for `nil`): `{:ok, row}` for an active
+  person `user_id`: `{:ok, row}` for an active
   client paired with a device key, `:revoked` for a revoked one,
   `:not_standing` for a suspended one (a declared restore's, which stands
   for nothing until it is re-enabled, `Sanctum.Pairing.reenable/3`) and
   for one this home does not hold, and `:unavailable` when the store
   cannot answer.
   """
-  @spec paired_client(String.t(), String.t() | nil, String.t()) ::
+  @spec paired_client(String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, :revoked | :not_standing | :unavailable}
   def paired_client(athanor_id, user_id, client_id)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(client_id) do
-    filters =
-      if is_binary(user_id),
-        do: [user_id: user_id, standing: :all],
-        else: [standing: :all]
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and
+             is_binary(client_id) do
+    filters = [user_id: user_id, standing: :all]
 
     case Arca.PairedClients.list(Prima.Actor.in_athanor(athanor_id), filters) do
       {:ok, rows} ->

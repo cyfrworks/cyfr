@@ -251,6 +251,16 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       end
     end
 
+    test "a path spelled other than the storage door reaches it is refused", %{ctx: ctx} do
+      for path <- ["data//reports/", "data/./reports/", "data/reports//"] do
+        assert {:error, {:invalid_argument, why}} =
+                 preview(ctx, %{@ref => %{"storage" => %{"paths" => [path]}}}),
+               "#{path} was accepted"
+
+        assert why =~ "storage path #{path}", why
+      end
+    end
+
     test "the commit refuses it as the preview does", %{ctx: ctx} do
       {:ok, plan} = Plan.plan(ctx, %{ref: @ref})
       {:ok, preview} = Commit.preview(ctx, %{ref: @ref})
@@ -310,6 +320,15 @@ defmodule Sanctum.Consent.BlobBuilderTest do
 
       assert {:ok, _} =
                preview(ctx, %{@ref => %{"limits" => %{"rate_limit" => %{"requests" => 0}}}})
+    end
+  end
+
+  describe "a node whose stored manifest does not decode" do
+    test "refuses its ask as that damage, never asking for nothing" do
+      ref = "reagent:local.ask-damaged"
+      rows = %{ref => %{manifest: ~s({"name": "ask-damaged",)}}
+
+      assert {:error, {:corrupt, {:manifest, ^ref}}} = BlobBuilder.ask_rows(rows)
     end
   end
 

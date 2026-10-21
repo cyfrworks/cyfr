@@ -181,7 +181,7 @@ defmodule Sanctum.TinctureAccess do
   defp error_kind(_reason), do: :unknown
 
   defp enrich_with_segments(component) do
-    with {:ok, manifest} <- decode_manifest(component[:manifest] || component["manifest"]) do
+    with {:ok, manifest} <- decoded_manifest(Map.get(component, :manifest)) do
       segments =
         Prima.ComponentPath.version_dir(
           component.component_type,
@@ -197,16 +197,11 @@ defmodule Sanctum.TinctureAccess do
     end
   end
 
-  # A manifest that does not decode to a JSON object, or none at all, is a
-  # declaration refused: the version holds no pages and is not public, so
-  # it is not found here, publicly or privately.
-  defp decode_manifest(manifest) when is_binary(manifest) do
-    case Jason.decode(manifest) do
-      {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
-      _ -> {:error, :not_found}
-    end
-  end
-
-  defp decode_manifest(manifest) when is_map(manifest), do: {:ok, manifest}
-  defp decode_manifest(_), do: {:error, :not_found}
+  # The port hands a row's manifest decoded, or as the bytes storage holds
+  # when they do not decode to a JSON object
+  # (`Compendium.ConsentFacts.get_component/5`). Those bytes, or no
+  # manifest at all, are a declaration refused: the version holds no pages
+  # and is not public, so it is not found here, publicly or privately.
+  defp decoded_manifest(manifest) when is_map(manifest), do: {:ok, manifest}
+  defp decoded_manifest(_undecoded), do: {:error, :not_found}
 end

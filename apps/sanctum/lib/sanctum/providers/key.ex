@@ -5,8 +5,6 @@ defmodule Sanctum.Providers.Key do
   @moduledoc """
   API key tool handlers for the Sanctum MCP provider — create, get, list,
   revoke, rotate, and re-enable API keys.
-
-  Extracted from `Sanctum.Provider`; behaviour preserved exactly.
   """
 
   require Logger
@@ -45,8 +43,7 @@ defmodule Sanctum.Providers.Key do
             ),
             Arg.new("ip_allowlist", {:array, Arg.new(nil, :string)},
               description: "List of allowed IPs/CIDRs (e.g., ['192.168.1.0/24', '10.0.0.1'])"
-            ),
-            Arg.new("rate_limit", :string, description: "Rate limit (e.g., '100/1m')")
+            )
           ],
           kind: :write,
           planes: [:external],
@@ -150,20 +147,10 @@ defmodule Sanctum.Providers.Key do
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
     with {:ok, key_type} <- parse_key_type_arg(Map.get(args, "type", "application")) do
-      scope = Map.get(args, "scope", [])
-
-      scope =
-        cond do
-          is_binary(scope) -> String.split(scope, ",", trim: true) |> Enum.map(&String.trim/1)
-          is_list(scope) -> scope
-          true -> []
-        end
-
       opts = %{
         name: name,
         type: key_type,
-        scope: scope,
-        rate_limit: Map.get(args, "rate_limit"),
+        scope: Map.get(args, "scope", []),
         ip_allowlist: Map.get(args, "ip_allowlist")
       }
 
@@ -174,9 +161,6 @@ defmodule Sanctum.Providers.Key do
 
         {:error, :already_exists} ->
           {:error, {:conflict, "Key already exists: #{name}"}}
-
-        {:error, {:invalid_key_type, type}} ->
-          {:error, "Invalid key type: #{type}. Use: application, service, or admin"}
 
         {:error, {:scope_exceeds_ceiling, scope_list, ceiling}} ->
           {:error,
@@ -195,8 +179,7 @@ defmodule Sanctum.Providers.Key do
           {:error, conflict}
 
         # No re-log: the storage layer already logged this failure with the
-        # exception detail (Arca.ApiKeyStorage); a second error line here
-        # carried nothing the first lacked.
+        # exception detail (Arca.ApiKeyStorage).
         {:error, _reason} ->
           {:error, "Failed to create key"}
       end
@@ -214,9 +197,6 @@ defmodule Sanctum.Providers.Key do
     else
       {:error, :not_found} ->
         {:error, {:not_found, "Key", name}}
-
-      {:error, reason} when is_binary(reason) ->
-        {:error, reason}
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Key] Failed to revoke key: #{inspect(reason)}")

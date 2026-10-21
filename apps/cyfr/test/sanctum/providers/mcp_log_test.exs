@@ -37,7 +37,7 @@ defmodule Sanctum.Providers.McpLogTest do
       tools = MCP.tools()
       tool = Enum.find(tools, &(&1.name == "mcp_log"))
       actions = tool.input_schema["properties"]["action"]["enum"]
-      assert actions == ["list", "get", "correlate", "fan_outs", "stats"]
+      assert actions == ["list", "get", "correlate", "stats"]
 
       for operation <- tool.operations do
         assert operation.kind == :read
@@ -80,17 +80,18 @@ defmodule Sanctum.Providers.McpLogTest do
     end
   end
 
-  describe "retired write/delete verbs are unknown at dispatch" do
-    test "kernel-only and append-only verbs no longer exist on the surface", %{ctx: ctx} do
+  describe "write/delete verbs are unknown at dispatch" do
+    test "the log is kernel-written and append-only: no write or delete verb is on the surface",
+         %{ctx: ctx} do
       # Undeclared actions must be refused before handler dispatch.
-      retired = [
+      undeclared = [
         {"mcp_log", "log_started"},
         {"mcp_log", "log_completed"},
         {"mcp_log", "log_failed"},
         {"mcp_log", "delete"}
       ]
 
-      for {tool, verb} <- retired do
+      for {tool, verb} <- undeclared do
         {:error, %Prima.Refusal{stage: :admission, reason: {:unknown_action, name_action}}} =
           Sanctum.Gate.call_external(tool, ctx, %{"action" => verb})
 
@@ -107,7 +108,6 @@ defmodule Sanctum.Providers.McpLogTest do
         permissions: MapSet.new([:execute]),
         scope: :athanor,
         auth_method: :api_key,
-        api_key_type: :application,
         authenticated: true
       }
 
@@ -140,7 +140,6 @@ defmodule Sanctum.Providers.McpLogTest do
         permissions: MapSet.new([:execute]),
         scope: :athanor,
         auth_method: :api_key,
-        api_key_type: :application,
         authenticated: true
       }
 
@@ -172,7 +171,6 @@ defmodule Sanctum.Providers.McpLogTest do
         permissions: MapSet.new(),
         scope: :athanor,
         auth_method: :api_key,
-        api_key_type: :application,
         authenticated: true
       }
 
@@ -183,7 +181,6 @@ defmodule Sanctum.Providers.McpLogTest do
       extra_args = fn
         {_, "get"} -> %{"id" => "guard_probe"}
         {_, "correlate"} -> %{"request_id" => "guard_probe"}
-        {_, "fan_outs"} -> %{"request_ids" => ["guard_probe"]}
         _ -> %{}
       end
 

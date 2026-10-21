@@ -91,7 +91,7 @@ defmodule Sanctum.Providers.AssertionTest do
       )
 
     {:ok, session} = TestContext.create_session(built)
-    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
     %{user: user, ctx: ctx, genesis: genesis}
   end
 
@@ -101,7 +101,7 @@ defmodule Sanctum.Providers.AssertionTest do
   # browser's `/carry` page asks.
   defp carry!(ctx, destination \\ @hub) do
     {:ok, carry} =
-      call(ctx, %{"action" => "carry_begin", "destination" => destination, "operation" => "join"})
+      call(ctx, %{"action" => "carry_begin", "destination" => destination})
 
     carry
   end

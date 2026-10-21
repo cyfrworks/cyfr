@@ -140,13 +140,10 @@ defmodule Sanctum.Consent.Components do
 
   @doc """
   The placement a tincture row's declaration names under the frame's
-  rules as they are today: `{:ok, placement}`, nil for a tincture that
-  names none, or `{:error, :refused}` when those rules refuse the
-  declaration. The rules are the component domain's, so consent asks
-  for this verdict rather than reading a placement from the raw manifest.
-
-  Optional: an implementation that does not answer it is asked nothing,
-  and the port answers `{:error, :component_facts_unavailable}` for it.
+  rules: `{:ok, placement}`, nil for a tincture that names none, or
+  `{:error, :refused}` when those rules refuse the declaration. The rules
+  are the component domain's, so consent asks for this verdict rather
+  than reading a placement from the raw manifest.
   """
   @callback tincture_placement(Context.t(), map()) ::
               {:ok, String.t() | nil} | {:error, term()}
@@ -167,23 +164,17 @@ defmodule Sanctum.Consent.Components do
   @callback fill(map(), Context.t() | nil, String.t()) ::
               :ok | {:ok, map()} | {:error, term()}
 
-  @optional_callbacks tincture_placement: 2
-
   @doc """
   Install the port's implementation. Called once by `Cyfr.Application` at
   boot, before any consent is decided.
 
-  A module that does not export every required callback is refused here,
-  loudly, at boot, and the port is left as it was. An optional callback it
-  does not export is answered as unavailable when asked.
+  A module that does not export every callback is refused here, loudly,
+  at boot, and the port is left as it was.
   """
   @spec install!(module()) :: module()
   def install!(module) when is_atom(module) do
-    required =
-      __MODULE__.behaviour_info(:callbacks) -- __MODULE__.behaviour_info(:optional_callbacks)
-
     missing =
-      for {name, arity} <- required,
+      for {name, arity} <- __MODULE__.behaviour_info(:callbacks),
           not (Code.ensure_loaded?(module) and function_exported?(module, name, arity)),
           do: "#{name}/#{arity}"
 
@@ -195,16 +186,6 @@ defmodule Sanctum.Consent.Components do
 
     :persistent_term.put(@key, module)
     module
-  end
-
-  @doc """
-  Erase the installed implementation, leaving the port as boot found it.
-  The inverse of `install!/1`, for a test that installs one of its own.
-  """
-  @spec reset() :: :ok
-  def reset do
-    :persistent_term.erase(@key)
-    :ok
   end
 
   @doc """
@@ -233,7 +214,7 @@ defmodule Sanctum.Consent.Components do
   @doc "The newest registry row for a name, publisher and type."
   @spec get_latest(Context.t(), String.t(), String.t() | nil, String.t() | nil) ::
           {:ok, map()} | {:error, term()}
-  def get_latest(%Context{} = ctx, name, publisher \\ nil, type \\ nil) when is_binary(name),
+  def get_latest(%Context{} = ctx, name, publisher, type) when is_binary(name),
     do: get_component(ctx, name, nil, publisher, type)
 
   @doc """
@@ -266,20 +247,15 @@ defmodule Sanctum.Consent.Components do
     do: call(& &1.newer_shipped(ctx, row))
 
   @doc """
-  The placement a tincture row's declaration names under today's rules,
-  or `{:error, :refused}` when they refuse it.
+  The placement a tincture row's declaration names under the frame's
+  rules, or `{:error, :refused}` when they refuse it.
   `{:error, :component_facts_unavailable}` when no implementation is
-  installed, or the installed one does not answer this optional callback:
-  a placement that cannot be asked is never read as one that was answered.
+  installed: a placement that cannot be asked is never read as one that
+  was answered.
   """
   @spec tincture_placement(Context.t(), map()) :: {:ok, String.t() | nil} | {:error, term()}
-  def tincture_placement(%Context{} = ctx, row) when is_map(row) do
-    call(fn module ->
-      if Code.ensure_loaded?(module) and function_exported?(module, :tincture_placement, 2),
-        do: module.tincture_placement(ctx, row),
-        else: {:error, :component_facts_unavailable}
-    end)
-  end
+  def tincture_placement(%Context{} = ctx, row) when is_map(row),
+    do: call(& &1.tincture_placement(ctx, row))
 
   @doc """
   Fill `athanor`, as `c:fill/3` describes. Raises

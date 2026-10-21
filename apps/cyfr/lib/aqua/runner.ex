@@ -172,7 +172,7 @@ defmodule Aqua.Runner do
   end
 
   defp internal_context(athanor_id),
-    do: Sanctum.internal_context(user_id: "_threads", athanor_id: athanor_id, scope: :athanor)
+    do: Sanctum.Context.internal(user_id: "_threads", athanor_id: athanor_id, scope: :athanor)
 
   # A runner that declines to start answers why: the plane was lost in
   # between, or the thread is not an active athanor's.

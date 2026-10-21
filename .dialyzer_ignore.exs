@@ -44,23 +44,6 @@
   # of operations); counting up from 0 by one it answers a positive integer,
   # the type the spec states.
   {"lib/opus/events/sequence.ex", :missing_range},
-  # The Finch version locked wraps a transport failure in
-  # Finch.TransportError, so the clause for a bare Mint.TransportError no
-  # longer matches; the clause after it answers those failures.
-  {"lib/sanctum/auth/device_flow.ex", :pattern_match},
-  # The edge's spec makes tools a list, so the `edge.tools || []` fallback
-  # never takes its nil branch by the spec.
-  {"lib/sanctum/consent/shape_diff.ex", :guard_fail},
-  # Sanctum.ApiKey.revoke/2 refuses with atoms only today; the clause that
-  # passes a readable binary refusal through is the provider convention.
-  {"lib/sanctum/providers/key.ex", :guard_fail},
-  # session.use's lookups refuse with atoms only today; the clause that
-  # passes a readable binary refusal through is the provider convention.
-  {"lib/sanctum/providers/session.ex", :guard_fail},
-  # `valid_personal_slug?(slug) || {:error, :invalid_slug}` answers the
-  # refusal for false; Dialyzer does not narrow false out of the `||`'s
-  # other branch, so it sees the `with` fall through on false.
-  {"lib/sanctum/sign_in.ex", :missing_range},
   # An opaque-term warning dialyxir cannot classify: its own formatter
   # raises on it (`Dialyxir.WarningHelpers.ordinal/1`) and prints the raw
   # dialyzer text, so a `{file, kind}` filter never sees a kind to match.

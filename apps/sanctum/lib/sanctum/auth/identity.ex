@@ -66,9 +66,9 @@ defmodule Sanctum.Auth.Identity do
     "#{provider}|#{iss}|#{sub}"
   end
 
-  # Reject empty components. An empty iss/sub produced a degenerate key like
-  # "github||" that can collide across people and normalize unexpectedly — an
-  # identity must have all three parts.
+  # Reject empty components. An empty iss or sub would make a degenerate key
+  # like "github||", which can collide across people and normalize
+  # unexpectedly — an identity must have all three parts.
   #
   # The message names which part is wrong and never its value: a subject or
   # an issuer is a person's identity.
@@ -214,7 +214,7 @@ defmodule Sanctum.Auth.Identity do
   Whether `iss` names a host a direct strategy already owns.
 
   Wiring `ueberauth_oidcc` at github.com or accounts.google.com would mint
-  `"oidc|https://github.com|…"` where the direct strategy mints
+  `"oidcc|https://github.com|…"` where the direct strategy mints
   `"github|…"`, silently splitting one human into two ids across
   deployments. Compared on the normalized host, so a trailing slash, a port,
   a scheme variant or a look-alike (`https://evil-github.com/`) cannot slip
@@ -245,8 +245,4 @@ defmodule Sanctum.Auth.Identity do
     do: reserved_provider?(Atom.to_string(provider))
 
   def reserved_provider?(provider), do: provider in @reserved_providers
-
-  @doc "The built-in providers, by name."
-  @spec builtin_providers() :: [String.t()]
-  def builtin_providers, do: @builtin |> Map.keys() |> Enum.sort()
 end

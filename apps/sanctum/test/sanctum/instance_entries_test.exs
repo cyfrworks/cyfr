@@ -81,6 +81,9 @@ defmodule Sanctum.InstanceEntriesTest do
     # The install media ships no newer version of anything here.
     @impl true
     def newer_shipped(_ctx, _row), do: {:ok, nil}
+
+    @impl true
+    def tincture_placement(_ctx, _row), do: {:ok, nil}
   end
 
   # An inference-only account: chat completions and the model list, and
@@ -110,7 +113,10 @@ defmodule Sanctum.InstanceEntriesTest do
 
     on_exit(fn ->
       Facts.clear()
-      if previous, do: Components.install!(previous), else: Components.reset()
+
+      if previous,
+        do: Components.install!(previous),
+        else: Sanctum.TestContext.uninstall_port(Components)
     end)
 
     test = self()
@@ -460,7 +466,7 @@ defmodule Sanctum.InstanceEntriesTest do
     assert {3, _} = usage(entry.id)
 
     # With the port uninstalled the facts are unreadable: refused, no claim.
-    Components.reset()
+    Sanctum.TestContext.uninstall_port(Components)
 
     assert {:error, :component_not_admitted} =
              InstanceEntries.resolve(alice, entry.id, chat, @shipped)
@@ -702,7 +708,6 @@ defmodule Sanctum.InstanceEntriesTest do
         {%{person_daily: -1}, :invalid_caps},
         {%{total_daily: Arca.InstanceEntries.max_cap() + 1}, :invalid_caps},
         {%{kind: "password"}, {:invalid_kind, ~w(api_key bundle)}},
-        {%{kind: "oauth"}, {:kind_unavailable, "oauth"}},
         {%{name: ""}, :name_required}
       ]
 
@@ -1798,15 +1803,10 @@ defmodule Sanctum.InstanceEntriesTest do
       assert view.id == entry.id
       assert view.binding_digest == stored(entry.id).binding_digest
       assert view.provider_hint == "openai.com"
-      assert view.oauth_scopes == []
       assert view.component_policy == "any"
       refute inspect(view) =~ @secret
       assert {0, []} = usage(entry.id)
       assert stored(entry.id).last_used_at == nil
-
-      # The offer view carries the scopes too: none for a key.
-      assert {:ok, [offer]} = InstanceEntries.offered(alice)
-      assert offer.oauth_scopes == []
     end
 
     test "refuses in resolve/4's order, up to the status", %{admin: admin} do
@@ -1832,7 +1832,7 @@ defmodule Sanctum.InstanceEntriesTest do
   end
 
   describe "binding_facts/1" do
-    test "answers the kind, provider, status, digest and scopes alone, whatever the audience, " <>
+    test "answers the kind, provider, status and digest alone, whatever the audience, " <>
            "unsealing nothing and claiming no use",
          %{admin: admin} do
       listed = create!(admin, %{audience: "listed", members: [id("alice")]})
@@ -1843,8 +1843,7 @@ defmodule Sanctum.InstanceEntriesTest do
                kind: "api_key",
                provider_hint: "openai.com",
                status: "active",
-               binding_digest: stored(listed.id).binding_digest,
-               oauth_scopes: []
+               binding_digest: stored(listed.id).binding_digest
              }
 
       refute inspect(facts) =~ @secret
@@ -1854,6 +1853,40 @@ defmodule Sanctum.InstanceEntriesTest do
       {:ok, _} = InstanceEntries.revoke(admin, listed.id)
       assert {:ok, %{status: "revoked"}} = InstanceEntries.binding_facts(listed.id)
       assert {:error, :not_found} = InstanceEntries.binding_facts("ine_missing")
+    end
+  end
+
+  describe "a stored row of a kind no instance entry holds" do
+    test "is damage: offered to no one, and refused where it would be bound, resolved or rotated",
+         %{admin: admin} do
+      entry = create!(admin)
+      alice = person("alice")
+      rotation = %{entry_id: entry.id, fields: %{"API_KEY" => "sk-x"}, expected_payload_rev: 0}
+
+      # No create writes one (`{:kind_unavailable, "oauth"}`), so the row is
+      # damaged in the store itself.
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(i in Arca.Schemas.InstanceEntry, where: i.id == ^entry.id),
+          set: [kind: "oauth"]
+        )
+
+      {answers, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          [
+            InstanceEntries.offered(alice),
+            InstanceEntries.binding(alice, entry.id),
+            InstanceEntries.binding_facts(entry.id),
+            InstanceEntries.resolve(alice, entry.id, request("/v1/models", "GET"), @custom),
+            InstanceEntries.rotate(admin, rotation)
+          ]
+        end)
+
+      assert [{:ok, []} | refusals] = answers
+      assert refusals == List.duplicate({:error, :corrupt}, 4)
+      assert log =~ entry.id
+      assert {0, []} = usage(entry.id)
+      assert stored(entry.id).payload_rev == 0
     end
   end
 

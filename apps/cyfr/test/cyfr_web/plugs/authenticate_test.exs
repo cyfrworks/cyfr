@@ -230,7 +230,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
 
       on_exit(fn ->
-        Arca.Cache.delete_match({:established, :_, :_, :_})
+        Arca.Cache.delete_match({:established, :_, :_})
 
         case original do
           {:ok, value} -> Application.put_env(:sanctum, :caller_memo_ttl_ms, value)
@@ -602,7 +602,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       ctx = conn.assigns[:context]
 
       assert ctx.auth_method == :api_key
-      assert ctx.api_key_type == :application
       # Application keys get default scopes: execute, component_read, storage_read
       assert ctx.permissions ==
                MapSet.new([:execute, :component_read, :storage_read])

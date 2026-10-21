@@ -73,7 +73,7 @@ defmodule Sanctum.Consent.CommitDigest do
   admits no null (`Prima.JCS`) and every item the preview carries names
   its need, so an absent need is a null one and nothing else. The list is
   left out of the canonical map when empty, so a revision that removes
-  nothing hashes as it did before removals were covered. The head itself
+  nothing and a commit with no removals are one input. The head itself
   is pinned apart, by the expected revision the proof binds; this binds
   what the person was shown the revision drops.
 

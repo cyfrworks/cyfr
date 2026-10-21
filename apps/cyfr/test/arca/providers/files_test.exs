@@ -282,7 +282,6 @@ defmodule Arca.Providers.FilesTest do
     reader = %{
       ctx
       | auth_method: :api_key,
-        api_key_type: :application,
         permissions: MapSet.new([:storage_read])
     }
 
@@ -767,7 +766,6 @@ defmodule Arca.Providers.FilesTest do
         %{
           who.ctx
           | auth_method: :api_key,
-            api_key_type: :application,
             permissions: MapSet.new([:storage_read, :storage_write])
         }
       end

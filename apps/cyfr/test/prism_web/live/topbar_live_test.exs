@@ -155,7 +155,7 @@ defmodule PrismWeb.TopbarLiveTest do
   test "an operator sees how many wait at the door; the chip follows the door", %{conn: conn} do
     ops = test_user()
     conn = log_in_user(conn, ops)
-    {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops.user_id)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
 
     {view, _html} = mount_athanor(conn, "")
     bar = topbar(view)

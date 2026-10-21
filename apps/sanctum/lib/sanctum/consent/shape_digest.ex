@@ -14,8 +14,8 @@ defmodule Sanctum.Consent.ShapeDigest do
   (`hosts`, `paths`) and whether the component reads it itself
   (`disclose`), and the shape carries the configuration a publisher
   provides for its dependencies' needs (`provides`): each only when the
-  manifest declares it, so a shape that declares none hashes as it did
-  before they existed, and a version that changes one asks again.
+  manifest declares it, absent otherwise, and a version that changes one
+  asks again.
 
   Separating them is what makes a new release detectable. Under a
   versionless consent, a release whose shape digest is unchanged asks for
@@ -55,7 +55,7 @@ defmodule Sanctum.Consent.ShapeDigest do
           optional(:tincture_digest) => String.t(),
           optional(:provides) => %{
             optional(String.t()) => %{
-              optional(String.t()) => %{destination: map(), values: %{String.t() => String.t()}}
+              optional(String.t()) => %{String.t() => map()}
             }
           },
           optional(:tool_policy) => %{
@@ -108,8 +108,7 @@ defmodule Sanctum.Consent.ShapeDigest do
     do: {:error, {:invalid_shape, :input, "expected a map"}}
 
   @doc """
-  The canonical map a shape digest is taken over. Exposed so a preview can
-  show exactly what was hashed, and so the commit digest can embed it.
+  The canonical map a shape digest is taken over.
   """
   @spec normalize(shape()) :: {:ok, map()} | {:error, error()}
   def normalize(shape) do

@@ -7,16 +7,11 @@ defmodule Sanctum.Vault.Payload do
 
       {"v":3,"fields":{"url":"https://…","anon_key":"…"},
        "oauth":{"access_token":"…","refresh_token":"…",
-                "expires_at":"2026-08-07T12:00:00Z","token_type":"bearer",
-                "scopes":["a","b"],
-                "tokens":{"a":{"access_token":"…","expires_at":null}}}}
+                "expires_at":"2026-08-07T12:00:00Z"}}
 
-  The `oauth` bundle holds the entry's full-scope token beside its
-  refresh token. Its optional `tokens` map holds only tokens for narrower
-  scope sets, each obtained by a refresh the provider attenuated
-  (`Sanctum.Vault.OAuth`): the key is the scope set, sorted, de-duplicated
-  and joined by one space (`scope_key/1`), the value the token and its
-  expiry. Absent means none.
+  The `oauth` bundle holds the entry's token beside its refresh token and
+  the token's expiry. The scopes the token was granted for are the
+  entry's `oauth_scopes` binding column, never the bundle's.
 
   Decoding is strict: another version, unknown keys, non-string field
   values and malformed oauth blocks are refused, so a tampered or
@@ -26,8 +21,7 @@ defmodule Sanctum.Vault.Payload do
   @type t :: map()
 
   @version 3
-  @oauth_keys ~w(access_token refresh_token expires_at token_type scopes tokens)
-  @token_keys ~w(access_token expires_at)
+  @oauth_keys ~w(access_token refresh_token expires_at)
 
   @doc "Decode and validate a sealed payload's plaintext."
   @spec decode(binary()) ::
@@ -54,16 +48,6 @@ defmodule Sanctum.Vault.Payload do
     with {:ok, valid} <- validate(doc) do
       {:ok, Jason.encode!(valid)}
     end
-  end
-
-  @doc """
-  The key a scope set's token is held under in `oauth.tokens`: its scopes
-  sorted, de-duplicated and joined by one space, so one set has one key
-  however it was spelled.
-  """
-  @spec scope_key([String.t()]) :: String.t()
-  def scope_key(scopes) when is_list(scopes) do
-    scopes |> Enum.uniq() |> Enum.sort() |> Enum.join(" ")
   end
 
   # ---------------------------------------------------------------------------
@@ -102,59 +86,18 @@ defmodule Sanctum.Vault.Payload do
 
   defp check_oauth(%{"access_token" => token} = oauth) when is_binary(token) do
     with :ok <- only_keys(oauth, @oauth_keys) do
-      optional_ok? =
-        optional_string?(oauth, "refresh_token") and
-          optional_string?(oauth, "expires_at") and
-          optional_string?(oauth, "token_type") and
-          optional_string_list?(oauth, "scopes")
-
-      if optional_ok?, do: check_tokens(Map.get(oauth, "tokens")), else: bad("oauth")
+      if optional_string?(oauth, "refresh_token") and optional_string?(oauth, "expires_at"),
+        do: :ok,
+        else: bad("oauth")
     end
   end
 
   defp check_oauth(_), do: bad("oauth")
 
-  # Each held token sits under its own scope set's key, spelled the one
-  # way `scope_key/1` spells it, so a set is never held twice under two
-  # spellings.
-  defp check_tokens(nil), do: :ok
-
-  defp check_tokens(tokens) when is_map(tokens) do
-    valid? =
-      Enum.all?(tokens, fn {key, token} ->
-        canonical_key?(key) and held_token?(token)
-      end)
-
-    if valid?, do: :ok, else: bad("oauth.tokens")
-  end
-
-  defp check_tokens(_), do: bad("oauth.tokens")
-
-  defp canonical_key?(key) when is_binary(key) and key != "" do
-    scopes = String.split(key, " ")
-    "" not in scopes and key == scope_key(scopes)
-  end
-
-  defp canonical_key?(_), do: false
-
-  defp held_token?(%{"access_token" => token} = held) when is_binary(token) do
-    Map.keys(held) -- @token_keys == [] and optional_string?(held, "expires_at")
-  end
-
-  defp held_token?(_), do: false
-
   defp optional_string?(map, key) do
     case Map.get(map, key) do
       nil -> true
       v -> is_binary(v)
-    end
-  end
-
-  defp optional_string_list?(map, key) do
-    case Map.get(map, key) do
-      nil -> true
-      list when is_list(list) -> Enum.all?(list, &is_binary/1)
-      _ -> false
     end
   end
 

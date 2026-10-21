@@ -98,7 +98,7 @@ defmodule Opus.ChargeTest do
              Arca.Repo.all(Arca.Schemas.ExecutionAttempt)
              |> Enum.reject(&(&1.execution_id == root_id))
 
-    assert Sanctum.Authority.budget(auth).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
     assert {:ok, [%{id: "other"}]} =
              Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), auth.budget.id)

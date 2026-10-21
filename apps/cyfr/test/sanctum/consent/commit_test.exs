@@ -20,9 +20,8 @@ defmodule Sanctum.Consent.CommitTest do
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 
-  # The component domain's facts, but for the optional placement, which
-  # this implementation does not answer.
-  defmodule FactsWithoutPlacement do
+  # The component domain's facts, but for a placement it cannot read.
+  defmodule PlacementUnavailable do
     @moduledoc false
     @behaviour Sanctum.Consent.Components
 
@@ -47,6 +46,9 @@ defmodule Sanctum.Consent.CommitTest do
 
     @impl true
     defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
+
+    @impl true
+    def tincture_placement(_ctx, _row), do: {:error, :component_facts_unavailable}
   end
 
   # Runs `grant` with the table's tool-action reads counted, wherever the
@@ -846,15 +848,15 @@ defmodule Sanctum.Consent.CommitTest do
       view
     end
 
-    test "a consent narrowing scopes on a candidate that cannot be narrowed is refused at commit",
+    test "a consent narrowing an OAuth entry's scopes is refused at commit",
          %{ctx: ctx} do
       ref = "reagent:local.commit-narrow"
       publish!(ctx, "commit-narrow", "1.0.0", @mail_needs)
       entry = oauth_entry!(ctx, ["gmail.readonly", "gmail.send"])
 
       # The need's own scopes, and the same narrowing named outright, are
-      # fewer than the entry holds, and Google's preset does not attenuate
-      # a refresh: no preview offers it.
+      # fewer than the entry holds, and a token is dispensed for every
+      # scope its entry holds: no preview offers it.
       narrowed = [
         %{ref: ref, bindings: [%{need: "mail", entry_id: entry.id}]},
         %{ref: ref, bindings: [%{need: "mail", entry_id: entry.id, scopes: ["gmail.readonly"]}]}
@@ -1097,11 +1099,10 @@ defmodule Sanctum.Consent.CommitTest do
       {:ok, %{profile_id: owner}} = walk!(ctx, plain)
       real = Components.impl!()
 
-      # An implementation that answers every required callback but not the
-      # optional placement is installed, and the port answers the placement
-      # as unreadable facts: a public staging refuses as for any other
-      # component fact it cannot read, never as a placement answered.
-      Components.install!(FactsWithoutPlacement)
+      # An implementation that cannot read the placement is installed: a
+      # public staging refuses as for any other component fact it cannot
+      # read, never as a placement answered.
+      Components.install!(PlacementUnavailable)
 
       try do
         assert {:error, {:unavailable, "Components"}} =

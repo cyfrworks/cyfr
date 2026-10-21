@@ -181,11 +181,11 @@ defmodule Sanctum.Consent.LoaderTest do
     profile = profile_summary()
 
     # Widen the stored blob without touching any digest — a hand edit, a
-    # restored backup, or any write path that reaches the column. Before
-    # `blob_digest` existed nothing on the row detected this:
-    # `commit_digest` covers the decisions, not the bytes, and
-    # `check_blob_refs_equality/2` compares vault refs alone. So the loader
-    # built an Authority from whatever caps the edit left behind.
+    # restored backup, or any write path that reaches the column. Only
+    # `blob_digest` detects this: `commit_digest` covers the decisions, not
+    # the bytes, and `check_blob_refs_equality/2` compares vault refs alone,
+    # so without it the loader would build an Authority from whatever caps
+    # the edit left behind.
     honest = consent()
     tampered = Jason.decode!(honest.resolved_policy)
 
@@ -402,16 +402,21 @@ defmodule Sanctum.Consent.LoaderTest do
       consent(%{resolved_policy: policy})
     end
 
-    test "is refused at admission with consent_required, never rewritten", %{ctx: ctx} do
+    test "is refused at admission as a damaged blob, never rewritten", %{ctx: ctx} do
       profile = profile_summary()
+      formula = Fixtures.formula_ref()
 
       for path <- ["data//secrets/", "data/./secrets/", "data/../secrets/", "data/notes//"] do
         consent = with_paths(["data/ok/", path])
         seed(ctx, profile, consent)
 
-        assert {:error, {:consent_required, %{profile_id: "prof-1", shape_diff: []}}} =
+        assert {:error, refusal} =
                  Loader.load_root(ctx, profile, live: live_for(consent.activation)),
                "#{path} was admitted"
+
+        assert {:invalid_blob, {:invalid_resource, ^formula, "@ingress", :storage, why}} = refusal
+        assert why =~ inspect(path)
+        assert Loader.damage?(refusal)
 
         # The stored grant is as it was written.
         assert {:ok, %{resolved_policy: stored}} =

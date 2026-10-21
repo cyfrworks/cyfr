@@ -187,7 +187,7 @@ defmodule Opus.Sweeper do
         end_turn(actor, execution_id, turn_id, grant)
 
       %{status: "running"} ->
-        ctx = Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+        ctx = Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
         _ = Dispatch.cancel(ctx, execution_id)
         :ok
 

@@ -18,7 +18,6 @@ defmodule Sanctum.Consent.Authz do
   | A Sanctum session (`:oidc`) | yes — Prism web, the CLI, and device-flow-derived sessions all land here |
   | A paired device (`:device`), naming its paired client | yes — the person's own interactive client, on its device channel |
   | An API key with a capability pinned to this exact commit digest | yes, and only for that one commit |
-  | A tincture session upgrade (`:session`) | **no** — this is the public tincture surface, not a console |
   | A tincture token, webhook, cron, system, or unauthenticated caller | no |
   | Anything on the guest plane | no, whatever else it carries |
 
@@ -49,7 +48,7 @@ defmodule Sanctum.Consent.Authz do
   `Arca.PendingConfirmations`), proven by a passkey assertion or a fresh
   re-authentication, and consumed once.
 
-  An action that needs no fresh confirmation (`Sanctum.Pairing.fresh_required?/2`)
+  An action that needs no fresh confirmation (`Sanctum.Pairing.sensitive?/1`)
   is answered `:ok`: the site's own checks of who may act decide. For a
   sensitive change:
 
@@ -262,7 +261,7 @@ defmodule Sanctum.Consent.Authz do
   and the device must still stand on them as an issuance's must
   (`Sanctum.Issuance.device_held/1`). A revocation that committed after
   the device's standing was read refuses the change with one of the
-  issuance's standing refusals (`Sanctum.Issuance.standing_refusals/0`),
+  issuance's standing refusals (`t:Sanctum.Issuance.standing_refusal/0`),
   and one that starts later waits for the caller's commit.
   """
   @spec consume(Context.t(), {Sanctum.Pairing.action(), change()}) ::
@@ -356,7 +355,7 @@ defmodule Sanctum.Consent.Authz do
   capability can substitute (a digest-pinned capability is meaningless
   without a digest-shaped act). A paired device's standing is read on
   its channel, on every request, before the gate is asked
-  (`Sanctum.DeviceCerts.verify_request/3`).
+  (`Sanctum.DeviceCerts.verify_request/2`).
   """
   @spec authorize_interactive(Context.t()) :: {:ok, :interactive} | {:error, refusal()}
   def authorize_interactive(%Context{} = ctx) do
@@ -435,8 +434,8 @@ defmodule Sanctum.Consent.Authz do
   def message({:conflict, message}) when is_binary(message), do: message
 
   # This IS the vocabulary module — an unknown term here is a producer bug,
-  # logged and generalized, never inspected onto the wire (the catch-all
-  # `inspect/1` undid the closed union above).
+  # logged and generalized, never inspected onto the wire (a catch-all
+  # `inspect/1` would undo the closed union above).
   def message(other) do
     Logger.warning("[Sanctum.Consent.Authz] unrenderable consent refusal: #{inspect(other)}")
     "The consent request is not valid"
@@ -452,7 +451,7 @@ defmodule Sanctum.Consent.Authz do
   defp decide(ctx, action, change, mode) do
     with :ok <- known_action(action),
          {:ok, change} <- change(change) do
-      if Sanctum.Pairing.fresh_required?(action, ctx),
+      if Sanctum.Pairing.sensitive?(action),
         do: sensitive(ctx, action, change, mode),
         else: :ok
     end
@@ -517,7 +516,8 @@ defmodule Sanctum.Consent.Authz do
   # transaction (a `consume/2`, or a caller that holds one open) the
   # directory is never read: the cache answers, within its bound, as the
   # request's own revalidation outside the transaction left it. A local
-  # person, and a person with no identity row, binds none.
+  # person binds none; a person whose identity row, minted with their
+  # person row, is missing is damage.
   defp identity_epoch(user_id, mode) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
       {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
@@ -536,7 +536,9 @@ defmodule Sanctum.Consent.Authz do
         {:ok, nil}
 
       {:error, :not_found} ->
-        {:ok, nil}
+        if Prima.PersonId.person?(user_id),
+          do: {:error, {:corrupt, :person_identity}},
+          else: {:ok, nil}
 
       {:error, _unanswered} ->
         {:error, :unavailable}
@@ -818,9 +820,11 @@ defmodule Sanctum.Consent.Authz do
 
   defp named_asker(kind, _unnamed), do: %{"kind" => kind}
 
-  @doc false
-  # The longest prefix of `text` that is at most `max` bytes and valid
-  # UTF-8: a character the cut would split is dropped whole.
+  @doc """
+  The longest prefix of `text` that is at most `max` bytes and valid
+  UTF-8: a character the cut would split is dropped whole, and text with
+  no valid prefix answers `""`.
+  """
   @spec utf8_prefix(binary(), non_neg_integer()) :: binary()
   def utf8_prefix(text, max) when is_binary(text) and is_integer(max) and max >= 0,
     do: valid_prefix(binary_part(text, 0, min(byte_size(text), max)))
@@ -973,11 +977,15 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
-  @doc false
-  # What a revalidation's refusal is here: a person whose remote identity
-  # could not be read fresh is `:identity_stale`, and a refusal this
-  # vocabulary does not know is `:unavailable`, never a crash, so a refusal
-  # revalidation learns later still refuses.
+  @doc """
+  The confirmation vocabulary's word for a revalidation's refusal
+  (`Sanctum.Caller.revalidate_session/1`): `:unauthenticated` is
+  `:not_authenticated`, `:not_standing` and `:not_member` are
+  `:not_standing`, a person whose remote identity could not be read fresh
+  is `:identity_stale`, and a refusal this vocabulary does not know is
+  `:unavailable`, logged, never a crash, so a refusal revalidation learns
+  later still refuses.
+  """
   @spec standing_refusal(term()) ::
           :not_authenticated | :not_standing | :identity_stale | :unavailable
   def standing_refusal(:unauthenticated), do: :not_authenticated
@@ -1033,9 +1041,7 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
-  # Everything else is a surface that must not be able to consent — most
-  # sharply `:session`, which is produced only by the tincture upgrade path
-  # and would otherwise let a public tincture surface grant authority.
+  # Everything else is a surface that must not be able to consent.
   defp by_surface(method, _request, _now), do: {:error, {:surface_not_permitted, method}}
 
   defp check_capability(%Request{key_capability: nil}, _now), do: {:error, :no_capability}

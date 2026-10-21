@@ -440,6 +440,11 @@ defmodule Prima.Refusal do
 
   defp row({:corrupt, {:manifest, _ref}}), do: {:corrupt, "The stored manifest is damaged."}
 
+  # A person's identity row is minted with their person row; one missing
+  # is damage, never a local person who has not enrolled.
+  defp row({:corrupt, :person_identity}),
+    do: {:corrupt, "This person's identity record is missing, so it cannot be used."}
+
   # A run's component graph whose stored rows do not hash, so the consent
   # cannot be judged against it. The ref rides in the reason; the sentence
   # names the damaged thing, never a grant to make.

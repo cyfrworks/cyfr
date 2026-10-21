@@ -60,7 +60,7 @@ defmodule Sanctum.SealTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     %{user: user, athanor: athanor, ctx: %{session_ctx | origin: :interactive}}
   end
@@ -75,7 +75,7 @@ defmodule Sanctum.SealTest do
     {:ok, invitation} =
       ctx
       |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-      |> Pairing.begin(%{key_digest: digest})
+      |> Pairing.begin(%{"key_digest" => digest})
 
     glass = Context.build(%{authenticated: false, client_ip: @source})
     submission = %{device_key: device_key}
@@ -87,7 +87,7 @@ defmodule Sanctum.SealTest do
       Pairing.complete(
         glass,
         invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.sign(challenge, private))
+        Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
       )
 
     {:ok, connect} =
@@ -209,7 +209,6 @@ defmodule Sanctum.SealTest do
         },
         "the command line" => %{ctx | origin: :programmatic},
         "a session admitted on no path" => %{ctx | origin: nil},
-        "a tincture's session upgrade" => %{ctx | auth_method: :session},
         "a session naming a paired client" => %{ctx | client_id: "pcl_seal"},
         "a session holding no session" => %{ctx | session_token_hash: nil},
         "a device naming no client that stands" => %{
@@ -248,7 +247,7 @@ defmodule Sanctum.SealTest do
 
   describe "choose/2" do
     test "sets the first seal once; a second choice is refused and changes nothing", %{ctx: ctx} do
-      chosen!(ctx, %{"text" => "willow", "glyph" => ""})
+      chosen!(ctx, %{text: "willow", glyph: ""})
 
       assert {:ok, %Seal{text: "willow", glyph: nil}} = Seal.for_system_layer(ctx)
       assert Seal.choose(ctx, %{text: "oak", glyph: "☾"}) == {:error, :already_set}

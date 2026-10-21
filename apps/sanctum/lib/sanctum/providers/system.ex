@@ -40,17 +40,16 @@ defmodule Sanctum.Providers.System do
   defp service_scopes, do: Sanctum.Services.service_names()
 
   # ============================================================================
-  # ToolProvider Callbacks
+  # Prima.Provider callbacks
   # ============================================================================
 
   @impl true
   def tools do
     alias Prima.{Arg, Operation}
-    # Anonymous-allowed: the health check a client calls before
-    # logging in.
-    # Authenticated-only, matching the HTTP surface (which has always
-    # 401'd an anonymous tools.list): an uncredentialed caller's
-    # discovery is the anonymous action set, nothing more.
+    # `system.status` is anonymous: the health check a client calls
+    # before signing in. `tools.list` is authenticated, matching the HTTP
+    # surface, which 401s an anonymous tools.list: an uncredentialed
+    # caller's discovery is the anonymous action set, nothing more.
     [
       Operation.tool(
         [
@@ -295,10 +294,9 @@ defmodule Sanctum.Providers.System do
     end
   end
 
-  # "unknown" is a probe that deliberately did not run (test env) — not
-  # evidence of degradation.
+  # "unknown" is a probe that did not run, not evidence of degradation.
   defp overall(services) do
-    if Enum.all?(services, fn {_k, v} -> v in ["ok", "stub", "unknown"] end),
+    if Enum.all?(services, fn {_k, v} -> v in ["ok", "unknown"] end),
       do: "ok",
       else: "degraded"
   end
@@ -394,11 +392,8 @@ defmodule Sanctum.Providers.System do
   # what they depend on (`c:Prima.Provider.status/0`). A provider without
   # the callback adds nothing; one whose answer raises, exits or is not a
   # map of strings reads "crashed" under its service — the report degrades,
-  # the call never fails. Service names come from the configured roster and
-  # state names from provider code, so the atom table stays bounded.
+  # the call never fails. Every name is a string, as the wire carries it.
   defp service_status(service) do
-    service_key = String.to_atom(service)
-
     {states, crashed?} =
       service
       |> Sanctum.Services.providers_for()
@@ -410,7 +405,7 @@ defmodule Sanctum.Providers.System do
       end)
 
     own = if crashed?, do: "crashed", else: check_service_named(service)
-    Map.put(states, service_key, own)
+    Map.put(states, service, own)
   end
 
   defp provider_status(module) do
@@ -435,7 +430,7 @@ defmodule Sanctum.Providers.System do
 
   defp reported_states(states, module) when is_map(states) do
     if Enum.all?(states, fn {k, v} -> is_binary(k) and is_binary(v) end) do
-      {:ok, Map.new(states, fn {name, state} -> {String.to_atom(name), state} end)}
+      {:ok, states}
     else
       Logger.error(
         "[Sanctum.Providers.System] #{inspect(module)}.status/0 answered a malformed map"
@@ -489,8 +484,8 @@ defmodule Sanctum.Providers.System do
 
         # The pinned path resolves-validates once, connects to the validated
         # IP, and never follows redirects — a target that 302s toward a
-        # metadata endpoint goes nowhere. Private targets stay blocked
-        # unconditionally, as they always were on this surface.
+        # metadata endpoint goes nowhere. Private targets are blocked
+        # unconditionally.
         case Sanctum.Egress.pinned_request(:post, target, headers, body,
                receive_timeout: 10_000,
                # Only the status is read; a hostile target still must not
