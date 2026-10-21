@@ -2,8 +2,8 @@
 // Copyright 2026 CYFR Works Inc.
 //
 // The frame-facts probes, run from inside the sandboxed frame. Each attempt
-// records what the frame itself could see of it; the harness
-// (tests/browser/frame_facts.py) adds what only the page can see — a
+// records what the frame itself could see of it; the experiment
+// (tests/browser/frame-facts.mjs) adds what only the page can see — a
 // request that left, a message that arrived, a navigation — and decides
 // each outcome from both. Nothing here asserts: the record is the result.
 //
@@ -160,10 +160,10 @@
     ["module_script", function () { return scriptProbe("module.js", true, "__frameFactsModule"); }],
     ["blob_worker", workerProbe],
     ["wasm_instantiate", wasmProbe],
-    // An asset the harness answers with a 302 to asset.json (no /t/ route
-    // redirects today) carrying the CORS header today's asset answers
-    // carry, the same 302 without it, and a route the server itself
-    // redirects (/chat, to the sign-in page).
+    // An asset the harness answers with a 302 to asset.json (no tincture
+    // route redirects) carrying the CORS header an asset's answer carries,
+    // the same 302 without it, and a route the server itself redirects
+    // (/chat, to the sign-in page).
     ["redirect_fetch", function () {
       return fetchProbe("moved.json").then(function (asset) {
         return fetchProbe("moved-bare.json").then(function (bare) {

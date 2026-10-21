@@ -7,9 +7,10 @@ defmodule Cyfr.Bus.ExecutionEvent do
 
   A durable event is a row of `execution_events`, broadcast after its
   transaction committed; `sequence` is its number. A delta (`emit`) is
-  broadcast before the write-behind buffer keeps it, the bus's one
-  pre-persistence exception, numbered `<durable>.<n>` so a client that
-  missed it replays from its cursor. The kind is which of the two, and
+  never persisted: it is broadcast once the execution's bounded replay
+  buffer holds it (`Opus.Events`), the bus's one pre-persistence
+  exception, numbered `<durable>.<n>` so a client that missed it replays
+  from its cursor. The kind is which of the two, and
   `durable` and `delta` carry it: a durable event's `delta` is nil.
 
   The stream's own fields are the ones a replay yields (`event/1`), so a

@@ -1,19 +1,22 @@
-_build/
+**/_build/
 deps/
 .git/
-*.db
-*.db-shm
-*.db-wal
+**/*.db
+**/*.db-shm
+**/*.db-wal
 data/
 apps/codex/cyfr
-priv/*.db*
-cover/
-.elixir_ls/
-dist/
-node_modules/
+apps/codex/dist/
+**/cover/
+**/.elixir_ls/
 **/node_modules/
-*.tsbuildinfo
-test/
+**/*.tsbuildinfo
+# What `mix assets.deploy` writes, which the image build makes itself: the
+# bundles, the digested copies and their gzip companions, and the manifest.
+apps/*/priv/static/assets/
+apps/*/priv/static/cache_manifest.json
+apps/cyfr/priv/static/**/*.gz
+apps/cyfr/priv/static/**/*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].*
 .github/
 scripts/
 # The pinned wasm-tools installer, which both images run
@@ -26,13 +29,10 @@ docker-compose*.yml
 !tincture-guide.md
 !integration-guide.md
 !FAIR_SOURCE.md
-!seed/aqua/
 .formatter.exs
-tmp/
+**/tmp/
 .env
 .env.*
 seed/components/**/target/
-seed/components/**/node_modules/
 aqua/
 apps/*/test/
-_build_pg/

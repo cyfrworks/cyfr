@@ -483,7 +483,7 @@ defmodule Aqua.Loop.FlushTest do
   end
 
   defp drop_grants! do
-    if Cyfr.RuntimeConfig.repo_adapter() == Ecto.Adapters.Postgres,
+    if Arca.repo_adapter() == Ecto.Adapters.Postgres,
       do: Arca.Repo.query!("DROP TABLE tool_grants CASCADE"),
       else: Arca.Repo.query!("DROP TABLE tool_grants")
   end

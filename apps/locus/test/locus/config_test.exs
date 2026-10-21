@@ -443,7 +443,6 @@ defmodule Locus.ConfigTest do
 
       # And what the keeper refuses as a bound, this setting refuses at
       # the boot.
-
       for bytes <- refused do
         env = env(Map.put(base, variable, Integer.to_string(bytes)))
         assert {:error, message} = Config.from_env(env)
@@ -466,13 +465,8 @@ defmodule Locus.ConfigTest do
     assert Config.unknown_names(Config.variables()) == []
     assert {:ok, _settings} = Config.from_env(env(full()), Map.keys(full()))
 
-    # The runtime role's names are the node's too, and the retired names
-    # of the release's log setting are not.
+    # The runtime role's names are the node's too.
     assert Config.unknown_names(Config.variables(:runtime) ++ Config.variables(:runner)) == []
-
-    # Spelled split so the retired names are not themselves found here.
-    retired = ["LOCUS_BUILDS_" <> "LOG_LEVEL", "LOCUS_BUILDS_" <> "LOG_FORMAT"]
-    assert Config.unknown_names(retired) == Enum.sort(retired)
 
     assert {:error, message} =
              Config.from_env(env(full()), Map.keys(full()) ++ ["LOCUS_RUNTIME_POOL_SIZ"])
@@ -579,10 +573,9 @@ defmodule Locus.ConfigTest do
     assert Config.backends_rpc_timeout_ms() == 30_000
     assert Config.backends_memory_bytes() == 536_870_912
 
-    # The facade reads the same settings.
-    assert Locus.Backends.key() == Config.backends_key()
+    # The facade's listener reads the same settings.
+    assert Locus.Backends.bind() == Config.backends_bind()
     assert Locus.Backends.port() == Config.backends_port()
-    assert Locus.Backends.memory_bytes() == Config.backends_memory_bytes()
   end
 
   describe "runtime_from_env/2" do
@@ -743,15 +736,9 @@ defmodule Locus.ConfigTest do
       # A runner knows no address of CYFR's: it reaches CYFR through its relay.
       refute Map.has_key?(settings, :host_url)
 
-      assert {:ok, %{relay: {:fd, 5}}} =
-               Config.runner(Map.put(@runner_env, "RUNTIME_RELAY_FD", "5"))
-
       assert {:ok, %{relay: {:socket, "/tmp/runner/relay.sock"}}} =
                Config.runner(
-                 Map.merge(@runner_env, %{
-                   "RUNTIME_RELAY_FD" => "4",
-                   "RUNTIME_RELAY_SOCKET" => "/tmp/runner/relay.sock"
-                 })
+                 Map.put(@runner_env, "RUNTIME_RELAY_SOCKET", "/tmp/runner/relay.sock")
                )
 
       assert {:ok, %{control_fd: 0, watchdog_grace_ms: 250}} =
@@ -788,9 +775,6 @@ defmodule Locus.ConfigTest do
       assert {:error, {:malformed, "RUNTIME_RUNNER_ID"}} =
                Config.runner(%{@runner_env | "RUNTIME_RUNNER_ID" => "has space"})
 
-      assert {:error, {:malformed, "RUNTIME_RELAY_FD"}} =
-               Config.runner(Map.put(@runner_env, "RUNTIME_RELAY_FD", "2"))
-
       assert {:error, {:malformed, "RUNTIME_RELAY_SOCKET"}} =
                Config.runner(Map.put(@runner_env, "RUNTIME_RELAY_SOCKET", "relay.sock"))
 
@@ -810,12 +794,11 @@ defmodule Locus.ConfigTest do
           runner_id: "runner_1",
           service_id: "wrk_local",
           boot: "boot_1",
-          host_url: "http://127.0.0.1:4300",
           watchdog_grace_ms: 5_000
         })
 
-      # No address of CYFR's, whatever the service holds: the runner's host
-      # calls leave through its relay.
+      # No address of CYFR's: the runner's host calls leave through its
+      # relay.
       assert env == %{
                "RUNTIME_ROLE" => "runner",
                "RUNTIME_RUNNER_ID" => "runner_1",

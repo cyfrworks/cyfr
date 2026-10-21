@@ -9,7 +9,7 @@ defmodule Locus.Launcher do
 
   `c:spawn/2` starts `argv` with `env` as its whole environment beyond the
   launcher's own `HOME`, `TMPDIR`, `USER`, `LOGNAME` and `PATH`, in the uid
-  pool `pool`, under `memory_bytes` where the spec names it, and answers
+  pool `pool`, under `memory_bytes`, and answers
   the process's `t:handle/0`. The process that called it is the process's
   owner: every event of the process reaches it as
   `{launcher_module, handle.ref, event}` (`t:event/0`), in order, until
@@ -32,21 +32,21 @@ defmodule Locus.Launcher do
   sent until the process attaches; `c:send_relay/2` writes to its relay
   from any process, and `c:close_relay/1` ends the relay.
 
-  `Locus.Executor.launcher/0` names the implementation a node uses:
+  `Locus.Executor.executor/0` names the implementation a node uses:
   `Locus.Keeper` where cyfr-locus runs, and the test environment's
   unisolated launcher alone otherwise.
   """
 
   @typedoc """
-  What a process is started with: `memory_bytes` where its pool bounds it,
-  `control` where it has a control channel, and `isolation` where its pool
-  isolates it.
+  What a process is started with: the memory it is bounded by, which every
+  process has, `control` where it has a control channel, and `isolation`
+  where its pool isolates it.
   """
   @type spec :: %{
           required(:argv) => [String.t(), ...],
           required(:env) => %{optional(String.t()) => String.t()},
           required(:pool) => String.t(),
-          optional(:memory_bytes) => pos_integer(),
+          required(:memory_bytes) => pos_integer(),
           optional(:control) => boolean(),
           optional(:isolation) => String.t()
         }

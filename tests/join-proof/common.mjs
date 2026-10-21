@@ -26,8 +26,10 @@
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ask as askRunSh, readHomes, redact as redactKnown, sleep, waitFor } from "../browser/lib.mjs";
-export { sleep, waitFor };
+import {
+  ask as askRunSh, instrumentDevice, readHomes, redact as redactKnown, saveKit, sleep, waitFor,
+} from "../browser/lib.mjs";
+export { instrumentDevice, saveKit, sleep, waitFor };
 
 export const [homesFile, outDir] = process.argv.slice(2);
 if (!homesFile || !outDir) {
@@ -215,36 +217,8 @@ export function crossSiteHeld(seen) {
 }
 
 // ---------------------------------------------------------------------------
-// The glass, watched from inside its own page
+// The glass, watched from inside its own page (lib.mjs `instrumentDevice`)
 // ---------------------------------------------------------------------------
-
-export function instrumentDevice() {
-  const Native = window.WebSocket;
-  const device = { log: [], sockets: 0 };
-  window.__device = device;
-  const describe = (data) => {
-    try {
-      const map = JSON.parse(data);
-      return { type: map.type, id: map.id, error: map.error ? (map.error.class || "error") : undefined };
-    } catch {
-      return { type: "unreadable" };
-    }
-  };
-  class Watched extends Native {
-    constructor(url, protocols) {
-      super(url, protocols);
-      if (!/\/device\/websocket/.test(String(url))) return;
-      this.__serial = ++device.sockets;
-      super.addEventListener("message", (event) => device.log.push({ socket: this.__serial, dir: "in", ...describe(event.data) }));
-      super.addEventListener("close", (event) => device.log.push({ socket: this.__serial, event: "close", code: event.code }));
-    }
-    send(data) {
-      if (this.__serial) device.log.push({ socket: this.__serial, dir: "out", ...describe(data) });
-      return super.send(data);
-    }
-  }
-  window.WebSocket = Watched;
-}
 
 export const deviceLog = (page) => page.evaluate(() => (window.__device ? window.__device.log.slice() : []));
 
@@ -508,11 +482,6 @@ export async function readKit(page) {
   const lines = { identifier: await line("kit-identifier"), directory_url: await line("kit-directory"), recovery_secret: await line("kit-secret") };
   secrets.push(lines.recovery_secret);
   return lines;
-}
-
-export async function saveKit(page) {
-  await page.locator(`${layer} [data-test="recovery-ack"]`).click();
-  await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, { timeout: 30_000 });
 }
 
 export async function setUpHub(identifier) {

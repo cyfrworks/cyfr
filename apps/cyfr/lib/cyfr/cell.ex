@@ -66,11 +66,10 @@ defmodule Cyfr.Cell do
 
   ## The cluster flag
 
-  `CYFR_CLUSTER=1` used to lift the exclusive claim without replacing it.
-  It now boots only when every condition in `refusals/1` holds, and a
-  cluster member claims its slot like any other. Without the flag, a
-  member additionally refuses to boot while a live PEER holds a slot of
-  this database: one control plane per database, as before.
+  `CYFR_CLUSTER=on` boots only when every condition in `refusals/1` holds,
+  and a cluster member claims its slot like any other. Without the flag,
+  a member additionally refuses to boot while a live peer holds a slot of
+  this database: one control plane per database.
   """
 
   use GenServer
@@ -89,10 +88,6 @@ defmodule Cyfr.Cell do
   @doc "The slot lease a member takes and renews, in milliseconds of database time."
   @spec lease_ms() :: pos_integer()
   def lease_ms, do: @lease_ms
-
-  @doc "Whether `boot` is a live member's boot (`Arca.ControlPlane.live_member?/1`)."
-  @spec live_member?(String.t()) :: boolean()
-  defdelegate live_member?(boot), to: Arca.ControlPlane
 
   @doc """
   The cell's live members by node name, as this member last read them.
@@ -140,7 +135,7 @@ defmodule Cyfr.Cell do
   def mine?(subject) when is_binary(subject) do
     case owner_of(subject) do
       {:ok, member} -> member == node_name()
-      {:error, :no_roster} -> not Application.get_env(:arca, :control_plane_claim_enabled, true)
+      {:error, :no_roster} -> not Arca.ControlPlane.claimed?()
     end
   end
 
@@ -149,7 +144,7 @@ defmodule Cyfr.Cell do
   # ---- the boot refusals -----------------------------------------------------
 
   @doc """
-  What this deployment is missing before `CYFR_CLUSTER=1` may boot, as
+  What this deployment is missing before `CYFR_CLUSTER=on` may boot, as
   operator-facing sentences. An empty list is a cell that may form.
 
   A cluster flag is not evidence of distributed ownership, and each of
@@ -190,7 +185,7 @@ defmodule Cyfr.Cell do
 
   defp postgres(%{adapter: :sqlite}) do
     """
-    CYFR_CLUSTER=1 needs Postgres, and this member's database is SQLite. \
+    CYFR_CLUSTER=on needs Postgres, and this member's database is SQLite. \
     SQLite is one file with one writer and no server clock, so members \
     cannot agree which lease stands. Set CYFR_DATABASE=postgres and point \
     every member at one database, or unset CYFR_CLUSTER.\
@@ -201,7 +196,7 @@ defmodule Cyfr.Cell do
 
   defp shared_storage(%{shared_storage?: false}) do
     """
-    CYFR_CLUSTER=1 needs shared object storage, and this member's storage \
+    CYFR_CLUSTER=on needs shared object storage, and this member's storage \
     is local. Local storage is one member's filesystem: two members would \
     each hold half of every athanor. Set CYFR_STORAGE=s3 with the bucket \
     and credentials every member shares, or unset CYFR_CLUSTER.\
@@ -210,7 +205,7 @@ defmodule Cyfr.Cell do
 
   defp tls_distribution(%{proto_dist: proto}) when proto not in [:inet_tls, :inet6_tls] do
     """
-    CYFR_CLUSTER=1 needs TLS distribution, and this node speaks \
+    CYFR_CLUSTER=on needs TLS distribution, and this node speaks \
     #{inspect(proto)}. A cell of control planes on plain distribution is an \
     unauthenticated remote shell onto the database. Start every member with \
     `-proto_dist inet_tls` (or inet6_tls) and `-ssl_dist_optfile` naming its \
@@ -220,7 +215,7 @@ defmodule Cyfr.Cell do
 
   defp tls_distribution(%{dist_certificates?: false}) do
     """
-    CYFR_CLUSTER=1 needs TLS distribution with certificates, and this node \
+    CYFR_CLUSTER=on needs TLS distribution with certificates, and this node \
     was started with neither `-ssl_dist_optfile` nor `-ssl_dist_opt`. TLS \
     distribution without configured certificates verifies no peer. Name the \
     member's certificate, key and CA in an `-ssl_dist_optfile`, or unset \
@@ -232,7 +227,7 @@ defmodule Cyfr.Cell do
 
   defp cell_cookie(%{cell_cookie: cookie}) when not is_binary(cookie) do
     """
-    CYFR_CLUSTER=1 needs a cell-only cookie, and CYFR_CELL_COOKIE is not \
+    CYFR_CLUSTER=on needs a cell-only cookie, and CYFR_CELL_COOKIE is not \
     set. An ambient ~/.erlang.cookie is the machine's, not the cell's, and \
     a cookie bounds exactly one cell. Set CYFR_CELL_COOKIE to at least 32 \
     random characters on every member, or unset CYFR_CLUSTER.\
@@ -241,7 +236,7 @@ defmodule Cyfr.Cell do
 
   defp cell_cookie(%{cell_cookie: cookie}) when byte_size(cookie) < 32 do
     """
-    CYFR_CLUSTER=1 needs a cell-only cookie of at least 32 characters, and \
+    CYFR_CLUSTER=on needs a cell-only cookie of at least 32 characters, and \
     CYFR_CELL_COOKIE is #{byte_size(cookie)}. Generate one with \
     `openssl rand -hex 32` and set the same value on every member, or unset \
     CYFR_CLUSTER.\
@@ -252,7 +247,7 @@ defmodule Cyfr.Cell do
 
   defp cell_cookie(%{node_cookie: node_cookie}) do
     """
-    CYFR_CLUSTER=1 needs this node to be running under the cell's own \
+    CYFR_CLUSTER=on needs this node to be running under the cell's own \
     cookie, and its distribution cookie is #{inspect(node_cookie)}, not \
     CYFR_CELL_COOKIE. An ambient ~/.erlang.cookie is the machine's, not the \
     cell's. Start every member with CYFR_CELL_COOKIE as its distribution \
@@ -264,7 +259,7 @@ defmodule Cyfr.Cell do
 
   defp topology(_facts) do
     """
-    CYFR_CLUSTER=1 needs a discovery topology, and none is configured. A \
+    CYFR_CLUSTER=on needs a discovery topology, and none is configured. A \
     cell that never forms is a set of members that each believe they are a \
     cell. Set CYFR_CLUSTER_NODES to the members' node names, or \
     CYFR_CLUSTER_DNS_QUERY and CYFR_CLUSTER_NODE_BASENAME for a headless \
@@ -276,7 +271,7 @@ defmodule Cyfr.Cell do
 
   defp locus_runtime_root(_facts) do
     """
-    CYFR_CLUSTER=1 needs CYFR_LOCUS_RUNTIME_ROOT set and identical on every member. \
+    CYFR_CLUSTER=on needs CYFR_LOCUS_RUNTIME_ROOT set and identical on every member. \
     Unset, the worker root is random per boot, so a worker's report to a \
     peer fails MAC verification and its assignment is refused. Generate one \
     with `openssl rand -hex 32` and set the same value on every member, or \
@@ -288,7 +283,7 @@ defmodule Cyfr.Cell do
 
   defp host_api_url(_facts) do
     """
-    CYFR_CLUSTER=1 needs CYFR_HOST_API_URL, the address a worker service \
+    CYFR_CLUSTER=on needs CYFR_HOST_API_URL, the address a worker service \
     reaches THIS member's host API at, and it is not set. Every assignment \
     a member issues carries its own address, and a worker posts that \
     attempt's host calls there; with no address the worker falls back to \
@@ -299,9 +294,13 @@ defmodule Cyfr.Cell do
     """
   end
 
+  # The distribution carrier this node was started with: the two TLS ones
+  # by name, any other as the text it was given, which the refusal names.
   defp proto_dist do
     case :init.get_argument(:proto_dist) do
-      {:ok, [[proto | _] | _]} -> List.to_atom(proto)
+      {:ok, [[~c"inet_tls" | _] | _]} -> :inet_tls
+      {:ok, [[~c"inet6_tls" | _] | _]} -> :inet6_tls
+      {:ok, [[proto | _] | _]} -> List.to_string(proto)
       _ -> :inet_tcp
     end
   end
@@ -322,6 +321,16 @@ defmodule Cyfr.Cell do
 
   # ---- the claimant ----------------------------------------------------------
 
+  @doc """
+  Start this member's claimant of its cell slot. Every option defaults to
+  this member's own: `:name` (this module), `:lease_ms` and `:renew_ms`
+  (the slot lease and its renewal), `:cluster` (`:cyfr, :cluster`),
+  `:node_name` (the slot this member claims, its node's name), `:facts`
+  (`facts/0`, what this member can see of the conditions a cluster boot
+  is refused on) and `:release` (the release this boot runs,
+  `Prima.Version.current/0`).
+  """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
@@ -343,8 +352,6 @@ defmodule Cyfr.Cell do
       do: refuse_unformed_cell!(Keyword.get(opts, :facts, &facts/0)),
       else: refuse_foreign_nodes!()
 
-    # The release this boot runs; a test stands in for a member of another
-    # release by naming one.
     release = Keyword.get_lazy(opts, :release, &Prima.Version.current/0)
 
     state = %{
@@ -578,9 +585,10 @@ defmodule Cyfr.Cell do
         raise "[Cyfr] FATAL: another control plane (#{peer.owner} on #{peer.node}) holds " <>
                 "this database until #{DateTime.to_iso8601(peer.lease_until)} and is " <>
                 "renewing it. Two servers on one database each run every sweep and accept " <>
-                "every turn. Stop the other one, or set CYFR_CLUSTER=1 — which needs " <>
+                "every turn. Stop the other one, or set CYFR_CLUSTER=on — which needs " <>
                 "Postgres, shared object storage, TLS distribution, a cell cookie, a " <>
-                "discovery topology and a shared worker key."
+                "discovery topology, one CYFR_LOCUS_RUNTIME_ROOT on every member and " <>
+                "each member's own CYFR_HOST_API_URL."
     end
   end
 

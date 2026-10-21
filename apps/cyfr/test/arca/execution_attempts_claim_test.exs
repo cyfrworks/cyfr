@@ -426,7 +426,7 @@ defmodule Arca.ExecutionAttemptsClaimTest do
   # An outage, simulated: the table is gone. Postgres drops the tables that
   # reference `executions` along with it.
   defp drop_executions! do
-    if Cyfr.RuntimeConfig.repo_adapter() == Ecto.Adapters.Postgres,
+    if Arca.repo_adapter() == Ecto.Adapters.Postgres,
       do: Arca.Repo.query!("DROP TABLE executions CASCADE"),
       else: Arca.Repo.query!("DROP TABLE executions")
   end

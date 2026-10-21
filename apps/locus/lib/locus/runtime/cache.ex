@@ -30,8 +30,6 @@ defmodule Locus.Runtime.Cache do
       [] ->
         :miss
     end
-  rescue
-    ArgumentError -> :miss
   end
 
   @doc "Keep `value` under `key` for `ttl_ms`."
@@ -39,8 +37,6 @@ defmodule Locus.Runtime.Cache do
   def put(key, value, ttl_ms) when is_integer(ttl_ms) and ttl_ms >= 0 do
     :ets.insert(@table, {key, value, System.monotonic_time(:millisecond) + ttl_ms})
     :ok
-  rescue
-    ArgumentError -> :ok
   end
 
   @doc "Every unexpired `{key, value}` whose key matches `pattern` (`:_` wildcards)."
@@ -51,8 +47,6 @@ defmodule Locus.Runtime.Cache do
     for {key, value, expires_at} <- :ets.match_object(@table, {pattern, :_, :_}),
         now < expires_at,
         do: {key, value}
-  rescue
-    ArgumentError -> []
   end
 
   @doc "Forget the entry under `key`."
@@ -60,8 +54,6 @@ defmodule Locus.Runtime.Cache do
   def invalidate(key) do
     :ets.delete(@table, key)
     :ok
-  rescue
-    ArgumentError -> :ok
   end
 
   @impl true

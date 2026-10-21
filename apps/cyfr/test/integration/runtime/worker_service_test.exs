@@ -392,7 +392,7 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
   # outright, with nothing written on its channel.
   defp kill_runner_process!(runner) do
     %{pid: handle} =
-      Enum.find(Locus.Runtime.RunnerPool.runners(Locus.Runtime.RunnerPool), &(&1.id == runner))
+      Enum.find(Locus.Runtime.Test.Runners.runners(Locus.Runtime.RunnerPool), &(&1.id == runner))
 
     %{os_pid: os_pid} = Locus.Runtime.RunnerProcess.info(handle)
     {_, 0} = System.cmd("kill", ["-KILL", Integer.to_string(os_pid)])

@@ -15,8 +15,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     def only(:expected), do: :ok
   end
 
-  # Poll until a task has a stored result (or is gone) — replaces fixed
-  # sleeps that guessed at async completion.
+  # Poll until a task has a stored result (or is gone), so no test guesses
+  # at async completion with a sleep.
   defp wait_completed(tracker, task_id) do
     wait_until(fn -> AsyncTracker.poll(tracker, task_id) != {:ok, :pending} end)
   end
@@ -27,13 +27,13 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
   describe "a crashed task's log line" do
     test "names the failed call by arity, never its arguments" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
       on_exit(fn -> if Process.alive?(tracker), do: GenServer.stop(tracker) end)
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
           {:ok, id} =
-            AsyncTracker.spawn_task(tracker, fn -> apply(Only, :only, [{:put, @secret}]) end, "r")
+            AsyncTracker.spawn_task(tracker, fn -> apply(Only, :only, [{:put, @secret}]) end)
 
           wait_completed(tracker, id)
           assert {:error, "task crashed"} = AsyncTracker.await_task(tracker, id, 100)
@@ -46,41 +46,34 @@ defmodule Locus.Runtime.AsyncTrackerTest do
   end
 
   describe "start_link/1" do
-    test "starts successfully with default options" do
-      {:ok, pid} = AsyncTracker.start_link([])
+    test "starts under the node's task cap" do
+      {:ok, pid} = AsyncTracker.start_link(max_tasks: 5)
       assert Process.alive?(pid)
       GenServer.stop(pid)
     end
 
-    test "starts with custom options" do
-      {:ok, pid} =
-        AsyncTracker.start_link(
-          parent_execution_id: "exec_test",
-          max_tasks: 5,
-          batch_timeout_ms: 10_000
-        )
-
-      assert Process.alive?(pid)
-      GenServer.stop(pid)
+    test "a tracker without a task cap does not start" do
+      Process.flag(:trap_exit, true)
+      assert {:error, {%KeyError{key: :max_tasks}, _stack}} = AsyncTracker.start_link([])
     end
   end
 
   # ============================================================================
-  # spawn_task/3
+  # spawn_task/2
   # ============================================================================
 
-  describe "spawn_task/3" do
+  describe "spawn_task/2" do
     test "returns task_id on success" do
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
-      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> :hello end, "test-ref")
+      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> :hello end)
       assert task_id == "task_1"
       GenServer.stop(tracker)
     end
 
     test "increments task_id" do
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
-      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :one end, "ref1")
-      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :two end, "ref2")
+      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :one end)
+      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :two end)
       assert id1 == "task_1"
       assert id2 == "task_2"
       GenServer.stop(tracker)
@@ -95,8 +88,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(1000)
             :a
-          end,
-          "ref1"
+          end
         )
 
       {:ok, _} =
@@ -105,12 +97,11 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(1000)
             :b
-          end,
-          "ref2"
+          end
         )
 
       assert {:error, :max_tasks_exceeded} =
-               AsyncTracker.spawn_task(tracker, fn -> :c end, "ref3")
+               AsyncTracker.spawn_task(tracker, fn -> :c end)
 
       GenServer.stop(tracker)
     end
@@ -118,8 +109,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     test "undrained results count against the cap" do
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 2)
 
-      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :a end, "ref1")
-      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :b end, "ref2")
+      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :a end)
+      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :b end)
 
       wait_completed(tracker, id1)
       wait_completed(tracker, id2)
@@ -127,11 +118,11 @@ defmodule Locus.Runtime.AsyncTrackerTest do
       # Both tasks finished but were never awaited — their payloads still
       # sit in tracker state, so no slot is free until the guest drains.
       assert {:error, :max_tasks_exceeded} =
-               AsyncTracker.spawn_task(tracker, fn -> :c end, "ref3")
+               AsyncTracker.spawn_task(tracker, fn -> :c end)
 
       # Draining one frees exactly one slot.
       assert {:ok, :a} = AsyncTracker.await_task(tracker, id1, 1000)
-      assert {:ok, _} = AsyncTracker.spawn_task(tracker, fn -> :d end, "ref4")
+      assert {:ok, _} = AsyncTracker.spawn_task(tracker, fn -> :d end)
 
       GenServer.stop(tracker)
     end
@@ -143,7 +134,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
       refute AsyncTracker.room?(tracker)
 
       assert {:error, :max_tasks_exceeded} =
-               AsyncTracker.spawn_task(tracker, fn -> :ok end, "ref1")
+               AsyncTracker.spawn_task(tracker, fn -> :ok end)
 
       GenServer.stop(tracker)
     end
@@ -158,7 +149,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
       {:ok, tracker} = AsyncTracker.start_link(max_tasks: 2)
       assert AsyncTracker.room?(tracker)
 
-      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :a end, "ref1")
+      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :a end)
       assert AsyncTracker.room?(tracker)
 
       {:ok, _id2} =
@@ -168,8 +159,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
             receive do
               :never -> :b
             end
-          end,
-          "ref2"
+          end
         )
 
       refute AsyncTracker.room?(tracker)
@@ -190,8 +180,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
   describe "await_task/3" do
     test "returns result of completed task" do
-      {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> {:result, 42} end, "ref")
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
+      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> {:result, 42} end)
 
       {:ok, result} = AsyncTracker.await_task(tracker, task_id, 5000)
       assert result == {:result, 42}
@@ -199,13 +189,13 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     end
 
     test "returns error for unknown task_id" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
       assert {:error, :unknown_task} = AsyncTracker.await_task(tracker, "nonexistent", 1000)
       GenServer.stop(tracker)
     end
 
     test "returns timeout error when task takes too long" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
 
       {:ok, task_id} =
         AsyncTracker.spawn_task(
@@ -213,8 +203,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(10_000)
             :done
-          end,
-          "ref"
+          end
         )
 
       assert {:error, :timeout} = AsyncTracker.await_task(tracker, task_id, 100)
@@ -222,8 +211,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     end
 
     test "returns result for already-completed task" do
-      {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> :fast end, "ref")
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
+      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> :fast end)
 
       wait_completed(tracker, task_id)
 
@@ -239,10 +228,10 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
   describe "await_all/3" do
     test "returns all results when all tasks complete" do
-      {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :one end, "ref1")
-      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :two end, "ref2")
-      {:ok, id3} = AsyncTracker.spawn_task(tracker, fn -> :three end, "ref3")
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
+      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :one end)
+      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :two end)
+      {:ok, id3} = AsyncTracker.spawn_task(tracker, fn -> :three end)
 
       {:ok, results} = AsyncTracker.await_all(tracker, [id1, id2, id3], 5000)
       assert length(results) == 3
@@ -256,8 +245,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     end
 
     test "returns timeout errors for slow tasks" do
-      {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :fast end, "ref1")
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
+      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :fast end)
 
       {:ok, id2} =
         AsyncTracker.spawn_task(
@@ -265,8 +254,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(10_000)
             :slow
-          end,
-          "ref2"
+          end
         )
 
       # Short timeout — id1 should complete, id2 should timeout
@@ -282,7 +270,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     end
 
     test "returns empty list for empty task_ids" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
       {:ok, results} = AsyncTracker.await_all(tracker, [], 1000)
       assert results == []
       GenServer.stop(tracker)
@@ -293,7 +281,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     # already give — and never take the tracker down with it, because the
     # tracker dying fails the whole formula run.
     test "an unknown task id is an error result, not a crash" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
 
       assert {:ok, results} = AsyncTracker.await_all(tracker, ["task_never_spawned"], 1000)
       assert results == [{"task_never_spawned", {:error, :unknown_task}}]
@@ -303,8 +291,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     end
 
     test "an unknown id mixed with a real one still returns the real result" do
-      {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, id} = AsyncTracker.spawn_task(tracker, fn -> :done end, "ref1")
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
+      {:ok, id} = AsyncTracker.spawn_task(tracker, fn -> :done end)
 
       assert {:ok, results} = AsyncTracker.await_all(tracker, [id, "task_bogus"], 5000)
 
@@ -323,7 +311,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
   describe "await_any/3" do
     test "returns the first completed task" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
 
       {:ok, id1} =
         AsyncTracker.spawn_task(
@@ -331,11 +319,10 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(500)
             :slow
-          end,
-          "ref1"
+          end
         )
 
-      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :fast end, "ref2")
+      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :fast end)
 
       wait_completed(tracker, id2)
 
@@ -349,7 +336,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     end
 
     test "returns timeout when no task completes in time" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
 
       {:ok, id1} =
         AsyncTracker.spawn_task(
@@ -357,8 +344,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(10_000)
             :a
-          end,
-          "ref1"
+          end
         )
 
       {:ok, id2} =
@@ -367,8 +353,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(10_000)
             :b
-          end,
-          "ref2"
+          end
         )
 
       assert {:error, :timeout} = AsyncTracker.await_any(tracker, [id1, id2], 100)
@@ -377,7 +362,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
     # Unrelated task completions must not cause the await loop to spin; measure scheduler reductions.
     test "a completion for an unwatched task does not spin the await" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
 
       {:ok, watched} =
         AsyncTracker.spawn_task(
@@ -385,8 +370,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(600)
             :watched
-          end,
-          "ref-watched"
+          end
         )
 
       # Lands mid-await: late enough that the tracker is already blocked in
@@ -399,8 +383,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(100)
             :unwatched
-          end,
-          "ref-unwatched"
+          end
         )
 
       {:reductions, before} = Process.info(tracker, :reductions)
@@ -420,8 +403,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     end
 
     test "returns already-completed task immediately" do
-      {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :done end, "ref1")
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
+      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :done end)
 
       wait_completed(tracker, id1)
 
@@ -440,7 +423,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
   describe "poll/2" do
     test "returns pending for running task" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
 
       {:ok, task_id} =
         AsyncTracker.spawn_task(
@@ -448,8 +431,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(5000)
             :done
-          end,
-          "ref"
+          end
         )
 
       assert {:ok, :pending} = AsyncTracker.poll(tracker, task_id)
@@ -457,8 +439,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     end
 
     test "returns result for completed task" do
-      {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> :completed end, "ref")
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
+      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> :completed end)
 
       wait_completed(tracker, task_id)
 
@@ -468,7 +450,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     end
 
     test "returns error for unknown task_id" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
       assert {:error, :unknown_task} = AsyncTracker.poll(tracker, "nonexistent")
       GenServer.stop(tracker)
     end
@@ -480,7 +462,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
   describe "cancel_task/2" do
     test "cancels a running task" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
 
       {:ok, task_id} =
         AsyncTracker.spawn_task(
@@ -488,8 +470,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(10_000)
             :done
-          end,
-          "ref"
+          end
         )
 
       assert :ok = AsyncTracker.cancel_task(tracker, task_id)
@@ -500,8 +481,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     end
 
     test "returns error for already-completed task" do
-      {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> :done end, "ref")
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
+      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> :done end)
 
       wait_completed(tracker, task_id)
 
@@ -510,13 +491,13 @@ defmodule Locus.Runtime.AsyncTrackerTest do
     end
 
     test "returns error for unknown task_id" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
       assert {:error, :unknown_task} = AsyncTracker.cancel_task(tracker, "nonexistent")
       GenServer.stop(tracker)
     end
 
     test "cancelled task does not affect other tasks" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
 
       {:ok, id1} =
         AsyncTracker.spawn_task(
@@ -524,11 +505,10 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(10_000)
             :a
-          end,
-          "ref1"
+          end
         )
 
-      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :b end, "ref2")
+      {:ok, id2} = AsyncTracker.spawn_task(tracker, fn -> :b end)
 
       # Cancel id1
       assert :ok = AsyncTracker.cancel_task(tracker, id1)
@@ -547,10 +527,10 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
   describe "await_all timed-out task cleanup" do
     test "timed-out tasks are killed after await_all returns" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
 
       test_pid = self()
-      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :fast end, "ref1")
+      {:ok, id1} = AsyncTracker.spawn_task(tracker, fn -> :fast end)
 
       {:ok, id2} =
         AsyncTracker.spawn_task(
@@ -559,8 +539,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
             send(test_pid, {:task_pid, self()})
             Process.sleep(60_000)
             :slow
-          end,
-          "ref2"
+          end
         )
 
       # Get the pid of the slow task
@@ -586,9 +565,9 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
   describe "mixed results in await_all" do
     test "handles mix of success, crash, and timeout" do
-      {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, id_ok} = AsyncTracker.spawn_task(tracker, fn -> :success end, "ref1")
-      {:ok, id_crash} = AsyncTracker.spawn_task(tracker, fn -> raise "boom" end, "ref2")
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
+      {:ok, id_ok} = AsyncTracker.spawn_task(tracker, fn -> :success end)
+      {:ok, id_crash} = AsyncTracker.spawn_task(tracker, fn -> raise "boom" end)
 
       {:ok, id_slow} =
         AsyncTracker.spawn_task(
@@ -596,8 +575,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(10_000)
             :slow
-          end,
-          "ref3"
+          end
         )
 
       wait_completed(tracker, id_ok)
@@ -630,8 +608,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(5000)
             :a
-          end,
-          "ref1"
+          end
         )
 
       {:ok, _} =
@@ -640,8 +617,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(5000)
             :b
-          end,
-          "ref2"
+          end
         )
 
       {:ok, _} =
@@ -650,13 +626,12 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(5000)
             :c
-          end,
-          "ref3"
+          end
         )
 
       # Fourth spawn should fail
       assert {:error, :max_tasks_exceeded} =
-               AsyncTracker.spawn_task(tracker, fn -> :d end, "ref4")
+               AsyncTracker.spawn_task(tracker, fn -> :d end)
 
       GenServer.stop(tracker)
     end
@@ -671,8 +646,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(200)
             :first
-          end,
-          "ref1"
+          end
         )
 
       {:ok, _id2} =
@@ -681,19 +655,18 @@ defmodule Locus.Runtime.AsyncTrackerTest do
           fn ->
             Process.sleep(5000)
             :slow
-          end,
-          "ref2"
+          end
         )
 
       # At limit — both tasks still running
       assert {:error, :max_tasks_exceeded} =
-               AsyncTracker.spawn_task(tracker, fn -> :c end, "ref3")
+               AsyncTracker.spawn_task(tracker, fn -> :c end)
 
       # Await id1 to free a slot (also removes from tasks map)
       {:ok, :first} = AsyncTracker.await_task(tracker, id1, 5000)
 
       # Now we should be able to spawn again
-      {:ok, _id3} = AsyncTracker.spawn_task(tracker, fn -> :new end, "ref3")
+      {:ok, _id3} = AsyncTracker.spawn_task(tracker, fn -> :new end)
 
       GenServer.stop(tracker)
     end
@@ -705,7 +678,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
   describe "cleanup" do
     test "stopping tracker kills orphaned tasks" do
-      {:ok, tracker} = AsyncTracker.start_link([])
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
 
       test_pid = self()
 
@@ -717,8 +690,7 @@ defmodule Locus.Runtime.AsyncTrackerTest do
             send(test_pid, :task_started)
             Process.sleep(60_000)
             :never_reached
-          end,
-          "ref"
+          end
         )
 
       assert_receive :task_started, 1000
@@ -737,8 +709,8 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
   describe "crash handling" do
     test "crashed task is stored as error result" do
-      {:ok, tracker} = AsyncTracker.start_link([])
-      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> raise "boom" end, "ref")
+      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
+      {:ok, task_id} = AsyncTracker.spawn_task(tracker, fn -> raise "boom" end)
 
       wait_completed(tracker, task_id)
 

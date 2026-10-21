@@ -3,19 +3,12 @@
 
 defmodule CyfrWeb.ConnCase do
   @moduledoc """
-  This module defines the test case to be used by
-  tests that require setting up a connection.
-
-  Such tests rely on `Phoenix.ConnTest` and also
-  import other functionality to make it easier
-  to build common data structures and query the data layer.
-
-  Finally, if the test case interacts with the database,
-  we enable the SQL sandbox, so changes done to the database
-  are reverted at the end of every test. If you are using
-  PostgreSQL, you can even run database tests asynchronously
-  by setting `use CyfrWeb.ConnCase, async: true`, although
-  this option is not recommended for other databases.
+  The case template for tests that send requests through
+  `CyfrWeb.Endpoint`: it imports `Phoenix.ConnTest`, `Plug.Conn` and the
+  verified routes, builds the case's `conn` from its tags (`conn_for/1`),
+  and starts the case's sandbox owner (`Cyfr.Test.Sandbox.setup!/1`,
+  shared unless the case is async), so every write the case makes is
+  rolled back when it ends.
 
   ## Authentication
 
@@ -25,6 +18,10 @@ defmodule CyfrWeb.ConnCase do
   gives a bare `conn`, which reaches the plug as an anonymous caller.
   `auth` on an async test raises, because the provider that reads the
   bearer is global application environment.
+
+  The `conn` carries the endpoint's `secret_key_base`, as the endpoint
+  sets it on every request it serves, so a test that calls a plug or a
+  controller action directly signs and encrypts cookies as a request does.
   """
 
   use ExUnit.CaseTemplate
@@ -71,7 +68,10 @@ defmodule CyfrWeb.ConnCase do
               "application environment, so only a sync test may authenticate"
     end
 
-    conn = Phoenix.ConnTest.build_conn()
+    conn = %{
+      Phoenix.ConnTest.build_conn()
+      | secret_key_base: Application.fetch_env!(:cyfr, CyfrWeb.Endpoint)[:secret_key_base]
+    }
 
     case tags[:auth] do
       :person -> authenticate_as(conn)

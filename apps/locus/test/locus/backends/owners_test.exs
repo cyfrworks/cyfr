@@ -9,8 +9,11 @@ defmodule Locus.Backends.OwnersTest do
   `unknown`; reconcile and release; a lease lapsing and a backend going
   idle through a driven sweep, on a clock the test moves; a sync answered
   on admission with readiness through `rev`; the bound on backends per
-  owner and on calls awaiting one backend. Backends run through the test
-  environment's `Locus.DirectLauncher`; the pool is a stub the test sets.
+  owner and on calls awaiting one backend; a backend's spawn bounded by
+  the backends' configured memory when the owners are given none. Backends
+  run through the test environment's `Locus.DirectLauncher`, and through
+  `Locus.Keeper` to `Locus.Test.FakeKeeper` where the spawn is read; the
+  pool is a stub the test sets.
   The probe (`fixtures/probe.mjs`) needs `node`; its cases are tagged
   `:requires_node`.
   """
@@ -20,6 +23,7 @@ defmodule Locus.Backends.OwnersTest do
   import Prima.Test.Wait
 
   alias Locus.Backends.{Backend, LeaseSweeper, Owners}
+  alias Locus.Test.FakeKeeper
 
   @probe Path.expand("fixtures/probe.mjs", __DIR__)
   @athanor "ath_owners"
@@ -77,7 +81,11 @@ defmodule Locus.Backends.OwnersTest do
   defp advance(%{clock: clock}, ms), do: Agent.update(clock, &(&1 + ms))
 
   defp node! do
-    {path, 0} = System.cmd("node", ["-e", "process.stdout.write(process.execPath)"])
+    {path, 0} =
+      System.cmd("node", ["-e", "process.stdout.write(process.execPath)"],
+        env: Locus.Test.ProcessFamily.without_cyfr()
+      )
+
     path
   end
 
@@ -448,17 +456,17 @@ defmodule Locus.Backends.OwnersTest do
 
       assert {:ok, _} = sync(owners, "a", {1, 1}, probe, idle_ms: 1_000)
       pid = backend_pid(owners, "a", {1, 1}, "probe")
-      wait_until(fn -> Backend.status(pid).status == :ready end, 5_000)
+      wait_until(fn -> Backend.status(pid, 5_000).status == :ready end, 5_000)
 
       # Used within the period: kept.
       advance(ctx, 999)
       :ok = LeaseSweeper.sweep(owners)
-      assert %{status: :ready} = Backend.status(pid)
+      assert %{status: :ready} = Backend.status(pid, 5_000)
 
       advance(ctx, 1)
       :ok = LeaseSweeper.sweep(owners)
-      wait_until(fn -> Backend.status(pid).status == :idle end, 5_000)
-      assert %{tools: 2} = Backend.status(pid)
+      wait_until(fn -> Backend.status(pid, 5_000).status == :idle end, 5_000)
+      assert %{tools: 2} = Backend.status(pid, 5_000)
 
       # Its uid is free once its process is retired: another owner takes it.
       [owner] = Map.values(held(owners))
@@ -477,7 +485,7 @@ defmodule Locus.Backends.OwnersTest do
       assert {:ok, %{"content" => [%{"text" => ~s({"said":"again"})}]}} =
                Backend.call_tool(pid, "echo", %{"said" => "again"})
 
-      assert %{status: :ready} = Backend.status(pid)
+      assert %{status: :ready} = Backend.status(pid, 5_000)
       assert held(owners)[owner.id].backends["probe"].slot
     end
   end
@@ -536,7 +544,7 @@ defmodule Locus.Backends.OwnersTest do
       probe = [{"probe", probe(), %{}}]
       assert {:ok, _} = sync(owners, "a", {1, 1}, probe)
       pid = backend_pid(owners, "a", {1, 1}, "probe")
-      wait_until(fn -> Backend.status(pid).status == :ready end, 5_000)
+      wait_until(fn -> Backend.status(pid, 5_000).status == :ready end, 5_000)
 
       assert {:error, {:tool_error, _}} = Backend.call_tool(pid, "crash", %{})
       status = %{type: :status, owners: [%{athanor: @athanor, server: "a"}]}
@@ -559,7 +567,7 @@ defmodule Locus.Backends.OwnersTest do
       probe = [{"probe", probe(), %{}}]
       assert {:ok, _} = sync(owners, "a", {1, 1}, probe)
       pid = backend_pid(owners, "a", {1, 1}, "probe")
-      wait_until(fn -> Backend.status(pid).status == :ready end, 5_000)
+      wait_until(fn -> Backend.status(pid, 5_000).status == :ready end, 5_000)
 
       # A line that is no answer: the call awaits one until it is stopped.
       waiting = Task.async(fn -> Backend.call_tool(pid, "flood", %{"bytes" => 8}) end)
@@ -577,6 +585,50 @@ defmodule Locus.Backends.OwnersTest do
       release = %{type: :release, owners: [%{athanor: @athanor, server: "a", e: 1}]}
       assert {:ok, _} = control(owners, 1, release)
       assert {:error, {:tool_error, _stopped}} = Task.await(waiting)
+    end
+  end
+
+  describe "a backend's spawn through the keeper's client" do
+    setup do
+      {fake, channel} = FakeKeeper.start()
+      attach_dir = FakeKeeper.short_tmp_dir()
+
+      {:ok, client} = Locus.Keeper.start_link(channel: channel, attach_dir: attach_dir, name: nil)
+
+      Process.unlink(client)
+      :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
+
+      on_exit(fn ->
+        Process.exit(client, :kill)
+        Process.exit(fake, :kill)
+        File.rm_rf!(attach_dir)
+      end)
+
+      {:ok, fake: fake, keeper: client}
+    end
+
+    test "carries the backends' configured memory bound when the owners are given none", ctx do
+      owners =
+        start_owners(ctx,
+          backend_opts: [
+            launcher: Locus.Keeper,
+            launcher_server: ctx.keeper,
+            release_timeout_ms: 5_000,
+            init_timeout_ms: 60_000
+          ]
+        )
+
+      assert {:ok, _} = sync(owners, "mem", {1, 1}, idle_backends(1))
+
+      wait_until(
+        fn -> Enum.any?(FakeKeeper.requests(ctx.fake), &(&1["type"] == "spawn")) end,
+        10_000
+      )
+
+      [spawn] = Enum.filter(FakeKeeper.requests(ctx.fake), &(&1["type"] == "spawn"))
+      assert spawn["pool"] == "backends"
+      assert spawn["memory_bytes"] == Locus.Config.backends_memory_bytes()
+      assert spawn["memory_bytes"] == 536_870_912
     end
   end
 end

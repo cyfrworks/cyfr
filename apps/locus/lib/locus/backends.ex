@@ -7,7 +7,8 @@ defmodule Locus.Backends do
   per athanor and server row, each backend a long-lived process under the
   keeper, served over `Prima.LocusBackends`. This module is its facade:
   the children `Locus.Application` starts on a node that holds a backends
-  key, and the service's settings as `Locus.Config` reads them. Nothing
+  key, and the address its listener serves on as `Locus.Config` reads it.
+  Nothing
   outside `Locus.Backends` names a module under it but `Locus.Application`,
   and it only through this facade.
 
@@ -59,10 +60,6 @@ defmodule Locus.Backends do
   @spec init_nonces() :: :ok
   defdelegate init_nonces, to: Service
 
-  @doc "The backends service key, or nil where the node serves no backends."
-  @spec key() :: binary() | nil
-  defdelegate key, to: Locus.Config, as: :backends_key
-
   @doc "The address the backends service listens on."
   @spec bind() :: :inet.ip_address()
   defdelegate bind, to: Locus.Config, as: :backends_bind
@@ -70,20 +67,4 @@ defmodule Locus.Backends do
   @doc "The port the backends service listens on."
   @spec port() :: :inet.port_number()
   defdelegate port, to: Locus.Config, as: :backends_port
-
-  @doc "The calls that may await one backend at a time."
-  @spec max_in_flight() :: pos_integer()
-  defdelegate max_in_flight, to: Locus.Config, as: :backends_max_in_flight
-
-  @doc "The bound on each step of a backend's handshake, in milliseconds."
-  @spec init_timeout_ms() :: pos_integer()
-  defdelegate init_timeout_ms, to: Locus.Config, as: :backends_init_timeout_ms
-
-  @doc "The bound on one call to a backend, in milliseconds."
-  @spec rpc_timeout_ms() :: pos_integer()
-  defdelegate rpc_timeout_ms, to: Locus.Config, as: :backends_rpc_timeout_ms
-
-  @doc "The memory bound each backend's process is spawned under, in bytes."
-  @spec memory_bytes() :: pos_integer()
-  defdelegate memory_bytes, to: Locus.Config, as: :backends_memory_bytes
 end

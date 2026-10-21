@@ -50,7 +50,7 @@
 //                the glass: the home ends its stream, revokes it and closes
 //                the channel; the glass forgets its key and certificate, and
 //                its last certificate opens nothing
-//   viewport     the glass's steps once more at the proposed handheld's
+//   viewport     the glass's steps once more at the handheld's
 //                720×720 touch viewport (../browser/handheld.mjs): its key's
 //                code typed on the desktop, a pairing's consent in the
 //                Prism's system layer, the glass,
@@ -753,7 +753,7 @@ async function revoke(desk, phone) {
     record.revoke);
 }
 
-// The glass's steps once more on the proposed handheld (HANDHELD): the
+// The glass's steps once more on the handheld (HANDHELD): the
 // phone signed in again in a context of its own, its authenticator holding
 // the person's passkey carried from the phone's. Its Prism reads and
 // confirms a pairing in the system layer; it becomes the glass, confirms a

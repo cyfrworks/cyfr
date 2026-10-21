@@ -3,17 +3,10 @@
 
 defmodule Locus.Backends.Relay do
   @moduledoc """
-  The stdio side of one backend's process, as data: the bytes its relay
-  connection carries in, the JSON-RPC lines its stdout forms, the calls
-  awaiting an answer, and the tail of its stderr. State in, state out; no
-  process.
-
-  `frames/2` takes an attach connection's bytes as they arrive and decodes
-  them with `Prima.KeeperProtocol.parse_frames/1`: stdout and stderr go on
-  as `stdout/2` and `stderr/2` take them, a zero-length frame ends
-  nothing, and a frame the codec refuses or on any other stream is the
-  relay's fault (`:relay_protocol`). A launcher that has decoded the frames
-  already hands their payloads to `stdout/2` and `stderr/2` directly.
+  The stdio side of one backend's process, as data: the JSON-RPC lines
+  its stdout forms, the calls awaiting an answer, and the tail of its
+  stderr. State in, state out; no process. The launcher decodes the
+  process's frames and hands their payloads to `stdout/2` and `stderr/2`.
 
   Stdout is newline-delimited JSON-RPC. A line, or the part of one that
   has no newline yet, longer than `Prima.LocusBackends.max_frame_bytes/0`
@@ -35,10 +28,9 @@ defmodule Locus.Backends.Relay do
   taken (`stderr_tail/2`).
   """
 
-  alias Prima.{KeeperProtocol, LocusBackends}
+  alias Prima.LocusBackends
 
-  defstruct frames: "",
-            line: "",
+  defstruct line: "",
             stderr: "",
             pending: %{},
             next_id: 0,
@@ -51,7 +43,6 @@ defmodule Locus.Backends.Relay do
   @type tag :: term()
 
   @type t :: %__MODULE__{
-          frames: binary(),
           line: binary(),
           stderr: binary(),
           pending: %{pos_integer() => tag()},
@@ -85,13 +76,13 @@ defmodule Locus.Backends.Relay do
   end
 
   @doc """
-  The relay for the backend's next process: stdout, frames and pending
-  calls start over, ids from 1 again; the stderr kept and the count of
-  dropped messages carry on.
+  The relay for the backend's next process: stdout and pending calls
+  start over, ids from 1 again; the stderr kept and the count of dropped
+  messages carry on.
   """
   @spec restart(t()) :: t()
   def restart(%__MODULE__{} = relay),
-    do: %{relay | frames: "", line: "", pending: %{}, next_id: 0}
+    do: %{relay | line: "", pending: %{}, next_id: 0}
 
   # ————— calls —————
 
@@ -146,30 +137,6 @@ defmodule Locus.Backends.Relay do
   def dropped(%__MODULE__{dropped: dropped}), do: dropped
 
   # ————— bytes in —————
-
-  @doc "An attach connection's bytes: the events their stdout frames carry."
-  @spec frames(t(), binary()) ::
-          {:ok, [event()], t()} | {:error, :relay_protocol | :frame_too_large}
-  def frames(%__MODULE__{} = relay, data) when is_binary(data) do
-    case KeeperProtocol.parse_frames(relay.frames <> data) do
-      {:ok, frames, rest} -> each_frame(%{relay | frames: rest}, frames, [])
-      {:error, _reason} -> {:error, :relay_protocol}
-    end
-  end
-
-  defp each_frame(relay, [], events), do: {:ok, events, relay}
-
-  defp each_frame(relay, [{:stdout, payload} | frames], events) do
-    case stdout(relay, payload) do
-      {:ok, more, relay} -> each_frame(relay, frames, events ++ more)
-      {:error, _reason} = error -> error
-    end
-  end
-
-  defp each_frame(relay, [{:stderr, payload} | frames], events),
-    do: each_frame(stderr(relay, payload), frames, events)
-
-  defp each_frame(_relay, _frames, _events), do: {:error, :relay_protocol}
 
   @doc "Bytes of the backend's stdout: the events of every line they complete."
   @spec stdout(t(), binary()) :: {:ok, [event()], t()} | {:error, :frame_too_large}

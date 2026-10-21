@@ -62,7 +62,7 @@
 # build toolchain's files too; its runners still hold no capability, no
 # route and no descriptor but their channel and relay.
 
-# ---- cyfr-locus, the process helper: a static Go binary, pinned to the Go
+# ---- The process helper, cyfr-locus: a static Go binary, pinned to the Go
 # release apps/locus/keeper/go.mod names ----
 FROM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS keeper
 WORKDIR /src
@@ -71,14 +71,12 @@ RUN go mod download
 COPY apps/locus/keeper/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/cyfr-locus .
 
-# ---- Stage 1: release build ----
+# ---- The release build ----
 FROM hexpm/elixir:1.20.4-erlang-29.1.1-debian-trixie-20261005@sha256:fd5f8520b3836b8b1e5d5e6dd890d1fda394e4e378bbc0cbc67cd618f321e29b AS relbuilder
 
 RUN apt-get update && apt-get install -y \
     build-essential \
-    git \
     curl \
-    libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV MIX_ENV=prod
@@ -93,11 +91,7 @@ RUN mix local.hex --force && mix local.rebar --force
 
 # The release is built from the two apps it holds: the umbrella here is
 # the contracts and Locus alone, so nothing of the control plane is
-# fetched, compiled or present in this stage. The umbrella's manifest
-# names a Mix listener of the control plane's (Phoenix's code reloader),
-# which does not exist here and which a release build has no use for:
-# the compile runs without listeners, and the release is assembled from
-# what it compiled.
+# fetched, compiled or present in this stage.
 # The pinned wasm-tools every component is validated with
 # (`Prima.ComponentFeatures`), its archive checked against the pinned
 # sha256 by the one installer (scripts/wasm-tools.sh).
@@ -118,9 +112,9 @@ COPY apps/locus/ apps/locus/
 # build here instead.
 COPY wit/ wit/
 
-RUN mix do compile --no-listeners + release locus --no-compile
+RUN mix do compile + release locus --no-compile
 
-# ---- Stage 2: toolchain runtime ----
+# ---- The toolchain runtime ----
 FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 LABEL org.opencontainers.image.source="https://github.com/cyfrworks/cyfr"
@@ -139,7 +133,6 @@ RUN echo "apt refresh ${APT_REFRESH}" && apt-get update && apt-get upgrade -y &&
     openssl \
     libncurses6 \
     ca-certificates \
-    libsqlite3-0 \
     curl \
     locales \
     build-essential \

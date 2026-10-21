@@ -356,7 +356,7 @@ defmodule Cyfr.TelemetryBridge do
       execution_id: meta[:execution_id],
       request_id: meta[:request_id],
       parent_execution_id: meta[:parent_execution_id],
-      reference: meta[:reference] || meta[:component],
+      reference: meta[:reference],
       component_type: meta[:component_type],
       duration_ms: meta[:duration_ms],
       error: classify(meta[:error])

@@ -159,7 +159,7 @@ defmodule Cyfr.EnvFilesTest do
 
     test "the refusal names the file that holds it, after files that do not", %{dir: dir} do
       clean = env_file(dir, ["A=a"])
-      held = Path.join(dir, ".env.local")
+      held = Path.join(dir, "second.env")
       File.write!(held, "B=b\nC=$(\n")
 
       message =
@@ -174,7 +174,7 @@ defmodule Cyfr.EnvFilesTest do
       dir: dir
     } do
       shared = env_file(dir, ["SHARED=base"])
-      local = Path.join(dir, ".env.local")
+      local = Path.join(dir, "second.env")
 
       for {line, said} <- [
             {"B=$(secret", "opens a $( it does not close on that line."},
@@ -196,7 +196,7 @@ defmodule Cyfr.EnvFilesTest do
 
     test "an earlier file that fails another way is reported as Dotenvy reports it", %{dir: dir} do
       broken = env_file(dir, [~s[A="unterminated]])
-      held = Path.join(dir, ".env.local")
+      held = Path.join(dir, "second.env")
       File.write!(held, "B=$(\n")
 
       message =
@@ -234,7 +234,8 @@ defmodule Cyfr.EnvFilesTest do
       "CYFR_ACCESS" => "local",
       "CYFR_DATABASE" => nil,
       "CYFR_COSIGN_KEY" => nil,
-      "CYFR_COSIGN_PASSWORD" => nil
+      "CYFR_COSIGN_IDENTITY" => nil,
+      "CYFR_COSIGN_ISSUER" => nil
     }
 
     previous = Map.new(env, fn {k, _} -> {k, System.get_env(k)} end)
@@ -262,18 +263,19 @@ defmodule Cyfr.EnvFilesTest do
     test "a .env value holding a $(…) reaches the configuration as written, and nothing runs",
          %{dir: dir, marker: marker} do
       env_file(dir, [
-        "CYFR_COSIGN_KEY=/keys/cosign.key",
-        ~s[CYFR_COSIGN_PASSWORD="pa$(touch #{marker})ss"]
+        "CYFR_COSIGN_ISSUER=https://issuer.example",
+        ~s[CYFR_COSIGN_IDENTITY="pa$(touch #{marker})ss"]
       ])
 
       config = with_release_env(dir, &read_prod_config!/0)
 
-      assert config[:cyfr][:sigstore][:password] == "pa$(touch #{marker})ss"
+      assert config[:cyfr][:sigstore][:identity] == "pa$(touch #{marker})ss"
       refute File.exists?(marker)
     end
 
     test "a $( not closed on its line refuses the boot by file and line", %{dir: dir} do
-      path = env_file(dir, ["CYFR_COSIGN_KEY=/keys/cosign.key", "CYFR_COSIGN_PASSWORD=pa$(ss"])
+      path =
+        env_file(dir, ["CYFR_COSIGN_ISSUER=https://issuer.example", "CYFR_COSIGN_IDENTITY=pa$(ss"])
 
       message =
         with_release_env(dir, fn ->

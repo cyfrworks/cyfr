@@ -27,8 +27,8 @@ defmodule Cyfr.Platform.Settings.Roster do
   harness), which a shell may export beside a server. `unknown/2` is the
   refusal: a `CYFR_*` name in the boot's `.env` files that none of the
   first three classes declares, or one in its process environment that
-  none of the four declares, refuses the boot naming it. That is how a
-  retired name is refused without a list of retired names.
+  none of the four declares, refuses the boot naming it: a name the server
+  does not read is never set to no effect.
 
   Every declaration carries the sentence `configuration-guide.md` gives
   it, which `mix cyfr.gen.configuration_guide` renders from this module.
@@ -52,10 +52,10 @@ defmodule Cyfr.Platform.Settings.Roster do
         and its reader reads once, and `[:level]` for the log level, which
         Logger holds. `nil` for every other setting, whose reader calls
         `Arca.PlatformSettings.effective/1` on each use.
-      * `variable` — the `CYFR_*` name that pins it, or `nil`.
-      * `type` — the value's shape: `:integer`, `:boolean`, `:string`,
-        `:duration_s` (whole seconds), `:list`, `:keyword` or `:atom` (a
-        name from a closed set, stored as its string).
+      * `variable` — the `CYFR_*` name that pins it.
+      * `type` — the value's shape: `:integer`, `:string`, `:duration_s`
+        (whole seconds) or `:atom` (a name from a closed set, stored as its
+        string).
       * `default` — the value when neither the environment nor a row sets it;
         `nil` is a value where the reader reads it as "none" (an unset cap,
         the hostname for the device label).
@@ -92,10 +92,10 @@ defmodule Cyfr.Platform.Settings.Roster do
 
     @type t :: %__MODULE__{
             key: String.t(),
-            app: :cyfr | :sanctum | :arca | :logger,
+            app: :cyfr | :sanctum | :logger,
             config: [atom()] | nil,
-            variable: String.t() | nil,
-            type: :integer | :boolean | :string | :duration_s | :list | :keyword | :atom,
+            variable: String.t(),
+            type: :integer | :string | :duration_s | :atom,
             default: term(),
             validator: (term() -> {:ok, term()} | {:error, String.t()}),
             group: atom(),
@@ -132,7 +132,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_AUTH_PROVIDER",
      "The sign-in provider: unset for the built-in GitHub and Google device flows, `oidc` for the external issuer the three `CYFR_OIDC_*` variables name; `oidc` with any of them missing refuses the boot."},
     {"CYFR_AUTO_MIGRATE",
-     "Whether the server migrates the schema on boot (default `true`); `false` when several members share one PostgreSQL database or an operator runs `bin/cyfr eval \"Cyfr.Release.migrate()\"` by hand."},
+     "Whether the server migrates the schema on boot (default `on`); `off` when several members share one PostgreSQL database or an operator runs `bin/cyfr eval \"Cyfr.Release.migrate()\"` by hand."},
     {"CYFR_BIND_ADDRESS",
      "The address the endpoint's loopback listener binds, in every mode (default `127.0.0.1`): `127.0.0.1` or `::1`, since the boot refuses any other address without the compose file's `CYFR_LOCAL_INGRESS_ASSERTED`. The stack binds cyfr's fixed address on its `default` network, which no other container joins and Docker publishes on the host's loopback port alone."},
     {"CYFR_CELL_COOKIE",
@@ -146,14 +146,13 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_CLUSTER_NODES",
      "A cell's members by name, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`)."},
     {"CYFR_CORS_ALLOWED_ORIGINS",
-     "The browser CORS allowlist, comma-separated origins. Assigned empty, as `cyfr init` writes it, it admits no cross-origin caller, which the shipped stack never needs; unassigned, the application's configured list stands, empty unless the deployment's own configuration names one. A release with sign-in configured refuses to boot on a wildcard."},
+     "The browser CORS allowlist, comma-separated origins. Empty or unset (`cyfr init` writes it empty), it admits no cross-origin caller, which the shipped stack never needs. A release with sign-in configured refuses to boot on a wildcard."},
     {"CYFR_COSIGN_IDENTITY",
      "Keyless OCI signature verification: the regular expression the signing certificate's identity must match, with `CYFR_COSIGN_ISSUER`; a missing keyless constraint refuses verification."},
     {"CYFR_COSIGN_ISSUER",
      "Keyless OCI signature verification: the regular expression the signing certificate's issuer must match, with `CYFR_COSIGN_IDENTITY`."},
     {"CYFR_COSIGN_KEY",
      "Key-based OCI signature verification: the path of a file holding the cosign public key, readable by the server; a value that names no readable file (a KMS URI among them) refuses verification as `unreadable_key`."},
-    {"CYFR_COSIGN_PASSWORD", "The password of `CYFR_COSIGN_KEY`, when it has one."},
     {"CYFR_CRYPTO_KEYRING",
      "The keyring sealing secrets at rest (vault entries, webhook secrets, registry tokens, and each person's online keys and pending recovery material), as JSON `{\"primary\":\"label\",\"keys\":{\"label\":\"<base64, at least 32 bytes>\"}}`; unset, one key derived from `CYFR_SECRET_KEY_BASE`. To rotate, keep the old labels listed and re-seal with `Cyfr.Release.rotate_cipher_keys/1`. Losing it loses every person's online keys at this home: an enrolled person restores from a printed kit on an empty installation, and an unenrolled person's keys are gone."},
     {"CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT",
@@ -164,7 +163,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_DATABASE_URL",
      "The PostgreSQL URL, which a PostgreSQL build requires (there is no localhost fallback)."},
     {"CYFR_DATA_PATH",
-     "The one runtime storage root: every athanor's tree, the caches and the SQLite database (default `data`; the image sets its own)."},
+     "The one runtime storage root: every athanor's tree, the caches and the SQLite database (default `data`, under the working directory: `/app/data` in the image)."},
     {"CYFR_DB_POOL_SIZE", "The database connection pool's size (default 20)."},
     {"CYFR_DB_SSL", "TLS to the PostgreSQL server (default off)."},
     {"CYFR_DIRECTORY_URL",
@@ -239,7 +238,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_S3_ACCESS_KEY_ID", "The object store's access key ID, with `CYFR_STORAGE=s3`."},
     {"CYFR_S3_BUCKET", "The object store's bucket, with `CYFR_STORAGE=s3`."},
     {"CYFR_S3_ENDPOINT",
-     "The endpoint of a non-AWS object store (MinIO and the like), usually with `CYFR_S3_PATH_STYLE=true`."},
+     "The endpoint of a non-AWS object store (MinIO and the like), usually with `CYFR_S3_PATH_STYLE=on`."},
     {"CYFR_S3_PATH_STYLE", "Path-style bucket addressing (default off)."},
     {"CYFR_S3_PREFIX", "A key prefix every object is stored under (default none)."},
     {"CYFR_S3_RECEIVE_TIMEOUT_MS",
@@ -294,13 +293,14 @@ defmodule Cyfr.Platform.Settings.Roster do
   @foreign [
     {"CYFR_TOKEN", "the Codex CLI: the session token its non-interactive path signs in with"},
     {"CYFR_NO_UPDATE_CHECK", "the Codex CLI: turns off its release check"},
+    {"CYFR_NO_INTERACTIVE", "the Codex CLI: turns off its prompts, as `--no-interactive` does"},
     {"CYFR_INSECURE_SKIP_VERIFY",
-     "the Codex CLI: skips TLS verification of the server it calls; the installer: skips verifying the download"},
+     "the installer (scripts/install.sh): skips verifying the download's checksum and signature"},
     {"CYFR_INSTALL_DIR", "the installer (scripts/install.sh): where it puts the CLI"},
     {"CYFR_ALLOW_UNVERIFIED",
      "the installer: installs without cosign or the release's signature, on the checksum alone"},
     {"CYFR_VERSION", "the installer: the release it installs"},
-    {"CYFR_IMAGE", "the installer: the image the stack it writes runs"},
+    {"CYFR_IMAGE", "the test harness: the app image the backends image suite runs"},
     {"CYFR_RESTORE_INCOMPLETE",
      "the Codex CLI and the image's entrypoint: the restore's bar, which `cyfr restore` sets in the project's `.env` (the cyfr service's `env_file`) until the restore is declared and sets empty for its own offline evals; the entrypoint refuses to start anything while it is non-empty"},
     {"CYFR_TEST_*", "the test harness: its partition, run root and object-store fixtures"},
@@ -839,8 +839,7 @@ defmodule Cyfr.Platform.Settings.Roster do
   # ---------------------------------------------------------------------------
 
   # A whole number of `unit` in `range`, from the environment's text (read
-  # by the strict reader the boot has always used, `Prima.EnvValue`) or as
-  # an integer.
+  # by the boot's strict reader, `Prima.EnvValue`) or as an integer.
   defp whole(_first.._last//1 = range, unit) do
     bounded(range, unit, &Prima.EnvValue.whole_number(&1, "value", range, unit))
   end
@@ -909,7 +908,7 @@ defmodule Cyfr.Platform.Settings.Roster do
 
   @doc "Every rostered setting's variable."
   @spec variables() :: [String.t()]
-  def variables, do: for(%Entry{variable: v} <- entries(), v != nil, do: v)
+  def variables, do: Enum.map(entries(), & &1.variable)
 
   @doc """
   The deployment variables: read before the repo opens, deciding how the
@@ -1045,16 +1044,6 @@ defmodule Cyfr.Platform.Settings.Roster do
   end
 
   @doc """
-  The `{application, key}` pairs the entries are written under: the head
-  of each configuration path, the restart-scoped settings' and the log
-  level's. `Cyfr.Boundaries` classes these keys `:setting`.
-  """
-  @spec config_keys() :: [{atom(), atom()}]
-  def config_keys do
-    for %Entry{app: app, config: [key | _]} <- entries(), uniq: true, do: {app, key}
-  end
-
-  @doc """
   The settings this boot's environment pinned, as `config/runtime.exs`
   recorded them: `{key, value}`, sorted by key.
   """
@@ -1071,8 +1060,6 @@ defmodule Cyfr.Platform.Settings.Roster do
   variable and the form it must take.
   """
   @spec read(Entry.t(), getenv()) :: {:ok, term()} | {:error, String.t()}
-  def read(%Entry{variable: nil}, _getenv), do: {:ok, nil}
-
   def read(%Entry{variable: variable, validator: validator}, getenv)
       when is_function(getenv, 1) do
     case Prima.EnvValue.text(getenv, variable) do

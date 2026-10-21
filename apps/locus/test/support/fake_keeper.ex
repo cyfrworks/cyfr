@@ -44,8 +44,8 @@ defmodule Locus.Test.FakeKeeper do
   @stream_attach 3
 
   # Named by absolute path, as the direct launcher names its tools: a test
-  # that moves this node's PATH must not lose a kill.
-  @kill "/bin/kill"
+  # that moves this node's PATH must not lose a fifo. Signals go through
+  # the direct launcher's group signal (`Locus.DirectLauncher.signal_group/2`).
   @mkfifo "/usr/bin/mkfifo"
 
   @doc "Starts a fake and answers `{fake, client_channel}`, the `:socket` to hand `Locus.Keeper`."
@@ -68,23 +68,23 @@ defmodule Locus.Test.FakeKeeper do
   @doc """
   A fake and a `Locus.Keeper` client on its channel, both stopped and the
   client's attach directory removed when the calling test ends: answers
-  `%{fake: fake, name: name, client: client}`, `name` the client's.
+  `%{fake: fake, name: client, client: client}`, the client addressed
+  by its pid.
   """
   def start_client! do
     {fake, channel} = start()
     attach_dir = short_tmp_dir()
-    name = :"keeper_#{System.unique_integer([:positive])}"
 
     ExUnit.Callbacks.on_exit(fn ->
       Process.exit(fake, :kill)
       File.rm_rf!(attach_dir)
     end)
 
-    {:ok, client} = Locus.Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
+    {:ok, client} = Locus.Keeper.start_link(channel: channel, attach_dir: attach_dir, name: nil)
     Process.unlink(client)
     ExUnit.Callbacks.on_exit(fn -> Process.exit(client, :kill) end)
     :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
-    %{fake: fake, name: name, client: client}
+    %{fake: fake, name: client, client: client}
   end
 
   @doc """
@@ -205,7 +205,7 @@ defmodule Locus.Test.FakeKeeper do
   # A signal asked for before the command's pid was known is sent now.
   def handle_info({:running, spawn_id, os_pid}, state) do
     with {:held, sigs} <- state.spawns[spawn_id],
-         do: for(sig <- Enum.reverse(sigs), do: signal_group(os_pid, sig))
+         do: for(sig <- Enum.reverse(sigs), do: Locus.DirectLauncher.signal_group(os_pid, sig))
 
     {:noreply, put_in(state.spawns[spawn_id], os_pid)}
   end
@@ -295,7 +295,7 @@ defmodule Locus.Test.FakeKeeper do
   defp signal(state, spawn_id, sig) do
     case Map.fetch(state.spawns, spawn_id) do
       {:ok, os_pid} when is_integer(os_pid) ->
-        signal_group(os_pid, sig)
+        Locus.DirectLauncher.signal_group(os_pid, sig)
         state
 
       {:ok, nil} ->
@@ -308,18 +308,6 @@ defmodule Locus.Test.FakeKeeper do
         state
     end
   end
-
-  # The command leads its own process group; the direct signal covers one
-  # that does not. The group's negative id follows `--`, which a Linux
-  # host's procps `kill` needs to read it as a group.
-  defp signal_group(os_pid, sig) when is_integer(os_pid) do
-    for target <- [["--", "-#{os_pid}"], ["#{os_pid}"]],
-        do: System.cmd(@kill, ["-#{sig}" | target], stderr_to_stdout: true)
-
-    :ok
-  end
-
-  defp signal_group(_os_pid, _sig), do: :ok
 
   # A relay's command directory is recorded, and removed however the relay
   # ends: a client or channel gone mid-run ends it before its last frames.
@@ -434,7 +422,7 @@ defmodule Locus.Test.FakeKeeper do
   # it writes them, and its exit ends the relay.
   defp live(fake, spawn_id, request, conn, dir) do
     log = Path.join(dir, "stderr")
-    {_, 0} = System.cmd(@mkfifo, ["-m", "600", log])
+    {_, 0} = System.cmd(@mkfifo, ["-m", "600", log], env: Locus.Test.ProcessFamily.no_env())
     env = Enum.map(request["env"], fn {k, v} -> "#{k}=#{v}" end)
 
     port =
@@ -468,8 +456,8 @@ defmodule Locus.Test.FakeKeeper do
     Process.exit(reader, :kill)
 
     # What is left of the group goes, and the stderr relay drains.
-    signal_group(os_pid, "KILL")
-    System.cmd("/bin/sh", ["-c", ~s(exec 3<>"$0"), log])
+    Locus.DirectLauncher.signal_group(os_pid, "KILL")
+    System.cmd("/bin/sh", ["-c", ~s(exec 3<>"$0"), log], env: Locus.Test.ProcessFamily.no_env())
     drain_relay(relay, conn)
 
     :gen_tcp.send(conn, [frame(@stream_stdout, ""), frame(@stream_stderr, "")])

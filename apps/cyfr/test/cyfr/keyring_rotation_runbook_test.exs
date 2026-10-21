@@ -7,7 +7,7 @@ defmodule Cyfr.KeyringRotationRunbookTest do
 
   The fingerprint and the re-seal are each tested alone — a mismatch refuses,
   and `reencrypt_all/1` moves rows onto the primary — but the order between
-  them is the part an operator gets wrong, and nothing composed it. It is not
+  them is the part an operator gets wrong, so this walks the two as one. It is not
   "write, rotate, restart": `reencrypt_all/1` seals onto the keyring's
   CURRENT primary, so running it before the primary moves does nothing at all.
 

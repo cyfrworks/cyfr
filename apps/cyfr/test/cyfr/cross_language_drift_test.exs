@@ -131,10 +131,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
 
   test "the shared version-ordering fixture ranks the same here as in Go" do
     # Go's twin is TestVersionOrderingFixture in ref_fixture_test.go. The
-    # verdict cases above cover PARSING; this covers ORDERING — the two
-    # sides once disagreed on every mixed pair (Go byte-compared when
-    # either side failed the grammar; the server ranks the parsable side
-    # higher and byte-compares only when both fail).
+    # verdict cases above cover PARSING; this covers ORDERING, mixed pairs
+    # included: both sides rank the parsable side of a pair higher and
+    # byte-compare only when both fail the grammar.
     %{"version_ordering" => cases} =
       "tests/fixtures/component_refs.json"
       |> (&Path.join(@root, &1)).()
@@ -519,7 +518,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/codex/internal/access/head_test.go", ~w(derive boot profiles names words)},
       {"apps/codex/internal/access/refusals_test.go", ~w(refusals)},
       {"apps/cyfr/test/cyfr/cross_language_drift_test.exs", ~w(refusals)},
-      {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(derive boot profiles names words)},
+      {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(derive boot profiles names)},
       {"tests/compose-proof/run.sh", ~w(refusals boot)},
       {"tests/release-boot/boot.sh", ~w(boot)}
     ],

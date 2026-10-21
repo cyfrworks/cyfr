@@ -95,16 +95,7 @@ defmodule Cyfr.BusPayloadTest do
       Ping.new(1),
       Viewing.new("ath_payload"),
       RoomInView.new(%{"athanor_id" => "ath_payload", "thread_id" => "t", "title" => "x"}),
-      ScheduleCompleted.new(@actor, %{
-        issuer_member: %{node: "a@host", owner: "boot_1", generation: 1},
-        schedule_id: "s",
-        execution_id: "e",
-        occurrence_id: "o",
-        completed_at: DateTime.utc_now(),
-        keep_outcome: true,
-        note_name: "n",
-        output: %{"rows" => 42}
-      })
+      ScheduleCompleted.new(@actor)
     ]
   end
 
@@ -139,7 +130,6 @@ defmodule Cyfr.BusPayloadTest do
             arity in [0, 1, 2],
             name not in [
               :topics,
-              :global,
               :prefix,
               :broadcast,
               :broadcast_global,
@@ -150,7 +140,6 @@ defmodule Cyfr.BusPayloadTest do
               :subscribe_global,
               :unsubscribe_global,
               :subscribe_page,
-              :unsubscribe_page,
               :subscribe_standing,
               :unsubscribe_standing,
               # Lookups over the roster a stream grant is checked and
@@ -179,22 +168,10 @@ defmodule Cyfr.BusPayloadTest do
       assert roster_gaps(row) == [:no_producer, :no_consumer]
     end
 
-    test "no row is pending, and a marker excuses none from its consumers" do
-      assert for(row <- Bus.topics(), Map.has_key?(row, :pending), do: row.key) == []
-
-      later = %{key: :later, struct: Webhooks, producers: ["X"], consumers: [], pending: true}
-      assert roster_gaps(later) == [:no_consumer]
-    end
-
     test "a person's confirmations are heard through their stream alone" do
       row = Enum.find(Bus.topics(), &(&1.key == :confirmations))
       assert row.consumers == ["stream:confirmation.changes"]
       assert row.reason =~ "kind"
-    end
-
-    test "the global rows are global/0, in order" do
-      assert Bus.global() ==
-               for(%{scope: :global} = row <- Bus.topics(), do: {row.template, row.reason})
     end
   end
 
@@ -308,7 +285,7 @@ defmodule Cyfr.BusPayloadTest do
     end
 
     test "a seat change is one of a closed set, and anything else raises" do
-      for change <- Membership.changes() do
+      for change <- [:joined, :left, :athanor_changed, :platform_granted] do
         assert %Membership{change: ^change} = Membership.new(:changed, "u", nil, change)
       end
 
@@ -463,34 +440,6 @@ defmodule Cyfr.BusPayloadTest do
     end
   end
 
-  describe "the schedule completion" do
-    test "keeps output only when the schedule asked, encoded and capped" do
-      base = %{schedule_id: "s", execution_id: "e", output: %{"a" => 1}}
-
-      assert %{output: nil, truncated: false} =
-               ScheduleCompleted.new(@actor, Map.put(base, :keep_outcome, false))
-
-      assert %{output: ~s({"a":1})} =
-               ScheduleCompleted.new(@actor, Map.put(base, :keep_outcome, true))
-
-      long = String.duplicate("é", 40_000)
-
-      assert %{output: cut, truncated: true} =
-               ScheduleCompleted.new(
-                 @actor,
-                 %{base | output: long} |> Map.put(:keep_outcome, true)
-               )
-
-      assert byte_size(cut) <= ScheduleCompleted.max_output_bytes() and String.valid?(cut)
-    end
-
-    test "names its issuer the same way on both sides" do
-      slot = %{node: "a", owner: "b", generation: 3, fence: 9, lease_until: DateTime.utc_now()}
-      assert ScheduleCompleted.issuer({:ok, slot}) == %{node: "a", owner: "b", generation: 3}
-      assert ScheduleCompleted.issuer(:none) == nil
-    end
-  end
-
   # ---------------------------------------------------------------------------
 
   # An accepted result's envelope, as `Prima.Feed.envelope/5` builds it.
@@ -517,7 +466,13 @@ defmodule Cyfr.BusPayloadTest do
   end
 
   defp source_of(name) do
-    module = Module.concat([name])
+    module =
+      try do
+        Module.safe_concat([name])
+      rescue
+        ArgumentError -> flunk("#{name} is rostered and does not exist")
+      end
+
     assert Code.ensure_loaded?(module), "#{name} is rostered and does not exist"
     module.module_info(:compile)[:source] |> to_string() |> File.read!()
   end

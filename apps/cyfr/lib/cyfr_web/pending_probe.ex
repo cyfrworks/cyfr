@@ -60,11 +60,10 @@ defmodule CyfrWeb.PendingProbe do
 
   # The session's provider is not caller input to be validated — it is what
   # actually signed this person in, and it is what cyfr.run is being told
-  # about them. Filtering it through the device-flow roster (github,
-  # google) meant an OIDC deployment reported every one of its people as
-  # "github", because `provider?("oidcc")` is false and the fallback is the
-  # roster's first entry. The `params` path above still validates, because
-  # that value does come from the request.
+  # about them, so it is not filtered through the device-flow roster
+  # (github, google), which would name every person of an OIDC deployment
+  # by the roster's first entry. The `params` path above validates,
+  # because that value does come from the request.
   defp session_provider(conn) do
     case Sanctum.Caller.peek(get_session(conn, CyfrWeb.SignInResponse.session_key())) do
       {:ok, %{provider: p}} when is_binary(p) and p != "" -> p

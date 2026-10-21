@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 name: Codex CI (cyfr CLI)
 
 # Vet, test, and build the Go CLI on every change. security.yml only runs
@@ -58,8 +61,7 @@ jobs:
     name: vet + test + build
     runs-on: ubuntu-latest
     # The Compose-requiring tests of cmd and the access engine bring real
-    # stacks up and down; on this runner they take past five minutes,
-    # which cancelled the job once they all passed (run 39376100470).
+    # stacks up and down, and on this runner they take past five minutes.
     timeout-minutes: 20
     defaults:
       run:
@@ -79,10 +81,9 @@ jobs:
         run: test -z "$(gofmt -l .)"
 
       - name: go test
-        # -race matches the Makefile's local invocation — the stricter run
-        # was the one CI didn't do. The total coverage goes to the job
-        # summary: it is reported, never a floor, so only a failing test
-        # fails the step.
+        # -race, as the Makefile's local invocation runs it. The total
+        # coverage goes to the job summary: it is reported, never a floor,
+        # so only a failing test fails the step.
         run: |
           go test ./... -race -coverprofile="$RUNNER_TEMP/cover.out"
           echo "apps/codex coverage: $(go tool cover -func "$RUNNER_TEMP/cover.out" | tail -1)" >> "$GITHUB_STEP_SUMMARY"

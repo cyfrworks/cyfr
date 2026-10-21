@@ -6,10 +6,10 @@ defmodule Cyfr.Release do
   Release tasks — the operator's hands on the database when the server is
   not the one to touch it.
 
-  By default the server migrates on boot (`CYFR_AUTO_MIGRATE=true`); one node
+  By default the server migrates on boot (`CYFR_AUTO_MIGRATE=on`); one node
   fronting one database wants exactly that. Several nodes sharing a
   Postgres, or an operator who wants the schema step in their own hands,
-  set `CYFR_AUTO_MIGRATE=false` and run these from the release:
+  set `CYFR_AUTO_MIGRATE=off` and run these from the release:
 
       bin/cyfr eval "Cyfr.Release.migrate()"
 
@@ -25,7 +25,10 @@ defmodule Cyfr.Release do
       bin/cyfr eval "Cyfr.Release.cipher_audit()"
       bin/cyfr eval "Cyfr.Release.rotate_cipher_keys()"
 
-  Add the new key to `CYFR_CRYPTO_KEYRING` and make it `primary`, restart, then
+  Add the new key to `CYFR_CRYPTO_KEYRING` and make it `primary`, keeping the
+  old label among the keys. The next boot refuses the changed keyring and
+  names its fingerprint (`Cyfr.KeyringFingerprint`); set
+  `CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT` to it for that one boot, then
   run the rotation: it re-encrypts every sealed row onto the primary key,
   skipping rows already there. Read `cipher_audit/0` first to see the spread,
   and again afterwards to confirm nothing is left on the old label — only then

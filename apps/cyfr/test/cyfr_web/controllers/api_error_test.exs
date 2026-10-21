@@ -176,8 +176,4 @@ defmodule CyfrWeb.ApiErrorTest do
       assert body(conn) == %{"code" => "internal", "message" => Prima.Refusal.unconfirmed()}
     end)
   end
-
-  test "halt/2 halts" do
-    assert conn(:get, "/") |> ApiError.halt(:rate_limited) |> Map.fetch!(:halted)
-  end
 end

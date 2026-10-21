@@ -102,18 +102,16 @@ defmodule CyfrWeb.Plugs.WebhookRateLimit do
   # verification. Unknown or disabled slugs share an IP-keyed scan bucket so
   # an attacker cannot get a fresh `100/1m` allowance per fabricated slug.
   #
-  # We cache the lookup result on `conn.assigns[:webhook_lookup]` so the
-  # `VerifyWebhookSignature` plug can reuse it without a second indexed query.
-  # On the happy path that takes inbound webhook deliveries from 2 DB queries
-  # to 1.
+  # The lookup is kept on `conn.assigns[:webhook_lookup]`, the one read of
+  # the slug a delivery makes: `VerifyWebhookSignature` judges the request
+  # against it.
   #
   # Database errors fall through to the *default* slug-keyed bucket (not the
   # tighter scan-evasion one): during a DB outage we don't know whether the
   # slug is legitimate, and rate-limiting legitimate traffic to 10/min would
   # cascade the outage into rejected webhooks. The verify-signature plug
   # answers 503 on the same error.
-  defp bucket_for(%Plug.Conn{path_params: %{"slug" => slug}} = conn)
-       when is_binary(slug) and slug != "" do
+  defp bucket_for(%Plug.Conn{path_params: %{"slug" => slug}} = conn) do
     lookup = Sanctum.Webhook.resolve_ingress(slug)
     conn = assign(conn, :webhook_lookup, lookup)
 
@@ -134,8 +132,6 @@ defmodule CyfrWeb.Plugs.WebhookRateLimit do
         {conn, {:ip_unknown, ip(conn)}, @unknown_max, @unknown_window_ms}
 
       {:error, reason} ->
-        require Logger
-
         Logger.warning(
           "[WebhookRateLimit] storage lookup failed slug=#{slug} reason=#{inspect(reason)} — falling back to default per-slug limit"
         )
@@ -144,11 +140,9 @@ defmodule CyfrWeb.Plugs.WebhookRateLimit do
     end
   end
 
-  defp bucket_for(conn), do: {conn, {:ip_unknown, ip(conn)}, @unknown_max, @unknown_window_ms}
-
   # Through the X-Forwarded-For trust boundary like every other limiter:
-  # behind the shipped Caddy proxy, `conn.remote_ip` is the proxy, which
-  # collapsed the whole internet's scan traffic into one 10/1m bucket.
+  # behind the shipped Caddy proxy, `conn.remote_ip` is the proxy, and the
+  # scan bucket keyed by it would hold every sender's traffic as one.
   defp ip(conn), do: Sanctum.ClientIp.resolve(conn)
 
   # Parse "<count>/<window>" — e.g. "100/1m", "1000/1h", "60/30s".
@@ -172,8 +166,7 @@ defmodule CyfrWeb.Plugs.WebhookRateLimit do
     end
   end
 
-  # One duration grammar for every enforcement window (Prima.Limits) —
-  # this also gains ms support the local parser lacked.
+  # One duration grammar for every enforcement window (`Prima.Limits`).
   defp parse_window(spec) do
     case Prima.Limits.parse_duration(spec) do
       {:ok, ms} when ms > 0 -> {:ok, ms}

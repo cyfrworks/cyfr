@@ -51,7 +51,7 @@ defmodule CyfrWeb.Plugs.MCPRateLimit do
   end
 
   def call(conn, opts) do
-    bucket = Keyword.get(opts, :bucket, @default_bucket)
+    bucket = Keyword.fetch!(opts, :bucket)
     max_requests = limit(bucket, "_rate_limit_max")
     window_ms = limit(bucket, "_rate_limit_window_ms")
 
@@ -63,11 +63,7 @@ defmodule CyfrWeb.Plugs.MCPRateLimit do
         conn
 
       {:deny, retry_after} ->
-        CyfrWeb.RateLimitRefusal.halt(
-          conn,
-          retry_after,
-          Keyword.get(opts, :errors, @default_errors)
-        )
+        CyfrWeb.RateLimitRefusal.halt(conn, retry_after, Keyword.fetch!(opts, :errors))
     end
   end
 

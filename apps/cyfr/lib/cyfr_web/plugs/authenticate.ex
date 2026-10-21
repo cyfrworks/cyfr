@@ -41,24 +41,19 @@ defmodule CyfrWeb.Plugs.Authenticate do
 
   alias Sanctum.Context
 
-  # `init/1` normalizes and `call/2` re-reads with the same default, so the plug
-  # behaves identically whether it is mounted in a pipeline or called directly.
   @default_errors CyfrWeb.ApiError
 
   def init(opts), do: Keyword.put_new(opts, :errors, @default_errors)
 
   def call(conn, opts) do
-    errors = Keyword.get(opts, :errors, @default_errors)
+    errors = Keyword.fetch!(opts, :errors)
 
     # A bearer credential is resolved first: it authenticates the request on its
     # own, so no server-side session is involved either way.
     case resolve_bearer_credential(conn) do
-      {:ok, context, kind} ->
+      {:ok, context} ->
         Prima.LoggerContext.set_from_context(context)
-
-        conn
-        |> assign(:context, established(conn, context))
-        |> assign(:auth_method, kind)
+        assign(conn, :context, established(conn, context))
 
       # No credential this plug recognises. Either none was presented — the
       # public surface is reachable that way and the router gates per action —
@@ -119,7 +114,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
   end
 
   defp get_context(conn) do
-    auth_provider = Cyfr.RuntimeConfig.auth_provider()
+    auth_provider = Sanctum.Auth.provider()
 
     if is_nil(auth_provider) do
       # No auth configured — the operator runs without sign-in. Requests reach
@@ -238,19 +233,18 @@ defmodule CyfrWeb.Plugs.Authenticate do
   # memo, which every logout/revocation invalidates, so no cached copy
   # outlives one.
   #
-  # Returns {:ok, context, :api_key | :session_token}, :no_key when no bearer
-  # credential is present, or {:error, reason}.
+  # Returns {:ok, context}, whose `auth_method` names the credential's kind,
+  # :no_key when no bearer credential is present, :unclaimed_bearer when a
+  # bearer is no session this server issued, or {:error, reason}.
   defp resolve_bearer_credential(conn) do
     case Sanctum.BearerToken.read(conn) do
       nil ->
         :no_key
 
       token ->
-        if Sanctum.ApiKey.looks_like_key?(token) do
-          with {:ok, ctx} <- validate_api_key(conn, token), do: {:ok, ctx, :api_key}
-        else
-          with {:ok, ctx, kind} <- validate_session_token(token), do: {:ok, ctx, kind}
-        end
+        if Sanctum.ApiKey.looks_like_key?(token),
+          do: validate_api_key(conn, token),
+          else: validate_session_token(token)
     end
   end
 
@@ -266,11 +260,11 @@ defmodule CyfrWeb.Plugs.Authenticate do
     # names it (`Sanctum.Session`, the one place both are stamped).
     case establish_session(token) do
       {:ok, ctx} ->
-        {:ok, ctx, :session_token}
+        {:ok, ctx}
 
       {:error, {:denied, denied}} ->
         # No standing at the door: only the anonymous surface answers.
-        {:ok, denied, :session_token}
+        {:ok, denied}
 
       {:error, :no_athanor} ->
         {:error, :missing_tenant}

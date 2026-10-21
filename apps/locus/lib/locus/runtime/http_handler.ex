@@ -52,7 +52,7 @@ defmodule Locus.Runtime.HttpHandler do
 
   ## Architecture
 
-  Follows the same pattern as `cyfr:vault/read` (see `runtime.ex:267-291`).
+  Follows the same pattern as `cyfr:vault/read` (`Locus.Runtime.Engine`).
   The host function is registered as a Wasmex import that the WASM component
   calls synchronously. All edge checks happen before any network I/O via
   `Locus.Runtime.HttpRequestValidation` — the single validation path shared with
@@ -72,8 +72,6 @@ defmodule Locus.Runtime.HttpHandler do
   alias Locus.Runtime.Egress
   alias Locus.Runtime.HostClient
   alias Locus.Runtime.HttpRequestValidation
-
-  @request_timeout 30_000
 
   # How much longer than the node's timeout the handler waits for the
   # relay's next word, which the relay bounds by that timeout itself.
@@ -194,7 +192,7 @@ defmodule Locus.Runtime.HttpHandler do
   end
 
   defp do_execute(json_request, edge, limits, host, component_ref) do
-    case HttpRequestValidation.validate(json_request, edge, limits, host, component_ref) do
+    case HttpRequestValidation.validate(json_request, edge, limits, host) do
       {:ok, request} ->
         perform_request(request, limits, component_ref, host)
 
@@ -282,11 +280,11 @@ defmodule Locus.Runtime.HttpHandler do
   # any other naming its pin, with its method, its path and query, its
   # headers and its body, a multipart body encoded here. Answers the relay
   # and the fetch's ref, or a refusal for a request the relay cannot
-  # carry. Shared with `Locus.Runtime.HttpStreamHandler`.
+  # carry. A guest's client is its runner's, which always carries the
+  # relay (`Locus.Runtime.Runner`). Shared with
+  # `Locus.Runtime.HttpStreamHandler`.
   @spec relay_fetch(HostClient.t(), map()) ::
           {:ok, GenServer.server(), non_neg_integer()} | {:error, atom()}
-  def relay_fetch(%HostClient{relay: nil}, _request), do: {:error, :no_relay}
-
   def relay_fetch(%HostClient{relay: relay} = host, %{attached: attached}) do
     keys = %{call: host.call_key, seal: host.seal_key}
 
@@ -386,9 +384,6 @@ defmodule Locus.Runtime.HttpHandler do
 
   def fetch_error("private_ip_blocked", _limits),
     do: {:private_ip_blocked, "metadata IP blocked"}
-
-  def fetch_error(:no_relay, _limits),
-    do: {:http_error, "HTTP request failed: the runner has no relay"}
 
   def fetch_error(:unsendable, _limits),
     do: {:invalid_request, "The request cannot be sent: its path or headers are malformed"}
@@ -540,9 +535,7 @@ defmodule Locus.Runtime.HttpHandler do
 
   defp note_redirect(_host, _request, _status, _headers), do: :ok
 
-  defp request_timeout(limits) do
-    HttpRequestValidation.timeout_ms(limits, @request_timeout)
-  end
+  defp request_timeout(limits), do: HttpRequestValidation.timeout_ms(limits)
 
   # ============================================================================
   # Private: Response Encoding

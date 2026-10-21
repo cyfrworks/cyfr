@@ -379,7 +379,7 @@ defmodule Cyfr.GracefulStopTest do
 
   describe "the running application's endpoint" do
     test "serves no listener under test, so the lookup answers nothing and prep_stop leaves it be" do
-      assert App.endpoint_servers() == []
+      assert App.endpoint_servers(CyfrWeb.Endpoint) == []
       refute LiveSocket.draining?()
 
       endpoint = Process.whereis(CyfrWeb.Endpoint)
@@ -451,14 +451,14 @@ defmodule Cyfr.GracefulStopTest do
 
   describe "the suspension fails safe" do
     test "an endpoint that is not running has nothing to suspend" do
-      name = Module.concat(__MODULE__, NotRunning)
+      name = __MODULE__.NotRunning
 
       assert App.endpoint_servers(name) == []
       assert App.suspend_endpoint(name) == :ok
     end
 
     test "a server the endpoint serves that cannot be suspended is logged and answered :error" do
-      name = Module.concat(__MODULE__, Unsuspendable)
+      name = __MODULE__.Unsuspendable
 
       # The shape the Phoenix adapter builds, `{endpoint, scheme}`, a
       # socket server by its module, over a supervisor that runs no
@@ -481,7 +481,7 @@ defmodule Cyfr.GracefulStopTest do
     end
 
     test "an endpoint that does not answer holds the stop no longer than the deadline" do
-      name = Module.concat(__MODULE__, Silent)
+      name = __MODULE__.Silent
 
       silent =
         spawn(fn ->

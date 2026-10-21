@@ -8,8 +8,10 @@ defmodule Cyfr.EgressInventoryTest do
 
   Outbound HTTP is where SSRF, credential leakage and unbounded buffering
   live, so each site must be a classified, deliberate act: the control
-  plane's pinned transport, the auth domain's token POST, the object
-  store, the IdP sliver, or the two guest egress handlers.
+  plane's pinned transport, the object store, the IdP sliver, a guest's
+  fetch through the worker service's relay and its attached request
+  through the control plane, the worker wire's two sides, and the builds
+  wire's client.
   A new `Req`/`Finch`/`Mint`/`httpc` call fails here until someone
   classifies it — the fail-closed direction.
 
@@ -144,7 +146,7 @@ defmodule Cyfr.EgressInventoryTest do
            or route them through a pinned site above):
              #{inspect(found -- allowed)}
 
-           stale rows (the site no longer speaks HTTP):
+           stale rows (the site speaks no HTTP):
              #{inspect(allowed -- found)}
            """
   end
@@ -161,7 +163,7 @@ defmodule Cyfr.EgressInventoryTest do
            or resolve through a site above):
              #{inspect(found -- allowed)}
 
-           stale rows (the site no longer resolves a host):
+           stale rows (the site resolves no host):
              #{inspect(allowed -- found)}
            """
   end
@@ -175,7 +177,7 @@ defmodule Cyfr.EgressInventoryTest do
     assert "apps/sanctum/lib/sanctum/network.ex" in sites(@operator_targets)
   end
 
-  test "the backends service's egress arm still exists where this inventory says" do
+  test "the backends service's egress arm is where this inventory says" do
     for path <-
           ~w(apps/locus/lib/locus/backends/service.ex apps/locus/lib/locus/backends/backend.ex) do
       assert File.exists?(Path.join(root(), path)), path

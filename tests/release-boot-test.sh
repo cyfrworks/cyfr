@@ -12,9 +12,9 @@
 # stand-in `cyfr` that records how it was run, and the dotenv reading of
 # it (`cell_assignments`); the identity front's readiness
 # (tests/identity-proof/front.sh) against a stranger answering on its
-# address, with `docker` a stand-in; and the one redaction
-# (tests/browser/lib.mjs `redact`) against a vector of every pattern the
-# proofs' former copies masked, run by node.
+# address, with `docker` a stand-in; and the proofs' redaction
+# (tests/browser/lib.mjs `redact`) against a case of every pattern it
+# hides, run by node.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 scratch=$(mktemp -d /tmp/cyfr-release-boot-test.XXXXXX)
@@ -391,7 +391,7 @@ esac
 for key in CYFR_PUBLIC_URL CYFR_BIND_ADDRESS; do
   [ "$(assigned local "$key")" = 0 ] || fail "the local cell's deployment file assigns $key"
 done
-for pair in CYFR_ACCESS=local CYFR_HOST=localhost CYFR_PORT=4399 CYFR_DATABASE=sqlite CYFR_AUTO_MIGRATE=true \
+for pair in CYFR_ACCESS=local CYFR_HOST=localhost CYFR_PORT=4399 CYFR_DATABASE=sqlite CYFR_AUTO_MIGRATE=on \
   CYFR_HOST_API_BIND=127.0.0.1 CYFR_HOST_API_PORT=4398 LOCUS_RUNTIME_SERVICE_ID=wrk_locus \
   CYFR_PLATFORM_ADMIN_EMAILS=operator@example.com CYFR_SECRET_KEY_BASE=stub-key-base-0123456789abcdef; do
   [ "$(assigned local "${pair%%=*}")" = 1 ] && [ "$(value local "${pair%%=*}")" = "${pair#*=}" ] ||
@@ -497,7 +497,7 @@ until_true 10 accepts 127.77.0.9 "$control" || fail "the stranger never listened
 [ "$(status_of front dead 127.77.0.9 "$control")" = 1 ] || { cat "$scratch/out" >&2; fail "a stranger's health answer was taken for the front's"; }
 has "the front of dir.test stopped before it answered on http://127.77.0.9:$control, where another front answers" \
   "the refusal names the front and the stranger"
-pass "a stranger answering the old health shape on the front's address is refused"
+pass "a stranger answering on the front's address without the front's token is refused"
 
 control=$(free_port)
 [ "$(status_of front own 127.77.0.10 "$control")" = 0 ] || { cat "$scratch/out" >&2; fail "the front's own health answer was refused"; }
@@ -510,39 +510,9 @@ cat >"$scratch/redact-check.mjs" <<'JS'
 import { pathToFileURL } from "node:url";
 const { redact, MARKER } = await import(pathToFileURL(process.argv[2]).href);
 
-// The proofs' former copies, as each read before lib.mjs held the one.
+// The keys and attributes whose values a proof's record never shows.
 const SECRET_KEYS = ["session", "static", "_csrf_token", "token", "plan_token", "proof"];
-const KEYED = new RegExp(`((?:\\\\)?"(?:${SECRET_KEYS.join("|")})(?:\\\\)?"\\s*:\\s*(?:\\\\)?")(?:[^"\\\\]|\\\\(?!"))*`, "g");
 const SECRET_ATTRIBUTES = ["data-phx-session", "data-phx-static", "data-csrf"];
-const ATTRIBUTE = new RegExp(`((?:${SECRET_ATTRIBUTES.join("|")})=(?:\\\\)?")(?:[^"\\\\]|\\\\(?!"))*`, "g");
-const known = (text, secrets) => secrets.reduce((out, s) => (s ? out.split(s).join("[secret]") : out), String(text));
-const old = {
-  // tests/grant-proof/redact.mjs, which the approval proof read too
-  grant(text, secrets) {
-    let out = String(text);
-    for (const secret of secrets) {
-      if (!secret) continue;
-      out = out.split(secret).join("[secret]");
-      for (let n = secret.length - 1; n >= 4; n--) {
-        if (out.endsWith(secret.slice(0, n))) { out = out.slice(0, -n) + "[secret]"; break; }
-      }
-    }
-    return out.replace(KEYED, "$1[secret]").replace(ATTRIBUTE, "$1[secret]");
-  },
-  // tests/canvas-proof/proof.mjs
-  canvas(text, secrets) {
-    return known(text, secrets)
-      .replace(/\/_s\/(?!\[credential\])[^/"'\s]+/g, "/_s/[credential]")
-      .replace(/\/_c\/v1\/(?!\[credential\])[^/"'\s]+/g, "/_c/v1/[credential]")
-      .replace(/SFMyNTY\.[A-Za-z0-9_\-.]*/g, "[signed token]")
-      .replace(/(Bearer\s+)(?!\[secret\])[^\s"']+/gi, "$1[secret]");
-  },
-  // tests/hostile-frame-proof/proof.mjs (and the tincture proof's paths)
-  hostile: (text) => String(text).replace(/\/_s\/[^/]+/g, "/_s/…"),
-  // tests/join-proof/common.mjs and tests/identity-proof/proof.mjs
-  join: (text, secrets) => known(text, secrets),
-  identity: (text, secrets) => known(text, secrets),
-};
 
 // Each case: a text, the secrets the proof knew, and what must not be
 // written of it.
@@ -566,29 +536,14 @@ const cases = [
 ];
 
 const failures = [];
-const masked = Object.fromEntries(Object.keys(old).map((name) => [name, 0]));
 for (const c of cases) {
   for (const h of c.hidden) if (!c.text.includes(h)) failures.push(`the case ${JSON.stringify(c.text)} does not hold ${h}`);
   const out = redact(c.text, c.secrets);
-  // Every value a former copy masked, the one masks.
-  let byAny = false;
-  for (const [name, copy] of Object.entries(old)) {
-    const before = copy(c.text, c.secrets);
-    for (const h of c.hidden) {
-      if (before.includes(h)) continue;
-      byAny = true;
-      masked[name]++;
-      if (out.includes(h)) failures.push(`${name} masked ${h} in ${JSON.stringify(c.text)}; the one redaction writes ${JSON.stringify(out)}`);
-    }
-  }
-  if (!byAny) failures.push(`no former copy masked ${JSON.stringify(c.text)}: the case shows no pattern`);
-  // Canvas's patterns are everyone's, so the one masks every case.
   for (const h of c.hidden) if (out.includes(h)) failures.push(`${JSON.stringify(c.text)} is written ${JSON.stringify(out)}, holding ${h}`);
   if (redact(out, c.secrets) !== out) failures.push(`redacting ${JSON.stringify(out)} again changed it`);
 }
-for (const [name, n] of Object.entries(masked)) if (!n) failures.push(`no case shows a pattern of ${name}`);
 
-// Canvas's marker forms.
+// The marker forms.
 const forms = redact('src="/_s/Cred/x" "/_c/v1/Cred/y" SFMyNTY.a.b Bearer z known-secret-1', ["known-secret-1"]);
 for (const marker of ["/_s/[credential]/", "/_c/v1/[credential]/", "[signed token]", `Bearer ${MARKER}`, ` ${MARKER}`]) {
   if (!forms.includes(marker)) failures.push(`the marker ${marker} is not in ${JSON.stringify(forms)}`);
@@ -610,7 +565,7 @@ for (const [name, value] of Object.entries(shapes)) {
     try {
       JSON.parse(out);
     } catch (error) {
-      failures.push(`the ${name} shape${indent ? ", indented," : ""} is no longer JSON once redacted: ${out.replace(/\s+/g, " ")} (${error.message})`);
+      failures.push(`the ${name} shape${indent ? ", indented," : ""} is not JSON once redacted: ${out.replace(/\s+/g, " ")} (${error.message})`);
     }
     for (const kept of ["Cred99", "HostCred", "/_s/Cred", "Bearer tok"]) if (out.includes(kept)) failures.push(`the ${name} shape kept ${kept}: ${out}`);
   }
@@ -623,9 +578,9 @@ if (redact(plain, []) !== plain) failures.push(`a record with no secret is writt
 
 for (const f of failures) console.error(`FAIL: ${f}`);
 if (failures.length) process.exit(1);
-console.log(`ok: ${cases.length} cases; every value a former copy masked is masked (${Object.entries(masked).map(([n, k]) => `${n} ${k}`).join(", ")})`);
+console.log(`ok: ${cases.length} cases, each value hidden`);
 JS
-node "$scratch/redact-check.mjs" "$root/tests/browser/lib.mjs" || fail "the one redaction does not mask what its former copies masked"
-pass "the redaction masks every pattern its former copies masked"
+node "$scratch/redact-check.mjs" "$root/tests/browser/lib.mjs" || fail "the redaction leaves a value it hides"
+pass "the redaction hides every case's values, keeps JSON JSON and keeps what is not a secret"
 
 echo "release-boot-test: all checks passed"

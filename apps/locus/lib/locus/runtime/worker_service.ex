@@ -51,8 +51,12 @@ defmodule Locus.Runtime.WorkerService do
   is stopped only by this report, so the service names it whatever the
   runner listed; an attempt already closed is named harmlessly, since CYFR
   lapses only a running attempt that runner still holds. A runner is
-  reported once. A report runs beside the service, which never waits on
-  CYFR, and `await_reports/1` answers once none is in flight. A
+  reported once. A report runs in a process of its own beside the
+  service, which never waits on CYFR, and is the service's: it ends with
+  the service, however the service ends, since a report carries this
+  boot and a restarted service holds none of its predecessor's attempts.
+  The attempts an ended report would have named lapse on their leases,
+  and the service logs each runner whose report it ended. A
   `start` no runner can be found for answers `{:error, :unavailable}`,
   and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
   with the keeper's account of why; the listener refuses either `503`,
@@ -145,23 +149,15 @@ defmodule Locus.Runtime.WorkerService do
   @impl Prima.WorkerAPI
   def status, do: GenServer.call(__MODULE__, :status)
 
-  @doc """
-  Answer once every runner exit this service is reporting has been
-  answered by CYFR or given up on (`Locus.Runtime.HostClient.runner_exited/5`
-  bounds each); at once when none is in flight. For a caller that must
-  know no report of the runners it ended still lands after it moved on,
-  as a test's end does. Exits if that takes longer than `timeout_ms`.
-  """
-  @spec await_reports(timeout()) :: :ok
-  def await_reports(timeout_ms \\ 70_000),
-    do: GenServer.call(__MODULE__, :await_reports, timeout_ms)
-
   # ---------------------------------------------------------------------------
   # Server
   # ---------------------------------------------------------------------------
 
   @impl true
   def init(_opts) do
+    # Its reports are linked to it (`report/4`): a report's end is a
+    # message, and the service's end takes every report with it.
+    Process.flag(:trap_exit, true)
     credentials = Locus.Runtime.Credentials.load!()
     :ok = Locus.Runtime.Credentials.install(credentials)
     settings = Locus.Runtime.Settings.pool!()
@@ -170,7 +166,7 @@ defmodule Locus.Runtime.WorkerService do
     :ok =
       RunnerPool.serve(
         RunnerPool,
-        %{service_id: credentials.service_id, boot: boot, host_url: credentials.host_url},
+        %{service_id: credentials.service_id, boot: boot},
         self()
       )
 
@@ -184,9 +180,8 @@ defmodule Locus.Runtime.WorkerService do
        executions: %{},
        ended: %{ids: %{}, order: :queue.new()},
        offered: %{ids: %{}, order: :queue.new()},
-       seq: 0,
        reports: %{},
-       report_waiters: []
+       seq: 0
      }}
   end
 
@@ -235,9 +230,6 @@ defmodule Locus.Runtime.WorkerService do
     end
   end
 
-  def handle_call(:await_reports, from, state),
-    do: {:noreply, reported(%{state | report_waiters: [from | state.report_waiters]})}
-
   def handle_call(:status, _from, state) do
     status =
       Map.merge(RunnerPool.status(RunnerPool), %{
@@ -249,11 +241,18 @@ defmodule Locus.Runtime.WorkerService do
     {:reply, {:ok, status}, state}
   end
 
-  # A report in flight has been answered, or given up on.
   @impl true
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
-      when is_map_key(state.reports, ref) do
-    {:noreply, reported(%{state | reports: Map.delete(state.reports, ref)})}
+  def handle_info({:EXIT, pid, reason}, state) when is_map_key(state.reports, pid) do
+    {runner, reports} = Map.pop(state.reports, pid)
+
+    if reason != :normal do
+      Logger.error(
+        "[Locus.Runtime.WorkerService] the report of runner #{runner} ended: " <>
+          Prima.LogFilter.inspect_reason(reason)
+      )
+    end
+
+    {:noreply, %{state | reports: reports}}
   end
 
   def handle_info({:DOWN, _ref, :process, pid, reason}, state),
@@ -318,6 +317,24 @@ defmodule Locus.Runtime.WorkerService do
         message
     end)
   end
+
+  # Every report still in flight ends with the service, whatever its
+  # reason: a stop reason of `:normal` would not take a linked report
+  # down, and a kill, which runs no `terminate/2`, takes each down through
+  # its link. The attempts each would have named lapse on their leases.
+  @impl true
+  def terminate(_reason, %{reports: reports}) when map_size(reports) > 0 do
+    Logger.warning(
+      "[Locus.Runtime.WorkerService] the service ends with the reports of runners " <>
+        "#{reports |> Map.values() |> Enum.join(", ")} in flight; they end with it, " <>
+        "and the attempts they name lapse on their leases"
+    )
+
+    for pid <- Map.keys(reports), do: Process.exit(pid, :shutdown)
+    :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
 
   # ---------------------------------------------------------------------------
   # Starting
@@ -391,8 +408,8 @@ defmodule Locus.Runtime.WorkerService do
   # `complete` last, before it answers the `take` that hands the runner out
   # again (`Locus.Runtime.RunnerPool`). So every frame of the previous subtree is
   # already in this mailbox, behind this start. They are read now, in
-  # order, against that subtree, up to its `complete`, which ends it as it
-  # always does: a `child` it announced joins it and is ended with it, and
+  # order, against that subtree, up to its `complete`, which ends it as any
+  # `complete` does: a `child` it announced joins it and is ended with it, and
   # none of its frames can reach the new subtree. Should the `complete` not
   # be there, the pool's order was broken: the assignment is forgotten all
   # the same, so the new subtree never inherits it, and the break is logged.
@@ -428,7 +445,7 @@ defmodule Locus.Runtime.WorkerService do
   # belongs to a subtree whose clean `complete` is already queued, so it has
   # ended with it: it is only remembered as ended, never counted against the
   # bound or answered by ending the runner, which the pool has already taken
-  # for the next subtree. Every other frame is read as it always is.
+  # for the next subtree. Every other frame is read as any frame is.
   defp read_queued_frames(state, pid) do
     receive do
       {RunnerPool, ^pid, {:child, execution_id, _attempt}} ->
@@ -617,14 +634,17 @@ defmodule Locus.Runtime.WorkerService do
   end
 
   # A report of the end of `runner`, which held `assignment` and whose
-  # `exit` listed `open`, runs beside the service, which never waits on
-  # CYFR, and is watched until it is answered, so `await_reports/1` can
-  # wait for it.
+  # `exit` listed `open`, runs in a process of its own beside the service,
+  # which never waits on CYFR; `Locus.Runtime.HostClient.runner_exited/5`
+  # bounds it. The service holds each report it starts, linked, from the
+  # callback that starts it until the report ends (`:reports`, by pid), so
+  # no report is in flight that the service does not hold, and none
+  # outlives the service.
   defp report(%{credentials: credentials, boot: boot} = state, runner, assignment, open) do
     {attempts, left_out} = named(assignment, open)
 
-    {_pid, ref} =
-      spawn_monitor(fn ->
+    pid =
+      spawn_link(fn ->
         Process.put(:"$callers", assignment.callers)
         Prima.LoggerContext.restore(assignment.logger)
 
@@ -648,7 +668,7 @@ defmodule Locus.Runtime.WorkerService do
         end
       end)
 
-    %{state | reports: Map.put(state.reports, ref, true)}
+    %{state | reports: Map.put(state.reports, pid, runner)}
   end
 
   # What the report of one runner's end names: the subtree's root, then the
@@ -667,12 +687,4 @@ defmodule Locus.Runtime.WorkerService do
   # A line about one runner's subtree carries the logger context its start
   # was made under (`Prima.LoggerContext.capture/0`), as its report's do.
   defp log(level, assignment, line), do: Logger.log(level, line, assignment.logger)
-
-  # Whoever waits for the reports in flight is answered once none is.
-  defp reported(%{reports: reports} = state) when map_size(reports) > 0, do: state
-
-  defp reported(state) do
-    for from <- state.report_waiters, do: GenServer.reply(from, :ok)
-    %{state | report_waiters: []}
-  end
 end

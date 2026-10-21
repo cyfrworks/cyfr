@@ -565,7 +565,7 @@ defmodule Cyfr.Test.ChatFixture do
 
   defp tables do
     sql =
-      if Cyfr.RuntimeConfig.repo_adapter() == Ecto.Adapters.Postgres,
+      if Arca.repo_adapter() == Ecto.Adapters.Postgres,
         do: "SELECT tablename FROM pg_tables WHERE schemaname = current_schema()",
         else: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
 

@@ -33,7 +33,7 @@ exit "$refuse"
 DOCKER
 chmod +x "$scratch/bin/docker"
 
-# One run of boot.sh's third case, as far as its databases go: it derives
+# One run of boot.sh's restores case, as far as its databases go: it derives
 # and creates its cell and restore databases and prints their names, and
 # its exit drops what it created, as boot.sh's cleanup does. `$1` names the
 # run's log.

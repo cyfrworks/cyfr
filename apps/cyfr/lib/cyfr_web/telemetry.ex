@@ -3,11 +3,11 @@
 
 defmodule CyfrWeb.Telemetry do
   @moduledoc """
-  Telemetry metrics for Emissary MCP service.
+  The host's telemetry metrics, reported by the Prometheus reporter, whose
+  scrape `CyfrWeb.MetricsPlug` serves, and the console reporter, each when
+  it is enabled.
 
   ## MCP Metrics
-
-    - Tags: `:transport`, `:lifecycle` (created/terminated)
 
   - `cyfr.emissary.request.duration` - Request processing time
     - Tags: `:method`, `:tool`, `:status` (success/error/cancelled)
@@ -68,8 +68,8 @@ defmodule CyfrWeb.Telemetry do
         description: "MCP request processing duration"
       ),
 
-      # Execution ingresses. Both were emitted and consumed by nothing —
-      # two of the three credentialed run surfaces were un-metered.
+      # Execution ingresses: the webhook and tincture invokes, each a start
+      # counter and a stop distribution.
       distribution("cyfr.emissary.webhook.invoke.stop.duration_ms",
         event_name: [:cyfr, :emissary, :webhook, :invoke, :stop],
         measurement: :duration_ms,
@@ -101,7 +101,7 @@ defmodule CyfrWeb.Telemetry do
       ),
       counter("cyfr.emissary.webhook.dedup_unavailable.count",
         event_name: [:cyfr, :emissary, :webhook, :dedup_unavailable],
-        description: "Webhook deliveries accepted without dedup protection (store down)"
+        description: "Webhook deliveries refused because the dedup store could not answer"
       ),
       distribution("cyfr.opus.tincture.invoke.stop.duration_ms",
         event_name: [:cyfr, :opus, :tincture, :invoke, :stop],

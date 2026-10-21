@@ -13,8 +13,8 @@
 # Two runs, A and B, push between each other's steps, and B's merge lands
 # inside A's. Each run's manifest must list its own images only, and each
 # printed digest must be its own version's manifest. The same interleaving
-# through BASE's mutable :amd64/:arm64 tags and its read of :latest is the
-# negative control: it must show the mix.
+# through mutable :amd64/:arm64 tags and a read of :latest is the negative
+# control: it must show the mix.
 #
 # The images are FROM scratch, so both platforms build on any host without
 # emulation. The registry with its anonymous volume, the builder and the
@@ -169,9 +169,9 @@ pipeline_build() {
     "type=image,name=$reg/publish,push-by-digest=true,name-canonical=true,push=true"
 }
 
-# BASE's build: each platform pushed under a mutable tag.
-legacy_build() {
-  build "$1" "$2" "type=image,name=$reg/legacy:$2,push=true"
+# The control's build: each platform pushed under a mutable tag.
+mutable_tag_build() {
+  build "$1" "$2" "type=image,name=$reg/mutable:$2,push=true"
 }
 
 is_digest() {
@@ -397,11 +397,12 @@ else
   fail "$label" "tags: $tags" "latest: $(digest_of "$reg/publish:latest")"
 fi
 
-# --- the negative control: BASE's merge through the mutable tags ---
+# --- the negative control: a merge through mutable per-platform tags ---
 
-# BASE's steps (docker.yml at 07c6b715d, 118-131), run in this order. A
-# step is "push-RUN", "create-RUN" or "read-RUN"; each run's version is
-# 1.0.0 for A and 1.0.1 for B.
+# Each run pushes its platforms under the mutable tags, creates its
+# version's manifest from them and reads :latest for its attestation, in
+# this order. A step is "push-RUN", "create-RUN" or "read-RUN"; each run's
+# version is 1.0.0 for A and 1.0.1 for B.
 control_order="push-a push-b create-a create-b read-a read-b"
 declare -A control_digest=() control_attested=()
 for step in $control_order; do
@@ -410,28 +411,28 @@ for step in $control_order; do
   case "$step" in
     push-*)
       for arch in amd64 arm64; do
-        control_digest[$run-$arch]=$(legacy_build "$run" "$arch")
-        is_digest "${control_digest[$run-$arch]}" || die "a legacy build reported no digest"
+        control_digest[$run-$arch]=$(mutable_tag_build "$run" "$arch")
+        is_digest "${control_digest[$run-$arch]}" || die "a mutable-tag build reported no digest"
       done
       ;;
     create-*)
       docker buildx imagetools create \
-        --tag "$reg/legacy:latest" \
-        --tag "$reg/legacy:$version" \
-        "$reg/legacy:amd64" \
-        "$reg/legacy:arm64" > /dev/null 2> "$scratch/err" || die "the control's create for $version failed"
+        --tag "$reg/mutable:latest" \
+        --tag "$reg/mutable:$version" \
+        "$reg/mutable:amd64" \
+        "$reg/mutable:arm64" > /dev/null 2> "$scratch/err" || die "the control's create for $version failed"
       ;;
     read-*)
-      control_attested[$run]=$(docker buildx imagetools inspect "$reg/legacy:latest" --format '{{json .Manifest}}' | jq -r '.digest')
+      control_attested[$run]=$(docker buildx imagetools inspect "$reg/mutable:latest" --format '{{json .Manifest}}' | jq -r '.digest')
       ;;
   esac
 done
 
-own_a=$( (children "$reg/legacy" "${control_digest[a-amd64]}"; children "$reg/legacy" "${control_digest[a-arm64]}") | sort -u)
-own_b=$( (children "$reg/legacy" "${control_digest[b-amd64]}"; children "$reg/legacy" "${control_digest[b-arm64]}") | sort -u)
-control_a_listed=$(listed "$reg/legacy:1.0.0")
+own_a=$( (children "$reg/mutable" "${control_digest[a-amd64]}"; children "$reg/mutable" "${control_digest[a-arm64]}") | sort -u)
+own_b=$( (children "$reg/mutable" "${control_digest[b-amd64]}"; children "$reg/mutable" "${control_digest[b-arm64]}") | sort -u)
+control_a_listed=$(listed "$reg/mutable:1.0.0")
 
-label="negative control: BASE's merge gives run A's manifest run B's images"
+label="negative control: a merge through mutable tags gives run A's manifest run B's images"
 if [ -n "$control_a_listed" ] && [ "$control_a_listed" = "$own_b" ] &&
   [ -z "$(comm -12 <(echo "$control_a_listed") <(echo "$own_a"))" ]; then
   pass "$label"
@@ -439,9 +440,9 @@ else
   fail "$label" "the control showed no mix: A's 1.0.0 lists $(echo $control_a_listed)"
 fi
 
-label="negative control: BASE's read of :latest attests B's manifest for A"
+label="negative control: a read of :latest attests B's manifest for A"
 if is_digest "${control_attested[a]}" && [ "${control_attested[a]}" = "${control_attested[b]}" ] &&
-  [ "${control_attested[a]}" = "$(digest_of "$reg/legacy:1.0.1")" ]; then
+  [ "${control_attested[a]}" = "$(digest_of "$reg/mutable:1.0.1")" ]; then
   pass "$label"
 else
   fail "$label" "the control showed no mix: A attested '${control_attested[a]}', B attested '${control_attested[b]}'"

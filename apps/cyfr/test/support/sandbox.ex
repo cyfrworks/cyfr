@@ -25,9 +25,9 @@ defmodule Cyfr.Test.Sandbox do
   only once every child is gone. The runtime's runners are OS
   processes, and their handles' supervisor (`Locus.Runtime.RunnerPool.Runners`) is
   swept through the pool instead (`pooled/0`): every busy runner is ended
-  at once and awaited (`Locus.Runtime.RunnerPool.retire_busy/2`), fresh and idle
+  at once and awaited (`Locus.Runtime.Test.Runners.retire_busy/2`), fresh and idle
   ones stay pooled for the next test, and every report of a runner's exit
-  the service has in flight is awaited (`Locus.Runtime.WorkerService.await_reports/1`),
+  the service has in flight is awaited (`Locus.Runtime.Test.Runners.await_reports/1`),
   so no runner's host call and no report lands after the owner is gone.
   Then the connections open on the listeners of the worker wire
   (`Cyfr.Test.RuntimeService.listeners/0`) are closed: a host call a stopped
@@ -59,13 +59,13 @@ defmodule Cyfr.Test.Sandbox do
   with `DBConnection.OwnershipError`. Every such line logged at error level
   or above, from the first `setup!/1` on, is kept with the sandboxed tests
   running when it arrived; once the suite ends they are printed, and a
-  line of a sandboxed test outside the exact roster of known offenders
-  fails the run (`watch_ownership!/0`). A refusal a test provokes and the
+  line logged while a sandboxed test ran fails the run
+  (`watch_ownership!/0`). A refusal a test provokes and the
   code handles is logged below error level and is not counted.
   """
 
   # The runtime is a sibling application, not a dependency.
-  @compile {:no_warn_undefined, [Locus.Runtime.RunnerPool, Locus.Runtime.WorkerService]}
+  @compile {:no_warn_undefined, [Locus.Runtime.RunnerPool, Locus.Runtime.Test.Runners]}
 
   @supervisors [
     Aqua.RunnerSupervisor,
@@ -107,15 +107,6 @@ defmodule Cyfr.Test.Sandbox do
   # or its work that never ends fails the test naming each such process,
   # rather than timing the test out with no process named.
   @end_views_deadline_ms 30_000
-
-  # Sandboxed tests whose own end loses the connection under work they
-  # started: a LiveView or request process linked to the test process dies
-  # with it, before any `on_exit` runs, while it holds the shared
-  # connection, and the work it started (a turn's host calls and runner
-  # reports, a decision-log writer, a provisioning task) then finds no
-  # owner. No sweep runs early enough; a module leaves this roster when its
-  # test ends that work itself (`end_views/0`).
-  @known_offenders %{}
 
   @doc "The supervisors a sync test's work is swept from, in the order they are stopped."
   @spec supervisors() :: [atom()]
@@ -387,8 +378,8 @@ defmodule Cyfr.Test.Sandbox do
   Watch the log for `DBConnection.OwnershipError` at error level or above,
   once per run: a `:logger` handler keeps each such line with the
   sandboxed tests running when it arrived, and an `after_suite` callback
-  prints every line and fails the run for any line a sandboxed test
-  outside `known_offenders/0` was running for. A line logged while no
+  prints every line and fails the run for any line logged while a
+  sandboxed test was running. A line logged while no
   sandboxed test runs comes from a test that checks the sandbox out
   itself, whose owner is its own process; it is printed, and those tests
   answer for it. Idempotent; `setup!/1` calls it.
@@ -400,13 +391,6 @@ defmodule Cyfr.Test.Sandbox do
       _keeper -> :ok
     end
   end
-
-  @doc """
-  The sandboxed test modules whose ownership lines do not fail the run,
-  each with its reason. Exact: a module that no longer logs one leaves.
-  """
-  @spec known_offenders() :: %{module() => String.t()}
-  def known_offenders, do: @known_offenders
 
   # The tables outlive every test: their keeper is registered, unlinked,
   # and so never swept.
@@ -511,12 +495,7 @@ defmodule Cyfr.Test.Sandbox do
     do: format |> :io_lib.format(args) |> IO.chardata_to_string()
 
   defp verdict([]), do: :outside
-
-  defp verdict(running) do
-    if Enum.all?(running, fn {module, _name} -> Map.has_key?(@known_offenders, module) end),
-      do: :known,
-      else: :new
-  end
+  defp verdict(_running), do: :new
 
   defp report_ownership(_result) do
     lines =
@@ -537,7 +516,6 @@ defmodule Cyfr.Test.Sandbox do
         heading =
           case verdict do
             :new -> "NEW, while running: #{names}"
-            :known -> "known offender, while running: #{names}"
             :outside -> "while no sandboxed test ran (a test that checks the sandbox out itself)"
           end
 
@@ -563,8 +541,8 @@ defmodule Cyfr.Test.Sandbox do
   # old one.
   defp retire_runners do
     busy = Locus.Runtime.RunnerPool.status(Locus.Runtime.RunnerPool).runners.busy
-    :ok = Locus.Runtime.RunnerPool.retire_busy(Locus.Runtime.RunnerPool)
-    :ok = Locus.Runtime.WorkerService.await_reports()
+    :ok = Locus.Runtime.Test.Runners.retire_busy(Locus.Runtime.RunnerPool)
+    :ok = Locus.Runtime.Test.Runners.await_reports()
     List.duplicate(:retired, busy)
   catch
     :exit, {:noproc, _call} -> []

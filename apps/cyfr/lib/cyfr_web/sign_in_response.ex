@@ -5,15 +5,18 @@ defmodule CyfrWeb.SignInResponse do
   @moduledoc """
   One transcription of the sign-in outcome to a browser response.
 
-  `Sanctum.SignIn.complete/3` always proceeds; three surfaces render it —
-  the Ueberauth callback, the device-flow ticket, and the post-legal
-  re-probe — and one more answer, a membership read that failed while
-  minting the session, is a page. This module owns the one mapping, and
-  the differences that are real travel as options:
+  A sign-in always proceeds (`Sanctum.SignIn`'s outcome, which
+  `Compendium.complete_sign_in/4` answers); five surfaces render it — the
+  Ueberauth callback, the device-flow ticket, the passkey ticket, the
+  `cyfr` door's callback and the post-legal re-probe — and one more
+  answer, a membership read that failed while minting the session, is a
+  page. This module owns the one mapping, and the differences that are
+  real travel as options:
 
     * `:session` — `{:mint, ctx}` (create the session and cookie it),
-      `{:token, token}` (cookie an already-minted token — the device
-      ticket), or `:existing` (the cookie session stands — post-legal).
+      `{:token, token}` (cookie an already-minted token — the device and
+      passkey tickets and the `cyfr` door), or `:existing` (the cookie
+      session stands — post-legal).
     * `:access_token` — keep the IdP token in the `_cyfr_pending_probe`
       cookie for a person who still has a publisher namespace to claim;
       absent retires any stash.
@@ -101,16 +104,14 @@ defmodule CyfrWeb.SignInResponse do
   end
 
   @doc """
-  Put a flash message only if flash is available on the conn — some test
-  paths exercise these responses without the full browser plug stack.
+  Put a flash message when the conn has fetched its flash; a conn without
+  one is answered unchanged.
   """
   def put_flash_if_available(conn, kind, msg) do
     Phoenix.Controller.put_flash(conn, kind, msg)
   rescue
-    # Narrowed to the one thing this is for — `put_flash/3` raises
-    # ArgumentError when no session was fetched. A bare `_` here caught
-    # genuine bugs too and returned the conn as if nothing had happened,
-    # three lines above a sibling that gets this right.
+    # `put_flash/3` raises ArgumentError when no flash was fetched; nothing
+    # else is caught.
     ArgumentError -> conn
   end
 
@@ -129,11 +130,7 @@ defmodule CyfrWeb.SignInResponse do
   # the data (the cookie store keeps no id to rotate) and `renew: true` moves
   # the id for a server-side store. Everything this module writes for the
   # claim and legal pages is written after, inside the outcome's callback.
-  defp renew_session(conn) do
-    conn |> configure_session(renew: true) |> clear_session()
-  rescue
-    ArgumentError -> conn
-  end
+  defp renew_session(conn), do: conn |> configure_session(renew: true) |> clear_session()
 
   # The session, then the cookie, then whatever the outcome renders. A
   # session that cannot be written is a 500 — the only non-redirect answer
@@ -204,29 +201,20 @@ defmodule CyfrWeb.SignInResponse do
 
   # 10-min encrypted cookie holding the IdP access_token for the one thing
   # that still needs it: the claim submission, or the re-probe after legal
-  # acceptance. Not stored in the session DB (secret sprawl). Guarded
-  # against a missing secret_key_base (some test-only conn paths) — the
-  # cookie is what makes the claim possible, and its absence is logged.
+  # acceptance. Not stored in the session DB (secret sprawl). Encrypted
+  # under the endpoint's secret_key_base, which the endpoint sets on every
+  # request it serves.
   defp stash_pending_probe(conn, access_token) when is_binary(access_token) do
-    try do
-      put_resp_cookie(conn, @probe_cookie, access_token,
-        # Encrypted, not merely signed: a signed cookie's value is plaintext
-        # to anyone who can read it, and this one holds a live IdP access
-        # token.
-        encrypt: true,
-        max_age: 600,
-        http_only: true,
-        same_site: "Lax",
-        secure: Cyfr.RuntimeConfig.cookie_secure?()
-      )
-    rescue
-      e ->
-        Logger.warning(
-          "[CyfrWeb.SignInResponse] failed to stash pending_probe cookie: #{Prima.LogFilter.exception_message(e)}"
-        )
-
-        conn
-    end
+    put_resp_cookie(conn, @probe_cookie, access_token,
+      # Encrypted, not merely signed: a signed cookie's value is plaintext
+      # to anyone who can read it, and this one holds a live IdP access
+      # token.
+      encrypt: true,
+      max_age: 600,
+      http_only: true,
+      same_site: "Lax",
+      secure: Cyfr.RuntimeConfig.cookie_secure?()
+    )
   end
 
   # What the registry said, when it matters to the person: push tokens that

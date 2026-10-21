@@ -39,7 +39,7 @@ the first row a later one rests on.
 | `flows` | version 1.3.0 lets outside material reach the host the person kept: the plan's shape digest moves, the loader asks the person's run to grant again (`consent_required`), and the prompt's exits row for that host names `outside` beside `files_by_grant`, the new flow unticked since a re-grant opens from the head's narrowing; ticked and granted, the head is revision 3, holds the flow and admits the run |
 | `revocation` | the profile revoked in the console: the first admission asked after the revocation's answer is refused, on the member that committed it |
 
-## Pending a worker beside the release
+## Shown in the suite
 
 The steps that need an execution engine or a model run in the suite, which
 has both:

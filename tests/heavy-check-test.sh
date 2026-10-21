@@ -312,18 +312,26 @@ t_redaction() {
   ! grep -q secret "$scratch/r1.err" "$scratch/r2.err" || fail "the value reached a check's stderr"
 }
 
-# --- a caller that takes the lock file with flock directly -------------------
-t_flock_direct() {
-  local f c
-  flock "$scratch/lock" "$hold" "$scratch/release-f" &
-  f=$!; started+=("$f")
-  until_true 10 sh -c "! flock -n '$scratch/lock' true" || fail 'the direct flock never took the lock'
-  "${hc[@]}" -- touch "$scratch/after-flock" >/dev/null 2>"$scratch/f.err" &
-  c=$!; started+=("$c")
-  until_true 10 has_line 'behind a holder that left no record' "$scratch/f.err" || fail 'did not queue behind a direct flock'
-  [ ! -e "$scratch/after-flock" ] || fail 'ran beside a direct flock'
-  touch "$scratch/release-f"; wait "$f"; wait "$c"
-  [ -e "$scratch/after-flock" ] || fail 'did not run after the direct flock ended'
+# --- a check killed outright: its watchdog keeps the host, with no live record ---
+# The killed check's record names its dead pid, so a check that queues
+# behind the watchdog is told the holder has no live record, and runs once
+# the watchdog has stopped the command, here a leader that ignores TERM
+# under a grace long enough to queue behind it.
+t_killed_holder() {
+  local k n
+  "${clean[@]}" HEAVY_CHECK_GRACE=30 bash "$check" -- "$scratch/stubborn" "$scratch/kh.pid" >/dev/null 2>"$scratch/kh1.err" &
+  k=$!; started+=("$k")
+  until_true 10 test -s "$scratch/kh.pid" || fail 'the command did not start'
+  kill -KILL "$k"
+  wait "$k" 2>/dev/null || :
+  "${hc[@]}" -- touch "$scratch/after-killed" >/dev/null 2>"$scratch/kh2.err" &
+  n=$!; started+=("$n")
+  until_true 10 has_line 'behind a holder with no live record' "$scratch/kh2.err" || fail "did not queue behind the killed check's watchdog: $(cat "$scratch/kh2.err")"
+  [ ! -e "$scratch/after-killed" ] || fail "ran beside the killed check's command"
+  kill -KILL "$(cat "$scratch/kh.pid")"
+  wait "$n" || fail 'the queued check failed'
+  [ -e "$scratch/after-killed" ] || fail "did not run after the killed check's watchdog let the host go"
+  forget_killed
 }
 
 # --- scoped runs: three side by side, the fourth waits ------------------------
@@ -875,7 +883,7 @@ t_await_queue() {
 
 cases=(
   usage admission nested result frame roster fds fd_base elsewhere
-  exclusive redaction flock_direct scoped scoped_order scoped_stale scoped_stopped queue_lock precedence
+  exclusive redaction killed_holder scoped scoped_order scoped_stale scoped_stopped queue_lock precedence
   hold hold_frame queue term int hup usr1 term_queued int_queued hup_queued term_queued_scoped refusals
   leftover sigkill nested_session registry_nested survivor survivor_remains
   await_result await_died await_line await_nested await_bare await_reused await_explicit

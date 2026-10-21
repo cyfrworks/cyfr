@@ -44,28 +44,6 @@
   # of operations); counting up from 0 by one it answers a positive integer,
   # the type the spec states.
   {"lib/opus/events/sequence.ex", :missing_range},
-  # The plug's refusal mapping and its telemetry each end in a clause for a
-  # reason outside today's closed set of atoms (a tuple clause and two
-  # catch-alls), so a reason added later still answers 500 and is counted
-  # instead of crashing the plug.
-  {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match},
-  # The two catch-all clauses the entry above names.
-  {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
-  # deadline/1 adds a platform setting typed term(), so Dialyzer types the
-  # sum as number(); the settings roster parses both lifetimes as integers.
-  {"lib/cyfr_web/sse.ex", :missing_range},
-  # The step bench's harness, `Cyfr.Test.StepBench`, is test support: it is
-  # compiled only under MIX_ENV=test, the one environment the task runs in.
-  {"lib/mix/tasks/cyfr.bench.step.ex", :unknown_function},
-  # Wasmex.Components.Store declares no t/0 type; the spec names the store
-  # struct the cache compiles with, and Dialyzer reads it as any().
-  {"lib/locus/runtime/component_cache.ex", :unknown_type},
-  # `Prima.GuestError.render(reason) || "The call failed."` never answers
-  # nil; Dialyzer does not narrow nil out of the `||`'s other branch.
-  {"lib/locus/runtime/formula_handler.ex", :missing_range},
-  # h/1 answers the binary Plug.HTML.html_escape/1 makes; the spec states
-  # iodata(), which is how callers interpolate it into a page.
-  {"lib/cyfr_web/minimal_page.ex", :extra_range},
   # The Finch version locked wraps a transport failure in
   # Finch.TransportError, so the clause for a bare Mint.TransportError no
   # longer matches; the clause after it answers those failures.

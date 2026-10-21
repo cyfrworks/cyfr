@@ -130,8 +130,7 @@ resolve_version() {
     # does (internal/release.Latest): the greatest bare MAJOR.MINOR.PATCH tag
     # without leading zeros, compared numerically, whatever order the API
     # lists them in. Drafts, releases GitHub marks as pre-releases and tags
-    # with a pre-release (0.6.0-alpha.1), which is no bare version, are
-    # skipped; so are legacy `v*` releases and `porta-v*` desktop releases.
+    # outside the bare release-version grammar are skipped.
     # Each release's tag_name, draft and prerelease are its own top-level
     # keys, tag_name first; a string value cannot hold an unescaped quote, so
     # no release body matches them. A release whose flags are not both read

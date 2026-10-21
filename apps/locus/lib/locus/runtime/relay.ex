@@ -27,8 +27,8 @@ defmodule Locus.Runtime.Relay do
 
   ## Host calls
 
-  The runner signs and seals each host call under the attempt's keys, as
-  ever. Before it posts one, this process verifies its header under the
+  The runner signs and seals each host call under the attempt's keys.
+  Before it posts one, this process verifies its header under the
   attempt's call key it holds (`Prima.WorkerAuth.verify_host_call_header_under/3`)
   and refuses, with a `close`, a header that names another attempt, runner,
   boot or member than the ones it holds, a body the header does not name
@@ -134,7 +134,6 @@ defmodule Locus.Runtime.Relay do
   # The most body bytes one `fetch_chunk` carries: a slice of the credit,
   # so no one chunk holds the channel's writer for long.
   @chunk_bytes 262_144
-  @fetch_timeout_ms 30_000
 
   @purposes %{"fetch" => :fetch, "stream" => :stream}
 
@@ -933,7 +932,7 @@ defmodule Locus.Runtime.Relay do
     end
   end
 
-  defp fetch_timeout(bound), do: HttpRequestValidation.timeout_ms(bound.limits, @fetch_timeout_ms)
+  defp fetch_timeout(bound), do: HttpRequestValidation.timeout_ms(bound.limits)
 
   defp head_once(relay, re, resp) do
     unless Process.get({__MODULE__, :headed}) do

@@ -38,9 +38,12 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
     |> Map.put(:remote_ip, ip)
   end
 
+  # The plug as a pipeline mounts it: its options through `init/1`.
+  defp limit(conn, opts \\ []), do: MCPRateLimit.call(conn, MCPRateLimit.init(opts))
+
   test "allows requests under the limit" do
     for _ <- 1..3 do
-      refute MCPRateLimit.call(conn_from({127, 0, 0, 10}), []).halted
+      refute limit(conn_from({127, 0, 0, 10})).halted
     end
   end
 
@@ -48,10 +51,10 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
     ip = {127, 0, 0, 11}
 
     for _ <- 1..3 do
-      refute MCPRateLimit.call(conn_from(ip), errors: Emissary.Web.MCPError).halted
+      refute limit(conn_from(ip), errors: Emissary.Web.MCPError).halted
     end
 
-    blocked = MCPRateLimit.call(conn_from(ip), errors: Emissary.Web.MCPError)
+    blocked = limit(conn_from(ip), errors: Emissary.Web.MCPError)
     assert blocked.halted
     assert blocked.status == 429
     assert [retry_after] = Plug.Conn.get_resp_header(blocked, "retry-after")
@@ -68,10 +71,10 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
     ip = {127, 0, 0, 16}
 
     for _ <- 1..3 do
-      refute MCPRateLimit.call(conn_from(ip), MCPRateLimit.init([])).halted
+      refute limit(conn_from(ip)).halted
     end
 
-    blocked = MCPRateLimit.call(conn_from(ip), MCPRateLimit.init([]))
+    blocked = limit(conn_from(ip))
     assert blocked.status == 429
 
     body = Jason.decode!(blocked.resp_body)
@@ -82,13 +85,13 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
   test "a limit set takes the next request, with no restart" do
     ip = {127, 0, 0, 20}
 
-    for _ <- 1..3, do: refute(MCPRateLimit.call(conn_from(ip), []).halted)
-    assert MCPRateLimit.call(conn_from(ip), []).halted
+    for _ <- 1..3, do: refute(limit(conn_from(ip)).halted)
+    assert limit(conn_from(ip)).halted
 
     Settings.put("mcp_rate_limit_max", 5)
 
-    for _ <- 1..2, do: refute(MCPRateLimit.call(conn_from(ip), []).halted)
-    assert MCPRateLimit.call(conn_from(ip), []).halted
+    for _ <- 1..2, do: refute(limit(conn_from(ip)).halted)
+    assert limit(conn_from(ip)).halted
   end
 
   test "the :api bucket takes the MCP pair while its own is unset, and its own once set" do
@@ -124,8 +127,8 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
     Settings.expire("mcp_rate_limit_window_ms")
     Settings.break_store!()
 
-    for _ <- 1..3, do: refute(MCPRateLimit.call(conn_from(ip), []).halted)
-    assert MCPRateLimit.call(conn_from(ip), []).status == 429
+    for _ <- 1..3, do: refute(limit(conn_from(ip)).halted)
+    assert limit(conn_from(ip)).status == 429
 
     assert_received {[:cyfr, :platform_settings, :stale_served], ^ref, %{count: 1},
                      %{key: "mcp_rate_limit_max"}}
@@ -133,10 +136,10 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
 
   test "different client IPs have independent buckets" do
     for _ <- 1..3 do
-      MCPRateLimit.call(conn_from({127, 0, 0, 12}), [])
+      limit(conn_from({127, 0, 0, 12}))
     end
 
-    refute MCPRateLimit.call(conn_from({127, 0, 0, 13}), []).halted
+    refute limit(conn_from({127, 0, 0, 13})).halted
   end
 
   test "SSE GET establishment is throttled like any request" do
@@ -144,11 +147,11 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
 
     for _ <- 1..3 do
       conn = Plug.Test.conn(:get, "/mcp") |> Map.put(:remote_ip, ip)
-      refute MCPRateLimit.call(conn, []).halted
+      refute limit(conn).halted
     end
 
     conn = Plug.Test.conn(:get, "/mcp") |> Map.put(:remote_ip, ip)
-    assert MCPRateLimit.call(conn, []).halted
+    assert limit(conn).halted
   end
 
   test "keying honors the XFF trust boundary (spoofed leftmost shares the socket bucket)" do
@@ -162,13 +165,13 @@ defmodule CyfrWeb.Plugs.MCPRateLimitTest do
         conn_from(ip)
         |> Plug.Conn.put_req_header("x-forwarded-for", "1.2.3.#{i}")
 
-      refute MCPRateLimit.call(conn, []).halted
+      refute limit(conn).halted
     end
 
     blocked =
       conn_from(ip)
       |> Plug.Conn.put_req_header("x-forwarded-for", "9.9.9.9")
-      |> MCPRateLimit.call([])
+      |> limit()
 
     assert blocked.halted
     assert blocked.status == 429

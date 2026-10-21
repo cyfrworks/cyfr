@@ -348,11 +348,6 @@ def request_body(op, args):
     return json.dumps({"v": VERSION, "op": op, "args": args}, separators=(",", ":"))
 
 
-def answer_body(answer):
-    """An answer as the wire writes it: `v` first, then `ok` or `error` and its fields."""
-    return json.dumps({"v": VERSION, **answer}, separators=(",", ":"))
-
-
 def _versioned(decoded):
     v = decoded.get("v")
     return isinstance(v, int) and not isinstance(v, bool) and v == VERSION

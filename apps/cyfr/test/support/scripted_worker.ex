@@ -50,8 +50,8 @@ defmodule Cyfr.Test.ScriptedWorker do
   entry for its scripted references alone ahead of the configured worker
   services in `config :cyfr, :locus_runtime_workers` (`workers/2`), so
   `Opus.Dispatch` routes every other reference to the worker
-  services configured after it, and stopping it removes that entry. Tests
-  that change `:locus_runtime_workers` themselves restore it on exit as they do today.
+  services configured after it, and stopping it removes that entry. A test
+  that changes `:locus_runtime_workers` itself restores it on exit.
   Started for a reference the routing did not name, it refuses the
   assignment `:malformed`.
 

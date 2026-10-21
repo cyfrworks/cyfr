@@ -34,11 +34,18 @@ defmodule Cyfr.TestTimingsScriptTest do
     %{dir: dir}
   end
 
-  # Two modules under names of their own, each with one test.
+  # Two modules under names of their own, each with one test, purged when
+  # the case ends so a repeated run defines them afresh.
   defp define_inner_suite do
-    suffix = System.unique_integer([:positive])
-    async = Module.concat([__MODULE__, "Async#{suffix}"])
-    sync = Module.concat([__MODULE__, "Sync#{suffix}"])
+    async = __MODULE__.Async
+    sync = __MODULE__.Sync
+
+    on_exit(fn ->
+      for module <- [async, sync] do
+        :code.delete(module)
+        :code.purge(module)
+      end
+    end)
 
     Code.compile_string(
       """
@@ -88,7 +95,13 @@ defmodule Cyfr.TestTimingsScriptTest do
     end
   end
 
-  defp script(args), do: System.cmd("elixir", [@script | args], stderr_to_stdout: true)
+  # The script takes its directory as an argument and reads nothing of the
+  # server's environment, so every `CYFR_*` name, the timings directory
+  # this case sets among them, is unset for it.
+  defp script(args) do
+    unset = for {name, _} <- System.get_env(), String.starts_with?(name, "CYFR_"), do: {name, nil}
+    System.cmd("elixir", [@script | args], stderr_to_stdout: true, env: unset)
+  end
 
   defp lines(output), do: String.split(output, "\n", trim: true)
 

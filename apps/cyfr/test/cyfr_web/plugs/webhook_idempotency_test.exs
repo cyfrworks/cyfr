@@ -83,8 +83,8 @@ defmodule CyfrWeb.Plugs.WebhookIdempotencyTest do
     test "missing header on a webhook configured for it is refused",
          %{ctx: ctx} do
       # Configuring the header is the operator's statement that every real
-      # delivery carries it. Letting a header-less request through made the
-      # dedup opt-out per request — a replayer just stripped the header.
+      # delivery carries it. A header-less request let through would make
+      # the dedup opt-out per request: a replayer would strip the header.
       webhook = create_hook!(ctx, "missing", %{idempotency_key_header: "X-Cyfr-Delivery"})
 
       conn = build_conn_with_webhook(webhook, [])

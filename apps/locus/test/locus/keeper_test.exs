@@ -330,8 +330,7 @@ defmodule Locus.KeeperTest do
     defp plain_client! do
       {peer, channel} = channel_pair()
       attach_dir = FakeKeeper.short_tmp_dir()
-      name = :"keeper_plant_#{System.unique_integer([:positive])}"
-      {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
+      {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: nil)
       Process.unlink(client)
       :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
 
@@ -340,7 +339,7 @@ defmodule Locus.KeeperTest do
         File.rm_rf!(attach_dir)
       end)
 
-      %{peer: peer, name: name, client: client, attach_dir: attach_dir}
+      %{peer: peer, name: client, client: client, attach_dir: attach_dir}
     end
 
     defp channel_pair do
@@ -371,11 +370,11 @@ defmodule Locus.KeeperTest do
     test "(a) a runner's held assign, its partial frames and every payload message show no key or environment value" do
       p = plant()
       c = plain_client!()
-      adapter = :"keeper_plant_adapter_#{System.unique_integer([:positive])}"
 
-      start_supervised!(
-        {Locus.Runtime.Keeper.Channel, client: c.name, memory_bytes: 268_435_456, name: adapter}
-      )
+      adapter =
+        start_supervised!(
+          {Locus.Runtime.Keeper.Channel, client: c.name, memory_bytes: 268_435_456, name: nil}
+        )
 
       # The runtime's adapter asks for the runner, as a runner's process
       # does, with the planted environment.
@@ -475,7 +474,12 @@ defmodule Locus.KeeperTest do
         )
 
       launched =
-        Keeper.spawn(:no_such_keeper_client, %{argv: ["/bin/true"], env: p.env, pool: "runner"})
+        Keeper.spawn(:no_such_keeper_client, %{
+          argv: ["/bin/true"],
+          env: p.env,
+          pool: "runner",
+          memory_bytes: 268_435_456
+        })
 
       answers = [spawned, sent, relayed, run, launched, Keeper.send_control(gone, p.assign)]
       for answer <- answers, do: assert(clean?(p, answer), "#{inspect(answer)} carries a payload")
@@ -657,7 +661,7 @@ defmodule Locus.KeeperTest do
 
       # Once a write waits on the full connection, the runner writes its
       # last line, which the client receives while it waits.
-      wait_until(fn -> writing?(Process.whereis(c.name)) end, 5_000)
+      wait_until(fn -> writing?(c.client) end, 5_000)
       last = ~s({"type":"complete"}\n)
       :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, last))
 
@@ -756,12 +760,17 @@ defmodule Locus.KeeperTest do
       refute_receive {Keeper, _ref, _event}, 200
     end
 
-    test "a spec that names no memory bound is refused before the keeper hears of it", %{
+    test "a spec without a memory bound is refused before cyfr-locus is asked anything", %{
       name: name,
       fake: fake
     } do
-      assert {:error, {:spawn_failed, :unencodable_command}} =
-               Keeper.spawn(name, %{argv: ["true"], env: %{}, pool: "backends"})
+      for spec <- [
+            %{argv: ["true"], env: %{}, pool: "backends"},
+            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: nil},
+            %{argv: ["true"], env: %{}, pool: "backends", memory_bytes: 0}
+          ] do
+        assert_raise FunctionClauseError, fn -> Keeper.spawn(name, spec) end
+      end
 
       assert requests(fake, "spawn") == []
     end
@@ -868,7 +877,12 @@ defmodule Locus.KeeperTest do
 
     test "a keeper that is gone answers as unavailable" do
       assert {:error, {:launcher_unavailable, :noproc}} =
-               Keeper.spawn(:no_such_keeper, %{argv: ["true"], env: %{}, pool: "backends"})
+               Keeper.spawn(:no_such_keeper, %{
+                 argv: ["true"],
+                 env: %{},
+                 pool: "backends",
+                 memory_bytes: 268_435_456
+               })
 
       assert {:error, {:launcher_unavailable, :noproc}} =
                Keeper.pool_stats(:no_such_keeper, "backends")

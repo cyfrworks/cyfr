@@ -3,10 +3,9 @@
 
 defmodule Cyfr.LoggerRosterTest do
   @moduledoc """
-  The metadata roster existed in three places: `config/config.exs`,
-  `config/runtime.exs`'s JSON branch, and a hardcoded fallback inside
-  `Prima.JsonFormatter` — which carried three keys the config never
-  requested and therefore never emitted.
+  The log's metadata roster is one list, `config/config.exs`'s: the JSON
+  format `config/runtime.exs` selects and `Prima.JsonFormatter` read it,
+  and neither holds a copy of its own.
 
   Config files run before application code is loaded, so the roster cannot
   literally be one expression. It can be one *checked* expression: the keys
@@ -340,13 +339,14 @@ defmodule Cyfr.LoggerRosterTest do
            """
   end
 
-  # Every Mix application of the umbrella; the Go programs have none.
+  # Every Mix application of the umbrella, by its directory's name; the Go
+  # programs have none.
   defp applications do
     apps =
       for mix <- Path.wildcard(Path.join(root(), "apps/*/mix.exs")),
-          do: mix |> Path.dirname() |> Path.basename() |> String.to_atom()
+          do: mix |> Path.dirname() |> Path.basename()
 
-    assert :prima in apps and :cyfr in apps and :locus in apps
+    assert "prima" in apps and "cyfr" in apps and "locus" in apps
     apps
   end
 
@@ -355,8 +355,8 @@ defmodule Cyfr.LoggerRosterTest do
   # application this one does not depend on is read too; an application
   # that yields none was built elsewhere, and the check would read nothing.
   defp lib_beams(app) do
-    ebin = Path.join([Mix.Project.build_path(), "lib", Atom.to_string(app), "ebin"])
-    lib = Path.join([root(), "apps", Atom.to_string(app), "lib"]) <> "/"
+    ebin = Path.join([Mix.Project.build_path(), "lib", app, "ebin"])
+    lib = Path.join([root(), "apps", app, "lib"]) <> "/"
 
     beams =
       for path <- Path.wildcard(Path.join(ebin, "*.beam")),

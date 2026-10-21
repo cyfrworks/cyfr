@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 name: Security
 
 on:
@@ -49,7 +52,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # Mix through 1.20 can wait forever on its own build lock the second
   # time a fresh lock directory is taken, and a runner starts every one
   # fresh. One Mix process at a time builds here, so the lock is off.

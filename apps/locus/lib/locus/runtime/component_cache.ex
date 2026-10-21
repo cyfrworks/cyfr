@@ -21,6 +21,9 @@ defmodule Locus.Runtime.ComponentCache do
 
   @ttl_ms :timer.minutes(15)
 
+  # The store a component compiles in: Wasmex declares no type for it.
+  @typep store :: %Wasmex.Components.Store{}
+
   @doc """
   Returns a compiled component, using the cache when possible.
 
@@ -34,7 +37,7 @@ defmodule Locus.Runtime.ComponentCache do
   @spec get_or_compile(
           String.t(),
           (-> {:ok, binary()} | {:error, term()}),
-          Wasmex.Components.Store.t()
+          store()
         ) :: {:ok, Wasmex.Components.Component.t()} | {:error, term()}
   def get_or_compile(digest, fetch, store)
       when is_binary(digest) and digest != "" and is_function(fetch, 0) do

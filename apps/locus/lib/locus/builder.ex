@@ -248,13 +248,6 @@ defmodule Locus.Builder do
     end
   end
 
-  @doc "`prepare/1`, then `run/2`."
-  @spec build(request(), timeout_ms: pos_integer(), on_progress: on_progress()) ::
-          {:ok, built()} | {:error, BuilderProtocol.refusal() | :cancelled}
-  def build(request, opts \\ []) do
-    with {:ok, plan} <- prepare(request), do: run(plan, opts)
-  end
-
   @doc """
   Check if a compilation toolchain is available on the system.
   """

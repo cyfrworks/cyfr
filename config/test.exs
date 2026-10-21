@@ -2,12 +2,12 @@
 # Copyright 2026 CYFR Works Inc.
 import Config
 
-# We don't run a server during test
 # The caller bound is off: the establish memo keeps nothing, so tests
 # assert on the uncached pipeline, and every retained context is
 # revalidated before each action it is used for.
 config :sanctum, :caller_memo_ttl_ms, 0
 
+# The suite runs no server.
 config :cyfr, CyfrWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "test-secret-key-base-minimum-64-characters-long-for-testing-only",
@@ -33,18 +33,38 @@ config :arca, decision_log_budget_ms: 5_000
 # The origin an absolute URL falls back to, the endpoint's own above.
 config :sanctum, :fallback_origin, "http://localhost:4002"
 
+# The MCP Origin allowlist of a local home on the loopback, which
+# `config/runtime.exs` resolves from the access settings for every other
+# boot, with no extras.
+config :cyfr,
+  mcp_allowed_origins: [
+    "http://localhost",
+    "https://localhost",
+    "http://127.0.0.1",
+    "https://127.0.0.1",
+    "http://[::1]",
+    "https://[::1]"
+  ],
+  mcp_extra_origins: []
+
+# The storage reserve's size, as `config/runtime.exs` sets it for a boot
+# that names none (`Cyfr.RuntimeConfig.resolve_storage_reserve/1`); the
+# suite keeps no reserve directory.
+config :cyfr, :storage_reserve_bytes, 64 * 1024 * 1024
+
 # A one-time confirmation code's transport: the tree ships none, so the
 # suite captures each code where the test that asked for it reads it
 # (`Sanctum.TestContext.MailSink`); a home without one refuses the email
 # method (`Sanctum.Auth.EmailVerification`).
 config :sanctum, :confirmation_code_transport, Sanctum.TestContext.MailSink
 
-# Proofs likewise: unit tests run on the ETS store; proof_db_test.exs
-# exercises the durable adapter directly.
+# The consent proof store: the suite's is the ETS store, and
+# proof_db_test.exs exercises the durable adapter directly.
 config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.Memory
 
-# Same for the tincture transport rate limit; TinctureRateLimitTest and the
-# tincture controller's 429 tests override this per-test.
+# The tincture transport rate limit, high enough that no suite trips it;
+# TinctureRateLimitTest and the tincture controller's 429 tests override
+# it per test.
 config :cyfr, :tincture_rate_limit_max, 1_000_000
 
 # No network from tests: the registry health probe is a real DNS + TLS
@@ -61,15 +81,6 @@ config :cyfr, :registry_health_probe, false
 config :cyfr, :registry_url, "127.0.0.1:19"
 config :cyfr, :oci_registry_url, "127.0.0.1:19"
 
-# Configure Arca for tests (use sandboxed pool). The adapter is selected at
-# build time in config.exs from CYFR_DATABASE; the per-adapter opts must
-# match (SQLite-only keys break a Postgres connect, and Postgres needs a URL
-# or hostname/credentials to authenticate).
-#
-# The sandbox funnels every process a test spawns through the one connection
-# it owns, so a burst of concurrent tasks each writing an audit row queues on
-# it. The production queue drop target (50 ms) is tuned for a real pool and
-# would drop those requests under load; give the single shared connection room.
 # The runner supplies one private root per checkout/run/partition. Direct
 # Mix invocations also get collision-resistant disposable roots; timestamps
 # alone collide when multiple VMs evaluate config in the same millisecond.
@@ -100,6 +111,15 @@ config :ex_unit,
         )
     )
 
+# Arca for tests, on the sandboxed pool. The adapter is the build's
+# (`config/database_choice.exs` reads CYFR_DATABASE); the per-adapter opts
+# must match (SQLite-only keys break a Postgres connect, and Postgres needs
+# a URL or hostname/credentials to authenticate).
+#
+# The sandbox funnels every process a test spawns through the one connection
+# it owns, so a burst of concurrent tasks each writing an audit row queues on
+# it. The production queue drop target (50 ms) is tuned for a real pool and
+# would drop those requests under load; give the single shared connection room.
 case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
   :sqlite ->
     config :arca, Arca.Repo,
@@ -251,7 +271,7 @@ config :sanctum, stored_grants_check_enabled: false
 # throwaway SIBLING roots — the topology dev and prod use ("two trees, two
 # lifetimes", Arca.Storage): `base_path` holds all tenant storage, and the
 # seed tree starts with an empty bundle so no test sees one it did not
-# write. Leaving either at its config.exs default would make tests read or
+# write. A root outside the run's own directory would make tests read or
 # write the repo's own trees. test_helper.exs copies the shipped AQUA
 # template into the throwaway seed tree — it is only ever read in place
 # through the overlay. test_helper.exs removes both roots after the suite.
@@ -261,11 +281,7 @@ config :arca,
 
 # Sanctum test configuration
 config :sanctum,
-  secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!",
-  # Namespace populated on Context.local() / Context.fixture-shaped contexts.
-  # Production contexts should never use this — they get namespace from
-  # CredentialStore via the session-resolution path.
-  default_test_namespace: "testns"
+  secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
 # The runtime root every key CYFR issues derives from (`Prima.WorkerAuth`),
 # fixed for the suite so the runtime's worker service of a test boot holds the
@@ -287,15 +303,26 @@ config :cyfr, :locus_runtime_root, test_worker_root
 # log level, the scheduler counts) the service passes it explicitly
 # (`Locus.Runtime.Release.runner_command/0`).
 config :locus, :runtime,
+  service_id: "wrk_local",
   service_key:
     :hmac
     |> :crypto.mac(:sha256, test_worker_root, "cyfr-locus/v1/runtime\nwrk_local")
     |> Base.encode16(case: :lower),
+  host_url: "http://127.0.0.1:4300",
+  bind: "127.0.0.1",
   port: 0,
   keeper: :direct,
   direct_keeper: Locus.DirectLauncher.Runner
 
 config :cyfr, :host_api_port, 0
+
+# The worker services runs are dispatched to (`Opus.Dispatch`), as
+# `config/runtime.exs` writes them from CYFR_LOCUS_RUNTIME_WORKERS for every
+# other boot: the suite's own runtime service, which
+# `Cyfr.Test.RuntimeService` points at its listener once it is up.
+config :cyfr, :locus_runtime_workers, [
+  %{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}
+]
 
 # The checkout's pinned wasm-tools (scripts/wasm-tools.sh install _tools).
 config :prima, :wasm_tools, Path.expand("../_tools/wasm-tools", __DIR__)

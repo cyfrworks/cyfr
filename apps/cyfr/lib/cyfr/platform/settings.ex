@@ -107,20 +107,13 @@ defmodule Cyfr.Platform.Settings do
   @typedoc "One member's environment pin, as `Arca.PlatformSettings.pins/0` answers it."
   @type pin :: Store.pin()
 
-  @typedoc "A live member's slot as `Arca.ControlPlane.roster/0` answers it, or any map naming both."
-  @type slot_row :: %{
-          required(:node) => String.t(),
-          required(:generation) => pos_integer(),
-          optional(atom()) => term()
-        }
-
   @typedoc "One rostered setting as `list/0` describes it."
   @type setting :: %{
           key: String.t(),
           group: String.t(),
           scope: String.t(),
           stale: String.t(),
-          variable: String.t() | nil,
+          variable: String.t(),
           value: Store.value(),
           default: Store.value(),
           desired: Store.value(),
@@ -175,15 +168,11 @@ defmodule Cyfr.Platform.Settings do
     end
   end
 
-  @doc """
-  Each of `mine` (this member's pins, `{key, value}`) that a live pin of
-  another member holds at a different value: `{key, value, member,
-  their_value}`. `me` is this member's node, whose own earlier pins are
-  never a conflict.
-  """
-  @spec conflicts([{String.t(), Store.value()}], String.t(), [pin()]) ::
-          [{String.t(), Store.value(), String.t(), Store.value()}]
-  def conflicts(mine, me, live) when is_list(mine) and is_binary(me) and is_list(live) do
+  # Each of `mine` (this member's pins, `{key, value}`) that a live pin of
+  # another member holds at a different value: `{key, value, member,
+  # their_value}`. `me` is this member's node, whose own earlier pins are
+  # never a conflict.
+  defp conflicts(mine, me, live) when is_list(mine) and is_binary(me) and is_list(live) do
     for {key, value} <- mine,
         %{key: ^key, member: member, value: theirs} <- live,
         member != me,
@@ -191,13 +180,10 @@ defmodule Cyfr.Platform.Settings do
         do: {key, value, member, theirs}
   end
 
-  @doc """
-  The pins in `pins` recorded by the boot that holds its slot now: the
-  member's slot is live in `members` (`Arca.ControlPlane.roster/0`) at the
-  generation the pin was recorded under.
-  """
-  @spec live([pin()], [slot_row()]) :: [pin()]
-  def live(pins, members) when is_list(pins) and is_list(members) do
+  # The pins in `pins` recorded by the boot that holds its slot now: the
+  # member's slot is live in `members` (`Arca.ControlPlane.roster/0`) at the
+  # generation the pin was recorded under.
+  defp live(pins, members) when is_list(pins) and is_list(members) do
     held = Map.new(members, &{&1.node, &1.generation})
     Enum.filter(pins, &(Map.get(held, &1.member) == &1.generation))
   end
@@ -294,17 +280,12 @@ defmodule Cyfr.Platform.Settings do
     end
   end
 
-  # The value this member runs a key at without a row: where the reader
-  # takes it today, else the roster's default.
+  # The value this member runs a key at without a row: where its reader
+  # takes it, else the roster's default.
   defp configured(%Entry{key: "log_level"}), do: Logger.level()
 
   defp configured(%Entry{app: app, config: [name], default: default}),
     do: Application.get_env(app, name, default)
-
-  defp configured(%Entry{app: app, config: [name, sub], default: default}),
-    do: app |> Application.get_env(name, []) |> Keyword.get(sub, default)
-
-  defp configured(%Entry{default: default}), do: default
 
   @doc """
   The apply of the two execution-slot caps (`values`, key to validated
@@ -681,10 +662,8 @@ defmodule Cyfr.Platform.Settings do
   end
 
   defp variable(key) do
-    case Roster.fetch(key) do
-      {:ok, %Entry{variable: variable}} when is_binary(variable) -> variable
-      _other -> key
-    end
+    {:ok, %Entry{variable: variable}} = Roster.fetch(key)
+    variable
   end
 
   # A value as the store answers it: JSON's.

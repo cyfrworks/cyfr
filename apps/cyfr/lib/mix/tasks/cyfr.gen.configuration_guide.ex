@@ -52,10 +52,6 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
     end
   end
 
-  @doc "The guide's path, relative to the repository root."
-  @spec target() :: String.t()
-  def target, do: @target
-
   @doc "The guide's text, from the roster."
   @spec render() :: String.t()
   def render do
@@ -167,7 +163,7 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
 
   defp setting_row(%Entry{} = entry) do
     cells = [
-      if(entry.variable, do: "`#{entry.variable}`", else: "—"),
+      "`#{entry.variable}`",
       "`#{entry.key}`",
       "`#{entry.type}`",
       default(entry),

@@ -67,7 +67,10 @@ cat > "$scratch/bin/mix" <<'FAKE'
 printf '%s|%s|%s|%s|%s|%s\n' "${MIX_ENV:--}" "${CYFR_DATABASE:--}" "${MIX_BUILD_PATH:--}" "${MIX_TEST_PARTITION:--}" "$PWD" "$*" >> "$TRACE/mix.calls"
 case "$PWD" in
   */island_*/apps/*) app=${PWD##*/}; key="island_${app}_$1"
-    [ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || echo "$PWD $1" >> "$TRACE/island-with-build-lock" ;;
+    [ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || echo "$PWD $1" >> "$TRACE/island-with-build-lock"
+    # What the island holds: its top level, and what apps/, config/,
+    # tests/ and seed/ hold.
+    [ "$1" != compile ] || (cd ../.. && { ls -A; for d in apps config tests seed; do [ ! -d "$d" ] || ls -A "$d" | sed "s|^|$d/|"; done; } | LC_ALL=C sort) > "$TRACE/island.$app.tree" ;;
   *) key="${CYFR_DATABASE:-none}_${MIX_ENV:-dev}_$1" ;;
 esac
 # The Rust test fixtures' recipe writes each fixture's Cargo.toml with
@@ -79,11 +82,11 @@ if [ "$1" = run ] && [ "${2:-}" = --no-start ] && [ "${3:-}" = -e ] && [ -n "${C
   mkdir -p "$TRACE/real-mix-tmp"
   TMPDIR="$TRACE/real-mix-tmp" exec "$REAL_MIX" "$@"
 fi
-# The runner's assignment, as T03's tests stand in for it: `mix run
-# --no-start --no-compile HELPER assign DIR COUNT TABLE REQUIRED FAILED --
-# NAMES...` writes DIR/assign/p1..pCOUNT, each the partition's units,
-# NUL-terminated, dealing the named paths round robin, or one unit to
-# every partition when none is named.
+# The runner's assignment, as tests/test-partitioned-test.sh stands in for
+# it: `mix run --no-start --no-compile HELPER assign DIR COUNT TABLE
+# REQUIRED FAILED -- NAMES...` writes DIR/assign/p1..pCOUNT, each the
+# partition's units, NUL-terminated, dealing the named paths round robin,
+# or one unit to every partition when none is named.
 if [ "$1" = run ] && [ "${5:-}" = assign ]; then
   dir=$6 count=$7
   shift 11
@@ -123,7 +126,7 @@ FAKE
 chmod +x "$scratch/bin/mix"
 
 # start_gate NAME [VAR=value...] -- GATE ARGS...: starts the gate as every
-# harness test starts a wrapper (C1), as the leader of a session of its
+# harness test starts a wrapper, as the leader of a session of its
 # own, with SIGINT and SIGHUP at their defaults (an asynchronous command
 # starts with SIGINT ignored, a caller may have HUP ignored, and a shell
 # cannot trap a signal ignored at its start). Its
@@ -187,7 +190,7 @@ for l in lines[start + 1:]:
     if m:
         roster[(m[1], m[2], m[3])] = 0
 have = set(re.findall(r"\bstep (?:static|postgres|vocab|cluster) ([a-z_]+)", gate))
-have |= {"islands:" + a for a in re.findall(r"'(prima|arca|sanctum|locus) apps/", gate)}
+have |= {"islands:" + a for m in re.findall(r"^\s*run_islands ([a-z ]+)", gate, re.M) for a in m.split()}
 
 CI_RUNS = {
     ("dialyzer.yml", "dialyzer", "run: mix compile --warnings-as-errors"): ["compile_sqlite_dev"],
@@ -219,7 +222,7 @@ CI_RUNS = {
     ("test.yml", "locus-independence", "Compile and test Locus from its declared apps alone"): ["islands:locus"],
     ("test.yml", "locus-runtime-image", "The credential canary's own checks"): ["canary_checks"],
     ("test.yml", "release-boot", "Each run names and drops databases of its own"): ["boot_names"],
-    ("test.yml", "vocabulary-gate", "Tier A/B fossil patterns must be absent"): ["fossils"],
+    ("test.yml", "vocabulary-gate", "Retired names stay out and the storage layout is Arca's"): ["fossils"],
 }
 SETUP_ACTIONS = {
     "actions/checkout", "actions/setup-node", "actions/setup-go", "./.github/actions/setup-elixir", "actions/cache",
@@ -359,7 +362,7 @@ cp "$root"/.github/workflows/*.yml "$scratch/roster/wf/"
 python3 -I - "$scratch/roster/wf/test.yml" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-anchor = "      - name: Tier A/B fossil patterns must be absent\n"
+anchor = "      - name: Retired names stay out and the storage layout is Arca's\n"
 assert anchor in s
 open(p, "w").write(s.replace(anchor, "      - name: A planted check\n        run: \"true\"\n" + anchor))
 PY
@@ -531,6 +534,55 @@ start_leg() {
   mkdir -p "$scratch/$name.log"
   start_gate "$name" GATE_LEG_LOGDIR="$scratch/$name.log" GATE_LEG_PARTS=2 GATE_LEG_CLOSE=false "$@" -- "$gate" --leg "$leg"
 }
+# --- the islands' copy lists ----------------------------------------------------
+# Each island's list is read from its test.yml job: the application, the
+# lock, its apps, deps and the WIT tree at least. A planted copy reaches
+# the list; a line the gate does not mirror, a copy to another directory
+# and a missing job each fail it with the reason.
+island_list() { (cd "$1" && . "$gate" && island_spec "$2"); }
+for isl in prima arca sanctum locus; do
+  spec=$(island_list "$root" "$isl") || fail "the $isl island's list could not be read from test.yml"
+  [ "${spec%% *}" = "$isl" ] || fail "the $isl island's list names another application: $spec"
+  for p in mix.lock "apps/$isl" deps wit; do
+    case " $spec " in *" $p "*) ;; *) fail "the $isl island's list lacks $p: $spec" ;; esac
+  done
+done
+plant_islands() {
+  mkdir -p "$scratch/islands-$1/.github/workflows"
+  python3 -I - "$root/.github/workflows/test.yml" "$scratch/islands-$1/.github/workflows/test.yml" "$2" "$3" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:]
+s = open(src).read()
+assert s.count(old) == 1, old
+open(dst, "w").write(s.replace(old, new))
+PY
+}
+arca_copy='          cp config/database_choice.exs "$island/config/"
+          cd "$island/apps/arca"'
+plant_islands added "$arca_copy" '          cp config/database_choice.exs "$island/config/"
+          cp -R tests/fixtures "$island/tests/"
+          cd "$island/apps/arca"'
+[ "$(island_list "$scratch/islands-added" arca)" = "$(island_list "$root" arca) tests/fixtures" ] ||
+  fail "a copy planted in the arca job did not reach the gate's list: $(island_list "$scratch/islands-added" arca)"
+plant_islands unknown "$arca_copy
+          mix compile --warnings-as-errors
+          mix test" "$arca_copy
+          mix compile --warnings-as-errors
+          mix test --include slow"
+! island_list "$scratch/islands-unknown" arca 2>"$scratch/islands-unknown.err" || fail 'an island step the gate does not mirror was read'
+has_line 'runs a line the gate does not mirror: mix test --include slow' "$scratch/islands-unknown.err" ||
+  fail "an island step the gate does not mirror failed without its reason: $(cat "$scratch/islands-unknown.err")"
+plant_islands elsewhere "$arca_copy" '          cp config/database_choice.exs "$island/"
+          cd "$island/apps/arca"'
+! island_list "$scratch/islands-elsewhere" arca 2>"$scratch/islands-elsewhere.err" || fail 'a copy to another directory was read'
+has_line 'copies config/database_choice.exs to \$island/, which the gate does not mirror' "$scratch/islands-elsewhere.err" ||
+  fail "a copy to another directory failed without its reason: $(cat "$scratch/islands-elsewhere.err")"
+plant_islands missing '  arca-independence:' '  arca-elsewhere:'
+! island_list "$scratch/islands-missing" arca 2>"$scratch/islands-missing.err" || fail 'a missing island job was read'
+has_line 'test.yml has no arca-independence job' "$scratch/islands-missing.err" ||
+  fail "a missing island job failed without its reason: $(cat "$scratch/islands-missing.err")"
+echo 'ok: the islands copy what test.yml copies'
+
 # A selection git cannot read fails the postgres leg after its compiles,
 # with its marker, and no test runs.
 start_leg pgread postgres GIT_DIR=/nonexistent
@@ -683,6 +735,13 @@ has_line '^==> gate passed in ' "$scratch/pass.out" || fail "a passing gate did 
 for suite in static.sqlite_suite postgres.pg_tests islands.prima islands.arca islands.sanctum; do
   has_line "^    ${suite//./\\.}: .*Result: " "$scratch/pass.out" || fail "the passing gate's $suite reported no result: $(cat "$scratch/pass.out")"
 done
+# Each island held what its test.yml job gives it, and nothing else.
+for isl in prima arca sanctum; do
+  read -r -a paths <<<"$(island_list "$root" "$isl")"
+  want=$(for p in "${paths[@]:1}"; do echo "${p%%/*}"; case $p in */*) echo "$p" ;; esac; done | LC_ALL=C sort -u)
+  [ "$(cat "$scratch/pass.trace/island.$isl.tree")" = "$want" ] ||
+    fail "the $isl island held $(tr '\n' ' ' < "$scratch/pass.trace/island.$isl.tree"), not test.yml's $(echo $want)"
+done
 echo 'ok: a whole gate that passes, every suite with a result'
 
 # --- a whole gate: a stalled island, build paths, the pg leg, the framing --------
@@ -834,7 +893,6 @@ until_true 60 test -s "$scratch/kill.trace/held.postgres_test_compile" || fail "
 steps="$(cat "$scratch/kill.trace/held.sqlite_test_compile") $(cat "$scratch/kill.trace/held.postgres_test_compile")"
 legs=$(pgrep -P "$k" | tr '\n' ' ')
 [ -n "$legs" ] || fail 'the SIGKILL case found no leg to watch'
-# shellcheck disable=SC2086
 alive_all() { local p; for p in "$@"; do alive "$p" || return 1; done; }
 # shellcheck disable=SC2086
 alive_all $steps || fail 'the held steps were not running before the SIGKILL'

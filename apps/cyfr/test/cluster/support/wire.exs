@@ -65,7 +65,11 @@ defmodule Cyfr.Cluster.Wire do
     end
   end
 
-  defp via(name), do: :"#{__MODULE__}.#{name}"
+  # The wires the suite opens, each by its registered name: a name is an
+  # atom, so this spells each rather than minting one.
+  @registered %{worker: Cyfr.Cluster.Wire.Worker}
+
+  defp via(name), do: Map.fetch!(@registered, name)
 
   @impl true
   def init({host, port}) do

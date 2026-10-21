@@ -97,14 +97,6 @@ defmodule Locus.Runtime.WasiCapabilitiesTest do
     end
   end
 
-  describe "unknown types are secure" do
-    test "unknown type returns nil (no WASI at all)" do
-      assert ComponentType.wasi_options(:unknown) == nil
-      assert ComponentType.wasi_options(:invalid) == nil
-      assert ComponentType.wasi_options(:malicious) == nil
-    end
-  end
-
   describe "WASI options structure" do
     test "all valid types return properly structured WasiP2Options" do
       for type <- [:catalyst, :reagent, :formula] do

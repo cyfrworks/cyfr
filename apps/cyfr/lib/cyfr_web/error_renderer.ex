@@ -15,8 +15,7 @@ defmodule CyfrWeb.ErrorRenderer do
   implementation of "is this caller who they say they are", two renderings. The
   alternative — a second copy of the credential logic for routes that do not
   speak JSON-RPC — is how an endpoint ends up answering a bad token with a
-  JSON-RPC envelope carrying a null id, which is what `/api/executions/:id/events`
-  did while it shared the MCP pipeline.
+  JSON-RPC envelope carrying a null id.
 
   `code` is the refusal: a reason term or a `%Prima.Refusal{}`. Each renderer
   maps it to whatever its wire format calls an error code — its class for

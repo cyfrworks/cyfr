@@ -6,8 +6,8 @@ defmodule Cyfr.ComponentRefGrammarTest do
   Checks construction uses the shared type:namespace.name grammar
   with an optional :version suffix.
 
-  `Prima.ComponentRef.build/4` is the one author now. This test keeps it
-  that way, and pins the grammar it produces.
+  `Prima.ComponentRef.build/4` is the one author of a ref. This test holds
+  it so, and pins the grammar it produces.
   """
 
   use ExUnit.Case, async: true

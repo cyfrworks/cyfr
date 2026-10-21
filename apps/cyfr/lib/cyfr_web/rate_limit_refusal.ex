@@ -5,11 +5,12 @@ defmodule CyfrWeb.RateLimitRefusal do
   @moduledoc """
   What a throttled request is told, in one place.
 
-  Four plugs meter four different things — sign-in attempts, MCP calls,
-  tincture serving, webhook deliveries — and they stay four plugs, because
-  what genuinely differs between them is real: the key topology (an IP, an
-  IP plus publisher plus tincture, a webhook slug) and where the budget
-  comes from (plug options, app config, a per-slug database column).
+  Four plugs meter four different things — sign-in attempts, MCP and API
+  calls, tincture serving, webhook deliveries — and they stay four plugs,
+  because what differs between them is real: the key topology (an IP, an
+  IP plus athanor, publisher and tincture, an asset credential, a webhook
+  slug) and where the budget comes from (plug options, platform settings,
+  a per-slug database column).
 
   Renders the shared rate-limit status, headers, and response body.
 

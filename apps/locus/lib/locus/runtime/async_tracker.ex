@@ -33,10 +33,8 @@ defmodule Locus.Runtime.AsyncTracker do
 
   defstruct [
     :supervisor,
-    :parent_execution_id,
     :max_tasks,
-    :batch_timeout_ms,
-    # task_id => %{task: %Task{}, ref: reference, started_at: ms, reference: str}
+    # task_id => %{task: %Task{}, ref: reference}
     tasks: %{},
     # task_id => {:ok, result} | {:error, reason}
     results: %{},
@@ -52,9 +50,8 @@ defmodule Locus.Runtime.AsyncTracker do
 
   ## Options
 
-  - `:parent_execution_id` - The formula's execution ID
-  - `:max_tasks` - Maximum concurrent spawned tasks (from the node's limits)
-  - `:batch_timeout_ms` - Default timeout for await-all/await-any (from the node's limits)
+  - `:max_tasks` - Maximum concurrent spawned tasks (the node's
+    `max_concurrent_tasks`); required
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -64,8 +61,8 @@ defmodule Locus.Runtime.AsyncTracker do
   @doc """
   Spawn an async task. Returns `{:ok, task_id}` or `{:error, reason}`.
   """
-  @spec spawn_task(pid(), (-> term()), String.t()) :: {:ok, String.t()} | {:error, term()}
-  def spawn_task(tracker, fun, reference) do
+  @spec spawn_task(pid(), (-> term())) :: {:ok, String.t()} | {:error, term()}
+  def spawn_task(tracker, fun) do
     # Captured here, in the caller — the tracker process has its own
     # (empty) Logger metadata, so capturing at the spawn site inside
     # handle_call would tag the task with nothing.
@@ -76,7 +73,7 @@ defmodule Locus.Runtime.AsyncTracker do
       fun.()
     end
 
-    GenServer.call(tracker, {:spawn, task_fun, reference})
+    GenServer.call(tracker, {:spawn, task_fun})
   end
 
   @doc """
@@ -135,19 +132,11 @@ defmodule Locus.Runtime.AsyncTracker do
 
   @impl true
   def init(opts) do
-    parent_execution_id = Keyword.get(opts, :parent_execution_id, "unknown")
-    max_tasks = Keyword.get(opts, :max_tasks, 10)
-    batch_timeout_ms = Keyword.get(opts, :batch_timeout_ms, 300_000)
+    max_tasks = Keyword.fetch!(opts, :max_tasks)
 
     case Task.Supervisor.start_link() do
       {:ok, supervisor} ->
-        {:ok,
-         %__MODULE__{
-           supervisor: supervisor,
-           parent_execution_id: parent_execution_id,
-           max_tasks: max_tasks,
-           batch_timeout_ms: batch_timeout_ms
-         }}
+        {:ok, %__MODULE__{supervisor: supervisor, max_tasks: max_tasks}}
 
       {:error, reason} ->
         {:stop, reason}
@@ -155,7 +144,7 @@ defmodule Locus.Runtime.AsyncTracker do
   end
 
   @impl true
-  def handle_call({:spawn, fun, reference}, _from, state) do
+  def handle_call({:spawn, fun}, _from, state) do
     # Undrained results count against the cap too: a completed-but-never-
     # awaited task still holds its full payload in tracker state, so a
     # spawn/complete/never-await loop would otherwise grow per-execution
@@ -165,12 +154,7 @@ defmodule Locus.Runtime.AsyncTracker do
       task_id = "task_#{state.next_id}"
       task = Task.Supervisor.async_nolink(state.supervisor, fun)
 
-      task_entry = %{
-        task: task,
-        ref: task.ref,
-        started_at: System.monotonic_time(:millisecond),
-        reference: reference
-      }
+      task_entry = %{task: task, ref: task.ref}
 
       new_state = %{
         state
@@ -217,14 +201,14 @@ defmodule Locus.Runtime.AsyncTracker do
 
     if pending_ids == [] do
       # All already completed
-      results = build_ordered_results(task_ids, immediate_results, %{})
+      results = build_ordered_results(task_ids, immediate_results)
       new_state = cleanup_results(state, task_ids)
       {:reply, {:ok, results}, new_state}
     else
       # Yield on pending tasks. An id that names neither a result nor a live
       # task is one the guest made up (or already awaited): it has no task
       # struct to yield on, so it is dropped here and picked up by
-      # `build_ordered_results/3`'s `:unknown_task` default — the same answer
+      # `build_ordered_results/2`'s `:unknown_task` default — the same answer
       # `await/2` and `await_any/2` give. Looking it up regardless would
       # dereference nil and take the tracker, and with it the whole run.
       pending_tasks =
@@ -258,7 +242,7 @@ defmodule Locus.Runtime.AsyncTracker do
 
       # Build ordered results
       all_results = Map.merge(immediate_results, yielded)
-      results = build_ordered_results(task_ids, all_results, %{})
+      results = build_ordered_results(task_ids, all_results)
 
       # Clean up state
       new_state =
@@ -526,7 +510,7 @@ defmodule Locus.Runtime.AsyncTracker do
     :ok
   end
 
-  defp build_ordered_results(task_ids, results_map, _opts) do
+  defp build_ordered_results(task_ids, results_map) do
     Enum.map(task_ids, fn id ->
       result = Map.get(results_map, id, {:error, :unknown_task})
       {id, result}
@@ -549,10 +533,11 @@ defmodule Locus.Runtime.AsyncTracker do
   # `Locus.Runtime.FormulaHandler.format_task_result/2` picks them up, and because
   # they arrive already-stringified they pass through `stringify_reason/1`
   # and `Prima.GuestError.render/1` unchanged — the renderers' binary clause is the
-  # identity. `inspect/1` on an exit reason carries the exception struct, the
-  # term that failed to match and a stack trace, so it handed Elixir internals
-  # to a component. The detail goes to the log, where the operator can read
-  # it; the guest gets the kind of failure, which is what it can act on.
+  # identity. An exit reason carries the exception struct, the term that
+  # failed to match and a stack trace, Elixir internals no component sees,
+  # so it is never inspected for the guest. The detail goes to the log,
+  # where the operator can read it; the guest gets the kind of failure,
+  # which is what it can act on.
   defp format_crash_reason(:normal), do: "task exited normally"
   defp format_crash_reason(:killed), do: "task was killed"
 

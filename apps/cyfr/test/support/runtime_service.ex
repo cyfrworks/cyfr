@@ -40,7 +40,7 @@ defmodule Cyfr.Test.RuntimeService do
               Locus.Runtime.Credentials,
               Locus.Runtime.RunnerPool,
               Locus.Runtime.Settings,
-              Locus.Runtime.WorkerService
+              Locus.Runtime.Test.Runners
             ]}
 
   @service "wrk_local"
@@ -144,11 +144,11 @@ defmodule Cyfr.Test.RuntimeService do
 
   @doc """
   Answer once every runner exit the service is reporting has been
-  answered by CYFR or given up on (`Locus.Runtime.WorkerService.await_reports/1`):
+  answered by CYFR or given up on (`Locus.Runtime.Test.Runners.await_reports/1`):
   for a test outside the wiring suite that ends a runner, before its end.
   """
   @spec await_reports() :: :ok
-  def await_reports, do: Locus.Runtime.WorkerService.await_reports()
+  def await_reports, do: Locus.Runtime.Test.Runners.await_reports()
 
   @doc """
   Restart the worker service and its runners: a new boot that holds no

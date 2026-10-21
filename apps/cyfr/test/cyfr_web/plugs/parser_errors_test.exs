@@ -279,7 +279,7 @@ defmodule CyfrWeb.Plugs.ParserErrorsTest do
       refute conn.halted
       assert conn.body_params == %{"a" => "b"}
 
-      # A type outside the list reaches the parsers as before.
+      # A type outside the list reaches the parsers untouched.
       conn = ParserErrors.call(counted(:post, "/other", "text/plain"), opts)
       refute conn.halted
 

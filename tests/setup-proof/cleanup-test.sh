@@ -10,7 +10,6 @@
 # stops on SIGTERM, then fails. The teardown passes when, by its return,
 # the container is stopped, the proof job and the stand-in have ended, the
 # stand-in having been asked to stop, and the scratch directory is gone.
-# SETUP_PROOF_CLEANUP names another teardown to hold to the same checks.
 #
 # Usage: tests/setup-proof/cleanup-test.sh
 # Env: SETUP_PROOF_IMAGE, an image with `sleep` (default cyfr:setup-proof),
@@ -19,7 +18,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-TEARDOWN="${SETUP_PROOF_CLEANUP:-$HERE/cleanup.sh}"
+TEARDOWN="$HERE/cleanup.sh"
 IMAGE="${SETUP_PROOF_IMAGE:-cyfr:setup-proof}"
 BASE="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-setup-cleanup-test.XXXXXX")"
 CONTAINER="cyfr-setup-cleanup-test-$$-${BASE##*.}"

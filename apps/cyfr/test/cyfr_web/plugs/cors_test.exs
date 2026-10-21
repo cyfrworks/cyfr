@@ -130,15 +130,9 @@ defmodule CyfrWeb.Plugs.CORSTest do
       assert methods.(methods: ~w(POST OPTIONS)) == ["OPTIONS", "POST"]
     end
 
-    # A header nothing reads must not be advertised: a preflight is a statement
-    # about what the server accepts, and `mcp-session-id` has no reader left.
-    test "the retired session header is not advertised" do
-      refute "mcp-session-id" in preflight_headers("access-control-allow-headers")
-    end
-
-    # `last-event-id` belongs to the execution event stream, not to MCP.
-    # Advertising it everywhere claimed support for something no MCP handler
-    # reads; each mount now names the extra headers it actually accepts.
+    # `last-event-id` belongs to the execution event stream, not to MCP: a
+    # preflight is a statement about what the mount accepts, so each mount
+    # names the extra headers it reads.
     test "each mount advertises only the extra headers it accepts" do
       Application.put_env(:cyfr, :cors_allowed_origins, ["*"])
 

@@ -59,7 +59,7 @@ MODE=exclusive; HOLD=2700; QUEUE=7200
 usage() { echo "usage: $0 [-s] [-t HOLD_SECONDS] [-w QUEUE_SECONDS] [--] command [args]"; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -s|--scoped) MODE=scoped; shift ;;
+    -s) MODE=scoped; shift ;;
     -t|-w)
       [ "$#" -ge 2 ] || { usage >&2; exit 64; }
       case "$1" in -t) HOLD=$2 ;; *) QUEUE=$2 ;; esac
@@ -257,16 +257,14 @@ announce() {
     say "queued ($MODE) behind:"
     printf '%s\n' "$held" | sed 's/^/==> heavy-check:   /' >&2
   else
-    say "queued ($MODE) behind a holder that left no record (lslocks names it)"
+    say "queued ($MODE) behind a holder with no live record, such as a check killed outright whose watchdog is still stopping its command (lslocks names it)"
   fi
 }
 
 # Descriptors: 7 a scoped slot, 8 the turnstile, 9 the host. The turnstile
 # is what puts a queued exclusive check ahead of later scoped runs: every
 # check passes it on the way in, and an exclusive one keeps it until it
-# has the host. The host's file is the one `flock <lock> command` takes,
-# so a caller that still uses flock directly is excluded like any other.
-# The wait runs in the background and is waited for by pid, because Bash
+# has the host. The wait runs in the background and is waited for by pid, because Bash
 # defers a trapped INT or TERM until a foreground command ends.
 take() {
   local fd=$1 how=$2 status=0

@@ -21,8 +21,8 @@ defmodule Cyfr.Bus do
       the struct declared for the topic; otherwise it answers
       `{:error, :cross_tenant}` and emits `[:cyfr, :bus, :publish_refused]`.
       `subscribe/2` refuses a topic outside the actor's own prefix.
-    * `:global` — deliberately unscoped, each with the reason `global/0`
-      gives. Only those topics pass `broadcast_global/2`,
+    * `:global` — deliberately unscoped, each with the reason its row
+      gives (`topics/0`). Only those topics pass `broadcast_global/2`,
       `subscribe_global/1` and `unsubscribe_global/1`.
     * `:page` — one page instance talking to the views nested beside it,
       broadcast on this node alone (`broadcast_page/2`).
@@ -502,13 +502,12 @@ defmodule Cyfr.Bus do
   def topics, do: Enum.map(@topics, &Map.delete(&1, :match))
 
   @doc """
-  Whether `key` — a roster key, as an atom or its string — names a topic
-  of the roster. A pure lookup: what a provider's stream declaration
-  names (`Prima.Provider.Stream`) is checked against it at boot.
+  Whether the roster key `key` names a topic of the roster. A pure
+  lookup: what a provider's stream declaration names
+  (`Prima.Provider.Stream`) is checked against it at boot.
   """
-  @spec topic?(atom() | String.t()) :: boolean()
-  def topic?(key) when is_atom(key) or is_binary(key), do: match?({:ok, _row}, row_by_key(key))
-  def topic?(_key), do: false
+  @spec topic?(atom()) :: boolean()
+  def topic?(key) when is_atom(key), do: match?({:ok, _row}, row_by_key(key))
 
   @doc """
   Whether a stream on the roster key `key` can be granted with a subject
@@ -517,7 +516,7 @@ defmodule Cyfr.Bus do
   subject-taking stream rides a row whose topics end in a subject id
   while a subject-less one rides a row that is one topic.
   """
-  @spec grantable?(atom() | String.t(), boolean()) :: boolean()
+  @spec grantable?(atom(), boolean()) :: boolean()
   def grantable?(key, subject?) when is_boolean(subject?) do
     case row_by_key(key) do
       {:ok, %{scope: :tenant, match: {:exact, _}}} -> not subject?
@@ -550,14 +549,6 @@ defmodule Cyfr.Bus do
                 "got #{Prima.LoggerContext.shape(key)}"
     end
   end
-
-  @doc """
-  The unscoped topics and why each one is unscoped, for anyone auditing
-  tenancy. Every tenant topic is `tenant:`-prefixed; page topics never
-  leave the node.
-  """
-  @spec global() :: [{String.t(), String.t()}]
-  def global, do: for(%{scope: :global} = row <- @topics, do: {row.template, row.reason})
 
   @doc """
   The tenant prefix of `actor`'s athanor: `tenant:<athanor_id>:`. An actor
@@ -747,15 +738,10 @@ defmodule Cyfr.Bus do
   # Page topics
   # ---------------------------------------------------------------------------
 
-  @doc """
-  What the page `host` has in view (`Cyfr.Bus.Viewing`). A bar rendered
-  with no page over it listens on a topic nobody publishes to.
-  """
-  @spec page_viewing(pid() | nil) :: String.t()
+  @doc "What the page `host` has in view (`Cyfr.Bus.Viewing`)."
+  @spec page_viewing(pid()) :: String.t()
   def page_viewing(host) when is_pid(host),
     do: "page:viewing:" <> List.to_string(:erlang.pid_to_list(host))
-
-  def page_viewing(nil), do: "page:viewing:none"
 
   @doc "The room the page `socket_id` has open (`Cyfr.Bus.RoomInView`)."
   @spec room_feed(String.t()) :: String.t()
@@ -890,13 +876,6 @@ defmodule Cyfr.Bus do
     Phoenix.PubSub.subscribe(@pubsub, topic)
   end
 
-  @doc "Unsubscribe the calling process from a page topic."
-  @spec unsubscribe_page(String.t()) :: :ok
-  def unsubscribe_page(topic) when is_binary(topic) do
-    _row = scoped_row!(:page, topic)
-    Phoenix.PubSub.unsubscribe(@pubsub, topic)
-  end
-
   @doc """
   Subscribe the calling process to every announcement that can end a
   held context's standing: sessions, caller invalidation and archives,
@@ -966,9 +945,6 @@ defmodule Cyfr.Bus do
 
   defp row_by_key(key) when is_atom(key) and key not in [nil, true, false],
     do: Enum.find_value(@topics, :error, &(&1.key == key && {:ok, &1}))
-
-  defp row_by_key(key) when is_binary(key),
-    do: Enum.find_value(@topics, :error, &(Atom.to_string(&1.key) == key && {:ok, &1}))
 
   defp row_by_key(_key), do: :error
 

@@ -2,26 +2,24 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Cyfr.OtelTenantHandlerTest do
-  use ExUnit.Case, async: true
+  # attach/0 attaches a handler global to the node.
+  use ExUnit.Case, async: false
 
   alias Cyfr.OtelTenantHandler
 
   describe "attach/0" do
-    test "does not crash when OpenTelemetry is not loaded" do
+    test "attaches one handler to the post-pipeline :stop events, however often it is called" do
+      on_exit(fn -> :telemetry.detach("cyfr-otel-tenant") end)
+
       assert :ok == OtelTenantHandler.attach()
-    end
-  end
+      assert :ok == OtelTenantHandler.attach()
 
-  describe "the subscribed events" do
-    # Use post-pipeline :stop events so the resolved context is available.
-    test "are the post-pipeline :stop events" do
-      root = Path.expand("../../../..", __DIR__)
-      source = File.read!(Path.join(root, "apps/cyfr/lib/cyfr/otel_tenant_handler.ex"))
+      handlers =
+        for event <- [[:phoenix, :endpoint, :stop], [:phoenix, :router_dispatch, :stop]],
+            %{id: "cyfr-otel-tenant"} = handler <- :telemetry.list_handlers(event),
+            do: handler.event_name
 
-      assert source =~ "[:phoenix, :endpoint, :stop]"
-      assert source =~ "[:phoenix, :router_dispatch, :stop]"
-      refute source =~ "[:phoenix, :endpoint, :start]"
-      refute source =~ "[:phoenix, :router_dispatch, :start]"
+      assert handlers == [[:phoenix, :endpoint, :stop], [:phoenix, :router_dispatch, :stop]]
     end
   end
 

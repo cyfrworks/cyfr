@@ -46,12 +46,7 @@ defmodule Mix.Tasks.Cyfr.Bench.Step do
   flush to disk). Numbers from a loaded machine are indicative only.
   """
 
-  use Boundary, classify_to: Cyfr.Mix
-
   use Mix.Task
-
-  # The harness is test support, compiled only under MIX_ENV=test.
-  @compile {:no_warn_undefined, Cyfr.Test.StepBench}
 
   @switches [mode: :string, steps: :integer, warmup: :integer]
   @modes %{"attached" => :attached, "pinned" => :pinned}
@@ -72,16 +67,7 @@ defmodule Mix.Tasks.Cyfr.Bench.Step do
     if steps < 1 or warmup < 0,
       do: Mix.raise("--steps must be positive and --warmup non-negative")
 
-    if Mix.env() != :test,
-      do: Mix.raise("mix cyfr.bench.step runs under MIX_ENV=test (it is #{Mix.env()})")
-
     Mix.Task.run("app.start")
-
-    if not Code.ensure_loaded?(Cyfr.Test.StepBench),
-      do:
-        Mix.raise(
-          "mix cyfr.bench.step runs from the umbrella root, where its harness is compiled"
-        )
 
     report = Cyfr.Test.StepBench.run(steps: steps, warmup: warmup, mode: mode)
     Mix.shell().info(Cyfr.Test.StepBench.render(report))

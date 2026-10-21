@@ -30,24 +30,23 @@ value is literal throughout, an open `$(` included.
 |---|---|
 | `CADDY_ACME_EMAIL` | The address Let's Encrypt registers a public home's Caddy certificate under, optional, which `cyfr access public --acme-email` writes and compose hands Caddy; any other mode refuses it. |
 | `CYFR_AUTH_PROVIDER` | The sign-in provider: unset for the built-in GitHub and Google device flows, `oidc` for the external issuer the three `CYFR_OIDC_*` variables name; `oidc` with any of them missing refuses the boot. |
-| `CYFR_AUTO_MIGRATE` | Whether the server migrates the schema on boot (default `true`); `false` when several members share one PostgreSQL database or an operator runs `bin/cyfr eval "Cyfr.Release.migrate()"` by hand. |
+| `CYFR_AUTO_MIGRATE` | Whether the server migrates the schema on boot (default `on`); `off` when several members share one PostgreSQL database or an operator runs `bin/cyfr eval "Cyfr.Release.migrate()"` by hand. |
 | `CYFR_BIND_ADDRESS` | The address the endpoint's loopback listener binds, in every mode (default `127.0.0.1`): `127.0.0.1` or `::1`, since the boot refuses any other address without the compose file's `CYFR_LOCAL_INGRESS_ASSERTED`. The stack binds cyfr's fixed address on its `default` network, which no other container joins and Docker publishes on the host's loopback port alone. |
 | `CYFR_CELL_COOKIE` | A cell's cookie: at least 32 characters (`openssl rand -hex 32`), the same on every member and the cookie each member's BEAM runs under (`RELEASE_COOKIE` or `-setcookie`). |
 | `CYFR_CLUSTER` | Several members on one database as one cell (default off). A member boots only with PostgreSQL, S3 storage, TLS distribution, `CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_LOCUS_RUNTIME_ROOT` and its own `CYFR_HOST_API_URL`; each missing one is a named refusal. |
 | `CYFR_CLUSTER_DNS_QUERY` | A cell's discovery by DNS: the headless service whose addresses are the members, each named `<CYFR_CLUSTER_NODE_BASENAME>@<address>`. |
 | `CYFR_CLUSTER_NODE_BASENAME` | The node basename of the members `CYFR_CLUSTER_DNS_QUERY` finds. |
 | `CYFR_CLUSTER_NODES` | A cell's members by name, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`). |
-| `CYFR_CORS_ALLOWED_ORIGINS` | The browser CORS allowlist, comma-separated origins. Assigned empty, as `cyfr init` writes it, it admits no cross-origin caller, which the shipped stack never needs; unassigned, the application's configured list stands, empty unless the deployment's own configuration names one. A release with sign-in configured refuses to boot on a wildcard. |
+| `CYFR_CORS_ALLOWED_ORIGINS` | The browser CORS allowlist, comma-separated origins. Empty or unset (`cyfr init` writes it empty), it admits no cross-origin caller, which the shipped stack never needs. A release with sign-in configured refuses to boot on a wildcard. |
 | `CYFR_COSIGN_IDENTITY` | Keyless OCI signature verification: the regular expression the signing certificate's identity must match, with `CYFR_COSIGN_ISSUER`; a missing keyless constraint refuses verification. |
 | `CYFR_COSIGN_ISSUER` | Keyless OCI signature verification: the regular expression the signing certificate's issuer must match, with `CYFR_COSIGN_IDENTITY`. |
 | `CYFR_COSIGN_KEY` | Key-based OCI signature verification: the path of a file holding the cosign public key, readable by the server; a value that names no readable file (a KMS URI among them) refuses verification as `unreadable_key`. |
-| `CYFR_COSIGN_PASSWORD` | The password of `CYFR_COSIGN_KEY`, when it has one. |
 | `CYFR_CRYPTO_KEYRING` | The keyring sealing secrets at rest (vault entries, webhook secrets, registry tokens, and each person's online keys and pending recovery material), as JSON `{"primary":"label","keys":{"label":"<base64, at least 32 bytes>"}}`; unset, one key derived from `CYFR_SECRET_KEY_BASE`. To rotate, keep the old labels listed and re-seal with `Cyfr.Release.rotate_cipher_keys/1`. Losing it loses every person's online keys at this home: an enrolled person restores from a printed kit on an empty installation, and an unenrolled person's keys are gone. |
 | `CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT` | The primary-key fingerprint the boot's refusal reports, set for one boot to accept a deliberate key change; re-seal, then unset it. It recovers nothing sealed with a key that is gone. |
 | `CYFR_DATABASE` | The database adapter, `sqlite` (default) or `postgres`, fixed when the release is built; the published image is SQLite, and a runtime value that disagrees with the build refuses the boot. |
 | `CYFR_DATABASE_PATH` | The SQLite file (default `cyfr.db` under `CYFR_DATA_PATH`). |
 | `CYFR_DATABASE_URL` | The PostgreSQL URL, which a PostgreSQL build requires (there is no localhost fallback). |
-| `CYFR_DATA_PATH` | The one runtime storage root: every athanor's tree, the caches and the SQLite database (default `data`; the image sets its own). |
+| `CYFR_DATA_PATH` | The one runtime storage root: every athanor's tree, the caches and the SQLite database (default `data`, under the working directory: `/app/data` in the image). |
 | `CYFR_DB_POOL_SIZE` | The database connection pool's size (default 20). |
 | `CYFR_DB_SSL` | TLS to the PostgreSQL server (default off). |
 | `CYFR_DIRECTORY_URL` | The identity directory this deployment enrolls its local people at, an `https` URL chosen explicitly: there is no hosted default, and choosing one is a choice about how long an identity lasts. Unset, local work and local pairing still work and enrollment is refused; a malformed value, or one longer than the 1,024 bytes an enrollment's confirmation preview can name, refuses the boot. |
@@ -88,7 +87,7 @@ value is literal throughout, an open `$(` included.
 | `CYFR_RESTORE_TOKEN` | The installation's restore capability, exactly 64 lowercase hexadecimal characters (`openssl rand -hex 32`), set in `.env` alone. Set, an empty installation's first person is reserved for a restore from a printed kit and ordinary first sign-in is refused; unset, restore is disabled. A malformed value refuses the boot, which never prints it. |
 | `CYFR_S3_ACCESS_KEY_ID` | The object store's access key ID, with `CYFR_STORAGE=s3`. |
 | `CYFR_S3_BUCKET` | The object store's bucket, with `CYFR_STORAGE=s3`. |
-| `CYFR_S3_ENDPOINT` | The endpoint of a non-AWS object store (MinIO and the like), usually with `CYFR_S3_PATH_STYLE=true`. |
+| `CYFR_S3_ENDPOINT` | The endpoint of a non-AWS object store (MinIO and the like), usually with `CYFR_S3_PATH_STYLE=on`. |
 | `CYFR_S3_PATH_STYLE` | Path-style bucket addressing (default off). |
 | `CYFR_S3_PREFIX` | A key prefix every object is stored under (default none). |
 | `CYFR_S3_RECEIVE_TIMEOUT_MS` | The per-request timeout against the object store, in milliseconds (default 60000); a slower store reads as a storage outage. |
@@ -203,11 +202,12 @@ assigns one.
 |---|---|
 | `CYFR_TOKEN` | the Codex CLI: the session token its non-interactive path signs in with |
 | `CYFR_NO_UPDATE_CHECK` | the Codex CLI: turns off its release check |
-| `CYFR_INSECURE_SKIP_VERIFY` | the Codex CLI: skips TLS verification of the server it calls; the installer: skips verifying the download |
+| `CYFR_NO_INTERACTIVE` | the Codex CLI: turns off its prompts, as `--no-interactive` does |
+| `CYFR_INSECURE_SKIP_VERIFY` | the installer (scripts/install.sh): skips verifying the download's checksum and signature |
 | `CYFR_INSTALL_DIR` | the installer (scripts/install.sh): where it puts the CLI |
 | `CYFR_ALLOW_UNVERIFIED` | the installer: installs without cosign or the release's signature, on the checksum alone |
 | `CYFR_VERSION` | the installer: the release it installs |
-| `CYFR_IMAGE` | the installer: the image the stack it writes runs |
+| `CYFR_IMAGE` | the test harness: the app image the backends image suite runs |
 | `CYFR_RESTORE_INCOMPLETE` | the Codex CLI and the image's entrypoint: the restore's bar, which `cyfr restore` sets in the project's `.env` (the cyfr service's `env_file`) until the restore is declared and sets empty for its own offline evals; the entrypoint refuses to start anything while it is non-empty |
 | `CYFR_TEST_…` (every name it begins) | the test harness: its partition, run root and object-store fixtures |
 | `CYFR_CLUSTER_DATABASE_URL` | the test harness: the cluster suite's shared database |

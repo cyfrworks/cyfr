@@ -5,7 +5,7 @@ defmodule Cyfr.CellTest do
   @moduledoc """
   This member's place in the cell: the claimant of its `cell_leases` slot,
   the rendezvous proposal over the live roster, and the seven conditions
-  `CYFR_CLUSTER=1` boots only under.
+  `CYFR_CLUSTER=on` boots only under.
 
   The claimant writes the process-wide standing record, so this file runs
   alone and puts back what it found. Every case that touches a row names a
@@ -232,7 +232,7 @@ defmodule Cyfr.CellTest do
                Cell.start_link(name: nil, node_name: node, lease_ms: 500, renew_ms: 60_000)
 
       assert message =~ "another control plane (boot-peer on #{peer})"
-      assert message =~ "CYFR_CLUSTER=1"
+      assert message =~ "CYFR_CLUSTER=on"
 
       # The refused member gave its own slot back, so it left the row as
       # it found it.
@@ -534,8 +534,8 @@ defmodule Cyfr.CellTest do
       assert ControlPlane.held?()
       assert {:ok, _generation} = ControlPlane.generation()
 
-      # A cluster member claims its slot like any other: no
-      # `{:held, :forever}`, and a real generation to stamp outward.
+      # A cluster member claims its slot like any other: a lease deadline,
+      # and a real generation to stamp outward.
       assert {:held, deadline} = :persistent_term.get(@standing_key)
       assert is_integer(deadline)
 
@@ -584,16 +584,6 @@ defmodule Cyfr.CellTest do
       assert node in Cell.roster()
 
       :ok = stop_supervised(Cell)
-    end
-  end
-
-  describe "live_member?/1" do
-    test "answers the cell's roster, not this node's processes", %{node: node} do
-      assert {:ok, _} = ControlPlane.take(node, "boot-live", 60_000)
-      assert Cell.live_member?("boot-live")
-
-      expire(node)
-      refute Cell.live_member?("boot-live")
     end
   end
 end

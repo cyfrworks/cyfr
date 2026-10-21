@@ -467,7 +467,7 @@ defmodule Cyfr.Test.StepBench do
         warmup: warmup,
         mode: bench.mode,
         commit: commit,
-        database: Cyfr.RuntimeConfig.repo_adapter(),
+        database: Arca.repo_adapter(),
         storage: Arca.Storage.configured_adapter(),
         upstream_port: bench.port,
         upstream: bench.server,

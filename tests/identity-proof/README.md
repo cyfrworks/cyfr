@@ -64,7 +64,7 @@ is removed when it ends, whether it succeeds or fails.
 The person's passkeys are made and used by Chromium's virtual WebAuthn
 authenticator over CDP (`virtualAuthenticator`); Firefox and WebKit offer
 Playwright none, so the proof runs in Chromium alone. The glass's steps run
-once more on a second glass at the proposed handheld's 720×720 touch
+once more on a second glass at the handheld's 720×720 touch
 viewport (`tests/browser/handheld.mjs`).
 
 ## Steps

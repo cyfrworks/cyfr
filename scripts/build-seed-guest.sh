@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
 # Build a seed WASM component from its tracked source and write
 # src/build.stamp with the source and binary digests plus toolchain
 # versions, so a source edit without a rebuild fails CI.
 #
-# Usage: scripts/build-seed-guest.sh <version-dir> [--check | --rebuild-check]
+# Usage: scripts/build-seed-guest.sh <version-dir> [--check]
 #   <version-dir>: a seed component version directory, e.g.
 #                  seed/components/formulas/local/list-models/0.6.3 or
 #                  seed/components/catalysts/local/claude/1.4.1
 #   --check: verify digests against the stamp without a toolchain.
-#   --rebuild-check: rebuild and compare bytes using the recorded toolchain.
 #
 # Requires Rust with wasm32-wasip2 and cargo-component:
 #   rustup target add wasm32-wasip2
 #   cargo install cargo-component
 set -euo pipefail
 
-[ $# -ge 1 ] || { echo "usage: $0 <version-dir> [--check | --rebuild-check]" >&2; exit 2; }
+[ $# -ge 1 ] || { echo "usage: $0 <version-dir> [--check]" >&2; exit 2; }
 
 dir="$(cd "$1" && pwd)"
 src="$dir/src"
@@ -70,17 +71,6 @@ case "${2:-}" in
   --check)
     check "$1"
     ;;
-  --rebuild-check)
-    build
-    if cmp -s "$built" "$shipped"; then
-      echo "$artifact is byte-identical to a fresh build"
-    else
-      echo "$artifact differs from what the source builds here — run $0 $1" >&2
-      (cd "$src" && cargo clean --quiet)
-      exit 1
-    fi
-    (cd "$src" && cargo clean --quiet)
-    ;;
   "")
     build
     cp "$built" "$shipped"
@@ -95,7 +85,7 @@ case "${2:-}" in
     (cd "$src" && cargo clean --quiet)
     ;;
   *)
-    echo "usage: $0 <version-dir> [--check | --rebuild-check]" >&2
+    echo "usage: $0 <version-dir> [--check]" >&2
     exit 2
     ;;
 esac

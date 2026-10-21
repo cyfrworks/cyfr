@@ -3,7 +3,9 @@
 
 defmodule CyfrWeb.Plugs.CORS do
   @moduledoc """
-  Minimal CORS plug for the Emissary MCP endpoint.
+  Minimal CORS plug for the endpoint's cross-origin mounts: the MCP
+  transport, the execution event stream, the tincture data routes and a
+  certified device's renewal.
 
   Handles OPTIONS preflight requests and sets CORS headers on all responses.
   Allowed origins are configurable — none by default, a list of origins, or
@@ -87,9 +89,8 @@ defmodule CyfrWeb.Plugs.CORS do
     * `:methods` — request verbs this mount routes, upper-case, without
       `OPTIONS` (always appended). Defaults to `#{inspect(@default_methods)}`.
     * `:headers` — request headers this mount accepts *in addition* to the
-      common set. `last-event-id` is the case that motivated it: it belongs to
-      the execution event stream, not to MCP, and advertising it on the MCP
-      endpoint claimed support for something no MCP handler reads.
+      common set, such as the execution event stream's `last-event-id`,
+      which no MCP handler reads and the MCP mount does not advertise.
     * `:null_origin` — answer the `null` origin (default `false`); see
       "The null origin" above.
     * `:any_origin` — answer every other origin `*`, never with
@@ -135,25 +136,16 @@ defmodule CyfrWeb.Plugs.CORS do
     put_cors_headers(conn, opts)
   end
 
-  # The bare-opts fallback, derived ONCE at compile time — this ran
-  # init([])'s list-pipeline on every request, including preflights.
-  @default_allowed_methods @default_methods
-                           |> Enum.map(&String.upcase/1)
-                           |> Enum.concat(["OPTIONS"])
-                           |> Enum.uniq()
-                           |> Enum.join(", ")
-  @default_allowed_headers Enum.join(Enum.uniq(@default_headers), ", ")
-
   defp put_cors_headers(conn, opts) do
-    allowed_methods = Keyword.get(opts, :allowed_methods) || @default_allowed_methods
-    allowed_headers = Keyword.get(opts, :allowed_headers) || @default_allowed_headers
+    allowed_methods = Keyword.fetch!(opts, :allowed_methods)
+    allowed_headers = Keyword.fetch!(opts, :allowed_headers)
     origin = get_req_header(conn, "origin") |> List.first()
     allowed = allowed_origins()
 
     allow_origin =
       cond do
-        origin == "null" -> if Keyword.get(opts, :null_origin, false), do: "null"
-        Keyword.get(opts, :any_origin, false) -> "*"
+        origin == "null" -> if Keyword.fetch!(opts, :null_origin), do: "null"
+        Keyword.fetch!(opts, :any_origin) -> "*"
         "*" in allowed -> "*"
         origin != nil and origin in allowed -> origin
         true -> nil

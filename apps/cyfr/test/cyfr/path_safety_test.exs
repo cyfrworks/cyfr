@@ -78,14 +78,14 @@ defmodule Cyfr.PathSafetyTest do
       assert message =~ ".."
     end
 
-    test "rejects null bytes (gained from the Arca side of the merge)" do
+    test "rejects null bytes" do
       assert {:error, {:null_bytes, message}} =
                PathSafety.validate_relative_path("data/x" <> <<0>> <> "y")
 
       assert message =~ "null bytes"
     end
 
-    test "rejects encoded traversal (gained from the Arca side of the merge)" do
+    test "rejects encoded traversal" do
       assert {:error, {:encoded_dots, message}} =
                PathSafety.validate_relative_path("data/%2e%2e/secrets")
 

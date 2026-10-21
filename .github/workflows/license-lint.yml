@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 name: License Lint
 
 # Check directory-based licensing: the `apps/sanctum` application uses
@@ -122,27 +125,24 @@ jobs:
         run: |
           set -uo pipefail
           fail=0
-          for app in locus; do
-            file="Dockerfile.$app"
-            if ! grep -qxF 'LABEL org.opencontainers.image.licenses="Apache-2.0"' "$file"; then
-              echo "::error file=$file::the $app image must be labelled Apache-2.0 alone"
-              fail=1
-            fi
-            roster="$(awk -v app="$app" '$0 ~ "^      " app ": \\[$" { inblk = 1; next } inblk && /applications: \[/ { inapps = 1; next } inapps && /\]/ { exit } inapps { sub(/^ +/, ""); sub(/:.*/, ""); print }' mix.exs | sort | tr '\n' ' ')"
-            if [ "$roster" != "$app prima " ]; then
-              echo "::error file=mix.exs::the $app release must hold prima and $app alone, found: ${roster:-nothing}"
-              fail=1
-            fi
-            deps="$(grep -oE '\{:[a-z_]+, in_umbrella: true' "apps/$app/mix.exs" | sed -E 's/^\{:([a-z_]+).*/\1/' | sort -u | tr '\n' ' ')"
-            if [ "$deps" != "prima " ]; then
-              echo "::error file=apps/$app/mix.exs::$app may depend in the umbrella on prima alone, found: ${deps:-nothing}"
-              fail=1
-            fi
-            fsl="$(grep -rlF 'SPDX-License-Identifier: FSL-1.1-Apache-2.0' "apps/$app" apps/prima || true)"
-            if [ -n "$fsl" ]; then
-              echo "::error::FSL-licensed files in what the $app image releases:"
-              echo "$fsl"
-              fail=1
-            fi
-          done
+          if ! grep -qxF 'LABEL org.opencontainers.image.licenses="Apache-2.0"' Dockerfile.locus; then
+            echo "::error file=Dockerfile.locus::the locus image must be labelled Apache-2.0 alone"
+            fail=1
+          fi
+          roster="$(awk '$0 ~ "^      locus: \\[$" { inblk = 1; next } inblk && /applications: \[/ { inapps = 1; next } inapps && /\]/ { exit } inapps { sub(/^ +/, ""); sub(/:.*/, ""); print }' mix.exs | sort | tr '\n' ' ')"
+          if [ "$roster" != "locus prima " ]; then
+            echo "::error file=mix.exs::the locus release must hold prima and locus alone, found: ${roster:-nothing}"
+            fail=1
+          fi
+          deps="$(grep -oE '\{:[a-z_]+, in_umbrella: true' apps/locus/mix.exs | sed -E 's/^\{:([a-z_]+).*/\1/' | sort -u | tr '\n' ' ')"
+          if [ "$deps" != "prima " ]; then
+            echo "::error file=apps/locus/mix.exs::locus may depend in the umbrella on prima alone, found: ${deps:-nothing}"
+            fail=1
+          fi
+          fsl="$(grep -rlF 'SPDX-License-Identifier: FSL-1.1-Apache-2.0' apps/locus apps/prima || true)"
+          if [ -n "$fsl" ]; then
+            echo "::error::FSL-licensed files in what the locus image releases:"
+            echo "$fsl"
+            fail=1
+          fi
           exit "$fail"

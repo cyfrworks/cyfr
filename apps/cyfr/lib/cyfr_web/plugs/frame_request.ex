@@ -44,8 +44,7 @@ defmodule CyfrWeb.Plugs.FrameRequest do
   @impl true
   def call(conn, opts) do
     if frame_request?(conn) do
-      errors = Keyword.get(opts, :errors, @default_errors)
-      errors.halt(conn, 403, :frame_request, nil)
+      Keyword.fetch!(opts, :errors).halt(conn, 403, :frame_request, nil)
     else
       conn
     end
@@ -59,8 +58,4 @@ defmodule CyfrWeb.Plugs.FrameRequest do
     |> Enum.flat_map(&String.split(&1, ","))
     |> Enum.any?(&((&1 |> String.trim() |> String.downcase()) in @frame_destinations))
   end
-
-  @doc "The `sec-fetch-dest` values that are refused."
-  @spec frame_destinations() :: [String.t()]
-  def frame_destinations, do: @frame_destinations
 end

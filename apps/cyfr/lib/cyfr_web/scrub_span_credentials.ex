@@ -26,9 +26,10 @@ defmodule CyfrWeb.ScrubSpanCredentials do
       definition of where a credential stands in a path;
     * a query (`url.query`) pair by pair, each value whose key the
       redaction roster names (`Prima.Sanitizer.sensitive_key?/1`, which
-      holds the tincture credential query keys) replaced by `[REDACTED]`;
-    * a target (`http.target`) and a full URL (`url.full`, `http.url`) as
-      their path and query.
+      holds the tincture credential query keys) replaced by `[REDACTED]`.
+
+  These are the attributes the installed instrumentation names a request
+  by (`OpentelemetryBandit`, `OpentelemetryPhoenix`).
 
   Every other attribute, and an attribute already free of a credential,
   is exported as it was recorded. A batch that cannot be rewritten is
@@ -50,8 +51,6 @@ defmodule CyfrWeb.ScrubSpanCredentials do
 
   @path_keys ["url.path", "http.route"]
   @query_keys ["url.query"]
-  @target_keys ["http.target"]
-  @url_keys ["url.full", "http.url"]
 
   @impl true
   def init(inner) do
@@ -141,8 +140,6 @@ defmodule CyfrWeb.ScrubSpanCredentials do
     cond do
       key in @path_keys -> redact_path(value)
       key in @query_keys -> redact_query(value)
-      key in @target_keys -> redact_target(value)
-      key in @url_keys -> redact_url(value)
       true -> value
     end
   end
@@ -150,25 +147,6 @@ defmodule CyfrWeb.ScrubSpanCredentials do
   def scrub(_key, value), do: value
 
   defp redact_path(path), do: CyfrWeb.Plugs.ScrubTinctureCredentials.redact_path(path)
-
-  defp redact_target(target) do
-    case String.split(target, "?", parts: 2) do
-      [path, query] -> redact_path(path) <> "?" <> redact_query(query)
-      [path] -> redact_path(path)
-    end
-  end
-
-  # A URL's path and query are the ones it would be requested by; the rest
-  # is written back as it came. A URL with neither is left alone.
-  defp redact_url(url) do
-    uri = URI.parse(url)
-    path = uri.path && redact_path(uri.path)
-    query = uri.query && redact_query(uri.query)
-
-    if path == uri.path and query == uri.query,
-      do: url,
-      else: URI.to_string(%{uri | path: path, query: query})
-  end
 
   # Pair by pair, so a pair the roster passes is written back byte for
   # byte. A key is compared decoded, as the parameters it names are.

@@ -7,10 +7,10 @@ defmodule Cyfr.Cluster.WorkerWatchTest do
   @moduledoc """
   A member that cannot reach a worker its peer can.
 
-  This is the fault the worker watch's claim exists to close: every member
-  used to poll every worker and lapse the attempts of whatever boot it
-  stopped hearing from, **whoever claimed them**, so a member partitioned
-  from a worker lapsed a healthy peer's running work. The answer is a
+  This is the fault the worker watch's claim exists to close: were every
+  member to poll every worker and lapse the attempts of whatever boot it
+  stopped hearing from, **whoever claimed them**, a member partitioned
+  from a worker would lapse a healthy peer's running work. The answer is a
   claim whose lease a **miss does not renew**, and a cascade: a member
   that cannot reach a worker loses the watch within one lease, the next
   rendezvous candidate takes it, and if *it* can reach the worker it hears

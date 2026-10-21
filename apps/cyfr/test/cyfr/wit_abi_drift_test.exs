@@ -3,7 +3,7 @@
 
 defmodule Cyfr.WitAbiDriftTest do
   @moduledoc """
-  The guest ABI is written down twice, and nothing bound the two together.
+  The guest ABI is written down twice, and this test binds the two together.
 
   `wit/` is the contract: `Prima.WIT` embeds it at compile time,
   `Locus.Builder` copies it into the build sandbox, and `Prima.CargoToml`

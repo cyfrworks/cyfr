@@ -91,8 +91,12 @@ defmodule Cyfr.PlatformSettingsTest do
     end
   end
 
+  # A settings process of the suite's own beside the boot's, under a name
+  # of its own: each test starts at most one and stops it as it ends.
+  @instance __MODULE__.Instance
+
   defp start_process(opts) do
-    name = :"settings_#{System.unique_integer([:positive])}"
+    name = @instance
 
     pid =
       start_supervised!(
@@ -436,43 +440,6 @@ defmodule Cyfr.PlatformSettingsTest do
       assert %{value: 64, desired: 5, pending: true} = listed("opus_max_concurrent")
     end
 
-    test "a row stored under an execution setting's retired key is read by no setting" do
-      # Each setting's key under the name the execution domain had before,
-      # beside the key it is now, with a value its validator takes that is
-      # not its default. Spelled split so the retired names are not
-      # themselves found here.
-      retired = [
-        {"cruc" <> "ible_max_concurrent", "opus_max_concurrent", 64},
-        {"cruc" <> "ible_max_concurrent_per_tenant", "opus_max_concurrent_per_tenant", 3},
-        {"cruc" <> "ible_events_max_concurrent", "opus_events_max_concurrent", 2},
-        {"cruc" <> "ible_events_max_ms", "opus_events_max_ms", 60_000}
-      ]
-
-      slots = Application.get_env(:cyfr, :opus_max_concurrent)
-      per_tenant = Application.get_env(:cyfr, :opus_max_concurrent_per_tenant)
-      on_exit(fn -> restore(:cyfr, :opus_max_concurrent_per_tenant, per_tenant) end)
-
-      Enum.reduce(retired, revision(), fn {old, _new, value}, at ->
-        {:ok, next} = Store.put(old, value, at, "ops")
-        next
-      end)
-
-      assert Settings.apply() == :ok
-
-      for {old, new, _value} <- retired do
-        assert Store.effective(old) == {:error, :unknown_key}
-
-        assert %{default: default, desired: default, source: "default", revision: nil} =
-                 listed(new)
-
-        assert Store.effective(new) == {:ok, default}
-      end
-
-      # The boot applied no retired row to the slots it writes.
-      assert Application.get_env(:cyfr, :opus_max_concurrent) == slots
-      assert Application.get_env(:cyfr, :opus_max_concurrent_per_tenant) == per_tenant
-    end
-
     test "an unreadable store refuses the boot" do
       Arca.Repo.query!("DROP TABLE platform_settings")
 
@@ -611,7 +578,7 @@ defmodule Cyfr.PlatformSettingsTest do
 
       # The boot's start, linked as a supervisor's child is: its refusal is
       # the start's answer, and the exit it sends is trapped here.
-      opts = [name: :"settings_#{System.unique_integer([:positive])}", member: "m@test"]
+      opts = [name: @instance, member: "m@test"]
       trapping = Process.flag(:trap_exit, true)
 
       {result, _log} =
@@ -646,7 +613,7 @@ defmodule Cyfr.PlatformSettingsTest do
       # The quota's pin is gone: its row's removal would expose the
       # default quota under the stored reserve.
       Application.put_env(:cyfr, :deployment_pinned, [])
-      opts = [name: :"settings_#{System.unique_integer([:positive])}", member: "m@test"]
+      opts = [name: @instance, member: "m@test"]
       trapping = Process.flag(:trap_exit, true)
 
       {result, _log} =
@@ -720,30 +687,6 @@ defmodule Cyfr.PlatformSettingsTest do
   end
 
   describe "pins" do
-    test "a conflict is another live member's different value for a key this one pins" do
-      live = [
-        %{key: "log_level", member: "b@h", generation: 2, value: "debug"},
-        %{key: "max_athanors", member: "b@h", generation: 2, value: 5},
-        %{key: "log_level", member: "a@h", generation: 1, value: "info"}
-      ]
-
-      mine = [{"log_level", "error"}, {"max_athanors", 5}]
-
-      assert Settings.conflicts(mine, "a@h", live) == [{"log_level", "error", "b@h", "debug"}]
-      assert Settings.conflicts([{"log_level", "debug"}], "a@h", live) == []
-    end
-
-    test "a pin is live only under the generation its member's slot holds now" do
-      pins = [
-        %{key: "k", member: "a@h", generation: 3, value: 1},
-        %{key: "k", member: "b@h", generation: 1, value: 1},
-        %{key: "k", member: "c@h", generation: 1, value: 1}
-      ]
-
-      members = [%{node: "a@h", generation: 3}, %{node: "b@h", generation: 2}]
-      assert Settings.live(pins, members) == [hd(pins)]
-    end
-
     test "the claim retires its slot's earlier pins and a dead member's, and records its own" do
       me = "me-#{System.unique_integer([:positive])}@h"
       peer = "peer-#{System.unique_integer([:positive])}@h"
@@ -783,6 +726,18 @@ defmodule Cyfr.PlatformSettingsTest do
 
       # A pin on a peer and none here is a divergence, not a refusal.
       Application.put_env(:cyfr, :deployment_pinned, [])
+      assert Settings.check_pins!() == :ok
+
+      # This member's own earlier pin is never a conflict, and a pin
+      # recorded under a generation its member's slot no longer holds is
+      # not live.
+      me = Atom.to_string(node())
+      lease!(me, 2)
+      :ok = Store.record_pin("log_level", me, 2, "warning")
+      stale = "stale-#{System.unique_integer([:positive])}@h"
+      lease!(stale, 3)
+      :ok = Store.record_pin("log_level", stale, 2, "info")
+      Application.put_env(:cyfr, :deployment_pinned, [{"log_level", :debug}])
       assert Settings.check_pins!() == :ok
     end
   end

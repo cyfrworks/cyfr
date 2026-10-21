@@ -866,7 +866,7 @@ project_new() {
   # The run's own settings: its images, migration, its operator, the
   # private host the shutdown case's upstream is, and builds off as an
   # operator turns them off, both empty.
-  env_set CYFR_AUTO_MIGRATE true
+  env_set CYFR_AUTO_MIGRATE on
   env_set CYFR_PLATFORM_ADMIN_EMAILS operator@example.com
   env_set CYFR_LOCUS_BUILDS_URL ""
   env_set CYFR_LOCUS_BUILDS_KEY ""

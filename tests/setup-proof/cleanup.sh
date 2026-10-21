@@ -11,12 +11,12 @@
 # proof's browser, whose container outlives the shell that started it
 # (`stop_proof_container`), then `cyfr setup`, asked to stop as an
 # interrupt asks it, so a waiting join is cancelled and a start runs to its
-# end under the stack's lock, killed only past SETUP_PROOF_STOP_SECONDS
-# (default 300). Then each project goes whole, its volumes with it: its
-# join containers (labelled by the engine), the stack and the join network;
-# then the stand-in image and the scratch directory. The asks and answers
-# go on every exit; the record stays. A removal is tried three times, and
-# one that still fails fails the run.
+# end under the stack's lock, killed only past 300 s. Then each project
+# goes whole, its volumes with it: its join containers (labelled by the
+# engine), the stack and the join network; then the stand-in image and the
+# scratch directory. The asks and answers go on every exit; the record
+# stays. A removal is tried three times, and one that still fails fails the
+# run.
 
 # The step `$@`, tried three times, three seconds apart.
 cleanup_retry() {
@@ -42,12 +42,12 @@ cleanup() {
   rm -f "$OUT"/ask-* "$OUT"/answer-*
   if [ -n "$SETUP_PID" ]; then
     kill -TERM "$SETUP_PID" 2>/dev/null || true
-    closes=$((SECONDS + ${SETUP_PROOF_STOP_SECONDS:-300}))
+    closes=$((SECONDS + 300))
     while kill -0 "$SETUP_PID" 2>/dev/null && [ "$SECONDS" -lt "$closes" ]; do
       sleep 0.2
     done
     if kill -0 "$SETUP_PID" 2>/dev/null; then
-      echo "::error::setup proof cleanup: cyfr setup did not stop within ${SETUP_PROOF_STOP_SECONDS:-300} s; killed" >&2
+      echo "::error::setup proof cleanup: cyfr setup did not stop within 300 s; killed" >&2
       kill -KILL "$SETUP_PID" 2>/dev/null || true
       failed=1
     fi

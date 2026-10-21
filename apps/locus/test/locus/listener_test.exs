@@ -1440,7 +1440,7 @@ defmodule Locus.ListenerTest do
 
   # A nonce table of the calling test's own, gone with its process.
   defp nonce_table do
-    table = :"#{__MODULE__}.Nonces#{System.unique_integer([:positive])}"
+    table = __MODULE__.Nonces
     :ok = Listener.init_nonces(table)
     table
   end

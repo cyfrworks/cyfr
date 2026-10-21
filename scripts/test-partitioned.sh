@@ -41,9 +41,9 @@ COVER=false
 usage() { echo "usage: $0 [-n N] [-a sqlite|postgres] [--cover] [--] [test paths and Mix arguments]"; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -n|--partitions|-a|--adapter)
+    -n|-a)
       [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 64; }
-      case "$1" in -n|--partitions) PARTITIONS=$2 ;; *) ADAPTER=$2 ;; esac
+      case "$1" in -n) PARTITIONS=$2 ;; *) ADAPTER=$2 ;; esac
       shift 2 ;;
     --cover) COVER=true; shift ;;
     -h|--help) usage; exit 0 ;;

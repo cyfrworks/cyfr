@@ -15,6 +15,11 @@ defmodule Locus.BuilderEnvTest do
 
   alias Locus.Builder
 
+  # A build as the service runs one: the request prepared, then its plan run.
+  defp build(request, opts \\ []) do
+    with {:ok, plan} <- Builder.prepare(request), do: Builder.run(plan, opts)
+  end
+
   defp tincture(package) do
     %{
       language: :javascript,
@@ -52,7 +57,7 @@ defmodule Locus.BuilderEnvTest do
         scripts: %{build: "mkdir -p dist && env > dist/env.txt"}
       })
 
-    assert {:ok, %{outputs: %{"env.txt" => env}}} = Builder.build(request)
+    assert {:ok, %{outputs: %{"env.txt" => env}}} = build(request)
 
     refute env =~ "CARGO_TARGET_DIR="
     refute env =~ "CYFR_DATABASE_URL="
@@ -70,7 +75,7 @@ defmodule Locus.BuilderEnvTest do
 
     homes =
       for _build <- 1..2 do
-        assert {:ok, %{outputs: %{"env.txt" => env}}} = Builder.build(request)
+        assert {:ok, %{outputs: %{"env.txt" => env}}} = build(request)
 
         values =
           for line <- String.split(env, "\n"),

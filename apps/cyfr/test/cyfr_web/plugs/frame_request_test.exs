@@ -43,9 +43,7 @@ defmodule CyfrWeb.Plugs.FrameRequestTest do
   end
 
   test "every frame destination is refused with 403 and halted" do
-    assert FrameRequest.frame_destinations() == ~w(iframe frame embed object fencedframe)
-
-    for value <- FrameRequest.frame_destinations() do
+    for value <- ~w(iframe frame embed object fencedframe) do
       conn = assert_refused(call([value]))
 
       assert %{"code" => "forbidden", "message" => "A request made by a frame is refused"} =

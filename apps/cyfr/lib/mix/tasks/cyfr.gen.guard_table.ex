@@ -12,10 +12,9 @@ defmodule Mix.Tasks.Cyfr.Gen.GuardTable do
   the metadata rule the guard installs first.
 
       mix cyfr.gen.guard_table
-      mix cyfr.gen.guard_table --check
 
-  `--check` fails when the guard does not hold the table;
-  `apps/cyfr/test/cyfr/guard_table_test.exs` fails on it as well.
+  `apps/cyfr/test/cyfr/guard_table_test.exs` fails when the guard does not
+  hold the table.
   """
 
   use Boundary, classify_to: Cyfr
@@ -35,22 +34,13 @@ defmodule Mix.Tasks.Cyfr.Gen.GuardTable do
     spliced = splice(current)
 
     case args do
-      ["--check"] ->
-        if current == spliced do
-          Mix.shell().info("#{@target} holds the address table")
-        else
-          Mix.raise(
-            "#{@target} does not hold Prima.Cidr's address table — run `mix cyfr.gen.guard_table`"
-          )
-        end
-
       [] ->
         # arca:bypass-ok=E
         File.write!(path, spliced)
         Mix.shell().info("wrote the address table into #{@target}")
 
       _other ->
-        Mix.raise("usage: mix cyfr.gen.guard_table [--check]")
+        Mix.raise("usage: mix cyfr.gen.guard_table")
     end
   end
 

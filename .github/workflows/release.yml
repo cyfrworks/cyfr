@@ -29,7 +29,6 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io/cyfrworks
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # The verification: each called workflow bounds its own jobs.
@@ -108,8 +107,9 @@ jobs:
   images:
     needs: [version, test, dialyzer, codex-ci, keeper-ci, license-lint, security]
     if: github.repository == 'cyfrworks/cyfr'
-    # No successful run has built cyfr-locus yet to bound it by.
-    timeout-minutes: 90
+    # The slowest of these jobs, cyfr-locus on amd64, runs about ten minutes
+    # (cyfr about three): the bound is three times that.
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -254,7 +254,7 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ matrix.image }}
         run: |
-          digest=$(scripts/ci/merge-image.sh "$IMAGE" "${GITHUB_REF_NAME#v}" "$(cat digests/amd64)" "$(cat digests/arm64)")
+          digest=$(scripts/ci/merge-image.sh "$IMAGE" "$GITHUB_REF_NAME" "$(cat digests/amd64)" "$(cat digests/arm64)")
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
@@ -430,14 +430,11 @@ jobs:
           git -C "$workdir" config user.name  "github-actions[bot]"
           git -C "$workdir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Install the cask, remove the root formula, and register the formula-to-cask
-          # migration for existing Homebrew installs. Stage files before checking for
-          # changes so new files are included.
+          # Install the cask, staged before the check for changes so a new
+          # file is included.
           stage() {
             mkdir -p "$workdir/Casks"
             cp "$CASK_SRC" "$workdir/Casks/cyfr.rb"
-            git -C "$workdir" rm --ignore-unmatch cyfr.rb >/dev/null 2>&1 || true
-            printf '{\n  "cyfr": "cyfrworks/cyfr/cyfr"\n}\n' > "$workdir/tap_migrations.json"
             git -C "$workdir" add -A
           }
 

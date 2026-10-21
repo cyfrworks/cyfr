@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Regression cases for scripts/ci/seed-guard.sh and scripts/ci/config-seam.sh,
-# and for scripts/release.sh's use of the seed guard.
+# Regression cases for scripts/ci/seed-guard.sh, scripts/ci/config-seam.sh and
+# scripts/ci/storage-diagrams.py, and for scripts/release.sh's use of the seed
+# guard.
 # Each case builds its own scratch git repository and runs the scripts there
 # by path, so nothing in this file reimplements their rules.
 #
@@ -442,6 +443,105 @@ commit modify
 TMPDIR="$scratch/tmpdir" bash "$seed_guard" "$base" > "$scratch/out" 2> "$scratch/err"
 code=$?
 if [ "$passed" -eq 0 ] && [ "$code" -eq 1 ] && [ -z "$(ls -A "$scratch/tmpdir")" ]; then pass "$label"; else fail "$label"; fi
+
+# --- scripts/ci/storage-diagrams.py ---
+
+# A layout source as Arca.Storage spells it: two tenant rows, a reserved
+# one and a global one, with a comment row between them.
+diagram_layout() {
+  cat > "$1" <<'EX'
+defmodule Arca.Storage do
+  @layout [
+    {"aqua", :tenant, nil, :overlay, :shaped},
+    # A comment row {"ghost", :tenant, nil, nil, :read},
+    {"payloads", :tenant_reserved, nil, nil, :system},
+    {"data", :tenant, "data", nil, :open},
+    {"cache", :global, nil, nil, :system}
+  ]
+
+  @tenant_roots for {root, class, _guest, _seed, _tier} <- @layout,
+                    class in [:tenant, :tenant_reserved],
+                    do: root
+end
+EX
+}
+# A guide drawing an athanor's tree both ways the guides do: a placeholder
+# under `athanors/`, and `athanors/<placeholder>/` on one line. Each
+# names its extra lines after the tree's roots.
+diagram_guide() {
+  local extra=$1
+  {
+    printf '# Guide\n\n```\nproject/\n└── data/\n    ├── cache/\n    └── athanors/\n        └── <athanor id>/\n'
+    printf '            ├── aqua/       # soul\n            │   └── roles/  # nested, not a root\n'
+    printf '%b' "$extra"
+    printf '            ├── payloads/\n            └── data/\n```\n\n```\n└── data/\n    └── athanors/{athanor_id}/\n'
+    printf '        ├── aqua/\n        └── data/\n```\n'
+  } > guide.md
+}
+storage_diagrams="$root/scripts/ci/storage-diagrams.py"
+run_diagrams() {
+  python3 -I "$storage_diagrams" "$@" > "$scratch/out" 2> "$scratch/err"
+  code=$?
+}
+out_has() { grep -qF -- "$1" "$scratch/out"; }
+
+label="storage-diagrams reads the tenant roots from the layout's tenant and reserved rows"
+new_repo
+diagram_layout storage.ex
+run_diagrams --layout storage.ex --roster
+if [ "$code" -eq 0 ] && [ "$(tr '\n' ' ' < "$scratch/out")" = 'aqua payloads data ' ]; then pass "$label"; else fail "$label"; fi
+
+label="storage-diagrams reads Arca.Storage's own roster"
+cd "$root" || exit 1
+run_diagrams --roster
+if [ "$code" -eq 0 ] && grep -qx data "$scratch/out" && grep -qx components "$scratch/out" && ! grep -qx cache "$scratch/out"; then pass "$label"; else fail "$label"; fi
+
+label="storage-diagrams passes the guides"
+run_diagrams README.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md
+if [ "$code" -eq 0 ]; then pass "$label"; else fail "$label"; fi
+
+label="storage-diagrams passes a tree of tenant roots, with anything nested under them"
+new_repo
+diagram_layout storage.ex
+diagram_guide ''
+run_diagrams --layout storage.ex guide.md
+check accepted
+
+label="storage-diagrams refuses a directory under an athanor's tree that is no tenant root"
+diagram_guide '            ├── builds/     # planted\n'
+run_diagrams --layout storage.ex guide.md
+if [ "$code" -eq 1 ] && out_has 'name a scope that is not a tenant root' && out_has 'guide.md:11:            ├── builds/'; then pass "$label"; else fail "$label"; fi
+
+label="storage-diagrams refuses a global root under an athanor's tree"
+diagram_guide '            ├── cache/\n'
+run_diagrams --layout storage.ex guide.md
+if [ "$code" -eq 1 ] && out_has 'guide.md:11:            ├── cache/'; then pass "$label"; else fail "$label"; fi
+
+label="storage-diagrams refuses a file under an athanor's tree"
+diagram_guide '            ├── data\n'
+run_diagrams --layout storage.ex guide.md
+if [ "$code" -eq 1 ] && out_has 'guide.md:11:            ├── data'; then pass "$label"; else fail "$label"; fi
+
+label="storage-diagrams refuses a phantom in the one-line athanors/<id>/ form"
+sed -i 's|^        └── data/$|        ├── builds/\n        └── data/|' guide.md
+diagram_guide_line=$(grep -n '^        ├── builds/$' guide.md | cut -d: -f1)
+run_diagrams --layout storage.ex guide.md
+if [ "$code" -eq 1 ] && out_has "guide.md:$diagram_guide_line:        ├── builds/"; then pass "$label"; else fail "$label"; fi
+
+label="storage-diagrams refuses guides that draw no athanor's tree"
+printf '```\nproject/\n└── data/\n    └── cache/\n```\n' > plain.md
+run_diagrams --layout storage.ex plain.md
+if [ "$code" -eq 1 ] && out_has 'the check would check nothing'; then pass "$label"; else fail "$label"; fi
+
+label="storage-diagrams refuses a layout source it cannot read the roster from"
+diagram_guide ''
+sed 's/class in \[:tenant, :tenant_reserved\],/class != :global,/' storage.ex > other.ex
+run_diagrams --layout other.ex guide.md
+if [ "$code" -eq 1 ] && out_has 'no @layout table or no @tenant_roots comprehension'; then pass "$label"; else fail "$label"; fi
+
+label="storage-diagrams exits 64 without a guide"
+run_diagrams --layout storage.ex
+if [ "$code" -eq 64 ] && [ ! -s "$scratch/out" ]; then pass "$label"; else fail "$label"; fi
 
 # --- scripts/release.sh runs the seed guard against the last tag ---
 

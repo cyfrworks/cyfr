@@ -196,6 +196,10 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
   defp execute(json, host, auth), do: FormulaHandler.execute(json, host, FormulaHost.opts(auth))
 
+  # A request the handler refuses before it reaches a host call.
+  defp parse(json, host),
+    do: FormulaHandler.execute(json, host, limits: Prima.Limits.defaults(:formula))
+
   defp imports(host, auth),
     do: FormulaHandler.build_formula_imports(host, FormulaHost.opts(auth))
 
@@ -335,15 +339,6 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
       FormulaHandler.cleanup_registry(tracker_pid)
     end
-
-    test "works without limits (defaults)", %{ctx: ctx} do
-      {imports, tracker_pid} = FormulaHandler.build_formula_imports(host!(ctx, Authority.zero()))
-
-      assert is_map(imports)
-      assert is_pid(tracker_pid)
-
-      FormulaHandler.cleanup_registry(tracker_pid)
-    end
   end
 
   # ============================================================================
@@ -356,27 +351,27 @@ defmodule Locus.Runtime.FormulaHandlerTest do
     end
 
     test "returns error for invalid JSON", %{host: host} do
-      parsed = Jason.decode!(FormulaHandler.execute("not json", host))
+      parsed = Jason.decode!(parse("not json", host))
       assert parsed["error"]["type"] == "invalid_json"
       assert parsed["error"]["message"] =~ "Invalid JSON"
     end
 
     test "returns error when tool is missing", %{host: host} do
-      parsed = Jason.decode!(FormulaHandler.execute(Jason.encode!(%{"action" => "run"}), host))
+      parsed = Jason.decode!(parse(Jason.encode!(%{"action" => "run"}), host))
       assert parsed["error"]["type"] == "invalid_request"
       assert parsed["error"]["message"] =~ "tool"
     end
 
     test "returns error when action is missing", %{host: host} do
       parsed =
-        Jason.decode!(FormulaHandler.execute(Jason.encode!(%{"tool" => "execution"}), host))
+        Jason.decode!(parse(Jason.encode!(%{"tool" => "execution"}), host))
 
       assert parsed["error"]["type"] == "invalid_request"
     end
 
     test "returns error when args is not a map", %{host: host} do
       json = Jason.encode!(%{"tool" => "execution", "action" => "run", "args" => "string"})
-      parsed = Jason.decode!(FormulaHandler.execute(json, host))
+      parsed = Jason.decode!(parse(json, host))
       assert parsed["error"]["type"] == "invalid_request"
       assert parsed["error"]["message"] =~ "args"
     end
@@ -1070,7 +1065,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
     end
 
     test "a tracker that is already gone is not an error" do
-      {:ok, pid} = Locus.Runtime.AsyncTracker.start_link([])
+      {:ok, pid} = Locus.Runtime.AsyncTracker.start_link(max_tasks: 1)
       # Unlink before killing: the tracker is linked to whoever started it,
       # which here is the test process.
       Process.unlink(pid)

@@ -39,7 +39,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
   import Prima.Test.Wait
 
   alias Prima.{HostAPI, RunnerControl, WorkerAuth, WorkerWire}
-  alias Locus.Runtime.Test.{ScriptedHost, ScriptedKeeper}
+  alias Locus.Runtime.Test.{Runners, ScriptedHost, ScriptedKeeper}
   alias Locus.Runtime.{RunnerPool, RunnerProcess, WorkerService}
 
   # A runner is a VM booting from nothing: its first host call takes seconds.
@@ -67,7 +67,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
         Supervisor.restart_child(Locus.Runtime.Supervisor, Locus.Runtime.WorkerService.Tree)
     end)
 
-    keeper = ScriptedKeeper.start!()
+    keeper = ScriptedKeeper.start!(__MODULE__.Keeper)
     {:ok, settings} = Locus.Runtime.Settings.pool([keeper: :direct, pool_size: 1], %{})
 
     start_supervised!(
@@ -226,7 +226,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
     attempt = ScriptedHost.attempt!(host, boot: boot)
     assert :ok = start(attempt)
     assert_receive {:attach_held, held}, @boot_ms
-    %{pid: handle} = Enum.find(RunnerPool.runners(RunnerPool), &(&1.state == :busy))
+    %{pid: handle} = Enum.find(Runners.runners(RunnerPool), &(&1.state == :busy))
     os_pid = RunnerProcess.info(handle).os_pid
 
     ScriptedHost.restart_service!()
@@ -234,7 +234,12 @@ defmodule Locus.Runtime.WorkerServiceTest do
 
     assert {:ok, %{boot: new_boot, attempts: []}} = WorkerService.status()
     assert new_boot != boot
-    wait_until(fn -> not os_alive?(os_pid) end, 10_000, "the old boot's runner to be gone")
+
+    wait_until(
+      fn -> not Locus.Test.ProcessFamily.running?(os_pid) end,
+      10_000,
+      "the old boot's runner to be gone"
+    )
 
     # The predecessor's assignment is another boot's now.
     assert {:error, :malformed} = start(attempt)
@@ -250,7 +255,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
     assert_receive {:attach_held, held}, @boot_ms
 
     %Locus.Runtime.Credentials{} = credentials = Locus.Runtime.Credentials.current()
-    handles = for %{pid: pid} <- RunnerPool.runners(RunnerPool), do: pid
+    handles = for %{pid: pid} <- Runners.runners(RunnerPool), do: pid
 
     # Each runner's relay holds the keys of the attempt it is bound to, and
     # each runner's process of the launcher carried them on its stdio.
@@ -511,7 +516,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
       # not reported.
       write(later_runner, [%{type: :complete, execution_id: later.execution_id, clean: false}])
       wait_until(fn -> assignment_of(later) == nil end)
-      assert :ok = WorkerService.await_reports()
+      assert :ok = Runners.await_reports()
       assert ScriptedHost.requests(context.host, "runner_exited") == []
     end
 
@@ -536,7 +541,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
       write(runner, [%{type: :complete, execution_id: first_id, clean: true}])
 
       wait_until(fn ->
-        Enum.any?(RunnerPool.runners(RunnerPool), &(&1.id == id and &1.state == :idle))
+        Enum.any?(Runners.runners(RunnerPool), &(&1.id == id and &1.state == :idle))
       end)
 
       assert {:messages,
@@ -565,7 +570,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
       assert :ok = WorkerService.kill("exec_first_child")
       assert %{state: :busy, execution_id: ^next_id} = pooled(id)
       assert ScriptedKeeper.releases(context.keeper) == []
-      assert :ok = WorkerService.await_reports()
+      assert :ok = Runners.await_reports()
       assert ScriptedHost.requests(context.host, "runner_exited") == []
 
       # The next subtree's own kill ends its runner, which is reported
@@ -604,7 +609,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
       )
 
       wait_until(fn ->
-        Enum.any?(RunnerPool.runners(RunnerPool), &(&1.id == id and &1.state == :idle))
+        Enum.any?(Runners.runners(RunnerPool), &(&1.id == id and &1.state == :idle))
       end)
 
       capture_log(fn ->
@@ -624,7 +629,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
       assert ended?("exec_child_#{max}")
       assert :ok = WorkerService.kill("exec_child_#{max}")
       assert %{state: :busy, execution_id: ^next_id} = pooled(id)
-      assert :ok = WorkerService.await_reports()
+      assert :ok = Runners.await_reports()
       assert ScriptedHost.requests(context.host, "runner_exited") == []
     end
 
@@ -648,7 +653,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
       ])
 
       wait_until(fn ->
-        Enum.any?(RunnerPool.runners(RunnerPool), &(&1.id == id and &1.state == :idle))
+        Enum.any?(Runners.runners(RunnerPool), &(&1.id == id and &1.state == :idle))
       end)
 
       assert {:messages,
@@ -678,7 +683,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
       assert %{state: :busy, execution_id: ^next_id} = pooled(id)
       refute ScriptedKeeper.read(runner) =~ "cancel_child"
       assert ScriptedKeeper.releases(context.keeper) == []
-      assert :ok = WorkerService.await_reports()
+      assert :ok = Runners.await_reports()
       assert ScriptedHost.requests(context.host, "runner_exited") == []
     end
   end
@@ -731,7 +736,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
   defp assignments, do: Map.values(:sys.get_state(WorkerService).assigned)
 
   # The pool's runner `id`, as the pool sees it.
-  defp pooled(id), do: Enum.find(RunnerPool.runners(RunnerPool), &(&1.id == id))
+  defp pooled(id), do: Enum.find(Runners.runners(RunnerPool), &(&1.id == id))
 
   # What the service holds for the runner of `attempt`'s subtree, if any.
   defp assignment_of(attempt),
@@ -749,7 +754,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
   # The id of the pool's runner that took `attempt`'s subtree.
   defp runner_id(attempt) do
     RunnerPool
-    |> RunnerPool.runners()
+    |> Runners.runners()
     |> Enum.find_value(&(&1.execution_id == attempt.execution_id && &1.id))
   end
 
@@ -757,7 +762,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
   # service has seen it answered.
   defp reports(context, timeout \\ 5_000) do
     wait_until(fn -> ScriptedHost.requests(context.host, "runner_exited") != [] end, timeout)
-    assert :ok = WorkerService.await_reports()
+    assert :ok = Runners.await_reports()
     ScriptedHost.requests(context.host, "runner_exited")
   end
 
@@ -775,14 +780,5 @@ defmodule Locus.Runtime.WorkerServiceTest do
         30_000 -> {:ok, %{}}
       end
     end)
-  end
-
-  defp os_alive?(os_pid) do
-    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(os_pid)],
-           stderr_to_stdout: true
-         ) do
-      {stat, 0} -> not String.starts_with?(String.trim(stat), "Z")
-      {_none, _status} -> false
-    end
   end
 end

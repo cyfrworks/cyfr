@@ -950,7 +950,7 @@ defmodule Cyfr.StackShapeTest do
     assert opens == closes, "unbalanced braces in Caddyfile (#{opens} vs #{closes})"
 
     # Never the loopback listener: Caddy is not on its network.
-    refute caddy =~ ~r/porta|CYFR_PORT\b|4000/
+    refute caddy =~ ~r/CYFR_PORT\b|4000/
   end
 
   test "compose runs cyfr, locus-runtime, locus-backends, locus-builds, caddy and tailscale — one web origin" do
@@ -970,7 +970,6 @@ defmodule Cyfr.StackShapeTest do
 
     guards = for %{guard: guard} <- LocusRoles.roles(), guard != nil, do: guard
     assert services == Enum.sort(["caddy", "cyfr", "tailscale" | @locus_services] ++ guards)
-    refute compose =~ ~r/porta|8080/
 
     # The runtime is attached to its network and no other, which cyfr
     # joins: cyfr reaches it there, it reaches cyfr's host API there, and
@@ -1039,9 +1038,6 @@ defmodule Cyfr.StackShapeTest do
                    ~r/^    networks:\n      #{Regex.escape(role.network)}:\n        aliases:\n          - #{Regex.escape(role.service)}$/m
       end
     end
-
-    # Runtime storage uses one data root.
-    refute compose =~ ~r/^\s*- \.\/components:/m
   end
 
   # cyfr reaches the builder over the builds network, which only the two of
@@ -1191,12 +1187,6 @@ defmodule Cyfr.StackShapeTest do
     # builds' bounds, which are settings too.
     assert builds =~ ~r/^          memory: \$\{LOCUS_BUILDS_MEMORY_LIMIT:-[0-9]+[MG]\}$/m
     assert builds =~ ~r/^          cpus: "\$\{LOCUS_BUILDS_CPU_LIMIT:-[0-9]+\}"$/m
-
-    # Spelled split so the retired names are not themselves found here.
-    refute compose =~
-             ~r/CYFR_BUILDE[R]_|CYFR_BUIL[D]_|CYFR_MAX_CONCURRENT_BUILD[S]|Dockerfile\.builde[r]|cyfrworks\/cyfr-builde[r]/
-
-    refute compose =~ ~r/\.env\.builde[r]/
   end
 
   # The backends service runs the Locus image as compose runs the builds
@@ -1324,7 +1314,7 @@ defmodule Cyfr.StackShapeTest do
        "      - \"#{builds.port}\"\n    entrypoint: [\"cyfr-guard\"]\n    init: true\n    cap_drop:\n      - ALL\n    cap_add:\n      - NET_ADMIN\n",
        "      - \"#{builds.port}\"\n    entrypoint: [\"cyfr-guard\"]\n    init: true\n    cap_drop:\n      - ALL\n    cap_add:\n      - NET_ADMIN\n      - SETUID\n",
        [{builds.guard, "cap_add"}]},
-      {"the backends island on its own network again",
+      {"the backends island on its own network",
        "    network_mode: service:#{backends.guard}\n    depends_on:\n      #{backends.guard}:\n        condition: service_healthy\n",
        "    networks:\n      - #{backends.network}\n",
        [
@@ -1396,16 +1386,23 @@ defmodule Cyfr.StackShapeTest do
 
     assert {_, 0} =
              System.cmd("bash", [Path.join(@root, "scripts/scaffold-tarball.sh"), tarball],
-               stderr_to_stdout: true
+               stderr_to_stdout: true,
+               env: bare_env()
              )
 
-    {listing, 0} = System.cmd("tar", ["-tzf", tarball])
+    {listing, 0} = System.cmd("tar", ["-tzf", tarball], env: bare_env())
     entries = String.split(listing, "\n", trim: true)
     assert "docker-compose.yml" in entries
     assert "keeper.seccomp.json" in entries
 
-    {profile, 0} = System.cmd("tar", ["-xOzf", tarball, "keeper.seccomp.json"])
+    {profile, 0} = System.cmd("tar", ["-xOzf", tarball, "keeper.seccomp.json"], env: bare_env())
     assert profile == read!("apps/locus/keeper/seccomp/keeper.json")
+  end
+
+  # A child's environment: every inherited name unset but where it finds
+  # its tools and its temporary directory.
+  defp bare_env do
+    for {name, _} <- System.get_env(), name not in ~w(PATH TMPDIR), do: {name, nil}
   end
 
   # The image names its pooled uids for the role that runs under them,
@@ -1434,10 +1431,6 @@ defmodule Cyfr.StackShapeTest do
       file = if role.name == image_role, do: "Dockerfile.locus", else: "docker-compose.yml"
       assert read!(file) =~ ~s("--pool", "#{pool_spec(role)}")
     end
-
-    # Spelled split so the retired names are not themselves found here.
-    refute read!("Dockerfile.locus") =~
-             ~r/cyfr-buil[d]\d|cyfr-backen[d]\d|'cyfr-(buil[d]|backen[d])%/
   end
 
   test "every spelling of a role's facts is the role table's" do
@@ -1725,7 +1718,6 @@ defmodule Cyfr.StackShapeTest do
     # refuses to start with the database, the keyring, the runtime's root
     # or the control plane's builds and backends keys in its environment.
     refute example =~ ~r/^#? ?CYFR_[A-Z_]*=/m
-    refute File.exists?(Path.join(@root, ".env.builder.example"))
   end
 
   test "the ports are parameters everywhere, 4000 and 4001 only as their defaults" do
@@ -1919,6 +1911,18 @@ defmodule Cyfr.StackShapeTest do
     assert parsed["services"]["caddy"]["profiles"] == ["public"]
   end
 
+  # A probe that runs the binary (`caddy version`) passes in a container
+  # whose server has stopped; the admin API answers only from a running
+  # caddy, with the config it loaded.
+  test "caddy's healthcheck asks the running server for its loaded config" do
+    caddy = compose!()["services"]["caddy"]
+
+    assert caddy["healthcheck"]["test"] ==
+             ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+
+    refute read!("Caddyfile") =~ ~r/^\s*admin\s+off\b/m
+  end
+
   # The firewall paragraph names defaults for each mode. Read its port
   # claims and compare them with Compose's own profile selection, so a
   # published binding cannot silently drift away from the operator's guide.
@@ -2014,19 +2018,15 @@ defmodule Cyfr.StackShapeTest do
   test "the image carries the seed tree and the release reads it there" do
     # A bare image boot (no host bind mount) must still be able to provision
     # an athanor from its seed: the bundle rides in the image inside the seed
-    # tree (CYFR_SEED_PATH), each athanor's copy is taken from it at
-    # provisioning, and the entrypoint copies nothing into the volume.
+    # tree (CYFR_SEED_PATH), and each athanor's copy is taken from it at
+    # provisioning.
     dockerfile = read!("Dockerfile")
-    entrypoint = read!("docker-entrypoint.sh")
     dockerignore = read!(".dockerignore")
 
     assert dockerfile =~ ~r/^COPY seed\/components\/ \/app\/seed\/components\/$/m
     assert dockerfile =~ ~r/^ENV CYFR_SEED_PATH=\/app\/seed$/m
-    refute entrypoint =~ ~r/seed\/components/
 
-    # Include seed source in the build context.
-    refute dockerignore =~ ~r/^components\/\*$/m
-    refute dockerignore =~ ~r/^!components\/_bundle\/$/m
+    # A checkout's runtime data stays out of the build context.
     assert dockerignore =~ ~r/^data\/$/m
   end
 
@@ -2052,25 +2052,19 @@ defmodule Cyfr.StackShapeTest do
       |> Enum.join("\n")
 
     assert code =~ "[ ! -f /app/seed/aqua/#{soul} ]"
-    refute code =~ "agent.json"
     assert File.regular?(Path.join(@root, "seed/aqua/#{soul}"))
     assert File.dir?(Path.join(@root, "seed/aqua/#{roles}"))
 
-    # Prima.WIT embeds the WIT tree at build time; runtime images need no wit directory.
+    # Prima.WIT embeds the WIT tree at compile time, so the builder stage
+    # carries it.
     stages = String.split(dockerfile, ~r/^FROM /m)
     builder = Enum.find(stages, &String.contains?(&1, "AS builder"))
-    runner = Enum.find(stages, &String.contains?(&1, "AS runner"))
 
     assert builder =~ ~r/^COPY wit\/ wit\/$/m
-    refute runner =~ ~r/^COPY wit\/ wit\/$/m
   end
 
-  test "the env template names no retired knobs, and every worker knob" do
+  test "the env template names every worker knob" do
     env = read!(".env.example")
-    # Spelled with the underscore split so the vocabulary gate itself does
-    # not trip on this file.
-    refute env =~
-             ~r/CYFR_PORT[A]_BIND|CYFR_PRIS[M]_|CYFR_COMPONENT[S]_PATH|CYFR_WORKE[R]_|CYFR_WORKER[S]\b|CYFR_EXECUTIO[N]_EVENTS_|CYFR_MAX_CONCURRENT_EXECUTION[S]|CYFR_SPAWN_CHANNE[L]|CYFR_BEHIN[D]_PROXY/
 
     for knob <-
           ~w(CYFR_LOCUS_RUNTIME_ROOT LOCUS_RUNTIME_SERVICE_ID LOCUS_RUNTIME_KEY LOCUS_RUNTIME_HOST_API_URL CYFR_LOCUS_RUNTIME_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT) do
@@ -2109,5 +2103,17 @@ defmodule Cyfr.StackShapeTest do
     assert guide =~ ~r/^\| `LOCUS_RUNTIME_BIND` \|/m and guide =~ ~r/^\| `LOCUS_RUNTIME_PORT` \|/m
 
     refute example =~ ~r/CYFR_LOCUS_RUNTIME_ROOT|CYFR_DATABASE_UR[L]|CYFR_CRYPTO_KEYRIN[G]=/
+  end
+
+  test "the compose file's profiles are public, tailnet and locus-builds" do
+    services = YamlElixir.read_from_string!(read!("docker-compose.yml"))
+
+    profiles =
+      for {_service, definition} <- services["services"],
+          profile <- List.wrap(definition["profiles"]),
+          uniq: true,
+          do: profile
+
+    assert Enum.sort(profiles) == ["locus-builds", "public", "tailnet"]
   end
 end

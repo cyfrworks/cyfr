@@ -242,7 +242,7 @@ defmodule Opus.StepSpansTest do
     assert_received {:mix_shell, :info, [table]}
     assert table =~ "3 model steps on catalyst:local.step-stub after 1 warmup, mode attached"
     assert table =~ ~r/^commit: [0-9a-f]{40}( with uncommitted changes)?$/m
-    assert table =~ "database: #{inspect(Cyfr.RuntimeConfig.repo_adapter())}"
+    assert table =~ "database: #{inspect(Arca.repo_adapter())}"
     assert table =~ "storage: #{inspect(Arca.Storage.configured_adapter())}"
     assert table =~ "upstream: 4 one-byte fetches, 4 with the key attached"
 

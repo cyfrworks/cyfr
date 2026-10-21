@@ -25,7 +25,7 @@ defmodule Locus.Runtime.GenServerCatchallTest do
 
   describe "AsyncTracker catch-all" do
     test "survives unexpected message and logs warning" do
-      {:ok, pid} = Locus.Runtime.AsyncTracker.start_link(parent_execution_id: "test_catchall")
+      {:ok, pid} = Locus.Runtime.AsyncTracker.start_link(max_tasks: 5)
 
       assert capture_log(fn ->
                send(pid, :unexpected_test_message)
@@ -38,10 +38,7 @@ defmodule Locus.Runtime.GenServerCatchallTest do
 
     test "survives unexpected tuple message" do
       {:ok, pid} =
-        Locus.Runtime.AsyncTracker.start_link(
-          parent_execution_id: "test_catchall_2",
-          max_tasks: 5
-        )
+        Locus.Runtime.AsyncTracker.start_link(max_tasks: 5)
 
       assert capture_log(fn ->
                send(pid, {:something, :entirely, :unexpected})
