@@ -32,7 +32,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   import Prima.Test.Wait
 
   alias Prima.{RunnerControl, WorkerAPI, WorkerAuth, WorkerWire}
-  alias Locus.Runtime.Test.{ScriptedHost, ScriptedKeeper}
+  alias Locus.Runtime.Test.{Runners, ScriptedHost, ScriptedKeeper}
   alias Locus.Runtime.WorkerService
 
   @bound 402_653_184
@@ -240,7 +240,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       write(runner, %{type: :complete, execution_id: root.execution_id, clean: false})
 
       wait_until(fn -> elem(WorkerService.status(), 1).attempts == [] end)
-      assert :ok = WorkerService.await_reports()
+      assert :ok = Runners.await_reports()
       assert ScriptedHost.requests(context.host, "runner_exited") == []
     end
   end
@@ -248,14 +248,14 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   # The one runner exit report the host received, once it has.
   defp reports(context) do
     wait_until(fn -> ScriptedHost.requests(context.host, "runner_exited") != [] end, 5_000)
-    assert :ok = WorkerService.await_reports()
+    assert :ok = Runners.await_reports()
     ScriptedHost.requests(context.host, "runner_exited")
   end
 
   # The id of the pool's runner that took `attempt`'s subtree.
   defp runner_id(attempt) do
     Locus.Runtime.RunnerPool
-    |> Locus.Runtime.RunnerPool.runners()
+    |> Runners.runners()
     |> Enum.find_value(&(&1.execution_id == attempt.execution_id && &1.id))
   end
 
@@ -272,13 +272,13 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
       end
     end)
 
-    assert :ok = WorkerService.await_reports()
+    assert :ok = Runners.await_reports()
 
     {_root, runner} = started!(context)
     ScriptedKeeper.exit(runner, 137)
     assert_receive {:report_held, held}, 5_000
 
-    waiting = Task.async(fn -> WorkerService.await_reports() end)
+    waiting = Task.async(fn -> Runners.await_reports() end)
     assert Task.yield(waiting, 200) == nil
     send(held, :go)
     assert Task.await(waiting, 5_000) == :ok

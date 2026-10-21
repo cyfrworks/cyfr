@@ -204,13 +204,18 @@ defmodule Locus.Runtime.Settings do
   runner reaches CYFR only through its relay.
   """
   @spec runner_environment(map()) :: %{String.t() => String.t()}
-  def runner_environment(%{runner_id: runner_id, service_id: service_id, boot: boot} = settings) do
+  def runner_environment(%{
+        runner_id: runner_id,
+        service_id: service_id,
+        boot: boot,
+        watchdog_grace_ms: watchdog_grace_ms
+      }) do
     %{
       "RUNTIME_ROLE" => "runner",
       "RUNTIME_RUNNER_ID" => runner_id,
       "RUNTIME_SERVICE_ID" => service_id,
       "RUNTIME_BOOT_ID" => boot,
-      "RUNTIME_WATCHDOG_GRACE_MS" => Integer.to_string(Map.fetch!(settings, :watchdog_grace_ms))
+      "RUNTIME_WATCHDOG_GRACE_MS" => Integer.to_string(watchdog_grace_ms)
     }
   end
 

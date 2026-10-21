@@ -102,7 +102,6 @@ defmodule Locus.Runtime.SettingsTest do
           runner_id: "r",
           service_id: "wrk_local",
           boot: "b",
-          host_url: "http://127.0.0.1:4300",
           watchdog_grace_ms: 5_000
         })
 

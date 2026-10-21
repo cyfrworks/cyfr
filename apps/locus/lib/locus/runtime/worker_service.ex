@@ -51,8 +51,8 @@ defmodule Locus.Runtime.WorkerService do
   is stopped only by this report, so the service names it whatever the
   runner listed; an attempt already closed is named harmlessly, since CYFR
   lapses only a running attempt that runner still holds. A runner is
-  reported once. A report runs beside the service, which never waits on
-  CYFR, and `await_reports/1` answers once none is in flight. A
+  reported once. A report runs in a process of its own beside the
+  service, which never waits on CYFR. A
   `start` no runner can be found for answers `{:error, :unavailable}`,
   and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
   with the keeper's account of why; the listener refuses either `503`,
@@ -145,17 +145,6 @@ defmodule Locus.Runtime.WorkerService do
   @impl Prima.WorkerAPI
   def status, do: GenServer.call(__MODULE__, :status)
 
-  @doc """
-  Answer once every runner exit this service is reporting has been
-  answered by CYFR or given up on (`Locus.Runtime.HostClient.runner_exited/5`
-  bounds each); at once when none is in flight. For a caller that must
-  know no report of the runners it ended still lands after it moved on,
-  as a test's end does. Exits if that takes longer than `timeout_ms`.
-  """
-  @spec await_reports(timeout()) :: :ok
-  def await_reports(timeout_ms \\ 70_000),
-    do: GenServer.call(__MODULE__, :await_reports, timeout_ms)
-
   # ---------------------------------------------------------------------------
   # Server
   # ---------------------------------------------------------------------------
@@ -170,7 +159,7 @@ defmodule Locus.Runtime.WorkerService do
     :ok =
       RunnerPool.serve(
         RunnerPool,
-        %{service_id: credentials.service_id, boot: boot, host_url: credentials.host_url},
+        %{service_id: credentials.service_id, boot: boot},
         self()
       )
 
@@ -184,9 +173,7 @@ defmodule Locus.Runtime.WorkerService do
        executions: %{},
        ended: %{ids: %{}, order: :queue.new()},
        offered: %{ids: %{}, order: :queue.new()},
-       seq: 0,
-       reports: %{},
-       report_waiters: []
+       seq: 0
      }}
   end
 
@@ -235,9 +222,6 @@ defmodule Locus.Runtime.WorkerService do
     end
   end
 
-  def handle_call(:await_reports, from, state),
-    do: {:noreply, reported(%{state | report_waiters: [from | state.report_waiters]})}
-
   def handle_call(:status, _from, state) do
     status =
       Map.merge(RunnerPool.status(RunnerPool), %{
@@ -249,13 +233,7 @@ defmodule Locus.Runtime.WorkerService do
     {:reply, {:ok, status}, state}
   end
 
-  # A report in flight has been answered, or given up on.
   @impl true
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
-      when is_map_key(state.reports, ref) do
-    {:noreply, reported(%{state | reports: Map.delete(state.reports, ref)})}
-  end
-
   def handle_info({:DOWN, _ref, :process, pid, reason}, state),
     do: {:noreply, gone(state, pid, {:handle_down, reason})}
 
@@ -617,14 +595,14 @@ defmodule Locus.Runtime.WorkerService do
   end
 
   # A report of the end of `runner`, which held `assignment` and whose
-  # `exit` listed `open`, runs beside the service, which never waits on
-  # CYFR, and is watched until it is answered, so `await_reports/1` can
-  # wait for it.
+  # `exit` listed `open`, runs in a process of its own beside the service,
+  # which never waits on CYFR; `Locus.Runtime.HostClient.runner_exited/5`
+  # bounds it.
   defp report(%{credentials: credentials, boot: boot} = state, runner, assignment, open) do
     {attempts, left_out} = named(assignment, open)
 
-    {_pid, ref} =
-      spawn_monitor(fn ->
+    _pid =
+      spawn(fn ->
         Process.put(:"$callers", assignment.callers)
         Prima.LoggerContext.restore(assignment.logger)
 
@@ -648,7 +626,7 @@ defmodule Locus.Runtime.WorkerService do
         end
       end)
 
-    %{state | reports: Map.put(state.reports, ref, true)}
+    state
   end
 
   # What the report of one runner's end names: the subtree's root, then the
@@ -667,12 +645,4 @@ defmodule Locus.Runtime.WorkerService do
   # A line about one runner's subtree carries the logger context its start
   # was made under (`Prima.LoggerContext.capture/0`), as its report's do.
   defp log(level, assignment, line), do: Logger.log(level, line, assignment.logger)
-
-  # Whoever waits for the reports in flight is answered once none is.
-  defp reported(%{reports: reports} = state) when map_size(reports) > 0, do: state
-
-  defp reported(state) do
-    for from <- state.report_waiters, do: GenServer.reply(from, :ok)
-    %{state | report_waiters: []}
-  end
 end

@@ -80,7 +80,6 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
              runner_id: "run_vectors",
              service_id: "wrk_not_the_assignments",
              boot: "boot_not_the_assignments",
-             host_url: "http://127.0.0.1:9",
              control_fd: nil,
              watchdog_grace_ms: 500
            },

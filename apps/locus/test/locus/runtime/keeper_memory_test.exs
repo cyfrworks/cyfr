@@ -27,7 +27,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
   alias Locus.Runtime.Keeper.Channel
   alias Locus.Runtime.{RunnerPool, RunnerProcess}
-  alias Locus.Runtime.Test.ScriptedHost
+  alias Locus.Runtime.Test.{Runners, ScriptedHost}
 
   @stream_attach 3
 
@@ -267,7 +267,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       :ok =
         RunnerPool.serve(
           pool,
-          %{service_id: "wrk_local", boot: "boot_memory", host_url: "http://127.0.0.1:9"},
+          %{service_id: "wrk_local", boot: "boot_memory"},
           self()
         )
 
@@ -305,7 +305,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       :gen_tcp.close(relay)
       reply(keeper, %{v: 1, type: "released", spawn_id: spawn_id})
       wait_until(fn -> RunnerPool.status(pool).runners.tainted == 0 end)
-      refute Enum.any?(RunnerPool.runners(pool), &(&1.id == runner))
+      refute Enum.any?(Runners.runners(pool), &(&1.id == runner))
 
       # The athanor's next subtree gets another runner, never this one.
       reply(keeper, %{
@@ -375,7 +375,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           :ok =
             RunnerPool.serve(
               pool,
-              %{service_id: "wrk_local", boot: "boot_plant", host_url: "http://127.0.0.1:9"},
+              %{service_id: "wrk_local", boot: "boot_plant"},
               self()
             )
 
