@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
+// The canvas wire on the toolkit's side, held to `tests/fixtures/canvas_wire.json`:
+// the vector is read through support.mjs.
+
 import assert from "node:assert/strict"
 import {describe, test} from "node:test"
 
