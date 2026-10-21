@@ -1911,6 +1911,18 @@ defmodule Cyfr.StackShapeTest do
     assert parsed["services"]["caddy"]["profiles"] == ["public"]
   end
 
+  # A probe that runs the binary (`caddy version`) passes in a container
+  # whose server has stopped; the admin API answers only from a running
+  # caddy, with the config it loaded.
+  test "caddy's healthcheck asks the running server for its loaded config" do
+    caddy = compose!()["services"]["caddy"]
+
+    assert caddy["healthcheck"]["test"] ==
+             ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+
+    refute read!("Caddyfile") =~ ~r/^\s*admin\s+off\b/m
+  end
+
   # The firewall paragraph names defaults for each mode. Read its port
   # claims and compare them with Compose's own profile selection, so a
   # published binding cannot silently drift away from the operator's guide.
