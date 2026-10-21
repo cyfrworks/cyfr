@@ -12,7 +12,7 @@ defmodule Prism.SafeMode do
   It is entered with its reason and the visible canvas (`enter/2`): the
   canvas's id in the layout, the tincture it runs, and the version its
   versions document keeps (`kept`, read from `Compendium.canvas_versions/2`
-  as safe mode is entered, or nil). Its reasons (`reasons/0`):
+  as safe mode is entered, or nil). Its reasons:
 
     * `:not_ready` — the canvas did not send `ready` in time, or was
       refused at its open;

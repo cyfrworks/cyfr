@@ -464,8 +464,7 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
           "catalyst_ref" => g.catalyst_ref,
           "tool_policy" => g.tool_policy || %{},
           "disabled" => g.disabled == true,
-          "provenance" =>
-            Map.get(provenance, Enum.join(Compendium.agent_file_path(g.name), "/"))
+          "provenance" => Map.get(provenance, Enum.join(Compendium.agent_file_path(g.name), "/"))
         }
       end
 

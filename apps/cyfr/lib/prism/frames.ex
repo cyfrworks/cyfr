@@ -114,10 +114,10 @@ defmodule Prism.Frames do
 
   ## Ending
 
-  Every credential minted is remembered (`minted/1`) until it is
-  revoked, and `revoke_all/2` revokes each one; the view calls it on
-  every path that ends it. `clear/2` revokes them all and holds no
-  frame, which is how safe mode starts.
+  Every credential minted is remembered until it is revoked, and
+  `revoke_all/2` revokes each one; the view calls it on every path that
+  ends it. `clear/2` revokes them all and holds no frame, which is how
+  safe mode starts.
 
   The pure transitions — placement, visibility, attribution, the
   handshake and the signals the view sends — take no context and touch
