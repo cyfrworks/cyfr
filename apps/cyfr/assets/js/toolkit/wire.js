@@ -36,7 +36,7 @@ const DATA_PREFIX = "/_f/v1/o/"
 const ASSET_PREFIX = "_s"
 
 // The one data route under a canvas open's data path.
-export const STREAM_ROUTE = "stream"
+const STREAM_ROUTE = "stream"
 
 // The stream whose events carry a feed's binding: its subject is the feed's
 // name (`Opus.Providers.Feed`).
@@ -157,6 +157,11 @@ export function servedPrefix(moduleUrl) {
 // The data prefix of a canvas open, the one its policy names.
 export function dataPath(frame) {
   return DATA_PREFIX + frameOf(frame) + "/"
+}
+
+// The URL a canvas open's streams post to, under its data URL.
+export function streamUrlOf(dataUrl) {
+  return dataUrl + STREAM_ROUTE
 }
 
 function frameOf(frame) {

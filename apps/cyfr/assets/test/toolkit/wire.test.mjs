@@ -23,7 +23,8 @@ import {
   isTinctureRef,
   recordFromEnvelope,
   replacesRecord,
-  servedPrefix
+  servedPrefix,
+  streamUrlOf
 } from "../../js/toolkit/wire.js"
 import {CREDENTIAL, FRAME, bootArgs, canvasWire, feedEnvelopes} from "./support.mjs"
 
@@ -68,8 +69,11 @@ describe("the canvas wire is Prima.CanvasWire's", () => {
     )
   })
 
-  test("the data path is the vector's, and a frame id outside its grammar throws", () => {
-    for (const row of canvasWire.paths.valid) assert.equal(dataPath(row.frame), row.data_path)
+  test("the data path and the stream path are the vector's, and a frame id outside its grammar throws", () => {
+    for (const row of canvasWire.paths.valid) {
+      assert.equal(dataPath(row.frame), row.data_path)
+      assert.equal(streamUrlOf(dataPath(row.frame)), row.stream_path)
+    }
     assert.throws(() => dataPath("not a frame id"), TypeError)
   })
 

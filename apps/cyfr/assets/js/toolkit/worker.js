@@ -32,7 +32,6 @@ import {
   FEED_STREAM,
   ON_KINDS,
   ROLES,
-  STREAM_ROUTE,
   answer,
   decodeAnswer,
   decodeRequest,
@@ -42,7 +41,8 @@ import {
   fromStreams,
   pairKey,
   recordFromEnvelope,
-  request
+  request,
+  streamUrlOf
 } from "./wire.js"
 
 // A refusal or a failure, as a canvas's module reads it, in the shape the
@@ -277,7 +277,7 @@ export function startStreamsWorker(scope, {fetchFn}) {
 
     booted = true
     credential = boot.credential
-    streamUrl = boot.data_url + STREAM_ROUTE
+    streamUrl = streamUrlOf(boot.data_url)
     declared = new Set(boot.streams.map(pairKey))
     port = boot.port
     port.onmessage = (message) => onRequest(message.data)
