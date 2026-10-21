@@ -114,7 +114,7 @@ defmodule Opus.FeedsTest do
       assert DateTime.compare(row.next_run_at, feed.next_run_at) == :gt
 
       assert {:ok, %{binding_id: id, feed_result_seq: 1, result: %{"price" => 42.5}}} =
-               Feeds.get(ctx, feed.id)
+               listed(ctx, feed.id)
 
       assert id == feed.id
 
@@ -691,7 +691,7 @@ defmodule Opus.FeedsTest do
       assert {:ok, %{"revision" => ^seq, "result" => %{"price" => 3}}} =
                Feeds.accept(ctx, feed.id, seq, ~s({"status":201,"data":{"price":3}}), slot)
 
-      assert {:ok, %{result: %{"price" => 3}, feed_result_seq: ^seq}} = Feeds.get(ctx, feed.id)
+      assert {:ok, %{result: %{"price" => 3}, feed_result_seq: ^seq}} = listed(ctx, feed.id)
       assert {:error, :stale} = Feeds.accept(ctx, feed.id, seq, answer(4), slot)
     end
 
@@ -736,7 +736,7 @@ defmodule Opus.FeedsTest do
       assert {:ok, _envelope} =
                Feeds.accept(ctx, feed.id, seq, envelope(%{"price" => 2}, 299), slot)
 
-      assert {:ok, %{result: %{"price" => 2}}} = Feeds.get(ctx, feed.id)
+      assert {:ok, %{result: %{"price" => 2}}} = listed(ctx, feed.id)
     end
 
     test "a stale member writes no result", %{ctx: ctx, actor: actor} do
@@ -789,7 +789,7 @@ defmodule Opus.FeedsTest do
       # And an unclaimed seq is answered as one, whatever it carries.
       assert {:error, :unclaimed} = Feeds.accept(ctx, feed.id, 3, "not json", slot)
 
-      assert {:ok, %{result: %{"price" => 2}, feed_result_seq: 2}} = Feeds.get(ctx, feed.id)
+      assert {:ok, %{result: %{"price" => 2}, feed_result_seq: 2}} = listed(ctx, feed.id)
     end
   end
 
@@ -861,7 +861,7 @@ defmodule Opus.FeedsTest do
       foreign = Sanctum.Context.actor(foreign_ctx)
 
       assert {:ok, []} = Feeds.list(foreign_ctx)
-      assert {:error, :not_found} = Feeds.get(foreign_ctx, feed.id)
+      assert {:error, :not_found} = listed(foreign_ctx, feed.id)
       assert {:error, :not_found} = CronSchedule.claim_feed_seq(foreign, feed.id)
       assert {:error, :not_found} = Feeds.accept(foreign_ctx, feed.id, 1, answer(1), slot)
 
@@ -946,9 +946,8 @@ defmodule Opus.FeedsTest do
               ]} = Feeds.list(ctx)
 
       assert {btc_id, eth_id} == {first.id, second.id}
-      assert {:ok, %{binding: ^eth}} = Feeds.get(ctx, second.id)
-      assert {:error, :not_found} = Feeds.get(ctx, removed.id)
-      assert {:ok, ^eth} = Feeds.spec(second)
+      assert {:ok, %{binding: ^eth}} = listed(ctx, second.id)
+      assert {:error, :not_found} = listed(ctx, removed.id)
     end
 
     test "a row whose stored binding no longer reads is left out, named by its id only", %{
@@ -957,31 +956,45 @@ defmodule Opus.FeedsTest do
     } do
       {:ok, kept} = bind(actor, feed_binding("btc"))
       {:ok, broken} = bind(actor, feed_binding("eth"))
+      {:ok, not_json} = bind(actor, feed_binding("sol"))
 
       {1, _} =
         Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^broken.id),
           set: [feed_spec: ~s({"name":"eth","secret":"do-not-log"})]
         )
 
+      {1, _} =
+        Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^not_json.id),
+          set: [feed_spec: "{"]
+        )
+
       log =
         capture_log(fn ->
           assert {:ok, [%{binding_id: id}]} = Feeds.list(ctx)
           assert id == kept.id
-          assert {:error, :not_found} = Feeds.get(ctx, broken.id)
+          assert {:error, :not_found} = listed(ctx, broken.id)
         end)
 
-      assert log =~ broken.id
+      # Each line names the row and where its binding fails, never its text.
+      assert log =~
+               ~s|feed #{broken.id} has a stored binding that does not read (unknown_key at "/secret")|
+
+      assert log =~ ~s|feed #{not_json.id} has a stored binding that does not read (json at "")|
       refute log =~ "do-not-log"
-
-      assert {:error, %{path: "/secret", reason: "unknown_key"}} =
-               Feeds.spec(%{feed_spec: ~s({"secret":1})})
-
-      assert {:error, %{path: "", reason: "json"}} = Feeds.spec(%{feed_spec: "{"})
-      assert {:error, %{path: "", reason: "required"}} = Feeds.spec(%{feed_spec: nil})
     end
   end
 
   # ---- helpers -----------------------------------------------------------------
+
+  # The caller's athanor's live feed `binding_id`, as `Feeds.list/1` answers it.
+  defp listed(ctx, binding_id) do
+    with {:ok, feeds} <- Feeds.list(ctx) do
+      case Enum.find(feeds, &(&1.binding_id == binding_id)) do
+        nil -> {:error, :not_found}
+        feed -> {:ok, feed}
+      end
+    end
+  end
 
   defp consented!(ctx) do
     {:ok, component} =

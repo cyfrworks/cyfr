@@ -204,7 +204,10 @@ defmodule Opus.Providers.FeedTest do
                {@pinned, @profile_id, @reference}
 
       {:ok, shape} = Prima.Canvas.Shape.validate(@price)
-      assert {:ok, %{binding: %{result_shape: ^shape}}} = Feeds.get(ctx, answer.binding)
+      assert {:ok, feeds} = Feeds.list(ctx)
+
+      assert %{binding: %{result_shape: ^shape}} =
+               Enum.find(feeds, &(&1.binding_id == answer.binding))
     end
 
     test "bind refuses a consent that does not admit schedule", %{ctx: ctx, actor: actor} do
