@@ -12,9 +12,13 @@ defmodule Sanctum.Cipher.Rotation do
 
   ## Usage
 
-      bin/cyfr eval "Sanctum.Cipher.Rotation.audit()"
-      bin/cyfr eval "Sanctum.Cipher.Rotation.reencrypt_all(dry_run: true)"
-      bin/cyfr eval "Sanctum.Cipher.Rotation.reencrypt_all()"
+  The operator runs it through the release, whose entry points install the
+  log filter before anything here reads a key or a sealed row
+  (`Cyfr.Release.cipher_audit/0`, `Cyfr.Release.rotate_cipher_keys/1`):
+
+      bin/cyfr eval "Cyfr.Release.cipher_audit()"
+      bin/cyfr eval "Cyfr.Release.rotate_cipher_keys(dry_run: true)"
+      bin/cyfr eval "Cyfr.Release.rotate_cipher_keys()"
 
   ## Three-phase rotation
 

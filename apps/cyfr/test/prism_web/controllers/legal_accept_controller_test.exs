@@ -115,15 +115,15 @@ defmodule PrismWeb.LegalAcceptControllerTest do
   describe "POST against a registry that refuses the acceptance (Bypass)" do
     setup do
       bypass = Bypass.open()
-      original_scheme = Application.get_env(:cyfr, :registry_scheme)
-      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
-      Application.put_env(:cyfr, :registry_scheme, "http")
+      original_url = Application.get_env(:cyfr, :registry_url)
 
       on_exit(fn ->
-        if original_scheme,
-          do: Application.put_env(:cyfr, :registry_scheme, original_scheme),
-          else: Application.delete_env(:cyfr, :registry_scheme)
+        if original_url,
+          do: Application.put_env(:cyfr, :registry_url, original_url),
+          else: Application.delete_env(:cyfr, :registry_url)
       end)
+
+      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
 
       {:ok, bypass: bypass}
     end
