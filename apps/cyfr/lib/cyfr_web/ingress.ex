@@ -118,13 +118,7 @@ defmodule CyfrWeb.Ingress do
   # The plug a listener hands its requests to, as Phoenix's Bandit adapter
   # picks it: the endpoint, behind the code reloader's sync when that is on.
   defp endpoint_plug(code_reload?, endpoint) do
-    if code_reload? &&
-         Code.ensure_loaded?(Phoenix.Endpoint.SyncCodeReloadPlug) &&
-         function_exported?(Phoenix.Endpoint.SyncCodeReloadPlug, :call, 2) do
-      {Phoenix.Endpoint.SyncCodeReloadPlug, {endpoint, []}}
-    else
-      endpoint
-    end
+    if code_reload?, do: {Phoenix.Endpoint.SyncCodeReloadPlug, {endpoint, []}}, else: endpoint
   end
 
   @impl Plug
