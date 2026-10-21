@@ -5,7 +5,7 @@ defmodule CyfrWeb.MetricsPlug do
   @moduledoc """
   Plug that exposes Prometheus metrics at `/metrics`.
 
-  Disabled by default (`CYFR_PROMETHEUS_METRICS=true` opts in). With
+  Disabled by default (`CYFR_PROMETHEUS_METRICS=on` opts in). With
   `CYFR_METRICS_TOKEN` set, the scrape requires `Authorization: Bearer
   <token>` — Prometheus speaks that natively (`authorization:` in the
   scrape config). Without a token the endpoint stays unauthenticated when
