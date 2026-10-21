@@ -895,6 +895,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       assert Roster.unknown(["CYFR_RETIRED_KNOB"], []) == ["CYFR_RETIRED_KNOB"]
 
       assert Roster.unknown([], ["CYFR_TOKEN", "CYFR_TEST_RUN_ROOT", "HOME"]) == []
+      assert Roster.unknown([], ["CYFR_NO_INTERACTIVE"]) == []
       assert Roster.unknown(["CYFR_TOKEN"], []) == ["CYFR_TOKEN"]
       assert Roster.unknown(["CYFR_B", "CYFR_A"], ["CYFR_A"]) == ["CYFR_A", "CYFR_B"]
 
@@ -909,6 +910,50 @@ defmodule Cyfr.PlatformSettingsRosterTest do
                "PLANTED"
              ]
     end
+  end
+
+  describe "the names other programs own" do
+    test "each is read by every program its sentence names" do
+      assert unread(Roster.foreign()) == []
+
+      assert unread([{"CYFR_PLANTED_KNOB", "the Codex CLI: a name it does not read"}]) == [
+               {"CYFR_PLANTED_KNOB", "the Codex CLI"}
+             ]
+
+      assert unread([{"CYFR_TOKEN", "the installer: a name it does not read"}]) == [
+               {"CYFR_TOKEN", "the installer"}
+             ]
+    end
+  end
+
+  # The programs a foreign row's sentence may name before its colon, each
+  # with the files that program is. A name the program reads appears in
+  # one of them, quoted for the Codex CLI's Go.
+  @readers [
+    {"the Codex CLI", {"apps/codex/**/*.go", :quoted}},
+    {"the installer", {"scripts/install.sh", :bare}},
+    {"the image's entrypoint", {"docker-entrypoint.sh", :bare}},
+    {"the test harness", {"{apps/*/test,tests,scripts}/**/*", :bare}}
+  ]
+
+  # `{name, program}` for each program a row names that does not read it.
+  defp unread(rows) do
+    for {name, owner} <- rows,
+        [named, _] = String.split(owner, ":", parts: 2),
+        {program, files} <- @readers,
+        String.contains?(named, program),
+        not reads?(files, String.trim_trailing(name, "*")),
+        do: {name, program}
+  end
+
+  defp reads?({glob, form}, name) do
+    needle = if form == :quoted, do: ~s("#{name}), else: name
+
+    @root
+    |> Path.join(glob)
+    |> Path.wildcard()
+    |> Enum.reject(&(File.dir?(&1) or String.ends_with?(&1, "_test.go")))
+    |> Enum.any?(&(&1 |> File.read!() |> String.contains?(needle)))
   end
 
   # The foreign rows whose name is not under the prefix or whose owner

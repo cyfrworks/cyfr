@@ -47,7 +47,7 @@ value is literal throughout, an open `$(` included.
 | `CYFR_DATABASE` | The database adapter, `sqlite` (default) or `postgres`, fixed when the release is built; the published image is SQLite, and a runtime value that disagrees with the build refuses the boot. |
 | `CYFR_DATABASE_PATH` | The SQLite file (default `cyfr.db` under `CYFR_DATA_PATH`). |
 | `CYFR_DATABASE_URL` | The PostgreSQL URL, which a PostgreSQL build requires (there is no localhost fallback). |
-| `CYFR_DATA_PATH` | The one runtime storage root: every athanor's tree, the caches and the SQLite database (default `data`; the image sets its own). |
+| `CYFR_DATA_PATH` | The one runtime storage root: every athanor's tree, the caches and the SQLite database (default `data`, under the working directory: `/app/data` in the image). |
 | `CYFR_DB_POOL_SIZE` | The database connection pool's size (default 20). |
 | `CYFR_DB_SSL` | TLS to the PostgreSQL server (default off). |
 | `CYFR_DIRECTORY_URL` | The identity directory this deployment enrolls its local people at, an `https` URL chosen explicitly: there is no hosted default, and choosing one is a choice about how long an identity lasts. Unset, local work and local pairing still work and enrollment is refused; a malformed value, or one longer than the 1,024 bytes an enrollment's confirmation preview can name, refuses the boot. |
@@ -203,11 +203,12 @@ assigns one.
 |---|---|
 | `CYFR_TOKEN` | the Codex CLI: the session token its non-interactive path signs in with |
 | `CYFR_NO_UPDATE_CHECK` | the Codex CLI: turns off its release check |
-| `CYFR_INSECURE_SKIP_VERIFY` | the Codex CLI: skips TLS verification of the server it calls; the installer: skips verifying the download |
+| `CYFR_NO_INTERACTIVE` | the Codex CLI: turns off its prompts, as `--no-interactive` does |
+| `CYFR_INSECURE_SKIP_VERIFY` | the installer (scripts/install.sh): skips verifying the download's checksum and signature |
 | `CYFR_INSTALL_DIR` | the installer (scripts/install.sh): where it puts the CLI |
 | `CYFR_ALLOW_UNVERIFIED` | the installer: installs without cosign or the release's signature, on the checksum alone |
 | `CYFR_VERSION` | the installer: the release it installs |
-| `CYFR_IMAGE` | the installer: the image the stack it writes runs |
+| `CYFR_IMAGE` | the test harness: the app image the backends image suite runs |
 | `CYFR_RESTORE_INCOMPLETE` | the Codex CLI and the image's entrypoint: the restore's bar, which `cyfr restore` sets in the project's `.env` (the cyfr service's `env_file`) until the restore is declared and sets empty for its own offline evals; the entrypoint refuses to start anything while it is non-empty |
 | `CYFR_TEST_…` (every name it begins) | the test harness: its partition, run root and object-store fixtures |
 | `CYFR_CLUSTER_DATABASE_URL` | the test harness: the cluster suite's shared database |
