@@ -107,9 +107,9 @@ defmodule Prima.MCP.WireVectorsTest do
     assert Message.encode_error(1, :no_such_code_name, "m")["error"]["code"] == fallback
   end
 
-  test "the consent tags are the five signals, each answered with its own code" do
+  test "the consent tags are the four signals, each answered with its own code" do
     tags = @vectors["consent_tags"]
-    assert length(tags) == 5
+    assert length(tags) == 4
 
     assert Enum.map(ConsentSignal.tags(), &Atom.to_string/1) == tags
 

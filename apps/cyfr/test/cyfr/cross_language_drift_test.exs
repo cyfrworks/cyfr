@@ -245,11 +245,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
     client_go = read!("apps/codex/internal/mcp/client.go")
 
     # The roster is Prima.Refusal's, read from Prima.ConsentSignal; every
-    # other side is held to it, so a sixth tag fails here until each side
+    # other side is held to it, so a fifth tag fails here until each side
     # names it.
     assert Prima.Refusal.signal_tags() == Prima.ConsentSignal.tags()
     tags = Enum.map(Prima.Refusal.signal_tags(), &Atom.to_string/1)
-    assert length(tags) == 5
+    assert length(tags) == 4
 
     go_tags = Regex.scan(~r/-335\d\d: "(\w+)"/, client_go, capture: :all_but_first)
 
@@ -265,7 +265,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       "setup_required" => "-33501",
       "consent_required" => "-33502",
       "consent_conflict" => "-33503",
-      "restart_required" => "-33504",
       "confirmation_required" => "-33505"
     }
 
@@ -302,7 +301,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       guard |> String.split(",", trim: true) |> Enum.map(&(&1 |> String.trim() |> trim_colon()))
 
     assert Enum.sort(guard_tags) == Enum.sort(tags),
-           "opus/provider.ex guard roster must be the five consent signal tags"
+           "opus/provider.ex guard roster must be the four consent signal tags"
 
     # The payload keys Consent documents as normative are the ones the CLI
     # formatter reads — a renamed key degrades every explanation to the

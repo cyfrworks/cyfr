@@ -233,7 +233,6 @@ defmodule Prima.RefusalTest do
     {{:setup_required, %{"node_ref" => "c:local.x:1.0.0"}}, :setup_required},
     {{:consent_required, %{}}, :consent_required},
     {{:consent_conflict, %{}}, :conflict},
-    {{:restart_required, %{}}, :cancelled},
     {{:confirmation_required, %{id: "confirmation-7f3a", operation: "vault/create"}},
      :confirmation_required},
     {{:confirmation_required, %{"id" => "confirmation-7f3a"}}, :confirmation_required},

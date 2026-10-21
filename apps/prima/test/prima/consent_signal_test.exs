@@ -34,7 +34,6 @@ defmodule Prima.ConsentSignalTest do
     setup_required: :setup_required,
     consent_required: :consent_required,
     consent_conflict: :conflict,
-    restart_required: :cancelled,
     confirmation_required: :confirmation_required
   }
 
@@ -51,13 +50,12 @@ defmodule Prima.ConsentSignalTest do
   defp guarded?({tag, payload}) when ConsentSignal.is_signal(tag, payload), do: true
   defp guarded?(_term), do: false
 
-  test "the roster is the five tags" do
+  test "the roster is the four tags" do
     assert ConsentSignal.tags() ==
              [
                :setup_required,
                :consent_required,
                :consent_conflict,
-               :restart_required,
                :confirmation_required
              ]
   end

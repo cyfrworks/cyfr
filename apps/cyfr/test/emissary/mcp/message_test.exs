@@ -65,7 +65,6 @@ defmodule Emissary.MCP.MessageTest do
 
     test "a consent signal answers with its own tag's code" do
       assert code({:consent_conflict, %{}}) == -33503
-      assert code({:restart_required, %{}}) == -33504
       assert code({:setup_required, %{}}) == -33501
 
       assert code({:confirmation_required, %{id: "confirmation-7f3a", operation: "vault/create"}}) ==

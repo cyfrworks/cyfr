@@ -93,7 +93,6 @@ defmodule Prima.MCP.Message do
     setup_required: -33501,
     consent_required: -33502,
     consent_conflict: -33503,
-    restart_required: -33504,
     confirmation_required: -33505
   }
 

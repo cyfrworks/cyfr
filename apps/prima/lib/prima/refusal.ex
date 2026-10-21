@@ -1328,7 +1328,6 @@ defmodule Prima.Refusal do
   defp signal_class(:setup_required), do: :setup_required
   defp signal_class(:consent_required), do: :consent_required
   defp signal_class(:consent_conflict), do: :conflict
-  defp signal_class(:restart_required), do: :cancelled
   defp signal_class(:confirmation_required), do: :confirmation_required
 
   defp component_digest?(digest), do: Regex.match?(~r/\Asha256:[0-9a-f]{64}\z/, digest)

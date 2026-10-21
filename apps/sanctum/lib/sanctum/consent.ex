@@ -68,13 +68,12 @@ defmodule Sanctum.Consent do
   ## Errors
 
   These cross the MCP boundary, the console, the PWA and the CLI, and the
-  first four the WIT boundary too, so their payloads are normative rather
+  first three the WIT boundary too, so their payloads are normative rather
   than incidental.
 
       setup_required         {profile_id, node_ref, need, reason}
       consent_required       {profile_id, current_revision, shape_diff}
       consent_conflict       {expected_revision, actual_revision, cause}
-      restart_required       {profile_id, new_revision, missing}
       confirmation_required  {id, operation, expires_at}
 
   `consent_required`'s `shape_diff` is what changed since the head, one
@@ -125,12 +124,6 @@ defmodule Sanctum.Consent do
           cause: conflict_cause()
         }
 
-  @type restart_required :: %{
-          profile_id: String.t(),
-          new_revision: non_neg_integer(),
-          missing: %{chain: [String.t()], edge: String.t(), activation: String.t()}
-        }
-
   @type confirmation_required :: %{
           id: String.t(),
           operation: String.t(),
@@ -166,7 +159,6 @@ defmodule Sanctum.Consent do
           {:setup_required, setup_required()}
           | {:consent_required, consent_required()}
           | {:consent_conflict, consent_conflict()}
-          | {:restart_required, restart_required()}
           | {:confirmation_required, confirmation_required()}
 
   @typedoc """

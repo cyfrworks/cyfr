@@ -380,7 +380,6 @@ on the wire.
 | -33501 | `setup_required` | A dependency needs configuring before this can run ([Readiness and typed errors](#readiness-and-typed-errors)) |
 | -33502 | `consent_required` | The caller has no consent for this component |
 | -33503 | `consent_conflict` | Consent exists but does not cover what was asked |
-| -33504 | `restart_required` | Consent changed under a running execution |
 | -33505 | `confirmation_required` | A sensitive change waits for the person's fresh confirmation and nothing was changed; `error.data.payload.id` is the asking client's own secret for this request — keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation.pending` lists the pending confirmation by its ref, never by that id, and names the client that asked. Once it is confirmed, repeat the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to that id, never as an argument: a repeat before the proof answers the same id and changes nothing, and a value not spelled `cnf_` and 43 base64url characters is refused `-32602` at HTTP 400 ([Readiness and typed errors](#readiness-and-typed-errors)) |
 
 `-33304` is the one to branch on for backoff; the `-335xx` band is the
@@ -1082,17 +1081,16 @@ Interactive sessions and consent-capable API keys may commit; a key's consent ca
 
 `component.setup_plan` answers "can this run?" before you invoke: its `consent` section lists the profile and one row per need (`satisfied` + a human-readable `detail`), and top-level `ready` is true only when the profile is active and every need is bound to a live, digest-matching vault entry.
 
-Five typed errors cross every surface (MCP, HTTP, CLI, consoles) with normative payloads:
+Four typed errors cross every surface (MCP, HTTP, CLI, consoles) with normative payloads:
 
 | Error | Payload | Meaning / next step |
 |-------|---------|---------------------|
 | `setup_required` | `{profile_id, node_ref, need, reason}` | Names the unbound need — grant a vault entry for it (`profile.plan` / `cyfr profile grant <ref>`) |
 | `consent_required` | `{profile_id, current_revision, shape_diff}` | The grant does not cover this run: the component's ask changed since approval (the shape diff shows each component's changes, naming its `node` and marking new or dropped dependencies with `new` or `dropped`), or the grant does not admit the run's origin. Review and grant again |
 | `consent_conflict` | `{expected_revision, actual_revision, cause}` | `stale_plan` → re-run plan; `digest_changed` → re-run preview; `race` → retry commit |
-| `restart_required` | `{profile_id, new_revision, missing}` | A new revision landed under a running execution — restart to pick it up |
 | `confirmation_required` | `{id, operation, expires_at}` | A sensitive change needs the person's fresh confirmation before `expires_at`; nothing was changed, and it is no denial. `id` is the asking client's own secret for this one request: keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation.pending` lists the pending confirmation by its ref, derived one way from `id`, never by `id` itself, and names the client that asked. Over MCP the asking client then repeats the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to `id`, which no request log records; a repeat before the proof answers the same `id` and opens nothing, and a repeat after it completes the change once. The CLI repeats for you on a terminal: it shows the ref and repeats each time you press Enter. A plain HTTP endpoint carries no repeat |
 
-On the MCP wire each arrives as a protocol-level JSON-RPC error — codes `-33501` (`setup_required`), `-33502` (`consent_required`), `-33503` (`consent_conflict`), `-33504` (`restart_required`), `-33505` (`confirmation_required`) — with `error.data` carrying `{"tag": …, "payload": {…}}` and a one-line human summary in `error.message`. A plain HTTP endpoint answers the same `data` beside its `code` and `message`, `confirmation_required` at `428 Precondition Required`. Branch on the code (or `data.tag`); the payload is the table above.
+On the MCP wire each arrives as a protocol-level JSON-RPC error — codes `-33501` (`setup_required`), `-33502` (`consent_required`), `-33503` (`consent_conflict`), `-33505` (`confirmation_required`) — with `error.data` carrying `{"tag": …, "payload": {…}}` and a one-line human summary in `error.message`. A plain HTTP endpoint answers the same `data` beside its `code` and `message`, `confirmation_required` at `428 Precondition Required`. Branch on the code (or `data.tag`); the payload is the table above.
 
 ### What a grant enforces
 

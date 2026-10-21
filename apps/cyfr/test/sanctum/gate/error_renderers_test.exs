@@ -271,7 +271,7 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
   ]
 
   # Refusals outside the authorization vocabulary: a sample of the table's
-  # rows, the five consent signals, a producer's own sentence and a term
+  # rows, the four consent signals, a producer's own sentence and a term
   # nobody knows.
   @other_reasons [
     :busy,
@@ -285,7 +285,6 @@ defmodule Sanctum.Gate.ErrorRenderersTest do
     {:setup_required, %{}},
     {:consent_required, %{}},
     {:consent_conflict, %{}},
-    {:restart_required, %{}},
     {:confirmation_required,
      %{id: "confirmation-7f3a", operation: "probe/change", expires_at: ~U[2026-09-29 12:05:00Z]}},
     "a crafted sentence",

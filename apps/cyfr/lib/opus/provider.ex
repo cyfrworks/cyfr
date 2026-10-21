@@ -787,7 +787,6 @@ defmodule Opus.Provider do
               :setup_required,
               :consent_required,
               :consent_conflict,
-              :restart_required,
               :confirmation_required
             ] and is_map(payload) do
     {:error, {tag, payload}}
