@@ -4,10 +4,9 @@
 #
 # The verified-image guard (tests/tailnet-real/guard.sh) against scratch
 # copies of docker-compose.yml and verified-image: a record of the pinned
-# reference passes, and no record, the checkout as it is until a
-# real-tailnet run passes, a new digest under the same tag, another tag, a
-# reference without a digest, and a record of two lines or with a stray
-# byte each fail, naming why.
+# reference passes, and no record (and the checkout when it holds none), a
+# new digest under the same tag, another tag, a reference without a digest,
+# and a record of two lines or with a stray byte each fail, naming why.
 #
 # Usage: bash tests/tailnet-real/guard-test.sh
 set -uo pipefail
@@ -72,7 +71,8 @@ case_of "$image" "$image\r\n" fail "has not been verified on a real tailnet" "a 
 case_of "$image" "$image" fail "is not one line" "a verified-image without its line end fails"
 
 # No record: the guard on the scratch pair with verified-image absent, and
-# on the checkout itself, whose record only a passing run writes.
+# on the checkout itself when it holds none, since only a passing run
+# writes the record.
 no_record() {
   local what="$1" code
   shift
