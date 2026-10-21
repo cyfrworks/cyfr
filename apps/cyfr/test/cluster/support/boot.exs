@@ -219,64 +219,6 @@ defmodule Cyfr.Cluster.Boot do
     end
   end
 
-  @doc """
-  Watch `athanor_id`'s tray from this member, keeping the references of
-  each `:regrant_required` entry it hears (`tray_heard/0`).
-
-  The tray's topic is the cell's, so a watcher here hears what either
-  member announces. Like `watch_stream!/2` it is a named process, and it
-  answers only once that process has subscribed.
-  """
-  @spec watch_tray!(String.t()) :: :ok
-  def watch_tray!(athanor_id) do
-    stop_registered!(:cyfr_cluster_tray_watch)
-    caller = self()
-    actor = Prima.Actor.in_athanor(athanor_id)
-
-    watcher =
-      spawn(fn ->
-        :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.notify(actor))
-        send(caller, {:subscribed, self()})
-        collect_tray([])
-      end)
-
-    Process.register(watcher, :cyfr_cluster_tray_watch)
-
-    receive do
-      {:subscribed, ^watcher} -> :ok
-    after
-      10_000 -> raise "the tray watcher never subscribed to #{athanor_id}"
-    end
-  end
-
-  @doc """
-  The `:regrant_required` entries this member's tray watcher has heard, in
-  arrival order, each as its sorted references.
-  """
-  @spec tray_heard() :: [[String.t()]]
-  def tray_heard do
-    send(:cyfr_cluster_tray_watch, {:heard, self()})
-
-    receive do
-      {:tray_heard, seen} -> seen
-    after
-      5_000 -> raise "the tray watcher did not answer"
-    end
-  end
-
-  defp collect_tray(seen) do
-    receive do
-      %Cyfr.Bus.Notify{kind: :regrant_required, payload: %{references: references}} ->
-        collect_tray(seen ++ [Enum.sort(references)])
-
-      {:heard, from} ->
-        send(from, {:tray_heard, seen})
-        collect_tray(seen)
-
-      _other ->
-        collect_tray(seen)
-    end
-  end
 
   @doc """
   Run one sweep of the stale-attempt pass on this member, as its own timer

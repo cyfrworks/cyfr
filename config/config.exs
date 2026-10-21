@@ -85,13 +85,6 @@ config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.DB
 # reached can go unread anywhere in the cell.
 config :sanctum, :caller_memo_ttl_ms, 2_000
 
-# The boot check of stored grants (`Sanctum.Consent.StoredGrants`): every
-# member's boot logs the grants that name a storage path the grammar no
-# longer admits, and the cell announces them to their athanors once per
-# cell, only when the list changes. A notice; the loader refuses such a
-# grant whether or not it runs. The suite turns it off.
-config :sanctum, :stored_grants_check_enabled, true
-
 # Where this deployment is reachable when it has no public URL: a local
 # home's address, `http://localhost:<port>`, kept in step with the
 # endpoint below and with the per-environment ports, which override this

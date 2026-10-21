@@ -28,8 +28,7 @@ defmodule Sanctum.Notify do
     :approval_resolved,
     :schedule_failed,
     :passkey_registered,
-    :passkey_recovered,
-    :regrant_required
+    :passkey_recovered
   ]
 
   @type kind ::
@@ -44,7 +43,6 @@ defmodule Sanctum.Notify do
           | :schedule_failed
           | :passkey_registered
           | :passkey_recovered
-          | :regrant_required
 
   @doc "The tray's closed vocabulary, in the order `t:kind/0` names it."
   @spec kinds() :: [kind()]

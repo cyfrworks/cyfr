@@ -547,11 +547,10 @@ defmodule Sanctum.Providers.Profile do
   # read: a store that cannot answer them refuses the whole read, and a
   # head row that does not decode is not among them (`active_heads/2`
   # drops it). A head the loader cannot trust (its validity, digest,
-  # parse, blob/refs equality or binding digests) refuses the whole read
-  # as that damage, in the loader's one reading of it
-  # (`Sanctum.Consent.Loader.damage_refusal/3`, the damaged head
-  # `{:head_corrupt, profile_id}`); a head asked again under the canonical
-  # spelling of its storage paths reaches nothing. A lender the store
+  # parse, storage-path spelling, blob/refs equality or binding digests)
+  # refuses the whole read as that damage, in the loader's one reading of
+  # it (`Sanctum.Consent.Loader.damage_refusal/3`, the damaged head
+  # `{:head_corrupt, profile_id}`). A lender the store
   # could not answer, or whose profile row or head does not decode, or
   # whose head's bytes fail their digest or do not parse, refuses the
   # whole read with that reason (`Sanctum.Unauthorized`'s sentence): an
@@ -699,9 +698,8 @@ defmodule Sanctum.Providers.Profile do
   # head the loader cannot trust refuses it as that damage, in the
   # loader's one reading of it (`Loader.damage?/1`, `damage_refusal/3`):
   # read as reaching nothing, a grant that exists would read as none. Any
-  # other refusal, a revision asked again under the canonical spelling of
-  # its paths or a lender that does not admit the origin, reaches nothing
-  # under that origin.
+  # other refusal, such as a lender that does not admit the origin,
+  # reaches nothing under that origin.
   defp reaching_edges(ctx, profile, consent, resource) do
     Enum.reduce_while(consent.admitted_origins, {:ok, []}, fn origin, none ->
       case Loader.admitted_blob(%{ctx | origin: origin}, profile, consent) do

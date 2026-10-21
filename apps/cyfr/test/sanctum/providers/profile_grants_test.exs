@@ -375,18 +375,21 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert {:ok, %{grants: []}} = grants(ctx, %{"path" => "data/secretsheet.md"})
     end
 
-    test "a pattern the door refuses every spelling under reaches nothing", %{ctx: ctx} do
+    test "a head granting a pattern the door refuses every spelling under is damage",
+         %{ctx: ctx} do
       for {name, pattern} <- [
             {"g-dotdot", "data/../secrets/"},
             {"g-encoded", "data/%2e%2e/secrets/"},
             {"g-absolute", "/data/secrets/"},
             {"g-backslash", "data\\secrets/"}
           ] do
-        grant!(ctx, name, policy("reagent:local.#{name}", storage([pattern])))
-      end
+        ref = "reagent:local.#{name}"
+        id = grant!(ctx, name, policy(ref, storage([pattern])))
+        profile = %{id: id, kind: :owner, source_ref: ref, label: "default", status: :active}
 
-      for path <- ["data/secrets/key.txt", "secrets/key.txt", "data/x"] do
-        assert {:ok, %{grants: [], count: 0}} = grants(ctx, %{"path" => path}), path
+        assert {:error, {:invalid_blob, {:invalid_resource, ^ref, "@ingress", :storage, _why}}} =
+                 Loader.load_root(%{ctx | origin: :interactive}, profile),
+               pattern
       end
     end
 
@@ -754,20 +757,18 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       end
     end
 
-    test "a head the loader asks to grant again reaches nothing, through any resource",
+    test "a head whose blob spells a storage path other than the door reaches it is damage",
          %{ctx: ctx} do
-      # A storage path spelled other than the door reaches it: the loader
-      # asks for the grant again rather than run it.
       ref = "reagent:local.g-unusable"
       edge = Map.merge(egress(["refused.example"]), storage(["data//secrets/"]))
       unusable = grant!(ctx, "g-unusable", policy(ref, edge))
       profile = %{id: unusable, kind: :owner, source_ref: ref, label: "default", status: :active}
 
-      assert {:error, {:consent_required, %{profile_id: ^unusable}}} =
+      assert {:error, {:invalid_blob, {:invalid_resource, ^ref, "@ingress", :storage, _why}}} =
                Loader.load_root(%{ctx | origin: :interactive}, profile)
 
       for args <- [%{"domain" => "refused.example"}, %{"path" => "data/secrets/key.txt"}] do
-        assert {:ok, %{grants: [], count: 0}} = grants(ctx, args), inspect(args)
+        assert {:error, {:head_corrupt, ^unusable}} = grants(ctx, args), inspect(args)
       end
     end
 

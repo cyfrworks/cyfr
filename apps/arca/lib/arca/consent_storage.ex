@@ -894,56 +894,6 @@ defmodule Arca.ConsentStorage do
   def active_heads(%Prima.Actor{}, limit: limit) when is_integer(limit) and limit > 0,
     do: {:error, :no_athanor}
 
-  @typedoc "One active head as the stored-grant check reads it (`active_head_policies/2`)."
-  @type head_policy :: %{
-          athanor_id: String.t(),
-          profile_id: String.t(),
-          source_ref: String.t(),
-          revision: non_neg_integer(),
-          resolved_policy: String.t()
-        }
-
-  @doc """
-  One page of every athanor's active heads, for the boot check of stored
-  grants (`Sanctum.Consent.StoredGrants`): up to `limit` rows in profile-id
-  order after `after_id` (`nil` for the first page), each naming its own
-  athanor, the profile and its source, and the head's revision and
-  resolved policy as stored. Nothing is decoded or checked here: the
-  reader says what a policy grants.
-  """
-  @spec active_head_policies(String.t() | nil, pos_integer()) ::
-          {:ok, [head_policy()]} | {:error, term()}
-  # arca:unscoped-ok the stored-grant check walks every athanor's active
-  # heads by design, a page at a time, at boot; each row names its own
-  # athanor, and what the check finds is announced to that athanor alone.
-  def active_head_policies(after_id, limit)
-      when (is_nil(after_id) or is_binary(after_id)) and is_integer(limit) and limit > 0 do
-    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.active_head_policies", fn ->
-      page =
-        from(p in Arca.Schemas.Profile,
-          join: c in Consent,
-          on: c.id == p.head_consent_id and c.athanor_id == p.athanor_id,
-          where: p.status == "active",
-          order_by: p.id,
-          limit: ^limit,
-          select: %{
-            athanor_id: p.athanor_id,
-            profile_id: p.id,
-            source_ref: p.source_ref,
-            revision: c.revision,
-            resolved_policy: c.resolved_policy
-          }
-        )
-        |> after_profile(after_id)
-        |> Arca.Repo.all()
-
-      {:ok, page}
-    end)
-  end
-
-  defp after_profile(query, nil), do: query
-  defp after_profile(query, after_id), do: where(query, [p], p.id > ^after_id)
-
   defp refs_by_consent(_athanor_id, []), do: %{}
 
   defp refs_by_consent(athanor_id, consent_ids) do

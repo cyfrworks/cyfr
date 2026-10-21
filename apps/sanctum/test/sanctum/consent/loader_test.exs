@@ -402,16 +402,21 @@ defmodule Sanctum.Consent.LoaderTest do
       consent(%{resolved_policy: policy})
     end
 
-    test "is refused at admission with consent_required, never rewritten", %{ctx: ctx} do
+    test "is refused at admission as a damaged blob, never rewritten", %{ctx: ctx} do
       profile = profile_summary()
+      formula = Fixtures.formula_ref()
 
       for path <- ["data//secrets/", "data/./secrets/", "data/../secrets/", "data/notes//"] do
         consent = with_paths(["data/ok/", path])
         seed(ctx, profile, consent)
 
-        assert {:error, {:consent_required, %{profile_id: "prof-1", shape_diff: []}}} =
+        assert {:error, refusal} =
                  Loader.load_root(ctx, profile, live: live_for(consent.activation)),
                "#{path} was admitted"
+
+        assert {:invalid_blob, {:invalid_resource, ^formula, "@ingress", :storage, why}} = refusal
+        assert why =~ inspect(path)
+        assert Loader.damage?(refusal)
 
         # The stored grant is as it was written.
         assert {:ok, %{resolved_policy: stored}} =

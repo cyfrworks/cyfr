@@ -172,8 +172,7 @@ defmodule Sanctum.TelemetryTest do
                :approval_resolved,
                :schedule_failed,
                :passkey_registered,
-               :passkey_recovered,
-               :regrant_required
+               :passkey_recovered
              ]
 
       Code.ensure_loaded!(Sanctum.Notify)

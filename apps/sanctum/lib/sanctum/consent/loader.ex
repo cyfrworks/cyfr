@@ -19,9 +19,10 @@ defmodule Sanctum.Consent.Loader do
   5. the resolved policy blob parses (`Prima.Authority.Blob.parse/1`)
   6. **canonical storage paths** — every storage path the blob grants is
      spelled as the storage door reaches it
-     (`Prima.ComponentPath.door_path/1`, `"*"` aside); a revision that
-     names another spelling answers `consent_required`, and is never
-     rewritten here
+     (`Prima.ComponentPath.door_path/1`, `"*"` aside), as every commit
+     writes it; a blob that names another spelling is damaged
+     (`{:invalid_blob, {:invalid_resource, node, edge, :storage, _}}`),
+     and is never rewritten here
   7. **blob/refs equality** — every bound vault reference inside the blob
      must exactly equal the consent's stored `vault_refs`; any asymmetry
      means the blob and the reverse index disagree about what was
@@ -256,7 +257,7 @@ defmodule Sanctum.Consent.Loader do
     with :ok <- check_consent_validity(consent),
          :ok <- check_blob_digest(consent),
          {:ok, blob} <- parse_blob(consent),
-         :ok <- check_canonical_paths(blob, profile, consent),
+         :ok <- check_canonical_paths(blob),
          :ok <- check_blob_refs_equality(blob, consent),
          {:ok, blob} <- resolve_selections(ctx, Context.actor(ctx), blob),
          :ok <- check_entry_digest_conflicts(blob) do
@@ -304,19 +305,25 @@ defmodule Sanctum.Consent.Loader do
       %{profile_id: profile.id, current_revision: consent.revision, shape_diff: []}}}
   end
 
-  # A storage path is granted as the door reaches it. A revision written
-  # before the manifest grammar refused other spellings (`data//secrets/`)
-  # still runs nothing: it is asked again, under the canonical spelling,
-  # and never rewritten here.
-  defp check_canonical_paths(%Blob{nodes: nodes}, profile, consent) do
-    canonical? =
-      Enum.all?(nodes, fn {_ref, node} ->
-        Enum.all?(node.edges, fn {_key, edge} ->
-          Enum.all?(Blob.Edge.paths(edge), &Prima.Manifest.Caps.canonical_storage_path?/1)
-        end)
-      end)
+  # A storage path is granted as the door reaches it, and a commit
+  # refuses every other spelling (`Sanctum.Consent.BlobBuilder`), so a
+  # blob naming one (`data//secrets/`) is damage: it runs nothing and is
+  # never rewritten here.
+  defp check_canonical_paths(%Blob{nodes: nodes}) do
+    Enum.find_value(nodes, :ok, fn {ref, node} ->
+      Enum.find_value(node.edges, fn {key, edge} ->
+        case Enum.reject(Blob.Edge.paths(edge), &Prima.Manifest.Caps.canonical_storage_path?/1) do
+          [] ->
+            nil
 
-    if canonical?, do: :ok, else: regrant(profile, consent)
+          [path | _] ->
+            {:error,
+             {:invalid_blob,
+              {:invalid_resource, ref, key, :storage,
+               "path #{inspect(path)} is not spelled as the storage door reaches it"}}}
+        end
+      end)
+    end)
   end
 
   defp check_consent_validity(consent) do
