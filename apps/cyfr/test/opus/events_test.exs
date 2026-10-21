@@ -6,6 +6,7 @@ defmodule Opus.EventsTest do
 
   alias Opus.Events
   alias Opus.Events.Sequence
+  alias Cyfr.Test.{AttemptFixtures, ScriptedWorker}
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -153,21 +154,119 @@ defmodule Opus.EventsTest do
   describe "the counter table" do
     # The table belongs to an always-started child of `Opus.Tree`; with it
     # absent a delta has no number, and numbering raises rather than
-    # answering one from outside the stream's counter.
-    test "numbering raises while the table is absent" do
-      on_exit(&restart_sequence/0)
-      :ok = Supervisor.terminate_child(Opus.Tree, Sequence)
-
-      try do
+    # answering one from outside the stream's counter. Retiring a finished
+    # stream's counters runs after its row committed, on the way to what
+    # its end cleans up, and an absent table holds none to retire.
+    @tag :capture_log
+    test "numbering raises while the table is absent, and retiring answers :ok" do
+      without_sequence(fn ->
         exec_id = "exec_evt_seq_#{System.unique_integer([:positive])}"
         assert_raise ArgumentError, fn -> Sequence.next(exec_id, 1) end
         assert_raise ArgumentError, fn -> Sequence.reseed(exec_id, 1, 3) end
-        assert_raise ArgumentError, fn -> Sequence.forget(exec_id) end
-      after
-        restart_sequence()
-      end
+        assert :ok = Sequence.forget(exec_id)
+      end)
 
       assert Sequence.next("exec_evt_seq_back", 1) == 1
+    end
+
+    # Readers retire in a loop until the table is gone, while its owner is
+    # stopped, so in some round one has found the table and deletes from
+    # it as it goes.
+    @tag :capture_log
+    test "retiring answers :ok while the table's owner exits under it" do
+      on_exit(&restart_sequence/0)
+      test = self()
+
+      for _round <- 1..5 do
+        :ok = restart_sequence()
+
+        readers =
+          for _reader <- 1..max(System.schedulers_online(), 4),
+              do: spawn_monitor(fn -> retire_until_gone(test) end)
+
+        for {reader, _ref} <- readers, do: assert_receive({:retiring, ^reader}, 5_000)
+        :ok = Supervisor.terminate_child(Opus.Tree, Sequence)
+
+        for {reader, ref} <- readers do
+          assert_receive {:DOWN, ^ref, :process, ^reader, reason}, 5_000
+          assert reason == :normal
+        end
+      end
+
+      restart_sequence()
+    end
+
+    # The parent's runner attached and was handed the run, so its stop is
+    # the kill its worker service is sent.
+    @tag :capture_log
+    test "a cancel while the table is absent still fails the run's children and kills its runner" do
+      start_supervised!({ScriptedWorker, ref: "reagent:local.unscripted", script: []})
+      ctx = Sanctum.TestContext.local(:api)
+
+      parent =
+        AttemptFixtures.attached!(
+          ctx: ctx,
+          component_type: :formula,
+          worker: ScriptedWorker.endpoint()
+        )
+
+      :ok = Opus.Attempt.hand_over(parent.pid)
+      child = child!(parent)
+
+      without_sequence(fn ->
+        assert {:ok, %{cancelled: true}} = Opus.cancel(ctx, parent.execution_id)
+      end)
+
+      message = "Parent execution (#{parent.execution_id}) terminated"
+      assert %{status: "cancelled"} = Arca.Repo.get!(Arca.Schemas.Execution, parent.execution_id)
+
+      assert %{status: "failed", error_message: ^message} =
+               Arca.Repo.get!(Arca.Schemas.Execution, child.id)
+
+      assert parent.execution_id in ScriptedWorker.kills()
+    end
+  end
+
+  # A running child of `parent`'s run, admitted under the parent's stamp.
+  defp child!(parent) do
+    {:ok, %{execution: child}} =
+      Arca.Execution.admit(
+        %{
+          id: Prima.UUID7.execution_id(),
+          reference: "reagent:local.evt-child:0.1.0",
+          user_id: parent.ctx.user_id,
+          athanor_id: parent.athanor_id,
+          component_type: "reagent",
+          parent_execution_id: parent.execution_id,
+          root_execution_id: parent.execution_id
+        },
+        grant: parent.grant,
+        verify: &Sanctum.ExecutionStanding.verify/1
+      )
+
+    child
+  end
+
+  defp retire_until_gone(test) do
+    :ok = Sequence.forget("exec_evt_retiring")
+    send(test, {:retiring, self()})
+    retiring()
+  end
+
+  defp retiring do
+    :ok = Sequence.forget("exec_evt_retiring")
+    if :ets.whereis(Sequence) != :undefined, do: retiring(), else: :ok
+  end
+
+  # Run `fun` with the counter table's owner stopped, and start it again.
+  defp without_sequence(fun) do
+    on_exit(&restart_sequence/0)
+    :ok = Supervisor.terminate_child(Opus.Tree, Sequence)
+
+    try do
+      fun.()
+    after
+      restart_sequence()
     end
   end
 

@@ -192,8 +192,35 @@ defmodule Opus.WorkerWatchTest do
     )
   end
 
-  defp attached!(ctx, boot),
-    do: AttemptFixtures.attached!(ctx: ctx, service_id: @service, boot_id: boot)
+  defp attached!(ctx, boot, opts \\ []),
+    do: AttemptFixtures.attached!([ctx: ctx, service_id: @service, boot_id: boot] ++ opts)
+
+  # A running child of `parent`'s run, admitted under the parent's stamp.
+  defp child!(parent) do
+    {:ok, %{execution: child}} =
+      Arca.Execution.admit(
+        %{
+          id: Prima.UUID7.execution_id(),
+          reference: "reagent:local.watch-child:0.1.0",
+          user_id: parent.ctx.user_id,
+          athanor_id: parent.athanor_id,
+          component_type: "reagent",
+          parent_execution_id: parent.execution_id,
+          root_execution_id: parent.execution_id
+        },
+        grant: parent.grant,
+        verify: &Sanctum.ExecutionStanding.verify/1
+      )
+
+    child
+  end
+
+  defp restart_sequence do
+    case Supervisor.restart_child(Opus.Tree, Opus.Events.Sequence) do
+      {:ok, _pid} -> :ok
+      {:error, :running} -> :ok
+    end
+  end
 
   defp row(fixture), do: Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
 
@@ -384,6 +411,39 @@ defmodule Opus.WorkerWatchTest do
 
       assert Arca.JobClaims.read("worker_watch", id) == {:error, :not_found}
       assert WorkerWatch.fresh_boot(endpoint, watch) == :unknown
+    end
+
+    # The lapse's event retires the stream's delta counters after the row
+    # committed; with their table absent there are none to retire, and the
+    # children and the attempt are still settled.
+    test "a lapse while the counter table is absent still fails the formula's children and stops its attempt",
+         %{ctx: ctx} do
+      fixture = attached!(ctx, "boot_1", component_type: :formula)
+      child = child!(fixture)
+      endpoint = serve!([status("boot_1", [fixture.attempt])])
+      watch = watch!(endpoint)
+      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
+
+      on_exit(&restart_sequence/0)
+      :ok = Supervisor.terminate_child(Opus.Tree, Opus.Events.Sequence)
+      Worker.script!(self(), [@not_a_status])
+
+      message = "Parent execution (#{fixture.execution_id}) terminated"
+
+      wait_until(
+        fn ->
+          match?(
+            %{status: "failed", error_message: ^message},
+            Arca.Repo.get!(Arca.Schemas.Execution, child.id)
+          )
+        end,
+        @heard_ms,
+        "the child failed"
+      )
+
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(fixture.pid, fixture.close)
+      assert %{status: "failed", error_message: @lapsed} = row(fixture)
+      restart_sequence()
     end
   end
 
