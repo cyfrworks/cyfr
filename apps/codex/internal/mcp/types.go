@@ -42,12 +42,6 @@ type DiscoverResult struct {
 	Meta              map[string]any `json:"_meta,omitempty"`
 }
 
-// ServerInfo describes the MCP server.
-type ServerInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
 // ToolCallParams are the parameters for tools/call.
 type ToolCallParams struct {
 	Name      string          `json:"name"`
@@ -65,18 +59,4 @@ type ToolCallResult struct {
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
-}
-
-// Tool describes an MCP tool.
-type Tool struct {
-	Name         string `json:"name"`
-	Title        string `json:"title,omitempty"`
-	Description  string `json:"description,omitempty"`
-	InputSchema  any    `json:"inputSchema,omitempty"`
-	OutputSchema any    `json:"outputSchema,omitempty"`
-}
-
-// ToolsListResult is the result of tools/list.
-type ToolsListResult struct {
-	Tools []Tool `json:"tools"`
 }

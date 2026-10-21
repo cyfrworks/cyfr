@@ -90,7 +90,7 @@ func TestCurrent_NilWhenMissing(t *testing.T) {
 	}
 }
 
-func TestSetToken_Persists(t *testing.T) {
+func TestSaveTo_PersistsTokenUpdate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
@@ -104,8 +104,6 @@ func TestSetToken_Persists(t *testing.T) {
 		t.Fatalf("SaveTo failed: %v", err)
 	}
 
-	// SetToken uses Save() which writes to ~/.cyfr, so we test the
-	// assignment + SaveTo manually to avoid touching the home dir.
 	ctx := cfg.Current()
 	ctx.Token = "test-token-123"
 	if err := cfg.SaveTo(path); err != nil {

@@ -141,59 +141,23 @@ func FetchScrolls(ctx context.Context, client *mcp.Client) ([]Option, error) {
 // It looks for result[listKey] as a []any of map[string]any, then extracts
 // labelKey and valueKey from each entry.
 func extractOptions(result map[string]any, listKey, labelKey, valueKey string) ([]Option, error) {
-	raw, ok := result[listKey]
-	if !ok {
-		// Try the result itself as a flat list — some responses return
-		// the list at the top level without a wrapper key.
-		return extractOptionsFlat(result, labelKey, valueKey)
-	}
-
-	items, ok := raw.([]any)
+	items, ok := result[listKey].([]any)
 	if !ok {
 		return nil, fmt.Errorf("unexpected type for %q: expected array", listKey)
 	}
 
 	var opts []Option
 	for _, item := range items {
-		switch v := item.(type) {
-		case string:
-			// Flat string array (e.g. secrets: ["KEY1", "KEY2"])
-			opts = append(opts, Option{Label: v, Value: v})
-		case map[string]any:
-			label := fmt.Sprintf("%v", v[labelKey])
-			value := fmt.Sprintf("%v", v[valueKey])
-			if label == "<nil>" || value == "<nil>" {
-				continue
-			}
-			opts = append(opts, Option{Label: label, Value: value})
+		v, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("unexpected entry for %q: expected object", listKey)
 		}
+		label := fmt.Sprintf("%v", v[labelKey])
+		value := fmt.Sprintf("%v", v[valueKey])
+		if label == "<nil>" || value == "<nil>" {
+			continue
+		}
+		opts = append(opts, Option{Label: label, Value: value})
 	}
 	return opts, nil
-}
-
-// extractOptionsFlat handles the case where the result map itself contains
-// the data rather than a nested array.
-func extractOptionsFlat(result map[string]any, labelKey, valueKey string) ([]Option, error) {
-	// If the result has a single array value, try to use that
-	for _, v := range result {
-		if items, ok := v.([]any); ok {
-			var opts []Option
-			for _, item := range items {
-				m, ok := item.(map[string]any)
-				if !ok {
-					continue
-				}
-				label := fmt.Sprintf("%v", m[labelKey])
-				value := fmt.Sprintf("%v", m[valueKey])
-				if label == "<nil>" || value == "<nil>" {
-					continue
-				}
-				opts = append(opts, Option{Label: label, Value: value})
-			}
-			if len(opts) > 0 {
-				return opts, nil
-			}
-		}
-	}
-	return nil, nil
 }

@@ -22,7 +22,7 @@ func TestIsNewer(t *testing.T) {
 		{"1.0.0", "0.9.9", true},
 		{"0.6.0", "0.5.9", true},
 		{"0.5.10", "0.5.9", true},                // numeric, not lexical, compare
-		{"v0.5.4", "0.5.3", false},               // a prefix is no release version
+		{"prefix-0.5.4", "0.5.3", false},         // a prefix is no release version
 		{"0.5.4", "dev", false},                  // unreleased current -> no notice
 		{"dev", "0.5.3", false},                  // unparseable latest -> no notice
 		{"0.5.4-rc1", "0.5.3", true},             // a later line's pre-release
@@ -59,9 +59,9 @@ func withAPIURL(t *testing.T, body string, status int) {
 }
 
 func TestLatestPicksNewestBareTag(t *testing.T) {
-	// Newest first; the "porta-v*" desktop tag must be skipped.
+	// A tag outside the release grammar is skipped before selecting the newest.
 	withAPIURL(t, `[
-		{"tag_name": "porta-v1.2.0"},
+		{"tag_name": "prefix-1.2.0"},
 		{"tag_name": "0.5.4"},
 		{"tag_name": "0.5.3"}
 	]`, http.StatusOK)
@@ -75,15 +75,15 @@ func TestLatestPicksNewestBareTag(t *testing.T) {
 	}
 }
 
-func TestLatestSkipsLegacyV(t *testing.T) {
-	withAPIURL(t, `[{"tag_name": "v0.4.0"}, {"tag_name": "0.5.4"}]`, http.StatusOK)
+func TestLatestSkipsPrefixedTags(t *testing.T) {
+	withAPIURL(t, `[{"tag_name": "prefix-0.4.0"}, {"tag_name": "0.5.4"}]`, http.StatusOK)
 
 	got, err := Latest(context.Background())
 	if err != nil {
 		t.Fatalf("Latest returned error: %v", err)
 	}
 	if got != "0.5.4" {
-		t.Errorf("Latest = %q, want %q (legacy v* tag should be skipped)", got, "0.5.4")
+		t.Errorf("Latest = %q, want %q (prefixed tag should be skipped)", got, "0.5.4")
 	}
 }
 
@@ -101,7 +101,7 @@ func TestLatestNon200(t *testing.T) {
 func TestLatestNoReleases(t *testing.T) {
 	for name, body := range map[string]string{
 		"none":                 `[]`,
-		"a desktop release":    `[{"tag_name": "porta-v1.0.0"}]`,
+		"an invalid prefix":    `[{"tag_name": "prefix-1.0.0"}]`,
 		"flagged pre-releases": `[{"tag_name": "0.6.0-alpha.1", "prerelease": true}, {"tag_name": "0.6.0", "prerelease": true}]`,
 		"pre-release tags":     `[{"tag_name": "0.6.0-alpha.1"}, {"tag_name": "0.6.0-beta.1"}]`,
 		"a draft":              `[{"tag_name": "0.6.0", "draft": true}]`,

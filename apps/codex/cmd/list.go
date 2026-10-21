@@ -54,12 +54,8 @@ var listCmd = &cobra.Command{
 			if !ok {
 				continue
 			}
-			reference := strVal(comp, "component_ref")
-			if reference == "" {
-				reference = strVal(comp, "id")
-			}
 			rows = append(rows, map[string]string{
-				"REFERENCE":   reference,
+				"REFERENCE":   strVal(comp, "component_ref"),
 				"TYPE":        strVal(comp, "component_type"),
 				"DESCRIPTION": strVal(comp, "description"),
 			})

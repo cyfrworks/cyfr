@@ -193,6 +193,8 @@ func TestAnInterruptedQuestionPrintsItsSentence(t *testing.T) {
 
 // A form ends when the command's context does, as prompt.ErrAborted.
 func TestAFormEndsWithTheContext(t *testing.T) {
+	// TERM=dumb selects huh's accessible mode, which does not observe ctx.
+	t.Setenv("TERM", "xterm-256color")
 	in, asked := blockAfter(t)
 	restore := prompt.UseTerminal(in, &bytes.Buffer{})
 	t.Cleanup(restore)

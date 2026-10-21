@@ -6,7 +6,6 @@ package cmd
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/cyfr/codex/internal/ops"
 	"strings"
@@ -42,25 +41,20 @@ func joinTypeShorthand(args []string) []string {
 //
 // Refs containing '@' are passed through unchanged — ref.ParseRef + Validate
 // reject them (personal slugs are bare; '@' is invalid anywhere in a ref).
-func parseReference(rawRef string, compType string) (string, error) {
-	// Reject local file paths — components must be registered first
-	if strings.HasSuffix(rawRef, ".wasm") || strings.HasPrefix(rawRef, "./") || strings.HasPrefix(rawRef, "/") {
-		return "", errors.New("Local file execution is no longer supported. Register the component first:\n  cyfr register\n  cyfr run <reference>")
-	}
-
+func parseReference(rawRef string, compType string) string {
 	// If --type flag given and ref has no type prefix, prepend it
 	if compType != "" {
 		if colonIdx := strings.Index(rawRef, ":"); colonIdx >= 0 {
 			firstPart := rawRef[:colonIdx]
 			if !strings.Contains(firstPart, ".") && ref.IsTypePrefix(firstPart) {
 				// Already has a type prefix, pass through
-				return rawRef, nil
+				return rawRef
 			}
 		}
 		rawRef = compType + ":" + rawRef
 	}
 
-	return rawRef, nil
+	return rawRef
 }
 
 func init() {
@@ -140,10 +134,7 @@ Run without arguments for interactive selection.`,
 			Normalize: func(ctx context.Context, arg string) (string, error) {
 				// Inject --type, then resolve a missing version for
 				// registry refs.
-				withType, err := parseReference(arg, compType)
-				if err != nil {
-					return "", err
-				}
+				withType := parseReference(arg, compType)
 				return resolveComponentRef(ctx, client, withType)
 			},
 		})

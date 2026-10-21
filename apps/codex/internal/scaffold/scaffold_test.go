@@ -460,8 +460,7 @@ func evilTarball(t *testing.T) []byte {
 // A verified checksums.txt beside a tarball it does not name is an
 // integrity failure like an unsigned checksums.txt: it wraps
 // release.ErrUnverified, which stops `cyfr init` and `cyfr update`, and
-// extracts nothing. Found by review: the mismatch read as a transport
-// failure, and init continued.
+// extracts nothing.
 func TestScaffoldMismatchIsUnverified(t *testing.T) {
 	sc := readSignedChecksums(t)
 	assets := signedAssets(sc)

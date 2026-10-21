@@ -17,22 +17,7 @@ import (
 
 	"github.com/cyfr/codex/internal/release"
 	"github.com/cyfr/codex/internal/version"
-	"github.com/spf13/cobra"
 )
-
-func init() {
-	rootCmd.AddCommand(upgradeCmd)
-}
-
-// upgradeCmd is the retired verb, kept only to say which one replaced it.
-var upgradeCmd = &cobra.Command{
-	Use:                "upgrade",
-	Hidden:             true,
-	DisableFlagParsing: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return errors.New("cyfr upgrade is now cyfr update, which updates this program and then the home in this directory")
-	},
-}
 
 // The release lookups, the install and the handover, each a package
 // variable so tests substitute them.

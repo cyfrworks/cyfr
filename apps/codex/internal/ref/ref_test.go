@@ -290,15 +290,6 @@ func indexOf(haystack, needle string) int {
 	return -1
 }
 
-func TestParsedRef_HasTypePrefix(t *testing.T) {
-	if !(ParsedRef{Type: "c"}).HasTypePrefix() {
-		t.Error("expected HasTypePrefix for type 'c'")
-	}
-	if (ParsedRef{}).HasTypePrefix() {
-		t.Error("expected !HasTypePrefix for empty type")
-	}
-}
-
 func TestParsedRef_WithVersion(t *testing.T) {
 	tests := []struct {
 		ref     ParsedRef

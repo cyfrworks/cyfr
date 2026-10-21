@@ -29,7 +29,7 @@
 body { margin: 0; }
 
 /* A window taller than the handheld holds the screen in its middle; at the
-   handheld's 720px the screen starts at the top, as it always has. A
+   handheld's 720px the screen starts at the top. A
    screen taller than the window grows the body, so none of it is cut. */
 @media (min-height: 721px) {
   body {

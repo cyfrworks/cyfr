@@ -18,8 +18,7 @@ var ErrNotInteractive = errors.New("interactive mode not available (no TTY)")
 
 // ErrAborted is the sentinel commands return when the user aborts a prompt
 // (Ctrl+C). main maps it to exit code 130 without printing an error, and it
-// unwinds through defers and cleanup hooks — unlike the os.Exit(130) it
-// replaces.
+// unwinds through defers and cleanup hooks.
 var ErrAborted = errors.New("aborted")
 
 // IsInteractive returns true if stdin and stdout are terminals and

@@ -92,7 +92,7 @@ func TestUpdateLeavesShippedComposeAlone(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if added, err := ensureCyfrComposeFields(path); err != nil || added != nil {
+		if added, err := ensureComposeFields(path, nil); err != nil || added != nil {
 			t.Errorf(".env %q: update added %q (error %v)", env, added, err)
 		}
 		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, shipped) {
@@ -215,7 +215,7 @@ func TestUpdateEnsuresPublishedPort(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		added, err := ensureCyfrComposeFields(path)
+		added, err := ensureComposeFields(path, nil)
 		if err != nil {
 			t.Fatalf("ports %s, .env %q: %v", c.ports, c.env, err)
 		}
@@ -234,7 +234,7 @@ func TestUpdateEnsuresPublishedPort(t *testing.T) {
 // cyfr, and the Locus services keep their hardening: the shared
 // x-locus-role block, each worker's merge of it, each guard's own keys
 // (a guard merges no role block), and every key each service runs with.
-func TestEnsureCyfrComposeFieldsKeepsTheLocusRoleBlock(t *testing.T) {
+func TestEnsureComposeFieldsKeepsTheLocusRoleBlock(t *testing.T) {
 	shipped, err := os.ReadFile(filepath.Join("..", "..", "..", "docker-compose.yml"))
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +249,7 @@ func TestEnsureCyfrComposeFieldsKeepsTheLocusRoleBlock(t *testing.T) {
 	if err := os.WriteFile(path, []byte(input), 0644); err != nil {
 		t.Fatal(err)
 	}
-	added, err := ensureCyfrComposeFields(path)
+	added, err := ensureComposeFields(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1558,8 +1558,7 @@ func TestUpdateOnASignal(t *testing.T) {
 
 // Once the switch begins it is never cut short: a signal during the start
 // lets the start finish, so the stack is not left half-switched, and the
-// update reports the interrupt beside its outcome. Found by review: the
-// command's documentation said every step from the stop on ends the update.
+// update reports the interrupt beside its outcome.
 func TestUpdateFinishesTheSwitchOnASignal(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
 	s.answer("up.signal", "")
@@ -1586,7 +1585,7 @@ func TestUpdateFinishesTheSwitchOnASignal(t *testing.T) {
 	}
 }
 
-// The switch rewrites only image lines and ensureCyfrComposeFields keeps
+// The switch rewrites only image lines and ensureComposeFields keeps
 // every block it does not own: x-locus-role, each worker's merge of it,
 // each guard's own keys and every key a bundled service runs with besides
 // its image.
@@ -1609,7 +1608,7 @@ func TestSwitchKeepsTheBundledServicesBlocks(t *testing.T) {
 	if err := os.WriteFile(path, plan.rewritten, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if added, err := ensureCyfrComposeFields(path); err != nil || !slices.Contains(added, "volumes: ./aqua:/app/seed/aqua") {
+	if added, err := ensureComposeFields(path, nil); err != nil || !slices.Contains(added, "volumes: ./aqua:/app/seed/aqua") {
 		t.Fatalf("added %v (error %v), without cyfr's aqua volume, so nothing was written", added, err)
 	}
 	output, _ := os.ReadFile(path)
@@ -1806,9 +1805,7 @@ func (s *updateScenario) setService(key string, value any) {
 // service-level tmpfs (a list or one path), a secret or a config whose
 // target lies under the storage root, or at the root itself, is no bind
 // the snapshot can copy, and volumes_from mounts what the configuration
-// does not place; each refuses before anything stops. Found by review: a
-// service-level tmpfs under the root was accepted and the update reported
-// success.
+// does not place; each refuses before anything stops.
 func TestUpdateRefusesEveryNonBindMountSource(t *testing.T) {
 	cases := []struct {
 		name, key string
@@ -2005,7 +2002,7 @@ VOLUMES`
 // source: no second mount at /app/data or /app/seed/aqua is added beside
 // it, so compose resolves the target to the customized source, before and
 // after. A target bound by no entry gets the default once.
-func TestEnsureCyfrComposeFieldsKeepsACustomizedMount(t *testing.T) {
+func TestEnsureComposeFieldsKeepsACustomizedMount(t *testing.T) {
 	cases := map[string]struct{ volumes, env string }{
 		"short":              {"      - ./alternate-data:/app/data\n      - ./my-aqua:/app/seed/aqua\n", ""},
 		"short with options": {"      - ./alternate-data:/app/data:rw,z\n      - ./my-aqua:/app/seed/aqua:ro\n", ""},
@@ -2027,9 +2024,9 @@ func TestEnsureCyfrComposeFieldsKeepsACustomizedMount(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := resolvedDataSource(t, dir)
-			added, err := ensureCyfrComposeFields(path)
+			added, err := ensureComposeFields(path, nil)
 			if err != nil || len(added) != 0 {
-				t.Fatalf("ensureCyfrComposeFields added %v (error %v) to a project binding both targets", added, err)
+				t.Fatalf("ensureComposeFields added %v (error %v) to a project binding both targets", added, err)
 			}
 			if got, _ := os.ReadFile(path); string(got) != input {
 				t.Errorf("docker-compose.yml was rewritten:\n%s", got)
@@ -2048,8 +2045,8 @@ func TestEnsureCyfrComposeFieldsKeepsACustomizedMount(t *testing.T) {
 		if err := os.WriteFile(path, []byte(input), 0644); err != nil {
 			t.Fatal(err)
 		}
-		if added, err := ensureCyfrComposeFields(path); err != nil || len(added) != 0 {
-			t.Fatalf("ensureCyfrComposeFields added %v (error %v)", added, err)
+		if added, err := ensureComposeFields(path, nil); err != nil || len(added) != 0 {
+			t.Fatalf("ensureComposeFields added %v (error %v)", added, err)
 		}
 	})
 
@@ -2060,11 +2057,11 @@ func TestEnsureCyfrComposeFieldsKeepsACustomizedMount(t *testing.T) {
 		if err := os.WriteFile(path, []byte(strings.Replace(opusProbeCompose, "    volumes:\nVOLUMES", "", 1)), 0644); err != nil {
 			t.Fatal(err)
 		}
-		added, err := ensureCyfrComposeFields(path)
+		added, err := ensureComposeFields(path, nil)
 		if err != nil || !slices.Equal(added, []string{"volumes: ./data:/app/data", "volumes: ./aqua:/app/seed/aqua"}) {
-			t.Fatalf("ensureCyfrComposeFields added %v (error %v)", added, err)
+			t.Fatalf("ensureComposeFields added %v (error %v)", added, err)
 		}
-		if added, err := ensureCyfrComposeFields(path); err != nil || len(added) != 0 {
+		if added, err := ensureComposeFields(path, nil); err != nil || len(added) != 0 {
 			t.Errorf("a second run added %v (error %v)", added, err)
 		}
 		got, _ := os.ReadFile(path)
@@ -2107,7 +2104,7 @@ func resolvedDataSource(t *testing.T, dir string) string {
 // key is added to a copy of that list, which keeps every inherited mount;
 // a service that extends another adds nothing unless compose's own
 // resolution says the target is unbound, and that resolution decides.
-func TestEnsureCyfrComposeFieldsKeepsInheritedMounts(t *testing.T) {
+func TestEnsureComposeFieldsKeepsInheritedMounts(t *testing.T) {
 	write := func(t *testing.T, input string) (string, string) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "docker-compose.yml")
@@ -2128,9 +2125,9 @@ func TestEnsureCyfrComposeFieldsKeepsInheritedMounts(t *testing.T) {
 	t.Run("merge key, one target inherited", func(t *testing.T) {
 		dir, path := write(t, "x-base: &base\n  volumes:\n    - ./alternate-data:/app/data\nservices:\n  cyfr:\n    <<: *base\n"+service)
 		before := resolvedDataSource(t, dir)
-		added, err := ensureCyfrComposeFields(path)
+		added, err := ensureComposeFields(path, nil)
 		if err != nil || !slices.Equal(added, []string{"volumes: ./aqua:/app/seed/aqua"}) {
-			t.Fatalf("ensureCyfrComposeFields added %v (error %v)", added, err)
+			t.Fatalf("ensureComposeFields added %v (error %v)", added, err)
 		}
 		if after := resolvedDataSource(t, dir); after != before {
 			t.Errorf("compose resolves /app/data to %s after, %s before", after, before)
@@ -2147,8 +2144,8 @@ func TestEnsureCyfrComposeFieldsKeepsInheritedMounts(t *testing.T) {
 	})
 	t.Run("extends", func(t *testing.T) {
 		_, path := write(t, "services:\n  base:\n    image: alpine:3.22\n    volumes:\n      - ./alternate-data:/app/data\n      - ./my-aqua:/app/seed/aqua\n  cyfr:\n    extends: base\n"+service)
-		if added, err := ensureCyfrComposeFields(path); err != nil || len(added) != 0 {
-			t.Fatalf("ensureCyfrComposeFields added %v (error %v) to a service whose volumes another file holds", added, err)
+		if added, err := ensureComposeFields(path, nil); err != nil || len(added) != 0 {
+			t.Fatalf("ensureComposeFields added %v (error %v) to a service whose volumes another file holds", added, err)
 		}
 		if added, err := ensureComposeFields(path, map[string]bool{"/app/data": true}); err != nil || !slices.Equal(added, []string{"volumes: ./aqua:/app/seed/aqua"}) {
 			t.Fatalf("ensureComposeFields added %v (error %v), want the one target compose resolves unbound", added, err)
@@ -2165,7 +2162,7 @@ func TestEnsureCyfrComposeFieldsKeepsInheritedMounts(t *testing.T) {
 
 // A list the cyfr service anchors, which another service may alias, is not
 // appended to: the other service's mounts and ports stay as they are.
-func TestEnsureCyfrComposeFieldsLeavesAnAnchoredListAlone(t *testing.T) {
+func TestEnsureComposeFieldsLeavesAnAnchoredListAlone(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "docker-compose.yml")
 	input := `services:
   cyfr:
@@ -2310,7 +2307,7 @@ services:
 		t.Fatal(err)
 	}
 	before := resolvedDataSource(t, dir)
-	added, err := ensureCyfrComposeFields(file)
+	added, err := ensureComposeFields(file, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2348,7 +2345,7 @@ services:
 	}
 	before := composeConfigOf(t, "compose", "config", "--format", "json")
 	// This is the switchImages path, supplied with preflight's resolved
-	// targets, not just the standalone ensureCyfrComposeFields helper.
+	// targets as the running update reads them.
 	added, err := ensureComposeFields(filepath.Join(dir, "docker-compose.yml"), map[string]bool{"/app/data": true})
 	if err != nil {
 		t.Fatal(err)
@@ -2519,7 +2516,7 @@ func TestComposeFieldsRewriteKeepsTheFileMode(t *testing.T) {
 	if err := os.WriteFile(path, []byte(strings.Replace(string(shippedCompose(t)), aqua, "", 1)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if added, err := ensureCyfrComposeFields(path); err != nil || len(added) == 0 {
+	if added, err := ensureComposeFields(path, nil); err != nil || len(added) == 0 {
 		t.Fatalf("added %v (error %v)", added, err)
 	}
 	info, err := os.Stat(path)

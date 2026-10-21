@@ -100,7 +100,7 @@ func (c *Config) SaveTo(path string) error {
 
 	// MkdirAll does not tighten the permissions of a dir that already exists.
 	// The config holds session tokens, so enforce 0700 even when the directory
-	// pre-existed with looser bits (e.g. created by an older version or by hand).
+	// already exists with looser permissions.
 	if err := os.Chmod(dir, 0700); err != nil {
 		return fmt.Errorf("secure config dir: %w", err)
 	}
@@ -147,16 +147,6 @@ func (c *Config) CurrentURL() string {
 		return "http://127.0.0.1:4000"
 	}
 	return ctx.URL
-}
-
-// SetToken stores the bearer credential for the active context and saves.
-func (c *Config) SetToken(token string) error {
-	ctx := c.Current()
-	if ctx == nil {
-		return fmt.Errorf("no active context")
-	}
-	ctx.Token = token
-	return c.Save()
 }
 
 // DefaultForLocal returns a config with the default local context.

@@ -24,8 +24,8 @@ associated with the current session.
 Composes the local identity (` + "`session.whoami`" + `) with the registry
 identity (` + "`registry.whoami`" + `). The two actions are split so the
 auth sliver stays registry-free; push-token state lives under the Compendium
-registry tool. Both actions are called; partial results are surfaced if one
-fails.`,
+registry tool. A session failure ends the command; a registry failure
+preserves the local identity and adds a warning.`,
 	Example: `  cyfr whoami
   cyfr whoami --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -53,7 +53,6 @@ fails.`,
 
 // composeWhoami merges the two-action responses into a single shape so the
 // JSON output is stable and --json consumers see both halves in one payload.
-// Exported for registry.go's `registry whoami` which composes differently.
 func composeWhoami(session, registry map[string]any, registryErr error) map[string]any {
 	out := map[string]any{
 		"session": session,
@@ -83,9 +82,8 @@ func composeWhoami(session, registry map[string]any, registryErr error) map[stri
 //   - reg. offline:  `(registry.cyfr.run unreachable)`
 //   - signed out:    skipped; output is just `Not signed in.`
 //
-// The pipe-delimited `User ID` is kept at the bottom for support/grep but no
-// longer tucked under a separate "details:" block — per user feedback it's
-// cleaner as one continuous list.
+// The pipe-delimited User ID follows the identity and membership fields
+// for support and command-line filtering.
 func renderWhoami(composed map[string]any, registryErr error) {
 	session, _ := composed["session"].(map[string]any)
 	registry, hasRegistry := composed["registry"].(map[string]any)

@@ -20,9 +20,6 @@ type Field[T any] struct {
 // Value supplies an argument, including false, zero and empty values.
 func Value[T any](value T) Field[T] { return Field[T]{value: value, present: true} }
 
-// Null explicitly supplies null for a nullable argument.
-func Null[T any]() Field[*T] { return Value[*T](nil) }
-
 // Nullable supplies a non-null value for a nullable argument.
 func Nullable[T any](value T) Field[*T] { return Value(&value) }
 

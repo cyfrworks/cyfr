@@ -1641,16 +1641,15 @@ func TestAccountNameKey_MatchesTheHome(t *testing.T) {
 
 // A listed profile's head reads as what the home answered of it: its
 // revision when it was read, none when the profile has no head, and a
-// damaged or unreadable head as such, never as none. A home that answers
-// no head_state reads by its revision, as it always did.
+// damaged or unreadable head as such, never as none.
 func TestProfileList_SaysWhatStandsInPlaceOfAHead(t *testing.T) {
 	srv := newCLIServer(t, "", `{"profiles":[`+
 		`{"id":"prof_present","kind":"owner","status":"active","head_state":"present","head_revision":3},`+
 		`{"id":"prof_missing","kind":"owner","status":"active","head_state":"missing","head_revision":null},`+
 		`{"id":"prof_damaged","kind":"owner","status":"active","head_state":"damaged","head_revision":null},`+
 		`{"id":"prof_unavailable","kind":"owner","status":"active","head_state":"unavailable","head_revision":null},`+
-		`{"id":"prof_older","kind":"owner","status":"active","head_revision":null},`+
-		`{"id":"prof_older_read","kind":"owner","status":"active","head_revision":2}]}`)
+		`{"id":"prof_invalid","kind":"owner","status":"active","head_state":"invalid","head_revision":2},`+
+		`{"id":"prof_unread_revision","kind":"owner","status":"active","head_state":"present","head_revision":null}]}`)
 
 	out, err := runCLI(t, srv, "profile", "list", "reagent:local.listed")
 	if err != nil {
@@ -1658,12 +1657,12 @@ func TestProfileList_SaysWhatStandsInPlaceOfAHead(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"prof_present":     "consent rev 3",
-		"prof_missing":     "consent rev none",
-		"prof_damaged":     "consent damaged",
-		"prof_unavailable": "consent unavailable — try again",
-		"prof_older":       "consent rev none",
-		"prof_older_read":  "consent rev 2",
+		"prof_present":         "consent rev 3",
+		"prof_missing":         "consent rev none",
+		"prof_damaged":         "consent damaged",
+		"prof_unavailable":     "consent unavailable — try again",
+		"prof_invalid":         "consent damaged",
+		"prof_unread_revision": "consent damaged",
 	}
 
 	lines := strings.Split(strings.TrimSpace(out), "\n")

@@ -355,19 +355,6 @@ func TestContinueAsChecksTheRelease(t *testing.T) {
 	s.unchanged()
 }
 
-// The retired verb says which one replaced it, whatever follows it.
-func TestUpgradeNamesUpdate(t *testing.T) {
-	for _, args := range [][]string{nil, {"--yes"}, {"0.9.0"}} {
-		err := upgradeCmd.RunE(upgradeCmd, args)
-		if err == nil || err.Error() != "cyfr upgrade is now cyfr update, which updates this program and then the home in this directory" || ExitStatus(err) != 1 {
-			t.Errorf("cyfr upgrade %v answered %v", args, err)
-		}
-	}
-	if upgradeCmd.IsAvailableCommand() {
-		t.Error("cyfr upgrade is listed in the help")
-	}
-}
-
 // fakeBrew puts a brew on PATH, in shell builtins alone since the
 // scenario's PATH holds no other tools, that records each run in its
 // directory's log, answers `--prefix` with its directory, `list --cask cyfr` as

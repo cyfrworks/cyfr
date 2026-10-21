@@ -32,9 +32,6 @@ var (
 	flagNoInteractive bool
 	flagToken         string
 	flagVersions      bool
-
-	// activeClient tracks the MCP client for session cleanup on exit.
-	activeClient *mcp.Client
 )
 
 var rootCmd = &cobra.Command{
@@ -50,15 +47,6 @@ restore, access or init started the home on this machine only, because
 the tailnet machine is not ready to serve it (not the one .env names, not
 joined, or HTTPS off; the message says what to do);
 130 when interrupted at a prompt.`,
-	PersistentPostRun: func(cmd *cobra.Command, args []string) {
-		// This transport has no server-side session to terminate — the
-		// credential authenticates each request on its own (client.Close
-		// only clears client-side state). Kept so a future transport with
-		// a teardown has its hook already wired.
-		if activeClient != nil {
-			_ = activeClient.Close()
-		}
-	},
 	// Commands report failures by returning an error (Execute prints it as
 	// "Error: …" on stderr); a failure is not a usage mistake, so no help
 	// text dump rides along. Errors are printed by Execute rather than by
@@ -173,9 +161,8 @@ func Execute(ctx context.Context) error {
 	return err
 }
 
-// newClient creates an MCP client from config.
-// If no cached session exists, it tries to initialize with the server
-// to auto-adopt a session created via browser login (Prism).
+// newClient creates an MCP client for the selected context, with the
+// invocation credential or the credential stored in that context.
 func newClient() *mcp.Client {
 	cfg, err := config.Load()
 	if err != nil {
@@ -205,8 +192,6 @@ func newClient() *mcp.Client {
 // the credential it sends there are the same context's.
 func clientAt(address, stored string) *mcp.Client {
 	client := mcp.NewClient(address)
-	activeClient = client
-
 	// A change answered confirmation_required waits here and repeats, for
 	// every command alike.
 	client.Confirm = (&confirmationWait{
