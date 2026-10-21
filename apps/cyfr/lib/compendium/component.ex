@@ -198,12 +198,14 @@ defmodule Compendium.Component do
 
   defp parse_reference(_), do: {:error, "Reference must be a string"}
 
+  # An agent's one version is its file as it stands, which its row records
+  # as "": its canonical ref is the versionless form.
   defp canonical_ref(ref) do
     Prima.ComponentRef.to_string(%Prima.ComponentRef{
       type: ref.type,
       namespace: ref.namespace,
       name: ref.name,
-      version: ref.version
+      version: if(ref.version == "", do: nil, else: ref.version)
     })
   end
 

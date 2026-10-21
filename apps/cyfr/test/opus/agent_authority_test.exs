@@ -139,6 +139,13 @@ defmodule Opus.AgentAuthorityTest do
     assert http_edge.egress.domains != []
   end
 
+  test "the soul's inspection names it by its versionless ref", %{ctx: ctx} do
+    {:ok, _} = Bootstrap.run(ctx)
+
+    assert {:ok, @soul, "agent", %{"component_ref" => @soul}} =
+             Admission.inspect_component(ctx, @soul)
+  end
+
   # The soul's inspection reads no dependency tree, so its model's damage
   # first meets the run's graph.
   @tag :capture_log
@@ -147,7 +154,6 @@ defmodule Opus.AgentAuthorityTest do
        %{ctx: ctx} do
     {:ok, _} = Bootstrap.run(ctx)
     assert {:ok, _} = Admission.authority_for(ctx, :default, @soul)
-    {:ok, root_ref, _type, _component} = Admission.inspect_component(ctx, @soul)
 
     {count, _} =
       Ecto.Query.from(c in Arca.Schemas.Component,
@@ -160,7 +166,7 @@ defmodule Opus.AgentAuthorityTest do
     assert count > 0
 
     assert Admission.authority_for(ctx, :default, @soul) ==
-             {:error, {:corrupt, {:component_graph, root_ref}}}
+             {:error, {:corrupt, {:component_graph, @soul}}}
   end
 
   test "two roles on the soul run one catalyst with two keys", %{ctx: ctx} do
