@@ -29,6 +29,8 @@ defmodule Locus.Runtime.RunnerPoolTest do
   alias Locus.Runtime.Test.{Runners, ScriptedHost, ScriptedKeeper}
 
   @service %{service_id: "wrk_local", boot: "boot_pool"}
+  # The address an assignment names for its member's host API.
+  @host_url "http://127.0.0.1:9"
 
   defp start_pool!(keeper, overrides) do
     {:ok, defaults} = Locus.Runtime.Settings.pool([], %{})
@@ -63,7 +65,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
   defp assign(pid) do
     attempt = ScriptedHost.attempt!(ScriptedHost.start!())
 
-    {RunnerProcess.assign(pid, attempt.assignment, "{}", attempt.keys, @service.host_url),
+    {RunnerProcess.assign(pid, attempt.assignment, "{}", attempt.keys, @host_url),
      attempt.assignment}
   end
 

@@ -26,8 +26,9 @@ defmodule Locus.Runtime.EngineTest do
   end
 
   test "the runtime accepts a run whose authority is present" do
-    # Garbage bytes fail at compile, not at the authority check — proving the
-    # check passed and execution was attempted.
+    # Garbage bytes are refused as no WebAssembly when the run compiles
+    # them, not at the authority check — proving the check passed and the
+    # run went on to compile.
     result =
       Locus.Runtime.Engine.execute_component(<<0, 1, 2, 3>>, %{},
         authority: Prima.Authority.zero(),
@@ -35,7 +36,8 @@ defmodule Locus.Runtime.EngineTest do
         host: client()
       )
 
-    assert {:error, "Component compilation failed: " <> _} = result
+    assert {:error, "The component sha256:" <> _ = message} = result
+    assert message =~ "is not valid WebAssembly"
   end
 
   test "the runtime refuses a run whose authority is not an authority" do
