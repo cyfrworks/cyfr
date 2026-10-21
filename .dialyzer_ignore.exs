@@ -63,13 +63,6 @@
   # the {date, time} tuple Logger hands a formatter, and Dialyzer reads the
   # unknown type as any().
   {"lib/prima/json_formatter.ex", :unknown_type},
-  # The plug's refusal mapping and its telemetry each end in a clause for a
-  # reason outside today's closed set of atoms (a tuple clause and two
-  # catch-alls), so a reason added later still answers 500 and is counted
-  # instead of crashing the plug.
-  {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match},
-  # The two catch-all clauses the entry above names.
-  {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
   # The step bench's harness, `Cyfr.Test.StepBench`, is test support: it is
   # compiled only under MIX_ENV=test, the one environment the task runs in.
   {"lib/mix/tasks/cyfr.bench.step.ex", :unknown_function},
