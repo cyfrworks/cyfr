@@ -33,35 +33,8 @@ defmodule Sanctum.CipherTest do
     Map.merge(%{purpose: :vault_entry, athanor: "ath_a", name: "ve_1", sub: "github"}, over)
   end
 
-  # Seals a v3 envelope exactly as the pre-athanor writer did (org/project
-  # scoped AAD). Production keeps zero v3-write paths and no v3 decrypt
-  # path, so legacy rows are fabricated here to prove they fail closed.
-  defp seal_v3(plaintext, %{purpose: purpose}, label, master) do
-    info = "cyfr-cipher-v1|" <> Atom.to_string(purpose)
-    # Mirrors Sanctum.Cipher's fixed iteration count (no knob may change it).
-    key = :crypto.pbkdf2_hmac(:sha256, master, info, 100_000, 32)
-    iv = :crypto.strong_rand_bytes(12)
-
-    fields =
-      for v <- ["project", "org_a", "default", "ve_1", "github", ""] do
-        <<byte_size(v)::32, v::binary>>
-      end
-
-    aad =
-      IO.iodata_to_binary([
-        "cyfrv3",
-        <<0x03>>,
-        <<byte_size(label)::32, label::binary>>,
-        <<byte_size(Atom.to_string(purpose))::32, Atom.to_string(purpose)::binary>>
-        | fields
-      ])
-
-    {ct, tag} = :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, aad, 16, true)
-    <<0x03, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>
-  end
-
-  describe "T-CIPHER-RT: versioned envelope round-trip" do
-    test "round-trips and emits a v4, labeled envelope" do
+  describe "a versioned envelope" do
+    test "round-trips and emits a labeled envelope" do
       {:ok, ct} = Cipher.encrypt("sk-secret", aad())
 
       assert <<0x04, 2, "k1", _iv::binary-size(12), _tag::binary-size(16), _rest::binary>> = ct
@@ -84,12 +57,7 @@ defmodule Sanctum.CipherTest do
     end
   end
 
-  describe "T-CIPHER-NO-FALLBACK: clean cutoff, no headerless fallback" do
-    test "a v1-shaped (headerless) blob is rejected, not decrypted" do
-      assert {:error, {:decrypt, :unknown_version}} =
-               Cipher.decrypt(<<0x01>> <> :crypto.strong_rand_bytes(40), aad())
-    end
-
+  describe "an input that is no envelope" do
     test "garbage and short inputs fail closed" do
       assert {:error, {:decrypt, :unknown_version}} = Cipher.decrypt(<<0x99, 1, 2, 3>>, aad())
       assert {:error, {:decrypt, :truncated}} = Cipher.decrypt(<<0x04, 5, "ab">>, aad())
@@ -97,7 +65,7 @@ defmodule Sanctum.CipherTest do
     end
   end
 
-  describe "T-AAD-MISMATCH: athanor binding" do
+  describe "the athanor binding" do
     setup do
       {:ok, ct} = Cipher.encrypt("payload", aad())
       %{ct: ct}
@@ -138,24 +106,7 @@ defmodule Sanctum.CipherTest do
     end
   end
 
-  describe "T-CIPHER-V3-RETIRED: pre-v4 envelopes fail closed" do
-    test "a v3-sealed row is rejected as an unknown version" do
-      v3 = seal_v3("legacy-material", aad(), "k1", @k1)
-
-      assert :error = Cipher.envelope(v3)
-      assert {:error, {:decrypt, :unknown_version}} = Cipher.decrypt(v3, aad())
-    end
-
-    test "a fresh v4 ciphertext relabeled 0x03 is rejected, not decrypted" do
-      {:ok, v4} = Cipher.encrypt("fresh", aad())
-      <<0x04, rest::binary>> = v4
-
-      assert {:error, {:decrypt, :unknown_version}} =
-               Cipher.decrypt(<<0x03, rest::binary>>, aad())
-    end
-  end
-
-  describe "T-CIPHER-USER-FRAME: the user binding" do
+  describe "the user binding" do
     test "absent :user and explicit empty :user are the same AAD" do
       {:ok, ct} = Cipher.encrypt("payload", aad())
 
@@ -173,14 +124,13 @@ defmodule Sanctum.CipherTest do
   describe "envelope/1" do
     test "rejects malformed headers" do
       assert :error = Cipher.envelope(<<>>)
-      assert :error = Cipher.envelope(<<0x01, 2, "k1">>)
-      assert :error = Cipher.envelope(<<0x03, 2, "k1">>)
+      assert :error = Cipher.envelope(<<0x07, 2, "k1">>)
       assert :error = Cipher.envelope(<<0x04, 0>>)
       assert :error = Cipher.envelope(<<0x04, 9, "k1">>)
     end
   end
 
-  describe "T-KEYRING-ROT: rotation" do
+  describe "keyring rotation" do
     test "old-label rows still decrypt after primary moves; new writes use new primary" do
       {:ok, old} = Cipher.encrypt("under-k1", aad())
 

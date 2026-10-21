@@ -265,15 +265,13 @@ defmodule Sanctum.Directory do
 
   @doc """
   One page of `identifier`'s log: the entries after position `after`
-  (nil or -1 for the start), with the head and length the page was read
-  against and `next`, the position to ask after next, while more remain.
+  (-1 for the start), with the head and length the page was read against
+  and `next`, the position to ask after next, while more remain.
   """
-  @spec resolve(%{identifier: String.t(), after: integer() | nil, source: source()}) ::
+  @spec resolve(%{identifier: String.t(), after: integer(), source: source()}) ::
           {:ok, page()} | {:error, reason()}
   def resolve(%{identifier: identifier, after: after_seq, source: source})
       when is_binary(identifier) and is_binary(source) do
-    after_seq = after_seq || -1
-
     with :ok <- serving(:read),
          :ok <- known(identifier),
          :ok <- position(after_seq),

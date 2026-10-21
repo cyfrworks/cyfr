@@ -834,7 +834,6 @@ defmodule Sanctum.ApiKey do
   # ============================================================================
 
   defp normalize_scope(nil), do: {:ok, []}
-  defp normalize_scope(scope) when is_binary(scope), do: {:ok, [scope]}
 
   defp normalize_scope(scope) when is_list(scope) do
     if Enum.all?(scope, &is_binary/1), do: {:ok, scope}, else: {:error, :invalid_scope}

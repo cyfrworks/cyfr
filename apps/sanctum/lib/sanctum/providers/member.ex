@@ -143,8 +143,8 @@ defmodule Sanctum.Providers.Member do
     with {:ok, athanor, _focused} <- Athanor.resolve(ctx, args, include_archived: true),
          {:ok, members} <-
            Members.list_by_athanor(athanor.id,
-             limit: int_arg(args, "limit", 500),
-             offset: int_arg(args, "offset", 0)
+             limit: Map.get(args, "limit", 500),
+             offset: Map.get(args, "offset", 0)
            ) do
       {:ok, %{athanor: athanor.id, members: Enum.map(members, &render/1), count: length(members)}}
     else
@@ -316,22 +316,6 @@ defmodule Sanctum.Providers.Member do
   defp named(email: email), do: String.downcase(email)
   defp named(user_id: user_id), do: user_id
   defp named(identifier: identifier), do: identifier
-
-  defp int_arg(args, key, default) do
-    case Map.get(args, key) do
-      n when is_integer(n) ->
-        n
-
-      s when is_binary(s) ->
-        case Integer.parse(s) do
-          {n, ""} -> n
-          _ -> default
-        end
-
-      _ ->
-        default
-    end
-  end
 
   defp render(row) do
     %{

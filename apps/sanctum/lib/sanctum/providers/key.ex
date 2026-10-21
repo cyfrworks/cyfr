@@ -148,19 +148,10 @@ defmodule Sanctum.Providers.Key do
 
   def handle(%Context{} = ctx, %{"action" => "create", "name" => name} = args) do
     with {:ok, key_type} <- parse_key_type_arg(Map.get(args, "type", "application")) do
-      scope = Map.get(args, "scope", [])
-
-      scope =
-        cond do
-          is_binary(scope) -> String.split(scope, ",", trim: true) |> Enum.map(&String.trim/1)
-          is_list(scope) -> scope
-          true -> []
-        end
-
       opts = %{
         name: name,
         type: key_type,
-        scope: scope,
+        scope: Map.get(args, "scope", []),
         rate_limit: Map.get(args, "rate_limit"),
         ip_allowlist: Map.get(args, "ip_allowlist")
       }

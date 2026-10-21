@@ -698,7 +698,7 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  defp release_digest(row), do: Map.get(row, :release_digest) || Map.get(row, "release_digest")
+  defp release_digest(row), do: Map.get(row, :release_digest)
 
   defp credential_needs(manifest) do
     case Prima.Manifest.Needs.from_manifest(manifest) do

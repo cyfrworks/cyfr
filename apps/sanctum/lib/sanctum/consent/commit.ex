@@ -536,7 +536,7 @@ defmodule Sanctum.Consent.Commit do
   # A tincture whose row stores no manifest is as damaged as one whose
   # manifest does not decode: neither holds a declaration to publish.
   defp check_declaration_parses(component, source_ref, tincture?) do
-    stored = Map.get(component, :manifest) || Map.get(component, "manifest")
+    stored = Map.get(component, :manifest)
 
     if tincture? and is_nil(stored),
       do: {:error, {:corrupt, {:manifest, source_ref}}},
@@ -1392,7 +1392,7 @@ defmodule Sanctum.Consent.Commit do
   # A manifest that does not decode declares nothing. The line names the
   # component, never the manifest's bytes.
   defp manifest(row, ref) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
       {:ok, manifest} ->
         manifest
 

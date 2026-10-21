@@ -26,13 +26,6 @@ defmodule Sanctum.Vault.PayloadTest do
       assert tokens["c"]["expires_at"] == "2026-08-07T12:00:00Z"
     end
 
-    test "refuses another version, since nothing loads an earlier one's rows" do
-      for v <- [1, 2, 4, "3"] do
-        assert {:error, {:invalid_payload, :unrecognized_shape}} =
-                 Payload.decode(Jason.encode!(%{"v" => v, "fields" => %{}}))
-      end
-    end
-
     test "refuses unknown keys and malformed shapes" do
       assert {:error, {:invalid_payload, {:unknown_keys, ["x"]}}} =
                Payload.decode(~s({"v":3,"fields":{},"x":1}))

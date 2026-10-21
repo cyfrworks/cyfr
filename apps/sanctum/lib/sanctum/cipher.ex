@@ -33,7 +33,7 @@ defmodule Sanctum.Cipher do
   """
   @type aad_ctx :: %{required(:purpose) => atom(), optional(atom()) => term()}
 
-  @version_v4 0x04
+  @version 0x04
   @iv_size 12
   @tag_size 16
   @key_len 32
@@ -46,18 +46,18 @@ defmodule Sanctum.Cipher do
     master = Map.fetch!(keyring.keys, label)
     key = derive_key(label, purpose, master)
     iv = :crypto.strong_rand_bytes(@iv_size)
-    aad = build_aad(@version_v4, label, ctx)
+    aad = build_aad(@version, label, ctx)
 
     {ct, tag} =
       :crypto.crypto_one_time_aead(:aes_256_gcm, key, iv, plaintext, aad, @tag_size, true)
 
     {:ok,
-     <<@version_v4::8, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>}
+     <<@version::8, byte_size(label)::8, label::binary, iv::binary, tag::binary, ct::binary>>}
   end
 
   @spec decrypt(binary(), aad_ctx()) :: {:ok, binary()} | {:error, term()}
   def decrypt(<<version::8, llen::8, rest::binary>>, %{purpose: purpose} = ctx)
-      when version == @version_v4 and
+      when version == @version and
              byte_size(rest) >= llen + @iv_size + @tag_size do
     <<label::binary-size(^llen), iv::binary-size(@iv_size), tag::binary-size(@tag_size),
       ct::binary>> = rest
@@ -77,7 +77,7 @@ defmodule Sanctum.Cipher do
     end
   end
 
-  def decrypt(<<version::8, _::binary>>, _ctx) when version == @version_v4,
+  def decrypt(<<version::8, _::binary>>, _ctx) when version == @version,
     do: {:error, {:decrypt, :truncated}}
 
   def decrypt(bin, _ctx) when is_binary(bin), do: {:error, {:decrypt, :unknown_version}}
@@ -106,7 +106,7 @@ defmodule Sanctum.Cipher do
   """
   @spec envelope(binary()) :: {:ok, {4, binary()}} | :error
   def envelope(<<version::8, llen::8, rest::binary>>)
-      when version == @version_v4 and byte_size(rest) >= llen and llen > 0 do
+      when version == @version and byte_size(rest) >= llen and llen > 0 do
     <<lbl::binary-size(^llen), _::binary>> = rest
     {:ok, {version, lbl}}
   end
@@ -116,10 +116,6 @@ defmodule Sanctum.Cipher do
   @doc "The current primary key label (the label new writes use)."
   @spec primary_label() :: binary()
   def primary_label, do: keyring().primary
-
-  @doc "The envelope version `encrypt/2` writes — the only one `decrypt/2` reads."
-  @spec current_version() :: pos_integer()
-  def current_version, do: @version_v4
 
   @doc """
   The resolved keyring (`:sanctum, :crypto_keyring`), pinned at boot.
@@ -140,10 +136,10 @@ defmodule Sanctum.Cipher do
   # as "" so the AAD is well-defined and identical across encrypt/decrypt for
   # a given purpose. Version + key label are bound so the plaintext header
   # cannot be tampered with undetected.
-  defp build_aad(@version_v4, label, %{purpose: purpose} = ctx) do
+  defp build_aad(@version, label, %{purpose: purpose} = ctx) do
     IO.iodata_to_binary([
       "cyfrv4",
-      <<@version_v4::8>>,
+      <<@version::8>>,
       frame(label),
       frame(Atom.to_string(purpose)),
       frame(field(ctx, :athanor)),

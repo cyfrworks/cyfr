@@ -124,24 +124,20 @@ defmodule Sanctum.TinctureAuth do
   @frame_credential_salt "tincture_frame_credential_v1"
   @version 1
 
-  # The frame bearer's own format: it carries the deadline it was signed
-  # with, so a bearer of any earlier format is refused.
+  # The frame bearer's format tag; the bearer carries the deadline it was
+  # signed with.
   @frame_version 2
 
   # A validation credential's life, in seconds: a trial answers within
   # its own deadline, and the credential is spent at activation.
   @validation_deadline_s 60
 
-  @doc """
-  The key both tincture credentials are signed with.
-
-  From config, not from the web endpoint's module: the auth domain must not
-  reach into the web layer for key material. In every deployed env this is
-  the same secret the endpoint signs with (runtime.exs and dev.exs set both
-  from one value), read through the domain's own key.
-  """
-  @spec signing_secret() :: binary()
-  def signing_secret, do: Application.fetch_env!(:sanctum, :secret_key_base)
+  # The key both tincture credentials are signed with. From config, not
+  # from the web endpoint's module: the auth domain must not reach into the
+  # web layer for key material. In every deployed env this is the same
+  # secret the endpoint signs with (runtime.exs and dev.exs set both from
+  # one value), read through the domain's own key.
+  defp signing_secret, do: Application.fetch_env!(:sanctum, :secret_key_base)
 
   # ---- minting ---------------------------------------------------------------
 

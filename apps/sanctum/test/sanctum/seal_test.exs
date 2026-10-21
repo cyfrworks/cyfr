@@ -248,7 +248,7 @@ defmodule Sanctum.SealTest do
 
   describe "choose/2" do
     test "sets the first seal once; a second choice is refused and changes nothing", %{ctx: ctx} do
-      chosen!(ctx, %{"text" => "willow", "glyph" => ""})
+      chosen!(ctx, %{text: "willow", glyph: ""})
 
       assert {:ok, %Seal{text: "willow", glyph: nil}} = Seal.for_system_layer(ctx)
       assert Seal.choose(ctx, %{text: "oak", glyph: "☾"}) == {:error, :already_set}

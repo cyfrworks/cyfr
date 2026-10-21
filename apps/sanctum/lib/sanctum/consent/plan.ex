@@ -456,7 +456,7 @@ defmodule Sanctum.Consent.Plan do
   # A manifest that does not decode declares nothing. The line names the
   # component, never the manifest's bytes.
   defp manifest(row, ref) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
       {:ok, manifest} ->
         manifest
 
@@ -1256,7 +1256,7 @@ defmodule Sanctum.Consent.Plan do
   # it (`Compendium.ConsentFacts.get_component/5`): one that does not
   # decode is the damaged row it is.
   defp intact_manifest(row) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
       {:ok, _manifest} ->
         :ok
 

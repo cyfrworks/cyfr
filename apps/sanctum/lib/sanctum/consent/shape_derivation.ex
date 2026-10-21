@@ -526,7 +526,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # A manifest that does not decode is a damaged row, refused by the ref it
   # was read under and never by its bytes.
   defp manifest(row, ref) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
       {:ok, manifest} -> {:ok, manifest}
       {:error, :malformed_manifest} -> {:error, {:corrupt, {:manifest, ref}}}
     end

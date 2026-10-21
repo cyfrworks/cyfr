@@ -360,7 +360,7 @@ defmodule Sanctum.Consent.ShapeDiff do
   # A manifest that does not decode declares nothing. The line names the
   # component, never the manifest's bytes.
   defp manifest(row, ref) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest) || Map.get(row, "manifest")) do
+    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
       {:ok, manifest} ->
         manifest
 

@@ -199,7 +199,7 @@ defmodule Sanctum.WebhookMCPTest do
       assert hook.target_ref == "f:local.updated"
 
       # Same secret still verifies — rotate did NOT happen.
-      {:ok, row} = Arca.WebhookStorage.get_by_slug(hook.slug)
+      {:ok, row} = Sanctum.Webhook.resolve_ingress(hook.slug)
 
       assert :ok =
                Sanctum.Webhook.verify_with_grace(
@@ -273,7 +273,7 @@ defmodule Sanctum.WebhookMCPTest do
       assert rotated.secret != old_secret
       assert rotated.slug == slug
 
-      {:ok, row} = Arca.WebhookStorage.get_by_slug(slug)
+      {:ok, row} = Sanctum.Webhook.resolve_ingress(slug)
 
       assert :ok =
                Sanctum.Webhook.verify_with_grace(

@@ -35,7 +35,7 @@ defmodule PrismWeb.WebhooksLive do
   alias PrismWeb.SystemLayer
   require Logger
 
-  @default_signature_header Sanctum.Webhook.default_signature_header()
+  @default_signature_header Prima.Webhook.default_signature_header()
 
   defp default_signature_header, do: @default_signature_header
 

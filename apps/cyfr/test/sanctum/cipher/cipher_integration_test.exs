@@ -43,12 +43,9 @@ defmodule Sanctum.CipherIntegrationTest do
   defp sign(secret, body),
     do: "sha256=" <> Base.encode16(:crypto.mac(:hmac, :sha256, secret, body), case: :lower)
 
-  # ==========================================================================
-  # T-WEBHOOK-GRACE (B3): verify_with_grace rebuilds the row's tenant AAD;
-  # current + previous secret share it, so the grace window stays stable.
-  # ==========================================================================
-
-  describe "T-WEBHOOK-GRACE" do
+  # verify_with_grace opens a row's secrets under its tenant AAD; the current
+  # and previous secret share it, so the grace window stays stable.
+  describe "a webhook's secrets under rotation" do
     test "create → verify; rotate → old (grace) + new both verify; tenant-mismatch fails closed",
          %{ctx: ctx} do
       Sanctum.Test.ComponentHelpers.register_test_component("x", "1.0.0", "catalyst", %{}, ctx)
@@ -62,7 +59,7 @@ defmodule Sanctum.CipherIntegrationTest do
           profile_id: profile
         })
 
-      {:ok, row} = Arca.WebhookStorage.get_by_slug(slug)
+      {:ok, row} = Webhook.resolve_ingress(slug)
       body = "event-body"
 
       assert :ok = Webhook.verify_with_grace(row, body, sign(secret, body))
@@ -70,18 +67,8 @@ defmodule Sanctum.CipherIntegrationTest do
       assert {:error, :signature_mismatch} =
                Webhook.verify_with_grace(row, body, sign("wrong", body))
 
-      # Cross-tenant: same ciphertext, AAD rebuilt for another athanor → the
-      # cipher's tag check fails. Still fails closed, but as
-      # `:secret_unreadable`, not `:signature_mismatch`: the sender's
-      # signature is fine and the SERVER cannot read the secret under this
-      # AAD. Reporting it as a signature failure told the sender to fix
-      # something on their side and hid a server-side fault — the same
-      # collapse a keyring rotated without re-sealing produces.
-      assert {:error, :secret_unreadable} =
-               Webhook.verify_with_grace(%{row | athanor_id: "ath_b"}, body, sign(secret, body))
-
       {:ok, %{secret: new_secret}} = Sanctum.TestContext.rotate_webhook(ctx, "h")
-      {:ok, rotated} = Arca.WebhookStorage.get_by_slug(slug)
+      {:ok, rotated} = Webhook.resolve_ingress(slug)
 
       assert :ok = Webhook.verify_with_grace(rotated, body, sign(new_secret, body))
       # Old secret still valid inside the grace window (previous ciphertext
@@ -96,9 +83,36 @@ defmodule Sanctum.CipherIntegrationTest do
 
       assert :ok = Webhook.verify_with_grace(expired, body, sign(new_secret, body))
     end
+
+    # The same ciphertext under another athanor's AAD fails the cipher's
+    # tag check: refused as `:secret_unreadable`, a fault of the server's
+    # and never `:signature_mismatch`, since the sender signed correctly.
+    test "a row copied to another athanor cannot open its secret", %{ctx: ctx} do
+      Sanctum.Test.ComponentHelpers.register_test_component("x", "1.0.0", "catalyst", %{}, ctx)
+      profile = Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "catalyst:local.x:1.0.0")
+
+      {:ok, %{secret: secret, slug: slug}} =
+        Sanctum.TestContext.create_webhook(ctx, %{
+          name: "copied",
+          replay_protection: "none",
+          target_ref: "catalyst:local.x:1.0.0",
+          profile_id: profile
+        })
+
+      {1, _} =
+        Arca.Repo.update_all(
+          Ecto.Query.from(w in Arca.Schemas.Webhook, where: w.slug == ^slug),
+          set: [athanor_id: "ath_b"]
+        )
+
+      {:ok, copied} = Webhook.resolve_ingress(slug)
+
+      assert {:error, :secret_unreadable} =
+               Webhook.verify_with_grace(copied, "event-body", sign(secret, "event-body"))
+    end
   end
 
-  describe "T-REGISTRY-CRED" do
+  describe "a registry credential" do
     test "a registry blob is crypto-bound to its principal via the user AAD" do
       # The exact AAD the registry-token store builds — the owning user
       # rides the `user` frame, so a row repointed at another principal
@@ -139,13 +153,10 @@ defmodule Sanctum.CipherIntegrationTest do
     end
   end
 
-  # ==========================================================================
-  # T-INSTANCE-ENTRY: an instance entry belongs to no athanor, so its AAD
-  # binds the entry's id and provider hint alone. What the instance's
-  # verbs seal opens under that tuple and under nothing else.
-  # ==========================================================================
-
-  describe "T-INSTANCE-ENTRY" do
+  # An instance entry belongs to no athanor, so its AAD binds the entry's
+  # id and provider hint alone. What the instance's verbs seal opens under
+  # that tuple and under nothing else.
+  describe "an instance entry" do
     test "an instance entry's material is bound to its id and hint, and to no athanor" do
       aad = Sanctum.CipherAAD.instance_entry("ine_one", "openai.com")
       assert aad == %{purpose: :instance_entry, name: "ine_one", sub: "openai.com"}

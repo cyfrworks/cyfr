@@ -83,7 +83,7 @@ defmodule CyfrWeb.Plugs.WebhookIdempotency do
   end
 
   defp signature_nonce(conn, webhook) do
-    header = webhook.signature_header || Sanctum.Webhook.default_signature_header()
+    header = webhook.signature_header || Prima.Webhook.default_signature_header()
 
     case fetch_key(conn, header) do
       nil -> nil

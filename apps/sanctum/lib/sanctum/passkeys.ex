@@ -155,7 +155,7 @@ defmodule Sanctum.Passkeys do
   @doc """
   Register a passkey for the context's person (the module doc).
 
-  `args` holds `credential` (or `"credential"`): absent, the answer is
+  `args` holds `credential`: absent, the answer is
   `%{public_key: creation_options, registration: token, expires_at:}`;
   given, it is the browser's answer to those options, the token under
   `registration` beside the WebAuthn `id`, `rawId`, `type` and `response`
@@ -174,7 +174,7 @@ defmodule Sanctum.Passkeys do
   def register(%Context{} = ctx, args) when is_map(args) do
     with {:ok, user_id} <- registrant(ctx),
          {:ok, identity} <- identity(user_id) do
-      case Map.get(args, :credential, Map.get(args, "credential")) do
+      case Map.get(args, :credential) do
         nil -> options(ctx, user_id)
         credential when is_map(credential) -> registered(ctx, identity, credential)
         _malformed -> {:error, :registration_refused}
