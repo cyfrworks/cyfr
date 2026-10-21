@@ -9,36 +9,21 @@
 # last matching warning is fixed; list_unused_filters fails on unused
 # entries. Review the reported warning before adding a filter.
 [
-  # The pagination's seen-token set is built by MapSet.new/0 and MapSet.put/2
-  # and carried down the recursion; Dialyzer reads the struct literal as a
-  # non-opaque map, so MapSet.member?/2 on it reads as a call without the
-  # opaque term. The regex entry for this file below is the same set.
-  {"lib/arca/adapters/s3.ex", :call_without_opaque},
-  # Ecto.Multi's struct default holds a MapSet literal (`names:
-  # MapSet.new()`), so Dialyzer reads Ecto.Multi.new/0's answer as carrying a
-  # non-opaque map and each Ecto.Multi.run/3 on it as a call without the
-  # opaque term.
+  # Ecto.Multi.run/3's success typing reaches Erlang's `:sets` through the
+  # MapSet calls on the multi's `names`, so Dialyzer expects that field to
+  # be the opaque `:sets.set/1`. Ecto.Multi.new/0's struct literal holds the
+  # empty map `:sets.new(version: 2)` builds there (MapSet itself types the
+  # field as term()), and Dialyzer reports each Ecto.Multi.run/3 on it as a
+  # call without the opaque term. The struct and the pipeline are Ecto's
+  # public API.
   {"lib/arca/consent_storage.ex", :call_without_opaque},
-  # prepare_transaction/2 receives `fun | Ecto.Multi.t()`; the Multi clause is
-  # the non-fun fall-through and Dialyzer cannot narrow the union past the
-  # guard, so the append of the opaque Multi reads as a non-opaque call.
+  # The same Ecto.Multi.new/0 literal handed to Ecto.Multi.run/3, in
+  # prepare_transaction/2.
   {"lib/arca/repo.ex", :call_without_opaque},
-  # db_errors/0 branches on the compile-time @adapter; in the build Dialyzer
-  # analyses, SQLite's, the Ecto.Adapters.Postgres branch cannot match.
-  {"lib/arca/repo/errors.ex", :pattern_match},
-  # Arca.usage/2's spec makes :bytes an integer, so the {:ok, other} clause
-  # cannot match by the spec; it refuses an answer of another shape instead
-  # of caching it.
-  {"lib/arca/usage.ex", :pattern_match},
   # resolve_component/2's `type || component[:component_type] || …` tests
   # for nil two values the specs make binaries (the parsed ref's type and the
   # registry row's component type), so neither nil branch is taken by them.
   {"lib/compendium/component.ex", :guard_fail},
-  # The resolver's visited set is built by MapSet.new/0 and carried down the
-  # recursion, the s3.ex case: MapSet.member?/2 on the struct literal reads
-  # as a call without the opaque term. The regex entry for this file below
-  # is the same set.
-  {"lib/compendium/dependency_resolver.ex", :call_without_opaque},
   # Compendium.OCI.Reference's spec makes repository a binary, so the
   # `ref.repository || ""` fallback in do_oci_pull/2 never takes its nil
   # branch by the spec.
@@ -59,10 +44,6 @@
   # of operations); counting up from 0 by one it answers a positive integer,
   # the type the spec states.
   {"lib/opus/events/sequence.ex", :missing_range},
-  # Logger.Formatter defines no time/0 type in this Elixir; the spec names
-  # the {date, time} tuple Logger hands a formatter, and Dialyzer reads the
-  # unknown type as any().
-  {"lib/prima/json_formatter.ex", :unknown_type},
   # The plug's refusal mapping and its telemetry each end in a clause for a
   # reason outside today's closed set of atoms (a tuple clause and two
   # catch-alls), so a reason added later still answers 500 and is counted
@@ -89,15 +70,9 @@
   # Finch.TransportError, so the clause for a bare Mint.TransportError no
   # longer matches; the clause after it answers those failures.
   {"lib/sanctum/auth/device_flow.ex", :pattern_match},
-  # max_prefix_for/1's last clause answers 0 for a value that is not a
-  # tuple, which no caller passes today.
-  {"lib/prima/cidr.ex", :pattern_match_cov},
   # The edge's spec makes tools a list, so the `edge.tools || []` fallback
   # never takes its nil branch by the spec.
   {"lib/sanctum/consent/shape_diff.ex", :guard_fail},
-  # fail/2 throws on purpose: the encoder catches {:jcs, _} at its entry and
-  # answers it as an error.
-  {"lib/prima/jcs.ex", :no_return},
   # Sanctum.ApiKey.revoke/2 refuses with atoms only today; the clause that
   # passes a readable binary refusal through is the provider convention.
   {"lib/sanctum/providers/key.ex", :guard_fail},
@@ -108,17 +83,11 @@
   # refusal for false; Dialyzer does not narrow false out of the `||`'s
   # other branch, so it sees the `with` fall through on false.
   {"lib/sanctum/sign_in.ex", :missing_range},
-  # Three opaque-term warnings dialyxir cannot classify: its own formatter
-  # raises on them (`Dialyxir.WarningHelpers.ordinal/1`) and prints the raw
+  # An opaque-term warning dialyxir cannot classify: its own formatter
+  # raises on it (`Dialyxir.WarningHelpers.ordinal/1`) and prints the raw
   # dialyzer text, so a `{file, kind}` filter never sees a kind to match.
-  # Matched by regex instead. Every one is a struct built in one module and
-  # read in another where the reader's spec re-states the struct's shape —
-  # noise from the loose `%__MODULE__{}` schema types, not a defect.
-  # This one: list_pages/5's recursive call with the seen-token MapSet.
-  ~r{lib/arca/adapters/s3\.ex:\d+:\d+:.*opaque},
-  # The first entry's kind for dependency_resolver.ex: do_resolve_tree/5's
-  # recursive call with the visited MapSet.
-  ~r{lib/compendium/dependency_resolver\.ex:\d+:\d+:.*opaque},
+  # Matched by regex instead: the opaque Task.ref() a Task carries, passed
+  # where Dialyzer reads a plain term.
   # The first entry's kind for mcp_controller.ex: Process.demonitor/2 on the
   # monitor reference a Task carries, an opaque Task.ref().
   ~r{lib/emissary/web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque}

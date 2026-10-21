@@ -71,8 +71,8 @@ defmodule Prima.Slots do
   `unreaped_max` live notes is in a penalty box and refused
   `{:error, :key_unreaped}` for roots and background work; children pass,
   since their parent already holds a slot. Notes decay after
-  `unreaped_ttl_ms`, because native completion is not observable;
-  `forgive_unreaped/2` clears them early, and a force-release keeps them.
+  `unreaped_ttl_ms`, because native completion is not observable, and a
+  force-release keeps them.
 
   ## Configuration
 
@@ -311,13 +311,6 @@ defmodule Prima.Slots do
     do: call(server, {:note_unreaped, key, execution_id})
 
   @doc """
-  Clear one key's penalty box before it decays: the operator has dealt with
-  the spinning work at the node level. A force-release does not do this.
-  """
-  @spec forgive_unreaped(server(), key()) :: :ok | {:error, :unavailable}
-  def forgive_unreaped(server, key), do: call(server, {:forgive_unreaped, key})
-
-  @doc """
   The instance's counts for diagnostics: totals, per class, per key, the
   holders with their age, the waiters per class and the live unreaped notes.
   A server that is not running answers the same keys with zeros and
@@ -334,7 +327,7 @@ defmodule Prima.Slots do
 
   @doc """
   Emergency recovery: drop every holding and cancel every waiter, answering
-  how many of each. The penalty box stays (`forgive_unreaped/2`). A server
+  how many of each. The penalty box stays. A server
   that is not running has nothing to release, and says so rather than
   reporting a recovery that did not happen.
   """
@@ -562,9 +555,6 @@ defmodule Prima.Slots do
 
     {:reply, {:ok, length(entries)}, %{state | unreaped: Map.put(state.unreaped, key, entries)}}
   end
-
-  def handle_call({:forgive_unreaped, key}, _from, state),
-    do: {:reply, :ok, %{state | unreaped: Map.delete(state.unreaped, key)}}
 
   def handle_call(:status, _from, state) do
     now = now_ms()

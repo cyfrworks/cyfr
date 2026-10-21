@@ -184,8 +184,9 @@ defmodule Arca.ToolGrantStorage do
   defp conflict_index("agent"), do: :tool_grants_agent_scope_index
 
   # Ecto's default index name for these columns — what SQLite's adapter
-  # reports a violation under whatever the index was actually called.
-  defp column_index_name(columns), do: :"tool_grants_#{Enum.join(columns, "_")}_index"
+  # reports a violation under whatever the index was actually called. A
+  # string, which Ecto matches as it matches an atom name.
+  defp column_index_name(columns), do: "tool_grants_#{Enum.join(columns, "_")}_index"
 
   # The scope's own key, spelled as a query — WITH the tenant, so a delete
   # is bounded by the owning athanor exactly as the module claims every

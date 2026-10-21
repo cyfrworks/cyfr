@@ -66,8 +66,8 @@ defmodule Prima.LocusBackends do
 
   ## Authentication
 
-  One 32-byte service key (`decode_key/1`) is shared by CYFR and the
-  service. From it, over the label `cyfr-locus/v1/backends`, derive the
+  One 32-byte service key (64 hexadecimal digits,
+  `Prima.MacEnvelope.decode_root/1`) is shared by CYFR and the service. From it, over the label `cyfr-locus/v1/backends`, derive the
   **control key** (`<label>/control`), which signs control messages; the
   **seal key** (`<label>/seal`), which seals a sync's environment; and one
   **owner key** per athanor, server row, generation and epoch
@@ -568,10 +568,6 @@ defmodule Prima.LocusBackends do
 
   # ————— authentication —————
 
-  @doc "The service key `LOCUS_BACKENDS_KEY` or `CYFR_LOCUS_BACKENDS_KEY` spells: 64 hexadecimal digits."
-  @spec decode_key(term()) :: {:ok, binary()} | :error
-  defdelegate decode_key(text), to: MacEnvelope, as: :decode_root
-
   @doc "The key control messages are signed with."
   @spec control_key(binary()) :: binary()
   def control_key(key) when byte_size(key) == 32,
@@ -606,17 +602,6 @@ defmodule Prima.LocusBackends do
   def canonical(kind, message, body)
       when is_map_key(@envelopes, kind) and is_map(message) and is_binary(body),
       do: MacEnvelope.canonical(Map.fetch!(@envelopes, kind), message, body)
-
-  @doc """
-  A header's fields, with the body hash it names as `:body_hash`, and its
-  MAC; `{:error, :unknown_version}` for a version token other than `v1`,
-  and `{:error, :malformed}` for anything else but exactly one well-formed
-  header of `kind`.
-  """
-  @spec parse_header(kind(), term()) ::
-          {:ok, map(), String.t()} | {:error, :unknown_version | :malformed}
-  def parse_header(kind, header) when is_map_key(@envelopes, kind),
-    do: MacEnvelope.parse(Map.fetch!(@envelopes, kind), header)
 
   @doc """
   A request's authenticated fields under the service `key`, or the first

@@ -212,7 +212,7 @@ defmodule Sanctum.Consent.AccountsTest do
             # bytes that fail their digest
             [blob_digest: "sha256:" <> String.duplicate("0", 64)],
             # bytes that do not parse, under their own digest
-            [resolved_policy: "not a blob", blob_digest: Prima.JCS.hash_binary("not a blob")],
+            [resolved_policy: "not a blob", blob_digest: Prima.Digest.sha256("not a blob")],
             # a revision pinning a version its scope does not
             [pinned_version: "0.1.0"]
           ] do
@@ -263,7 +263,7 @@ defmodule Sanctum.Consent.AccountsTest do
       :ok =
         Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile_id,
           resolved_policy: policy,
-          blob_digest: Prima.JCS.hash_binary(policy)
+          blob_digest: Prima.Digest.sha256(policy)
         )
 
       {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)

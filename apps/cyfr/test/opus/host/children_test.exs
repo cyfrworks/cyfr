@@ -86,7 +86,7 @@ defmodule Opus.Host.ChildrenTest do
     ctx = Sanctum.TestContext.local(:api)
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       if previous,

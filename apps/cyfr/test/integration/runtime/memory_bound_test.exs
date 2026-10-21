@@ -55,7 +55,7 @@ defmodule Locus.Runtime.MemoryBoundTest do
     ctx = %{Sanctum.TestContext.local(:api) | athanor_id: athanor.id}
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(run_dir)
 
       case previous do

@@ -121,7 +121,8 @@ defmodule Aqua.CanvasWriteTest do
     assert {:ok, %{"release_digest" => "sha256:" <> _, "manifest" => manifest}} =
              Compendium.inspect_component(ctx, "tincture:local.runs-board:0.1.0")
 
-    assert get_in(Prima.Manifest.decode(manifest), ["tincture", "frame", "placement"]) == "canvas"
+    assert {:ok, decoded} = Prima.Manifest.decode_strict(manifest)
+    assert get_in(decoded, ["tincture", "frame", "placement"]) == "canvas"
 
     assert {:ok, %{document: %{allocated: "0.1.0", working: nil}, revision: 1}} =
              Compendium.canvas_versions(ctx, "runs-board")

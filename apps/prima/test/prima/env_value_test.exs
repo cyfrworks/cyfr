@@ -20,12 +20,14 @@ defmodule Prima.EnvValueTest do
       assert {:ok, false} = EnvValue.switch(env(%{"K" => "  "}), "K", false)
     end
 
-    test "every spelling of on and off, any case" do
-      for on <- ~w(on ON true True yes 1),
-          do: assert({:ok, true} = EnvValue.switch(env(%{"K" => on}), "K", false))
+    test "on and off, and no other spelling" do
+      assert {:ok, true} = EnvValue.switch(env(%{"K" => " on "}), "K", false)
+      assert {:ok, false} = EnvValue.switch(env(%{"K" => "off"}), "K", true)
 
-      for off <- ~w(off OFF false False no 0),
-          do: assert({:ok, false} = EnvValue.switch(env(%{"K" => off}), "K", true))
+      for other <- ~w(ON Off true false yes no 1 0) do
+        assert {:error, message} = EnvValue.switch(env(%{"K" => other}), "K", true), other
+        assert message == "K=#{inspect(other)} is not a switch; use on or off."
+      end
     end
 
     test "an unrecognised spelling is an error naming the key, not the default" do

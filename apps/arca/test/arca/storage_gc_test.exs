@@ -435,16 +435,12 @@ defmodule Arca.StorageGCTest do
       {:ok, roots} = StorageGC.roots(actor)
       assert {:ok, [%{revision: ^one} = candidate]} = StorageGC.candidates(actor, roots)
 
-      manifest =
-        for {rel, bytes} <- files("one"),
-            do: {rel, Prima.Digest.sha256(bytes), byte_size(bytes)}
-
       # Both commits happen after the snapshot and before its final check.
       # A reader could resolve `one` between these commits.
       assert :committed =
                StorageUnits.commit(actor, draft, nil, token, %{
                  new_revision: one,
-                 content_identity: Arca.Overlay.content_identity(manifest),
+                 content_identity: Prima.Digest.sha256("one"),
                  commit_identity: actor.user_id
                })
 
@@ -467,9 +463,8 @@ defmodule Arca.StorageGCTest do
       {:ok, %{current_revision: one}} = pointer(actor, unit)
       orphan = lay_prefix(actor, unit, StorageUnits.new_revision(), "orphan")
 
-      # Repair finds nothing of the row's to move, and leaves the orphan.
-      assert {:ok, %{repaired: [], intact: 1, left: [], unrecoverable: []}} =
-               StorageGC.repair(actor)
+      # Repair finds nothing of the row's to give back, and leaves the orphan.
+      assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
 
       assert {:ok, %{current_revision: ^one}} = pointer(actor, unit)
       assert served(actor, unit) == whole("one")
@@ -488,9 +483,7 @@ defmodule Arca.StorageGCTest do
     test "with no unit row at all makes no row", %{actor: actor, unit: unit} do
       lay_prefix(actor, unit, StorageUnits.new_revision(), "orphan", marker: false)
 
-      assert {:ok, %{repaired: [], intact: 0, left: [], unrecoverable: []}} =
-               StorageGC.repair(actor)
-
+      assert {:error, :not_found} = Arca.Overlay.repair_unit(actor, unit)
       assert row(actor, unit) == nil
       assert {:ok, %{collected: 1}} = StorageGC.sweep(actor, now: later(2 * @day))
       assert row(actor, unit) == nil
@@ -595,7 +588,7 @@ defmodule Arca.StorageGCTest do
   # Repair
   # ---------------------------------------------------------------------------
 
-  describe "repair/2" do
+  describe "Arca.Overlay.repair_unit/2 beside the collector" do
     test "releases the draft of a writer that died after its commit, once it has outlived its lifetime",
          %{actor: actor, unit: unit} do
       commit_unreleased(actor, unit, "one")
@@ -606,21 +599,20 @@ defmodule Arca.StorageGCTest do
       assert Map.keys(staged(actor, unit)) == [one]
       assert %StorageUnit{draft_writer_token: "wrt_" <> _} = row(actor, unit)
 
-      # Inside the lifetime the draft is its holder's, and the audit says so.
-      assert {:ok, %{repaired: [], left: [{^unit, {:repair_failed, :stale_writer}}]}} =
-               StorageGC.repair(actor)
+      # Inside the lifetime the draft is its holder's.
+      assert {:error, :stale_writer} = Arca.Overlay.repair_unit(actor, unit)
 
       expire!(actor, unit)
-      assert {:ok, %{repaired: [^unit], left: [], unrecoverable: []}} = StorageGC.repair(actor)
+      assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
 
       # Nothing moved: the revision is where it was, the pointer too.
       assert served(actor, unit) == whole("one")
       assert Map.keys(staged(actor, unit)) == [one]
       assert {:ok, %{current_revision: ^one, draft_writer_token: nil}} = pointer(actor, unit)
-      assert {:ok, %{repaired: [], intact: 1}} = StorageGC.repair(actor)
+      assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
     end
 
-    test "reads the content identity the overlay recorded, for both unit shapes", %{
+    test "gives back a dead writer's draft for both unit shapes", %{
       actor: actor,
       unit: unit
     } do
@@ -635,11 +627,14 @@ defmodule Arca.StorageGCTest do
       expire!(actor, unit)
       expire!(actor, agent)
 
-      assert {:ok, %{repaired: repaired, left: [], unrecoverable: []}} = StorageGC.repair(actor)
-      assert Enum.sort(repaired) == Enum.sort([unit, agent])
+      for repaired <- [unit, agent],
+          do: assert({:ok, :repaired} = Arca.Overlay.repair_unit(actor, repaired))
+
       assert {:ok, "# a role"} = Arca.get(actor, agent)
       assert served(actor, unit) == whole("one")
-      assert {:ok, %{repaired: [], intact: 2, left: []}} = StorageGC.repair(actor)
+
+      for intact <- [unit, agent],
+          do: assert({:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, intact))
     end
 
     test "reports a committed revision whose completion object is gone, and keeps the row", %{
@@ -653,9 +648,6 @@ defmodule Arca.StorageGCTest do
       # Damage beneath the overlay: the sentinel of the pointer's prefix goes.
       :ok = Arca.Adapters.Local.delete(actor, UnitLocator.staged_object(unit, two, [@sentinel]))
 
-      assert {:ok, %{repaired: [], left: [{^unit, :staged_incomplete}], unrecoverable: []}} =
-               StorageGC.repair(actor)
-
       assert {:error, :staged_incomplete} = Arca.Overlay.repair_unit(actor, unit)
 
       # Nothing is moved or invented: the pointer stands, the unit reads
@@ -667,10 +659,11 @@ defmodule Arca.StorageGCTest do
       assert Map.keys(staged(actor, unit)) == [two]
     end
 
-    test "reports a committed revision edited in place since its commit, and leaves the edit", %{
-      actor: actor,
-      unit: unit
-    } do
+    test "gives back nothing for a revision edited in place since its commit, and leaves the edit",
+         %{
+           actor: actor,
+           unit: unit
+         } do
       assert {:ok, _} = commit(actor, unit, "one")
       {:ok, %{current_revision: one}} = pointer(actor, unit)
       :ok = Arca.put(actor, unit ++ ["a.txt"], "an edit")
@@ -682,9 +675,7 @@ defmodule Arca.StorageGCTest do
       assert {:ok, "an edit"} = Arca.get(actor, UnitLocator.staged_object(unit, one, ["a.txt"]))
       assert {:ok, []} = Arca.Adapters.Local.list_recursive(actor, unit)
 
-      # The journal names what was committed; the audit says the prefix
-      # differs, and changes nothing.
-      assert {:ok, %{repaired: [], intact: 0, left: [{^unit, :edited}]}} = StorageGC.repair(actor)
+      # Nothing of a writer's is pending, so nothing changes.
       assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
       assert {:ok, "an edit"} = Arca.get(actor, unit ++ ["a.txt"])
       assert {:ok, "new"} = Arca.get(actor, unit ++ ["new.txt"])
@@ -702,8 +693,7 @@ defmodule Arca.StorageGCTest do
       :ok = Arca.Adapters.Local.delete_tree(actor, UnitLocator.revision_prefix(unit, one))
 
       ExUnit.CaptureLog.capture_log(fn ->
-        assert {:ok, %{repaired: [], unrecoverable: [^unit], orphan_commits: []}} =
-                 StorageGC.repair(actor)
+        assert {:error, :staged_incomplete} = Arca.Overlay.repair_unit(actor, unit)
       end)
 
       assert {:ok, %{current_revision: ^one}} = pointer(actor, unit)
@@ -751,7 +741,7 @@ defmodule Arca.StorageGCTest do
       assert %{ready: false, source_revision: ^one, pending: true} = committed
 
       expire!(actor, unit)
-      assert {:ok, %{repaired: [^unit]}} = StorageGC.repair(actor)
+      assert {:ok, :repaired} = Arca.Overlay.repair_unit(actor, unit)
 
       repaired = change(actor, unit)
       assert %{ready: true, source_revision: ^one, tombstone: false} = repaired
@@ -825,11 +815,11 @@ defmodule Arca.StorageGCTest do
       assert Map.keys(staged(actor, unit)) == [two]
       assert served(actor, unit) == whole("two")
 
-      # The sweep gave the dead draft back and marked nothing: the unit is
-      # intact to the audit, and its commit's generation stays pending
+      # The sweep gave the dead draft back and marked nothing: nothing is
+      # pending for repair, and its commit's generation stays pending
       # until the settle marks it where it stands.
       assert %StorageUnit{draft_writer_token: nil} = row(actor, unit)
-      assert {:ok, %{repaired: [], intact: 1, left: []}} = StorageGC.repair(actor)
+      assert {:ok, :nothing_pending} = Arca.Overlay.repair_unit(actor, unit)
       assert %{ready: false, source_revision: ^two} = change(actor, unit)
       {root, _key} = UnitLocator.unit_key(unit)
 
@@ -860,7 +850,6 @@ defmodule Arca.StorageGCTest do
 
       assert {:error, :no_athanor} = StorageGC.sweep(nobody)
       assert {:error, :no_athanor} = StorageGC.roots(nobody)
-      assert {:error, :no_athanor} = StorageGC.repair(nobody)
       assert {:error, :no_athanor} = StorageGC.collect(nobody, candidate(unit, "rev_1"))
 
       assert {:error, :no_athanor} =

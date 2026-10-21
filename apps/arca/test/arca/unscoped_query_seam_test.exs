@@ -373,7 +373,7 @@ defmodule Arca.UnscopedQuerySeamTest do
 
     assert stale == [],
            """
-           `# arca:unscoped-ok` on a function that no longer queries:
+           `# arca:unscoped-ok` on a function that does not query:
 
            #{Enum.map_join(Enum.sort(stale), "\n", &"  #{&1}")}
 
@@ -484,7 +484,7 @@ defmodule Arca.UnscopedQuerySeamTest do
 
     assert MapSet.to_list(stale) == [],
            """
-           `@athanor_less` names schemas that no longer exist or now carry an
+           `@athanor_less` names schemas that do not exist or that carry an
            athanor column:
 
            #{Enum.map_join(Enum.sort(stale), "\n", &"  #{&1}")}

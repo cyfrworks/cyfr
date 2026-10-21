@@ -230,7 +230,7 @@ defmodule Cyfr.Test.ScriptedWorker do
   @doc """
   Start the context's athanor on fresh execution limits: a fresh consented
   rate window (`Opus.Rates`) for the pinned releases of `refs`,
-  and no unreaped-kill penalty (`Prima.Slots.forgive_unreaped/2`).
+  and no unreaped-kill penalty (`Prima.Test.Slots.clear_unreaped/2`).
   Scripted runs are admitted, and their runners killed, for real, so every
   test sharing an athanor draws on the same limits.
   """
@@ -240,7 +240,7 @@ defmodule Cyfr.Test.ScriptedWorker do
       :ok = Arca.RateWindows.clear(Sanctum.Context.actor(ctx), pinned)
     end
 
-    :ok = Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+    :ok = Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
   end
 
   # ---------------------------------------------------------------------------

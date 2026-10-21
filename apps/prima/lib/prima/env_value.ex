@@ -20,8 +20,7 @@ defmodule Prima.EnvValue do
   @type getenv :: (String.t() -> String.t() | nil)
 
   @doc """
-  An on/off switch: `on`/`off`, `true`/`false`, `yes`/`no` or `1`/`0`,
-  ignoring case. Unset or blank is `default`.
+  An on/off switch: exactly `on` or `off`. Unset or blank is `default`.
   """
   @spec switch(getenv(), String.t(), boolean()) :: {:ok, boolean()} | {:error, String.t()}
   def switch(getenv, key, default) when is_function(getenv, 1) and is_boolean(default) do
@@ -29,12 +28,14 @@ defmodule Prima.EnvValue do
       nil ->
         {:ok, default}
 
+      "on" ->
+        {:ok, true}
+
+      "off" ->
+        {:ok, false}
+
       raw ->
-        case String.downcase(raw) do
-          on when on in ["on", "true", "yes", "1"] -> {:ok, true}
-          off when off in ["off", "false", "no", "0"] -> {:ok, false}
-          _ -> {:error, "#{key}=#{inspect(raw)} is not a switch; use on or off."}
-        end
+        {:error, "#{key}=#{inspect(raw)} is not a switch; use on or off."}
     end
   end
 

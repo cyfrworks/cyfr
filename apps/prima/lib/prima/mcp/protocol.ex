@@ -81,12 +81,13 @@ defmodule Prima.MCP.Protocol do
   # correlate a failure with a server log.
   @exposed_headers [@protocol_version_header, "x-request-id"]
 
-  # `x-mcp-header` mirrors a tool argument into `Mcp-Param-{Name}`. A preflight
-  # cannot advertise a prefix, so each one would have to be named explicitly —
-  # see `Prima.Provider` and the CORS drift test.
-  # Reserved: no producer or consumer in this revision — a client library
-  # may mirror simple params as headers under this prefix for
-  # middleboxes; kept so the name is spoken for.
+  # `x-mcp-header` on a tool's input property asks a client to mirror that
+  # argument into `Mcp-Param-{Name}`. CYFR's outbound client produces these
+  # for an external server's tools that ask for them
+  # (`Emissary.External.Server`). CYFR's own tools ask for none, so its
+  # server reads none and its preflight advertises none; a preflight cannot
+  # advertise a prefix, so a tool that asked would have its header named
+  # in the CORS allow-list one by one.
   @param_header_prefix "mcp-param-"
 
   @doc """

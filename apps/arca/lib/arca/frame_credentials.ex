@@ -16,8 +16,7 @@ defmodule Arca.FrameCredentials do
   leaves `revoked`. `renew/3` moves an active row's deadline and not its
   state, and `resume/3` sets the deadline as it resumes. A standing
   transition revokes rows in its own transaction
-  (`Arca.SecurityTransitions`), and a retired source's rows go with
-  `revoke_for_source/2`. Each write raises `updated_at`, which is when a
+  (`Arca.SecurityTransitions`). Each write raises `updated_at`, which is when a
   revoked row was retired; `Arca.Retention.FrameCredentials`
   removes revoked rows older than the athanor's value.
 
@@ -40,9 +39,7 @@ defmodule Arca.FrameCredentials do
 
   Every function takes the actor first. An athanor actor reads and writes
   its own athanor's rows, and `get_by_frame_id/2` reads only its own
-  person's among them; `revoke_for_source/2` and `revoke_for_user/2`
-  also take the platform system actor, for a retirement that crosses
-  athanors. Rows are answered as plain maps (`Arca.Data`).
+  person's among them. Rows are answered as plain maps (`Arca.Data`).
   """
 
   import Ecto.Query
@@ -72,9 +69,6 @@ defmodule Arca.FrameCredentials do
           inserted_at: DateTime.t(),
           updated_at: DateTime.t()
         }
-
-  @typedoc "The credential a frame credential was minted under: a session's token-hash id, or a key's id."
-  @type source :: {:session | :api_key, String.t()}
 
   @doc """
   Record the frame credential of a frame `attrs.frame_id` opened in the
@@ -318,36 +312,6 @@ defmodule Arca.FrameCredentials do
 
   def consume(%Prima.Actor{}, _frame_id, _expected_digest), do: {:error, :no_athanor}
 
-  @doc """
-  Revoke every unrevoked row minted under `source`, the retired session
-  or key: in the actor's athanor, or in every athanor for the platform
-  system actor. Answers the ids it revoked.
-  """
-  @spec revoke_for_source(Prima.Actor.t(), source()) ::
-          {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
-  def revoke_for_source(%Prima.Actor{} = actor, {kind, source_id})
-      when kind in [:session, :api_key] and is_binary(source_id) and source_id != "" do
-    kind = Atom.to_string(kind)
-
-    scoped(actor, "Arca.FrameCredentials.revoke_for_source", fn query ->
-      where(query, [f], f.source_kind == ^kind and f.source_id == ^source_id)
-    end)
-  end
-
-  @doc """
-  Revoke every unrevoked row of the person `user_id`: in the actor's
-  athanor, or in every athanor for the platform system actor. Answers the
-  ids it revoked.
-  """
-  @spec revoke_for_user(Prima.Actor.t(), String.t()) ::
-          {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
-  def revoke_for_user(%Prima.Actor{} = actor, user_id)
-      when is_binary(user_id) and user_id != "" do
-    scoped(actor, "Arca.FrameCredentials.revoke_for_user", fn query ->
-      where(query, [f], f.user_id == ^user_id)
-    end)
-  end
-
   @doc false
   # The retention kind's count: revoked rows of the athanor retired before
   # `cutoff`.
@@ -484,28 +448,6 @@ defmodule Arca.FrameCredentials do
   end
 
   defp set_state(%FrameCredential{}, _from, _to), do: {:error, :revoked}
-
-  defp scoped(actor, tag, narrow) do
-    case scope(actor) do
-      {:ok, query} ->
-        Arca.Repo.Errors.with_db_rescue(tag, fn ->
-          {:ok, revoke_all(narrow.(query))}
-        end)
-
-      {:error, _} = refusal ->
-        refusal
-    end
-  end
-
-  # The platform system actor retires a person's or a source's frames in
-  # every athanor; any other actor is held to its own.
-  defp scope(%Prima.Actor{scope: :platform, system: true}), do: {:ok, from(f in FrameCredential)}
-
-  defp scope(%Prima.Actor{athanor_id: athanor_id} = actor)
-       when is_binary(athanor_id) and athanor_id != "",
-       do: {:ok, QueryHelpers.where_tenant(FrameCredential, actor)}
-
-  defp scope(%Prima.Actor{}), do: {:error, :no_athanor}
 
   @doc false
   @spec revoke_all(Ecto.Queryable.t()) :: [String.t()]

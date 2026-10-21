@@ -20,8 +20,9 @@ defmodule Arca.Providers.Files do
   answers the sources its settled generation was written with
   (`Arca.Files.read/2`, `read_sources/2`); a file anywhere else records
   none, so it is outside material, since provenance that is not recorded
-  is never the athanor's own. A listing names files without reading them
-  and answers `files_by_grant` and outside material as before.
+  is never the athanor's own. A listing names files without reading them,
+  so it answers `files_by_grant` and outside material whatever the files
+  hold.
 
   `list`, `read`, `write` and `delete` name their file or folder by
   `path`, relative to the athanor root, and declare it as their resource

@@ -23,15 +23,6 @@ defmodule Arca.TurnStorageTest do
   @standing %{grant: :stored, verify: &Arca.Test.Actor.admits/1}
 
   describe "the vocabulary and the policy" do
-    test "the statuses are Prima's, and the store keeps no recovery cap" do
-      assert TurnStorage.statuses() == Prima.TurnState.statuses()
-      assert TurnStorage.open_statuses() == Prima.TurnState.open_statuses()
-      assert TurnStorage.terminal_statuses() == Prima.TurnState.terminal_statuses()
-
-      Code.ensure_loaded!(TurnStorage)
-      refute function_exported?(TurnStorage, :recovery_cap, 0)
-    end
-
     test "every transaction takes the write lock through the locking helper" do
       source = File.read!(Path.expand("../../lib/arca/turn_storage.ex", __DIR__))
 

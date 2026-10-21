@@ -437,7 +437,7 @@ defmodule PrismWeb.ComponentsLiveTest do
       :ok =
         ConsentFixtures.hand_edit_head!(person, lender,
           resolved_policy: "not a blob",
-          blob_digest: Prima.JCS.hash_binary("not a blob")
+          blob_digest: Prima.Digest.sha256("not a blob")
         )
 
       assert_grant_refused(conn, refused)

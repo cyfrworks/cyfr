@@ -175,8 +175,9 @@ defmodule Prima.Cidr do
   True when `ip` (an `:inet` tuple or a string) falls within `cidr_string`.
 
   An IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) is matched against an IPv4
-  CIDR by its embedded IPv4 form (preserves the prior policy-matcher
-  behaviour and makes `Sanctum.ApiKey` consistent with it).
+  CIDR by its embedded IPv4 form, so the address a dual-stack listener
+  reports matches the IPv4 rule written for it, for the policy matcher and
+  `Sanctum.ApiKey` alike.
   """
   @spec ip_in_cidr?(:inet.ip_address() | String.t(), String.t()) :: boolean()
   def ip_in_cidr?(ip, cidr_string) when is_binary(cidr_string) do
@@ -393,8 +394,6 @@ defmodule Prima.Cidr do
       _ -> 0
     end
   end
-
-  defp max_prefix_for(_), do: 0
 
   defp ip_to_integer({a, b, c, d}), do: bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
 

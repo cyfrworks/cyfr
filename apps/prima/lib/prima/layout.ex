@@ -221,7 +221,7 @@ defmodule Prima.Layout do
 
   @doc "The document's digest: `sha256:` over `encode/1`."
   @spec digest(t()) :: String.t()
-  def digest(%__MODULE__{} = layout), do: Prima.JCS.hash_binary(encode(layout))
+  def digest(%__MODULE__{} = layout), do: Prima.Digest.sha256(encode(layout))
 
   @doc "Every tincture the document names, each once, sorted."
   @spec tinctures(t()) :: [ref()]

@@ -87,8 +87,6 @@ defmodule Arca.SchemaVocabularyTest do
                Arca.StatusTransitions.statuses(:credentials)
 
       assert Arca.Schemas.Profile.statuses() == Arca.StatusTransitions.statuses(:profiles)
-
-      assert Arca.TurnStorage.statuses() == Prima.TurnState.statuses()
     end
   end
 

@@ -143,7 +143,7 @@ defmodule Sanctum.NetworkPrivatePolicyTest do
         ] do
       url = "http://#{host}/latest/meta-data/"
 
-      for policy <- [:operator, :allow_all, {:fun, fn _ip -> true end}] do
+      for policy <- [:operator, :allow_all, {:allowlist, ["0.0.0.0/0", "::/0"]}] do
         assert {:error, :private_ip_blocked, msg} =
                  Sanctum.Network.pin(url, private_policy: policy)
 

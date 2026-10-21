@@ -41,7 +41,7 @@ defmodule Opus.Schedules.SchedulerTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {{app, key}, value} <- prev do

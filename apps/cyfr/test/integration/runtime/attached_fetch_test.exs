@@ -105,7 +105,7 @@ defmodule Locus.Runtime.AttachedFetchTest do
     {ctx, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
 
       case previous do
         {:ok, value} -> Application.put_env(:arca, :base_path, value)

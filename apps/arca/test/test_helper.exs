@@ -11,11 +11,10 @@ ExUnit.configure(exclude: [:s3_integration | Arca.Test.Adapter.exclusions()])
 #
 # Only when nothing has installed one, exactly as the locators
 # (`Arca.Test.SuiteBoot`). The port is one process-wide term and this file
-# runs in the same VM as every other app's suite, so installing
-# unconditionally replaced the real implementation `Cyfr.Application` had
-# already put there: the cap refusals under `apps/cyfr/test/arca` then
-# asked the double and were admitted, which is how
-# `mix test apps/arca/test apps/cyfr/test/arca` found three of them failing.
+# can run in the same VM as another app's suite, where `Cyfr.Application`
+# has already installed the real implementation: replacing it with the
+# double would admit the writes the cap refusals under
+# `apps/cyfr/test/arca` expect refused.
 try do
   Prima.Caps.impl!()
 rescue

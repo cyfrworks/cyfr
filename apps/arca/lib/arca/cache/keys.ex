@@ -117,8 +117,9 @@ defmodule Arca.Cache.Keys do
 
   @doc """
   SSE replay buffer for an execution within an athanor. The athanor is
-  the actor's and the execution is the argument — the two were both
-  strings in the same call, either way round.
+  the actor's and the execution is the argument, so the key's tenant
+  always comes from the actor and never from a string the caller
+  could pass in the execution's place.
   """
   def exec_events(%Prima.Actor{athanor_id: athanor_id}, execution_id)
       when is_binary(athanor_id) and athanor_id != "",

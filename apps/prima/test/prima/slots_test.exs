@@ -79,8 +79,8 @@ defmodule Prima.SlotsTest do
 
       assert %{id: Slots} = Slots.child_spec([])
 
-      a = :"slots_a_#{System.unique_integer([:positive])}"
-      b = :"slots_b_#{System.unique_integer([:positive])}"
+      a = :slots_test_instance_a
+      b = :slots_test_instance_b
       start_supervised!({Slots, name: a, max: 1, child_reserve: 0})
       start_supervised!({Slots, name: b, max: 1, child_reserve: 0})
 
@@ -744,16 +744,6 @@ defmodule Prima.SlotsTest do
       end)
     end
 
-    test "forgiving a key clears its penalty at once" do
-      server = start_slots(max: 16, key_max: 4)
-      for _ <- 1..2, do: {:ok, _} = Slots.note_unreaped(server, "ath_forgiven", "exec_probe")
-      assert {:error, :key_unreaped} = Slots.acquire(server, "ath_forgiven", :root)
-
-      assert :ok = Slots.forgive_unreaped(server, "ath_forgiven")
-      assert {:ok, _} = Slots.acquire(server, "ath_forgiven", :root)
-      assert Slots.status(server).unreaped == %{}
-    end
-
     test "the threshold is configurable" do
       server = start_slots(max: 16, key_max: 4, unreaped_max: 1)
       assert {:ok, 1} = Slots.note_unreaped(server, "ath_one", "exec_probe")
@@ -927,13 +917,12 @@ defmodule Prima.SlotsTest do
       assert {:error, :unavailable} = Slots.cancel(server, self())
       assert {:error, :unavailable} = Slots.note_unreaped(server, "ath_a", "exec")
       assert {:ok, 0} = Slots.note_unreaped(server, nil, "exec")
-      assert {:error, :unavailable} = Slots.forgive_unreaped(server, "ath_a")
       assert {:error, :unavailable} = Slots.force_release_all(server)
       assert {:error, :unavailable} = Slots.sweep(server)
     end
 
     test "a name nobody registered answers the same" do
-      name = :"slots_nobody_#{System.unique_integer([:positive])}"
+      name = :slots_test_nobody_registered
       assert {:error, :unavailable} = Slots.acquire(name, nil, :root)
       assert :ok = Slots.release(name, make_ref())
       assert {:error, :unavailable} = Slots.force_release_all(name)
@@ -956,7 +945,7 @@ defmodule Prima.SlotsTest do
   # ---------------------------------------------------------------------------
 
   describe "refusal/1" do
-    test "every refusal has a sentence, and the execution ones read as before" do
+    test "every refusal has a sentence, and the execution ones have their own wording" do
       for reason <- [:capacity, :key_cap, :key_unreaped, :timeout, :cancelled, :unavailable] do
         sentence = Slots.refusal(reason)
         assert byte_size(sentence) > 0

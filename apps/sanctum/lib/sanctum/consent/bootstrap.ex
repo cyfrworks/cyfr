@@ -369,7 +369,7 @@ defmodule Sanctum.Consent.Bootstrap do
            ),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
          {:ok, digests} <-
-           compute_digests(ctx, source_ref, JCS.hash_binary(blob_json), List.wrap(binding)),
+           compute_digests(ctx, source_ref, Prima.Digest.sha256(blob_json), List.wrap(binding)),
          {:ok, activation_json} <- JCS.encode(activation.graph) do
       insert(
         {ctx, claim},
@@ -723,7 +723,7 @@ defmodule Sanctum.Consent.Bootstrap do
            ),
          {:ok, blob_json} <- BlobBuilder.encode(nodes),
          {:ok, digests} <-
-           compute_digests(ctx, source_ref, JCS.hash_binary(blob_json), List.wrap(binding)),
+           compute_digests(ctx, source_ref, Prima.Digest.sha256(blob_json), List.wrap(binding)),
          :ok <- revisable(head, digests, activation.graph, vouched),
          {:ok, activation_json} <- JCS.encode(activation.graph),
          {:ok, _consent} <-

@@ -1226,25 +1226,6 @@ defmodule Arca.Overlay do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Every unit the seed ships under a seeded root, as unit paths — what
-  provisioning copies and a release offers. Install media that cannot be
-  listed is a fault, never an empty bundle.
-  """
-  @spec shipped_units(String.t()) :: {:ok, [Arca.Storage.path()]}
-  def shipped_units(root) when is_binary(root) do
-    if root in Arca.Storage.overlay_roots() do
-      with {:ok, seed_leaves} <- seed_list_recursive([root]) do
-        units =
-          for leaf <- seed_leaves, loc = leaf_loc(leaf), uniq: true, do: unit_of(loc)
-
-        {:ok, Enum.sort(units)}
-      end
-    else
-      {:ok, []}
-    end
-  end
-
-  @doc """
   Copy one shipped unit into the athanor, whole — the seed's bytes,
   droppings excluded, committed as any unit is (`commit_unit/4`) —
   replacing whatever stands at the path. What provisioning does for every
@@ -1595,9 +1576,8 @@ defmodule Arca.Overlay do
   completion object is in its prefix and whose draft is free has nothing
   pending, `{:ok, :nothing_pending}`; one whose completion object is
   nowhere is `{:error, :staged_incomplete}`, reported and left. The
-  collector's audit (`Arca.StorageGC.repair/1`) reads every object of
-  such a revision against the journal; this answers from the completion
-  object alone. `{:error, :not_found}` for a unit no committed row names.
+  answer reads the completion object alone. `{:error, :not_found}` for a
+  unit no committed row names.
   """
   @spec repair_unit(Prima.Actor.t(), Arca.Storage.path()) ::
           {:ok, :repaired | :nothing_pending}
@@ -2017,17 +1997,10 @@ defmodule Arca.Overlay do
   """
   @type content_manifest :: [{Arca.Storage.path(), String.t(), non_neg_integer()}]
 
-  @doc """
-  The content identity of a revision: each object in path order, framed
-  as its path, its digest and its size, NUL-separated, hashed.
-
-  The one framing there is. A commit records it in the journal, and every
-  reader that must tell one revision's objects from another's — this
-  module's repair, `Arca.StorageGC`'s collection and its own repair —
-  compares against it rather than restating the framing.
-  """
-  @spec content_identity(content_manifest()) :: String.t()
-  def content_identity(manifest) do
+  # The content identity of a revision: each object in path order, framed
+  # as its path, its digest and its size, NUL-separated, hashed. A commit
+  # records it in the journal.
+  defp content_identity(manifest) do
     manifest
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.flat_map(fn {rel, digest, size} ->

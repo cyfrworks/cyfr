@@ -88,7 +88,7 @@ defmodule Sanctum.Test.ConsentFixtures do
           # Derived, never a literal: `Consent.Loader` refuses a row whose
           # stored digest does not match its policy bytes, so a fixture that
           # hardcoded one would drift the moment the policy changed.
-          blob_digest: Prima.JCS.hash_binary(policy),
+          blob_digest: Prima.Digest.sha256(policy),
           resolved_policy: policy,
           activation: Jason.encode!(%{name_ref => "sha256:act"}),
           admitted_origins: origins,
@@ -214,7 +214,7 @@ defmodule Sanctum.Test.ConsentFixtures do
   def seed_head!(%Context{} = ctx, profile, consent) do
     consent =
       consent
-      |> Map.put_new_lazy(:blob_digest, fn -> Prima.JCS.hash_binary(consent.resolved_policy) end)
+      |> Map.put_new_lazy(:blob_digest, fn -> Prima.Digest.sha256(consent.resolved_policy) end)
       |> live_shape(ctx, profile)
 
     forget!(ctx, profile.id)

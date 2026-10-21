@@ -521,8 +521,6 @@ defmodule Arca.Providers.Records do
   defp decode_json(str, field) when is_binary(str),
     do: decode_stored(str, %{"_decode_error" => "stored snapshot was not valid JSON"}, field)
 
-  defp decode_json(val, _field), do: val
-
   # A stored JSON column that does not decode reads as its default. The
   # line names the column and its size, never its bytes. `decode_json/2`
   # answers nil itself.

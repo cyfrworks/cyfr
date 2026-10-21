@@ -363,18 +363,29 @@ defmodule Arca.SqliteBusyWaitTest do
   # The repo's migrations as `{version, module}`, each module the one this
   # VM already holds when the `ecto.migrate` alias loaded it: recompiling a
   # file whose module is loaded redefines it, and the warning that raises
-  # would fail a warnings-as-errors run depending on test order.
+  # would fail a warnings-as-errors run depending on test order. A file
+  # whose module is not loaded is compiled, and names its module itself.
   defp loaded_migrations do
     for file <- Enum.sort(Path.wildcard(Path.join(Arca.Repo.migrations_path(), "*.exs"))) do
       [version, name] = file |> Path.basename(".exs") |> String.split("_", parts: 2)
-      module = Module.concat(Arca.Repo.Migrations, Macro.camelize(name))
-
-      unless Code.ensure_loaded?(module) do
-        Code.compile_file(file)
-      end
-
-      {String.to_integer(version), module}
+      {String.to_integer(version), migration_module(file, name)}
     end
+  end
+
+  defp migration_module(file, name) do
+    with nil <- loaded_module(Arca.Repo.Migrations, Macro.camelize(name)) do
+      [{module, _binary}] = Code.compile_file(file)
+      module
+    end
+  end
+
+  # Module.safe_concat/2 answers only a name that already exists, and
+  # raises for one that does not.
+  defp loaded_module(namespace, name) do
+    module = Module.safe_concat(namespace, name)
+    if Code.ensure_loaded?(module), do: module
+  rescue
+    ArgumentError -> nil
   end
 
   test "a fresh database migrates through the hook, its first transaction taking the lock" do

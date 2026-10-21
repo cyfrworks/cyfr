@@ -117,14 +117,15 @@ defmodule Compendium.Pull do
 
   @doc """
   The static dependencies of a registered component's manifest that are
-  not present in the caller's athanor, as ref strings. The required ones
-  by default; `include: :all` adds the optional ones.
+  not present in the caller's athanor, as ref strings: `{:ok, refs}`. The
+  required ones by default; `include: :all` adds the optional ones. A
+  stored manifest that does not decode, or a dependency block that does
+  not parse, is damage and the error, never "nothing missing".
   """
-  @spec missing_deps(Context.t(), map(), keyword()) :: [String.t()]
+  @spec missing_deps(Context.t(), map(), keyword()) :: {:ok, [String.t()]} | {:error, term()}
   def missing_deps(%Context{} = ctx, component, opts \\ []) when is_map(component) do
-    manifest = Prima.Manifest.decode(Map.get(component, :manifest))
-
-    with {:ok, deps} <-
+    with {:ok, manifest} <- Prima.Manifest.decode_strict(Map.get(component, :manifest)),
+         {:ok, deps} <-
            DependencyResolver.extract_from_manifest(manifest, component_id(component)) do
       %{missing: missing, optional_missing: optional} =
         DependencyResolver.classify_availability(ctx, deps)
@@ -135,9 +136,7 @@ defmodule Compendium.Pull do
           :required -> missing
         end
 
-      Enum.map(wanted, & &1.dependency_ref)
-    else
-      _ -> []
+      {:ok, Enum.map(wanted, & &1.dependency_ref)}
     end
   end
 
@@ -178,9 +177,19 @@ defmodule Compendium.Pull do
             on_progress.(ref, :pulled)
             outcome = %{outcome | pulled: [ref | outcome.pulled]}
 
-            Enum.reduce(missing_deps(ctx, component), {outcome, visited}, fn dep, acc ->
-              walk(ctx, dep, acc, walker)
-            end)
+            # A pulled release whose dependencies do not read leaves its
+            # closure unknown, which is a failure, never an empty closure.
+            case missing_deps(ctx, component) do
+              {:ok, deps} ->
+                Enum.reduce(deps, {outcome, visited}, fn dep, acc ->
+                  walk(ctx, dep, acc, walker)
+                end)
+
+              {:error, reason} ->
+                Logger.warning("[Compendium.Pull] #{ref}: its dependencies do not read")
+                on_progress.(ref, {:failed, {:dependencies, reason}})
+                {%{outcome | failed: [{ref, {:dependencies, reason}} | outcome.failed]}, visited}
+            end
 
           {:error, reason} ->
             Logger.warning("[Compendium.Pull] #{ref}: #{inspect(reason)}")

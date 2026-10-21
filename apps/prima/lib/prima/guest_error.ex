@@ -17,11 +17,8 @@ defmodule Prima.GuestError do
   What a refusal *means* is `Prima.Refusal`'s, and this module holds no
   sentence of its own for one. That is the whole point: a guest in a chain
   and a person at the console are told the same thing, because there is
-  one place the thing is said. Before, two vocabularies restated each
-  other and seven refusals were in only one of them — `:busy`,
-  `:not_member`, `:archived`, `:no_agent`, `:control_plane_lost`,
-  `:not_provisioned`, `:message_too_long` — so a guest hitting any of them
-  was handed the atom's own name where a sentence belonged.
+  one place the thing is said, and every refusal the table knows has a
+  sentence for a guest as well.
 
   `render/1` answers `nil` for a term it does not know, so a caller logs
   the term where it was produced and hands the guest a generic sentence

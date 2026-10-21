@@ -41,8 +41,8 @@ defmodule Arca.Supervisor do
           Arca.WriteTurn,
           Arca.DecisionLog,
           # The write-behind for bookkeeping rows (allowed policy lines,
-          # MCP log completions, vault last-used); after the repo so it
-          # drains before the repo goes down.
+          # vault last-used); after the repo so it drains before the repo
+          # goes down.
           Arca.RecordSink,
           # The shared cache table's one owner. A crash here flushes the
           # table, harmlessly for a read-through cache.
@@ -96,14 +96,17 @@ defmodule Arca.Supervisor do
     dir = Path.dirname(path)
     test_file = Path.join(dir, ".cyfr_write_test")
 
-    # arca:bypass-ok=B — pre-Arca bootstrap probe used to surface friendly
-    # Docker UID errors before the Repo pool tries to open the DB.
+    # arca:bypass-ok=B — pre-Arca bootstrap probe that surfaces a friendly
+    # Docker UID error before the Repo pool tries to open the DB.
     case File.touch(test_file) do
       :ok ->
         File.rm(test_file)
 
       {:error, reason} ->
-        {uid, 0} = System.cmd("id", ["-u"])
+        # `id` reads nothing from the environment, so it inherits none of
+        # the boot's, which carries the operator's secrets.
+        unset_all = Enum.map(System.get_env(), fn {name, _value} -> {name, nil} end)
+        {uid, 0} = System.cmd("id", ["-u"], env: unset_all)
         uid = String.trim(uid)
 
         raise """

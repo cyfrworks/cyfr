@@ -18,6 +18,7 @@ defmodule Prima.EffectsTest do
   """
   use ExUnit.Case, async: true
 
+  alias __MODULE__.Plant
   alias Prima.Test.SourceTree
 
   @lib Path.expand("../../lib", __DIR__)
@@ -255,7 +256,7 @@ defmodule Prima.EffectsTest do
          %{findings: findings} do
       for {module, {:compile_time, effects}} <- @roster do
         reached = for {^module, where, class, _mfa} <- findings, class in effects, do: where
-        assert reached != [], "#{inspect(module)} no longer reaches #{inspect(effects)}"
+        assert reached != [], "#{inspect(module)} does not reach #{inspect(effects)}"
         assert Enum.uniq(reached) == [:body]
       end
     end
@@ -357,6 +358,14 @@ defmodule Prima.EffectsTest do
       assert classes(beam_imports(beam)) == [:app_env, :wall_clock]
     end
 
+    test "a call spelled from the Elixir root is caught" do
+      {module, beam, found} =
+        plant(Plant.Rooted, "def now, do: Elixir.System.system_time(:millisecond)")
+
+      assert {module, {:now, 0}, :wall_clock, {System, :system_time, 1}} in found
+      assert classes(beam_imports(beam)) == [:wall_clock]
+    end
+
     test "a default argument is the function's own" do
       {module, _beam, found} =
         plant(Plant.Default, "def seal(x, iv \\\\ :crypto.strong_rand_bytes(12)), do: {x, iv}")
@@ -418,7 +427,7 @@ defmodule Prima.EffectsTest do
         do: {module, found, expected}
   end
 
-  # A row naming a module that no longer compiles here.
+  # A row naming a module that does not compile here.
   defp absent_rows(modules, roster),
     do: for({module, _row} <- roster, module not in modules, do: module) |> Enum.sort()
 
@@ -461,7 +470,7 @@ defmodule Prima.EffectsTest do
 
   defp modules_in({:defimpl, _, [protocol, opts | rest]}, parent, acc) when is_list(opts) do
     for_module = if opts[:for], do: expand(opts[:for], parent, %{}), else: parent
-    module = Module.concat(expand(protocol, parent, %{}), for_module)
+    module = concat([expand(protocol, parent, %{}), for_module])
     body = Keyword.get(opts, :do) || Keyword.get(List.first(rest) || [], :do)
     modules_in(body, module, [module | acc])
   end
@@ -526,7 +535,7 @@ defmodule Prima.EffectsTest do
 
   defp statement({:defimpl, _, [protocol, opts | rest]}, module, aliases) when is_list(opts) do
     for_module = if opts[:for], do: expand(opts[:for], module, aliases), else: module
-    impl = Module.concat(expand(protocol, module, aliases), for_module)
+    impl = concat([expand(protocol, module, aliases), for_module])
     body = Keyword.get(opts, :do) || Keyword.get(List.first(rest) || [], :do)
     {_, found} = walk_body(body, impl, aliases)
     {aliases, found}
@@ -602,7 +611,8 @@ defmodule Prima.EffectsTest do
     found
   end
 
-  defp record(acc, module, where, {target, f, _a} = mfa) when is_atom(target) do
+  defp record(acc, module, where, {target, f, _a} = mfa)
+       when is_atom(target) or is_binary(target) do
     case classify(mfa) do
       nil when {target, f} in @id_functions -> [{module, where, :mint, mfa} | acc]
       nil -> acc
@@ -613,13 +623,7 @@ defmodule Prima.EffectsTest do
   defp record(acc, _module, _where, _dynamic), do: acc
 
   defp imported_findings(module, imported, only) do
-    functions =
-      if only do
-        only
-      else
-        Code.ensure_loaded(imported)
-        imported.module_info(:exports)
-      end
+    functions = only || exports(imported)
 
     for {f, a} <- functions,
         class = classify({imported, f, a}),
@@ -627,11 +631,29 @@ defmodule Prima.EffectsTest do
         do: {module, :body, class, {imported, f, a}}
   end
 
-  defp nested({:__aliases__, _, [{:__MODULE__, _, _} | rest]}, parent),
-    do: Module.concat([parent | rest])
+  # A loaded module answers its exports; a name no atom spells yet is a
+  # module no code has loaded, and its beam on the code path answers them.
+  defp exports(module) when is_atom(module) do
+    Code.ensure_loaded(module)
+    module.module_info(:exports)
+  end
 
-  defp nested({:__aliases__, _, segments}, nil), do: Module.concat(segments)
-  defp nested({:__aliases__, _, segments}, parent), do: Module.concat([parent | segments])
+  defp exports(name) when is_binary(name) do
+    case :code.where_is_file(String.to_charlist(name <> ".beam")) do
+      :non_existing ->
+        []
+
+      path ->
+        {:ok, {_module, [exports: exports]}} = :beam_lib.chunks(path, [:exports])
+        exports
+    end
+  end
+
+  defp nested({:__aliases__, _, [{:__MODULE__, _, _} | rest]}, parent),
+    do: concat([parent | rest])
+
+  defp nested({:__aliases__, _, segments}, nil), do: concat(segments)
+  defp nested({:__aliases__, _, segments}, parent), do: concat([parent | segments])
   defp nested(atom, _parent) when is_atom(atom), do: atom
 
   # A nested `defmodule Child` is reachable as `Child` in its parent.
@@ -644,7 +666,7 @@ defmodule Prima.EffectsTest do
     base = expand(base, module, aliases)
 
     Enum.reduce(members, aliases, fn {:__aliases__, _, segments}, acc ->
-      Map.put(acc, List.last(segments), Module.concat([base | segments]))
+      Map.put(acc, List.last(segments), concat([base | segments]))
     end)
   end
 
@@ -652,8 +674,14 @@ defmodule Prima.EffectsTest do
     full = expand(target, module, aliases)
 
     case Keyword.get(opts, :as) do
-      {:__aliases__, _, [as]} -> Map.put(aliases, as, full)
-      nil -> Map.put(aliases, full |> Module.split() |> List.last() |> String.to_atom(), full)
+      {:__aliases__, _, [as]} ->
+        Map.put(aliases, as, full)
+
+      # The short name is the last segment of a parsed alias, so the parse
+      # made its atom; a name no parsed atom spells is one no source can
+      # look up.
+      nil ->
+        Map.put(aliases, full |> Module.split() |> List.last() |> String.to_existing_atom(), full)
     end
   rescue
     # `alias :erlang_module` has no Elixir segments to shorten.
@@ -661,12 +689,12 @@ defmodule Prima.EffectsTest do
   end
 
   defp expand({:__aliases__, _, [{:__MODULE__, _, _} | rest]}, module, _aliases),
-    do: Module.concat([module | rest])
+    do: concat([module | rest])
 
   defp expand({:__aliases__, _, [first | rest]}, _module, aliases) do
     case Map.fetch(aliases, first) do
-      {:ok, full} -> Module.concat([full | rest])
-      :error -> Module.concat([first | rest])
+      {:ok, full} -> concat([full | rest])
+      :error -> concat([first | rest])
     end
   end
 
@@ -674,9 +702,41 @@ defmodule Prima.EffectsTest do
   defp expand(atom, _module, _aliases) when is_atom(atom), do: atom
   defp expand(_dynamic, _module, _aliases), do: nil
 
+  # Module.concat/1's name without making an atom: the module's atom when
+  # one exists, else its name as a string. Every module the roster, the
+  # pins and the class lists name is a literal here, so its atom exists; a
+  # string names a module none of them names, which only the name-prefix
+  # classes can match. A leading `Elixir` segment is the root every name
+  # already has (`Elixir.System` is `System`), as Module.concat/1 reads it.
+  defp concat(parts) do
+    segments =
+      parts
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&(&1 |> to_string() |> String.replace_prefix("Elixir.", "")))
+      |> Enum.drop_while(&(&1 == "Elixir"))
+      |> Enum.join(".")
+
+    existing("Elixir." <> segments)
+  end
+
+  defp existing(name) do
+    String.to_existing_atom(name)
+  rescue
+    ArgumentError -> name
+  end
+
   # ---------------------------------------------------------------------------
   # Effect classes
   # ---------------------------------------------------------------------------
+
+  defp classify({m, _f, _a}) when is_binary(m) do
+    cond do
+      http?(m) -> :http
+      under?(m, ["Task", "Agent", "Supervisor"]) -> :otp
+      mix?(m) -> :mix
+      true -> nil
+    end
+  end
 
   defp classify({m, f, a}) when is_atom(m) do
     cond do
@@ -713,7 +773,7 @@ defmodule Prima.EffectsTest do
   defp mix?(m), do: m == Mix or under?(m, ["Mix"])
 
   defp under?(m, roots) do
-    name = Atom.to_string(m)
+    name = to_string(m)
     Enum.any?(roots, &String.starts_with?(name, "Elixir." <> &1 <> "."))
   end
 
@@ -724,8 +784,7 @@ defmodule Prima.EffectsTest do
   # Compile `body` as a module of its own and walk the same source: the
   # compiled binary is what the beam view reads, the source what the walk
   # reads.
-  defp plant(name, body) do
-    module = Module.concat(__MODULE__, name)
+  defp plant(module, body) do
     source = "defmodule #{inspect(module)} do\n#{body}\nend\n"
     [{^module, binary}] = Code.compile_string(source)
     {module, binary, source_findings(source)}

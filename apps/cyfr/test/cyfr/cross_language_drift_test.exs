@@ -377,7 +377,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/assets/test/carrier/carry.test.mjs",
        ~w(fragments.parse fragments.valid max_fragment_bytes payload returns)},
       {"apps/prima/test/prima/carry_test.exs",
-       ~w(envelopes fragments identity keys max_fragment_bytes max_payload_bytes operations outcomes payload payload_digest protocol replay returns verify)}
+       ~w(envelopes fragments identity keys max_fragment_bytes max_payload_bytes operations outcomes payload payload_digest protocol returns verify)}
     ],
     "component_refs.json" => [
       {"apps/codex/internal/ref/ref_fixture_test.go", ~w(cases version_ordering)},
@@ -562,7 +562,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/locus/test/locus/runtime/worker_listener_test.exs", ~w(requests status)},
       {"apps/prima/test/prima/worker_api_test.exs",
        ~w(version routes retries timeouts_ms requests status)},
-      {"apps/prima/test/prima/worker_auth_test.exs", ~w(status)},
       {"apps/prima/test/prima/worker_protocol_test.exs", ~w(retries timeouts_ms status)},
       {"apps/prima/test/prima/worker_wire_test.exs", ~w(version routes requests)},
       {"tests/locus-runtime-image/runners.py", ~w(status)},

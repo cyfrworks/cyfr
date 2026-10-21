@@ -46,7 +46,7 @@ fn [user_id, name] ->
         invoke_mode: "open_inert",
         shape_digest: "sha256:" <> String.duplicate("0", 64),
         commit_digest: "sha256:" <> String.duplicate("0", 64),
-        blob_digest: Prima.JCS.hash_binary(policy),
+        blob_digest: Prima.Digest.sha256(policy),
         resolved_policy: policy,
         activation: Jason.encode!(%{}),
         admitted_origins: [:interactive],

@@ -233,7 +233,7 @@
           "client": null
         },
         "diagnostics": [],
-        "sentence": "the builder speaks builder protocol 1 and this server speaks no builder protocol (a release older than this one); run the builder image of the same release as this server",
+        "sentence": "the builder speaks builder protocol 1 and this server speaks no builder protocol; run the builder image of the same release as this server",
         "body": "{\"class\":\"protocol_mismatch\",\"diagnostics\":[],\"reason\":{\"builder\":1,\"client\":null},\"type\":\"refusal\",\"version\":1}"
       }
     ]

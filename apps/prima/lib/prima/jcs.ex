@@ -76,17 +76,8 @@ defmodule Prima.JCS do
   """
   @spec hash(value()) :: {:ok, String.t()} | {:error, error()}
   def hash(term) do
-    with {:ok, encoded} <- encode(term), do: {:ok, hash_binary(encoded)}
+    with {:ok, encoded} <- encode(term), do: {:ok, Prima.Digest.sha256(encoded)}
   end
-
-  @doc """
-  Hash an already-canonical binary. Exposed so callers that concatenate a
-  canonical form with other material (a release digest binds an artifact
-  digest to its manifest subset) hash it the same way. Delegates to
-  `Prima.Digest` — one producer, one spelling.
-  """
-  @spec hash_binary(binary()) :: String.t()
-  defdelegate hash_binary(binary), to: Prima.Digest, as: :sha256
 
   # ============================================================================
   # Private: serialization
@@ -172,5 +163,9 @@ defmodule Prima.JCS do
 
   defp escape_bytes([byte | rest], acc), do: escape_bytes(rest, [<<byte>> | acc])
 
+  # Throws by design: encode/1 catches `{:jcs, error}` at its entry and
+  # answers it as `{:error, error}`, so a refusal deep in the walk unwinds it
+  # whole.
+  @spec fail(path(), reason()) :: no_return()
   defp fail(path, reason), do: throw({:jcs, {:invalid_value, path, reason}})
 end

@@ -117,8 +117,6 @@ defmodule Arca.AthanorsTest do
       assert {:error, :cross_tenant} = Athanors.list_active(member)
       assert {:error, :cross_tenant} = Athanors.list_for_user(member, "usr_1")
       assert {:error, :cross_tenant} = Athanors.count_active(member)
-      assert {:error, :cross_tenant} = Athanors.count_groups_created_by(member, "usr_1")
-      assert {:error, :cross_tenant} = Athanors.count_pairs_of(member, "usr_1")
 
       assert {:error, :cross_tenant} =
                Athanors.count_people_created_since(member, DateTime.utc_now())
@@ -313,9 +311,6 @@ defmodule Arca.AthanorsTest do
 
       assert {:ok, count} = Athanors.count_active(server())
       assert count >= 1
-
-      assert {:ok, 0} = Athanors.count_groups_created_by(server(), owner)
-      assert {:ok, 0} = Athanors.count_pairs_of(server(), owner)
 
       assert {:ok, since} =
                Athanors.count_people_created_since(

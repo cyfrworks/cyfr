@@ -498,7 +498,6 @@ defmodule Arca.DirectoryHeadsTest do
     member = Prima.Actor.in_athanor("ath_test")
     assert {:error, :cross_tenant} = DirectoryHeads.get(member, identifier())
     assert {:error, :cross_tenant} = DirectoryHeads.put(member, %{})
-    assert :ok = DirectoryHeads.delete(server(), identifier())
   end
 
   # A carry's lifetime, the bound the carry sweep passes.

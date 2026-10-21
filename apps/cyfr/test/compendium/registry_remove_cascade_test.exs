@@ -61,7 +61,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
           invoke_mode: "open_inert",
           shape_digest: "sha256:s",
           commit_digest: "sha256:c",
-          blob_digest: Prima.JCS.hash_binary("{}"),
+          blob_digest: Prima.Digest.sha256("{}"),
           resolved_policy: "{}",
           activation: "{}",
           admitted_origins: [:interactive],

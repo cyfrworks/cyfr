@@ -98,10 +98,26 @@ defmodule Prima.WorkerAuthTest do
     }
   end
 
+  # The vector file's attempt members, by the atom each is keyed by here: a
+  # name outside this map fails the setup rather than minting an atom.
+  @vector_attempt_names %{
+    "athanor_id" => :athanor_id,
+    "execution_id" => :execution_id,
+    "attempt" => :attempt,
+    "fence" => :fence,
+    "generation" => :generation,
+    "service" => :service
+  }
+
   describe "the shared vectors" do
     setup do
       v = @vectors
-      attempt = Map.new(v["attempt"], fn {name, value} -> {String.to_atom(name), value} end)
+
+      attempt =
+        Map.new(v["attempt"], fn {name, value} ->
+          {Map.fetch!(@vector_attempt_names, name), value}
+        end)
+
       {:ok, v: v, root: unhex(v["root_hex"]), attempt: attempt}
     end
 
@@ -242,12 +258,13 @@ defmodule Prima.WorkerAuthTest do
 
     test "every valid root text decodes to the root, and every invalid one is refused",
          %{v: v, root: root} do
-      for text <- v["root_text"]["valid"], do: assert({:ok, ^root} = WorkerAuth.decode_root(text))
+      for text <- v["root_text"]["valid"],
+          do: assert({:ok, ^root} = MacEnvelope.decode_root(text))
 
       for text <- v["root_text"]["invalid"],
-          do: assert(:error = WorkerAuth.decode_root(text), inspect(text))
+          do: assert(:error = MacEnvelope.decode_root(text), inspect(text))
 
-      assert :error = WorkerAuth.decode_root(nil)
+      assert :error = MacEnvelope.decode_root(nil)
     end
   end
 
@@ -924,19 +941,15 @@ defmodule Prima.WorkerAuthTest do
     end
   end
 
-  test "the vector file holds the primitives, and the wire's messages are the message vectors'" do
-    refute Map.has_key?(@vectors, "status")
+  test "the vector file holds the primitives the host API's vectors derive with" do
+    keys =
+      Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+      |> Map.fetch!("keys")
 
-    for file <- ~w(host_api.json worker_api.json) do
-      keys =
-        Path.expand("../../../../tests/fixtures/" <> file, __DIR__)
-        |> File.read!()
-        |> Jason.decode!()
-        |> Map.get("keys")
-
-      if keys, do: assert(Map.delete(keys, "root_hex") == @vectors["keys"])
-      if keys, do: assert(keys["root_hex"] == @vectors["root_hex"])
-    end
+    assert Map.delete(keys, "root_hex") == @vectors["keys"]
+    assert keys["root_hex"] == @vectors["root_hex"]
   end
 
   test "a header at another version is refused as such before anything else" do

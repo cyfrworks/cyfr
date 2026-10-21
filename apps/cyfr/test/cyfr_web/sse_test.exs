@@ -19,6 +19,7 @@ defmodule CyfrWeb.SSETest do
 
   alias CyfrWeb.SSE
   alias Prima.{StreamGrant, TinctureWire}
+  alias Prima.Test.EventStream
   alias Sanctum.Context
 
   setup tags do
@@ -84,7 +85,7 @@ defmodule CyfrWeb.SSETest do
 
   defp changed(actor), do: Cyfr.Bus.McpServers.new(actor, :changed)
 
-  defp events(conn), do: TinctureWire.decode_stream(conn.resp_body)
+  defp events(conn), do: EventStream.decode(conn.resp_body)
 
   test "delivers each payload projected to the grant, under the stream's name, until the deadline",
        %{ctx: ctx, actor: actor} do

@@ -989,36 +989,11 @@ defmodule Arca.Execution do
       do: {:error, :no_athanor}
 
   @doc """
-  Deletes executions older than the newest `keep` records within an
-  athanor. Members are interchangeable, so retention keeps the N most
-  recent executions per athanor, not per user. The row-plane retention
-  convention: `{:ok, count}` — or `{:error, :database_error}` when the
-  store cannot answer.
+  The ids of an athanor's executions older than its newest `keep`, for the
+  payloads to release before `delete_ids/2` removes them. Members are
+  interchangeable, so retention keeps the N most recent executions per
+  athanor, not per user.
   """
-  @spec delete_older_than(non_neg_integer(), keyword()) ::
-          {:ok, non_neg_integer()} | {:error, :database_error}
-  def delete_older_than(keep, opts) when is_list(opts) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Execution.delete_older_than", fn ->
-      {count, _} = Arca.Repo.delete_all(stale_query(keep, opts))
-      {:ok, count}
-    end)
-  end
-
-  @doc """
-  Deletes an athanor's executions that started more than `days` ago, the
-  age bound beside the count bound above. A row still "running" is never
-  stale, for the reasons `stale_query/2` gives.
-  """
-  @spec delete_older_than_days(pos_integer(), keyword()) ::
-          {:ok, non_neg_integer()} | {:error, :database_error}
-  def delete_older_than_days(days, opts) when is_integer(days) and days > 0 and is_list(opts) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Execution.delete_older_than_days", fn ->
-      {count, _} = Arca.Repo.delete_all(aged_query(days, opts))
-      {:ok, count}
-    end)
-  end
-
-  @doc "The ids `delete_older_than/2` would remove, for what must go before them."
   @spec stale_ids(non_neg_integer(), keyword()) :: {:ok, [String.t()]} | {:error, :database_error}
   def stale_ids(keep, opts) when is_list(opts) do
     Arca.Repo.Errors.with_db_rescue("Arca.Execution.stale_ids", fn ->
@@ -1026,7 +1001,11 @@ defmodule Arca.Execution do
     end)
   end
 
-  @doc "The ids `delete_older_than_days/2` would remove, for what must go before them."
+  @doc """
+  The ids of an athanor's executions that started more than `days` ago,
+  the age bound beside the count bound above, for the payloads to release
+  before `delete_ids/2` removes them.
+  """
   @spec ids_older_than_days(pos_integer(), keyword()) ::
           {:ok, [String.t()]} | {:error, :database_error}
   def ids_older_than_days(days, opts) when is_integer(days) and days > 0 and is_list(opts) do
@@ -1058,7 +1037,7 @@ defmodule Arca.Execution do
     end)
   end
 
-  @doc "How many rows `delete_older_than_days/2` would remove — the dry-run count."
+  @doc "How many ids `ids_older_than_days/2` would answer: the dry-run count."
   @spec count_older_than_days(pos_integer(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
   def count_older_than_days(days, opts) when is_integer(days) and days > 0 and is_list(opts) do
@@ -1078,7 +1057,7 @@ defmodule Arca.Execution do
     |> Arca.QueryHelpers.where_athanor(athanor_id)
   end
 
-  @doc "How many rows `delete_older_than/2` would remove — the dry-run count."
+  @doc "How many ids `stale_ids/2` would answer: the dry-run count."
   @spec count_stale(non_neg_integer(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, :database_error}
   def count_stale(keep, opts) when is_list(opts) do
@@ -1087,8 +1066,8 @@ defmodule Arca.Execution do
     end)
   end
 
-  # Everything past the newest `keep` in the athanor — the one spelling
-  # both the delete and its dry-run count share. A row still "running" is
+  # Everything past the newest `keep` in the athanor: the one spelling
+  # both the selection and its dry-run count share. A row still "running" is
   # never stale whatever its age: deleting it mid-flight blinds the lease
   # sweeper, makes its completion a refusal, and loses its children
   # from the cancel cascade. The sweeper fails a lease-lapsed row first;

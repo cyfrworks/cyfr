@@ -19,7 +19,6 @@ defmodule Locus.Runtime.ChainTest do
   alias Cyfr.Test.TwoServices
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
-  alias Prima.JCS
 
   @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   # Activation digests as the resolver spells them; an assignment carries
@@ -227,7 +226,7 @@ defmodule Locus.Runtime.ChainTest do
       row = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
       assert row.activation_digest != nil
       assert Jason.decode!(row.activation_graph) == %{@root_node => root.release_digest}
-      assert JCS.hash_binary(row.activation_graph) == row.activation_digest
+      assert Prima.Digest.sha256(row.activation_graph) == row.activation_digest
     end
   end
 

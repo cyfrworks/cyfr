@@ -21,12 +21,12 @@ defmodule Prima.ComponentRefTest do
       assert msg =~ "type prefix"
     end
 
-    test "rejects legacy name:version format" do
+    test "rejects name:version without type" do
       assert {:error, msg} = ComponentRef.parse("my-tool:1.0.0")
       assert msg =~ "type prefix"
     end
 
-    test "rejects legacy colon-separated local:name:version" do
+    test "rejects colon-separated local:name:version without type" do
       assert {:error, msg} = ComponentRef.parse("local:my-tool:1.0.0")
       assert msg =~ "type prefix"
     end

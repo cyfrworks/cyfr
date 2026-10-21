@@ -1248,12 +1248,11 @@ defmodule PrismWeb.ShellLive do
   defp card_at(ctx, card, version) do
     ref = Prima.ComponentRef.build("tincture", card.publisher, card.name, version)
 
-    case Compendium.inspect_component(ctx, ref) do
-      {:ok, %{"manifest" => manifest}} ->
-        {:ok, %{card | version: version, manifest: Prima.Manifest.decode(manifest)}}
-
-      _unreadable ->
-        :error
+    with {:ok, %{"manifest" => stored}} <- Compendium.inspect_component(ctx, ref),
+         {:ok, manifest} <- Prima.Manifest.decode_strict(stored) do
+      {:ok, %{card | version: version, manifest: manifest}}
+    else
+      _unreadable -> :error
     end
   end
 

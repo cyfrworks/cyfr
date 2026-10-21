@@ -32,7 +32,7 @@ defmodule Sanctum.Network do
   Resolve and pin a URL under `:private_policy` (`:deny` by default).
 
   `:operator` uses the configured private-egress allowlist; `:allow_all` and
-  `{:fun, predicate}` retain their explicit meanings. Metadata addresses are
+  `{:allowlist, targets}` retain their explicit meanings. Metadata addresses are
   always refused. `:resolver` defaults to `:inet`; remaining transport options
   are the pure `Prima.Network.pin/3` options.
   """

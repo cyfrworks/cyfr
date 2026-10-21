@@ -105,7 +105,7 @@ defmodule Arca.CronScheduleTest do
       assert {:error, :schedule_cap} =
                CronSchedule.create(actor, valid_attrs(%{name: "c", cap: 2}))
 
-      assert CronSchedule.count_active(actor, "schedule") == {:ok, 2}
+      assert Arca.Test.CronSlots.occupied(actor, "schedule") == {:ok, 2}
 
       # A deleted one holds none.
       {:ok, _} = CronSchedule.soft_delete(actor, a.id)
@@ -113,7 +113,7 @@ defmodule Arca.CronScheduleTest do
 
       # A cap of 0 is no ceiling, as the operator's setting reads.
       assert {:ok, _} = CronSchedule.create(actor, valid_attrs(%{name: "d", cap: 0}))
-      assert CronSchedule.count_active(actor, "schedule") == {:ok, 3}
+      assert Arca.Test.CronSlots.occupied(actor, "schedule") == {:ok, 3}
     end
 
     test "refuses a missing or malformed cap, writing nothing", %{actor: actor} do
@@ -127,7 +127,7 @@ defmodule Arca.CronScheduleTest do
                inspect(Map.get(attrs, :cap))
       end
 
-      assert CronSchedule.count_active(actor, "schedule") == {:ok, 0}
+      assert Arca.Test.CronSlots.occupied(actor, "schedule") == {:ok, 0}
     end
 
     test "writes into the actor's athanor, whatever the attributes name", %{actor: actor} do
@@ -141,7 +141,7 @@ defmodule Arca.CronScheduleTest do
 
       homeless = %{actor | athanor_id: "ath_cron_rowless_#{System.unique_integer([:positive])}"}
       assert {:error, :not_found} = CronSchedule.create(homeless, valid_attrs())
-      assert CronSchedule.count_active(homeless, "schedule") == {:ok, 0}
+      assert Arca.Test.CronSlots.occupied(homeless, "schedule") == {:ok, 0}
     end
   end
 
@@ -245,7 +245,7 @@ defmodule Arca.CronScheduleTest do
       {:ok, s2} = CronSchedule.create(actor, valid_attrs(%{name: "c2"}))
       CronSchedule.soft_delete(actor, s2.id)
 
-      assert CronSchedule.count_active(actor, "schedule") == {:ok, 1}
+      assert Arca.Test.CronSlots.occupied(actor, "schedule") == {:ok, 1}
     end
 
     test "counts one kind: a feed is not a schedule", %{actor: actor} do
@@ -254,8 +254,8 @@ defmodule Arca.CronScheduleTest do
       {:ok, removed} = feed!(actor, "c2")
       {:ok, _} = CronSchedule.remove_feed(actor, removed.id)
 
-      assert CronSchedule.count_active(actor, "schedule") == {:ok, 1}
-      assert CronSchedule.count_active(actor, "feed") == {:ok, 1}
+      assert Arca.Test.CronSlots.occupied(actor, "schedule") == {:ok, 1}
+      assert Arca.Test.CronSlots.occupied(actor, "feed") == {:ok, 1}
     end
   end
 
@@ -351,7 +351,7 @@ defmodule Arca.CronScheduleTest do
       {:ok, _} = feed!(actor, "b", 2)
 
       assert {:error, :feed_cap} = feed!(actor, "c", 2)
-      assert CronSchedule.count_active(actor, "feed") == {:ok, 2}
+      assert Arca.Test.CronSlots.occupied(actor, "feed") == {:ok, 2}
 
       {:ok, _} = CronSchedule.remove_feed(actor, a.id)
       assert {:ok, _} = feed!(actor, "c", 2)
@@ -393,7 +393,7 @@ defmodule Arca.CronScheduleTest do
                CronSchedule.create_feed(actor, %{base | cap: -1})
 
       assert {:error, {:validation, _}} = CronSchedule.create_feed(actor, %{binding: binding})
-      assert CronSchedule.count_active(actor, "feed") == {:ok, 0}
+      assert Arca.Test.CronSlots.occupied(actor, "feed") == {:ok, 0}
     end
 
     test "refuses an actor with no athanor, and an athanor with no row", %{actor: actor} do
@@ -512,7 +512,7 @@ defmodule Arca.CronScheduleTest do
       take_over!(slot)
 
       assert {:error, :not_owner} = CronSchedule.create(actor, valid_attrs(%{name: "late"}))
-      assert CronSchedule.count_active(actor, "schedule") == {:ok, 0}
+      assert Arca.Test.CronSlots.occupied(actor, "schedule") == {:ok, 0}
     end
 
     # Every generic writer, one case each: a person's through a surface, an

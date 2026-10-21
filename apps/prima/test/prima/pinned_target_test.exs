@@ -93,7 +93,10 @@ defmodule Prima.PinnedTargetTest do
 
     assert :error = PinnedTarget.read(Map.delete(wire, "expires_at"))
     assert :error = PinnedTarget.read(Map.put(wire, "resolved_from", "dns"))
-    assert :error = PinnedTarget.read(Map.new(wire, fn {k, v} -> {String.to_atom(k), v} end))
+
+    assert :error =
+             PinnedTarget.read(Map.new(wire, fn {k, v} -> {String.to_existing_atom(k), v} end))
+
     assert :error = PinnedTarget.read(@pin)
     assert :error = PinnedTarget.read(nil)
     refute PinnedTarget.valid?(Map.from_struct(@pin))

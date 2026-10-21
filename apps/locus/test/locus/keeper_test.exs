@@ -756,16 +756,14 @@ defmodule Locus.KeeperTest do
       refute_receive {Keeper, _ref, _event}, 200
     end
 
-    test "a spawn's memory bound is its spec's, and a spec may name none", %{
+    test "a spec that names no memory bound is refused before the keeper hears of it", %{
       name: name,
       fake: fake
     } do
-      assert {:ok, handle} =
+      assert {:error, {:spawn_failed, :unencodable_command}} =
                Keeper.spawn(name, %{argv: ["true"], env: %{}, pool: "backends"})
 
-      events_until_released(handle)
-      [spawn] = recorded(fake, "spawn")
-      refute Map.has_key?(spawn, "memory_bytes")
+      assert requests(fake, "spawn") == []
     end
 
     test "stdin is written as frames of the codec's bound, held until the relay attaches", %{

@@ -727,7 +727,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
       :ok =
         Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
           resolved_policy: "not a blob",
-          blob_digest: Prima.JCS.hash_binary("not a blob")
+          blob_digest: Prima.Digest.sha256("not a blob")
         )
 
       assert {:error, {:lender_corrupt, @dep, ^lender} = reason} = run(ctx, ref)
@@ -758,7 +758,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
       :ok =
         Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, borrower,
           resolved_policy: "not a blob",
-          blob_digest: Prima.JCS.hash_binary("not a blob")
+          blob_digest: Prima.Digest.sha256("not a blob")
         )
 
       assert {:error, {:head_corrupt, ^borrower}} = run(ctx, ref)
@@ -823,7 +823,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
       :ok =
         Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
           resolved_policy: "not a blob",
-          blob_digest: Prima.JCS.hash_binary("not a blob")
+          blob_digest: Prima.Digest.sha256("not a blob")
         )
 
       assert commit_over_mcp(ctx, staged) == error_response(-33104, damaged_lender(lender))

@@ -722,10 +722,8 @@ defmodule PrismWeb.SettingsLive do
     with ref when is_binary(ref) <- f(row, :component_ref),
          {:ok, inspected} <- call_tool(socket, "component/inspect", %{"reference" => ref}),
          # `component.inspect` answers string keys (`Compendium.Component.inspect_component/2`).
-         needs when is_list(needs) <-
-           inspected["manifest"]
-           |> Prima.Manifest.decode()
-           |> Prima.Manifest.Needs.from_manifest() do
+         {:ok, manifest} <- Prima.Manifest.decode_strict(inspected["manifest"]),
+         needs when is_list(needs) <- Prima.Manifest.Needs.from_manifest(manifest) do
       Enum.filter(needs, &(&1.kind in @instance_kinds))
     else
       _unread -> []

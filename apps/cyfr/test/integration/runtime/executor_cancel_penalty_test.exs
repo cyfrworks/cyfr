@@ -49,7 +49,7 @@ defmodule Locus.Runtime.ExecutorCancelPenaltyTest do
     # The penalty box outlives a force-release: what this suite fills for
     # its tenant, it empties.
     on_exit(fn ->
-      Slots.forgive_unreaped(@slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(@slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do
@@ -70,7 +70,7 @@ defmodule Locus.Runtime.ExecutorCancelPenaltyTest do
     on_exit(fn -> :telemetry.detach(handler) end)
 
     Sanctum.TestContext.ready!(ctx.athanor_id)
-    Slots.forgive_unreaped(@slots, ctx.athanor_id)
+    Prima.Test.Slots.clear_unreaped(@slots, ctx.athanor_id)
     {:ok, ctx: ctx}
   end
 

@@ -289,8 +289,7 @@ fn args ->
           runs: row.run_count,
           errors: row.error_count,
           next_run_at: next && DateTime.to_iso8601(next),
-          next_run_in_s:
-            next && DateTime.diff(next, DateTime.utc_now(), :millisecond) / 1000
+          next_run_in_s: next && DateTime.diff(next, DateTime.utc_now(), :millisecond) / 1000
         }
 
       {:error, :not_found} ->
@@ -307,7 +306,11 @@ fn args ->
       Opus.Feeds.accept(ctx, binding, seq, %{"status" => 200, "data" => data}, slot)
 
     :ok =
-      Cyfr.Bus.broadcast(actor, Cyfr.Bus.feeds(actor), Cyfr.Bus.FeedPublished.new(actor, envelope))
+      Cyfr.Bus.broadcast(
+        actor,
+        Cyfr.Bus.feeds(actor),
+        Cyfr.Bus.FeedPublished.new(actor, envelope)
+      )
 
     envelope
   end
@@ -324,7 +327,8 @@ fn args ->
           "type" => "catalyst",
           "version" => version,
           "publisher" => "local",
-          "description" => "The canvas proof's feed source: it declares its results and runs nothing.",
+          "description" =>
+            "The canvas proof's feed source: it declares its results and runs nothing.",
           "results" => %{"quote" => candle_shape}
         })
 
@@ -361,7 +365,7 @@ fn args ->
             invoke_mode: "open_inert",
             shape_digest: "sha256:" <> String.duplicate("0", 64),
             commit_digest: "sha256:" <> String.duplicate("0", 64),
-            blob_digest: Prima.JCS.hash_binary(policy),
+            blob_digest: Prima.Digest.sha256(policy),
             resolved_policy: policy,
             activation: Jason.encode!(%{}),
             admitted_origins: [:interactive, :schedule],
@@ -395,18 +399,24 @@ fn args ->
 
     ["bearer", token, reference] ->
       ctx = establish.(token)
+
       {:ok, %{"release_digest" => "sha256:" <> _ = digest, "manifest" => _}} =
         Compendium.inspect_component(ctx, reference)
 
       {:ok, parsed} = Prima.ComponentRef.parse(reference)
       ref = %{publisher: parsed.namespace, name: parsed.name, version: parsed.version}
+
       {:ok, revision} =
         Compendium.tincture_grant_revision(
           ctx,
           Prima.ComponentRef.build("tincture", parsed.namespace, parsed.name, parsed.version)
         )
+
       frame_id = "frm_" <> Base.url_encode64(:crypto.strong_rand_bytes(15), padding: false)
-      {:ok, minted} = Sanctum.TinctureAuth.mint_frame_credential(ctx, ref, digest, revision, frame_id)
+
+      {:ok, minted} =
+        Sanctum.TinctureAuth.mint_frame_credential(ctx, ref, digest, revision, frame_id)
+
       answer.(%{bearer: minted.credential, frame: frame_id})
 
     ["failed_fire", token, binding] ->

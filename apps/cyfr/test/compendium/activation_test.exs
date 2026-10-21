@@ -278,7 +278,7 @@ defmodule Compendium.ActivationTest do
       {:ok, %{digest: digest, graph: graph}} = Activation.resolve(ctx, root)
       {:ok, encoded} = Activation.encode_graph(graph)
 
-      assert Prima.JCS.hash_binary(encoded) == digest
+      assert Prima.Digest.sha256(encoded) == digest
       assert Jason.decode!(encoded) == graph
     end
 

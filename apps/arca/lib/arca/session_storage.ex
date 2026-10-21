@@ -20,8 +20,8 @@ defmodule Arca.SessionStorage do
   round, and refuses an epoch that is not the cached head's current one
   (`Arca.DirectoryHeads.bindable!/2`, read under the person's lock, so an
   advance that retires the epoch either retires this session or refuses
-  it). `revoke_key_epoch/3` ends every session carrying a `key_epoch` a
-  fresh head retired.
+  it). The advance ends every session carrying a `key_epoch` the fresh
+  head retired.
   """
 
   import Ecto.Query
@@ -293,27 +293,12 @@ defmodule Arca.SessionStorage do
     end
   end
 
-  @doc """
-  End every session of the people `user_ids` that carries `key_epoch`: a
-  fresh head retired it, and a session minted under a live key the head no
-  longer names must not outlive the refresh. The platform's own actor
-  only. Answers the token hashes it ended, for the caller to invalidate
-  after commit.
-  """
-  @spec revoke_key_epoch(Prima.Actor.t(), [String.t()], String.t()) ::
-          {:ok, [binary()]} | {:error, :cross_tenant | :database_error}
-  def revoke_key_epoch(%Prima.Actor{scope: :platform, system: true}, user_ids, key_epoch)
-      when is_list(user_ids) and is_binary(key_epoch) do
-    Arca.Repo.Errors.with_db_rescue("Arca.SessionStorage.revoke_key_epoch", fn ->
-      Arca.Repo.locking_transaction(fn -> delete_key_epoch!(user_ids, key_epoch) end)
-    end)
-  end
-
-  def revoke_key_epoch(%Prima.Actor{}, _user_ids, _key_epoch), do: {:error, :cross_tenant}
-
   @doc false
-  # The statement behind `revoke_key_epoch/3`, run in a caller's
-  # transaction (`Arca.DirectoryHeads.advance/4`).
+  # End every session of the people `user_ids` that carries `key_epoch`: a
+  # fresh head retired it, and a session minted under a live key the head
+  # no longer names must not outlive the refresh. Answers the token hashes
+  # it ended, for the caller to invalidate after commit. Run in the
+  # caller's transaction (`Arca.DirectoryHeads.advance/4`).
   @spec delete_key_epoch!([String.t()], String.t()) :: [binary()]
   def delete_key_epoch!([], _key_epoch), do: []
 

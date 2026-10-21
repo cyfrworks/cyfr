@@ -834,7 +834,7 @@ defmodule Aqua.ScheduleNotesSchedulerTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       # A switch the suite holds `false` is put back as `false`: deleted,

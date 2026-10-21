@@ -351,12 +351,15 @@ defmodule Opus.Feeds do
   defp result_shape(ctx, pinned, reference, operation) do
     case Compendium.inspect_component(ctx, pinned) do
       {:ok, row} ->
-        case Prima.Manifest.decode(Map.get(row, "manifest")) do
-          %{"results" => %{} = results} when is_map_key(results, operation) ->
+        case Prima.Manifest.decode_strict(Map.get(row, "manifest")) do
+          {:ok, %{"results" => %{} = results}} when is_map_key(results, operation) ->
             {:ok, Map.fetch!(results, operation)}
 
-          _declares_none ->
+          {:ok, _declares_none} ->
             {:error, {:invalid_argument, "#{operation} declares no result shape"}}
+
+          {:error, :malformed_manifest} ->
+            {:error, {:unavailable, "Component"}}
         end
 
       {:error, {:not_found, _what}} ->

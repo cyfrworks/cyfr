@@ -162,26 +162,6 @@ defmodule Arca.DeviceCertificates do
 
   def revoke(%Prima.Actor{}, _id), do: {:error, :no_athanor}
 
-  @doc """
-  Revoke every certificate of the paired client `paired_client_id` in the
-  actor's athanor, answering the ids it revoked, sorted.
-  """
-  @spec revoke_for_client(Prima.Actor.t(), String.t()) ::
-          {:ok, [String.t()]} | {:error, :no_athanor | :database_error}
-  def revoke_for_client(%Prima.Actor{athanor_id: athanor_id} = actor, paired_client_id)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(paired_client_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.DeviceCertificates.revoke_for_client", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        DeviceCertificate
-        |> QueryHelpers.where_tenant(actor)
-        |> where([c], c.paired_client_id == ^paired_client_id)
-        |> revoke_all()
-      end)
-    end)
-  end
-
-  def revoke_for_client(%Prima.Actor{}, _paired_client_id), do: {:error, :no_athanor}
-
   @doc false
   # Revoke every active certificate `query` names, in the caller's
   # transaction or its own statement, answering the ids it revoked, sorted.

@@ -135,7 +135,7 @@ defmodule PrismWeb.ShellTinctureUrlTest do
           invoke_mode: :open_inert,
           shape_digest: :live,
           commit_digest: "sha256:commit",
-          blob_digest: Prima.JCS.hash_binary(policy),
+          blob_digest: Prima.Digest.sha256(policy),
           resolved_policy: policy,
           activation: %{@source => "sha256:act"}
         }

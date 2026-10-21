@@ -7,8 +7,8 @@ defmodule Prima.WorkerAuth do
   `Prima.MacEnvelope`. `tests/fixtures/worker_auth.json` holds the vectors
   every derivation, MAC and seal here must reproduce.
 
-  One root secret of 32 bytes (`CYFR_LOCUS_RUNTIME_ROOT`, `decode_root/1`) is
-  CYFR's. Every key is derived from it, so nothing but the root is
+  One root secret of 32 bytes (`CYFR_LOCUS_RUNTIME_ROOT`, 64 hexadecimal
+  digits, `Prima.MacEnvelope.decode_root/1`) is CYFR's. Every key is derived from it, so nothing but the root is
   configured and nothing is stored:
 
   | Key | Derived from, over | Held by | Use |
@@ -340,13 +340,6 @@ defmodule Prima.WorkerAuth do
   `verify_body/2` checks the body against.
   """
   @type body_hash :: String.t()
-
-  @doc """
-  The root secret `CYFR_LOCUS_RUNTIME_ROOT` spells: exactly 64 hexadecimal digits,
-  in either case. Anything else is `:error`.
-  """
-  @spec decode_root(term()) :: {:ok, binary()} | :error
-  defdelegate decode_root(text), to: MacEnvelope
 
   @doc """
   How far a header's `ts` may be from the verifier's clock, in

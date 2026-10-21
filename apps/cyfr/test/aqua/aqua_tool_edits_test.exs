@@ -207,7 +207,7 @@ defmodule Aqua.AquaToolEditsTest do
 
     # Published: the row, the journal, and the role reads already.
     assert {:ok, %{state: "committed"}} = Arca.StorageUnits.current(actor, root, key)
-    assert {:ok, [_one_commit]} = Arca.StorageUnits.journal(actor, root, key)
+    assert {:ok, [_one_commit]} = Arca.Test.StorageJournal.journal(actor, root, key)
     assert Arca.exists?(actor, role)
 
     # The commit stamped the role pending and its release never came: the

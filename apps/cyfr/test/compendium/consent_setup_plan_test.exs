@@ -699,7 +699,7 @@ defmodule Compendium.ConsentSetupPlanTest do
       :ok =
         Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, lender,
           resolved_policy: "not a blob",
-          blob_digest: Prima.JCS.hash_binary("not a blob")
+          blob_digest: Prima.Digest.sha256("not a blob")
         )
 
       assert detail!(ctx, ref) == damaged

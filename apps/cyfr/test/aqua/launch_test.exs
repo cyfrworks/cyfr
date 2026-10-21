@@ -522,7 +522,7 @@ defmodule Aqua.LaunchTest do
       )
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(upstream)
-    on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id) end)
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
     probe = publish_probe!(ctx)
     default = attached_entry!(ctx, port, "default", @default_secret)
@@ -731,7 +731,7 @@ defmodule Aqua.LaunchTest do
   # Work's entry: the fixture, with the step the loop hands the dispatcher.
   defp approved_work_launch!(ctx, thread, pins, approver) do
     Cyfr.Test.Sandbox.stop_work_on_exit()
-    on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id) end)
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
     %{args: args, work: work} = fixture = work_app!(ctx)
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
@@ -833,7 +833,7 @@ defmodule Aqua.LaunchTest do
          "entry in hand, and the run carries no expectation past its root's admission",
        %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
-    on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id) end)
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
     %{app: app, work: work, args: args} = work_app!(ctx)
     turn = started!(%{ctx | origin: :interactive}, thread, pins)
@@ -875,7 +875,7 @@ defmodule Aqua.LaunchTest do
          "refused, and the run it starts is rooted with none",
        %{ctx: ctx} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
-    on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id) end)
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
     %{app: app, other: other, args: args} = work_app!(ctx)
     run = Map.put(args, "action", "run")
@@ -960,7 +960,7 @@ defmodule Aqua.LaunchTest do
   test "a card drawn when its app had no grant lets nothing flow, whatever grant its root loads",
        %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
-    on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id) end)
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
     app = publish_app!(ctx)
     args = %{"reference" => app <> ":1.0.0", "input" => %{}}
@@ -994,7 +994,7 @@ defmodule Aqua.LaunchTest do
          "classes its card lets flow in the root's policy",
        %{ctx: ctx, thread: thread, pins: pins, approver: approver} do
     Cyfr.Test.Sandbox.stop_work_on_exit()
-    on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id) end)
+    on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id) end)
 
     %{app: app, args: args} = granted_app!(ctx)
     turn = started!(%{ctx | origin: :interactive}, thread, pins)

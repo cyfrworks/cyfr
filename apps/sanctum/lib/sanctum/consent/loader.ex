@@ -343,7 +343,7 @@ defmodule Sanctum.Consent.Loader do
   # Tampering returns an integrity error regardless of parse validity.
   defp check_blob_digest(%{blob_digest: stored, resolved_policy: policy})
        when is_binary(stored) and is_binary(policy) do
-    if Plug.Crypto.secure_compare(JCS.hash_binary(policy), stored) do
+    if Plug.Crypto.secure_compare(Prima.Digest.sha256(policy), stored) do
       :ok
     else
       {:error, {:blob_digest_mismatch, stored}}

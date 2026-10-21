@@ -94,12 +94,12 @@ defmodule Prima.BuilderProtocol do
 
   ## Authentication
 
-  One 32-byte key per Locus service (`LOCUS_BUILDS_KEY`, `decode_key/1`)
-  is shared by CYFR and the builder. The key a request is signed with is
-  derived from it over the service's label, `cyfr-locus/v1/builds`
-  (`request_key/1`), and the signature is `Prima.MacEnvelope`'s over that
-  label as its prefix, the kind `request`, a timestamp in Unix
-  milliseconds, a nonce and the body's hash, carried in the `x-cyfr-auth`
+  One 32-byte key per Locus service (`LOCUS_BUILDS_KEY`, 64 hexadecimal
+  digits, `Prima.MacEnvelope.decode_root/1`) is shared by CYFR and the
+  builder. The key a request is signed with is derived from it over the
+  service's label, `cyfr-locus/v1/builds` (`request_key/1`), and the
+  signature is `Prima.MacEnvelope`'s over that label as its prefix, the
+  kind `request`, a timestamp in Unix milliseconds, a nonce and the body's hash, carried in the `x-cyfr-auth`
   header (`auth_header/0`). The domain `cyfr-locus/v1` is shared with
   every Locus service; the label names one, so neither the key nor a
   header of another service (`backends`) verifies a build request. A
@@ -443,10 +443,6 @@ defmodule Prima.BuilderProtocol do
   def max_log_bytes, do: @max_log_bytes
 
   # ————— authentication —————
-
-  @doc "The service key `LOCUS_BUILDS_KEY` or `CYFR_LOCUS_BUILDS_KEY` spells: 64 hexadecimal digits."
-  @spec decode_key(term()) :: {:ok, binary()} | :error
-  defdelegate decode_key(text), to: MacEnvelope, as: :decode_root
 
   @doc "The key build requests are signed with, derived from the service key over this service's label."
   @spec request_key(binary()) :: binary()
@@ -935,7 +931,7 @@ defmodule Prima.BuilderProtocol do
       "#{describe_version(client)}; run the builder image of the same release as this server"
   end
 
-  defp describe_version(nil), do: "no builder protocol (a release older than this one)"
+  defp describe_version(nil), do: "no builder protocol"
   defp describe_version(version), do: "builder protocol #{version}"
 
   # ————— reading —————

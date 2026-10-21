@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.Carry: every side re-signs each envelope whose signer is named and reproduces its sig (signer null: altered after signing), walks the identity entries to each head, checks each envelope under the named head against the expected destination, action and payload digest with the given clock (Unix milliseconds; skew and max_age in milliseconds), reaching the named result or refusal, answers each replay from what was recorded for the action id (the digest over the accepted envelope's JCS bytes and its acknowledgment), reproduces the valid fragment and parses it back, holds payloads to 8 KiB of JCS bytes and fragments to 16 KiB before decoding, and reads, refuses and replays each return. A filler_length case is the payload {\"filler\": that many 'a'}; a repeat case is that many copies of char.",
+  "comment": "The vectors pinning Prima.Carry: every side re-signs each envelope whose signer is named and reproduces its sig (signer null: altered after signing), walks the identity entries to each head, checks each envelope under the named head against the expected destination, action and payload digest with the given clock (Unix milliseconds; skew and max_age in milliseconds), reaching the named result or refusal, reproduces the valid fragment and parses it back, holds payloads to 8 KiB of JCS bytes and fragments to 16 KiB before decoding, and reads and refuses each return. A filler_length case is the payload {\"filler\": that many 'a'}; a repeat case is that many copies of char.",
   "envelopes": {
     "destination_substituted": {
       "envelope": {
@@ -284,47 +284,6 @@
   },
   "payload_digest": "sha256:d444b4370d812b79c53fb639cde7aaadc0920898dd89afb142f35d7f7306cb98",
   "protocol": "cyfr-carry/v1",
-  "replay": [
-    {
-      "envelope": "valid",
-      "name": "an action id answered for the first time",
-      "recorded": null,
-      "result": "fresh"
-    },
-    {
-      "ack": {
-        "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
-        "outcome": "admitted",
-        "protocol": "cyfr-carry/v1"
-      },
-      "envelope": "valid",
-      "name": "the exact envelope again",
-      "recorded": {
-        "ack": {
-          "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
-          "outcome": "admitted",
-          "protocol": "cyfr-carry/v1"
-        },
-        "digest": "sha256:ecfa7b0c488475c62f449cd5351eacdcf1b39a7bb2d9f1a9f772438ce2dc19a3",
-        "envelope": "valid"
-      },
-      "result": "duplicate"
-    },
-    {
-      "envelope": "issued_later",
-      "error": "action_reused",
-      "name": "a reused action id with different bytes",
-      "recorded": {
-        "ack": {
-          "action_id": "cry_01a09fee-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
-          "outcome": "admitted",
-          "protocol": "cyfr-carry/v1"
-        },
-        "digest": "sha256:ecfa7b0c488475c62f449cd5351eacdcf1b39a7bb2d9f1a9f772438ce2dc19a3",
-        "envelope": "valid"
-      }
-    }
-  ],
   "returns": {
     "admitted": {
       "fragment": "eyJhY3Rpb25faWQiOiJjcnlfMDFhMDlmZWUtNWU2Zi03YThiLTljMGQtMWUyZjNhNGI1YzZkIiwib3V0Y29tZSI6ImFkbWl0dGVkIiwicHJvdG9jb2wiOiJjeWZyLWNhcnJ5L3YxIn0",
@@ -370,27 +329,7 @@
         "outcome": "refused",
         "protocol": "cyfr-carry/v1"
       }
-    },
-    "replay": [
-      {
-        "name": "a first return",
-        "recorded": null,
-        "result": "fresh",
-        "return": "admitted"
-      },
-      {
-        "name": "the same return again",
-        "recorded": "admitted",
-        "result": "duplicate",
-        "return": "admitted"
-      },
-      {
-        "error": "outcome_changed",
-        "name": "a changed outcome under the same action",
-        "recorded": "admitted",
-        "return": "refused"
-      }
-    ]
+    }
   },
   "verify": [
     {

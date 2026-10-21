@@ -378,10 +378,13 @@ defmodule Compendium.Canvas do
     end
   end
 
+  # A stored manifest that does not decode is damage: it places nothing,
+  # so the version is refused as a canvas.
   defp placement(manifest) do
-    case Prima.Manifest.decode(manifest) do
-      %{"tincture" => %{"frame" => %{"placement" => placement}}} -> placement
-      _ -> nil
+    case Prima.Manifest.decode_strict(manifest) do
+      {:ok, %{"tincture" => %{"frame" => %{"placement" => placement}}}} -> placement
+      {:ok, _places_nothing} -> nil
+      {:error, :malformed_manifest} -> nil
     end
   end
 

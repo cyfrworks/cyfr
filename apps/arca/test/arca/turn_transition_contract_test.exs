@@ -3,8 +3,8 @@
 
 defmodule Arca.TurnTransitionContractTest do
   @moduledoc """
-  Every transition whose legality once rested on the caller's map is
-  decided by the rows: for each, the move the rows do not allow is refused
+  Every turn transition here is decided by the stored rows, never by the
+  map the caller holds: for each, the move the rows do not allow is refused
   and writes nothing, and the one they allow is admitted. The rows are
   read after the turn row is taken, so a caller's stale view decides
   nothing, and of two writers racing on one fence exactly one lands.

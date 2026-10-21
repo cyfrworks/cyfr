@@ -107,7 +107,7 @@ defmodule Cyfr.AdmissionOriginTest do
     Application.put_env(:arca, :base_path, base)
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Opus.Slots, Sanctum.TestContext.local().athanor_id)
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, Sanctum.TestContext.local().athanor_id)
       Prima.Test.RateLimiter.reset!()
       File.rm_rf!(base)
 

@@ -261,8 +261,9 @@ defmodule Prima.Limits do
     {:error, "Invalid duration. Expected a string like '30s', '5m', '1h', or '500ms'"}
   end
 
+  # Exactly one suffix comes off: "5mm" is not a number of minutes.
   defp parse_int_unit(str, suffix, multiplier) do
-    raw = String.trim_trailing(str, suffix)
+    raw = binary_part(str, 0, byte_size(str) - byte_size(suffix))
 
     case Integer.parse(raw) do
       {n, ""} ->

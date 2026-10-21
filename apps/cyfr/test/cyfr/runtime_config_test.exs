@@ -150,7 +150,7 @@ defmodule Cyfr.RuntimeConfigTest do
                    "CYFR_S3_REGION" => "us-east-1",
                    "CYFR_S3_ACCESS_KEY_ID" => "ak",
                    "CYFR_S3_SECRET_ACCESS_KEY" => "sk",
-                   "CYFR_S3_PATH_STYLE" => "true",
+                   "CYFR_S3_PATH_STYLE" => "on",
                    "CYFR_S3_ENDPOINT" => "http://minio:9000"
                  })
                )
@@ -163,7 +163,7 @@ defmodule Cyfr.RuntimeConfigTest do
       assert opts[:endpoint] == "http://minio:9000"
     end
 
-    test "CYFR_S3_PATH_STYLE is a switch: on in any spelling, off by default, a misspelling refuses" do
+    test "CYFR_S3_PATH_STYLE is a switch: on, off by default, any other spelling refuses" do
       base = %{
         "CYFR_STORAGE" => "s3",
         "CYFR_S3_BUCKET" => "b",
@@ -172,11 +172,14 @@ defmodule Cyfr.RuntimeConfigTest do
         "CYFR_S3_SECRET_ACCESS_KEY" => "sk"
       }
 
-      for on <- ~w(on yes 1 TRUE) do
-        assert {:ok, {:s3, opts}} =
-                 RuntimeConfig.resolve_storage(env(Map.put(base, "CYFR_S3_PATH_STYLE", on)))
+      assert {:ok, {:s3, opts}} =
+               RuntimeConfig.resolve_storage(env(Map.put(base, "CYFR_S3_PATH_STYLE", "on")))
 
-        assert opts[:path_style] == true
+      assert opts[:path_style] == true
+
+      for other <- ~w(yes 1 TRUE) do
+        assert {:error, _message} =
+                 RuntimeConfig.resolve_storage(env(Map.put(base, "CYFR_S3_PATH_STYLE", other)))
       end
 
       assert {:ok, {:s3, opts}} = RuntimeConfig.resolve_storage(env(base))
@@ -525,7 +528,7 @@ defmodule Cyfr.RuntimeConfigTest do
                  env(%{
                    "CYFR_DATABASE_URL" => "postgres://u:p@h:5432/db",
                    "CYFR_DB_POOL_SIZE" => "10",
-                   "CYFR_DB_SSL" => "true"
+                   "CYFR_DB_SSL" => "on"
                  })
                )
 
@@ -533,12 +536,15 @@ defmodule Cyfr.RuntimeConfigTest do
       assert opts[:ssl] == true
     end
 
-    test "CYFR_DB_SSL is a switch: on in any spelling, a misspelling refuses" do
+    test "CYFR_DB_SSL is a switch: on, and any other spelling refuses" do
       url = %{"CYFR_DATABASE_URL" => "postgres://u:p@h:5432/db"}
 
-      for on <- ~w(on yes 1 TRUE) do
-        assert {:ok, opts} = RuntimeConfig.resolve_postgres(env(Map.put(url, "CYFR_DB_SSL", on)))
-        assert opts[:ssl] == true
+      assert {:ok, opts} = RuntimeConfig.resolve_postgres(env(Map.put(url, "CYFR_DB_SSL", "on")))
+      assert opts[:ssl] == true
+
+      for other <- ~w(yes 1 TRUE) do
+        assert {:error, _message} =
+                 RuntimeConfig.resolve_postgres(env(Map.put(url, "CYFR_DB_SSL", other)))
       end
 
       assert {:error, message} =

@@ -85,7 +85,7 @@ defmodule Arca.CanvasVersionsTest do
     # The bytes are the document's canonical JSON, absent fields omitted.
     {:ok, bytes} = CanvasVersions.encode(allocated)
     assert bytes == ~s({"allocated":"0.1.0","version":1})
-    assert digest == Prima.JCS.hash_binary(bytes)
+    assert digest == Prima.Digest.sha256(bytes)
     assert stored_row(actor, name).digest == digest
 
     working =
@@ -176,7 +176,7 @@ defmodule Arca.CanvasVersionsTest do
 
     {1, _} =
       Arca.Repo.update_all(row_query(actor, name),
-        set: [blob_key: "staging/" <> staged, digest: Prima.JCS.hash_binary(foreign)]
+        set: [blob_key: "staging/" <> staged, digest: Prima.Digest.sha256(foreign)]
       )
 
     assert {:error, :corrupt} = CanvasVersions.get(actor, name)
@@ -194,7 +194,6 @@ defmodule Arca.CanvasVersionsTest do
     {:ok, bytes} = CanvasVersions.encode(full)
     assert {:ok, ^full} = CanvasVersions.decode(bytes)
     assert {:ok, ~s({"version":1})} = CanvasVersions.encode(document())
-    assert CanvasVersions.outcomes() == ["no_tree", "died"]
 
     for bad <- [
           %{document() | version: 2},

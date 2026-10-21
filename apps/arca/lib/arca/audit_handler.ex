@@ -13,13 +13,11 @@ defmodule Arca.AuditHandler do
   `[:cyfr, :audit, :recorded]` telemetry event carrying the same struct,
   which is where a deployment's own SIEM or object-store trail attaches.
 
-  That second way is the extension point. What stood here before was a
-  behaviour and a list of modules in configuration, with one
-  implementation shipped, and a fan-out, a per-sink rescue and an
-  all-sinks-failed alarm around it. An audit trail's readers are consumers
-  of a telemetry event, and this repository declares and drift-checks its
-  telemetry consumers in one place, so they are consumers of one there
-  now.
+  That second way is the extension point. An audit trail's readers are
+  consumers of a telemetry event, and this repository declares and
+  drift-checks its telemetry consumers in one place, the telemetry
+  catalog, so a trail beyond the log line attaches there rather than
+  through configuration here.
 
   ## Monitored Events
 

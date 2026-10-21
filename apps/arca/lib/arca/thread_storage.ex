@@ -173,8 +173,8 @@ defmodule Arca.ThreadStorage do
   end
 
   # `threads.athanor_id` names no foreign key, so a create in an athanor
-  # with no row lands as it always has; only an athanor with a row has one
-  # to hold.
+  # with no row lands with nothing locked; only an athanor with a row has
+  # one to hold.
   defp lock_athanor(%Prima.Actor{athanor_id: athanor_id}) do
     from(a in Athanor, where: a.id == ^athanor_id, select: a.id)
     |> QueryHelpers.for_update()

@@ -342,35 +342,6 @@ defmodule Arca.Athanors do
 
   def count_people_created_since(%Prima.Actor{}, _since), do: {:error, :cross_tenant}
 
-  @doc """
-  The ACTIVE open groups this person created — what the per-person group
-  cap counts. A frozen pair is not a group they made and is counted by
-  `count_pairs_of/2` instead.
-  """
-  @spec count_groups_created_by(Prima.Actor.t(), String.t()) ::
-          {:ok, non_neg_integer()} | refusal()
-  def count_groups_created_by(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Athanors.count_groups_created_by", fn ->
-      counted(groups_created_by(user_id))
-    end)
-  end
-
-  def count_groups_created_by(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
-
-  @doc """
-  Every ACTIVE pair this person sits in — the pair cap's measure. Counted
-  by membership and not by `created_by`: a pair is minted for two, and the
-  one who did not click holds it just the same.
-  """
-  @spec count_pairs_of(Prima.Actor.t(), String.t()) :: {:ok, non_neg_integer()} | refusal()
-  def count_pairs_of(%Prima.Actor{scope: :platform}, user_id) when is_binary(user_id) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Athanors.count_pairs_of", fn ->
-      counted(pairs_of(user_id))
-    end)
-  end
-
-  def count_pairs_of(%Prima.Actor{}, _user_id), do: {:error, :cross_tenant}
-
   # ---- internal --------------------------------------------------------------
 
   defp do_insert(attrs) do
@@ -450,6 +421,8 @@ defmodule Arca.Athanors do
   # What each cap counts, one definition for the mint and the reads.
   defp active_athanors, do: from(a in Athanor, where: a.status == "active", select: count(a.id))
 
+  # The ACTIVE open groups this person created. A frozen pair is not a
+  # group they made and is counted by `pairs_of/1` instead.
   defp groups_created_by(user_id) do
     from(a in Athanor,
       where:
@@ -459,6 +432,9 @@ defmodule Arca.Athanors do
     )
   end
 
+  # Every ACTIVE pair this person sits in, counted by membership and not by
+  # `created_by`: a pair is minted for two, and the one who did not click
+  # holds it just the same.
   defp pairs_of(user_id) do
     from(a in Athanor,
       join: m in Membership,

@@ -64,7 +64,7 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
     Sanctum.TestContext.ready!(ctx.athanor_id)
 
     on_exit(fn ->
-      Slots.forgive_unreaped(@slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(@slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {key, value} <- previous do

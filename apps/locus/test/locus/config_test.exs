@@ -371,6 +371,24 @@ defmodule Locus.ConfigTest do
     refute message =~ "not-a-key"
   end
 
+  # Whether the protocol's codec refuses `bytes` as a spawn's memory bound,
+  # on a spawn whose every other member is well formed.
+  defp bound_refused?(bytes) do
+    spawn = %{
+      type: :spawn,
+      id: "1",
+      pool: "build",
+      argv: ["true"],
+      attach: %{path: "/run/a.sock", token: String.duplicate("ab", 32)},
+      memory_bytes: bytes
+    }
+
+    _line = Prima.KeeperProtocol.encode(spawn)
+    false
+  rescue
+    error in ArgumentError -> String.starts_with?(error.message, "memory_bytes ")
+  end
+
   test "the memory bound takes the whole of the keeper's range, both ends, and nothing outside it" do
     # One range, the keeper protocol's.
     assert Config.memory_range() ==
@@ -383,13 +401,20 @@ defmodule Locus.ConfigTest do
       |> File.read!()
       |> Jason.decode!()
 
-    # A spawn's own bound: a whole number refused for what it is, not for
-    # the request it rides on.
-    bounds = fn requests ->
-      for %{"request" => %{"type" => "spawn", "memory_bytes" => bytes}} <- requests,
-          is_integer(bytes),
-          do: bytes
-    end
+    # The whole-number bounds the refused spawns carry, split by what the
+    # protocol's codec refuses on a spawn otherwise well formed: a bound
+    # refused for what it is, and a well-formed bound carried by a spawn
+    # refused for another of its members.
+    {refused, carried} =
+      for(
+        %{"request" => %{"type" => "spawn", "memory_bytes" => bytes}} <-
+          vectors["invalid_requests"],
+        is_integer(bytes),
+        do: bytes
+      )
+      |> Enum.split_with(&bound_refused?/1)
+
+    assert refused != []
 
     accepted =
       for %{"memory_bytes" => bytes} <- vectors["valid_requests"], do: bytes
@@ -403,20 +428,21 @@ defmodule Locus.ConfigTest do
 
     # What the keeper accepts as a spawn's bound, this setting accepts.
     # The same for a build's bound, a backend's and a runner's.
+    # A bound a refused spawn carries beside its malformed member is one
+    # the keeper accepts, and so does this setting.
     for {base, variable, read} <- [
           {full(), "LOCUS_BUILDS_MEMORY_BYTES", & &1[:memory_bytes]},
           {full(), "LOCUS_BACKENDS_MEMORY_BYTES", & &1[:backends_memory_bytes]},
           {runtime, "LOCUS_RUNTIME_MEMORY_BYTES", & &1[:runtime][:runner_memory_bytes]}
         ] do
-      for bytes <- accepted do
+      for bytes <- accepted ++ carried do
         env = env(Map.put(base, variable, Integer.to_string(bytes)))
         assert {:ok, settings} = Config.from_env(env)
         assert read.(settings) == bytes
       end
 
-      # And what the keeper refuses, this setting refuses at the boot.
-      refused = bounds.(vectors["invalid_requests"])
-      assert refused != []
+      # And what the keeper refuses as a bound, this setting refuses at
+      # the boot.
 
       for bytes <- refused do
         env = env(Map.put(base, variable, Integer.to_string(bytes)))

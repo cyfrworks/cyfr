@@ -69,7 +69,7 @@ defmodule Opus.FeedsTest do
     ctx = Sanctum.TestContext.local()
 
     on_exit(fn ->
-      Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
+      Prima.Test.Slots.clear_unreaped(Opus.Slots, ctx.athanor_id)
       File.rm_rf!(test_path)
 
       for {{app, key}, value} <- prev do
@@ -807,8 +807,8 @@ defmodule Opus.FeedsTest do
 
       # And the feeds' bound counts feeds only, beside three schedules.
       assert {:error, :feed_cap} = bind(actor, feed_binding("feed-3"), 2)
-      assert {:ok, 3} = CronSchedule.count_active(actor, "schedule")
-      assert {:ok, 2} = CronSchedule.count_active(actor, "feed")
+      assert {:ok, 3} = Arca.Test.CronSlots.occupied(actor, "schedule")
+      assert {:ok, 2} = Arca.Test.CronSlots.occupied(actor, "feed")
     end
   end
 
@@ -1278,7 +1278,7 @@ defmodule Opus.FeedsRaceTest do
 
     assert Enum.count(answers, &match?({:ok, _}, &1)) == cap
     assert Enum.count(answers, &(&1 == {:error, :feed_cap})) == @binds - cap
-    assert {:ok, ^cap} = unboxed(fn -> CronSchedule.count_active(actor, "feed") end)
+    assert {:ok, ^cap} = unboxed(fn -> Arca.Test.CronSlots.occupied(actor, "feed") end)
   end
 
   defp feed_binding(name) do

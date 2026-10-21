@@ -105,7 +105,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         invoke_mode: :open_inert,
         shape_digest: "sha256:shape-claude",
         commit_digest: "sha256:commit-claude",
-        blob_digest: Keyword.get(opts, :blob_digest, JCS.hash_binary(policy)),
+        blob_digest: Keyword.get(opts, :blob_digest, Prima.Digest.sha256(policy)),
         resolved_policy: policy,
         activation: %{source_ref => "sha256:act-c"},
         admitted_origins: Keyword.get(opts, :origins, [:interactive]),
@@ -151,7 +151,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         invoke_mode: :open_inert,
         shape_digest: "sha256:shape-aqua",
         commit_digest: "sha256:commit-aqua",
-        blob_digest: JCS.hash_binary(policy),
+        blob_digest: Prima.Digest.sha256(policy),
         resolved_policy: policy,
         activation: @activation,
         admitted_origins: origins,
@@ -499,7 +499,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
         invoke_mode: :open_inert,
         shape_digest: "sha256:shape-aqua",
         commit_digest: "sha256:commit-aqua",
-        blob_digest: JCS.hash_binary(policy),
+        blob_digest: Prima.Digest.sha256(policy),
         resolved_policy: policy,
         activation: Map.put(@activation, role, "sha256:act-r"),
         vault_refs:
@@ -616,7 +616,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
       :ok =
         ConsentFixtures.hand_edit_head!(ctx, "prof-claude",
           resolved_policy: "not a blob",
-          blob_digest: JCS.hash_binary("not a blob")
+          blob_digest: Prima.Digest.sha256("not a blob")
         )
 
       assert Loader.row_binding(ctx, consent, row) == damaged
@@ -707,7 +707,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
       :ok =
         ConsentFixtures.hand_edit_head!(ctx, "prof-claude",
           resolved_policy: "not a blob",
-          blob_digest: JCS.hash_binary("not a blob")
+          blob_digest: Prima.Digest.sha256("not a blob")
         )
 
       assert load(ctx, profile) == damaged
@@ -729,7 +729,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
       :ok =
         ConsentFixtures.hand_edit_head!(ctx, "prof-aqua",
           resolved_policy: "not a blob",
-          blob_digest: JCS.hash_binary("not a blob")
+          blob_digest: Prima.Digest.sha256("not a blob")
         )
 
       assert {:error, {:invalid_blob, _}} = load(ctx, profile)
@@ -760,7 +760,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     :ok =
       ConsentFixtures.hand_edit_head!(ctx, "prof-claude",
         resolved_policy: bare,
-        blob_digest: JCS.hash_binary(bare)
+        blob_digest: Prima.Digest.sha256(bare)
       )
 
     profile = put_formula!(ctx, selection)

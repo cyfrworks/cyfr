@@ -609,7 +609,7 @@ defmodule Sanctum.Consent.Commit do
            publish_nodes: published && published.nodes
          },
          {:ok, blob_json, blob_refs, narrowed} <- build_blob(ctx, blob_inputs),
-         blob_digest = JCS.hash_binary(blob_json),
+         blob_digest = Prima.Digest.sha256(blob_json),
          {:ok, removed} <-
            removed_bindings(ctx, {profile_id, expected_revision}, %{
              refs: blob_refs,

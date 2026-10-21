@@ -3,7 +3,7 @@
 
 defmodule Arca.StorageGC do
   @moduledoc """
-  Collection and audit of an athanor's staging areas: the revision
+  Collection of an athanor's staging areas: the revision
   prefixes `Arca.Overlay`'s write protocol stages under and serves from
   (`Arca.Storage.UnitLocator.revision_prefix/2`).
 
@@ -67,23 +67,6 @@ defmodule Arca.StorageGC do
   across it reads `{:error, :not_found}` from then on, as at any unit no
   committed row names.
 
-  ## Audit
-
-  `repair/2` audits every committed unit against its journal and its
-  objects, and alters no committed revision: the pointer's prefix must hold the
-  revision's completion object, and it is intact when its objects hash to
-  the content identity the journal's newest commit recorded. A prefix
-  whose completion object is gone is reported and left; one that is
-  complete and hashes otherwise has been edited in place since the commit,
-  or damaged, and is reported as such and left; a row whose revision holds
-  no object anywhere is reported as unrecoverable and left. The one thing
-  it gives back is what
-  `Arca.Overlay.repair_unit/2` gives back — the draft of a writer that
-  died after its commit, once the token has outlived the lifetime.
-  Objects alone never make or move a pointer: a complete prefix no
-  row names is collected after the grace like any other. A sweep audits
-  nothing; the audit is asked for.
-
   ## Tenancy
 
   Every function takes the `Prima.Actor` first, refuses one with no
@@ -95,8 +78,6 @@ defmodule Arca.StorageGC do
 
   import Ecto.Query, only: [from: 2]
   import Arca.QueryHelpers, only: [where_athanor: 2]
-
-  require Logger
 
   alias Arca.Schemas.{StorageCommit, StorageUnit}
   alias Arca.Storage.UnitLocator
@@ -154,7 +135,7 @@ defmodule Arca.StorageGC do
   One bounded sweep of the actor's athanor, in the moduledoc's order.
 
   Options: `grace_ms:` (default a day), `now:` (default the cell's
-  clock), `limit:` — how many prefixes one sweep collects or repairs,
+  clock), `limit:` — how many prefixes one sweep collects,
   oldest first (default #{@default_limit}) — and `dry_run: true`, which
   counts what the snapshot would collect and touches nothing.
   """
@@ -298,175 +279,6 @@ defmodule Arca.StorageGC do
            :ok <- outside_replacement_grace(athanor, candidate, now, grace_ms) do
         delete_prefix(inner, unit, revision)
       end
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Repair
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Audit every committed unit of the actor's athanor against its journal
-  and its objects, giving back what a writer left undone and altering
-  no committed revision (the moduledoc's Audit).
-
-  Answers, by unit path: `repaired` — a dead writer's draft released
-  (`Arca.Overlay.repair_unit/2`);
-  `intact` (a count) — the pointer's prefix holds exactly the objects the
-  journal recorded; `left` — a prefix that is not what was committed, with
-  why (`:journal_mismatch` when the newest commit does not name the
-  pointer's revision, `:staged_incomplete` when the revision's completion
-  object is gone, `:edited` when the completion object is there and the
-  objects do not hash to what the commit recorded — edited in place since,
-  or damaged — and `{:repair_failed, reason}` when the give-back was
-  refused, `:stale_writer` while another writer holds the unit);
-  `unrecoverable` — a row whose revision holds no object anywhere,
-  reported and left as it is; `orphan_commits` — journal rows whose unit
-  row is gone, reported and left.
-  """
-  @spec repair(Prima.Actor.t(), keyword()) ::
-          {:ok,
-           %{
-             repaired: [Arca.Storage.path()],
-             intact: non_neg_integer(),
-             left: [{Arca.Storage.path(), term()}],
-             unrecoverable: [Arca.Storage.path()],
-             orphan_commits: [String.t()]
-           }}
-          | {:error, term()}
-          | refusal()
-  def repair(%Prima.Actor{} = actor, _opts \\ []) do
-    with {:ok, athanor} <- tenant(actor),
-         {:ok, {rows, orphans}} <-
-           rescuing_db("repair", fn ->
-             {:ok, {committed_rows(athanor), orphan_commits(athanor)}}
-           end),
-         {:ok, listing} <- listing(actor) do
-      inner = internal_actor(actor)
-      report = %{repaired: [], intact: 0, left: [], unrecoverable: [], orphan_commits: orphans}
-
-      {:ok,
-       Enum.reduce(rows, report, fn row, acc ->
-         unit = UnitLocator.unit_path(row.root, row.unit_key)
-         staged = Map.get(listing.groups, {row.root, row.unit_key, row.current_revision}, [])
-
-         case audit(athanor, inner, row, unit, staged) do
-           :repaired -> %{acc | repaired: [unit | acc.repaired]}
-           :intact -> %{acc | intact: acc.intact + 1}
-           :unrecoverable -> %{acc | unrecoverable: [unit | acc.unrecoverable]}
-           {:left, reason} -> %{acc | left: [{unit, reason} | acc.left]}
-         end
-       end)}
-    end
-  end
-
-  # A unit whose revision is in its prefix is proven against the journal
-  # and, if its writer died holding the draft, given back; one whose
-  # prefix holds no object is unrecoverable, and left.
-  defp audit(athanor, inner, row, unit, staged) do
-    objects = Enum.reject(staged, &marker_key?/1)
-
-    if objects == [] do
-      Logger.error(
-        "[Arca.StorageGC] #{Enum.join(unit, "/")} is committed at #{row.current_revision} " <>
-          "and that revision holds no object anywhere; the row is left as it is"
-      )
-
-      :unrecoverable
-    else
-      with {:ok, newest} <- journal_of(athanor, row),
-           {:ok, sameness} <- proven(inner, unit, row.current_revision, newest, objects) do
-        case {released(inner, unit), sameness} do
-          {:intact, :differs} -> {:left, :edited}
-          {outcome, _sameness} -> outcome
-        end
-      else
-        {:left, _reason} = left -> left
-        {:error, reason} -> {:left, {:repair_failed, reason}}
-      end
-    end
-  end
-
-  # What the overlay gives back for a proven revision: a dead writer's
-  # draft, or nothing.
-  defp released(inner, unit) do
-    case Arca.Overlay.repair_unit(inner, unit) do
-      {:ok, :repaired} -> :repaired
-      {:ok, :nothing_pending} -> :intact
-      {:error, reason} -> {:left, {:repair_failed, reason}}
-    end
-  end
-
-  defp journal_of(athanor, %StorageUnit{id: id, current_revision: revision}) do
-    rescuing_db("journal_of", fn ->
-      newest =
-        from(c in where_athanor(StorageCommit, athanor),
-          where: c.storage_unit_id == ^id,
-          order_by: [desc: c.committed_at, desc: c.id],
-          limit: 1
-        )
-        |> Arca.Repo.one()
-
-      case newest do
-        %StorageCommit{new_revision: ^revision} -> {:ok, newest}
-        _no_commit_names_the_pointer -> {:left, :journal_mismatch}
-      end
-    end)
-  end
-
-  # Whether the prefix holds what the journal recorded for the revision:
-  # `:identical` when every object hashes to the commit's content
-  # identity, `:differs` when the completion object is there and the
-  # objects hash otherwise — edited in place since the commit, or damaged
-  # — and `{:left, :staged_incomplete}` when the completion object is
-  # gone. Nothing here changes a byte.
-  defp proven(inner, unit, revision, %StorageCommit{content_identity: committed}, keys) do
-    prefix = UnitLocator.revision_prefix(unit, revision)
-
-    if completion_key(unit, revision) in keys do
-      with {:ok, identity} <- identity_of(inner, keys, &staged_relative(unit, prefix, &1)) do
-        {:ok, if(identity == committed, do: :identical, else: :differs)}
-      end
-    else
-      {:left, :staged_incomplete}
-    end
-  end
-
-  # The revision's completion object under its prefix: a directory unit's
-  # sentinel, a file unit's one object.
-  defp completion_key(unit, revision) do
-    case Arca.Storage.locate(unit) do
-      {:file, ^unit} -> UnitLocator.staged_object(unit, revision, [])
-      {:dir, ^unit, sentinel} -> UnitLocator.staged_object(unit, revision, [sentinel])
-    end
-  end
-
-  # A file unit is one object whose relative path is `[]`, staged under
-  # its own name.
-  defp staged_relative(unit, prefix, key) do
-    case Arca.Storage.locate(unit) do
-      {:file, ^unit} -> []
-      _dir -> Enum.drop(key, length(prefix))
-    end
-  end
-
-  # The content identity of a set of objects, read one at a time and
-  # framed by `Arca.Overlay.content_identity/1` — the framing a commit
-  # recorded, stated once, there.
-  defp identity_of(inner, keys, relative) do
-    keys
-    |> Enum.reduce_while({:ok, []}, fn key, {:ok, acc} ->
-      case Arca.get(inner, key) do
-        {:ok, bytes} ->
-          {:cont, {:ok, [{relative.(key), Prima.Digest.sha256(bytes), byte_size(bytes)} | acc]}}
-
-        {:error, _} = error ->
-          {:halt, error}
-      end
-    end)
-    |> case do
-      {:ok, manifest} -> {:ok, Arca.Overlay.content_identity(manifest)}
-      {:error, _} = error -> error
     end
   end
 
@@ -780,26 +592,6 @@ defmodule Arca.StorageGC do
   defp rooted_rows(athanor) do
     from(u in where_athanor(StorageUnit, athanor),
       where: u.state == "committed" or not is_nil(u.draft_writer_token)
-    )
-    |> Arca.Repo.all()
-  end
-
-  defp committed_rows(athanor) do
-    from(u in where_athanor(StorageUnit, athanor),
-      where: u.state == "committed" and not is_nil(u.current_revision),
-      order_by: [asc: u.root, asc: u.unit_key]
-    )
-    |> Arca.Repo.all()
-  end
-
-  # The composite foreign key makes these impossible; a store restored
-  # from parts is where one could appear.
-  defp orphan_commits(athanor) do
-    from(c in where_athanor(StorageCommit, athanor),
-      left_join: u in StorageUnit,
-      on: u.id == c.storage_unit_id and u.athanor_id == c.athanor_id,
-      where: is_nil(u.id),
-      select: c.id
     )
     |> Arca.Repo.all()
   end

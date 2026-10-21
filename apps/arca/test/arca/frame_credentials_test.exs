@@ -455,43 +455,6 @@ defmodule Arca.FrameCredentialsTest do
     end
   end
 
-  describe "revocation by source and by person" do
-    test "revokes every unrevoked row of the source, in the actor's athanor", %{actor: actor} do
-      a = mint!(actor)
-      b = mint!(actor)
-      {:ok, _} = FrameCredentials.suspend(actor, b.id)
-      other_source = mint!(actor, %{source_kind: "api_key", source_id: "key_1"})
-
-      assert {:ok, ids} = FrameCredentials.revoke_for_source(actor, {:session, a.source_id})
-      assert ids == Enum.sort([a.id, b.id])
-      assert {:ok, %{state: "active"}} = FrameCredentials.get(actor, other_source.id)
-      assert {:ok, []} = FrameCredentials.revoke_for_source(actor, {:session, a.source_id})
-    end
-
-    test "a person's rows go in every athanor only for the platform's own actor", %{actor: actor} do
-      elsewhere =
-        Prima.Actor.in_athanor("ath_frc_elsewhere_#{System.unique_integer([:positive])}")
-
-      here = mint!(actor)
-      there = mint!(elsewhere)
-      theirs = mint!(actor, %{user_id: "usr_other"})
-
-      assert {:ok, [here_id]} = FrameCredentials.revoke_for_user(actor, "usr_frc")
-      assert here_id == here.id
-      assert {:ok, %{state: "active"}} = FrameCredentials.get(elsewhere, there.id)
-
-      assert {:ok, [there_id]} = FrameCredentials.revoke_for_user(Prima.Actor.system(), "usr_frc")
-      assert there_id == there.id
-      assert {:ok, %{state: "active"}} = FrameCredentials.get(actor, theirs.id)
-
-      assert {:error, :no_athanor} =
-               FrameCredentials.revoke_for_user(
-                 %{Prima.Actor.system() | system: false},
-                 "usr_frc"
-               )
-    end
-  end
-
   describe "retention" do
     test "sweeps revoked rows past the athanor's days, and never a standing one", %{actor: actor} do
       assert Arca.Retention.FrameCredentials in Arca.Retention.kinds()

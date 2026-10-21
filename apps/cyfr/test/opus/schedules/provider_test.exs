@@ -211,7 +211,7 @@ defmodule Opus.Schedules.ProviderTest do
       assert {:error, "Schedule limit reached (3 per athanor)"} =
                Provider.handle("schedule", ctx, schedule_args("limit-test-4"))
 
-      assert {:ok, 3} = Arca.CronSchedule.count_active(Context.actor(ctx), "schedule")
+      assert {:ok, 3} = Arca.Test.CronSlots.occupied(Context.actor(ctx), "schedule")
     end
 
     test "the ceiling is the operator's setting: 1,000 unset, and 0 removes it", %{ctx: ctx} do
@@ -232,7 +232,7 @@ defmodule Opus.Schedules.ProviderTest do
         assert {:ok, _} = Provider.handle("schedule", ctx, schedule_args("ceiling-#{i}"))
       end
 
-      assert {:ok, 3} = Arca.CronSchedule.count_active(Context.actor(ctx), "schedule")
+      assert {:ok, 3} = Arca.Test.CronSlots.occupied(Context.actor(ctx), "schedule")
     end
 
     test "a ceiling the store cannot answer refuses the create", %{ctx: ctx} do
@@ -303,7 +303,7 @@ defmodule Opus.Schedules.ProviderTest do
       end
 
       assert Arca.CronSchedule.get_for_daemon(id) == before
-      assert {:ok, 1} = Arca.CronSchedule.count_active(Context.actor(ctx), "schedule")
+      assert {:ok, 1} = Arca.Test.CronSlots.occupied(Context.actor(ctx), "schedule")
     end
   end
 
@@ -877,8 +877,8 @@ defmodule Opus.Schedules.ProviderTest do
       assert {:error, "Schedule limit reached (3 per athanor)"} =
                Provider.handle("schedule", ctx, schedule_args("cap-4"))
 
-      assert {:ok, 3} = Arca.CronSchedule.count_active(Context.actor(ctx), "schedule")
-      assert {:ok, 4} = Arca.CronSchedule.count_active(Context.actor(ctx), "feed")
+      assert {:ok, 3} = Arca.Test.CronSlots.occupied(Context.actor(ctx), "schedule")
+      assert {:ok, 4} = Arca.Test.CronSlots.occupied(Context.actor(ctx), "feed")
     end
   end
 

@@ -128,7 +128,7 @@ defmodule Prima.KeeperProtocol do
          argv: :required,
          env: :optional,
          rlimits: :optional,
-         memory_bytes: :optional,
+         memory_bytes: :required,
          control: :optional,
          isolation: :optional,
          attach: :required
@@ -166,9 +166,9 @@ defmodule Prima.KeeperProtocol do
 
   @typedoc """
   A request, as `encode/1` takes it: its `type` and its members, with atom
-  keys but for `env`'s names. `spawn` requires `id`, `pool`, `argv` and
-  `attach` (`%{path: path, token: token}`); `env` (names to values),
-  `rlimits` (`nofile`, `nproc`, `core`, `fsize`), `memory_bytes`,
+  keys but for `env`'s names. `spawn` requires `id`, `pool`, `argv`,
+  `memory_bytes` and `attach` (`%{path: path, token: token}`); `env`
+  (names to values), `rlimits` (`nofile`, `nproc`, `core`, `fsize`),
   `control` and `isolation` (`"netns"`) are optional.
   """
   @type request ::
@@ -179,7 +179,7 @@ defmodule Prima.KeeperProtocol do
             required(:argv) => [String.t(), ...],
             optional(:env) => %{optional(String.t()) => String.t()},
             optional(:rlimits) => %{optional(atom()) => non_neg_integer()},
-            optional(:memory_bytes) => pos_integer(),
+            required(:memory_bytes) => pos_integer(),
             optional(:control) => boolean(),
             optional(:isolation) => String.t(),
             required(:attach) => %{path: String.t(), token: String.t()}

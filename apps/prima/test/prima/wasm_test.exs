@@ -126,46 +126,6 @@ defmodule Prima.WasmTest do
     end
   end
 
-  describe "quick_check/1" do
-    test "passes valid WASM" do
-      assert :ok = Wasm.quick_check(@valid_wasm)
-    end
-
-    test "rejects invalid magic bytes" do
-      invalid = <<0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00>>
-      assert {:error, :invalid_magic_bytes} = Wasm.quick_check(invalid)
-    end
-
-    test "rejects non-binary" do
-      assert {:error, :not_binary} = Wasm.quick_check(nil)
-    end
-  end
-
-  describe "compute_digest/1" do
-    test "computes SHA-256 digest" do
-      digest = Wasm.compute_digest(@valid_wasm)
-
-      assert String.starts_with?(digest, "sha256:")
-      # Hex encoded SHA-256 is 64 characters
-      "sha256:" <> hash = digest
-      assert byte_size(hash) == 64
-    end
-
-    test "produces consistent digest for same input" do
-      digest1 = Wasm.compute_digest(@valid_wasm)
-      digest2 = Wasm.compute_digest(@valid_wasm)
-
-      assert digest1 == digest2
-    end
-
-    test "produces different digest for different input" do
-      digest1 = Wasm.compute_digest(@valid_wasm)
-      digest2 = Wasm.compute_digest(@wasm_with_export)
-
-      assert digest1 != digest2
-    end
-  end
-
   describe "suggest_type/1" do
     test "suggests formula for execute export" do
       assert :formula = Wasm.suggest_type(["execute", "validate"])

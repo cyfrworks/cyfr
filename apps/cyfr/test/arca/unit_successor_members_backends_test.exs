@@ -302,10 +302,7 @@ defmodule Arca.UnitSuccessorMembersBackendsTest do
 
       identity = %{
         new_revision: revision,
-        content_identity:
-          Arca.Overlay.content_identity(
-            for {rel, bytes} <- objects, do: {rel, Prima.Digest.sha256(bytes), byte_size(bytes)}
-          ),
+        content_identity: Prima.Digest.sha256(revision),
         commit_identity: actor.user_id || "system"
       }
 

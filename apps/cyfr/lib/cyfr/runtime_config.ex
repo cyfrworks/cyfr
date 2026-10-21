@@ -976,7 +976,7 @@ defmodule Cyfr.RuntimeConfig do
   @spec access_digest(access_head()) :: %{canonical: String.t(), digest: String.t()}
   def access_digest(head) when is_map(head) do
     {:ok, canonical} = Prima.JCS.encode(head)
-    %{canonical: canonical, digest: Prima.JCS.hash_binary(canonical)}
+    %{canonical: canonical, digest: Prima.Digest.sha256(canonical)}
   end
 
   @doc """

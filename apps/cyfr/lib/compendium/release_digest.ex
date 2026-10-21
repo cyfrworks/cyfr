@@ -68,7 +68,7 @@ defmodule Compendium.ReleaseDigest do
     subset = Map.take(manifest, @security_blocks)
 
     case JCS.encode(subset) do
-      {:ok, canonical} -> {:ok, JCS.hash_binary(artifact_digest <> canonical)}
+      {:ok, canonical} -> {:ok, Prima.Digest.sha256(artifact_digest <> canonical)}
       {:error, reason} -> {:error, {:invalid_manifest, reason}}
     end
   end

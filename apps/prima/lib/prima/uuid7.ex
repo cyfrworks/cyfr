@@ -5,12 +5,11 @@ defmodule Prima.UUID7 do
   @moduledoc """
   UUID v7 generator compliant with RFC 9562.
 
-  The repo-wide id generator. It lived under `Emissary` — the MCP and HTTP
-  namespace — while Arca minted rows with it, Sanctum minted tenancy and
-  vault ids, and Locus minted execution and build ids: every
-  persistence path in the system reached into the transport namespace for
-  a primitive that has nothing to do with transport. It is glue, so it
-  lives with the glue.
+  The repo-wide id generator. Every layer mints ids with it — Arca its
+  rows, Sanctum its challenges, consent profiles and requests, Locus its
+  runners, the product its executions; it is a shared primitive
+  with no transport or domain in it, so it lives in the contracts every
+  layer may reach.
 
   UUID v7 provides time-ordered, random UUIDs suitable for database keys
   and correlation IDs. The format guarantees:

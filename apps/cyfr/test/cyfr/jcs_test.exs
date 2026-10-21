@@ -170,11 +170,11 @@ defmodule Cyfr.JCSTest do
   # Hashing
   # ============================================================================
 
-  describe "hash/1 and hash_binary/1" do
-    test "hash matches the artifact digest convention" do
+  describe "hash/1" do
+    test "hash is the artifact digest of the canonical form" do
       {:ok, digest} = JCS.hash(%{"a" => 1})
 
-      assert digest == JCS.hash_binary(~s({"a":1}))
+      assert digest == Prima.Digest.sha256(~s({"a":1}))
       assert "sha256:" <> hex = digest
       assert String.length(hex) == 64
       assert hex == String.downcase(hex)

@@ -148,14 +148,14 @@ defmodule Prima.BuilderProtocolTest do
                v["backends_request_key_hex"]
 
       for text <- v["key_text"]["valid"] do
-        assert {:ok, decoded} = BuilderProtocol.decode_key(text)
+        assert {:ok, decoded} = MacEnvelope.decode_root(text)
         assert decoded == key()
       end
 
       for text <- v["key_text"]["invalid"],
-          do: assert(:error = BuilderProtocol.decode_key(text), inspect(text))
+          do: assert(:error = MacEnvelope.decode_root(text), inspect(text))
 
-      assert :error = BuilderProtocol.decode_key(nil)
+      assert :error = MacEnvelope.decode_root(nil)
     end
 
     test "the request reads to its fields, writes back to its body, and signs as the vectors say" do

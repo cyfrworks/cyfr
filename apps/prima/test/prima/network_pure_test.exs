@@ -60,11 +60,13 @@ defmodule Prima.NetworkPureTest do
     assert {:error, :private_ip_blocked, _} = Network.pin(uri, ip, [])
     assert {:error, :private_ip_blocked, _} = Network.pin(uri, ip, private_policy: :operator)
 
+    assert {:error, :private_ip_blocked, _} =
+             Network.pin(uri, ip, private_policy: {:fun, fn _address -> true end})
+
     for policy <- [
           :allow_all,
           {:allowlist, ["SERVICE.internal"]},
-          {:allowlist, ["10.0.0.0/8"]},
-          {:fun, fn address -> address == ip end}
+          {:allowlist, ["10.0.0.0/8"]}
         ] do
       assert {:ok, _} = Network.pin(uri, ip, private_policy: policy)
     end
@@ -88,8 +90,7 @@ defmodule Prima.NetworkPureTest do
 
       for policy <- [
             :allow_all,
-            {:allowlist, ["metadata.test", "0.0.0.0/0", "::/0"]},
-            {:fun, fn _ -> flunk("metadata reached the policy override") end}
+            {:allowlist, ["metadata.test", "0.0.0.0/0", "::/0"]}
           ] do
         assert {:error, :private_ip_blocked, message} =
                  Network.pin(uri, ip, private_policy: policy)

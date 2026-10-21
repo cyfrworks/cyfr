@@ -138,9 +138,6 @@ defmodule Prima.Carry.Envelope do
   signed under, and `issued_at` in Unix milliseconds.
 
   `verify/4` is the receiver's check under the person's current head.
-  `check_replay/2` is its rule for an action id it has already answered:
-  the exact same envelope returns the acknowledgment it recorded, and
-  other bytes under that action id are refused.
   """
 
   alias Prima.Carry
@@ -259,11 +256,6 @@ defmodule Prima.Carry.Envelope do
     %{envelope | sig: sig}
   end
 
-  @doc "An envelope's digest, over its JCS bytes, `sig` included: what a receiver records for its action id."
-  @spec digest(t()) :: String.t()
-  def digest(%__MODULE__{} = envelope),
-    do: envelope |> encode() |> Encoding.jcs!() |> Prima.Digest.sha256()
-
   @doc """
   The receiver's check of an envelope under the person's current head
   (`state`, verified and fresh), against what it expects and its clock.
@@ -296,21 +288,6 @@ defmodule Prima.Carry.Envelope do
          :ok <- timely(envelope.issued_at, clock) do
       {:ok, envelope}
     end
-  end
-
-  @doc """
-  What a receiver answers for an envelope under an action id it may have
-  answered before. `recorded` is nil, or what it recorded for that action
-  id: `%{digest: Prima.Carry.Envelope.digest/1 of the envelope it
-  accepted, ack: its acknowledgment}`. The same envelope again returns
-  `{:duplicate, ack}`; other bytes are `:action_reused`.
-  """
-  @spec check_replay(t(), %{digest: String.t(), ack: term()} | nil) ::
-          :fresh | {:duplicate, term()} | {:error, :action_reused}
-  def check_replay(%__MODULE__{}, nil), do: :fresh
-
-  def check_replay(%__MODULE__{} = envelope, %{digest: digest, ack: ack}) do
-    if digest(envelope) == digest, do: {:duplicate, ack}, else: {:error, :action_reused}
   end
 
   defp reread(%__MODULE__{} = envelope), do: envelope |> encode() |> decode()
@@ -400,9 +377,7 @@ defmodule Prima.Carry.Return do
   `admitted` or `refused`. It is unsigned and reports navigation only: it
   grants no membership or session and writes no saved-home entry.
 
-  The source records an action's outcome once. `check_replay/2` is that
-  rule: the same outcome again returns what was recorded, and a changed
-  outcome under the same action id is refused.
+  The source records an action's outcome once.
   """
 
   alias Prima.Carry
@@ -470,16 +445,6 @@ defmodule Prima.Carry.Return do
   end
 
   def parse_fragment(_fragment), do: {:error, :invalid_fragment}
-
-  @doc """
-  What the source answers for a return, given what it recorded for that
-  action id (nil when nothing): `:fresh`, `{:duplicate, recorded}` for the
-  same outcome, or `:outcome_changed`.
-  """
-  @spec check_replay(t(), t() | nil) :: :fresh | {:duplicate, t()} | {:error, :outcome_changed}
-  def check_replay(%__MODULE__{}, nil), do: :fresh
-  def check_replay(%__MODULE__{} = return, %__MODULE__{} = return), do: {:duplicate, return}
-  def check_replay(%__MODULE__{}, %__MODULE__{}), do: {:error, :outcome_changed}
 
   defp outcome(map) do
     case Map.fetch(@outcomes, map["outcome"]) do

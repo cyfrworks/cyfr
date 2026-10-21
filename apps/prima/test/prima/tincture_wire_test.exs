@@ -16,6 +16,7 @@ defmodule Prima.TinctureWireTest do
   use ExUnit.Case, async: true
 
   alias Prima.{StreamGrant, TinctureUrl, TinctureWire}
+  alias Prima.Test.EventStream
 
   @vectors Path.expand("../../../../tests/fixtures/tincture_wire.json", __DIR__)
   @refs Path.expand("../../../../tests/fixtures/component_refs.json", __DIR__)
@@ -105,7 +106,7 @@ defmodule Prima.TinctureWireTest do
       for %{"id" => id, "event" => event, "data" => data} <- events,
           do: %{id: id, event: event, data: data}
 
-    assert TinctureWire.decode_stream(body) == expected
+    assert EventStream.decode(body) == expected
 
     {deliveries, [%{event: "refusal", data: projection}]} =
       Enum.split_while(expected, &(&1.event != TinctureWire.refusal_event()))
@@ -126,11 +127,11 @@ defmodule Prima.TinctureWireTest do
   end
 
   test "a stream event not ended by its blank line, without data or with data that is not JSON is dropped" do
-    assert TinctureWire.decode_stream("event: a\ndata: {\"x\":1}") == []
-    assert TinctureWire.decode_stream("event: a\n\n") == []
-    assert TinctureWire.decode_stream("event: a\ndata: {x\n\n") == []
+    assert EventStream.decode("event: a\ndata: {\"x\":1}") == []
+    assert EventStream.decode("event: a\n\n") == []
+    assert EventStream.decode("event: a\ndata: {x\n\n") == []
 
-    assert TinctureWire.decode_stream("id: 7\r\nretry: 5\r\ndata: {\"a\":\r\ndata: 1}\r\n\r\n") ==
+    assert EventStream.decode("id: 7\r\nretry: 5\r\ndata: {\"a\":\r\ndata: 1}\r\n\r\n") ==
              [%{id: 7, event: "message", data: %{"a" => 1}}]
   end
 
