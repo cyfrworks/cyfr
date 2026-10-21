@@ -307,7 +307,7 @@ defmodule PrismWeb.SystemLayerTest do
     {:ok, session} = Sanctum.TestContext.create_session(%{ctx | provider: "github"})
 
     {:ok, other} =
-      Sanctum.Caller.establish(session.token, focus: ctx.athanor_id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: ctx.athanor_id, refresh: false)
 
     other
   end
@@ -4983,7 +4983,7 @@ defmodule PrismWeb.SystemLayerTest do
       {:ok, session} = Sanctum.TestContext.create_session(%{built | provider: "github"})
 
       {:ok, ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       safe = %{id: "safe-outage", kind: :safe_mode, action: nil, subject: safe_mode()}
 
@@ -5016,7 +5016,7 @@ defmodule PrismWeb.SystemLayerTest do
       {:ok, session} = Sanctum.TestContext.create_session(%{built | provider: "github"})
 
       {:ok, ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       {:ok, view, _html} =
         live_isolated(conn, BareHost, session: %{"context" => ctx, "test" => self()})

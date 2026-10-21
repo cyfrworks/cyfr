@@ -42,7 +42,7 @@ defmodule PrismWeb.OperatorDelistLiveTest do
     on_exit(fn ->
       # The memos this case primed are the node's, not its own: left
       # behind they make a neighbour's "no caller is memoized" read false.
-      Arca.Cache.delete_match({:established, :_, :_, :_})
+      Arca.Cache.delete_match({:established, :_, :_})
 
       for {{app, key}, value} <- prev do
         if is_nil(value),

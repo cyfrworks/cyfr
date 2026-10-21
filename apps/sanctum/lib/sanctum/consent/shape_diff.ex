@@ -263,7 +263,7 @@ defmodule Sanctum.Consent.ShapeDiff do
 
   defp flatten_edge(edge) do
     %{
-      "tools" => edge.tools || [],
+      "tools" => edge.tools,
       "egress" => %{
         "domains" => get_in(edge.egress, [:domains]) || [],
         "methods" => get_in(edge.egress, [:methods]) || [],

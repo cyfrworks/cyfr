@@ -431,7 +431,7 @@ defmodule Sanctum.Auth.OIDC do
   # The answering browser's own session names the record's person and
   # still stands.
   defp answering_person(token, user_id) when is_binary(token) and token != "" do
-    case Sanctum.Caller.establish(token, task_supervisor: nil) do
+    case Sanctum.Caller.establish(token, refresh: false) do
       {:ok, %Context{user_id: ^user_id, authenticated: true}} -> :ok
       {:ok, _another} -> {:error, :another_person}
       {:error, :unavailable} -> {:error, :unavailable}

@@ -441,7 +441,7 @@ defmodule Sanctum.ValidationCredentialRaceTest do
         athanor_id: athanor,
         permissions: [:*],
         scope: :athanor,
-        auth_method: :session,
+        auth_method: :oidc,
         authenticated: true
       )
 

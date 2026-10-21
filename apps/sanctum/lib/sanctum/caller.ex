@@ -154,13 +154,11 @@ defmodule Sanctum.Caller do
 
   Options:
 
-    * `:surface` — forwarded to `Session.load/2` (default `:console`).
-    * `:focus` — an athanor id or row to focus the established context on
+    * `:focus` — an athanor id to focus the established context on
       (`Context.focus/2`); how a nested view follows the page's focus.
-    * `:refresh` — slide the session's expiry when due (default `true`).
-    * `:task_supervisor` — where the fire-and-forget refresh runs (default
-      `Sanctum.TaskSupervisor`), so the write never blocks the hot path;
-      `nil` runs none.
+    * `:refresh` — slide the session's expiry when due (default `true`),
+      fire-and-forget under `Sanctum.TaskSupervisor`, so the write never
+      blocks the hot path.
   """
   @spec establish(credential() | String.t() | nil, keyword()) ::
           {:ok, Context.t()} | {:error, refusal()}
@@ -690,7 +688,7 @@ defmodule Sanctum.Caller do
   end
 
   defp do_establish(token, opts) do
-    case Session.load_sliding(token, surface: Keyword.get(opts, :surface, :console)) do
+    case Session.load_sliding(token) do
       {:ok, %Context{} = ctx, slide_due?} ->
         with {:ok, established} <- establish_context(ctx, opts),
              :ok <- identity_current(established.user_id, established.session_token_hash) do
@@ -709,7 +707,7 @@ defmodule Sanctum.Caller do
   @doc """
   Establish a Context that already exists — a loaded session's, or one a
   configured auth provider synthesized (which never went through
-  `Session.load/2`, so nothing about it can be assumed done).
+  `Session.load/1`, so nothing about it can be assumed done).
 
   An unauthenticated context is `{:denied, ctx}` — the door stopped
   admitting its person after the session was minted.
@@ -753,7 +751,7 @@ defmodule Sanctum.Caller do
   session row the context's hash names — it must exist, be unexpired and
   belong to the same person — and the person's standing, and the focused
   athanor's; then rebuilds the context from the stored session and the
-  person's current memberships (`Sanctum.Session.load_by_hash/2`) and
+  person's current memberships (`Sanctum.Session.load_by_hash/1`) and
   focuses it again on the athanor the caller had in focus
   (`Sanctum.Context.focus/2`). The result carries the caller's request
   correlation and plane, never more permission than the caller held, and
@@ -807,7 +805,7 @@ defmodule Sanctum.Caller do
           {:ok, Context.t()} | {:error, revalidation_refusal()}
   def revalidate_session(%Context{} = ctx) do
     case holder(ctx) do
-      {:session, hash, surface} -> revalidate_stored(ctx, hash, surface)
+      {:session, hash} -> revalidate_stored(ctx, hash)
       {:api_key, id} -> revalidate_key(ctx, id)
       :device -> revalidate_device(ctx)
       :other -> {:ok, ctx}
@@ -858,14 +856,13 @@ defmodule Sanctum.Caller do
   defp session_binding?(%{source_kind: :session}), do: true
   defp session_binding?(_binding), do: false
 
-  defp session_holder(%Context{session_token_hash: hash, credential_binding: binding} = ctx)
+  defp session_holder(%Context{
+         auth_method: :oidc,
+         session_token_hash: hash,
+         credential_binding: binding
+       })
        when is_binary(hash) and hash != "" do
-    with true <- binding_names?(binding, hash),
-         {:ok, surface} <- surface_of(ctx) do
-      {:session, hash, surface}
-    else
-      _ -> :unbound
-    end
+    if binding_names?(binding, hash), do: {:session, hash}, else: :unbound
   end
 
   defp session_holder(%Context{}), do: :unbound
@@ -892,13 +889,9 @@ defmodule Sanctum.Caller do
 
   defp key_holder(%Context{}), do: :unbound
 
-  defp surface_of(%Context{auth_method: :oidc}), do: {:ok, :console}
-  defp surface_of(%Context{auth_method: :session}), do: {:ok, :tincture}
-  defp surface_of(%Context{}), do: :error
-
-  defp revalidate_stored(ctx, hash, surface) do
+  defp revalidate_stored(ctx, hash) do
     with :ok <- stored_standing(ctx, hash),
-         {:ok, rebuilt} <- reload(hash, surface),
+         {:ok, rebuilt} <- reload(hash),
          :ok <- same_person(rebuilt, ctx),
          :ok <- identity_current(rebuilt.user_id, hash),
          {:ok, focused} <- refocus(rebuilt, ctx.athanor_id) do
@@ -1144,8 +1137,8 @@ defmodule Sanctum.Caller do
   defp key_athanor(%{status: "active"}), do: :ok
   defp key_athanor(_athanor), do: {:error, :not_standing}
 
-  defp reload(hash, surface) do
-    case Session.load_by_hash(hash, surface: surface) do
+  defp reload(hash) do
+    case Session.load_by_hash(hash) do
       {:ok, %Context{} = rebuilt} -> {:ok, rebuilt}
       {:error, :invalid_session} -> {:error, :unauthenticated}
       {:error, _unanswered} -> {:error, :unavailable}
@@ -1219,7 +1212,7 @@ defmodule Sanctum.Caller do
   def peek(token) when token in [nil, ""], do: {:error, :unauthenticated}
 
   def peek(token) when is_binary(token) do
-    case Session.load(token, surface: :console) do
+    case Session.load(token) do
       {:ok, %Context{} = ctx} ->
         {:ok,
          %{
@@ -1308,15 +1301,8 @@ defmodule Sanctum.Caller do
   end
 
   defp memo_key(token, opts) do
-    Arca.Cache.Keys.established(
-      Session.token_hash(token),
-      Keyword.get(opts, :surface, :console),
-      memo_coord(Keyword.get(opts, :focus))
-    )
+    Arca.Cache.Keys.established(Session.token_hash(token), Keyword.get(opts, :focus))
   end
-
-  defp memo_coord(%{id: id}), do: id
-  defp memo_coord(other), do: other
 
   defp tenant_ok(ctx) do
     case Context.tenant_ok(ctx) do
@@ -1328,7 +1314,7 @@ defmodule Sanctum.Caller do
   defp focus(ctx, nil), do: {:ok, ctx}
   defp focus(ctx, coordinate), do: Context.focus(ctx, coordinate)
 
-  # `Session.load/2` populates the namespace from the users row, but a
+  # `Session.load/1` populates the namespace from the users row, but a
   # provider-synthesized Context never saw the load — refresh from the
   # row when it is missing.
   defp ensure_namespace(%Context{namespace: ns} = ctx) when is_binary(ns) and ns != "", do: ctx
@@ -1338,23 +1324,19 @@ defmodule Sanctum.Caller do
 
   # Activity-based sliding refresh, fire-and-forget so the hot path never
   # waits on the write. Started only when the row the load read is due one
-  # (`Session.slide_due?/1`); `Session.refresh_if_stale/1` checks again.
+  # (`Session.load_sliding/1`); `Session.refresh_if_stale/1` checks again.
   defp maybe_refresh(token, opts) do
-    with true <- Keyword.get(opts, :refresh, true),
-         supervisor when not is_nil(supervisor) <-
-           Keyword.get(opts, :task_supervisor, Sanctum.TaskSupervisor) do
-      start_refresh(supervisor, token)
-    else
-      _ -> :ok
-    end
+    if Keyword.get(opts, :refresh, true),
+      do: start_refresh(token),
+      else: :ok
   end
 
-  # Best effort: a pool that is not up (a standalone build that never
-  # started this application) costs the slide, never the establish.
-  defp start_refresh(supervisor, token) do
+  # Best effort: a pool that does not answer (the node shutting down)
+  # costs the slide, never the establish.
+  defp start_refresh(token) do
     logger_metadata = Prima.LoggerContext.capture()
 
-    case Task.Supervisor.start_child(supervisor, fn ->
+    case Task.Supervisor.start_child(Sanctum.TaskSupervisor, fn ->
            Prima.LoggerContext.restore(logger_metadata)
            slide(token)
          end) do

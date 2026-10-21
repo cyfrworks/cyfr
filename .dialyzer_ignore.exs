@@ -95,16 +95,9 @@
   # max_prefix_for/1's last clause answers 0 for a value that is not a
   # tuple, which no caller passes today.
   {"lib/prima/cidr.ex", :pattern_match_cov},
-  # The edge's spec makes tools a list, so the `edge.tools || []` fallback
-  # never takes its nil branch by the spec.
-  {"lib/sanctum/consent/shape_diff.ex", :guard_fail},
   # fail/2 throws on purpose: the encoder catches {:jcs, _} at its entry and
   # answers it as an error.
   {"lib/prima/jcs.ex", :no_return},
-  # `valid_personal_slug?(slug) || {:error, :invalid_slug}` answers the
-  # refusal for false; Dialyzer does not narrow false out of the `||`'s
-  # other branch, so it sees the `with` fall through on false.
-  {"lib/sanctum/sign_in.ex", :missing_range},
   # Three opaque-term warnings dialyxir cannot classify: its own formatter
   # raises on them (`Dialyxir.WarningHelpers.ordinal/1`) and prints the raw
   # dialyzer text, so a `{file, kind}` filter never sees a kind to match.

@@ -362,7 +362,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       assert started() == leaves(@post_gate) ++ @web
 
       refute platform?(delisted.user.id)
-      assert {:error, _} = Sanctum.Session.load(delisted.token, surface: :console)
+      assert {:error, _} = Sanctum.Session.load(delisted.token)
       refute_receive {:credential, _}
       stop_tree(starter)
     end

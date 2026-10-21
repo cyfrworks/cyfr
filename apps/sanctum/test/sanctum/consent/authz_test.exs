@@ -96,7 +96,7 @@ defmodule Sanctum.Consent.AuthzTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     %{user: user, athanor: athanor, session: session, session_ctx: session_ctx}
   end
@@ -598,13 +598,6 @@ defmodule Sanctum.Consent.AuthzTest do
   end
 
   describe "refused surfaces" do
-    test "the tincture session upgrade cannot consent" do
-      # `:session` is produced only by the tincture upgrade path — admitting
-      # it would put consent on the public tincture surface.
-      assert Authz.authorize(ctx(auth_method: :session), request()) ==
-               {:error, {:surface_not_permitted, :session}}
-    end
-
     test "no non-interactive surface can consent, nor the device channel's naming no client" do
       for method <- [:tincture, :webhook, :scheduled, :system, :device, nil] do
         assert {:error, {:surface_not_permitted, ^method}} =
@@ -767,10 +760,10 @@ defmodule Sanctum.Consent.AuthzTest do
       # Two contexts built from one session token: the thief's, which asks
       # first, and the person's, which asks for the identical change.
       {:ok, thief} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       {:ok, person} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       assert thief.session_token_hash == person.session_token_hash
 
@@ -922,7 +915,7 @@ defmodule Sanctum.Consent.AuthzTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, other} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       assert {:error, {:confirmation_required, %{id: own}}} =
                Authz.check(%{other | confirmation_id: id}, :credential_entry, change())
@@ -1117,7 +1110,7 @@ defmodule Sanctum.Consent.AuthzTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, stolen} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       refute stolen.session_token_hash == asking.session_token_hash
 

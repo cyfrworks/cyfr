@@ -505,7 +505,7 @@ defmodule Sanctum.SignInTest do
     setup do
       Arca.Cache.init()
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
-      on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_, :_}) end)
+      on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_}) end)
       :ok
     end
 
@@ -534,7 +534,7 @@ defmodule Sanctum.SignInTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       ctx
     end

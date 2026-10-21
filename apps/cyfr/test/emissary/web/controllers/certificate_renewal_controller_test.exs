@@ -71,7 +71,7 @@ defmodule Emissary.Web.CertificateRenewalControllerTest do
       )
 
     {:ok, session} = TestContext.create_session(built)
-    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
     keys = Arca.Repo.get_by!(PersonIdentity, user_id: user.id)
 
     {:ok, operational} =

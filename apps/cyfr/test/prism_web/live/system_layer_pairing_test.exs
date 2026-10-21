@@ -387,7 +387,7 @@ defmodule PrismWeb.SystemLayerPairingTest do
       {:ok, session} = Sanctum.TestContext.create_session(%{ctx | provider: "github"})
 
       {:ok, other} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       key = device_key!()
 
@@ -438,7 +438,7 @@ defmodule PrismWeb.SystemLayerPairingTest do
       {:ok, session} = Sanctum.TestContext.create_session(%{ctx | provider: "github"})
 
       {:ok, session_ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       {:ok, _approved} =
         Sanctum.TestContext.confirming(session_ctx, &Sanctum.CliSignIn.approve(&1, secret))
@@ -455,7 +455,7 @@ defmodule PrismWeb.SystemLayerPairingTest do
       assert {:ok, []} = Arca.PendingConfirmations.list_open(Context.actor(ctx), ctx.user_id)
 
       assert {:error, _ended} =
-               Sanctum.Caller.establish(begun.session_token, task_supervisor: nil)
+               Sanctum.Caller.establish(begun.session_token, refresh: false)
 
       Cyfr.Test.Sandbox.end_views()
     end

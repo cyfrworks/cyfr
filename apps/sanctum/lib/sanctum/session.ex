@@ -16,7 +16,7 @@ defmodule Sanctum.Session do
       {:ok, session} = Sanctum.Session.create(ctx)
 
       # Load context from session token
-      {:ok, ctx} = Sanctum.Session.load(session.token, surface: :console)
+      {:ok, ctx} = Sanctum.Session.load(session.token)
 
       # Refresh session (extend expiration)
       {:ok, session} = Sanctum.Session.refresh(session.token)
@@ -390,38 +390,35 @@ defmodule Sanctum.Session do
   ephemeral fields (request_id, etc.) nil. Returns `{:error, :invalid_session}`
   if the token is unknown or expired.
 
-  The `:surface` option is required and decides the context's auth class:
-  `:console` stamps `auth_method: :oidc` — the interactive class that can
-  reach vault CRUD, consent commits and overrides — while `:tincture`
-  stamps `:session`, which cannot. The most-privileged class must never be
-  a default a caller can inherit by omission, so every ingress declares
-  which surface it serves.
+  The context is the console's interactive class (`auth_method: :oidc`),
+  the one a person's session carries on every surface.
 
   ## Examples
 
-      {:ok, ctx} = Sanctum.Session.load("abc123...", surface: :console)
+      {:ok, ctx} = Sanctum.Session.load("abc123...")
       ctx.user_id
       #=> "123"
 
   """
-  @spec load(String.t(), surface: :console | :tincture) ::
+  @spec load(String.t()) ::
           {:ok, Context.t()}
           | {:error, :invalid_session | :database_error | :namespace_unavailable}
-  def load(token, opts) when is_binary(token), do: load_by_hash(hash_token(token), opts)
+  def load(token) when is_binary(token), do: load_by_hash(hash_token(token))
 
   @doc """
-  `load/2`, also saying whether the session is due its sliding refresh
-  (`slide_due?/1`), read off the row the load already read — so the
-  caller starts a refresh only when one would write.
+  `load/1`, also saying whether the session is due its sliding refresh
+  (about a day, or half the TTL, since it was last extended), read off
+  the row the load already read — so the caller starts a refresh only
+  when one would write.
   """
-  @spec load_sliding(String.t(), surface: :console | :tincture) ::
+  @spec load_sliding(String.t()) ::
           {:ok, Context.t(), boolean()}
           | {:error, :invalid_session | :database_error | :namespace_unavailable}
-  def load_sliding(token, opts) when is_binary(token) do
+  def load_sliding(token) when is_binary(token) do
     token_hash = hash_token(token)
 
-    with {:ok, row} <- stored(token_hash, opts),
-         {:ok, ctx} <- row_to_context(row, token_hash, Keyword.fetch!(opts, :surface)) do
+    with {:ok, row} <- stored(token_hash),
+         {:ok, ctx} <- row_to_context(row, token_hash) do
       {:ok, ctx, slide_due?(row.expires_at)}
     end
   end
@@ -430,24 +427,16 @@ defmodule Sanctum.Session do
   Load a Context from a session's row key (`token_hash/1`) rather than its
   token: what `Sanctum.Caller.revalidate_session/1` rebuilds a retained
   context from, since a holder keeps the hash and never the token. The
-  same assembly as `load/2`, with the same `:surface` rule and results.
+  same assembly as `load/1`, with the same results.
   """
-  @spec load_by_hash(binary(), surface: :console | :tincture) ::
+  @spec load_by_hash(binary()) ::
           {:ok, Context.t()}
           | {:error, :invalid_session | :database_error | :namespace_unavailable}
-  def load_by_hash(token_hash, opts) when is_binary(token_hash) do
-    with {:ok, row} <- stored(token_hash, opts),
-         do: row_to_context(row, token_hash, Keyword.fetch!(opts, :surface))
+  def load_by_hash(token_hash) when is_binary(token_hash) do
+    with {:ok, row} <- stored(token_hash), do: row_to_context(row, token_hash)
   end
 
-  defp stored(token_hash, opts) do
-    surface = Keyword.fetch!(opts, :surface)
-
-    unless surface in [:console, :tincture] do
-      raise ArgumentError,
-            "Session.load surface must be :console or :tincture, got: #{Prima.LoggerContext.shape(surface)}"
-    end
-
+  defp stored(token_hash) do
     case Arca.SessionStorage.get_session(token_hash) do
       {:ok, row} -> {:ok, row}
       {:error, :not_found} -> {:error, :invalid_session}
@@ -550,28 +539,22 @@ defmodule Sanctum.Session do
     end
   end
 
-  @doc """
-  Whether a session expiring at `expires_at` is due its sliding refresh:
-  more than ~1 day (or half the TTL, whichever is smaller) has passed
-  since it was last extended. Never for infinite (TTL 0) sessions, nor
-  while the idle timeout cannot be read.
-  """
-  @spec slide_due?(DateTime.t() | term()) :: boolean()
-  def slide_due?(expires_at) do
-    case {session_ttl_hours(), coerce_datetime(expires_at)} do
-      {{:ok, 0}, _} ->
+  # Whether a session expiring at `expires_at` is due its sliding refresh:
+  # more than ~1 day (or half the TTL, whichever is smaller) has passed
+  # since it was last extended. Never for infinite (TTL 0) sessions, nor
+  # while the idle timeout cannot be read.
+  defp slide_due?(%DateTime{} = expires_at) do
+    case session_ttl_hours() do
+      {:ok, 0} ->
         false
 
-      {{:error, :unavailable}, _} ->
+      {:error, :unavailable} ->
         false
 
-      {_ttl_hours, nil} ->
-        false
-
-      {{:ok, ttl_hours}, %DateTime{} = at} ->
+      {:ok, ttl_hours} ->
         ttl_seconds = ttl_hours * 3600
         stale_after = ttl_seconds - min(86_400, div(ttl_seconds, 2))
-        DateTime.diff(at, DateTime.utc_now()) < stale_after
+        DateTime.diff(expires_at, DateTime.utc_now()) < stale_after
     end
   end
 
@@ -718,7 +701,7 @@ defmodule Sanctum.Session do
   # The one assembly of a session's context: the row key
   # (`session_token_hash`) and the binding that names it are stamped here
   # together and nowhere else.
-  defp row_to_context(row, token_hash, surface) do
+  defp row_to_context(row, token_hash) do
     # A namespace is a publishing credential, not identity: a person
     # without one is as signed in as anyone, with `namespace: nil`.
     case namespace_of(row.user_id) do
@@ -740,7 +723,7 @@ defmodule Sanctum.Session do
             # bounces a genuinely athanor-less user.
             athanor_id: row.athanor_id,
             scope: :athanor,
-            auth_method: surface_auth_method(surface),
+            auth_method: :oidc,
             session_token_hash: token_hash,
             authenticated: true
           )
@@ -819,9 +802,6 @@ defmodule Sanctum.Session do
     end
   end
 
-  defp surface_auth_method(:console), do: :oidc
-  defp surface_auth_method(:tincture), do: :session
-
   defp row_to_external(row, token) do
     %{
       token: token,
@@ -832,9 +812,6 @@ defmodule Sanctum.Session do
       expires_at: Prima.Time.iso8601(row.expires_at)
     }
   end
-
-  defp coerce_datetime(%DateTime{} = dt), do: dt
-  defp coerce_datetime(_), do: nil
 
   # Subscribers hear that a session was created. No token travels — a
   # subscriber uses adopt_active_session() to get its own. Sanctum

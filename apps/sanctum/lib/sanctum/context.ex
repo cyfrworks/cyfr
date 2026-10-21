@@ -64,7 +64,6 @@ defmodule Sanctum.Context do
           | :webhook
           | :tincture
           | :system
-          | :session
           | nil
   @type api_key_type :: :application | :service | :admin | nil
   @type plane :: :external | :guest
@@ -374,7 +373,6 @@ defmodule Sanctum.Context do
     :webhook,
     :tincture,
     :system,
-    :session,
     nil
   ]
 
@@ -1051,7 +1049,7 @@ defmodule Sanctum.Context do
     {:error, :unauthenticated}
   end
 
-  def authorize(%__MODULE__{} = ctx, action, resource) do
+  def authorize(%__MODULE__{} = ctx, action, resource) when is_atom(action) do
     do_authorize(ctx, action, resource)
   end
 
@@ -1059,9 +1057,7 @@ defmodule Sanctum.Context do
   # enforce the tenant scope (via `Sanctum.TenantPolicy`) so an athanor-less
   # context is rejected centrally rather than relying on storage-layer scoping.
   defp do_authorize(%__MODULE__{} = ctx, action, nil) do
-    permission = action_to_permission(action)
-
-    with :ok <- require_permission(ctx, permission),
+    with :ok <- require_permission(ctx, action),
          :ok <- tenant_ok(ctx) do
       :ok
     else
@@ -1122,7 +1118,7 @@ defmodule Sanctum.Context do
   # {:execution|:tenant}. verify_tenant (Sanctum.TenantPolicy) logs any
   # tenant mismatch, so this does not re-log.
   defp verify_tenant_resource(%__MODULE__{} = ctx, action, record) do
-    with :ok <- require_permission(ctx, action_to_permission(action)),
+    with :ok <- require_permission(ctx, action),
          :ok <- verify_tenant(ctx, record) do
       :ok
     end
@@ -1134,9 +1130,6 @@ defmodule Sanctum.Context do
   defp verify_tenant(%__MODULE__{} = ctx, record) do
     Sanctum.TenantPolicy.verify(ctx, record)
   end
-
-  # Accept permission atoms from Sanctum.Atoms directly.
-  defp action_to_permission(action) when is_atom(action), do: action
 
   # user_id and auth_method ride the rostered Logger metadata — the
   # message carries only what the roster does not.

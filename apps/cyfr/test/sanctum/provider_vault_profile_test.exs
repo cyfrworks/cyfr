@@ -818,28 +818,4 @@ defmodule Sanctum.ProviderVaultProfileTest do
     assert previewed == []
     assert {:ok, %{status: "granted", revision: 2, removed: []}} = granted
   end
-
-  test "the tincture session surface is named in the refusal", %{ctx: ctx} do
-    session_ctx = %{ctx | auth_method: :session}
-
-    assert {:error, "consent_class_required:" <> _} =
-             Sanctum.Provider.handle("vault", session_ctx, %{"action" => "list"})
-  end
-
-  test "a limits decision is refused rather than signed and ignored", %{ctx: ctx} do
-    # It rode the commit digest and stopped there: the blob is built from the
-    # manifest's caps, so the operator's number was proofed and recorded while
-    # the runtime kept the manifest's. Refusing keeps the digest a promise
-    # about what actually runs.
-    for action <- ["preview", "commit"] do
-      assert {:error, "limits are not a consent decision" <> _} =
-               Sanctum.Provider.handle("profile", ctx, %{
-                 "action" => action,
-                 "decisions" => %{
-                   "ref" => "reagent:local.mcp-walk",
-                   "limits" => %{"timeout" => "1s"}
-                 }
-               })
-    end
-  end
 end

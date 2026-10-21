@@ -66,7 +66,7 @@ defmodule Sanctum.Providers.PersonRotationTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(built)
-    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
     %{user: user, athanor: athanor, ctx: ctx}
   end
 

@@ -415,10 +415,7 @@ defmodule Sanctum.ToolGrantsTest do
 
       assert :ok =
                ToolGrants.check_standing(
-                 Map.put(write, :constraint, %{
-                   "kind" => "storage_path",
-                   "patterns" => ["data/a.md"]
-                 }),
+                 Map.put(write, :constraint, %{kind: "storage_path", patterns: ["data/a.md"]}),
                  now
                )
 
@@ -445,6 +442,8 @@ defmodule Sanctum.ToolGrantsTest do
             %{kind: "storage_path", patterns: ["data/*"]},
             %{kind: "storage_path", patterns: ["data/notes/", "data/*.md"]},
             %{patterns: ["data/"]},
+            %{kind: :storage_path, patterns: ["data/"]},
+            %{"kind" => "storage_path", "patterns" => ["data/"]},
             :corrupt
           ] do
         assert {:error, {:scope_not_permitted, :invalid_constraint}} =
@@ -465,7 +464,7 @@ defmodule Sanctum.ToolGrantsTest do
 
       assert :ok =
                ToolGrants.check_standing(
-                 Map.put(fetch, :constraint, %{kind: :egress_domain, patterns: ["*.example.com"]}),
+                 Map.put(fetch, :constraint, %{kind: "egress_domain", patterns: ["*.example.com"]}),
                  now
                )
 

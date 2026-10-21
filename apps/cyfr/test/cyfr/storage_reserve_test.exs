@@ -560,7 +560,7 @@ defmodule Cyfr.StorageReserveTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     %{user: user, athanor: athanor, session_ctx: session_ctx}
   end

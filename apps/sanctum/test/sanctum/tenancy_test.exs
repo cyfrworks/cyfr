@@ -23,6 +23,20 @@ defmodule Sanctum.TenancyTest do
     athanor
   end
 
+  defp person!(name) do
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      Sanctum.Tenancy.Users.upsert_from_provider(%{
+        id: "github|https://github.com|#{name}-#{n}",
+        provider: "github",
+        email: "#{name}-#{n}@example.com",
+        verified: true
+      })
+
+    user
+  end
+
   describe "resolve_status/2 — override seam" do
     setup do
       original = Application.get_env(:sanctum, :tenancy_resolver_override)
@@ -309,51 +323,26 @@ defmodule Sanctum.TenancyTest do
 
     test "true while the athanor is active and the creator is not denied" do
       athanor = group!("chan-a")
-      uid = "github|https://github.com|chan-#{System.unique_integer([:positive])}"
-
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: uid,
-          provider: "github",
-          email: "chan@example.com",
-          verified: true
-        })
+      user = person!("chan")
+      bystander = person!("bystander")
 
       assert Tenancy.channel_active?(athanor.id, user.id)
       # a creator who merely leaves (or never was a member) leaves the channel running
-      assert Tenancy.channel_active?(athanor.id, "someone-else")
+      assert Tenancy.channel_active?(athanor.id, bystander.id)
       # synthetic principals are never denied
       assert Tenancy.channel_active?(athanor.id, "webhook:abc")
+      assert Tenancy.channel_active?(athanor.id, "system")
       assert Tenancy.channel_active?(athanor.id, nil)
 
-      # an id minted here always has its row: one without was never a person
+      # rows are never deleted: an id without one was never a person here
       refute Tenancy.channel_active?(athanor.id, "usr_never-seen")
+      refute Tenancy.channel_active?(athanor.id, "someone-else")
 
       {:ok, _} = Sanctum.Tenancy.Users.deny(user)
       refute Tenancy.channel_active?(athanor.id, user.id)
 
-      # a denied person whose row predates minted ids — an in-place upgrade —
-      # is read by the row, never waved through by the shape of the id
-      legacy = "github|https://github.com|legacy-#{System.unique_integer([:positive])}"
-      now = DateTime.utc_now()
-
-      {1, _} =
-        Arca.Repo.insert_all(Arca.Schemas.User, [
-          %{
-            id: legacy,
-            provider: "github",
-            status: "denied",
-            first_seen_at: now,
-            last_seen_at: now,
-            created_at: now,
-            updated_at: now
-          }
-        ])
-
-      refute Tenancy.channel_active?(athanor.id, legacy)
-
       {:ok, _} = Athanors.archive(athanor)
-      refute Tenancy.channel_active?(athanor.id, "someone-else")
+      refute Tenancy.channel_active?(athanor.id, bystander.id)
     end
 
     test "false for a missing or unknown athanor" do
@@ -437,7 +426,7 @@ defmodule Sanctum.TenancyTest do
       assert {:ok, _} = Arca.SessionStorage.get_session(again.hash)
 
       assert {:error, :no_athanor} =
-               Sanctum.Caller.establish(again.token, focus: group.id, task_supervisor: nil)
+               Sanctum.Caller.establish(again.token, focus: group.id, refresh: false)
 
       ctx =
         Context.build(
@@ -478,7 +467,7 @@ defmodule Sanctum.TenancyTest do
 
       # The session that stands still establishes in the athanor they kept.
       assert {:ok, %{athanor_id: athanor_id}} =
-               Sanctum.Caller.establish(kept.token, focus: stay.id, task_supervisor: nil)
+               Sanctum.Caller.establish(kept.token, focus: stay.id, refresh: false)
 
       assert athanor_id == stay.id
     end

@@ -690,7 +690,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
       Members.ensure(alice, scope: "athanor", athanor_id: Sanctum.TestContext.athanor_id())
 
     {:ok, session} = Sanctum.TestContext.create_session(a)
-    {:ok, loaded} = Sanctum.Session.load(session.token, surface: :console)
+    {:ok, loaded} = Sanctum.Session.load(session.token)
     with_hash = %{a | session_token_hash: Sanctum.Session.token_hash(session.token)}
 
     assert {:ok, %{athanor: %{id: gid}}} =
@@ -698,7 +698,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     assert gid == group.id
     assert loaded.athanor_id != gid
-    {:ok, reloaded} = Sanctum.Session.load(session.token, surface: :console)
+    {:ok, reloaded} = Sanctum.Session.load(session.token)
     assert reloaded.athanor_id == gid
 
     b = %{ctx.(bob, Sanctum.TestContext.athanor_id(), []) | session_token_hash: "x"}

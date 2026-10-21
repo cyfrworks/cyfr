@@ -815,8 +815,7 @@ defmodule Sanctum.Providers.Profile do
   # ---------------------------------------------------------------------------
 
   defp decode_decisions(raw) do
-    with :ok <- refuse_limits(raw),
-         {:ok, kind} <- kind(raw),
+    with {:ok, kind} <- kind(raw),
          {:ok, scope} <- enum(raw, "scope", %{"versionless" => :versionless, "pinned" => :pinned}),
          {:ok, invoke_mode} <-
            enum(raw, "invoke_mode", %{"open_inert" => :open_inert, "edge_only" => :edge_only}),
@@ -878,22 +877,6 @@ defmodule Sanctum.Providers.Profile do
       :error -> {:ok, nil}
       {:ok, subset} when is_map(subset) -> {:ok, subset}
       {:ok, _other} -> {:error, {:invalid_argument, "subset must be a map of node references"}}
-    end
-  end
-
-  # Reject a top-level limits override. Runtime limits come from manifest
-  # caps and defaults and are covered by the shape digest; a decision may
-  # only narrow them, per node, under `subset`.
-  defp refuse_limits(raw) do
-    case Map.get(raw, "limits") do
-      nil ->
-        :ok
-
-      _ ->
-        {:error,
-         "limits are not a consent decision — a component's limits come from its " <>
-           "manifest caps, which shape_digest already covers; a decision narrows " <>
-           "them per node under subset.<node>.limits"}
     end
   end
 

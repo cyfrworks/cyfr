@@ -110,7 +110,7 @@ defmodule Sanctum.PairingTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     %{user: user, athanor: athanor, session_ctx: session_ctx, session_token: session.token}
   end
@@ -311,7 +311,6 @@ defmodule Sanctum.PairingTest do
         ctx(auth_method: :oidc, plane: :guest),
         ctx(auth_method: :api_key, api_key_type: :admin),
         ctx(auth_method: :api_key, plane: :guest),
-        ctx(auth_method: :session),
         ctx(auth_method: :tincture),
         ctx(auth_method: :webhook),
         ctx(auth_method: :scheduled),
@@ -353,8 +352,8 @@ defmodule Sanctum.PairingTest do
          %{session_token: token, user: user, athanor: athanor} do
       # Two contexts built from one session token: the thief's, which asks
       # first, and the person's. One credential, one opener.
-      {:ok, thief} = Sanctum.Caller.establish(token, focus: athanor.id, task_supervisor: nil)
-      {:ok, person} = Sanctum.Caller.establish(token, focus: athanor.id, task_supervisor: nil)
+      {:ok, thief} = Sanctum.Caller.establish(token, focus: athanor.id, refresh: false)
+      {:ok, person} = Sanctum.Caller.establish(token, focus: athanor.id, refresh: false)
       assert thief.session_token_hash == person.session_token_hash
       args = for_key(device_key())
 
@@ -466,7 +465,7 @@ defmodule Sanctum.PairingTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, stolen} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       args = for_key(device_key())
       assert {:error, {:confirmation_required, %{id: id}}} = Pairing.begin(asking, args)
@@ -1180,7 +1179,7 @@ defmodule Sanctum.PairingTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, other_ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       device = pair!(session_ctx)
 
@@ -1362,7 +1361,7 @@ defmodule Sanctum.PairingTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(built)
-    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    {:ok, ctx} = Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
     ctx
   end
 

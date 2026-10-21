@@ -231,7 +231,7 @@ defmodule Sanctum.ProviderTest do
     test "logout retires the session that called it", %{ctx: ctx} do
       ctx = Sanctum.TestContext.issuer!(ctx)
       {:ok, session} = Sanctum.Session.create(ctx)
-      assert {:ok, _} = Sanctum.Session.load(session.token, surface: :console)
+      assert {:ok, _} = Sanctum.Session.load(session.token)
 
       session_ctx = %{ctx | session_token_hash: Sanctum.Session.token_hash(session.token)}
 
@@ -239,7 +239,7 @@ defmodule Sanctum.ProviderTest do
       assert result.message =~ "Logged out"
 
       # The whole point: the credential must not survive its own logout.
-      assert {:error, _} = Sanctum.Session.load(session.token, surface: :console)
+      assert {:error, _} = Sanctum.Session.load(session.token)
     end
 
     test "logout refuses when an API key authenticated the call", %{ctx: ctx} do

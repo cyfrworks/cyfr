@@ -127,8 +127,9 @@ defmodule Sanctum.Decisions do
   before authentication has no actor and a null tenant. `inserted_at` is
   now. `open/3` records it.
   """
-  @spec refused(Context.t() | nil, term(), keyword() | map()) :: Decision.t()
-  def refused(ctx, reason, fields) when is_nil(ctx) or is_struct(ctx, Context) do
+  @spec refused(Context.t() | nil, term(), keyword()) :: Decision.t()
+  def refused(ctx, reason, fields)
+      when (is_nil(ctx) or is_struct(ctx, Context)) and is_list(fields) do
     fields = Map.new(fields)
     refusal = Sanctum.Refusals.classify(reason)
 

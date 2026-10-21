@@ -24,8 +24,4 @@ defmodule Sanctum.Gate.ServicesTest do
     assert Services.service_name(Arca.Providers.Files) == "arca"
     assert Services.providers_for("arca") == [Arca.Providers.Records, Arca.Providers.Files]
   end
-
-  test "an unlisted module is sanctum's" do
-    assert Services.service_name(UnknownProvider) == "sanctum"
-  end
 end

@@ -407,7 +407,7 @@ defmodule Emissary.Web.RestoreControllerTest do
       assert is_binary(token)
       refute conn.resp_body =~ token
 
-      {:ok, session} = Sanctum.Session.load(token, surface: :console)
+      {:ok, session} = Sanctum.Session.load(token)
       assert session.provider == "restore"
 
       assert %{phase: "completed", user_id: user_id} =

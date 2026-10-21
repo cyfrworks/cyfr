@@ -30,7 +30,7 @@ defmodule Sanctum.CarryTest do
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
-    on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_, :_}) end)
+    on_exit(fn -> Arca.Cache.delete_match({:established, :_, :_}) end)
     :ok
   end
 
@@ -65,7 +65,7 @@ defmodule Sanctum.CarryTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(built)
-    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, refresh: false)
     %{user: user, ctx: ctx, token: session.token}
   end
 

@@ -203,7 +203,7 @@ defmodule Sanctum.CallerTest do
       Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
 
       on_exit(fn ->
-        Arca.Cache.delete_match({:established, :_, :_, :_})
+        Arca.Cache.delete_match({:established, :_, :_})
 
         if original,
           do: Application.put_env(:sanctum, :caller_memo_ttl_ms, original),
@@ -220,7 +220,7 @@ defmodule Sanctum.CallerTest do
       assert {:ok, ctx} = Caller.establish(session.token)
       assert {:ok, %Context{user_id: user_id}} = Caller.establish(session.token)
       assert user_id == ctx.user_id
-      refute Arca.Cache.match({:established, :_, :_, :_}) == []
+      refute Arca.Cache.match({:established, :_, :_}) == []
     end
 
     test "destroy invalidates the memo: a logged-out session refuses on the next call" do
@@ -250,7 +250,7 @@ defmodule Sanctum.CallerTest do
     test "refusals are never cached" do
       assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_nope")
       assert {:error, :unauthenticated} = Caller.establish("cyfr_sess_nope")
-      assert Arca.Cache.match({:established, :_, :_, :_}) == []
+      assert Arca.Cache.match({:established, :_, :_}) == []
     end
 
     test "a plain member removal drops the memo like the door's revocations do" do
@@ -260,11 +260,11 @@ defmodule Sanctum.CallerTest do
       session = session_for(user)
 
       assert {:ok, _ctx} = Caller.establish(session.token)
-      refute Arca.Cache.match({:established, :_, :_, :_}) == []
+      refute Arca.Cache.match({:established, :_, :_}) == []
 
       :ok = Sanctum.Tenancy.Members.remove_member(home, user_id: user.user_id)
 
-      assert Arca.Cache.match({:established, :_, :_, :_}) == [],
+      assert Arca.Cache.match({:established, :_, :_}) == [],
              "the removed member's cached context survived the removal"
     end
 

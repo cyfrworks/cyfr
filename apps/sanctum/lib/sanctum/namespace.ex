@@ -32,19 +32,6 @@ defmodule Sanctum.Namespace do
   # to 0: a sandbox rollback is a write no invalidation sees.)
   @cache_ttl_ms 60_000
 
-  # A read that raises is a transient failure, never "unclaimed". The
-  # store's own failures no longer arrive that way — the facade below
-  # answers them as `{:error, reason}`, which the clause on the read
-  # already reports as retryable — so the one class left is the sandbox
-  # handing a checkout to a process that does not own it. That is a
-  # caller-side lifecycle fault the storage boundary deliberately does not
-  # map, and this is a read on every authenticated request, so it is
-  # caught rather than allowed to look like an unclaimed namespace.
-  # ArgumentError stays deliberately absent — it is the programmer-error
-  # signal (an athanor-less context at a storage backstop, a malformed
-  # call), and catching it as retryable would hide bugs as 503s.
-  @transient [DBConnection.OwnershipError]
-
   @doc """
   Resolve a person's namespace slug.
 
@@ -130,14 +117,6 @@ defmodule Sanctum.Namespace do
             {:error, reason}
         end
     end
-  rescue
-    e in @transient ->
-      Logger.warning(
-        "[Sanctum.Namespace] transient namespace lookup failure for " <>
-          "user_id=#{inspect(user_id)}: #{Exception.message(e)} — treating as retryable"
-      )
-
-      {:error, e}
   end
 
   def lookup_status(_), do: :not_claimed

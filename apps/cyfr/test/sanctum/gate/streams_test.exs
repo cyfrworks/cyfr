@@ -444,11 +444,10 @@ defmodule Sanctum.Gate.StreamsTest do
       assert [%{admission: "admitted"}] = decisions(ctx)
     end
 
-    test "is refused for a session, an MCP key and a paired device, before anything else", %{
+    test "is refused for an MCP key and a paired device, before anything else", %{
       ctx: ctx
     } do
       callers = [
-        session: %{ctx | auth_method: :session, origin: :interactive},
         mcp_key: %{
           ctx
           | auth_method: :api_key,

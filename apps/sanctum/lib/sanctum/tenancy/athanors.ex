@@ -170,18 +170,13 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   The canonical key for a pair of people: order-independent, so
-  `{alice, bob}` and `{bob, alice}` name the same athanor. Exactly two ids
-  — a pair is what a frozen athanor holds, and a key over any other number
-  would name nothing `create_pair/2` can find.
+  `{alice, bob}` and `{bob, alice}` name the same athanor.
 
   Hashes the JSON encoding of sorted member ids, preserving unambiguous boundaries.
   """
-  @spec pair_key([String.t()] | String.t(), String.t() | nil) :: String.t()
-  def pair_key(user_a, user_b) when is_binary(user_a) and is_binary(user_b),
-    do: pair_key([user_a, user_b], nil)
-
-  def pair_key([a, b] = user_ids, nil) when is_binary(a) and is_binary(b) do
-    user_ids
+  @spec pair_key(String.t(), String.t()) :: String.t()
+  def pair_key(user_a, user_b) when is_binary(user_a) and is_binary(user_b) do
+    [user_a, user_b]
     |> Enum.sort()
     |> Jason.encode!()
     |> then(&:crypto.hash(:sha256, &1))

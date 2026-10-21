@@ -223,7 +223,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     Application.put_env(:sanctum, :caller_memo_ttl_ms, 60_000)
 
     on_exit(fn ->
-      Arca.Cache.delete_match({:established, :_, :_, :_})
+      Arca.Cache.delete_match({:established, :_, :_})
 
       if original,
         do: Application.put_env(:sanctum, :caller_memo_ttl_ms, original),

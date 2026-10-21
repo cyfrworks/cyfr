@@ -128,7 +128,7 @@ defmodule Cyfr.BootstrapTest do
     assert Enum.any?(kept_rows, &(&1.scope == "platform"))
     assert {:ok, dropped_rows} = Members.list_by_user(dropped.id)
     refute Enum.any?(dropped_rows, &(&1.scope == "platform"))
-    assert {:error, _} = Sanctum.Session.load(session.token, surface: :console)
+    assert {:error, _} = Sanctum.Session.load(session.token)
   end
 
   describe "the claimed job" do

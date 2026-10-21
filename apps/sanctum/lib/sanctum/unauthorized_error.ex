@@ -21,18 +21,8 @@ defmodule Sanctum.UnauthorizedError do
 
   @impl true
   def exception(opts) when is_list(opts) do
-    opts |> Keyword.get(:reason, :unauthenticated) |> build()
-  end
-
-  def exception(reason), do: build(reason)
-
-  defp build(reason) do
-    message =
-      if Sanctum.Unauthorized.reason?(reason),
-        do: Sanctum.Unauthorized.message(reason),
-        else: "Unauthorized"
-
-    %__MODULE__{reason: reason, message: message}
+    reason = Keyword.fetch!(opts, :reason)
+    %__MODULE__{reason: reason, message: Sanctum.Unauthorized.message(reason)}
   end
 end
 
@@ -40,10 +30,7 @@ defimpl Plug.Exception, for: Sanctum.UnauthorizedError do
   use Boundary, classify_to: Sanctum
 
   def status(%{reason: reason}) do
-    if Sanctum.Unauthorized.reason?(reason) and
-         Sanctum.Unauthorized.class(reason) == :unauthenticated,
-       do: 401,
-       else: 403
+    if Sanctum.Unauthorized.class(reason) == :unauthenticated, do: 401, else: 403
   end
 
   def actions(_exception), do: []

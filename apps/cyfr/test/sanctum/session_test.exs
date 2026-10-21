@@ -69,7 +69,7 @@ defmodule Sanctum.SessionTest do
       {:ok, session} = Session.create(%{ctx | permissions: MapSet.new([:read])})
       refute Map.has_key?(session, :permissions)
 
-      assert {:ok, %{permissions: permissions}} = Session.load(session.token, surface: :console)
+      assert {:ok, %{permissions: permissions}} = Session.load(session.token)
       assert MapSet.equal?(permissions, MapSet.new(Sanctum.Context.person_permissions()))
       refute MapSet.member?(permissions, :*)
     end
@@ -79,7 +79,7 @@ defmodule Sanctum.SessionTest do
     test "returns context for a valid session; no publisher namespace is still signed in",
          %{ctx: ctx} do
       {:ok, session} = Session.create(ctx)
-      {:ok, retrieved_ctx} = Session.load(session.token, surface: :console)
+      {:ok, retrieved_ctx} = Session.load(session.token)
 
       assert retrieved_ctx.user_id == ctx.user_id
       assert retrieved_ctx.email == "test@example.com"
@@ -117,7 +117,7 @@ defmodule Sanctum.SessionTest do
       {:ok, session} = Sanctum.TestContext.create_session(ctx)
 
       assert {:ok, %{authenticated: true, namespace: ns}} =
-               Session.load(session.token, surface: :console)
+               Session.load(session.token)
 
       assert ns == "sess#{n}"
 
@@ -138,24 +138,16 @@ defmodule Sanctum.SessionTest do
 
       :ok = Compendium.Registry.CredentialStore.delete(person, registry, "sess#{n}")
       Sanctum.Namespace.invalidate(user_id)
-      assert {:ok, %{authenticated: true}} = Session.load(session.token, surface: :console)
+      assert {:ok, %{authenticated: true}} = Session.load(session.token)
     end
 
     test "returns error for invalid token", %{ctx: _ctx} do
-      assert {:error, :invalid_session} = Session.load("invalid_token", surface: :console)
+      assert {:error, :invalid_session} = Session.load("invalid_token")
     end
 
-    test "the surface decides the auth class and cannot be omitted", %{ctx: ctx} do
+    test "a loaded session carries the interactive class", %{ctx: ctx} do
       {:ok, session} = Session.create(ctx)
-
-      # The interactive class (:oidc) is only ever stamped for an explicit
-      # :console surface; :tincture gets :session, which the consent
-      # authorization class rejects. Omission is a caller bug, not a default.
-      assert_raise KeyError, fn -> Session.load(session.token, []) end
-
-      assert_raise ArgumentError, fn ->
-        Session.load(session.token, surface: :public)
-      end
+      assert {:ok, %{auth_method: :oidc}} = Session.load(session.token)
     end
 
     test "returns error for expired session", %{ctx: ctx} do
@@ -170,7 +162,7 @@ defmodule Sanctum.SessionTest do
       from(s in Arca.Schemas.Session, where: s.token_hash == ^token_hash)
       |> Arca.Repo.update_all(set: [expires_at: past])
 
-      assert {:error, :invalid_session} = Session.load(session.token, surface: :console)
+      assert {:error, :invalid_session} = Session.load(session.token)
     end
   end
 
@@ -245,7 +237,7 @@ defmodule Sanctum.SessionTest do
       expiry = fn -> elem(Session.get(session.token), 1).expires_at end
 
       # A fresh session is not due: the load says so and no slide runs.
-      assert {:ok, %Context{}, false} = Session.load_sliding(session.token, surface: :console)
+      assert {:ok, %Context{}, false} = Session.load_sliding(session.token)
       untouched = expiry.()
       {:ok, _} = Sanctum.Caller.establish(session.token)
       Process.sleep(50)
@@ -257,7 +249,7 @@ defmodule Sanctum.SessionTest do
       from(s in Arca.Schemas.Session, where: s.token_hash == ^token_hash)
       |> Arca.Repo.update_all(set: [expires_at: soon])
 
-      assert {:ok, %Context{}, true} = Session.load_sliding(session.token, surface: :console)
+      assert {:ok, %Context{}, true} = Session.load_sliding(session.token)
       {:ok, _} = Sanctum.Caller.establish(session.token)
 
       Prima.Test.Wait.wait_until(fn ->
@@ -279,13 +271,13 @@ defmodule Sanctum.SessionTest do
       {:ok, session} = Session.create(ctx)
 
       # Session should exist
-      {:ok, _} = Session.load(session.token, surface: :console)
+      {:ok, _} = Session.load(session.token)
 
       # Destroy it
       assert :ok = Session.destroy(session.token)
 
       # Session should no longer exist
-      assert {:error, :invalid_session} = Session.load(session.token, surface: :console)
+      assert {:error, :invalid_session} = Session.load(session.token)
     end
 
     test "destroying non-existent session succeeds", %{ctx: _ctx} do
@@ -314,10 +306,10 @@ defmodule Sanctum.SessionTest do
       assert removed_count == 1
 
       # Valid session should still work
-      {:ok, _} = Session.load(valid_session.token, surface: :console)
+      {:ok, _} = Session.load(valid_session.token)
 
       # Expired session should be gone
-      assert {:error, :invalid_session} = Session.load(expired_session.token, surface: :console)
+      assert {:error, :invalid_session} = Session.load(expired_session.token)
     end
   end
 

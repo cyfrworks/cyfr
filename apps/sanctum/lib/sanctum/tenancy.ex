@@ -382,8 +382,8 @@ defmodule Sanctum.Tenancy do
   context the sender's sign-in would carry (`auth_method: :oidc`, the
   person's full permission vocabulary), rebuilt from the turn's rows when
   the sender's own context is gone, and carrying `origin`, the origin
-  stored with the work it continues (`Prima.Origin`, an atom or its wire
-  spelling as a row keeps it). The origin is the stored one and never
+  stored with the work it continues (`Prima.Origin`'s wire spelling, as
+  the row keeps it). The origin is the stored one and never
   one inferred from the person continuing: a programmatic turn a person
   approved continues as `programmatic`.
 
@@ -395,7 +395,7 @@ defmodule Sanctum.Tenancy do
   seated in the turn's own athanor, `:archived` when the athanor is not
   active, `:unavailable` when the store cannot answer.
   """
-  @spec continuation(String.t(), String.t(), Prima.Origin.t() | String.t() | nil) ::
+  @spec continuation(String.t(), String.t(), String.t() | nil) ::
           {:ok, Context.t()}
           | {:error, :no_origin | :denied | :not_member | :archived | :unavailable}
   def continuation(user_id, athanor_id, origin)
@@ -436,9 +436,7 @@ defmodule Sanctum.Tenancy do
     end
   end
 
-  defp stored_origin(origin) do
-    if Prima.Origin.origin?(origin), do: {:ok, origin}, else: {:error, :no_origin}
-  end
+  defp stored_origin(_origin), do: {:error, :no_origin}
 
   # The one site that builds a person's continuation context.
   defp continuation_context(user_id, athanor_id, origin) do
@@ -472,12 +470,8 @@ defmodule Sanctum.Tenancy do
   one of the server's synthetic principals (`system`, `_seed`,
   `webhook:<slug>`) for a channel nobody signed in to create — those are
   never denied. Any other id names a person, and that row is read: a
-  denied person's channels stop, whether the row carries an id minted
-  here (`usr_…`) or the IdP composite a server upgraded in place still
-  holds. A minted id with no row is refused — rows are never deleted, so
-  such an id was never a person. An id of any other shape with no row (a
-  fixture, an imported row) was never a signed-in person here, and the
-  channel is the athanor's regardless.
+  denied person's channels stop. An id with no row is refused — rows are
+  never deleted, so such an id was never a person here.
 
   Every caller is a credential path — a webhook, an API key, a tincture
   token, a schedule about to fire — so a store that cannot answer FAILS
@@ -509,9 +503,7 @@ defmodule Sanctum.Tenancy do
   defp athanor_active?(_), do: false
 
   # The server's synthetic principals are never people, so they are never
-  # denied. Every other id is read as a person's — the shape of the id
-  # decides nothing, or a denied person whose row predates minted ids
-  # would keep every channel they created.
+  # denied. Every other id is read as a person's row.
   @synthetic_principals ["system", "_seed"]
 
   defp creator_not_denied?(user_id) when is_binary(user_id) do
@@ -526,7 +518,7 @@ defmodule Sanctum.Tenancy do
           true
 
         {:error, :not_found} ->
-          not Prima.PersonId.person?(user_id)
+          false
 
         {:error, reason} ->
           Logger.warning(

@@ -352,7 +352,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           do: Application.put_env(:sanctum, :device_flow_endpoints, endpoints),
           else: Application.delete_env(:sanctum, :device_flow_endpoints)
 
-        Arca.Cache.delete_match({:established, :_, :_, :_})
+        Arca.Cache.delete_match({:established, :_, :_})
         Prima.Test.RateLimiter.reset!()
       end)
 
@@ -413,7 +413,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       {:ok, session} = Sanctum.TestContext.create_session(built)
 
       {:ok, ctx} =
-        Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+        Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
       %{user: user, ctx: ctx}
     end
@@ -521,7 +521,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           do: Application.put_env(:sanctum, :device_flow_endpoints, endpoints),
           else: Application.delete_env(:sanctum, :device_flow_endpoints)
 
-        Arca.Cache.delete_match({:established, :_, :_, :_})
+        Arca.Cache.delete_match({:established, :_, :_})
         Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
         Prima.Test.RateLimiter.reset!()
       end)
@@ -590,7 +590,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           do: Application.put_env(:sanctum, :device_flow_endpoints, endpoints),
           else: Application.delete_env(:sanctum, :device_flow_endpoints)
 
-        Arca.Cache.delete_match({:established, :_, :_, :_})
+        Arca.Cache.delete_match({:established, :_, :_})
         Prima.Test.RateLimiter.reset!()
       end)
 

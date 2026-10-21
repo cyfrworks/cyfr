@@ -375,17 +375,8 @@ defmodule Sanctum.ToolGrants do
     end
   end
 
-  defp constraint_parts(%{} = constraint) do
-    kind = Map.get(constraint, :kind, Map.get(constraint, "kind"))
-    patterns = Map.get(constraint, :patterns, Map.get(constraint, "patterns"))
-
-    kind =
-      if is_atom(kind) and not is_nil(kind) and not is_boolean(kind),
-        do: Atom.to_string(kind),
-        else: kind
-
-    if is_binary(kind), do: {:ok, kind, patterns}, else: :error
-  end
+  defp constraint_parts(%{kind: kind, patterns: patterns}) when is_binary(kind),
+    do: {:ok, kind, patterns}
 
   defp constraint_parts(_constraint), do: :error
 

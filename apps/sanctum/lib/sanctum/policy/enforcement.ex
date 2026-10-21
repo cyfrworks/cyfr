@@ -104,8 +104,7 @@ defmodule Sanctum.Policy.Enforcement do
     snapshot =
       case attrs[:host_policy_snapshot] do
         nil -> nil
-        s when is_binary(s) -> s
-        s -> safe_encode(s)
+        %{} = s -> safe_encode(s)
       end
 
     record_attrs = %{
@@ -247,8 +246,6 @@ defmodule Sanctum.Policy.Enforcement do
   # adapter, so it stores as text + Jason like every other list here.
   defp encode_chain(nil), do: nil
   defp encode_chain(chain) when is_list(chain), do: safe_encode(chain)
-  defp encode_chain(chain) when is_binary(chain), do: chain
-  defp encode_chain(_), do: nil
 
   defp generate_id, do: Prima.UUID7.generate_id("polog")
 end

@@ -102,7 +102,7 @@ defmodule PrismWeb.CliLiveTest do
     refute has_element?(view, ~s([data-test="cli-approve"]))
     assert status(begun.session_token) == "approved"
 
-    assert {:ok, cli_ctx} = Sanctum.Caller.establish(begun.session_token, task_supervisor: nil)
+    assert {:ok, cli_ctx} = Sanctum.Caller.establish(begun.session_token, refresh: false)
     assert cli_ctx.user_id == user.user_id
 
     Cyfr.Test.Sandbox.end_views()
@@ -205,7 +205,7 @@ defmodule PrismWeb.CliLiveTest do
       })
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: ctx.athanor_id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: ctx.athanor_id, refresh: false)
 
     session_ctx
   end

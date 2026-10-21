@@ -356,7 +356,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       end)
 
       assert {:ok, %{authenticated: true, namespace: nil}} =
-               Sanctum.Session.load(token, surface: :console)
+               Sanctum.Session.load(token)
 
       conn = submit(slug, token)
       assert redirected_to(conn) == "/"
@@ -364,7 +364,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       assert {:ok, %{namespace: ^slug}} = Sanctum.Tenancy.Users.get(user_id)
 
       assert {:ok, %{authenticated: true, namespace: ^slug}} =
-               Sanctum.Session.load(token, surface: :console)
+               Sanctum.Session.load(token)
 
       assert {:ok, %{token: "cyfr_pt_new"}} =
                Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)
@@ -478,7 +478,7 @@ defmodule PrismWeb.ClaimNamespaceControllerTest do
       conn = submit(slug, token, {198, 51, 100, 72})
       assert redirected_to(conn) == "/"
       assert {:ok, %{namespace: ^slug}} = Sanctum.Tenancy.Users.get(user_id)
-      assert {:ok, %{authenticated: true}} = Sanctum.Session.load(token, surface: :console)
+      assert {:ok, %{authenticated: true}} = Sanctum.Session.load(token)
 
       assert {:error, :not_found} =
                Compendium.Registry.CredentialStore.get(as(user_id), "registry.test", slug)

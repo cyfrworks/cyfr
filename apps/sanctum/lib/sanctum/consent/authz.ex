@@ -18,7 +18,6 @@ defmodule Sanctum.Consent.Authz do
   | A Sanctum session (`:oidc`) | yes — Prism web, the CLI, and device-flow-derived sessions all land here |
   | A paired device (`:device`), naming its paired client | yes — the person's own interactive client, on its device channel |
   | An API key with a capability pinned to this exact commit digest | yes, and only for that one commit |
-  | A tincture session upgrade (`:session`) | **no** — this is the public tincture surface, not a console |
   | A tincture token, webhook, cron, system, or unauthenticated caller | no |
   | Anything on the guest plane | no, whatever else it carries |
 
@@ -1033,9 +1032,7 @@ defmodule Sanctum.Consent.Authz do
     end
   end
 
-  # Everything else is a surface that must not be able to consent — most
-  # sharply `:session`, which is produced only by the tincture upgrade path
-  # and would otherwise let a public tincture surface grant authority.
+  # Everything else is a surface that must not be able to consent.
   defp by_surface(method, _request, _now), do: {:error, {:surface_not_permitted, method}}
 
   defp check_capability(%Request{key_capability: nil}, _now), do: {:error, :no_capability}

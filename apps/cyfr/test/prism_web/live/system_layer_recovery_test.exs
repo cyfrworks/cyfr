@@ -125,7 +125,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     %{view: view, ctx: ctx, user: user, authenticator: Sanctum.TestContext.passkey!(user.user_id)}
   end

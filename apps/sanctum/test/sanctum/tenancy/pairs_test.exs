@@ -82,16 +82,12 @@ defmodule Sanctum.Tenancy.PairsTest do
   end
 
   describe "pair_key/2" do
-    test "is order-independent and names exactly two people" do
-      assert Athanors.pair_key("a", "b") == Athanors.pair_key(["b", "a"], nil)
-
-      # A key over one id, or three, would name nothing a pair can be.
-      assert_raise FunctionClauseError, fn -> Athanors.pair_key(["a"], nil) end
-      assert_raise FunctionClauseError, fn -> Athanors.pair_key(["a", "b", "c"], nil) end
+    test "is order-independent" do
+      assert Athanors.pair_key("a", "b") == Athanors.pair_key("b", "a")
     end
 
     test "delimits the ids by encoding, not by a separator an id could hold" do
-      # Under a newline join these two pairs hashed the same bytes.
+      # A newline join would hash these two pairs to the same bytes.
       refute Athanors.pair_key("a\nb", "c") == Athanors.pair_key("a", "b\nc")
     end
   end

@@ -718,7 +718,7 @@ defmodule Sanctum.TestContext do
       )
 
     {:ok, session} = Sanctum.Session.create(base, generation_snapshot: snapshot!(base))
-    {:ok, loaded} = Sanctum.Session.load(session.token, surface: :console)
+    {:ok, loaded} = Sanctum.Session.load(session.token)
     loaded
   end
 

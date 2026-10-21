@@ -58,7 +58,7 @@ defmodule Sanctum.IdentityFreshnessTest do
       restore(:private_egress_targets, targets)
       restore(:caller_memo_ttl_ms, ttl)
       :persistent_term.erase({Resolver, :observer})
-      Arca.Cache.delete_match({:established, :_, :_, :_})
+      Arca.Cache.delete_match({:established, :_, :_})
       Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
       Prima.Test.RateLimiter.reset!()
     end)
@@ -255,7 +255,7 @@ defmodule Sanctum.IdentityFreshnessTest do
       )
 
     {:ok, session} = Sanctum.TestContext.create_session(built)
-    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, refresh: false)
     ctx
   end
 
@@ -374,7 +374,7 @@ defmodule Sanctum.IdentityFreshnessTest do
   # The session behind `token`, established as a console does, with no
   # sliding refresh left running behind the case.
   defp establish(token, athanor),
-    do: Caller.establish(token, focus: athanor.id, task_supervisor: nil)
+    do: Caller.establish(token, focus: athanor.id, refresh: false)
 
   # A session row of `user_id`, bound to `epoch`, as a door at this home
   # mints one for a remote person, with a whole idle window ahead of it;

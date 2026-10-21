@@ -639,7 +639,7 @@ defmodule Sanctum.Catalog do
     if String.contains?(name, ":") do
       :ok
     else
-      action = args["action"] || args[:action]
+      action = args["action"]
 
       case lookup(name) do
         {:ok, {_module, meta}} ->
@@ -680,7 +680,7 @@ defmodule Sanctum.Catalog do
              | {:unknown_action, String.t()}
              | Prima.Refusal.t()}
   def authorize_annotated_action(name, meta, ctx, args, in_chain? \\ false) do
-    action = args["action"] || args[:action]
+    action = args["action"]
     annotation = Annotations.annotation(meta, action)
 
     cond do
@@ -720,10 +720,10 @@ defmodule Sanctum.Catalog do
   end
 
   defp depleted_admits("confirmation", _operation, ctx, args) do
-    case {args["action"] || args[:action], args["request"] || args[:request]} do
+    case {args["action"], args["request"]} do
       {"pending", nil} -> :ok
       {"pending", request} -> flagged_admits(ctx, request)
-      {_proof_or_cancel, _request} -> flagged_admits(ctx, args["ref"] || args[:ref])
+      {_proof_or_cancel, _request} -> flagged_admits(ctx, args["ref"])
     end
   end
 
@@ -1045,7 +1045,7 @@ defmodule Sanctum.Catalog do
           {fun, key} <- [resources: :uri, resource_templates: :uriTemplate],
           function_exported?(module, fun, 0),
           entry <- apply(module, fun, []),
-          do: {module, Map.get(entry, key) || Map.get(entry, Atom.to_string(key))}
+          do: {module, Map.get(entry, key)}
 
     Enum.reduce(entries, {[], []}, fn {module, uri}, {advertised, malformed} ->
       case Prima.Provider.resource_scheme(uri) do

@@ -278,7 +278,7 @@ defmodule Sanctum.SignIn do
           {:ok, Sanctum.Tenancy.Users.user()}
           | {:error, :not_found | :invalid_slug | :namespace_owned_by_another_identity | term()}
   def record_namespace(user_id, slug) when is_binary(user_id) and is_binary(slug) do
-    with true <- Prima.ComponentRef.valid_personal_slug?(slug) || {:error, :invalid_slug},
+    with :ok <- personal_slug(slug),
          {:ok, user} <- Users.get(user_id) do
       cond do
         user.namespace == slug ->
@@ -775,5 +775,9 @@ defmodule Sanctum.SignIn do
       %{count: 1},
       %{user_id: user_id}
     )
+  end
+
+  defp personal_slug(slug) do
+    if Prima.ComponentRef.valid_personal_slug?(slug), do: :ok, else: {:error, :invalid_slug}
   end
 end

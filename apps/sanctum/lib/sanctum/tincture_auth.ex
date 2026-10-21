@@ -152,7 +152,7 @@ defmodule Sanctum.TinctureAuth do
   # A person's session or an athanor's key, as established — never a
   # frame's context.
   defp primary(%Context{authenticated: true, anonymous: false, auth_method: method})
-       when method in [:oidc, :session, :api_key],
+       when method in [:oidc, :api_key],
        do: :ok
 
   defp primary(%Context{}), do: {:error, :not_primary}

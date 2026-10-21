@@ -105,11 +105,8 @@ defmodule Sanctum.NamespaceTest do
       assert {:ok, "bob"} = Namespace.lookup_status(person("bob"))
     end
 
-    # The third outcome — {:error, reason} for a TRANSIENT store failure
-    # (distinct from :not_claimed) — is exercised end-to-end by
-    # Arca.AuditHandlerTest, where a DBConnection.OwnershipError from an
-    # un-owned process is rescued into {:error, _} (and collapsed to nil by
-    # lookup/1). It cannot be induced here under this module's shared
-    # sandbox.
+    # The third outcome — {:error, reason} for a store that cannot answer
+    # (distinct from :not_claimed) — cannot be induced under this module's
+    # shared sandbox.
   end
 end

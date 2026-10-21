@@ -179,6 +179,5 @@
   {Credo.Check.Warning.UnsafeToAtom, "apps/prima/test/prima/worker_auth_test.exs",
    "String.to_atom", 1},
   {Credo.Check.Warning.UnsafeToAtom, "apps/sanctum/lib/sanctum/providers/system.ex",
-   "String.to_atom", 2},
-  {Credo.Check.Warning.UnsafeToAtom, "apps/sanctum/lib/sanctum/webhook.ex", "String.to_atom", 1}
+   "String.to_atom", 2}
 ]

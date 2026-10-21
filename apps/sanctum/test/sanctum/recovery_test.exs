@@ -64,7 +64,7 @@ defmodule Sanctum.RecoveryTest do
 
       if mode, do: InstallationClaims.install_mode!(mode), else: InstallationClaims.reset()
       Arca.Cache.delete_match(Arca.Cache.Keys.match_identity_unreachable())
-      Arca.Cache.delete_match({:established, :_, :_, :_})
+      Arca.Cache.delete_match({:established, :_, :_})
       Prima.Test.RateLimiter.reset!()
     end)
 
@@ -126,7 +126,7 @@ defmodule Sanctum.RecoveryTest do
       )
 
     {:ok, session} = TestContext.create_session(built)
-    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+    {:ok, ctx} = Caller.establish(session.token, focus: athanor.id, refresh: false)
     %{user: user, athanor: athanor, ctx: ctx}
   end
 
@@ -365,7 +365,7 @@ defmodule Sanctum.RecoveryTest do
     {:ok, %{status: "completed"} = restored} =
       Recovery.restore(identity.kit, @token, context.opts)
 
-    {:ok, session} = Sanctum.Session.load(restored.session_token, surface: :console)
+    {:ok, session} = Sanctum.Session.load(restored.session_token)
     Map.merge(restored, %{identity: identity, ctx: session})
   end
 
@@ -895,7 +895,7 @@ defmodule Sanctum.RecoveryTest do
 
       assert {:ok, %{state: "ended", outcome: "completed"}} = InstallationClaims.get(system())
 
-      {:ok, session} = Sanctum.Session.load(token, surface: :console)
+      {:ok, session} = Sanctum.Session.load(token)
       assert session.user_id == user_id
       assert session.provider == "restore"
 
@@ -1415,7 +1415,7 @@ defmodule Sanctum.RecoveryTest do
           set: [inserted_at: aged]
         )
 
-      {:ok, ctx} = Sanctum.Session.load(restored.session_token, surface: :console)
+      {:ok, ctx} = Sanctum.Session.load(restored.session_token)
       assert {{:error, :reauth_required}, _auth} = first_passkey(ctx)
 
       kit = restored.identity.kit
@@ -1437,7 +1437,7 @@ defmodule Sanctum.RecoveryTest do
       assert {:error, :challenge_refused} =
                Recovery.reproof(Map.put(kit, "challenge", challenge), @token, context.opts)
 
-      {:ok, fresh_ctx} = Sanctum.Session.load(fresh, surface: :console)
+      {:ok, fresh_ctx} = Sanctum.Session.load(fresh)
       assert fresh_ctx.provider == "restore"
       assert {{:ok, %{status: "active"}}, _auth} = first_passkey(fresh_ctx)
 

@@ -55,8 +55,6 @@ defmodule Sanctum.ProseErrorInventoryTest do
      "Sanctum.Providers.Profile.decode_tool_servers/1"} => 1,
     {"apps/sanctum/lib/sanctum/providers/profile.ex", "Sanctum.Providers.Profile.enum/3"} => 1,
     {"apps/sanctum/lib/sanctum/providers/profile.ex", "Sanctum.Providers.Profile.handle/2"} => 6,
-    {"apps/sanctum/lib/sanctum/providers/profile.ex", "Sanctum.Providers.Profile.refuse_limits/1"} =>
-      1,
     {"apps/sanctum/lib/sanctum/providers/session.ex", "Sanctum.Providers.Session.handle/2"} => 4,
     {"apps/sanctum/lib/sanctum/providers/system.ex", "Sanctum.Providers.System.handle/3"} => 5,
     {"apps/sanctum/lib/sanctum/providers/system.ex", "Sanctum.Providers.System.handle_notify/2"} =>

@@ -60,7 +60,7 @@ defmodule Sanctum.SealTest do
     {:ok, session} = Sanctum.TestContext.create_session(built)
 
     {:ok, session_ctx} =
-      Sanctum.Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      Sanctum.Caller.establish(session.token, focus: athanor.id, refresh: false)
 
     %{user: user, athanor: athanor, ctx: %{session_ctx | origin: :interactive}}
   end
@@ -209,7 +209,6 @@ defmodule Sanctum.SealTest do
         },
         "the command line" => %{ctx | origin: :programmatic},
         "a session admitted on no path" => %{ctx | origin: nil},
-        "a tincture's session upgrade" => %{ctx | auth_method: :session},
         "a session naming a paired client" => %{ctx | client_id: "pcl_seal"},
         "a session holding no session" => %{ctx | session_token_hash: nil},
         "a device naming no client that stands" => %{

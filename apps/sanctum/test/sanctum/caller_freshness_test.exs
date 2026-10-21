@@ -37,7 +37,7 @@ defmodule Sanctum.CallerFreshnessTest do
     prev = Map.new(@keys, &{&1, Application.get_env(:sanctum, &1)})
 
     on_exit(fn ->
-      Arca.Cache.delete_match({:established, :_, :_, :_})
+      Arca.Cache.delete_match({:established, :_, :_})
 
       for {key, value} <- prev do
         if is_nil(value),
@@ -518,7 +518,7 @@ defmodule Sanctum.CallerFreshnessTest do
   end
 
   defp establish(%{token: token, athanor: athanor}),
-    do: Caller.establish(token, focus: athanor.id, task_supervisor: nil)
+    do: Caller.establish(token, focus: athanor.id, refresh: false)
 
   defp session_row(%{token: token}),
     do: Arca.Repo.get_by(Arca.Schemas.Session, token_hash: Session.token_hash(token))
@@ -603,7 +603,7 @@ defmodule Sanctum.CallerFreshnessTest do
       %{ctx: ctx, session: session, athanor: athanor} = person!()
 
       assert {:ok, _} = Caller.revalidate_session(ctx)
-      assert {:ok, _} = Caller.establish(session.token, focus: athanor.id, task_supervisor: nil)
+      assert {:ok, _} = Caller.establish(session.token, focus: athanor.id, refresh: false)
       assert Arca.Repo.all(Arca.Schemas.DirectoryHead) == []
     end
   end
@@ -721,9 +721,9 @@ defmodule Sanctum.CallerFreshnessTest do
     assert ctx.session_token_hash == Session.token_hash(session.token)
 
     assert {:ok, %Context{session_token_hash: hash}} =
-             Session.load_by_hash(ctx.session_token_hash, surface: :console)
+             Session.load_by_hash(ctx.session_token_hash)
 
     assert hash == ctx.session_token_hash
-    assert {:error, :invalid_session} = Session.load_by_hash(<<0::256>>, surface: :console)
+    assert {:error, :invalid_session} = Session.load_by_hash(<<0::256>>)
   end
 end

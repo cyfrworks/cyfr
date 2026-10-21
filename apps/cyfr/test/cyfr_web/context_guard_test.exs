@@ -27,7 +27,7 @@ defmodule CyfrWeb.ContextGuardTest do
     prev = Map.new(@sanctum_keys, &{&1, Application.get_env(:sanctum, &1)})
 
     on_exit(fn ->
-      Arca.Cache.delete_match({:established, :_, :_, :_})
+      Arca.Cache.delete_match({:established, :_, :_})
 
       for {key, value} <- prev do
         if is_nil(value),
@@ -415,7 +415,7 @@ defmodule CyfrWeb.ContextGuardTest do
       user = test_user()
       {conn, identifier, _hash} = remote!(conn, user)
       token = Plug.Conn.get_session(conn, session_key())
-      {:ok, ctx} = Caller.establish(token, task_supervisor: nil)
+      {:ok, ctx} = Caller.establish(token, refresh: false)
 
       stale!(identifier)
       bound!(0)
