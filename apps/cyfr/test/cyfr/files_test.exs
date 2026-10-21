@@ -406,7 +406,7 @@ defmodule Arca.FilesTest do
 
     assert {:ok, _} = Files.write(actor, manifest, good)
 
-    # A block validator's sentence, after the file's name — today's text.
+    # A block validator's sentence, after the file's name.
     assert {:error, {:invalid_argument, message}} =
              Files.write(actor, manifest, ~s({"type":"reagent","setup":{}}))
 

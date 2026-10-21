@@ -3,10 +3,9 @@
 
 defmodule Cyfr.LoggerRosterTest do
   @moduledoc """
-  The metadata roster existed in three places: `config/config.exs`,
-  `config/runtime.exs`'s JSON branch, and a hardcoded fallback inside
-  `Prima.JsonFormatter` — which carried three keys the config never
-  requested and therefore never emitted.
+  The log's metadata roster is one list, `config/config.exs`'s: the JSON
+  format `config/runtime.exs` selects and `Prima.JsonFormatter` read it,
+  and neither holds a copy of its own.
 
   Config files run before application code is loaded, so the roster cannot
   literally be one expression. It can be one *checked* expression: the keys

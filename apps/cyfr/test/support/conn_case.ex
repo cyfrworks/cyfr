@@ -3,19 +3,12 @@
 
 defmodule CyfrWeb.ConnCase do
   @moduledoc """
-  This module defines the test case to be used by
-  tests that require setting up a connection.
-
-  Such tests rely on `Phoenix.ConnTest` and also
-  import other functionality to make it easier
-  to build common data structures and query the data layer.
-
-  Finally, if the test case interacts with the database,
-  we enable the SQL sandbox, so changes done to the database
-  are reverted at the end of every test. If you are using
-  PostgreSQL, you can even run database tests asynchronously
-  by setting `use CyfrWeb.ConnCase, async: true`, although
-  this option is not recommended for other databases.
+  The case template for tests that send requests through
+  `CyfrWeb.Endpoint`: it imports `Phoenix.ConnTest`, `Plug.Conn` and the
+  verified routes, builds the case's `conn` from its tags (`conn_for/1`),
+  and starts the case's sandbox owner (`Cyfr.Test.Sandbox.setup!/1`,
+  shared unless the case is async), so every write the case makes is
+  rolled back when it ends.
 
   ## Authentication
 

@@ -1314,7 +1314,7 @@ defmodule Cyfr.StackShapeTest do
        "      - \"#{builds.port}\"\n    entrypoint: [\"cyfr-guard\"]\n    init: true\n    cap_drop:\n      - ALL\n    cap_add:\n      - NET_ADMIN\n",
        "      - \"#{builds.port}\"\n    entrypoint: [\"cyfr-guard\"]\n    init: true\n    cap_drop:\n      - ALL\n    cap_add:\n      - NET_ADMIN\n      - SETUID\n",
        [{builds.guard, "cap_add"}]},
-      {"the backends island on its own network again",
+      {"the backends island on its own network",
        "    network_mode: service:#{backends.guard}\n    depends_on:\n      #{backends.guard}:\n        condition: service_healthy\n",
        "    networks:\n      - #{backends.network}\n",
        [

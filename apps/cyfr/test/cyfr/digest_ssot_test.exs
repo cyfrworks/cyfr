@@ -7,9 +7,9 @@ defmodule Cyfr.DigestSSOTTest do
   @moduledoc """
   Pins Prima.Digest as the only module that spells a content digest.
 
-  A second producer is how the components table ended up holding two digest
-  formats (bare hex for tinctures, prefixed for everything else) — this scan
-  fails the build if the `"sha256:" <>` construction reappears outside
+  One producer keeps every stored digest in one format: a second could write
+  bare hex for one kind of row and the prefixed form for the rest. This scan
+  fails the build if the `"sha256:" <>` construction appears outside
   Prima.Digest.
   """
 

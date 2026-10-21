@@ -10,8 +10,7 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   among them) is emitted by a module the control plane's release holds:
   the host's own (`apps/cyfr/lib`) or one of the two applications below it
   (`apps/arca/lib`, `apps/sanctum/lib`), which start in the same VM. An
-  event
-  emitted under `apps/locus/lib/locus/runtime` runs in a runner, the OS
+  event emitted under `apps/locus/lib/locus/runtime` runs in a runner, the OS
   process that runs a guest, and is rostered as the worker's
   (`emitter: :worker`), for the operator alone; one rostered so is emitted
   there and nowhere in the control plane. Nothing else emits an event: the
@@ -240,9 +239,9 @@ defmodule Cyfr.Telemetry.EmitterDriftTest do
   # ---------------------------------------------------------------------------
 
   test "a credential read audited in the runner that reads it is refused both ways" do
-    # What the tree held before the control plane audited credentials: the
-    # runner's vault import emitted the secret events, which only the
-    # control plane's audit consumed.
+    # A runner's vault import emitting the credential read the control
+    # plane's audit consumes: the audit attaches in the control plane's VM,
+    # so it never hears the event.
     runner = """
     defmodule Locus.Runtime.Engine do
       def get(name) do

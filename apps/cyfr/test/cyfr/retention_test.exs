@@ -383,10 +383,10 @@ defmodule Arca.RetentionTest do
     end
 
     test "a build orphaned at 'started' is collected once it cannot be running", %{actor: actor} do
-      # Build records have no sweeper and no lease — nothing ever moves an
+      # Build records have no sweeper and no lease: nothing moves an
       # abandoned row off "started" (a node restart mid-build, or a build
-      # task that ended with its watcher). Excluding the status
-      # outright made those rows immortal and `keep` stopped being a cap.
+      # task that ended with its watcher). A row that has read "started"
+      # past the grace window is ranked like any other, so `keep` caps it.
       :ok = Arca.BuildRecords.record_started(actor, "build_orphan", "reagent:local.test:0.1.0")
 
       {1, _} =
@@ -404,7 +404,7 @@ defmodule Arca.RetentionTest do
       ids = build_ids(actor)
 
       refute "build_orphan" in ids,
-             "an orphaned 'started' build is immortal — `keep` is no longer a cap"
+             "an orphaned 'started' build outlives `keep`"
 
       refute "build_2" in ids
     end

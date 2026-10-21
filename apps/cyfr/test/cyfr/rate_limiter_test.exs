@@ -5,9 +5,9 @@ defmodule Cyfr.RateLimiterTest do
   # Rate-limit counters live in their own table, isolated from Arca.Cache, so an
   # attacker-cardinality flood cannot evict sessions or OAuth state.
   #
-  # `Prima.RateLimiter` is a shared contract, but this suite stays here:
-  # the isolation case below reads `Arca.Cache`'s table, and every case
-  # needs the limiter started by Sanctum's application tree.
+  # `Prima.RateLimiter` is a shared contract, and this suite runs in the
+  # host: the isolation case below reads `Arca.Cache`'s table, and every
+  # case needs the limiter started by Sanctum's application tree.
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog

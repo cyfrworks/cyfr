@@ -130,7 +130,7 @@ defmodule Cyfr.AdmissionOriginTest do
   # The roster
   # ==========================================================================
 
-  test "every built entry that names an origin has one driver, and every driver such a row" do
+  test "every entry that names an origin has one driver, and every driver such a row" do
     assert Enum.sort(Enum.map(@rows, &{&1.module, &1.site})) == Enum.sort(Map.keys(@drivers))
   end
 
@@ -970,10 +970,9 @@ defmodule Cyfr.AdmissionOriginTest do
     )
   end
 
-  # The frame the shell would open for `name`: its credential, row id and
-  # frame id.
   # A frame the shell would open for `name`, minted at `revision`, or by
-  # default at revision 1 of a grant made as the person would make it.
+  # default at revision 1 of a grant made as the person would make it: its
+  # credential, row id and frame id.
   defp frame!(source, name, digest, revision \\ nil) do
     revision = revision || granted!(source, name)
     reference = %{publisher: "local", name: name, version: "1.0.0"}

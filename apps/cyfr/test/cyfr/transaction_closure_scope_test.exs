@@ -611,7 +611,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
     test "no transaction closure makes a network call or publishes" do
       %{read: read, bound: bound, forms: forms, refused: refused} = scan(tree())
 
-      # 53 closures are read at the plan's base, 10 of them bound to a
+      # The tree passes 53 closures or more, 10 or more of them bound to a
       # variable before they are passed. A count alone could be met with a
       # whole form unread, so each form is asserted read too, and the bound
       # ones are counted apart.
@@ -656,7 +656,7 @@ defmodule Cyfr.TransactionClosureScopeTest do
 
       assert Enum.sort(named) == Enum.sort(Map.keys(@not_in_transaction)), """
       Arca functions take closures under names the transaction scan does not
-      read, or `@not_in_transaction` names one Arca no longer takes:
+      read, or `@not_in_transaction` names one Arca does not take:
 
       #{Enum.map_join(Enum.sort(named -- Map.keys(@not_in_transaction)), "\n", &"  taken: #{inspect(&1)}")}
       #{Enum.map_join(Enum.sort(Map.keys(@not_in_transaction) -- named), "\n", &"  stale: #{inspect(&1)}")}

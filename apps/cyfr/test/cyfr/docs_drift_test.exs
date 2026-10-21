@@ -420,7 +420,7 @@ defmodule Cyfr.DocsDriftTest do
 
     for prefix <- @retired_name_exceptions do
       assert Enum.any?(excepted, fn {rel, _} -> String.starts_with?(rel, prefix) end),
-             "#{prefix} no longer says the retired name; remove its exception"
+             "#{prefix} does not say the retired name; remove its exception"
     end
   end
 
@@ -483,15 +483,12 @@ defmodule Cyfr.DocsDriftTest do
   # ==========================================================================
   # integration-guide's two reference tables
   #
-  # These are what an integrator writes their client against, and both had
-  # drifted into fiction: the error table listed twelve codes that no
-  # producer mints (`auth_expired`, `component_not_found`, a whole `-334xx`
-  # signature band) while omitting `-33304 rate_limited` — the one code a
-  # client needs to back off — and the public-tools table said `session`
-  # "all", which quietly published `session.use`, the tenancy switch.
-  #
-  # A wrong reference is worse than a missing one: it is followed. So both
-  # tables are now derived from the code and checked in both directions.
+  # These are what an integrator writes their client against, and a wrong
+  # reference is worse than a missing one, because it is followed: a client
+  # waits for a code no producer mints, never backs off on a code the table
+  # omits (`-33304 rate_limited`), and calls a tool the table publishes
+  # without the credential it needs. So both tables are derived from the
+  # code and checked in both directions.
   # ==========================================================================
 
   @integration_guide Path.join(@repo_root, "integration-guide.md")
@@ -578,11 +575,10 @@ defmodule Cyfr.DocsDriftTest do
            an anonymous action nobody wrote down is a surface nobody reviews.
            """
 
-    # The other direction, which is the one that had gone wrong: the table
-    # published `registry`, `aqua` and `component` reads as needing no auth
-    # when all three need a credential, so a client written from it got
-    # `-33001` on its first call. `auth: :signed_in` is NOT public — it
-    # serves a live session, with or without an athanor to work in.
+    # The other direction: an action the table lists as needing no auth
+    # that needs a credential answers a client written from it `-33001` on
+    # its first call. `auth: :signed_in` is NOT public — it serves a live
+    # session, with or without an athanor to work in.
     overclaimed =
       for {tool, row} <- rows,
           [_, action] <- Regex.scan(~r/`(\w+)`/, row),
@@ -1949,7 +1945,7 @@ defmodule Cyfr.DocsDriftTest do
     }
 
     assert {:error, {:invalid_tincture, sentence}} = Compendium.tincture_declaration(manifest),
-           "a tincture may declare layout.edit again; say so in tincture-guide.md's " <>
+           "a tincture may declare layout.edit; say so in tincture-guide.md's " <>
              "layout paragraph"
 
     assert sentence =~ "layout.edit"
@@ -1959,7 +1955,7 @@ defmodule Cyfr.DocsDriftTest do
                %{"type" => type, "caps" => %{"tools" => ["layout.edit"]}},
                &Arca.Storage.valid_guest_path?/1
              ) == {:error, {:invalid_caps, {:agent_only_tool, "layout.edit"}}},
-             "a #{type}'s caps may name layout.edit again; say so in tincture-guide.md's " <>
+             "a #{type}'s caps may name layout.edit; say so in tincture-guide.md's " <>
                "layout paragraph"
     end
 
@@ -1978,7 +1974,7 @@ defmodule Cyfr.DocsDriftTest do
       }
 
       assert {:error, {:invalid_tincture, sentence}} = Compendium.tincture_declaration(manifest),
-             "a tincture may declare #{tool} again; say so in tincture-guide.md's actions"
+             "a tincture may declare #{tool}; say so in tincture-guide.md's actions"
 
       assert sentence =~ tool
 
@@ -1987,7 +1983,7 @@ defmodule Cyfr.DocsDriftTest do
                  %{"type" => type, "caps" => %{"tools" => [tool]}},
                  &Arca.Storage.valid_guest_path?/1
                ) == {:error, {:invalid_caps, {:agent_only_tool, tool}}},
-               "a #{type}'s caps may name #{tool} again; say so in component-guide.md"
+               "a #{type}'s caps may name #{tool}; say so in component-guide.md"
       end
 
       assert :ok =
@@ -2066,7 +2062,7 @@ defmodule Cyfr.DocsDriftTest do
 
     for event <- ["error", "unhandledrejection"] do
       assert worker =~ ~s{listen("#{event}", () => fail("runtime"))},
-             "the toolkit's module worker no longer fails the canvas on #{event}; say what it " <>
+             "the toolkit's module worker does not fail the canvas on #{event}; say what it " <>
                "does in tincture-guide.md's toolkit section"
     end
 

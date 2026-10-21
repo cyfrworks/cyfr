@@ -4,8 +4,8 @@
 defmodule Cyfr.VocabularyDriftTest do
   @moduledoc """
   Checks assistant, role, scroll and note terminology in code and product
-  copy. The retired words are spelled split here so the file passes the
-  gate it enforces.
+  copy. The words the product does not use are spelled split here so the
+  file passes the gate it enforces.
 
   The agent-type values are held the same way: `"soul"` and `"role"` are
   `Compendium.AquaAgent`'s (`soul_type/0`, `role_type/0`, `type_of/1`),
@@ -26,13 +26,12 @@ defmodule Cyfr.VocabularyDriftTest do
   # holds the gate.
   @lib_trees ["apps/cyfr/lib/**/*.ex", "apps/sanctum/lib/**/*.ex"]
 
-  # The word the runner, the rows and the tool option used to call the
-  # agent a turn is addressed to. It is gone from every code line under
-  # `apps/cyfr/lib` and `apps/sanctum/lib` and from every column of the
-  # baseline: quoted, bare, as an atom or as a field — by file and exact
-  # count, none.
-  @retired_word "orch" <> "estrator"
-  @retired_word_allowed %{}
+  # The agent a turn is addressed to is a soul or a role, never this word:
+  # no code line under `apps/cyfr/lib` and `apps/sanctum/lib` and no column
+  # of the baseline says it, quoted, bare, as an atom or as a field — by
+  # file and exact count, none.
+  @unused_word "orch" <> "estrator"
+  @unused_word_allowed %{}
   @baseline "apps/arca/priv/repo/migrations/*_baseline.exs"
 
   @type_value ~r/"(?:soul|role)"/
@@ -48,8 +47,8 @@ defmodule Cyfr.VocabularyDriftTest do
     String.replace(line, @type_key, "") =~ @type_value
   end
 
-  defp retired_word_line?(line) do
-    line |> String.downcase() |> String.contains?(@retired_word)
+  defp unused_word_line?(line) do
+    line |> String.downcase() |> String.contains?(@unused_word)
   end
 
   test "the scan distinguishes argument names from agent type values" do
@@ -77,14 +76,14 @@ defmodule Cyfr.VocabularyDriftTest do
           into: %{},
           do: {rel, n}
 
-    retired_counts =
+    unused_counts =
       for {rel, lines} <- sources ++ code_lines(@baseline),
-          n = Enum.count(lines, &retired_word_line?/1),
+          n = Enum.count(lines, &unused_word_line?/1),
           n > 0,
           into: %{},
           do: {rel, n}
 
-    {:ok, counts: counts, type_counts: type_counts, retired_counts: retired_counts}
+    {:ok, counts: counts, type_counts: type_counts, unused_counts: unused_counts}
   end
 
   defp code_lines(glob) do
@@ -100,9 +99,9 @@ defmodule Cyfr.VocabularyDriftTest do
     assert type_counts == @type_literal_allowed
   end
 
-  # The product's words reach the person through the seed, the CLI, the
-  # guides and the formula's manifest as well as the code; none of them
-  # may say what the code no longer does.
+  # The product's words reach the person through the seed, the CLI, README,
+  # ARCHITECTURE.md and the shipped guides as well as the code; each speaks
+  # the code's vocabulary.
   @product_files ["seed/aqua/**/*.md", "apps/codex/**/*.go", "README.md", "ARCHITECTURE.md"]
 
   # The guides a project ships are the scaffold tarball's items
@@ -127,15 +126,15 @@ defmodule Cyfr.VocabularyDriftTest do
     guides
   end
 
-  @old_words Regex.compile!("sub-agent|\\bsub_agent\\b|" <> @retired_word, "i")
+  @unused_words Regex.compile!("sub-agent|\\bsub_agent\\b|" <> @unused_word, "i")
 
-  test "the seed, the CLI, the guides and the manifest speak soul, role and scroll" do
+  test "the seed, the CLI and the guides speak soul, role and scroll" do
     stale =
       for glob <- @product_files ++ shipped_guides(),
           path <- Prima.Test.SourceTree.files!(Path.join(@root, glob)),
           not String.ends_with?(path, "_test.go"),
           {line, n} <- path |> File.read!() |> String.split("\n") |> Enum.with_index(1),
-          line =~ @old_words,
+          line =~ @unused_words,
           do: "#{Path.relative_to(path, @root)}:#{n}: #{String.trim(line)}"
 
     assert stale == [], Enum.join(stale, "\n")
@@ -145,9 +144,9 @@ defmodule Cyfr.VocabularyDriftTest do
     assert Map.get(counts, "\"sub-agent\"", %{}) == %{}
   end
 
-  test "no code line under lib and no column of the baseline says \"#{@retired_word}\"", %{
-    retired_counts: retired_counts
+  test "no code line under lib and no column of the baseline says \"#{@unused_word}\"", %{
+    unused_counts: unused_counts
   } do
-    assert retired_counts == @retired_word_allowed
+    assert unused_counts == @unused_word_allowed
   end
 end
