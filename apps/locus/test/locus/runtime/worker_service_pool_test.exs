@@ -305,7 +305,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
     {_root, runner} = started!(context)
 
     # The report the runner's exit starts, as the service spawns it.
-    true = :erlang.trace(service, true, [:procs])
+    1 = :erlang.trace(service, true, [:procs])
 
     report =
       try do
