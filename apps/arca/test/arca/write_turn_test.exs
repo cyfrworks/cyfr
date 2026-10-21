@@ -17,8 +17,11 @@ defmodule Arca.WriteTurnTest do
 
   alias Arca.WriteTurn
 
+  # The case's arbiter goes by a name of this module's own, since a waiter
+  # asks a restarted generation by name; the case's tests run one at a time
+  # and each stops its arbiter at its end.
   setup do
-    name = :"write_turn_#{System.unique_integer([:positive])}"
+    name = __MODULE__.Arbiter
     start_supervised!({WriteTurn, name: name, capacity: 3})
     {:ok, server: name}
   end
@@ -173,9 +176,9 @@ defmodule Arca.WriteTurnTest do
 
   describe "generations" do
     test "waiters ask a new generation within their deadlines; an old release frees nothing" do
-      name = :"write_turn_bare_#{System.unique_integer([:positive])}"
+      name = __MODULE__.Unsupervised
       {:ok, first} = GenServer.start(WriteTurn, 3, name: name)
-      on_exit(fn -> Process.exit(first, :kill) end)
+      on_exit(fn -> kill!(first) end)
       %{generation: g1} = WriteTurn.status(name)
       holder = writer(name, :holder, :audit)
       assert_receive {:issued, :holder, ^g1}
@@ -183,7 +186,7 @@ defmodule Arca.WriteTurnTest do
       # The next generation, under no name yet, with a turn of the case's
       # own already issued, so every waiter that asks it waits.
       {:ok, second} = GenServer.start(WriteTurn, 3)
-      on_exit(fn -> Process.exit(second, :kill) end)
+      on_exit(fn -> kill!(second) end)
       %{generation: g2} = WriteTurn.status(second)
       current = writer(second, :current, :audit)
       assert_receive {:issued, :current, ^g2}
@@ -270,6 +273,16 @@ defmodule Arca.WriteTurnTest do
 
     on_exit(fn -> Process.exit(pid, :kill) end)
     pid
+  end
+
+  # Killed and gone, so the name it held is free when this returns.
+  defp kill!(pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    end
   end
 
   defp release(pid, tag) do
@@ -722,22 +735,26 @@ defmodule Arca.WriteTurnLockTest do
   # call, so a kill lands inside it. The pool reports its connection's
   # disconnect.
   defp zombie!(statement, marker) do
-    name = :"zombie_#{System.unique_integer([:positive])}"
     test = self()
 
-    start_supervised!(
-      Supervisor.child_spec(
-        {Arca.Repo,
-         name: name, pool_size: 1, pool: DBConnection.ConnectionPool, connection_listeners: [test]},
-        id: name
+    # An unnamed repo of its own, reached by its pid.
+    pool =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Arca.Repo,
+           name: nil,
+           pool_size: 1,
+           pool: DBConnection.ConnectionPool,
+           connection_listeners: [test]},
+          id: :zombie_pool
+        )
       )
-    )
 
     assert_receive {:connected, _conn}, 5_000
 
     pid =
       spawn(fn ->
-        Arca.Repo.put_dynamic_repo(name)
+        Arca.Repo.put_dynamic_repo(pool)
         {:ok, _} = WriteTurn.acquire(:audit, System.monotonic_time(:millisecond) + 60_000)
 
         Arca.Repo.checkout(

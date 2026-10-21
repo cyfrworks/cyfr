@@ -24,6 +24,8 @@ defmodule Prima.FeedTest do
 
   # A value no refusal may carry.
   @canary "c4n4ry-feed-0a6c"
+  # The canary spelled as an atom, a key no JSON object has.
+  @canary_atom :"c4n4ry-feed-0a6c"
 
   defp vectors, do: @vectors |> File.read!() |> Jason.decode!()
 
@@ -381,7 +383,7 @@ defmodule Prima.FeedTest do
         {:key, @canary},
         [@canary],
         %{@canary => 1},
-        String.to_atom(@canary),
+        @canary_atom,
         <<0xFF>> <> @canary,
         @canary <> <<0xC3>>
       ]

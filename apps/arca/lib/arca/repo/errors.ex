@@ -14,6 +14,26 @@ defmodule Arca.Repo.Errors do
   # config:compile-runtime-ok — must match what `Arca.Repo` compiled against.
   @adapter Application.compile_env(:arca, :repo_adapter, Ecto.Adapters.SQLite3)
 
+  # Selected while this module compiles, so the compiled macro holds only
+  # the configured adapter's list.
+  @db_errors (case @adapter do
+                Ecto.Adapters.Postgres ->
+                  [
+                    Ecto.QueryError,
+                    DBConnection.ConnectionError,
+                    Postgrex.Error,
+                    Arca.Repo.BusyTimeoutError
+                  ]
+
+                _ ->
+                  [
+                    Ecto.QueryError,
+                    DBConnection.ConnectionError,
+                    Exqlite.Error,
+                    Arca.Repo.BusyTimeoutError
+                  ]
+              end)
+
   @doc """
   Returns the list of database error modules for use in rescue clauses:
   the driver's own, and `Arca.Repo.BusyTimeoutError` for a transaction
@@ -25,28 +45,7 @@ defmodule Arca.Repo.Errors do
         e in Arca.Repo.Errors.db_errors() ->
           handle_db_error(e)
   """
-  defmacro db_errors do
-    errors =
-      case @adapter do
-        Ecto.Adapters.Postgres ->
-          [
-            Ecto.QueryError,
-            DBConnection.ConnectionError,
-            Postgrex.Error,
-            Arca.Repo.BusyTimeoutError
-          ]
-
-        _ ->
-          [
-            Ecto.QueryError,
-            DBConnection.ConnectionError,
-            Exqlite.Error,
-            Arca.Repo.BusyTimeoutError
-          ]
-      end
-
-    Macro.escape(errors)
-  end
+  defmacro db_errors, do: Macro.escape(@db_errors)
 
   @doc """
   Run `fun`, mapping any database-adapter error to

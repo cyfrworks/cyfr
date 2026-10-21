@@ -24,9 +24,9 @@ defmodule Arca.Adapters.S3 do
   (`Arca.ObjectRevisions`). S3 caps a key at 1,024 bytes, so the longest
   logical path the bucket stores is shorter than the 1,024-byte logical
   limit (`Arca.Storage.validate_path!/1`) by the prefix, the tenant
-  segments and `objects/<generation>/`, as it was by the prefix and the
-  tenant segments before; a store the bucket refuses for it fails its
-  write, publishes nothing, and leaves a generation retention collects.
+  segments and `objects/<generation>/`; a store the bucket refuses for it
+  fails its write, publishes nothing, and leaves a generation retention
+  collects.
 
   An S3 deployment is not a whole-box backup: the bucket holds Arca
   objects; the volume still holds the database (`data/cyfr.db`).
@@ -775,10 +775,12 @@ defmodule Arca.Adapters.S3 do
   # follow NextContinuationToken until IsTruncated goes false — otherwise
   # component scans and tree deletions silently stop at the first page. The
   # parser is the only thing the two enumerations (bare keys; key+size
-  # entries) do differently.
-  defp list_keys(prefix), do: list_pages(prefix, &parse_list_keys/1, nil, [], MapSet.new())
+  # entries) do differently. The tokens already followed are the keys of a
+  # plain map: Dialyzer reads a MapSet carried down the recursion as a
+  # non-opaque struct literal.
+  defp list_keys(prefix), do: list_pages(prefix, &parse_list_keys/1, nil, [], %{})
 
-  defp list_entries(prefix), do: list_pages(prefix, &parse_list_entries/1, nil, [], MapSet.new())
+  defp list_entries(prefix), do: list_pages(prefix, &parse_list_entries/1, nil, [], %{})
 
   defp list_pages(prefix, parser, token, acc, seen_tokens) do
     case request_list_page(prefix, token) do
@@ -792,11 +794,11 @@ defmodule Arca.Adapters.S3 do
             {:ok, acc |> Enum.reverse() |> List.flatten()}
 
           next ->
-            if MapSet.member?(seen_tokens, next) do
+            if Map.has_key?(seen_tokens, next) do
               # A repeated token would loop forever; treat it as a bad server.
               {:error, {:s3_list_repeated_token, next}}
             else
-              list_pages(prefix, parser, next, acc, MapSet.put(seen_tokens, next))
+              list_pages(prefix, parser, next, acc, Map.put(seen_tokens, next, true))
             end
         end
 

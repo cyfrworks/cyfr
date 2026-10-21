@@ -105,7 +105,8 @@ defmodule Prima.LoggerContextTest do
     end
 
     test "a map is its size and its first ten sorted keys; a non-atom key is its type" do
-      map = Map.new(?a..?z, &{:"#{<<&1>>}", "value-#{<<&1>>}"})
+      map =
+        Map.new(~w(a b c d e f g h i j k l m n o p q r s t u v w x y z)a, &{&1, "value-#{&1}"})
 
       assert shape(map) == "map/26 [:a, :b, :c, :d, :e, :f, :g, :h, :i, :j]"
 
@@ -139,7 +140,22 @@ defmodule Prima.LoggerContextTest do
     end
 
     test "the line is capped near 200 characters" do
-      keys = Map.new(1..10, &{:"#{String.duplicate(<<?a + &1>>, 60)}", &1})
+      # Ten keys of sixty characters each.
+      keys =
+        ~w"""
+        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+        eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+        ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+        gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+        hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
+        iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii
+        jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj
+        kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
+        """a
+        |> Enum.with_index(1)
+        |> Map.new()
 
       assert String.length(line(keys)) <= 200
       assert String.ends_with?(line(keys), "…")

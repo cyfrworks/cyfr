@@ -65,12 +65,13 @@ defmodule Prima.Test.BeamsTest do
 
   # A beam compiled from `source`, written to `ebin`. Nothing is written at
   # `source`: the compiler records the path it is given, and the module is
-  # unloaded again, so only the file remains.
+  # unloaded again, deleted and then purged, so only the file remains and
+  # the next test compiles the same module afresh.
   defp beam!(ebin, source) do
-    module = Module.concat(__MODULE__, "Planted#{System.unique_integer([:positive])}")
+    module = __MODULE__.Planted
     [{^module, binary}] = Code.compile_string("defmodule #{inspect(module)}, do: nil", source)
-    :code.purge(module)
     :code.delete(module)
+    :code.purge(module)
     path = Path.join(ebin, "#{module}.beam")
     File.write!(path, binary)
     path

@@ -137,9 +137,6 @@ defmodule Arca.Usage do
             Arca.Cache.put(key, bytes, @ttl_ms)
             {:ok, bytes}
 
-          {:ok, other} ->
-            {:error, {:unexpected_usage, other}}
-
           {:error, _} = error ->
             error
         end

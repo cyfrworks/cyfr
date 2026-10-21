@@ -31,6 +31,8 @@ defmodule Prima.Canvas.ShapeTest do
 
   # A value no refusal may carry.
   @canary "c4n4ry-shape-3b9a"
+  # The canary spelled as an atom, a key no JSON object has.
+  @canary_atom :"c4n4ry-shape-3b9a"
 
   defp normalized!(shape) do
     {:ok, normalized} = Shape.validate(shape)
@@ -324,7 +326,7 @@ defmodule Prima.Canvas.ShapeTest do
         {:key, @canary},
         [@canary],
         %{@canary => 1},
-        String.to_atom(@canary),
+        @canary_atom,
         7,
         <<0xFF>> <> @canary,
         @canary <> <<0xC3>>

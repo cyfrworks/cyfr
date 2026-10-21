@@ -808,18 +808,18 @@ defmodule Arca.DecisionLogBudgetTest do
 
   @tag :sqlite
   test "a dead writer's connection is lent again only once its disconnect has finished" do
-    name = :"dead_writer_pool_#{System.unique_integer([:positive])}"
-
-    start_supervised!(
-      Supervisor.child_spec(
-        {Arca.Repo,
-         name: name,
-         pool_size: 1,
-         pool: DBConnection.ConnectionPool,
-         connection_listeners: [self()]},
-        id: name
+    # An unnamed repo of its own, reached by its pid.
+    pool =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Arca.Repo,
+           name: nil,
+           pool_size: 1,
+           pool: DBConnection.ConnectionPool,
+           connection_listeners: [self()]},
+          id: :dead_writer_pool
+        )
       )
-    )
 
     assert_receive {:connected, _conn}, 5_000
     test = self()
@@ -827,7 +827,7 @@ defmodule Arca.DecisionLogBudgetTest do
 
     writer =
       spawn(fn ->
-        Arca.Repo.put_dynamic_repo(name)
+        Arca.Repo.put_dynamic_repo(pool)
 
         Arca.Repo.checkout(
           fn ->
@@ -844,7 +844,7 @@ defmodule Arca.DecisionLogBudgetTest do
     Process.exit(writer, :kill)
 
     Task.start_link(fn ->
-      Arca.Repo.put_dynamic_repo(name)
+      Arca.Repo.put_dynamic_repo(pool)
       Arca.Repo.checkout(fn -> send(test, :lent) end, timeout: 15_000)
     end)
 

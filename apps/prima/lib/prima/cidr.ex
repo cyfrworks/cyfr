@@ -394,8 +394,6 @@ defmodule Prima.Cidr do
     end
   end
 
-  defp max_prefix_for(_), do: 0
-
   defp ip_to_integer({a, b, c, d}), do: bsl(a, 24) + bsl(b, 16) + bsl(c, 8) + d
 
   defp ip_to_integer({a, b, c, d, e, f, g, h}) do
