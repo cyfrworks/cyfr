@@ -109,14 +109,14 @@
     {
       "why": "setup_required naming the node and its need",
       "tag": "setup_required",
-      "payload": {"need": "api_key", "node_ref": "catalyst:local.claude:1.4.0"},
+      "payload": {"need": "api_key", "node_ref": "catalyst:local.claude:1.4.1"},
       "response": {
         "jsonrpc": "2.0",
         "id": 3,
         "error": {
           "code": -33501,
-          "message": "Setup required: catalyst:local.claude:1.4.0 needs a vault entry for \"api_key\" — grant it a profile first",
-          "data": {"tag": "setup_required", "payload": {"need": "api_key", "node_ref": "catalyst:local.claude:1.4.0"}}
+          "message": "Setup required: catalyst:local.claude:1.4.1 needs a vault entry for \"api_key\" — grant it a profile first",
+          "data": {"tag": "setup_required", "payload": {"need": "api_key", "node_ref": "catalyst:local.claude:1.4.1"}}
         }
       }
     },
