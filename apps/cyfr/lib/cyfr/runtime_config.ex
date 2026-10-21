@@ -222,7 +222,7 @@ defmodule Cyfr.RuntimeConfig do
   @doc "Whether the Prometheus /metrics endpoint is enabled."
   @spec prometheus_metrics_enabled?() :: boolean()
   def prometheus_metrics_enabled?,
-    do: Application.get_env(:cyfr, :prometheus_metrics_enabled, false)
+    do: Application.fetch_env!(:cyfr, :prometheus_metrics_enabled)
 
   @doc """
   Whether unsigned OCI components are refused. Read at both ends of a

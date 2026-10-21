@@ -270,7 +270,7 @@ config :sanctum, stored_grants_check_enabled: false
 # throwaway SIBLING roots — the topology dev and prod use ("two trees, two
 # lifetimes", Arca.Storage): `base_path` holds all tenant storage, and the
 # seed tree starts with an empty bundle so no test sees one it did not
-# write. Leaving either at its config.exs default would make tests read or
+# write. A root outside the run's own directory would make tests read or
 # write the repo's own trees. test_helper.exs copies the shipped AQUA
 # template into the throwaway seed tree — it is only ever read in place
 # through the overlay. test_helper.exs removes both roots after the suite.
@@ -306,15 +306,26 @@ config :cyfr, :locus_runtime_root, test_worker_root
 # log level, the scheduler counts) the service passes it explicitly
 # (`Locus.Runtime.Release.runner_command/0`).
 config :locus, :runtime,
+  service_id: "wrk_local",
   service_key:
     :hmac
     |> :crypto.mac(:sha256, test_worker_root, "cyfr-locus/v1/runtime\nwrk_local")
     |> Base.encode16(case: :lower),
+  host_url: "http://127.0.0.1:4300",
+  bind: "127.0.0.1",
   port: 0,
   keeper: :direct,
   direct_keeper: Locus.DirectLauncher.Runner
 
 config :cyfr, :host_api_port, 0
+
+# The worker services runs are dispatched to (`Opus.Dispatch`), as
+# `config/runtime.exs` writes them from CYFR_LOCUS_RUNTIME_WORKERS for every
+# other boot: the suite's own runtime service, which
+# `Cyfr.Test.RuntimeService` points at its listener once it is up.
+config :cyfr, :locus_runtime_workers, [
+  %{id: "wrk_local", url: "http://127.0.0.1:4200", components: nil}
+]
 
 # The checkout's pinned wasm-tools (scripts/wasm-tools.sh install _tools).
 config :prima, :wasm_tools, Path.expand("../_tools/wasm-tools", __DIR__)

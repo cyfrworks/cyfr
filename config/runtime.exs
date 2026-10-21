@@ -394,17 +394,11 @@ if config_env() != :test do
         do: [scheme: "http", host: "localhost", port: loopback_port],
         else: [scheme: "https", host: access.head["host"], port: 443]
       ),
+    # HTTP/1.1 alone comes from config/config.exs's `http:`, which this
+    # deep-merges over (endpoint_http2_test.exs holds the release to it).
     http:
       listener.(access.listeners.loopback) ++
-        [
-          thousand_island_options: [read_timeout: 60_000],
-          # HTTP/1.1 alone, as every Bandit listener of the product serves
-          # (config/config.exs's base says the same, so dev and test agree):
-          # a WebSocket upgrades from HTTP/1.1 and SSE streams as an HTTP/1.1
-          # response, so neither needs HTTP/2, and endpoint_http2_test.exs
-          # holds the release to it.
-          http_2_options: [enabled: false]
-        ],
+        [thousand_island_options: [read_timeout: 60_000]],
     check_origin: access.check_origins
 
   case access.listeners.proxy do

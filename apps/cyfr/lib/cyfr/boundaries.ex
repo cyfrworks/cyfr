@@ -2512,6 +2512,20 @@ defmodule Cyfr.Boundaries do
     # carries a keyring of its own.
     crypto_keyring: :operator,
 
+    # Values the code owns, read with its own default and set by no
+    # deployment: the execution payload store, the shared subtree read's
+    # concurrency, the shared cache's budgets, the tincture archive's
+    # decompression ceiling, an external MCP server's in-flight calls and
+    # backends, and a returning sign-in's wait on the cyfr.run probe.
+    execution_payload_store: :default,
+    read_subtree_concurrency: :default,
+    cache_max_binary_bytes: :default,
+    cache_max_compiled_components: :default,
+    tincture_max_decompressed_bytes: :default,
+    external_server_max_in_flight: :default,
+    max_backends_per_server: :default,
+    returning_probe_ms: :default,
+
     # Operator-shaped, with nothing to set them from. Each has a sensible
     # in-code default, so this is a gap in reach, not a broken deployment.
     oci_max_blob_bytes: :missing_lever,
@@ -2522,6 +2536,12 @@ defmodule Cyfr.Boundaries do
 
   @test_only_config_key_classes %{
     namespace_cache_ttl_ms: :seam,
+    # The caller memo's bound (`Sanctum.Caller`), its code's own 2 s in
+    # every release; the suite turns the memo off.
+    caller_memo_ttl_ms: :seam,
+    # The consent proofs' store (`Sanctum.Consent.Proof`), durable in every
+    # release; the suite holds them in memory.
+    consent_proof_store: :seam,
     # A one-time confirmation code's transport
     # (`Sanctum.Auth.EmailVerification`): the tree ships none, so only the
     # suite sets one, its capture sink; with none the email method refuses

@@ -2,8 +2,6 @@
 # Copyright 2026 CYFR Works Inc.
 import Config
 
-# For production, require all settings to be explicit at runtime
-
 # The pinned wasm-tools every component is validated with
 # (`Prima.ComponentFeatures`), where both images install it
 # (scripts/wasm-tools.sh); `CYFR_WASM_TOOLS` names another for a cyfr

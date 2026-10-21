@@ -5,8 +5,7 @@ import Config
 # Prometheus metrics stay on in dev (loopback bind, no exposure).
 config :cyfr, :prometheus_metrics_enabled, true
 
-# For development, we disable any cache and enable
-# debugging and code reloading. The listeners, the URL and the origins are
+# Development enables debugging and code reloading. The listeners, the URL and the origins are
 # the access settings', which `config/runtime.exs` writes in development as in a
 # release: a checkout whose .env sets no CYFR_ACCESS is `local`, on
 # 127.0.0.1:4000 unless CYFR_BIND_ADDRESS or CYFR_PORT says otherwise.
@@ -21,7 +20,7 @@ config :cyfr, CyfrWeb.Endpoint,
   ],
   live_reload: [
     patterns: [
-      ~r"apps/cyfr/priv/static/(?!uploads/).*(js|css|png|jpeg|jpg|gif|svg)$",
+      ~r"apps/cyfr/priv/static/.*(js|css|png|jpeg|jpg|gif|svg)$",
       ~r"apps/cyfr/lib/prism_web/(controllers|live|components)/.*(ex|heex)$",
       ~r"apps/cyfr/lib/cyfr_web/.*(ex|heex)$",
       ~r"apps/cyfr/lib/emissary/web/.*(ex)$"
@@ -34,10 +33,8 @@ config :phoenix, :stacktrace_depth, 20
 # Initialize plugs at runtime for faster development compilation
 config :phoenix, :plug_init_mode, :runtime
 
-# Add development connection options; runtime.exs resolves the database path.
-config :arca, Arca.Repo,
-  database: Path.expand("data/cyfr.db"),
-  show_sensitive_data_on_connection_error: true
+# Development connection options; runtime.exs resolves the database path.
+config :arca, Arca.Repo, show_sensitive_data_on_connection_error: true
 
 # Sanctum dev configuration
 config :sanctum,
