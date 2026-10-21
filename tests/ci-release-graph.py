@@ -133,7 +133,7 @@ def check_graph(wf):
 HOMEBREW = "Publish Homebrew cask to tap"
 # A failure turned into success: `|| true` or `|| :`.
 IGNORED = re.compile(r"\|\|\s*(true|:)(?=\s|;|\)|$)", re.MULTILINE)
-# The CLI release's permissions at BASE, which it may narrow and never widen.
+# The CLI release's permissions, which it may narrow and never widen.
 RELEASE_PERMISSIONS = {"contents": "write", "id-token": "write", "attestations": "write"}
 IMAGES = {"cyfr": "Dockerfile", "cyfr-locus": "Dockerfile.locus"}
 PUSH_BY_DIGEST = (
@@ -1923,7 +1923,9 @@ def fixed_tag_against_declared(wf):
     step["run"] = step["run"].replace(TAG_COMPARISON, '"%s" != "${declared[0]}"' % real_version(), 1)
 
 
-def tag_without_v(wf):
+def tag_compared_inexactly(wf):
+    # The tag compared after a leading character is trimmed: the check must
+    # hold the tag to the declared version exactly.
     step = tag_step(wf)
     step["run"] = step["run"].replace(TAG_COMPARISON, '"${GITHUB_REF_NAME#v}" != "${declared[0]}"', 1)
 
@@ -2216,7 +2218,7 @@ MUTANTS = [
     ("continue-on-error on the tag check job", tag_job_continues),
     ("the tag compared with a fixed version", tag_against_fixed_version),
     ("a fixed tag compared with the declared version", fixed_tag_against_declared),
-    ("a v-prefixed tag accepted", tag_without_v),
+    ("an inexact tag comparison", tag_compared_inexactly),
     ("a tag mismatch that exits 0", tag_mismatch_exits_0),
     ("the version read from another file", tag_reads_another_file),
     ("GITHUB_REF_NAME fixed on the tag comparison", tag_env_fixed),
