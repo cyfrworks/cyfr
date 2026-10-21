@@ -17,11 +17,9 @@ import {fileURLToPath} from "node:url"
 
 import {
   b64url,
-  capabilitiesMessage,
   codeFromFragment,
   CONFIRMATIONS,
   LISTEN_RETRY_MS,
-  CONTINUOUS_FIELDS,
   connectMessage,
   decodeHome,
   expired,
@@ -29,14 +27,11 @@ import {
   GLASS_TYPES,
   Glass,
   generateKeyPair,
-  HOME_TYPES,
   intentMessage,
   jcs,
   keyCode,
   keyDigest,
-  memoryStore,
   openingPlan,
-  pairRequestMessage,
   promptModel,
   sealText,
   proofMessage,
@@ -60,6 +55,7 @@ import {
   renewElsewhere,
   UNREACHABLE_OFFER
 } from "../../js/system_layer/device_key.js"
+import {memoryStore} from "./memory_store.mjs"
 import SystemLayer, {clearAllMarked, clearForms, clearMarked, glassStatus, markForm, resubmit} from "../../js/system_layer/index.js"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -209,24 +205,18 @@ describe("device_cert.json", () => {
 })
 
 describe("device.json", () => {
-  test("the glass and the home send the vector's types", () => {
+  test("the glass sends the vector's types", () => {
     assert.deepEqual(GLASS_TYPES, device.types.glass)
-    assert.deepEqual(HOME_TYPES, device.types.home)
-    assert.deepEqual(CONTINUOUS_FIELDS, device.continuous_fields)
   })
 
   test("each message the glass sends is written as the vector writes it", () => {
     const connect = named("a connect")
     assert.deepEqual(connectMessage(connect.client_id, connect.certificate), connect)
     assert.deepEqual(proofMessage(named("its proof").proof), named("its proof"))
-    assert.deepEqual(capabilitiesMessage(["display", "touch", "camera"]), named("a capability announcement"))
     assert.deepEqual(renewMessage(connect.client_id), named("a renewal, locating by client"))
 
     const located = device.messages.find((vector) => vector.message.type === "renew" && vector.message.certificate).message
     assert.deepEqual(renewMessage(located.client_id, located.certificate), located)
-
-    const pair = named("a pairing request")
-    assert.deepEqual(pairRequestMessage(pair.invitation_secret, pair.device_key, pair.key_digest), pair)
 
     const intent = named("a discrete intent")
     assert.deepEqual(intentMessage(intent.id, intent.operation, intent.args), intent)
@@ -279,7 +269,7 @@ describe("device.json", () => {
 
   test("an intent the glass writes carries no continuous data and names tool.action", () => {
     const intent = intentMessage("int_9", "vault.create", {name: "x"})
-    for (const field of CONTINUOUS_FIELDS) assert.equal(field in intent, false)
+    for (const field of device.continuous_fields) assert.equal(field in intent, false)
     assert.throws(() => intentMessage("int_9", "vault", {}))
     assert.throws(() => intentMessage("int_9", "vault.create", ["x"]))
     assert.throws(() => intentMessage("", "vault.create", {}))

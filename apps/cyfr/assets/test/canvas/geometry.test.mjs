@@ -6,14 +6,13 @@ import {describe, test} from "node:test"
 
 import {
   COLUMNS,
-  EDGE_STRIP_PX,
   HAND_BELOW_PX,
   MAX_COVERED,
   MODES,
+  POSTURES,
   SWIPE_MIN_PX,
   columnGeometry,
   coveredRects,
-  isPosture,
   parseColumns,
   postureFor,
   stylesheet,
@@ -40,8 +39,7 @@ describe("the posture", () => {
   })
 
   test("only hand and desk are postures, and an app is full or a column", () => {
-    assert.ok(isPosture("hand") && isPosture("desk"))
-    for (const value of ["tablet", "", null, undefined, 1]) assert.equal(isPosture(value), false)
+    assert.deepEqual(POSTURES, ["hand", "desk"])
     assert.deepEqual(MODES, ["full", "column"])
   })
 })
@@ -175,7 +173,6 @@ describe("what covers a canvas", () => {
 
 describe("a swipe on the edge strip", () => {
   test("leftward is next and rightward previous, from 48 pixels across and more across than down", () => {
-    assert.equal(EDGE_STRIP_PX, 16)
     assert.equal(SWIPE_MIN_PX, 48)
     assert.equal(swipeDirection({x: 300, y: 5}, {x: 252, y: 10}), "next")
     assert.equal(swipeDirection({x: 300, y: 5}, {x: 348, y: 0}), "previous")

@@ -210,7 +210,7 @@ export function startModuleWorker(scope, {importModule}) {
   const canvas = Object.freeze({
     /** Draw `tree`: an element tree of toolkit major 1. */
     render(tree) {
-      let json = null
+      let json
       try {
         json = JSON.stringify(tree)
       } catch (_error) {
@@ -352,7 +352,7 @@ export function startStreamsWorker(scope, {fetchFn}) {
 
     const type = (response.headers.get("content-type") || "").split(";")[0].trim()
     if (type !== STREAM_CONTENT_TYPE) {
-      let body = null
+      let body
       try {
         body = await response.json()
       } catch (_error) {

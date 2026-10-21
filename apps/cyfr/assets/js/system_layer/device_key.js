@@ -73,17 +73,6 @@ export const CONFIRMATIONS = "confirmation.changes"
 export const LISTEN_RETRY_MS = 5_000
 
 export const GLASS_TYPES = ["capabilities", "connect", "intent", "pair_request", "proof", "renew"]
-export const HOME_TYPES = [
-  "answer",
-  "certificate",
-  "challenge",
-  "event",
-  "grant",
-  "pair_answer",
-  "revoke",
-  "standing"
-]
-export const CONTINUOUS_FIELDS = ["stream", "frames", "chunks", "samples", "continuous"]
 
 // Each home message's fields: required, then optional.
 const HOME_FIELDS = {
@@ -230,10 +219,6 @@ function message(type, fields) {
 export const connectMessage = (clientId, certificate) => message("connect", {client_id: clientId, certificate})
 export const renewMessage = (clientId, certificate) => message("renew", {client_id: clientId, certificate})
 export const proofMessage = (proof) => message("proof", {proof})
-export const capabilitiesMessage = (capabilities) => message("capabilities", {capabilities})
-
-export const pairRequestMessage = (invitationSecret, deviceKey, keyDigest) =>
-  message("pair_request", {invitation_secret: invitationSecret, device_key: deviceKey, key_digest: keyDigest})
 
 /**
  * The digest of the device public key `deviceKey` (its unpadded base64url
@@ -442,7 +427,7 @@ async function askIssuer(fetchFn, url, body) {
     throw Object.assign(new Error("The home that certified this device could not be reached."), {ended: false})
   }
 
-  let answer = null
+  let answer
   try {
     answer = await response.json()
   } catch (_error) {
@@ -536,30 +521,6 @@ export function openStore(indexedDB = globalThis.indexedDB, name = "cyfr-glass")
     loadCertify: () => run("readonly", (store) => store.get("certify")).then((value) => value || null),
     saveCertify: (record) => run("readwrite", (store) => store.put(record, "certify")).then(() => record),
     clearCertify: () => run("readwrite", (store) => store.delete("certify")).then(() => null)
-  }
-}
-
-/** A store in memory, with the same calls. */
-export function memoryStore(record = null, pendingRecord = null, certifyRecord = null, preparedRecord = null) {
-  let held = record
-  let pending = pendingRecord
-  let asked = certifyRecord
-  let prepared = preparedRecord
-  return {
-    load: async () => held,
-    save: async (next) => (held = next),
-    clear: async () => (held = null),
-    saveIf: async (clientId, next) => (held && held.clientId === clientId ? ((held = next), true) : false),
-    clearIf: async (clientId) => (held && held.clientId === clientId ? ((held = null), true) : false),
-    loadPrepared: async () => prepared,
-    savePrepared: async (next) => (prepared = next),
-    clearPrepared: async () => (prepared = null),
-    loadPending: async () => pending,
-    savePending: async (next) => (pending = next),
-    clearPending: async () => (pending = null),
-    loadCertify: async () => asked,
-    saveCertify: async (next) => (asked = next),
-    clearCertify: async () => (asked = null)
   }
 }
 

@@ -21,9 +21,8 @@ export const MODES = Object.freeze(["full", "column"])
 // spans the canvas's width, and the columns share its height.
 export const COLUMNS = Object.freeze({width: 420, min: 240, gap: 12, pad: 12})
 
-// The edge strip along the bottom of the canvas layer, and how far a
-// pointer travels on it, more across than down, to switch canvases.
-export const EDGE_STRIP_PX = 16
+// How far a pointer travels along the bottom edge strip, more across than
+// down, to switch canvases.
 export const SWIPE_MIN_PX = 48
 
 // The most rectangles a canvas is told it is covered by (`Prima.CanvasWire`).
@@ -31,10 +30,6 @@ export const MAX_COVERED = 64
 
 const FRAME_ID = /^[A-Za-z0-9_-]{8,64}$/
 const SCOPE = /^[A-Za-z][A-Za-z0-9_-]*$/
-
-export function isPosture(value) {
-  return POSTURES.includes(value)
-}
 
 // `hand` under HAND_BELOW_PX CSS pixels wide, `desk` otherwise, and for a
 // width that is not a number.

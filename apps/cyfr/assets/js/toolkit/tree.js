@@ -70,10 +70,6 @@ const RULES = {
   spacer: {required: [], optional: {}}
 }
 
-// The element names the grammar defines, for the test that holds them to
-// the renderers' `ELEMENTS`.
-export const GRAMMAR_ELEMENTS = Object.freeze(Object.keys(RULES))
-
 class Refusal {
   constructor(path, reason) {
     this.path = path

@@ -32,7 +32,6 @@ const MAX_TINCTURES = 512
 const MAX_NAME = 128
 const MAX_STREAMS = 64
 
-const PAGE_PREFIX = "/_c/v1/"
 const DATA_PREFIX = "/_f/v1/o/"
 const ASSET_PREFIX = "_s"
 
@@ -155,21 +154,9 @@ export function servedPrefix(moduleUrl) {
 
 // ---- paths -------------------------------------------------------------------
 
-// The host page of a canvas open; a credential or a frame id outside its
-// grammar throws.
-export function pagePath(credential, frame) {
-  if (!isCredential(credential)) throw new TypeError("an asset credential is opaque, URL-safe and bounded")
-  return PAGE_PREFIX + credential + "/" + frameOf(frame)
-}
-
 // The data prefix of a canvas open, the one its policy names.
 export function dataPath(frame) {
   return DATA_PREFIX + frameOf(frame) + "/"
-}
-
-// A canvas open's one data route.
-export function streamPath(frame) {
-  return dataPath(frame) + STREAM_ROUTE
 }
 
 function frameOf(frame) {

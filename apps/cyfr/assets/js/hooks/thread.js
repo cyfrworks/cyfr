@@ -113,9 +113,7 @@ const Thread = {
   },
 
   // Phoenix LiveView's client-side router seam. The data-phx-link contract
-  // is the same one <.link navigate> emits — stable through phoenix_live_view
-  // 1.2.x. If a future major version changes the markup, fall back to
-  // liveSocket.historyRedirect(to, "push").
+  // is the one <.link navigate> emits.
   _navigateTo(to) {
     if (typeof to !== "string" || to === "") return
     const a = document.createElement("a")

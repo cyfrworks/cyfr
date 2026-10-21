@@ -59,17 +59,6 @@
 @custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
 @custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
 
-/* Mermaid diagram containers */
-.mermaid-block {
-  display: flex;
-  justify-content: center;
-  background-color: rgb(31 41 55);
-  border-radius: 0.5rem;
-  padding: 1rem;
-  overflow-x: auto;
-  margin: 1rem 0;
-}
-
 /* Prose overrides for dark-theme code blocks */
 .prose pre {
   border: 1px solid rgb(55 65 81);
@@ -139,15 +128,6 @@
   line-height: 1.6;
 }
 
-/* Sub-agent collapsible group */
-.sub-agent-group {
-  border-left: 2px solid rgb(99 102 241);
-  margin-left: 0.25rem;
-  padding-left: 0.75rem;
-  margin-top: 0.25rem;
-  margin-bottom: 0.25rem;
-}
-
 /* The consent sheet (PrismWeb.ConsentSheetComponent): grant, the connection
  * picker, the delta — one walk, rendered from Components and Agents. */
 .consent-sheet { color: rgb(229 231 235); font-size: 0.875rem; }
@@ -188,14 +168,3 @@
   display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem;
   border-top: 1px solid rgb(31 41 55); padding-top: 0.75rem;
 }
-.btn-primary {
-  border-radius: 0.375rem; background: rgb(37 99 235); padding: 0.375rem 0.75rem;
-  font-size: 0.75rem; font-weight: 500; color: #fff;
-}
-.btn-primary:hover { background: rgb(59 130 246); }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-secondary {
-  border-radius: 0.375rem; border: 1px solid rgb(55 65 81); padding: 0.375rem 0.75rem;
-  font-size: 0.75rem; color: rgb(209 213 219);
-}
-.btn-secondary:hover { background: rgb(31 41 55); }
