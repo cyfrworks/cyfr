@@ -1182,6 +1182,8 @@ def refused_scaffold_args(out, version):
     a, b = FAKE_CYFR, FAKE_LOCUS
     o = os.path.join(out, "refused.tar.gz")
     return o, [
+        ("no output", []),
+        ("an empty output alone", [""]),
         ("a version without digests", [o, version]),
         ("one digest", [o, version, a]),
         ("five arguments", [o, version, a, b, b]),

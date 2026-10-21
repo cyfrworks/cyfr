@@ -4,8 +4,8 @@
 #
 # The scaffold `cyfr init` extracts: scripts/scaffold-tarball.sh OUTPUT [VERSION CYFR_DIGEST LOCUS_DIGEST]
 #
-# With OUTPUT alone (default cyfr-scaffold.tar.gz) the tarball carries the
-# repository's docker-compose.yml as it is. A release passes the version
+# With OUTPUT alone the tarball carries the repository's docker-compose.yml
+# as it is. A release passes the version
 # and the merged multi-arch digests of the two images it published: the
 # tarball's docker-compose.yml then names every cyfr image as
 # ghcr.io/cyfrworks/cyfr:VERSION@CYFR_DIGEST and every cyfr-locus image as
@@ -31,7 +31,7 @@ usage() {
 
 VERSION="" CYFR_DIGEST="" LOCUS_DIGEST=""
 case "$#" in
-  0 | 1) ;;
+  1) [[ "$1" != "" ]] || usage ;;
   4)
     VERSION=$2 CYFR_DIGEST=$3 LOCUS_DIGEST=$4
     [[ "$1" != "" ]] || usage
@@ -44,7 +44,7 @@ esac
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
-OUTPUT="${1:-cyfr-scaffold.tar.gz}"
+OUTPUT=$1
 
 ITEMS=(
   configuration-guide.md component-guide.md tincture-guide.md integration-guide.md
