@@ -719,6 +719,9 @@ defmodule Sanctum.Consent.BootstrapTest do
       {:ok, stale} =
         Arca.ProvisioningClaims.claim(actor, "boot_elsewhere/own_walk", "sign_in", 1, :none)
 
+      # A claim as provisioning hands it on: with the slot it was taken under.
+      stale = Map.put(stale, :slot, :none)
+
       after_read!("instance_entries", fn ->
         Prima.Test.Wait.wait_until(
           fn -> not Arca.ProvisioningClaims.live?(stale) end,

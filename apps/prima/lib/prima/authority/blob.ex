@@ -169,10 +169,10 @@ defmodule Prima.Authority.Blob do
           nodes: %{optional(String.t()) => Node.t()}
         }
 
-  defstruct canonical: "jcs-1", nodes: %{}
-
   @canonical "jcs-1"
   @ingress_key "@ingress"
+
+  defstruct canonical: @canonical, nodes: %{}
   @scopes ["athanor", "instance"]
   @default_slot "default"
   @name_slot "name:"
@@ -184,6 +184,10 @@ defmodule Prima.Authority.Blob do
   """
   @spec ingress_key() :: String.t()
   def ingress_key, do: @ingress_key
+
+  @doc "The one canonical encoding a stored blob names (`\"canonical\"`)."
+  @spec canonical() :: String.t()
+  def canonical, do: @canonical
 
   @type error ::
           {:invalid_json, term()}

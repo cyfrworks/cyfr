@@ -192,7 +192,7 @@ defmodule Sanctum.Consent.ShapeDigestTest do
 
   describe "how a need attaches, where it goes, and what is provided" do
     @need %{name: "api_key", type: "api_key:openai.com", fields: ["KEY"]}
-    @attach %{in: "header", name: "Authorization", template: "Bearer {value}"}
+    @attach %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
     @provided %{
       "catalyst:local.supabase" => %{
         "database" => %{
@@ -231,7 +231,7 @@ defmodule Sanctum.Consent.ShapeDigestTest do
       end
     end
 
-    test "one not declared is the input it was before they existed" do
+    test "one not declared is absent from the canonical form" do
       base = Map.put(@base, :needs, [@need])
       {:ok, canonical} = ShapeDigest.normalize(base)
 

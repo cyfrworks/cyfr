@@ -236,8 +236,8 @@ defmodule Sanctum.Consent.ShapeDerivation do
   end
 
   # The publisher's provided configuration, each entry's destination in
-  # its canonical form: nil for a manifest without the block, so its shape
-  # is the one it had before the block existed.
+  # its canonical form: nil for a manifest without the block, which the
+  # shape then leaves out.
   defp provides(manifest) do
     case Prima.Manifest.Provides.from_manifest(manifest) do
       provides when is_map(provides) and provides != %{} ->
@@ -439,15 +439,12 @@ defmodule Sanctum.Consent.ShapeDerivation do
   @spec expand_tools([String.t()]) :: [String.t()]
   def expand_tools(patterns) when is_list(patterns) do
     patterns
-    |> ToolPattern.expand(all_tool_actions())
+    # The operation table's own roster, so a shape derived here can only
+    # name actions the table can serve; an unloaded table raises
+    # `Sanctum.Catalog.NotLoadedError` rather than answer none.
+    |> ToolPattern.expand(Sanctum.Catalog.tool_actions())
     |> Enum.reject(&(&1 in @exact_only and &1 not in patterns))
   end
-
-  @doc false
-  # The operation table's own roster, so a shape derived here can only name
-  # actions the table can serve. An unloaded table raises
-  # `Sanctum.Catalog.NotLoadedError` here rather than answer none.
-  def all_tool_actions, do: Sanctum.Catalog.tool_actions()
 
   # ---------------------------------------------------------------------------
   # Internal
@@ -473,8 +470,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   # The digest's need rows: name/type/fields/scopes, and the attach rule,
   # hosts, paths and a true `disclose` where the need declares them — the
   # reason is prose and required-ness surfaces on the sheet, neither is
-  # shape. A need that declares none of the four is the row it was before
-  # they existed.
+  # shape. A field the need does not declare is left out of its row.
   defp digest_needs(needs) do
     Enum.map(needs, fn need ->
       %{

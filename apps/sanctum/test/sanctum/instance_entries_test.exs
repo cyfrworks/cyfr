@@ -81,6 +81,9 @@ defmodule Sanctum.InstanceEntriesTest do
     # The install media ships no newer version of anything here.
     @impl true
     def newer_shipped(_ctx, _row), do: {:ok, nil}
+
+    @impl true
+    def tincture_placement(_ctx, _row), do: {:ok, nil}
   end
 
   # An inference-only account: chat completions and the model list, and

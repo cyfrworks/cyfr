@@ -754,6 +754,9 @@ defmodule Sanctum.Consent.PlanTest do
     @impl true
     def newer_shipped(ctx, row), do: real().newer_shipped(ctx, row)
 
+    @impl true
+    def tincture_placement(ctx, row), do: real().tincture_placement(ctx, row)
+
     defp answer(read, answered) do
       counted_outage =
         case :persistent_term.get({__MODULE__, :counted_read}, nil) do

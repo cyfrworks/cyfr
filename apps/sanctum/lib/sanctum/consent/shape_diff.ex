@@ -108,7 +108,7 @@ defmodule Sanctum.Consent.ShapeDiff do
          {:ok, edge} <- Blob.ingress(blob, source_ref),
          {:ok, component} <- Sanctum.Consent.Plan.fetch_component(ctx, source_ref),
          manifest = manifest(component, source_ref),
-         {:ok, live} <- live_caps(ctx, source_ref, manifest) do
+         {:ok, live} <- live_caps(source_ref, manifest) do
       own =
         Enum.map(
           diff_caps(flatten_edge(edge), live) ++ diff_provided(blob, source_ref, manifest),
@@ -169,9 +169,9 @@ defmodule Sanctum.Consent.ShapeDiff do
     }
   end
 
-  defp live_caps(ctx, source_ref, manifest) do
+  defp live_caps(source_ref, manifest) do
     with {:ok, resources, _limits} <-
-           Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest) do
+           Sanctum.Consent.BlobBuilder.node_grant(source_ref, manifest) do
       {:ok,
        %{
          "tools" => resources["tools"] || [],

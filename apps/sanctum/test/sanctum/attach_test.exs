@@ -87,6 +87,9 @@ defmodule Sanctum.AttachTest do
 
     @impl true
     def newer_shipped(_ctx, _row), do: {:ok, nil}
+
+    @impl true
+    def tincture_placement(_ctx, _row), do: {:ok, nil}
   end
 
   @secret "sk-attach-material"

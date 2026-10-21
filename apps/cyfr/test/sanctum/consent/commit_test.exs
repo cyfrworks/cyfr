@@ -20,9 +20,8 @@ defmodule Sanctum.Consent.CommitTest do
 
   @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
 
-  # The component domain's facts, but for the optional placement, which
-  # this implementation does not answer.
-  defmodule FactsWithoutPlacement do
+  # The component domain's facts, but for a placement it cannot read.
+  defmodule PlacementUnavailable do
     @moduledoc false
     @behaviour Sanctum.Consent.Components
 
@@ -47,6 +46,9 @@ defmodule Sanctum.Consent.CommitTest do
 
     @impl true
     defdelegate newer_shipped(ctx, row), to: Compendium.ConsentFacts
+
+    @impl true
+    def tincture_placement(_ctx, _row), do: {:error, :component_facts_unavailable}
   end
 
   # Runs `grant` with the table's tool-action reads counted, wherever the
@@ -1097,11 +1099,10 @@ defmodule Sanctum.Consent.CommitTest do
       {:ok, %{profile_id: owner}} = walk!(ctx, plain)
       real = Components.impl!()
 
-      # An implementation that answers every required callback but not the
-      # optional placement is installed, and the port answers the placement
-      # as unreadable facts: a public staging refuses as for any other
-      # component fact it cannot read, never as a placement answered.
-      Components.install!(FactsWithoutPlacement)
+      # An implementation that cannot read the placement is installed: a
+      # public staging refuses as for any other component fact it cannot
+      # read, never as a placement answered.
+      Components.install!(PlacementUnavailable)
 
       try do
         assert {:error, {:unavailable, "Components"}} =

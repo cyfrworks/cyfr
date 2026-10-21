@@ -113,7 +113,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
     # The fill that just ran failed (this suite ships no bundle), so clear
     # the record: what is under test is the claim, not the backoff.
     {:ok, own} = Sanctum.TestContext.mark_provisioned(own)
-    {:ok, own} = Athanors.update(own, %{provisioned_at: nil})
+    {:ok, own} = Arca.Athanors.update(Prima.Actor.in_athanor(own.id), %{provisioned_at: nil})
 
     refute own.provisioned_at
 

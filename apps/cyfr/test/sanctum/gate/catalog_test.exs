@@ -310,7 +310,7 @@ defmodule Sanctum.Gate.CatalogTest do
               fn -> Catalog.lookup("system") end,
               &Catalog.tool_actions/0,
               fn -> Catalog.action_declaration("system.status") end,
-              &Sanctum.Consent.ShapeDerivation.all_tool_actions/0,
+              fn -> Sanctum.Consent.ShapeDerivation.expand_tools([]) end,
               fn ->
                 Sanctum.ToolGrants.check_standing(
                   %{scope: "thread", effect: "allow", tool: "system", action: "status"},

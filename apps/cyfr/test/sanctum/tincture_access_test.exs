@@ -31,6 +31,8 @@ defmodule Sanctum.TinctureAccessTest do
     def shipped_nodes(_ctx, _rows), do: failed()
     @impl true
     def newer_shipped(_ctx, _row), do: failed()
+    @impl true
+    def tincture_placement(_ctx, _row), do: failed()
 
     defp failed, do: {:error, %RuntimeError{message: @canary}}
   end
@@ -57,6 +59,8 @@ defmodule Sanctum.TinctureAccessTest do
     def shipped_nodes(_ctx, _rows), do: failed()
     @impl true
     def newer_shipped(_ctx, _row), do: failed()
+    @impl true
+    def tincture_placement(_ctx, _row), do: failed()
 
     defp failed, do: {:error, %{__exception__: true, __struct__: RaisingFacts.canary()}}
   end

@@ -263,9 +263,9 @@ defmodule Sanctum.Consent.Plan do
          stored = if(head, do: {:ok, head, profile_id}, else: :none),
          manifest = manifest(component, source_ref),
          {:ok, resources, limits} <-
-           Sanctum.Consent.BlobBuilder.node_grant(ctx, source_ref, manifest),
+           Sanctum.Consent.BlobBuilder.node_grant(source_ref, manifest),
          {:ok, {closure, closure_rows}} <- closure(ctx, component),
-         {:ok, rows} <- ask_rows(ctx, closure, closure_rows),
+         {:ok, rows} <- ask_rows(closure, closure_rows),
          {:ok, candidates} <- ctx |> candidates() |> read(:vault),
          {:ok, sources} <- ctx |> choice_sources() |> read(:vault),
          needs =
@@ -1289,10 +1289,10 @@ defmodule Sanctum.Consent.Plan do
   # The ask of every node of the closure, each row held to its shape, each
   # once. A closure that cannot be resolved has no ask to show: the
   # source's own rows would read as the whole of it.
-  defp ask_rows(_ctx, {:unresolved, _unresolved}, _closure_rows), do: {:ok, []}
+  defp ask_rows({:unresolved, _unresolved}, _closure_rows), do: {:ok, []}
 
-  defp ask_rows(ctx, {:ok, _graph}, closure_rows) do
-    with {:ok, rows} <- BlobBuilder.ask_rows(ctx, closure_rows) do
+  defp ask_rows({:ok, _graph}, closure_rows) do
+    with {:ok, rows} <- BlobBuilder.ask_rows(closure_rows) do
       rows = BlobBuilder.order_rows(rows)
 
       case BlobBuilder.check_rows(rows) do

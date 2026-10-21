@@ -150,6 +150,9 @@ defmodule Sanctum.Consent.Commit do
                      {Atom.to_string(key), value}
                  end)
 
+  @canonical Prima.Authority.Blob.canonical()
+  @ingress Prima.Authority.Blob.ingress_key()
+
   @readonly_storage_actions ~w(read list exists)
 
   @canvas_not_public "A canvas has no public profile: it is the person's own data page."
@@ -1411,7 +1414,7 @@ defmodule Sanctum.Consent.Commit do
 
     lifetimes = Map.new(owner_consent.vault_refs, &{&1.binding_key, &1.lifetime_kind})
 
-    with {:ok, %{"canonical" => "jcs-1", "nodes" => nodes}} <-
+    with {:ok, %{"canonical" => @canonical, "nodes" => nodes}} <-
            Jason.decode(owner_consent.resolved_policy),
          :ok <- publishable(nodes, need_ids, lifetimes) do
       transformed =
@@ -1828,7 +1831,7 @@ defmodule Sanctum.Consent.Commit do
         {:ok, %{kind: "standing", until: nil}}
 
       %{} = lifetime when not is_struct(lifetime) ->
-        kind = lifetime_kind(Map.get(lifetime, :kind))
+        kind = Map.get(lifetime, :kind)
         until = Map.get(lifetime, :until)
 
         cond do
@@ -1852,9 +1855,6 @@ defmodule Sanctum.Consent.Commit do
         lifetime_refusal(subject, "names a lifetime that is not a record of kind and until")
     end
   end
-
-  defp lifetime_kind(kind) when is_atom(kind) and not is_nil(kind), do: Atom.to_string(kind)
-  defp lifetime_kind(kind), do: kind
 
   defp until_instant(until, subject, now) when is_binary(until) do
     utc? = String.ends_with?(until, "Z") or String.ends_with?(until, "+00:00")
@@ -1998,7 +1998,7 @@ defmodule Sanctum.Consent.Commit do
   # The needs an entry meets; the others name a component.
   @credential_kinds Prima.CredentialKinds.all()
 
-  defp check_known_need("@ingress", nil), do: {:ok, nil}
+  defp check_known_need(@ingress, nil), do: {:ok, nil}
   defp check_known_need(need, nil), do: {:error, {:unknown_need, need}}
 
   defp check_known_need(need, declared) when is_list(declared) do
@@ -2322,7 +2322,7 @@ defmodule Sanctum.Consent.Commit do
   # the edge names, the dependency's one credential need, or the one of
   # its several whose candidates hold the entry; a lender's label names
   # none of several.
-  defp head_need({ctx, sources, built}, {node, "@ingress"}, identity)
+  defp head_need({ctx, sources, built}, {node, @ingress}, identity)
        when node == built.source_ref do
     case identity do
       {:label, _label} ->
@@ -2588,7 +2588,7 @@ defmodule Sanctum.Consent.Commit do
       |> Enum.uniq_by(& &1.binding_key)
 
     with {:ok, nodes, narrowed} <- BlobBuilder.narrow_nodes(nodes, prep.source_ref, prep.subset),
-         {:ok, blob_json} <- JCS.encode(%{"canonical" => "jcs-1", "nodes" => nodes}),
+         {:ok, blob_json} <- JCS.encode(%{"canonical" => @canonical, "nodes" => nodes}),
          :ok <- check_binding_digests(blob_json, prep) do
       {:ok, blob_json, refs, narrowed}
     end

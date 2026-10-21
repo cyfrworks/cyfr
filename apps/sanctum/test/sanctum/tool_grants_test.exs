@@ -147,8 +147,9 @@ defmodule Sanctum.ToolGrantsTest do
   @tag :unloaded_table
   test "an unloaded table is refused by name, never read as no actions", %{ctx: ctx} do
     unloaded(fn ->
-      assert_raise Sanctum.Catalog.NotLoadedError,
-                   &Sanctum.Consent.ShapeDerivation.all_tool_actions/0
+      assert_raise Sanctum.Catalog.NotLoadedError, fn ->
+        Sanctum.Consent.ShapeDerivation.expand_tools([])
+      end
 
       assert_raise Sanctum.Catalog.NotLoadedError, fn ->
         ToolGrants.check_standing(decision(), DateTime.utc_now())

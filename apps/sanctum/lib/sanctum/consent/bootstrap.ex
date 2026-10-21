@@ -200,9 +200,8 @@ defmodule Sanctum.Consent.Bootstrap do
   # writes nothing, or after it has committed. With no claim, none.
   defp fenced(_ctx, nil), do: []
 
-  defp fenced(%Context{} = ctx, %{owner: owner, fence: fence} = claim) do
+  defp fenced(%Context{} = ctx, %{owner: owner, fence: fence, slot: slot}) do
     actor = Context.actor(ctx)
-    slot = Map.get(claim, :slot, :none)
 
     verify = fn ->
       if Arca.ProvisioningClaims.hold?(actor, owner, fence, slot),
@@ -635,7 +634,7 @@ defmodule Sanctum.Consent.Bootstrap do
   # activation names, at those digests, and the ones its blob selects.
   defp vouched_by(head, blob, shipped_nodes) do
     named =
-      case Jason.decode(head.activation || "") do
+      case Jason.decode(head.activation) do
         {:ok, %{} = graph} -> graph
         _ -> %{}
       end

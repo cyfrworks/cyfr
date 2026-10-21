@@ -299,16 +299,13 @@ defmodule Sanctum.Tenancy.Athanors do
   def route_slug(%{kind: "person", slug: slug}), do: "@" <> slug
   def route_slug(%{slug: slug}), do: slug
 
-  @spec update(athanor(), map()) :: {:ok, athanor()} | {:error, term()}
-  def update(%{id: id}, attrs), do: Arca.Athanors.update(in_athanor(id), Map.new(attrs))
-
   @doc "Rename an athanor. The slug stays: it is an address."
   @spec rename(athanor(), String.t()) :: {:ok, athanor()} | {:error, term()}
   def rename(%{id: _} = athanor, name) when is_binary(name) do
     name = String.trim(name)
 
     with :ok <- validate_name(name) do
-      update(athanor, %{name: name})
+      Arca.Athanors.update(in_athanor(athanor.id), %{name: name})
     end
   end
 

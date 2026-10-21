@@ -151,6 +151,8 @@ defmodule Sanctum.Consent.BlobBuilder do
   # lifetime is the binding's row's.
   @decision "__decision__"
 
+  @ingress Blob.ingress_key()
+
   @typedoc "A preview row in its JSON form (`Prima.ConsentPreview.Row.encode/1`)."
   @type row :: %{required(String.t()) => term()}
 
@@ -200,7 +202,7 @@ defmodule Sanctum.Consent.BlobBuilder do
       place = {graph, rows}
 
       Enum.reduce_while(Map.keys(graph), {:ok, %{}}, fn node_key, {:ok, acc} ->
-        case build_node(ctx, place, node_key, source_ref, vault_fns, extras, narrowing) do
+        case build_node(place, node_key, source_ref, vault_fns, extras, narrowing) do
           {:ok, node} -> {:cont, {:ok, Map.put(acc, node_key, node)}}
           # A refused narrowing names its node already.
           {:error, {:invalid_argument, _sentence} = refusal} -> {:halt, {:error, refusal}}
@@ -343,15 +345,14 @@ defmodule Sanctum.Consent.BlobBuilder do
       Map.new(nodes, fn {node_key, node} ->
         edges =
           Map.new(node.edges, fn
-            {"@ingress" = key, resources} ->
+            {@ingress = key, resources} ->
               {key, resources |> finalize_edge() |> bind_flows() |> place_vault(node_key, key)}
 
             {dep_key, %{"__dep__" => dep_key} = placeholder} ->
               # A dep key the activation graph does not carry is a
-              # construction bug, not a `nil.resources` UndefinedFunctionError
-              # raised out of `Consent.Bootstrap` — whose `run_components/2`
-              # catches only typed skips and refusals, so provisioning
-              # crashed the whole supervised task instead of recording one.
+              # construction bug, thrown as a typed refusal: `Consent.Bootstrap`'s
+              # `run_components/2` catches only typed skips and refusals, and
+              # records this one rather than crashing its supervised task.
               case nodes[dep_key] do
                 nil ->
                   throw({:dangling_dep, dep_key})
@@ -371,7 +372,7 @@ defmodule Sanctum.Consent.BlobBuilder do
         {node_key, %{"limits" => node.limits, "edges" => edges}}
       end)
 
-    JCS.encode(%{"canonical" => "jcs-1", "nodes" => encoded_nodes})
+    JCS.encode(%{"canonical" => Blob.canonical(), "nodes" => encoded_nodes})
   end
 
   # A bound entry's key names where it sits: the node, the edge and the
@@ -708,12 +709,12 @@ defmodule Sanctum.Consent.BlobBuilder do
     end
   end
 
-  defp build_node(ctx, {graph, rows}, node_key, source_ref, vault_fns, extras, {subset, ceiling}) do
+  defp build_node({graph, rows}, node_key, source_ref, vault_fns, extras, {subset, ceiling}) do
     {vault_fn, edge_vault_fn} = vault_fns
 
     with {:ok, row} <- closure_row(rows, node_key),
          manifest = manifest(row, node_key),
-         {:ok, asked, asked_limits} <- node_grant(ctx, node_key, manifest),
+         {:ok, asked, asked_limits} <- node_grant(node_key, manifest),
          {:ok, resources, limits, narrowed} <-
            narrow(node_key, asked, asked_limits, Map.get(subset, node_key), ceiling) do
       vault = vault_fn.(node_key, row, manifest)
@@ -767,7 +768,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   # empty ask, and a block that no longer meets the grammar is refused
   # (`ShapeDerivation.declared_caps/2`). Public for the plan verb, which
   # must show the same grant this builder would freeze.
-  def node_grant(_ctx, node_key, manifest) do
+  def node_grant(node_key, manifest) do
     with {:ok, caps} <- Sanctum.Consent.ShapeDerivation.declared_caps(manifest, node_key) do
       {:ok, resource_map_from_caps(caps), limits_map_from_caps(node_key, caps)}
     end
@@ -1185,8 +1186,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   # The one clamp (`Prima.Limits.Ceiling.clamp/2`) decides: a limit the
   # narrowing names is inside the ceiling when clamping leaves it as named.
   defp under_ceiling(node_key, limits, record, ceiling) do
-    clamped =
-      Prima.Limits.Ceiling.clamp(limits, ceiling || Sanctum.Policy.Ceiling.platform_ceiling())
+    clamped = Prima.Limits.Ceiling.clamp(limits, ceiling)
 
     above =
       record
@@ -1239,13 +1239,12 @@ defmodule Sanctum.Consent.BlobBuilder do
   resources and limits its manifest declares, every flow it declares to
   each of its exits, none narrowed, and a tincture's declarations.
   """
-  @spec ask_rows(Sanctum.Context.t(), %{String.t() => map()}) ::
-          {:ok, [row()]} | {:error, term()}
-  def ask_rows(ctx, rows) when is_map(rows) do
+  @spec ask_rows(%{String.t() => map()}) :: {:ok, [row()]} | {:error, term()}
+  def ask_rows(rows) when is_map(rows) do
     collect_rows(rows |> Map.keys() |> Enum.sort(), fn node_key ->
       with {:ok, row} <- closure_row(rows, node_key),
            manifest = manifest(row, node_key),
-           {:ok, resources, limits} <- node_grant(ctx, node_key, manifest),
+           {:ok, resources, limits} <- node_grant(node_key, manifest),
            {:ok, wildcard} <- wildcard_ask(node_key, manifest),
            {:ok, declared} <- tincture_rows(node_key, manifest) do
         exits = {Tincture.connect(manifest), flows_of(resources)}
