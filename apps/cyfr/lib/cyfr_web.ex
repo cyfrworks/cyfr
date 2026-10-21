@@ -68,7 +68,7 @@ defmodule CyfrWeb do
   # `manifest.webmanifest` and `sw.js` are the PWA's; the service worker is
   # registered by its literal path and both are served undigested.
   def static_paths,
-    do: ~w(assets images sdk favicon.ico robots.txt manifest.webmanifest sw.js)
+    do: ~w(assets images sdk favicon.ico manifest.webmanifest sw.js)
 
   def router do
     quote do
