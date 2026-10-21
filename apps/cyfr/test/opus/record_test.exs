@@ -927,7 +927,8 @@ defmodule Opus.RecordTest do
   end
 
   # A row as a writer outside `Opus.Record` stamps it (`Emissary.External.Proxy`
-  # writes an MCP tool call's), with `attrs` over its columns.
+  # writes an MCP tool call's), with `attrs` over its columns. With no parent
+  # it is a root, and carries its own id as its root, as `Record.new/4` stamps one.
   defp insert_row!(ctx, attrs) do
     id = Prima.UUID7.execution_id()
 
@@ -936,6 +937,7 @@ defmodule Opus.RecordTest do
         Map.merge(
           %{
             id: id,
+            root_execution_id: id,
             athanor_id: ctx.athanor_id,
             user_id: ctx.user_id,
             reference: "mcp-server:remote_tool",

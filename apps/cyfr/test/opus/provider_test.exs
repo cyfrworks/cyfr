@@ -1245,6 +1245,7 @@ defmodule Opus.ProviderTest do
           Arca.Repo.insert_all("executions", [
             %{
               id: id,
+              root_execution_id: id,
               athanor_id: athanor,
               user_id: ctx.user_id,
               reference: reference,
