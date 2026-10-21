@@ -444,13 +444,13 @@ defmodule Cyfr.Application do
     Emissary.Supervisor
   ]
 
-  @doc false
-  # The two tiers in start order, each with its children in start order,
-  # down through every subtree the tree names — the census
-  # `Cyfr.StartupAdmissionBarrierTest` reads. It is read from the child
-  # specs `start/2` starts, each supervisor's children through the same
-  # `init/1` its start runs, so the test and the boot cannot describe
-  # different trees.
+  @doc """
+  The two tiers in start order, each with its children in start order,
+  down through every subtree the tree names. It is read from the child
+  specs `start/2` starts, each supervisor's children through the same
+  `init/1` its start runs, so no description of the tree can differ from
+  the tree a boot starts.
+  """
   @spec tiers() :: [census()]
   def tiers, do: Enum.map(layout(), &(&1 |> tier() |> census()))
 
@@ -756,13 +756,19 @@ defmodule Cyfr.Application do
      )}
   end
 
-  @doc false
-  # Pure decision seam (testable without booting). One athanor's roots each
-  # carry a chain down to the authority depth cap, and children are exempt
-  # from the per-athanor cap by design (a chain that cannot get a child
-  # slot waits while holding its root slot, which is a deadlock, not a
-  # limit), so the cap bounds an athanor's roots and not its footprint.
-  # Capping children is not the fix; the lever is the ratio.
+  @doc """
+  The boot's warning for an execution-slot configuration under which one
+  athanor can hold every slot of the node: `max` slots against `key_max`
+  roots per athanor. Answers `:ok`, or `{:warn, message}`, which the boot
+  logs.
+
+  One athanor's roots each carry a chain down to the authority depth cap,
+  and children are exempt from the per-athanor cap by design (a chain
+  that cannot get a child slot waits while holding its root slot, which
+  is a deadlock, not a limit), so the cap bounds an athanor's roots and
+  not its footprint. Capping children is not the fix; the lever is the
+  ratio.
+  """
   @spec execution_slot_footprint(pos_integer(), pos_integer()) :: :ok | {:warn, String.t()}
   def execution_slot_footprint(max, key_max) do
     footprint = Prima.Slots.max_key_footprint(key_max)
@@ -898,11 +904,14 @@ defmodule Cyfr.Application do
     end
   end
 
-  @doc false
-  # Pure decision seam (testable without booting). A deployment that has
-  # authentication configured must name its CORS origins in an explicit
-  # allowlist, never the wildcard. Fail closed at boot in a real release (gated
-  # on RELEASE_ROOT, so dev/test are never blocked); warn loudly otherwise.
+  @doc """
+  The boot's decision on the CORS allowlist: a deployment that has
+  authentication configured must name its CORS origins in an explicit
+  allowlist, never the wildcard. With the wildcard, a release
+  (`real_release?`, a `RELEASE_ROOT` boot) answers `{:raise, message}`
+  and any other boot `{:warn, message}`; every other configuration
+  answers `:ok`.
+  """
   @spec cors_enforcement(boolean(), term(), boolean()) ::
           :ok | {:raise, String.t()} | {:warn, String.t()}
   def cors_enforcement(auth_configured?, origins, real_release?) do
@@ -1083,11 +1092,14 @@ defmodule Cyfr.Application do
     keyring
   end
 
-  @doc false
-  # Public for the same reason `cors_enforcement/3` is. The key base is
-  # held to the rule `config/runtime.exs` holds CYFR_SECRET_KEY_BASE to
-  # (`Cyfr.RuntimeConfig.check_secret_key_base/1`), so a refusal here
-  # never sends the operator to a value the boot then refuses.
+  @doc """
+  The at-rest keyring the boot derives from `key_base` when
+  CYFR_CRYPTO_KEYRING is unset: one key, `"default"`. Raises for a key
+  base the boot refuses; the key base is held to the rule
+  `config/runtime.exs` holds CYFR_SECRET_KEY_BASE to
+  (`Cyfr.RuntimeConfig.check_secret_key_base/1`), so a refusal here never
+  sends the operator to a value the boot then refuses.
+  """
   @spec derive_keyring!(term()) :: %{primary: String.t(), keys: map()}
   def derive_keyring!(key_base) do
     case Cyfr.RuntimeConfig.check_secret_key_base(key_base) do
@@ -1104,9 +1116,12 @@ defmodule Cyfr.Application do
     end
   end
 
-  @doc false
-  # Public for the same reason `cors_enforcement/3` is: boot policy that
-  # refuses a deployment should be testable without booting one.
+  @doc """
+  The at-rest keyring CYFR_CRYPTO_KEYRING names, as JSON
+  `{"primary": label, "keys": {label: base64 of at least 32 bytes}}`:
+  labels an envelope can carry, no two keys alike, and a primary that is
+  one of the keys. Raises naming what is wrong for any other value.
+  """
   @spec parse_keyring_env!(String.t()) :: %{primary: String.t(), keys: map()}
   def parse_keyring_env!(json) do
     case Jason.decode(json) do

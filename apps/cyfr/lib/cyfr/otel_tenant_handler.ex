@@ -64,9 +64,11 @@ defmodule Cyfr.OtelTenantHandler do
       :ok
   end
 
-  @doc false
-  # The pure half, split out so a test can assert what a conn yields
-  # without a live span.
+  @doc """
+  The tenant attributes a request's span carries: the athanor and the
+  person of the conn's `Sanctum.Context`, each only when set, and none
+  for a conn without one.
+  """
   def attributes_from(%Plug.Conn{assigns: assigns}) do
     case assigns[:context] do
       # Only a real Context carries tenant fields; a stray non-struct

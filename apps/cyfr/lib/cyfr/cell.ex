@@ -321,6 +321,16 @@ defmodule Cyfr.Cell do
 
   # ---- the claimant ----------------------------------------------------------
 
+  @doc """
+  Start this member's claimant of its cell slot. Every option defaults to
+  this member's own: `:name` (this module), `:lease_ms` and `:renew_ms`
+  (the slot lease and its renewal), `:cluster` (`:cyfr, :cluster`),
+  `:node_name` (the slot this member claims, its node's name), `:facts`
+  (`facts/0`, what this member can see of the conditions a cluster boot
+  is refused on) and `:release` (the release this boot runs,
+  `Prima.Version.current/0`).
+  """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
@@ -342,8 +352,6 @@ defmodule Cyfr.Cell do
       do: refuse_unformed_cell!(Keyword.get(opts, :facts, &facts/0)),
       else: refuse_foreign_nodes!()
 
-    # The release this boot runs; a test stands in for a member of another
-    # release by naming one.
     release = Keyword.get_lazy(opts, :release, &Prima.Version.current/0)
 
     state = %{
