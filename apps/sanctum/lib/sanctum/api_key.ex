@@ -16,7 +16,7 @@ defmodule Sanctum.ApiKey do
 
       # Create a new API key
       {:ok, %{api_key: "cyfr_pk_...", name: "frontend-key"}} =
-        Sanctum.ApiKey.create(ctx, %{name: "frontend-key", type: :application, scope: ["execution"]})
+        Sanctum.ApiKey.create(ctx, %{name: "frontend-key", type: :application, scope: ["execute"]})
 
       # List all keys (keys are redacted)
       {:ok, [%{name: "frontend-key", scope: [...], created_at: ...}]} = Sanctum.ApiKey.list(ctx)
@@ -103,8 +103,7 @@ defmodule Sanctum.ApiKey do
 
   - `:name` - Required. Human-readable name for the key.
   - `:type` - Key type: `:application` (default), `:service`, or `:admin`
-  - `:scope` - List of permissions (e.g., ["execution", "component.search"])
-  - `:rate_limit` - Rate limit string (e.g., "100/1m")
+  - `:scope` - List of permissions within the key type's ceiling (e.g., ["execute", "component_read"])
   - `:ip_allowlist` - List of allowed IPs/CIDRs (e.g., ["192.168.1.0/24", "10.0.0.1"])
 
   ## Key Types
@@ -116,7 +115,7 @@ defmodule Sanctum.ApiKey do
   ## Examples
 
       iex> ctx = Sanctum.TestContext.local()
-      iex> {:ok, result} = Sanctum.ApiKey.create(ctx, %{name: "my-key", scope: ["execution"]})
+      iex> {:ok, result} = Sanctum.ApiKey.create(ctx, %{name: "my-key", scope: ["execute"]})
       iex> String.starts_with?(result.api_key, "cyfr_pk_")
       true
 
@@ -252,7 +251,6 @@ defmodule Sanctum.ApiKey do
         key_prefix: String.slice(key, 0, 12),
         type: to_string(key_type),
         scope: safe_encode(scope_list),
-        rate_limit: Map.get(opts, :rate_limit),
         ip_allowlist: allowlist_json,
         capability: Map.get(opts, :capability_json),
         created_by: ctx.user_id,
@@ -265,12 +263,11 @@ defmodule Sanctum.ApiKey do
 
   defp encode_allowlist(nil), do: {:ok, nil}
 
-  # The shape is checked here, not only that it encodes. `ip_matches?/2` is
-  # guarded `is_binary(pattern)` and has no other clause, so a key created
-  # with `"ip_allowlist": [1, 2]` — which the MCP input validator admits,
-  # since it checks `type: array` and never descends into `items` — raised
-  # `FunctionClauseError` on every subsequent `validate/2`. That is a 500 on
-  # the authentication path and a key that can never be used again.
+  # The shape is checked here, not only that it encodes. `ip_matches?/2`
+  # takes binary patterns only, and the MCP input validator checks
+  # `type: array` without descending into `items`, so a key stored with
+  # `"ip_allowlist": [1, 2]` would raise on every later `validate/2`: a
+  # 500 on the authentication path and a key that can never be used.
   defp encode_allowlist(ip_allowlist) when is_list(ip_allowlist) do
     if Enum.all?(ip_allowlist, &is_binary/1) do
       case Jason.encode(ip_allowlist) do
@@ -298,8 +295,8 @@ defmodule Sanctum.ApiKey do
 
       {:error, :already_exists} ->
         # The unique index is partial (WHERE NOT revoked), so a violation
-        # always means an ACTIVE key holds the name; revoked keys no longer
-        # reserve theirs.
+        # always means an ACTIVE key holds the name; a revoked key reserves
+        # none.
         {:error, :already_exists}
 
       error ->
@@ -693,7 +690,8 @@ defmodule Sanctum.ApiKey do
   other seats widen nothing (`Sanctum.Context.focus/2`,
   `Sanctum.Tenancy.list_athanors/1`). The
   namespace is the creator's personal slug from `Sanctum.Namespace.lookup/1`,
-  with `_system` as the fallback when no slug is recorded.
+  or nil when no slug is recorded (the namespace is identity-only, so the
+  key still works, and the lookup's miss is logged).
 
   The caller is responsible for the tenant gate
   (`Sanctum.Context.require_tenant!/1`) after building — an athanor-less key
@@ -743,7 +741,6 @@ defmodule Sanctum.ApiKey do
       name: row.name,
       type: key_type,
       scope: decode_stored(row.scope, [], "scope"),
-      rate_limit: row.rate_limit,
       ip_allowlist: decode_stored(row.ip_allowlist, nil, "ip_allowlist"),
       user_id: row.created_by,
       athanor_id: row.athanor_id
@@ -768,43 +765,25 @@ defmodule Sanctum.ApiKey do
       iex> Sanctum.ApiKey.ip_allowed?("192.168.1.10", ["192.168.1.10"])
       true
   """
-  def ip_allowed?(client_ip, allowlist) when is_binary(client_ip) and is_list(allowlist) do
-    Enum.any?(allowlist, fn pattern ->
-      ip_matches?(client_ip, pattern)
-    end)
-  end
+  def ip_allowed?(client_ip, allowlist) when is_binary(client_ip) and is_list(allowlist),
+    do: Enum.any?(allowlist, &entry_admits?(client_ip, &1))
 
-  defp ip_matches?(client_ip, pattern) when is_binary(client_ip) and is_binary(pattern) do
+  # The match is `Prima.Cidr.match?/2`'s, an IPv4-mapped IPv6 address
+  # matched against an IPv4 range by its embedded IPv4 form. An entry that
+  # names no address or range admits nothing and is logged for the
+  # operator who wrote it.
+  defp entry_admits?(client_ip, entry) do
     cond do
-      # Exact match
-      client_ip == pattern ->
+      Prima.Cidr.match?(client_ip, entry) ->
         true
 
-      # CIDR notation
-      String.contains?(pattern, "/") ->
-        ip_in_cidr?(client_ip, pattern)
-
-      # No match
-      true ->
+      Prima.Cidr.parse_cidr(entry) != :error or Prima.Cidr.parse_ip(entry) != :error ->
         false
-    end
-  end
 
-  # Exact-IP match stays a string compare in ip_matches?/2; only the CIDR
-  # arithmetic is delegated to the Prima.Cidr SSOT. The operator-facing
-  # misconfig warning is preserved (fires whenever the IP or CIDR is
-  # unparseable, exactly as before). ip_in_network?/3 is used directly (no
-  # v4-mapped unwrap) to keep this path's prior behaviour identical.
-  defp ip_in_cidr?(ip_string, cidr_string) do
-    case {Prima.Cidr.parse_ip(ip_string), Prima.Cidr.parse_cidr(cidr_string)} do
-      {{:ok, ip}, {:ok, {network, prefix_length}}} ->
-        Prima.Cidr.ip_in_network?(ip, network, prefix_length)
-
-      _ ->
+      true ->
         Logger.warning(
-          "[Sanctum.ApiKey] Failed to parse IP/CIDR for allowlist check. " <>
-            "IP: #{inspect(ip_string)}, CIDR: #{inspect(cidr_string)}. " <>
-            "Expected format: IP like '192.168.1.10', CIDR like '192.168.1.0/24'"
+          "[Sanctum.ApiKey] allowlist entry #{inspect(entry)} is neither an IP like " <>
+            "'192.168.1.10' nor a CIDR like '192.168.1.0/24'; it admits nothing"
         )
 
         false
@@ -870,7 +849,6 @@ defmodule Sanctum.ApiKey do
       key_prefix: (row.key_prefix || "") <> "...",
       suspended: row.suspended == true,
       scope: decode_stored(row.scope, [], "scope"),
-      rate_limit: row.rate_limit,
       ip_allowlist: decode_stored(row.ip_allowlist, nil, "ip_allowlist"),
       created_at: Prima.Time.iso8601(row.inserted_at),
       rotated_at: Prima.Time.iso8601(row.rotated_at)
@@ -881,9 +859,9 @@ defmodule Sanctum.ApiKey do
   # athanor-less context raises before it can touch any row.
   defp athanor!(%Context{} = ctx), do: Context.athanor!(ctx)
 
-  # The actor the key rows are read and written under, with the
-  # product-boundary refusal kept where it has always been: `athanor!/1`
-  # raises `Sanctum.UnauthorizedError` for an unresolved tenant, so only a
+  # The actor the key rows are read and written under, behind the
+  # product-boundary refusal: `athanor!/1` raises
+  # `Sanctum.UnauthorizedError` for an unresolved tenant, so only a
   # resolved context reaches Arca and the storage refusal is unreachable
   # from here.
   defp actor!(%Context{} = ctx) do

@@ -43,8 +43,7 @@ defmodule Sanctum.Providers.Key do
             ),
             Arg.new("ip_allowlist", {:array, Arg.new(nil, :string)},
               description: "List of allowed IPs/CIDRs (e.g., ['192.168.1.0/24', '10.0.0.1'])"
-            ),
-            Arg.new("rate_limit", :string, description: "Rate limit (e.g., '100/1m')")
+            )
           ],
           kind: :write,
           planes: [:external],
@@ -152,7 +151,6 @@ defmodule Sanctum.Providers.Key do
         name: name,
         type: key_type,
         scope: Map.get(args, "scope", []),
-        rate_limit: Map.get(args, "rate_limit"),
         ip_allowlist: Map.get(args, "ip_allowlist")
       }
 

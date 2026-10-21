@@ -72,18 +72,6 @@ defmodule Sanctum.ApiKeyTest do
     test "returns error without name", %{ctx: ctx} do
       assert {:error, "name is required"} = create_key(ctx, %{scope: []})
     end
-
-    test "creates key with rate limit", %{ctx: ctx} do
-      {:ok, result} =
-        create_key(ctx, %{
-          name: "limited-key",
-          type: :service,
-          scope: ["vault_read"],
-          rate_limit: "100/1m"
-        })
-
-      assert result.name == "limited-key"
-    end
   end
 
   describe "get/2" do
@@ -291,8 +279,7 @@ defmodule Sanctum.ApiKeyTest do
         create_key(ctx, %{
           name: "valid-key",
           type: :service,
-          scope: ["vault_read", "component_manage"],
-          rate_limit: "50/1m"
+          scope: ["vault_read", "component_manage"]
         })
 
       {:ok, validated} = ApiKey.validate(created.api_key)
@@ -300,7 +287,7 @@ defmodule Sanctum.ApiKeyTest do
       assert validated.name == "valid-key"
       assert validated.type == :service
       assert validated.scope == ["vault_read", "component_manage"]
-      assert validated.rate_limit == "50/1m"
+      refute Map.has_key?(validated, :rate_limit)
     end
 
     test "validates secret key and returns correct type", %{ctx: ctx} do
@@ -487,6 +474,11 @@ defmodule Sanctum.ApiKeyTest do
       assert ApiKey.ip_allowed?("2001:db8:abcd::1", ["2001:db8:abcd::/48"])
       assert ApiKey.ip_allowed?("2001:db8:abcd:ffff::1", ["2001:db8:abcd::/48"])
       refute ApiKey.ip_allowed?("2001:db8:abce::1", ["2001:db8:abcd::/48"])
+    end
+
+    test "an IPv4-mapped IPv6 address is matched against an IPv4 range by its IPv4 form" do
+      assert ApiKey.ip_allowed?("::ffff:10.1.2.3", ["10.0.0.0/8"])
+      refute ApiKey.ip_allowed?("::ffff:11.0.0.1", ["10.0.0.0/8"])
     end
 
     test "IPv6 loopback" do

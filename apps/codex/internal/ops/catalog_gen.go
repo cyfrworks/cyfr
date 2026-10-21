@@ -2264,8 +2264,6 @@ type KeyCreateArgs struct {
 	Scope Field[[]string] `json:"scope,omitzero"`
 	// List of allowed IPs/CIDRs (e.g., ['192.168.1.0/24', '10.0.0.1'])
 	IpAllowlist Field[[]string] `json:"ip_allowlist,omitzero"`
-	// Rate limit (e.g., '100/1m')
-	RateLimit Field[string] `json:"rate_limit,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
