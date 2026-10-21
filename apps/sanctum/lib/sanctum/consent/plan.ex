@@ -275,6 +275,7 @@ defmodule Sanctum.Consent.Plan do
            dependency_needs(ctx, sources, closure, closure_rows),
          {:ok, asked} <- held_ask(ctx, stored, source_ref, {closure, closure_rows}),
          {:ok, head_narrowing} <- held_narrowing(stored, source_ref, asked),
+         {:ok, shape_diff} <- held_shape_diff(ctx, stored, shape_digest, source_ref, asked),
          {:ok, plan_token} <-
            mint_token(ctx, shape_digest, profile_id, expected_revision) do
       # A head binding is read as the commit reads it (`Commit.head_place/2`),
@@ -288,7 +289,7 @@ defmodule Sanctum.Consent.Plan do
            rows: closure_rows
          }}
 
-      head = head_facts(ctx, stored, shape_digest, {source_ref, asked}, reads)
+      head = head_facts(stored, reads)
 
       {:ok,
        %{
@@ -307,7 +308,7 @@ defmodule Sanctum.Consent.Plan do
          head_origins: head.origins,
          head_bindings: head.bindings,
          head_narrowing: head_narrowing,
-         shape_diff: head.shape_diff,
+         shape_diff: shape_diff,
          candidates: candidates,
          tool_server_candidates: Sanctum.Proxy.impl!().consent_candidates(ctx),
          warnings: need_warnings(needs, provided_notes),
@@ -784,23 +785,27 @@ defmodule Sanctum.Consent.Plan do
          do: {:ok, Enum.filter(entries, &(&1.status == "active"))}
   end
 
-  # What the profile's head holds: the origins it admits, its bindings,
-  # and what changed against it when the shape moved. A first grant, or a
-  # profile with no head, holds none.
-  defp head_facts(_ctx, :none, _shape_digest, _ask, _reads),
-    do: %{origins: nil, bindings: [], shape_diff: []}
+  # What the profile's head holds: the origins it admits and its bindings.
+  # A first grant, or a profile with no head, holds none.
+  defp head_facts(:none, _reads), do: %{origins: nil, bindings: []}
 
-  defp head_facts(ctx, {:ok, head, _profile_id}, shape_digest, {source_ref, asked}, reads) do
+  defp head_facts({:ok, head, _profile_id}, reads) do
     %{
       origins: Prima.Origin.to_wire_list(head.admitted_origins),
-      bindings: Enum.map(head.vault_refs, &head_binding(&1, reads)),
-      shape_diff:
-        if(head.shape_digest == shape_digest,
-          do: [],
-          else: Sanctum.Consent.ShapeDiff.compute(ctx, source_ref, head.resolved_policy, asked)
-        )
+      bindings: Enum.map(head.vault_refs, &head_binding(&1, reads))
     }
   end
+
+  # What changed against the head when the shape moved
+  # (`Sanctum.Consent.ShapeDiff`): nothing for a first grant or an
+  # unmoved shape, and the diff's refusal for a side stored damaged.
+  defp held_shape_diff(_ctx, :none, _shape_digest, _source_ref, _asked), do: {:ok, []}
+
+  defp held_shape_diff(_ctx, {:ok, %{shape_digest: digest}, _id}, digest, _source_ref, _asked),
+    do: {:ok, []}
+
+  defp held_shape_diff(ctx, {:ok, head, _profile_id}, _shape_digest, source_ref, asked),
+    do: Sanctum.Consent.ShapeDiff.compute(ctx, source_ref, head.resolved_policy, asked)
 
   @doc """
   The narrowing a stored head holds against the ask as it stands, in the

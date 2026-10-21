@@ -1167,7 +1167,7 @@ defmodule Opus.Admission do
       with {:ok, consent} <- Sanctum.Consent.head_consent(ctx, profile.id) do
         Sanctum.Consent.ShapeDiff.compute(ctx, profile.source_ref, consent.resolved_policy)
       else
-        _ -> []
+        _ -> {:ok, []}
       end
     end
   end

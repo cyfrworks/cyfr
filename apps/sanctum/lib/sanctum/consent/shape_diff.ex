@@ -81,18 +81,16 @@ defmodule Sanctum.Consent.ShapeDiff do
 
   @doc """
   Compare a head consent's granted shape against live capabilities, every
-  node of the source's closure as it resolves now. Returns the entries, or
-  `[]` when either side cannot be derived.
+  node of the source's closure as it resolves now. Returns `{:ok,
+  entries}`, or the refusal of the side that cannot be read: a stored
+  manifest that does not decode is `{:corrupt, {:manifest, ref}}`, never
+  an empty diff.
   """
-  @spec compute(Sanctum.Context.t(), String.t(), String.t()) :: [entry()]
+  @spec compute(Sanctum.Context.t(), String.t(), String.t()) ::
+          {:ok, [entry()]} | {:error, term()}
   def compute(ctx, source_ref, resolved_policy) do
-    asked =
-      case Sanctum.Consent.Plan.asked_blob(ctx, source_ref) do
-        {:ok, asked} -> asked
-        {:error, _underivable} -> nil
-      end
-
-    compute(ctx, source_ref, resolved_policy, asked)
+    with {:ok, asked} <- Sanctum.Consent.Plan.asked_blob(ctx, source_ref),
+         do: compute(ctx, source_ref, resolved_policy, asked)
   end
 
   @doc false
@@ -100,7 +98,8 @@ defmodule Sanctum.Consent.ShapeDiff do
   # (`Sanctum.Consent.Plan.asked_blob/2`'s, as JSON), so the closure is
   # resolved once; nil, for a closure that does not resolve, compares the
   # source alone.
-  @spec compute(Sanctum.Context.t(), String.t(), String.t(), String.t() | nil) :: [entry()]
+  @spec compute(Sanctum.Context.t(), String.t(), String.t(), String.t() | nil) ::
+          {:ok, [entry()]} | {:error, term()}
   def compute(ctx, source_ref, resolved_policy, asked) do
     with {:ok, blob} <- Blob.parse(resolved_policy),
          {:ok, edge} <- Blob.ingress(blob, source_ref),
@@ -113,9 +112,7 @@ defmodule Sanctum.Consent.ShapeDiff do
           &on_node(&1, source_ref, :held)
         )
 
-      own ++ diff_dependencies(resolved_policy, source_ref, asked)
-    else
-      _ -> []
+      {:ok, own ++ diff_dependencies(resolved_policy, source_ref, asked)}
     end
   end
 
@@ -356,8 +353,7 @@ defmodule Sanctum.Consent.ShapeDiff do
   defp normalize(_), do: []
 
   # A manifest that does not decode is a damaged row, refused by the ref it
-  # was read under and never by its bytes; it shows no change rather than
-  # one against nothing.
+  # was read under and never by its bytes.
   defp manifest(row, ref) do
     case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
       {:ok, manifest} -> {:ok, manifest}

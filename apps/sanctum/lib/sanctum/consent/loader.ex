@@ -821,16 +821,20 @@ defmodule Sanctum.Consent.Loader do
 
           # The diff arrives as a thunk so the loader stays inert data
           # logic: it is computed only when re-consent is actually
-          # required, and never influences the decision above.
-          shape_diff = Keyword.get(opts, :shape_diff, fn -> [] end)
+          # required. It never admits: a diff that cannot be shown leaves
+          # the refusal as it is, and one that finds a side stored damaged
+          # refuses as that damage.
+          shape_diff = Keyword.get(opts, :shape_diff, fn -> {:ok, []} end)
 
-          {:error,
-           {:consent_required,
-            %{
-              profile_id: profile.id,
-              current_revision: consent.revision,
-              shape_diff: safe_diff(shape_diff)
-            }}}
+          case safe_diff(shape_diff) do
+            {:ok, diff} ->
+              {:error,
+               {:consent_required,
+                %{profile_id: profile.id, current_revision: consent.revision, shape_diff: diff}}}
+
+            {:error, damage} ->
+              {:error, damage}
+          end
 
         {:integrity_alarm, nodes} ->
           Logger.error(
@@ -863,8 +867,9 @@ defmodule Sanctum.Consent.Loader do
 
   defp safe_diff(fun) when is_function(fun, 0) do
     case fun.() do
-      diff when is_list(diff) -> diff
-      _ -> []
+      {:ok, diff} when is_list(diff) -> {:ok, diff}
+      {:error, {:corrupt, _what} = damage} -> {:error, damage}
+      _unshown -> {:ok, []}
     end
   rescue
     e ->
@@ -873,10 +878,8 @@ defmodule Sanctum.Consent.Loader do
         "[Consent.Loader] shape diff failed: #{Prima.LogFilter.exception_message(e)}"
       )
 
-      []
+      {:ok, []}
   end
-
-  defp safe_diff(_), do: []
 
   defp compare_shape(nil, _stored), do: :unknown
   defp compare_shape(live, stored) when live == stored, do: :match
