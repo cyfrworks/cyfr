@@ -149,6 +149,21 @@ defmodule Opus.EventsTest do
       assert seq == 2
       assert Sequence.next(record.id, 1) == 1
     end
+
+    test "a floor raises a counter that is below it and never lowers one" do
+      exec_id = "exec_evt_floor_#{System.unique_integer([:positive])}"
+      assert Sequence.next(exec_id, 1) == 1
+
+      assert :ok = Sequence.reseed(exec_id, 1, 5)
+      assert Sequence.next(exec_id, 1) == 6
+
+      assert :ok = Sequence.reseed(exec_id, 1, 3)
+      assert Sequence.next(exec_id, 1) == 7
+
+      assert :ok = Sequence.reseed(exec_id, 2, 4)
+      assert Sequence.next(exec_id, 2) == 5
+      Sequence.forget(exec_id)
+    end
   end
 
   describe "the counter table" do
@@ -292,6 +307,24 @@ defmodule Opus.EventsTest do
 
     # The next emit restarts the buffer, which floors the counter from
     # what the cache saw, and the stream continues.
+    assert {:ok, "1.3"} = Events.push(record.id, %{"n" => 3}, record, origin: "host")
+
+    assert ["1.1", "1.2", "1.3"] =
+             record.id
+             |> Events.since({1, 0}, "ath_evt_x")
+             |> Enum.map(& &1.sequence)
+  end
+
+  # The counter outlives the buffer: the restarted buffer's floor is the
+  # number the counter already holds.
+  test "a buffer that stops on its idle timeout resumes the numbering its counter kept" do
+    record = execution!("ath_evt_x")
+
+    assert {:ok, "1.1"} = Events.push(record.id, %{"n" => 1}, record, origin: "host")
+    assert {:ok, "1.2"} = Events.push(record.id, %{"n" => 2}, record, origin: "host")
+
+    idle_stop_buffer(record.id)
+
     assert {:ok, "1.3"} = Events.push(record.id, %{"n" => 3}, record, origin: "host")
 
     assert ["1.1", "1.2", "1.3"] =

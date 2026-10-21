@@ -89,8 +89,12 @@ defmodule Opus.Events.Sequence do
       when is_binary(execution_id) and is_integer(durable) and is_integer(floor) and floor >= 0 do
     key = {execution_id, durable}
 
+    # A tuple in a match specification's body is an expression, so the key
+    # is written back as a constant.
     unless :ets.insert_new(@table, {key, floor}) do
-      :ets.select_replace(@table, [{{key, :"$1"}, [{:<, :"$1", floor}], [{{key, floor}}]}])
+      :ets.select_replace(@table, [
+        {{key, :"$1"}, [{:<, :"$1", floor}], [{{{:const, key}, floor}}]}
+      ])
     end
 
     :ok
