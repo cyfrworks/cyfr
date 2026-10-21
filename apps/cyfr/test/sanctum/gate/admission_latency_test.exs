@@ -836,7 +836,11 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
   end
 
   defp commit do
-    case System.cmd("git", ["rev-parse", "HEAD"], stderr_to_stdout: true) do
+    # The checkout's own HEAD, never one an inherited GIT_* variable names.
+    case System.cmd("git", ["rev-parse", "HEAD"],
+           stderr_to_stdout: true,
+           env: [{"GIT_DIR", nil}, {"GIT_WORK_TREE", nil}, {"GIT_INDEX_FILE", nil}]
+         ) do
       {sha, 0} -> String.trim(sha)
       _ -> nil
     end
@@ -857,7 +861,13 @@ defmodule Sanctum.Gate.AdmissionLatencyTest do
   end
 
   defp cpu do
-    case System.cmd("sysctl", ["-n", "machdep.cpu.brand_string"], stderr_to_stdout: true) do
+    # `sysctl` reads nothing from the environment, so it inherits none of it.
+    unset_all = Enum.map(System.get_env(), fn {name, _value} -> {name, nil} end)
+
+    case System.cmd("sysctl", ["-n", "machdep.cpu.brand_string"],
+           stderr_to_stdout: true,
+           env: unset_all
+         ) do
       {brand, 0} -> String.trim(brand)
       _ -> nil
     end
