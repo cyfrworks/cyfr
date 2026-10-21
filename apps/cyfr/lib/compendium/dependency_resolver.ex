@@ -33,56 +33,61 @@ defmodule Compendium.DependencyResolver do
   detecting and breaking cycles via a visited set.
 
   Returns `{:ok, tree}` where tree is a list of dependency nodes,
-  each annotated with their own sub-dependencies.
+  each annotated with their own sub-dependencies. An installed dependency
+  whose manifest the store cannot read or that does not decode fails the
+  tree, `{:error, {:dependency_unreadable, ref, reason}}`, `ref` the
+  dependency as its dependent declares it.
   """
   @spec resolve_tree(Context.t(), map()) :: {:ok, list()} | {:error, term()}
   def resolve_tree(%Context{} = ctx, manifest),
-    do: do_resolve_tree(ctx, manifest, MapSet.new(), 0)
+    do: do_resolve_tree(ctx, manifest, %{}, 0)
 
   defp do_resolve_tree(_ctx, _manifest, _visited, depth) when depth > @max_depth do
     {:ok, []}
   end
 
   defp do_resolve_tree(ctx, manifest, visited, depth) do
-    case extract_from_manifest(manifest) do
-      {:ok, []} ->
+    with {:ok, deps} <- extract_from_manifest(manifest) do
+      deps
+      |> Enum.reduce_while({:ok, []}, fn dep, {:ok, nodes} ->
+        case dep_node(ctx, dep, visited, depth) do
+          {:ok, node} -> {:cont, {:ok, [node | nodes]}}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+      |> then(fn
+        {:ok, nodes} -> {:ok, Enum.reverse(nodes)}
+        error -> error
+      end)
+    end
+  end
+
+  # `visited` is the refs on the path, a map of ref to true. A dependency
+  # already on the path is a cycle and stops there; one not
+  # installed has no children to read; one whose manifest or own
+  # dependencies do not read fails the tree, since an unknown subtree is
+  # not an empty one.
+  defp dep_node(ctx, dep, visited, depth) do
+    ref = dep.dependency_ref
+
+    if Map.has_key?(visited, ref) do
+      {:ok, dep |> Map.put(:cycle, true) |> Map.put(:children, [])}
+    else
+      with {:ok, children} <- children(ctx, dep, Map.put(visited, ref, true), depth),
+           do: {:ok, dep |> Map.put(:cycle, false) |> Map.put(:children, children)}
+    end
+  end
+
+  defp children(ctx, dep, visited, depth) do
+    case resolve_dep_manifest(ctx, dep) do
+      {:ok, child_manifest} ->
+        do_resolve_tree(ctx, child_manifest, visited, depth + 1)
+
+      {:error, :not_found} ->
         {:ok, []}
 
-      {:ok, deps} ->
-        nodes =
-          Enum.map(deps, fn dep ->
-            ref = dep.dependency_ref
-
-            if MapSet.member?(visited, ref) do
-              # Cycle detected — mark and stop recursion
-              Map.put(dep, :cycle, true)
-              |> Map.put(:children, [])
-            else
-              new_visited = MapSet.put(visited, ref)
-
-              # Try to find this dependency in the local registry and recurse
-              children =
-                case resolve_dep_manifest(ctx, dep) do
-                  {:ok, child_manifest} ->
-                    case do_resolve_tree(ctx, child_manifest, new_visited, depth + 1) do
-                      {:ok, child_deps} -> child_deps
-                      {:error, _} -> []
-                    end
-
-                  {:error, _} ->
-                    []
-                end
-
-              dep
-              |> Map.put(:cycle, false)
-              |> Map.put(:children, children)
-            end
-          end)
-
-        {:ok, nodes}
-
-      {:error, _} = err ->
-        err
+      {:error, reason} ->
+        {:error, {:dependency_unreadable, dep.dependency_ref, reason}}
     end
   end
 
@@ -184,7 +189,7 @@ defmodule Compendium.DependencyResolver do
 
     case result do
       {:ok, component} ->
-        {:ok, Prima.Manifest.decode(component.manifest)}
+        Prima.Manifest.decode_strict(component.manifest)
 
       {:error, _} = err ->
         err

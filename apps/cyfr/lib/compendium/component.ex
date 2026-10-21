@@ -27,6 +27,10 @@ defmodule Compendium.Component do
   - `"resolved_from"` — original reference if it was resolved (e.g., versionless)
   - dependency info when applicable
 
+  A stored manifest that does not decode, the component's own or an
+  installed dependency's, refuses the inspection as
+  `{:corrupt, {:manifest, ref}}`; a dependency the store cannot read
+  refuses it with the store's own error.
   """
   @spec inspect_component(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def inspect_component(%Context{} = ctx, reference) when is_binary(reference) do
@@ -209,7 +213,7 @@ defmodule Compendium.Component do
 
   defp maybe_enrich_with_dependencies(ctx, component, result) do
     with {:ok, manifest} <- decode_manifest(component.manifest, result["component_ref"]),
-         do: {:ok, enrich_with_dependencies(ctx, manifest, result)}
+         do: enrich_with_dependencies(ctx, manifest, result)
   end
 
   defp enrich_with_dependencies(ctx, manifest, result) do
@@ -217,28 +221,40 @@ defmodule Compendium.Component do
     has_dynamic = Compendium.DependencyResolver.has_dynamic_deps?(manifest)
 
     if static_deps == [] and not has_dynamic do
-      result
+      {:ok, result}
     else
       case Compendium.DependencyResolver.resolve_tree(ctx, manifest) do
         {:ok, tree} ->
           flat_deps = flatten_dep_tree(tree)
           availability = Compendium.DependencyResolver.classify_availability(ctx, flat_deps)
 
-          result
-          |> Map.put("dependencies", tree)
-          |> Map.put("has_dynamic", has_dynamic)
-          |> Map.put("all_satisfied", availability.all_satisfied)
-          |> Map.put("missing", Enum.map(availability.missing, & &1[:dependency_ref]))
-          |> Map.put(
-            "optional_missing",
-            Enum.map(availability.optional_missing, & &1[:dependency_ref])
-          )
+          {:ok,
+           result
+           |> Map.put("dependencies", tree)
+           |> Map.put("has_dynamic", has_dynamic)
+           |> Map.put("all_satisfied", availability.all_satisfied)
+           |> Map.put("missing", Enum.map(availability.missing, & &1[:dependency_ref]))
+           |> Map.put(
+             "optional_missing",
+             Enum.map(availability.optional_missing, & &1[:dependency_ref])
+           )}
 
-        {:error, _reason} ->
-          result
+        {:error, reason} ->
+          {:error, tree_refusal(reason)}
       end
     end
   end
+
+  # What keeps the dependency tree from being read, as the inspection
+  # refuses it: an installed dependency whose stored manifest does not
+  # decode is that damaged manifest, named as its dependent declares it,
+  # and one the store could not read is the store's own error. A
+  # dependency block that does not parse answers its grammar's sentence.
+  defp tree_refusal({:dependency_unreadable, ref, :malformed_manifest}),
+    do: {:corrupt, {:manifest, ref}}
+
+  defp tree_refusal({:dependency_unreadable, _ref, reason}), do: reason
+  defp tree_refusal(reason), do: reason
 
   defp flatten_dep_tree(tree) when is_list(tree) do
     Enum.flat_map(tree, fn node ->

@@ -948,4 +948,26 @@ defmodule Compendium.ConsentSetupPlanTest do
     assert {:error, ^damage} =
              Compendium.Component.inspect_component(ctx, "reagent:local.plan-torn")
   end
+
+  @tag :capture_log
+  test "an installed dependency whose stored manifest does not decode is damage to the inspect",
+       %{ctx: ctx} do
+    child = "reagent:local.plan-torn-child:1.0.0"
+    publish!(ctx, "plan-torn-child")
+
+    publish_manifest!(ctx, "plan-whole-root", %{
+      "dependencies" => %{"static" => [%{"ref" => child}]}
+    })
+
+    assert {:ok, %{"dependencies" => [%{dependency_ref: ^child}], "all_satisfied" => true}} =
+             Compendium.Component.inspect_component(ctx, "reagent:local.plan-whole-root")
+
+    Arca.Repo.update_all(
+      Ecto.Query.from(c in Arca.Schemas.Component, where: c.name == "plan-torn-child"),
+      set: [manifest: "{not json"]
+    )
+
+    assert {:error, {:corrupt, {:manifest, ^child}}} =
+             Compendium.Component.inspect_component(ctx, "reagent:local.plan-whole-root")
+  end
 end
