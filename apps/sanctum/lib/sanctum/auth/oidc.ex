@@ -217,23 +217,10 @@ defmodule Sanctum.Auth.OIDC do
   # Private Helpers
   # ============================================================================
 
-  defp get_email(auth) do
-    cond do
-      auth.info && is_map(auth.info) && Map.get(auth.info, :email) ->
-        Map.get(auth.info, :email)
-
-      auth.extra && is_map(auth.extra) && is_map(auth.extra[:raw_info]) &&
-          auth.extra[:raw_info]["email"] ->
-        auth.extra[:raw_info]["email"]
-
-      auth.extra && is_map(auth.extra) && is_map(Map.get(auth.extra, :raw_info)) &&
-          Map.get(auth.extra, :raw_info)["email"] ->
-        Map.get(auth.extra, :raw_info)["email"]
-
-      true ->
-        nil
-    end
-  end
+  # The strategy fills `Ueberauth.Auth.Info.email` from the issuer's
+  # claims and userinfo; nothing else of the auth names an address.
+  defp get_email(%{info: %{email: email}}), do: email
+  defp get_email(_auth), do: nil
 
   @doc """
   The operator-configured issuer (`:sanctum, :oidc_issuer`, pinned at boot
