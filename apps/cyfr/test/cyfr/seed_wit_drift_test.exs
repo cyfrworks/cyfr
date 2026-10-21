@@ -114,6 +114,14 @@ defmodule Cyfr.SeedWitDriftTest do
   test "a world imports cyfr:vault/read only where the component reads a need itself" do
     worlds = for path <- seed_wit_files(), Path.basename(path) == "world.wit", do: path
 
+    # A positive control for the scan: the import is recognised where it is
+    # written. No shipped world imports it now that every shipped need is
+    # attached, so the readers below may be empty and the rule still holds.
+    assert Enum.any?(
+             imports("import cyfr:vault/read@0.1.0;"),
+             &String.starts_with?(&1, "import cyfr:vault/read@")
+           )
+
     readers =
       for path <- worlds,
           Enum.any?(
@@ -121,8 +129,6 @@ defmodule Cyfr.SeedWitDriftTest do
             &String.starts_with?(&1, "import cyfr:vault/read@")
           ),
           do: path
-
-    assert readers != []
 
     offenders =
       for path <- readers, not reads_a_need?(version_dir(path)) do
