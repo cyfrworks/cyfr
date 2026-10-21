@@ -16,7 +16,9 @@ defmodule Emissary.Web.WebhookController do
   `Opus.run_root/5` via `Task.Supervisor.start_child/2`. The HTTP request
   returns `200 {"status":"accepted","request_id":...}` immediately — webhook
   senders only need a 2xx ack to consider delivery successful (Stripe /
-  GitHub / Twilio / PayPal docs all converge on this). The delivery is
+  GitHub / Twilio / PayPal docs all converge on this). A delivery whose
+  target no worker service runs (`Opus.available?/1`) is refused `503`
+  instead, which the sender retries. The delivery is
   one admission decision (`Sanctum.Decisions.open/3`), recorded with its
   request-log row before the run is spawned, under a call id minted beside
   the request id and carried on the context, so the root execution's row
@@ -193,11 +195,12 @@ defmodule Emissary.Web.WebhookController do
     # not inherit it. Same idiom as `CyfrWeb.Plugs.Authenticate`.
     logger_metadata = Prima.LoggerContext.capture()
 
-    # With no engine to run the delivery (`Opus.available?/0`) it is
-    # refused `503`, which a sender retries; an accepted delivery whose run
-    # then failed would be answered `200` and never sent again.
+    # With no worker service to run the hook's target (`Opus.available?/1`,
+    # the selection its run makes) the delivery is refused `503`, which a
+    # sender retries; an accepted delivery whose run then failed would be
+    # answered `200` and never sent again.
     spawn_result =
-      if Opus.available?() do
+      if Opus.available?(webhook.target_ref) do
         claim = conn.assigns[:webhook_delivery_claim]
 
         Task.Supervisor.start_child(Emissary.Web.TaskSupervisor, fn ->

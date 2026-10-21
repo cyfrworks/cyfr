@@ -23,9 +23,11 @@ defmodule Opus do
   its parent's, read where it is admitted, so a chain rooted by a
   schedule stays `schedule` however deep it runs.
 
-  A run is dispatched to the first worker service `config :cyfr, :locus_runtime_workers`
-  names that is loaded and answers; with none, `available?/0` is false and
-  a dispatched run answers `{:error, :execution_unavailable}`.
+  A run of a reference is dispatched to the first worker service
+  `config :cyfr, :locus_runtime_workers` names that runs the reference and
+  answers; with none, `available?/1` is false for the reference and a
+  dispatched run answers `{:error, :execution_unavailable}`. `available?/0`
+  asks only whether any worker service answers.
 
   A spawn-shaped child's invoke-budget slot is charged by its step and
   held under the guard by the process that dispatches it, with its charge
@@ -77,6 +79,17 @@ defmodule Opus do
   @spec available?() :: boolean()
   def available? do
     is_pid(Process.whereis(Opus.Slots)) and match?({:ok, _}, Dispatch.worker())
+  end
+
+  @doc """
+  Whether a run of `reference` has a worker service to go to, and the
+  execution slots are up: the selection a dispatched run of it makes
+  (`Opus.Dispatch.worker/1`), so a worker service that answers but does
+  not run `reference` leaves it unavailable.
+  """
+  @spec available?(String.t()) :: boolean()
+  def available?(reference) when is_binary(reference) do
+    is_pid(Process.whereis(Opus.Slots)) and match?({:ok, _}, Dispatch.worker(reference))
   end
 
   @doc "The service label a run is logged as routed to (`Opus.Provider.service/0`)."
