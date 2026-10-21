@@ -35,6 +35,13 @@ defmodule Compendium.Activation do
   a store that cannot answer, a registry projection not yet caught up —
   is the resolution's own error, never an absence.
 
+  A node whose stored manifest does not decode, the root's or any
+  dependency's, is damage: `{:corrupt, {:manifest, key}}`, `key` the
+  node's name-level ref. Read as declaring nothing, it would walk no
+  dependencies and, for a release whose manifest declares no security
+  block, recompute the digest it was published with and verify as
+  intact.
+
   The rows are the `components` root's projection, so a resolution first
   waits for it (`Compendium.ProjectionReconciler.await/2`), before its
   cache is asked: `{:error, :projection_unavailable}` rather than a graph
@@ -56,6 +63,7 @@ defmodule Compendium.Activation do
           {:incomplete,
            {:missing_release_digest | :unresolvable_dependency, String.t()} | :depth_exceeded}
           | {:invalid_graph, JCS.error()}
+          | {:corrupt, {:manifest, String.t()}}
           | :projection_unavailable
           | :unavailable
           | :database_error
@@ -169,17 +177,15 @@ defmodule Compendium.Activation do
       emit_resolve(ctx, component, false)
 
       nodes =
-        Map.new(rows, fn {key, row} ->
-          {key, %{release_digest: release_digest(row), integrity: integrity(row)}}
+        Map.new(rows, fn {key, {row, manifest}} ->
+          {key, %{release_digest: release_digest(row), integrity: integrity(row, manifest)}}
         end)
 
       {:ok, %{digest: digest, graph: graph, nodes: nodes}}
     end
   end
 
-  defp integrity(row) do
-    manifest = manifest(row)
-
+  defp integrity(row, manifest) do
     case Compendium.ReleaseDigest.compute(field(row, :digest), manifest) do
       {:ok, recomputed} ->
         if recomputed == release_digest(row), do: :ok, else: :mismatch
@@ -189,7 +195,8 @@ defmodule Compendium.Activation do
     end
   end
 
-  defp graph_from_rows(rows), do: Map.new(rows, fn {key, row} -> {key, release_digest(row)} end)
+  defp graph_from_rows(rows),
+    do: Map.new(rows, fn {key, {row, _manifest}} -> {key, release_digest(row)} end)
 
   # ============================================================================
   # Private
@@ -199,8 +206,8 @@ defmodule Compendium.Activation do
     {:error, {:incomplete, :depth_exceeded}}
   end
 
-  # Accumulates the full component row per node key; resolve/2 and
-  # resolve_verified/2 project what they need from the rows.
+  # Accumulates the full component row and its decoded manifest per node
+  # key; resolve/2 and resolve_verified/2 project what they need from them.
   defp walk(ctx, component, acc, depth) do
     key = Prima.ComponentRow.node_key(component)
 
@@ -213,12 +220,13 @@ defmodule Compendium.Activation do
         {:error, {:incomplete, {:missing_release_digest, key}}}
 
       true ->
-        acc = Map.put(acc, key, component)
-        manifest = manifest(component)
+        with {:ok, manifest} <- manifest(component, key) do
+          acc = Map.put(acc, key, {component, manifest})
 
-        case Compendium.DependencyResolver.extract_from_manifest(manifest) do
-          {:ok, deps} -> walk_deps(ctx, deps, acc, depth)
-          {:error, _} -> {:error, {:incomplete, {:unresolvable_dependency, key}}}
+          case Compendium.DependencyResolver.extract_from_manifest(manifest) do
+            {:ok, deps} -> walk_deps(ctx, deps, acc, depth)
+            {:error, _} -> {:error, {:incomplete, {:unresolvable_dependency, key}}}
+          end
         end
     end
   end
@@ -271,20 +279,17 @@ defmodule Compendium.Activation do
   # plain maps from the registry; neither implements Access.
   defp field(component, key), do: Map.get(component, key)
 
-  # A manifest that does not decode declares nothing: no dependencies, and
-  # a release digest that no longer matches. The line names the component,
-  # never the manifest's bytes.
-  defp manifest(row) do
+  # A stored manifest that does not decode is the node's damage, which
+  # fails the whole resolution. The line names the node, never the
+  # manifest's bytes.
+  defp manifest(row, key) do
     case Prima.Manifest.decode_strict(field(row, :manifest)) do
       {:ok, manifest} ->
-        manifest
+        {:ok, manifest}
 
       {:error, :malformed_manifest} ->
-        Logger.warning(
-          "[Compendium.Activation] manifest malformed: #{Prima.ComponentRow.node_key(row)}"
-        )
-
-        %{}
+        Logger.warning("[Compendium.Activation] manifest malformed: #{key}")
+        {:error, {:corrupt, {:manifest, key}}}
     end
   end
 
