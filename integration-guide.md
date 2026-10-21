@@ -396,7 +396,7 @@ and a failed validation. Branch on `result.isError` for those, not on a code.
 
 Two protocol-level codes are also in play, both standard JSON-RPC:
 `-32601` for an unknown method and `-32022` (`UnsupportedProtocolVersion`),
-which carries the supported list in `error.data`.
+which carries the supported list in `error.data.supported`.
 
 > **MCP Tool Reference**: For a complete mapping of CLI commands to MCP tool/action pairs (useful when building HTTP integrations), see [CLI → MCP Tool Reference](component-guide.md#cli--mcp-tool-reference) in the Component Guide.
 
