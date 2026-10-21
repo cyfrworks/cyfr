@@ -374,6 +374,15 @@ defmodule Sanctum.Consent.ShapeDiffTest do
 
       assert payload.profile_id == profile_id
       assert payload.shape_diff == moved.shape_diff
+
+      # The library's stored manifest damaged, the source's intact: the
+      # diff refuses as that damage rather than comparing the source alone.
+      actor = Sanctum.Context.actor(ctx)
+      {:ok, [lib]} = Arca.ComponentStorage.list_components(actor, name: "diffed-lib")
+      {:ok, _} = Arca.ComponentStorage.put_component(actor, Map.put(lib, :manifest, "not json"))
+
+      assert {:error, {:corrupt, {:manifest, @lib}}} =
+               ShapeDiff.compute(ctx, @user, head.resolved_policy)
     end
   end
 

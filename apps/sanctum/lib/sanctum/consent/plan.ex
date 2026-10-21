@@ -1081,12 +1081,26 @@ defmodule Sanctum.Consent.Plan do
   # builds it with nothing narrowed (`BlobBuilder.build/5`,
   # `BlobBuilder.encode/1`), as JSON: what a head's narrowing and the shape
   # diff (`Sanctum.Consent.ShapeDiff`) are read against. `{:ok, nil}` for a
-  # closure that does not resolve, which has no ask to hold a head against.
+  # closure that does not resolve, which has no ask to hold a head against;
+  # a closure node whose stored manifest does not decode is that damage,
+  # `{:error, {:corrupt, {:manifest, node_key}}}`, never an ask of none.
   @spec asked_blob(Context.t(), String.t()) :: {:ok, String.t() | nil} | {:error, term()}
   def asked_blob(%Context{} = ctx, source_ref) do
-    with {:ok, component} <- fetch_component(ctx, source_ref),
-         {:ok, resolved} <- closure(ctx, component),
-         do: ask(ctx, source_ref, resolved)
+    with {:ok, component} <- fetch_component(ctx, source_ref) do
+      case resolve_closure(ctx, component) do
+        {:ok, {graph, rows}} ->
+          ask(ctx, source_ref, {{:ok, graph}, rows})
+
+        {:error, {:corrupt, {:manifest, _node_key}} = damage} ->
+          {:error, damage}
+
+        {:error, outage} when Components.is_outage(outage) ->
+          {:error, {:unavailable, "Components"}}
+
+        {:error, _unresolved} ->
+          {:ok, nil}
+      end
+    end
   end
 
   defp ask(_ctx, _source_ref, {{:unresolved, _}, _rows}), do: {:ok, nil}
@@ -1161,13 +1175,22 @@ defmodule Sanctum.Consent.Plan do
   # is walked refuses as the components unavailable: read as unresolved,
   # the walk would say to install components that exist.
   defp closure(ctx, component) do
-    with {:ok, %{graph: graph}} <- Components.resolve(ctx, component),
-         {:ok, rows} <- closure_rows(ctx, component, graph) do
-      {:ok, {{:ok, graph}, rows}}
-    else
-      {:error, outage} when Components.is_outage(outage) -> {:error, {:unavailable, "Components"}}
-      {:error, reason} -> {:ok, {{:unresolved, unresolved_reason(reason)}, %{}}}
+    case resolve_closure(ctx, component) do
+      {:ok, {graph, rows}} ->
+        {:ok, {{:ok, graph}, rows}}
+
+      {:error, outage} when Components.is_outage(outage) ->
+        {:error, {:unavailable, "Components"}}
+
+      {:error, reason} ->
+        {:ok, {{:unresolved, unresolved_reason(reason)}, %{}}}
     end
+  end
+
+  defp resolve_closure(ctx, component) do
+    with {:ok, %{graph: graph}} <- Components.resolve(ctx, component),
+         {:ok, rows} <- closure_rows(ctx, component, graph),
+         do: {:ok, {graph, rows}}
   end
 
   @doc false
