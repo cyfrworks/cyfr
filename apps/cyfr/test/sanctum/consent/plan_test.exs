@@ -2183,6 +2183,22 @@ defmodule Sanctum.Consent.PlanTest do
   end
 
   describe "a closure that cannot be resolved" do
+    test "a closure whose source's stored manifest does not decode is refused as that damage",
+         %{ctx: ctx} do
+      ref = "reagent:local.plan-damaged-source"
+
+      source = %{
+        component_type: "reagent",
+        publisher: "local",
+        name: "plan-damaged-source",
+        release_digest: "sha256:damaged",
+        manifest: ~s({"name": "plan-damaged-source",)
+      }
+
+      assert {:error, {:corrupt, {:manifest, ^ref}}} =
+               Plan.closure_rows(ctx, source, %{ref => "sha256:damaged"})
+    end
+
     # A dependency whose stored manifest does not decode, read as declaring
     # nothing, would drop its needs out of the plan and the grant: the
     # closure is unresolved as that damage, and neither a preview nor a

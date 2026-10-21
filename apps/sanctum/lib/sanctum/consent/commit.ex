@@ -105,7 +105,6 @@ defmodule Sanctum.Consent.Commit do
   change its new row shows, never a removal.
   """
 
-  require Logger
   require Sanctum.Consent.Components
 
   alias Sanctum.Consent.Authz
@@ -587,7 +586,7 @@ defmodule Sanctum.Consent.Commit do
          {:ok, shape_digest} <- shape_for_scope(shape_input, scope, component),
          {:ok, profile_id, expected_revision} <-
            Plan.locate_profile(ctx, source_ref, label, kind),
-         declared = declared_needs(component, source_ref),
+         {:ok, declared} <- declared_needs(component, source_ref),
          place = %{
            source_ref: source_ref,
            graph: activation.graph,
@@ -831,6 +830,9 @@ defmodule Sanctum.Consent.Commit do
 
               %{covered: [{one, _}, {other, _} | _]} ->
                 {:halt, {:error, one_credential(dep, one, other)}}
+
+              {:error, _} = refused ->
+                {:halt, refused}
             end
           end)
           |> case do
@@ -838,16 +840,23 @@ defmodule Sanctum.Consent.Commit do
             error -> {:halt, error}
           end
 
-        _unreadable ->
+        {:error, :not_in_closure} ->
           {:cont, {:ok, acc}}
+
+        {:error, _} = refused ->
+          {:halt, refused}
       end
     end)
   end
 
+  # What `from` provides on its edge to `dep`: nothing for a dependency
+  # outside the closure's rows; a dependency whose manifest does not decode
+  # refuses.
   defp edge_provided(rows, from_manifest, dep) do
     case node_row_manifest(rows, dep) do
       {:ok, _row, dep_manifest} -> BlobBuilder.provided(from_manifest, dep, dep_manifest)
-      _unreadable -> %{covered: [], unprovidable: []}
+      {:error, :not_in_closure} -> %{covered: [], unprovidable: []}
+      {:error, _} = refused -> refused
     end
   end
 
@@ -1258,7 +1267,7 @@ defmodule Sanctum.Consent.Commit do
   # that version, never at its latest.
   defp node_row_manifest(rows, node_key) do
     case Map.fetch(rows, node_key) do
-      {:ok, row} -> {:ok, row, manifest(row, node_key)}
+      {:ok, row} -> with {:ok, manifest} <- manifest(row, node_key), do: {:ok, row, manifest}
       :error -> {:error, :not_in_closure}
     end
   end
@@ -1387,21 +1396,17 @@ defmodule Sanctum.Consent.Commit do
   end
 
   defp declared_needs(component, source_ref) do
-    component
-    |> manifest(source_ref)
-    |> Prima.Manifest.Needs.from_manifest()
+    with {:ok, manifest} <- manifest(component, source_ref),
+         do: {:ok, Prima.Manifest.Needs.from_manifest(manifest)}
   end
 
-  # A manifest that does not decode declares nothing. The line names the
-  # component, never the manifest's bytes.
+  # A manifest that does not decode is a damaged row, refused by the ref it
+  # was read under and never by its bytes: read as declaring nothing, its
+  # needs would drop out of the grant.
   defp manifest(row, ref) do
     case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
-      {:ok, manifest} ->
-        manifest
-
-      {:error, :malformed_manifest} ->
-        Logger.warning("[Sanctum.Consent.Commit] manifest malformed: #{ref}")
-        %{}
+      {:ok, manifest} -> {:ok, manifest}
+      {:error, :malformed_manifest} -> {:error, {:corrupt, {:manifest, ref}}}
     end
   end
 

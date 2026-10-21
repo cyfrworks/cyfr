@@ -323,6 +323,15 @@ defmodule Sanctum.Consent.BlobBuilderTest do
     end
   end
 
+  describe "a node whose stored manifest does not decode" do
+    test "refuses its ask as that damage, never asking for nothing" do
+      ref = "reagent:local.ask-damaged"
+      rows = %{ref => %{manifest: ~s({"name": "ask-damaged",)}}
+
+      assert {:error, {:corrupt, {:manifest, ^ref}}} = BlobBuilder.ask_rows(rows)
+    end
+  end
+
   describe "an ask that names every tool" do
     setup %{ctx: ctx} do
       publish!(ctx, "narrow-every", %{"caps" => %{"tools" => ["*"]}})

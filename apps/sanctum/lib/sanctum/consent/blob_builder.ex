@@ -97,8 +97,6 @@ defmodule Sanctum.Consent.BlobBuilder do
   alias Sanctum.Consent.Components
   alias Prima.JCS
 
-  require Logger
-
   @type vault_fn ::
           (node_key :: String.t(), row :: map(), manifest :: map() -> map() | nil)
 
@@ -713,7 +711,7 @@ defmodule Sanctum.Consent.BlobBuilder do
     {vault_fn, edge_vault_fn} = vault_fns
 
     with {:ok, row} <- closure_row(rows, node_key),
-         manifest = manifest(row, node_key),
+         {:ok, manifest} <- manifest(row, node_key),
          {:ok, asked, asked_limits} <- node_grant(node_key, manifest),
          {:ok, resources, limits, narrowed} <-
            narrow(node_key, asked, asked_limits, Map.get(subset, node_key), ceiling) do
@@ -752,14 +750,15 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   defp edge_vault(nil, _from, _dep, _rows), do: nil
 
+  # A dependency outside the rows, or one whose manifest does not decode,
+  # places no vault here: building that dependency's own node refuses the
+  # whole build first or after, so no blob is made with this edge.
   defp edge_vault(edge_vault_fn, {from, from_manifest}, dep, rows) do
-    case closure_row(rows, dep) do
-      {:ok, row} ->
-        manifest = manifest(row, dep)
-        edge_vault_fn.(from, dep, row, manifest, provided(from_manifest, dep, manifest))
-
-      {:error, _} ->
-        nil
+    with {:ok, row} <- closure_row(rows, dep),
+         {:ok, manifest} <- manifest(row, dep) do
+      edge_vault_fn.(from, dep, row, manifest, provided(from_manifest, dep, manifest))
+    else
+      {:error, _} -> nil
     end
   end
 
@@ -1243,7 +1242,7 @@ defmodule Sanctum.Consent.BlobBuilder do
   def ask_rows(rows) when is_map(rows) do
     collect_rows(rows |> Map.keys() |> Enum.sort(), fn node_key ->
       with {:ok, row} <- closure_row(rows, node_key),
-           manifest = manifest(row, node_key),
+           {:ok, manifest} <- manifest(row, node_key),
            {:ok, resources, limits} <- node_grant(node_key, manifest),
            {:ok, wildcard} <- wildcard_ask(node_key, manifest),
            {:ok, declared} <- tincture_rows(node_key, manifest) do
@@ -1268,7 +1267,7 @@ defmodule Sanctum.Consent.BlobBuilder do
       when is_map(nodes) and is_map(narrowed) and is_map(rows) do
     collect_rows(nodes |> Map.keys() |> Enum.sort(), fn node_key ->
       with {:ok, row} <- closure_row(rows, node_key),
-           manifest = manifest(row, node_key),
+           {:ok, manifest} <- manifest(row, node_key),
            {:ok, caps} <- Sanctum.Consent.ShapeDerivation.declared_caps(manifest, node_key),
            {:ok, wildcard} <- wildcard_ask(node_key, manifest),
            {:ok, declared} <- tincture_rows(node_key, manifest) do
@@ -1496,16 +1495,13 @@ defmodule Sanctum.Consent.BlobBuilder do
     end
   end
 
-  # A manifest that does not decode declares nothing. The line names the
-  # component, never the manifest's bytes.
+  # A manifest that does not decode is a damaged row, refused by the ref it
+  # was read under and never by its bytes: read as declaring nothing, its
+  # needs would drop out of the grant.
   defp manifest(row, ref) do
     case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
-      {:ok, manifest} ->
-        manifest
-
-      {:error, :malformed_manifest} ->
-        Logger.warning("[Sanctum.Consent.BlobBuilder] manifest malformed: #{ref}")
-        %{}
+      {:ok, manifest} -> {:ok, manifest}
+      {:error, :malformed_manifest} -> {:error, {:corrupt, {:manifest, ref}}}
     end
   end
 end

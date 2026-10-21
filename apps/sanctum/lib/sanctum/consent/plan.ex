@@ -131,8 +131,6 @@ defmodule Sanctum.Consent.Plan do
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
 
-  require Logger
-
   # Ten minutes: an operator reads candidates and decides. The commit
   # proof (120s) is the short-lived one; the plan token only pins facts.
   @plan_ttl_ms 600_000
@@ -259,7 +257,7 @@ defmodule Sanctum.Consent.Plan do
          {:ok, profile_id, expected_revision, head} <-
            ctx |> locate_head(source_ref, label, kind) |> read(:profiles),
          stored = if(head, do: {:ok, head, profile_id}, else: :none),
-         manifest = manifest(component, source_ref),
+         {:ok, manifest} <- manifest(component, source_ref),
          {:ok, resources, limits} <-
            Sanctum.Consent.BlobBuilder.node_grant(source_ref, manifest),
          {:ok, {closure, closure_rows}} <- closure(ctx, component),
@@ -451,16 +449,13 @@ defmodule Sanctum.Consent.Plan do
   # Internal
   # ---------------------------------------------------------------------------
 
-  # A manifest that does not decode declares nothing. The line names the
-  # component, never the manifest's bytes.
+  # A manifest that does not decode is a damaged row, refused by the ref it
+  # was read under and never by its bytes: read as declaring nothing, its
+  # needs would drop out of the grant and the plan.
   defp manifest(row, ref) do
     case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
-      {:ok, manifest} ->
-        manifest
-
-      {:error, :malformed_manifest} ->
-        Logger.warning("[Sanctum.Consent.Plan] manifest malformed: #{ref}")
-        %{}
+      {:ok, manifest} -> {:ok, manifest}
+      {:error, :malformed_manifest} -> {:error, {:corrupt, {:manifest, ref}}}
     end
   end
 
@@ -1172,10 +1167,10 @@ defmodule Sanctum.Consent.Plan do
   # row the graph does not record at that digest is
   # `{:error, {:activation_moved, node_key}}`: the closure moved under the
   # read, and the plan or the commit is asked again. A dependency whose
-  # stored manifest does not decode is `{:error, {:corrupt, {:manifest,
-  # node_key}}}`: read as declaring nothing, its needs would drop out of
-  # the grant and the plan, and a grant would be made without its key.
-  # The source's own manifest is `ShapeDerivation`'s to refuse.
+  # stored manifest does not decode, the source's among them, is
+  # `{:error, {:corrupt, {:manifest, node_key}}}`: read as declaring
+  # nothing, its needs would drop out of the grant and the plan, and a
+  # grant would be made without its key.
   @spec closure_rows(Context.t(), map(), %{String.t() => String.t()}) ::
           {:ok, %{String.t() => map()}} | {:error, term()}
   def closure_rows(%Context{} = ctx, source_row, graph) when is_map(graph),
@@ -1192,37 +1187,40 @@ defmodule Sanctum.Consent.Plan do
         {:error, {:activation_moved, key}}
 
       true ->
-        row
-        |> manifest(key)
-        |> Prima.Manifest.Dependencies.from_manifest()
-        |> case do
-          {:ok, deps} -> deps
-          {:error, _} -> []
-        end
-        |> Enum.reduce_while({:ok, Map.put(rows, key, row)}, fn dep, {:ok, rows} ->
-          # As the activation walks: an optional dependency whose release is
-          # not installed is skipped, whether or not another path reaches
-          # its node at another release; any other that does not read
-          # leaves the closure incomplete.
-          with {:ok, dep_row} <- dependency_row(ctx, dep),
-               :ok <- intact_manifest(dep_row) do
-            case walk_rows(ctx, dep_row, graph, rows) do
-              {:ok, rows} -> {:cont, {:ok, rows}}
-              {:error, _} = refused -> {:halt, refused}
-            end
-          else
-            {:error, :not_found} when dep.optional == true ->
-              {:cont, {:ok, rows}}
-
-            {:error, :not_found} ->
-              dep_key = Prima.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name)
-              {:halt, {:error, {:incomplete, {:unresolvable_dependency, dep_key}}}}
-
-            {:error, _} = refused ->
-              {:halt, refused}
-          end
-        end)
+        with {:ok, manifest} <- manifest(row, key),
+             do: walk_dependencies(ctx, row, key, manifest, graph, rows)
     end
+  end
+
+  defp walk_dependencies(ctx, row, key, manifest, graph, rows) do
+    manifest
+    |> Prima.Manifest.Dependencies.from_manifest()
+    |> case do
+      {:ok, deps} -> deps
+      {:error, _} -> []
+    end
+    |> Enum.reduce_while({:ok, Map.put(rows, key, row)}, fn dep, {:ok, rows} ->
+      # As the activation walks: an optional dependency whose release is
+      # not installed is skipped, whether or not another path reaches
+      # its node at another release; any other that does not read
+      # leaves the closure incomplete.
+      with {:ok, dep_row} <- dependency_row(ctx, dep) do
+        case walk_rows(ctx, dep_row, graph, rows) do
+          {:ok, rows} -> {:cont, {:ok, rows}}
+          {:error, _} = refused -> {:halt, refused}
+        end
+      else
+        {:error, :not_found} when dep.optional == true ->
+          {:cont, {:ok, rows}}
+
+        {:error, :not_found} ->
+          dep_key = Prima.ComponentRef.build(dep.dep_type, dep.dep_namespace, dep.dep_name)
+          {:halt, {:error, {:incomplete, {:unresolvable_dependency, dep_key}}}}
+
+        {:error, _} = refused ->
+          {:halt, refused}
+      end
+    end)
   end
 
   defp dependency_row(ctx, %{dep_version: version} = dep) when is_binary(version),
@@ -1230,19 +1228,6 @@ defmodule Sanctum.Consent.Plan do
 
   defp dependency_row(ctx, dep),
     do: Components.get_latest(ctx, dep.dep_name, dep.dep_namespace, dep.dep_type)
-
-  # A dependency's row as the port hands it, its manifest as storage holds
-  # it (`Compendium.ConsentFacts.get_component/5`): one that does not
-  # decode is the damaged row it is.
-  defp intact_manifest(row) do
-    case Prima.Manifest.decode_strict(Map.get(row, :manifest)) do
-      {:ok, _manifest} ->
-        :ok
-
-      {:error, :malformed_manifest} ->
-        {:error, {:corrupt, {:manifest, Prima.ComponentRow.node_key(row)}}}
-    end
-  end
 
   defp unresolved_reason({:activation_moved, key}),
     do: %{reason: "activation_moved", missing: key}
@@ -1291,25 +1276,34 @@ defmodule Sanctum.Consent.Plan do
   defp dependency_needs(_ctx, _sources, {:unresolved, _unresolved}, _rows), do: {:ok, {[], []}}
 
   defp dependency_needs(ctx, sources, {:ok, graph}, rows) do
+    with {:ok, edges} <- dependency_edges(graph, rows) do
+      Enum.reduce_while(edges, {:ok, {[], []}}, fn {from, manifest, dep}, {:ok, {all, notes}} ->
+        case dependency_rows(ctx, sources, {from, manifest, graph, rows}, dep) do
+          {:ok, {dep_rows, dep_notes}} -> {:cont, {:ok, {all ++ dep_rows, notes ++ dep_notes}}}
+          {:error, _} = refused -> {:halt, refused}
+        end
+      end)
+    end
+  end
+
+  # Each closure node's edges to its dependencies, with the node's
+  # manifest; a node outside the rows has none, and one whose manifest
+  # does not decode refuses.
+  defp dependency_edges(graph, rows) do
     graph
     |> Map.keys()
     |> Enum.sort()
-    |> Enum.flat_map(fn from ->
+    |> Enum.reduce_while({:ok, []}, fn from, {:ok, acc} ->
       case node_manifest(rows, from) do
         {:ok, manifest} ->
-          manifest
-          |> BlobBuilder.dep_edges(graph, from)
-          |> Enum.sort()
-          |> Enum.map(&{from, manifest, &1})
+          edges = manifest |> BlobBuilder.dep_edges(graph, from) |> Enum.sort()
+          {:cont, {:ok, acc ++ Enum.map(edges, &{from, manifest, &1})}}
 
-        _ ->
-          []
-      end
-    end)
-    |> Enum.reduce_while({:ok, {[], []}}, fn {from, manifest, dep}, {:ok, {all, notes}} ->
-      case dependency_rows(ctx, sources, {from, manifest, graph, rows}, dep) do
-        {:ok, {dep_rows, dep_notes}} -> {:cont, {:ok, {all ++ dep_rows, notes ++ dep_notes}}}
-        {:error, _} = refused -> {:halt, refused}
+        {:error, :not_in_closure} ->
+          {:cont, {:ok, acc}}
+
+        {:error, _} = refused ->
+          {:halt, refused}
       end
     end)
   end
@@ -1343,14 +1337,14 @@ defmodule Sanctum.Consent.Plan do
   # A closure node's manifest at the release the closure resolved.
   defp node_manifest(rows, node_key) do
     case Map.fetch(rows, node_key) do
-      {:ok, row} -> {:ok, manifest(row, node_key)}
+      {:ok, row} -> manifest(row, node_key)
       :error -> {:error, :not_in_closure}
     end
   end
 
   defp dependency_rows(ctx, sources, {from, from_manifest, graph, rows}, dep) do
     with {:ok, row} <- Map.fetch(rows, dep),
-         dep_manifest = manifest(row, dep),
+         {:ok, dep_manifest} <- manifest(row, dep),
          {:ok, _caps} <- ShapeDerivation.declared_caps(dep_manifest, dep),
          needs = Prima.Manifest.Needs.from_manifest(dep_manifest) do
       provided = BlobBuilder.provided(from_manifest, dep, dep_manifest)
@@ -1389,6 +1383,7 @@ defmodule Sanctum.Consent.Plan do
           end
       end
     else
+      {:error, {:corrupt, _damage}} = refused -> refused
       _ -> {:ok, {[], []}}
     end
   end
