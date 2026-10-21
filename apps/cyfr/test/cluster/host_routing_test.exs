@@ -24,11 +24,10 @@ defmodule Cyfr.Cluster.HostRoutingTest do
     * a call posted at that address is answered — the ordinary path, over
       HTTP, through the member's own listener;
     * the same signed call posted at the peer is refused **whatever it
-      asks for**. This is the repair: a completion was already lost on a
-      peer, but a lease renewal is answered from the row, and in a freshly
-      formed cell every member holds generation 1, so the peer used to
-      renew the lease of work it held none of — the half that worked, and
-      made a misrouted worker silent rather than broken;
+      asks for**: a lease renewal included, which is answered from the
+      row, and in a freshly formed cell every member holds generation 1,
+      so a peer that answered it would renew the lease of work it holds
+      none of and make a misrouted worker silent rather than broken;
     * a member that is *gone* fails differently from a member that
       *refuses*: the post never becomes an answer at all, and the
       surviving member settles the attempt from the rows within the

@@ -58,12 +58,13 @@ config :cyfr, :storage_reserve_bytes, 64 * 1024 * 1024
 # method (`Sanctum.Auth.EmailVerification`).
 config :sanctum, :confirmation_code_transport, Sanctum.TestContext.MailSink
 
-# Proofs likewise: unit tests run on the ETS store; proof_db_test.exs
-# exercises the durable adapter directly.
+# The consent proof store: the suite's is the ETS store, and
+# proof_db_test.exs exercises the durable adapter directly.
 config :sanctum, :consent_proof_store, Sanctum.Consent.Proof.Memory
 
-# Same for the tincture transport rate limit; TinctureRateLimitTest and the
-# tincture controller's 429 tests override this per-test.
+# The tincture transport rate limit, high enough that no suite trips it;
+# TinctureRateLimitTest and the tincture controller's 429 tests override
+# it per test.
 config :cyfr, :tincture_rate_limit_max, 1_000_000
 
 # No network from tests: the registry health probe is a real DNS + TLS
@@ -80,15 +81,6 @@ config :cyfr, :registry_health_probe, false
 config :cyfr, :registry_url, "127.0.0.1:19"
 config :cyfr, :oci_registry_url, "127.0.0.1:19"
 
-# Configure Arca for tests (use sandboxed pool). The adapter is selected at
-# build time in config.exs from CYFR_DATABASE; the per-adapter opts must
-# match (SQLite-only keys break a Postgres connect, and Postgres needs a URL
-# or hostname/credentials to authenticate).
-#
-# The sandbox funnels every process a test spawns through the one connection
-# it owns, so a burst of concurrent tasks each writing an audit row queues on
-# it. The production queue drop target (50 ms) is tuned for a real pool and
-# would drop those requests under load; give the single shared connection room.
 # The runner supplies one private root per checkout/run/partition. Direct
 # Mix invocations also get collision-resistant disposable roots; timestamps
 # alone collide when multiple VMs evaluate config in the same millisecond.
@@ -119,6 +111,15 @@ config :ex_unit,
         )
     )
 
+# Arca for tests, on the sandboxed pool. The adapter is the build's
+# (`config/database_choice.exs` reads CYFR_DATABASE); the per-adapter opts
+# must match (SQLite-only keys break a Postgres connect, and Postgres needs
+# a URL or hostname/credentials to authenticate).
+#
+# The sandbox funnels every process a test spawns through the one connection
+# it owns, so a burst of concurrent tasks each writing an audit row queues on
+# it. The production queue drop target (50 ms) is tuned for a real pool and
+# would drop those requests under load; give the single shared connection room.
 case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
   :sqlite ->
     config :arca, Arca.Repo,
