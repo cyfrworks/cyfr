@@ -10,7 +10,8 @@ defmodule Cyfr do
   the gate, the identity domain and persistence and names nothing above
   itself: a domain or a surface reaches the host downward, and the host
   reaches up only through a port or the bus. The composition root
-  (`Cyfr.Application`), the Mix tasks (`Cyfr.Mix`) and the test support
+  (`Cyfr.Application`), the Mix tasks that render from the gate's
+  operation table or a shared contract (`Cyfr.Mix`) and the test support
   are boundaries of their own beside it.
   """
 

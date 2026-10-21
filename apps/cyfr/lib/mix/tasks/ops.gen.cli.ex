@@ -26,6 +26,8 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
 
   @impl Mix.Task
   def run(args) do
+    if args not in [[], ["--check"]], do: Mix.raise("usage: mix ops.gen.cli [--check]")
+
     Mix.Task.run("app.config")
     path = Path.join(root(), @target)
     rendered = render()
@@ -39,11 +41,11 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
           Mix.raise("#{@target} is stale — run `mix ops.gen.cli`")
         end
 
-      _ ->
+      [] ->
         # arca:bypass-ok=E
         File.mkdir_p!(Path.dirname(path))
         File.write!(path, rendered)
-        gofmt(path)
+        Cyfr.Mix.gofmt(path)
         Mix.shell().info("wrote #{@target}")
     end
   end
@@ -61,15 +63,6 @@ defmodule Mix.Tasks.Ops.Gen.Cli do
       ~r/`[^`]*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\/[^\r\n]*|\/\*[\s\S]*?\*\/|[\p{L}\p{N}_]+|<<=|>>=|&\^=|:=|==|!=|<=|>=|&&|\|\||<<|>>|&\^|\+\+|--|\.\.\.|<-|[+*\/=%&|^!-]=|\S/u,
       text
     )
-  end
-
-  # The Go toolchain formats what it will compile; without one the file is
-  # written as rendered and `gofmt` runs where the CLI is built.
-  defp gofmt(path) do
-    case System.find_executable("gofmt") do
-      nil -> :ok
-      gofmt -> {_, 0} = System.cmd(gofmt, ["-w", path])
-    end
   end
 
   @doc "The file's text, from the loaded catalog."

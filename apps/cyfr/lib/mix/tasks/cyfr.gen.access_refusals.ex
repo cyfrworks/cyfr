@@ -14,9 +14,8 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
   back to the row's own sentence.
 
       mix cyfr.gen.access_refusals
-      mix cyfr.gen.access_refusals --check
 
-  `--check` fails when either file is not the render.
+  `Cyfr.CrossLanguageDriftTest` fails when either file is not the render.
   """
 
   use Boundary, classify_to: Cyfr.Mix
@@ -26,8 +25,7 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
   @fixture "tests/fixtures/access_modes.json"
   @go "apps/codex/internal/access/refusals_gen.go"
 
-  # Every code the engine and `cyfr up` render, in the order the plan's
-  # refusal table lists them, with its variants: the payload values a
+  # Every code the engine and `cyfr up` render, with its variants: the payload values a
   # variant fixes and the keys it fills in. A filled key's sample is the
   # value the template is rendered with before the sample is replaced by
   # `{key}`; it satisfies the row's guard.
@@ -99,27 +97,16 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
     rendered_go = render_go()
 
     case args do
-      ["--check"] ->
-        # arca:bypass-ok=E
-        if json == rendered_json and
-             Mix.Tasks.Ops.Gen.Cli.current?(File.read(go), rendered_go) do
-          Mix.shell().info("#{@fixture} refusals and #{@go} are current")
-        else
-          Mix.raise(
-            "#{@fixture} refusals or #{@go} is stale — run `mix cyfr.gen.access_refusals`"
-          )
-        end
-
       [] ->
         # arca:bypass-ok=E
         File.write!(fixture, rendered_json)
         # arca:bypass-ok=E
         File.write!(go, rendered_go)
-        gofmt(go)
+        Cyfr.Mix.gofmt(go)
         Mix.shell().info("wrote #{@fixture} refusals and #{@go}")
 
       _other ->
-        Mix.raise("usage: mix cyfr.gen.access_refusals [--check]")
+        Mix.raise("usage: mix cyfr.gen.access_refusals")
     end
   end
 
@@ -233,22 +220,6 @@ defmodule Mix.Tasks.Cyfr.Gen.AccessRefusals do
       do: Mix.raise("#{inspect(text)} holds a control character")
 
     "\"" <> (text |> String.replace("\\", "\\\\") |> String.replace("\"", "\\\"")) <> "\""
-  end
-
-  # The Go toolchain formats what it will compile; without one the file is
-  # written as rendered and `gofmt` runs where the CLI is built. It reads
-  # none of the server's settings, so it is given none of them.
-  defp gofmt(path) do
-    case System.find_executable("gofmt") do
-      nil ->
-        :ok
-
-      gofmt ->
-        unset =
-          for {name, _} <- System.get_env(), String.starts_with?(name, "CYFR_"), do: {name, nil}
-
-        {_, 0} = System.cmd(gofmt, ["-w", path], env: unset)
-    end
   end
 
   defp root, do: Path.expand("../../../../..", __DIR__)
