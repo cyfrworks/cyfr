@@ -26,9 +26,10 @@ defmodule Prima.Device do
     * `capabilities` — the `capabilities` the glass announces, by name.
     * `intent` — one discrete operation: `id`, `operation` (`tool.action`),
       `args` (an object of at most 64 KiB) and, when repeated under a
-      confirmation, `confirmation_id`. An intent never carries continuous
-      data: one that carries a `stream`, `frames`, `chunks`, `samples` or
-      `continuous` field is refused by its shape.
+      confirmation, `confirmation_id`. An intent is one discrete step: one
+      whose own members include a `stream`, `frames`, `chunks`, `samples`
+      or `continuous` field is refused by its shape. `args` is not read
+      for them; it is the operation's to read.
 
   From the home to the glass:
 
