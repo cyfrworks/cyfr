@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 name: Keeper CI (cyfr-locus)
 
 # Test cyfr-locus, the process helper the Locus image starts every

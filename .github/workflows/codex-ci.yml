@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+
 name: Codex CI (cyfr CLI)
 
 # Vet, test, and build the Go CLI on every change. security.yml only runs
