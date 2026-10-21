@@ -173,6 +173,7 @@ defmodule Locus.Runtime.WorkerService do
        executions: %{},
        ended: %{ids: %{}, order: :queue.new()},
        offered: %{ids: %{}, order: :queue.new()},
+       reports: %{},
        seq: 0
      }}
   end
@@ -234,6 +235,10 @@ defmodule Locus.Runtime.WorkerService do
   end
 
   @impl true
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
+      when is_map_key(state.reports, ref),
+      do: {:noreply, %{state | reports: Map.delete(state.reports, ref)}}
+
   def handle_info({:DOWN, _ref, :process, pid, reason}, state),
     do: {:noreply, gone(state, pid, {:handle_down, reason})}
 
@@ -597,14 +602,14 @@ defmodule Locus.Runtime.WorkerService do
   # A report of the end of `runner`, which held `assignment` and whose
   # `exit` listed `open`, runs in a process of its own beside the service,
   # which never waits on CYFR; `Locus.Runtime.HostClient.runner_exited/5`
-  # bounds it. The process is labelled as the report it is
-  # (`Process.set_label/1`), so a crash report and the observer name it.
+  # bounds it. The service holds each report it starts, monitored, from
+  # the callback that starts it until the report ends (`:reports`), so no
+  # report is in flight that the service does not hold.
   defp report(%{credentials: credentials, boot: boot} = state, runner, assignment, open) do
     {attempts, left_out} = named(assignment, open)
 
-    _pid =
-      spawn(fn ->
-        Process.set_label({__MODULE__, :report, runner})
+    {pid, ref} =
+      spawn_monitor(fn ->
         Process.put(:"$callers", assignment.callers)
         Prima.LoggerContext.restore(assignment.logger)
 
@@ -628,7 +633,7 @@ defmodule Locus.Runtime.WorkerService do
         end
       end)
 
-    state
+    %{state | reports: Map.put(state.reports, ref, pid)}
   end
 
   # What the report of one runner's end names: the subtree's root, then the

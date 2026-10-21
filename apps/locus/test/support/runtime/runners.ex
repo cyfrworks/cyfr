@@ -52,24 +52,27 @@ defmodule Locus.Runtime.Test.Runners do
 
   @doc """
   Answer once no runner exit the worker service of this VM reports is in
-  flight. The service reports each exit in a process of its own, spawned
-  as it handles the runner's end and labelled as that report, which ends
-  once CYFR answers or the report gives up
-  (`Locus.Runtime.HostClient.runner_exited/5` bounds it); the service
-  handles what it was already sent before the reports are looked for.
-  Fails past `timeout_ms`.
+  flight (`reports_in_flight/0`). The service reports each exit in a
+  process of its own, which ends once CYFR answers or the report gives up
+  (`Locus.Runtime.HostClient.runner_exited/5` bounds it). Fails past
+  `timeout_ms`.
   """
   @spec await_reports(non_neg_integer()) :: :ok
   def await_reports(timeout_ms \\ 70_000) do
-    _state = :sys.get_state(Locus.Runtime.WorkerService)
-    wait_until(fn -> reports() == [] end, timeout_ms, "the runner exit reports in flight")
+    wait_until(
+      fn -> reports_in_flight() == [] end,
+      timeout_ms,
+      "the runner exit reports in flight"
+    )
   end
 
-  # A report is the process labelled `{Locus.Runtime.WorkerService,
-  # :report, runner}`; a process that has ended has no label.
-  defp reports do
-    for pid <- Process.list(),
-        match?({Locus.Runtime.WorkerService, :report, _runner}, :proc_lib.get_label(pid)),
-        do: pid
-  end
+  @doc """
+  The runner exit reports the worker service of this VM holds in flight,
+  by pid. The service holds a report from the callback that starts it,
+  before the report has run, until it ends; the read is answered between
+  the service's callbacks, so it misses none.
+  """
+  @spec reports_in_flight() :: [pid()]
+  def reports_in_flight,
+    do: Map.values(:sys.get_state(Locus.Runtime.WorkerService).reports)
 end

@@ -284,6 +284,55 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
     assert Task.await(waiting, 5_000) == :ok
   end
 
+  # The service holds a report from the callback that starts it: one
+  # stopped before it has run anything more is in flight all the same, and
+  # a test's end waits for it.
+  test "a report is in flight from its start, before it has run", context do
+    test = self()
+
+    ScriptedHost.script(context.host, "runner_exited", fn _args, _caller ->
+      send(test, {:report_held, self()})
+
+      receive do
+        :go -> {:ok, true}
+      after
+        10_000 -> {:ok, true}
+      end
+    end)
+
+    assert :ok = Runners.await_reports()
+    service = Process.whereis(WorkerService)
+    {_root, runner} = started!(context)
+
+    # The report the runner's exit starts, as the service spawns it.
+    true = :erlang.trace(service, true, [:procs])
+
+    report =
+      try do
+        ScriptedKeeper.exit(runner, 137)
+
+        receive do
+          {:trace, ^service, :spawn, report, _mfa} -> report
+        after
+          5_000 -> flunk("the service started no report")
+        end
+      after
+        :erlang.trace(service, false, [:procs])
+      end
+
+    true = :erlang.suspend_process(report)
+    assert report in Runners.reports_in_flight()
+
+    waiting = Task.async(fn -> Runners.await_reports() end)
+    assert Task.yield(waiting, 200) == nil
+
+    true = :erlang.resume_process(report)
+    assert_receive {:report_held, held}, 5_000
+    assert Task.yield(waiting, 200) == nil
+    send(held, :go)
+    assert Task.await(waiting, 5_000) == :ok
+  end
+
   @tag :refusing
   test "a keeper that refuses runners: the status says why, and a start is refused 503 naming it",
        context do
