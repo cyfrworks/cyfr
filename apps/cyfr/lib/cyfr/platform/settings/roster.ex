@@ -132,7 +132,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_AUTH_PROVIDER",
      "The sign-in provider: unset for the built-in GitHub and Google device flows, `oidc` for the external issuer the three `CYFR_OIDC_*` variables name; `oidc` with any of them missing refuses the boot."},
     {"CYFR_AUTO_MIGRATE",
-     "Whether the server migrates the schema on boot (default `true`); `false` when several members share one PostgreSQL database or an operator runs `bin/cyfr eval \"Cyfr.Release.migrate()\"` by hand."},
+     "Whether the server migrates the schema on boot (default `on`); `off` when several members share one PostgreSQL database or an operator runs `bin/cyfr eval \"Cyfr.Release.migrate()\"` by hand."},
     {"CYFR_BIND_ADDRESS",
      "The address the endpoint's loopback listener binds, in every mode (default `127.0.0.1`): `127.0.0.1` or `::1`, since the boot refuses any other address without the compose file's `CYFR_LOCAL_INGRESS_ASSERTED`. The stack binds cyfr's fixed address on its `default` network, which no other container joins and Docker publishes on the host's loopback port alone."},
     {"CYFR_CELL_COOKIE",
