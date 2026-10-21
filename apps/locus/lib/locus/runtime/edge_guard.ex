@@ -111,8 +111,9 @@ defmodule Locus.Runtime.EdgeGuard do
   Generous on purpose: a payload at the consented ceiling must always fit,
   base64 overhead (4/3), JSON escaping and the scaffolding included. This
   refuses the blob, not the legitimate request. A `max_request_size` of 0
-  is a ceiling like any other, as `Prima.Limits` defines it: no payload,
-  so the envelope holds the framing alone.
+  is a ceiling like any other, as the decoded checks below hold it
+  (`check_request_size/2`, `check_event_size/2`): no payload, so the
+  envelope holds the framing alone.
   """
   @spec check_envelope_size(Limits.t(), binary()) :: :ok | {:error, :request_too_large}
   def check_envelope_size(%Limits{max_request_size: max}, json)
