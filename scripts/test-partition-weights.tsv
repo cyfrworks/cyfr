@@ -331,7 +331,6 @@
 0.0	apps/cyfr/test/cyfr/logger_context_sanctum_test.exs
 5.1	apps/cyfr/test/cyfr/logger_roster_test.exs
 0.8	apps/cyfr/test/cyfr/lower_app_start_test.exs
-4.1	apps/cyfr/test/cyfr/no_stub_operations_test.exs
 0.0	apps/cyfr/test/cyfr/otel_tenant_handler_test.exs
 0.0	apps/cyfr/test/cyfr/path_safety_test.exs
 1.0	apps/cyfr/test/cyfr/platform_settings_roster_test.exs

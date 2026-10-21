@@ -77,8 +77,8 @@ defmodule Cyfr.FrameGrantOriginTest do
     {:ok, consent} = Sanctum.Consent.head_consent(source, profile.id)
     assert consent.admitted_origins == [:schedule]
 
-    # Control: the existing root loader rejects this exact grant on the
-    # interactive path, before constructing authority.
+    # Control: the root loader rejects this exact grant on the interactive
+    # path, before constructing authority.
     {:ok, row} = Components.get_component(source, @name, @version, "local", "tincture")
     live = Components.resolve_verified(source, row)
     {:ok, shape} = ShapeDerivation.version_digest(source, @ref, @version)

@@ -10,9 +10,9 @@ defmodule Cyfr.ContextSwapTest do
   archive-checked crossing for the system plane). This pins that the
   domains that narrow onto other athanors go through it: the agent
   harness, the two person-surface MCP tools, the agents page, and the
-  Sanctum tree itself. The allowlist names the surviving raw swaps by
+  Sanctum tree itself. The allowlist names the raw swaps that stay by
   file WITH their expected count, so a new swap beside a rostered one
-  still fails — each row says why its file may keep the shape.
+  fails too — each row says why its file may keep the shape.
 
   `Sanctum.Provisioning`'s internal mint context and the test tree are
   out of scope: the first constructs a context for an athanor it is
@@ -38,8 +38,8 @@ defmodule Cyfr.ContextSwapTest do
     # (`keyless_athanor/1`): it narrows onto none, and a key never acts in
     # an athanor other than its own, which `refocus/2` would admit.
     "apps/sanctum/lib/sanctum/tenancy.ex" => 2,
-    # `resolve/3` narrows through `focus/2`; the one swap left is its
-    # open of an ARCHIVED athanor for `get`/`unarchive`, hand-built under
+    # `resolve/3` narrows through `focus/2`; its one swap is its open of
+    # an ARCHIVED athanor for `get`/`unarchive`, hand-built under
     # the one admission focus grants (a seat) because `focus/2` rightly
     # refuses an archived athanor.
     "apps/sanctum/lib/sanctum/providers/athanor.ex" => 1,

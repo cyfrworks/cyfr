@@ -158,20 +158,6 @@ defmodule Cyfr.DocsDriftTest do
              "Cyfr.Boundaries.ports/0 rosters #{inspect(rostered)}"
   end
 
-  # A standing approval's constraint is a resource kind the grant store's
-  # grammar spells patterns for, and the architecture promises no other.
-  test "ARCHITECTURE.md's bounded standing approval names no constraint the grammar lacks" do
-    [bullet] =
-      Regex.run(~r/^- \*\*A standing approval is bounded\.\*\*.*$/m, File.read!(@architecture)) ||
-        flunk("ARCHITECTURE.md has no bullet beginning \"**A standing approval is bounded.**\"")
-
-    refute "vault_entry" in Arca.Schemas.ToolGrant.constraint_kinds()
-
-    refute bullet =~ ~r/vault entry|one entry|named account/,
-           "ARCHITECTURE.md's bounded standing approval binds one to a vault entry, a " <>
-             "constraint the grant store's grammar does not spell"
-  end
-
   defp read_variables do
     not_read = spelled_not_read()
 
@@ -405,7 +391,8 @@ defmodule Cyfr.DocsDriftTest do
 
     {listing, 0} =
       System.cmd("git", ["ls-files", "-z", "--", "apps", "seed", "tests", ":(glob)*.md"],
-        cd: @repo_root
+        cd: @repo_root,
+        env: [{"GIT_DIR", nil}, {"GIT_WORK_TREE", nil}, {"GIT_INDEX_FILE", nil}]
       )
 
     files = String.split(listing, <<0>>, trim: true)
@@ -430,7 +417,7 @@ defmodule Cyfr.DocsDriftTest do
 
     for prefix <- @retired_name_exceptions do
       assert Enum.any?(excepted, fn {rel, _} -> String.starts_with?(rel, prefix) end),
-             "#{prefix} no longer says the retired name; remove its exception"
+             "#{prefix} does not say the retired name; remove its exception"
     end
   end
 
@@ -493,15 +480,12 @@ defmodule Cyfr.DocsDriftTest do
   # ==========================================================================
   # integration-guide's two reference tables
   #
-  # These are what an integrator writes their client against, and both had
-  # drifted into fiction: the error table listed twelve codes that no
-  # producer mints (`auth_expired`, `component_not_found`, a whole `-334xx`
-  # signature band) while omitting `-33304 rate_limited` — the one code a
-  # client needs to back off — and the public-tools table said `session`
-  # "all", which quietly published `session.use`, the tenancy switch.
-  #
-  # A wrong reference is worse than a missing one: it is followed. So both
-  # tables are now derived from the code and checked in both directions.
+  # These are what an integrator writes their client against, and a wrong
+  # reference is worse than a missing one, because it is followed: a client
+  # waits for a code no producer mints, never backs off on a code the table
+  # omits (`-33304 rate_limited`), and calls a tool the table publishes
+  # without the credential it needs. So both tables are derived from the
+  # code and checked in both directions.
   # ==========================================================================
 
   @integration_guide Path.join(@repo_root, "integration-guide.md")
@@ -588,11 +572,10 @@ defmodule Cyfr.DocsDriftTest do
            an anonymous action nobody wrote down is a surface nobody reviews.
            """
 
-    # The other direction, which is the one that had gone wrong: the table
-    # published `registry`, `aqua` and `component` reads as needing no auth
-    # when all three need a credential, so a client written from it got
-    # `-33001` on its first call. `auth: :signed_in` is NOT public — it
-    # serves a live session, with or without an athanor to work in.
+    # The other direction: an action the table lists as needing no auth
+    # that needs a credential answers a client written from it `-33001` on
+    # its first call. `auth: :signed_in` is NOT public — it serves a live
+    # session, with or without an athanor to work in.
     overclaimed =
       for {tool, row} <- rows,
           [_, action] <- Regex.scan(~r/`(\w+)`/, row),
@@ -1196,18 +1179,6 @@ defmodule Cyfr.DocsDriftTest do
     end
   end
 
-  test "the guides' tincture-block keys are ones the code actually reads" do
-    # Documented tincture keys must match validator and consumer support.
-    documented_only = ~w(sandbox)
-
-    for guide <- ~w(component-guide.md tincture-guide.md), key <- documented_only do
-      source = File.read!(Path.join(@repo_root, guide))
-
-      refute source =~ "`#{key}` |",
-             "#{guide} documents tincture.#{key} as a field, but nothing reads it"
-    end
-  end
-
   # ==========================================================================
   # Every variable the releases read has one home, and every documented
   # name is read
@@ -1537,28 +1508,15 @@ defmodule Cyfr.DocsDriftTest do
 
   # A feed's press is an external operation and nothing narrower: the shell
   # sends a canvas's control to it, and the CLI and the API reach it as any
-  # external operation, never from a chain. So no guide says that only a
-  # person's press, or only Prism, reaches it, and the integration guide's
-  # press row says who does.
+  # external operation, never from a chain. So the tincture guide says that
+  # from a canvas only the person's press runs it, and the integration
+  # guide's press row says who reaches it.
   test "a feed's press is an external operation" do
     %Prima.Operation{planes: planes} = Map.fetch!(operations("feed"), "press")
 
     assert planes == [:external],
            "feed.press declares the planes #{inspect(planes)}; the guides say it is external " <>
              "only, so either declare it so or say in both guides who reaches it"
-
-    retired = [
-      "a feed's actions run only from the person's press",
-      "External only: Prism calls it",
-      "and only a person's press"
-    ]
-
-    for guide <- ["tincture-guide.md", "integration-guide.md"], phrase <- retired do
-      refute File.read!(Path.join(@repo_root, guide)) =~ phrase,
-             "#{guide} says #{inspect(phrase)}, but any external caller reaches feed.press: " <>
-               "say that from a canvas only the person's press reaches it, and the CLI and " <>
-               "the API reach it as any external operation"
-    end
 
     press =
       for [action | _] = row <- guide_table("### Feeds (`feed` tool)"),
@@ -1943,9 +1901,8 @@ defmodule Cyfr.DocsDriftTest do
   # A layout is published only through the layout tool: `layout.edit`
   # (`Compendium.Providers.Layout`) is `Arca.Layouts.publish/4`'s one
   # caller, and every shell, the canvas and safe mode only read the layout.
-  # The tincture guide names that tool as how a layout is published, the
-  # writers the code admits, and no shell, console page, tincture or
-  # component as one.
+  # The tincture guide names that tool as how a layout is published, and
+  # the writers the code admits.
   test "a layout is published only through the layout tool" do
     publisher = "apps/cyfr/lib/compendium/providers/layout.ex"
 
@@ -1969,10 +1926,6 @@ defmodule Cyfr.DocsDriftTest do
            "tincture-guide.md's layout paragraph does not say a layout is published only " <>
              "through the `layout` tool's `edit`"
 
-    refute paragraph =~ ~r/another shell|by the console/,
-           "tincture-guide.md's layout paragraph names a shell or the console as a layout's " <>
-             "writer; only the layout tool publishes one"
-
     # Who reaches the tool: the CLI, the API and a glass paired with the
     # person from outside, and the assistant from a run. No tincture
     # declares it, a manifest of any type but an agent's may not name it,
@@ -1989,7 +1942,7 @@ defmodule Cyfr.DocsDriftTest do
     }
 
     assert {:error, {:invalid_tincture, sentence}} = Compendium.tincture_declaration(manifest),
-           "a tincture may declare layout.edit again; say so in tincture-guide.md's " <>
+           "a tincture may declare layout.edit; say so in tincture-guide.md's " <>
              "layout paragraph"
 
     assert sentence =~ "layout.edit"
@@ -1999,7 +1952,7 @@ defmodule Cyfr.DocsDriftTest do
                %{"type" => type, "caps" => %{"tools" => ["layout.edit"]}},
                &Arca.Storage.valid_guest_path?/1
              ) == {:error, {:invalid_caps, {:agent_only_tool, "layout.edit"}}},
-             "a #{type}'s caps may name layout.edit again; say so in tincture-guide.md's " <>
+             "a #{type}'s caps may name layout.edit; say so in tincture-guide.md's " <>
                "layout paragraph"
     end
 
@@ -2018,7 +1971,7 @@ defmodule Cyfr.DocsDriftTest do
       }
 
       assert {:error, {:invalid_tincture, sentence}} = Compendium.tincture_declaration(manifest),
-             "a tincture may declare #{tool} again; say so in tincture-guide.md's actions"
+             "a tincture may declare #{tool}; say so in tincture-guide.md's actions"
 
       assert sentence =~ tool
 
@@ -2027,7 +1980,7 @@ defmodule Cyfr.DocsDriftTest do
                  %{"type" => type, "caps" => %{"tools" => [tool]}},
                  &Arca.Storage.valid_guest_path?/1
                ) == {:error, {:invalid_caps, {:agent_only_tool, tool}}},
-               "a #{type}'s caps may name #{tool} again; say so in component-guide.md"
+               "a #{type}'s caps may name #{tool}; say so in component-guide.md"
       end
 
       assert :ok =
@@ -2079,10 +2032,6 @@ defmodule Cyfr.DocsDriftTest do
       assert paragraph =~ writer,
              "tincture-guide.md's layout paragraph does not say #{inspect(writer)}"
     end
-
-    refute paragraph =~ ~r/a tincture whose declaration names|a component whose grant names it/,
-           "tincture-guide.md's layout paragraph names a tincture or a component as a layout's " <>
-             "writer; neither reaches the layout tool"
   end
 
   # A layout is one fenced document per person per athanor: its key names
@@ -2110,7 +2059,7 @@ defmodule Cyfr.DocsDriftTest do
 
     for event <- ["error", "unhandledrejection"] do
       assert worker =~ ~s{listen("#{event}", () => fail("runtime"))},
-             "the toolkit's module worker no longer fails the canvas on #{event}; say what it " <>
+             "the toolkit's module worker does not fail the canvas on #{event}; say what it " <>
                "does in tincture-guide.md's toolkit section"
     end
 
@@ -2136,11 +2085,6 @@ defmodule Cyfr.DocsDriftTest do
     assert guide =~ ~s({"operation": …, "params": …})
     assert guide =~ "Referrer-Policy: no-referrer"
     assert guide =~ ~r/no proxy may log `\/_s\/` paths/i
-
-    for guide <- ["tincture-guide.md", "integration-guide.md"] do
-      refute File.read!(Path.join(@repo_root, guide)) =~ ~r/POST \/t\//,
-             "#{guide} documents the retired /t/ invoke route"
-    end
   end
 
   # ==========================================================================

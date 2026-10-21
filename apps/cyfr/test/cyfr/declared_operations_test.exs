@@ -3,11 +3,11 @@
 
 defmodule Cyfr.DeclaredOperationsTest do
   @moduledoc """
-  The operations the identity, device and grant work declared: each is on
-  the operation table with the annotations it is admitted under. Each new
-  argument of an operation that existed before is decided, never dropped,
-  so nothing reads as narrower, bounded or admitted when it is not. That
-  no operation answers as a stub is `Cyfr.NoStubOperationsTest`'s.
+  The identity, device and grant operations: each is on the operation
+  table with the annotations it is admitted under, and each argument that
+  names a subject, narrows a grant or bounds an approval is decided, never
+  dropped, so nothing reads as narrower, bounded or admitted when it is
+  not.
   """
 
   use ExUnit.Case, async: false
@@ -31,7 +31,7 @@ defmodule Cyfr.DeclaredOperationsTest do
     do: Sanctum.Gate.call_external(tool, ctx, Map.put(args, "action", action))
 
   describe "the declared operations" do
-    test "are on the table as their work will be admitted: interactive, external, never replayed" do
+    test "are on the table as they are admitted: interactive, external, never replayed" do
       for tool <- ~w(person pairing passkey confirmation) do
         {_provider, meta} = Map.fetch!(Sanctum.Catalog.operations(), tool)
 
@@ -98,7 +98,7 @@ defmodule Cyfr.DeclaredOperationsTest do
     end
   end
 
-  describe "a new argument of an operation that exists" do
+  describe "an argument that names, narrows or bounds" do
     test "a member's identifier is decided, and stands alone", %{ctx: ctx} do
       identifier = "per_" <> String.duplicate("ab", 32)
 

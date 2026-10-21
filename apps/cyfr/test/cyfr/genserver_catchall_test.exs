@@ -56,8 +56,6 @@ defmodule Cyfr.GenServerCatchallTest do
   # runtime's among them, run in their own VMs and are rostered by their own suites.
   @release_libs ~w(apps/cyfr/lib apps/arca/lib apps/sanctum/lib)
 
-  # Classify GenServers requiring fixture setup before catch-all probing.
-
   describe "catch-all handle_info/2" do
     for {mod, label} <- @genservers do
       test "#{label} (#{mod}) survives unexpected message and logs warning" do
@@ -193,14 +191,12 @@ defmodule Cyfr.GenServerCatchallTest do
             path <- Prima.Test.SourceTree.files!(Path.join([root, dir, "**/*.ex"])),
             source = Prima.Test.SourceTree.read(path),
             String.contains?(source, "Prima.LoggerContext.unexpected(__MODULE__"),
-            # Two spellings register the app-wide name, and matching only the
-            # first hid `Sanctum.Authority.BudgetGuard` — a real adopter —
-            # from this roster entirely, which made its `@not_probed` row
-            # inert rather than load-bearing.
+            # Either spelling registers the app-wide name: `name: __MODULE__`,
+            # or `:name, __MODULE__` as the default of a `:name` option.
             String.match?(source, ~r/name: __MODULE__|:name, __MODULE__/),
             [_, mod] <-
               Regex.scan(~r/defmodule ([\w.]+) do/, source, capture: :all) |> Enum.take(1),
-            do: Module.concat([mod])
+            do: Module.safe_concat([mod])
 
       missing = Enum.reject(adopters, &MapSet.member?(rostered, &1))
 
@@ -259,7 +255,10 @@ defmodule Cyfr.GenServerCatchallTest do
       assert helper_line(log) =~ "%URI{:authority, :fragment, :host"
       refute log =~ ~s("h")
 
-      map = Map.new(1..20, &{:"key_#{String.pad_leading(to_string(&1), 2, "0")}", &1})
+      keys = ~w(key_01 key_02 key_03 key_04 key_05 key_06 key_07 key_08 key_09 key_10
+                key_11 key_12 key_13 key_14 key_15 key_16 key_17 key_18 key_19 key_20)a
+
+      map = Map.new(Enum.zip(keys, 1..20))
       log = capture_log(fn -> Prima.LoggerContext.unexpected(__MODULE__, map) end)
       assert helper_line(log) =~ "map/20 [:key_01,"
       assert log =~ ":key_10]"
@@ -270,8 +269,8 @@ defmodule Cyfr.GenServerCatchallTest do
       # The suite logs at :warning; this synchronous test lowers it and
       # puts it back.
       previous = Logger.level()
-      Logger.configure(level: :debug)
       on_exit(fn -> Logger.configure(level: previous) end)
+      Logger.configure(level: :debug)
 
       log =
         capture_log([level: :debug], fn ->

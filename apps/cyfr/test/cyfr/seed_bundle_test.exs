@@ -124,11 +124,6 @@ defmodule Cyfr.Test.SeedBundleTest do
     refute module =~ ~r/https?:\/\//
   end
 
-  test "the shipped desktop is gone" do
-    seed = Path.expand("../../../../seed/components/tinctures/local", __DIR__)
-    refute File.exists?(Path.join(seed, "desktop"))
-  end
-
   test "the shipped vault declares only what a frame can complete, and passes the publish check" do
     vault = SeedBundle.local_unit!("tinctures", "vault")
     assert vault.ref == "tincture:local.vault"

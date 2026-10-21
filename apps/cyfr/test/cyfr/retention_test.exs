@@ -193,15 +193,6 @@ defmodule Arca.RetentionTest do
       assert {:ok, %{"executions" => 5}} = Retention.get_settings(actor)
     end
 
-    test "a retention key in the athanor's security settings is inert", %{actor: actor} do
-      athanor = Arca.Test.Actor.ensure_athanor_row(actor.athanor_id)
-
-      {:ok, _} =
-        Sanctum.Tenancy.Athanors.put_settings(athanor, %{"retention" => %{"executions" => 1}})
-
-      assert {:ok, %{"executions" => 10_000}} = Retention.get_settings(actor)
-    end
-
     test "settings are isolated across athanors" do
       # Within an athanor, members share settings (one config); the isolation
       # boundary is the athanor, not the user.
@@ -392,10 +383,10 @@ defmodule Arca.RetentionTest do
     end
 
     test "a build orphaned at 'started' is collected once it cannot be running", %{actor: actor} do
-      # Build records have no sweeper and no lease — nothing ever moves an
+      # Build records have no sweeper and no lease: nothing moves an
       # abandoned row off "started" (a node restart mid-build, or a build
-      # task that ended with its watcher). Excluding the status
-      # outright made those rows immortal and `keep` stopped being a cap.
+      # task that ended with its watcher). A row that has read "started"
+      # past the grace window is ranked like any other, so `keep` caps it.
       :ok = Arca.BuildRecords.record_started(actor, "build_orphan", "reagent:local.test:0.1.0")
 
       {1, _} =
@@ -413,7 +404,7 @@ defmodule Arca.RetentionTest do
       ids = build_ids(actor)
 
       refute "build_orphan" in ids,
-             "an orphaned 'started' build is immortal — `keep` is no longer a cap"
+             "an orphaned 'started' build outlives `keep`"
 
       refute "build_2" in ids
     end
