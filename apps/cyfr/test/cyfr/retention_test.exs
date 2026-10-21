@@ -231,8 +231,14 @@ defmodule Arca.RetentionTest do
       assert settings["executions"] == 10_000
     end
 
-    test "coerces integer strings", %{actor: actor} do
-      assert {:ok, %{"executions" => 7}} = Retention.set_settings(actor, %{"executions" => "7"})
+    test "a value is read in its one stored type: an integer string is refused, writing nothing",
+         %{actor: actor} do
+      for spelled <- ["7", " 7", "07"] do
+        assert {:error, {:invalid_setting, "executions"}} =
+                 Retention.set_settings(actor, %{"executions" => spelled})
+      end
+
+      assert {:ok, %{"executions" => 10_000}} = Retention.get_settings(actor)
     end
 
     test "corrupt settings refuse, rather than read as the defaults", %{actor: actor} do

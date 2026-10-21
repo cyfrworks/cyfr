@@ -207,7 +207,8 @@ defmodule Arca.StandaloneWriteTest do
       generation: 1,
       fence: 1,
       lease_until: now,
-      taken_at: now
+      taken_at: now,
+      release: "0.0.0-test"
     }
   end
 
@@ -221,6 +222,7 @@ defmodule Arca.StandaloneWriteTest do
       fence: 1,
       lease_until: now,
       taken_at: now,
+      release: "0.0.0-test",
       inserted_at: now,
       updated_at: now
     }
@@ -862,7 +864,8 @@ defmodule Arca.StandaloneWriteLockTest do
       generation: 1,
       fence: 1,
       lease_until: now,
-      taken_at: now
+      taken_at: now,
+      release: "0.0.0-test"
     }
   end
 
@@ -876,6 +879,7 @@ defmodule Arca.StandaloneWriteLockTest do
       fence: 1,
       lease_until: now,
       taken_at: now,
+      release: "0.0.0-test",
       inserted_at: now,
       updated_at: now
     }

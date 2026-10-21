@@ -50,7 +50,7 @@ defmodule Sanctum.Providers.Pairing do
       its key; any other caller, an ordinary device intent among them, is
       refused.
     * `revoke` answers the client's id and its standing, `revoked`.
-    * `reenable` answers the client's id, label and standing, `active`,
+    * `reenable` answers the client's id and standing, `active`,
       and `recovery_closed`, whether re-enabling it ended the person's
       recovery from the restore. While the person recovers it is confirmed
       by a door this home re-authenticates or an emailed code, never by a
@@ -338,7 +338,6 @@ defmodule Sanctum.Providers.Pairing do
   defp listed(client) do
     %{
       client_id: client.client_id,
-      label: client.label,
       source: client.source,
       paired_at: Prima.Time.iso8601(client.paired_at),
       certificate_expires_at: Prima.Time.iso8601(client.certificate_expires_at),

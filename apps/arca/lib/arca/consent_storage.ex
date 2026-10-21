@@ -179,8 +179,8 @@ defmodule Arca.ConsentStorage do
   spellings in the enum's order; a revision without it, an empty list, a
   duplicate or an origin outside the enum is refused `{:error, {:invalid,
   %{admitted_origins: …}}}` with nothing written. A stored revision whose
-  origins are absent or do not parse does not decode, so no reader meets
-  a revision that admits none.
+  origins do not parse does not decode, so no reader meets a revision
+  that admits none.
   """
   @spec insert_revision(map(), [map()], String.t() | nil, keyword()) ::
           {:ok, map()} | {:error, term()}
@@ -1083,9 +1083,9 @@ defmodule Arca.ConsentStorage do
 
   defp decode_activation(_), do: {:error, {:invalid_stored_value, :activation}}
 
-  # A stored list that is absent or does not parse refuses the consent
-  # rather than guessing which origins it admits.
-  defp decode_origins(json) when is_binary(json) do
+  # A stored list that does not parse refuses the consent rather than
+  # guessing which origins it admits.
+  defp decode_origins(json) do
     with {:ok, spellings} <- Jason.decode(json),
          {:ok, origins} <- Prima.Origin.parse_list(spellings) do
       {:ok, origins}
@@ -1093,6 +1093,4 @@ defmodule Arca.ConsentStorage do
       _ -> {:error, {:invalid_stored_value, :admitted_origins}}
     end
   end
-
-  defp decode_origins(_absent), do: {:error, {:invalid_stored_value, :admitted_origins}}
 end

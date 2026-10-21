@@ -95,7 +95,7 @@ defmodule Opus.Assignments do
       attempt: record.attempt,
       fence: attempt.fence,
       parent_execution_id: record.parent_execution_id,
-      root_execution_id: record.root_execution_id || record.id,
+      root_execution_id: record.root_execution_id,
       step: Map.get(admitted, :step),
       athanor_id: record.athanor_id,
       actor: actor(admitted.ctx),

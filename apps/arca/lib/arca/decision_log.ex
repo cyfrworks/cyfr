@@ -198,9 +198,8 @@ defmodule Arca.DecisionLog do
   `t:Prima.Decision.completion_record/0`, `completed_at` defaulting to now.
 
   `mcp_log:` — the completion's columns of the call's `Arca.McpLog` row
-  (`status`, `duration_ms`, `routed_to`, `error_code`, `output`,
-  `error`), written in the same transaction; the row is the call's own
-  in the actor's tenant.
+  (`status`, `duration_ms`, `routed_to`, `output`, `error`), written in
+  the same transaction; the row is the call's own in the actor's tenant.
 
   A row outside the actor's tenant is `:not_found`, as is no row.
   """
@@ -271,7 +270,7 @@ defmodule Arca.DecisionLog do
   defp projection!(_actor, _attrs),
     do: raise(ArgumentError, "an mcp_log projection is filed under the actor's athanor")
 
-  @completion_columns [:status, :duration_ms, :routed_to, :error_code, :output, :error]
+  @completion_columns [:status, :duration_ms, :routed_to, :output, :error]
 
   defp completion_projection!(_actor, nil), do: nil
 

@@ -60,8 +60,9 @@ defmodule Arca.Test.Writers do
   An execution row with no attempt and no admission, in a status of the
   execution vocabulary (the start changeset's): `{:ok, row}`, `{:error,
   :illegal_transition}` when `attrs` names an attempt, or `{:error,
-  {:invalid, errors}}`. A row it writes has no stamp to match, so it ends
-  on its status alone.
+  {:invalid, errors}}`. A row that names no root is its own, as an
+  admitted root is. A row it writes has no stamp to match, so it ends on
+  its status alone.
   """
   @spec record_start(map()) :: {:ok, map()} | {:error, term()}
   def record_start(attrs) when is_map(attrs) do
@@ -70,6 +71,7 @@ defmodule Arca.Test.Writers do
     else
       Arca.Repo.Errors.with_db_rescue("Arca.Test.Writers.record_start", fn ->
         attrs
+        |> Map.put(:root_execution_id, Map.get(attrs, :root_execution_id) || Map.get(attrs, :id))
         |> Row.start_changeset()
         |> Arca.Repo.insert()
         |> duplicate_child_key()

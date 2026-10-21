@@ -738,7 +738,7 @@ defmodule PrismWeb.VaultLive do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(s) when is_binary(s), do: if(String.trim(s) == "", do: nil, else: s)
 
-  @entry_keys ~w(id name kind provider_hint status provenance field_names oauth_scopes destination attach_only payload_rev last_used_at)a
+  @entry_keys ~w(id name kind provider_hint status field_names oauth_scopes destination attach_only payload_rev last_used_at)a
 
   defp normalize_entry(entry) do
     Map.new(@entry_keys, fn key -> {key, entry[key]} end)

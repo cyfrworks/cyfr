@@ -121,7 +121,6 @@ defmodule Sanctum.Passkeys do
   @typedoc "A passkey as its person and the administrator read it."
   @type listed :: %{
           id: String.t(),
-          label: String.t() | nil,
           state: String.t(),
           rp_id: String.t(),
           registered_at: DateTime.t() | nil,
@@ -1027,7 +1026,7 @@ defmodule Sanctum.Passkeys do
            Authz.confirm(ctx, :passkey_registration, %{
              operation: "passkey.revoke",
              arguments: %{"passkey_id" => passkey_id},
-             resource: passkey.label || "passkey " <> String.slice(passkey.credential_id, 0, 16)
+             resource: "passkey " <> String.slice(passkey.credential_id, 0, 16)
            }) do
       also = fn %{passkey: revoked, was: was} -> leaves_a_way_in(ctx, user_id, revoked, was) end
 
@@ -1323,7 +1322,7 @@ defmodule Sanctum.Passkeys do
     %{
       operation: "passkey.reenable",
       arguments: %{"passkey_id" => passkey.id},
-      resource: passkey.label || "passkey " <> String.slice(passkey.credential_id, 0, 16),
+      resource: "passkey " <> String.slice(passkey.credential_id, 0, 16),
       details: %{
         "effect" =>
           "This passkey, suspended when this home was restored from a backup, signs you in " <>
@@ -1367,7 +1366,6 @@ defmodule Sanctum.Passkeys do
   def listed(row) do
     %{
       id: row.id,
-      label: row.label,
       state: row.state,
       rp_id: row.rp_id,
       registered_at: row.inserted_at,

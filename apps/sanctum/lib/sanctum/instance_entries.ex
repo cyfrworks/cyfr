@@ -123,9 +123,8 @@ defmodule Sanctum.InstanceEntries do
           kind: String.t(),
           provider_hint: String.t(),
           status: String.t(),
-          provenance: String.t(),
           field_names: [String.t()],
-          oauth_scopes: [String.t()],
+          oauth_scopes: [],
           destination: %{String.t() => term()} | nil,
           attach_only: true,
           binding_digest: String.t() | nil,
@@ -142,15 +141,15 @@ defmodule Sanctum.InstanceEntries do
 
   @typedoc """
   An entry offered to a person: what it reaches and for whom, never
-  material. `oauth_scopes` are the scopes an OAuth entry was authorized
-  for, `[]` for any other kind.
+  material. `oauth_scopes` is `[]`: an instance entry is never of kind
+  `oauth`, and the field keeps the shape a vault entry's offer has.
   """
   @type offer_view :: %{
           id: String.t(),
           name: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
-          oauth_scopes: [String.t()],
+          oauth_scopes: [],
           destination: %{String.t() => term()} | nil,
           component_policy: String.t()
         }
@@ -166,7 +165,7 @@ defmodule Sanctum.InstanceEntries do
           name: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
-          oauth_scopes: [String.t()],
+          oauth_scopes: [],
           destination: %{String.t() => term()} | nil,
           component_policy: String.t(),
           used_today: non_neg_integer(),
@@ -189,7 +188,7 @@ defmodule Sanctum.InstanceEntries do
           name: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
-          oauth_scopes: [String.t()],
+          oauth_scopes: [],
           destination: %{String.t() => term()} | nil,
           component_policy: String.t(),
           binding_digest: String.t() | nil
@@ -197,15 +196,15 @@ defmodule Sanctum.InstanceEntries do
 
   @typedoc """
   What a carried binding is held to: the entry's kind, provider, status,
-  digest and the scopes an OAuth entry was authorized for (`[]` for
-  another kind).
+  digest and its OAuth scopes, `[]` since an instance entry is never of
+  kind `oauth`.
   """
   @type binding_facts :: %{
           kind: String.t(),
           provider_hint: String.t(),
           status: String.t(),
           binding_digest: String.t() | nil,
-          oauth_scopes: [String.t()]
+          oauth_scopes: []
         }
 
   @typedoc "The running node's facts, taken from the attempt and never from a request."
@@ -364,7 +363,7 @@ defmodule Sanctum.InstanceEntries do
   The facts a boot's revision with no person holds a carried instance
   binding to (`Sanctum.Consent.Bootstrap`, its only caller): the entry's
   `kind`, `provider_hint`, `status`, stored `binding_digest` and
-  `oauth_scopes`, read under the platform's actor, or
+  `oauth_scopes` (none), read under the platform's actor, or
   `{:error, :not_found}`. Metadata only:
   it unseals nothing, offers nothing and names no person, so it decides
   no one's use; the attach path (`resolve/4`) holds each request to the
@@ -376,10 +375,7 @@ defmodule Sanctum.InstanceEntries do
       {:ok,
        entry
        |> Map.take([:kind, :provider_hint, :status, :binding_digest])
-       |> Map.put(
-         :oauth_scopes,
-         if(entry.kind == "oauth", do: decode_list(entry.oauth_scopes), else: [])
-       )}
+       |> Map.put(:oauth_scopes, [])}
     end
   end
 
@@ -431,24 +427,20 @@ defmodule Sanctum.InstanceEntries do
            }),
          id = Prima.UUID7.generate_id("ine"),
          {:ok, sealed} <- seal(json, CipherAAD.instance_entry(id, hint)) do
-      binding = %{
+      row = %{
         provider_hint: hint,
         field_names: Jason.encode!(Enum.sort(Map.keys(fields))),
-        oauth_endpoints: nil,
-        oauth_scopes: nil,
-        destination: destination,
-        attach_only: true
+        destination: destination
       }
 
-      with {:ok, digest} <- VaultReader.binding_digest(binding),
+      with {:ok, digest} <- VaultReader.binding_digest(as_binding(row)),
            {:ok, entry} <-
              Store.put(
                actor(),
-               Map.merge(binding, %{
+               Map.merge(row, %{
                  id: id,
                  name: name,
                  kind: kind,
-                 provenance: "user",
                  status: "active",
                  sealed_payload: sealed,
                  binding_digest: digest,
@@ -551,11 +543,17 @@ defmodule Sanctum.InstanceEntries do
   # A rebind that lost the race recomputes against what landed, and is
   # decided again there.
   defp move(ctx, entry, destination, attempts) do
-    rebound = %{entry | destination: destination}
+    rebound = as_binding(%{entry | destination: destination})
 
     with {:ok, digest} <- VaultReader.binding_digest(rebound),
          {:ok, confirmation} <-
-           Sanctum.Vault.rebind_confirmation(ctx, "instance_entry.rebind", entry, rebound, digest) do
+           Sanctum.Vault.rebind_confirmation(
+             ctx,
+             "instance_entry.rebind",
+             as_binding(entry),
+             rebound,
+             digest
+           ) do
       case Store.move_binding(
              actor(),
              entry.id,
@@ -1186,6 +1184,14 @@ defmodule Sanctum.InstanceEntries do
   defp emit(event, ctx, kind, id),
     do: :telemetry.execute(event, %{count: 1}, %{entry_id: id, kind: kind, user_id: ctx.user_id})
 
+  # The binding an instance entry's digest covers and a rebind compares:
+  # its own binding columns, with the OAuth endpoints, scopes and
+  # disclosure every instance entry holds by definition (none, none and
+  # attach-only), in the shape `Sanctum.VaultReader.binding_digest/1`
+  # reads of an entry of either store.
+  defp as_binding(entry),
+    do: Map.merge(entry, %{oauth_endpoints: nil, oauth_scopes: nil, attach_only: true})
+
   defp view(entry) do
     %{
       id: entry.id,
@@ -1193,9 +1199,8 @@ defmodule Sanctum.InstanceEntries do
       kind: entry.kind,
       provider_hint: entry.provider_hint,
       status: entry.status,
-      provenance: entry.provenance,
       field_names: decode_list(entry.field_names),
-      oauth_scopes: decode_list(entry.oauth_scopes),
+      oauth_scopes: [],
       destination: decode_destination(entry.destination),
       attach_only: true,
       binding_digest: entry.binding_digest,
@@ -1217,7 +1222,7 @@ defmodule Sanctum.InstanceEntries do
       name: entry.name,
       kind: entry.kind,
       provider_hint: entry.provider_hint,
-      oauth_scopes: if(entry.kind == "oauth", do: decode_list(entry.oauth_scopes), else: []),
+      oauth_scopes: [],
       destination: decode_destination(entry.destination),
       component_policy: entry.component_policy
     }

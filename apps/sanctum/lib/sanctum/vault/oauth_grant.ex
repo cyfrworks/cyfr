@@ -480,7 +480,6 @@ defmodule Sanctum.Vault.OAuthGrant do
                id: id,
                name: target.name,
                kind: "oauth",
-               provenance: "user",
                status: "active",
                sealed_payload: sealed,
                binding_digest: digest

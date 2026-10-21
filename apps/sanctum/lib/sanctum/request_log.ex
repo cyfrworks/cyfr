@@ -19,8 +19,7 @@ defmodule Sanctum.RequestLog do
   A row's meaning is its decision's: a refused call carries the
   refusal's `refusal_class`, a failed one its sentence, and the decision
   carries the completion's class. A JSON-RPC error code is a transport's
-  rendering of a class, which the gate cannot name, so a row the gate
-  writes leaves `error_code` empty.
+  rendering of a class, which the gate cannot name, so a row holds none.
 
   Every row is filed under the athanor the call ran in. A decision without
   an athanor — a caller refused before any tenant was resolved, a platform

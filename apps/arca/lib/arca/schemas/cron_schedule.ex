@@ -43,6 +43,8 @@ defmodule Arca.Schemas.CronSchedule do
     field :name, :string
     field :cron_expression, :string
     field :reference, :string
+    # The pinned version a fire runs: the reference as resolved when the
+    # row was created or last repointed.
     field :resolved_reference, :string
     field :input, :string
     field :metadata, :string
@@ -108,6 +110,7 @@ defmodule Arca.Schemas.CronSchedule do
       :name,
       :cron_expression,
       :reference,
+      :resolved_reference,
       :profile_id,
       :athanor_id,
       :created_at,
@@ -189,6 +192,7 @@ defmodule Arca.Schemas.CronSchedule do
       :error_count,
       :updated_at
     ])
+    |> validate_required([:resolved_reference])
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:concurrency, @concurrency)
     |> validate_missed_runs()

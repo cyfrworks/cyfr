@@ -34,7 +34,6 @@ case Cyfr.ConfigEnv.DatabaseChoice.choice!() do
 
   :postgres ->
     config :arca, :repo_adapter, Ecto.Adapters.Postgres
-    config :arca, Arca.Repo, []
 end
 
 # The filesystem adapter over two sibling roots: all tenant storage under

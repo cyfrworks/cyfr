@@ -202,6 +202,7 @@ defmodule Arca.ToolGrantStorageTest do
         Arca.Execution.admit(
           %{
             id: id,
+            root_execution_id: id,
             reference: "catalyst:local.test:1.0.0",
             user_id: "user_tg",
             athanor_id: row.athanor_id,

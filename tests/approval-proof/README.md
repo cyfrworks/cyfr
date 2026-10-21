@@ -165,10 +165,10 @@ either fails whole, and their columns need no class.
 
 | Table | Exact | Derived | Bound |
 |---|---|---|---|
-| `vault_entries` | `name`, `provider_hint`, `kind`, `provenance`, `field_names`, `oauth_endpoints`, `oauth_scopes`, `attach_only`, `status`, `payload_rev` | `binding_digest`, `destination`: what her request implies (`requested`); `sealed_payload`: the value she typed, compared inside the fixture | `id`: the Vault page's; `athanor_id`: the sign-in's; `last_used_at`, `inserted_at`, `updated_at`: times |
+| `vault_entries` | `name`, `provider_hint`, `kind`, `field_names`, `oauth_endpoints`, `oauth_scopes`, `attach_only`, `status`, `payload_rev` | `binding_digest`, `destination`: what her request implies (`requested`); `sealed_payload`: the value she typed, compared inside the fixture | `id`: the Vault page's; `athanor_id`: the sign-in's; `last_used_at`, `inserted_at`, `updated_at`: times |
 | `vault_defaults` | `provider_hint`, `instance_entry_id` | | `id`: a default's own id; `athanor_id`: the sign-in's; `vault_entry_id`: the Vault page's; `inserted_at`, `updated_at`: times |
 | `profiles` | `source_ref`, `kind`, `label`, `status` | | `id`, `head_consent_id`: the admission's; `athanor_id`: the sign-in's; `inserted_at`, `updated_at`: times |
-| `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via`, `supersedes_id`, `admitted_origins` | `shape_digest`, `commit_digest`, `blob_digest`, `resolved_policy`, `activation`: what a commit of her decisions writes (`derived`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
+| `consents` | `revision`, `scope`, `pinned_version`, `invoke_mode`, `granted_via`, `admitted_origins` | `shape_digest`, `commit_digest`, `blob_digest`, `resolved_policy`, `activation`: what a commit of her decisions writes (`derived`) | `id`, `profile_id`: the admission's; `athanor_id`, `granted_by`: the sign-in's; `granted_at`: a time |
 | `consent_vault_refs` | `binding_key`, `scope`, `instance_entry_id`, `via_label`, `lifetime_kind`, `consumed_by_root` | `binding_digest`: `requested`; `expires_at`: the until the preview showed her | `consent_id`: the admission's; `athanor_id`: the sign-in's; `vault_entry_id`: the Vault page's |
 
 The bounds:
@@ -180,10 +180,6 @@ The bounds:
 - **A time** is none where the model holds none (an entry never used).
   Otherwise it lies inside the run's window: from the database's time as the
   run starts to its time at the end of the read that returned it.
-
-No writer sets a consent's `supersedes_id`: a revision follows the one
-before it by its number and the profile's head, so the column is none at
-every revision, compared exactly.
 
 **The until.** A five-minute binding's `expires_at` is compared, as an
 instant, with the until the preview row showed her, never with the stored

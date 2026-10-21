@@ -78,7 +78,6 @@ defmodule Sanctum.Vault do
           kind: String.t(),
           provider_hint: String.t(),
           status: String.t(),
-          provenance: String.t(),
           field_names: [String.t()],
           oauth_scopes: [String.t()],
           destination: %{String.t() => term()} | nil,
@@ -331,7 +330,6 @@ defmodule Sanctum.Vault do
                  id: id,
                  name: name,
                  kind: kind,
-                 provenance: Map.get(params, :provenance, "user"),
                  status: "active",
                  sealed_payload: sealed,
                  binding_digest: digest
@@ -685,7 +683,6 @@ defmodule Sanctum.Vault do
       kind: entry.kind,
       provider_hint: entry.provider_hint,
       status: entry.status,
-      provenance: entry.provenance,
       field_names: decode_list(entry.field_names, "field_names"),
       oauth_scopes: decode_list(entry.oauth_scopes, "oauth_scopes"),
       destination: decode_destination(entry.destination),

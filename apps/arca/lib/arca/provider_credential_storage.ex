@@ -11,9 +11,7 @@ defmodule Arca.ProviderCredentialStorage do
   Every read and delete takes the `Prima.Actor` first and matches it in
   its head, so the athanor comes from the caller and never from an
   argument. An actor whose athanor is nil or the empty string is refused
-  before any query — `{:error, :no_athanor}`, and a raise from
-  `exists?/2`, whose `boolean()` has no refusal to spell and must not
-  read an unresolved tenant as "no credentials stored".
+  before any query: `{:error, :no_athanor}`.
   """
 
   import Ecto.Query
@@ -101,15 +99,6 @@ defmodule Arca.ProviderCredentialStorage do
   end
 
   def delete(%Prima.Actor{}, _provider), do: {:error, :no_athanor}
-
-  @spec exists?(Prima.Actor.t(), String.t()) :: boolean()
-  def exists?(%Prima.Actor{athanor_id: athanor_id} = actor, provider)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(provider) do
-    match?({:ok, _}, get(actor, provider))
-  end
-
-  def exists?(%Prima.Actor{}, _provider),
-    do: Arca.QueryHelpers.no_athanor!("Arca.ProviderCredentialStorage.exists?/2")
 
   @doc "The athanor's rows, by provider name — never the ciphertext."
   @spec list(Prima.Actor.t()) ::

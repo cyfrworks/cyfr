@@ -37,6 +37,7 @@ defmodule Arca.ExecutionPayloadsTest do
       Arca.Repo.insert_all(Arca.Schemas.Execution, [
         %{
           id: id,
+          root_execution_id: id,
           athanor_id: actor.athanor_id,
           user_id: actor.user_id,
           reference: "reagent:local.pay:0.1.0",

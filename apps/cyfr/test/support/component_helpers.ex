@@ -13,6 +13,8 @@ defmodule Sanctum.Test.ComponentHelpers do
   def register_test_component(name, version, type, manifest, ctx \\ nil) do
     ctx = ctx || Sanctum.TestContext.local()
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    digest = "sha256:test"
+    {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
 
     attrs = %{
       id:
@@ -22,7 +24,8 @@ defmodule Sanctum.Test.ComponentHelpers do
       component_type: type,
       description: "Test component",
       tags: "[]",
-      digest: "sha256:test",
+      digest: digest,
+      release_digest: release_digest,
       size: 100,
       exports: "[]",
       manifest: Jason.encode!(manifest),

@@ -34,6 +34,7 @@ defmodule Arca.ExecutionStandingTest do
       },
       overrides
     )
+    |> then(&Map.put_new(&1, :root_execution_id, &1[:parent_execution_id]))
   end
 
   defp unavailable, do: fn %Prima.ExecutionGrant{} -> {:error, :unavailable} end

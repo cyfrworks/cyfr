@@ -902,6 +902,7 @@ defmodule Arca.MembersTest do
           fence: 1,
           lease_until: DateTime.add(now, lease_offset_ms, :millisecond),
           taken_at: now,
+          release: "0.0.0-test",
           inserted_at: now,
           updated_at: now
         }

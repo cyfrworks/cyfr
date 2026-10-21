@@ -75,6 +75,7 @@ defmodule Arca.Schemas.Execution do
     # `t:child_key/0`): unique under the parent, so a retried admission is
     # answered with this row (`child_by_key/3`). Nil for a root.
     field :child_key, :string
+    # The root of the run's tree: a root names itself, a child its root.
     field :root_execution_id, :string
     field :resolver_digest, :string
     field :activation_digest, :string
@@ -162,7 +163,8 @@ defmodule Arca.Schemas.Execution do
       :athanor_id,
       :started_at,
       :status,
-      :component_type
+      :component_type,
+      :root_execution_id
     ])
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:kind, @kinds)

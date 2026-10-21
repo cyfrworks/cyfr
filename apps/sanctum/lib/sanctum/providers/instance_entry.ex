@@ -509,7 +509,6 @@ defmodule Sanctum.Providers.InstanceEntry do
               :not_offered,
               :component_not_admitted,
               :destination_mismatch,
-              :endpoints_immutable,
               :unavailable
             ],
        do: reason

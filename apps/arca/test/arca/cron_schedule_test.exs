@@ -63,6 +63,7 @@ defmodule Arca.CronScheduleTest do
         name: "test-schedule-#{:rand.uniform(100_000)}",
         cron_expression: "*/5 * * * *",
         reference: "reagent:local.test:1.0.0",
+        resolved_reference: "reagent:local.test:1.0.0",
         profile_id: "prof_test",
         cap: 1_000
       },
@@ -90,6 +91,19 @@ defmodule Arca.CronScheduleTest do
 
     test "requires reference", %{actor: actor} do
       assert {:error, _} = CronSchedule.create(actor, valid_attrs(%{reference: nil}))
+    end
+
+    test "requires the resolved reference a fire runs, at create and at update", %{actor: actor} do
+      assert {:error, {:validation, %{resolved_reference: _}}} =
+               CronSchedule.create(actor, Map.delete(valid_attrs(), :resolved_reference))
+
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs())
+
+      assert {:error, {:validation, %{resolved_reference: _}}} =
+               CronSchedule.update(actor, schedule.id, %{resolved_reference: nil})
+
+      assert {:ok, %{resolved_reference: "reagent:local.test:1.0.0"}} =
+               CronSchedule.get(actor, schedule.id)
     end
 
     test "refuses at the cap it is given, counting non-deleted schedules and no feed", %{
@@ -763,6 +777,7 @@ defmodule Arca.CronScheduleTakeoverTest do
         name: "cron-fence-#{System.unique_integer([:positive])}",
         cron_expression: "*/5 * * * *",
         reference: "reagent:local.test:1.0.0",
+        resolved_reference: "reagent:local.test:1.0.0",
         profile_id: "prof_test",
         cap: 1_000
       })
@@ -986,6 +1001,7 @@ defmodule Arca.CronScheduleRaceTest do
       name: name,
       cron_expression: "*/5 * * * *",
       reference: "reagent:local.test:1.0.0",
+      resolved_reference: "reagent:local.test:1.0.0",
       profile_id: "prof_test",
       cap: cap
     })

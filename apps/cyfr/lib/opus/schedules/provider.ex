@@ -761,9 +761,7 @@ defmodule Opus.Schedules.Provider do
             :error -> schedule.profile_id
           end
 
-        target =
-          Map.get(update_attrs, :resolved_reference) || schedule.resolved_reference ||
-            schedule.reference
+        target = Map.get(update_attrs, :resolved_reference) || schedule.resolved_reference
 
         authorize_profile_binding(ctx, target, profile_id)
     end

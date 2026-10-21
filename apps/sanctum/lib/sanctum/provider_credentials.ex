@@ -13,7 +13,7 @@ defmodule Sanctum.ProviderCredentials do
     deserves. `put/4` and `delete/2` are **interactive** (`Consent.Authz`),
     like every `vault.*` mutation: this is the athanor's OAuth app identity,
     and a key that could rewrite it could point the next consent screen at
-    another app. `configured?/2` is a read and keeps `:vault_read`.
+    another app. `list/1` is a read and keeps `:vault_read`.
   - **Use** (`fetch_for_oauth/2`) takes an explicit athanor id and no
     caller context at all — it is reachable only from the host's OAuth
     exchange/refresh plane, never through a caller's permission set, and
@@ -85,15 +85,6 @@ defmodule Sanctum.ProviderCredentials do
   def list(%Context{} = ctx) do
     with :ok <- Context.require_permission(ctx, :vault_read) do
       Arca.ProviderCredentialStorage.list(actor!(ctx))
-    end
-  end
-
-  @doc "Whether client credentials are stored for a provider (presence only)."
-  @spec configured?(Context.t(), String.t()) :: boolean() | {:error, term()}
-  def configured?(%Context{} = ctx, provider) do
-    with :ok <- Context.require_permission(ctx, :vault_read),
-         :ok <- validate_provider(provider) do
-      Arca.ProviderCredentialStorage.exists?(actor!(ctx), provider)
     end
   end
 

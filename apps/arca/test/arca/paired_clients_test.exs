@@ -61,8 +61,7 @@ defmodule Arca.PairedClientsTest do
       %{
         user_id: "usr_pcl",
         source_kind: "session",
-        source_id: "src_#{System.unique_integer([:positive])}",
-        label: "Firefox on the desk"
+        source_id: "src_#{System.unique_integer([:positive])}"
       },
       overrides
     )

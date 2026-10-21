@@ -743,7 +743,6 @@ defmodule Sanctum.ApiKey do
       name: row.name,
       type: key_type,
       scope: decode_stored(row.scope, [], "scope"),
-      rate_limit: row.rate_limit,
       ip_allowlist: decode_stored(row.ip_allowlist, nil, "ip_allowlist"),
       user_id: row.created_by,
       athanor_id: row.athanor_id
@@ -871,7 +870,6 @@ defmodule Sanctum.ApiKey do
       key_prefix: (row.key_prefix || "") <> "...",
       suspended: row.suspended == true,
       scope: decode_stored(row.scope, [], "scope"),
-      rate_limit: row.rate_limit,
       ip_allowlist: decode_stored(row.ip_allowlist, nil, "ip_allowlist"),
       created_at: Prima.Time.iso8601(row.inserted_at),
       rotated_at: Prima.Time.iso8601(row.rotated_at)

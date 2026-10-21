@@ -29,6 +29,8 @@ defmodule Arca.ComponentStorageTest do
         license: "MIT",
         digest:
           "sha256:#{:crypto.hash(:sha256, "#{name}:#{version}") |> Base.encode16(case: :lower)}",
+        release_digest:
+          "sha256:#{:crypto.hash(:sha256, "release #{name}:#{version}") |> Base.encode16(case: :lower)}",
         size: 1024,
         exports: "[]",
         manifest: "{}",

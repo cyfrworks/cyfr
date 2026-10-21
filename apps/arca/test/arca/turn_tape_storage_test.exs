@@ -133,6 +133,7 @@ defmodule Arca.TurnTapeStorageTest do
           fence: 1,
           lease_until: DateTime.add(DateTime.utc_now(), lease_ms, :millisecond),
           taken_at: DateTime.utc_now(),
+          release: "0.0.0-test",
           inserted_at: DateTime.utc_now(),
           updated_at: DateTime.utc_now()
         }

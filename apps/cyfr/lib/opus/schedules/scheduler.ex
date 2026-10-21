@@ -873,17 +873,6 @@ defmodule Opus.Schedules.Scheduler do
 
   defp fire_active_schedule(schedule, ctx, state) do
     case runnable(schedule) do
-      {:error, :unresolved_reference} ->
-        Logger.error(
-          "[Opus.Schedules.Scheduler] schedule #{schedule.id} has no resolved_reference. " <>
-            "Cannot execute with unresolved reference '#{schedule.reference}'. " <>
-            "Re-create or update the schedule to pin a resolved version."
-        )
-
-        emit_schedule_failed(schedule.id, ctx, :unresolved_reference)
-        record_error(ctx, schedule.id, "No resolved reference — re-create or update the schedule")
-        schedule_timer(schedule.id, state)
-
       {:error, :invalid_input} ->
         Logger.error(
           "[Opus.Schedules.Scheduler] schedule #{schedule.id} has invalid JSON input, skipping execution"
@@ -934,10 +923,9 @@ defmodule Opus.Schedules.Scheduler do
     end
   end
 
-  # What a run needs of the row, fail-closed: a resolved reference and
-  # input that decodes.
-  defp runnable(%{resolved_reference: nil}), do: {:error, :unresolved_reference}
-
+  # What a run needs of the row, fail-closed: input that decodes. The
+  # pinned version is the row's own `resolved_reference`, which every row
+  # carries.
   defp runnable(schedule) do
     case decode_json(schedule.input) do
       {:ok, input} -> {:ok, schedule.resolved_reference, input}

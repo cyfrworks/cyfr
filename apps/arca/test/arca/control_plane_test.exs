@@ -332,18 +332,10 @@ defmodule Arca.ControlPlaneTest do
       assert standing() == before
     end
 
-    test "a live slot naming no release counts as another release", %{node: node} do
-      peer!(node <> "-peer", nil, 60_000)
-
-      assert ControlPlane.take(node, "boot_a", 60_000) == {:error, {:mixed_release, nil}}
-      assert ControlPlane.slot(node) == {:error, :not_found}
-    end
-
     test "an expired slot of another release is no bar, and the take stamps this release", %{
       node: node
     } do
       peer!(node <> "-peer", "0.0.0-other", -1_000)
-      peer!(node <> "-unknown", nil, -1_000)
 
       assert {:ok, slot} = ControlPlane.take(node, "boot_a", 60_000)
       assert slot.release == Prima.Version.current()
@@ -366,7 +358,9 @@ defmodule Arca.ControlPlaneTest do
       # boot there is `:busy`, never a mixed release.
       assert {:busy, _row} = ControlPlane.take(node, "boot_b", 60_000, release: "2.0.0")
 
-      Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node), set: [release: nil])
+      Arca.Repo.update_all(from(l in CellLease, where: l.node == ^node),
+        set: [release: "0.0.0-older"]
+      )
 
       assert {:ok, %{release: "1.0.0"}} =
                ControlPlane.take(node, "boot_a", 60_000, release: "1.0.0")
@@ -601,8 +595,8 @@ defmodule Arca.ControlPlaneTest do
   end
 
   # A peer's slot written straight to its row: `release` as the peer's boot
-  # stamped it (nil for a row that names none), live for `lease_ms` on the
-  # cell's clock or, negative, already lapsed.
+  # stamped it, live for `lease_ms` on the cell's clock or, negative,
+  # already lapsed.
   defp peer!(node, release, lease_ms) do
     now = Arca.ServerMetaStorage.now!()
 

@@ -346,8 +346,8 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
     """
   end
 
-  defp name("passkey.reenable", item), do: present(item.label) || "A passkey"
-  defp name("pairing.reenable", item), do: present(item.label) || "A paired device"
+  defp name("passkey.reenable", _item), do: "A passkey"
+  defp name("pairing.reenable", _item), do: "A paired device"
   defp name("key.reenable", item), do: present(item.name) || "An API key"
   defp name("webhook.reenable", item), do: present(item.name) || "A webhook"
 

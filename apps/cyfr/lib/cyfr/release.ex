@@ -108,7 +108,7 @@ defmodule Cyfr.Release do
           %{
             node: String.t(),
             owner: String.t(),
-            release: String.t() | nil,
+            release: String.t(),
             lease_until: String.t()
           }
         ]

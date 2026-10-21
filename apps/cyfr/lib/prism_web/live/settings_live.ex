@@ -2032,7 +2032,7 @@ defmodule PrismWeb.SettingsLive do
             data-state={passkey.state}
           >
             <span>
-              <span class="font-medium">{passkey.label || "Passkey"}</span>
+              <span class="font-medium">Passkey</span>
               <span class="text-gray-400">{passkey_state(passkey)}</span>
             </span>
             <.button

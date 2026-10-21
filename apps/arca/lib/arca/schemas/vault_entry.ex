@@ -25,7 +25,6 @@ defmodule Arca.Schemas.VaultEntry do
     field :name, :string
     field :provider_hint, :string, default: ""
     field :kind, :string
-    field :provenance, :string, default: "user"
     field :field_names, :string, default: "[]"
     field :binding_digest, :string
     field :oauth_endpoints, :string

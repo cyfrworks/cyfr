@@ -20,6 +20,7 @@ defmodule Arca.ExecutionTest do
     test "creates valid changeset with required fields" do
       attrs = %{
         id: "exec_test123",
+        root_execution_id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
         athanor_id: @athanor,
@@ -35,6 +36,7 @@ defmodule Arca.ExecutionTest do
     test "requires an explicit component_type and rejects non-executable types" do
       base = %{
         id: "exec_type_check",
+        root_execution_id: "exec_type_check",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
         athanor_id: @athanor,
@@ -67,9 +69,26 @@ defmodule Arca.ExecutionTest do
       assert {:id, _} = hd(changeset.errors)
     end
 
+    test "requires the root of the run's tree" do
+      attrs = %{
+        id: "exec_test123",
+        reference: ~s({"local": "./test.wasm"}),
+        user_id: "user_abc",
+        athanor_id: @athanor,
+        started_at: DateTime.utc_now(),
+        status: "running",
+        component_type: "reagent"
+      }
+
+      changeset = Row.start_changeset(attrs)
+      refute changeset.valid?
+      assert [root_execution_id: _] = changeset.errors
+    end
+
     test "requires reference" do
       attrs = %{
         id: "exec_test123",
+        root_execution_id: "exec_test123",
         user_id: "user_abc",
         athanor_id: @athanor,
         started_at: DateTime.utc_now(),
@@ -84,6 +103,7 @@ defmodule Arca.ExecutionTest do
     test "validates status inclusion" do
       attrs = %{
         id: "exec_test123",
+        root_execution_id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
         athanor_id: @athanor,
@@ -99,6 +119,7 @@ defmodule Arca.ExecutionTest do
     test "validates component_type inclusion" do
       attrs = %{
         id: "exec_test123",
+        root_execution_id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
         athanor_id: @athanor,
@@ -115,6 +136,7 @@ defmodule Arca.ExecutionTest do
     test "accepts optional fields" do
       attrs = %{
         id: "exec_test123",
+        root_execution_id: "exec_test123",
         reference: ~s({"local": "./test.wasm"}),
         user_id: "user_abc",
         athanor_id: @athanor,
@@ -167,7 +189,8 @@ defmodule Arca.ExecutionTest do
             component_type: "catalyst"
           },
           attrs
-        ),
+        )
+        |> then(&Map.put_new(&1, :root_execution_id, &1[:parent_execution_id])),
         grant: Arca.Test.Actor.grant(@athanor),
         verify: &Arca.Test.Actor.admits/1
       )
@@ -378,6 +401,29 @@ defmodule Arca.ExecutionTest do
                start!(%{id: "exec_r_#{System.unique_integer([:positive])}"})
     end
 
+    test "a root is its own tree's root, and a child naming no root is refused, writing nothing" do
+      parent = admitted!(%{id: "exec_p_#{System.unique_integer([:positive])}"})
+      assert Arca.Repo.get!(Row, parent.id).root_execution_id == parent.id
+
+      orphan = "exec_c_#{System.unique_integer([:positive])}"
+
+      assert {:error, {:invalid, %{root_execution_id: _}}} =
+               Execution.admit(
+                 %{
+                   id: orphan,
+                   reference: "catalyst:local.child:1.0.0",
+                   user_id: "user_test",
+                   athanor_id: @athanor,
+                   component_type: "catalyst",
+                   parent_execution_id: parent.id,
+                   child_key: "ck_rootless"
+                 },
+                 Arca.Test.Actor.standing(@athanor)
+               )
+
+      refute Arca.Repo.get(Row, orphan)
+    end
+
     test "a malformed key, or a key without a parent, is refused before any write" do
       parent = admitted!(%{id: "exec_p_#{System.unique_integer([:positive])}"})
       malformed = "exec_c_#{System.unique_integer([:positive])}"
@@ -416,7 +462,8 @@ defmodule Arca.ExecutionTest do
             component_type: "catalyst"
           },
           attrs
-        ),
+        )
+        |> then(&Map.put_new(&1, :root_execution_id, &1[:parent_execution_id])),
         Arca.Test.Actor.standing(@athanor)
       )
     end
@@ -520,6 +567,7 @@ defmodule Arca.ExecutionTest do
         Execution.admit(
           %{
             id: id,
+            root_execution_id: id,
             reference: "catalyst:local.test:1.0.0",
             user_id: "user_test",
             athanor_id: @athanor,
@@ -606,6 +654,7 @@ defmodule Arca.ExecutionTest do
         Execution.admit(
           %{
             id: id,
+            root_execution_id: id,
             reference: "catalyst:local.test:1.0.0",
             user_id: "user_test",
             athanor_id: @athanor,
@@ -909,6 +958,7 @@ defmodule Arca.ExecutionTest do
                Execution.admit(
                  %{
                    id: execution_id,
+                   root_execution_id: execution_id,
                    reference: "reagent:local.test:1.0.0",
                    user_id: actor.user_id,
                    athanor_id: @athanor,
@@ -1079,6 +1129,7 @@ defmodule Arca.ExecutionTakeoverTest do
         Arca.Execution.admit(
           %{
             id: execution_id,
+            root_execution_id: execution_id,
             reference: "catalyst:local.markets:1.0.0",
             user_id: actor.user_id,
             athanor_id: athanor,
@@ -1423,7 +1474,8 @@ defmodule Arca.ExecutionEgressMarkTest do
             Jason.encode!(%{allowed_domains: if(reaches_outside?, do: ["x.example"], else: [])})
         },
         lineage
-      ),
+      )
+      |> then(&Map.put_new(&1, :root_execution_id, &1[:parent_execution_id])),
       grant: grant,
       verify: &Arca.Test.Actor.verify/1,
       reaches_outside: reaches_outside?

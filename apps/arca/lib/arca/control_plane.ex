@@ -96,10 +96,9 @@ defmodule Arca.ControlPlane do
   with code that did not write them. So every slot row carries the release
   of the boot that holds it (`Prima.Version.current/0`), and a member whose
   release differs from a live member's is refused its slot: `take/3` answers
-  `{:error, {:mixed_release, other}}` and writes nothing. A live slot that
-  names no release counts as another release, since what it runs is not
-  known to be this one; an expired slot of any release is taken and
-  stamped.
+  `{:error, {:mixed_release, other}}` and writes nothing; an expired slot
+  of any release is taken and stamped. Every take and renewal stamps the
+  boot's release on the row, so every slot names one.
 
   The check and the write it admits are one transaction, after
   `Arca.Repo.transaction_lock/1` on a key of the control plane's own and
@@ -291,8 +290,8 @@ defmodule Arca.ControlPlane do
       its own renew writes nothing.
     * A slot a live peer holds answers `{:busy, row}` and writes nothing.
     * A live slot under another node key whose release is not this
-      boot's, or names none, answers `{:error, {:mixed_release, other}}`
-      and writes nothing.
+      boot's answers `{:error, {:mixed_release, other}}` and writes
+      nothing.
 
   The boot's release is `Prima.Version.current/0`; `opts[:release]`
   names another only for a test standing in for a member of another
@@ -304,7 +303,7 @@ defmodule Arca.ControlPlane do
   @spec take(String.t(), String.t(), pos_integer(), keyword()) ::
           {:ok, slot()}
           | {:busy, map()}
-          | {:error, :database_error | {:mixed_release, String.t() | nil}}
+          | {:error, :database_error | {:mixed_release, String.t()}}
   def take(node, owner, lease_ms, opts \\ [])
       when is_binary(node) and node != "" and is_binary(owner) and owner != "" and
              is_integer(lease_ms) and lease_ms > 0 and is_list(opts) do
@@ -353,7 +352,7 @@ defmodule Arca.ControlPlane do
           {:ok, slot()}
           | :taken
           | :unclaimed
-          | {:error, :database_error | {:mixed_release, String.t() | nil}}
+          | {:error, :database_error | {:mixed_release, String.t()}}
   def renew(lease_ms) when is_integer(lease_ms) and lease_ms > 0 do
     case held() do
       :none ->
@@ -749,14 +748,13 @@ defmodule Arca.ControlPlane do
   end
 
   # A slot under another node key whose lease stands at `now` and whose
-  # release is not this member's: NULL counts, since a slot that names no
-  # release is not known to run this one. This member's own key is left to
-  # the take, where a live row of another boot is `{:busy, row}`.
+  # release is not this member's. This member's own key is left to the
+  # take, where a live row of another boot is `{:busy, row}`.
   defp other_release(node, mine, now) do
     query =
       from(l in CellLease,
         where: l.node != ^node and l.lease_until > ^now,
-        where: is_nil(l.release) or l.release != ^mine,
+        where: l.release != ^mine,
         order_by: [asc: l.node],
         limit: 1,
         select: l.release

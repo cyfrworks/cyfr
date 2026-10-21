@@ -26,7 +26,6 @@ defmodule Arca.Schemas.McpLog do
   - `status` - pending/success/error
   - `duration_ms` - Request duration in milliseconds
   - `routed_to` - Service that handled the request
-  - `error_code` - JSON-RPC error code if failed
   - `input` - JSON-encoded request input
   - `output` - JSON-encoded response output
   - `error` - Error message if failed
@@ -58,7 +57,6 @@ defmodule Arca.Schemas.McpLog do
     field :status, :string, default: "pending"
     field :duration_ms, :integer
     field :routed_to, :string
-    field :error_code, :integer
     field :input, :string
     field :output, :string
     field :error, :string
@@ -73,7 +71,6 @@ defmodule Arca.Schemas.McpLog do
     :method,
     :duration_ms,
     :routed_to,
-    :error_code,
     :input,
     :output,
     :error,
