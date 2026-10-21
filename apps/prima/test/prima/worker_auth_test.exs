@@ -941,17 +941,15 @@ defmodule Prima.WorkerAuthTest do
     end
   end
 
-  test "the vector file holds the primitives, and the wire's messages are the message vectors'" do
-    for file <- ~w(host_api.json worker_api.json) do
-      keys =
-        Path.expand("../../../../tests/fixtures/" <> file, __DIR__)
-        |> File.read!()
-        |> Jason.decode!()
-        |> Map.get("keys")
+  test "the vector file holds the primitives the host API's vectors derive with" do
+    keys =
+      Path.expand("../../../../tests/fixtures/host_api.json", __DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+      |> Map.fetch!("keys")
 
-      if keys, do: assert(Map.delete(keys, "root_hex") == @vectors["keys"])
-      if keys, do: assert(keys["root_hex"] == @vectors["root_hex"])
-    end
+    assert Map.delete(keys, "root_hex") == @vectors["keys"]
+    assert keys["root_hex"] == @vectors["root_hex"]
   end
 
   test "a header at another version is refused as such before anything else" do

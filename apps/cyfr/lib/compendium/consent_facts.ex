@@ -63,8 +63,8 @@ defmodule Compendium.ConsentFacts do
     # row names its clone edges, and which roles exist decides them.
     roster =
       rows
-      |> Enum.filter(&(to_string(Map.get(&1, :component_type)) == agent_type()))
-      |> MapSet.new(&Map.get(&1, :name))
+      |> Enum.filter(&(to_string(Prima.ComponentRow.field(&1, :component_type)) == agent_type()))
+      |> MapSet.new(&Prima.ComponentRow.field(&1, :name))
 
     {:ok,
      Enum.reduce(rows, %{}, fn row, acc ->
@@ -97,7 +97,7 @@ defmodule Compendium.ConsentFacts do
   # decode, or none at all, among them.
   @impl Sanctum.Consent.Components
   def tincture_placement(%Context{}, row) do
-    with stored when not is_nil(stored) <- Map.get(row, :manifest),
+    with stored when not is_nil(stored) <- Prima.ComponentRow.field(row, :manifest),
          {:ok, manifest} <- Prima.Manifest.decode_strict(stored),
          {:ok, declaration} <- Compendium.tincture_declaration(manifest) do
       {:ok, declaration.frame.placement}
@@ -109,10 +109,10 @@ defmodule Compendium.ConsentFacts do
   defp agent_type, do: AgentSource.type()
 
   defp shipped_digest(ctx, row, roster) do
-    type = to_string(Map.get(row, :component_type))
+    type = to_string(Prima.ComponentRow.field(row, :component_type))
 
     cond do
-      type == agent_type() -> seed_agent_digest(Map.get(row, :name), roster)
+      type == agent_type() -> seed_agent_digest(Prima.ComponentRow.field(row, :name), roster)
       type == "tincture" -> pristine_tincture_digest(ctx, row)
       type in @wasm_types -> Provenance.shipped_release_digest(row)
       true -> :error
@@ -127,7 +127,7 @@ defmodule Compendium.ConsentFacts do
 
     with {:ok, bytes} <- Arca.get(Prima.Actor.system(), path),
          {:ok, row} <- AgentSource.shipped_row(name, bytes, roster) do
-      {:ok, Map.get(row, :release_digest)}
+      {:ok, Prima.ComponentRow.field(row, :release_digest)}
     end
   end
 
@@ -137,16 +137,16 @@ defmodule Compendium.ConsentFacts do
     unit =
       ComponentPath.version_dir(
         "tincture",
-        Map.get(row, :publisher),
-        Map.get(row, :name),
-        Map.get(row, :version)
+        Prima.ComponentRow.field(row, :publisher),
+        Prima.ComponentRow.field(row, :name),
+        Prima.ComponentRow.field(row, :version)
       )
 
     actor = Context.actor(ctx)
 
     with {:ok, :shipped} <- Arca.Overlay.unit_status(actor, unit),
          {:ok, false} <- Arca.Overlay.edited?(actor, unit),
-         digest when is_binary(digest) <- Map.get(row, :release_digest) do
+         digest when is_binary(digest) <- Prima.ComponentRow.field(row, :release_digest) do
       {:ok, digest}
     else
       _ -> :error

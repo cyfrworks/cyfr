@@ -519,7 +519,8 @@ defmodule Prima.KeeperProtocolTest do
 
       assert line(spawn_request(%{pool: "runner", control: true, isolation: "netns"})) ==
                ~s({"argv":["true"],"attach":{"path":"/run/a.sock","token":"#{@token}"},) <>
-                 ~s("control":true,"id":"1","isolation":"netns","pool":"runner","type":"spawn","v":1}\n)
+                 ~s("control":true,"id":"1","isolation":"netns","memory_bytes":16777216,) <>
+                 ~s("pool":"runner","type":"spawn","v":1}\n)
 
       assert KeeperProtocol.isolations() == ["netns"]
 

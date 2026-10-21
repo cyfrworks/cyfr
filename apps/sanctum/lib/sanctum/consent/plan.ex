@@ -641,7 +641,7 @@ defmodule Sanctum.Consent.Plan do
 
   defp release_ref(node_key, rows) do
     with %{} = row <- Map.get(rows, node_key),
-         version when is_binary(version) <- Map.get(row, :version),
+         version when is_binary(version) <- Prima.ComponentRow.field(row, :version),
          {:ok, ref} <- Prima.ComponentRef.parse(node_key) do
       Prima.ComponentRef.build(ref.type, ref.namespace, ref.name, version)
     else
@@ -1209,7 +1209,7 @@ defmodule Sanctum.Consent.Plan do
       Map.has_key?(rows, key) ->
         {:ok, rows}
 
-      Map.get(graph, key) != Map.get(row, :release_digest) ->
+      Map.get(graph, key) != Prima.ComponentRow.field(row, :release_digest) ->
         {:error, {:activation_moved, key}}
 
       true ->

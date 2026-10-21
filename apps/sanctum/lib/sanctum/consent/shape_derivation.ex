@@ -179,7 +179,7 @@ defmodule Sanctum.Consent.ShapeDerivation do
   defp version_shape_key(ctx, source_ref, version, row) do
     with {:ok, ref} <- Prima.ComponentRef.parse(source_ref),
          release when is_binary(release) and release != "" <-
-           Map.get(row, :release_digest) do
+           Prima.ComponentRow.field(row, :release_digest) do
       live_shape_key(ctx, {Prima.ComponentRef.to_string(%{ref | version: version}), release})
     else
       _unidentified -> nil

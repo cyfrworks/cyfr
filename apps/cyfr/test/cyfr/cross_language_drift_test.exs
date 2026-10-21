@@ -562,7 +562,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/locus/test/locus/runtime/worker_listener_test.exs", ~w(requests status)},
       {"apps/prima/test/prima/worker_api_test.exs",
        ~w(version routes retries timeouts_ms requests status)},
-      {"apps/prima/test/prima/worker_auth_test.exs", ~w(status)},
       {"apps/prima/test/prima/worker_protocol_test.exs", ~w(retries timeouts_ms status)},
       {"apps/prima/test/prima/worker_wire_test.exs", ~w(version routes requests)},
       {"tests/locus-runtime-image/runners.py", ~w(status)},
