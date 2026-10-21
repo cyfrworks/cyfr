@@ -491,7 +491,7 @@ RECOMMENDED:
 
 | `code` | When | Fix |
 |--------|------|-----|
-| `unauthenticated` (`no_frame`) | the page is not a frame the shell opened, or the handshake never came | open the tincture from the shell, or publish it and use its public address |
+| `no_frame` | the page is not a frame the shell opened, or the handshake never came | open the tincture from the shell, or publish it and use its public address |
 | `forbidden` (`frame_suspended`) | the frame is hidden and does not declare `frame.background` | act when shown, or declare `background` |
 | `forbidden` (`frame_moved`) | the version or its owner profile's grant changed since the frame opened | open the tincture again |
 | `forbidden` (undeclared) | the component, action or stream is not in the declaration | declare it and publish a new version |
