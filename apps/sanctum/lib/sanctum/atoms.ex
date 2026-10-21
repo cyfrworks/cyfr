@@ -44,7 +44,7 @@ defmodule Sanctum.Atoms do
   def known_permissions, do: @known_permissions
 
   # Every permission but the wildcard, which no sign-in path mints.
-  @person_permissions @permissions -- [:*]
+  @person_permissions List.delete(@permissions, :*)
 
   @doc """
   The permissions a signed-in person holds: every declared permission. A

@@ -202,7 +202,6 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       assert MapSet.equal?(
                anonymous,
                MapSet.new([
-                 {"session", "login"},
                  {"session", "logout"},
                  {"session", "whoami"},
                  {"session", "device_init"},

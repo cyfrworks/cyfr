@@ -11,6 +11,8 @@ defmodule Sanctum.CipherIntegrationTest do
   alias Sanctum.{Context, Webhook}
   alias Sanctum.Cipher
 
+  require Ecto.Query
+
   @key :crypto.strong_rand_bytes(32)
 
   setup tags do
