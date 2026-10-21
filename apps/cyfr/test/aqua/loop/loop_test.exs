@@ -588,7 +588,7 @@ defmodule Aqua.LoopTest do
              Arca.TurnStorage.pin_catalyst(
                Sanctum.Context.actor(ctx),
                turn.id,
-               "catalyst:local.openai:1.3.1",
+               "catalyst:local.openai:1.4.1",
                %{
                  fence: paused.fence
                }
