@@ -653,10 +653,7 @@ defmodule Aqua.ScheduleNotesTest do
       :ok = :sys.resume(keeper)
 
       completion =
-        ScheduleCompleted.new(Prima.Actor.in_athanor(athanor.id), %{
-          schedule_id: schedule.id,
-          execution_id: execution_id
-        })
+        ScheduleCompleted.new(Prima.Actor.in_athanor(athanor.id))
 
       :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
       # One round trip: the completion ahead of it has been handled.
@@ -704,10 +701,7 @@ defmodule Aqua.ScheduleNotesTest do
       keeper = keeper!()
 
       completion =
-        ScheduleCompleted.new(Prima.Actor.in_athanor("ath_nowhere"), %{
-          schedule_id: "s",
-          execution_id: "e"
-        })
+        ScheduleCompleted.new(Prima.Actor.in_athanor("ath_nowhere"))
 
       :ok = Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion)
       :sys.get_state(keeper)

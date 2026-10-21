@@ -1623,24 +1623,12 @@ defmodule Opus.Schedules.Scheduler do
   # reaches here, since that closer's is the only word; the `moved > 0`
   # guard is the shape this clause accepts, and anything else, a finish
   # the store could not answer included, publishes nothing.
-  defp publish_completion(ctx, completed, {:ok, moved}, {:ok, row}, generation)
+  defp publish_completion(ctx, completed, {:ok, moved}, {:ok, _row}, generation)
        when is_integer(moved) and moved > 0 do
-    %{schedule: schedule, occurrence: occurrence} = completed
-    {keep?, note_name} = keep_outcome(schedule.metadata)
-    actor = Sanctum.Context.actor(ctx)
+    %{schedule: schedule} = completed
 
     if still_ours?(generation) do
-      completion =
-        ScheduleCompleted.new(actor, %{
-          issuer_member: ScheduleCompleted.issuer(Arca.ControlPlane.held()),
-          schedule_id: schedule.id,
-          execution_id: completed.execution_id,
-          occurrence_id: occurrence.id,
-          completed_at: Map.get(row, :last_run_at),
-          keep_outcome: keep?,
-          note_name: note_name,
-          output: completed.output
-        })
+      completion = ScheduleCompleted.new(Sanctum.Context.actor(ctx))
 
       case Cyfr.Bus.broadcast_global(Cyfr.Bus.schedule_completions(), completion) do
         :ok ->

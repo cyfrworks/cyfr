@@ -95,16 +95,7 @@ defmodule Cyfr.BusPayloadTest do
       Ping.new(1),
       Viewing.new("ath_payload"),
       RoomInView.new(%{"athanor_id" => "ath_payload", "thread_id" => "t", "title" => "x"}),
-      ScheduleCompleted.new(@actor, %{
-        issuer_member: %{node: "a@host", owner: "boot_1", generation: 1},
-        schedule_id: "s",
-        execution_id: "e",
-        occurrence_id: "o",
-        completed_at: DateTime.utc_now(),
-        keep_outcome: true,
-        note_name: "n",
-        output: %{"rows" => 42}
-      })
+      ScheduleCompleted.new(@actor)
     ]
   end
 
@@ -446,34 +437,6 @@ defmodule Cyfr.BusPayloadTest do
       for nobody <- ["", nil] do
         assert_raise FunctionClauseError, fn -> apply(Bus, :file_offers, [nobody]) end
       end
-    end
-  end
-
-  describe "the schedule completion" do
-    test "keeps output only when the schedule asked, encoded and capped" do
-      base = %{schedule_id: "s", execution_id: "e", output: %{"a" => 1}}
-
-      assert %{output: nil, truncated: false} =
-               ScheduleCompleted.new(@actor, Map.put(base, :keep_outcome, false))
-
-      assert %{output: ~s({"a":1})} =
-               ScheduleCompleted.new(@actor, Map.put(base, :keep_outcome, true))
-
-      long = String.duplicate("é", 40_000)
-
-      assert %{output: cut, truncated: true} =
-               ScheduleCompleted.new(
-                 @actor,
-                 %{base | output: long} |> Map.put(:keep_outcome, true)
-               )
-
-      assert byte_size(cut) <= ScheduleCompleted.max_output_bytes() and String.valid?(cut)
-    end
-
-    test "names its issuer the same way on both sides" do
-      slot = %{node: "a", owner: "b", generation: 3, fence: 9, lease_until: DateTime.utc_now()}
-      assert ScheduleCompleted.issuer({:ok, slot}) == %{node: "a", owner: "b", generation: 3}
-      assert ScheduleCompleted.issuer(:none) == nil
     end
   end
 
