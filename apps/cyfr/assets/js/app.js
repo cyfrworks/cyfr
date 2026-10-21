@@ -87,84 +87,6 @@ Hooks.ScrollBottom = {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Custom confirm dialog (replaces window.confirm for Tauri WKWebView compat)
-// ---------------------------------------------------------------------------
-// phoenix_html.js intercepts clicks on [data-confirm] elements and calls
-// window.confirm(). In Tauri's WKWebView (external URLs), window.confirm()
-// silently returns false, preventing phx-click events from ever firing.
-// We intercept the phoenix.link.click custom event on document.body (closer
-// than the window-level handler) and show an HTML modal instead.
-
-function showConfirmDialog(message) {
-  return new Promise(function(resolve) {
-    var overlay = document.createElement("div")
-    overlay.className = "fixed inset-0 z-[9999] flex items-center justify-center bg-black/60"
-
-    var panel = document.createElement("div")
-    panel.className = "bg-gray-900 border border-gray-800 rounded-lg shadow-xl p-6 max-w-sm w-full mx-4"
-
-    var msg = document.createElement("p")
-    msg.className = "text-gray-200 text-sm mb-6"
-    msg.textContent = message
-
-    var buttons = document.createElement("div")
-    buttons.className = "flex justify-end gap-3"
-
-    var cancel = document.createElement("button")
-    cancel.className = "inline-flex items-center justify-center rounded-lg font-medium px-4 py-2 text-sm bg-gray-700 text-gray-200 hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:ring-offset-gray-900"
-    cancel.textContent = "Cancel"
-
-    var confirm = document.createElement("button")
-    confirm.className = "inline-flex items-center justify-center rounded-lg font-medium px-4 py-2 text-sm bg-red-600 text-white hover:bg-red-500 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-gray-900"
-    confirm.textContent = "Confirm"
-
-    buttons.appendChild(cancel)
-    buttons.appendChild(confirm)
-    panel.appendChild(msg)
-    panel.appendChild(buttons)
-    overlay.appendChild(panel)
-    document.body.appendChild(overlay)
-
-    // Remove the document listener on every dialog close path.
-    function onKeydown(e) {
-      if (e.key === "Escape") cleanup(false)
-    }
-
-    function cleanup(result) {
-      document.removeEventListener("keydown", onKeydown)
-      overlay.remove()
-      resolve(result)
-    }
-
-    cancel.addEventListener("click", function() { cleanup(false) })
-    confirm.addEventListener("click", function() { cleanup(true) })
-    overlay.addEventListener("click", function(e) {
-      if (e.target === overlay) cleanup(false)
-    })
-    document.addEventListener("keydown", onKeydown)
-
-    confirm.focus()
-  })
-}
-
-document.body.addEventListener("phoenix.link.click", function(e) {
-  var message = e.target.getAttribute("data-confirm")
-  if (!message) return
-  e.stopPropagation()
-  if (e.target.hasAttribute("data-confirm-resolved")) {
-    e.target.removeAttribute("data-confirm-resolved")
-    return
-  }
-  e.preventDefault()
-  showConfirmDialog(message).then(function(ok) {
-    if (ok) {
-      e.target.setAttribute("data-confirm-resolved", "")
-      e.target.click()
-    }
-  })
-}, false)
-
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
@@ -187,12 +109,10 @@ window.liveSocket = liveSocket
 // JS.dispatch("phx:clipboard", ...) fires the window event directly, and
 // push_event("clipboard", ...) from a LiveView arrives as the same
 // "phx:clipboard" window event (the client prefixes server-pushed events
-// with "phx:"). The navigator.clipboard check guards non-secure contexts
-// and older WebViews, where the async clipboard API is undefined and the
-// bare call would throw.
+// with "phx:").
 window.addEventListener("phx:clipboard", (e) => {
   const text = e.detail && e.detail.text
-  if (text && navigator.clipboard) {
+  if (text) {
     navigator.clipboard.writeText(text)
   }
 })
