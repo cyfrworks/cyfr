@@ -2603,21 +2603,6 @@ defmodule Cyfr.Boundaries do
   @spec config_applications() :: [atom()]
   def config_applications, do: [:arca, :cyfr, :sanctum]
 
-  @config_keys_read_outside_lib %{
-    default_test_namespace:
-      "read by the Sanctum suite's context fixture, in `apps/sanctum/test/support`. " <>
-        "The schema reads each application's `lib` alone: widening it to test " <>
-        "support would change what it means — keys the application reads becomes " <>
-        "keys anything reads — and pull in every fixture's own reads with it."
-  }
-
-  @doc """
-  The keys a configuration file sets that nothing under any `lib` reads,
-  and why each is set anyway.
-  """
-  @spec config_keys_read_outside_lib() :: %{atom() => String.t()}
-  def config_keys_read_outside_lib, do: @config_keys_read_outside_lib
-
   @doc """
   The keys `declared` names under an application that `scanned` never
   reads under that application.
@@ -2632,10 +2617,8 @@ defmodule Cyfr.Boundaries do
           [{String.t(), String.t()}]
   def unread_config_keys(declared, scanned) do
     read = config_pairs_read(scanned)
-    outside_lib = MapSet.new(Map.keys(@config_keys_read_outside_lib), &Atom.to_string/1)
 
     declared
-    |> Enum.reject(fn {_app, key} -> MapSet.member?(outside_lib, key) end)
     |> Enum.reject(&MapSet.member?(read, &1))
     |> Enum.sort()
   end

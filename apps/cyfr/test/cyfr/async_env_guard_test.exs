@@ -74,8 +74,8 @@ defmodule Cyfr.AsyncEnvGuardTest do
     in_file = for w <- writes, w.file == @conn_case, do: {w.line, w.what, w.guarded?}
 
     assert Enum.sort(in_file) == [
-             {98, "Application.put_env", true},
-             {99, "Application.delete_env", true}
+             {91, "Application.put_env", true},
+             {92, "Application.delete_env", true}
            ],
            "conn_case.ex must hold its two admitted writes and no other: #{inspect(in_file)}"
   end

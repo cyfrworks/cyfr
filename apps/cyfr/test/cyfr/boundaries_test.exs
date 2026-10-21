@@ -1342,23 +1342,9 @@ defmodule Cyfr.BoundariesTest do
              A file that sets `:arca, :some_key` while the code reads
              `:cyfr, :some_key` sets nothing: the umbrella build reads the root
              file, an application's own build reads its own, and a key in the
-             wrong one of them is inert in both. If the key really is read
-             outside every application's `lib`, say so in
-             `Cyfr.Boundaries.config_keys_read_outside_lib/0`.
+             wrong one of them is inert in both. Set the key under the
+             application that reads it, or delete it.
              """
-    end
-
-    test "every key said to be read outside lib is still declared somewhere" do
-      declared = MapSet.new(declared_config_pairs(), &elem(&1, 1))
-
-      stale =
-        for {key, _reason} <- Boundaries.config_keys_read_outside_lib(),
-            not MapSet.member?(declared, Atom.to_string(key)),
-            do: key
-
-      assert stale == [],
-             "these keys are named as read outside lib and nothing sets them: " <>
-               inspect(stale)
     end
 
     test "the :setting class is the platform settings roster's keys, and nothing else" do
