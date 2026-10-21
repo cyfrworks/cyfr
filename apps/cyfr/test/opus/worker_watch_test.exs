@@ -216,6 +216,13 @@ defmodule Opus.WorkerWatchTest do
     child
   end
 
+  defp restart_event_buffers do
+    case Supervisor.restart_child(Opus.Tree, Opus.Events.Supervisor) do
+      {:ok, _pid} -> :ok
+      {:error, :running} -> :ok
+    end
+  end
+
   defp restart_sequence do
     case Supervisor.restart_child(Opus.Tree, Opus.Events.Sequence) do
       {:ok, _pid} -> :ok
@@ -445,6 +452,40 @@ defmodule Opus.WorkerWatchTest do
       assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(fixture.pid, fixture.close)
       assert %{status: "failed", error_message: @lapsed} = row(fixture)
       restart_sequence()
+    end
+
+    # The row is failed before the lapse publishes it: a publication that
+    # exits leaves the lapse done, its children failed and its attempt
+    # stopped, never reported as not lapsed.
+    @tag :capture_log
+    test "a lapse whose publication exits after its row is failed still stands done",
+         %{ctx: ctx} do
+      fixture = attached!(ctx, "boot_1", component_type: :formula)
+      child = child!(fixture)
+      endpoint = serve!([status("boot_1", [fixture.attempt])])
+      watch = watch!(endpoint)
+      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
+
+      on_exit(&restart_event_buffers/0)
+      :ok = Supervisor.terminate_child(Opus.Tree, Opus.Events.Supervisor)
+      Worker.script!(self(), [@not_a_status])
+
+      message = "Parent execution (#{fixture.execution_id}) terminated"
+
+      wait_until(
+        fn ->
+          match?(
+            %{status: "failed", error_message: ^message},
+            Arca.Repo.get!(Arca.Schemas.Execution, child.id)
+          )
+        end,
+        @heard_ms,
+        "the child failed"
+      )
+
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(fixture.pid, fixture.close)
+      assert %{status: "failed", error_message: @lapsed} = row(fixture)
+      restart_event_buffers()
     end
   end
 
