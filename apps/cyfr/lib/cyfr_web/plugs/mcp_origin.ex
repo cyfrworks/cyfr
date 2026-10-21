@@ -32,7 +32,7 @@ defmodule CyfrWeb.Plugs.MCPOrigin do
   def init(opts), do: Keyword.put_new(opts, :errors, @default_errors)
 
   def call(conn, opts) do
-    errors = Keyword.get(opts, :errors, @default_errors)
+    errors = Keyword.fetch!(opts, :errors)
 
     case get_req_header(conn, "origin") do
       [origin | _] ->
