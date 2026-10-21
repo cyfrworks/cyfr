@@ -914,14 +914,21 @@ defmodule PrismWeb.AquaLiveTest do
       refute has_element?(view, "#prompt-editor")
     end
 
-    test "a prompt saved over another member's edit made since the editor opened is refused, " <>
-           "and theirs stands",
+    test "the prompt editor saves the prompt it opened, and refuses to save over another " <>
+           "member's edit made since",
          %{conn: conn, ctx: ctx} do
       {view, _html} = mount_athanor(conn, "/aqua")
+      agents = with_target(view, "#aqua-agents")
 
-      view
-      |> with_target("#aqua-agents")
-      |> render_click("editor_edit_prompt", %{"name" => "planner"})
+      render_click(agents, "editor_edit_prompt", %{"name" => "planner"})
+      html = view |> form("#prompt-editor form", %{"content" => "# Mine"}) |> render_submit()
+
+      refute html =~ "Save failed"
+      assert {:ok, %{"content" => "# Mine"}} = get_agent(ctx, "planner")
+      refute has_element?(view, "#prompt-editor")
+
+      render_click(agents, "editor_edit_prompt", %{"name" => "planner"})
+      assert has_element?(view, "#prompt-editor textarea[name=content]", "# Mine")
 
       {:ok, _} =
         AgentConfig.call_aqua(ctx, %{
@@ -930,9 +937,9 @@ defmodule PrismWeb.AquaLiveTest do
           "content" => "# Theirs"
         })
 
-      html = view |> form("#prompt-editor form", %{"content" => "# Mine"}) |> render_submit()
+      html = view |> form("#prompt-editor form", %{"content" => "# Again"}) |> render_submit()
 
-      assert html =~ "Save failed"
+      assert html =~ "The prompt changed since you opened it"
       assert {:ok, %{"content" => "# Theirs"}} = get_agent(ctx, "planner")
       assert has_element?(view, "#prompt-editor textarea[name=content]")
     end
