@@ -687,7 +687,8 @@ defmodule Sanctum.ApiKeyTest do
     for {label, stored} <- [
           {"not JSON", ~s(["192.168.1.0/24")},
           {"not a list", ~s({"allow": "192.168.1.0/24"})},
-          {"not strings", "[1, 2]"}
+          {"not strings", "[1, 2]"},
+          {"empty", ""}
         ] do
       test "#{label} refuses every address", %{ctx: ctx} do
         stored = unquote(stored)
@@ -723,21 +724,19 @@ defmodule Sanctum.ApiKeyTest do
         assert log =~
                  ~r/\[Sanctum\.ApiKey\] stored ip_allowlist is not (valid JSON|a list of strings) \(#{byte_size(stored)} bytes\)/
 
-        refute log =~ stored
+        if stored != "", do: refute(log =~ stored)
       end
     end
 
-    test "an absent or empty column is no restriction", %{ctx: ctx} do
+    test "an absent column is no restriction", %{ctx: ctx} do
       name = "absent-allowlist-#{System.unique_integer([:positive])}"
       {:ok, %{api_key: key}} = create_key(ctx, %{name: name, ip_allowlist: ["192.168.1.0/24"]})
 
-      for stored <- [nil, ""] do
-        Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.name == ^name),
-          set: [ip_allowlist: stored]
-        )
+      Arca.Repo.update_all(from(k in Arca.Schemas.ApiKey, where: k.name == ^name),
+        set: [ip_allowlist: nil]
+      )
 
-        assert {:ok, _} = ApiKey.validate(key, client_ip: "10.0.0.1")
-      end
+      assert {:ok, _} = ApiKey.validate(key, client_ip: "10.0.0.1")
     end
   end
 

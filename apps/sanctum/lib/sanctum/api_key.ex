@@ -915,14 +915,17 @@ defmodule Sanctum.ApiKey do
     end
   end
 
-  # A stored allowlist is a security row. Valid JSON holding only strings
-  # is the list, an absent column is no restriction, and anything else is
-  # corrupt, which every admission refuses. The line names the column and
-  # its size, never its bytes.
-  defp decode_allowlist(nil), do: nil
-  defp decode_allowlist(""), do: nil
+  @doc """
+  A key's stored `ip_allowlist` column as every admission reads it: valid
+  JSON holding only strings is the list, an absent column (`nil`) is no
+  restriction, and anything else, an empty string included, is
+  `:corrupt`, a security row that admits no address. The warning names
+  the column and its size, never its bytes.
+  """
+  @spec decode_allowlist(String.t() | nil) :: [String.t()] | nil | :corrupt
+  def decode_allowlist(nil), do: nil
 
-  defp decode_allowlist(json) when is_binary(json) do
+  def decode_allowlist(json) when is_binary(json) do
     case Prima.Json.decode(json) do
       {:ok, list} when is_list(list) ->
         if Enum.all?(list, &is_binary/1),

@@ -673,7 +673,7 @@ defmodule Sanctum.Caller do
          %{athanor_id: athanor_id, user_id: user_id},
          client_ip
        ) do
-    case decode_allowlist(row.ip_allowlist) do
+    case Sanctum.ApiKey.decode_allowlist(row.ip_allowlist) do
       :corrupt -> {:error, :ip_not_allowed}
       allowlist when allowlist in [nil, []] -> {:ok, nil}
       allowlist when is_binary(client_ip) and is_list(allowlist) -> allowed(client_ip, allowlist)
@@ -1110,7 +1110,7 @@ defmodule Sanctum.Caller do
          },
          %Context{athanor_id: athanor_id, user_id: creator, client_ip: client_ip}
        ) do
-    case decode_allowlist(row.ip_allowlist) do
+    case Sanctum.ApiKey.decode_allowlist(row.ip_allowlist) do
       :corrupt ->
         {:error, :unauthenticated}
 
@@ -1380,32 +1380,5 @@ defmodule Sanctum.Caller do
       Logger.debug(
         "[Sanctum.Caller] session refresh did not run: #{Prima.LogFilter.inspect_reason(reason)}"
       )
-  end
-
-  # A stored allowlist is a security row. Valid JSON holding only strings
-  # is the list, an absent column is no restriction, and anything else is
-  # corrupt, which every admission refuses. The line names the column and
-  # its size, never its bytes.
-  defp decode_allowlist(nil), do: nil
-  defp decode_allowlist(""), do: nil
-
-  defp decode_allowlist(json) when is_binary(json) do
-    case Prima.Json.decode(json) do
-      {:ok, list} when is_list(list) ->
-        if Enum.all?(list, &is_binary/1),
-          do: list,
-          else: corrupt_allowlist("is not a list of strings", json)
-
-      {:ok, _other} ->
-        corrupt_allowlist("is not a list of strings", json)
-
-      {:error, :invalid_json} ->
-        corrupt_allowlist("is not valid JSON", json)
-    end
-  end
-
-  defp corrupt_allowlist(problem, json) do
-    Logger.warning("[Sanctum.Caller] stored ip_allowlist #{problem} (#{byte_size(json)} bytes)")
-    :corrupt
   end
 end

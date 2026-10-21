@@ -393,7 +393,8 @@ defmodule Sanctum.CallerTest do
     for {label, stored} <- [
           {"not JSON", ~s(["192.168.1.0/24")},
           {"not a list", ~s({"allow": "192.168.1.0/24"})},
-          {"not strings", "[1, 2]"}
+          {"not strings", "[1, 2]"},
+          {"empty", ""}
         ] do
       test "#{label}: the derived source and the revalidation refuse", %{
         name: name,
@@ -415,9 +416,9 @@ defmodule Sanctum.CallerTest do
           end)
 
         assert log =~
-                 ~r/\[Sanctum\.Caller\] stored ip_allowlist is not (valid JSON|a list of strings) \(#{byte_size(stored)} bytes\)/
+                 ~r/\[Sanctum\.ApiKey\] stored ip_allowlist is not (valid JSON|a list of strings) \(#{byte_size(stored)} bytes\)/
 
-        refute log =~ stored
+        if stored != "", do: refute(log =~ stored)
       end
     end
   end
