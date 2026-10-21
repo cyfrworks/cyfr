@@ -113,7 +113,7 @@ if config_env() != :test do
         nil
 
       text ->
-        case Prima.WorkerAuth.decode_root(text) do
+        case Prima.MacEnvelope.decode_root(text) do
           {:ok, root} ->
             root
 

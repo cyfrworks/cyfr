@@ -384,9 +384,13 @@ defmodule Locus.ConfigTest do
       |> Jason.decode!()
 
     # A spawn's own bound: a whole number refused for what it is, not for
-    # the request it rides on.
+    # the request it rides on, which carries a bound of its own.
     bounds = fn requests ->
-      for %{"request" => %{"type" => "spawn", "memory_bytes" => bytes}} <- requests,
+      for %{
+            "why" => "memory bound" <> _,
+            "request" => %{"type" => "spawn", "memory_bytes" => bytes}
+          } <-
+            requests,
           is_integer(bytes),
           do: bytes
     end
