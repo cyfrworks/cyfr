@@ -47,7 +47,7 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 | Type | Prefix | Use Case | Security Considerations |
 |------|--------|----------|------------------------|
 | **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
-| **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can read the vault. |
+| **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can list the metadata of stored OAuth client credentials. |
 | **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
@@ -132,7 +132,7 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 | Scope | What It Allows |
 |-------|----------------|
 | `execute` | Run components, manage schedules, compile builds |
-| `vault_read` | Read stored credential metadata (vault entries; material never leaves the vault) |
+| `vault_read` | `oauth.list`: the names of the OAuth providers the athanor has client credentials for, who stored them and when; never the secret |
 | `component_read` | Get component blobs, discover components |
 | `component_manage` | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim and verify publishers, manage registry tokens and members; change Aqua souls, roles, guides and scrolls and their skills |
 | `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
