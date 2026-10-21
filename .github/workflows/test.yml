@@ -1768,23 +1768,26 @@ jobs:
         run: scripts/ci/config-seam.sh
 
   vocabulary-gate:
-    name: No org/project fossils (one tenancy vocabulary)
+    name: Retired names and the storage layout
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The tenancy unit is the athanor and a conversation is a thread. This
-      # asserts the old vocabularies — org/project, the athanor's retired
-      # second name, conversation/topic subscription, the prism: PubSub
-      # prefix, the keeper's retired role name, the WASM engine's retired
-      # names, the gate's retired name, the desktop and card names the
-      # canvas replaced and its retired measurement script — cannot creep
-      # back into code, config, or operator-facing docs. Each retired name
-      # is matched as a word or inside an identifier, never inside an
-      # English word that merely contains its letters.
-      # Free-word "org"/"project" is deliberately not gated (OCI annotations,
-      # Mix.Project, Go module paths, "project directory" prose are legitimate).
-      - name: Tier A/B fossil patterns must be absent
+      # The tenancy unit is the athanor and a conversation is a thread. Code,
+      # configuration and the operator-facing docs spell none of the retired
+      # names below: the org/project tenancy vocabulary and conversation and
+      # topic subscription with the prism: PubSub prefix, in every form; the
+      # athanor's retired second name and the WASM engine's, as words; and
+      # the apps, images, environment variables and paths the umbrella's
+      # applications replaced: Porta and the separate Prism endpoint, spawn
+      # and its spawner, the standalone Opus app and its worker image, the
+      # keeper's retired home and the worker settings. Other retired module
+      # and function names are not listed: a call to one fails to compile.
+      # Each name is matched as a word or inside an identifier, never inside
+      # an English word that merely contains its letters; the free words
+      # "org" and "project" are not gated (OCI annotations, Mix.Project, Go
+      # module paths and "project directory" prose are legitimate).
+      - name: Retired names stay out and the storage layout is Arca's
         run: |
           set -uo pipefail
           paths='apps config wit scripts tests Caddyfile docker-compose.yml Dockerfile Dockerfile.locus docker-entrypoint.sh .env.example .env.locus.example .gitignore .dockerignore README.md ARCHITECTURE.md CONTRIBUTING.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md'
@@ -1800,21 +1803,9 @@ jobs:
             'Arca\.Schemas\.(Org|Project)\b' \
             'Sanctum\.Tenancy\.(Orgs|Projects|Memberships)\b' \
             'Compendium\.ProjectSeeder\b' \
-            'Compendium\.AthanorSeeder\b' \
-            'Compendium\.Upstream\b' \
-            'Compendium\.Bundle\b' \
-            'Sanctum\.TenantScope\b' \
-            'Arca\.Tenant\b' \
-            'default_athanor' \
-            'cyfr\.consent\.bootstrap' \
             ':org([^a-z_]|$)' \
             ':project([^a-z_]|$)' \
-            'PrismWeb\.Endpoint\b' \
-            'Prism\.AuthExchange\b' \
-            'PrismWeb\.LiveClaimGate\b' \
             'CYFR_PRISM_' \
-            'Prism\.AquaConversations\b' \
-            ':aqua_path\b' \
             ':4001\b|4001:4001' \
             'CYFR_PORTA_' \
             'cyfr-porta' \
@@ -1823,40 +1814,13 @@ jobs:
             'topic_subscription|TopicSubscription' \
             'Cyfr\.Topics\b' \
             'prism:[a-z_]' \
-            'cyfr_contracts' \
-            'CyfrContracts' \
-            'Compendium\.(WITSource|WasmValidator)\b' \
-            'Cyfr\.Test\.(SourceTree|CodeLines|Wait|AuthorityFixtures)\b' \
-            'Emissary\.MCP\.VaultRef\b' \
-            'Cyfr\.Ops\b' \
-            '[Gg]rimoire|GRIMOIRE' \
-            'OperationTable' \
-            'Emissary\.MCP\.(RequestLog|RunningTasks|Tools\.SystemProvider)\b' \
-            ':cyfr, :?tool_providers' \
-            'Cyfr\.Execution\b' \
-            'Cyfr\.Schedules\b' \
-            'Crucible\\?\.[A-Za-z_{]' \
-            'CYFR_CRUCIBLE_' \
-            'crucible_' \
-            ':crucible\b' \
-            'crucible://' \
-            'lib/crucible' \
-            'CrucibleTest' \
-            'cyfr\.crucible\.' \
-            'test/crucible' \
-            '"crucible"' \
-            '\bopus_(workers|key)\b' \
-            'Emissary\.MCP\.(McpServersTool|ExternalProvider|Bridge|ExternalServer\w*|ApprovalTool|NotesTool|ThreadTool|BackendDefinition|StatusRedaction)\b' \
-            'Compendium\.MCP\b' \
-            'Sanctum\.MCP\b' \
+            '[Cc]rucible|CRUCIBLE' \
             'apps/spawn/' \
             'cyfr-spawn' \
             'spawn_protocol\.json' \
             'CYFR_SPAWN_CHANNEL' \
             'cyfr-worker/v1' \
             'cyfr\.worker\.key' \
-            'Locus\.Spawner\b' \
-            'Locus\.Test\.FakeSpawner\b' \
             '(^|[^A-Za-z])([Ss]pawners?([^a-z]|$)|SPAWNERS?([^A-Z]|$))|[a-z]Spawner' \
             'apps/opus\b' \
             '"apps", *"(opus|keeper)"' \
@@ -1868,20 +1832,7 @@ jobs:
             '\bOPUS\b' \
             'CYFR_OPUS_(KEY|WORKERS|WATCH_)' \
             'wrk_opus' \
-            'OpusService' \
             'cyfr\.opus\.key' \
-            'Opus\\?\.(Application|AsyncTracker|Cache|ComponentCache|ComponentType|Credentials|EdgeGuard|Egress|FormulaHandler|HostClient|HttpHandler|HttpRequestValidation|HttpStreamHandler|Keeper|MixProject|OAuthHandler|Relay|Release|Runner|RunnerPool|RunnerProcess|Runtime|Settings|SharedEngine|StorageHandler|Subtree|Test|WorkerListener|WorkerService)\b' \
-            'Opus\\?\.(ActivationStamping|Application|AsyncTracker|AttachedFetch|AuthorityExecutionCharacterization|AuthorityPlumbing|BootstrapFirstRun|BudgetConcurrencyCharacterization|CancelCascadeCharacterization|Chain|ComponentCache|ComponentType|Credentials|DirectKeeper|EdgeGuard|Egress|ExecutionProvenance|ExecutorCancelPenalty|ExecutorCascade|ExecutorMaskedOutput|ExecutorRateLimit|ExecutorRegistration|FormulaHandler|FormulaHandlerMcp|FormulaHandlerRunner|GenServerCatchall|HostClient|HttpHandler|HttpHandlerEnforcement|HttpRequestValidation|HttpStreamHandler|HttpStreamHandlerBoundary|KeeperChannel|KeeperMemory|KeeperVectors|LogFilterBoot|MemoryBound|ModelContract|ModelsCatalogue|NestedProbeFixture|OAuthHandler|OrphanChildren|Relay|Release|ResourceLimits|RestartRequired|RetainedInput|Runner|RunnerBoundary|RunnerControlVectors|RunnerPool|RunnerReuse|Runtime|SecretAudit|Security|SeedModelCatalysts|Settings|StorageHandler|StoreLimits|Timeout|VaultDenial|WasiCapabilities|WorkerListener|WorkerService|WorkerServicePool|WorkerServiceWire)Test\b' \
-            'Opus\.\{ *([A-Za-z0-9_.]+ *, *)*(Application|AsyncTracker|Cache|ComponentCache|ComponentType|Credentials|EdgeGuard|Egress|FormulaHandler|HostClient|HttpHandler|HttpRequestValidation|HttpStreamHandler|Keeper|MixProject|OAuthHandler|Relay|Release|Runner|RunnerPool|RunnerProcess|Runtime|Settings|SharedEngine|StorageHandler|Subtree|Test|WorkerListener|WorkerService) *([,}]|$)' \
-            'Cyfr\.Opus\.Key\b' \
-            '\bopus_(named_by_cyfr_tests|service|watch)' \
-            'MacEnvelope\.domain\(:opus\)' \
-            'MacEnvelope\.label\(:worker\)' \
-            '\{:opus, "worker"\}' \
-            '@type service ::[^#]*:worker\b' \
-            '\{PREFIX\}/worker\b' \
-            '(\[:cyfr, :opus, :|cyfr\.opus\.)(formula|mcp_tool|storage|http|runtime)\b' \
-            'Opus\.Telemetry\.(formula|mcp_tool|storage)_' \
             'http:\\?/\\?/opus:' \
             '/app/bin/opus\b' \
             '/run/opus\b' \
@@ -1904,12 +1855,6 @@ jobs:
             'CYFR_MAX_CONCURRENT_EXECUTIONS' \
             'CYFR_WORKER_WATCH_' \
             '(^|[^A-Za-z])([Ee]states?([^a-z]|$)|ESTATES?([^A-Z]|$))|[a-z]Estate' \
-            'Prima\.Card\b' \
-            'Prism\.Desktop\b' \
-            'shell_desktop|DesktopLive' \
-            'tincture\.cards' \
-            'canvas-(card|stall)\b' \
-            'measure\.exs' \
             ; do
             hits="$(git grep -InE "$p" -- $paths $excl || true)"
             if [ -n "$hits" ]; then
@@ -1920,10 +1865,10 @@ jobs:
           done
           # Check athanor_id constraints in every migration. Only the baseline's
           # memberships, sessions and decision_logs columns may be nullable.
-          # `grep -c` exits 1 when the count is zero, and the job's shell is
-          # `bash -e`, so an unguarded count on a migration that adds no
-          # athanor_id column kills the job silently — which is what every
-          # check below this point had been dying behind.
+          # `grep -c` exits 1 when the count is zero and the job's shell is
+          # `bash -e`, so every count is guarded: an unguarded one on a
+          # migration that adds no athanor_id column would end the job there,
+          # silently, with every check below it unrun.
           m=apps/arca/priv/repo/migrations/20260815000000_baseline.exs
           nullable="$(grep -cE 'add :athanor_id' "$m" || true)"
           notnull="$(grep -cE 'add :athanor_id.*null: false' "$m" || true)"
@@ -1944,38 +1889,22 @@ jobs:
           if [ "$(grep -c 'COALESCE(athanor_id' "$m" || true)" -ne 1 ]; then
             echo "::error::expected exactly one COALESCE(athanor_id (the membership assignment index)"; fail=1
           fi
-          # Runtime storage must stay under data/.
-          if ! grep -q '^/data/$' .gitignore || grep -qE '^(components/\*|!components/_bundle/)$' .gitignore; then
-            echo "::error::.gitignore must ignore /data/ and carry no components/* allowlist pair"; fail=1
+          # Runtime storage stays under data/, which the repository ignores.
+          if ! grep -q '^/data/$' .gitignore; then
+            echo "::error::.gitignore must ignore /data/"; fail=1
           fi
-          # The template `cyfr init` writes must agree with the repo's own.
-          # Anchored the way the .gitignore check above is: an unanchored
-          # '/data/' also matched the config template's `./data/cyfr.db` and a
-          # code comment, so the ignore entry this guards could be deleted —
-          # every `cyfr init` project then committing its runtime state — with
-          # the gate still green.
-          if ! grep -q '^/data/$' apps/codex/cmd/lifecycle.go || grep -qE 'components/\*$|!components/_bundle/' apps/codex/cmd/lifecycle.go; then
-            echo "::error::lifecycle.go .gitignore template must ignore /data/ and carry no components/* allowlist pair"; fail=1
+          # The template `cyfr init` writes ignores it too. Anchored as the
+          # .gitignore check above is: an unanchored '/data/' also matches the
+          # config template's `./data/cyfr.db` and a code comment, and would
+          # pass with the ignore entry itself deleted.
+          if ! grep -q '^/data/$' apps/codex/cmd/lifecycle.go; then
+            echo "::error::lifecycle.go .gitignore template must ignore /data/"; fail=1
           fi
-          # Operator-facing docs describe the unified athanor layout — not the
-          # old two-segment one, not the split components/{athanor} roots, and
-          # not a bare components/ tree at the project root.
-          docs_hits="$(git grep -InE 'components/local/default|/t/:publisher/|/t/<publisher>/|components/\{athanor|^components/$' -- README.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md .env.example || true)"
-          if [ -n "$docs_hits" ]; then
-            echo "::error::guides still describe a pre-unification layout"; echo "$docs_hits"; fail=1
-          fi
-          # Per-athanor storage diagrams must name physical tenant roots.
-          # The names below are not tenant roots. `data/` is no longer among
-          # them: the guest's scope and the athanor's root are one name now
-          # (Arca.Storage.tenant_roots/0).
-          phantom_hits="$(git grep -InE '^ +[├└│|]+─* *(config|builds)/ ' -- README.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md || true)"
-          if [ -n "$phantom_hits" ]; then
-            echo "::error::guide tree diagrams name a scope that is not a tenant root (see Arca.Storage.tenant_roots/0)"; echo "$phantom_hits"; fail=1
-          fi
-          # Tracked seed media belongs under seed/.
-          if git ls-files 'components/*' 'aqua/*' | grep -q .; then
-            echo "::error::seed media lives under seed/ — nothing may be tracked at components/ or aqua/"; fail=1
-          fi
+          # Each directory a guide's per-athanor storage diagram draws under
+          # an athanor's tree is a tenant root: Arca.Storage.tenant_roots/0,
+          # read from the @layout that builds it.
+          python3 -I scripts/ci/storage-diagrams.py README.md component-guide.md configuration-guide.md integration-guide.md tincture-guide.md identity-guide.md devices-guide.md || fail=1
+          # Tracked seed media holds the two seed roots alone.
           if git ls-files 'seed/*' | grep -vE '^seed/(components|aqua)/' | grep -q .; then
             echo "::error::seed/ carries only its two roots, components/ and aqua/"; fail=1
           fi
@@ -1983,23 +1912,17 @@ jobs:
           # — compose mounts, the Docker seed bake, the init template, the
           # scaffold tarball. Witness each spelling so a layout rename in
           # Arca.Storage cannot silently drift past them.
-          # A comment that MENTIONS the spelling is not the spelling. Strip
-          # whole-line comments first, or deleting the code a guard names is
-          # masked by the paragraph explaining it — which is exactly what
-          # `docker-entrypoint.sh '/app/seed/aqua'` did: the string sits in
-          # three header comments above the seeding block it guards, so the
-          # block could go and the gate would stay green.
+          # A comment that mentions the spelling is not the spelling: whole-
+          # line comments are stripped first, so deleting the code a guard
+          # names fails even when a comment above it still names the string.
           # No pipe: `grep -q` exits at the first match, and the strip
-          # upstream of it then dies of SIGPIPE, which `pipefail` reports as
-          # a failed pipeline even though the string was found. That made
-          # these assertions answer differently on a fast machine than a
-          # slow one — `lifecycle.go` was reported as no longer spelling a
-          # string it still contains.
+          # upstream of it would then die of SIGPIPE, which `pipefail`
+          # reports as a failed pipeline although the string was found.
           assert_spelling() {
             stripped="$(grep -vE '^[[:space:]]*(#|//)' "$1" || true)"
             case "$stripped" in
               *"$2"*) : ;;
-              *) echo "::error::$1 no longer spells '$2' — the deployment layout drifted from Arca.Storage"; fail=1 ;;
+              *) echo "::error::$1 does not spell '$2' — the deployment layout drifted from Arca.Storage"; fail=1 ;;
             esac
           }
           assert_spelling docker-compose.yml './data:/app/data'

@@ -406,7 +406,7 @@ PY
 # there the patterns run as PCRE, which reads them the same way.
 leg_vocab() {
   local script="$LOGDIR/vocab.sh"
-  ci_step "Tier A/B fossil patterns must be absent" > "$script" || return 1
+  ci_step "Retired names stay out and the storage layout is Arca's" > "$script" || return 1
   if [ "$(uname -s)" = Darwin ]; then sed -i '' 's/git grep -InE/git grep -InP/' "$script"; fi
   step vocab fossils bash "$script"
 }

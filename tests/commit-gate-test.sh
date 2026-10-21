@@ -219,7 +219,7 @@ CI_RUNS = {
     ("test.yml", "locus-independence", "Compile and test Locus from its declared apps alone"): ["islands:locus"],
     ("test.yml", "locus-runtime-image", "The credential canary's own checks"): ["canary_checks"],
     ("test.yml", "release-boot", "Each run names and drops databases of its own"): ["boot_names"],
-    ("test.yml", "vocabulary-gate", "Tier A/B fossil patterns must be absent"): ["fossils"],
+    ("test.yml", "vocabulary-gate", "Retired names stay out and the storage layout is Arca's"): ["fossils"],
 }
 SETUP_ACTIONS = {
     "actions/checkout", "actions/setup-node", "actions/setup-go", "./.github/actions/setup-elixir", "actions/cache",
@@ -359,7 +359,7 @@ cp "$root"/.github/workflows/*.yml "$scratch/roster/wf/"
 python3 -I - "$scratch/roster/wf/test.yml" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-anchor = "      - name: Tier A/B fossil patterns must be absent\n"
+anchor = "      - name: Retired names stay out and the storage layout is Arca's\n"
 assert anchor in s
 open(p, "w").write(s.replace(anchor, "      - name: A planted check\n        run: \"true\"\n" + anchor))
 PY
