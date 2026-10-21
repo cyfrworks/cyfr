@@ -267,20 +267,10 @@ defmodule Arca.Adapters.LocalTest do
       assert beside(actor) == ["keep"]
     end
 
-    test "a journal that is an Erlang term, not the JSON record, directs no rename", %{
-      actor: actor
-    } do
+    test "a journal whose bytes are not the JSON record directs no rename", %{actor: actor} do
       names = crashed_swap!(actor, staged: "new")
 
-      File.write!(
-        names.journal,
-        :erlang.term_to_binary(%{
-          version: 1,
-          live: "site",
-          staged: "site.staged.tmp.7",
-          retired: "site.retired.tmp.7"
-        })
-      )
+      File.write!(names.journal, <<0xFF, 0x00, "site.staged.tmp.7", 0xFE>>)
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->

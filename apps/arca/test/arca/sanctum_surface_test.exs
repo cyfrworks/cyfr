@@ -6,10 +6,10 @@ defmodule Arca.SanctumSurfaceTest do
   What the storage layer actually needs from the auth domain, written down.
 
   Sanctum→Arca is ordinary layering (the auth domain persists through the
-  storage layer). Arca→Sanctum was the arrow pointing BACK UP — a real
-  cycle that also spanned the license boundary, `lib/arca` being
-  Apache-2.0 and `lib/sanctum` FSL. It is closed: the roster below is
-  empty, and this test is what keeps it that way.
+  storage layer). Arca→Sanctum would point BACK UP — a cycle that also
+  spans the license boundary, `lib/arca` being Apache-2.0 and
+  `lib/sanctum` FSL. The roster below is empty, and this test keeps it
+  that way.
 
   Same shape as the island rosters in `Cyfr.Boundaries`: pinned in both
   directions. A new Arca→Sanctum reach fails here until someone decides it
@@ -21,17 +21,14 @@ defmodule Arca.SanctumSurfaceTest do
 
   # The Sanctum namespaces lib/arca reaches into IN CODE (doc prose
   # mentions many more — the filter below is what keeps this list honest).
-  # It is empty, and that is the point: there is no arrow back up left to
-  # widen.
+  # It is empty: the storage layer has no arrow back up.
   #
-  # What was vocabulary is gone rather than forgotten: the tenancy scope
-  # list and the webhook signature header's default are shapes two sides
-  # agree on, so they live in the contracts (`Prima.TenancyScope`,
-  # `Prima.Webhook`) and the storage layer reads them there, while the auth
-  # domain keeps its names over the same declaration. The tenancy carrier
-  # was the last row: every facade now takes the `%Prima.Actor{}` the
-  # context projects, the caps are asked through `Prima.Caps`, and the
-  # server's own work carries `Prima.Actor.system/0`.
+  # What the two sides share lives in the contracts: the tenancy scope
+  # list and the webhook signature header's default are read from
+  # `Prima.TenancyScope` and `Prima.Webhook`, while the auth domain keeps
+  # its names over the same declaration. Every facade takes the
+  # `%Prima.Actor{}` the context projects, the caps are asked through
+  # `Prima.Caps`, and the server's own work carries `Prima.Actor.system/0`.
   @surface []
 
   @namespace ~r/\bSanctum(?:\.[A-Z]\w+)+\b/
@@ -72,10 +69,10 @@ defmodule Arca.SanctumSurfaceTest do
            """
   end
 
-  test "the surface names nothing the storage layer has stopped reaching into" do
+  test "the surface names only Sanctum namespaces the storage layer reaches into" do
     stale = MapSet.new(@surface) |> MapSet.difference(reached()) |> Enum.sort()
 
     assert stale == [],
-           "the surface names Sanctum namespaces lib/arca no longer uses: #{inspect(stale)}"
+           "the surface names Sanctum namespaces lib/arca does not use: #{inspect(stale)}"
   end
 end

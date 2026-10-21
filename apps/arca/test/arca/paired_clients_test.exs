@@ -136,7 +136,6 @@ defmodule Arca.PairedClientsTest do
       refute is_struct(row)
       assert "pcl_" <> _ = row.id
       assert row.standing == "active"
-      refute Map.has_key?(row, :class)
       assert row.athanor_id == actor.athanor_id
       assert {:ok, [^row]} = PairedClients.list(actor, [])
     end

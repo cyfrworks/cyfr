@@ -156,19 +156,19 @@ defmodule Arca.LockingSeamTest do
     end
 
     assert CodeLines.lines(homes[@homes.lock]) |> Enum.any?(&(&1 =~ @lock_clause)),
-           "the scan no longer sees for_update/1's own lock clause"
+           "the scan does not see for_update/1's own lock clause"
 
     assert CodeLines.lines(homes[@homes.mode]) |> Enum.any?(&(&1 =~ @mode)),
-           "the scan no longer sees prepare_transaction/2's own transaction mode"
+           "the scan does not see prepare_transaction/2's own transaction mode"
 
     assert CodeLines.lines(homes[@homes.lock_write]) |> Enum.any?(&(&1 =~ @lock_write)),
-           "the scan no longer sees prepare_transaction/2's own lock-taking write"
+           "the scan does not see prepare_transaction/2's own lock-taking write"
 
     assert CodeLines.lines(homes[@homes.advisory]) |> Enum.any?(&(&1 =~ @advisory)),
-           "the scan no longer sees transaction_lock/1's own advisory lock"
+           "the scan does not see transaction_lock/1's own advisory lock"
 
     assert CodeLines.lines(homes[@homes.row_lock_sql]) |> Enum.any?(&(&1 =~ @row_lock_sql)),
-           "the scan no longer sees for_update/1's own FOR UPDATE"
+           "the scan does not see for_update/1's own FOR UPDATE"
   end
 
   test "no lock clause, transaction mode or lock-taking write outside its one home" do

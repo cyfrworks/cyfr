@@ -9,11 +9,12 @@ defmodule Prima.CodeLinesTest do
   mistakes are theirs: a line it drops is a dependency no roster sees, and
   a line of prose it keeps is a dependency that is not there.
 
-  The filter that came before this one counted `\"""` occurrences per line
-  to decide whether it was inside a heredoc. The cases below are the ones
-  that counting got wrong — a `\"""` written inside a comment turned the
-  rest of the file into heredoc body, which is a roster that silently
-  stops reading — and the ones it got right, which still hold.
+  The filter reads code by Elixir's own tokenizer, never by counting
+  `\"""` occurrences per line: a `\"""` written inside a comment would
+  turn the rest of the file into heredoc body for a counter, which is a
+  roster that silently stops reading. The cases below hold the plain
+  shapes of prose and code, and the ones where a delimiter or a comment
+  sits beside code.
   """
 
   use ExUnit.Case, async: true
@@ -30,7 +31,7 @@ defmodule Prima.CodeLinesTest do
 
   defp numbers(source), do: source |> CodeLines.code_lines() |> Enum.map(&elem(&1, 1))
 
-  describe "what the counting filter got right, and this one keeps" do
+  describe "documentation, comments, aliases and interpolation" do
     test "a heredoc body is prose" do
       source = ~S'''
       defmodule A do
@@ -74,9 +75,10 @@ defmodule Prima.CodeLinesTest do
     end
   end
 
-  describe "what counting got wrong" do
-    # The fault that matters: the rest of the file was read as heredoc
-    # body, so every reach below the comment was invisible.
+  describe "delimiters and comments beside code" do
+    # A heredoc delimiter inside a comment is no delimiter: read as one,
+    # the rest of the file would be heredoc body and every reach below the
+    # comment invisible.
     test ~S(a comment holding """ does not make the rest of the file prose) do
       source = """
       defmodule A do

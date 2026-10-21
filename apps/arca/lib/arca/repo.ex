@@ -343,7 +343,7 @@ defmodule Arca.Repo do
 
   # What the transaction keeps of the write's options: its log level, so
   # the transaction logs nothing the caller silenced, and its pool timeout,
-  # which now bounds the whole transaction. The pool closes a connection
+  # which bounds the whole transaction. The pool closes a connection
   # held past it, so the lock step is told the instant (`:pool_deadline`).
   defp one_statement_opts(opts) do
     kept = Keyword.take(opts, [:log, :timeout])

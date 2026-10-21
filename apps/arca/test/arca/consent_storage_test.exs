@@ -500,8 +500,8 @@ defmodule Arca.ConsentStorageTest do
   end
 
   describe "the read side answers the actor's own tenant" do
-    # The two reads the consent domain used to reach through a swappable
-    # source now come from here, actor-first. Another tenant's actor holding
+    # The consent domain reads a component's profiles and a profile's head
+    # consent here, actor-first. Another tenant's actor holding
     # the right ids is the case that proves the scope is the actor's and not
     # the argument's: a profile id and a source ref are guessable strings.
     test "another tenant's actor sees no profile, no head and no decoded consent",

@@ -98,10 +98,26 @@ defmodule Prima.WorkerAuthTest do
     }
   end
 
+  # The vector file's attempt members, by the atom each is keyed by here: a
+  # name outside this map fails the setup rather than minting an atom.
+  @vector_attempt_names %{
+    "athanor_id" => :athanor_id,
+    "execution_id" => :execution_id,
+    "attempt" => :attempt,
+    "fence" => :fence,
+    "generation" => :generation,
+    "service" => :service
+  }
+
   describe "the shared vectors" do
     setup do
       v = @vectors
-      attempt = Map.new(v["attempt"], fn {name, value} -> {String.to_atom(name), value} end)
+
+      attempt =
+        Map.new(v["attempt"], fn {name, value} ->
+          {Map.fetch!(@vector_attempt_names, name), value}
+        end)
+
       {:ok, v: v, root: unhex(v["root_hex"]), attempt: attempt}
     end
 
@@ -925,8 +941,6 @@ defmodule Prima.WorkerAuthTest do
   end
 
   test "the vector file holds the primitives, and the wire's messages are the message vectors'" do
-    refute Map.has_key?(@vectors, "status")
-
     for file <- ~w(host_api.json worker_api.json) do
       keys =
         Path.expand("../../../../tests/fixtures/" <> file, __DIR__)

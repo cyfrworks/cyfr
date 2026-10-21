@@ -11,12 +11,11 @@ defmodule Arca.TenantArgumentOrderTest do
   `where_athanor/2`'s guard can tell them apart — so a call that swaps
   them is not an error, it is a query against another athanor that
   returns that athanor's rows, or none, and looks like an ordinary miss
-  either way. `Arca.ApiKeyStorage` once had both spellings at once:
-  `get_key(name, athanor_id)` beside `get_key_by_id(athanor_id, id)`,
-  identical `(String.t(), String.t())` specs pointing opposite ways.
+  either way. Two functions of one module could take
+  `(String.t(), String.t())` with the tenant first in one and second in
+  the other, and nothing would say so.
 
-  Putting the tenant first was the first half of the answer. This is the
-  second: the tenant is not an argument at all. Every tenant-scoped
+  So the tenant is not an argument at all. Every tenant-scoped
   facade matches a `%Prima.Actor{}` in its head and reads the athanor out
   of it, so the athanor comes from the caller the identity domain
   established and no argument a caller passes can move a read or a write
@@ -516,7 +515,7 @@ defmodule Arca.TenantArgumentOrderTest do
       |> Enum.reject(fn label -> Enum.any?(found, &(elem(&1, 0) == label)) end)
 
     assert stale == [],
-           "these rostered readers no longer read the tenant from their options; " <>
+           "these rostered readers do not read the tenant from their options; " <>
              "remove them: #{inspect(stale)}"
 
     for {label, reason} <- @keyword_tenant_readers do
@@ -582,9 +581,9 @@ defmodule Arca.TenantArgumentOrderTest do
            ]
   end
 
-  test "the keyword-tenant detector sees a policy-log read whose tenant was an option" do
-    # The policy log's reader as it read before it took the actor: the
-    # tenant one private call below the public head.
+  test "the keyword-tenant detector sees a tenant option read one private call below the head" do
+    # A reader whose tenant is an option, fetched one private call below
+    # the public head.
     planted = ~S"""
     defmodule Arca.PolicyLog do
       def list(opts) do

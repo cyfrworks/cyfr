@@ -14,8 +14,9 @@ defmodule Prima.PathSafety do
     * literal `..` and `.` segments (and their URI-encoded spellings,
       multi-layer included — `%2e%2e`, `%252e...`)
     * empty segments (`""` is not a name; on the segment-list contract it
-      is refused rather than silently collapsed, because the two storage
-      adapters disagreed on what it meant)
+      is refused rather than silently collapsed, because a filesystem
+      join collapses it where an object key keeps it, so the two storage
+      adapters would name different objects for one path)
     * null bytes
     * absolute paths (leading `/`)
     * backslashes (Windows separators that sidestep `/`-based checks)

@@ -19,10 +19,11 @@ defmodule Prima.Sanitizer do
   # The `*_key` family is enumerated rather than matched by suffix, for the
   # same reason `code` is exact-matched below: a `_key` rule would redact
   # `sort_key`, `cache_key`, `partition_key` and `idempotency_key`, which are
-  # the values you most want to read when one of those goes wrong. What was
-  # missing is the crypto half — `keyring` names the boot config the entire
-  # at-rest scheme hangs on, and `master_key` / `encryption_key` / `hmac_key`
-  # are the material itself.
+  # the values you most want to read when one of those goes wrong. The
+  # crypto names are listed whole: `keyring` and `crypto_keyring` name the
+  # boot config the entire at-rest scheme hangs on, and `master_key`,
+  # `encryption_key`, `hmac_key`, `derived_key` and `key_material` are the
+  # material itself.
   #
   # `confirmation_id` and `confirmationId` are a pending confirmation's
   # secret, which only the asking client holds, under the names it travels

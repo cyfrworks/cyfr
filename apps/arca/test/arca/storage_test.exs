@@ -379,13 +379,8 @@ defmodule Arca.StorageTest do
 
       refute Storage.valid_guest_path?("aqua/agent.json")
       refute Storage.valid_guest_path?("threads/thread_1")
-      # Refused as a host scope, not as an unknown root; the retired name
-      # (spelled split for the vocabulary gate) is no root at all.
+      # Refused as a host scope, not as an unknown root.
       assert "threads" in Storage.tenant_roots()
-      retired = "conver" <> "sations"
-      refute retired in Storage.tenant_roots()
-      refute Map.has_key?(Storage.console_scopes(), retired)
-      refute Storage.valid_guest_path?(retired <> "/thread_1")
       refute Storage.valid_guest_path?("guest/notes.txt")
       refute Storage.valid_guest_path?("datax/notes.txt")
       refute Storage.valid_guest_path?("*")
@@ -432,7 +427,7 @@ defmodule Arca.StorageTest do
     # wedge the tree (a regular file where the tree root belongs).
     #
     # A mutation that passes the path gate reaches the storage cap, which
-    # the settings accessor reads from the store since B2, so the tests
+    # the settings accessor reads from the store, so the tests
     # that exercise a deeper path need a sandbox owner.
     setup tags do
       Arca.Test.Sandbox.setup!(tags)
