@@ -163,5 +163,9 @@ defmodule Prima.JCS do
 
   defp escape_bytes([byte | rest], acc), do: escape_bytes(rest, [<<byte>> | acc])
 
+  # Throws by design: encode/1 catches `{:jcs, error}` at its entry and
+  # answers it as `{:error, error}`, so a refusal deep in the walk unwinds it
+  # whole.
+  @spec fail(path(), reason()) :: no_return()
   defp fail(path, reason), do: throw({:jcs, {:invalid_value, path, reason}})
 end

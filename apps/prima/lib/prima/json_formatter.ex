@@ -26,7 +26,8 @@ defmodule Prima.JsonFormatter do
 
   Conforms to the `:logger` formatter callback signature.
   """
-  @spec format(Logger.level(), Logger.message(), Logger.Formatter.time(), keyword()) :: iodata()
+  @spec format(Logger.level(), Logger.message(), Logger.Formatter.date_time_ms(), keyword()) ::
+          iodata()
   def format(level, message, {date, time}, metadata) do
     msg = IO.iodata_to_binary(message)
 
@@ -57,11 +58,10 @@ defmodule Prima.JsonFormatter do
   defp stringify(v) when is_number(v), do: to_string(v)
   defp stringify(v), do: inspect(v)
 
-  # The configured roster is the one source. A hardcoded copy here meant
-  # adding a key required editing two files — and carried three keys the
-  # config never requested, which therefore never arrived. The fallback is
-  # what `Prima.LoggerContext` actually sets, so a missing config degrades to
-  # the tenant fields rather than to nothing.
+  # The configured `:logger, :default_formatter` roster is the one source of
+  # the keys a line carries. Without one, the keys are those
+  # `Prima.LoggerContext` sets, so a missing config degrades to the tenant
+  # fields rather than to nothing.
   defp metadata_keys do
     case :persistent_term.get(@roster_key, nil) do
       nil ->
