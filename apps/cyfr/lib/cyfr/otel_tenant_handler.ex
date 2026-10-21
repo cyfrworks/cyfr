@@ -5,10 +5,9 @@ defmodule Cyfr.OtelTenantHandler do
   @moduledoc """
   Telemetry handler that bridges tenant metadata to OpenTelemetry span attributes.
 
-  Attaches to Phoenix/Bandit telemetry events and adds `tenant.athanor_id`
-  and `tenant.user_id` attributes to the current OTEL span.
-
-  Only activates when OpenTelemetry is loaded. Safe to call when OTEL is absent.
+  Attaches to Phoenix telemetry events and adds `tenant.athanor_id` and
+  `tenant.user_id` attributes to the current span. `Cyfr.Application`
+  attaches it when tracing is enabled.
   """
 
   require Logger
@@ -22,42 +21,34 @@ defmodule Cyfr.OtelTenantHandler do
     [:phoenix, :router_dispatch, :stop]
   ]
 
-  @doc """
-  Attach the telemetry handler. No-op if OpenTelemetry is not loaded.
-  """
+  @doc "Attach the telemetry handler, replacing an earlier attach of it."
+  @spec attach() :: :ok
   def attach do
-    if otel_available?() do
-      # Handlers are global to the node. Attaching over an existing id
-      # answers `{:error, :already_exists}` and changes nothing, so a second
-      # boot (a release restart, a test that restarts :cyfr) would keep the
-      # first attach and log that it had attached. Detach first, and say so
-      # when the attach itself fails.
-      :telemetry.detach(@handler_id)
+    # Handlers are global to the node. Attaching over an existing id
+    # answers `{:error, :already_exists}` and changes nothing, so a second
+    # boot (a release restart, a restart of :cyfr) would keep the first
+    # attach and log that it had attached. Detach first, and say so when
+    # the attach itself fails.
+    :telemetry.detach(@handler_id)
 
-      case :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{}) do
-        :ok ->
-          Logger.debug("[OtelTenantHandler] Attached to #{length(@events)} telemetry events")
+    case :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, %{}) do
+      :ok ->
+        Logger.debug("[OtelTenantHandler] Attached to #{length(@events)} telemetry events")
 
-        {:error, reason} ->
-          Logger.error(
-            "[OtelTenantHandler] attach failed: #{inspect(reason)} — " <>
-              "spans will carry no tenant attribution"
-          )
-      end
-    else
-      Logger.debug("[OtelTenantHandler] OpenTelemetry not loaded, skipping attach")
+      {:error, reason} ->
+        Logger.error(
+          "[OtelTenantHandler] attach failed: #{inspect(reason)} — " <>
+            "spans will carry no tenant attribution"
+        )
     end
   end
 
   @doc false
   def handle_event(_event, _measurements, metadata, _config) do
-    if otel_available?() do
-      attrs = attributes_from(metadata[:conn])
+    attrs = attributes_from(metadata[:conn])
 
-      if attrs != [] do
-        span_ctx = apply(OpenTelemetry.Tracer, :current_span_ctx, [])
-        apply(OpenTelemetry.Span, :set_attributes, [span_ctx, attrs])
-      end
+    if attrs != [] do
+      OpenTelemetry.Span.set_attributes(OpenTelemetry.Tracer.current_span_ctx(), attrs)
     end
 
     :ok
@@ -93,8 +84,4 @@ defmodule Cyfr.OtelTenantHandler do
   end
 
   def attributes_from(_), do: []
-
-  defp otel_available? do
-    Code.ensure_loaded?(OpenTelemetry) and Code.ensure_loaded?(OpenTelemetry.Tracer)
-  end
 end

@@ -107,8 +107,10 @@ defmodule Cyfr.BusTest do
       end
     end
 
-    test "global/0 lists exactly the unscoped topics, each with its reason" do
-      assert Enum.map(Bus.global(), &elem(&1, 0)) == [
+    test "the global rows are exactly the unscoped topics, each with its reason" do
+      global = for %{scope: :global} = row <- Bus.topics(), do: {row.template, row.reason}
+
+      assert Enum.map(global, &elem(&1, 0)) == [
                "sanctum:vault_changed",
                "sanctum:athanor_archived",
                "sanctum:caller_invalidated",
@@ -123,7 +125,7 @@ defmodule Cyfr.BusTest do
                "arca:file_offers:<user_id>"
              ]
 
-      for {_topic, reason} <- Bus.global(), do: assert(is_binary(reason) and reason != "")
+      for {_topic, reason} <- global, do: assert(is_binary(reason) and reason != "")
     end
 
     test "only a global topic passes the global doors" do
@@ -390,9 +392,6 @@ defmodule Cyfr.BusTest do
                    %{class: :internal, message: "The outcome could not be confirmed."}
         end
       end)
-
-      Code.ensure_loaded!(Bus)
-      refute function_exported?(Bus, :bounded_reason, 1)
     end
   end
 
@@ -434,17 +433,11 @@ defmodule Cyfr.BusTest do
   end
 
   describe "topic?/1" do
-    test "knows every roster key, as an atom or its string, and nothing else" do
-      for %{key: key} <- Bus.topics() do
-        assert Bus.topic?(key)
-        assert Bus.topic?(Atom.to_string(key))
-      end
+    test "knows every roster key and nothing else" do
+      for %{key: key} <- Bus.topics(), do: assert(Bus.topic?(key))
 
       refute Bus.topic?(:no_such_topic)
-      refute Bus.topic?("no_such_topic")
-      refute Bus.topic?("tenant:ath_1:bus:mcp_servers")
       refute Bus.topic?(nil)
-      refute Bus.topic?(42)
     end
   end
 

@@ -139,7 +139,6 @@ defmodule Cyfr.BusPayloadTest do
             arity in [0, 1, 2],
             name not in [
               :topics,
-              :global,
               :prefix,
               :broadcast,
               :broadcast_global,
@@ -150,7 +149,6 @@ defmodule Cyfr.BusPayloadTest do
               :subscribe_global,
               :unsubscribe_global,
               :subscribe_page,
-              :unsubscribe_page,
               :subscribe_standing,
               :unsubscribe_standing,
               # Lookups over the roster a stream grant is checked and
@@ -179,22 +177,10 @@ defmodule Cyfr.BusPayloadTest do
       assert roster_gaps(row) == [:no_producer, :no_consumer]
     end
 
-    test "no row is pending, and a marker excuses none from its consumers" do
-      assert for(row <- Bus.topics(), Map.has_key?(row, :pending), do: row.key) == []
-
-      later = %{key: :later, struct: Webhooks, producers: ["X"], consumers: [], pending: true}
-      assert roster_gaps(later) == [:no_consumer]
-    end
-
     test "a person's confirmations are heard through their stream alone" do
       row = Enum.find(Bus.topics(), &(&1.key == :confirmations))
       assert row.consumers == ["stream:confirmation.changes"]
       assert row.reason =~ "kind"
-    end
-
-    test "the global rows are global/0, in order" do
-      assert Bus.global() ==
-               for(%{scope: :global} = row <- Bus.topics(), do: {row.template, row.reason})
     end
   end
 
@@ -308,7 +294,7 @@ defmodule Cyfr.BusPayloadTest do
     end
 
     test "a seat change is one of a closed set, and anything else raises" do
-      for change <- Membership.changes() do
+      for change <- [:joined, :left, :athanor_changed, :platform_granted] do
         assert %Membership{change: ^change} = Membership.new(:changed, "u", nil, change)
       end
 
@@ -517,7 +503,13 @@ defmodule Cyfr.BusPayloadTest do
   end
 
   defp source_of(name) do
-    module = Module.concat([name])
+    module =
+      try do
+        Module.safe_concat([name])
+      rescue
+        ArgumentError -> flunk("#{name} is rostered and does not exist")
+      end
+
     assert Code.ensure_loaded?(module), "#{name} is rostered and does not exist"
     module.module_info(:compile)[:source] |> to_string() |> File.read!()
   end

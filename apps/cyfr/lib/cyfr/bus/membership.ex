@@ -5,7 +5,7 @@ defmodule Cyfr.Bus.Membership do
   @moduledoc """
   One person's seat in one athanor changed, on the global
   `Cyfr.Bus.memberships/1` topic keyed by the person: which athanors they
-  may now reach. `change` is one of a closed set (`changes/0`); anything
+  may now reach. `change` is one of a closed set (`t:change/0`); anything
   else raises, as a kind outside `kinds/0` does.
   """
 
@@ -32,13 +32,9 @@ defmodule Cyfr.Bus.Membership do
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
 
-  @doc "The closed set of seat changes."
-  @spec changes() :: [change()]
-  def changes, do: @changes
-
   @doc """
   A seat change for `user_id`. A kind outside `kinds/0` or a change
-  outside `changes/0` raises.
+  outside `t:change/0` raises.
   """
   @spec new(kind(), String.t(), String.t() | nil, change()) :: t()
   def new(kind, user_id, athanor_id, change) when is_binary(user_id) do
