@@ -16,15 +16,13 @@ defmodule Aqua do
   - `Aqua.Approvals` — a card decided once, from its own rows;
     `Aqua.Standing` — what may stand for later calls; `Aqua.Launch` — an
     approved launch run as its approver.
-  - `Aqua.Agent` — the agent a turn is addressed to, as the
-    approvals re-authorise a card against it.
   - `Aqua.Prompt` — the one composer of the system prompt, from the
     resolved agent and the turn's pinned authority.
   - `Aqua.ToolGrants` — standing approvals as rows, composed over the
     agent's declared `tool_policy`.
   - `Aqua.Hands` — the pseudo-tools that run on the bundled catalysts, and
     the console intents (`Aqua.Intents`).
-  - `Aqua.AgentConfig` — the soul's and the roles' definitions and prompts;
+  - `Aqua.AgentConfig` — the soul's and the roles' definitions and their catalysts;
     `Aqua.Roster` — who may be addressed.
   - `Aqua.Models` — what a model can do, the model listing and whether
     each soul's model has a key; `Aqua.ConsentStatus` — whether what the
@@ -63,26 +61,9 @@ defmodule Aqua do
   @spec models(Context.t()) :: {:ok, map()} | {:error, :forbidden | :unavailable}
   defdelegate models(ctx), to: Models, as: :catalogue
 
-  @doc "What one model can do, read from its catalyst. See `Aqua.Models.capabilities/5`."
-  @spec model_capabilities(Context.t(), String.t(), String.t(), String.t() | nil, keyword()) ::
-          {:ok, Prima.Model.capabilities()} | {:error, term()}
-  defdelegate model_capabilities(ctx, resolved_ref, model, binding_digest, opts),
-    to: Models,
-    as: :capabilities
-
   @doc "Whether each soul's model has a key. See `Aqua.Models.model_status/2`."
   @spec model_status(Context.t() | nil, [map()]) :: %{String.t() => {atom(), String.t()}}
   defdelegate model_status(ctx, agents), to: Models
-
-  @doc "Whether the soul's consent still covers its source. See `Aqua.ConsentStatus.state/2`."
-  @spec consent_state(Context.t()) ::
-          {:ok, ConsentStatus.state()} | {:error, ConsentStatus.refusal()}
-  def consent_state(%Context{} = ctx), do: ConsentStatus.state(ctx, Prima.AgentRef.soul_ref())
-
-  @doc "Whether the consent of `ref` still covers its source. See `Aqua.ConsentStatus.state/2`."
-  @spec consent_state(Context.t(), String.t()) ::
-          {:ok, ConsentStatus.state()} | {:error, ConsentStatus.refusal()}
-  defdelegate consent_state(ctx, ref), to: ConsentStatus, as: :state
 
   @doc "Every local source whose consent no longer answers. See `Aqua.ConsentStatus.stale_refs/1`."
   @spec stale_consent_refs(Context.t()) ::

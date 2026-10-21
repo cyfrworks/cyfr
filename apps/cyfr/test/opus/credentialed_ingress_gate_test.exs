@@ -99,7 +99,7 @@ defmodule Opus.CredentialedIngressGateTest do
       auth = ungranted_authority()
 
       # This is what the executor's grant stage sees: an edge without a
-      # vault resource yields the empty map, never the legacy plane.
+      # vault resource yields the empty map.
       assert auth.resources.vault == nil
     end
 
@@ -145,28 +145,26 @@ defmodule Opus.CredentialedIngressGateTest do
     end
   end
 
-  describe "per-ingress classification" do
-    # Each classified ingress either roots through a profile's consent (and
-    # so inherits the shared resolution above) or falls back to the legacy
-    # path when no profile exists. This pins which is which, so a change
-    # in routing has to be deliberate.
-    # Every tincture surface shares the :tincture flag — one ingress,
-    # three transports, ONE implementation (`Opus.invoke_tincture/3`,
-    # behind the declared `tincture` operations), so one row here.
+  describe "per-ingress routing" do
+    # Each classified ingress roots through a profile's consent, and so
+    # inherits the shared resolution above; a root with no profile is
+    # refused there. Every tincture surface shares the :tincture flag —
+    # one ingress, three transports, one implementation
+    # (`Opus.Tincture.invoke/3`, behind the declared `tincture`
+    # operations), so one row here. A registered ingress — a schedule, a
+    # webhook, a feed — roots on the profile its registration binds.
     @ingresses [
-      {:mcp, "apps/cyfr/lib/opus/provider.ex", :falls_back},
-      {:cron, "apps/cyfr/lib/opus/schedules/scheduler.ex", :no_fallback_when_bound},
-      {:webhook, "apps/cyfr/lib/emissary/web/controllers/webhook_controller.ex",
-       :no_fallback_when_bound},
-      {:tincture, "apps/cyfr/lib/opus/tincture.ex", :falls_back},
-      # A feed's press roots on the binding's own profile.
-      {:feed, "apps/cyfr/lib/opus/feeds.ex", :no_fallback_when_bound}
+      {:mcp, "apps/cyfr/lib/opus/provider.ex", :caller},
+      {:cron, "apps/cyfr/lib/opus/schedules/scheduler.ex", :registration},
+      {:webhook, "apps/cyfr/lib/emissary/web/controllers/webhook_controller.ex", :registration},
+      {:tincture, "apps/cyfr/lib/opus/tincture.ex", :caller},
+      {:feed, "apps/cyfr/lib/opus/feeds.ex", :registration}
     ]
 
     test "each ingress routes through the chain" do
       root = Path.expand("../../../..", __DIR__)
 
-      for {_ingress, path, _fallback} <- @ingresses do
+      for {_ingress, path, _profile} <- @ingresses do
         source = File.read!(Path.join(root, path))
 
         assert String.contains?(source, "Opus.run_root"),
@@ -174,11 +172,10 @@ defmodule Opus.CredentialedIngressGateTest do
       end
     end
 
-    test "a bound registration never falls back to the legacy path" do
+    test "a registered ingress decides on its registration's profile" do
       root = Path.expand("../../../..", __DIR__)
 
-      for {_ingress, path, :no_fallback_when_bound} <-
-            Enum.filter(@ingresses, &(elem(&1, 2) == :no_fallback_when_bound)) do
+      for {_ingress, path, :registration} <- @ingresses do
         source = File.read!(Path.join(root, path))
 
         assert String.contains?(source, "profile_id"),

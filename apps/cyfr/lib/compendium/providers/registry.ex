@@ -6,8 +6,6 @@ defmodule Compendium.Providers.Registry do
   Registry tool handlers for the Compendium MCP provider — cyfr.run
   identity/namespace operations (probe, claim, tokens, members, abuse
   reports, legal, appeals).
-
-  Extracted from `Compendium.Provider`; behaviour preserved exactly.
   """
 
   alias Sanctum.Context
@@ -44,14 +42,7 @@ defmodule Compendium.Providers.Registry do
   # handler they gate; Compendium.Provider assembles its roster from these.
   def definition do
     alias Prima.{Arg, Operation}
-    # Bootstrap/spec reads stay open (they run before a session
-    # exists per the cyfr.run spec); identity mutations mirror
-    # `Compendium.Providers.Registry`'s gate.
-    # A person's own registry standing: served to any live session,
-    # whether or not it has an athanor to work in.
-    # report action params
-    # list_my_reports pagination
-    # legal_page / legal_accept
+
     Operation.tool(
       [
         Operation.new(
@@ -509,10 +500,6 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  def handle(_ctx, %{"action" => "probe"}) do
-    {:error, {:invalid_argument, "registry.probe requires 'provider' and 'access_token'"}}
-  end
-
   def handle(
         %Context{} = ctx,
         %{
@@ -538,7 +525,7 @@ defmodule Compendium.Providers.Registry do
         # must subsequently call /v1/identity/probe after establishing a
         # session to provision the credential locally.
         # A registry answer that names no slug claimed the one asked for,
-        # as the claim page always read it.
+        # as the claim page reads it.
         maybe_store_personal_credential(ctx, Map.put_new(body, "slug", username))
 
       {:error, err} ->
@@ -546,21 +533,11 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  def handle(_ctx, %{"action" => "claim_personal"}) do
-    {:error,
-     {:invalid_argument,
-      "registry.claim_personal requires 'username', 'provider', and 'access_token'"}}
-  end
-
   def handle(_ctx, %{"action" => "get_namespace", "slug" => slug}) do
     case Compendium.Registry.Client.get_namespace(slug) do
       {:ok, body} -> {:ok, body}
       {:error, err} -> refuse(err)
     end
-  end
-
-  def handle(_ctx, %{"action" => "get_namespace"}) do
-    {:error, {:invalid_argument, "registry.get_namespace requires 'slug'"}}
   end
 
   def handle(%Context{} = ctx, %{"action" => "tokens_list", "slug" => slug}) do
@@ -572,10 +549,6 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  def handle(_ctx, %{"action" => "tokens_list"}) do
-    {:error, {:invalid_argument, "registry.tokens_list requires 'slug'"}}
-  end
-
   def handle(%Context{} = ctx, %{"action" => "members_list", "slug" => slug}) do
     with {:ok, bearer} <- Shared.namespace_bearer(ctx, slug),
          {:ok, body} <- Compendium.Registry.Client.list_members(slug, bearer) do
@@ -585,10 +558,9 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  def handle(_ctx, %{"action" => "members_list"}) do
-    {:error, {:invalid_argument, "registry.members_list requires 'slug'"}}
-  end
-
+  # User-side abuse report submission. Auth: any push token belonging to the
+  # caller — resolved via the same first-push-token heuristic as probe. At
+  # least one of target_namespace or target_component_ref must be set.
   def handle(%Context{} = ctx, %{"action" => "report"} = args) do
     category = Map.get(args, "category", "")
     target_namespace = Map.get(args, "target_namespace")
@@ -702,14 +674,6 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  def handle(_ctx, %{"action" => action}) do
-    {:error, {:unknown_action, "registry.#{action}"}}
-  end
-
-  def handle(_ctx, _args) do
-    {:error, :action_missing}
-  end
-
   # ============================================================================
   # Private helpers
   # ============================================================================
@@ -720,13 +684,6 @@ defmodule Compendium.Providers.Registry do
   defp refuse(reason), do: {:error, Shared.refusal(reason)}
 
   defp put_if_int(kw, key, n) when is_integer(n) and n >= 0, do: Keyword.put(kw, key, n)
-
-  defp put_if_int(kw, key, s) when is_binary(s) do
-    case Integer.parse(s) do
-      {n, ""} when n >= 0 -> Keyword.put(kw, key, n)
-      _ -> kw
-    end
-  end
 
   defp put_if_int(kw, _key, _), do: kw
 
@@ -889,7 +846,7 @@ defmodule Compendium.Providers.Registry do
              r.name,
              r.version
            ) do
-      {:ok, comp["id"] || comp[:id]}
+      {:ok, comp["id"]}
     end
   end
 
@@ -938,10 +895,6 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  defp handle_gated(_ctx, %{"action" => "claim_publisher"}) do
-    {:error, {:invalid_argument, "registry.claim_publisher requires 'slug'"}}
-  end
-
   defp handle_gated(%Context{} = ctx, %{"action" => "verify_publisher", "slug" => slug}) do
     with {:ok, bearer} <- personal_bearer(ctx),
          {:ok, body} <- Compendium.Registry.Client.verify_publisher_namespace(slug, bearer) do
@@ -949,10 +902,6 @@ defmodule Compendium.Providers.Registry do
     else
       {:error, err} -> refuse(err)
     end
-  end
-
-  defp handle_gated(_ctx, %{"action" => "verify_publisher"}) do
-    {:error, {:invalid_argument, "registry.verify_publisher requires 'slug'"}}
   end
 
   # A push token outlives the session that asks for it: the issuing is
@@ -973,10 +922,6 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  defp handle_gated(_ctx, %{"action" => "tokens_issue"}) do
-    {:error, {:invalid_argument, "registry.tokens_issue requires 'slug'"}}
-  end
-
   defp handle_gated(%Context{} = ctx, %{
          "action" => "tokens_revoke",
          "slug" => slug,
@@ -988,10 +933,6 @@ defmodule Compendium.Providers.Registry do
     else
       {:error, err} -> refuse(err)
     end
-  end
-
-  defp handle_gated(_ctx, %{"action" => "tokens_revoke"}) do
-    {:error, {:invalid_argument, "registry.tokens_revoke requires 'slug' and 'token_id'"}}
   end
 
   defp handle_gated(%Context{} = ctx, %{
@@ -1008,12 +949,6 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  defp handle_gated(_ctx, %{"action" => "members_add"}) do
-    {:error,
-     {:invalid_argument,
-      "registry.members_add requires 'slug', 'target_personal_slug', and 'role'"}}
-  end
-
   defp handle_gated(%Context{} = ctx, %{
          "action" => "members_update",
          "slug" => slug,
@@ -1028,12 +963,6 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
-  defp handle_gated(_ctx, %{"action" => "members_update"}) do
-    {:error,
-     {:invalid_argument,
-      "registry.members_update requires 'slug', 'target_personal_slug', and 'role'"}}
-  end
-
   defp handle_gated(%Context{} = ctx, %{
          "action" => "members_remove",
          "slug" => slug,
@@ -1046,13 +975,4 @@ defmodule Compendium.Providers.Registry do
       {:error, err} -> refuse(err)
     end
   end
-
-  defp handle_gated(_ctx, %{"action" => "members_remove"}) do
-    {:error,
-     {:invalid_argument, "registry.members_remove requires 'slug' and 'target_personal_slug'"}}
-  end
-
-  # User-side abuse report submission. Auth: any push token belonging to the
-  # caller — resolved via the same first-push-token heuristic as probe. At
-  # least one of target_namespace or target_component_ref must be set.
 end

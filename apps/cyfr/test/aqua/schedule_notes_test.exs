@@ -39,7 +39,6 @@ defmodule Aqua.ScheduleNotesTest do
   alias Opus.Schedules.Scheduler
   alias Sanctum.Test.ConsentFixtures
 
-  @claimant "boot_schedule_notes_test"
   @reference "reagent:local.notes"
 
   setup tags do
@@ -168,14 +167,14 @@ defmodule Aqua.ScheduleNotesTest do
     cadence = %{next_after: &{:ok, DateTime.add(&1, 3600, :second)}, missed_bound_ms: 600_000}
 
     {:ok, occurrence} =
-      ScheduleOccurrences.claim(%{schedule | next_run_at: due}, @claimant, cadence)
+      ScheduleOccurrences.claim(%{schedule | next_run_at: due}, Prima.Boot.id(), cadence)
 
     execution_id = Prima.UUID7.execution_id()
     actor = Prima.Actor.in_athanor(schedule.athanor_id)
 
     {:ok, 1} =
       Arca.Repo.transaction(fn ->
-        ScheduleOccurrences.start!(actor, occurrence.id, @claimant, execution_id)
+        ScheduleOccurrences.start!(actor, occurrence.id, Prima.Boot.id(), execution_id)
       end)
 
     # The schedule row as the scheduler reads it before the run.
@@ -185,7 +184,7 @@ defmodule Aqua.ScheduleNotesTest do
 
   defp finished!({occurrence, execution_id}, output) do
     {:ok, 1} =
-      Scheduler.complete(occurrence.read_before, occurrence, execution_id, output, @claimant)
+      Scheduler.complete(occurrence.read_before, occurrence, execution_id, output)
 
     {occurrence, execution_id}
   end

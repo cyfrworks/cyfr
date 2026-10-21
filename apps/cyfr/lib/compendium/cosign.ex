@@ -8,8 +8,8 @@ defmodule Compendium.Cosign do
   Reads configuration from `Application.get_env(:cyfr, :sigstore)`:
 
   - `verification: :keyed` — verify with a specific public key (`key_path`,
-    `CYFR_COSIGN_KEY`). The same key signs on publish and verifies on pull,
-    so keyed verification pins pulls to that one key.
+    `CYFR_COSIGN_KEY`), so keyed verification pins pulls to the publisher
+    that holds the matching private key. This server signs nothing.
   - `verification: :keyless` — verify via Sigstore's keyless (Fulcio + Rekor)
     flow against a named signer: `identity` and `issuer` are regexps the
     certificate must match (`CYFR_COSIGN_IDENTITY` / `CYFR_COSIGN_ISSUER`)

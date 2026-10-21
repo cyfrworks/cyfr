@@ -16,10 +16,7 @@ defmodule Aqua.FacadeTest do
     attachment_limits: 0,
     attachment_refs: 1,
     auto_permitted?: 2,
-    consent_state: 1,
-    consent_state: 2,
     describe_note_result: 1,
-    model_capabilities: 5,
     model_status: 2,
     models: 1,
     note_pinned?: 1,
@@ -55,7 +52,7 @@ defmodule Aqua.FacadeTest do
       assert Aqua.parse_approval_scope(scope) == Aqua.ApprovalScope.parse(scope)
     end
 
-    for scope <- Aqua.ApprovalScope.all() do
+    for scope <- [:once, :thread, :always, :never] do
       assert Aqua.approval_scope_string(scope) == Aqua.ApprovalScope.to_string(scope)
     end
   end

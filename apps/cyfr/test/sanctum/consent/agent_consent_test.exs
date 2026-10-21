@@ -228,7 +228,7 @@ defmodule Sanctum.Consent.AgentConsentTest do
     # Authoring a role through the tool edits the soul too: it may clone
     # into the new role.
     {:ok, %{"cloneable" => true}} =
-      Aqua.AgentConfig.call_aqua(ctx, %{"action" => "create", "name" => "scout"})
+      Cyfr.Test.AquaTool.call(ctx, %{"action" => "create", "name" => "scout"})
 
     {:ok, %{minted: [], revised: [], skipped: skipped}} = Bootstrap.run(ctx)
     assert {"agent:local.scout", :not_vouched} in skipped

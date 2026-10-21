@@ -59,7 +59,7 @@ defmodule Locus.Runtime.ExecutorRateLimitTest do
       # but the important thing is the rate limiter allowed it through.
       result =
         Opus.Dispatch.run(ctx, ref, input,
-          type: :reagent,
+          type: "reagent",
           authority: Prima.Authority.zero()
         )
 
@@ -75,7 +75,7 @@ defmodule Locus.Runtime.ExecutorRateLimitTest do
     test "passing the policy gate records one policy_consultation row", %{ctx: ctx, ref: ref} do
       _result =
         Opus.Dispatch.run(ctx, ref, %{"a" => 1, "b" => 2},
-          type: :reagent,
+          type: "reagent",
           authority: Prima.Authority.zero()
         )
 
@@ -146,27 +146,6 @@ defmodule Locus.Runtime.ExecutorRateLimitTest do
         assert {:ok, :unlimited} =
                  Opus.Rates.check(Context.actor(ctx), component_ref, limit_source)
       end
-    end
-
-    test "rate limit status can be queried", %{ctx: ctx} do
-      component_ref = "status-test-#{:rand.uniform(100_000)}"
-
-      limit_source = %{rate_limit: %{requests: 5, window: "1m"}}
-
-      # Check initial status
-      assert {:ok, 0, 5, _window} =
-               Opus.Rates.status(Context.actor(ctx), component_ref, limit_source)
-
-      # Make a request
-      assert {:ok, 4} =
-               Opus.Rates.check(Context.actor(ctx), component_ref, limit_source)
-
-      # Check status again
-      assert {:ok, 1, 4, _window} =
-               Opus.Rates.status(Context.actor(ctx), component_ref, limit_source)
-
-      # Clean up
-      :ok = Arca.RateWindows.clear(Context.actor(ctx), component_ref)
     end
   end
 end

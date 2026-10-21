@@ -8,7 +8,7 @@ defmodule Compendium.Provenance do
   - `:bundled` — the athanor's copy of a unit the server ships.
   - `:bundled_modified` — a shipped copy whose bytes differ from what
     ships. Only the surfaces that compare bytes answer it (`status/2`,
-    `drift/2`, `Compendium.AquaTemplate.status/1`); a reset restores what
+    `Compendium.AquaTemplate.status/1`); a reset restores what
     the release ships.
   - `:user` — the athanor's own: scaffolded, built, or forked here.
   - `:remote` — pulled from a registry (`source` `"oci"`/`"published"`).
@@ -18,7 +18,7 @@ defmodule Compendium.Provenance do
   the tree's answer (`Arca.Overlay.unit_status/2`). A row can cache the
   answer for display, but the tree wins.
 
-  `shipped_versions/2` lists bundled versions for a name; `drift/2` compares
+  `shipped_versions/2` lists bundled versions for a name; `status/2` compares
   the tenant copy with its shipped counterpart.
   """
 
@@ -44,14 +44,11 @@ defmodule Compendium.Provenance do
     end
   end
 
-  @doc """
-  The one translation from an overlay unit state to provenance — every
-  surface that speaks provenance (components and aqua alike) derives its
-  words here, so the two cannot drift.
-  """
-  @spec of_status(Arca.Overlay.unit_status()) :: t()
-  def of_status(status) when status in [:available, :shipped], do: :bundled
-  def of_status(status) when status in [:own, :absent], do: :user
+  # The one translation from an overlay unit state to provenance, which
+  # `of/2` and `annotate/2` share.
+  @spec of_status(Arca.Overlay.unit_status()) :: :bundled | :user
+  defp of_status(status) when status in [:available, :shipped], do: :bundled
+  defp of_status(status) when status in [:own, :absent], do: :user
 
   @doc """
   The wire spelling of a provenance — the MCP boundary stringifies
@@ -61,33 +58,6 @@ defmodule Compendium.Provenance do
   @spec label(t()) :: String.t()
   def label(provenance) when provenance in [:bundled, :bundled_modified, :user, :remote],
     do: Atom.to_string(provenance)
-
-  @doc """
-  Classify every component the athanor's registry holds, in one pass: the
-  rows list once, the overlay walks twice (`Arca.Overlay.unit_statuses/2`)
-  — no per-component probes. Keyed `{name, version, publisher}`.
-  """
-  @spec map(Context.t()) ::
-          {:ok, %{{String.t(), String.t(), String.t()} => t()}} | {:error, term()}
-  def map(%Context{} = ctx) do
-    with {:ok, statuses} <- Arca.Overlay.unit_statuses(Sanctum.Context.actor(ctx), "components"),
-         {:ok, rows} <-
-           Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), limit: :none) do
-      {:ok,
-       Map.new(rows, fn row ->
-         publisher = ComponentPath.normalize_publisher(Map.get(row, :publisher))
-         {{row.name, row.version, publisher}, classify_row(statuses, row)}
-       end)}
-    end
-  end
-
-  defp classify_row(statuses, row) do
-    if Compendium.Source.remote?(Map.get(row, :source)) do
-      :remote
-    else
-      of_status(Map.get(statuses, version_dir(row), :absent))
-    end
-  end
 
   # A strictly newer shipped version exists than the row's own — the
   # conservative predicate: an unparsable seed directory name never
@@ -131,23 +101,6 @@ defmodule Compendium.Provenance do
         {:error, _} = error ->
           error
       end
-    end
-  end
-
-  @doc """
-  How a bundled copy differs from what the release shipped —
-  `{:ok, :pristine}` for a byte-identical copy, `{:ok, {:modified, diff}}`
-  with the added/removed/changed relative paths otherwise. Any other
-  provenance answers `{:error, :not_bundled}`. A thin reading of
-  `status/2`.
-  """
-  @spec drift(Context.t(), map()) ::
-          {:ok, :pristine | {:modified, map()}} | {:error, term()}
-  def drift(%Context{} = ctx, component) do
-    case status(ctx, component) do
-      {:ok, %{drift: nil}} -> {:error, :not_bundled}
-      {:ok, %{drift: drift}} -> {:ok, drift}
-      {:error, _} = error -> error
     end
   end
 
@@ -278,9 +231,7 @@ defmodule Compendium.Provenance do
 
   defp remote_row?(row), do: Compendium.Source.remote?(Map.get(row, :source))
 
-  defp type_of(row) do
-    to_string(Map.get(row, :component_type) || Map.get(row, "component_type") || "")
-  end
+  defp type_of(row), do: row |> Map.get(:component_type) |> to_string()
 
   # The fork's stamp. Lineage lives IN the manifest, deliberately: it
   # travels with the content on push and pull, and provenance stays
@@ -320,8 +271,9 @@ defmodule Compendium.Provenance do
   @wasm_types ~w(catalyst reagent formula)
 
   @doc """
-  The release digest of the unit the seed ships at this row's path —
-  the install media's artifact and manifest, not the athanor's copy.
+  The release digest of the unit the seed ships at this atom-keyed
+  registry row's path — the install media's artifact and manifest, not
+  the athanor's copy.
   A version the seed does not hold is `{:error, :not_shipped}`. Cached
   under a seed-only key: a version directory is immutable.
   """
@@ -329,13 +281,9 @@ defmodule Compendium.Provenance do
   def shipped_release_digest(component) when is_map(component) do
     type = type_of(component)
 
-    publisher =
-      ComponentPath.normalize_publisher(
-        Map.get(component, :publisher) || Map.get(component, "publisher")
-      )
-
-    name = Map.get(component, :name) || Map.get(component, "name")
-    version = Map.get(component, :version) || Map.get(component, "version")
+    publisher = ComponentPath.normalize_publisher(Map.get(component, :publisher))
+    name = Map.get(component, :name)
+    version = Map.get(component, :version)
 
     cond do
       type not in @wasm_types ->

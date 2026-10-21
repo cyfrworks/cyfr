@@ -14,7 +14,7 @@ defmodule Compendium.Providers.RegistryTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  # Valid mutation arguments must reach the credential check, not the missing-argument handler.
+  # Valid mutation arguments reach the credential check.
   describe "gated identity mutations reach their handlers with valid args" do
     test "tokens_revoke", %{ctx: ctx} do
       assert {:error, reason} =
@@ -135,15 +135,12 @@ defmodule Compendium.Providers.RegistryTest do
     setup do
       bypass = Bypass.open()
       original_url = Application.get_env(:cyfr, :registry_url)
-      original_scheme = Application.get_env(:cyfr, :registry_scheme)
 
       on_exit(fn ->
         restore_env(:cyfr, :registry_url, original_url)
-        restore_env(:cyfr, :registry_scheme, original_scheme)
       end)
 
       Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
-      Application.put_env(:cyfr, :registry_scheme, "http")
 
       {person, _user} = Sanctum.TestContext.person!(Sanctum.TestContext.local(:prism))
       registry = Compendium.RegistryHost.canonical_host()
@@ -208,15 +205,12 @@ defmodule Compendium.Providers.RegistryTest do
     setup do
       bypass = Bypass.open()
       original_url = Application.get_env(:cyfr, :registry_url)
-      original_scheme = Application.get_env(:cyfr, :registry_scheme)
 
       on_exit(fn ->
         restore_env(:cyfr, :registry_url, original_url)
-        restore_env(:cyfr, :registry_scheme, original_scheme)
       end)
 
       Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
-      Application.put_env(:cyfr, :registry_scheme, "http")
       {:ok, bypass: bypass}
     end
 
@@ -357,19 +351,33 @@ defmodule Compendium.Providers.RegistryTest do
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 
-  describe "gated identity mutations still refuse incomplete args" do
-    test "each arg-missing arm answers its own sentence", %{ctx: ctx} do
-      for {action, sentence} <- [
-            {"tokens_revoke", "requires 'slug' and 'token_id'"},
-            {"members_add", "requires 'slug', 'target_personal_slug', and 'role'"},
-            {"members_update", "requires 'slug', 'target_personal_slug', and 'role'"},
-            {"members_remove", "requires 'slug' and 'target_personal_slug'"}
-          ] do
-        assert {:error, reason} = RegistryProvider.handle(ctx, %{"action" => action}),
-               "expected a refusal for bare #{action}"
+  # The gate casts every call against its action's declaration
+  # (`Prima.Operation.cast/2`) before the handler runs.
+  describe "gated identity mutations refuse incomplete args" do
+    test "each required argument missing is refused by the declaration" do
+      definition = RegistryProvider.definition()
 
-        assert Refusals.render(reason) =~ sentence,
-               "expected the arg-missing sentence for #{action}, got: #{inspect(reason)}"
+      complete = %{
+        "slug" => "someslug",
+        "token_id" => "tok_1",
+        "target_personal_slug" => "bob",
+        "role" => "member"
+      }
+
+      for {action, required} <- [
+            {"tokens_revoke", ~w(slug token_id)},
+            {"members_add", ~w(slug target_personal_slug role)},
+            {"members_update", ~w(slug target_personal_slug role)},
+            {"members_remove", ~w(slug target_personal_slug)}
+          ] do
+        args = complete |> Map.take(required) |> Map.put("action", action)
+        assert {:ok, _} = Prima.Operation.cast(definition, args), action
+
+        for field <- required do
+          assert {:error, {:invalid_argument, "Missing required field: " <> ^field}} =
+                   Prima.Operation.cast(definition, Map.delete(args, field)),
+                 "#{action} without #{field}"
+        end
       end
     end
   end

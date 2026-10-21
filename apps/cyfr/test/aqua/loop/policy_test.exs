@@ -387,8 +387,8 @@ defmodule Aqua.Loop.PolicyTest do
   end
 
   describe "a catalog call's sources are its operation's" do
-    # Sol's assessment probe (Sol-2): a registry read declares no sources,
-    # so its answer is outside, as the operation's own reading says.
+    # A registry read declares no sources, so its answer is outside, as the
+    # operation's own reading says.
     for action <- ["get_namespace", "legal_page"] do
       test "catalog retains canonical sources: #{action}" do
         action = unquote(action)
@@ -403,8 +403,8 @@ defmodule Aqua.Loop.PolicyTest do
       end
     end
 
-    # Opus's assessment probe (Sol-2): the same reads, resolved as the
-    # model names them, carry an outside source into the turn.
+    # The same reads, resolved as the model names them, carry an outside
+    # source into the turn.
     test "a registry read carries an outside source into the turn" do
       ctx = %{ctx() | athanor_id: "ath_probe"}
 
@@ -518,6 +518,47 @@ defmodule Aqua.Loop.PolicyTest do
 
       assert Policy.sources_of(write, {:error, :not_found}, ctx) == []
     end
+  end
+
+  describe "group/1" do
+    test "a write between reads runs alone, and the reads on either side do not join it" do
+      read1 = item("files", %{"action" => "read", "path" => "a"})
+      write = item("files", %{"action" => "write", "path" => "b", "content" => "x"})
+      read2 = item("files", %{"action" => "read", "path" => "c"})
+
+      assert [{:concurrent, [^read1]}, {:exclusive, ^write}, {:concurrent, [^read2]}] =
+               Policy.group([read1, write, read2])
+    end
+
+    test "consecutive reads share a group and consecutive writes do not" do
+      r1 = item("files", %{"action" => "read", "path" => "a"})
+      r2 = item("files", %{"action" => "read", "path" => "b"})
+      w1 = item("files", %{"action" => "write", "path" => "c", "content" => "x"})
+      w2 = item("files", %{"action" => "write", "path" => "d", "content" => "y"})
+
+      assert [{:concurrent, [^r1, ^r2]}, {:exclusive, ^w1}, {:exclusive, ^w2}] =
+               Policy.group([r1, r2, w1, w2])
+    end
+
+    test "a write last, and a write first, each stand alone" do
+      read = item("files", %{"action" => "read", "path" => "a"})
+      write = item("files", %{"action" => "write", "path" => "b", "content" => "x"})
+
+      assert [{:concurrent, [^read]}, {:exclusive, ^write}] = Policy.group([read, write])
+      assert [{:exclusive, ^write}, {:concurrent, [^read]}] = Policy.group([write, read])
+    end
+
+    test "a launch stands alone and flushes the reads before it" do
+      read = item("files", %{"action" => "read", "path" => "a"})
+      launch = %{step: %{kind: "launch"}, call: {:ok, :launch}}
+
+      assert [{:concurrent, [^read]}, {:launch, ^launch}] = Policy.group([read, launch])
+    end
+  end
+
+  defp item(name, args) do
+    {:ok, call} = Binding.resolve(name, args)
+    %{step: %{kind: "tool"}, call: {:ok, call}}
   end
 
   defp ctx, do: Sanctum.TestContext.local()

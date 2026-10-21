@@ -445,6 +445,9 @@ defmodule Prima.Refusal do
   defp row({:corrupt, :person_identity}),
     do: {:corrupt, "This person's identity record is missing, so it cannot be used."}
 
+  defp row({:corrupt, {:execution, _id}}),
+    do: {:corrupt, "The stored execution record is damaged."}
+
   # A run's component graph whose stored rows do not hash, so the consent
   # cannot be judged against it. The ref rides in the reason; the sentence
   # names the damaged thing, never a grant to make.
@@ -514,8 +517,8 @@ defmodule Prima.Refusal do
   defp row(:execution_unavailable),
     do: {:unavailable, "The execution engine is unavailable — retry shortly"}
 
-  defp row(:engine_starting),
-    do: {:unavailable, "The execution engine is starting — retry shortly"}
+  defp row(:no_worker_for_target),
+    do: {:unavailable, "No worker serves this webhook's target; try again when one does."}
 
   defp row(:message_too_long),
     do: {:invalid_argument, "The message is longer than the 32 KiB bound"}

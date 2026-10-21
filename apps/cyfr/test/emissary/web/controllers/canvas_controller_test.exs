@@ -131,17 +131,8 @@ defmodule Emissary.Web.CanvasControllerTest do
     |> get(Prima.CanvasWire.page_path(credential, frame_id))
   end
 
-  # The endpoint's origin as a tincture document's policy names it:
-  # read off `Emissary.Web.TinctureAssets.csp/2`'s own `frame-ancestors`.
-  defp endpoint_origin do
-    [_, origin] =
-      Regex.run(
-        ~r/frame-ancestors ([^;]+)/,
-        Emissary.Web.TinctureAssets.csp(%{}, String.duplicate("n", 22))
-      )
-
-    origin
-  end
+  # The endpoint's origin as a tincture document's policy names it.
+  defp endpoint_origin, do: Emissary.Web.TinctureAssets.endpoint_origin()
 
   defp toolkit(file), do: File.read!(Path.join(@toolkit, file))
 
@@ -524,13 +515,15 @@ defmodule Emissary.Web.CanvasControllerTest do
   end
 
   describe "the host bundle" do
-    test "a bundle holding </script in any case, or <!--, is not page-safe, and the shipped one is" do
-      assert Emissary.Web.CanvasController.page_safe?(toolkit("host.js"))
-      assert Emissary.Web.CanvasController.page_safe?("if (a < b) { s = '<scr' + 'ipt>' }")
+    test "the page's script ends only at its own closing tag, and the page holds no comment", %{
+      credential: credential,
+      open: open
+    } do
+      body = page(credential, open.frame_id).resp_body
 
-      for unsafe <- ["a</script>b", "a</SCRIPT b", "a</ScRiPt", "a<!--b", "<!-- x -->"] do
-        refute Emissary.Web.CanvasController.page_safe?(unsafe), unsafe
-      end
+      # Two elements close: the host script and the inert worker element.
+      assert length(Regex.scan(~r{</script}i, body)) == 2
+      refute body =~ "<!--"
 
       # The build holds the embedded bundle to it once the module exists.
       assert Emissary.Web.CanvasController.__after_compile__(nil, nil) == nil

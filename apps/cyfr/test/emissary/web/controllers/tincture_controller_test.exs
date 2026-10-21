@@ -253,16 +253,15 @@ defmodule Emissary.Web.TinctureControllerTest do
 
     # ── Public tincture with a rate-limited policy (rl-dash) ─────────
     # Dedicated fixture for the fail-closed test: its policy carries a rate
-    # limit from the start, so no mid-test policy swap / cache invalidation
-    # is needed (which proved environment-sensitive in CI).
+    # limit from the start, so the test swaps no policy and invalidates no
+    # cache mid-test.
     Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", "rl-dash", "1.0.0",
       manifest: rl_manifest,
       files: [{"index.html", "<html><head></head><body>RL</body></html>"}]
     )
 
-    # Public-ness is a published profile now, not a policy bit. Both
-    # public fixtures get an active public profile; the pre-dispatch
-    # policy rate limiter is gone (rates ride the authority path).
+    # A tincture is public by its published profile. Each public fixture
+    # gets an active public profile; its rates ride the authority path.
 
     for name <- ["pub-dash", "rl-dash", "nl-dash", "built-dash"] do
       {:ok, _} =
@@ -325,15 +324,6 @@ defmodule Emissary.Web.TinctureControllerTest do
         refute conn.resp_body =~ "Auth"
       end
     end
-
-    test "the old in-address asset prefix opens nothing", %{session: session} do
-      {:ok, ctx} = Sanctum.Caller.establish(session.token)
-
-      {:ok, %{credential: credential}} =
-        Sanctum.TinctureAuth.mint_asset_credential(ctx, release_digest("auth-dash"))
-
-      assert get(build_conn(), "/t/test/local/auth-dash/_s/#{credential}/app.js").status == 404
-    end
   end
 
   # ── Public tincture (no auth needed) ─────────────────────────────
@@ -376,10 +366,15 @@ defmodule Emissary.Web.TinctureControllerTest do
 
       manifest = component["manifest"]
 
-      # The hand-written policy is gone: connect-src names the endpoint's
-      # origin and the declared domains, never `'self'`, and the document
-      # is sandboxed.
-      assert csp == Emissary.Web.TinctureAssets.csp(manifest, nonce)
+      # The policy is the frame's rules' derivation: connect-src names the
+      # endpoint's origin and the declared domains, never `'self'`, and the
+      # document is sandboxed.
+      assert csp ==
+               Compendium.tincture_frame_policy(manifest, %{
+                 endpoint: Emissary.Web.TinctureAssets.endpoint_origin(),
+                 nonce: nonce
+               })
+
       assert csp =~ ~r/connect-src https?:\/\/\S+ https:\/\/\*\.supabase\.co;/
       refute csp =~ "connect-src 'self'"
       assert String.ends_with?(csp, "; sandbox allow-scripts")
@@ -682,7 +677,12 @@ defmodule Emissary.Web.TinctureControllerTest do
       {:ok, component} = Compendium.inspect_component(ctx, "tincture:local.auth-dash:1.0.0")
       manifest = component["manifest"]
 
-      assert csp == Emissary.Web.TinctureAssets.csp(manifest, nonce)
+      assert csp ==
+               Compendium.tincture_frame_policy(manifest, %{
+                 endpoint: Emissary.Web.TinctureAssets.endpoint_origin(),
+                 nonce: nonce
+               })
+
       assert String.ends_with?(csp, "; sandbox allow-scripts")
       assert get_resp_header(page, "referrer-policy") == ["no-referrer"]
     end

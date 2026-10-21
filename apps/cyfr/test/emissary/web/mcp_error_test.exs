@@ -108,7 +108,7 @@ defmodule Emissary.Web.MCPErrorTest do
       assert_raise Plug.Parsers.ParseError, fn ->
         conn
         |> put_req_header("content-type", "application/json")
-        |> post("/auth/whoami", ~s({"broken":))
+        |> post("/auth/logout", ~s({"broken":))
       end
     end
   end

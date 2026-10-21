@@ -6,14 +6,15 @@ defmodule Emissary.SecurityTest do
   Security tests for Emissary MCP server.
 
   Tests for:
-  - Session ID security (forgery, injection, size limits)
+  - The `Mcp-Session-Id` header, which this protocol revision does not
+    define: no value of it authenticates or changes an answer
   - Header security (null bytes, oversized headers)
   - Input validation edge cases
   """
   use Emissary.Web.ConnCase
 
   # The Mcp-Session-Id header must have no effect on authentication, regardless of its value.
-  describe "the retired session header is inert" do
+  describe "the Mcp-Session-Id header has no effect" do
     @hostile [
       "sess_00000000-0000-0000-0000-000000000000",
       "sess_' OR '1'='1",

@@ -97,14 +97,14 @@ defmodule Opus.RatesTest do
 
       # A window of zero holds nothing and a negative count admits
       # nothing: both read as configured and enforce nothing.
-      assert {:error, :rate_limited, 0} = Rates.check(actor, bucket, policy(10, 0))
+      assert {:error, :rate_limited, 0} = Rates.check(actor, bucket, policy(10, "0s"))
       assert {:error, :rate_limited, 0} = Rates.check(actor, bucket, policy(-1, "1m"))
 
       assert row(actor, bucket) == nil
     end
 
     test "every window format the duration grammar spells", %{actor: actor, bucket: bucket} do
-      for window <- ["100ms", "30s", "5m", "1h", 250] do
+      for window <- ["100ms", "30s", "5m", "1h"] do
         assert {:ok, 9} = Rates.check(actor, "#{bucket}:#{inspect(window)}", policy(10, window))
       end
     end
@@ -170,14 +170,6 @@ defmodule Opus.RatesTest do
   end
 
   describe "nothing in this boot holds an allowance" do
-    test "there is no table and no owner process to lose" do
-      # The window used to live in this boot's ETS table, behind a named
-      # owner: a restart forgot every bucket and handed each a fresh
-      # window. Both are gone, and the row is what a claim reads.
-      assert :ets.whereis(:cyfr_execution_rates) == :undefined
-      assert GenServer.whereis(Opus.Rates) == nil
-    end
-
     test "a claim outlives the process that made it", %{actor: actor, bucket: bucket} do
       parent = self()
 
@@ -193,7 +185,6 @@ defmodule Opus.RatesTest do
       # Nothing died with it: the count is the row's, and the next claim
       # in any process continues from it.
       assert %RateWindow{count: 1} = row(actor, bucket)
-      assert {:ok, 1, 2, 60_000} = Rates.status(actor, bucket, policy(3, "1m"))
       assert {:ok, 1} = Rates.check(actor, bucket, policy(3, "1m"))
     end
 
@@ -218,24 +209,7 @@ defmodule Opus.RatesTest do
     end
   end
 
-  describe "status/3, and a cleared bucket" do
-    test "status reads the window and counts nothing", %{actor: actor, bucket: bucket} do
-      assert {:ok, 0, 5, 60_000} = Rates.status(actor, bucket, policy(5, "1m"))
-
-      for _ <- 1..2, do: assert({:ok, _} = Rates.check(actor, bucket, policy(5, "1m")))
-
-      assert {:ok, 2, 3, 60_000} = Rates.status(actor, bucket, policy(5, "1m"))
-      assert {:ok, 2, 3, 60_000} = Rates.status(actor, bucket, policy(5, "1m"))
-    end
-
-    test "status of an unlimited bucket, and of one whose limit cannot be read", %{
-      actor: actor,
-      bucket: bucket
-    } do
-      assert {:ok, :unlimited} = Rates.status(actor, bucket, nil)
-      assert {:ok, 0, 0, 0} = Rates.status(actor, bucket, policy(10, "every friday"))
-    end
-
+  describe "a cleared bucket" do
     test "a cleared bucket's window is forgotten", %{actor: actor, bucket: bucket} do
       for _ <- 1..2, do: assert({:ok, _} = Rates.check(actor, bucket, policy(2, "1m")))
       assert {:error, :rate_limited, _} = Rates.check(actor, bucket, policy(2, "1m"))
@@ -252,7 +226,6 @@ defmodule Opus.RatesTest do
     test "an unresolved athanor is refused before any claim", %{bucket: bucket} do
       for actor <- [%Prima.Actor{athanor_id: nil}, %Prima.Actor{athanor_id: ""}] do
         assert {:error, :missing_tenant} = Rates.check(actor, bucket, policy(10, "1m"))
-        assert {:error, :missing_tenant} = Rates.status(actor, bucket, policy(10, "1m"))
 
         # Even with no limit to enforce: a bucket without a tenant would
         # collide across tenants.
@@ -271,7 +244,6 @@ defmodule Opus.RatesTest do
       Arca.Repo.query!("DROP TABLE rate_windows")
 
       assert {:error, :unavailable} = Rates.check(actor, bucket, policy(5, "1m"))
-      assert {:error, :unavailable} = Rates.status(actor, bucket, policy(5, "1m"))
 
       # An unlimited bucket asks the store nothing, so it still answers.
       assert {:ok, :unlimited} = Rates.check(actor, bucket, nil)

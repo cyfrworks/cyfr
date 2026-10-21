@@ -29,7 +29,6 @@ defmodule Compendium.Registry.CredentialStore do
   1. The `device_label` platform setting, read through
      `Arca.PlatformSettings.effective/1` (`CYFR_DEVICE_LABEL` pins it).
   2. `:inet.gethostname/0` (the machine's configured hostname).
-  3. Literal `"cyfr-host"` fallback.
 
   It rides along on every stored credential and on the token-minting requests
   that produce them, so it is named here rather than at either call site.
@@ -46,10 +45,8 @@ defmodule Compendium.Registry.CredentialStore do
         label
 
       {:ok, nil} ->
-        case :inet.gethostname() do
-          {:ok, host} -> to_string(host)
-          _ -> "cyfr-host"
-        end
+        {:ok, host} = :inet.gethostname()
+        to_string(host)
     end
   end
 

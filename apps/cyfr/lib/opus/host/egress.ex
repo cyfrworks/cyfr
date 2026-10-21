@@ -11,7 +11,7 @@ defmodule Opus.Host.Egress do
 
   `Opus.Host` verifies the call and reads its args
   (`Prima.PinnedTarget.read_request/1`, `malformed` otherwise) before
-  `pin/3` acts. The attempt must be held by the calling runner and live,
+  `pin/2` acts. The attempt must be held by the calling runner and live,
   as for a child or a catalog tool (`Opus.Attempt.call/3` with
   `:chain`); otherwise the call is `lost` or `unavailable` and nothing is
   resolved. What decides the address is the run's admitted authority,
@@ -67,7 +67,7 @@ defmodule Opus.Host.Egress do
   led by the request's purpose (`fetch: …`, `attached: …`) and naming the
   host and never the URL, whose path and query can carry a credential.
 
-  `pin/3` takes the purposes a runner may ask for and `:attached`, the pin
+  `pin/2` takes the purposes a runner may ask for and `:attached`, the pin
   CYFR takes for an attached request (`Opus.Host.AttachedFetch`), which
   names the need it carries (`:need`), is decided the same way with that
   need as an exit beside its host, and is recorded as its own; a runner's
@@ -79,11 +79,14 @@ defmodule Opus.Host.Egress do
   attempt and its id, in a node-local ETS table for two header windows,
   which is as long as a redirect of the request a pin was answered for
   can follow it: one window for the pin and one for the answer's own
-  timeout (`Prima.HostAPI.request_timeout_ms/1`). A row of any other
-  shape names no pin a redirect may follow.
-  `Opus.Host.Egress.Pins` owns the table and sweeps it; every host
-  listener (`Opus.HostListener`) starts one, and the first started
-  holds the table for the node.
+  timeout (`Prima.HostAPI.request_timeout_ms/1`).
+  `Opus.Host.Egress.Pins` owns the table and sweeps it; `Opus.Supervisor`
+  starts it once for the node, before the host listener whose calls
+  write it.
+
+  Names resolve through `:inet`, or through the module the application's
+  `:egress_resolver` names, a test's scripted resolver, which answers
+  `getaddr/2` as `:inet` does and is never set outside the suite.
   """
 
   alias Opus.Attempt
@@ -98,21 +101,19 @@ defmodule Opus.Host.Egress do
   @typedoc "An attached request's pin: the URL and the need whose credential it carries."
   @type attached :: %{url: String.t(), purpose: :attached, from: nil, need: String.t()}
 
-  @typedoc "What `pin/3` answers."
+  @typedoc "What `pin/2` answers."
   @type answer ::
           {:ok, PinnedTarget.t()}
           | {:error, :lost | :unavailable | PinnedTarget.refusal()}
 
   @doc """
   Pin the address the attempt of `caller` (the verified header) may reach
-  `request`'s URL at, for its purpose. Options: `:now` (Unix ms, default
-  the clock) and `:resolver` (a module answering `getaddr/2` as `:inet`
-  does, default `:inet`), which `Opus.Host` never passes.
+  `request`'s URL at, for its purpose.
   """
-  @spec pin(Attempt.caller(), PinnedTarget.request() | attached(), keyword()) :: answer()
-  def pin(caller, %{url: url, purpose: _purpose} = request, opts \\ []) when is_binary(url) do
-    now = Keyword.get_lazy(opts, :now, fn -> System.system_time(:millisecond) end)
-    resolver = Keyword.get(opts, :resolver, :inet)
+  @spec pin(Attempt.caller(), PinnedTarget.request() | attached()) :: answer()
+  def pin(caller, %{url: url, purpose: _purpose} = request) when is_binary(url) do
+    now = System.system_time(:millisecond)
+    resolver = Application.get_env(:cyfr, :egress_resolver, :inet)
 
     with {:ok, chain} <- Attempt.call(caller.execution_id, caller, :chain) do
       case decide(caller, request, chain, resolver, now) do
@@ -236,18 +237,18 @@ defmodule Opus.Host.Egress do
 
   # A redirect carries the request's credentials, so it keeps to the
   # origin of the pin it follows: a hop to another scheme, host or port,
-  # or from a pin this attempt was never answered (or no longer
-  # remembers), is refused.
+  # or from a pin this attempt holds no live row of (never answered, or
+  # past its keep), is refused.
   defp same_origin(_caller, %{purpose: purpose}, _uri, _now) when purpose != :redirect, do: :ok
 
   defp same_origin(caller, %{from: from}, uri, now) do
     case :ets.lookup(@table, {caller.attempt, from}) do
-      [{_key, %URI{} = origin, keep_until}] when is_integer(keep_until) and keep_until >= now ->
+      [{_key, origin, keep_until}] when keep_until >= now ->
         if Prima.Network.same_origin?(uri, origin),
           do: :ok,
           else: redirect_refused("to another origin than its pin's", uri)
 
-      _unknown ->
+      _none_live ->
         redirect_refused("from a pin this attempt holds none of", uri)
     end
   end
@@ -325,10 +326,8 @@ defmodule Opus.Host.Egress do
     @moduledoc false
     # The node's table of recent pins, `{{attempt, id}, origin,
     # keep_until}`, owned here and swept each header window of every row
-    # past its keep_until and every row of another shape, which no lookup
-    # answers. A host listener starts one; a second listener on the same
-    # node finds the first and starts nothing, so every listener's calls
-    # share one table.
+    # past its keep_until. `Opus.Supervisor` starts the one owner, so
+    # every listener's calls share one table.
 
     use GenServer
 
@@ -336,15 +335,10 @@ defmodule Opus.Host.Egress do
     @window_ms Prima.WorkerAuth.window_ms()
 
     def child_spec(_opts) do
-      %{id: __MODULE__, start: {__MODULE__, :start_link, []}, shutdown: 5_000}
+      %{id: __MODULE__, start: {__MODULE__, :start_link, []}}
     end
 
-    def start_link do
-      case GenServer.start_link(__MODULE__, :ok, name: __MODULE__) do
-        {:error, {:already_started, _holder}} -> :ignore
-        started -> started
-      end
-    end
+    def start_link, do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
     @impl true
     def init(:ok) do
@@ -364,10 +358,7 @@ defmodule Opus.Host.Egress do
     def handle_info(:sweep, state) do
       now = System.system_time(:millisecond)
 
-      :ets.select_delete(@table, [
-        {{:_, :_, :"$1"}, [{:<, :"$1", now}], [true]},
-        {:_, [{:"=/=", {:tuple_size, :"$_"}, 3}], [true]}
-      ])
+      :ets.select_delete(@table, [{{:_, :_, :"$1"}, [{:<, :"$1", now}], [true]}])
 
       Process.send_after(self(), :sweep, @window_ms)
       {:noreply, state}

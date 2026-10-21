@@ -106,7 +106,7 @@ defmodule Arca.ThreadSubscriptionStorageTest do
     :ok = Subs.follow(bob, thread.id, bob.user_id)
 
     {:ok, _} =
-      Aqua.ToolGrants.put(alice_ctx, %{
+      Sanctum.ToolGrants.put(alice_ctx, %{
         scope: "thread",
         effect: "allow",
         thread_id: thread.id,
@@ -117,7 +117,7 @@ defmodule Arca.ThreadSubscriptionStorageTest do
 
     # An agent-scope answer belongs to the agent, not the thread — it stays.
     {:ok, _} =
-      Aqua.ToolGrants.put(alice_ctx, %{
+      Sanctum.ToolGrants.put(alice_ctx, %{
         scope: "agent",
         effect: "allow",
         thread_id: thread.id,

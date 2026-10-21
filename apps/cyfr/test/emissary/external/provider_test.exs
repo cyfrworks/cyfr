@@ -36,10 +36,11 @@ defmodule Emissary.External.ProviderTest do
   end
 
   describe "handle/3 - create" do
-    test "requires name", %{ctx: ctx} do
+    test "requires a non-empty name", %{ctx: ctx} do
       assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                Provider.handle("mcp_servers", ctx, %{
                  "action" => "create",
+                 "name" => "",
                  "config" => %{"url" => "https://example.com/mcp"}
                })
     end
@@ -530,8 +531,7 @@ defmodule Emissary.External.ProviderTest do
       for {config, fragment} <- [
             {Map.put(@stdio_config, "url", "https://x/mcp"), "no url"},
             {Map.put(@stdio_config, "headers", %{}), "no headers"},
-            {%{"url" => "https://x/mcp", "backends" => []}, "no backends"},
-            {Map.put(@stdio_config, "transport", "ws"), "Unknown transport"}
+            {%{"url" => "https://x/mcp", "backends" => []}, "no backends"}
           ] do
         assert {:error, {:invalid_argument, message}} =
                  Provider.handle("mcp_servers", ctx, %{
@@ -542,6 +542,19 @@ defmodule Emissary.External.ProviderTest do
 
         assert message =~ fragment
       end
+    end
+
+    test "name a transport the declaration enumerates, and the gate refuses another",
+         %{ctx: ctx} do
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, message}}} =
+               Sanctum.Gate.call_external("mcp_servers", Sanctum.TestContext.local(:api), %{
+                 "action" => "create",
+                 "name" => "piped",
+                 "config" => Map.put(@stdio_config, "transport", "ws")
+               })
+
+      assert message =~ "config.transport"
+      assert {:error, :not_found} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "piped")
     end
 
     test "restart is for an enabled stdio server only", %{ctx: ctx} do
@@ -629,9 +642,9 @@ defmodule Emissary.External.ProviderTest do
   end
 
   describe "handle/3 - delete" do
-    test "requires name", %{ctx: ctx} do
+    test "requires a non-empty name", %{ctx: ctx} do
       assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
-               Provider.handle("mcp_servers", ctx, %{"action" => "delete"})
+               Provider.handle("mcp_servers", ctx, %{"action" => "delete", "name" => ""})
     end
 
     test "deletes existing server", %{ctx: ctx} do
@@ -887,11 +900,6 @@ defmodule Emissary.External.ProviderTest do
   end
 
   describe "handle/3 - get" do
-    test "requires name", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
-               Provider.handle("mcp_servers", ctx, %{"action" => "get"})
-    end
-
     test "requires non-empty name", %{ctx: ctx} do
       assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                Provider.handle("mcp_servers", ctx, %{"action" => "get", "name" => ""})
@@ -921,11 +929,6 @@ defmodule Emissary.External.ProviderTest do
   end
 
   describe "handle/3 - test" do
-    test "requires name", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
-               Provider.handle("mcp_servers", ctx, %{"action" => "test"})
-    end
-
     test "requires non-empty name", %{ctx: ctx} do
       assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                Provider.handle("mcp_servers", ctx, %{"action" => "test", "name" => ""})
@@ -1010,23 +1013,6 @@ defmodule Emissary.External.ProviderTest do
                  "action" => "enable",
                  "name" => "toggle2"
                })
-    end
-  end
-
-  describe "handle/3 - unknown" do
-    test "returns error for unknown action", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, "Unknown action: " <> _}} =
-               Provider.handle("mcp_servers", ctx, %{"action" => "bogus"})
-    end
-
-    test "returns error for missing action", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, "Missing required parameter: action"}} =
-               Provider.handle("mcp_servers", ctx, %{})
-    end
-
-    test "returns error for unknown tool", %{ctx: ctx} do
-      assert {:error, "Unknown tool: other"} =
-               Provider.handle("other", ctx, %{"action" => "list"})
     end
   end
 

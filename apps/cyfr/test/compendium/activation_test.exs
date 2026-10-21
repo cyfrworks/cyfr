@@ -3,6 +3,8 @@
 defmodule Compendium.ActivationTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Compendium.Activation
   alias Compendium.Registry
 
@@ -68,6 +70,18 @@ defmodule Compendium.ActivationTest do
       Arca.ComponentStorage.get_component(Sanctum.Context.actor(ctx), name, version, "local")
 
     row
+  end
+
+  # A row altered outside the publish path: its manifest column holds bytes
+  # that are not JSON.
+  defp corrupt_manifest!(ctx, name) do
+    {1, _} =
+      Ecto.Query.from(c in Arca.Schemas.Component,
+        where: c.athanor_id == ^ctx.athanor_id and c.name == ^name
+      )
+      |> Arca.Repo.update_all(set: [manifest: "not json"])
+
+    :ok
   end
 
   # ============================================================================
@@ -252,12 +266,13 @@ defmodule Compendium.ActivationTest do
       assert graph["reagent:local.present"] == leaf.release_digest
     end
 
-    test "a node without a release digest makes the activation incomplete", %{ctx: ctx} do
-      component = publish!(ctx, "legacy")
-      legacy = %{component | release_digest: nil}
+    test "a damaged row without a release digest makes the activation incomplete",
+         %{ctx: ctx} do
+      component = publish!(ctx, "undigested")
+      damaged = %{component | release_digest: nil}
 
-      assert {:error, {:incomplete, {:missing_release_digest, "reagent:local.legacy"}}} =
-               Activation.resolve(ctx, legacy)
+      assert {:error, {:incomplete, {:missing_release_digest, "reagent:local.undigested"}}} =
+               Activation.resolve(ctx, damaged)
     end
   end
 
@@ -324,7 +339,7 @@ defmodule Compendium.ActivationTest do
       import Ecto.Query
 
       component = publish!(ctx, "verified-forged")
-      key = Activation.node_key(component)
+      key = Prima.ComponentRow.node_key(component)
 
       {1, _} =
         Arca.Repo.update_all(
@@ -344,6 +359,41 @@ defmodule Compendium.ActivationTest do
       assert {:ok, %{nodes: nodes}} = Activation.resolve_verified(ctx, row)
       assert nodes[key].integrity == :mismatch
       assert nodes[key].release_digest == "sha256:forged"
+    end
+  end
+
+  # A leaf that declares no dependencies, needs or caps has a release
+  # digest an empty manifest recomputes, so a manifest read as none would
+  # verify as intact.
+  describe "a stored manifest that does not decode" do
+    @describetag capture_log: true
+
+    test "on the root is damage, never a node that declares nothing", %{ctx: ctx} do
+      publish!(ctx, "torn-root")
+      corrupt_manifest!(ctx, "torn-root")
+      root = row!(ctx, "torn-root")
+
+      damage = {:error, {:corrupt, {:manifest, "reagent:local.torn-root"}}}
+      assert Activation.resolve_verified(ctx, root) == damage
+      assert Activation.resolve(ctx, root) == damage
+    end
+
+    test "on a dependency is damage to the whole activation", %{ctx: ctx} do
+      publish!(ctx, "torn-dep")
+
+      root =
+        publish!(ctx, "torn-dependent",
+          type: "formula",
+          manifest: %{
+            "dependencies" => %{"static" => [%{"ref" => "reagent:local.torn-dep:1.0.0"}]}
+          }
+        )
+
+      corrupt_manifest!(ctx, "torn-dep")
+
+      damage = {:error, {:corrupt, {:manifest, "reagent:local.torn-dep"}}}
+      assert Activation.resolve_verified(ctx, root) == damage
+      assert Activation.resolve(ctx, root) == damage
     end
   end
 

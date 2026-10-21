@@ -77,7 +77,7 @@ defmodule Aqua.Loop.AgentWideAutoPolicyTest do
         before = soul_file!(ctx)
 
         assert {:error, {:invalid_argument, sentence}} =
-                 Aqua.AgentConfig.call_aqua(ctx, %{
+                 Cyfr.Test.AquaTool.call(ctx, %{
                    "action" => "update",
                    "name" => "aqua",
                    "tool_policy_patch" => %{key => "auto"}
@@ -90,7 +90,7 @@ defmodule Aqua.Loop.AgentWideAutoPolicyTest do
 
     test "refuses a glob at auto that covers notes.pin, naming it", %{ctx: ctx} do
       assert {:error, {:invalid_argument, sentence}} =
-               Aqua.AgentConfig.call_aqua(ctx, %{
+               Cyfr.Test.AquaTool.call(ctx, %{
                  "action" => "update",
                  "name" => "aqua",
                  "tool_policy_patch" => %{"notes.*" => "auto"}

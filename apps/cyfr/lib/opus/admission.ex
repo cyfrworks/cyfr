@@ -60,8 +60,8 @@ defmodule Opus.Admission do
   @typedoc """
   An admitted run: its execution id, its open attempt, what its assignment
   is signed from (`t:Opus.Assignments.admitted/0`), its
-  consented timeout and the state its waiter closes it lost with
-  (`Opus.Dispatch.await/2`).
+  consented timeout and the state its waiter (`Opus.Dispatch`) closes it
+  lost with.
   """
   @type admitted :: %{
           execution_id: String.t(),
@@ -106,7 +106,8 @@ defmodule Opus.Admission do
   The component graph the consent is judged against is read before the
   loader is asked (`Compendium.resolve_verified_activation/2`). One that
   cannot be read right now is `{:error, {:unavailable, "The component
-  graph"}}`, and one whose stored rows do not hash is
+  graph"}}`, and one whose stored rows do not hash, or a node of which
+  holds a stored manifest that does not decode, is
   `{:error, {:corrupt, {:component_graph, ref}}}`, `ref` the root's own
   component ref: an outage and damage, never a setup to make.
 
@@ -294,7 +295,7 @@ defmodule Opus.Admission do
   `:parent_attempt` (the attempt of `:parent_execution_id` a child is
   admitted under), `:step_spans`, `:envelope` (true when the caller reads
   the component's answer as its catalyst envelope, whose error is a refusal
-  the run completes with: `Opus.Close.complete/4`), and what the
+  the run completes with: `Opus.Close.complete/3`), and what the
   attempt is opened with
   (`Opus.Attempt.open/1`): `:service_id` and `:boot_id` (the
   worker service the run is dispatched to and the boot of it dispatch
@@ -354,10 +355,7 @@ defmodule Opus.Admission do
          {:ok, pinned, resolution} <- resolve(ctx, reference),
          {:ok, component_ref, extracted_type, component} <- inspect_component(ctx, pinned),
          {:ok, component_type} <- authoritative_type(extracted_type, opts[:type]) do
-      record =
-        ctx
-        |> new_record(pinned, input, opts, component_type, component, resolution)
-        |> Map.put(:grant, grant)
+      record = new_record(ctx, pinned, input, opts, component_type, component, resolution)
 
       Prima.LoggerContext.set_execution_id(record.id)
 
@@ -376,7 +374,9 @@ defmodule Opus.Admission do
           signature_verified: component["signature_verified"] || false,
           envelope: opts[:envelope] == true,
           admission:
-            Keyword.take(opts, [
+            opts
+            |> Keyword.take([
+              :retained_input,
               :charge,
               :step,
               :parent_attempt,
@@ -384,6 +384,10 @@ defmodule Opus.Admission do
               :service_id,
               :boot_id
             ])
+            |> Keyword.merge(
+              grant: grant,
+              retention_class: opts[:retention_class] || Record.default_retention_class(ctx)
+            )
         }
       }
 
@@ -403,7 +407,7 @@ defmodule Opus.Admission do
 
   # The standing the run is admitted under, before anything is resolved: a
   # root's athanor as it stands now, a child's parent's stored stamp
-  # (`Opus.Record.grant/1`). The admission transaction checks
+  # (`Opus.Record.inherited_grant/2`). The admission transaction checks
   # it again under the athanor's lock.
   defp grant(ctx, opts) do
     case opts[:parent_execution_id] do
@@ -463,14 +467,9 @@ defmodule Opus.Admission do
   end
 
   defp parse_component_type(type) do
-    name = if is_atom(type), do: Atom.to_string(type), else: type
-
-    case is_binary(name) && Record.executable_type(name) do
-      {:ok, component_type} ->
-        {:ok, component_type}
-
-      _ ->
-        {:error, :invalid_component_type}
+    case Record.executable_type(type) do
+      {:ok, component_type} -> {:ok, component_type}
+      :error -> {:error, :invalid_component_type}
     end
   end
 
@@ -484,8 +483,6 @@ defmodule Opus.Admission do
         # A child walks its parent's authority and roots no profile of its
         # own, so it records none.
         profile_id: opts[:profile_id],
-        retention_class: opts[:retention_class],
-        retained_input: opts[:retained_input],
         schedule_id: opts[:schedule_id]
       ]
       |> maybe_put(:execution_id, opts[:execution_id])
@@ -531,7 +528,7 @@ defmodule Opus.Admission do
 
       is_nil(opts[:parent_execution_id]) ->
         with {:ok, %{digest: digest, graph: graph}} <-
-               Compendium.resolve_activation(ctx, component),
+               Compendium.resolve_activation(ctx, activation_row(component)),
              {:ok, encoded} <- Compendium.encode_activation_graph(graph) do
           %{record | activation_digest: digest, activation_graph: encoded}
         else
@@ -848,8 +845,7 @@ defmodule Opus.Admission do
     {:error, {:attestation_failed, what}}
   end
 
-  defp pinned_signer(verify) when is_map(verify),
-    do: {verify["identity"] || verify[:identity], verify["issuer"] || verify[:issuer]}
+  defp pinned_signer(verify) when is_map(verify), do: {verify["identity"], verify["issuer"]}
 
   defp pinned_signer(_), do: {nil, nil}
 
@@ -871,7 +867,7 @@ defmodule Opus.Admission do
   end
 
   defp admit_row(run) do
-    with :ok <- Record.write_started(run.close.record, run.close.admission) do
+    with :ok <- Record.write_started(run.ctx, run.close.record, run.close.admission) do
       Telemetry.execute_start(run.close.record)
       {:ok, put_in(run, [:close, Access.key!(:started)], true)}
     end
@@ -893,7 +889,7 @@ defmodule Opus.Admission do
         need: run.opts[:need],
         limits: run.limits,
         close: run.close,
-        grant: record.grant,
+        grant: Keyword.fetch!(run.close.admission, :grant),
         # A formula's events go on its root's stream, which the caller
         # watching the whole run subscribes to; any other component's go on
         # its own.
@@ -1089,6 +1085,20 @@ defmodule Opus.Admission do
 
   defp validate_need(other), do: {:error, {:invalid_need, other}}
 
+  # The registry row an activation is resolved from, atom-keyed as
+  # `Compendium.Activation` reads a row, taken from the string-keyed answer
+  # of `inspect_component/2`.
+  defp activation_row(component) do
+    %{
+      name: component["name"],
+      publisher: component["publisher"],
+      component_type: component["component_type"],
+      digest: component["digest"],
+      release_digest: component["release_digest"],
+      manifest: component["manifest"]
+    }
+  end
+
   defp load_authority(ctx, profile, component, opts) do
     with {:ok, live} <- live_activation(ctx, component) do
       # An unchanged live shape permits versionless consent. Derivation failure
@@ -1117,7 +1127,6 @@ defmodule Opus.Admission do
     end
   end
 
-  @doc false
   # The root load's answer for the loader's refusal `reason` of the profile
   # `profile_id`, rooting the component `source_ref`: its own grant, or the
   # release it runs, read damaged (`Sanctum.Consent.Loader.damage?/1`) is
@@ -1125,8 +1134,7 @@ defmodule Opus.Admission do
   # (`Sanctum.Consent.Loader.damage_refusal/3`), a reason the router
   # answers typed, in class `corrupt` and its own sentence, never as an
   # outcome that could not be confirmed. Any other reason stands.
-  @spec root_refusal(term(), String.t(), String.t()) :: term()
-  def root_refusal(reason, profile_id, source_ref) do
+  defp root_refusal(reason, profile_id, source_ref) do
     if Sanctum.Consent.Loader.damage?(reason),
       do: Sanctum.Consent.Loader.damage_refusal(reason, profile_id, source_ref),
       else: reason
@@ -1137,10 +1145,11 @@ defmodule Opus.Admission do
   # store could not give right now (its projection not caught up, or a
   # store that did not answer) is an outage, and one whose stored rows do
   # not hash (a release digest or name that is not text, which only a row
-  # written outside the publish path carries) is damage: neither is a
-  # setup to make. An incomplete graph is the loader's to judge.
+  # written outside the publish path carries) or a node of which holds a
+  # stored manifest that does not decode is damage: neither is a setup to
+  # make. An incomplete graph is the loader's to judge.
   defp live_activation(ctx, component) do
-    case Compendium.resolve_verified_activation(ctx, component) do
+    case Compendium.resolve_verified_activation(ctx, activation_row(component)) do
       {:ok, _} = verified ->
         {:ok, verified}
 
@@ -1151,6 +1160,9 @@ defmodule Opus.Admission do
         {:error, {:unavailable, "The component graph"}}
 
       {:error, {:invalid_graph, _}} ->
+        {:error, {:corrupt, {:component_graph, component["component_ref"]}}}
+
+      {:error, {:corrupt, {:manifest, _node_key}}} ->
         {:error, {:corrupt, {:component_graph, component["component_ref"]}}}
 
       # `:no_athanor` among them, which never reaches here: the profile
@@ -1179,8 +1191,6 @@ defmodule Opus.Admission do
 
   defp launch_opts(opts, %{execution_id: id} = launch) when is_binary(id),
     do: opts |> Keyword.put(:launch, launch) |> Keyword.put_new(:execution_id, id)
-
-  defp launch_opts(opts, launch), do: Keyword.put(opts, :launch, launch)
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)

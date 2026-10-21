@@ -34,10 +34,6 @@ defmodule Aqua.RoomExcerpt do
           optional(:athanor) => String.t() | nil
         }
 
-  @doc "The excerpt's byte bound — half the runner's message cap."
-  @spec max_bytes() :: pos_integer()
-  def max_bytes, do: @max_bytes
-
   @doc """
   The room's newest lines as one bounded text. `{:error, reason}` when the
   person holds no seat in the room, the thread is gone, or nobody has said

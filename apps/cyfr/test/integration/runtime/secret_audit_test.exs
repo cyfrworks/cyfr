@@ -189,7 +189,7 @@ defmodule Locus.Runtime.SecretAuditTest do
     {result, log} =
       with_log(fn ->
         Opus.Dispatch.run(ctx, @ref, %{"operation" => "probe"},
-          type: :catalyst,
+          type: "catalyst",
           authority: authority,
           execution_id: id
         )

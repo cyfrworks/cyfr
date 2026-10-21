@@ -70,8 +70,8 @@ defmodule Opus.SlotsTest do
   end
 
   # And on the live instance: a root at the athanor's cap is refused with
-  # the sentence the operator has always seen, while a child is never
-  # refused for it — the other half of the depth guarantee.
+  # the sentence the operator reads, while a child is never refused for
+  # it — the other half of the depth guarantee.
   test "a root at the athanor's cap is refused with its sentence, and a child still passes" do
     tenant = "ath_slots_#{System.unique_integer([:positive])}"
     %{key_max: key_max} = Slots.status(@slots)

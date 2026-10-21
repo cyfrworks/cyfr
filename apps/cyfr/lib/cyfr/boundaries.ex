@@ -367,9 +367,9 @@ defmodule Cyfr.Boundaries do
         "`Sanctum.ToolGrants` holds the standing answers a person gave, which are " <>
           "consent state: the assistant composes them with an agent's policy and " <>
           "checks which may stand, and reads and writes the rows only through it. " <>
-          "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s two in-process agent reads " <>
-          "alone — the first-need hook: a turn reads its athanor's tree in-process, " <>
-          "and the bundle a group athanor " <>
+          "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s in-process agent read " <>
+          "alone — the first-need hook: a turn reads its athanor's tree in-process " <>
+          "rather than through the `aqua` tool, and the bundle a group athanor " <>
           "is filled with on first read has to be there before the turn roots an " <>
           "authority in it. `Sanctum.ExecutionStanding` is `Aqua.Tape`'s check over " <>
           "the grant a turn's root attempt stores, handed to the turn's writes. " <>
@@ -501,12 +501,12 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       depth: 3,
       allow: ~w(
-        Sanctum Sanctum.BearerToken Sanctum.Caller Sanctum.Catalog
+        Sanctum Sanctum.Caller Sanctum.Catalog
         Sanctum.Catalog.NotLoadedError Sanctum.ClientIp Sanctum.Consent Sanctum.Consent.Loader
         Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
-        Sanctum.RunningTasks Sanctum.Seal Sanctum.Session Sanctum.TinctureAccess
+        Sanctum.RunningTasks Sanctum.Seal Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Vault.OAuthGrant Sanctum.VaultReader
         Sanctum.Visibility Sanctum.Webhook
@@ -1887,9 +1887,7 @@ defmodule Cyfr.Boundaries do
       chain_reachable?: 2,
       configured_providers: 0,
       get_tool: 1,
-      host_intercepted?: 2,
       host_intercepted_actions: 0,
-      in_chain_refused?: 2,
       list_tools: 0,
       load!: 0,
       lookup_stream: 1,
@@ -2025,7 +2023,7 @@ defmodule Cyfr.Boundaries do
       glyphs: 0,
       words: 0
     ],
-    "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1, get: 1],
+    "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1],
     "Sanctum.SignIn" => [
       admitted: 2,
       link_ticket: 2,
@@ -2081,7 +2079,6 @@ defmodule Cyfr.Boundaries do
       check_standing: 2,
       for_thread: 2,
       grant_row: 2,
-      put: 2,
       revoke: 2
     ],
     "Sanctum.ToolServerDigest" => [
@@ -2104,12 +2101,9 @@ defmodule Cyfr.Boundaries do
     "Sanctum.VirtualTools" => [
       action: 2,
       action_kinds: 0,
-      action_pairs: 0,
-      actions_of: 1,
       auto_only?: 2,
       catalyst_for: 1,
       catalysts: 0,
-      kind_for: 2,
       recovery: 2,
       table: 0,
       tool?: 1
@@ -2182,10 +2176,6 @@ defmodule Cyfr.Boundaries do
     webhook_hmac: %{
       admits: :credential,
       why: "the sender's HMAC over the raw body, verified on the pipeline"
-    },
-    handler_auth: %{
-      admits: :credential,
-      why: "the controller self-gates, answering 401 or 400 without a token"
     },
     tincture_handler_auth: %{
       admits: :credential,
@@ -2457,6 +2447,11 @@ defmodule Cyfr.Boundaries do
     # scripted directory through paths that pass no options; a caller's
     # options win, and a release never sets it, so it uses the system's.
     directory_client: :seam,
+    # The resolver a guest's outbound pin resolves through
+    # (`Opus.Host.Egress`), which a suite sets to a scripted resolver so a
+    # pin's names never reach the network; a release never sets it, so
+    # names resolve through `:inet`.
+    egress_resolver: :seam,
     # An OAuth provider a suite scripts (`Sanctum.Vault.OAuth`): a preset for
     # a hint no shipped preset holds and that preset's token endpoint, which
     # a code exchange and a refresh both reach, never replacing a shipped
@@ -2526,8 +2521,7 @@ defmodule Cyfr.Boundaries do
     # in-code default, so this is a gap in reach, not a broken deployment.
     oci_max_blob_bytes: :missing_lever,
     webhook_max_body_bytes: :missing_lever,
-    platform_ceiling: :missing_lever,
-    registry_scheme: :missing_lever
+    platform_ceiling: :missing_lever
   }
 
   @test_only_config_key_classes %{
@@ -3115,7 +3109,7 @@ defmodule Cyfr.Boundaries do
         "the readiness probe is anonymous and asks whether the store still takes a " <>
           "write, so it runs before any caller is known and in no athanor: `ready/2` " <>
           "puts one fixed key under the global `system/` root " <>
-          "(`Emissary.Web.HealthController.probe_dir/0`) and deletes it again, under " <>
+          "(`system/health/.write_probe`) and deletes it again, under " <>
           "the platform's internal context, whose system actor is the only kind " <>
           "`Arca.Storage.authorize_path/2` opens a global root to. `Arca` runs that " <>
           "check on every put and delete. The probe names no tenant path and reads " <>

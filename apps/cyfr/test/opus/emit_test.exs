@@ -31,7 +31,10 @@ defmodule Opus.EmitTest do
   end
 
   defp new(ctx, stream_id, opts \\ []) do
-    Emit.new(stream_id, [ctx: ctx, authority: Prima.Authority.zero()] ++ opts)
+    Emit.new(
+      stream_id,
+      Keyword.merge([ctx: ctx, authority: Prima.Authority.zero(), budget_id: stream_id], opts)
+    )
   end
 
   # Emit each event in turn with `secrets`, answering the last reply and the

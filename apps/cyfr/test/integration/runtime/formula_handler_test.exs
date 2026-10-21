@@ -1200,9 +1200,6 @@ defmodule Locus.Runtime.FormulaHandlerTest do
       emit_fn.(Jason.encode!(%{"kind" => "text_delta", "content" => "hello"}))
       emit_fn.(Jason.encode!(%{"kind" => "tool_use", "tool" => "read_file"}))
 
-      # Flush pending buffer writes before reading
-      Opus.Events.flush(execution_id)
-
       events = Opus.Events.since(execution_id, {0, 0}, ctx.athanor_id)
       assert length(events) == 3
       assert Enum.map(events, & &1.sequence) == ["0.1", "0.2", "0.3"]

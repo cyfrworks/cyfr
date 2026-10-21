@@ -68,7 +68,7 @@ defmodule Compendium.OCI.ErrorsTest do
       assert err.detail.required_version == nil
     end
 
-    test "404 maps to :not_found (regression — adding 410 must not shift other clauses)" do
+    test "404 maps to :not_found, beside 410's :taken_down" do
       err = Errors.from_response(404, "", "registry.cyfr.run")
       assert err.reason == :not_found
       assert err.status == 404

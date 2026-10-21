@@ -16,7 +16,7 @@ defmodule Compendium.ProviderTest do
                 <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
   # The athanor's own AQUA definitions live under its tenant storage —
-  # v3 agent files that shadow the throwaway seed's per-file, so these
+  # agent files that shadow the throwaway seed's per-file, so these
   # tests read exactly this fixture whatever the shipped template says.
   # Written through the facade so each shadowing write records its origin
   # — the fixture IS an edit of the shipped template, not the athanor's
@@ -116,9 +116,8 @@ defmodule Compendium.ProviderTest do
     :ok = Sanctum.TestContext.shipped!(Sanctum.TestContext.athanor_id())
     setup_aqua_dir()
 
-    # Point API URL at a non-routable address so cyfr.run fallback tests
-    # don't hit the real API or timeout waiting.
-    # Client.ex prepends "https://", so we set the bare host:port here.
+    # The REST host is a loopback port with no listener, so cyfr.run fallback
+    # tests are refused at once on this machine and reach no registry.
     original_registry_url = Application.get_env(:cyfr, :registry_url)
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
 
@@ -519,11 +518,6 @@ defmodule Compendium.ProviderTest do
       refute err_msg(msg) =~ "cyfr.run"
     end
 
-    test "returns error for missing reference", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("component", ctx, %{"action" => "inspect"})
-      assert err_msg(msg) =~ "Missing required"
-    end
-
     test "inspect with version-less ref to nonexistent component returns error", %{ctx: ctx} do
       {:error, msg} =
         Provider.handle("component", ctx, %{
@@ -582,11 +576,6 @@ defmodule Compendium.ProviderTest do
 
       assert err_msg(msg) =~ "not a version the server ships"
       assert err_msg(msg) =~ "cyfr register"
-    end
-
-    test "returns error for missing reference", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("component", ctx, %{"action" => "pull"})
-      assert err_msg(msg) =~ "Missing required"
     end
 
     test "rejects an OCI pull from a non-configured registry host", %{ctx: ctx} do
@@ -773,15 +762,6 @@ defmodule Compendium.ProviderTest do
       assert err_msg(msg) =~ "Component not found locally"
     end
 
-    test "returns error for missing reference", %{ctx: ctx} do
-      {:error, msg} =
-        Provider.handle("component", ctx, %{
-          "action" => "push"
-        })
-
-      assert err_msg(msg) =~ "Missing required" and err_msg(msg) =~ "reference"
-    end
-
     test "rejects a push to a non-cyfr.run registry", %{ctx: ctx} do
       {:error, msg} =
         Provider.handle("component", ctx, %{
@@ -827,6 +807,63 @@ defmodule Compendium.ProviderTest do
       tool = Enum.find(Provider.tools(), &(&1.name == "component"))
       # The schema does not accept a directory property.
       refute Map.has_key?(action_schema(tool, "register")["properties"], "directory")
+    end
+
+    test "a registered formula whose stored manifest does not decode is reported as damage",
+         %{ctx: ctx, test_dir: test_dir} do
+      name = "torn-register"
+
+      setup_dep_test_dir(test_dir, "formula", name, "0.1.0", %{
+        "type" => "formula",
+        "version" => "0.1.0",
+        "description" => "A formula whose row is damaged once registered",
+        "dependencies" => %{
+          "static" => [
+            %{
+              "ref" => "catalyst:local.torn-register-dep:0.1.0",
+              "optional" => false,
+              "reason" => "Required"
+            }
+          ]
+        }
+      })
+
+      # The scan's replacement commits, then announces each row it wrote,
+      # in the scan's own process and before the dependency check reads the
+      # rows: this tenant's announcement of the formula damages its stored
+      # manifest, as a row altered outside the publish path would be.
+      import Ecto.Query, only: [from: 2]
+
+      handler = {__MODULE__, make_ref()}
+      on_exit(fn -> :telemetry.detach(handler) end)
+      athanor_id = ctx.athanor_id
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :compendium, :component, :install],
+          fn _event, _measurements, metadata, _config ->
+            if metadata.athanor_id == athanor_id and metadata.name == name do
+              {1, _} =
+                from(c in Arca.Schemas.Component,
+                  where: c.athanor_id == ^athanor_id and c.name == ^name
+                )
+                |> Arca.Repo.update_all(set: [manifest: "not json"])
+            end
+          end,
+          nil
+        )
+
+      assert {:ok, result} = Provider.handle("component", ctx, %{"action" => "register"})
+
+      assert %{status: "registered"} = Enum.find(result.components, &(&1.name == name))
+
+      # Read as declaring nothing, the formula would have no dependency to
+      # check and the register would answer an empty check.
+      assert result.dependency_check_error ==
+               Sanctum.Refusals.render({:corrupt, {:manifest, "formula:local.#{name}:0.1.0"}})
+
+      assert result.missing_local_deps == []
     end
   end
 
@@ -1013,11 +1050,6 @@ defmodule Compendium.ProviderTest do
       assert err_msg(msg) =~ "not found" or err_msg(msg) =~ "Blob"
     end
 
-    test "returns error for missing digest", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("component", ctx, %{"action" => "get_blob"})
-      assert err_msg(msg) =~ "Missing required" or err_msg(msg) =~ "digest"
-    end
-
     test "has digest property in tool schema" do
       tool = Enum.find(Provider.tools(), &(&1.name == "component"))
       digest_schema = action_schema(tool, "get_blob")["properties"]["digest"]
@@ -1174,11 +1206,6 @@ defmodule Compendium.ProviderTest do
 
       assert [%{required: false}] = result.needs
       assert result.ready == true
-    end
-
-    test "returns error for missing reference", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("component", ctx, %{"action" => "setup_plan"})
-      assert err_msg(msg) =~ "Missing required argument: reference"
     end
 
     test "returns error for nonexistent component", %{ctx: ctx} do
@@ -1358,11 +1385,6 @@ defmodule Compendium.ProviderTest do
       assert err_msg(msg) =~ "not found"
     end
 
-    test "returns error for missing reference", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("component", ctx, %{"action" => "delete"})
-      assert err_msg(msg) =~ "Missing required argument: reference"
-    end
-
     test "returns error for invalid reference", %{ctx: ctx} do
       {:error, msg} =
         Provider.handle("component", ctx, %{
@@ -1371,22 +1393,6 @@ defmodule Compendium.ProviderTest do
         })
 
       assert err_msg(msg) =~ "not found" or err_msg(msg) =~ "Invalid reference"
-    end
-  end
-
-  # ============================================================================
-  # Invalid/Missing Action
-  # ============================================================================
-
-  describe "component tool - invalid action" do
-    test "returns error for invalid action", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("component", ctx, %{"action" => "invalid"})
-      assert err_msg(msg) =~ "Invalid component action"
-    end
-
-    test "returns error for missing action", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("component", ctx, %{})
-      assert err_msg(msg) =~ "Missing required"
     end
   end
 
@@ -1524,12 +1530,12 @@ defmodule Compendium.ProviderTest do
       refute Map.has_key?(result, :effective_tool_policy)
     end
 
-    test "update rejects the retired allow/approval/block vocabulary", %{ctx: ctx} do
+    test "update refuses a tool_policy value other than ask or auto", %{ctx: ctx} do
       assert {:error, msg} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
                  "name" => "builder",
-                 "tool_policy" => %{"files.delete" => "block"}
+                 "tool_policy" => %{"files.delete" => "sometimes"}
                })
 
       assert err_msg(msg) =~ ~s{use "ask" or "auto"}
@@ -1588,34 +1594,6 @@ defmodule Compendium.ProviderTest do
       assert {:error, _} =
                Provider.handle("aqua", ctx, %{"action" => "get", "name" => "launcher"})
 
-      # A role written before the door refused the key keeps loading, and a
-      # patch that removes it is how it leaves.
-      :ok =
-        Arca.put(
-          Sanctum.Context.actor(ctx),
-          Compendium.AquaPath.agent_file("builder"),
-          Compendium.AquaAgent.serialize(%{
-            name: "builder",
-            title: "builder",
-            description: "",
-            disabled: false,
-            catalyst_ref: nil,
-            model: nil,
-            tool_policy: %{"build.compile" => "auto", "execution.run" => "auto"},
-            prompt: "# builder"
-          })
-        )
-
-      assert {:ok, _} =
-               Provider.handle("aqua", ctx, %{
-                 "action" => "update",
-                 "name" => "builder",
-                 "tool_policy_patch" => %{"execution.run" => nil}
-               })
-
-      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
-      assert result.tool_policy == %{"build.compile" => "auto"}
-
       # The soul's own key is still the soul's to write.
       assert {:ok, _} =
                Provider.handle("aqua", ctx, %{
@@ -1625,10 +1603,8 @@ defmodule Compendium.ProviderTest do
                })
     end
 
-    test "a patch of another key on a role copy that still holds execution.run is refused until it leaves",
+    test "a role file holding execution.run is refused as damage, and a patch cannot reach it",
          %{ctx: ctx} do
-      # A role copied in before the door refused the key: the door checks
-      # the policy the patch leaves behind, so the copy's own key is named.
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
@@ -1645,18 +1621,14 @@ defmodule Compendium.ProviderTest do
           })
         )
 
-      assert {:error,
-              {:invalid_argument,
-               "execution.run has no effect on a role — a role launches nothing and every " <>
-                 "launch asks; leave it out"}} =
+      assert {:error, _} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
+
+      assert {:error, _} =
                Provider.handle("aqua", ctx, %{
                  "action" => "update",
                  "name" => "builder",
-                 "tool_policy_patch" => %{"files.read" => "auto"}
+                 "tool_policy_patch" => %{"execution.run" => nil}
                })
-
-      {:ok, result} = Provider.handle("aqua", ctx, %{"action" => "get", "name" => "builder"})
-      assert result.tool_policy == %{"build.compile" => "auto", "execution.run" => "auto"}
     end
 
     test "a patch value outside ask, auto and null is the patch's own refusal, whatever the key",
@@ -1786,11 +1758,6 @@ defmodule Compendium.ProviderTest do
 
       assert err_msg(msg) =~ "role or guide not found"
       assert err_msg(msg) =~ "nonexistent"
-    end
-
-    test "get without name returns error", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("aqua", ctx, %{"action" => "get"})
-      assert err_msg(msg) =~ "Missing required"
     end
   end
 
@@ -2186,18 +2153,6 @@ defmodule Compendium.ProviderTest do
     end
   end
 
-  describe "aqua tool - invalid action" do
-    test "returns error for invalid action", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("aqua", ctx, %{"action" => "invalid"})
-      assert err_msg(msg) =~ "Unknown action: aqua.invalid"
-    end
-
-    test "returns error for missing action", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("aqua", ctx, %{})
-      assert err_msg(msg) =~ "Missing required argument: action"
-    end
-  end
-
   describe "aqua tool - schema" do
     test "aqua tool has required schema fields" do
       tool = Enum.find(Provider.tools(), &(&1.name == "aqua"))
@@ -2220,8 +2175,6 @@ defmodule Compendium.ProviderTest do
       assert "update" in actions
       assert "delete" in actions
       refute "readme" in actions
-      # `create_agent` was folded into `create` (dispatch by `type` arg).
-      refute "create_agent" in actions
     end
 
     test "all internal tools declare per-action kind annotations" do
@@ -2449,17 +2402,6 @@ defmodule Compendium.ProviderTest do
   end
 
   # ============================================================================
-  # Unknown Tool
-  # ============================================================================
-
-  describe "unknown tool" do
-    test "returns error for unknown tool", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("unknown_tool", ctx, %{})
-      assert err_msg(msg) =~ "Unknown tool"
-    end
-  end
-
-  # ============================================================================
   # Schema drift guards
   # ============================================================================
 
@@ -2503,19 +2445,13 @@ defmodule Compendium.ProviderTest do
     setup do
       bypass = Bypass.open()
       original_url = Application.get_env(:cyfr, :registry_url)
-      original_scheme = Application.get_env(:cyfr, :registry_scheme)
 
       Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
-      Application.put_env(:cyfr, :registry_scheme, "http")
 
       on_exit(fn ->
         if original_url,
           do: Application.put_env(:cyfr, :registry_url, original_url),
           else: Application.delete_env(:cyfr, :registry_url)
-
-        if original_scheme,
-          do: Application.put_env(:cyfr, :registry_scheme, original_scheme),
-          else: Application.delete_env(:cyfr, :registry_scheme)
       end)
 
       {:ok, bypass: bypass}

@@ -177,6 +177,10 @@ defmodule Emissary.Web.TinctureController do
         {:error, {:not_found, _reference}} ->
           {:error, :not_found}
 
+        # A stored manifest that does not decode declares no pages.
+        {:error, {:corrupt, {:manifest, _reference}}} ->
+          {:error, :not_found}
+
         # The reference was held to its grammar above, so any other refusal
         # is the store's: it could not say, and nothing is served.
         {:error, _unanswered} ->
@@ -187,16 +191,8 @@ defmodule Emissary.Web.TinctureController do
     end
   end
 
-  # A manifest that does not decode to a JSON object, or none at all, is a
-  # declaration refused: the version holds no pages and is not found.
+  # A version with no manifest declares no pages and is not found.
   defp decode_manifest(manifest) when is_map(manifest), do: {:ok, manifest}
-
-  defp decode_manifest(manifest) when is_binary(manifest) do
-    case Jason.decode(manifest) do
-      {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
-      _ -> {:error, :not_found}
-    end
-  end
 
   defp decode_manifest(_manifest), do: {:error, :not_found}
 

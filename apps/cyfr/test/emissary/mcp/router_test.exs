@@ -103,6 +103,30 @@ defmodule Emissary.MCP.RouterTest do
       assert {:ok, result} = Router.dispatch(ctx, msg)
       assert is_list(result["tools"])
     end
+
+    test "reads the page a cursor it issued names", %{context: ctx} do
+      cursor = Base.url_encode64("0", padding: false)
+      first = %Message{type: :request, id: 4, method: "tools/list", params: nil}
+      named = %Message{first | params: %{"cursor" => cursor}}
+
+      assert {:ok, %{"tools" => tools}} = Router.dispatch(ctx, first)
+      assert {:ok, %{"tools" => ^tools}} = Router.dispatch(ctx, named)
+    end
+
+    test "refuses a cursor it did not issue as invalid params", %{context: ctx} do
+      for cursor <- [
+            "not a cursor",
+            Base.url_encode64("-1", padding: false),
+            Base.url_encode64("1x", padding: false),
+            Base.url_encode64("1000001", padding: false),
+            7
+          ] do
+        msg = %Message{type: :request, id: 5, method: "tools/list", params: %{"cursor" => cursor}}
+
+        assert {:error, :invalid_params, "Invalid cursor"} = Router.dispatch(ctx, msg),
+               inspect(cursor)
+      end
+    end
   end
 
   describe "dispatch/2 with tools/call" do
@@ -186,9 +210,8 @@ defmodule Emissary.MCP.RouterTest do
 
   # The Router makes no decision of its own: the gate authorizes and casts
   # once, and the stage of its answer says how the wire carries it. What
-  # the gate refused before the tool ran is a JSON-RPC error by class —
-  # every refusal the Router's own pre-checks used to make, with the same
-  # class and code; what the tool answered is a failed tool result, except
+  # the gate refused before the tool ran is a JSON-RPC error by class,
+  # with its class's code; what the tool answered is a failed tool result, except
   # an authentication, permission or consent refusal.
   describe "dispatch/2 with tools/call refusals" do
     defp call(ctx, name, arguments) do

@@ -755,7 +755,7 @@ defmodule Compendium.Registry do
           {:ok, map()} | {:error, :not_found | term()}
   def latest_row(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil)
       when is_binary(name) do
-    if component_type == Compendium.AgentSource.type() do
+    if component_type == "agent" do
       # An agent is a source node projected from the athanor's aqua/ tree,
       # never a registry row; its one version is the file as it stands.
       Compendium.AgentSource.latest_row(ctx, name)
@@ -1187,9 +1187,6 @@ defmodule Compendium.Registry do
     current_dir
     # arca:bypass-ok=D — list the tar-extract scratch dir.
     |> File.ls!()
-    # The validator owns which files a tincture excludes, so what is hashed
-    # and what is stored cannot come apart.
-    |> Enum.reject(&Compendium.TinctureValidator.excluded?/1)
     |> Enum.reduce_while({:ok, acc}, fn entry, {:ok, {list, n}} ->
       path = Path.join(current_dir, entry)
 

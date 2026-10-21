@@ -13,9 +13,7 @@ defmodule Compendium.SourceTest do
 
   alias Compendium.Source
 
-  test "the roster is closed and the predicate splits it" do
-    assert Source.values() == [Source.filesystem(), Source.published(), Source.oci()]
-
+  test "the predicate splits the roster" do
     assert Source.remote?(Source.oci())
     assert Source.remote?(Source.published())
     refute Source.remote?(Source.filesystem())

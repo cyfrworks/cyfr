@@ -233,6 +233,14 @@ defmodule Emissary.Web.TinctureAssetsTest do
     csp
   end
 
+  # The policy the frame's rules derive for `manifest` under `nonce`.
+  defp policy(manifest, nonce),
+    do:
+      Compendium.tincture_frame_policy(manifest, %{
+        endpoint: TinctureAssets.endpoint_origin(),
+        nonce: nonce
+      })
+
   defp csp_nonce(conn) do
     [_, nonce] = Regex.run(~r/script-src 'self' 'nonce-([A-Za-z0-9_-]+)'/, csp(conn))
     nonce
@@ -264,10 +272,13 @@ defmodule Emissary.Web.TinctureAssetsTest do
       {:ok, sandbox} = Compendium.tincture_sandbox_tokens(["pointer_lock", "fullscreen"])
 
       assert csp(conn) ==
-               Compendium.tincture_csp(manifest, %{endpoint: endpoint_origin(), nonce: nonce}) <>
+               Compendium.Tincture.Rules.csp(manifest, %{
+                 endpoint: endpoint_origin(),
+                 nonce: nonce
+               }) <>
                  "; sandbox " <> Enum.join(sandbox, " ")
 
-      assert csp(conn) == TinctureAssets.csp(manifest, nonce)
+      assert csp(conn) == policy(manifest, nonce)
 
       # Every directive is one the rules derive or the sandbox; none names
       # a connect entry the grammar refuses, and the sandbox opens scripts
@@ -283,7 +294,7 @@ defmodule Emissary.Web.TinctureAssetsTest do
       refute csp(conn) =~ "x.com;"
       assert csp(conn) =~ "; sandbox allow-scripts allow-pointer-lock"
 
-      for token <- Compendium.Tincture.Rules.forbidden_sandbox_tokens(),
+      for token <- ~w(allow-same-origin allow-top-navigation allow-popups allow-forms),
           do: refute(csp(conn) =~ token)
     end
 
@@ -303,7 +314,7 @@ defmodule Emissary.Web.TinctureAssetsTest do
 
       # A policy derived for it still opens nothing beyond scripts.
       assert String.ends_with?(
-               TinctureAssets.csp(manifest, String.duplicate("n", 22)),
+               policy(manifest, String.duplicate("n", 22)),
                "; sandbox allow-scripts"
              )
     end
@@ -329,7 +340,7 @@ defmodule Emissary.Web.TinctureAssetsTest do
       conn = serve(ctx, t, ["page2.html"])
 
       assert conn.status == 200
-      assert csp(conn) == TinctureAssets.csp(%{}, csp_nonce(conn))
+      assert csp(conn) == policy(%{}, csp_nonce(conn))
       assert csp(conn) =~ "; sandbox allow-scripts"
       assert conn.resp_body == "<html><head></head><body>two</body></html>"
     end

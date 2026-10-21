@@ -23,7 +23,7 @@ defmodule Compendium.Tincture do
 
   alias Sanctum.Context
 
-  @reserved_files ["data.db", Compendium.ComponentPath.manifest_name(), "schema.sql"]
+  @reserved_files [Compendium.ComponentPath.manifest_name()]
 
   # What a version carries beside the files it serves: the registry's
   # readme and source tree (`Compendium.OCI.Client` lays them into the
@@ -31,10 +31,10 @@ defmodule Compendium.Tincture do
   @readme "README.md"
   @source_dir "src"
 
-  # The raster set the CSAM launch constraint blocks in the two DISCOVERY
-  # slots (icon/preview): a tincture whose discovered media names one of
-  # these is dropped from the listing until hash matching (PhotoDNA)
-  # ships. Deliberately narrower than the serve gate above — a directly
+  # The raster set the CSAM constraint blocks in the two DISCOVERY slots
+  # (icon/preview): a tincture whose discovered media names one of these is
+  # dropped from the listing, since no image is hash-matched against known
+  # material. Deliberately narrower than the serve gate above — a directly
   # referenced raster asset inside an operator-installed app still serves;
   # the constraint is on what the registry SURFACES, not on what an
   # installed page may contain. `.webp` is blocked here and absent from
@@ -79,31 +79,20 @@ defmodule Compendium.Tincture do
       default_preview: default_preview(),
       preview_count: preview_count(),
       image_extensions: image_extensions(),
-      blocked_raster_extensions: blocked_raster_extensions(),
+      blocked_raster_extensions: @blocked_raster_extensions,
       allowed_extensions: allowed_extensions(),
-      reserved_files: reserved_files()
+      reserved_files: @reserved_files
     }
   end
 
-  @doc "Extensions the asset serve gate honors: the served types' (`Compendium.tincture_served_types/0`)."
-  @spec allowed_extensions() :: [String.t()]
-  def allowed_extensions, do: Compendium.tincture_served_types() |> Map.keys() |> Enum.sort()
+  # Extensions the asset serve gate honors: the served types'
+  # (`Compendium.tincture_served_types/0`).
+  defp allowed_extensions, do: Compendium.tincture_served_types() |> Map.keys() |> Enum.sort()
 
-  @doc "The files a tincture never serves, as an entry or as an asset."
-  @spec reserved_files() :: [String.t()]
-  def reserved_files, do: @reserved_files
-
-  @doc "The raster set the listing's CSAM launch constraint blocks."
-  @spec blocked_raster_extensions() :: [String.t()]
-  def blocked_raster_extensions, do: @blocked_raster_extensions
-
-  @doc """
-  Image extensions a console page may build an asset URL for: vector plus
-  every servable raster — derived from the serve gate, so the client-side
-  fast reject and the server-side gate cannot drift.
-  """
-  @spec image_extensions() :: [String.t()]
-  def image_extensions do
+  # Image extensions a console page may build an asset URL for: vector plus
+  # every servable raster — derived from the serve gate, so the client-side
+  # fast reject and the server-side gate cannot drift.
+  defp image_extensions do
     allowed = allowed_extensions()
     [".svg" | @blocked_raster_extensions] |> Enum.filter(&(&1 in allowed))
   end
@@ -226,17 +215,8 @@ defmodule Compendium.Tincture do
     end
   end
 
-  @doc """
-  Whether a `tincture.connect` entry is a bare domain with an optional
-  `*.` prefix — the grammar the manifest validator holds entries to and
-  the served page's CSP is built from, owned by `Prima.Manifest`.
-  """
-  @spec valid_connect_domain?(term()) :: boolean()
-  defdelegate valid_connect_domain?(domain), to: Prima.Manifest
-
-  @doc "What a tincture serves when its manifest names no entry."
-  @spec default_entry() :: String.t()
-  def default_entry, do: "index.html"
+  # What a tincture serves when its manifest names no entry.
+  defp default_entry, do: "index.html"
 
   @doc """
   The entry a tincture serves, for a caller outside the domain: the
@@ -279,16 +259,15 @@ defmodule Compendium.Tincture do
     end
   end
 
-  @doc "An entry held to the rule: path-safe, not reserved, not a dotfile."
-  @spec validate_entry(term()) :: {:ok, String.t()} | {:error, String.t()}
-  def validate_entry(nil), do: {:ok, default_entry()}
-  def validate_entry(""), do: {:ok, default_entry()}
+  # An entry held to the rule: path-safe, not reserved, not a dotfile.
+  defp validate_entry(nil), do: {:ok, default_entry()}
+  defp validate_entry(""), do: {:ok, default_entry()}
 
   # Path safety answers first: it covers traversal, absolute paths and null
   # bytes, and its refusals name what is actually wrong. A `../escape.html`
   # begins with a dot, so a dotfile check placed above would refuse it for
   # the least useful of its several reasons.
-  def validate_entry(entry) when is_binary(entry) do
+  defp validate_entry(entry) when is_binary(entry) do
     with :ok <- path_safe(entry) do
       cond do
         entry in @reserved_files ->
@@ -303,7 +282,7 @@ defmodule Compendium.Tincture do
     end
   end
 
-  def validate_entry(_other), do: {:error, "entry must be a string"}
+  defp validate_entry(_other), do: {:error, "entry must be a string"}
 
   # Branch on the typed refusal, independently of message wording.
   defp path_safe(entry) do
@@ -325,9 +304,8 @@ defmodule Compendium.Tincture do
     end
   end
 
-  @doc "The media directory inside a tincture version, as segments."
-  @spec media_dir() :: [String.t()]
-  def media_dir, do: ["public", "media"]
+  # The media directory inside a tincture version, as segments.
+  defp media_dir, do: ["public", "media"]
 
   @doc "The default icon slot the scaffolder fills, as segments."
   @spec default_icon() :: [String.t()]

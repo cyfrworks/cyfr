@@ -125,7 +125,7 @@ defmodule Locus.Runtime.MemoryBoundTest do
 
     result =
       Opus.Dispatch.run(ctx, node_ref(name) <> ":0.1.0", %{"hostile" => true},
-        type: :reagent,
+        type: "reagent",
         authority: authority(name, max_memory_bytes),
         execution_id: id
       )

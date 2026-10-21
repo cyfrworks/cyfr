@@ -84,8 +84,6 @@ defmodule Compendium.ProjectionReconciler do
   @conflicts 3
   @reconciling {__MODULE__, :reconciling}
 
-  @defaults [enabled: true, interval_ms: :timer.minutes(1), settle_after_ms: :timer.seconds(60)]
-
   @type root :: String.t()
 
   # ---------------------------------------------------------------------------
@@ -288,7 +286,9 @@ defmodule Compendium.ProjectionReconciler do
   defp settle_after_ms(opts),
     do: Keyword.get_lazy(opts, :settle_after_ms, fn -> config()[:settle_after_ms] end)
 
-  defp config, do: Keyword.merge(@defaults, Application.get_env(:cyfr, __MODULE__, []))
+  # `config/config.exs` holds the three settings; `config/test.exs` turns
+  # the process off.
+  defp config, do: Application.fetch_env!(:cyfr, __MODULE__)
 
   # ---------------------------------------------------------------------------
   # The process
@@ -379,11 +379,10 @@ defmodule Compendium.ProjectionReconciler do
 
   def handle_event(_event, _measurements, _metadata, _config), do: :ok
 
-  @doc false
   # Attach the handler for the reconciler registered as `name` to exactly
   # the catalog's `:projection` roster, replacing any earlier attach of it.
   @spec attach(atom()) :: :ok | {:error, term()}
-  def attach(name) do
+  defp attach(name) do
     detach(name)
 
     case :telemetry.attach_many(
@@ -405,16 +404,14 @@ defmodule Compendium.ProjectionReconciler do
     end
   end
 
-  @doc false
   @spec detach(atom()) :: :ok
-  def detach(name) do
+  defp detach(name) do
     _ = :telemetry.detach(handler_id(name))
     :ok
   end
 
-  @doc false
   @spec handler_id(atom()) :: {module(), atom()}
-  def handler_id(name), do: {__MODULE__, name}
+  defp handler_id(name), do: {__MODULE__, name}
 
   defp schedule(state) do
     Process.send_after(self(), :tick, state.interval_ms)

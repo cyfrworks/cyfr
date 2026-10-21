@@ -26,11 +26,6 @@ defmodule Opus.Schedules.Provider do
   # The one kind of row this tool reads and writes.
   @kind "schedule"
 
-  # The refusals a profile binding answers besides its sentences
-  # (`Sanctum.Consent.RegistrationBinding.refusal/1`): an outage or a damaged
-  # row is answered as a classed `Prima.Refusal`.
-  @binding_refusals [:invalid_argument, :consent_class_required]
-
   @behaviour Prima.Provider
 
   @impl true
@@ -39,11 +34,6 @@ defmodule Opus.Schedules.Provider do
   alias Sanctum.{Context, Refusals}
 
   require Logger
-
-  @impl true
-  def resources, do: []
-  @impl true
-  def resource_templates, do: []
 
   @impl true
   def tools do
@@ -253,7 +243,6 @@ defmodule Opus.Schedules.Provider do
   def handle("schedule", %Context{} = ctx, %{"action" => "create"} = args) do
     with :ok <- validate_required(args, ["name", "cron_expression", "reference"]),
          :ok <- validate_cron(args["cron_expression"]),
-         :ok <- validate_concurrency(args["concurrency"]),
          {:ok, missed} <- missed_runs(args, %{missed_runs: "skip", catch_up_limit: nil}),
          {:ok, reference, resolved_reference} <-
            resolve_for_schedule(ctx, args["reference"], "create schedule"),
@@ -310,16 +299,11 @@ defmodule Opus.Schedules.Provider do
     end
   end
 
-  def handle("schedule", _ctx, %{"action" => "get"}) do
-    {:error, "Missing required argument: schedule_id"}
-  end
-
   # Update
   def handle("schedule", %Context{} = ctx, %{"action" => "update", "schedule_id" => id} = args) do
     with {:schedule, {:ok, schedule}} <-
            {:schedule, schedule(ctx, id)},
          :ok <- validate_cron_if_present(args["cron_expression"]),
-         :ok <- validate_concurrency(args["concurrency"]),
          {:ok, missed} <- missed_runs(args, schedule) do
       update_attrs = missed
 
@@ -383,10 +367,6 @@ defmodule Opus.Schedules.Provider do
     end
   end
 
-  def handle("schedule", _ctx, %{"action" => "update"}) do
-    {:error, "Missing required argument: schedule_id"}
-  end
-
   # Pause
   def handle("schedule", %Context{} = ctx, %{"action" => "pause", "schedule_id" => id}) do
     case schedule(ctx, id) do
@@ -403,10 +383,6 @@ defmodule Opus.Schedules.Provider do
             store_refusal(reason, id)
         end
     end
-  end
-
-  def handle("schedule", _ctx, %{"action" => "pause"}) do
-    {:error, "Missing required argument: schedule_id"}
   end
 
   # Resume
@@ -438,10 +414,6 @@ defmodule Opus.Schedules.Provider do
     end
   end
 
-  def handle("schedule", _ctx, %{"action" => "resume"}) do
-    {:error, "Missing required argument: schedule_id"}
-  end
-
   # Delete
   def handle("schedule", %Context{} = ctx, %{"action" => "delete", "schedule_id" => id}) do
     case schedule(ctx, id) do
@@ -460,10 +432,6 @@ defmodule Opus.Schedules.Provider do
     end
   end
 
-  def handle("schedule", _ctx, %{"action" => "delete"}) do
-    {:error, "Missing required argument: schedule_id"}
-  end
-
   # Re-resolve — bump resolved_reference to latest version without recreating the schedule
   def handle("schedule", %Context{} = ctx, %{"action" => "re_resolve", "schedule_id" => id}) do
     case schedule(ctx, id) do
@@ -479,26 +447,6 @@ defmodule Opus.Schedules.Provider do
             {:error, "Failed to re-resolve '#{schedule.reference}': #{Refusals.render(reason)}"}
         end
     end
-  end
-
-  def handle("schedule", _ctx, %{"action" => "re_resolve"}) do
-    {:error, "Missing required argument: schedule_id"}
-  end
-
-  # Invalid/missing action, in the one refusal vocabulary: this provider
-  # answered both as bare sentences, which is why the action-coverage
-  # case had to recognise two shapes of catch-all and checked only the
-  # provider that used the bare one.
-  def handle("schedule", _ctx, %{"action" => action}) do
-    {:error, {:invalid_argument, "Invalid schedule action: #{action}"}}
-  end
-
-  def handle("schedule", _ctx, _args) do
-    {:error, :action_missing}
-  end
-
-  def handle(tool, _ctx, _args) do
-    {:error, "Unknown tool: #{tool}"}
   end
 
   # Helpers
@@ -537,14 +485,11 @@ defmodule Opus.Schedules.Provider do
     end
   end
 
-  defp validate_concurrency(nil), do: :ok
-  defp validate_concurrency(value) when value in ["forbid", "allow"], do: :ok
-  defp validate_concurrency(_), do: {:error, "concurrency must be forbid or allow"}
-
   # The policy the write leaves the schedule with, as the two columns:
   # what the arguments name, over what `current` holds. A `catch_up` names
   # a limit of 1 to the scheduler's ceiling, and NULL or 0 is refused; a
-  # `skip` names none, and switching to it drops the old limit.
+  # `skip` names none, and switching to it drops the stored limit. The
+  # policy is one the declaration's enum admits or the row's CHECK holds.
   defp missed_runs(args, current) do
     policy = Map.get(args, "missed_runs") || current.missed_runs
 
@@ -570,9 +515,6 @@ defmodule Opus.Schedules.Provider do
       {"catch_up", _limit} ->
         {:error,
          {:invalid_argument, "missed_runs catch_up needs a catch_up_limit of 1 to #{max}"}}
-
-      {_other, _limit} ->
-        {:error, {:invalid_argument, "missed_runs must be skip or catch_up"}}
     end
   end
 
@@ -627,8 +569,8 @@ defmodule Opus.Schedules.Provider do
       last_execution_id: schedule.last_execution_id,
       run_count: schedule.run_count,
       error_count: schedule.error_count,
-      created_at: schedule.created_at && DateTime.to_iso8601(schedule.created_at),
-      updated_at: schedule.updated_at && DateTime.to_iso8601(schedule.updated_at)
+      created_at: DateTime.to_iso8601(schedule.created_at),
+      updated_at: DateTime.to_iso8601(schedule.updated_at)
     }
   end
 
@@ -679,32 +621,38 @@ defmodule Opus.Schedules.Provider do
   end
 
   # Apply component existence and profile-consent checks when rebinding
-  # a schedule to a resolved version.
+  # a schedule to a resolved version. Their refusals answer as themselves;
+  # only the store's write is rendered as a storage error.
   defp re_resolve_to(ctx, schedule, pinned, id) do
     with :ok <- verify_component_exists(ctx, pinned),
-         :ok <- authorize_profile_binding(ctx, pinned, schedule.profile_id),
-         {:ok, updated} <-
-           Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
+         :ok <- authorize_profile_binding(ctx, pinned, schedule.profile_id) do
+      case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
              resolved_reference: pinned
            }) do
-      Opus.Schedules.Scheduler.update(updated.id)
-      {:ok, format_schedule(updated)}
-    else
-      {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, {tag, _detail}} = refused when tag in @binding_refusals -> refused
-      {:error, %Prima.Refusal{}} = refused -> refused
-      {:error, reason} -> store_refusal(reason, id)
+        {:ok, updated} ->
+          Opus.Schedules.Scheduler.update(updated.id)
+          {:ok, format_schedule(updated)}
+
+        {:error, reason} ->
+          store_refusal(reason, id)
+      end
     end
   end
 
+  # A component the registry does not hold is a sentence to act on; any
+  # other refusal of its inspection (its stored manifest damaged, the
+  # store unavailable) answers as itself, never as a missing component.
   defp verify_component_exists(ctx, resolved_reference) do
     case Compendium.inspect_component(ctx, resolved_reference) do
       {:ok, _} ->
         :ok
 
-      {:error, _} ->
+      {:error, {:not_found, _}} ->
         {:error,
          "Component '#{resolved_reference}' not found in registry. Register or pull it first."}
+
+      {:error, _} = refused ->
+        refused
     end
   end
 
@@ -726,13 +674,9 @@ defmodule Opus.Schedules.Provider do
   # Binding a schedule to a profile mints a standing, attacker-timed
   # invocation conduit for that profile's authority — the consent
   # authorization class gates it, not a permission a wildcard key holds.
-  # A schedule fires under its bound profile's consent or not at all, so
-  # an unbound registration is refused here rather than minted as a row
-  # that can never fire.
-  defp authorize_profile_binding(_ctx, _target_ref, nil) do
-    {:error, "profile_id is required — a schedule fires under its bound profile's consent"}
-  end
-
+  # A schedule fires under its bound profile's consent or not at all: the
+  # declaration requires a string `profile_id` at create and refuses a nil
+  # one at update, and the stored column is never null.
   defp authorize_profile_binding(ctx, target_ref, profile_id) when is_binary(profile_id) do
     case Sanctum.Consent.RegistrationBinding.authorize(ctx, target_ref, profile_id) do
       :ok -> :ok
@@ -740,13 +684,9 @@ defmodule Opus.Schedules.Provider do
     end
   end
 
-  defp authorize_profile_binding(_ctx, _target_ref, _), do: {:error, "invalid profile_id"}
-
   # Re-pointing is the same act as binding: the gate runs against the
   # target the row will have after this update — whether the update moves
-  # the profile, the reference, or both. An explicit nil is an unbind,
-  # and an unbound schedule can never fire — refuse it here the same way
-  # create does.
+  # the profile, the reference, or both.
   defp maybe_authorize_profile_binding(ctx, schedule, args, update_attrs) do
     repointed? = Map.has_key?(update_attrs, :resolved_reference)
 
@@ -761,9 +701,7 @@ defmodule Opus.Schedules.Provider do
             :error -> schedule.profile_id
           end
 
-        target =
-          Map.get(update_attrs, :resolved_reference) || schedule.resolved_reference ||
-            schedule.reference
+        target = Map.get(update_attrs, :resolved_reference, schedule.resolved_reference)
 
         authorize_profile_binding(ctx, target, profile_id)
     end

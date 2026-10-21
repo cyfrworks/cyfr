@@ -24,7 +24,7 @@ defmodule Opus.WorkerWatchTest do
   Two terminal writers for one attempt leave one terminal row and give
   its capacity back once. The bounds are validated when the watch starts,
   and dispatch addresses a start to the boot the watch heard within one
-  poll interval.
+  poll interval, reading `:unknown` from a watch that exits as it reads.
   """
 
   use ExUnit.Case, async: false
@@ -33,7 +33,7 @@ defmodule Opus.WorkerWatchTest do
 
   alias Opus.{Attempt, Dispatch, Lapse, WorkerWatch}
   alias Prima.Slots
-  alias Cyfr.Test.{AttemptFixtures, ScriptedWorkerListener}
+  alias Cyfr.Test.{AttemptFixtures, AttemptWaiter, ScriptedWorkerListener}
 
   @moduletag :capture_log
 
@@ -47,6 +47,7 @@ defmodule Opus.WorkerWatchTest do
   # only bounds one that never ends.
   @heard_ms 10_000
   @watch :worker_watch_under_test
+  @exiting :worker_watch_exiting
   @not_a_status %{"no" => "status"}
 
   # A worker service whose status answers from a script the test sets: a
@@ -192,15 +193,49 @@ defmodule Opus.WorkerWatchTest do
     )
   end
 
-  defp attached!(ctx, boot),
-    do: AttemptFixtures.attached!(ctx: ctx, service_id: @service, boot_id: boot)
+  defp attached!(ctx, boot, opts \\ []),
+    do: AttemptFixtures.attached!([ctx: ctx, service_id: @service, boot_id: boot] ++ opts)
+
+  # A running child of `parent`'s run, admitted under the parent's stamp.
+  defp child!(parent) do
+    {:ok, %{execution: child}} =
+      Arca.Execution.admit(
+        %{
+          id: Prima.UUID7.execution_id(),
+          reference: "reagent:local.watch-child:0.1.0",
+          user_id: parent.ctx.user_id,
+          athanor_id: parent.athanor_id,
+          component_type: "reagent",
+          parent_execution_id: parent.execution_id,
+          root_execution_id: parent.execution_id
+        },
+        grant: parent.grant,
+        verify: &Sanctum.ExecutionStanding.verify/1
+      )
+
+    child
+  end
+
+  defp restart_event_buffers do
+    case Supervisor.restart_child(Opus.Tree, Opus.Events.Supervisor) do
+      {:ok, _pid} -> :ok
+      {:error, :running} -> :ok
+    end
+  end
+
+  defp restart_sequence do
+    case Supervisor.restart_child(Opus.Tree, Opus.Events.Sequence) do
+      {:ok, _pid} -> :ok
+      {:error, :running} -> :ok
+    end
+  end
 
   defp row(fixture), do: Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
 
   defp attempt_row(fixture),
     do: Arca.ExecutionAttempts.get(Prima.Actor.in_athanor(fixture.athanor_id), fixture.attempt)
 
-  defp seen(watch), do: Map.fetch!(WorkerWatch.seen(watch), @service)
+  defp seen(watch), do: Map.fetch!(:sys.get_state(watch).seen, @service)
 
   # The runner's complete of `fixture`'s attempt with `outcome` and the
   # lapse of its boot, in `order`: each once the other has answered, or
@@ -246,7 +281,7 @@ defmodule Opus.WorkerWatchTest do
     # Exactly one writer's row stands. A complete that found the row
     # lapsed already is answered lost by an attempt that stops; one held
     # when it was checked, whose write the lapse beat, is answered the
-    # lapsed row (`Opus.Close.complete/4` answers a row closed before its
+    # lapsed row (`Opus.Close.complete/3` answers a row closed before its
     # result), a failure, never its output.
     case lapsed do
       [] ->
@@ -298,7 +333,7 @@ defmodule Opus.WorkerWatchTest do
 
       Worker.script!(self(), [@not_a_status])
 
-      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(fixture.pid, fixture.close)
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(fixture.pid, fixture.close)
       assert %{status: "failed", error_message: @lapsed} = row(fixture)
       assert %{state: "lapsed", outcome: "uncertain", boot_id: "boot_1"} = attempt_row(fixture)
       execution_id = fixture.execution_id
@@ -321,7 +356,7 @@ defmodule Opus.WorkerWatchTest do
       refute_received %Cyfr.Bus.ExecutionEvent{type: "execution.lapsed"}
 
       Worker.script!(self(), [status("boot_1", [later.attempt]), @not_a_status])
-      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(later.pid, later.close)
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(later.pid, later.close)
       assert %{status: "failed", error_message: @lapsed} = row(later)
     end
 
@@ -363,7 +398,7 @@ defmodule Opus.WorkerWatchTest do
       malformed = status("boot_1", [fixture.attempt], %{runners: %{fresh: -1}})
       Worker.script!(self(), [elsewhere, malformed, elsewhere])
 
-      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(fixture.pid, fixture.close)
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(fixture.pid, fixture.close)
       assert %{status: "failed", error_message: @lapsed} = row(fixture)
       assert %{lapsed: true} = seen(watch)
     end
@@ -377,13 +412,83 @@ defmodule Opus.WorkerWatchTest do
       # because a miss never takes a watch. There is no boot to lapse and
       # no member that ever heard one, so no row is opened at all — the
       # key is this test's own, so what is measured is this test's run.
-      wait_until(fn -> WorkerWatch.seen(watch)[id].unheard >= 4 end, @heard_ms)
+      wait_until(fn -> :sys.get_state(watch).seen[id].unheard >= 4 end, @heard_ms)
 
       assert %{boot: nil, attempts: [], misses: 0, lapsed: false, claimed: false} =
-               WorkerWatch.seen(watch)[id]
+               :sys.get_state(watch).seen[id]
 
       assert Arca.JobClaims.read("worker_watch", id) == {:error, :not_found}
       assert WorkerWatch.fresh_boot(endpoint, watch) == :unknown
+    end
+
+    # The lapse's event retires the stream's delta counters after the row
+    # committed; with their table absent there are none to retire, and the
+    # children and the attempt are still settled.
+    test "a lapse while the counter table is absent still fails the formula's children and stops its attempt",
+         %{ctx: ctx} do
+      fixture = attached!(ctx, "boot_1", component_type: :formula)
+      child = child!(fixture)
+      endpoint = serve!([status("boot_1", [fixture.attempt])])
+      watch = watch!(endpoint)
+      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
+
+      on_exit(&restart_sequence/0)
+      :ok = Supervisor.terminate_child(Opus.Tree, Opus.Events.Sequence)
+      Worker.script!(self(), [@not_a_status])
+
+      message = "Parent execution (#{fixture.execution_id}) terminated"
+
+      wait_until(
+        fn ->
+          match?(
+            %{status: "failed", error_message: ^message},
+            Arca.Repo.get!(Arca.Schemas.Execution, child.id)
+          )
+        end,
+        @heard_ms,
+        "the child failed"
+      )
+
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(fixture.pid, fixture.close)
+      assert %{status: "failed", error_message: @lapsed} = row(fixture)
+      restart_sequence()
+    end
+
+    # The row is failed before the lapse publishes it: a publication that
+    # exits leaves the lapse done, every child failed (one child's event
+    # that cannot be made never leaves a sibling running) and its attempt
+    # stopped, never reported as not lapsed.
+    @tag :capture_log
+    test "a lapse whose publications exit after its rows are failed still stands done",
+         %{ctx: ctx} do
+      fixture = attached!(ctx, "boot_1", component_type: :formula)
+      children = [child!(fixture), child!(fixture)]
+      endpoint = serve!([status("boot_1", [fixture.attempt])])
+      watch = watch!(endpoint)
+      wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
+
+      on_exit(&restart_event_buffers/0)
+      :ok = Supervisor.terminate_child(Opus.Tree, Opus.Events.Supervisor)
+      Worker.script!(self(), [@not_a_status])
+
+      message = "Parent execution (#{fixture.execution_id}) terminated"
+
+      wait_until(
+        fn ->
+          Enum.all?(children, fn child ->
+            match?(
+              %{status: "failed", error_message: ^message},
+              Arca.Repo.get!(Arca.Schemas.Execution, child.id)
+            )
+          end)
+        end,
+        @heard_ms,
+        "every child failed"
+      )
+
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(fixture.pid, fixture.close)
+      assert %{status: "failed", error_message: @lapsed} = row(fixture)
+      restart_event_buffers()
     end
   end
 
@@ -472,16 +577,16 @@ defmodule Opus.WorkerWatchTest do
       # three, and lapses nothing: the count is the cell's, and the member
       # that hears the service keeps putting it back to zero. Its misses are
       # counted from the takeover, so each of them read the peer's row.
-      unheard = WorkerWatch.seen(cut_off)[@service].unheard
+      unheard = :sys.get_state(cut_off).seen[@service].unheard
 
       wait_until(
-        fn -> WorkerWatch.seen(cut_off)[@service].unheard >= unheard + 9 end,
+        fn -> :sys.get_state(cut_off).seen[@service].unheard >= unheard + 9 end,
         @heard_ms,
         "nine more unheard answers on the cut-off member"
       )
 
-      assert %{claimed: false} = WorkerWatch.seen(cut_off)[@service]
-      assert %{claimed: true, boot: "boot_1"} = WorkerWatch.seen(hearing)[@service]
+      assert %{claimed: false} = :sys.get_state(cut_off).seen[@service]
+      assert %{claimed: true, boot: "boot_1"} = :sys.get_state(hearing).seen[@service]
 
       row = claim_row()
       assert row.owner == "member_b"
@@ -505,7 +610,7 @@ defmodule Opus.WorkerWatchTest do
 
       Worker.script!(self(), [status("boot_2")])
 
-      assert {:error, {:uncertain, @lapsed}} = Dispatch.await(old.pid, old.close)
+      assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(old.pid, old.close)
       assert %{status: "failed", error_message: @lapsed} = row(old)
       assert %{state: "lapsed", outcome: "uncertain", boot_id: "boot_1"} = attempt_row(old)
       old_id = old.execution_id
@@ -609,6 +714,70 @@ defmodule Opus.WorkerWatchTest do
 
       assert :ignore = WorkerWatch.start_link([])
       assert WorkerWatch.fresh_boot(%{id: "wrk_local", url: "http://127.0.0.1:4200"}) == :unknown
+    end
+  end
+
+  describe "the heard table" do
+    # The table goes with the watch that owns it. Readers read it in a loop
+    # while the watch is killed, so in some round one has found the table
+    # and reads it as it goes; each answers what it heard, then `:unknown`.
+    test "a watch that exits while it is read answers :unknown, never a raise" do
+      endpoint = serve!([status("boot_1")])
+      test = self()
+
+      for _round <- 1..5 do
+        watch =
+          start_supervised!(
+            Supervisor.child_spec(
+              {WorkerWatch,
+               workers: [endpoint],
+               poll_ms: 60_000,
+               lease_ms: @lease_ms,
+               misses: 3,
+               name: @exiting},
+              id: @exiting,
+              restart: :temporary
+            )
+          )
+
+        wait_until(
+          fn -> WorkerWatch.fresh_boot(endpoint, @exiting) == {:ok, "boot_1"} end,
+          @heard_ms
+        )
+
+        # The heard status is recorded; the next poll is a minute away.
+        _state = :sys.get_state(watch)
+
+        readers =
+          for _reader <- 1..max(System.schedulers_online(), 4),
+              do: spawn_monitor(fn -> read_until_unknown(endpoint, test) end)
+
+        for {reader, _ref} <- readers, do: assert_receive({:reading, ^reader}, @heard_ms)
+
+        ref = Process.monitor(watch)
+        Process.exit(watch, :kill)
+        assert_receive {:DOWN, ^ref, :process, ^watch, :killed}, @heard_ms
+
+        for {reader, ref} <- readers do
+          assert_receive {:DOWN, ^ref, :process, ^reader, reason}, @heard_ms
+          assert reason == :normal
+        end
+
+        assert WorkerWatch.fresh_boot(endpoint, @exiting) == :unknown
+      end
+    end
+  end
+
+  defp read_until_unknown(endpoint, test) do
+    {:ok, "boot_1"} = WorkerWatch.fresh_boot(endpoint, @exiting)
+    send(test, {:reading, self()})
+    reading(endpoint)
+  end
+
+  defp reading(endpoint) do
+    case WorkerWatch.fresh_boot(endpoint, @exiting) do
+      {:ok, "boot_1"} -> reading(endpoint)
+      :unknown -> :ok
     end
   end
 

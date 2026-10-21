@@ -295,7 +295,6 @@ const (
 	ThreadFollow                    = "follow"
 	ThreadGet                       = "get"
 	ThreadList                      = "list"
-	ThreadMessages                  = "messages"
 	ThreadRestartForConsent         = "restart_for_consent"
 	ThreadRevokeGrant               = "revoke_grant"
 	ThreadSend                      = "send"
@@ -361,7 +360,7 @@ var Actions = map[string][]string{
 	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "logout", "read_resource", "use", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"system":              {"notify", "status"},
-	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "follow", "get", "list", "messages", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
+	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "follow", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
 	"tincture":            {"invoke_protected", "invoke_public"},
 	"tincture_visibility": {"get"},
 	"tools":               {"list"},
@@ -5332,25 +5331,6 @@ func (args ThreadListArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: ThreadList, fields: fields(args)})
-}
-
-// ThreadMessagesArgs carries arguments for thread.messages.
-type ThreadMessagesArgs struct {
-	// Thread id (all actions except create and list)
-	Thread string `json:"thread"`
-	// events: replay messages after this seq. Omit to start from the beginning.
-	AfterSeq Field[int] `json:"after_seq,omitzero"`
-	// events: rows per page (default and ceiling 500). Page by passing the returned cursor as after_seq.
-	Limit Field[int] `json:"limit,omitzero"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args ThreadMessagesArgs) MarshalJSON() ([]byte, error) {
-	type fields ThreadMessagesArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: ThreadMessages, fields: fields(args)})
 }
 
 // ThreadRestartForConsentArgs carries arguments for thread.restart_for_consent.

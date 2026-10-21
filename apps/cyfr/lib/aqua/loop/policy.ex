@@ -239,6 +239,37 @@ defmodule Aqua.Loop.Policy do
 
   def overlap(%Call{}), do: :exclusive
 
+  @doc """
+  A batch of dispatch items split into the groups the loop runs in order:
+  consecutive reads gather into one `{:concurrent, items}` group, and
+  anything else stands alone as `{:exclusive, item}`, or as `{:launch,
+  item}` for a launch step. A non-read flushes the reads waiting before it
+  and stands alone, so no read after it joins it. Which calls share a
+  group decides what runs beside what.
+  """
+  @spec group([map()]) :: [{:concurrent, [map()]} | {:exclusive | :launch, map()}]
+  def group(items) when is_list(items) do
+    {groups, pending} =
+      Enum.reduce(items, {[], []}, fn item, {groups, reads} ->
+        cond do
+          launch?(item) -> {[{:launch, item} | gather(reads, groups)], []}
+          concurrent?(item) -> {groups, [item | reads]}
+          true -> {[{:exclusive, item} | gather(reads, groups)], []}
+        end
+      end)
+
+    pending |> gather(groups) |> Enum.reverse()
+  end
+
+  defp gather([], groups), do: groups
+  defp gather(reads, groups), do: [{:concurrent, Enum.reverse(reads)} | groups]
+
+  defp launch?(%{step: %{kind: "launch"}}), do: true
+  defp launch?(_item), do: false
+
+  defp concurrent?(%{call: {:ok, %Call{} = call}}), do: overlap(call) == :concurrent
+  defp concurrent?(_item), do: false
+
   defp component_ref?(reference), do: match?({:ok, _}, Prima.ComponentRef.parse(reference))
 
   # A launch asks, with the entry its named account resolves to; an
@@ -433,7 +464,7 @@ defmodule Aqua.Loop.Policy do
   @doc """
   What a model or hand child's answer says of its ledger: `{:carried,
   sources}` for a completion result carrying the ledger its terminal
-  write left (`Opus.Close.complete/4`); `:nothing_ran` for a refusal the
+  write left (`Opus.Close.complete/3`); `:nothing_ran` for a refusal the
   gate made at admission, before any attempt existed
   (`%Prima.Refusal{stage: :admission}`); `:unknown` for anything else —
   a failure, a death, an answer of another shape — whose ledger only the

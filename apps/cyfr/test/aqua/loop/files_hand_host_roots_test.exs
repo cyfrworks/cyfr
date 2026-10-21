@@ -104,7 +104,7 @@ defmodule Aqua.Loop.FilesHandHostRootsTest do
   # is walked again for the shape that moved.
   defp soul_policy!(ctx, patch) do
     {:ok, _} =
-      Aqua.AgentConfig.call_aqua(ctx, %{
+      Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
         "name" => "aqua",
         "tool_policy_patch" => patch

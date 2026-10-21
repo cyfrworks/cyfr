@@ -763,19 +763,72 @@ defmodule Sanctum.ProvisioningTest do
   end
 
   describe "an attempt whose claim a later attempt took" do
-    # An attempt that lost its lease mid-fill, and its successor: the first
-    # claim's lease runs out, the second takes the athanor at the next fence.
-    defp overtaken!(athanor_id) do
+    # A fill overtaken mid-way: `takeover` runs once, where the fill's first
+    # commit for the athanor announces itself — its bundle's unit,
+    # published under the claim the fill took — so every write the fill
+    # makes after it is made under whatever `takeover` left of that claim.
+    # The announcement comes in the filling process, after the commit's
+    # transaction.
+    defp at_first_commit!(athanor_id, takeover) do
+      handler = {__MODULE__, make_ref()}
+      once = :atomics.new(1, [])
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          Arca.StorageProjectionChanges.event(),
+          fn _event, _measurements, metadata, _config ->
+            if metadata.athanor_id == athanor_id and metadata.root == "components" and
+                 :atomics.compare_exchange(once, 1, 0, 1) == :ok,
+               do: takeover.()
+          end,
+          nil
+        )
+    end
+
+    # The attempt's lease runs out at its first commit, and a later attempt
+    # — another boot's, taken where no claimant runs, so under no slot —
+    # takes the athanor at the next fence and runs `holding` with it. The
+    # test is told both claims as each attempt carries its own.
+    defp overtaken_mid_fill!(athanor_id, holding \\ fn _successor -> :ok end) do
+      import Ecto.Query, only: [from: 2]
+
+      test = self()
       actor = %Prima.Actor{athanor_id: athanor_id}
-      {:ok, stale} = Claims.claim(actor, "boot_elsewhere/own_stale", "first_need", 1, :none)
-      Prima.Test.Wait.wait_until(fn -> not Claims.live?(stale) end, 2_000, "the lease to run out")
 
-      {:ok, successor} =
-        Claims.claim(actor, "boot_elsewhere/own_successor", "provision", 60_000, :none)
+      at_first_commit!(athanor_id, fn ->
+        {:ok, held} = Claims.current(actor)
+        {:ok, slot} = Arca.ControlPlane.member_slot()
 
-      assert successor.fence == stale.fence + 1
-      # Taken where no claimant runs, so under no slot: `:none`.
-      {actor, Map.put(stale, :slot, :none), Map.put(successor, :slot, :none)}
+        {1, _} =
+          Arca.Repo.update_all(
+            from(c in Arca.Schemas.ProvisioningClaim, where: c.athanor_id == ^athanor_id),
+            set: [lease_until: DateTime.add(DateTime.utc_now(), -60, :second)]
+          )
+
+        {:ok, successor} =
+          Claims.claim(actor, "boot_elsewhere/own_successor", "provision", 60_000, :none)
+
+        successor = Map.put(successor, :slot, :none)
+        holding.(successor)
+        send(test, {:overtaken, Map.put(held, :slot, slot), successor})
+      end)
+    end
+
+    defp stale_group!(tag) do
+      n = System.unique_integer([:positive])
+      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|#{tag}-#{n}"}
+      {:ok, group} = Athanors.create_group(ctx.user_id, "#{tag} #{n}")
+      {group, %{ctx | athanor_id: group.id}, %Prima.Actor{athanor_id: group.id}}
+    end
+
+    # The successor gives the athanor back, and the next attempt fills it
+    # from the same bundle.
+    defp next_attempt_fills!(group, in_group, actor, successor) do
+      :ok = Claims.release(actor, successor.owner, successor.fence)
+      {:ok, row} = Athanors.get(group.id)
+      assert {:ok, %{provisioned_at: %DateTime{}}} = Filler.provision(row, in_group)
     end
 
     # The four writes an attempt makes on the athanor's behalf — readiness,
@@ -785,28 +838,27 @@ defmodule Sanctum.ProvisioningTest do
 
     test "stamps no provisioned_at", %{bundle_dir: bundle_dir} do
       write_bundle!(bundle_dir)
-      n = System.unique_integer([:positive])
-      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|stale-#{n}"}
-      {:ok, group} = Athanors.create_group(ctx.user_id, "Stale #{n}")
-      in_group = %{ctx | athanor_id: group.id}
-      {actor, stale, successor} = overtaken!(group.id)
+      {group, in_group, actor} = stale_group!("stale")
+      overtaken_mid_fill!(group.id)
+
+      # The whole fill would succeed — the same bundle fills a group in the
+      # first test of this module. Overtaken after its first commit, it is
+      # told the athanor is another attempt's, in progress.
+      assert {:error, :provisioning_busy} = Filler.provision(group, in_group)
+      assert_received {:overtaken, stale, successor}
+      assert successor.fence == stale.fence + 1
 
       # The verdict that precedes the mark cannot land under the lost fence.
       assert {:error, :claim_lost} = Provisioning.settle(group.id, stale, "ready", nil)
 
-      # And the whole fill would succeed — the same bundle fills a group in
-      # the first test of this module. Run under the claim it lost, it is
-      # told the athanor is another attempt's, in progress.
-      assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
-
       {:ok, row} = Athanors.get(group.id)
       refute row.provisioned_at
 
-      # The successor's claim is as it took it, and its own fill marks it.
+      # The successor's claim is as it took it.
       assert {:ok, %{owner: owner, fence: fence, outcome: nil}} = Claims.current(actor)
       assert {owner, fence} == {successor.owner, successor.fence}
 
-      assert {:ok, %{provisioned_at: %DateTime{}}} = Filler.fill(successor, group, in_group)
+      next_attempt_fills!(group, in_group, actor, successor)
       assert {:ok, %{outcome: "ready"}} = Claims.current(actor)
 
       # Settled, the late one is still stale: it cannot turn ready to failed.
@@ -816,17 +868,16 @@ defmodule Sanctum.ProvisioningTest do
 
     test "mints no consent", %{bundle_dir: bundle_dir} do
       write_bundle!(bundle_dir)
-      n = System.unique_integer([:positive])
-      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|stalemint-#{n}"}
-      {:ok, group} = Athanors.create_group(ctx.user_id, "Stale mint #{n}")
-      in_group = %{ctx | athanor_id: group.id}
-      {_actor, stale, successor} = overtaken!(group.id)
+      {group, in_group, actor} = stale_group!("stalemint")
+      overtaken_mid_fill!(group.id)
+
+      assert {:error, :provisioning_busy} = Filler.provision(group, in_group)
+      assert_received {:overtaken, stale, successor}
 
       # The walk refuses the lost claim on its own, whoever calls it, and
       # it is the only door to a machine mint.
       assert {:error, :claim_lost} = Provisioning.bootstrap_consents(in_group, stale)
       assert {:error, :claim_lost} = Sanctum.Consent.Bootstrap.run(in_group, stale)
-      assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
 
       assert {:ok, []} =
                Arca.ProfileStorage.list_for_source(
@@ -834,8 +885,8 @@ defmodule Sanctum.ProvisioningTest do
                  "catalyst:local.foo"
                )
 
-      # The successor's mint lands: nothing about the bundle stopped it.
-      assert {:ok, %{provisioned_at: %DateTime{}}} = Filler.fill(successor, group, in_group)
+      # The next attempt's mint lands: nothing about the bundle stopped it.
+      next_attempt_fills!(group, in_group, actor, successor)
 
       assert {:ok, [_profile]} =
                Arca.ProfileStorage.list_for_source(
@@ -846,44 +897,46 @@ defmodule Sanctum.ProvisioningTest do
 
     test "publishes no agent index", %{bundle_dir: bundle_dir} do
       write_bundle!(bundle_dir)
-      n = System.unique_integer([:positive])
-      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|staleidx-#{n}"}
-      {:ok, group} = Athanors.create_group(ctx.user_id, "Stale index #{n}")
-      in_group = %{ctx | athanor_id: group.id}
-      {_actor, stale, successor} = overtaken!(group.id)
+      {group, in_group, actor} = stale_group!("staleidx")
+      overtaken_mid_fill!(group.id)
+
+      assert {:error, :provisioning_busy} = Filler.provision(group, in_group)
+      assert_received {:overtaken, stale, successor}
 
       # The index rewrites the athanor's rows wholesale, so it is asked for
       # the fence last thing before it runs.
       assert {:error, :claim_lost} = Provisioning.holding(group.id, stale)
-      assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
       assert {:ok, []} = Arca.AgentStorage.list(Prima.Actor.in_athanor(group.id))
 
-      # The successor's index lands: the tree the seed lays is the same one.
+      # The next attempt's index lands: the tree the seed lays is the same one.
       assert :ok = Provisioning.holding(group.id, successor)
-      assert {:ok, %{provisioned_at: %DateTime{}}} = Filler.fill(successor, group, in_group)
+      next_attempt_fills!(group, in_group, actor, successor)
       assert {:ok, [_ | _]} = Arca.AgentStorage.list(Prima.Actor.in_athanor(group.id))
     end
 
-    test "records no failure over its successor's" do
-      # No bundle: the attempt fails at the seed step, and would record it.
-      n = System.unique_integer([:positive])
-      ctx = %{Sanctum.TestContext.local() | user_id: "github|https://github.com|stalefail-#{n}"}
-      {:ok, group} = Athanors.create_group(ctx.user_id, "Stale failure #{n}")
-      in_group = %{ctx | athanor_id: group.id}
-      {actor, stale, successor} = overtaken!(group.id)
+    test "records no failure over its successor's", %{bundle_dir: bundle_dir} do
+      write_bundle!(bundle_dir)
+      {group, in_group, actor} = stale_group!("stalefail")
+      test = self()
 
       # The successor fails first, and says where.
-      assert {:error, {:provisioning_failed, :seed, :bundle_missing}} =
-               Filler.fill(successor, group, in_group)
+      overtaken_mid_fill!(group.id, fn successor ->
+        failed = Provisioning.record_failure(successor, group, :seed, :bundle_missing)
+        {:ok, row} = Athanors.get(group.id)
+        send(test, {:successor_failed, failed, Athanors.provisioning_failure(row)})
+      end)
 
-      {:ok, failed} = Athanors.get(group.id)
-      assert %{step: "seed", at: recorded_at} = Athanors.provisioning_failure(failed)
+      # The late attempt fails at its next step, its AQUA copy refused under
+      # the lost claim, and writes nothing over the successor's record.
+      assert {:error, :provisioning_busy} = Filler.provision(group, in_group)
+      assert_received {:overtaken, _stale, successor}
 
-      # The late attempt fails the same way and writes nothing over it.
-      assert {:error, :provisioning_busy} = Filler.fill(stale, group, in_group)
+      assert_received {:successor_failed,
+                       {:error, {:provisioning_failed, :seed, :bundle_missing}},
+                       %{step: "seed"} = recorded}
 
       {:ok, after_late} = Athanors.get(group.id)
-      assert Athanors.provisioning_failure(after_late).at == recorded_at
+      assert Athanors.provisioning_failure(after_late) == recorded
 
       assert {:ok, %{owner: owner, fence: fence, outcome: "failed"}} = Claims.current(actor)
       assert {owner, fence} == {successor.owner, successor.fence}
@@ -1081,26 +1134,27 @@ defmodule Sanctum.ProvisioningTest do
     # before the write passes and only the write's own transaction can
     # refuse.
 
-    test "a fill whose member lost its slot publishes nothing, and the next member fills it", %{
-      bundle_dir: bundle_dir,
-      slot: slot
-    } do
+    test "a fill whose member lost its slot publishes nothing more, and the next member fills it",
+         %{bundle_dir: bundle_dir, slot: slot} do
       write_bundle!(bundle_dir)
       {group, in_group} = group!("slotfill")
-      {:ok, claim} = Provisioning.take_claim(group.id, "provision")
-      assert claim.slot == slot
+      test = self()
 
-      replace_lease!(slot, owner: slot.node <> "#boot_b", generation: slot.generation + 1)
-      assert Arca.ControlPlane.held?()
+      # The slot goes to a successor at the fill's first commit, after the
+      # claim was taken under it.
+      at_first_commit!(group.id, fn ->
+        {:ok, claim_slot} = Arca.ControlPlane.member_slot()
+        replace_lease!(slot, owner: slot.node <> "#boot_b", generation: slot.generation + 1)
+        send(test, {:slot_lost, claim_slot, Arca.ControlPlane.held?()})
+      end)
 
-      assert {:error, :provisioning_busy} =
-               Provisioning.hold(group.id, claim, &Filler.fill(&1, group, in_group))
+      assert {:error, :provisioning_busy} = Filler.provision(group, in_group)
+      assert_received {:slot_lost, ^slot, true}
 
-      # Nothing half-published: no unit, no component row, no agent, no
-      # consent, no mark and no failure recorded over the athanor.
+      # Nothing published after it: no AQUA unit, no agent, no consent, no
+      # mark and no failure recorded over the athanor.
       actor = Prima.Actor.in_athanor(group.id)
-      assert {:ok, %{}} == Arca.Overlay.unit_statuses(actor, "components") |> own_units()
-      assert {:ok, []} = Arca.ComponentStorage.list_components(actor, limit: :none)
+      assert {:ok, %{}} == Arca.Overlay.unit_statuses(actor, "aqua") |> own_units()
       assert {:ok, []} = Arca.AgentStorage.list(actor)
       assert {:ok, []} = Arca.ProfileStorage.list_for_source(actor, "catalyst:local.foo")
       {:ok, row} = Athanors.get(group.id)

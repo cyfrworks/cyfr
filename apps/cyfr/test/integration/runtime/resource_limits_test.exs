@@ -86,12 +86,12 @@ defmodule Locus.Runtime.ResourceLimitsTest do
 
       {:error, error_msg} =
         Opus.Dispatch.run(ctx, ref, %{"a" => 10, "b" => 10},
-          type: :reagent,
+          type: "reagent",
           authority: auth
         )
 
       assert error_msg =~ "Component"
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Opus.Record.list(ctx)
       assert Enum.any?(records, &(&1.status == :failed))
     end
 
@@ -100,7 +100,7 @@ defmodule Locus.Runtime.ResourceLimitsTest do
 
       {:error, error_msg} =
         Opus.Dispatch.run(ctx, ref, %{"a" => 3, "b" => 7},
-          type: :reagent,
+          type: "reagent",
           authority: auth
         )
 

@@ -303,7 +303,7 @@ defmodule Aqua.Models do
            "reference" => resolved
          }) do
       {:ok, plan} ->
-        if (plan[:ready] || plan["ready"]) == true,
+        if plan.ready == true,
           do: assistant_status(ctx, ref, resolved),
           else: unready(plan, resolved)
 
@@ -358,10 +358,6 @@ defmodule Aqua.Models do
     end
   end
 
-  defp head_state(plan) do
-    case plan[:consent] || plan["consent"] do
-      %{} = consent -> consent[:head_state] || consent["head_state"]
-      _none -> nil
-    end
-  end
+  defp head_state(%{consent: %{head_state: state}}), do: state
+  defp head_state(_plan), do: nil
 end

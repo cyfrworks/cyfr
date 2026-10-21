@@ -109,13 +109,6 @@ defmodule Aqua.Standing do
 
   def rows(_ctx, _turn, _proposal, _scope, bounds), do: unbounded(bounds)
 
-  @doc "The words a standing answer is called by on the tape."
-  @spec answer(scope()) :: String.t()
-  def answer(:never), do: "\"Never\""
-  def answer(:always), do: "\"Always\""
-  def answer(:thread), do: "\"Always for this thread\""
-  def answer(:once), do: "\"Once\""
-
   # An answer that writes no row takes no bound.
   defp unbounded(bounds) do
     if Enum.any?(Map.values(bounds), &(not is_nil(&1))),

@@ -4,7 +4,7 @@
 Code.require_file("support/nested_execution_helper.exs", __DIR__)
 Code.require_file("support/formula_host_helper.exs", __DIR__)
 
-defmodule Locus.Runtime.BudgetConcurrencyCharacterizationTest do
+defmodule Locus.Runtime.BudgetConcurrencyTest do
   @moduledoc """
   A root's invoke budget bounds a formula's spawned children however they
   race: under a cap of 2, five concurrent admissions of a child, asked

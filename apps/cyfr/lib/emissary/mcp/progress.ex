@@ -57,8 +57,9 @@ defmodule Emissary.MCP.Progress do
 
   @doc """
   The `notifications/progress` a step renders to in the calling process:
-  the step's phase and message, its subject's id under the key the client
-  has always read it by, its data, and the token the client bound. A step
+  the step's phase and message, its subject's id under the key its
+  operation names it by (`build_id`, `register_id`, `progress_id`), its
+  data, and the token the client bound. A step
   of a request this process has not bound renders nothing.
   """
   @spec notification(Step.t()) :: {:ok, map()} | :ignore

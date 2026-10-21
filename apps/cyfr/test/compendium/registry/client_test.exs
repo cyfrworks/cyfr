@@ -5,8 +5,8 @@ defmodule Compendium.Registry.ClientTest do
   # The registry does not answer here: `config/test.exs` points both registry
   # endpoints at 127.0.0.1:19, a loopback port with no listener, so every
   # call is refused on this machine and none reaches a registry. Tests that
-  # point the client elsewhere change the global `:registry_url` and
-  # `:registry_scheme`, or capture its log, and live in
+  # point the client elsewhere change the global `:registry_url`, or
+  # capture its log, and live in
   # `Compendium.Registry.ClientSyncTest`.
   use ExUnit.Case, async: true
 
@@ -51,7 +51,9 @@ defmodule Compendium.Registry.ClientTest do
 
   describe "get_component/5 - error handling" do
     test "returns %Errors{} when cyfr.run is unreachable", %{ctx: ctx} do
-      {:error, %Errors{} = err} = Client.get_component(ctx, "reagent", "cyfr", "data-processor")
+      {:error, %Errors{} = err} =
+        Client.get_component(ctx, "reagent", "cyfr", "data-processor", "1.0.0")
+
       assert err.registry == "cyfr.run"
       assert err.reason == :registry_unavailable
     end
@@ -224,9 +226,13 @@ defmodule Compendium.Registry.ClientTest do
   end
 
   describe "MCP component.yank" do
-    test "rejects missing reference", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("component", ctx, %{"action" => "yank"})
-      assert err_msg(msg) =~ "reference"
+    # The gate casts the call against the action's declaration
+    # (`Prima.Operation.cast/2`) before the handler runs.
+    test "rejects missing reference" do
+      assert {:error, {:invalid_argument, "Missing required field: reference"}} =
+               Prima.Operation.cast(Compendium.Providers.Component.definition(), %{
+                 "action" => "yank"
+               })
     end
 
     test "rejects unpinned ref", %{ctx: ctx} do

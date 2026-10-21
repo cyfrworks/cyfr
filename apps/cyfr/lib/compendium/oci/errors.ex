@@ -134,9 +134,9 @@ defmodule Compendium.OCI.Errors do
   end
 
   # 410 Gone — cyfr.run signals taken-down components on REST detail handlers
-  # and on OCI gateway `/v2/*` manifest pulls. The status code is authoritative;
-  # `X-Cyfr-Component-Status: taken_down` is also present but not currently
-  # captured (catch-all 4-arity from_response/4 not threaded yet).
+  # and on OCI gateway `/v2/*` manifest pulls. The status code is
+  # authoritative; the `X-Cyfr-Component-Status: taken_down` header beside it
+  # is not read.
   def from_response(410, body, registry) do
     %__MODULE__{
       reason: :taken_down,

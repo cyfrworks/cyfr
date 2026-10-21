@@ -224,21 +224,49 @@ defmodule Emissary.External.Backends do
 
   @doc """
   Start the controller. Answers `:ignore` unless a service URL and a
-  32-byte service key are configured (`:locus_backends_url` and
-  `:locus_backends_key`, or the `:url` and `:root` options), and while
-  `:cluster` is on: a cluster of control planes runs no stdio servers.
-  `:lease_ms` fixes the lease each sync and renewal asks for and `:idle_ms`
-  the idle period each sync asks for (absent, each is its platform
-  setting as it reads at every tick), `:tick_ms` the renewal cadence
-  (default a third of the lease), `:ready_wait_ms` how long a sync's
-  caller waits for its backends (default 15 s) and `:generation` the
-  zero-arity function the control-plane generation is read from (default
-  `Arca.ControlPlane.generation/0`).
+  32-byte service key are configured, and while `:cluster` is on: a
+  cluster of control planes runs no stdio servers.
 
-  `:lease_ms` is also the lease each backend claim asks for, and the tick
-  is what renews it: a third of the lease by default, so the claim stands
-  while the service lease it goes with does, and a member that stops
-  ticking gives up both together.
+  ## Options
+
+    * `:url` — the base URL of the backends service's listener, every
+      control message's destination; a trailing `/` is dropped. Default
+      `config :cyfr, :locus_backends_url`; with neither, or an empty
+      one, the start answers `:ignore`.
+    * `:root` — the 32-byte service key, the one the service holds: the
+      key control messages are signed with and the key a sync's
+      environment is sealed with derive from it
+      (`Prima.LocusBackends.control_key/1`, `seal_key/1`). Default
+      `config :cyfr, :locus_backends_key`; with neither, or one of
+      another size, the start answers `:ignore`.
+    * `:lease_ms` — milliseconds, positive: the lease each sync and
+      renewal asks the service for, and the lease each backend claim
+      asks for (`Arca.JobClaims`). Given, it holds for the controller's
+      life; absent, it is the `locus_backends_lease_ms` platform setting
+      as it reads at every tick.
+    * `:idle_ms` — milliseconds, positive: the idle period each sync asks
+      the service to retire a backend after. Given, it holds for the
+      controller's life; absent, it is the `locus_backends_idle_ms`
+      platform setting as it reads at every tick.
+    * `:tick_ms` — milliseconds, positive: the renewal cadence, at which
+      service leases and backend claims are renewed and unacknowledged
+      releases retried, besides the faster polls while backends start.
+      Default a third of the lease, so a claim stands while the service
+      lease it goes with does and a member that stops ticking gives up
+      both together; a value at or past the lease lets both lapse
+      between ticks.
+    * `:ready_wait_ms` — milliseconds, positive: how long after the
+      service admits a sync the owner's waiting server processes wait for
+      its backends to run before they are answered with the grant as it
+      stands. Default 15 s, the wait `sync/1`'s own call is sized from
+      (the default and three control timeouts), so a longer one can
+      outlast the caller's call.
+    * `:generation` — the zero-arity function this member's control-plane
+      generation is read from before anything is sent or a claim renewed,
+      while the member holds its slot in the cell: `{:ok, generation}`
+      with a positive integer is spoken, `:none` (a member that has
+      claimed nothing) is generation 1, and any other answer sends
+      nothing. Default `Arca.ControlPlane.generation/0`.
   """
   def start_link(opts \\ []) do
     url = Keyword.get(opts, :url, Application.get_env(:cyfr, :locus_backends_url))
@@ -296,15 +324,6 @@ defmodule Emissary.External.Backends do
   @spec status(String.t(), String.t()) :: {:ok, map() | nil} | {:error, term()}
   def status(athanor_id, server_id),
     do: call({:status, {athanor_id, server_id}}, 2 * @control_timeout_ms)
-
-  @doc false
-  # The bounds a status is asked and read within: the wire's.
-  @spec status_bounds() :: %{owners: pos_integer(), bytes: pos_integer()}
-  def status_bounds,
-    do: %{
-      owners: LocusBackends.max_status_owners(),
-      bytes: LocusBackends.max_status_answer_bytes()
-    }
 
   @doc """
   Release, at once and without reading the store, every live owner of the

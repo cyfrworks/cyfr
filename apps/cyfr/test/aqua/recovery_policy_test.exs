@@ -59,13 +59,8 @@ defmodule Aqua.Runner.RecoveryPolicyTest do
     turn
   end
 
-  test "the cap is the assistant's policy, and the store keeps none of its own" do
+  test "the cap is the assistant's policy" do
     assert RecoveryPolicy.max_attempts() == 3
-
-    Code.ensure_loaded!(Arca.TurnStorage)
-    refute function_exported?(Arca.TurnStorage, :recovery_cap, 0)
-    Code.ensure_loaded!(Tape)
-    refute function_exported?(Tape, :recovery_cap, 0)
   end
 
   test "a started turn stores the policy's limit, and a fourth takeover is refused", %{ctx: ctx} do

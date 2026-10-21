@@ -125,7 +125,8 @@ defmodule Aqua.Approvals do
   How long a card stays open, in seconds: the athanor's
   `settings["approvals"]["expiry_hours"]` (a positive integer, read
   defensively — member-writable settings are not trusted to have a
-  shape), else `config :cyfr, Aqua.Approvals, expiry_hours:`.
+  shape), else `config :cyfr, Aqua.Approvals, expiry_hours:`, which must
+  be a positive integer: any other configured value raises.
 
   A card expires so that a home back from a long absence asks again
   rather than running a queue of old proposals.
@@ -142,13 +143,22 @@ defmodule Aqua.Approvals do
         _ -> nil
       end
 
-    default =
-      case Keyword.get(Application.get_env(:cyfr, __MODULE__, []), :expiry_hours, 24) do
-        hours when is_integer(hours) and hours > 0 -> hours
-        _ -> 24
-      end
+    (configured || configured_hours()) * 3600
+  end
 
-    (configured || default) * 3600
+  # The deployment's default, which must be a positive integer: a value
+  # outside that is a configuration error, never read as some other
+  # expiry.
+  defp configured_hours do
+    case :cyfr |> Application.fetch_env!(__MODULE__) |> Keyword.fetch!(:expiry_hours) do
+      hours when is_integer(hours) and hours > 0 ->
+        hours
+
+      other ->
+        raise ArgumentError,
+              "config :cyfr, Aqua.Approvals, expiry_hours: must be a positive integer, " <>
+                "got #{Prima.LoggerContext.shape(other)}"
+    end
   end
 
   @doc """
@@ -331,9 +341,9 @@ defmodule Aqua.Approvals do
        when is_binary(tool) and is_binary(action) do
     name = turn.agent
 
-    with {:ok, pick} <- Aqua.Agent.resolve(ctx, Aqua.Agent.by_name(name)),
+    with {:ok, authored} <- authored_policy(ctx, name),
          {:ok, rows} <- Aqua.ToolGrants.for_thread(ctx, turn.thread_id, name) do
-      policy = pick |> Aqua.Agent.with_grants(rows) |> Aqua.Agent.tool_policy()
+      policy = Aqua.ToolGrants.resolve(authored, rows)
 
       case Map.get(policy, "#{tool}.#{action}") do
         mode when mode in ["ask", "auto"] ->
@@ -355,10 +365,23 @@ defmodule Aqua.Approvals do
   defp authorize_card(_ctx, _turn, _proposal),
     do: {:error, {:stale_card, "the card names no call"}}
 
+  # The agent's policy as its enabled definition in the tree says it now,
+  # read again for every decision: one edited or disabled since the card
+  # was raised is what the card is held to.
+  defp authored_policy(ctx, name) do
+    with {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
+         %{"tool_policy" => policy} <- Enum.find(roster, &(&1["name"] == name)) do
+      {:ok, policy}
+    else
+      _ -> {:error, :no_agent}
+    end
+  end
+
   # Pin equality: the profile the turn pinned, loaded again at its head,
   # must still be at the pinned consent, and the agent as the tree holds
   # it now must still have the capability digest the turn started under.
-  # A turn that pinned no profile cannot be resumed under any authority.
+  # A turn that pinned no profile, or no agent, cannot be resumed under any
+  # authority.
   # The lender pins the executor re-verifies on every run are not
   # decided here.
   defp pins_hold(_ctx, %{profile_id: nil}, _approval, _intent),
@@ -400,8 +423,6 @@ defmodule Aqua.Approvals do
   defp unloaded({:unknown_origin, _spelling}), do: "the turn records no origin"
   defp unloaded(reason), do: Aqua.Ops.render_refusal(reason)
 
-  defp capability_holds(_ctx, %{agent_capability_digest: nil}), do: :ok
-
   defp capability_holds(ctx, %{agent: name, agent_capability_digest: pinned}) do
     with {:ok, agent} <- Compendium.agent(ctx, name),
          {:ok, ^pinned} <- Compendium.agent_capability_digest(agent) do
@@ -440,12 +461,8 @@ defmodule Aqua.Approvals do
 
   defp named_on_card(_intent, _sources), do: {:error, {:scope_not_permitted, :invalid_sources}}
 
-  defp constraint_wire(constraint) do
-    %{
-      "kind" => to_string(Map.get(constraint, :kind, Map.get(constraint, "kind"))),
-      "patterns" => Map.get(constraint, :patterns, Map.get(constraint, "patterns"))
-    }
-  end
+  defp constraint_wire(%{kind: kind, patterns: patterns}),
+    do: %{"kind" => kind, "patterns" => patterns}
 
   defp put_bound(resolution, _key, nil, _spell), do: resolution
   defp put_bound(resolution, key, value, spell), do: Map.put(resolution, key, spell.(value))

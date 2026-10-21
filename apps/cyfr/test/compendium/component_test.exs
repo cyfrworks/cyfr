@@ -3,9 +3,9 @@
 
 defmodule Compendium.ComponentTest do
   @moduledoc """
-  Component resolution returns human-readable `{:error, binary}` results
-  for malformed references, missing components, and storage faults.
-  `Compendium.Providers.Shared` delegates resolution to this module.
+  Component resolution answers `{:not_found, {:component, ref}}` for a
+  component the registry does not hold and a human-readable
+  `{:error, binary}` for a malformed reference or a storage fault.
   """
 
   use ExUnit.Case, async: false
@@ -32,15 +32,5 @@ defmodule Compendium.ComponentTest do
 
     assert Prima.Refusal.message(reason) ==
              "Component not found: reagent:local.no-such-thing:9.9.9"
-  end
-
-  test "the MCP tool surface delegates — the two resolvers cannot drift", %{ctx: ctx} do
-    for reference <- ["not a ref !!", "reagent:local.no-such-thing:9.9.9"] do
-      assert Compendium.Providers.Shared.resolve_component(ctx, reference) ==
-               Component.resolve_component(ctx, reference)
-    end
-
-    assert Compendium.Providers.Shared.parse_reference("c:local.tool:1.0.0") ==
-             Component.parse_reference("c:local.tool:1.0.0")
   end
 end

@@ -7,7 +7,7 @@ defmodule Aqua.ApprovalScopeTest do
   alias Aqua.ApprovalScope
 
   test "every scope round-trips through its wire spelling" do
-    for scope <- ApprovalScope.all() do
+    for scope <- [:once, :thread, :always, :never] do
       assert scope |> ApprovalScope.to_string() |> ApprovalScope.parse() == scope
       assert ApprovalScope.parse(scope) == scope
     end
@@ -15,18 +15,10 @@ defmodule Aqua.ApprovalScopeTest do
 
   test "never is a scope of its own, not a once" do
     assert ApprovalScope.parse("never") == :never
-    assert ApprovalScope.standing?(:never) == false
   end
 
   test "anything unrecognised reaches no further than the click" do
     for value <- ["forever", "", nil, 1, :later, %{}],
         do: assert(ApprovalScope.parse(value) == :once)
-  end
-
-  test "the standing scopes are the two that answer for unseen calls" do
-    assert Enum.filter(ApprovalScope.all(), &ApprovalScope.standing?/1) == [
-             :thread,
-             :always
-           ]
   end
 end

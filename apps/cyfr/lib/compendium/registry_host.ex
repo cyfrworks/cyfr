@@ -10,9 +10,6 @@ defmodule Compendium.RegistryHost do
   (`Compendium.Registry`) is deliberately not the home for hostnames.
   """
 
-  @default_oci_host "registry.cyfr.run"
-  @default_rest_host "cyfr.run"
-
   # `CYFR_REGISTRY_URL=none`: this deployment talks to no registry at all.
   # The accessors still answer a string — the host is interpolated into
   # messages and credential keys all over the tree — and the two network
@@ -34,25 +31,46 @@ defmodule Compendium.RegistryHost do
   def none, do: @none
 
   @doc """
-  Canonical OCI Distribution host for this deployment.
-
-  Defaults to `"registry.cyfr.run"`. Self-hosted deployments override via
-  `CYFR_OCI_REGISTRY_URL` (wired in `config/runtime.exs`).
+  Canonical OCI Distribution host for this deployment: `CYFR_OCI_REGISTRY_URL`,
+  or `registry.` before the REST host (`config/runtime.exs`).
   """
   @spec canonical_host() :: String.t()
-  def canonical_host,
-    do: Application.get_env(:cyfr, :oci_registry_url, @default_oci_host)
+  def canonical_host, do: Application.fetch_env!(:cyfr, :oci_registry_url)
 
   @doc """
   Canonical REST API host for this deployment (cyfr.run `/v1/*`
-  endpoints).
-
-  Defaults to `"cyfr.run"`. Self-hosted deployments override via
-  `CYFR_REGISTRY_URL`.
+  endpoints): `CYFR_REGISTRY_URL`, `cyfr.run` when unset
+  (`config/runtime.exs`).
   """
   @spec canonical_rest_host() :: String.t()
-  def canonical_rest_host,
-    do: Application.get_env(:cyfr, :registry_url, @default_rest_host)
+  def canonical_rest_host, do: Application.fetch_env!(:cyfr, :registry_url)
+
+  @doc """
+  The base URL of a registry `host` (a name or address, with an optional
+  port): `http://` for a loopback host — `localhost`, `127.0.0.0/8` or
+  `::1`, a registry on this machine — and `https://` for every other.
+  """
+  @spec base_url(String.t()) :: String.t()
+  def base_url(host) when is_binary(host) do
+    if loopback?(host), do: "http://" <> host, else: "https://" <> host
+  end
+
+  defp loopback?(host) do
+    case URI.parse("//" <> host) do
+      %URI{host: "localhost"} ->
+        true
+
+      %URI{host: name} when is_binary(name) ->
+        case :inet.parse_address(String.to_charlist(name)) do
+          {:ok, {127, _, _, _}} -> true
+          {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
 
   @doc """
   Whether an OCI registry host is this deployment's canonical one. Any

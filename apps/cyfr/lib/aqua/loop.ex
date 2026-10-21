@@ -619,11 +619,9 @@ defmodule Aqua.Loop do
     end
   end
 
-  # Every round carries the sender's attachments. A later round used to send
-  # none, on the belief that the rows carry them: they do not — the
-  # projection renders text, and an image or a document exists only as these
-  # typed blocks. After the first tool call the model could no longer see
-  # what it had been asked about.
+  # Every round carries the sender's attachments: the projection renders
+  # text, and an image or a document exists only as these typed blocks, so
+  # a round without them would not show the model what it was asked about.
   defp request(%State{spec: spec} = state, rows, excerpt, _first?) do
     rows = Planner.prune(rows)
     authors = rows |> Enum.map(& &1.author) |> Enum.uniq() |> Enum.reject(&agent_or_system?/1)
@@ -1017,7 +1015,7 @@ defmodule Aqua.Loop do
   end
 
   defp run_dispatched(%State{} = state, runnable, cards) do
-    case run_groups(state, group(runnable)) do
+    case run_groups(state, Policy.group(runnable)) do
       {:halt, result, state} ->
         {:halt, result, state}
 
@@ -1248,37 +1246,6 @@ defmodule Aqua.Loop do
     end
   end
 
-  @doc false
-  # Public for its own test: which calls share a group decides what runs
-  # beside what, and a wrong grouping is invisible from outside until two
-  # things race.
-  #
-  # Reads gather; anything else runs alone. A non-read has to flush the
-  # reads waiting behind it AND stand alone, which is two emissions for one
-  # item — `chunk_while` allows one, so it seeded the next group with the
-  # write instead and the following read joined it.
-  def group(items) do
-    {groups, pending} =
-      Enum.reduce(items, {[], []}, fn item, {groups, reads} ->
-        cond do
-          launch?(item) -> {[{:launch, item} | flush(reads, groups)], []}
-          concurrent?(item) -> {groups, [item | reads]}
-          true -> {[{:exclusive, item} | flush(reads, groups)], []}
-        end
-      end)
-
-    pending |> flush(groups) |> Enum.reverse()
-  end
-
-  defp flush([], groups), do: groups
-  defp flush(reads, groups), do: [{:concurrent, Enum.reverse(reads)} | groups]
-
-  defp launch?(%{step: %{kind: "launch"}}), do: true
-  defp launch?(_item), do: false
-
-  defp concurrent?(%{call: {:ok, %Call{} = call}}), do: Policy.overlap(call) == :concurrent
-  defp concurrent?(_item), do: false
-
   # Every group's outcome rides out: a group that stopped the turn on an
   # unknown outcome halts the dispatch with the pause it established.
   defp run_groups(%State{} = state, groups) do
@@ -1406,8 +1373,7 @@ defmodule Aqua.Loop do
   # answered. A step that is no longer proposed (skipped, superseded)
   # runs nothing. An outcome that cannot be known is not closed here: it
   # is reported, and the loop stops the turn on it.
-  @doc false
-  def run_one(%State{} = state, %{step: step, call: {:ok, %Call{} = call}} = item) do
+  defp run_one(%State{} = state, %{step: step, call: {:ok, %Call{} = call}} = item) do
     case still_granted(state, item, call) do
       :ok -> dispatch_one(state, step, call)
       {:denied, message} -> settle_denied(state, step, call, message)
@@ -1896,7 +1862,7 @@ defmodule Aqua.Loop do
   end
 
   defp launched_ledger(state, step, id, %{} = result) do
-    case Map.get(result, :sources, Map.get(result, "sources")) do
+    case Map.get(result, :sources) do
       list when is_list(list) -> list |> Enum.map(&Prima.Source.from_json/1) |> Prima.Source.set()
       _not_carried -> read_ledger(state, id || step.child_execution_id)
     end
@@ -1909,7 +1875,6 @@ defmodule Aqua.Loop do
   # says (`execution.run`'s `reached_outside`); anything else is unknown,
   # which the step's close reads as outside.
   defp reached_outside(%{reached_outside: reached}) when is_boolean(reached), do: reached
-  defp reached_outside(%{"reached_outside" => reached}) when is_boolean(reached), do: reached
   defp reached_outside(_result), do: :unknown
 
   defp unwrap({:ok, %Call{} = call}), do: call
@@ -2136,7 +2101,7 @@ defmodule Aqua.Loop do
            observed_tokens: state.observed,
            new_bytes: appended_bytes(rows, state.observed_seq),
            request_bytes: encoded_size(probe),
-           max_request_size: catalyst_request_cap(spec)
+           max_request_size: spec.request_cap
          ) do
       :fit ->
         {:ok, state, rows}
@@ -2177,7 +2142,7 @@ defmodule Aqua.Loop do
   # note carries the turn's sources when they hold an outside one
   # (`Aqua.Providers.Notes`).
   defp flush(%State{spec: spec} = state, rows, probe) do
-    cap = catalyst_request_cap(spec)
+    cap = spec.request_cap
 
     with true <- flush_room?(state.steps, state.restricted?),
          {:ok, policy} <- Turn.current_policy(spec),
@@ -2207,12 +2172,10 @@ defmodule Aqua.Loop do
     Policy.auto?(probe, policy, place(state))
   end
 
-  @doc false
-  # Public for its own test: the gate a flush passes before the grant store
-  # is asked — a turn no unknown outcome restricts, with room for the flush,
-  # the summary and the next chat request under the step cap.
-  @spec flush_room?(non_neg_integer(), boolean()) :: boolean()
-  def flush_room?(steps, restricted?), do: not restricted? and steps + 3 <= @max_steps
+  # The gate a flush passes before the grant store is asked: a turn no
+  # unknown outcome restricts, with room for the flush, the summary and the
+  # next chat request under the step cap.
+  defp flush_room?(steps, restricted?), do: not restricted? and steps + 3 <= @max_steps
 
   # The flush keeps notes of the rows a summary is about to replace, so it
   # is sent without the room excerpt: nothing of the room reaches it, and
@@ -2350,7 +2313,7 @@ defmodule Aqua.Loop do
            |> List.wrap()
            |> Enum.filter(&(&1["type"] == "text"))
            |> Enum.map_join("", & &1["text"]),
-         {:ok, summary} <- summary_text(summary),
+         {:ok, summary} <- Planner.summary_text(summary),
          {:ok, _} <-
            Tape.record_response(guest(state), state.turn, step, %{
              text: nil,
@@ -2408,48 +2371,11 @@ defmodule Aqua.Loop do
     end
   end
 
-  @doc false
-  # Public for its own test. Whether the cap resolves is otherwise
-  # unobservable: the token estimate trips before a transcript can reach the
-  # byte cap under ordinary conditions, so no end-to-end turn reaches this
-  # branch, and a cap of nil looks exactly like a request that fits.
-  # By name, without the version. The spec carries a versioned ref because
-  # that is what resolved, but the consent graph keys every node by name —
-  # `Opus.Admission` steps by name and `Authority.limits/1` matches on
-  # that. A versioned key finds nothing, and a cap of nil is a check that
-  # never fires.
-  def catalyst_request_cap(%{authority: authority, catalyst: catalyst}) do
-    with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst),
-         {:ok, %Prima.Limits{max_request_size: cap}} <-
-           Prima.Authority.node_limits(authority, name_ref) do
-      cap
-    else
-      _ -> nil
-    end
-  end
-
-  # A compaction that did not land leaves the rows as they were; the
-  # model step it opened stays counted.
-  @doc """
-  The summary a compaction may commit, or `:empty_summary`.
-
-  A compaction row commits its boundary seqs, so the projection drops every
-  row before `first_kept_seq` and renders the summary in their place. An empty
-  summary would drop them behind nothing. Any reply carrying no text block
-  produces one — not only a reply that is all tool calls.
-
-  Public because the branch is unobservable end-to-end: reaching it needs a
-  transcript past the compaction threshold and a model that answers it without
-  text, and a skipped compaction looks exactly like a request that fit.
-  """
-  @spec summary_text(String.t()) :: {:ok, String.t()} | {:error, :empty_summary}
-  def summary_text(summary) when is_binary(summary) do
-    if String.trim(summary) == "", do: {:error, :empty_summary}, else: {:ok, summary}
-  end
-
   defp failure({kind, reason}) when kind in [:error, :exit], do: describe(reason)
   defp failure(other), do: describe(other)
 
+  # A compaction that did not land leaves the rows as they were; the
+  # model step it opened stays counted.
   defp skip_compaction(%State{} = state, rows, reason) do
     Logger.warning("[Aqua.Loop] compaction skipped for turn #{state.turn.id}: #{inspect(reason)}")
     {:ok, state, rows}

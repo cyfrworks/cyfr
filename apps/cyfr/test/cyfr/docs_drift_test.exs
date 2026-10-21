@@ -1750,7 +1750,7 @@ defmodule Cyfr.DocsDriftTest do
 
   defp tincture_list("frame-capabilities") do
     rows =
-      for capability <- Compendium.tincture_frame_capabilities() do
+      for capability <- Compendium.Tincture.Rules.frame_capabilities() do
         {:ok, ["allow-scripts" | sandbox]} = Compendium.tincture_sandbox_tokens([capability])
         {:ok, allow} = Compendium.tincture_allow_attribute([capability])
 
@@ -1776,7 +1776,7 @@ defmodule Cyfr.DocsDriftTest do
       "| Block | Keys |",
       "|---|---|",
       "| `frame` | #{list.(keys.(%Prima.Manifest.Tincture.Frame{}))} |",
-      "| `frame.placement` | one of #{list.(Compendium.tincture_placements())} |",
+      "| `frame.placement` | one of #{list.(Compendium.Tincture.Rules.placements())} |",
       "| `canvas` | #{list.(keys.(%Prima.Manifest.Tincture.Canvas{}))} |",
       "| `streams[]` | #{list.(keys.(%Prima.Manifest.Tincture.Stream{name: ""}))} |",
       "| `actions[]` | an operation name, `tool.action` |"

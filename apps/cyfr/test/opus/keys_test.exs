@@ -15,9 +15,13 @@ defmodule Opus.KeysTest do
   alias Opus.Keys
   alias Prima.WorkerAuth
 
+  # Where `Arca.ControlPlane` keeps the generation this member recorded.
+  @generation_key {Arca.ControlPlane, :generation}
+
   setup do
     previous = Keys.root()
     configured = Application.get_env(:cyfr, :locus_runtime_root)
+    generation = :persistent_term.get(@generation_key, :absent)
 
     on_exit(fn ->
       Application.put_env(:cyfr, :locus_runtime_root, previous)
@@ -26,6 +30,10 @@ defmodule Opus.KeysTest do
       if configured,
         do: Application.put_env(:cyfr, :locus_runtime_root, configured),
         else: Application.delete_env(:cyfr, :locus_runtime_root)
+
+      if generation == :absent,
+        do: :persistent_term.erase(@generation_key),
+        else: :persistent_term.put(@generation_key, generation)
     end)
 
     :ok
@@ -42,23 +50,32 @@ defmodule Opus.KeysTest do
   end
 
   test "the generation is the claim's, 1 without a claim, and refused when it is unknown" do
-    assert {:ok, 7} = Keys.generation({:ok, 7})
-    assert {:ok, 1} = Keys.generation(:none)
+    claim = Application.fetch_env(:arca, :control_plane_claim_enabled)
 
-    for unknown <- [{:error, :unavailable}, {:error, :database_error}, {:ok, 0}, nil] do
-      assert {:error, :unavailable} = Keys.generation(unknown)
-    end
+    on_exit(fn ->
+      case claim do
+        {:ok, value} -> Application.put_env(:arca, :control_plane_claim_enabled, value)
+        :error -> Application.delete_env(:arca, :control_plane_claim_enabled)
+      end
+    end)
 
-    assert {:ok, generation} = Keys.generation()
-    assert generation > 0
+    :ok = Arca.ControlPlane.record_generation(7)
+    assert {:ok, 7} = Keys.generation()
+
+    :ok = Arca.ControlPlane.record_generation(:none)
+    assert {:ok, 1} = Keys.generation()
+
+    # A member that claims the control plane and has recorded no
+    # generation cannot say which it holds.
+    :ok = Arca.ControlPlane.forget_generation()
+    Application.put_env(:arca, :control_plane_claim_enabled, true)
+    assert {:error, :unavailable} = Keys.generation()
   end
 
   test "the generation is read from the cell's cached standing, at no query" do
     # Every assignment issued and every host call verified reads this, so
     # it must stay a term read. `Arca.ControlPlane` answers it from a
     # persistent term; nothing on this path may put a query behind it.
-    on_exit(fn -> Arca.ControlPlane.forget_generation() end)
-
     :ok = Arca.ControlPlane.record_generation(:none)
     assert {:ok, 1} = Arca.Test.QueryCounter.assert_queries(0, fn -> Keys.generation() end)
 

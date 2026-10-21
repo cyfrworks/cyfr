@@ -73,7 +73,7 @@ defmodule Prism.AquaTemplatePolicyTest do
           # A virtual tool's ACTION has to exist too. Accepting the whole
           # namespace on the strength of its name let `storage.frobnicate`
           # through — granted in the template, dispatched by nothing.
-          is_nil(Hands.kind_for(tool, action))
+          is_nil(Sanctum.VirtualTools.kind_for(tool, action))
         else
           refused_action?(tool, action)
         end

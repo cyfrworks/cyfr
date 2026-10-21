@@ -18,28 +18,64 @@ defmodule Opus.Events.Sequence do
 
   use GenServer
 
+  require Logger
+
   @table __MODULE__
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
-  @doc "The next delta number under `durable` for `execution_id`, starting at 1."
+  @doc """
+  The next delta number under `durable` for `execution_id`, starting at 1.
+  Raises when the counter table is absent: a delta is never numbered
+  outside the stream's one counter.
+  """
   @spec next(String.t(), non_neg_integer()) :: pos_integer()
   def next(execution_id, durable) when is_binary(execution_id) and is_integer(durable) do
-    :ets.update_counter(@table, {execution_id, durable}, {2, 1}, {{execution_id, durable}, 0})
-  rescue
-    ArgumentError -> System.unique_integer([:positive, :monotonic])
+    case :ets.update_counter(
+           @table,
+           {execution_id, durable},
+           {2, 1},
+           {{execution_id, durable}, 0}
+         ) do
+      n when is_integer(n) and n > 0 -> n
+    end
   end
 
   @doc """
   Drop a finished stream's counters, every prefix. Called from the
-  stream's terminal publication — the last event this id ever numbers.
+  stream's terminal publication — the last event this id ever numbers —
+  after its row committed and before what its end cleans up, so it never
+  raises: a table that is absent, its owner restarting, holds no counters
+  to drop, and the call logs that and answers `:ok`.
   """
   @spec forget(String.t()) :: :ok
   def forget(execution_id) when is_binary(execution_id) do
-    :ets.match_delete(@table, {{execution_id, :_}, :_})
+    case :ets.whereis(@table) do
+      :undefined -> absent(execution_id)
+      table -> drop(table, execution_id)
+    end
+  end
+
+  # The owner can exit between the lookup above and this delete, and the
+  # table goes with it: a table that is gone holds nothing to drop. Any
+  # other failure raises.
+  defp drop(table, execution_id) do
+    :ets.match_delete(table, {{execution_id, :_}, :_})
     :ok
   rescue
-    ArgumentError -> :ok
+    error in ArgumentError ->
+      if :ets.info(table) == :undefined,
+        do: absent(execution_id),
+        else: reraise(error, __STACKTRACE__)
+  end
+
+  defp absent(execution_id) do
+    Logger.warning(
+      "[Opus.Events.Sequence] no counter table to retire #{execution_id}'s counters from: " <>
+        "its owner is restarting"
+    )
+
+    :ok
   end
 
   @doc """
@@ -53,13 +89,15 @@ defmodule Opus.Events.Sequence do
       when is_binary(execution_id) and is_integer(durable) and is_integer(floor) and floor >= 0 do
     key = {execution_id, durable}
 
+    # A tuple in a match specification's body is an expression, so the key
+    # is written back as a constant.
     unless :ets.insert_new(@table, {key, floor}) do
-      :ets.select_replace(@table, [{{key, :"$1"}, [{:<, :"$1", floor}], [{{key, floor}}]}])
+      :ets.select_replace(@table, [
+        {{key, :"$1"}, [{:<, :"$1", floor}], [{{{:const, key}, floor}}]}
+      ])
     end
 
     :ok
-  rescue
-    ArgumentError -> :ok
   end
 
   @impl true

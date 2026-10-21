@@ -22,13 +22,13 @@ defmodule Opus.Record do
 
       # Create and write started record BEFORE execution
       record = Record.new(ctx, reference, input)
-      :ok = Record.write_started(record)
+      :ok = Record.write_started(ctx, record, retention_class: class)
 
       # Execute...
 
       # On success: write completion
       record = Record.complete(record, output)
-      :ok = Record.write_completed(record)
+      {:ok, _ledger} = Record.write_completed_ledger(record, retention_class: class)
 
       # On failure: write failure
       record = Record.fail(record, error)
@@ -62,20 +62,27 @@ defmodule Opus.Record do
   @typedoc "The executable component types (`Prima.ComponentRef.executable_types/0`)."
   @type component_type :: :catalyst | :reagent | :formula
 
+  @typedoc """
+  What a stored row ran: an executable component type, a turn root's
+  `:agent`, or the `:tool_server` an MCP tool call
+  (`Emissary.External.Proxy`) runs on.
+  """
+  @type row_type :: component_type() | :agent | :tool_server
+
   @type t :: %__MODULE__{
           id: String.t(),
           request_id: String.t() | nil,
           call_id: String.t() | nil,
           user_id: String.t(),
           athanor_id: String.t() | nil,
-          reference: String.t() | nil,
+          reference: String.t(),
           resolved_from: String.t() | nil,
-          component_type: component_type() | :agent,
+          component_type: row_type(),
           component_digest: String.t() | nil,
           input: json(),
           output: json(),
-          status: :running | :paused | :completed | :failed | :cancelled | :unknown,
-          started_at: DateTime.t() | nil,
+          status: :running | :paused | :completed | :failed | :cancelled,
+          started_at: DateTime.t(),
           completed_at: DateTime.t() | nil,
           duration_ms: non_neg_integer() | nil,
           error: String.t() | nil,
@@ -92,18 +99,14 @@ defmodule Opus.Record do
           turn_id: String.t() | nil,
           schedule_id: String.t() | nil,
           reservation: map() | nil,
-          retention_class: String.t() | nil,
-          retained_input: map() | nil,
-          grant: Prima.ExecutionGrant.t() | nil,
-          origin: Prima.Origin.t() | nil,
           sources: [Prima.Source.t()],
           launch_classes: [Prima.Source.class()]
         }
 
-  # One execution row and the admission inputs that travel with it: the
-  # 32nd field makes the struct a hashed map rather than a flat one, a
-  # cost paid once per execution, not per call.
-  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
+  # One execution row, as its admission builds it and a read returns it.
+  # What admission alone needs to write the row (its grant, its origin,
+  # its payloads' retention class and retained input) is admission's
+  # (`write_started/3`), not the row's.
   defstruct [
     :id,
     :request_id,
@@ -145,23 +148,6 @@ defmodule Opus.Record do
     # A root's invocation reservation, `%{budget_id, cap}`, minted at
     # admission; nil for a child.
     :reservation,
-    # The class the execution's retained payloads are swept under
-    # (`Arca.Retention.Payloads` and its siblings): `api`, `webhook`,
-    # `schedule`, `system`, or `chat_step` for a turn's own dispatches.
-    # Not a column — the payload rows carry it.
-    :retention_class,
-    :retained_input,
-    # The standing the run was admitted under (`Prima.ExecutionGrant`): a
-    # root's read at admission, a child's its parent's stored stamp. Not
-    # a column of this row — its attempt stores it. Nil on a record read
-    # back, whose writes name the stored stamp instead.
-    :grant,
-    # How the run began (`Prima.Origin`): a root's is the origin of the
-    # context it was admitted in, which the admission entry that built the
-    # context set. A child names none: its row carries its parent's,
-    # read where it is admitted (`Arca.Execution.admit/2`). Nil on a
-    # record read back.
-    :origin,
     # A root's seed (`Prima.Source`), from what admitted it (`root_seed/2`);
     # a child's is its parent's ledger, read where it is admitted. On a
     # record read back, the row's ledger as that read found it.
@@ -176,26 +162,11 @@ defmodule Opus.Record do
 
   Options:
   - `:component_type` - The component type (:catalyst, :reagent, :formula). Defaults to :reagent.
-  - `:component_digest` - The SHA256 digest of the WASM component.
-  - `:host_policy` - Snapshot of the host policy applied to this execution.
   - `:parent_execution_id` - Parent formula execution ID for sub-invocations.
   - `:child_key` - The key the parent's runner minted for this child, which
     the row carries so a repeated admission under it answers this child.
   - `:root_execution_id` - The chain's root execution ID. A root stamps
     itself, so every row in a chain carries the same value.
-  - `:retained_input` - The map kept as the input payload in place of
-    `input`, when the sent input carries transient content; the row's
-    hash and envelope still describe `input`
-  - `:retention_class` - The class the execution's payloads are kept
-    under; derived from the caller when absent (`webhook` for a webhook
-    identity, `system` for the server's own context, else `api`).
-  - `:grant` - The `Prima.ExecutionGrant` the run is admitted under; read
-    at admission when absent (`write_started/2`).
-
-  A root carries `ctx`'s origin (`Prima.Origin`), which the admission
-  entry that built `ctx` set, into the row `write_started/2` admits; no
-  option names one. A record with a `:parent_execution_id` carries none,
-  and its row takes its parent's.
 
   A root's source ledger is seeded from what admitted it, never from an
   argument: an approved launch's stamp (`:launch`, `%{sources, classes}`,
@@ -209,8 +180,6 @@ defmodule Opus.Record do
   @spec new(Context.t(), String.t(), map(), keyword()) :: t()
   def new(%Context{} = ctx, reference, input, opts \\ []) do
     component_type = Keyword.get(opts, :component_type, :reagent)
-    component_digest = Keyword.get(opts, :component_digest)
-    host_policy = Keyword.get(opts, :host_policy)
     parent_execution_id = Keyword.get(opts, :parent_execution_id)
     id = Keyword.get(opts, :execution_id) || generate_id()
     # A root execution is its own root: one comparison answers "is this
@@ -225,7 +194,7 @@ defmodule Opus.Record do
       athanor_id: ctx.athanor_id,
       reference: reference,
       component_type: component_type,
-      component_digest: component_digest,
+      component_digest: nil,
       input: input,
       output: nil,
       status: :running,
@@ -233,7 +202,7 @@ defmodule Opus.Record do
       completed_at: nil,
       duration_ms: nil,
       error: nil,
-      host_policy: host_policy,
+      host_policy: nil,
       parent_execution_id: parent_execution_id,
       child_key: Keyword.get(opts, :child_key),
       root_execution_id: root_execution_id,
@@ -246,11 +215,6 @@ defmodule Opus.Record do
       turn_id: Keyword.get(opts, :turn_id),
       schedule_id: Keyword.get(opts, :schedule_id),
       reservation: Keyword.get(opts, :reservation),
-      retention_class: Keyword.get(opts, :retention_class) || default_retention_class(ctx),
-      retained_input: Keyword.get(opts, :retained_input),
-      grant: Keyword.get(opts, :grant),
-      # The context's, never an option's: the admission entry decides.
-      origin: if(is_nil(parent_execution_id), do: ctx.origin),
       sources: if(is_nil(parent_execution_id), do: root_seed(ctx, opts), else: []),
       launch_classes: if(is_nil(parent_execution_id), do: launch_classes(opts), else: [])
     }
@@ -263,7 +227,7 @@ defmodule Opus.Record do
 
       _no_launch ->
         cond do
-          ctx.origin in [:webhook, "webhook"] -> [Prima.Source.outside("webhook")]
+          ctx.origin == :webhook -> [Prima.Source.outside("webhook")]
           is_list(Keyword.get(opts, :frame_sources)) -> Keyword.fetch!(opts, :frame_sources)
           true -> []
         end
@@ -280,7 +244,14 @@ defmodule Opus.Record do
     end
   end
 
-  defp default_retention_class(%Context{} = ctx),
+  @doc """
+  The class a run's payloads are kept under when its admission names none
+  (`Arca.Retention.Payloads` and its siblings): derived from the caller —
+  `webhook` for a webhook identity, `system` for the server's own context,
+  else `api`. A turn's own dispatches name `chat_step`.
+  """
+  @spec default_retention_class(Context.t()) :: String.t()
+  def default_retention_class(%Context{} = ctx),
     do: Arca.Retention.default_class(Context.actor(ctx))
 
   @doc "Mark execution as completed with output."
@@ -314,9 +285,7 @@ defmodule Opus.Record do
   end
 
   @doc """
-  Cancel a running execution. `opts[:restart_required]` — a consent
-  payload — rides the `execution.cancelled` event, so a surface can say
-  "approved — re-run to continue" instead of "cancelled".
+  Cancel a running execution.
 
   Only running executions can be cancelled. Returns:
   - `{:ok, record}` - Successfully cancelled
@@ -325,16 +294,14 @@ defmodule Opus.Record do
   """
   @spec cancel(Context.t(), String.t()) ::
           {:ok, t()} | {:error, :not_found | :not_cancellable | term()}
-  def cancel(ctx, id, opts \\ [])
-
-  def cancel(%Context{} = ctx, id, opts) do
+  def cancel(%Context{} = ctx, id) do
     case get(ctx, id) do
       {:ok, %{status: :running} = record} ->
         # `get/2` authorized the READ; cancelling is a mutation and takes the
         # :execute permission — every ingress funnels through here, so a
         # viewer credential cannot kill executions.
         case Context.authorize(ctx, :execute, {:execution, Map.from_struct(record)}) do
-          :ok -> do_cancel(record, cancel_data(opts))
+          :ok -> do_cancel(record)
           {:error, _} = error -> error
         end
 
@@ -349,14 +316,7 @@ defmodule Opus.Record do
     end
   end
 
-  defp cancel_data(opts) do
-    case Keyword.get(opts, :restart_required) do
-      payload when is_map(payload) -> %{"restart_required" => payload}
-      _ -> %{}
-    end
-  end
-
-  defp do_cancel(record, event_data) do
+  defp do_cancel(record) do
     now = DateTime.utc_now()
     duration_ms = DateTime.diff(now, record.started_at, :millisecond)
 
@@ -367,7 +327,7 @@ defmodule Opus.Record do
         duration_ms: duration_ms
     }
 
-    case write_failed(cancelled_record, event_data) do
+    case write_failed(cancelled_record) do
       :ok ->
         {:ok, cancelled_record}
 
@@ -387,9 +347,23 @@ defmodule Opus.Record do
   # ============================================================================
 
   @doc """
-  Admit the execution BEFORE it begins: the row, its first attempt and,
-  for a root carrying a reservation, its budget row, in one transaction
-  (`Arca.Execution.admit/2`). `opts` carry the admission barriers a child
+  Admit the execution BEFORE it begins, in `ctx`, the context it was
+  admitted in: the row, its first attempt and, for a root carrying a
+  reservation, its budget row, in one transaction
+  (`Arca.Execution.admit/2`). A root's row records `ctx`'s origin
+  (`Prima.Origin`), which the admission entry that built `ctx` set; a
+  child's row takes its parent's.
+
+  `opts` carry what the admission settled: `:grant`, the
+  `Prima.ExecutionGrant` the run is admitted under (when absent, a root's
+  athanor standing read now, `Sanctum.ExecutionStanding.capture/1`, or the
+  stamp its parent's current attempt stores, which a child inherits
+  unchanged); `:retention_class`, the class its payloads are kept under
+  (`default_retention_class/1` of `ctx` when absent); and
+  `:retained_input`, the map kept as the input payload in place of the
+  input, when the sent input carries transient content (the row's hash
+  and envelope still describe the input). They also carry the admission
+  barriers a child
   passes through (`:charge`, `:step`, and `:parent_attempt`, the attempt of
   its parent it is admitted under), a scheduled run's `:occurrence_id`, and
   the worker side holding the attempt: `:service_id`, the worker service it
@@ -399,24 +373,28 @@ defmodule Opus.Record do
   The row keeps an input envelope — the reference, digest, sizes,
   top-level keys and attachment digests — and the input itself is the
   payload store's, staged first and committed by the admission
-  transaction under the record's retention class — the retained form
-  when the record carries one, else the input as sent: an input that
-  cannot be kept is `{:error, {:payload_not_retained, reason}}` and
-  nothing is admitted.
+  transaction under the retention class — the retained form when there
+  is one, else the input as sent: an input that cannot be kept is
+  `{:error, {:payload_not_retained, reason}}` and nothing is admitted.
 
-  The row is admitted under the record's grant (`grant/1` when it carries
-  none), checked in the admission transaction
-  (`Sanctum.ExecutionStanding.verify/1`): a grant that does not stand
-  admits nothing and is refused `{:error, :not_standing}`, a barrier's
-  refusal (`Arca.Execution.barrier_refusal?/1`).
+  The row is admitted under the grant, checked in the admission
+  transaction (`Sanctum.ExecutionStanding.verify/1`): a grant that does
+  not stand admits nothing and is refused `{:error, :not_standing}`, a
+  barrier's refusal (`Arca.Execution.barrier_refusal?/1`).
   """
-  @spec write_started(t(), keyword()) :: :ok | {:error, term()}
-  def write_started(%__MODULE__{} = record, opts \\ []) do
+  @spec write_started(Context.t(), t(), keyword()) :: :ok | {:error, term()}
+  def write_started(%Context{} = admitted_ctx, %__MODULE__{} = record, opts \\ []) do
     ctx = record_to_ctx(record)
 
-    with {:ok, grant} <- grant(record),
-         {:ok, staged} <- stage_input(ctx, record) do
-      case admit(%{record | grant: grant}, opts, [staged]) do
+    class =
+      Keyword.get_lazy(opts, :retention_class, fn -> default_retention_class(admitted_ctx) end)
+
+    input = Keyword.get(opts, :retained_input) || record.input || %{}
+    origin = if is_nil(record.parent_execution_id), do: admitted_ctx.origin
+
+    with {:ok, grant} <- admission_grant(record, opts),
+         {:ok, staged} <- stage_input(ctx, record, input, class) do
+      case admit(record, origin, grant, opts, [staged]) do
         :ok ->
           :ok
 
@@ -427,27 +405,28 @@ defmodule Opus.Record do
     end
   end
 
-  defp stage_input(ctx, record) do
-    case stage(ctx, record, "input", encode_json(record.retained_input || record.input || %{})) do
+  defp stage_input(ctx, record, input, class) do
+    case stage(ctx, record, "input", encode_json(input), class) do
       {:ok, staged} -> {:ok, staged}
       {:error, reason} -> {:error, {:payload_not_retained, reason}}
     end
   end
 
-  @doc """
-  The grant `record` is admitted under: the one it carries, else a root's
-  athanor standing read now (`Sanctum.ExecutionStanding.capture/1`) or the
-  stamp its parent's current attempt stores, which a child inherits
-  unchanged. `{:error, :not_standing}` when neither stands,
-  `{:error, :unavailable}` when the store cannot answer.
-  """
-  @spec grant(t()) :: {:ok, Prima.ExecutionGrant.t()} | {:error, :not_standing | :unavailable}
-  def grant(%__MODULE__{grant: %Prima.ExecutionGrant{} = grant}), do: {:ok, grant}
+  # The grant `record` is admitted under: the one admission settled, else a
+  # root's athanor standing read now or the stamp its parent's current
+  # attempt stores. `{:error, :not_standing}` when neither stands,
+  # `{:error, :unavailable}` when the store cannot answer.
+  defp admission_grant(record, opts) do
+    case Keyword.get(opts, :grant) do
+      %Prima.ExecutionGrant{} = grant -> {:ok, grant}
+      nil -> stored_or_captured_grant(record)
+    end
+  end
 
-  def grant(%__MODULE__{parent_execution_id: nil} = record),
+  defp stored_or_captured_grant(%__MODULE__{parent_execution_id: nil} = record),
     do: Sanctum.ExecutionStanding.capture(record_to_ctx(record))
 
-  def grant(%__MODULE__{athanor_id: athanor_id, parent_execution_id: parent}),
+  defp stored_or_captured_grant(%__MODULE__{athanor_id: athanor_id, parent_execution_id: parent}),
     do: inherited_grant(athanor_id, parent)
 
   @doc """
@@ -487,7 +466,6 @@ defmodule Opus.Record do
 
   # A run's own admitted egress: the domains its edge allows.
   defp reaches_outside?(%{allowed_domains: [_ | _]}), do: true
-  defp reaches_outside?(%{"allowed_domains" => [_ | _]}), do: true
   defp reaches_outside?(_policy), do: false
 
   # The root's policy with the classes its approved launch let flow, read
@@ -500,13 +478,13 @@ defmodule Opus.Record do
     |> Map.put(Arca.Execution.launch_key(), Enum.map(classes, &Atom.to_string/1))
   end
 
-  defp admit(%__MODULE__{} = record, opts, payloads) do
+  defp admit(%__MODULE__{} = record, origin, grant, opts, payloads) do
     case Arca.Execution.admit(
            %{
              id: record.id,
              request_id: record.request_id,
              call_id: record.call_id,
-             reference: encode_reference(record.reference),
+             reference: record.reference,
              input_hash: Arca.Execution.hash_input(record.input),
              user_id: record.user_id,
              athanor_id: record.athanor_id,
@@ -523,10 +501,10 @@ defmodule Opus.Record do
              activation_digest: record.activation_digest,
              activation_graph: record.activation_graph,
              profile_id: record.profile_id,
-             kind: record.kind || "component",
+             kind: record.kind,
              turn_id: record.turn_id,
              schedule_id: record.schedule_id,
-             origin: record.origin,
+             origin: origin,
              sources: record.sources
            },
            Keyword.merge(
@@ -535,7 +513,7 @@ defmodule Opus.Record do
                boot_id: boot_id(),
                reservation: record.reservation,
                payloads: payloads,
-               grant: record.grant,
+               grant: grant,
                verify: &Sanctum.ExecutionStanding.verify/1,
                # A run admitted with egress marks its tree's root in this
                # transaction, where retention cannot reach it first.
@@ -554,7 +532,7 @@ defmodule Opus.Record do
       {:ok, %{execution: execution}} ->
         publish(record, "execution.started", execution.event_seq, %{
           "attempt" => record.attempt,
-          "reference" => encode_reference(record.reference)
+          "reference" => record.reference
         })
 
       {:error, reason} ->
@@ -571,18 +549,8 @@ defmodule Opus.Record do
 
   defp publish(_record, _type, _seq, _data), do: :ok
 
-  defp stage(ctx, %__MODULE__{} = record, kind, bytes),
-    do:
-      Arca.ExecutionPayloads.stage(
-        Sanctum.Context.actor(ctx),
-        record.id,
-        kind,
-        bytes,
-        record.retention_class
-      )
-
-  @doc "How long one lease renewal is good for."
-  def lease_seconds, do: Arca.ExecutionAttempts.lease_seconds()
+  defp stage(ctx, %__MODULE__{} = record, kind, bytes, class),
+    do: Arca.ExecutionPayloads.stage(Sanctum.Context.actor(ctx), record.id, kind, bytes, class)
 
   @doc """
   This boot's id: the `boot_id` of an attempt this control plane holds
@@ -606,10 +574,7 @@ defmodule Opus.Record do
   answer; the runner keeps working only while the lease it last held
   still holds.
   """
-  @spec renew_lease(String.t(), String.t() | nil) ::
-          {:ok, DateTime.t()} | :lost | :unavailable
-  def renew_lease(_execution_id, nil), do: :lost
-
+  @spec renew_lease(String.t(), String.t()) :: {:ok, DateTime.t()} | :lost | :unavailable
   def renew_lease(execution_id, attempt) when is_binary(execution_id) and is_binary(attempt) do
     Arca.ExecutionAttempts.renew(attempt, lease_until(),
       grant: :stored,
@@ -625,37 +590,32 @@ defmodule Opus.Record do
   end
 
   @doc """
-  Close the row as completed. The row keeps an envelope of the output
-  (`persisted_output/1`); the output itself is staged as the result
-  payload and committed by the same transaction that closes the attempt.
-  A result that cannot be kept closes the attempt `result_lost` and the
-  row failed — durably, so nothing retries an effect that already
-  happened — and answers `{:error, {:result_lost, reason}}`.
+  Close the row as completed, answering `{:ok, ledger}`: the run's source
+  ledger as the terminal transaction itself read it
+  (`Arca.Execution.row_ledger/1`), the first carrier of its provenance to
+  whoever it answers — never a read after the write, which retention may
+  race. The row keeps an envelope of the output (`persisted_output/1`);
+  the output itself is staged as the result payload and committed by the
+  same transaction that closes the attempt. A result that cannot be kept
+  closes the attempt `result_lost` and the row failed — durably, so
+  nothing retries an effect that already happened — and answers
+  `{:error, {:result_lost, reason}}`.
 
-  A completion commits only under a grant that stands
+  `opts`: `:retention_class`, the class the run's input was staged under
+  (`write_started/3`), required; and `:grant`, the grant the run was
+  admitted under (the attempt's stored stamp when absent). A completion
+  commits only under a grant that stands
   (`Sanctum.ExecutionStanding.verify/1`). One whose athanor was archived
   while the run was in flight is never recorded as a success: its attempt
   closes `uncertain` and the row failed, since what the run did may
   already have happened, and the answer is `{:error, :not_standing}`.
   """
-  @spec write_completed(t()) :: :ok | {:error, term()}
-  def write_completed(%__MODULE__{} = record) do
-    case write_completed_ledger(record) do
-      {:ok, _ledger} -> :ok
-      refused -> refused
-    end
-  end
+  @spec write_completed_ledger(t(), keyword()) :: {:ok, [Prima.Source.t()]} | {:error, term()}
+  def write_completed_ledger(record, opts)
 
-  @doc """
-  `write_completed/1`, answering `{:ok, ledger}` on success: the run's
-  source ledger as the terminal transaction itself read it
-  (`Arca.Execution.row_ledger/1`), the first carrier of its provenance
-  to whoever it answers — never a read after the write, which retention
-  may race.
-  """
-  @spec write_completed_ledger(t()) :: {:ok, [Prima.Source.t()]} | {:error, term()}
-  def write_completed_ledger(%__MODULE__{status: :completed} = record) do
+  def write_completed_ledger(%__MODULE__{status: :completed} = record, opts) do
     ctx = record_to_ctx(record)
+    grant = written_grant(opts)
 
     close = %{
       completed_at: record.completed_at,
@@ -663,7 +623,7 @@ defmodule Opus.Record do
       output: encode_json(persisted_output(record))
     }
 
-    case stage_result(ctx, record) do
+    case stage_result(ctx, record, Keyword.fetch!(opts, :retention_class)) do
       {:ok, staged} ->
         case Arca.Execution.record_end(
                Sanctum.Context.actor(ctx),
@@ -671,7 +631,7 @@ defmodule Opus.Record do
                "completed",
                Map.put(close, :payloads, List.wrap(staged)),
                record.attempt,
-               grant: record.grant || :stored,
+               grant: grant,
                verify: &Sanctum.ExecutionStanding.verify/1
              ) do
           {:ok, execution} ->
@@ -685,11 +645,11 @@ defmodule Opus.Record do
 
           {:error, :not_standing} ->
             if staged, do: Arca.ExecutionPayloads.discard(staged)
-            retired(ctx, record)
+            retired(ctx, record, grant)
 
           {:error, {:payload_not_retained, reason}} ->
             if staged, do: Arca.ExecutionPayloads.discard(staged)
-            result_lost(ctx, record, reason)
+            result_lost(ctx, record, grant, reason)
 
           {:error, reason} ->
             if staged, do: Arca.ExecutionPayloads.discard(staged)
@@ -697,23 +657,27 @@ defmodule Opus.Record do
         end
 
       {:error, reason} ->
-        result_lost(ctx, record, reason)
+        result_lost(ctx, record, grant, reason)
     end
   end
 
-  def write_completed_ledger(%__MODULE__{status: status}) do
+  def write_completed_ledger(%__MODULE__{status: status}, _opts) do
     {:error, "Cannot write completed record for status: #{status}"}
   end
 
-  defp stage_result(_ctx, %__MODULE__{output: nil}), do: {:ok, nil}
+  # The grant a terminal write is fenced on: the one the run was admitted
+  # under, else the attempt's stored stamp.
+  defp written_grant(opts), do: Keyword.get(opts, :grant, :stored)
 
-  defp stage_result(ctx, %__MODULE__{} = record),
-    do: stage(ctx, record, "result", encode_json(record.output))
+  defp stage_result(_ctx, %__MODULE__{output: nil}, _class), do: {:ok, nil}
+
+  defp stage_result(ctx, %__MODULE__{} = record, class),
+    do: stage(ctx, record, "result", encode_json(record.output), class)
 
   # The grant retired while the run was in flight: the run may have acted,
   # so the attempt closes `uncertain`, never `ok`, and the output is
   # neither kept nor published.
-  defp retired(ctx, %__MODULE__{} = record) do
+  defp retired(ctx, %__MODULE__{} = record, grant) do
     message = "the execution's athanor is no longer active"
 
     case Arca.Execution.record_end(
@@ -727,7 +691,7 @@ defmodule Opus.Record do
              outcome: "uncertain"
            },
            record.attempt,
-           grant: record.grant || :stored,
+           grant: grant,
            verify: &Sanctum.ExecutionStanding.stamp_only/1
          ) do
       {:ok, execution} ->
@@ -744,7 +708,7 @@ defmodule Opus.Record do
     {:error, :not_standing}
   end
 
-  defp result_lost(ctx, %__MODULE__{} = record, reason) do
+  defp result_lost(ctx, %__MODULE__{} = record, grant, reason) do
     Logger.error(
       "[Opus.Record] result of #{record.id} not retained: #{inspect(reason)}; " <>
         "the attempt closes result_lost"
@@ -761,7 +725,7 @@ defmodule Opus.Record do
              outcome: "result_lost"
            },
            record.attempt,
-           grant: record.grant || :stored,
+           grant: grant,
            verify: &Sanctum.ExecutionStanding.stamp_only/1
          ) do
       {:ok, execution} ->
@@ -779,20 +743,20 @@ defmodule Opus.Record do
   end
 
   @doc """
-  Close the row as failed or cancelled, and publish the lifecycle event
-  with `event_data` merged into what it carries (a cancel that asks for
-  a restart says so there). A failure and a cancel retire work, so they
-  need the attempt's stored stamp and not a grant that still stands
-  (`Sanctum.ExecutionStanding.stamp_only/1`).
+  Close the row as failed or cancelled, and publish the lifecycle event.
+  A failure and a cancel retire work, so they need the attempt's stamp and
+  not a grant that still stands (`Sanctum.ExecutionStanding.stamp_only/1`):
+  `opts[:grant]`, the grant the run was admitted under, else the
+  attempt's stored stamp.
   """
-  @spec write_failed(t(), map()) :: :ok | {:error, term()}
-  def write_failed(record, event_data \\ %{})
+  @spec write_failed(t(), keyword()) :: :ok | {:error, term()}
+  def write_failed(record, opts \\ [])
 
-  def write_failed(%__MODULE__{status: status} = record, event_data)
-      when status in [:failed, :cancelled] and is_map(event_data),
-      do: write_ended(record, event_data, nil)
+  def write_failed(%__MODULE__{status: status} = record, opts)
+      when status in [:failed, :cancelled],
+      do: write_ended(record, nil, written_grant(opts))
 
-  def write_failed(%__MODULE__{status: status}, _event_data) do
+  def write_failed(%__MODULE__{status: status}, _opts) do
     {:error, "Cannot write failed record for status: #{status}"}
   end
 
@@ -802,11 +766,11 @@ defmodule Opus.Record do
   run did before it ended is not known, and the row fails as
   `write_failed/2` fails it. `record` is one `fail/2` made.
   """
-  @spec write_uncertain(t()) :: :ok | {:error, term()}
-  def write_uncertain(%__MODULE__{status: :failed} = record),
-    do: write_ended(record, %{}, "uncertain")
+  @spec write_uncertain(t(), keyword()) :: :ok | {:error, term()}
+  def write_uncertain(%__MODULE__{status: :failed} = record, opts \\ []),
+    do: write_ended(record, "uncertain", written_grant(opts))
 
-  defp write_ended(%__MODULE__{status: status} = record, event_data, outcome) do
+  defp write_ended(%__MODULE__{status: status} = record, outcome, grant) do
     ctx = record_to_ctx(record)
 
     case Arca.Execution.record_end(
@@ -817,21 +781,19 @@ defmodule Opus.Record do
              %{
                completed_at: record.completed_at,
                duration_ms: record.duration_ms,
-               error_message: record.error,
-               event: event_data
+               error_message: record.error
              },
              :outcome,
              outcome
            ),
            record.attempt,
-           grant: record.grant || :stored,
+           grant: grant,
            verify: &Sanctum.ExecutionStanding.stamp_only/1
          ) do
       {:ok, execution} ->
         data =
           %{"status" => Atom.to_string(status), "error" => record.error}
           |> Map.reject(fn {_k, v} -> is_nil(v) end)
-          |> Map.merge(event_data)
 
         publish(record, "execution." <> Atom.to_string(status), execution.event_seq, data)
 
@@ -860,9 +822,16 @@ defmodule Opus.Record do
 
   @doc """
   Load an execution record by ID.
+
+  Options:
+  - `:chain` - the root of the chain an in-chain caller is scoped to (nil,
+    the default, scopes nothing). A row that is neither that root nor
+    stamped with it is `{:error, :outside_chain}`, judged on its stored id
+    and root before the rest of the row is read, so a row outside the
+    chain answers the same whether it is intact or damaged.
   """
-  @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
-  def get(%Context{} = ctx, id) do
+  @spec get(Context.t(), String.t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def get(%Context{} = ctx, id, opts \\ []) do
     case Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), id) do
       nil ->
         {:error, :not_found}
@@ -877,9 +846,10 @@ defmodule Opus.Record do
       record ->
         result = execution_to_map(record)
 
-        case Context.authorize(ctx, :storage_read, {:execution, result}) do
-          :ok -> {:ok, hydrate_output(ctx, from_mcp_result(result))}
-          {:error, _} -> {:error, :not_found}
+        with :ok <- read_authorized(ctx, result),
+             :ok <- in_chain(result, Keyword.get(opts, :chain)),
+             {:ok, record} <- from_row(result) do
+          {:ok, hydrate_output(ctx, record)}
         end
     end
   end
@@ -912,11 +882,17 @@ defmodule Opus.Record do
   Options:
   - `:limit` - Maximum number of records (default: 20)
   - `:status` - Filter by status (:running, :completed, :failed, :all)
+  - `:chain` - the root of the chain an in-chain caller is scoped to (nil,
+    the default, scopes nothing): of the rows the limit takes, only that
+    root and the rows stamped with it, judged on their stored id and root
+    before any row is read, so a row outside the chain, intact or
+    damaged, is never read
   """
   @spec list(Context.t(), keyword()) :: {:ok, [t()]} | {:error, term()}
   def list(%Context{} = ctx, opts \\ []) do
     limit = Keyword.get(opts, :limit, 20)
     status_filter = Keyword.get(opts, :status, :all)
+    chain = Keyword.get(opts, :chain)
 
     opts = [limit: limit]
 
@@ -934,33 +910,91 @@ defmodule Opus.Record do
         {:error, reason}
 
       records ->
-        {:ok, Enum.map(records, fn r -> from_mcp_result(execution_to_map(r)) end)}
+        records
+        |> Enum.map(&execution_to_map/1)
+        |> Enum.filter(&(in_chain(&1, chain) == :ok))
+        |> Enum.reduce_while({:ok, []}, fn result, {:ok, acc} ->
+          case from_row(result) do
+            {:ok, record} -> {:cont, {:ok, [record | acc]}}
+            {:error, _} = damaged -> {:halt, damaged}
+          end
+        end)
+        |> case do
+          {:ok, records} -> {:ok, Enum.reverse(records)}
+          damaged -> damaged
+        end
     end
   end
+
+  defp read_authorized(ctx, result) do
+    case Context.authorize(ctx, :storage_read, {:execution, result}) do
+      :ok -> :ok
+      {:error, _} -> {:error, :not_found}
+    end
+  end
+
+  # Whether a stored row is the chain's root or stamped with it, read on
+  # its id and root columns alone, which a row damaged elsewhere still holds.
+  defp in_chain(_result, nil), do: :ok
+  defp in_chain(%{id: root}, root), do: :ok
+  defp in_chain(%{root_execution_id: root}, root), do: :ok
+  defp in_chain(_result, _root), do: {:error, :outside_chain}
 
   # ===========================================================================
   # Private - Struct Conversion
   # ===========================================================================
 
-  @spec from_mcp_result(map()) :: t()
-  defp from_mcp_result(result) when is_map(result) do
+  # A row's stored status and type are closed sets (the status CHECK, and
+  # the types its writers stamp), and its input, output and host policy
+  # are JSON or SQL NULL; a row holding anything else is damaged, refused
+  # `{:corrupt, {:execution, id}}` rather than read as something it is not.
+  @spec from_row(map()) :: {:ok, t()} | {:error, {:corrupt, {:execution, String.t()}}}
+  defp from_row(result) when is_map(result) do
+    with {:ok, status} <- parse_status(result.status),
+         {:ok, component_type} <- parse_component_type(result.component_type),
+         {:ok, input} <- stored_json(result, :input),
+         {:ok, output} <- stored_json(result, :output),
+         {:ok, host_policy} <- stored_json(result, :host_policy) do
+      # An input the read does not select (a listing selects no payload
+      # column) reads as empty.
+      json = %{input: input || %{}, output: output, host_policy: host_policy}
+      {:ok, record_of(result, status, component_type, json)}
+    else
+      :error ->
+        Logger.error(
+          "[Opus.Record] execution #{result.id} is stored damaged: status " <>
+            "#{inspect(result.status)}, component type #{inspect(result.component_type)}"
+        )
+
+        {:error, {:corrupt, {:execution, result.id}}}
+
+      {:not_json, column} ->
+        Logger.error(
+          "[Opus.Record] execution #{result.id} is stored damaged: its #{column} is not JSON"
+        )
+
+        {:error, {:corrupt, {:execution, result.id}}}
+    end
+  end
+
+  defp record_of(result, status, component_type, json) do
     %__MODULE__{
       id: result.id,
       request_id: result.request_id,
       call_id: result[:call_id],
       user_id: result.user_id,
       athanor_id: result[:athanor_id],
-      reference: parse_reference(result.reference),
-      component_type: parse_component_type(result.component_type),
+      reference: result.reference,
+      component_type: component_type,
       component_digest: result.component_digest,
-      input: parse_json_or_nil(result.input) || %{},
-      output: parse_json_or_nil(result.output),
-      status: parse_status(result.status),
-      started_at: parse_datetime_value(result.started_at),
-      completed_at: parse_datetime_value(result.completed_at),
+      input: json.input,
+      output: json.output,
+      status: status,
+      started_at: result.started_at,
+      completed_at: result.completed_at,
       duration_ms: result.duration_ms,
       error: result.error_message,
-      host_policy: parse_json_or_nil(result.host_policy),
+      host_policy: json.host_policy,
       parent_execution_id: result[:parent_execution_id],
       child_key: result[:child_key],
       root_execution_id: result[:root_execution_id],
@@ -977,48 +1011,26 @@ defmodule Opus.Record do
     }
   end
 
-  defp parse_json_or_nil(nil), do: nil
+  # SQL NULL is a column its writer leaves empty (a running row's output,
+  # the host policy of a run admitted with none) or one the read does not
+  # select, and reads as nil; stored bytes that do not decode are damage.
+  defp stored_json(result, column) do
+    case Map.fetch!(result, column) do
+      nil ->
+        {:ok, nil}
 
-  defp parse_json_or_nil(json) when is_binary(json) do
-    case Jason.decode(json) do
-      {:ok, map} ->
-        map
-
-      {:error, _reason} ->
-        Logger.warning(
-          "[Opus.Record] Failed to parse stored JSON (#{byte_size(json)} bytes), returning nil"
-        )
-
-        nil
+      json when is_binary(json) ->
+        case Jason.decode(json) do
+          {:ok, value} -> {:ok, value}
+          {:error, _not_json} -> {:not_json, column}
+        end
     end
   end
 
-  defp parse_json_or_nil(other), do: other
+  defp parse_status(status) when is_map_key(@status_atoms, status),
+    do: {:ok, @status_atoms[status]}
 
-  defp parse_reference(nil), do: nil
-  defp parse_reference(ref) when is_binary(ref), do: ref
-  defp parse_reference(_other), do: nil
-
-  defp parse_status(nil), do: :running
-  defp parse_status(status) when is_map_key(@status_atoms, status), do: @status_atoms[status]
-
-  defp parse_status(unknown) do
-    Logger.warning("[Opus.Record] Unrecognized status: #{inspect(unknown)}, treating as :unknown")
-
-    :unknown
-  end
-
-  defp parse_datetime_value(nil), do: nil
-  defp parse_datetime_value(%DateTime{} = dt), do: dt
-
-  defp parse_datetime_value(iso_string) when is_binary(iso_string) do
-    case DateTime.from_iso8601(iso_string) do
-      {:ok, dt, _offset} -> dt
-      _ -> nil
-    end
-  end
-
-  defp parse_datetime_value(_), do: nil
+  defp parse_status(_damaged), do: :error
 
   # ===========================================================================
   # Private
@@ -1031,9 +1043,6 @@ defmodule Opus.Record do
   """
   @spec generate_id() :: String.t()
   def generate_id, do: Prima.UUID7.execution_id()
-
-  defp encode_reference(ref) when is_binary(ref), do: ref
-  defp encode_reference(nil), do: nil
 
   defp encode_json(nil), do: nil
   defp encode_json(value) when is_binary(value), do: value
@@ -1048,7 +1057,7 @@ defmodule Opus.Record do
 
     %{
       "envelope" => "v1",
-      "reference" => encode_reference(record.reference),
+      "reference" => record.reference,
       "input_hash" => Arca.Execution.hash_input(input),
       "bytes" => byte_size(encoded),
       "keys" => input |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()
@@ -1060,11 +1069,11 @@ defmodule Opus.Record do
        when is_list(attachments) do
     digests =
       for %{} = attachment <- attachments do
-        data = attachment["data"] || attachment[:data] || ""
+        data = attachment["data"] || ""
 
         %{
-          "filename" => attachment["filename"] || attachment[:filename],
-          "media_type" => attachment["media_type"] || attachment[:media_type],
+          "filename" => attachment["filename"],
+          "media_type" => attachment["media_type"],
           "bytes" => byte_size(data),
           "digest" => Prima.Digest.sha256(data)
         }
@@ -1121,8 +1130,8 @@ defmodule Opus.Record do
   # The read map carries every column except the lease mechanics, which belong to the
   # write path and the sweeper alone — `write_started` stamps them fresh
   # and nothing read back through here may act on them. A new column
-  # flows into the map on its own; only `from_mcp_result/1` (the parser
-  # layer) needs a decision about it.
+  # flows into the map on its own; only `from_row/1` (the parser layer)
+  # needs a decision about it.
   @row_only_fields [:event_seq]
 
   defp execution_to_map(record) when is_map(record) do
@@ -1142,29 +1151,11 @@ defmodule Opus.Record do
   def executable_type(type) when is_binary(type), do: Map.fetch(@executable_types, type)
   def executable_type(_type), do: :error
 
-  defp parse_component_type(nil), do: :reagent
   # A turn root: the agent is a consent source, not an executable type.
-  defp parse_component_type("agent"), do: :agent
-
-  defp parse_component_type(type_str) when is_binary(type_str) do
-    case executable_type(type_str) do
-      {:ok, type} ->
-        type
-
-      :error ->
-        Logger.warning(
-          "[Opus.Record] Unknown component type: #{inspect(type_str)}, defaulting to :reagent"
-        )
-
-        :reagent
-    end
-  end
-
-  defp parse_component_type(other) do
-    raise ArgumentError,
-          "Unexpected component type value: #{Prima.LoggerContext.shape(other)}. " <>
-            "Expected nil, a binary string, or an atom."
-  end
+  defp parse_component_type("agent"), do: {:ok, :agent}
+  # An MCP tool call's row: the server it ran on (`Emissary.External.Proxy`).
+  defp parse_component_type("tool_server"), do: {:ok, :tool_server}
+  defp parse_component_type(type), do: executable_type(type)
 
   # Rebuild a minimal context from execution record fields for tenant-scoped writes.
   # namespace is identity-only and not path-bearing, so it is omitted — the

@@ -95,11 +95,11 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
 
   # Point the soul at `ref`, and put it back afterwards.
   defp soul_names_catalyst!(ctx, ref) do
-    {:ok, soul} = Aqua.AgentConfig.agent(ctx, "aqua")
+    {:ok, soul} = Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => "aqua"})
     was = soul["catalyst_ref"] || ""
 
     {:ok, _} =
-      Aqua.AgentConfig.call_aqua(ctx, %{
+      Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
         "name" => "aqua",
         "catalyst_ref" => ref
@@ -107,13 +107,15 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
 
     on_exit(fn ->
       assert {:ok, _} =
-               Aqua.AgentConfig.call_aqua(ctx, %{
+               Cyfr.Test.AquaTool.call(ctx, %{
                  "action" => "update",
                  "name" => "aqua",
                  "catalyst_ref" => was
                })
 
-      assert {:ok, restored} = Aqua.AgentConfig.agent(ctx, "aqua")
+      assert {:ok, restored} =
+               Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => "aqua"})
+
       assert (restored["catalyst_ref"] || "") == was
     end)
 

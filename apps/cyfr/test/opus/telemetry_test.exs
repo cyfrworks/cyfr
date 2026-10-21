@@ -122,27 +122,6 @@ defmodule Opus.TelemetryTest do
       assert measurements.duration >= 10 * 1_000_000
     end
 
-    test "accepts memory_bytes measurement", %{ctx: ctx} do
-      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
-      completed = Record.complete(record, %{})
-
-      Telemetry.execute_stop(completed, %{memory_bytes: 1024 * 1024})
-
-      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :stop], measurements, _metadata}
-      assert measurements.memory_bytes == 1024 * 1024
-    end
-
-    test "omits memory_bytes when the runtime reports none", %{ctx: ctx} do
-      record = Record.new(ctx, "reagent:local.test:0.1.0", %{})
-      completed = Record.complete(record, %{})
-
-      Telemetry.execute_stop(completed)
-
-      assert_receive {:telemetry_event, [:cyfr, :opus, :execute, :stop], measurements, _metadata}
-      # Never fabricated: a zero would read as a real measurement.
-      refute Map.has_key?(measurements, :memory_bytes)
-    end
-
     test "includes all required metadata", %{ctx: ctx} do
       record =
         Record.new(ctx, "formula:local.test-456:0.1.0", %{}, component_type: :formula)

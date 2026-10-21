@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Emissary.MCP.ResourceProviderTest do
+defmodule Emissary.MCP.ResourceSchemeTest do
   @moduledoc """
   A resource is advertised by an operation provider
   (`c:Prima.Provider.resources/0`, `c:Prima.Provider.resource_templates/0`)
-  and read through the one operation that declares its scheme. There is no
-  separate resource behaviour and no read callback: every provider that
-  advertises a resource is read through the gate.
+  and read through the one operation that declares its scheme, so every
+  provider that advertises a resource is read through the gate.
   """
 
   use ExUnit.Case, async: true
@@ -50,7 +49,7 @@ defmodule Emissary.MCP.ResourceProviderTest do
     def handle("advertiser", _ctx, %{"uri" => uri}), do: {:ok, %{content: uri}}
   end
 
-  test "resources and templates are optional provider callbacks; there is no read callback" do
+  test "resources and templates are optional provider callbacks" do
     callbacks = Provider.behaviour_info(:callbacks)
     optional = Provider.behaviour_info(:optional_callbacks)
 
@@ -58,9 +57,6 @@ defmodule Emissary.MCP.ResourceProviderTest do
       assert callback in callbacks
       assert callback in optional
     end
-
-    refute {:read, 2} in callbacks
-    refute Code.ensure_loaded?(Emissary.MCP.ResourceProvider)
   end
 
   test "an advertised scheme names its declared reader" do
@@ -90,13 +86,6 @@ defmodule Emissary.MCP.ResourceProviderTest do
                Sanctum.Providers.System,
                Sanctum.Provider
              ])
-
-    # No configured provider, an advertiser or not, keeps a read/2 the
-    # gate never calls: a resource is read through its declared operation.
-    for module <- providers do
-      refute function_exported?(module, :read, 2),
-             "#{inspect(module)} exports a read/2 beside the declared readers"
-    end
 
     assert :ok = Catalog.audit_resource_schemes()
   end

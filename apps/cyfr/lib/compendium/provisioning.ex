@@ -183,13 +183,11 @@ defmodule Compendium.Provisioning do
     Athanor.under_claim(athanor_id, entry_kind, &fill(&1, athanor, acting_ctx))
   end
 
-  @doc false
   # One attempt under a claim already taken — what every filling entry
-  # point runs once it holds the athanor. Public so a test can run an
-  # attempt under a claim it took, and lost, itself.
+  # point runs once it holds the athanor.
   @spec fill(Athanor.claim(), athanor(), Context.t() | nil) ::
           {:ok, athanor()} | {:error, term()}
-  def fill(claim, %{id: athanor_id} = athanor, acting_ctx) do
+  defp fill(claim, %{id: athanor_id} = athanor, acting_ctx) do
     # Re-read under the claim: the attempt that just held it may have been
     # filling this very athanor.
     case Athanor.athanor(athanor_id) do
@@ -518,11 +516,11 @@ defmodule Compendium.Provisioning do
     end
   end
 
-  # The shipped AQUA tree, checked well-formed first (a v2-shaped or empty
-  # mount fails loud here, at the one moment an operator is watching,
-  # instead of as an empty roster later), then copied into the athanor's
-  # `aqua/` — every shipped unit it does not yet hold, under the attempt's
-  # claim and slot.
+  # The shipped AQUA tree, checked well-formed first (a mount with no soul,
+  # or a soul or role that does not parse, fails loud here, at the one
+  # moment an operator is watching, instead of as an empty roster later),
+  # then copied into the athanor's `aqua/` — every shipped unit it does not
+  # yet hold, under the attempt's claim and slot.
   defp aqua_definitions(athanor_id, claim) do
     actor = Context.actor(Athanor.seed_ctx(athanor_id))
 

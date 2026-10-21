@@ -21,6 +21,15 @@ defmodule Aqua.Providers.ThreadTest do
 
   defp call(ctx, args), do: Tool.handle("thread", ctx, args)
 
+  # A call through the gate, which casts the arguments against the
+  # declaration before any handler runs: a refusal there is the gate's.
+  defp admission(ctx, tool, args) do
+    case Sanctum.Gate.call_external(tool, ctx, args) do
+      {:error, %Prima.Refusal{stage: :admission, reason: reason}} -> {:refused, reason}
+      other -> other
+    end
+  end
+
   defp attach(ctx, thread, message_id, bytes) do
     call(ctx, %{
       "action" => "attach",
@@ -181,11 +190,11 @@ defmodule Aqua.Providers.ThreadTest do
                  "turn" => "trn_never_minted"
                })
 
-      assert {:error, {:invalid_argument, _}} =
-               Tool.handle("turn", ctx, %{"action" => "recover", "thread" => thread.id})
+      assert {:refused, {:invalid_argument, _}} =
+               admission(ctx, "turn", %{"action" => "recover", "thread" => thread.id})
 
-      assert {:error, {:unknown_action, "turn.stop"}} =
-               Tool.handle("turn", ctx, %{"action" => "stop", "thread" => thread.id})
+      assert {:refused, {:unknown_action, "turn.stop"}} =
+               admission(ctx, "turn", %{"action" => "stop", "thread" => thread.id})
     end
   end
 
@@ -258,7 +267,7 @@ defmodule Aqua.Providers.ThreadTest do
     test "every action is external-plane only and interactive-only" do
       actions = Tool.definition().annotations.actions
 
-      assert map_size(actions) == 17
+      assert map_size(actions) == 16
 
       for {name, spec} <- actions do
         assert spec.planes == [:external], "#{name} is reachable in-chain"
@@ -365,8 +374,8 @@ defmodule Aqua.Providers.ThreadTest do
       assert {:error, {:invalid_argument, _}} =
                call(ctx, %{"action" => "send", "thread" => thread.id})
 
-      assert {:error, {:invalid_argument, _}} =
-               call(ctx, %{"action" => "approve", "thread" => thread.id})
+      assert {:refused, {:invalid_argument, _}} =
+               admission(ctx, "thread", %{"action" => "approve", "thread" => thread.id})
 
       assert {:error, {:invalid_argument, _}} =
                call(ctx, %{
@@ -376,10 +385,11 @@ defmodule Aqua.Providers.ThreadTest do
                  "scope" => "forever"
                })
 
-      assert {:error, {:unknown_action, "thread.dance"}} =
-               call(ctx, %{"action" => "dance", "thread" => thread.id})
+      assert {:refused, {:unknown_action, "thread.dance"}} =
+               admission(ctx, "thread", %{"action" => "dance", "thread" => thread.id})
 
-      assert {:error, {:invalid_argument, _}} = call(ctx, %{"action" => "events"})
+      assert {:refused, {:invalid_argument, _}} =
+               admission(ctx, "thread", %{"action" => "events"})
     end
 
     test "a refused standing answer is a sentence a person can read, not the runner's atom", %{
@@ -663,7 +673,7 @@ defmodule Aqua.Providers.ThreadTest do
       assert Threads.payload(row)["attachments"] == [ref]
 
       assert {:ok, %{messages: [%{id: ^message_id}], cursor: cursor}} =
-               call(ctx, %{"action" => "messages", "thread" => thread.id})
+               call(ctx, %{"action" => "events", "thread" => thread.id})
 
       assert is_integer(cursor)
     end
@@ -795,7 +805,7 @@ defmodule Aqua.Providers.ThreadTest do
       thread: thread
     } do
       {:ok, _} =
-        Aqua.ToolGrants.put(ctx, %{
+        Sanctum.ToolGrants.put(ctx, %{
           scope: "thread",
           effect: "allow",
           thread_id: thread.id,

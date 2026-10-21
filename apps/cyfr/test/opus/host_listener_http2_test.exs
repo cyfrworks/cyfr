@@ -71,7 +71,7 @@ defmodule Opus.HostListenerHTTP2Test do
   end
 
   test "the host listener closes an h2c connection unanswered and serves HTTP/1.1" do
-    listener = start_supervised!({HostListener, port: 0})
+    listener = start_supervised!({HostListener, bind: {127, 0, 0, 1}, port: 0, drain_ms: 5_000})
     address = {{127, 0, 0, 1}, HostListener.port(listener)}
 
     # The listener is the host listener and answers HTTP/1.1.

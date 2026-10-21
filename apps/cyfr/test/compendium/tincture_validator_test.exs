@@ -127,21 +127,6 @@ defmodule Compendium.TinctureValidatorTest do
       assert {:error, "entry must be a relative path"} = TinctureValidator.validate(dir)
     end
 
-    test "data.db is included in digest computation (cyfr no longer manages tincture state)", %{
-      base: base
-    } do
-      dir = setup_valid_tincture(base)
-
-      {:ok, result_without_db} = TinctureValidator.validate(dir)
-
-      # Adding data.db changes the digest — it's a regular shipped asset.
-      File.write!(Path.join(dir, "data.db"), "fake db content")
-
-      {:ok, result_with_db} = TinctureValidator.validate(dir)
-
-      refute result_without_db.digest == result_with_db.digest
-    end
-
     test "digest is deterministic for same content", %{base: base} do
       dir1 = setup_valid_tincture(base, "det1")
       dir2 = setup_valid_tincture(base, "det2")
@@ -166,51 +151,21 @@ defmodule Compendium.TinctureValidatorTest do
 
   # -- Helpers --
 
-  describe "excluded files" do
-    test "the two walkers agree on the digest, and the excluded bytes are in neither",
-         %{base: base} do
-      # Hash the same filtered files that publication stores.
-      dir = setup_valid_tincture(base, "with-sqlite-artifacts")
-      assert {:ok, clean} = TinctureValidator.validate(dir)
+  describe "the two walkers" do
+    test "the directory walk and the stored-tree walk agree on the digest", %{base: base} do
+      dir = setup_valid_tincture(base, "walked")
+      assert {:ok, walked} = TinctureValidator.validate(dir)
 
-      File.write!(Path.join(dir, "data.db-wal"), String.duplicate("w", 4096))
-      File.write!(Path.join(dir, "data.db-shm"), String.duplicate("s", 512))
-
-      assert {:ok, with_artifacts} = TinctureValidator.validate(dir)
-
-      assert with_artifacts.digest == clean.digest,
-             "a file that is never stored must not change the digest"
-
-      assert with_artifacts.size == clean.size
-
-      # The pair-based path — the one that re-reads the STORED tree — must
-      # land on the same digest, which is the whole point.
+      # The pair-based path re-reads the STORED tree and must land on the
+      # same digest.
       pairs =
         for path <- Path.wildcard(Path.join(dir, "**/*")),
             not File.dir?(path),
             do: {path |> Path.relative_to(dir) |> String.split("/"), File.read!(path)}
 
       assert {:ok, from_pairs} = TinctureValidator.validate_from_pairs(pairs)
-      assert from_pairs.digest == clean.digest
-      assert from_pairs.size == clean.size
-    end
-
-    test "data.db itself is a shipped asset and is hashed", %{base: base} do
-      dir = setup_valid_tincture(base, "with-db")
-      assert {:ok, before} = TinctureValidator.validate(dir)
-
-      File.write!(Path.join(dir, "data.db"), "sqlite-bytes")
-      assert {:ok, after_db} = TinctureValidator.validate(dir)
-
-      refute after_db.digest == before.digest
-      assert after_db.size > before.size
-    end
-
-    test "excluded?/1 decides on the basename" do
-      assert TinctureValidator.excluded?("data.db-wal")
-      assert TinctureValidator.excluded?("nested/dir/data.db-shm")
-      refute TinctureValidator.excluded?("data.db")
-      refute TinctureValidator.excluded?("index.html")
+      assert from_pairs.digest == walked.digest
+      assert from_pairs.size == walked.size
     end
   end
 
@@ -293,16 +248,14 @@ defmodule Compendium.TinctureValidatorTest do
       end
     end
 
-    test "the readme, the source tree, dotfiles and the reserved files are not served files",
+    test "the readme, the source tree, dotfiles and the manifest are not served files",
          %{base: base} do
       dir =
         write_tree(base, "carried", %{"schema" => %{}}, [
           {"index.html", "<html></html>"},
           {"README.md", "# readme"},
           {"src/lib.ts", "export {}"},
-          {".gitignore", "node_modules"},
-          {"data.db", "sqlite"},
-          {"schema.sql", "create table t (x);"}
+          {".gitignore", "node_modules"}
         ])
 
       assert {:ok, _} = both(dir)
@@ -356,8 +309,9 @@ defmodule Compendium.TinctureValidatorTest do
     # published cleanly, indexed cleanly, and 404'd the first time anyone
     # opened it — the author finding out last, from a blank page.
     test "an entry the serve side refuses does not pass validation" do
-      for entry <- ["cyfr-manifest.json", "data.db", "schema.sql", ".env"] do
-        assert {:error, _} = Compendium.Tincture.validate_entry(entry),
+      for entry <- ["cyfr-manifest.json", ".env"] do
+        assert {:error, _} =
+                 Compendium.Tincture.entry_of(%{"tincture" => %{"entry" => entry}}),
                "#{entry} must be refused at publish, not only at serve"
 
         assert Compendium.tincture_entry(%{
@@ -367,8 +321,12 @@ defmodule Compendium.TinctureValidatorTest do
     end
 
     test "an ordinary entry passes both, and an absent one defaults" do
-      assert {:ok, "app.html"} = Compendium.Tincture.validate_entry("app.html")
-      assert {:ok, "index.html"} = Compendium.Tincture.validate_entry(nil)
+      assert {:ok, "app.html"} =
+               Compendium.Tincture.entry_of(%{"tincture" => %{"entry" => "app.html"}})
+
+      assert {:ok, "index.html"} =
+               Compendium.Tincture.entry_of(%{"tincture" => %{"entry" => nil}})
+
       assert {:ok, "index.html"} = Compendium.Tincture.entry_of(%{})
 
       assert Compendium.tincture_entry(%{manifest: %{}}) ==
@@ -378,7 +336,9 @@ defmodule Compendium.TinctureValidatorTest do
     test "path safety speaks before the dotfile rule" do
       # `../escape.html` is a dotfile by prefix and a traversal by meaning;
       # the traversal is what the author needs told.
-      assert {:error, message} = Compendium.Tincture.validate_entry("../escape.html")
+      assert {:error, message} =
+               Compendium.Tincture.entry_of(%{"tincture" => %{"entry" => "../escape.html"}})
+
       assert message =~ "'..'"
     end
   end

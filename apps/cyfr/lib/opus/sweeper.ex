@@ -39,7 +39,7 @@ defmodule Opus.Sweeper do
   cancellation — a turn's root ends the turn (`Arca.TurnStorage.finish/4`,
   which closes its attempt, its root row and its reservation together),
   any other run is cancelled as a caller's cancel is
-  (`Opus.Dispatch.cancel/3`). Each write is a retirement under
+  (`Opus.Dispatch.cancel/2`). Each write is a retirement under
   the attempt's stored stamp (`Cyfr.Boundaries.system_responsibilities/0`):
   it never needs the grant to stand, never reports success, and matches
   only the attempt that carries the stamp. The cursor advances only past a
@@ -64,9 +64,9 @@ defmodule Opus.Sweeper do
 
   def start_link(opts \\ []) do
     # Timer-driven DB queries from a permanent process poison the test
-    # sandbox (the lent connection outlives its owning test) — same gate
-    # as CronScheduler/RetentionScheduler; test config turns it off and
-    # the sweep logic is exercised directly.
+    # sandbox (the lent connection outlives its owning test) — the gate
+    # `Opus.Schedules.Scheduler` and `Cyfr.RetentionScheduler` have too;
+    # test config turns it off and the sweep logic is exercised directly.
     if Application.get_env(:cyfr, :execution_sweeper_enabled, true) do
       GenServer.start_link(__MODULE__, opts, name: __MODULE__)
     else
@@ -95,10 +95,6 @@ defmodule Opus.Sweeper do
   defp schedule_sweep do
     Process.send_after(self(), :sweep, @sweep_interval_ms)
   end
-
-  @doc "The configured bounds of the sweep: its interval, and one page of the retired scan."
-  @spec bounds() :: %{interval_ms: pos_integer(), retired_page: pos_integer()}
-  def bounds, do: %{interval_ms: @sweep_interval_ms, retired_page: @retired_page}
 
   @doc false
   def sweep do

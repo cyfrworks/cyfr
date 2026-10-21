@@ -84,7 +84,6 @@ defmodule Compendium.FacadeTest do
     agent_source_refs: 1,
     agent_type_of: 1,
     agents: 1,
-    canvas_catalog: 1,
     canvas_versions: 2,
     complete_sign_in: 4,
     discover_components: 1,
@@ -122,24 +121,20 @@ defmodule Compendium.FacadeTest do
     tincture_check_canvas_streams: 2,
     tincture_check_streams: 2,
     tincture_connect_origins: 1,
-    tincture_csp: 2,
     tincture_declaration: 1,
     tincture_entry: 1,
-    tincture_frame_capabilities: 0,
     tincture_frame_classes: 1,
     tincture_frame_policy: 2,
     tincture_grant_revision: 2,
     tincture_invokes?: 2,
     tincture_lockfile_required?: 1,
     tincture_media: 2,
-    tincture_placements: 0,
     tincture_read_classes: 1,
     tincture_sandbox_tokens: 1,
     tincture_served_types: 0,
     tincture_templates: 0,
     tincture_toolkit_majors: 0,
-    valid_agent_name?: 1,
-    valid_tincture_connect_domain?: 1
+    valid_agent_name?: 1
   ]
 
   test "the root answers exactly its roster" do
@@ -237,19 +232,13 @@ defmodule Compendium.FacadeTest do
     setup do
       bypass = Bypass.open()
       original_url = Application.get_env(:cyfr, :registry_url)
-      original_scheme = Application.get_env(:cyfr, :registry_scheme)
 
       Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
-      Application.put_env(:cyfr, :registry_scheme, "http")
 
       on_exit(fn ->
         if original_url,
           do: Application.put_env(:cyfr, :registry_url, original_url),
           else: Application.delete_env(:cyfr, :registry_url)
-
-        if original_scheme,
-          do: Application.put_env(:cyfr, :registry_scheme, original_scheme),
-          else: Application.delete_env(:cyfr, :registry_scheme)
       end)
 
       {:ok, bypass: bypass}

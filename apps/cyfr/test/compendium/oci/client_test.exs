@@ -4,26 +4,12 @@
 defmodule Compendium.OCI.ClientTest do
   use ExUnit.Case, async: false
 
-  alias Compendium.OCI.{Blob, Cache, Client, Errors, Reference, Transport}
+  alias Compendium.OCI.{Cache, Client, Errors, Reference, Transport}
   alias Compendium.Registry.CredentialStore
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     :ok
-  end
-
-  describe "pull_bytes/1 - input validation" do
-    test "returns error for invalid OCI reference" do
-      assert {:error, _} = Client.pull_bytes("")
-    end
-  end
-
-  describe "pull_bytes/1 - registry-config enforcement" do
-    test "rejects pull_bytes from non-cyfr.run registry" do
-      {:error, msg} = Client.pull_bytes("ghcr.io/alice/reagents/data-processor:1.0.0")
-      assert msg =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
-      assert msg =~ "ghcr.io"
-    end
   end
 
   describe "OCI reference detection in pull routing" do
@@ -52,6 +38,17 @@ defmodule Compendium.OCI.ClientTest do
       assert msg =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert msg =~ "ghcr.io"
     end
+
+    test "a foreign host is refused with a typed error before any I/O" do
+      canonical = Compendium.RegistryHost.canonical_host()
+
+      assert :ok = Compendium.RegistryHost.validate_host(canonical)
+
+      assert {:error, %Errors{reason: :registry_host_mismatch, registry: "ghcr.io"} = refusal} =
+               Compendium.RegistryHost.validate_host("ghcr.io")
+
+      assert Errors.to_string(refusal) =~ "only supports #{canonical}"
+    end
   end
 
   describe "push/3 - registry-config enforcement" do
@@ -65,36 +62,6 @@ defmodule Compendium.OCI.ClientTest do
 
       assert msg =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
       assert msg =~ "ghcr.io"
-    end
-  end
-
-  describe "discover/2 - registry-config enforcement" do
-    test "rejects discover with non-cyfr.run registry, typed" do
-      assert {:error, %Errors{reason: :registry_host_mismatch, message: msg}} =
-               Client.discover("ghcr.io")
-
-      assert msg =~ "only supports #{Compendium.RegistryHost.canonical_host()}"
-      assert msg =~ "ghcr.io"
-    end
-
-    test "a foreign host is refused with the same typed error before any I/O" do
-      canonical = Compendium.RegistryHost.canonical_host()
-
-      assert :ok = Compendium.RegistryHost.validate_host(canonical)
-
-      assert {:error, %Errors{reason: :registry_host_mismatch, registry: "ghcr.io"} = refusal} =
-               Compendium.RegistryHost.validate_host("ghcr.io")
-
-      assert Errors.to_string(refusal) =~ "only supports #{canonical}"
-    end
-  end
-
-  describe "discover/2 - input validation" do
-    # Note: actual network calls will fail in test without a running registry,
-    # but we can test that the function handles errors gracefully.
-    test "returns error when registry is unreachable" do
-      result = Client.discover("nonexistent-registry.invalid")
-      assert {:error, _reason} = result
     end
   end
 
@@ -268,13 +235,15 @@ defmodule Compendium.OCI.ClientTest do
         restore_env(:sanctum, :auth_provider, original_auth)
       end)
 
-      :ok
+      # A caller holding no push token: every request it makes is anonymous.
+      {:ok, caller: caller("oci_pin")}
     end
 
-    test "refuses a pinned manifest whose body does not hash to the pin, even when the header vouches for it" do
-      wasm = "wasm-bytes-under-test"
+    test "refuses a pinned manifest whose body does not hash to the pin, even when the header vouches for it",
+         %{caller: caller} do
+      wasm = wasm_module("under-test")
       {manifest_json, wasm_digest} = manifest_fixture(wasm)
-      pin = Blob.compute_digest("entirely different content")
+      pin = Prima.Digest.sha256("entirely different content")
 
       # The registry lies: body doesn't match the pin but the header claims it does.
       port = start_canned_server(manifest_json, [{"docker-content-digest", pin}])
@@ -283,33 +252,36 @@ defmodule Compendium.OCI.ClientTest do
 
       # Seed the blob cache so that, were the manifest accepted, the pull
       # would fully succeed — the only thing standing in the way is the pin.
-      :ok = Cache.put_blob(wasm_digest, wasm)
+      :ok = put_blobs(wasm_digest, wasm)
 
-      assert {:error, msg} = Client.pull_bytes("#{registry}/alice/reagents/pinned@#{pin}")
+      assert {:error, msg} = Client.pull(caller, "#{registry}/alice/reagents/pinned@#{pin}")
       assert msg =~ "Digest mismatch"
     end
 
-    test "serves a pinned manifest that hashes to the pin, preferring the computed digest over a lying header" do
-      wasm = "wasm-bytes-under-test"
+    test "serves a pinned manifest that hashes to the pin, preferring the computed digest over a lying header",
+         %{caller: caller} do
+      wasm = wasm_module("under-test")
       {manifest_json, wasm_digest} = manifest_fixture(wasm)
-      pin = Blob.compute_digest(manifest_json)
+      pin = Prima.Digest.sha256(manifest_json)
 
       bogus_header = "sha256:" <> String.duplicate("0", 64)
       port = start_canned_server(manifest_json, [{"docker-content-digest", bogus_header}])
       registry = "localhost:#{port}"
       Application.put_env(:cyfr, :oci_registry_url, registry)
 
-      :ok = Cache.put_blob(wasm_digest, wasm)
+      :ok = put_blobs(wasm_digest, wasm)
 
-      assert {:ok, ^wasm} = Client.pull_bytes("#{registry}/alice/reagents/pinned@#{pin}")
+      assert {:ok, %{digest: ^wasm_digest, manifest_digest: ^pin}} =
+               Client.pull(caller, "#{registry}/alice/reagents/pinned@#{pin}")
     end
 
-    test "a poisoned cache entry under a digest key is discarded and refetched" do
-      good_wasm = "good-wasm-bytes"
-      evil_wasm = "evil-wasm-bytes"
+    test "a poisoned cache entry under a digest key is discarded and refetched",
+         %{caller: caller} do
+      good_wasm = wasm_module("good")
+      evil_wasm = wasm_module("evil")
       {good_json, good_digest} = manifest_fixture(good_wasm)
       {evil_json, evil_digest} = manifest_fixture(evil_wasm)
-      pin = Blob.compute_digest(good_json)
+      pin = Prima.Digest.sha256(good_json)
 
       port = start_canned_server(good_json, [])
       registry = "localhost:#{port}"
@@ -319,27 +291,29 @@ defmodule Compendium.OCI.ClientTest do
       # is a different manifest. Both blobs are cached, so were the poisoned
       # manifest served, the pull would succeed with the evil bytes.
       :ok = Cache.put_manifest(registry, "alice/reagents/pinned", pin, evil_json, pin)
-      :ok = Cache.put_blob(evil_digest, evil_wasm)
-      :ok = Cache.put_blob(good_digest, good_wasm)
+      :ok = put_blobs(evil_digest, evil_wasm)
+      :ok = put_blobs(good_digest, good_wasm)
 
-      assert {:ok, bytes} = Client.pull_bytes("#{registry}/alice/reagents/pinned@#{pin}")
-      assert bytes == good_wasm
+      assert {:ok, %{digest: ^good_digest}} =
+               Client.pull(caller, "#{registry}/alice/reagents/pinned@#{pin}")
     end
 
-    test "a verified pinned manifest is served from cache without touching the network while the entitlement stands" do
-      wasm = "wasm-bytes-under-test"
+    test "a verified pinned manifest is served from cache without touching the network while the entitlement stands",
+         %{caller: caller} do
+      wasm = wasm_module("under-test")
       {manifest_json, wasm_digest} = manifest_fixture(wasm)
-      pin = Blob.compute_digest(manifest_json)
+      pin = Prima.Digest.sha256(manifest_json)
 
       # Nothing listens on port 1 — the cache must satisfy the pull.
       registry = "localhost:1"
       Application.put_env(:cyfr, :oci_registry_url, registry)
 
       :ok = Cache.put_manifest(registry, "alice/reagents/pinned", pin, manifest_json, pin)
-      :ok = Cache.put_blob(wasm_digest, wasm)
+      :ok = put_blobs(wasm_digest, wasm)
       :ok = Cache.entitle("anonymous", registry, "alice/reagents/pinned")
 
-      assert {:ok, ^wasm} = Client.pull_bytes("#{registry}/alice/reagents/pinned@#{pin}")
+      assert {:ok, %{digest: ^wasm_digest}} =
+               Client.pull(caller, "#{registry}/alice/reagents/pinned@#{pin}")
     end
   end
 
@@ -352,8 +326,6 @@ defmodule Compendium.OCI.ClientTest do
   defmodule Registry do
     @moduledoc false
     @behaviour Plug
-
-    alias Compendium.OCI.Blob
 
     @impl Plug
     def init(agent), do: agent
@@ -381,7 +353,7 @@ defmodule Compendium.OCI.ClientTest do
           conn
           |> Plug.Conn.put_resp_header(
             "docker-content-digest",
-            Blob.compute_digest(state.manifest)
+            Prima.Digest.sha256(state.manifest)
           )
           |> Plug.Conn.send_resp(200, state.manifest)
 
@@ -410,30 +382,26 @@ defmodule Compendium.OCI.ClientTest do
     setup :start_registry
 
     @tag :capture_log
-    test "a private reference one caller warmed is refused to another on every path", ctx do
+    test "a private reference one caller warmed is refused to another by tag and by pin", ctx do
       %{registry: registry, a: a, b: b, ref: ref, wasm: wasm} = ctx
       allow(ctx.agent, ["Bearer tok_a"])
 
-      # A's reads warm the cache: its blobs, and the manifest entries a
+      # A's pull warms the cache: its blobs, and the manifest entries a
       # pull leaves under the tag and under the pin.
-      for digest <- Map.keys(Agent.get(ctx.agent, & &1.blobs)) do
-        assert {:ok, _} = Client.fetch_blob(a, ref, digest)
-      end
-
+      assert {:ok, _} = Client.pull(a, "#{registry}/#{@repo}:1.0.0")
       :ok = Cache.put_manifest(registry, @repo, "1.0.0", ctx.manifest, ctx.pin)
       :ok = Cache.put_manifest(registry, @repo, ctx.pin, ctx.manifest, ctx.pin)
       assert {:ok, ^wasm} = Cache.get_blob(ctx.wasm_digest)
       requests(ctx.agent)
 
-      # B holds a credential the registry refuses for the repository.
+      # B holds a credential the registry refuses for the repository. A
+      # pull asks for a blob only once the manifest path has proven the
+      # caller's entitlement, so each refusal comes before any cached blob.
       assert {:error, tag_refusal} = Client.pull(b, "#{registry}/#{@repo}:1.0.0")
       assert tag_refusal =~ "cyfr login"
 
       assert {:error, pin_refusal} = Client.pull(b, "#{registry}/#{@repo}@#{ctx.pin}")
       assert pin_refusal =~ "cyfr login"
-
-      assert {:error, %Errors{reason: :unauthorized, status: 403}} =
-               Client.fetch_blob(b, ref, ctx.wasm_digest)
 
       # Every refusal was the registry's answer to B's own credential.
       assert [_ | _] = seen = requests(ctx.agent)
@@ -443,68 +411,68 @@ defmodule Compendium.OCI.ClientTest do
 
     @tag :capture_log
     test "a revoked credential is refused once its memo expires", ctx do
-      %{a: a, ref: ref, wasm: wasm} = ctx
+      %{a: a, ref: ref, wasm_digest: wasm_digest} = ctx
+      pinned = "#{ctx.registry}/#{@repo}@#{ctx.pin}"
       allow(ctx.agent, ["Bearer tok_a"])
-      assert {:ok, ^wasm} = Client.fetch_blob(a, ref, ctx.wasm_digest)
+      assert {:ok, %{digest: ^wasm_digest}} = Client.pull(a, pinned)
 
       # Revoked at the registry: the memo still stands, and the cached
-      # blob is served without asking.
+      # manifest and blobs are served without asking.
       allow(ctx.agent, [])
       requests(ctx.agent)
-      assert {:ok, ^wasm} = Client.fetch_blob(a, ref, ctx.wasm_digest)
+      assert {:ok, %{digest: ^wasm_digest}} = Client.pull(a, pinned)
       assert [] = requests(ctx.agent)
 
       # The memo lapses: the registry is asked again, refuses, and nothing
       # is served or remembered.
       :ok = Cache.forget_entitlement(key(a, ref), ctx.registry, @repo)
 
-      assert {:error, %Errors{reason: :unauthorized}} =
-               Client.fetch_blob(a, ref, ctx.wasm_digest)
-
+      assert {:error, refusal} = Client.pull(a, pinned)
+      assert refusal =~ "cyfr login"
       assert [{"HEAD", _, "Bearer tok_a"}] = requests(ctx.agent)
       refute Cache.entitled?(key(a, ref), ctx.registry, @repo)
     end
 
     @tag :capture_log
     test "an unreachable registry serves a cached tag while the entitlement memo holds", ctx do
-      %{registry: registry, wasm: wasm} = ctx
+      %{registry: registry, wasm_digest: wasm_digest, anonymous: anonymous} = ctx
       allow(ctx.agent, [:anonymous])
 
       # An anonymous 200 is a public repository's entitlement.
-      assert {:ok, ^wasm} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+      assert {:ok, %{digest: ^wasm_digest}} = Client.pull(anonymous, "#{registry}/#{@repo}:1.0.0")
       :ok = Cache.put_manifest(registry, @repo, "1.0.0", ctx.manifest, ctx.pin)
 
       stop_supervised!(:registry)
-      assert {:ok, ^wasm} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+      assert {:ok, %{digest: ^wasm_digest}} = Client.pull(anonymous, "#{registry}/#{@repo}:1.0.0")
     end
 
     @tag :capture_log
     test "an unreachable registry serves nothing cached once the entitlement memo is gone", ctx do
-      %{registry: registry, wasm: wasm, ref: ref} = ctx
+      %{registry: registry, wasm_digest: wasm_digest, ref: ref, anonymous: anonymous} = ctx
       allow(ctx.agent, [:anonymous])
 
-      assert {:ok, ^wasm} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+      assert {:ok, %{digest: ^wasm_digest}} = Client.pull(anonymous, "#{registry}/#{@repo}:1.0.0")
       :ok = Cache.put_manifest(registry, @repo, "1.0.0", ctx.manifest, ctx.pin)
-      :ok = Cache.forget_entitlement(key(nil, ref), registry, @repo)
+      :ok = Cache.forget_entitlement(key(anonymous, ref), registry, @repo)
 
       stop_supervised!(:registry)
-      assert {:error, message} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+      assert {:error, message} = Client.pull(anonymous, "#{registry}/#{@repo}:1.0.0")
       assert message =~ "Failed to connect"
     end
 
     @tag :capture_log
-    test "a registry that no longer holds the tag is never answered from the cache", ctx do
-      %{registry: registry, wasm: wasm, ref: ref} = ctx
+    test "a registry that does not hold the tag is never answered from the cache", ctx do
+      %{registry: registry, wasm_digest: wasm_digest, ref: ref, anonymous: anonymous} = ctx
       allow(ctx.agent, [:anonymous])
 
-      assert {:ok, ^wasm} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+      assert {:ok, %{digest: ^wasm_digest}} = Client.pull(anonymous, "#{registry}/#{@repo}:1.0.0")
       :ok = Cache.put_manifest(registry, @repo, "1.0.0", ctx.manifest, ctx.pin)
-      assert Cache.entitled?(key(nil, ref), registry, @repo)
+      assert Cache.entitled?(key(anonymous, ref), registry, @repo)
 
       Agent.update(ctx.agent, &%{&1 | manifest_status: 404})
-      assert {:error, message} = Client.pull_bytes("#{registry}/#{@repo}:1.0.0")
+      assert {:error, message} = Client.pull(anonymous, "#{registry}/#{@repo}:1.0.0")
       assert message =~ "not found"
-      refute Cache.entitled?(key(nil, ref), registry, @repo)
+      refute Cache.entitled?(key(anonymous, ref), registry, @repo)
     end
 
     @tag :capture_log
@@ -760,10 +728,10 @@ defmodule Compendium.OCI.ClientTest do
     # stores it.
     wasm = <<0, ?a, ?s, ?m, 1, 0, 0, 0>>
     {manifest_json, wasm_digest} = manifest_fixture(wasm)
-    pin = Blob.compute_digest(manifest_json)
+    pin = Prima.Digest.sha256(manifest_json)
 
     blobs = %{
-      Blob.compute_digest(config_fixture()) => config_fixture(),
+      Prima.Digest.sha256(config_fixture()) => config_fixture(),
       wasm_digest => wasm
     }
 
@@ -797,6 +765,7 @@ defmodule Compendium.OCI.ClientTest do
      agent: agent,
      a: a,
      b: b,
+     anonymous: caller("oci_entitle_anonymous"),
      wasm: wasm,
      wasm_digest: wasm_digest,
      manifest: manifest_json,
@@ -886,7 +855,7 @@ defmodule Compendium.OCI.ClientTest do
         |> Map.put("annotations", %{"moved" => "true"})
         |> Jason.encode!()
 
-      {Blob.compute_digest(manifest), %{state | manifest: manifest}}
+      {Prima.Digest.sha256(manifest), %{state | manifest: manifest}}
     end)
   end
 
@@ -927,7 +896,7 @@ defmodule Compendium.OCI.ClientTest do
   # with `status`, and answers its digest.
   defp with_readme(agent, status) do
     readme = "readme-#{System.unique_integer([:positive])}"
-    digest = Blob.compute_digest(readme)
+    digest = Prima.Digest.sha256(readme)
 
     Agent.update(agent, fn state ->
       manifest =
@@ -954,7 +923,7 @@ defmodule Compendium.OCI.ClientTest do
   # Adds a src/ layer to the manifest whose blob the registry answers with
   # `bytes`.
   defp with_source(agent, bytes) do
-    digest = Blob.compute_digest(bytes)
+    digest = Prima.Digest.sha256(bytes)
 
     Agent.update(agent, fn state ->
       manifest =
@@ -979,11 +948,23 @@ defmodule Compendium.OCI.ClientTest do
   defp config_fixture,
     do: Jason.encode!(%{"name" => "pinned", "version" => "1.0.0", "type" => "reagent"})
 
+  # The smallest valid module, told apart from another by a custom section
+  # named `tag`.
+  defp wasm_module(tag) do
+    <<0, ?a, ?s, ?m, 1, 0, 0, 0, 0, byte_size(tag) + 1, byte_size(tag)>> <> tag
+  end
+
+  # The component's config blob and its WASM layer, in the blob cache.
+  defp put_blobs(wasm_digest, wasm) do
+    :ok = Cache.put_blob(Prima.Digest.sha256(config_fixture()), config_fixture())
+    Cache.put_blob(wasm_digest, wasm)
+  end
+
   # Minimal OCI image manifest wrapping the given bytes as a reagent WASM
   # layer. Returns {manifest_json, wasm_layer_digest}.
   defp manifest_fixture(wasm_bytes) do
     config = config_fixture()
-    wasm_digest = Blob.compute_digest(wasm_bytes)
+    wasm_digest = Prima.Digest.sha256(wasm_bytes)
 
     manifest =
       Jason.encode!(%{
@@ -993,7 +974,7 @@ defmodule Compendium.OCI.ClientTest do
         "config" => %{
           "mediaType" => "application/vnd.cyfr.manifest.v1+json",
           "size" => byte_size(config),
-          "digest" => Blob.compute_digest(config)
+          "digest" => Prima.Digest.sha256(config)
         },
         "layers" => [
           %{

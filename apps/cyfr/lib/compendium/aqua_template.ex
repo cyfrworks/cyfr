@@ -13,7 +13,7 @@ defmodule Compendium.AquaTemplate do
   seed is the default a reset copies in again. A release that ships new
   roles or scrolls changes nothing until a reset asks for them.
 
-  What remains here is the seed-side surface: `seed_check/0` (is the
+  This module is the seed-side surface: `seed_check/0` (is the
   install's template well-formed — provisioning fails loud on a mount
   with no soul), `files/0` (what the seed ships), `status/1` (each unit's
   provenance, from the overlay), and `reset/2` (restore edited copies of
@@ -28,10 +28,6 @@ defmodule Compendium.AquaTemplate do
   alias Sanctum.Context
 
   @seed_prefix Arca.Storage.seed_prefix("aqua")
-
-  @doc "The template's seed segments: `[\"seed\", \"aqua\"]`."
-  @spec seed_prefix() :: [String.t()]
-  def seed_prefix, do: @seed_prefix
 
   @doc """
   Whether the install ships a well-formed template: a soul file that

@@ -58,7 +58,6 @@ defmodule Aqua.ToolGrants do
   alias Sanctum.Context
 
   @scopes Sanctum.ToolGrants.scopes()
-  @effects Sanctum.ToolGrants.effects()
 
   # The bounds an allow may carry, as its row names them.
   @bounds [:lifecycle_kind, :lifecycle_id, :expires_at, :constraint, :sources]
@@ -234,15 +233,10 @@ defmodule Aqua.ToolGrants do
   # (`Sanctum.ToolGrants.check_standing/2`), applied again at every read. A
   # row written before an action gained `standing: false` (or by a surface
   # that never went through the write) must not auto-run anything; it
-  # simply stops counting. A deny is always honoured. A row that names no
-  # scope is read at thread scope, the narrower.
+  # simply stops counting. A deny is always honoured.
   defp standing_allows(rows) do
     now = DateTime.utc_now()
-
-    Enum.filter(rows, fn row ->
-      is_map(row) and
-        Sanctum.ToolGrants.check_standing(Map.put_new(row, :scope, "thread"), now) == :ok
-    end)
+    Enum.filter(rows, &(Sanctum.ToolGrants.check_standing(&1, now) == :ok))
   end
 
   @typedoc "The grant store could not be read — the caller refuses rather than composes without it."
@@ -335,19 +329,6 @@ defmodule Aqua.ToolGrants do
   @doc "The grant scopes, as the rows spell them."
   @spec scopes() :: [String.t()]
   def scopes, do: @scopes
-
-  @doc """
-  Record a decision. `scope` is `"thread"` or `"agent"`, `effect`
-  `"allow"` or `"deny"`, and an allow may name its bounds. An answer that
-  may not stand is refused with its reason
-  (`Sanctum.ToolGrants.check_standing/2`): a standing allow for a
-  destructive or external action at either scope, and a deny carrying a
-  bound. A plain deny is always recordable.
-  """
-  @spec put(Context.t(), map()) :: {:ok, grant()} | {:error, term()}
-  def put(%Context{} = ctx, %{scope: scope, effect: effect} = attrs)
-      when scope in @scopes and effect in @effects,
-      do: Sanctum.ToolGrants.put(ctx, attrs)
 
   @doc """
   The sentence a person reads when a standing answer was refused — one per

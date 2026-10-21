@@ -103,7 +103,7 @@ defmodule Locus.Runtime.ActivationStampingTest do
     # an authority that carries no activation of its own.
     {:ok, result} =
       Opus.Dispatch.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
-        type: :formula,
+        type: "formula",
         authority: Prima.Authority.zero()
       )
 

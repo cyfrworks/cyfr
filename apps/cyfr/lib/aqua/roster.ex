@@ -26,7 +26,7 @@ defmodule Aqua.Roster do
     case Aqua.AgentConfig.roster(ctx) do
       {:ok, agents} ->
         Enum.map(agents, fn agent ->
-          %{"name" => agent["name"], "title" => agent["title"] || agent["name"]}
+          %{"name" => agent["name"], "title" => agent["title"]}
         end)
 
       {:error, _} ->

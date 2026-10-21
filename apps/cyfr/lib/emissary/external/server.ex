@@ -59,7 +59,7 @@ defmodule Emissary.External.Server do
   of every vault entry its header and backend env templates name
   (`Sanctum.VaultReader.revisions/2`: the payload revision and the binding
   digest) and keeps them for as long as it serves with what it resolved
-  (`vault_revisions/2`). The reconciler's periodic pass compares them with
+  (`vault_revisions/1`). The reconciler's periodic pass compares them with
   the store, so a rotation, rebind or revocation whose announcement never
   arrived still ends this process. Read before resolving, a change in
   between leaves a token older than the material, which the pass reads as
@@ -87,7 +87,7 @@ defmodule Emissary.External.Server do
   # Upstream calls run in detached tasks so one slow server never blocks the
   # GenServer; the cap keeps a stalled upstream from accumulating an unbounded
   # task pile (each carrying resolved credentials in its heap).
-  @default_max_in_flight 8
+  @max_in_flight 8
   @registry Emissary.External.ServerRegistry
 
   # Matched in a pattern, so it has to be a compile-time literal — but it is
@@ -135,13 +135,13 @@ defmodule Emissary.External.Server do
   The revision token (`Sanctum.VaultReader.revisions/2`) of each vault
   entry the server process `pid` resolved its credentials against, or
   `:none` while it is not connected and serves with nothing resolved. A
-  process that does not answer within `timeout` answers `:none` too; the
-  next pass asks again.
+  process that does not answer within 5 s answers `:none` too; the next
+  pass asks again.
   """
-  @spec vault_revisions(pid(), timeout()) ::
+  @spec vault_revisions(pid()) ::
           {:ok, %{String.t() => Sanctum.VaultReader.revision() | :inactive}} | :none
-  def vault_revisions(pid, timeout \\ 5_000) when is_pid(pid) do
-    GenServer.call(pid, :vault_revisions, timeout)
+  def vault_revisions(pid) when is_pid(pid) do
+    GenServer.call(pid, :vault_revisions, 5_000)
   catch
     :exit, _reason -> :none
   end
@@ -156,16 +156,6 @@ defmodule Emissary.External.Server do
   def get_tools(name, athanor_id) do
     case lookup(name, athanor_id) do
       {:ok, pid} -> call_server(pid, :get_tools, @connect_call_timeout_ms)
-      {:error, _} = err -> err
-    end
-  end
-
-  @doc """
-  Call a tool on the external server.
-  """
-  def call_tool(name, athanor_id, tool_name, arguments) do
-    case lookup(name, athanor_id) do
-      {:ok, pid} -> call_tool(pid, tool_name, arguments)
       {:error, _} = err -> err
     end
   end
@@ -379,10 +369,10 @@ defmodule Emissary.External.Server do
       state.status != :ready ->
         {:reply, {:error, "Server #{state.name} is not ready: #{state.error}"}, state}
 
-      map_size(state.in_flight) >= max_in_flight() ->
+      map_size(state.in_flight) >= @max_in_flight ->
         {:reply,
          {:error,
-          "Server #{state.name} is busy (#{max_in_flight()} calls in flight) — retry shortly"},
+          "Server #{state.name} is busy (#{@max_in_flight} calls in flight) — retry shortly"},
          state}
 
       true ->
@@ -579,9 +569,6 @@ defmodule Emissary.External.Server do
     {:noreply, state}
   end
 
-  defp max_in_flight,
-    do: Application.get_env(:cyfr, :external_server_max_in_flight, @default_max_in_flight)
-
   # A connected stdio server lists its tools again under its grant. A
   # refused or failed listing leaves the catalogue as it was: the next call
   # meets the refusal and recovers from it.
@@ -776,12 +763,11 @@ defmodule Emissary.External.Server do
     call_timeout = state.timeout_ms
 
     # Headers are resolved before the `with`, not inside it: `with` does not
-    # export its bindings to `else`, so the failure arm masked with the
-    # *outer* state, whose `headers` is the struct's empty default (and is
-    # reset to empty on every `:reinitialize`). `sensitive_header_values/1`
-    # requires a resolved binary per key, found none, and masked nothing — so
-    # on a first connect, an upstream that echoed the Authorization header
-    # into its error body carried it out whole through `state.error`.
+    # export its bindings to `else`, and the failure arm must mask with the
+    # resolved headers. The outer state's `headers` is the struct's empty
+    # default (reset on every `:reinitialize`), which masks nothing, so an
+    # upstream echoing the Authorization header into its error body would
+    # carry it out whole through `state.error`.
     case resolve_headers(state.raw_headers, {state.athanor_id, state.url}) do
       {:error, reason} ->
         fail_initialize(state, reason)
@@ -1329,9 +1315,9 @@ defmodule Emissary.External.Server do
       value = to_string(v)
 
       if valid_header_name?(name) and not control_chars?(value) do
-        # keystore, not cons: an operator's content-type must REPLACE the
-        # client's base header — prepending sent both, and which one the
-        # upstream honored was its choice, not ours.
+        # keystore, not cons: an operator's content-type REPLACES the
+        # client's base header, so the request carries one value and the
+        # upstream has no second one to choose.
         List.keystore(acc, name, 0, {name, value})
       else
         Logger.warning(
@@ -1357,17 +1343,14 @@ defmodule Emissary.External.Server do
   # Secret Resolution
   # ============================================================================
 
-  @doc false
   # `target` is the athanor the server belongs to and the URL it posts
   # to: a header's entry is read only for a URL its destination admits.
   # Every header is checked before any entry is unsealed.
-  def resolve_headers(headers, {_athanor_id, _url} = target) when is_map(headers) do
+  defp resolve_headers(headers, {_athanor_id, _url} = target) when is_map(headers) do
     with :ok <- check_headers(headers, target) do
       unseal_headers(headers, target)
     end
   end
-
-  def resolve_headers(_headers, _target), do: {:ok, %{}}
 
   # From metadata alone (`Sanctum.Vault.destination_matches?/3`): a
   # reference this server does not resolve, or an entry missing, inactive
@@ -1482,8 +1465,7 @@ defmodule Emissary.External.Server do
   # the executor's SecretMasker, so the credentials THIS plane injected are
   # masked here: every resolved `vault:` header value plus the value of any
   # credential-shaped literal header.
-  @doc false
-  def mask_credentials(term, state) do
+  defp mask_credentials(term, state) do
     case sensitive_header_values(state) do
       [] -> term
       values -> mask_values(term, values)

@@ -54,7 +54,8 @@ defmodule Cyfr.Test.AttemptFixtures do
   - `:timeout_ms` — the run's timeout, from which its subtree deadline is
     set (default 60 s);
   - `:worker` — the worker service's endpoint (`t:Prima.WorkerAPI.endpoint/0`)
-    the attempt kills its runner through (default none);
+    the attempt kills its runner through (default `unreachable_worker/1`
+    of `:service_id`);
   - `:digest` — the digest of the component's artifact, in the assignment
     and the attempt (default the digest of the reference's own bytes);
   - `:input` — the input the row is admitted with (default
@@ -91,16 +92,23 @@ defmodule Cyfr.Test.AttemptFixtures do
     record =
       Record.new(ctx, component_ref, input,
         component_type: component_type,
-        reservation: reservation(authority, opts),
-        grant: grant
+        reservation: reservation(authority, opts)
       )
 
     service_id = Keyword.get(opts, :service_id, "wrk_fixture")
     boot_id = Keyword.get_lazy(opts, :boot_id, &Record.boot_id/0)
     timeout_ms = Keyword.get(opts, :timeout_ms, 60_000)
     deadline = System.system_time(:millisecond) + timeout_ms
-    :ok = Record.write_started(record, service_id: service_id, boot_id: boot_id)
-    close = %Close{ctx: ctx, record: record, limits: limits, started: true}
+    admission = [grant: grant, retention_class: Record.default_retention_class(ctx)]
+
+    :ok =
+      Record.write_started(ctx, record,
+        grant: grant,
+        service_id: service_id,
+        boot_id: boot_id
+      )
+
+    close = %Close{ctx: ctx, record: record, admission: admission, limits: limits, started: true}
 
     {:ok, pid} =
       Attempt.open(
@@ -118,7 +126,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         service_id: service_id,
         boot_id: boot_id,
         deadline: deadline,
-        worker: Keyword.get(opts, :worker),
+        worker: Keyword.get_lazy(opts, :worker, fn -> unreachable_worker(service_id) end),
         digest: digest,
         grant: grant
       )
@@ -138,6 +146,7 @@ defmodule Cyfr.Test.AttemptFixtures do
         input: input,
         timeout_ms: timeout_ms,
         deadline: deadline,
+        step: nil,
         service: service_id,
         boot: boot_id
       })
@@ -170,6 +179,16 @@ defmodule Cyfr.Test.AttemptFixtures do
       fixture
     end
   end
+
+  @doc """
+  The endpoint (`t:Prima.WorkerAPI.endpoint/0`) of the worker service
+  `service_id` at an address nothing answers at: a kill sent there is
+  refused unavailable, so an attempt whose waiter exits counts no unreaped
+  kill and lapses its row (`Opus.Attempt`).
+  """
+  @spec unreachable_worker(String.t()) :: Prima.WorkerAPI.endpoint()
+  def unreachable_worker(service_id) when is_binary(service_id),
+    do: %{id: service_id, url: "http://127.0.0.1:9", components: nil}
 
   @doc """
   The grant options (`Arca.ExecutionStanding`) a test admits a root in
@@ -211,7 +230,7 @@ defmodule Cyfr.Test.AttemptFixtures do
     record =
       Record.new(ctx, "formula:local.lineage-fixture:0.1.0", %{}, component_type: :formula)
 
-    :ok = Record.write_started(record)
+    :ok = Record.write_started(ctx, record)
 
     Map.merge(
       %{parent_execution_id: record.id, root_execution_id: record.id, attempt: record.attempt},

@@ -6,7 +6,42 @@ defmodule Emissary.Web.WebhookControllerTest do
 
   require Arca.Repo.Errors
 
+  alias Cyfr.Test.ScriptedWorkerListener
   alias Sanctum.Webhook
+
+  # A worker service that answers its status as itself, `wrk_once`, the
+  # first time it is asked, and as another service every time after: a
+  # delivery's availability check finds it, and its run's own lookup of a
+  # worker skips it.
+  defmodule AnswersOnce do
+    @moduledoc false
+    @behaviour Prima.WorkerAPI
+
+    def child_spec(_opts) do
+      %{id: __MODULE__, start: {Agent, :start_link, [fn -> 0 end, [name: __MODULE__]]}}
+    end
+
+    @impl true
+    def start(_token, _input, _sealed_keys), do: {:error, :malformed}
+
+    @impl true
+    def kill(_execution_id), do: {:error, :not_found}
+
+    @impl true
+    def status do
+      asked = Agent.get_and_update(__MODULE__, &{&1, &1 + 1})
+
+      {:ok,
+       %{
+         service: if(asked == 0, do: "wrk_once", else: "wrk_elsewhere"),
+         boot: "boot_once",
+         runners: %{fresh: 1, idle: 0, busy: 0, tainted: 0},
+         attempts: [],
+         memory_bytes: nil,
+         refusal: nil
+       }}
+    end
+  end
 
   setup do
     # Each hook targets a unique registered-but-artifact-less component:
@@ -219,8 +254,7 @@ defmodule Emissary.Web.WebhookControllerTest do
       conn = post_signed(conn, slug, secret, body, "x-hub-signature-256")
 
       # Signature OK → controller accepts and dispatches async → 200 accepted.
-      # (Pre-async: this would hit the controller and return 500 on missing
-      # component; now the missing-component error surfaces via telemetry.)
+      # A missing component is the run's refusal, reported by telemetry.
       assert conn.status == 200
       response = json_response(conn, 200)
       assert response["status"] == "accepted"
@@ -345,6 +379,16 @@ defmodule Emissary.Web.WebhookControllerTest do
     defp executions_for(call_id) do
       import Ecto.Query, only: [from: 2]
       Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.call_id == ^call_id))
+    end
+
+    # A delivery refused before its task is spawned is closed in the
+    # request: its stop telemetry, sent before the response, carries the
+    # sentence of `:no_worker_for_target`.
+    defp assert_refused_no_worker do
+      sentence = Sanctum.Refusals.render(:no_worker_for_target)
+
+      assert_received {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _,
+                       %{status: :error, error: ^sentence}}
     end
 
     @math_wasm_path Path.expand("../../../support/test_wasm/math.wasm", __DIR__)
@@ -601,21 +645,55 @@ defmodule Emissary.Web.WebhookControllerTest do
       %{slug: slug, secret: secret} = create_hook!(ctx, "no-engine")
 
       previous = Application.get_env(:cyfr, :locus_runtime_workers)
-      Application.put_env(:cyfr, :locus_runtime_workers, [])
       on_exit(fn -> Application.put_env(:cyfr, :locus_runtime_workers, previous) end)
+      Application.put_env(:cyfr, :locus_runtime_workers, [])
 
       conn = post_signed(conn, slug, secret, ~s({"event":"x"}))
       assert conn.status == 503
       Application.put_env(:cyfr, :locus_runtime_workers, previous)
+      assert_refused_no_worker()
 
       assert [decision] = Arca.Repo.all(Arca.Schemas.DecisionLog)
       assert decision.tool == "webhook"
       assert decision.admission == "admitted"
       assert decision.completion == "failed"
-      assert is_binary(decision.completion_class)
+      assert decision.completion_class == "unavailable"
 
       assert [row] = log_rows_for(decision.request_id)
       assert row.id == decision.call_id
+      assert row.status == "error"
+      assert executions_for(decision.call_id) == []
+
+      refute_received {:decision_lost, _}
+    end
+
+    test "a delivery whose target no worker service runs is refused 503 while another component's answers",
+         %{conn: conn, ctx: ctx} do
+      watch_losses()
+      %{slug: slug, secret: secret} = create_hook!(ctx, "no-worker-for-target")
+
+      # The boot's healthy worker service, routed to another component
+      # alone: an engine answers, and none runs this hook's target.
+      previous = Application.get_env(:cyfr, :locus_runtime_workers)
+      [endpoint | _] = previous
+      on_exit(fn -> Application.put_env(:cyfr, :locus_runtime_workers, previous) end)
+
+      Application.put_env(:cyfr, :locus_runtime_workers, [
+        Map.put(endpoint, :components, ["formula:local.another-component"])
+      ])
+
+      assert Opus.available?()
+
+      conn = post_signed(conn, slug, secret, ~s({"event":"x"}))
+      assert json_response(conn, 503)["code"] == "unavailable"
+      Application.put_env(:cyfr, :locus_runtime_workers, previous)
+      assert_refused_no_worker()
+
+      assert [decision] = Arca.Repo.all(Arca.Schemas.DecisionLog)
+      assert decision.tool == "webhook"
+      assert decision.completion == "failed"
+      assert decision.completion_class == "unavailable"
+      assert [row] = log_rows_for(decision.request_id)
       assert row.status == "error"
       assert executions_for(decision.call_id) == []
 
@@ -630,16 +708,21 @@ defmodule Emissary.Web.WebhookControllerTest do
       watch_losses()
       %{slug: slug, secret: secret} = create_hook!(ctx, "raises")
 
-      # A worker roster the availability check reads past, whose first
-      # service does not run this component and whose rest is not a list:
-      # the delivery is accepted, and the run's own lookup of a worker for
-      # the component raises inside the task.
+      # A worker roster whose one service answers the delivery's
+      # availability check and then answers as another service, and whose
+      # rest is not a list: the delivery is accepted, and the run's own
+      # lookup of a worker reads past that service and raises inside the
+      # task.
+      start_supervised!(AnswersOnce)
+
+      listener =
+        start_supervised!({ScriptedWorkerListener, worker: AnswersOnce, service: "wrk_once"})
+
       previous = Application.get_env(:cyfr, :locus_runtime_workers)
-      [endpoint | _] = previous
       on_exit(fn -> Application.put_env(:cyfr, :locus_runtime_workers, previous) end)
 
       Application.put_env(:cyfr, :locus_runtime_workers, [
-        Map.put(endpoint, :components, ["no-such-component"]) | :not_a_worker
+        ScriptedWorkerListener.endpoint(listener, "wrk_once") | :not_a_worker
       ])
 
       conn = post_signed(conn, slug, secret, ~s({"event":"x"}))

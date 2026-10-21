@@ -381,7 +381,7 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
         Path.expand("../../../lib/emissary/mcp/router.ex", __DIR__)
         |> File.read!()
 
-      [_, body] = String.split(source, "defp read_resource(ctx, uri, _id) do", parts: 2)
+      [_, body] = String.split(source, "defp read_resource(ctx, uri) do", parts: 2)
       [body | _] = String.split(body, "\n  defp ", parts: 2)
 
       assert length(String.split(body, "Sanctum.Gate.call_external(")) == 2,
@@ -392,9 +392,6 @@ defmodule Emissary.MCP.ResourceAdmissionTest do
                authorize_annotated_action Context.authorize .authenticated tenant_ok) do
         refute body =~ decision, "the Router's resource read makes a decision: #{decision}"
       end
-
-      Code.ensure_loaded!(Resources)
-      refute function_exported?(Resources, :read, 2)
     end
   end
 

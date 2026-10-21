@@ -6,8 +6,6 @@ defmodule Compendium.Providers.Component do
   Component tool handlers for the Compendium MCP provider — component
   discovery and registry operations (search, inspect, pull, push, register,
   create, fork, list, delete, deprecate, yank, etc.).
-
-  Extracted from `Compendium.Provider`; behaviour preserved exactly.
   """
 
   require Logger
@@ -21,32 +19,12 @@ defmodule Compendium.Providers.Component do
   # Tool Handlers - Action-based dispatch
   # ============================================================================
 
-  # Search action - search for components. Searches the local registry and,
-  # unless the caller restricts to source: "local", augments with the
-  # configured registry's REST API (cyfr.run by default), merging results.
   @doc false
   # The tool's wire definition — schema and access annotations beside the
   # handler they gate; Compendium.Provider assembles its roster from these.
   def definition do
     alias Prima.{Arg, Operation}
-    # Registration indexes the athanor's components tree without granting
-    # consent. It requires a console or CLI caller: staging consent refuses
-    # guests, and omitting :in_chain excludes formula and AQUA invocation.
-    # Operation planes and Context.plane are separate checks.
-    # Reverts a bundled component's local edits to exactly what the
-    # release shipped — destructive to the edits, mirror of aqua.reset.
-    # deprecate/yank were the one write pair with no permission gate —
-    # discovery already advertised :component_manage, and every
-    # sibling mutation carries it; the handlers' namespace-bearer
-    # check remains as the registry-identity residual.
-    # deprecate/yank action params
-    # search action params
-    # inspect/pull action params
-    # inspect action params
-    # Signature verification is controlled by the server’s
-    # require_signed_pulls setting and rechecked at execution.
-    # create/fork action params
-    # register action: no additional params (scans all component directories)
+
     Operation.tool(
       [
         Operation.new(
@@ -100,6 +78,8 @@ defmodule Compendium.Providers.Component do
           planes: [:external, :in_chain],
           recovery: :replay_safe
         ),
+        # Signature verification follows the server's require_signed_pulls
+        # setting and is rechecked at execution.
         Operation.new(
           "component",
           "pull",
@@ -145,6 +125,10 @@ defmodule Compendium.Providers.Component do
           consent: :interactive,
           permission: :component_manage
         ),
+        # Registration indexes the athanor's components tree without granting
+        # consent. It requires a console or CLI caller: staging consent refuses
+        # guests, and omitting :in_chain excludes formula and AQUA invocation.
+        # Operation planes and Context.plane are separate checks.
         Operation.new(
           "component",
           "register",
@@ -265,6 +249,8 @@ defmodule Compendium.Providers.Component do
           planes: [:external],
           permission: :component_manage
         ),
+        # Reverts a bundled component's local edits to exactly what the
+        # release shipped — destructive to the edits, mirror of aqua.reset.
         Operation.new(
           "component",
           "reset",
@@ -334,6 +320,9 @@ defmodule Compendium.Providers.Component do
           planes: [:external, :in_chain],
           permission: :component_manage
         ),
+        # deprecate and yank carry :component_manage like every sibling
+        # mutation; the handlers' namespace-bearer check is the
+        # registry-identity check beside it.
         Operation.new(
           "component",
           "deprecate",
@@ -411,7 +400,7 @@ defmodule Compendium.Providers.Component do
   never enters it), whose manifest, description and readme its publisher
   wrote; the athanor's own components carry none. Whose text an answer
   carries: each component it describes, and in an inspection's
-  dependency tree (`Compendium.DependencyResolver.resolve_tree/3`) each
+  dependency tree (`Compendium.DependencyResolver.resolve_tree/2`) each
   dependency whose own manifest supplied the entries under it, a node's
   `children`, so a local root that depends on a pulled component carries
   that component's prose. A component the answer cannot name is an
@@ -475,6 +464,9 @@ defmodule Compendium.Providers.Component do
 
   defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
 
+  # Search action - search for components. Searches the local registry and,
+  # unless the caller restricts to source: "local", augments with the
+  # configured registry's REST API (cyfr.run by default), merging results.
   def handle(%Context{} = ctx, %{"action" => "search"} = args) do
     filters = %{
       query: args["query"],
@@ -517,128 +509,110 @@ defmodule Compendium.Providers.Component do
     end
   end
 
-  def handle(_ctx, %{"action" => "inspect"}) do
-    {:error, {:invalid_argument, "Missing required argument: reference"}}
-  end
-
   # Pull action - pull component from registry (local or OCI)
-  def handle(%Context{} = ctx, %{"action" => "pull"} = args) do
+  def handle(%Context{} = ctx, %{"action" => "pull", "reference" => reference} = args) do
     progress_id = args["progress_id"]
 
-    case args["reference"] do
-      nil ->
-        {:error, {:invalid_argument, "Missing required argument: reference"}}
+    with {:ok, reference} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
+      oci_reference =
+        cond do
+          Compendium.OCI.Reference.oci_ref?(reference) -> {:ok, reference}
+          shipped_ref?(reference) -> :shipped
+          true -> convert_to_oci_ref(reference)
+        end
 
-      reference ->
-        with {:ok, reference} <- Compendium.Resolver.resolve_or_passthrough(ctx, reference) do
-          oci_reference =
-            cond do
-              Compendium.OCI.Reference.oci_ref?(reference) -> {:ok, reference}
-              shipped_ref?(reference) -> :shipped
-              true -> convert_to_oci_ref(reference)
-            end
+      case oci_reference do
+        # A `local` ref names what the server ships: the pull copies the
+        # shipped version from the seed rather than dialling a registry.
+        :shipped ->
+          broadcast_progress(ctx, progress_id, :pulling, "Copying shipped #{reference}...")
 
-          case oci_reference do
-            # A `local` ref names what the server ships: the pull copies the
-            # shipped version from the seed rather than dialling a registry.
-            :shipped ->
-              broadcast_progress(ctx, progress_id, :pulling, "Copying shipped #{reference}...")
-
-              case Compendium.Provisioning.install_shipped(ctx, reference) do
-                {:ok, res} ->
-                  broadcast_progress(ctx, progress_id, :complete, "Pulled #{res.component_ref}")
-                  broadcast_components_changed(ctx)
-                  {:ok, res}
-
-                {:error, reason} ->
-                  broadcast_progress(ctx, progress_id, :error, "Pull failed")
-                  {:error, shipped_pull_error(reference, reason)}
-              end
-
-            {:ok, ref} ->
-              broadcast_progress(ctx, progress_id, :pulling, "Pulling #{ref}...")
-              result = do_oci_pull(ctx, ref)
-
-              case result do
-                {:ok, res} ->
-                  broadcast_progress(
-                    ctx,
-                    progress_id,
-                    :complete,
-                    "Pulled #{res[:component_ref] || ref}"
-                  )
-
-                  broadcast_components_changed(ctx)
-
-                {:error, reason} ->
-                  Logger.error("[Compendium.Providers.Component] Pull failed: #{inspect(reason)}")
-                  broadcast_progress(ctx, progress_id, :error, "Pull failed")
-              end
-
-              result
+          case Compendium.Provisioning.install_shipped(ctx, reference) do
+            {:ok, res} ->
+              broadcast_progress(ctx, progress_id, :complete, "Pulled #{res.component_ref}")
+              broadcast_components_changed(ctx)
+              {:ok, res}
 
             {:error, reason} ->
-              {:error, reason}
+              broadcast_progress(ctx, progress_id, :error, "Pull failed")
+              {:error, shipped_pull_error(reference, reason)}
           end
-        end
+
+        {:ok, ref} ->
+          broadcast_progress(ctx, progress_id, :pulling, "Pulling #{ref}...")
+          result = do_oci_pull(ctx, ref)
+
+          case result do
+            {:ok, res} ->
+              broadcast_progress(
+                ctx,
+                progress_id,
+                :complete,
+                "Pulled #{res[:component_ref] || ref}"
+              )
+
+              broadcast_components_changed(ctx)
+
+            {:error, reason} ->
+              Logger.error("[Compendium.Providers.Component] Pull failed: #{inspect(reason)}")
+              broadcast_progress(ctx, progress_id, :error, "Pull failed")
+          end
+
+          result
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
   # Push action — upload an already-registered local component to an OCI
   # registry. The gate admitted a signed-in session (`consent: :interactive`).
-  def handle(%Context{} = ctx, %{"action" => "push"} = args) do
-    reference = args["reference"]
+  def handle(%Context{} = ctx, %{"action" => "push", "reference" => reference} = args) do
     registry = args["registry"] || default_registry()
     progress_id = args["progress_id"]
 
-    cond do
-      is_nil(reference) ->
+    case Prima.ComponentRef.parse(reference) do
+      {:ok, %{version: nil}} ->
         {:error,
-         {:invalid_argument, "Missing required argument: reference (format: name:version)"}}
+         {:invalid_argument, "Version is required for pushing. Example: c:local.name:1.0.0"}}
 
-      true ->
-        case Prima.ComponentRef.parse(reference) do
-          {:ok, %{version: nil}} ->
-            {:error,
-             {:invalid_argument, "Version is required for pushing. Example: c:local.name:1.0.0"}}
+      {:ok, cref} ->
+        with :ok <- refuse_non_local_push(cref),
+             :ok <- Compendium.RegistryHost.validate_host(registry) do
+          # `local` refs are remapped to the caller's claimed personal
+          # namespace inside `OCI.Client.push` (via resolve_push_publisher),
+          # which returns a precise error if no namespace is claimed. No
+          # literal-"local" credential pre-check here — there is no push
+          # token for "local"; the token belongs to the resolved namespace.
+          broadcast_progress(
+            ctx,
+            progress_id,
+            :pushing,
+            "Pushing #{reference} to #{registry}..."
+          )
 
-          {:ok, cref} ->
-            with :ok <- refuse_non_local_push(cref),
-                 :ok <- Compendium.RegistryHost.validate_host(registry) do
-              # `local` refs are remapped to the caller's claimed personal
-              # namespace inside `OCI.Client.push` (via resolve_push_publisher),
-              # which returns a precise error if no namespace is claimed. No
-              # literal-"local" credential pre-check here — there is no push
-              # token for "local"; the token belongs to the resolved namespace.
+          case Compendium.OCI.Client.push(ctx, reference, registry) do
+            {:ok, result} ->
               broadcast_progress(
                 ctx,
                 progress_id,
-                :pushing,
-                "Pushing #{reference} to #{registry}..."
+                :complete,
+                "Pushed #{result[:oci_reference] || reference}"
               )
 
-              case Compendium.OCI.Client.push(ctx, reference, registry) do
-                {:ok, result} ->
-                  broadcast_progress(
-                    ctx,
-                    progress_id,
-                    :complete,
-                    "Pushed #{result[:oci_reference] || reference}"
-                  )
+              record_push(ctx, reference, result)
+              {:ok, result}
 
-                  record_push(ctx, reference, result)
-                  {:ok, result}
-
-                {:error, reason} ->
-                  Logger.error("[Compendium.Providers.Component] Push failed: #{inspect(reason)}")
-                  broadcast_progress(ctx, progress_id, :error, "Push failed")
-                  {:error, reason}
-              end
-            end
-
-          {:error, reason} ->
-            {:error, {:invalid_argument, "Invalid reference: #{reason}"}}
+            {:error, reason} ->
+              Logger.error("[Compendium.Providers.Component] Push failed: #{inspect(reason)}")
+              broadcast_progress(ctx, progress_id, :error, "Push failed")
+              {:error, reason}
+          end
         end
+
+      {:error, reason} ->
+        {:error, {:invalid_argument, "Invalid reference: #{reason}"}}
     end
   end
 
@@ -777,10 +751,6 @@ defmodule Compendium.Providers.Component do
     end
   end
 
-  def handle(_ctx, %{"action" => "delete"}) do
-    {:error, {:invalid_argument, "Missing required argument: reference"}}
-  end
-
   # Reset action — restore a bundled component to exactly what the release
   # ships ("delete" never means "revert").
   def handle(%Context{} = ctx, %{"action" => "reset", "reference" => reference}) do
@@ -815,10 +785,6 @@ defmodule Compendium.Providers.Component do
       {:error, reason} ->
         {:error, {:invalid_argument, "Invalid reference: #{reason}"}}
     end
-  end
-
-  def handle(_ctx, %{"action" => "reset"}) do
-    {:error, {:invalid_argument, "Missing required argument: reference"}}
   end
 
   # Status action — provenance and drift for one component: whose bytes
@@ -951,10 +917,6 @@ defmodule Compendium.Providers.Component do
     end
   end
 
-  def handle(_ctx, %{"action" => "get_blob"}) do
-    {:error, {:invalid_argument, "Missing required argument: digest"}}
-  end
-
   # Discover action - list components on the configured registry (cyfr.run
   # REST API). The registry host is set via CYFR_REGISTRY_URL.
   def handle(%Context{} = ctx, %{"action" => "discover"} = args) do
@@ -992,10 +954,6 @@ defmodule Compendium.Providers.Component do
     Compendium.Component.setup_plan(ctx, reference)
   end
 
-  def handle(_ctx, %{"action" => "setup_plan"}) do
-    {:error, {:invalid_argument, "Missing required argument: reference"}}
-  end
-
   # Fork action - fork a published component to local namespace
   def handle(
         %Context{} = ctx,
@@ -1028,10 +986,6 @@ defmodule Compendium.Providers.Component do
     end
   end
 
-  def handle(_ctx, %{"action" => "fork"}) do
-    {:error, {:invalid_argument, "Missing required argument: reference"}}
-  end
-
   def handle(
         %Context{} = ctx,
         %{"action" => "deprecate", "reference" => reference} = args
@@ -1060,10 +1014,6 @@ defmodule Compendium.Providers.Component do
     end
   end
 
-  def handle(_ctx, %{"action" => "deprecate"}) do
-    {:error, {:invalid_argument, "component.deprecate requires 'reference' and 'reason'"}}
-  end
-
   # Yank action — reason optional (deprecate requires one; yank does not).
   def handle(
         %Context{} = ctx,
@@ -1087,20 +1037,6 @@ defmodule Compendium.Providers.Component do
     else
       {:error, err} -> {:error, Shared.refusal(err)}
     end
-  end
-
-  def handle(_ctx, %{"action" => "yank"}) do
-    {:error, {:invalid_argument, "component.yank requires 'reference'"}}
-  end
-
-  # Invalid action
-  def handle(_ctx, %{"action" => action}) do
-    {:error, {:invalid_argument, "Invalid component action: #{action}"}}
-  end
-
-  # Missing action
-  def handle(_ctx, _args) do
-    {:error, {:invalid_argument, "Missing required argument: action"}}
   end
 
   # The local rows beside cyfr.run's, as `source` asks.
@@ -1162,9 +1098,7 @@ defmodule Compendium.Providers.Component do
   defp finish_register(ctx, register_id, result) do
     # Broadcast per-component status
     Enum.each(result.components, fn comp ->
-      status = comp[:status] || comp["status"]
-      name = comp[:name] || comp["name"]
-      version = comp[:version] || comp["version"]
+      %{status: status, name: name, version: version} = comp
 
       case status do
         "registered" ->
@@ -1294,21 +1228,12 @@ defmodule Compendium.Providers.Component do
 
   # Enrich a local pull result with auto-pulled dependencies.
   defp enrich_pull_with_deps(ctx, component, result) do
-    manifest =
-      decode_manifest(
-        component[:manifest] || component["manifest"],
-        result[:component_ref] || result["component_ref"]
-      )
-
-    case Compendium.DependencyResolver.extract_from_manifest(manifest, component[:id] || "") do
-      {:ok, []} ->
-        result
-
-      {:ok, deps} ->
-        auto_pull_deps(ctx, deps, result)
-
-      {:error, _} ->
-        result
+    with {:ok, manifest} <- decode_manifest(component.manifest, result.component_ref) do
+      case Compendium.DependencyResolver.extract_from_manifest(manifest, result.component_ref) do
+        {:ok, []} -> {:ok, result}
+        {:ok, deps} -> {:ok, auto_pull_deps(ctx, deps, result)}
+        {:error, _} -> {:ok, result}
+      end
     end
   end
 
@@ -1327,24 +1252,12 @@ defmodule Compendium.Providers.Component do
     }
 
     formulas_to_check =
-      Enum.filter(components, fn comp ->
-        status = comp[:status] || comp["status"]
-        type = comp[:type] || comp["type"]
+      Enum.filter(components, fn %{status: status, type: type} ->
         type == "formula" and status in ["registered", "unchanged"]
       end)
 
-    if formulas_to_check == [] do
-      empty
-    else
-      all_deps =
-        Enum.flat_map(formulas_to_check, fn comp ->
-          case resolve_manifest_for_deps(ctx, comp) do
-            {:ok, deps} -> deps
-            :skip -> []
-          end
-        end)
-        |> Enum.uniq_by(& &1[:dependency_ref])
-
+    with false <- formulas_to_check == [],
+         {:ok, all_deps} <- registered_deps(ctx, formulas_to_check) do
       if all_deps == [] do
         empty
       else
@@ -1354,10 +1267,9 @@ defmodule Compendium.Providers.Component do
 
         {local_missing, published_missing} =
           Enum.split_with(availability.missing, fn dep ->
-            ns = dep[:dep_namespace] || dep["dep_namespace"]
             # Local/on-disk namespaces are never pullable from OCI — the
             # grammar is ComponentPath's, one spelling.
-            Compendium.ComponentPath.local_publisher?(ns)
+            Compendium.ComponentPath.local_publisher?(dep.dep_namespace)
           end)
 
         local_refs = Enum.map(local_missing, & &1[:dependency_ref])
@@ -1372,6 +1284,14 @@ defmodule Compendium.Providers.Component do
           optional_missing: optional_refs
         }
       end
+    else
+      true ->
+        empty
+
+      # A formula whose stored manifest does not decode is damage, and the
+      # register's answer says so instead of reading it as declaring nothing.
+      {:error, reason} ->
+        {:error, {:dependency_check_failed, Sanctum.Refusals.render(reason)}}
     end
   rescue
     e in [
@@ -1390,29 +1310,39 @@ defmodule Compendium.Providers.Component do
       {:error, {:dependency_check_failed, Exception.message(e)}}
   end
 
-  # Look up a freshly registered component and extract its dependencies.
-  defp resolve_manifest_for_deps(ctx, comp) do
-    name = comp[:name] || comp["name"]
-    version = comp[:version] || comp["version"]
-    type = comp[:type] || comp["type"]
+  # The dependencies the registered formulas declare, or the damage that
+  # stops one from being read.
+  defp registered_deps(ctx, formulas) do
+    formulas
+    |> Enum.reduce_while({:ok, []}, fn comp, {:ok, acc} ->
+      case resolve_manifest_for_deps(ctx, comp) do
+        {:ok, deps} -> {:cont, {:ok, acc ++ deps}}
+        :skip -> {:cont, {:ok, acc}}
+        {:error, _} = damaged -> {:halt, damaged}
+      end
+    end)
+    |> case do
+      {:ok, deps} -> {:ok, Enum.uniq_by(deps, & &1[:dependency_ref])}
+      damaged -> damaged
+    end
+  end
 
-    publisher =
-      Compendium.ComponentPath.normalize_publisher(comp[:publisher] || comp["publisher"])
+  # Look up a freshly registered component and extract its dependencies.
+  # A registered entry is the local namespace's: only it registers from the
+  # tree (`Compendium.AutoIndexer.discover/1`).
+  defp resolve_manifest_for_deps(ctx, %{name: name, version: version, type: type}) do
+    publisher = Compendium.ComponentPath.default_publisher()
 
     case Registry.get(ctx, name, version, publisher, type) do
       {:ok, component} ->
-        manifest =
-          decode_manifest(
-            component.manifest,
-            Prima.ComponentRef.build(to_string(type), publisher, name, version)
-          )
+        ref = Prima.ComponentRef.build(type, publisher, name, version)
 
-        component_id = component.id || ""
-
-        case Compendium.DependencyResolver.extract_from_manifest(manifest, component_id) do
-          {:ok, []} -> :skip
-          {:ok, deps} -> {:ok, deps}
-          {:error, _} -> :skip
+        with {:ok, manifest} <- decode_manifest(component.manifest, ref) do
+          case Compendium.DependencyResolver.extract_from_manifest(manifest, ref) do
+            {:ok, []} -> :skip
+            {:ok, deps} -> {:ok, deps}
+            {:error, _} -> :skip
+          end
         end
 
       _ ->
@@ -1459,7 +1389,7 @@ defmodule Compendium.Providers.Component do
   # (`local.*` refs are published under the caller's own), so it is read
   # from the result, not the argument.
   defp record_push(ctx, reference, result) do
-    oci_reference = result[:oci_reference] || result["oci_reference"]
+    oci_reference = result.oci_reference
     namespace = namespace_of(oci_reference)
 
     Logger.info(
@@ -1489,8 +1419,6 @@ defmodule Compendium.Providers.Component do
         nil
     end
   end
-
-  defp namespace_of(_), do: nil
 
   # A diff's relative segment lists, joined for the wire.
   defp format_diff(%{added: added, removed: removed, changed: changed}) do
@@ -1587,7 +1515,7 @@ defmodule Compendium.Providers.Component do
         case Compendium.RegistryHost.validate_host(ref.registry) do
           :ok ->
             namespace_slug =
-              case String.split(ref.repository || "", "/", parts: 2) do
+              case String.split(ref.repository, "/", parts: 2) do
                 [slug | _] when slug != "" -> slug
                 _ -> ""
               end
@@ -1645,8 +1573,7 @@ defmodule Compendium.Providers.Component do
             result
           end
 
-        result = maybe_auto_pull_oci_deps(ctx, reference, result)
-        {:ok, result}
+        maybe_auto_pull_oci_deps(ctx, result)
 
       {:error, reason} ->
         if anonymous? do
@@ -1669,15 +1596,13 @@ defmodule Compendium.Providers.Component do
   # Enrich an OCI pull result with auto-pulled dependencies.
   # After OCI pull, the component should be in the local registry.
   # Uses component_ref from the pull result (not the OCI URL) for lookup.
-  defp maybe_auto_pull_oci_deps(ctx, _oci_reference, result) do
-    ref = result[:component_ref] || result["component_ref"]
-
-    case ref && Shared.resolve_component(ctx, ref) do
+  defp maybe_auto_pull_oci_deps(ctx, result) do
+    case Compendium.Component.resolve_component(ctx, result.component_ref) do
       {:ok, component, _ref} ->
         enrich_pull_with_deps(ctx, component, result)
 
       _ ->
-        result
+        {:ok, result}
     end
   rescue
     e in [
@@ -1693,7 +1618,7 @@ defmodule Compendium.Providers.Component do
         "[Compendium.Providers.Component] Exception in auto-pull OCI deps: #{Exception.message(e)}"
       )
 
-      result
+      {:ok, result}
   end
 
   # Auto-pull the missing dependencies of a just-pulled component, closure
@@ -1721,16 +1646,17 @@ defmodule Compendium.Providers.Component do
     |> Map.put(:optional_missing, optional_missing)
   end
 
-  # A manifest that does not decode declares nothing. The line names the
+  # A stored manifest that does not decode is damage: the read refuses it
+  # rather than read a component that declares nothing. The line names the
   # component, never the manifest's bytes.
   defp decode_manifest(value, ref) do
     case Prima.Manifest.decode_strict(value) do
       {:ok, manifest} ->
-        manifest
+        {:ok, manifest}
 
       {:error, :malformed_manifest} ->
         Logger.warning("[Compendium.Providers.Component] manifest malformed: #{ref}")
-        %{}
+        {:error, {:corrupt, {:manifest, ref}}}
     end
   end
 
@@ -1739,7 +1665,7 @@ defmodule Compendium.Providers.Component do
   # ============================================================================
 
   defp read_component_readme(ctx, reference) do
-    case Shared.resolve_component(ctx, reference) do
+    case Compendium.Component.resolve_component(ctx, reference) do
       {:ok, _component, ref} ->
         path =
           Compendium.ComponentPath.file_path(
@@ -1772,7 +1698,7 @@ defmodule Compendium.Providers.Component do
     remote_by_identity =
       Enum.reduce(remote_components, %{}, fn comp, acc ->
         key = component_identity_key(comp)
-        version = comp["version"] || comp[:version]
+        version = comp[:version]
 
         case Map.get(acc, key) do
           nil ->
@@ -1791,7 +1717,7 @@ defmodule Compendium.Providers.Component do
     remote_all_versions =
       Enum.reduce(remote_components, %{}, fn comp, acc ->
         key = component_identity_key(comp)
-        version = comp["version"] || comp[:version]
+        version = comp[:version]
         Map.update(acc, key, [version], fn vs -> [version | vs] end)
       end)
 
@@ -1802,7 +1728,7 @@ defmodule Compendium.Providers.Component do
     annotated_local =
       Enum.map(local_components, fn comp ->
         key = component_identity_key(comp)
-        local_version = comp["version"] || comp[:version]
+        local_version = comp[:version]
 
         case Map.get(remote_by_identity, key) do
           {remote_version, _remote_comp} ->
@@ -1847,99 +1773,57 @@ defmodule Compendium.Providers.Component do
      }}
   end
 
-  defp ensure_component_ref(comp) do
-    if comp[:component_ref] || comp["component_ref"] do
-      comp
-    else
-      type = comp["component_type"] || comp[:component_type]
+  defp ensure_component_ref(%{component_ref: ref} = comp) when is_binary(ref), do: comp
 
-      publisher =
-        comp["namespace_slug"] || comp[:namespace_slug] || comp["publisher"] ||
-          comp[:publisher]
+  defp ensure_component_ref(%{component_type: type, publisher: publisher, name: name} = comp)
+       when is_binary(type) and is_binary(publisher) and is_binary(name) do
+    ref =
+      Prima.ComponentRef.to_string(%Prima.ComponentRef{
+        type: type,
+        namespace: publisher,
+        name: name,
+        version: comp[:version]
+      })
 
-      name = comp["name"] || comp[:name]
-      version = comp["version"] || comp[:version]
-
-      if type && publisher && name do
-        ref =
-          Prima.ComponentRef.to_string(%Prima.ComponentRef{
-            type: type,
-            namespace: publisher,
-            name: name,
-            version: version
-          })
-
-        Map.put(comp, :component_ref, ref)
-      else
-        comp
-      end
-    end
+    Map.put(comp, :component_ref, ref)
   end
 
-  defp component_identity_key(comp) when is_map(comp) do
-    {comp["name"] || comp[:name],
-     comp["publisher"] || comp[:publisher] || comp["namespace_slug"] || comp[:namespace_slug],
-     comp["component_type"] || comp[:component_type]}
-  end
+  defp ensure_component_ref(comp), do: comp
+
+  defp component_identity_key(comp) when is_map(comp),
+    do: {comp[:name], comp[:publisher], comp[:component_type]}
 
   # ============================================================================
-  # Tincture media enrichment (used by `component list` and `component inspect`)
+  # Tincture media enrichment (the `component list` answer)
   # ============================================================================
 
-  # Walk a search/list result and enrich tincture rows with media files
-  # discovered via the `public/media/` convention (probed through Arca.exists?
-  # — works on Local FS and S3 alike). Non-tincture rows pass through
-  # unchanged. Manifest values declared in `tincture.media` always win as
-  # escape hatch.
-  defp enrich_tincture_media(ctx, %{components: components} = result) when is_list(components) do
+  # Enrich the listed tincture rows with media files discovered via the
+  # `public/media/` convention (probed through Arca.exists? — works on
+  # Local FS and S3 alike). Other rows, and a tincture whose manifest did
+  # not decode, pass through unchanged. Manifest values declared in
+  # `tincture.media` always win as escape hatch.
+  defp enrich_tincture_media(ctx, %{components: components} = result) do
     %{result | components: Enum.map(components, &enrich_component_with_media(ctx, &1))}
   end
 
-  defp enrich_tincture_media(_ctx, result), do: result
-
-  defp enrich_component_with_media(ctx, %{component_type: "tincture"} = component) do
-    enrich_with_discovered_media(ctx, component)
-  end
-
-  defp enrich_component_with_media(ctx, %{"component_type" => "tincture"} = component) do
-    enrich_with_discovered_media(ctx, component)
+  # A listed row's manifest is the decoded map, or nil when it did not
+  # decode (`Compendium.Registry.search/2`).
+  defp enrich_component_with_media(
+         ctx,
+         %{
+           component_type: "tincture",
+           manifest: %{} = manifest,
+           publisher: publisher,
+           name: name,
+           version: version
+         } = component
+       ) do
+    segments = Compendium.ComponentPath.version_dir("tincture", publisher, name, version)
+    discovered = Compendium.Tincture.media(ctx, segments)
+    %{component | manifest: merge_discovered_into_manifest(manifest, discovered)}
   end
 
   defp enrich_component_with_media(_ctx, component), do: component
-
-  defp enrich_with_discovered_media(ctx, component) do
-    raw_manifest = component[:manifest] || component["manifest"]
-
-    case parse_manifest_for_enrichment(raw_manifest) do
-      {:ok, parsed} ->
-        case compute_tincture_version_segments(component) do
-          nil ->
-            component
-
-          segments ->
-            discovered = Compendium.Tincture.media(ctx, segments)
-            updated = merge_discovered_into_manifest(parsed, discovered)
-            put_manifest(component, updated, raw_manifest)
-        end
-
-      :error ->
-        component
-    end
-  end
-
-  # A component with no manifest is left alone rather than given one made of
-  # discovered media. Everything else goes through `Prima.Manifest`,
-  # which owns manifest decoding — the strict form, because a manifest that
-  # will not parse must also be left alone rather than replaced by a
-  # media-only map.
-  defp parse_manifest_for_enrichment(nil), do: :error
-
-  defp parse_manifest_for_enrichment(raw) do
-    case Prima.Manifest.decode_strict(raw) do
-      {:ok, manifest} -> {:ok, manifest}
-      {:error, :malformed_manifest} -> :error
-    end
-  end
 
   defp merge_discovered_into_manifest(manifest, discovered) do
     tincture_block = manifest["tincture"] || %{}
@@ -1965,36 +1849,4 @@ defmodule Compendium.Providers.Component do
   defp put_media_field(map, _key, nil), do: map
   defp put_media_field(map, _key, []), do: map
   defp put_media_field(map, key, value), do: Map.put(map, key, value)
-
-  # Write the enriched manifest back into the component, preserving whichever
-  # key shape (atom or string) the original used and whichever value shape
-  # (parsed map or JSON string) it came in. Keeps consumers downstream of the
-  # post-processor unaffected by the enrichment pass.
-  defp put_manifest(component, updated, original) when is_binary(original) do
-    encoded = Jason.encode!(updated)
-
-    cond do
-      Map.has_key?(component, :manifest) -> Map.put(component, :manifest, encoded)
-      Map.has_key?(component, "manifest") -> Map.put(component, "manifest", encoded)
-      true -> component
-    end
-  end
-
-  defp put_manifest(component, updated, _original) do
-    cond do
-      Map.has_key?(component, :manifest) -> Map.put(component, :manifest, updated)
-      Map.has_key?(component, "manifest") -> Map.put(component, "manifest", updated)
-      true -> component
-    end
-  end
-
-  defp compute_tincture_version_segments(component) do
-    publisher = component[:publisher] || component["publisher"]
-    name = component[:name] || component["name"]
-    version = component[:version] || component["version"]
-
-    if publisher && name && version do
-      Compendium.ComponentPath.version_dir("tincture", publisher, name, version)
-    end
-  end
 end

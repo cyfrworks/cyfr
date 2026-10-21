@@ -399,21 +399,21 @@ defmodule Cyfr.AdmissionOriginTest do
           origin: :interactive
         )
 
-      assert root.origin == :schedule
-      :ok = Opus.Record.write_started(root)
+      :ok = Opus.Record.write_started(scheduled(), root)
 
       # A child whose context says `interactive` is still its parent's.
+      interactive = %{scheduled() | origin: :interactive}
+
       child =
         Opus.Record.new(
-          %{scheduled() | origin: :interactive},
+          interactive,
           "reagent:local.origin-child:0.1.0",
           %{},
           parent_execution_id: root.id,
           root_execution_id: root.id
         )
 
-      assert is_nil(child.origin)
-      :ok = Opus.Record.write_started(child)
+      :ok = Opus.Record.write_started(interactive, child)
 
       assert row_origin(root.id) == :schedule
       assert row_origin(child.id) == :schedule
@@ -914,7 +914,7 @@ defmodule Cyfr.AdmissionOriginTest do
   # its edge to the dependency.
   defp tincture_profile!(ctx, node, kind) do
     id = "prof_#{kind}_#{System.unique_integer([:positive])}"
-    {:ok, _ref, _type, component} = Opus.Admission.inspect_component(ctx, node)
+    {:ok, component, _ref} = Compendium.Component.resolve_component(ctx, node)
     {:ok, %{graph: activation}} = Compendium.Activation.resolve_verified(ctx, component)
 
     :ok =

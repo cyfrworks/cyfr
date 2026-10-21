@@ -1415,8 +1415,6 @@ defmodule Sanctum.VaultTest do
 
       :ok = Vault.delete(ctx, view.id)
       assert_receive %Cyfr.Bus.VaultEntryChanged{kind: :delete, name: "moved"}
-
-      assert :rename in Emissary.External.Reconciler.relevant_verbs()
     end
 
     defp view_fields(_ctx, view) do

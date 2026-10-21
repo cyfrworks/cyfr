@@ -310,7 +310,7 @@ defmodule Compendium.ProjectionReconcilerTest do
   describe "the process" do
     # Never restarted: a case about a reconciler that is gone keeps it gone.
     defp start!(opts) do
-      name = :"projection_reconciler_#{System.unique_integer([:positive])}"
+      name = :projection_reconciler_under_test
       opts = Keyword.merge([name: name, enabled: true], opts)
 
       pid =
@@ -325,23 +325,31 @@ defmodule Compendium.ProjectionReconcilerTest do
     # when the test's connection goes.
     defp settle(pid), do: :sys.get_state(pid)
 
+    # The node's handlers that send to the reconciler registered as `name`.
+    defp handlers(name) do
+      for %{config: %{name: ^name}, function: function} = handler <-
+            :telemetry.list_handlers([]),
+          function == (&ProjectionReconciler.handle_event/4),
+          do: handler
+    end
+
+    # The notification lost: the reconciler's handlers go, as a node that
+    # never delivered them would leave it.
+    defp lose_notifications!(name) do
+      for %{id: id} <- handlers(name), do: :ok = :telemetry.detach(id)
+      assert handlers(name) == []
+    end
+
     test "attaches exactly the catalog's :projection roster, and detaches when it stops" do
       {name, pid} = start!(interval_ms: :timer.hours(1))
       settle(pid)
 
-      attached =
-        for %{id: id, event_name: event} <- :telemetry.list_handlers([]),
-            id == ProjectionReconciler.handler_id(name),
-            do: event
-
+      attached = for %{event_name: event} <- handlers(name), do: event
       assert Enum.sort(attached) == Cyfr.Telemetry.Catalog.consumed_by(:projection)
 
       :ok = stop_supervised!(name)
 
-      assert Enum.all?(
-               :telemetry.list_handlers([]),
-               &(&1.id != ProjectionReconciler.handler_id(name))
-             )
+      assert handlers(name) == []
     end
 
     test "not enabled, it starts, attaches nothing and ticks nothing", %{actor: actor, name: name} do
@@ -352,10 +360,7 @@ defmodule Compendium.ProjectionReconcilerTest do
       refute caught_up?(actor)
       assert Process.alive?(pid)
 
-      refute Enum.any?(
-               :telemetry.list_handlers([]),
-               &(&1.id == ProjectionReconciler.handler_id(process))
-             )
+      assert handlers(process) == []
     end
 
     test "a notification reconciles the athanor it names", %{actor: actor, name: name} do
@@ -371,7 +376,7 @@ defmodule Compendium.ProjectionReconcilerTest do
     test "a lost notification is recovered by the tick", %{actor: actor, name: name} do
       {process, pid} = start!(interval_ms: 25)
       settle(pid)
-      ProjectionReconciler.detach(process)
+      lose_notifications!(process)
 
       lay!(actor, name, "recovered")
       assert eventually(fn -> caught_up?(actor) end)
@@ -400,7 +405,7 @@ defmodule Compendium.ProjectionReconcilerTest do
     } do
       {process, pid} = start!(interval_ms: :timer.hours(1))
       settle(pid)
-      ProjectionReconciler.detach(process)
+      lose_notifications!(process)
       Process.exit(pid, :kill)
       refute Process.alive?(pid)
 

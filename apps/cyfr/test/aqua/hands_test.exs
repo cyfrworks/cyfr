@@ -87,8 +87,8 @@ defmodule Aqua.HandsTest do
   end
 
   test "request_setup.open is auto-only and builds no child call" do
-    assert Hands.auto_only?("request_setup", "open")
-    refute Hands.auto_only?("files", "read")
+    assert Sanctum.VirtualTools.auto_only?("request_setup", "open")
+    refute Sanctum.VirtualTools.auto_only?("files", "read")
     assert {:error, _} = Hands.child_call("request_setup", "open", %{})
   end
 end

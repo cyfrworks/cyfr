@@ -176,6 +176,7 @@ defmodule Prima.RefusalTest do
     {{:corrupt, :person_identity}, :corrupt},
     {{:corrupt, {:component_graph, "c:local.x:1.0.0"}}, :corrupt},
     {{:corrupt, {:artifact, "sha256:ab12"}}, :corrupt},
+    {{:corrupt, {:execution, "exec_1"}}, :corrupt},
     {{:component_type_mismatch, :formula, :reagent}, :invalid_argument},
     {:invalid_component_type, :invalid_argument},
     {{:corrupt, {:settings, :retention}}, :corrupt},
@@ -311,7 +312,7 @@ defmodule Prima.RefusalTest do
     {{:payload_not_retained, :expired}, :unavailable},
     {:not_cancellable, :conflict},
     {:not_running, :conflict},
-    {:engine_starting, :unavailable},
+    {:no_worker_for_target, :unavailable},
     {{:slot_refused, "The execution slots are full"}, :conflict},
     {:replayed, :conflict},
     {:capacity, :rate_limited},
@@ -456,6 +457,13 @@ defmodule Prima.RefusalTest do
         assert %Refusal{class: ^class, message: ^sentence} = Refusal.classify(reason),
                "#{inspect(reason)} reads as #{inspect(Refusal.classify(reason))}"
       end
+    end
+
+    test "a webhook delivery whose target no worker serves reads as unavailable, in its words" do
+      assert %Refusal{
+               class: :unavailable,
+               message: "No worker serves this webhook's target; try again when one does."
+             } = Refusal.classify(:no_worker_for_target)
     end
 
     test "an access row whose payload lacks a part is no sentence of its own" do
@@ -605,6 +613,9 @@ defmodule Prima.RefusalTest do
 
       assert Refusal.message({:corrupt, :person_identity}) ==
                "This person's identity record is missing, so it cannot be used."
+
+      assert Refusal.message({:corrupt, {:execution, "exec_secret"}}) ==
+               "The stored execution record is damaged."
 
       assert Refusal.message({:corrupt, {:settings, :retention}}) ==
                "The stored retention settings are damaged."

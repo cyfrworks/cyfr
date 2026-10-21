@@ -115,7 +115,9 @@ defmodule Compendium.ComponentFeaturesAdmissionTest do
       |> Enum.map(&Path.relative_to(&1, @root))
       |> Enum.sort()
 
-    {tracked, 0} = System.cmd("git", ["-C", @root, "ls-files", "*.wasm"])
+    # git runs with PATH alone of this environment.
+    env = for {name, _} <- System.get_env(), name != "PATH", do: {name, nil}
+    {tracked, 0} = System.cmd("git", ["-C", @root, "ls-files", "*.wasm"], env: env)
     assert found == tracked |> String.split("\n", trim: true) |> Enum.sort()
 
     refused =

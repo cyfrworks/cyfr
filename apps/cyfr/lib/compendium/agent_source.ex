@@ -44,22 +44,6 @@ defmodule Compendium.AgentSource do
   @type_name Prima.AgentRef.type()
   @publisher "local"
 
-  @doc "The source type an agent ref carries: `agent`."
-  @spec type() :: String.t()
-  defdelegate type(), to: Prima.AgentRef
-
-  @doc "The name-level ref of the agent `name`: `agent:local.<name>`."
-  @spec ref(String.t()) :: String.t()
-  defdelegate ref(name), to: Prima.AgentRef
-
-  @doc "The soul's name-level ref: `agent:local.aqua`."
-  @spec soul_ref() :: String.t()
-  defdelegate soul_ref(), to: Prima.AgentRef
-
-  @doc "Whether `ref` names an agent source."
-  @spec agent_ref?(String.t()) :: boolean()
-  defdelegate agent_ref?(ref), to: Prima.AgentRef
-
   @doc """
   The row of every enabled agent in the athanor's tree, the soul first.
   A file that fails to parse has no row.
@@ -122,7 +106,7 @@ defmodule Compendium.AgentSource do
 
     optional =
       Enum.map(clones, fn glob ->
-        %{"ref" => ref(String.trim_trailing(glob, ".*")), "optional" => true}
+        %{"ref" => Prima.AgentRef.ref(String.trim_trailing(glob, ".*")), "optional" => true}
       end)
 
     dependencies =
@@ -156,10 +140,6 @@ defmodule Compendium.AgentSource do
     }
   end
 
-  @doc "Whether `name` is the athanor's soul."
-  @spec soul?(String.t()) :: boolean()
-  defdelegate soul?(name), to: Prima.AgentRef
-
   @doc "The overlay unit an agent's file is: what `Arca.Overlay.unit_status/2` classifies."
   @spec unit(String.t()) :: Arca.Storage.path()
   def unit(name) when is_binary(name), do: AquaPath.agent_file(name)
@@ -192,7 +172,7 @@ defmodule Compendium.AgentSource do
     {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
 
     %{
-      id: ref(agent.name),
+      id: Prima.AgentRef.ref(agent.name),
       component_type: @type_name,
       publisher: @publisher,
       name: agent.name,

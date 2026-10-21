@@ -156,7 +156,6 @@
 0.7	apps/cyfr/test/aqua/providers/notes_test.exs
 0.5	apps/cyfr/test/aqua/providers/thread_test.exs
 0.1	apps/cyfr/test/aqua/recovery_policy_test.exs
-0.0	apps/cyfr/test/aqua/role_policy_test.exs
 0.1	apps/cyfr/test/aqua/room_excerpt_test.exs
 0.0	apps/cyfr/test/aqua/roster_test.exs
 0.1	apps/cyfr/test/aqua/runner/recovery_table_test.exs
@@ -423,8 +422,8 @@
 0.1	apps/cyfr/test/emissary/mcp/plane_taxonomy_test.exs
 0.2	apps/cyfr/test/emissary/mcp/progress_test.exs
 0.3	apps/cyfr/test/emissary/mcp/resource_admission_test.exs
-0.0	apps/cyfr/test/emissary/mcp/resource_provider_test.exs
 0.0	apps/cyfr/test/emissary/mcp/resource_read_audit_test.exs
+0.0	apps/cyfr/test/emissary/mcp/resource_scheme_test.exs
 0.2	apps/cyfr/test/emissary/mcp/router_tenancy_test.exs
 0.6	apps/cyfr/test/emissary/mcp/router_test.exs
 0.1	apps/cyfr/test/emissary/mcp/server_discover_test.exs
@@ -449,7 +448,6 @@
 5.7	apps/cyfr/test/emissary/web/controllers/mcp_transport_test.exs
 0.1	apps/cyfr/test/emissary/web/controllers/oauth_callback_controller_test.exs
 0.4	apps/cyfr/test/emissary/web/controllers/restore_controller_test.exs
-0.2	apps/cyfr/test/emissary/web/controllers/session_controller_test.exs
 4.3	apps/cyfr/test/emissary/web/controllers/tincture_controller_test.exs
 9.7	apps/cyfr/test/emissary/web/controllers/tincture_data_controller_test.exs
 0.7	apps/cyfr/test/emissary/web/controllers/webhook_controller_test.exs
@@ -462,11 +460,11 @@
 0.9	apps/cyfr/test/integration/multi_tenant_isolation_test.exs
 0.3	apps/cyfr/test/integration/runtime/activation_stamping_test.exs
 9.9	apps/cyfr/test/integration/runtime/attached_fetch_test.exs
-0.7	apps/cyfr/test/integration/runtime/authority_execution_characterization_test.exs
+0.7	apps/cyfr/test/integration/runtime/authority_execution_test.exs
 0.2	apps/cyfr/test/integration/runtime/authority_plumbing_test.exs
 0.6	apps/cyfr/test/integration/runtime/bootstrap_first_run_test.exs
-0.1	apps/cyfr/test/integration/runtime/budget_concurrency_characterization_test.exs
-0.8	apps/cyfr/test/integration/runtime/cancel_cascade_characterization_test.exs
+0.1	apps/cyfr/test/integration/runtime/budget_concurrency_test.exs
+0.8	apps/cyfr/test/integration/runtime/cancel_cascade_test.exs
 1.2	apps/cyfr/test/integration/runtime/chain_test.exs
 0.2	apps/cyfr/test/integration/runtime/execution_provenance_test.exs
 1.2	apps/cyfr/test/integration/runtime/executor_cancel_penalty_test.exs
@@ -485,7 +483,6 @@
 1.9	apps/cyfr/test/integration/runtime/orphan_children_test.exs
 0.1	apps/cyfr/test/integration/runtime/relay_flow_test.exs
 0.1	apps/cyfr/test/integration/runtime/resource_limits_test.exs
-0.1	apps/cyfr/test/integration/runtime/restart_required_test.exs
 0.9	apps/cyfr/test/integration/runtime/retained_input_test.exs
 0.3	apps/cyfr/test/integration/runtime/runner_reuse_test.exs
 6.5	apps/cyfr/test/integration/runtime/secret_audit_test.exs
@@ -529,7 +526,7 @@
 4.5	apps/cyfr/test/opus/host_test.exs
 0.0	apps/cyfr/test/opus/keys_test.exs
 0.6	apps/cyfr/test/opus/lease_watch_test.exs
-0.4	apps/cyfr/test/opus/mcp_cutover_test.exs
+0.4	apps/cyfr/test/opus/mcp_ingress_test.exs
 7.6	apps/cyfr/test/opus/provider_test.exs
 2.1	apps/cyfr/test/opus/providers/feed_test.exs
 0.3	apps/cyfr/test/opus/rates_test.exs

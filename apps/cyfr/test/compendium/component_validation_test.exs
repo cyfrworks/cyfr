@@ -2,80 +2,66 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Compendium.ComponentValidationTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   # Component-identity validation lives with the registry (the component domain),
   # not the Arca storage layer — Arca persists already-validated attributes.
   alias Compendium.Registry
 
-  @valid_attrs %{
-    name: "my-tool",
-    version: "1.0.0",
-    component_type: "catalyst",
-    publisher: "local"
-  }
+  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
 
-  describe "validate_attrs/1" do
-    test "accepts valid attributes" do
-      assert :ok = Registry.validate_attrs(@valid_attrs)
+  @valid_attrs %{name: "my-tool", version: "1.0.0", type: "reagent", publisher: "local"}
+
+  setup tags do
+    Arca.Cache.init()
+    Cyfr.Test.Sandbox.setup!(tags)
+
+    original_base_path = Application.fetch_env!(:arca, :base_path)
+    on_exit(fn -> Application.put_env(:arca, :base_path, original_base_path) end)
+
+    test_path = Path.join(System.tmp_dir!(), "component_validation_#{:rand.uniform(1_000_000)}")
+    on_exit(fn -> File.rm_rf!(test_path) end)
+    Application.put_env(:arca, :base_path, test_path)
+
+    {:ok, ctx: Sanctum.TestContext.local()}
+  end
+
+  describe "publishing a component's identity" do
+    test "accepts valid attributes", %{ctx: ctx} do
+      assert {:ok, %{name: "my-tool", version: "1.0.0"}} =
+               Registry.publish_bytes(ctx, @wasm, @valid_attrs)
     end
 
-    test "rejects missing name" do
-      attrs = Map.delete(@valid_attrs, :name)
-      assert {:error, {:missing_required, :name}} = Registry.validate_attrs(attrs)
+    test "refuses a missing or empty name, version or type", %{ctx: ctx} do
+      for key <- [:name, :version, :type] do
+        assert {:error, {:missing_required, ^key}} =
+                 Registry.publish_bytes(ctx, @wasm, Map.delete(@valid_attrs, key))
+
+        assert {:error, {:missing_required, ^key}} =
+                 Registry.publish_bytes(ctx, @wasm, %{@valid_attrs | key => ""})
+      end
     end
 
-    test "rejects empty name" do
-      attrs = %{@valid_attrs | name: ""}
-      assert {:error, {:missing_required, :name}} = Registry.validate_attrs(attrs)
+    test "refuses an invalid name, version, type or publisher", %{ctx: ctx} do
+      for {key, value} <- [
+            name: "MY_CAPS",
+            version: "not-semver",
+            type: "widget",
+            publisher: "UPPER_CASE"
+          ] do
+        assert {:error, _} = Registry.publish_bytes(ctx, @wasm, %{@valid_attrs | key => value}),
+               "#{key} #{inspect(value)} was accepted"
+      end
     end
 
-    test "rejects missing version" do
-      attrs = Map.delete(@valid_attrs, :version)
-      assert {:error, {:missing_required, :version}} = Registry.validate_attrs(attrs)
-    end
+    test "refuses an invalid type or publisher before the unit is written", %{ctx: ctx} do
+      assert {:error, {:invalid_type, _}} =
+               Registry.publish_bytes(ctx, @wasm, %{@valid_attrs | type: "widget"})
 
-    test "rejects missing component_type" do
-      attrs = Map.delete(@valid_attrs, :component_type)
+      assert {:error, {:invalid_publisher, _}} =
+               Registry.publish_bytes(ctx, @wasm, %{@valid_attrs | publisher: "UPPER_CASE"})
 
-      assert {:error, {:missing_required, :component_type}} =
-               Registry.validate_attrs(attrs)
-    end
-
-    test "rejects missing publisher" do
-      attrs = Map.delete(@valid_attrs, :publisher)
-      assert {:error, {:missing_required, :publisher}} = Registry.validate_attrs(attrs)
-    end
-
-    test "rejects invalid name format" do
-      attrs = %{@valid_attrs | name: "MY_CAPS"}
-      assert {:error, _} = Registry.validate_attrs(attrs)
-    end
-
-    test "rejects invalid version format" do
-      attrs = %{@valid_attrs | version: "not-semver"}
-      assert {:error, _} = Registry.validate_attrs(attrs)
-    end
-
-    test "rejects invalid component_type" do
-      attrs = %{@valid_attrs | component_type: "widget"}
-      assert {:error, _} = Registry.validate_attrs(attrs)
-    end
-
-    test "rejects invalid publisher format" do
-      attrs = %{@valid_attrs | publisher: "UPPER_CASE"}
-      assert {:error, _} = Registry.validate_attrs(attrs)
-    end
-
-    test "accepts string keys" do
-      attrs = %{
-        "name" => "my-tool",
-        "version" => "1.0.0",
-        "component_type" => "catalyst",
-        "publisher" => "local"
-      }
-
-      assert :ok = Registry.validate_attrs(attrs)
+      assert {:error, :not_found} = Registry.get(ctx, "my-tool", "1.0.0", "UPPER_CASE", "reagent")
     end
   end
 end

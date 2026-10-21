@@ -36,8 +36,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
     keys = [
       arca: :seed_path,
       cyfr: :locus_runtime_workers,
-      cyfr: :registry_url,
-      cyfr: :registry_scheme
+      cyfr: :registry_url
     ]
 
     prev = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
@@ -54,8 +53,8 @@ defmodule Aqua.Loop.CatalogSourcesTest do
 
     Application.put_env(:arca, :seed_path, @seed_root)
     bypass = Bypass.open()
+    # A loopback registry is reached over http (`Compendium.RegistryHost.base_url/1`).
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
-    Application.put_env(:cyfr, :registry_scheme, "http")
 
     # The loops' work stops before their tree is removed and the seed tree restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()
@@ -99,27 +98,27 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   end
 
   describe "a local component's inspection" do
-    # Sol's T6b review regression (F1): the inspection of a local root
-    # carries the entries a pulled dependency's own manifest declares.
+    # The inspection of a local root carries the entries a pulled
+    # dependency's own manifest declares.
     test "keeps a pulled dependency's prose outside before a standing allow is judged",
          %{ctx: ctx, thread: thread} do
       remote_reason = "REMOTE_PROSE_FROM_ACME"
 
       entries = [
-        {"acme", "sol-loop-dep",
+        {"acme", "loop-dep",
          %{
            "dependencies" => %{
              "static" => [
                %{
-                 "ref" => "reagent:local.sol-optional-leaf:1.0.0",
+                 "ref" => "reagent:local.optional-leaf:1.0.0",
                  "optional" => true,
                  "reason" => remote_reason
                }
              ]
            }
          }},
-        {"local", "sol-loop-root",
-         %{"dependencies" => %{"static" => [%{"ref" => "reagent:acme.sol-loop-dep:1.0.0"}]}}}
+        {"local", "loop-root",
+         %{"dependencies" => %{"static" => [%{"ref" => "reagent:acme.loop-dep:1.0.0"}]}}}
       ]
 
       wasm = File.read!(Path.expand("../../support/test_wasm/math.wasm", __DIR__))
@@ -156,7 +155,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
 
       script!([
         calls([
-          {"c1", "component.inspect", %{"reference" => "reagent:local.sol-loop-root:1.0.0"}}
+          {"c1", "component.inspect", %{"reference" => "reagent:local.loop-root:1.0.0"}}
         ]),
         calls([{"c2", "notes.keep", %{"name" => "dependency-info", "content" => remote_reason}}]),
         reply("kept")
@@ -169,7 +168,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
       assert %{outcome: "ok", content: content} = step_result(ctx, turn, "c1")
       assert content =~ remote_reason
 
-      assert Source.outside("reagent:acme.sol-loop-dep") in sources(ctx, turn)
+      assert Source.outside("reagent:acme.loop-dep") in sources(ctx, turn)
       assert outcome == {:paused, :approval}
       assert %{approval_id: approval_id} = step(ctx, turn, "c2")
       assert is_binary(approval_id)
@@ -242,8 +241,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
         kind = unquote(kind)
         soul_policy!(ctx, %{"registry.#{action}" => "ask"})
 
-        # A row written past the rule that now refuses it, as one written
-        # while the action was declared a write.
+        # An allow row the rule refuses, written straight to storage.
         {:ok, _} =
           Arca.ToolGrantStorage.put(%{
             athanor_id: ctx.athanor_id,
@@ -303,7 +301,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
   # for the shape that moved.
   defp soul_policy!(ctx, patch) do
     {:ok, _} =
-      Aqua.AgentConfig.call_aqua(ctx, %{
+      Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
         "name" => "aqua",
         "tool_policy_patch" => patch
@@ -325,7 +323,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
 
   # A thread allow with no bounds, naming no outside source.
   defp allow!(ctx, thread, tool, action) do
-    Aqua.ToolGrants.put(ctx, %{
+    Sanctum.ToolGrants.put(ctx, %{
       scope: "thread",
       effect: "allow",
       thread_id: thread.id,

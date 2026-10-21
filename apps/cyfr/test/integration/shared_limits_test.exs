@@ -30,7 +30,7 @@ defmodule Cyfr.SharedLimitsTest do
   import Prima.Test.Wait
 
   alias Prima.Authority
-  alias Opus.{Attempt, Keys, Rates, Sweeper}
+  alias Opus.{Attempt, Keys, Sweeper}
   alias Prima.Slots
   alias Cyfr.Test.{RuntimeService, ScriptedWorker}
   alias Cyfr.Test.TwoServices.Wire
@@ -127,7 +127,7 @@ defmodule Cyfr.SharedLimitsTest do
     assert length(ScriptedWorker.calls()) == 5
 
     assert {:ok, 10, 0, _window_ms} =
-             Rates.status(Sanctum.Context.actor(ctx), @stub_ref, %{rate_limit: @rate})
+             Arca.RateWindows.estimate(Sanctum.Context.actor(ctx), @stub_ref, 10, 60_000)
 
     # A refused invocation is recorded failed, and no runner claims it.
     for service <- [@local, @other] do
@@ -143,7 +143,7 @@ defmodule Cyfr.SharedLimitsTest do
     wait_until(fn -> RuntimeService.status().attempts == [] end, 10_000)
 
     assert {:ok, 10, 0, _window_ms} =
-             Rates.status(Sanctum.Context.actor(ctx), @stub_ref, %{rate_limit: @rate})
+             Arca.RateWindows.estimate(Sanctum.Context.actor(ctx), @stub_ref, 10, 60_000)
   end
 
   # ---------------------------------------------------------------------------

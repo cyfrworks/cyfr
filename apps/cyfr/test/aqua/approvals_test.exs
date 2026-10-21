@@ -55,12 +55,19 @@ defmodule Aqua.ApprovalsTest do
     {:ok, %{profile_id: profile_id, consent_id: consent_id}} =
       Opus.authority_for(ctx, :default, @soul)
 
-    {:ok, %{capability_digest: capability}} = Compendium.AgentIndex.snapshot(ctx, "aqua")
+    {:ok, %{revision_digest: revision, capability_digest: capability}} =
+      Compendium.AgentIndex.snapshot(ctx, "aqua")
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
     :ok = Aqua.Runner.subscribe(thread.id, ctx.athanor_id)
 
-    pins = %{profile_id: profile_id, consent_id: consent_id, agent_capability_digest: capability}
+    pins = %{
+      profile_id: profile_id,
+      consent_id: consent_id,
+      agent_revision_digest: revision,
+      agent_capability_digest: capability
+    }
+
     {:ok, ctx: ctx, thread: thread, pins: pins}
   end
 
@@ -314,7 +321,7 @@ defmodule Aqua.ApprovalsTest do
       # What put files.write in the soul's policy: an earlier answer, for
       # this run and data/notes/ alone, at agent scope.
       {:ok, _} =
-        Aqua.ToolGrants.put(ctx, %{
+        Sanctum.ToolGrants.put(ctx, %{
           scope: "agent",
           effect: "allow",
           agent_name: "aqua",
@@ -442,7 +449,7 @@ defmodule Aqua.ApprovalsTest do
       # wildcard. What put files.write in the policy is an earlier answer
       # for this run and data/notes/ alone.
       {:ok, _} =
-        Aqua.ToolGrants.put(ctx, %{
+        Sanctum.ToolGrants.put(ctx, %{
           scope: "agent",
           effect: "allow",
           agent_name: "aqua",
@@ -588,7 +595,7 @@ defmodule Aqua.ApprovalsTest do
 
     # And the model is told, in the row it reads as the call's result, that
     # the action did not run — the denial it observes instead of waiting.
-    rows = Tape.latest_messages(ctx, thread.id, 50)
+    rows = Threads.latest_messages(Sanctum.Context.actor(ctx), thread.id, 50)
     result = Enum.find(rows, &(&1.kind == "tool_result" and payload_of(&1)["step_id"] == step.id))
 
     assert result, "the expired call left no result for the model to read"
@@ -969,6 +976,20 @@ defmodule Aqua.ApprovalsTest do
         Sanctum.Tenancy.Athanors.put_settings(athanor, %{"approvals" => %{"expiry_hours" => 0}})
 
       assert Approvals.ttl_seconds(ctx) == 24 * 3600
+    end
+
+    test "refuses a configured default that is not a positive integer" do
+      ctx = Sanctum.TestContext.local(:prism)
+      configured = Application.fetch_env!(:cyfr, Approvals)
+      on_exit(fn -> Application.put_env(:cyfr, Approvals, configured) end)
+
+      for bad <- [0, -1, "24", nil] do
+        Application.put_env(:cyfr, Approvals, expiry_hours: bad)
+        assert_raise ArgumentError, ~r/expiry_hours/, fn -> Approvals.ttl_seconds(ctx) end
+      end
+
+      Application.put_env(:cyfr, Approvals, [])
+      assert_raise KeyError, fn -> Approvals.ttl_seconds(ctx) end
     end
   end
 end

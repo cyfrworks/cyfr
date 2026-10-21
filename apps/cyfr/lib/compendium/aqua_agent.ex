@@ -34,11 +34,11 @@ defmodule Compendium.AquaAgent do
   scalars plus the one flat string→string map (`tool_policy`) — enough for
   portability, small enough that `serialize/1` can emit it byte-stably.
   The policy's own grammar — keys `tool.action`, `tool.*` or
-  `native_search`, values `ask` or `auto` — is `check_tool_policy/1`, the
-  one rule the file parser and the `aqua` tool door both apply, so a
-  value the runtime would otherwise have to reinterpret never lands. What
-  an authored policy may say on top of that grammar is
-  `validate_tool_policy/2`, the door's rule alone.
+  `native_search`, values `ask` or `auto` — is the one rule the file
+  parser and the `aqua` tool door both apply, so a value the runtime would
+  otherwise have to reinterpret never lands; both also refuse a key that
+  has no effect on the agent that holds it. What an authored policy may
+  say on top of that is `validate_tool_policy/2`, the door's rule alone.
   `parse_frontmatter/1` is shared with the scrolls (`SKILL.md` files under
   `aqua/skills/` follow the open Agent Skills convention: `name` +
   `description` frontmatter, instructions as the body).
@@ -66,7 +66,8 @@ defmodule Compendium.AquaAgent do
   @doc """
   Parse one agent file. The name comes from the filename (`<name>.md`),
   never from the frontmatter — the tree is the roster. A `tool_policy`
-  outside the grammar refuses the whole file with its typed reason
+  outside the grammar, or holding a key with no effect on the agent the
+  name makes it, refuses the whole file with its typed reason
   (`t:tool_policy_error/0`) rather than parsing to something the runtime
   would have to guess at.
   """
@@ -74,7 +75,8 @@ defmodule Compendium.AquaAgent do
   def parse(name, binary) when is_binary(name) and is_binary(binary) do
     with {:ok, meta, body} <- parse_frontmatter(binary),
          policy = policy_or_empty(meta["tool_policy"]),
-         :ok <- check_tool_policy(policy) do
+         :ok <- check_tool_policy(policy),
+         :ok <- check_effect(policy, type_of_name(name)) do
       {:ok,
        %{
          name: name,
@@ -198,10 +200,6 @@ defmodule Compendium.AquaAgent do
   @spec clone_glob(String.t()) :: String.t()
   def clone_glob(name) when is_binary(name), do: name <> ".*"
 
-  @doc "Whether this agent is the athanor's soul, by the one reserved name."
-  @spec soul?(t()) :: boolean()
-  def soul?(%{name: name}), do: AquaPath.soul?(name)
-
   @soul_type "soul"
   @role_type "role"
 
@@ -219,10 +217,12 @@ defmodule Compendium.AquaAgent do
 
   @doc """
   An agent's wire `type`, decided by the tree: the reserved name is the
-  soul, every other name a role (`soul?/1`).
+  soul (`Compendium.AquaPath.soul?/1`), every other name a role.
   """
   @spec type_of(t()) :: String.t()
-  def type_of(agent), do: if(soul?(agent), do: @soul_type, else: @role_type)
+  def type_of(%{name: name}), do: type_of_name(name)
+
+  defp type_of_name(name), do: if(AquaPath.soul?(name), do: @soul_type, else: @role_type)
 
   @doc """
   The security-relevant subset of an agent, as a manifest: what it is
@@ -285,16 +285,14 @@ defmodule Compendium.AquaAgent do
           | {:tool_policy_invalid_value, String.t(), term()}
           | {:tool_policy_no_effect, String.t()}
 
-  @doc """
-  Check a `tool_policy` map against the grammar the runtime reads: every
-  key is `tool.action`, `tool.*` or the bare `native_search`, every value
-  exactly `"ask"` or `"auto"`. The guest treats only `"auto"` as
-  automatic and anything else as ask, so a value outside the vocabulary is
-  refused here — at the file and at the tool door alike — rather than
-  persisted for the runtime to reinterpret.
-  """
+  # A `tool_policy` map against the grammar the runtime reads: every key is
+  # `tool.action`, `tool.*` or the bare `native_search`, every value exactly
+  # `"ask"` or `"auto"`. The guest treats only `"auto"` as automatic and
+  # anything else as ask, so a value outside the vocabulary is refused here
+  # — at the file and at the tool door alike — rather than persisted for the
+  # runtime to reinterpret.
   @spec check_tool_policy(term()) :: :ok | {:error, tool_policy_error()}
-  def check_tool_policy(policy) when is_map(policy) do
+  defp check_tool_policy(policy) when is_map(policy) do
     Enum.find_value(policy, :ok, fn {key, value} ->
       cond do
         not valid_policy_key?(key) -> {:error, {:tool_policy_invalid_key, key}}
@@ -304,11 +302,11 @@ defmodule Compendium.AquaAgent do
     end)
   end
 
-  def check_tool_policy(_policy), do: {:error, :tool_policy_not_a_map}
+  defp check_tool_policy(_policy), do: {:error, :tool_policy_not_a_map}
 
   @doc """
-  What an AUTHORED `tool_policy` may say: the grammar
-  (`check_tool_policy/1`) first, then the rules a write door applies on
+  What an AUTHORED `tool_policy` may say: the grammar first, then the
+  rules a write door applies on
   top of it. A door refuses what a person must not be able to write: a
   UI event held at anything but `auto`, an automatic destructive or
   external action on any agent, a `tool.*` glob at `auto` whose actions
@@ -317,11 +315,10 @@ defmodule Compendium.AquaAgent do
   a key that has no effect on a role (`{:tool_policy_no_effect, key}`):
   `execution.run`, because a role launches nothing and every launch asks.
 
-  The parser keeps grammar only, so a hand-edited file still loads, and a
-  role copied into an athanor before its shipped version dropped
-  `execution.run` loads with the key it has no use for; the assistant's
-  runtime ceiling demotes whatever loaded anyway, so a file written past
-  this door reaches the guest already demoted.
+  The parser holds a file to the grammar and to the no-effect rule only, so
+  a hand-edited file that says more than a door would allow still loads;
+  the assistant's runtime ceiling demotes whatever loaded, so a file
+  written past this door reaches the guest already demoted.
 
   An action's kind is the gate's classification (`Sanctum.Catalog.tool_kind/2`:
   a virtual hand's from `Sanctum.VirtualTools`, `:external` for a

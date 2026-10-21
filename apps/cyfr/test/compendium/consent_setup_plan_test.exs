@@ -838,8 +838,8 @@ defmodule Compendium.ConsentSetupPlanTest do
     {:ok, digest} = Sanctum.VaultReader.binding_digest(row)
     key = Prima.Authority.Blob.binding_key(ref, "@ingress", nil)
 
-    # A head written before a binding was held to its disclosure: the
-    # slot of a manifest declaring no need, bound to an attach-only entry.
+    # A head whose slot, of a manifest declaring no need, is bound to an
+    # attach-only entry the component reads itself.
     vault = %{
       "entry_id" => view.id,
       "binding_digest" => digest,
@@ -929,5 +929,45 @@ defmodule Compendium.ConsentSetupPlanTest do
 
     assert plan.consent.needs == []
     assert plan.ready
+  end
+
+  @tag :capture_log
+  test "a stored manifest that does not decode is damage to the setup plan and the inspect",
+       %{ctx: ctx} do
+    publish!(ctx, "plan-torn")
+
+    Arca.Repo.update_all(
+      Ecto.Query.from(c in Arca.Schemas.Component, where: c.name == "plan-torn"),
+      set: [manifest: "{not json"]
+    )
+
+    damage = {:corrupt, {:manifest, "reagent:local.plan-torn:1.0.0"}}
+
+    assert {:error, ^damage} = Compendium.Component.setup_plan(ctx, "reagent:local.plan-torn")
+
+    assert {:error, ^damage} =
+             Compendium.Component.inspect_component(ctx, "reagent:local.plan-torn")
+  end
+
+  @tag :capture_log
+  test "an installed dependency whose stored manifest does not decode is damage to the inspect",
+       %{ctx: ctx} do
+    child = "reagent:local.plan-torn-child:1.0.0"
+    publish!(ctx, "plan-torn-child")
+
+    publish_manifest!(ctx, "plan-whole-root", %{
+      "dependencies" => %{"static" => [%{"ref" => child}]}
+    })
+
+    assert {:ok, %{"dependencies" => [%{dependency_ref: ^child}], "all_satisfied" => true}} =
+             Compendium.Component.inspect_component(ctx, "reagent:local.plan-whole-root")
+
+    Arca.Repo.update_all(
+      Ecto.Query.from(c in Arca.Schemas.Component, where: c.name == "plan-torn-child"),
+      set: [manifest: "{not json"]
+    )
+
+    assert {:error, {:corrupt, {:manifest, ^child}}} =
+             Compendium.Component.inspect_component(ctx, "reagent:local.plan-whole-root")
   end
 end

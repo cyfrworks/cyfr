@@ -98,11 +98,21 @@ defmodule Opus.Schedules.ProviderTest do
               "catch_up_limit" => Opus.Schedules.Scheduler.max_catch_up() + 1
             },
             %{"missed_runs" => "skip", "catch_up_limit" => 2},
-            %{"catch_up_limit" => 2},
-            %{"missed_runs" => "sometimes"}
+            %{"catch_up_limit" => 2}
           ] do
         assert {:error, {:invalid_argument, _}} = create!(ctx, extra), inspect(extra)
       end
+
+      # A policy outside the declared two never reaches the handler.
+      assert {:error, {:invalid_argument, "Field 'missed_runs' is not an allowed value"}} =
+               cast(%{
+                 "action" => "create",
+                 "profile_id" => "prof-cron",
+                 "name" => "sometimes",
+                 "cron_expression" => "*/5 * * * *",
+                 "reference" => "reagent:local.test:1.0.0",
+                 "missed_runs" => "sometimes"
+               })
 
       {:ok, %{schedules: listed}} = Provider.handle("schedule", ctx, %{"action" => "list"})
       assert listed == []
@@ -480,36 +490,21 @@ defmodule Opus.Schedules.ProviderTest do
   end
 
   describe "profile binding" do
-    test "create without a profile_id is refused", %{ctx: ctx} do
-      assert {:error, message} =
-               Provider.handle("schedule", ctx, %{
+    # The declaration refuses an unbound schedule before any handler runs:
+    # the gate casts every call against it (`Prima.Operation.cast/2`).
+    test "create without a profile_id is refused by its declaration" do
+      assert {:error, {:invalid_argument, "Missing required field: profile_id"}} =
+               cast(%{
                  "action" => "create",
                  "name" => "unbound",
                  "cron_expression" => "0 * * * *",
                  "reference" => "reagent:local.test:1.0.0"
                })
-
-      assert message =~ "profile_id is required"
     end
 
-    test "update with an explicit nil profile_id (unbind) is refused", %{ctx: ctx} do
-      {:ok, created} =
-        Provider.handle("schedule", ctx, %{
-          "action" => "create",
-          "profile_id" => "prof-cron",
-          "name" => "no-unbind",
-          "cron_expression" => "0 * * * *",
-          "reference" => "reagent:local.test:1.0.0"
-        })
-
-      assert {:error, message} =
-               Provider.handle("schedule", ctx, %{
-                 "action" => "update",
-                 "schedule_id" => created.schedule_id,
-                 "profile_id" => nil
-               })
-
-      assert message =~ "profile_id is required"
+    test "update with an explicit nil profile_id (unbind) is refused by its declaration" do
+      assert {:error, {:invalid_argument, "Field 'profile_id' must be a string"}} =
+               cast(%{"action" => "update", "schedule_id" => "sched_x", "profile_id" => nil})
     end
 
     test "update that re-points the reference re-runs the binding gate", %{ctx: ctx} do
@@ -740,6 +735,98 @@ defmodule Opus.Schedules.ProviderTest do
     end
   end
 
+  describe "a target whose installed dependency's stored manifest is damaged" do
+    @torn_child "reagent:local.torn-child:1.0.0"
+
+    defp publish_torn_target!(ctx) do
+      for {name, manifest} <- [
+            {"torn-child", %{}},
+            {"torn-root", %{"dependencies" => %{"static" => [%{"ref" => @torn_child}]}}}
+          ] do
+        {:ok, _} =
+          Compendium.Registry.publish_bytes(ctx, @valid_wasm, %{
+            name: name,
+            version: "1.0.0",
+            type: "reagent",
+            manifest:
+              Jason.encode!(
+                Map.merge(%{"name" => name, "version" => "1.0.0", "type" => "reagent"}, manifest)
+              )
+          })
+      end
+
+      Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.torn-root",
+        profile_id: "prof-torn"
+      )
+    end
+
+    defp tear_child! do
+      Arca.Repo.update_all(
+        Ecto.Query.from(c in Arca.Schemas.Component, where: c.name == "torn-child"),
+        set: [manifest: "{not json"]
+      )
+    end
+
+    @tag :capture_log
+    test "create, update and re-resolve answer the damage and leave the schedules as they were",
+         %{ctx: ctx} do
+      publish_torn_target!(ctx)
+
+      {:ok, created} =
+        Provider.handle("schedule", ctx, %{
+          "action" => "create",
+          "profile_id" => "prof-torn",
+          "name" => "torn-target",
+          "cron_expression" => "0 * * * *",
+          "reference" => "reagent:local.torn-root:1.0.0"
+        })
+
+      {:ok, other} =
+        Provider.handle("schedule", ctx, %{
+          "action" => "create",
+          "profile_id" => "prof-cron",
+          "name" => "torn-other",
+          "cron_expression" => "0 * * * *",
+          "reference" => "reagent:local.test:1.0.0"
+        })
+
+      tear_child!()
+      damage = {:corrupt, {:manifest, @torn_child}}
+
+      assert {:error, ^damage} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "create",
+                 "profile_id" => "prof-torn",
+                 "name" => "torn-again",
+                 "cron_expression" => "0 * * * *",
+                 "reference" => "reagent:local.torn-root:1.0.0"
+               })
+
+      assert {:error, ^damage} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "re_resolve",
+                 "schedule_id" => created.schedule_id
+               })
+
+      assert {:error, ^damage} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => other.schedule_id,
+                 "reference" => "reagent:local.torn-root:1.0.0"
+               })
+
+      actor = Sanctum.Context.actor(ctx)
+      assert {:error, :not_found} = Arca.CronSchedule.get_by_id_or_name(actor, "torn-again")
+
+      {:ok, torn} = Arca.CronSchedule.get_by_id_or_name(actor, created.schedule_id)
+      assert torn.resolved_reference == "reagent:local.torn-root:1.0.0"
+
+      {:ok, untouched} = Arca.CronSchedule.get_by_id_or_name(actor, other.schedule_id)
+      assert untouched.reference == "reagent:local.test:1.0.0"
+      assert untouched.resolved_reference == "reagent:local.test:1.0.0"
+    end
+  end
+
   describe "re-resolve action" do
     test "re-resolve returns error for nonexistent schedule", %{ctx: ctx} do
       assert {:error, msg} =
@@ -776,15 +863,6 @@ defmodule Opus.Schedules.ProviderTest do
       assert msg =~ "Failed to re-resolve"
     end
 
-    test "re-resolve requires schedule_id", %{ctx: _ctx} do
-      assert {:error, msg} =
-               Provider.handle("schedule", %Context{}, %{
-                 "action" => "re_resolve"
-               })
-
-      assert msg =~ "Missing required argument: schedule_id"
-    end
-
     test "re-resolve re-checks the profile binding against the new version", %{ctx: ctx} do
       # Changing a schedule version must pass the same profile-binding gates as creation and update.
       {:ok, created} =
@@ -815,16 +893,17 @@ defmodule Opus.Schedules.ProviderTest do
   end
 
   describe "invalid actions" do
-    test "rejects unknown action", %{ctx: ctx} do
-      assert {:error, _} = Provider.handle("schedule", ctx, %{"action" => "nope"})
+    test "the declaration refuses an unknown or missing action" do
+      assert {:error, {:unknown_action, "schedule.nope"}} = cast(%{"action" => "nope"})
+      assert {:error, :action_missing} = cast(%{})
     end
 
-    test "rejects missing action", %{ctx: ctx} do
-      assert {:error, _} = Provider.handle("schedule", ctx, %{})
-    end
-
-    test "rejects unknown tool" do
-      assert {:error, _} = Provider.handle("unknown", %Context{}, %{})
+    test "the declaration refuses a call that names no schedule" do
+      for action <- ~w(get update pause resume delete re_resolve) do
+        assert {:error, {:invalid_argument, "Missing required field: schedule_id"}} =
+                 cast(%{"action" => action}),
+               action
+      end
     end
   end
 
@@ -880,6 +959,12 @@ defmodule Opus.Schedules.ProviderTest do
       assert {:ok, 3} = Arca.Test.CronSlots.occupied(Context.actor(ctx), "schedule")
       assert {:ok, 4} = Arca.Test.CronSlots.occupied(Context.actor(ctx), "feed")
     end
+  end
+
+  # The gate's cast of a call against the tool's declaration.
+  defp cast(args) do
+    [tool] = Provider.tools()
+    Prima.Operation.cast(tool, args)
   end
 
   defp schedule_args(name) do

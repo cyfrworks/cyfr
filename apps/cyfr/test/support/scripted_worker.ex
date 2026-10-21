@@ -292,7 +292,9 @@ defmodule Cyfr.Test.ScriptedWorker do
 
     # The host listener its runners reach CYFR at: the real one, on a port
     # of its own. Its drain is short, since the runners go first.
-    %{start: {module, function, args}} = HostListener.child_spec(port: 0, drain_ms: 1_000)
+    %{start: {module, function, args}} =
+      HostListener.child_spec(bind: {127, 0, 0, 1}, port: 0, drain_ms: 1_000)
+
     {:ok, host_listener} = apply(module, function, args)
 
     # Route the scripted references here and everything else to the worker

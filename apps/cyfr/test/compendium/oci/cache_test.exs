@@ -9,7 +9,7 @@ defmodule Compendium.OCI.CacheTest do
   describe "blob operations" do
     test "put and get blob" do
       content = :crypto.strong_rand_bytes(256)
-      digest = Compendium.OCI.Blob.compute_digest(content)
+      digest = Prima.Digest.sha256(content)
 
       assert :ok = Cache.put_blob(digest, content)
       assert {:ok, ^content} = Cache.get_blob(digest)
@@ -28,7 +28,7 @@ defmodule Compendium.OCI.CacheTest do
 
     test "detects corrupted cache entries" do
       content = "test content"
-      digest = Compendium.OCI.Blob.compute_digest(content)
+      digest = Prima.Digest.sha256(content)
       Cache.put_blob(digest, content)
 
       # `put_blob/2` writes whatever bytes it is given at the path the digest
@@ -105,26 +105,10 @@ defmodule Compendium.OCI.CacheTest do
     end
   end
 
-  describe "clear/0" do
-    test "removes all cached data" do
-      content = "test"
-      digest = Compendium.OCI.Blob.compute_digest(content)
-      Cache.put_blob(digest, content)
-      Cache.put_manifest("reg.io", "test/repo", "v1", "{}", "sha256:m")
-
-      assert {:ok, _} = Cache.get_blob(digest)
-
-      Cache.clear()
-
-      assert :miss = Cache.get_blob(digest)
-      assert :miss = Cache.get_manifest("reg.io", "test/repo", "v1")
-    end
-  end
-
   describe "layout" do
     test "the cache lives under a global root — never a tenant's tree" do
       content = "layout-witness"
-      digest = Compendium.OCI.Blob.compute_digest(content)
+      digest = Prima.Digest.sha256(content)
       Cache.put_blob(digest, content)
 
       ctx = Sanctum.system_context()

@@ -13,10 +13,6 @@ defmodule Aqua.ApprovalScope do
   @type t :: :once | :thread | :always | :never
   @scopes [:once, :thread, :always, :never]
 
-  @doc "Every scope, in the order a card offers them."
-  @spec all() :: [t()]
-  def all, do: @scopes
-
   @doc """
   The scope a string or atom names; anything else is `:once` — the answer
   that reaches no further than the click.
@@ -31,8 +27,4 @@ defmodule Aqua.ApprovalScope do
   @doc "The wire spelling of a scope."
   @spec to_string(t()) :: String.t()
   def to_string(scope) when scope in @scopes, do: Atom.to_string(scope)
-
-  @doc "Whether a scope is a STANDING answer — one that answers for calls nobody has seen yet."
-  @spec standing?(t()) :: boolean()
-  def standing?(scope), do: scope in [:thread, :always]
 end

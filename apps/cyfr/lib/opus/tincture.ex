@@ -3,7 +3,7 @@
 
 defmodule Opus.Tincture do
   @moduledoc """
-  A tincture invoking one of its dependencies (`Opus.invoke_tincture/3`).
+  A tincture invoking one of its dependencies (`invoke/3`).
 
   The route is the profile the run roots at. `:public` is the tincture's
   public address, whoever calls: the athanor its URL names, read through
@@ -125,20 +125,16 @@ defmodule Opus.Tincture do
     :telemetry.execute(@start, %{system_time: System.system_time()}, meta)
     started = System.monotonic_time()
 
-    # The endpoints start before the execution machinery; a call in that
-    # window is refused, never crashed. The run starts holding every class
-    # the tincture's declared reads may carry, since what its frame passes
-    # may carry anything the frame has read.
+    # The run starts holding every class the tincture's declared reads may
+    # carry, since what its frame passes may carry anything the frame has
+    # read. With no worker service answering, dispatch refuses it
+    # `:execution_unavailable` before anything is admitted.
     outcome =
-      if Opus.available?() do
-        Opus.run_root_edge(run_ctx, tincture_ref, reference, input,
-          route: route,
-          client_ip: ctx.client_ip,
-          frame_sources: frame_sources(tincture)
-        )
-      else
-        {:error, :engine_starting}
-      end
+      Opus.run_root_edge(run_ctx, tincture_ref, reference, input,
+        route: route,
+        client_ip: ctx.client_ip,
+        frame_sources: frame_sources(tincture)
+      )
 
     duration_ms =
       System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond)
@@ -192,9 +188,9 @@ defmodule Opus.Tincture do
 
   defp unconsented(reason), do: %{Prima.Refusal.classify(:consent_required) | reason: reason}
 
-  # What a caller is told as it is: a profile to grant, an engine still
-  # starting. Anything else is logged for the operator too.
-  defp expected?(reason) when reason in [:engine_starting | @unconsented], do: true
+  # What a caller is told as it is: a profile to grant, no worker service
+  # answering. Anything else is logged for the operator too.
+  defp expected?(reason) when reason in [:execution_unavailable | @unconsented], do: true
   defp expected?({:profile_unavailable, _status}), do: true
   defp expected?(_reason), do: false
 end

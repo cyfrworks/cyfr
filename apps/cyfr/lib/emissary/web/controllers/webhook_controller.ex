@@ -16,7 +16,9 @@ defmodule Emissary.Web.WebhookController do
   `Opus.run_root/5` via `Task.Supervisor.start_child/2`. The HTTP request
   returns `200 {"status":"accepted","request_id":...}` immediately — webhook
   senders only need a 2xx ack to consider delivery successful (Stripe /
-  GitHub / Twilio / PayPal docs all converge on this). The delivery is
+  GitHub / Twilio / PayPal docs all converge on this). A delivery whose
+  target no worker service runs (`Opus.available?/1`) is refused `503`
+  instead, which the sender retries. The delivery is
   one admission decision (`Sanctum.Decisions.open/3`), recorded with its
   request-log row before the run is spawned, under a call id minted beside
   the request id and carried on the context, so the root execution's row
@@ -54,46 +56,41 @@ defmodule Emissary.Web.WebhookController do
     x-request-id
   )
 
-  def invoke(conn, _params) do
-    case conn.assigns[:webhook] do
-      nil ->
-        # Defensive — verify plug should have halted before us.
+  # The pipeline's signature plug assigns the verified row as `:webhook`
+  # or halts (`CyfrWeb.Plugs.VerifyWebhookSignature`).
+  def invoke(%Plug.Conn{assigns: %{webhook: webhook}} = conn, _params) do
+    # The request's identity is the pipeline's
+    # (`CyfrWeb.Plugs.CallIdentity`): the same key on the log lines
+    # as on the request-log row this run files, and the call id the
+    # delivery's decision and its execution row carry.
+    request_id = conn.assigns.request_id
+
+    case Sanctum.Caller.establish({:webhook, webhook}, request_id: request_id) do
+      {:ok, ctx} ->
+        # A delivery's run is a webhook's, whatever the request says.
+        ctx = %{CyfrWeb.Plugs.CallIdentity.stamp(conn, ctx) | origin: :webhook}
+        invoke_active(conn, ctx, webhook, conn.assigns[:raw_body], request_id)
+
+      {:error, :unauthenticated} ->
+        # The athanor is archived or the creator was denied on this
+        # server — the stored row must not remain a standing execution
+        # channel. Same response shape as a disabled webhook so
+        # existence is not leaked.
+        Logger.warning(
+          "[WebhookInvoke] athanor #{webhook.athanor_id} or creator " <>
+            "#{inspect(webhook.created_by)} no longer active — refusing slug=#{webhook.slug}"
+        )
+
+        CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
+
+      {:error, :no_athanor} ->
+        # Webhook row with no resolved athanor — should never happen for
+        # a well-formed row, but fail closed to preserve isolation.
+        Logger.error(
+          "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved athanor — rejecting"
+        )
+
         CyfrWeb.ApiError.send(conn, 500, :internal_error, nil)
-
-      webhook ->
-        # The request's identity is the pipeline's
-        # (`CyfrWeb.Plugs.CallIdentity`): the same key on the log lines
-        # as on the request-log row this run files, and the call id the
-        # delivery's decision and its execution row carry.
-        request_id = conn.assigns.request_id
-
-        case Sanctum.Caller.establish({:webhook, webhook}, request_id: request_id) do
-          {:ok, ctx} ->
-            # A delivery's run is a webhook's, whatever the request says.
-            ctx = %{CyfrWeb.Plugs.CallIdentity.stamp(conn, ctx) | origin: :webhook}
-            invoke_active(conn, ctx, webhook, conn.assigns[:raw_body], request_id)
-
-          {:error, :unauthenticated} ->
-            # The athanor is archived or the creator was denied on this
-            # server — the stored row must not remain a standing execution
-            # channel. Same response shape as a disabled webhook so
-            # existence is not leaked.
-            Logger.warning(
-              "[WebhookInvoke] athanor #{webhook.athanor_id} or creator " <>
-                "#{inspect(webhook.created_by)} no longer active — refusing slug=#{webhook.slug}"
-            )
-
-            CyfrWeb.ApiError.send(conn, 404, :not_found, nil)
-
-          {:error, :no_athanor} ->
-            # Webhook row with no resolved athanor — should never happen for
-            # a well-formed row, but fail closed to preserve isolation.
-            Logger.error(
-              "[WebhookInvoke] webhook slug=#{webhook.slug} has no resolved athanor — rejecting"
-            )
-
-            CyfrWeb.ApiError.send(conn, 500, :internal_error, nil)
-        end
     end
   end
 
@@ -147,8 +144,7 @@ defmodule Emissary.Web.WebhookController do
   @signature_headers ~w(x-hub-signature-256 stripe-signature x-twilio-signature)
 
   defp safe_headers(conn, signature_header) do
-    drop = [String.downcase(signature_header || Prima.Webhook.default_signature_header())]
-    drop = drop ++ @signature_headers
+    drop = [String.downcase(signature_header) | @signature_headers]
 
     conn.req_headers
     |> Enum.filter(fn {name, _} -> String.downcase(name) in @safe_header_allowlist end)
@@ -199,11 +195,12 @@ defmodule Emissary.Web.WebhookController do
     # not inherit it. Same idiom as `CyfrWeb.Plugs.Authenticate`.
     logger_metadata = Prima.LoggerContext.capture()
 
-    # The release starts :cyfr (binding this endpoint) before the execution
-    # machinery is up — refuse the request cleanly in that
-    # window instead of accepting work that noproc-crashes in the task.
+    # With no worker service to run the hook's target (`Opus.available?/1`,
+    # the selection its run makes) the delivery is refused `503`, which a
+    # sender retries; an accepted delivery whose run then failed would be
+    # answered `200` and never sent again.
     spawn_result =
-      if Opus.available?() do
+      if Opus.available?(webhook.target_ref) do
         claim = conn.assigns[:webhook_delivery_claim]
 
         Task.Supervisor.start_child(Emissary.Web.TaskSupervisor, fn ->
@@ -211,7 +208,7 @@ defmodule Emissary.Web.WebhookController do
           run_in_task(ctx, webhook, input, telemetry_meta, start_time, claim)
         end)
       else
-        {:error, :engine_starting}
+        {:error, :no_worker_for_target}
       end
 
     case spawn_result do

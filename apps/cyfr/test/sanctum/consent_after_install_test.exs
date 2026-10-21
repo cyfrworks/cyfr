@@ -139,7 +139,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     assert {:ok, %Prima.Authority{}} =
              Opus.authority_for(in_group, :default, @formula)
 
-    assert Aqua.consent_state(in_group, @formula) == {:ok, :current}
+    assert Aqua.ConsentStatus.state(in_group, @formula) == {:ok, :current}
 
     # The optional provider is installed, as the console's Install does.
     # That widens the closure the formula's consent was minted against, so
@@ -159,12 +159,12 @@ defmodule Sanctum.ConsentAfterInstallTest do
     assert {:error, {:consent_required, _}} =
              Opus.authority_for(in_group, :default, @formula)
 
-    assert Aqua.consent_state(in_group, @formula) == {:ok, :stale}
+    assert Aqua.ConsentStatus.state(in_group, @formula) == {:ok, :stale}
     assert Aqua.stale_consent_refs(in_group) == {:ok, [{@formula, :stale}]}
 
     # The bundled assistant names nothing the install touched: its closure
     # ships in the seed, so its consent stands and a turn still pins it.
-    assert Aqua.consent_state(in_group) == {:ok, :current}
+    assert Aqua.ConsentStatus.state(in_group, Prima.AgentRef.soul_ref()) == {:ok, :current}
 
     assert {:ok, %Prima.Authority{}} =
              Opus.authority_for(in_group, :default, "agent:local.aqua")
@@ -216,7 +216,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
     %{
       "moonmoon69/catalysts/claude" => %{
         manifest: manifest_json,
-        manifest_digest: Compendium.OCI.Blob.compute_digest(manifest_json),
+        manifest_digest: Prima.Digest.sha256(manifest_json),
         blobs: %{config_digest => config, wasm_digest => @wasm}
       }
     }

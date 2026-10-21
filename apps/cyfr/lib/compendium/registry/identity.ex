@@ -141,7 +141,9 @@ defmodule Compendium.Registry.Identity do
   # best-effort probe that retries would blow that budget.
   defp confirm_namespace(rest_host, %{token: token, namespace: slug})
        when is_binary(token) and is_binary(slug) do
-    url = "https://#{rest_host}/v1/namespaces/#{Transport.path_segment(slug)}"
+    url =
+      Compendium.RegistryHost.base_url(rest_host) <>
+        "/v1/namespaces/#{Transport.path_segment(slug)}"
 
     headers = [
       {"authorization", "Bearer #{token}"},

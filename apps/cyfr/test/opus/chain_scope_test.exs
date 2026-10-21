@@ -18,7 +18,7 @@ defmodule Opus.ChainScopeTest do
 
   defp record!(ctx, opts) do
     record = Record.new(ctx, "reagent:local.scoped:1.0.0", %{}, opts)
-    :ok = Record.write_started(record)
+    :ok = Record.write_started(ctx, record)
     record
   end
 
@@ -104,27 +104,6 @@ defmodule Opus.ChainScopeTest do
       assert root.id in ids
       assert child.id in ids
       refute stranger.id in ids
-    end
-
-    test "a legacy row with no stamped root fails closed for in-chain callers",
-         %{ctx: ctx, root: root} do
-      legacy = record!(ctx, component_type: :formula)
-
-      import Ecto.Query
-
-      Arca.Repo.update_all(
-        from(e in Arca.Schemas.Execution, where: e.id == ^legacy.id),
-        set: [root_execution_id: nil]
-      )
-
-      assert {:error, message} =
-               Opus.Provider.handle("execution", ctx, %{
-                 "action" => "logs",
-                 "execution_id" => legacy.id,
-                 "root_execution_id" => root.id
-               })
-
-      assert message =~ "not found in this chain"
     end
   end
 

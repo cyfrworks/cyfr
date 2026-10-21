@@ -130,18 +130,14 @@ defmodule Emissary.Web.TinctureAssets do
     end
   end
 
-  @doc """
-  A document's `Content-Security-Policy`: the frame's rules' derivation from
-  the version's manifest under `nonce`, with a `sandbox` directive opening
-  exactly what the declared frame capabilities open. A declaration the
-  rules refuse — which the publish check keeps from being installed —
-  opens nothing beyond scripts.
-  """
-  @spec csp(map() | nil, String.t()) :: String.t()
-  def csp(manifest, nonce) when is_binary(nonce) do
-    manifest = if is_map(manifest), do: manifest, else: %{}
-    Compendium.tincture_frame_policy(manifest, %{endpoint: endpoint_origin(), nonce: nonce})
-  end
+  # A document's `Content-Security-Policy`: the frame's rules' derivation
+  # from the version's manifest under `nonce`, with a `sandbox` directive
+  # opening exactly what the declared frame capabilities open. A document
+  # is served only for a version whose manifest is a decoded object
+  # (`holds_pages?/1`).
+  @spec csp(map(), String.t()) :: String.t()
+  defp csp(manifest, nonce) when is_map(manifest) and is_binary(nonce),
+    do: Compendium.tincture_frame_policy(manifest, %{endpoint: endpoint_origin(), nonce: nonce})
 
   @doc """
   The endpoint's origin as a tincture document's policy names it, from the

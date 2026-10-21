@@ -73,7 +73,10 @@ defmodule Aqua.Loop.PlannerTest do
     old_rows = for seq <- 1..40, do: row(seq, "text", String.duplicate("x", 40_000))
 
     compaction =
-      %{row(41, "compaction", "the story so far") | payload: %{"first_kept_seq" => 41}}
+      %{
+        row(41, "compaction", "the story so far")
+        | payload: Jason.encode!(%{"first_kept_seq" => 41})
+      }
 
     rows = old_rows ++ [compaction, row(42, "text", "carry on")]
 
@@ -85,9 +88,22 @@ defmodule Aqua.Loop.PlannerTest do
     assert Planner.readable(rows) == [compaction, row(42, "text", "carry on")]
   end
 
+  test "a summary with words is committed" do
+    assert {:ok, "what was said"} = Planner.summary_text("what was said")
+  end
+
+  test "a reply carrying no text is refused, so the boundary does not advance" do
+    # The loop filters the reply to text blocks and joins them, so a reply
+    # of only tool calls, or of no content at all, arrives here as "".
+    # Committing it would render an empty summary in place of every row
+    # before `first_kept_seq`.
+    assert {:error, :empty_summary} = Planner.summary_text("")
+    assert {:error, :empty_summary} = Planner.summary_text("   \n\t ")
+  end
+
   test "readable keeps only the latest summary" do
-    first = %{row(2, "compaction", "first") | payload: %{"first_kept_seq" => 2}}
-    second = %{row(4, "compaction", "second") | payload: %{"first_kept_seq" => 4}}
+    first = %{row(2, "compaction", "first") | payload: Jason.encode!(%{"first_kept_seq" => 2})}
+    second = %{row(4, "compaction", "second") | payload: Jason.encode!(%{"first_kept_seq" => 4})}
     rows = [row(1, "text", "a"), first, row(3, "text", "b"), second, row(5, "text", "c")]
 
     assert Planner.readable(rows) == [second, row(5, "text", "c")]

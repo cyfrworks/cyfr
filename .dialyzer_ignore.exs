@@ -20,36 +20,4 @@
   # The same Ecto.Multi.new/0 literal handed to Ecto.Multi.run/3, in
   # prepare_transaction/2.
   {"lib/arca/repo.ex", :call_without_opaque},
-  # resolve_component/2's `type || component[:component_type] || …` tests
-  # for nil two values the specs make binaries (the parsed ref's type and the
-  # registry row's component type), so neither nil branch is taken by them.
-  {"lib/compendium/component.ex", :guard_fail},
-  # Compendium.OCI.Reference's spec makes repository a binary, so the
-  # `ref.repository || ""` fallback in do_oci_pull/2 never takes its nil
-  # branch by the spec.
-  {"lib/compendium/providers/component.ex", :guard_fail},
-  # Every result reaching enrich_tincture_media/2 carries a components list,
-  # so its pass-through clause for any other shape is covered.
-  {"lib/compendium/providers/component.ex", :pattern_match_cov},
-  # t() names every provenance; of_status/1 translates an overlay unit state,
-  # which yields only :bundled or :user, and its spec states the type.
-  {"lib/compendium/provenance.ex", :extra_range},
-  # log_token_returning_result/2's four callers each pass {:ok, _} or
-  # {:error, _}; its fall-through clause passes on any other shape.
-  {"lib/compendium/registry/client.ex", :pattern_match_cov},
-  # :inet.gethostname/0's spec answers only {:ok, name}; the "cyfr-host"
-  # fallback keeps the device label total.
-  {"lib/compendium/registry/credential_store.ex", :pattern_match_cov},
-  # :ets.update_counter/4 is specced to return integer() (a list for a list
-  # of operations); counting up from 0 by one it answers a positive integer,
-  # the type the spec states.
-  {"lib/opus/events/sequence.ex", :missing_range},
-  # An opaque-term warning dialyxir cannot classify: its own formatter
-  # raises on it (`Dialyxir.WarningHelpers.ordinal/1`) and prints the raw
-  # dialyzer text, so a `{file, kind}` filter never sees a kind to match.
-  # Matched by regex instead: the opaque Task.ref() a Task carries, passed
-  # where Dialyzer reads a plain term.
-  # The first entry's kind for mcp_controller.ex: Process.demonitor/2 on the
-  # monitor reference a Task carries, an opaque Task.ref().
-  ~r{lib/emissary/web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque}
 ]

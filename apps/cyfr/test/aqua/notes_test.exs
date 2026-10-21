@@ -19,16 +19,8 @@ defmodule Aqua.NotesTest do
     assert Notes.describe(%{forgot: "flight", athanor_id: "ath_1"}) == "📝 Forgot the note: flight"
   end
 
-  test "describe/1 reads either key spelling — an answer may have crossed the wire" do
-    assert Notes.describe(%{"kept" => "flight", "replaced" => true}) ==
-             "📝 Replaced the note: flight"
-
-    assert Notes.describe(%{"forgot" => "flight"}) == "📝 Forgot the note: flight"
-  end
-
   test "describe/1 is nil for anything that is not a write's answer" do
     assert is_nil(Notes.describe(%{name: "flight", content: "BA117"}))
-    assert is_nil(Notes.describe(%{"status" => "ok"}))
     assert is_nil(Notes.describe(:ok))
     assert is_nil(Notes.describe(nil))
   end
@@ -279,7 +271,11 @@ defmodule Aqua.NotesStoreTest do
 
       # The card must name exactly what the note carries.
       assert {:error, {:conflict, _}} =
-               Notes.endorse(ctx, "clip", [Prima.Source.outside("other.example")])
+               Notes.endorse(
+                 ctx,
+                 "clip",
+                 Prima.Source.to_json_list([Prima.Source.outside("other.example")])
+               )
 
       assert {:error, {:conflict, _}} = Notes.endorse(ctx, "clip", [])
       assert {:ok, %{sources: [^host]}} = Notes.read(ctx, "clip")
@@ -291,9 +287,15 @@ defmodule Aqua.NotesStoreTest do
                Notes.read(ctx, "clip")
 
       assert kept_by == ctx.user_id
-      assert {:error, {:invalid_argument, _}} = Notes.endorse(ctx, "clip", [host])
-      assert {:error, {:invalid_argument, _}} = Notes.endorse(ctx, "about-us", [host])
-      assert {:error, {:not_found, "note", "gone"}} = Notes.endorse(ctx, "gone", [host])
+
+      assert {:error, {:invalid_argument, _}} =
+               Notes.endorse(ctx, "clip", Prima.Source.to_json_list([host]))
+
+      assert {:error, {:invalid_argument, _}} =
+               Notes.endorse(ctx, "about-us", Prima.Source.to_json_list([host]))
+
+      assert {:error, {:not_found, "note", "gone"}} =
+               Notes.endorse(ctx, "gone", Prima.Source.to_json_list([host]))
     end
 
     test "a note carrying only the athanor's own material is no outside material to endorse, and an endorsement keeps what it was made from",
@@ -331,7 +333,9 @@ defmodule Aqua.NotesStoreTest do
         {:ok, _} = Notes.keep_over(ctx, "clip", "Fares fall, corrected", 1)
       end)
 
-      assert {:error, {:conflict, _}} = Notes.endorse(ctx, "clip", [host])
+      assert {:error, {:conflict, _}} =
+               Notes.endorse(ctx, "clip", Prima.Source.to_json_list([host]))
+
       assert {:ok, %{content: "Fares fall, corrected", sources: []}} = Notes.read(ctx, "clip")
     end
 
@@ -344,7 +348,7 @@ defmodule Aqua.NotesStoreTest do
       # A standing allow naming the source covers the keep; it admits the
       # action and endorses nothing.
       {:ok, _} =
-        Aqua.ToolGrants.put(ctx, %{
+        Sanctum.ToolGrants.put(ctx, %{
           scope: "thread",
           effect: "allow",
           thread_id: thread,

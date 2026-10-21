@@ -71,36 +71,24 @@ defmodule Compendium.ForkTest do
         if(Keyword.get(opts, :with_source, true),
           do: [{"src/main.js", "export default function() {}"}],
           else: []
-        )
+        ) ++ Keyword.get(opts, :files, [])
 
-    base =
-      Arca.Test.UnitFixtures.tenant_component!(
-        Sanctum.TestContext.local(),
-        "tincture",
-        publisher,
-        name,
-        version,
-        manifest: %{
-          "name" => name,
-          "type" => "tincture",
-          "version" => version,
-          "publisher" => publisher,
-          "description" => "A test tincture",
-          "tincture" => %{"entry" => "index.html"}
-        },
-        files: files
-      )
-
-    if Keyword.get(opts, :with_data_db, false) do
-      Arca.Test.UnitFixtures.unit_write!(
-        Sanctum.TestContext.local(),
-        base,
-        "data.db",
-        "fake-sqlite-db"
-      )
-    end
-
-    base
+    Arca.Test.UnitFixtures.tenant_component!(
+      Sanctum.TestContext.local(),
+      "tincture",
+      publisher,
+      name,
+      version,
+      manifest: %{
+        "name" => name,
+        "type" => "tincture",
+        "version" => version,
+        "publisher" => publisher,
+        "description" => "A test tincture",
+        "tincture" => %{"entry" => "index.html"}
+      },
+      files: files
+    )
   end
 
   defp parse_ref!(ref_str) do
@@ -183,9 +171,8 @@ defmodule Compendium.ForkTest do
     end
 
     test "the stamped lineage is queryable end to end", %{ctx: ctx} do
-      # The "written but never read" gap, closed: fork → register → the
-      # row's manifest carries the stamp and the provenance surface
-      # reports the upstream line.
+      # Fork → register → the row's manifest carries the stamp and the
+      # provenance surface reports the upstream line.
       valid_wasm =
         <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
           <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
@@ -400,11 +387,11 @@ defmodule Compendium.ForkTest do
     end
   end
 
-  # Copy data.db as a regular shipped asset.
-
-  describe "data.db included" do
-    test "copies data.db when forking a tincture", %{ctx: ctx} do
-      create_tincture_component("acme", "db-dash", "1.0.0", with_data_db: true)
+  describe "shipped files" do
+    test "copies each file the version ships when forking a tincture", %{ctx: ctx} do
+      create_tincture_component("acme", "db-dash", "1.0.0",
+        files: [{"data.db", "fake-sqlite-db"}]
+      )
 
       source_base = [
         "components",

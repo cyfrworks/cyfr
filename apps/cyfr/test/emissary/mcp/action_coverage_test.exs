@@ -19,8 +19,9 @@ defmodule Emissary.MCP.ActionCoverageTest do
     * an admission refusal fails — the generated call did not satisfy the
       declaration it was built from, or the gate refuses a caller the
       declaration admits;
-    * a handler that raised or exited fails — the gate contains it as a
-      crash, which a direct `handle/3` call used to count as handled;
+    * a handler that raised or exited fails — the gate answers it as a
+      contained crash, an error result the coverage reads as a failure,
+      not as a refusal its handler chose;
     * `{:ok, _}` or a handler's own refusal passes: the action reached a
       clause that knows it, and placeholder arguments name nothing.
   """

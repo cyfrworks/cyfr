@@ -116,7 +116,7 @@ defmodule Opus.RunTest do
       assert error_msg =~ "Component Model"
 
       # Failed execution record is still written
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Opus.Record.list(ctx)
       assert records != []
       failed = Enum.find(records, &(&1.status == :failed))
       assert failed != nil
@@ -135,12 +135,12 @@ defmodule Opus.RunTest do
 
   describe "list/2" do
     test "lists execution records", %{ctx: ctx} do
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Opus.Record.list(ctx)
       assert is_list(records)
     end
 
     test "returns empty list initially", %{ctx: ctx} do
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Opus.Record.list(ctx)
       assert records == []
     end
   end
@@ -154,7 +154,7 @@ defmodule Opus.RunTest do
       {:error, _} = run_consented(ctx, %{"a" => 1, "b" => 2})
 
       # Execution record is written even on failure; find it via list
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Opus.Record.list(ctx)
       assert records != []
       record = hd(records)
       {:ok, fetched} = Opus.get(ctx, record.id)
@@ -172,7 +172,7 @@ defmodule Opus.RunTest do
       {:error, _} = run_consented(ctx, %{"a" => 1, "b" => 1})
 
       # Find the failed record via list
-      {:ok, records} = Opus.list(ctx)
+      {:ok, records} = Opus.Record.list(ctx)
       record = hd(records)
       assert {:error, :not_cancellable} = Opus.cancel(ctx, record.id)
     end

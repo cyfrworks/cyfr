@@ -36,10 +36,6 @@ defmodule Compendium.Source do
   @spec oci() :: String.t()
   defdelegate oci(), to: Prima.ComponentSource
 
-  @doc "The closed roster — what the row store admits."
-  @spec values() :: [String.t()]
-  defdelegate values(), to: Prima.ComponentSource
-
   @doc """
   Whether the source names registry-sourced bytes — the one input the
   provenance derivation takes from the row.
@@ -54,5 +50,5 @@ defmodule Compendium.Source do
 
   """
   @spec remote?(term()) :: boolean()
-  def remote?(source), do: to_string(source) in [@oci, @published]
+  def remote?(source), do: source in [@oci, @published]
 end

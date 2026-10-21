@@ -6,15 +6,9 @@ defmodule Compendium.Providers.Shared do
   Helpers shared across the Compendium MCP tool modules
   (`Compendium.Provider` facade, `Compendium.Providers.Component`,
   `Compendium.Providers.Aqua`, `Compendium.Providers.Registry`).
-
-  Component resolution delegates to `Compendium.Component` — the one
-  resolver, so the tool surface and internal callers can never drift.
   """
 
   alias Sanctum.Context
-
-  defdelegate resolve_component(ctx, reference), to: Compendium.Component
-  defdelegate parse_reference(reference), to: Compendium.Component
 
   @doc """
   A registry's own refusal as the gate's normalized form, at the

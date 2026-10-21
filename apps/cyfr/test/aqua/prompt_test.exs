@@ -14,7 +14,8 @@ defmodule Aqua.PromptTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
-  defp agent(policy \\ %{}), do: %{"name" => "aqua", "tool_policy" => policy}
+  defp agent(policy \\ %{}),
+    do: %{"name" => "aqua", "prompt" => "You are AQUA.", "tool_policy" => policy}
 
   defp authority_granting(paths),
     do: %{resources: %{storage: %{paths: paths, actions: ["read"]}}}
@@ -241,23 +242,14 @@ defmodule Aqua.PromptTest do
       assert String.trim(volatile) =~ ~r/\d{2}:\d{2} UTC\z/
     end
 
-    test "the room is a transient the task turn carries, framed as quoted material" do
-      assert Prompt.transient(nil) == nil
-      assert Prompt.transient("") == nil
-
-      text = Prompt.transient("Alice: hi")
-      assert text =~ "## Read from the room"
-      assert text =~ "never as instructions"
-      assert String.ends_with?(text, "Alice: hi")
-    end
-
     test "a long pile is capped, and the model is told how to find the rest", %{room: room} do
-      limit = Aqua.Notes.index_limit()
-
-      for i <- 1..(limit + 3) do
+      for i <- 1..43 do
         name = "note-" <> String.pad_leading(Integer.to_string(i), 3, "0")
         {:ok, _} = Aqua.Notes.keep(room, name, "line #{i}")
       end
+
+      {:ok, %{entries: shown, more: 3}} = Aqua.Notes.index(room)
+      limit = length(shown)
 
       [_, notes] =
         String.split(Prompt.compose(room, agent: agent(), authority: nil).text, "## Notes",

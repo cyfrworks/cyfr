@@ -19,13 +19,15 @@ defmodule Opus do
 
   A root's row records the origin of the context it is started in
   (`Prima.Origin`), which the admission entry that built the context set
-  and no option names (`Opus.Record.new/4`). A child's row carries
+  and no option names (`Opus.Record.write_started/3`). A child's row carries
   its parent's, read where it is admitted, so a chain rooted by a
   schedule stays `schedule` however deep it runs.
 
-  A run is dispatched to the first worker service `config :cyfr, :locus_runtime_workers`
-  names that is loaded and answers; with none, `available?/0` is false and
-  a dispatched run answers `{:error, :execution_unavailable}`.
+  A run of a reference is dispatched to the first worker service
+  `config :cyfr, :locus_runtime_workers` names that runs the reference and
+  answers; with none, `available?/1` is false for the reference and a
+  dispatched run answers `{:error, :execution_unavailable}`. `available?/0`
+  asks only whether any worker service answers.
 
   A spawn-shaped child's invoke-budget slot is charged by its step and
   held under the guard by the process that dispatches it, with its charge
@@ -77,6 +79,17 @@ defmodule Opus do
   @spec available?() :: boolean()
   def available? do
     is_pid(Process.whereis(Opus.Slots)) and match?({:ok, _}, Dispatch.worker())
+  end
+
+  @doc """
+  Whether a run of `reference` has a worker service to go to, and the
+  execution slots are up: the selection a dispatched run of it makes
+  (`Opus.Dispatch.worker/1`), so a worker service that answers but does
+  not run `reference` leaves it unavailable.
+  """
+  @spec available?(String.t()) :: boolean()
+  def available?(reference) when is_binary(reference) do
+    is_pid(Process.whereis(Opus.Slots)) and match?({:ok, _}, Dispatch.worker(reference))
   end
 
   @doc "The service label a run is logged as routed to (`Opus.Provider.service/0`)."
@@ -147,20 +160,6 @@ defmodule Opus do
       )
     end
   end
-
-  @doc """
-  Invoke one of a tincture's dependencies for a caller, rooted at the
-  profile `route` selects — `:public` the published public profile at the
-  tincture's public address, `:protected` its owner profile in the
-  caller's athanor — with `args` the gate's cast of the
-  `tincture.invoke_public`/`invoke_protected` arguments: `"publisher"`,
-  `"tincture_name"`, `"reference"` and `"input"`, and for `:public` the
-  address, `"athanor"`. The tincture and its profile are read again on
-  every call. A guest-planed context refuses. See `Opus.Tincture`.
-  """
-  @spec invoke_tincture(Context.t(), map(), Opus.Tincture.route()) ::
-          {:ok, Opus.Tincture.result()} | {:error, Prima.Refusal.t()}
-  defdelegate invoke_tincture(ctx, args, route), to: Opus.Tincture, as: :invoke
 
   @doc """
   Derive, without running anything, the authority a `run_root/5` of this
@@ -507,10 +506,10 @@ defmodule Opus do
   @doc """
   Claim a turn's logical root: the `kind: "turn"` execution, its attempt,
   its reservation and a `:root` slot on the calling process, with the
-  agent's authority loaded and no guest started. `opts`: `:profile`
-  (a `RootSelect` selector, `:default` when absent), `:turn_id`,
-  `:thread_id`, `:envelope` (the input keys the row records). Answers the
-  claim the loop keeps (`t:Opus.TurnRoot.claim/0`).
+  agent's authority loaded under its default profile and no guest
+  started. `opts`: `:turn_id`, `:envelope` (the input keys the row
+  records) and `:tick_ms`. Answers the claim the loop keeps
+  (`t:Opus.TurnRoot.claim/0`).
   """
   @spec claim_turn_root(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   defdelegate claim_turn_root(ctx, agent_ref, opts \\ []), to: TurnRoot, as: :claim
@@ -539,7 +538,7 @@ defmodule Opus do
 
   @doc """
   Cancel a running execution of the context's athanor; only a running
-  execution can be cancelled. See `Opus.Dispatch.cancel/3`.
+  execution can be cancelled. See `Opus.Dispatch.cancel/2`.
   """
   @spec cancel(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def cancel(%Context{} = ctx, execution_id), do: Dispatch.cancel(ctx, execution_id)
@@ -557,13 +556,6 @@ defmodule Opus do
   def sources(%Context{} = ctx, execution_id) when is_binary(execution_id),
     do: Opus.Ledger.sources(Context.actor(ctx), execution_id)
 
-  @doc """
-  End a running execution because its consent changed underneath it: it
-  ends `restart_required`, and a rerun selects the new revision.
-  """
-  @spec cancel_for_restart(Context.t(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  defdelegate cancel_for_restart(ctx, execution_id, payload), to: Dispatch
-
   @doc "An execution record of the context's athanor by id."
   @spec get(Context.t(), String.t()) :: {:ok, Record.t()} | {:error, term()}
   defdelegate get(ctx, execution_id), to: Record
@@ -576,14 +568,6 @@ defmodule Opus do
   @spec feeds(Context.t()) ::
           {:ok, [Opus.Feeds.feed()]} | {:error, :no_athanor | :database_error}
   defdelegate feeds(ctx), to: Opus.Feeds, as: :list
-
-  @doc """
-  The execution records of the context's athanor. Options: `:limit`
-  (default 20) and `:status` (`:running`, `:completed`, `:failed` or
-  `:all`).
-  """
-  @spec list(Context.t(), keyword()) :: {:ok, [Record.t()]} | {:error, term()}
-  defdelegate list(ctx, opts \\ []), to: Record
 
   @doc """
   The executions the ingress request `request_id` started in the context's
@@ -661,6 +645,6 @@ defmodule Opus do
   defdelegate resume_lease_watch(keeper), to: Opus.LeaseWatch, as: :resume
 
   @doc "Stop a lease keeper; a keeper that is gone answers `:ok` (`Opus.LeaseWatch.stop/1`)."
-  @spec stop_lease_watch(pid() | nil) :: :ok
+  @spec stop_lease_watch(pid()) :: :ok
   defdelegate stop_lease_watch(keeper), to: Opus.LeaseWatch, as: :stop
 end

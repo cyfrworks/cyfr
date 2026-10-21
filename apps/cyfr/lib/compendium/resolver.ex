@@ -74,7 +74,7 @@ defmodule Compendium.Resolver do
              resolved_to: resolved_to,
              was_resolved: true,
              resolved_at: DateTime.utc_now(),
-             digest: component[:digest] || component["digest"]
+             digest: component.digest
            }}
         end
 

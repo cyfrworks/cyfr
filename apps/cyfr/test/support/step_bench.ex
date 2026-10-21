@@ -58,6 +58,14 @@ defmodule Cyfr.Test.StepBench do
   @turn_timeout_ms 60_000
   @span_timeout_ms 5_000
 
+  # The `Opus.StepSpans` events, in the order a run reaches them.
+  @span_events [
+    [:cyfr, :execution, :child, :admission],
+    [:cyfr, :execution, :child, :first_delta],
+    [:cyfr, :execution, :child, :completion],
+    [:cyfr, :execution, :run_child]
+  ]
+
   @typedoc "How a step's request reaches the upstream."
   @type mode :: :attached | :pinned
 
@@ -158,6 +166,10 @@ defmodule Cyfr.Test.StepBench do
       end)
     end)
   end
+
+  @doc "The `Opus.StepSpans` events a step emits, in the order a run reaches them."
+  @spec span_events() :: [[atom(), ...]]
+  def span_events, do: @span_events
 
   @doc "The report as the table `mix cyfr.bench.step` prints."
   @spec render(report()) :: String.t()
@@ -436,7 +448,7 @@ defmodule Cyfr.Test.StepBench do
     :ok =
       :telemetry.attach_many(
         handler,
-        Opus.StepSpans.events(),
+        @span_events,
         fn event, %{duration: duration}, metadata, _config ->
           send(bench_pid, {:step_span, metadata.execution_id, event, duration})
         end,
@@ -510,7 +522,7 @@ defmodule Cyfr.Test.StepBench do
   end
 
   defp spans(execution_id) do
-    Enum.reduce(Opus.StepSpans.events(), %{}, fn event, acc ->
+    Enum.reduce(@span_events, %{}, fn event, acc ->
       receive do
         {:step_span, ^execution_id, ^event, duration} -> Map.put(acc, name(event), duration)
       after

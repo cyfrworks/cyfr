@@ -285,7 +285,6 @@ defmodule Aqua.Providers.Notes do
 
   @impl true
   def handle("notes", %Context{} = ctx, args), do: dispatch(ctx, args)
-  def handle(tool, _ctx, _args), do: {:error, {:not_found, "tool", tool}}
 
   # ---------------------------------------------------------------------------
 
@@ -302,17 +301,11 @@ defmodule Aqua.Providers.Notes do
        when is_binary(name) and is_binary(content),
        do: Notes.keep(ctx, name, content, provenance(args, ctx))
 
-  defp dispatch(_ctx, %{"action" => "keep"}),
-    do: {:error, {:invalid_argument, "keep requires 'name' and 'content'"}}
-
   # A pinned page is set one card at a time and carries no sources: the
   # person who approved it made it theirs.
   defp dispatch(ctx, %{"action" => "pin", "name" => name, "content" => content} = args)
        when is_binary(name) and is_binary(content),
        do: Notes.pin(ctx, name, content, Keyword.delete(provenance(args, ctx), :sources))
-
-  defp dispatch(_ctx, %{"action" => "pin"}),
-    do: {:error, {:invalid_argument, "pin requires 'name' and 'content' (empty content clears)"}}
 
   defp dispatch(ctx, %{"action" => "forget", "name" => name}) when is_binary(name),
     do: Notes.forget(ctx, name)
@@ -320,12 +313,6 @@ defmodule Aqua.Providers.Notes do
   defp dispatch(ctx, %{"action" => "endorse", "name" => name, "sources" => sources})
        when is_binary(name) and is_list(sources),
        do: Notes.endorse(ctx, name, sources)
-
-  defp dispatch(_ctx, %{"action" => "endorse"}),
-    do: {:error, {:invalid_argument, "endorse requires 'name' and 'sources'"}}
-
-  defp dispatch(_ctx, %{"action" => "forget"}),
-    do: {:error, {:invalid_argument, "forget requires 'name'"}}
 
   defp dispatch(ctx, %{"action" => "list"} = args) do
     with {:ok, page} <- Notes.list(ctx, scope(args), page(args)) do
@@ -342,9 +329,6 @@ defmodule Aqua.Providers.Notes do
          do: {:ok, wire_sources(note)}
   end
 
-  defp dispatch(_ctx, %{"action" => "read"}),
-    do: {:error, {:invalid_argument, "read requires 'name'"}}
-
   defp dispatch(ctx, %{"action" => "search", "query" => query} = args) when is_binary(query) do
     with {:ok, %{notes: matches} = page} <- Notes.search(ctx, query, scope(args), page(args)) do
       {:ok,
@@ -353,12 +337,6 @@ defmodule Aqua.Providers.Notes do
        |> Map.merge(%{matches: Enum.map(matches, &wire_sources/1), scope: scope(args)})}
     end
   end
-
-  defp dispatch(_ctx, %{"action" => "search"}),
-    do: {:error, {:invalid_argument, "search requires 'query'"}}
-
-  defp dispatch(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "notes.#{action}"}}
-  defp dispatch(_ctx, _args), do: {:error, :action_missing}
 
   defp scope(args), do: Map.get(args, "scope", "athanor")
 

@@ -36,7 +36,6 @@ defmodule Emissary.Web do
       OAuthCallbackController,
       Plugs.MCPRequestMetadata,
       RestoreController,
-      SessionController,
       TinctureController,
       TinctureDataController,
       WebhookController

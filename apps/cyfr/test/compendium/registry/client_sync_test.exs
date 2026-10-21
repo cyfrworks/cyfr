@@ -3,7 +3,7 @@
 
 defmodule Compendium.Registry.ClientSyncTest do
   # Tests that point the client at a Bypass server or at a seeded cache
-  # (`:registry_url`, `:registry_scheme`, `:oci_registry_url` and the
+  # (`:registry_url`, `:oci_registry_url` and the
   # storage root are global configuration) or capture its log (the capture
   # and the log level are global), so they run alone. The rest of the
   # client's tests run async in `Compendium.Registry.ClientTest`.
@@ -13,7 +13,7 @@ defmodule Compendium.Registry.ClientSyncTest do
 
   alias Compendium.Registry.{Client, CredentialStore}
   alias Compendium.Provider
-  alias Compendium.OCI.{Blob, Cache, Errors, Reference, Transport}
+  alias Compendium.OCI.{Cache, Errors, Reference, Transport}
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -21,20 +21,17 @@ defmodule Compendium.Registry.ClientSyncTest do
   end
 
   # Boots a real (but ephemeral) HTTP server per test via Bypass and points
-  # the client at it through the :registry_url and :registry_scheme
-  # overrides. Bypass fails the test on any request it holds no expectation
+  # the client at it through the :registry_url override; a loopback host is
+  # reached over http (`Compendium.RegistryHost.base_url/1`). Bypass fails the test on any request it holds no expectation
   # for, so a test that sets none proves that no request left.
   defp point_at_bypass(_context) do
     bypass = Bypass.open()
     original_url = Application.get_env(:cyfr, :registry_url)
-    original_scheme = Application.get_env(:cyfr, :registry_scheme)
 
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
-    Application.put_env(:cyfr, :registry_scheme, "http")
 
     on_exit(fn ->
       restore_env(:cyfr, :registry_url, original_url)
-      restore_env(:cyfr, :registry_scheme, original_scheme)
     end)
 
     {:ok, bypass: bypass}
@@ -98,7 +95,7 @@ defmodule Compendium.Registry.ClientSyncTest do
                })
     end
 
-    test "get_component/5 puts the version in the path when given one", %{
+    test "get_component/5 puts the version in the path", %{
       ctx: ctx,
       bypass: bypass
     } do
@@ -311,16 +308,36 @@ defmodule Compendium.Registry.ClientSyncTest do
     test "discover asks cyfr.run's REST API", %{ctx: ctx, bypass: bypass} do
       Bypass.expect_once(bypass, "GET", "/v1/components", fn conn ->
         assert query_pairs(conn) == []
-        json_resp(conn, 200, %{"components" => [%{"name" => "data-processor"}], "total" => 1})
+
+        json_resp(conn, 200, %{
+          "components" => [
+            %{"name" => "data-processor", "namespace_slug" => "cyfr", "unlisted" => true}
+          ],
+          "total" => 1
+        })
       end)
 
       assert {:ok, result} = Provider.handle("component", ctx, %{"action" => "discover"})
 
       assert result == %{
                registry: Compendium.RegistryHost.canonical_host(),
-               components: [%{name: "data-processor"}],
+               components: [%{name: "data-processor", namespace_slug: "cyfr", publisher: "cyfr"}],
                total: 1
              }
+    end
+
+    test "a listing without its total, or with an entry that is no object, is refused",
+         %{ctx: ctx, bypass: bypass} do
+      Bypass.expect(bypass, "GET", "/v1/components", fn conn ->
+        case conn.query_string do
+          "publisher=a" -> json_resp(conn, 200, %{"components" => []})
+          _ -> json_resp(conn, 200, %{"components" => ["entry"], "total" => 1})
+        end
+      end)
+
+      for params <- [%{namespace: "a"}, %{namespace: "b"}] do
+        assert {:error, %Errors{reason: :parse_error}} = Client.discover(ctx, params)
+      end
     end
 
     test "discover refuses a registry other than the canonical one before any request", %{
@@ -411,14 +428,14 @@ defmodule Compendium.Registry.ClientSyncTest do
       config = Jason.encode!(%{"name" => name, "version" => "1.0.0", "type" => "reagent"})
       manifest = manifest_json(config, wasm)
 
-      :ok = Cache.put_blob(Blob.compute_digest(config), config)
-      :ok = Cache.put_blob(Blob.compute_digest(wasm), wasm)
+      :ok = Cache.put_blob(Prima.Digest.sha256(config), config)
+      :ok = Cache.put_blob(Prima.Digest.sha256(wasm), wasm)
 
       {:ok,
        registry: registry,
        repository: repository,
        manifest: manifest,
-       digest: Blob.compute_digest(manifest),
+       digest: Prima.Digest.sha256(manifest),
        reference: "#{registry}/#{repository}:1.0.0",
        ref: %Reference{registry: registry, repository: repository, tag: "1.0.0"}}
     end
@@ -506,13 +523,13 @@ defmodule Compendium.Registry.ClientSyncTest do
       "config" => %{
         "mediaType" => "application/vnd.cyfr.manifest.v1+json",
         "size" => byte_size(config),
-        "digest" => Blob.compute_digest(config)
+        "digest" => Prima.Digest.sha256(config)
       },
       "layers" => [
         %{
           "mediaType" => "application/vnd.cyfr.reagent.v1+wasm",
           "size" => byte_size(wasm),
-          "digest" => Blob.compute_digest(wasm)
+          "digest" => Prima.Digest.sha256(wasm)
         }
       ],
       "annotations" => %{}

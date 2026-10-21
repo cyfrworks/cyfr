@@ -62,10 +62,8 @@ defmodule Compendium.Builds do
   @budget_ms 270_000
   @build_id ~r/^[A-Za-z0-9_-]{1,64}$/
 
-  # A tincture's build output lands under `dist/` and its `data.db` is data;
-  # neither is build input.
+  # A tincture's build output lands under `dist/`, which is not build input.
   @dist "dist"
-  @tincture_excluded [@dist, "data.db"]
 
   @typedoc """
   One step of a build as its watchers see it: a stage the builder reported
@@ -469,7 +467,7 @@ defmodule Compendium.Builds do
       name in ["Cargo.toml", "Cargo.lock"]
   end
 
-  defp tincture_source?(rel), do: not Enum.any?(rel, &(&1 in @tincture_excluded))
+  defp tincture_source?(rel), do: @dist not in rel
 
   # ---------------------------------------------------------------------------
   # The build, and how each way it ends is answered
@@ -602,32 +600,19 @@ defmodule Compendium.Builds do
 
   defp keep_lockfile(_ctx, _unit, _built), do: :ok
 
-  @doc """
-  Publish a tincture build into its version directory: the build replaces
-  the unit's `dist/` whole, as a new revision of the unit
-  (`Arca.Overlay.replace_subtree/5`). The revision's row commit publishes
-  it, and the rest of the unit — its manifest, its source and its own
-  `data.db` — is carried over as it is. A version with no manifest
-  publishes nothing (`{:error, :not_found}`), and a commit that landed on
-  the unit meanwhile refuses this one (`{:error, :stale_revision}`).
-
-  What a reader sees while the new revision is moved into place is the
-  adapter's (`Arca.Overlay`): on a filesystem, the previous `dist/` whole
-  and then the new one; on an object store, which has no rename, some
-  files of each until the move finishes.
-
-  Public because the build and the publication fail independently: a
-  scripted builder proves the one, this the other.
-  """
-  @spec store_tincture_output(
-          Context.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          %{String.t() => binary()} | [{String.t(), binary()}]
-        ) :: :ok | {:error, term()}
-  def store_tincture_output(%Context{} = ctx, type, publisher, name, version, output_files) do
+  # Publish a tincture build into its version directory: the build replaces
+  # the unit's `dist/` whole, as a new revision of the unit
+  # (`Arca.Overlay.replace_subtree/5`). The revision's row commit publishes
+  # it, and the rest of the unit — its manifest, its source and its other
+  # files — is carried over as it is. A version with no manifest
+  # publishes nothing (`{:error, :not_found}`), and a commit that landed on
+  # the unit meanwhile refuses this one (`{:error, :stale_revision}`).
+  #
+  # What a reader sees while the new revision is moved into place is the
+  # adapter's (`Arca.Overlay`): on a filesystem, the previous `dist/` whole
+  # and then the new one; on an object store, which has no rename, some
+  # files of each until the move finishes.
+  defp store_tincture_output(%Context{} = ctx, type, publisher, name, version, output_files) do
     unit = ComponentPath.version_dir(type, publisher, name, version)
     files = Enum.map(output_files, fn {rel, content} -> {Path.split(rel), content} end)
     total_bytes = Enum.reduce(files, 0, fn {_segs, content}, acc -> acc + byte_size(content) end)

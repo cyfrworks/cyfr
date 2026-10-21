@@ -231,7 +231,7 @@ defmodule Aqua.TurnLedgerTest do
 
     test "a note flush's, before the notes it keeps", %{ctx: ctx, thread: thread} do
       {:ok, _} =
-        Aqua.ToolGrants.put(ctx, %{
+        Sanctum.ToolGrants.put(ctx, %{
           scope: "thread",
           effect: "allow",
           thread_id: thread.id,

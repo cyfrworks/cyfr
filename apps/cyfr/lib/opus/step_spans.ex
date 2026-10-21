@@ -69,10 +69,6 @@ defmodule Opus.StepSpans do
           component: String.t()
         }
 
-  @doc "The four event names, in the order a run reaches them."
-  @spec events() :: [[atom(), ...]]
-  def events, do: [@admission, @first_delta, @completion, @run_child]
-
   @doc """
   Start the clock for a call of `reference` with `run_child/5`'s `opts`
   (`:execution_id`, `:root_execution_id`, `:ctx`).

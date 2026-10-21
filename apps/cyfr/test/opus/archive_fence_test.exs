@@ -49,9 +49,12 @@ defmodule Opus.ArchiveFenceTest do
 
   alias Prima.Authority
   alias Prima.Authority.Blob.Edge
-  alias Opus.{Dispatch, Record, Sweeper}
-  alias Cyfr.Test.AttemptFixtures
+  alias Opus.{Record, Sweeper}
+  alias Cyfr.Test.{AttemptFixtures, AttemptWaiter}
   alias Sanctum.Tenancy.Athanors
+
+  # One page of the sweep's retired scan (`Opus.Sweeper`).
+  @retired_page 50
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -166,7 +169,7 @@ defmodule Opus.ArchiveFenceTest do
 
       assert %{"error" => "lost"} = complete(fixture, %{"answer" => 42})
 
-      assert {:error, _lost} = Dispatch.await(fixture.pid, fixture.close)
+      assert {:error, _lost} = AttemptWaiter.await(fixture.pid, fixture.close)
       assert row(fixture).status == "failed"
       assert attempt_row(fixture).outcome != "ok"
       assert attempt_row(fixture).state == "failed"
@@ -280,7 +283,7 @@ defmodule Opus.ArchiveFenceTest do
                  "outcome" => AttemptFixtures.outcome(fixture, "failed", %{"error" => "stop"})
                })
 
-      assert {:error, _} = Dispatch.await(fixture.pid, fixture.close)
+      assert {:error, _} = AttemptWaiter.await(fixture.pid, fixture.close)
       assert row(fixture).status == "failed"
       assert Enum.filter(events(), &match?(%{type: "emit"}, &1)) == []
     end
@@ -307,6 +310,7 @@ defmodule Opus.ArchiveFenceTest do
       # the old root's row now is refused.
       assert {:error, :not_standing} =
                Record.write_started(
+                 ctx,
                  Record.new(ctx, "reagent:local.fence-child:0.1.0", %{},
                    parent_execution_id: old.execution_id,
                    root_execution_id: old.execution_id
@@ -365,7 +369,9 @@ defmodule Opus.ArchiveFenceTest do
       archive!(athanor)
 
       completed = Record.complete(fixture.record, %{"answer" => 42})
-      assert {:error, :not_standing} = Record.write_completed(completed)
+
+      assert {:error, :not_standing} =
+               Record.write_completed_ledger(completed, retention_class: "api")
 
       assert %{status: "failed", output: nil} = row(fixture)
       assert %{state: "failed", outcome: "uncertain"} = attempt_row(fixture)
@@ -445,7 +451,7 @@ defmodule Opus.ArchiveFenceTest do
   describe "the sweep" do
     test "retires every retired attempt past a page, paused turns and children among them, once",
          %{athanor: athanor, ctx: ctx} do
-      page = Sweeper.bounds().retired_page
+      page = @retired_page
       grant = AttemptFixtures.grant(ctx.athanor_id)
       roots = for _ <- 1..(page + 2), do: root!(ctx, grant)
       {parent, parent_attempt} = hd(roots)
@@ -500,8 +506,7 @@ defmodule Opus.ArchiveFenceTest do
       assert {:ok, []} = scan(ctx.athanor_id)
     end
 
-    test "records its bounds without extending them" do
-      assert %{interval_ms: 60_000, retired_page: 50} = Sweeper.bounds()
+    test "the attempt lease the sweep reads is 180 s" do
       assert Arca.ExecutionAttempts.lease_seconds() == 180
     end
   end

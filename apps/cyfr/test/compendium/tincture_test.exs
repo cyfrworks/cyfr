@@ -33,7 +33,7 @@ defmodule Compendium.TinctureTest do
     end
 
     test "refuses reserved files, dotfiles, traversal and absolute paths as invalid" do
-      for entry <- ~w(data.db cyfr-manifest.json schema.sql .env ../escape.html /etc/passwd) do
+      for entry <- ~w(cyfr-manifest.json .env ../escape.html /etc/passwd) do
         tincture = %{manifest: %{"tincture" => %{"entry" => entry}}}
         assert {:error, :invalid_entry} = Compendium.tincture_entry(tincture), entry
       end
@@ -50,15 +50,16 @@ defmodule Compendium.TinctureTest do
 
   describe "the entry, inside the domain" do
     test "keeps its sentences for the validators" do
-      assert {:ok, "index.html"} = Tincture.validate_entry(nil)
-      assert {:ok, "index.html"} = Tincture.entry_of(%{})
-      assert {:error, "entry must not be a dotfile"} = Tincture.validate_entry(".env")
-      assert {:error, "entry must be a relative path"} = Tincture.validate_entry("/etc/passwd")
-      assert {:error, "entry must be a string"} = Tincture.validate_entry(7)
+      entry = &Tincture.entry_of(%{"tincture" => %{"entry" => &1}})
 
-      assert {:error,
-              "entry must not be a reserved file (data.db, cyfr-manifest.json, schema.sql)"} =
-               Tincture.validate_entry("data.db")
+      assert {:ok, "index.html"} = entry.(nil)
+      assert {:ok, "index.html"} = Tincture.entry_of(%{})
+      assert {:error, "entry must not be a dotfile"} = entry.(".env")
+      assert {:error, "entry must be a relative path"} = entry.("/etc/passwd")
+      assert {:error, "entry must be a string"} = entry.(7)
+
+      assert {:error, "entry must not be a reserved file (cyfr-manifest.json)"} =
+               entry.("cyfr-manifest.json")
     end
   end
 
@@ -77,7 +78,7 @@ defmodule Compendium.TinctureTest do
       assert rules.default_icon == ["public", "media", "icon.svg"]
       assert rules.default_preview == ["public", "media", "preview-1.svg"]
       assert rules.preview_count == 6
-      assert rules.reserved_files == ["data.db", "cyfr-manifest.json", "schema.sql"]
+      assert rules.reserved_files == ["cyfr-manifest.json"]
       assert rules.blocked_raster_extensions == ~w(.png .jpg .jpeg .gif .webp)
     end
 
@@ -105,7 +106,6 @@ defmodule Compendium.TinctureTest do
       assert rules.default_icon == Tincture.default_icon()
       assert rules.default_preview == Tincture.default_preview()
       assert rules.preview_count == Tincture.preview_count()
-      assert rules.allowed_extensions == Tincture.allowed_extensions()
     end
   end
 
@@ -335,16 +335,6 @@ defmodule Compendium.TinctureTest do
       assert message =~ "vault.changes, which no provider declares"
 
       assert {:ok, 1} = Tincture.check_version(canvas(%{"streams" => []}), [{"canvas.js", 1}])
-    end
-  end
-
-  describe "the connect-domain grammar" do
-    test "is the manifest contract's rule, read through the facade" do
-      assert Compendium.valid_tincture_connect_domain?("*.supabase.co")
-      assert Compendium.valid_tincture_connect_domain?("api.example.com")
-      refute Compendium.valid_tincture_connect_domain?("evil.com\n")
-      refute Compendium.valid_tincture_connect_domain?("https://x.com")
-      refute Compendium.valid_tincture_connect_domain?(nil)
     end
   end
 end

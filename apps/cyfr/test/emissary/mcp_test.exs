@@ -60,8 +60,8 @@ defmodule Emissary.MCPTest do
       assert decoded["status"] in ["ok", "degraded"]
     end
 
-    # The current protocol rejects ping as an unsupported method.
-    test "ping is gone", %{ctx: ctx} do
+    # This protocol revision defines no `ping`: it is an unknown method.
+    test "ping is not a method of this protocol revision", %{ctx: ctx} do
       params = %{
         "jsonrpc" => "2.0",
         "id" => 3,

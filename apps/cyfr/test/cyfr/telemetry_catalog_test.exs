@@ -138,21 +138,23 @@ defmodule Cyfr.TelemetryCatalogTest do
     assert metric_events == Catalog.consumed_by(:metrics)
   end
 
-  test "the projection reconciler attaches exactly the catalog's :projection roster" do
+  # A completed schedule's note is kept from the committed bus message
+  # (`Cyfr.Bus.ScheduleCompleted`), never from the telemetry event too: the
+  # old `:notes` consumer is gone, with nothing attached in its place.
+  test "a completed schedule's telemetry has no consumer that keeps a note" do
+    assert Catalog.consumed_by(:notes) == []
+    assert Catalog.all()[[:cyfr, :schedules, :completed]].consumers == [:operator]
+
+    ids =
+      [:cyfr, :schedules, :completed] |> :telemetry.list_handlers() |> Enum.map(& &1.id)
+
+    refute Enum.any?(ids, &(is_binary(&1) and String.starts_with?(&1, "notes-")))
+  end
+
+  # What a started reconciler attaches is this roster exactly, and nothing
+  # once it stops (`Compendium.ProjectionReconcilerTest`, "the process").
+  test "the projection roster is the storage change notification alone" do
     assert Catalog.consumed_by(:projection) == [Arca.StorageProjectionChanges.event()]
-
-    # The attach a reconciler makes as it starts, under a name no running
-    # reconciler holds, so what it attaches is this case's alone.
-    name = __MODULE__
-    handler = Compendium.ProjectionReconciler.handler_id(name)
-    on_exit(fn -> Compendium.ProjectionReconciler.detach(name) end)
-
-    assert :ok = Compendium.ProjectionReconciler.attach(name)
-
-    attached =
-      for %{id: ^handler, event_name: event} <- :telemetry.list_handlers([]), do: event
-
-    assert Enum.sort(attached) == Catalog.consumed_by(:projection)
   end
 
   test "the dedicated log attaches cover the catalog's :log roster" do

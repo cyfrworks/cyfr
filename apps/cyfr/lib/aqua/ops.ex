@@ -81,20 +81,6 @@ defmodule Aqua.Ops do
     end
   end
 
-  @doc "Whether a running chain would refuse `tool`/`action` (nothing a chain can run)."
-  @spec in_chain_refused?(String.t(), String.t()) :: boolean()
-  def in_chain_refused?(tool, action),
-    do: Sanctum.Catalog.in_chain_refused?(tool, action)
-
-  @doc """
-  Whether an approved `tool`/`action` is an execution the assistant runs
-  as a CHILD of the card's authority rather than a catalog call: the host
-  intercepts it for a running chain, and the assistant does the same for
-  a card (`Aqua.Loop`).
-  """
-  @spec child_execution?(String.t(), String.t()) :: boolean()
-  def child_execution?(tool, action), do: Sanctum.Catalog.host_intercepted?(tool, action)
-
   @doc """
   One sentence for a refusal: the gate's renderer (`Sanctum.Refusals.render/1`),
   the same sentence everywhere — this text persists as a thread message

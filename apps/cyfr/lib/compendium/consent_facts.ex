@@ -106,7 +106,7 @@ defmodule Compendium.ConsentFacts do
     end
   end
 
-  defp agent_type, do: AgentSource.type()
+  defp agent_type, do: Prima.AgentRef.type()
 
   defp shipped_digest(ctx, row, roster) do
     type = to_string(Prima.ComponentRow.field(row, :component_type))

@@ -761,9 +761,12 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
+  # A node of the closure whose stored manifest does not decode, the
+  # source's or a dependency's, skips the source as that damage.
   defp resolve_activation(ctx, component) do
     case Components.resolve(ctx, component) do
       {:ok, activation} -> {:ok, activation}
+      {:error, {:corrupt, {:manifest, _ref}} = damaged} -> {:skip, damaged}
       {:error, reason} -> {:skip, {:activation_unresolvable, reason}}
     end
   end

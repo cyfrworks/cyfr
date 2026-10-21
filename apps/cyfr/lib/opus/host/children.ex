@@ -4,10 +4,11 @@
 defmodule Opus.Host.Children do
   @moduledoc """
   The host calls a formula's runner makes for its guest's children and
-  catalog tools: `admit_child` and `tool_call` (`Prima.HostAPI`).
+  catalog tools: `admit_child`, `tool_call` and `release_child`
+  (`Prima.HostAPI`).
 
   `Opus.Host` verifies the call, decodes its body
-  (`operation/2`) and checks its nonce before `call/2` acts. Both act under
+  (`operation/2`) and checks its nonce before `call/2` acts. Each acts under
   what CYFR holds for the calling attempt (`Opus.Attempt`): the
   authority its run was admitted under, the context its guest's calls run
   in, its root, the declared needs and activation digest the resolver gave
@@ -180,14 +181,15 @@ defmodule Opus.Host.Children do
   defp child_key(_args),
     do: {:error, guest_error(:invalid_request, "Invalid child_key: a child needs one")}
 
-  # The account the child asks its edge for: absent or null for the edge's
-  # default, else a name a named binding may carry.
+  # The account the child asks its edge for: absent for the edge's
+  # default (`t:Prima.HostAPI.connection/0`), else a name a named binding
+  # may carry.
   defp connection(args) do
-    case Map.get(args, "connection") do
-      nil ->
+    case Map.fetch(args, "connection") do
+      :error ->
         {:ok, nil}
 
-      name ->
+      {:ok, name} ->
         if Prima.Authority.Blob.valid_account_name?(name),
           do: {:ok, name},
           else: {:error, guest_error(:invalid_request, "Invalid connection: not an account name")}

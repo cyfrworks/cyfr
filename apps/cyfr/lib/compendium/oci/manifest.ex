@@ -12,8 +12,6 @@ defmodule Compendium.OCI.Manifest do
   - artifactType = application/vnd.cyfr.component.v1
   """
 
-  alias Compendium.OCI.Blob
-
   # Media type constants
   @manifest_media_type "application/vnd.oci.image.manifest.v1+json"
   @config_media_type "application/vnd.cyfr.manifest.v1+json"
@@ -72,8 +70,8 @@ defmodule Compendium.OCI.Manifest do
           {:ok, String.t(), String.t(), String.t()} | {:error, String.t()}
   def build(config_json, wasm_bytes, component_type, annotations \\ %{}, opts \\ []) do
     with {:ok, config_bytes} <- encode_config_json(config_json) do
-      config_digest = Blob.compute_digest(config_bytes)
-      wasm_digest = Blob.compute_digest(wasm_bytes)
+      config_digest = Prima.Digest.sha256(config_bytes)
+      wasm_digest = Prima.Digest.sha256(wasm_bytes)
       wasm_media = wasm_media_type(component_type)
 
       wasm_layer = %{
@@ -95,7 +93,7 @@ defmodule Compendium.OCI.Manifest do
                 %{
                   "mediaType" => @readme_media_type,
                   "size" => byte_size(readme),
-                  "digest" => Blob.compute_digest(readme)
+                  "digest" => Prima.Digest.sha256(readme)
                 }
               ]
         end
@@ -111,7 +109,7 @@ defmodule Compendium.OCI.Manifest do
                 %{
                   "mediaType" => @source_media_type,
                   "size" => byte_size(source),
-                  "digest" => Blob.compute_digest(source)
+                  "digest" => Prima.Digest.sha256(source)
                 }
               ]
         end
@@ -224,26 +222,6 @@ defmodule Compendium.OCI.Manifest do
   end
 
   @doc """
-  Extract the WASM layer descriptor from a parsed manifest.
-  Returns the first layer with a CYFR WASM media type.
-
-  For type-agnostic lookups, prefer `content_layer/1`.
-  """
-  @spec wasm_layer(map()) :: {:ok, map()} | {:error, String.t()}
-  def wasm_layer(%{layers: layers}) do
-    wasm =
-      Enum.find(layers, fn layer ->
-        media = layer["mediaType"] || ""
-        String.starts_with?(media, "application/vnd.cyfr.") and String.ends_with?(media, "+wasm")
-      end)
-
-    case wasm do
-      nil -> {:error, "No WASM layer found in manifest"}
-      layer -> {:ok, layer}
-    end
-  end
-
-  @doc """
   Extract the README layer descriptor from a parsed manifest.
   Returns `{:ok, layer}` or `:none` if no README layer is present.
   """
@@ -273,27 +251,25 @@ defmodule Compendium.OCI.Manifest do
   @spec build_annotations(map()) :: map()
   def build_annotations(metadata) do
     base = %{
-      "org.opencontainers.image.title" => metadata[:name] || metadata["name"],
-      "org.opencontainers.image.version" => metadata[:version] || metadata["version"],
-      "dev.cyfr.component.type" => metadata[:type] || metadata["type"],
+      "org.opencontainers.image.title" => metadata.name,
+      "org.opencontainers.image.version" => metadata.version,
+      "dev.cyfr.component.type" => metadata.type,
       "dev.cyfr.component.publisher" =>
-        Compendium.ComponentPath.normalize_publisher(
-          metadata[:publisher] || metadata["publisher"]
-        )
+        Compendium.ComponentPath.normalize_publisher(metadata.publisher)
     }
 
     base
     |> Prima.MapUtil.put_present(
       "org.opencontainers.image.description",
-      metadata[:description] || metadata["description"]
+      metadata[:description]
     )
     |> Prima.MapUtil.put_present(
       "org.opencontainers.image.licenses",
-      metadata[:license] || metadata["license"]
+      metadata[:license]
     )
     |> Prima.MapUtil.put_present(
       "dev.cyfr.component.category",
-      metadata[:category] || metadata["category"]
+      metadata[:category]
     )
   end
 

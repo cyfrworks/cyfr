@@ -146,11 +146,10 @@ defmodule Emissary.External.InChainProbeTest do
 
     root =
       Opus.Record.new(ctx, "formula:local.backends-e2e-chain:0.1.0", %{},
-        component_type: :formula,
-        grant: grant
+        component_type: :formula
       )
 
-    :ok = Opus.Record.write_started(root)
+    :ok = Opus.Record.write_started(ctx, root, grant: grant)
     lineage = %{"parent_execution_id" => root.id, "root_execution_id" => root.id}
 
     reply =
@@ -166,10 +165,17 @@ defmodule Emissary.External.InChainProbeTest do
     :ok =
       case reply do
         {:ok, answer} ->
-          root |> Opus.Record.complete(answer) |> Opus.Record.write_completed()
+          {:ok, _ledger} =
+            root
+            |> Opus.Record.complete(answer)
+            |> Opus.Record.write_completed_ledger(grant: grant, retention_class: "api")
+
+          :ok
 
         {:error, reason} ->
-          root |> Opus.Record.fail(Sanctum.Refusals.render(reason)) |> Opus.Record.write_failed()
+          root
+          |> Opus.Record.fail(Sanctum.Refusals.render(reason))
+          |> Opus.Record.write_failed(grant: grant)
       end
 
     answer =

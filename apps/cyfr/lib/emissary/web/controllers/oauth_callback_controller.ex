@@ -28,10 +28,9 @@ defmodule Emissary.Web.OAuthCallbackController do
   require Logger
 
   def callback(conn, %{"code" => code, "state" => state}) do
-    # The whole URI has one owner now, not just the path: the exchange fails
-    # if this differs by so much as a scheme from the one `authorize` sent,
-    # and building it here from the endpoint while the grant built it from
-    # the public origin is exactly how that happens.
+    # The whole URI has one owner, `Sanctum.Vault.OAuthGrant`: the exchange
+    # fails if this differs by so much as a scheme from the one `authorize`
+    # sent, so it is never rebuilt here from the endpoint.
     redirect_uri = Sanctum.Vault.OAuthGrant.redirect_uri()
 
     case Sanctum.Vault.OAuthGrant.complete(state, code, redirect_uri) do

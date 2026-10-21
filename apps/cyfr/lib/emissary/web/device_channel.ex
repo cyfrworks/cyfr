@@ -857,10 +857,8 @@ defmodule Emissary.Web.DeviceChannel do
   end
 
   defp overflowing? do
-    case Process.info(self(), :message_queue_len) do
-      {:message_queue_len, depth} -> depth > @max_backlog
-      nil -> false
-    end
+    {:message_queue_len, depth} = Process.info(self(), :message_queue_len)
+    depth > @max_backlog
   end
 
   defp recheck(state) do

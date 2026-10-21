@@ -27,7 +27,7 @@ defmodule Opus.Telemetry do
   | Event | Measurements |
   |-------|-------------|
   | `:start` | `%{system_time: integer}` |
-  | `:stop` | `%{duration: integer, memory_bytes: integer (when reported)}` |
+  | `:stop` | `%{duration: integer}` |
   | `:exception` | `%{duration: integer}`; `system_time` too for a row failed from outside |
 
   `duration` is in native units (nanoseconds).
@@ -60,7 +60,7 @@ defmodule Opus.Telemetry do
       %{
         execution_id: record.id,
         request_id: record.request_id,
-        component: format_reference(record.reference),
+        component: record.reference,
         reference: record.reference,
         component_type: record.component_type,
         user_id: record.user_id,
@@ -72,22 +72,19 @@ defmodule Opus.Telemetry do
   @doc """
   Emit `[:cyfr, :opus, :execute, :stop]` for a record marked completed.
 
-  Measurements: `duration`, and `memory_bytes` only when `measurements`
-  carries it. Metadata: that of `execute_start/1`, plus
+  Measurements: `duration`. Metadata: that of `execute_start/1`, plus
   `parent_execution_id` (nil for a root), `outcome: :success` and
   `duration_ms`.
   """
-  @spec execute_stop(Record.t(), map()) :: :ok
-  def execute_stop(%Record{} = record, measurements \\ %{}) do
+  @spec execute_stop(Record.t()) :: :ok
+  def execute_stop(%Record{} = record) do
     :telemetry.execute(
       [:cyfr, :opus, :execute, :stop],
-      # Only real measurements ride: memory is included when the runtime
-      # reports one, never fabricated as zero.
-      Map.merge(%{duration: native_duration(record)}, Map.take(measurements, [:memory_bytes])),
+      %{duration: native_duration(record)},
       %{
         execution_id: record.id,
         request_id: record.request_id,
-        component: format_reference(record.reference),
+        component: record.reference,
         reference: record.reference,
         component_type: record.component_type,
         user_id: record.user_id,
@@ -116,7 +113,7 @@ defmodule Opus.Telemetry do
       %{
         execution_id: record.id,
         request_id: record.request_id,
-        component: format_reference(record.reference),
+        component: record.reference,
         reference: record.reference,
         component_type: record.component_type,
         user_id: record.user_id,
@@ -148,7 +145,7 @@ defmodule Opus.Telemetry do
       %{
         execution_id: record.id,
         request_id: record.request_id,
-        component: format_reference(record.reference),
+        component: record.reference,
         reference: record.reference,
         component_type: record.component_type,
         user_id: cancelled_by,
@@ -214,10 +211,7 @@ defmodule Opus.Telemetry do
     )
   end
 
-  defp native_duration(%Record{duration_ms: duration_ms}), do: (duration_ms || 0) * 1_000_000
-
-  defp format_reference(ref) when is_binary(ref), do: ref
-  defp format_reference(_), do: "unknown"
+  defp native_duration(%Record{duration_ms: duration_ms}), do: duration_ms * 1_000_000
 
   defp format_error(reason) when is_binary(reason), do: reason
   defp format_error(reason), do: Sanctum.Refusals.render(reason)

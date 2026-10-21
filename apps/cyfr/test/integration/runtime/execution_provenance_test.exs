@@ -43,7 +43,7 @@ defmodule Locus.Runtime.ExecutionProvenanceTest do
         ctx,
         Probe.probe_ref(),
         %{"op" => "echo"},
-        [type: :formula, authority: Prima.Authority.zero()] ++ opts
+        [type: "formula", authority: Prima.Authority.zero()] ++ opts
       )
 
     assert result.status == :completed

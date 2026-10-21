@@ -215,7 +215,7 @@ defmodule Locus.Runtime.ChainTest do
       _result =
         Opus.run_root(ctx, :default, "#{@root_node}:0.1.0", %{"a" => 1},
           execution_id: execution_id,
-          type: :reagent
+          type: "reagent"
         )
 
       authority = entered!(execution_id)
@@ -454,13 +454,10 @@ defmodule Locus.Runtime.ChainTest do
       assert payload.reason == "vault_entry_revoked"
     end
 
-    test "a consented catalyst with no legacy policy rows executes under its blob", %{
-      ctx: ctx
-    } do
-      # No policy rows exist for this catalyst, and the callee-keyed
-      # resolver is gone: a direct run without an authority fails closed,
-      # while the authority path executes under the blob — the blob is the
-      # policy. Reaching the runtime witness proves it.
+    test "a consented catalyst executes under its blob", %{ctx: ctx} do
+      # A direct run without an authority fails closed, while the authority
+      # path executes under the blob — the blob is the policy. Reaching the
+      # runtime witness proves it.
       admin_ctx = Sanctum.TestContext.local()
       wasm_bytes = File.read!(@math_wasm_path)
 
@@ -514,7 +511,7 @@ defmodule Locus.Runtime.ChainTest do
       # nothing executes, so the blob below is provably the only policy in
       # play.
       assert {:error, no_authority_error} =
-               Opus.Dispatch.run(ctx, "#{cat_node}:0.1.0", %{}, type: :catalyst)
+               Opus.Dispatch.run(ctx, "#{cat_node}:0.1.0", %{}, type: "catalyst")
 
       assert no_authority_error =~ "without an authority is not a thing"
 
@@ -522,7 +519,7 @@ defmodule Locus.Runtime.ChainTest do
 
       _result =
         Opus.run_root(ctx, :default, "#{cat_node}:0.1.0", %{},
-          type: :catalyst,
+          type: "catalyst",
           execution_id: execution_id
         )
 

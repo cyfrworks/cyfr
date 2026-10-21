@@ -32,7 +32,8 @@ defmodule Opus.Attestation do
 
   ## Parameters
 
-  - `component` - Component map with `source`, `signature_verified`, `signer_identity`, `signer_issuer`
+  - `component` - The string-keyed registry row (`Opus.Admission.inspect_component/2`):
+    `"source"`, `"signature_verified"`, `"signer_identity"`, `"signer_issuer"`
   - `identity` - Expected signer identity (email or URI), or nil for any
   - `issuer` - Expected OIDC issuer URL, or nil for any
 
@@ -43,8 +44,8 @@ defmodule Opus.Attestation do
   """
   @spec verify(map(), String.t() | nil, String.t() | nil) :: :ok | {:error, String.t()}
   def verify(component, identity, issuer) when is_map(component) do
-    stored_identity = component["signer_identity"] || component[:signer_identity]
-    stored_issuer = component["signer_issuer"] || component[:signer_issuer]
+    stored_identity = component["signer_identity"]
+    stored_issuer = component["signer_issuer"]
 
     case attestation(component) do
       :trusted ->
@@ -60,10 +61,6 @@ defmodule Opus.Attestation do
       {:unknown_source, source} ->
         {:error, "Unknown component source #{inspect(source)} — signature policy undefined"}
     end
-  end
-
-  def verify(_component, _identity, _issuer) do
-    {:error, "Invalid component data for signature verification"}
   end
 
   @doc """
@@ -82,8 +79,8 @@ defmodule Opus.Attestation do
   """
   @spec attestation(map()) :: :trusted | :signed | :unsigned | {:unknown_source, term()}
   def attestation(component) when is_map(component) do
-    source = component["source"] || component[:source]
-    verified = component["signature_verified"] || component[:signature_verified]
+    source = component["source"]
+    verified = component["signature_verified"]
 
     cond do
       # `nil` is NOT in this list: a missing source is an unclassified value,

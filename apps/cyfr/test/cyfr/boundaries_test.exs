@@ -1386,7 +1386,6 @@ defmodule Cyfr.BoundariesTest do
       assert gaps == [
                :oci_max_blob_bytes,
                :platform_ceiling,
-               :registry_scheme,
                :tincture_rate_limit_max,
                :webhook_max_body_bytes
              ]
@@ -1582,7 +1581,7 @@ defmodule Cyfr.BoundariesTest do
          defmodule Cyfr.Bus.Planted do
            alias Sanctum.Context
            def a(%Context{} = ctx), do: Aqua.Runner.subscribe(ctx.athanor_id, "t")
-           def b, do: Opus.Events.flush("e")
+           def b, do: Opus.Events.since("e", {0, 0}, "a")
            def c, do: Prima.Actor.system()
          end
          ''')}

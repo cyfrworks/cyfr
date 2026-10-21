@@ -187,8 +187,8 @@ defmodule Compendium.SignInSync do
 
   defp membership_entries(_), do: []
 
-  defp slug_of(%{} = m), do: m["slug"] || m[:slug]
+  defp slug_of(%{} = m), do: m["slug"]
   defp slug_of(_), do: nil
-  defp token_of(%{} = m), do: m["token"] || m[:token]
-  defp role_of(%{} = m), do: m["role"] || m[:role] || "member"
+  defp token_of(%{} = m), do: m["token"]
+  defp role_of(%{} = m), do: m["role"] || "member"
 end

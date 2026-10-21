@@ -48,8 +48,8 @@ defmodule Opus.Assignments do
           required(:timeout_ms) => pos_integer(),
           required(:service) => String.t(),
           required(:boot) => String.t(),
-          optional(:deadline) => non_neg_integer(),
-          optional(:step) => Assignment.step() | nil
+          required(:deadline) => non_neg_integer(),
+          required(:step) => Assignment.step() | nil
         }
 
   @typedoc """
@@ -95,8 +95,8 @@ defmodule Opus.Assignments do
       attempt: record.attempt,
       fence: attempt.fence,
       parent_execution_id: record.parent_execution_id,
-      root_execution_id: record.root_execution_id || record.id,
-      step: Map.get(admitted, :step),
+      root_execution_id: record.root_execution_id,
+      step: admitted.step,
       athanor_id: record.athanor_id,
       actor: actor(admitted.ctx),
       authority: Authority.to_wire(admitted.authority),
@@ -104,8 +104,8 @@ defmodule Opus.Assignments do
       input_digest: Prima.Digest.sha256(Jason.encode!(admitted.input)),
       timeout_ms: admitted.timeout_ms,
       # The subtree deadline admission settled, already capped by the
-      # parent's; a run admitted with none has its own timeout from now.
-      deadline: Map.get(admitted, :deadline) || now + admitted.timeout_ms,
+      # parent's.
+      deadline: admitted.deadline,
       lease_until: now + Arca.ExecutionAttempts.lease_seconds() * 1000,
       intercepted: Sanctum.Catalog.host_intercepted_actions()
     }

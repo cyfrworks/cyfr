@@ -62,7 +62,7 @@ defmodule Opus.GuestStorageTest do
     scope = %{
       ctx: ctx,
       edge: edge,
-      limits: Keyword.get(opts, :limits),
+      limits: Keyword.get_lazy(opts, :limits, fn -> Prima.Limits.defaults(:reagent) end),
       quota: Keyword.get(opts, :quota),
       hold: Keyword.get(opts, :hold, &held(ctx, &1))
     }
@@ -448,16 +448,6 @@ defmodule Opus.GuestStorageTest do
 
       assert {:ok, "host bytes"} =
                Arca.get(Sanctum.Context.actor(ctx), ["threads", "thread_1", "msg_1.txt"])
-
-      # The retired name for threads/ (spelled split for the vocabulary
-      # gate) is no root at all, and no guest path either.
-      retired = "conver" <> "sations"
-      refute retired in Arca.Storage.tenant_roots()
-
-      assert {"storage_path_denied", _} =
-               refused(
-                 run(ctx, edge(["*"]), %{"action" => "read", "path" => retired <> "/thread_1"})
-               )
     end
 
     test "a grant that parses is a path this boundary honors, and the reverse", %{ctx: ctx} do
@@ -808,9 +798,13 @@ defmodule Opus.GuestStorageTest do
       hold = &held(ctx, &1)
       public = %{Authority.zero() | profile_kind: :public}
 
-      assert %{quota: quota} = GuestStorage.scope(ctx, public, nil, hold)
+      assert %{quota: quota} =
+               GuestStorage.scope(ctx, public, Prima.Limits.defaults(:reagent), hold)
+
       assert quota == Application.fetch_env!(:cyfr, :public_storage_quota)
-      assert %{quota: nil, edge: nil} = GuestStorage.scope(ctx, Authority.zero(), nil, hold)
+
+      assert %{quota: nil, edge: nil} =
+               GuestStorage.scope(ctx, Authority.zero(), Prima.Limits.defaults(:reagent), hold)
     end
   end
 

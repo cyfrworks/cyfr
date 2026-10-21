@@ -10,22 +10,17 @@ defmodule Compendium.Catalogue do
   status defaulting — and it lives here so the console renders what the
   registry means rather than re-deriving it.
 
-  Rows arrive in both key spellings (registry rows atom-keyed, search
-  JSON string-keyed); `field/2` reads either.
+  Rows are the atom-keyed rows of a tool result: the local registry's and
+  cyfr.run's (`Compendium.Registry.Client`), which name the publisher
+  `publisher` alike.
   """
 
-  @doc "Read `key` from a row that may be atom- or string-keyed."
-  def field(row, key) when is_map(row), do: row[key] || row[to_string(key)]
-  def field(_, _), do: nil
-
-  @doc """
-  Assemble a component reference from its parts:
-  `("catalyst", "alice", "api", "1.0.0")` → `"catalyst:alice.api:1.0.0"`.
-  A thin adapter over the ONE constructor (`Prima.ComponentRef.build/4`):
-  an absent publisher normalizes to `local` rather than being omitted,
-  because an omitted namespace produced a ref the parser refuses.
-  """
-  def build_ref(type, publisher, name, version) do
+  # A component reference from its parts:
+  # `("catalyst", "alice", "api", "1.0.0")` → `"catalyst:alice.api:1.0.0"`,
+  # through the one constructor (`Prima.ComponentRef.build/4`). An absent
+  # publisher normalizes to `local`, since the parser refuses a ref with
+  # no namespace.
+  defp build_ref(type, publisher, name, version) do
     Prima.ComponentRef.build(
       type,
       Compendium.ComponentPath.normalize_publisher(presence(publisher)),
@@ -46,15 +41,14 @@ defmodule Compendium.Catalogue do
   def group_search_results(rows) do
     rows
     |> Enum.group_by(fn row ->
-      {field(row, :name), field(row, :publisher) || field(row, :namespace_slug),
-       field(row, :component_type)}
+      {row[:name], row[:publisher], row[:component_type]}
     end)
     |> Enum.map(fn {{name, publisher, type}, local_versions} ->
-      sorted = Compendium.Semver.sort_desc_by(local_versions, &(field(&1, :version) || "0.0.0"))
+      sorted = Compendium.Semver.sort_desc_by(local_versions, &(&1[:version] || "0.0.0"))
       latest = hd(sorted)
 
-      remote_vs = field(latest, :remote_versions) || []
-      local_vs = MapSet.new(sorted, &field(&1, :version))
+      remote_vs = latest[:remote_versions] || []
+      local_vs = MapSet.new(sorted, & &1[:version])
 
       remote_only =
         remote_vs
@@ -64,21 +58,21 @@ defmodule Compendium.Catalogue do
         end)
 
       all_versions =
-        Compendium.Semver.sort_desc_by(sorted ++ remote_only, &(field(&1, :version) || "0.0.0"))
+        Compendium.Semver.sort_desc_by(sorted ++ remote_only, &(&1[:version] || "0.0.0"))
 
       %{
         name: name,
         publisher: Compendium.ComponentPath.normalize_publisher(publisher),
         component_type: type,
-        description: field(latest, :description),
+        description: latest[:description],
         latest: latest,
         versions: all_versions,
         version_count: length(all_versions),
-        # Latest version's status (active|deprecated|yanked|taken_down).
-        # Older rows + local-only entries may omit it; default to "active".
+        # Latest version's status (active|deprecated|yanked|taken_down):
+        # cyfr.run's, or "active" for a local row, which carries none.
         # Callers render a status badge when != "active".
-        status: field(latest, :status) || "active",
-        status_reason: field(latest, :status_reason)
+        status: latest[:status] || "active",
+        status_reason: latest[:status_reason]
       }
     end)
     |> Enum.sort_by(& &1.name)
@@ -91,7 +85,7 @@ defmodule Compendium.Catalogue do
   def group_by_component(rows) do
     rows
     |> Enum.group_by(fn row ->
-      ref = field(row, :component_ref) || field(row, :id) || "-"
+      ref = row[:component_ref] || row[:id] || "-"
 
       case Prima.ComponentRef.to_name_ref(ref) do
         {:ok, nr} -> nr
@@ -99,7 +93,7 @@ defmodule Compendium.Catalogue do
       end
     end)
     |> Enum.map(fn {name_ref, versions} ->
-      sorted = Compendium.Semver.sort_desc_by(versions, &(field(&1, :version) || "0.0.0"))
+      sorted = Compendium.Semver.sort_desc_by(versions, &(&1[:version] || "0.0.0"))
       latest = hd(sorted)
 
       %{
@@ -107,8 +101,8 @@ defmodule Compendium.Catalogue do
         latest: latest,
         versions: sorted,
         version_count: length(sorted),
-        component_type: field(latest, :component_type) || "unknown",
-        description: field(latest, :description)
+        component_type: latest[:component_type] || "unknown",
+        description: latest[:description]
       }
     end)
     |> Enum.sort_by(& &1.name_ref)

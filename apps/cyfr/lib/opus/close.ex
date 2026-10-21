@@ -6,7 +6,7 @@ defmodule Opus.Close do
   How an admitted execution ends: its terminal row, its lifecycle
   telemetry and the answer its caller receives.
 
-  `complete/4` closes a run with its output: the output is masked, checked
+  `complete/3` closes a run with its output: the output is masked, checked
   for an application error (unless the run's answer is its catalyst
   envelope) and against the node's response size, and written with its
   result payload. `fail/3` closes a run with a reason and
@@ -21,7 +21,8 @@ defmodule Opus.Close do
   yet.
 
   A close struct is data only: the row's record, the context the run was
-  admitted in, the node's limits and whether the row has been admitted.
+  admitted in, what its admission settled, the node's limits and whether
+  the row has been admitted.
 
   A run whose row was never admitted is admitted on failure, so a refusal
   is on record like any other run. When one of the admission barriers
@@ -36,17 +37,17 @@ defmodule Opus.Close do
   alias Prima.SecretMasker
   alias Sanctum.Context
 
-  @enforce_keys [:ctx, :record]
+  @enforce_keys [:ctx, :record, :admission]
   defstruct [
     :ctx,
     :record,
+    :admission,
     :limits,
     :step_spans,
     :setup_stream,
     signature_verified: false,
     started: false,
-    envelope: false,
-    admission: []
+    envelope: false
   ]
 
   @typedoc """
@@ -57,8 +58,11 @@ defmodule Opus.Close do
   `started` whether the row was admitted; `envelope` whether the output is
   the component's catalyst envelope (`Prima.Model.decode_envelope/1`),
   whose error is a refusal the component answers rather than a failure of
-  the run; `admission` the barriers (`:charge`, `:step`, `:occurrence_id`)
-  a row admitted only on failure passes through.
+  the run; `admission` what the run's admission settled, which every
+  write of its row names (`Opus.Record.write_started/3`): its `:grant`,
+  its payloads' `:retention_class` and `:retained_input`, and the barriers
+  (`:charge`, `:step`, `:occurrence_id`) a row admitted only on failure
+  passes through.
   """
   @type t :: %__MODULE__{
           ctx: Context.t(),
@@ -87,13 +91,13 @@ defmodule Opus.Close do
   `lost/1` answers it: a cancelled row answers its error, so no caller
   records a cancelled run as completed.
   A run whose athanor was archived while it ran is never answered as a
-  success: its completion is refused (`Opus.Record.write_completed/1`),
+  success: its completion is refused (`Opus.Record.write_completed_ledger/2`),
   the row closes failed and the answer is `{:error, message}`.
   """
-  @spec complete(t(), [String.t()], term(), map()) ::
+  @spec complete(t(), [String.t()], term()) ::
           {:ok, map()}
           | {:error, String.t() | {:uncertain, String.t()} | {:result_lost, String.t()}}
-  def complete(%__MODULE__{} = close, secrets, output, exec_metadata) do
+  def complete(%__MODULE__{} = close, secrets, output) do
     masked_output = SecretMasker.mask(output, secrets)
 
     with :ok <- check_application_error(close, secrets, masked_output),
@@ -102,18 +106,18 @@ defmodule Opus.Close do
          {:written, write_result, ledger} <- completed_write(close, completed_record) do
       if write_result == {:error, :not_running},
         do: closed_after(close, completed_record),
-        else: completed(close, completed_record, write_result, ledger, exec_metadata)
+        else: completed(close, completed_record, write_result, ledger)
     end
   end
 
-  defp completed(close, completed_record, write_result, ledger, exec_metadata) do
+  defp completed(close, completed_record, write_result, ledger) do
     if write_result == :ok, do: StepSpans.completed(close.step_spans)
 
     # The lifecycle telemetry follows the row: a completion is announced
     # only when its write committed; any other failed write is an audit
     # error.
     audit_error = audit_error(completed_record, write_result)
-    if write_result == :ok, do: Telemetry.execute_stop(completed_record, exec_metadata)
+    if write_result == :ok, do: Telemetry.execute_stop(completed_record)
 
     result = %{
       status: :completed,
@@ -146,7 +150,7 @@ defmodule Opus.Close do
   # closed failed by the record's write: its output is neither answered
   # nor announced as a success.
   defp completed_write(close, completed_record) do
-    case Record.write_completed_ledger(completed_record) do
+    case Record.write_completed_ledger(completed_record, close.admission) do
       {:error, :not_standing} ->
         message = "Execution refused: its athanor is no longer active"
         Telemetry.execute_exception(Record.fail(close.record, message), message)
@@ -222,7 +226,7 @@ defmodule Opus.Close do
     if Arca.ControlPlane.held?() do
       failed_record = Record.fail(record, message)
 
-      case Record.write_uncertain(failed_record) do
+      case Record.write_uncertain(failed_record, close.admission) do
         {:error, :not_running} ->
           closed_answer(close, message)
 
@@ -235,14 +239,11 @@ defmodule Opus.Close do
     end
   end
 
-  @doc """
-  The ledger of the run `close` ends (`Arca.Execution.sources/2`), read
-  after its terminal write, for the result its caller is handed: the
-  first carrier of a child's provenance to a turn. One that cannot be read
-  is an unnamed outside source, never none.
-  """
-  @spec sources(t()) :: [Prima.Source.t()]
-  def sources(%__MODULE__{ctx: ctx, record: record}) do
+  # The ledger of the run `close` ends (`Arca.Execution.sources/2`), read
+  # after its terminal write, for the result its caller is handed: the
+  # first carrier of a child's provenance to a turn. One that cannot be
+  # read is an unnamed outside source, never none.
+  defp sources(%__MODULE__{ctx: ctx, record: record}) do
     case Opus.Ledger.sources(Sanctum.Context.actor(ctx), record.id) do
       {:ok, sources} -> sources
       {:error, _unread} -> [Prima.Source.outside(nil)]
@@ -455,7 +456,7 @@ defmodule Opus.Close do
   # so a refusal is on record like any other run, unless a barrier refuses
   # it.
   defp close_failed(%__MODULE__{started: false, record: record} = close, secrets, message) do
-    case Record.write_started(record, close.admission) do
+    case Record.write_started(close.ctx, record, close.admission) do
       :ok ->
         Telemetry.execute_start(record)
         close_failed(%{close | started: true}, secrets, message)
@@ -482,7 +483,13 @@ defmodule Opus.Close do
   defp write_failed(close, secrets, message, admitted) do
     message = SecretMasker.mask(message, secrets)
     failed_record = Record.fail(close.record, message)
-    ended_failed(failed_record, Record.write_failed(failed_record), message, admitted)
+
+    ended_failed(
+      failed_record,
+      Record.write_failed(failed_record, close.admission),
+      message,
+      admitted
+    )
   end
 
   # What follows a failure's terminal write, whatever it answered: the

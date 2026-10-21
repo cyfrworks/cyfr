@@ -44,9 +44,8 @@ defmodule Emissary.Web.MCPError do
     {code, message} = wire(code, message)
 
     conn
-    # Declared here rather than at each call site. Every rejection from the MCP
-    # endpoint has to carry it, and when each caller remembered separately one
-    # of them eventually forgot.
+    # Declared here rather than at each call site: every rejection from the
+    # MCP endpoint carries it, whichever caller renders it.
     |> put_resp_header(@protocol_version_header, @protocol_version)
     |> challenge(status)
     |> put_status(status)
@@ -80,15 +79,11 @@ defmodule Emissary.Web.MCPError do
     |> Plug.Conn.halt()
   end
 
-  @doc """
-  The JSON-RPC `id` of the request being rejected, or `nil` when there is none.
-
-  A batch (`%{"_json" => [...]}`) has no single id, and an unfetched or
-  non-map body yields none either.
-  """
-  @spec request_id(Plug.Conn.t()) :: String.t() | integer() | nil
-  def request_id(%Plug.Conn{body_params: %{"id" => id}}) when is_binary(id) or is_integer(id),
+  # The JSON-RPC `id` of the request being rejected, or `nil` when there
+  # is none: a batch (`%{"_json" => [...]}`) has no single id, and an
+  # unfetched or non-map body yields none either.
+  defp request_id(%Plug.Conn{body_params: %{"id" => id}}) when is_binary(id) or is_integer(id),
     do: id
 
-  def request_id(_conn), do: nil
+  defp request_id(_conn), do: nil
 end

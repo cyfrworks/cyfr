@@ -84,9 +84,7 @@ defmodule Opus.LeaseWatch do
   end
 
   @doc "Stop a keeper from its holder, without touching the holder."
-  @spec stop(pid() | nil) :: :ok
-  def stop(nil), do: :ok
-
+  @spec stop(pid()) :: :ok
   def stop(pid) when is_pid(pid) do
     Process.unlink(pid)
     Process.exit(pid, :kill)

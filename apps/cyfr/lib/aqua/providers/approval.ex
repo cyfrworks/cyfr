@@ -122,11 +122,12 @@ defmodule Aqua.Providers.Approval do
 
   @impl true
   def handle("approval", %Context{} = ctx, args), do: dispatch(ctx, args)
-  def handle(tool, _ctx, _args), do: {:error, {:not_found, "tool", tool}}
 
   # The interactive-surface gate is the `consent: :interactive`
   # declaration on every action, enforced by the registry before this
-  # runs. A standing approval's bounds travel with the choice, and one the
+  # runs, and the declaration's cast has refused an argument of another
+  # type or outside its enum, so each arrives here in its declared shape.
+  # A standing approval's bounds travel with the choice, and one the
   # answer may not carry is refused, never dropped, so an answer never
   # stands wider than the one the person chose.
   defp dispatch(ctx, %{"action" => "resolve", "approval" => id, "decision" => decision} = args)
@@ -165,9 +166,6 @@ defmodule Aqua.Providers.Approval do
   defp dispatch(_ctx, %{"action" => "list"}),
     do: {:error, {:invalid_argument, "list requires 'thread'"}}
 
-  defp dispatch(_ctx, _args),
-    do: {:error, {:invalid_argument, "approval requires an 'action'"}}
-
   defp choice("approve", scope, _reason) when scope in [nil, "once", "thread", "always"],
     do: {:ok, %{decision: :approved, scope: Aqua.ApprovalScope.parse(scope || "once")}}
 
@@ -182,11 +180,6 @@ defmodule Aqua.Providers.Approval do
   defp choice("decline", scope, _reason),
     do: {:error, {:invalid_argument, "decline takes scope once or never, not #{scope}"}}
 
-  defp choice(decision, _scope, _reason),
-    do:
-      {:error,
-       {:invalid_argument, "decision must be approve or decline, not #{inspect(decision)}"}}
-
   @lifecycles %{"execution" => :execution, "turn" => :turn, "schedule" => :schedule}
 
   # The bounds a resolve names, each read explicitly: a lifecycle by its
@@ -195,36 +188,24 @@ defmodule Aqua.Providers.Approval do
   # (none named is no bound). Whether they may stand is the decision's
   # (`Aqua.Approvals`, `Aqua.Standing`).
   defp bounds(args) do
-    with {:ok, lifecycle} <- lifecycle(args["lifecycle"]),
-         {:ok, until} <- until(args["until"]),
-         {:ok, constraint} <- constraint(args["constraint"]),
-         {:ok, sources} <- sources(args["sources"]) do
+    with {:ok, until} <- until(args["until"]) do
       {:ok,
-       %{lifecycle: lifecycle, until: until, constraint: constraint, sources: sources}
+       %{
+         lifecycle: lifecycle(args["lifecycle"]),
+         until: until,
+         constraint: constraint(args["constraint"]),
+         sources: sources(args["sources"])
+       }
        |> Map.reject(fn {_bound, value} -> is_nil(value) end)}
     end
   end
 
-  defp sources(nil), do: {:ok, nil}
-  defp sources([]), do: {:ok, nil}
+  defp sources(nil), do: nil
+  defp sources([]), do: nil
+  defp sources(sources), do: Enum.map(sources, &Prima.Source.from_json/1)
 
-  defp sources(sources) when is_list(sources) do
-    if Enum.all?(sources, &is_map/1),
-      do: {:ok, Enum.map(sources, &Prima.Source.from_json/1)},
-      else: {:error, {:invalid_argument, "sources are objects naming a class and a name"}}
-  end
-
-  defp sources(_sources),
-    do: {:error, {:invalid_argument, "sources are objects naming a class and a name"}}
-
-  defp lifecycle(nil), do: {:ok, nil}
-
-  defp lifecycle(name) do
-    case Map.fetch(@lifecycles, name) do
-      {:ok, lifecycle} -> {:ok, lifecycle}
-      :error -> {:error, {:invalid_argument, "lifecycle is execution, turn or schedule"}}
-    end
-  end
+  defp lifecycle(nil), do: nil
+  defp lifecycle(name), do: Map.fetch!(@lifecycles, name)
 
   defp until(nil), do: {:ok, nil}
 
@@ -240,19 +221,10 @@ defmodule Aqua.Providers.Approval do
     end
   end
 
-  defp until(_time),
-    do:
-      {:error,
-       {:invalid_argument, "until is an ISO 8601 time with its offset, like 2026-10-01T17:00:00Z"}}
+  defp constraint(nil), do: nil
 
-  defp constraint(nil), do: {:ok, nil}
-
-  defp constraint(%{"kind" => kind, "patterns" => patterns})
-       when is_binary(kind) and is_list(patterns),
-       do: {:ok, %{kind: kind, patterns: patterns}}
-
-  defp constraint(_constraint),
-    do: {:error, {:invalid_argument, "constraint names a resource kind and its patterns"}}
+  defp constraint(%{"kind" => kind, "patterns" => patterns}),
+    do: %{kind: kind, patterns: patterns}
 
   defp render(approval) do
     %{

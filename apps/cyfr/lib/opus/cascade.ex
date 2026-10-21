@@ -81,16 +81,34 @@ defmodule Opus.Cascade do
       )
 
     if count > 0 do
-      Telemetry.row_failed(child, error_msg, duration_ms)
-
-      Events.publish(child.id, child, "execution.failed", event_seq, %{
-        "status" => "failed",
-        "error" => error_msg
-      })
-
+      announce_failed(child, error_msg, duration_ms, event_seq)
       true
     else
       false
     end
+  end
+
+  # The child's row is failed: its telemetry and event follow, and one that
+  # cannot be made is logged, never taken for a child left running, so the
+  # siblings after it are failed and every failed child is stopped.
+  defp announce_failed(child, error_msg, duration_ms, event_seq) do
+    Telemetry.row_failed(child, error_msg, duration_ms)
+
+    Events.publish(child.id, child, "execution.failed", event_seq, %{
+      "status" => "failed",
+      "error" => error_msg
+    })
+  rescue
+    exception ->
+      Logger.error(
+        "[Opus.Cascade] #{child.id} failed, but its event failed: " <>
+          Prima.LogFilter.exception_message(exception)
+      )
+  catch
+    :exit, reason ->
+      Logger.error(
+        "[Opus.Cascade] #{child.id} failed, but its event failed: " <>
+          Prima.LogFilter.inspect_reason(reason)
+      )
   end
 end

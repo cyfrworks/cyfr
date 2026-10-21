@@ -15,9 +15,8 @@ defmodule Opus.Feeds do
       counted under the athanor's lock in the transaction that inserts a
       feed (`Arca.CronSchedule.create_feed/2`, which takes it as `cap:`),
       apart from the schedules' own.
-    * `spec/1` reads a row's stored binding back.
-    * `list/1` and `get/2` answer the caller's athanor's live feeds, each
-      as `t:feed/0`.
+    * `list/1` answers the caller's athanor's live feeds, each as
+      `t:feed/0`, a row's stored binding read back through its grammar.
     * `accept/5` takes a run's output for the seq the run claimed: it
       checks the member's slot and the seq first, writing nothing, then
       decodes the output, unwraps its envelope, holds the data to the
@@ -228,21 +227,17 @@ defmodule Opus.Feeds do
 
   def latest(%Context{}, _name), do: {:ok, []}
 
-  @doc """
-  A feed row's stored binding (`feed_spec`), read back through its
-  grammar: `{:ok, binding}`, or `{:error, %{path, reason}}` for text that
-  is absent (`"required"`), not JSON (`"json"`) or that the grammar
-  refuses.
-  """
+  # A feed row's stored binding (`feed_spec`, never null on a feed row),
+  # read back through its grammar: `{:ok, binding}`, or
+  # `{:error, %{path, reason}}` for text that is not JSON (`"json"`) or
+  # that the grammar refuses.
   @spec spec(map()) :: {:ok, Binding.t()} | {:error, refusal()}
-  def spec(%{feed_spec: text}) when is_binary(text) do
+  defp spec(%{feed_spec: text}) when is_binary(text) do
     case Prima.Json.decode(text) do
       {:ok, json} -> Binding.validate(json)
       {:error, :invalid_json} -> {:error, %{path: "", reason: "json"}}
     end
   end
-
-  def spec(%{}), do: {:error, %{path: "", reason: "required"}}
 
   @doc """
   The caller's athanor's live feeds, by name. A row whose stored binding no
@@ -253,22 +248,6 @@ defmodule Opus.Feeds do
   def list(%Context{} = ctx) do
     with {:ok, rows} <- CronSchedule.list_feeds(Context.actor(ctx)) do
       {:ok, rows |> Enum.flat_map(&readable/1) |> Enum.sort_by(& &1.binding.name)}
-    end
-  end
-
-  @doc """
-  The caller's athanor's live feed `binding_id`. A schedule's id, a removed
-  or another athanor's feed, an absent id, and a row whose stored binding
-  no longer reads are each `:not_found`.
-  """
-  @spec get(Context.t(), String.t()) ::
-          {:ok, feed()} | {:error, :not_found | :no_athanor | :database_error}
-  def get(%Context{} = ctx, binding_id) when is_binary(binding_id) do
-    with {:ok, row} <- CronSchedule.get_feed(Context.actor(ctx), binding_id) do
-      case readable(row) do
-        [feed] -> {:ok, feed}
-        [] -> {:error, :not_found}
-      end
     end
   end
 
@@ -522,7 +501,7 @@ defmodule Opus.Feeds do
     with {:ok, slot} <- Arca.ControlPlane.member_slot(),
          {:ok, seq} <- claim(ctx, row.id),
          {:ok, result} <- run(ctx, row, Prima.Feed.input(binding), execution_id) do
-      case accept(ctx, row.id, seq, Map.get(result, :output, result), slot) do
+      case accept(ctx, row.id, seq, result.output, slot) do
         {:ok, envelope} ->
           publish(ctx, envelope)
           {:ok, %{binding: row.id, action: action.name, revision: envelope["revision"]}}
@@ -553,7 +532,7 @@ defmodule Opus.Feeds do
          binding: row.id,
          action: action.name,
          execution_id: execution_id,
-         status: result |> Map.get(:status, :completed) |> to_string()
+         status: Atom.to_string(result.status)
        }}
     end
   end

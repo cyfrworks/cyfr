@@ -14,47 +14,22 @@ defmodule Aqua.Intents do
   does not read the router. Resource-focus intents compute their target
   paths.
 
-  The vocabulary (`kinds/0`) moves the browser and nothing else: no
+  The vocabulary, exactly the kinds `validate/1` reads (any other is
+  refused as unknown), moves the browser and nothing else: no
   intent writes a person's state. Arranging the canvases is the `layout`
   tool's `edit`, called through the gate like any tool.
   """
 
-  @kinds ~w(
-    ui.navigate
-    ui.overlay.open
-    ui.overlay.close
-    ui.overlay.focus_input
-    ui.copy_clipboard
-    ui.activity.focus
-    ui.execution.focus
-    ui.schedule.focus
-    ui.component.focus
-    ui.tincture.focus
-    ui.mcp_server.focus
-  )
-
   @allowed_overlay_states ~w(half full)
 
-  @doc "Every intent kind `validate/1` reads; any other is refused as unknown."
-  @spec kinds() :: [String.t()]
-  def kinds, do: @kinds
-
   # One optional colon: an external MCP server's tool is proposed as
-
-  # `server:tool` — the shape `kind_for/2`'s `:external` branch and the
-
-  # approval card already speak, but which this regex silently refused, so
-
-  # the card never appeared for a policy that asked for one. Anchored
-
-  # `\A…\z`, not `^…$` — `$` matches before a trailing newline.
-
+  # `server:tool`, the shape `kind_for/2`'s `:external` branch and the
+  # approval card speak. Anchored `\A…\z`, not `^…$`: `$` matches before a
+  # trailing newline.
   @id_re ~r/\A[\w.\-]+(:[\w.\-]+)?\z/
 
   # A generous ceiling for a pasted code block, and a bound on what a model
-
   # can push through the LiveView channel into a browser in one action.
-
   @max_clipboard_bytes 100_000
 
   def validate(%{"kind" => "ui.navigate"} = obj) do
@@ -147,8 +122,7 @@ defmodule Aqua.Intents do
     end
   end
 
-  @doc false
-  def string_field(obj, key) do
+  defp string_field(obj, key) do
     case Map.get(obj, key) do
       v when is_binary(v) and v != "" -> {:ok, v}
       _ -> {:error, "requires non-empty string '#{key}'"}
@@ -170,15 +144,10 @@ defmodule Aqua.Intents do
   end
 
   # The clipboard is the one action whose output leaves the browser: whatever
-
   # lands there can be pasted anywhere, and a terminal treats a carriage
-
   # return or a trailing newline as Enter — so model-written text ending in
-
   # one runs on paste without a second keystroke. Newlines and tabs inside
-
   # the text stay (a pasted code block needs them); what goes is every other
-
   # C0 control character, and any run of them at the end.
 
   defp sanitize_clipboard(text) do
@@ -197,8 +166,7 @@ defmodule Aqua.Intents do
     end
   end
 
-  @doc false
-  def check_id_shape(value, kind, key) do
+  defp check_id_shape(value, kind, key) do
     if Regex.match?(@id_re, value) do
       :ok
     else

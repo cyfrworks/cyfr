@@ -336,8 +336,11 @@ defmodule Compendium.CosignTest do
     }
   end
 
+  # ps runs with none of this environment.
   defp running?(pid) do
-    case System.cmd("/bin/ps", ["-o", "stat=", "-p", pid], stderr_to_stdout: true) do
+    env = for {name, _} <- System.get_env(), do: {name, nil}
+
+    case System.cmd("/bin/ps", ["-o", "stat=", "-p", pid], stderr_to_stdout: true, env: env) do
       {stat, 0} -> not String.starts_with?(String.trim(stat), "Z")
       {_, _} -> false
     end

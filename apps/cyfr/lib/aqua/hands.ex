@@ -57,22 +57,6 @@ defmodule Aqua.Hands do
   @spec catalog() :: %{String.t() => VirtualTools.family()}
   defdelegate catalog, to: VirtualTools, as: :table
 
-  @doc "The kind of a virtual `tool.action`, or nil (`Sanctum.VirtualTools.kind_for/2`)."
-  @spec kind_for(String.t(), String.t()) :: atom() | nil
-  defdelegate kind_for(tool, action), to: VirtualTools
-
-  @doc """
-  Whether `tool.action` may only ever be `auto`: a UI event the guest
-  answers in place, never a catalyst call a card could run
-  (`Sanctum.VirtualTools.auto_only?/2`).
-  """
-  @spec auto_only?(String.t(), String.t()) :: boolean()
-  defdelegate auto_only?(tool, action), to: VirtualTools
-
-  @doc "The actions a virtual tool has, or `[]` (`Sanctum.VirtualTools.actions_of/1`)."
-  @spec actions_of(String.t()) :: [String.t()]
-  defdelegate actions_of(tool), to: VirtualTools
-
   @doc """
   Return `[{tool, [{action, kind}]}]` shaped like the MCP path's enumeration,
   so the AQUA harness can merge MCP + virtual + external surfaces into one
@@ -84,45 +68,6 @@ defmodule Aqua.Hands do
   @doc "Whether `tool` is a virtual tool managed by AQUA."
   @spec hand?(term()) :: boolean()
   defdelegate hand?(tool), to: VirtualTools, as: :tool?
-
-  @doc """
-  The second arm of the plane taxonomy audit.
-
-  Virtual tools are dispatched inside the formula and never reach
-  the operation table, so the table's boot audit structurally cannot see
-  them. Without this arm the taxonomy has a silent hole exactly
-  where the agent surface is.
-
-  Every virtual action is `:in_chain` and only `:in_chain` — there is no
-  ingress that could reach one from outside a running formula.
-  """
-  @spec audit_planes() :: :ok | {:error, [map()]}
-  def audit_planes do
-    missing =
-      Enum.flat_map(VirtualTools.table(), fn {tool, %{actions: actions}} ->
-        Enum.flat_map(actions, fn {action, annotation} ->
-          case annotation do
-            %{kind: kind, planes: [:in_chain]} when is_atom(kind) and not is_nil(kind) ->
-              []
-
-            other ->
-              [%{tool: tool, action: action, annotation: other}]
-          end
-        end)
-      end)
-
-    case missing do
-      [] -> :ok
-      _ -> {:error, missing}
-    end
-  end
-
-  @doc """
-  Every `tool.action` pair in the catalog, sorted — the surface the Rust
-  dispatch list must agree with.
-  """
-  @spec action_pairs() :: [String.t()]
-  defdelegate action_pairs, to: VirtualTools
 
   # ---------------------------------------------------------------------------
   # References

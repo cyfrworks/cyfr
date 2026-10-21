@@ -71,7 +71,9 @@ defmodule Emissary.Web.MCPController do
   @doc """
   Handle MCP POST requests.
 
-  Discovery answers before authentication; everything else needs a credential.
+  The caller is the context `CyfrWeb.Plugs.Authenticate` resolved, a
+  stranger included: `Emissary.MCP.Router` answers discovery and the
+  catalogue listings to anyone, and the gate decides every call.
   """
   # "The body of the HTTP POST MUST be a single JSON-RPC request or
   # notification."
@@ -101,12 +103,12 @@ defmodule Emissary.Web.MCPController do
     # the caller; the router authorizes each action.
     ctx = conn.assigns.context
 
-    # `subscriptions/listen` is answered here rather than through the dispatcher
-    # for a reason the discovery branch above did not have: its response *is* an
-    # open stream that outlives the call, so it cannot return a result for
-    # someone else to encode. Header validation happened in the pipeline like
-    # any other request; the auth gate lives in `listen/4` itself, because the
-    # dispatcher gate this method skips is where every other caller meets it.
+    # `subscriptions/listen` is answered here rather than through the
+    # dispatcher: its response *is* an open stream that outlives the call,
+    # so it cannot return a result for someone else to encode. Header
+    # validation happens in the pipeline like any other request's; the auth
+    # gate lives in `listen/4` itself, because the dispatcher gate this
+    # method skips is where every other caller meets it.
     case params["method"] do
       "subscriptions/listen" -> listen(conn, ctx, params, request_id)
       _ -> handle_message(conn, confirming(ctx, conn, params), params, request_id, start_time)
@@ -117,9 +119,8 @@ defmodule Emissary.Web.MCPController do
     # in the JSON-RPC envelope as the auth error it is, never as a 500.
     e in Sanctum.UnauthorizedError ->
       # The reason's class picks the code: absent identity is
-      # `:auth_required`, which is what a client retries on. Answering
-      # every refusal `:insufficient_permissions` told an unauthenticated
-      # caller their permissions were the problem.
+      # `:auth_required`, which is what a client retries on, and only a
+      # refusal of a known caller is `:insufficient_permissions`.
       # The sentence is chosen from the reason for the caller's credential
       # (`Sanctum.Refusals.classify/2`) rather than taken from
       # `Exception.message/1`: the struct bakes its prose at raise time
@@ -494,21 +495,48 @@ defmodule Emissary.Web.MCPController do
   # its token bound before the task starts, so immediate notifications are
   # received; on completion or cancel the subscription ends and whatever
   # progress was already queued is discarded, so nothing is written after.
+  #
+  # The task answers under a reference of its own and is watched by a
+  # monitor of its own, unlinked: its exit is an answer this process
+  # renders, never an exit of the request.
   defp streamed_dispatch(conn, context, params, request_id, token) do
     topic = progress_topic(context, request_id)
     :ok = Progress.listen(request_id, token)
 
-    logger_metadata = Prima.LoggerContext.capture()
+    result =
+      case start_work(context, params) do
+        {:ok, work} ->
+          pump(conn, work, request_id)
 
-    task =
-      Task.Supervisor.async_nolink(Emissary.TaskSupervisor, fn ->
-        Prima.LoggerContext.restore(logger_metadata)
-        MCP.handle_message(context, params)
-      end)
+        {:error, reason} ->
+          Logger.error(
+            "[MCPController] request handler did not start: #{Prima.LogFilter.inspect_reason(reason)}"
+          )
 
-    result = pump(conn, task, request_id)
+          {conn, {:error, :internal_error, "Request handler could not start"}}
+      end
+
     stop_progress(topic, request_id)
     result
+  end
+
+  defp start_work(context, params) do
+    caller = self()
+    reply = make_ref()
+    logger_metadata = Prima.LoggerContext.capture()
+
+    started =
+      Task.Supervisor.start_child(Emissary.TaskSupervisor, fn ->
+        Prima.LoggerContext.restore(logger_metadata)
+        send(caller, {reply, MCP.handle_message(context, params)})
+      end)
+
+    case started do
+      {:ok, pid} -> {:ok, {pid, Process.monitor(pid), reply}}
+      {:error, reason} -> {:error, reason}
+    end
+  catch
+    :exit, reason -> {:error, reason}
   end
 
   # A caller with no athanor runs nothing that reports progress: nothing is
@@ -546,25 +574,25 @@ defmodule Emissary.Web.MCPController do
   # Those outcomes are decided in the first moments of dispatch, before any work
   # worth reporting on has happened, so waiting for something to report costs
   # nothing and keeps the status codes honest.
-  defp pump(conn, %Task{ref: ref} = task, request_id) do
+  defp pump(conn, {_pid, monitor, reply} = work, request_id) do
     receive do
       %Cyfr.Bus.Progress{request_id: ^request_id} = step ->
         case Progress.notification(step) do
           {:ok, notification} ->
             case conn |> open_stream() |> write_event(notification) do
-              {:ok, conn} -> pump(conn, task, request_id)
-              {:error, conn} -> {conn, cancel_work(task, request_id)}
+              {:ok, conn} -> pump(conn, work, request_id)
+              {:error, conn} -> {conn, cancel_work(work, request_id)}
             end
 
           :ignore ->
-            pump(conn, task, request_id)
+            pump(conn, work, request_id)
         end
 
-      {^ref, outcome} ->
-        Process.demonitor(ref, [:flush])
+      {^reply, outcome} ->
+        Process.demonitor(monitor, [:flush])
         {conn, outcome}
 
-      {:DOWN, ^ref, :process, _pid, reason} ->
+      {:DOWN, ^monitor, :process, _pid, reason} ->
         Logger.error(
           "[MCPController] request handler exited: #{Prima.LogFilter.inspect_reason(reason)}"
         )
@@ -573,8 +601,8 @@ defmodule Emissary.Web.MCPController do
     after
       @keep_alive_ms ->
         case keep_alive(conn) do
-          {:ok, conn} -> pump(conn, task, request_id)
-          {:error, conn} -> {conn, cancel_work(task, request_id)}
+          {:ok, conn} -> pump(conn, work, request_id)
+          {:error, conn} -> {conn, cancel_work(work, request_id)}
         end
     end
   end
@@ -582,11 +610,23 @@ defmodule Emissary.Web.MCPController do
   # "Closing the SSE response stream MUST be treated by the server as
   # cancellation of that request." The tool task is killed through the
   # gate, which tracks it under the same request id; the wrapper task is
-  # killed after it, since killing the wrapper alone would leave the
-  # `async_nolink`'d tool task running with nobody waiting on it.
-  defp cancel_work(%Task{} = task, request_id) do
+  # killed after it, since killing the wrapper alone would leave the tool
+  # task running with nobody waiting on it. An answer the wrapper sent
+  # before it died is dropped with its monitor.
+  defp cancel_work({pid, monitor, reply}, request_id) do
     Sanctum.RunningTasks.cancel(request_id)
-    Task.shutdown(task, :brutal_kill)
+    Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+    end
+
+    receive do
+      {^reply, _outcome} -> :ok
+    after
+      0 -> :ok
+    end
+
     :cancelled
   end
 

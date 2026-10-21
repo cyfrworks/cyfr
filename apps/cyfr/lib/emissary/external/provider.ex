@@ -93,9 +93,13 @@ defmodule Emissary.External.Provider do
     ]
   end
 
+  # The gate casts the arguments against `definition/0` first
+  # (`Prima.Operation.cast/2`): the action is one this tool declares,
+  # every required argument is present and of its declared type, and an
+  # enumerated one, a config's transport among them, holds one of its values.
   @impl true
-  def handle("mcp_servers", %Context{} = ctx, args) when is_map(args), do: handle(ctx, args)
-  def handle(tool, _ctx, _args), do: {:error, "Unknown tool: #{tool}"}
+  def handle("mcp_servers", %Context{} = ctx, %{"action" => action} = args),
+    do: dispatch(action, ctx, args)
 
   @doc "The tool definition: name, annotations (the gate), and input schema."
   @spec definition() :: map()
@@ -306,37 +310,16 @@ defmodule Emissary.External.Provider do
     )
   end
 
-  @admin_actions ~w(create update delete test refresh enable disable restart)
-
-  def handle(%Context{} = ctx, %{"action" => action} = args)
-      when action in @admin_actions do
-    dispatch_admin(action, ctx, args)
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "list"}) do
-    handle_list(ctx)
-  end
-
-  def handle(%Context{} = ctx, %{"action" => "get"} = args) do
-    handle_get(ctx, args)
-  end
-
-  def handle(_ctx, %{"action" => action}) do
-    {:error, {:invalid_argument, "Unknown action: #{action}"}}
-  end
-
-  def handle(_ctx, _args) do
-    {:error, {:invalid_argument, "Missing required parameter: action"}}
-  end
-
-  defp dispatch_admin("create", ctx, args), do: handle_create(ctx, args)
-  defp dispatch_admin("update", ctx, args), do: handle_update(ctx, args)
-  defp dispatch_admin("delete", ctx, args), do: handle_delete(ctx, args)
-  defp dispatch_admin("test", ctx, args), do: handle_test(ctx, args)
-  defp dispatch_admin("refresh", ctx, args), do: handle_refresh(ctx, args)
-  defp dispatch_admin("enable", ctx, args), do: handle_enable_disable(ctx, args, true)
-  defp dispatch_admin("disable", ctx, args), do: handle_enable_disable(ctx, args, false)
-  defp dispatch_admin("restart", ctx, args), do: handle_restart(ctx, args)
+  defp dispatch("create", ctx, args), do: handle_create(ctx, args)
+  defp dispatch("update", ctx, args), do: handle_update(ctx, args)
+  defp dispatch("delete", ctx, args), do: handle_delete(ctx, args)
+  defp dispatch("list", ctx, _args), do: handle_list(ctx)
+  defp dispatch("get", ctx, args), do: handle_get(ctx, args)
+  defp dispatch("test", ctx, args), do: handle_test(ctx, args)
+  defp dispatch("refresh", ctx, args), do: handle_refresh(ctx, args)
+  defp dispatch("enable", ctx, args), do: handle_enable_disable(ctx, args, true)
+  defp dispatch("disable", ctx, args), do: handle_enable_disable(ctx, args, false)
+  defp dispatch("restart", ctx, args), do: handle_restart(ctx, args)
 
   # ============================================================================
   # Action Handlers
@@ -408,20 +391,14 @@ defmodule Emissary.External.Provider do
   defp epoch_arg(_args),
     do: {:error, {:invalid_argument, "Missing required parameter: epoch (read it with get)"}}
 
-  defp server_args(ctx, args) do
-    name = args["name"]
-    config = args["config"] || %{}
-
+  defp server_args(ctx, %{"name" => name, "config" => config}) do
     cond do
-      is_nil(name) or name == "" ->
+      name == "" ->
         {:error, {:invalid_argument, "Missing required parameter: name"}}
 
-      String.contains?(to_string(name), ":") ->
+      String.contains?(name, ":") ->
         {:error,
          {:invalid_argument, "Server name cannot contain ':' (reserved for tool namespacing)"}}
-
-      not is_map(config) ->
-        {:error, {:invalid_argument, "config must be an object"}}
 
       true ->
         with :ok <- validate_tool_patterns(config["tool_patterns"]),
@@ -470,9 +447,6 @@ defmodule Emissary.External.Provider do
         end
     end
   end
-
-  defp transport_args(_ctx, _other, _config),
-    do: {:error, {:invalid_argument, "Unknown transport — use http or stdio"}}
 
   defp stdio_available do
     cond do
@@ -595,9 +569,6 @@ defmodule Emissary.External.Provider do
     end
   end
 
-  defp validate_tool_patterns(_),
-    do: {:error, {:invalid_argument, "tool_patterns must be a list of strings"}}
-
   # The stored document: the transport's own keys, the timeout, the tool
   # patterns when given, and console reachability only when set — absent
   # means the in-chain default holds. `console` is not part of the consent
@@ -648,7 +619,7 @@ defmodule Emissary.External.Provider do
   defp with_warnings(result, server), do: Map.put(result, :warnings, warnings(server))
 
   defp warnings(%{transport: "stdio"} = server),
-    do: BackendDefinition.warnings(Servers.config_map(server)["backends"])
+    do: BackendDefinition.warnings(Arca.McpServerStorage.config(server)["backends"])
 
   defp warnings(_server), do: []
 
@@ -1009,7 +980,7 @@ defmodule Emissary.External.Provider do
   # shown. Backend env values are vault templates or the non-secret literals
   # `Emissary.External.BackendDefinition` allows, and are shown as stored.
   defp readable_config(server) do
-    config = Servers.config_map(server)
+    config = Arca.McpServerStorage.config(server)
 
     case Map.get(config, "headers") do
       %{} = headers -> Map.put(config, "headers", Map.new(headers, &redact_header/1))
@@ -1026,7 +997,7 @@ defmodule Emissary.External.Provider do
 
   # The vault entry names a server's header and env templates reference.
   defp vault_refs(server) do
-    config = Servers.config_map(server)
+    config = Arca.McpServerStorage.config(server)
 
     headers =
       case config["headers"] do

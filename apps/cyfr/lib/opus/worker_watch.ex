@@ -121,10 +121,7 @@ defmodule Opus.WorkerWatch do
   through `Arca.PlatformSettings.effective/1` at every tick, so a change
   reaches the next poll; both serve a stale value, so a store outage
   keeps the last bounds read. It starts only when
-  `config :cyfr, :worker_watch_enabled` is true. That key defaults to
-  `config :cyfr, :execution_sweeper_enabled` (itself true by default):
-  both are timer-driven detectors that write rows, and a configuration
-  that turns off one turns off the other. Started with
+  `config :cyfr, :worker_watch_enabled` is true (the default). Started with
   `:workers`, as a test starts it, the watch polls those endpoints
   whatever the gate says; `:poll_ms`, `:misses`, `:lease_ms`, `:owner`
   (the member the claim is taken for, this boot by default) and `:name`
@@ -194,28 +191,31 @@ defmodule Opus.WorkerWatch do
   @doc """
   The boot of the worker service at `endpoint` as the watch `name` heard
   it within the last poll interval, or `:unknown`: no watch runs under
-  that name, it has not heard from that endpoint, the endpoint's last
+  that name (its `:worker_watch_enabled` switch is off) or the watch exited
+  as it was read, it has not heard from that endpoint, the endpoint's last
   answer was a miss, its boot changed, or the boot it heard is older than
   one interval.
   """
   @spec fresh_boot(WorkerAPI.endpoint(), atom()) :: {:ok, String.t()} | :unknown
   def fresh_boot(%{id: id, url: url}, name \\ __MODULE__) when is_atom(name) do
-    case :ets.lookup(name, id) do
-      [{^id, ^url, boot, heard_at, poll_ms}] ->
-        if System.monotonic_time(:millisecond) - heard_at <= poll_ms,
-          do: {:ok, boot},
-          else: :unknown
-
-      _other ->
-        :unknown
+    with table when table != :undefined <- :ets.whereis(name),
+         [{^id, ^url, boot, heard_at, poll_ms}] <- lookup(table, id),
+         true <- System.monotonic_time(:millisecond) - heard_at <= poll_ms do
+      {:ok, boot}
+    else
+      _unheard -> :unknown
     end
-  rescue
-    ArgumentError -> :unknown
   end
 
-  @doc "The watch's view of each configured worker service (`t:seen/0`), by its id."
-  @spec seen(GenServer.server()) :: %{optional(String.t()) => seen()}
-  def seen(name \\ __MODULE__), do: GenServer.call(name, :seen)
+  # The table goes with the watch that owns it, which can exit between the
+  # lookup of its name above and this read: a table that is gone has heard
+  # nothing. Any other failure of the read raises.
+  defp lookup(table, id) do
+    :ets.lookup(table, id)
+  rescue
+    error in ArgumentError ->
+      if :ets.info(table) == :undefined, do: [], else: reraise(error, __STACKTRACE__)
+  end
 
   # ---------------------------------------------------------------------------
   # Server
@@ -238,9 +238,6 @@ defmodule Opus.WorkerWatch do
        polls: %{}
      })}
   end
-
-  @impl true
-  def handle_call(:seen, _from, state), do: {:reply, state.seen, state}
 
   @impl true
   def handle_info(:poll, state) do
@@ -668,11 +665,7 @@ defmodule Opus.WorkerWatch do
   # ---------------------------------------------------------------------------
 
   defp enabled? do
-    Application.get_env(
-      :cyfr,
-      :worker_watch_enabled,
-      Application.get_env(:cyfr, :execution_sweeper_enabled, true)
-    )
+    Application.get_env(:cyfr, :worker_watch_enabled, true)
   end
 
   defp settings(opts) do
