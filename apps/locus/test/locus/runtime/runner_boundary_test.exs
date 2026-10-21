@@ -95,7 +95,10 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
   end
 
   defp alive?(os_pid) do
-    case System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true) do
+    case System.cmd("kill", ["-0", Integer.to_string(os_pid)],
+           stderr_to_stdout: true,
+           env: Locus.Test.ProcessFamily.no_env()
+         ) do
       {_, 0} -> true
       _ -> false
     end

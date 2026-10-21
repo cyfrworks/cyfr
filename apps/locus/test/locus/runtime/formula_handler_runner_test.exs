@@ -57,8 +57,7 @@ defmodule Locus.Runtime.FormulaHandlerRunnerTest do
     end)
 
     test = self()
-    supervisor = :"formula_attempts_#{System.unique_integer([:positive])}"
-    start_supervised!({DynamicSupervisor, name: supervisor, strategy: :one_for_one})
+    supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
 
     settings = %{
       runner_id: @runner,

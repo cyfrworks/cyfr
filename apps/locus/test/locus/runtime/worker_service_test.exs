@@ -67,7 +67,7 @@ defmodule Locus.Runtime.WorkerServiceTest do
         Supervisor.restart_child(Locus.Runtime.Supervisor, Locus.Runtime.WorkerService.Tree)
     end)
 
-    keeper = ScriptedKeeper.start!()
+    keeper = ScriptedKeeper.start!(__MODULE__.Keeper)
     {:ok, settings} = Locus.Runtime.Settings.pool([keeper: :direct, pool_size: 1], %{})
 
     start_supervised!(
@@ -234,7 +234,12 @@ defmodule Locus.Runtime.WorkerServiceTest do
 
     assert {:ok, %{boot: new_boot, attempts: []}} = WorkerService.status()
     assert new_boot != boot
-    wait_until(fn -> not os_alive?(os_pid) end, 10_000, "the old boot's runner to be gone")
+
+    wait_until(
+      fn -> not Locus.Test.ProcessFamily.running?(os_pid) end,
+      10_000,
+      "the old boot's runner to be gone"
+    )
 
     # The predecessor's assignment is another boot's now.
     assert {:error, :malformed} = start(attempt)
@@ -775,14 +780,5 @@ defmodule Locus.Runtime.WorkerServiceTest do
         30_000 -> {:ok, %{}}
       end
     end)
-  end
-
-  defp os_alive?(os_pid) do
-    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(os_pid)],
-           stderr_to_stdout: true
-         ) do
-      {stat, 0} -> not String.starts_with?(String.trim(stat), "Z")
-      {_none, _status} -> false
-    end
   end
 end

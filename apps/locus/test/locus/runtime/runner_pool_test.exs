@@ -35,15 +35,13 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {keeper_opts, overrides} = Keyword.pop(overrides, :keeper_opts, [])
     {pool_opts, overrides} = Keyword.split(overrides, [:retire_bound_ms])
     settings = Map.merge(defaults, Map.new(overrides))
-    unique = System.unique_integer([:positive])
-    supervisor = :"pool_runners_#{unique}"
-    start_supervised!({DynamicSupervisor, name: supervisor, strategy: :one_for_one})
+    supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
 
     # The command's env carries the keeper's name to the scripted keeper.
     start_supervised!(
       {RunnerPool,
        [
-         name: :"pool_#{unique}",
+         name: nil,
          settings: settings,
          keeper: ScriptedKeeper,
          keeper_opts: keeper_opts,
@@ -149,7 +147,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
   end
 
   setup do
-    keeper = ScriptedKeeper.start!()
+    keeper = ScriptedKeeper.start!(__MODULE__.Keeper)
     {:ok, keeper: keeper}
   end
 

@@ -330,8 +330,7 @@ defmodule Locus.KeeperTest do
     defp plain_client! do
       {peer, channel} = channel_pair()
       attach_dir = FakeKeeper.short_tmp_dir()
-      name = :"keeper_plant_#{System.unique_integer([:positive])}"
-      {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
+      {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: nil)
       Process.unlink(client)
       :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
 
@@ -340,7 +339,7 @@ defmodule Locus.KeeperTest do
         File.rm_rf!(attach_dir)
       end)
 
-      %{peer: peer, name: name, client: client, attach_dir: attach_dir}
+      %{peer: peer, name: client, client: client, attach_dir: attach_dir}
     end
 
     defp channel_pair do
@@ -371,11 +370,11 @@ defmodule Locus.KeeperTest do
     test "(a) a runner's held assign, its partial frames and every payload message show no key or environment value" do
       p = plant()
       c = plain_client!()
-      adapter = :"keeper_plant_adapter_#{System.unique_integer([:positive])}"
 
-      start_supervised!(
-        {Locus.Runtime.Keeper.Channel, client: c.name, memory_bytes: 268_435_456, name: adapter}
-      )
+      adapter =
+        start_supervised!(
+          {Locus.Runtime.Keeper.Channel, client: c.name, memory_bytes: 268_435_456, name: nil}
+        )
 
       # The runtime's adapter asks for the runner, as a runner's process
       # does, with the planted environment.
@@ -662,7 +661,7 @@ defmodule Locus.KeeperTest do
 
       # Once a write waits on the full connection, the runner writes its
       # last line, which the client receives while it waits.
-      wait_until(fn -> writing?(Process.whereis(c.name)) end, 5_000)
+      wait_until(fn -> writing?(c.client) end, 5_000)
       last = ~s({"type":"complete"}\n)
       :ok = :gen_tcp.send(relay, KeeperProtocol.frames(:control, last))
 

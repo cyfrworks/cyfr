@@ -71,7 +71,6 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
     setup do
       test = self()
       port = make_ref()
-      name = :"runner_vectors_#{System.unique_integer([:positive])}"
 
       runner =
         start_supervised!(
@@ -84,8 +83,8 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
              watchdog_grace_ms: 500
            },
            port: port,
-           supervisor: :"#{name}_attempts",
-           name: name,
+           supervisor: __MODULE__.Attempts,
+           name: __MODULE__.Runner,
            halt: fn reason -> send(test, {:halted, reason}) end,
            stop: fn status -> send(test, {:stopped, status}) end}
         )
@@ -145,7 +144,7 @@ defmodule Locus.Runtime.RunnerControlVectorsTest do
 
   describe "the service's handle" do
     setup do
-      keeper = ScriptedKeeper.start!()
+      keeper = ScriptedKeeper.start!(__MODULE__.Keeper)
 
       spec = %{
         runner: "run_vectors",

@@ -81,7 +81,11 @@ defmodule Locus.Backends.OwnersTest do
   defp advance(%{clock: clock}, ms), do: Agent.update(clock, &(&1 + ms))
 
   defp node! do
-    {path, 0} = System.cmd("node", ["-e", "process.stdout.write(process.execPath)"])
+    {path, 0} =
+      System.cmd("node", ["-e", "process.stdout.write(process.execPath)"],
+        env: Locus.Test.ProcessFamily.without_cyfr()
+      )
+
     path
   end
 
@@ -589,8 +593,7 @@ defmodule Locus.Backends.OwnersTest do
       {fake, channel} = FakeKeeper.start()
       attach_dir = FakeKeeper.short_tmp_dir()
 
-      {:ok, client} =
-        Locus.Keeper.start_link(channel: channel, attach_dir: attach_dir, name: OwnersKeeper)
+      {:ok, client} = Locus.Keeper.start_link(channel: channel, attach_dir: attach_dir, name: nil)
 
       Process.unlink(client)
       :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
@@ -601,7 +604,7 @@ defmodule Locus.Backends.OwnersTest do
         File.rm_rf!(attach_dir)
       end)
 
-      {:ok, fake: fake}
+      {:ok, fake: fake, keeper: client}
     end
 
     test "carries the backends' configured memory bound when the owners are given none", ctx do
@@ -609,7 +612,7 @@ defmodule Locus.Backends.OwnersTest do
         start_owners(ctx,
           backend_opts: [
             launcher: Locus.Keeper,
-            launcher_server: OwnersKeeper,
+            launcher_server: ctx.keeper,
             release_timeout_ms: 5_000,
             init_timeout_ms: 60_000
           ]

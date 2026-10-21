@@ -60,8 +60,8 @@ defmodule Locus.Runtime.KeeperChannelTest do
 
     # The node's client of the keeper on the test's channel, and the
     # runtime's adapter spawning through it.
-    client = :"spawn_client_#{unique}"
-    name = :"spawn_keeper_#{unique}"
+    client = __MODULE__.Client
+    name = __MODULE__.Adapter
 
     start_supervised!(
       Supervisor.child_spec(

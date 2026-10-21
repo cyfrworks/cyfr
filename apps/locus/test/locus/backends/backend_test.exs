@@ -38,7 +38,11 @@ defmodule Locus.Backends.BackendTest do
   # The node binary itself: a version manager's shim may need an
   # environment the backend's, built from nothing, does not carry.
   defp node! do
-    {path, 0} = System.cmd("node", ["-e", "process.stdout.write(process.execPath)"])
+    {path, 0} =
+      System.cmd("node", ["-e", "process.stdout.write(process.execPath)"],
+        env: Locus.Test.ProcessFamily.without_cyfr()
+      )
+
     path
   end
 
@@ -80,7 +84,12 @@ defmodule Locus.Backends.BackendTest do
   defp text({:ok, %{"content" => [%{"type" => "text", "text" => text}]}}), do: text
 
   defp alive?(os_pid) do
-    {_out, status} = System.cmd("kill", ["-0", "#{os_pid}"], stderr_to_stdout: true)
+    {_out, status} =
+      System.cmd("kill", ["-0", "#{os_pid}"],
+        stderr_to_stdout: true,
+        env: Locus.Test.ProcessFamily.no_env()
+      )
+
     status == 0
   end
 
@@ -251,10 +260,7 @@ defmodule Locus.Backends.BackendTest do
     setup do
       {fake, channel} = FakeKeeper.start()
       attach_dir = FakeKeeper.short_tmp_dir()
-      name = :"backend_launcher_#{System.unique_integer([:positive])}"
-
-      {:ok, client} =
-        Locus.Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
+      {:ok, client} = Locus.Keeper.start_link(channel: channel, attach_dir: attach_dir, name: nil)
 
       Process.unlink(client)
       :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
@@ -265,7 +271,7 @@ defmodule Locus.Backends.BackendTest do
         File.rm_rf!(attach_dir)
       end)
 
-      {:ok, fake: fake, keeper: name}
+      {:ok, fake: fake, keeper: client}
     end
 
     defp keeper_opts(keeper),

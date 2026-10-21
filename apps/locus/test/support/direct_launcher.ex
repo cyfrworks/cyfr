@@ -316,7 +316,10 @@ defmodule Locus.DirectLauncher do
 
   def signal_group(os_pid, signal) do
     for target <- [["--", "-#{os_pid}"], ["#{os_pid}"]] do
-      System.cmd(@kill, ["-#{signal}" | target], stderr_to_stdout: true)
+      System.cmd(@kill, ["-#{signal}" | target],
+        stderr_to_stdout: true,
+        env: Locus.Test.ProcessFamily.no_env()
+      )
     end
 
     :ok
@@ -333,7 +336,12 @@ defmodule Locus.DirectLauncher do
   # It is no process of the group it reads, so no group signal reaches it.
   @spec stop_reader(port() | nil, non_neg_integer() | nil) :: :ok
   def stop_reader(reader, os_pid) do
-    if os_pid, do: System.cmd(@kill, ["-KILL", "#{os_pid}"], stderr_to_stdout: true)
+    if os_pid,
+      do:
+        System.cmd(@kill, ["-KILL", "#{os_pid}"],
+          stderr_to_stdout: true,
+          env: Locus.Test.ProcessFamily.no_env()
+        )
 
     if reader do
       try do
@@ -367,7 +375,10 @@ defmodule Locus.DirectLauncher do
     log = Path.join(home, "stderr")
 
     if wake and File.exists?(log) do
-      System.cmd("/bin/sh", ["-c", ~s(exec 3<>"$0"), log], stderr_to_stdout: true)
+      System.cmd("/bin/sh", ["-c", ~s(exec 3<>"$0"), log],
+        stderr_to_stdout: true,
+        env: Locus.Test.ProcessFamily.no_env()
+      )
     end
 
     File.rm_rf(home)
@@ -544,7 +555,10 @@ defmodule Locus.DirectLauncher.Child do
   end
 
   defp mkfifo(path) do
-    case System.cmd(@mkfifo, ["-m", "600", path], stderr_to_stdout: true) do
+    case System.cmd(@mkfifo, ["-m", "600", path],
+           stderr_to_stdout: true,
+           env: Locus.Test.ProcessFamily.no_env()
+         ) do
       {_output, 0} -> :ok
       {_output, _status} -> {:error, :mkfifo}
     end

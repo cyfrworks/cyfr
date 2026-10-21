@@ -30,7 +30,7 @@ defmodule Locus.DirectLauncherTest do
   alias Locus.DirectLauncher
 
   defp alive?(os_pid) do
-    {_out, status} = System.cmd("kill", ["-0", os_pid], stderr_to_stdout: true)
+    {_out, status} = System.cmd("kill", ["-0", os_pid], stderr_to_stdout: true, env: no_env())
     status == 0
   end
 
@@ -349,7 +349,7 @@ defmodule Locus.DirectLauncherTest do
 
     # The OS pids of the processes whose command line is `command`.
     defp readers(command) do
-      {listing, 0} = System.cmd("ps", ["-eo", "pid=,args="])
+      {listing, 0} = System.cmd("ps", ["-eo", "pid=,args="], env: no_env())
 
       for line <- String.split(listing, "\n"),
           [pid, args] <- [String.split(String.trim(line), " ", parts: 2)],
@@ -404,8 +404,7 @@ defmodule Locus.DirectLauncherTest do
     end
 
     test "the janitor forgets a reader that has ended, so its pid is never signalled" do
-      name = :"direct_janitor_#{System.unique_integer([:positive])}"
-      {:ok, janitor} = GenServer.start(Runner, [], name: name)
+      {:ok, janitor} = GenServer.start(Runner, [])
       on_exit(fn -> if Process.alive?(janitor), do: GenServer.stop(janitor) end)
 
       # The runner closes its stderr and runs on: its reader reads the end
@@ -417,7 +416,7 @@ defmodule Locus.DirectLauncherTest do
         control: true
       }
 
-      {:ok, handle} = DirectLauncher.spawn([janitor: name], spec)
+      {:ok, handle} = DirectLauncher.spawn([janitor: janitor], spec)
       child = handle.server
 
       wait_until(fn -> :sys.get_state(janitor).runners[child].reader_os_pid == nil end, 10_000)
@@ -428,9 +427,8 @@ defmodule Locus.DirectLauncherTest do
     end
 
     test "a stranded stderr reader is stopped by the janitor's end" do
-      name = :"direct_janitor_#{System.unique_integer([:positive])}"
-      {:ok, janitor} = GenServer.start(Runner, [], name: name)
-      {handle, reader} = stranded!("exec sleep 30", name)
+      {:ok, janitor} = GenServer.start(Runner, [])
+      {handle, reader} = stranded!("exec sleep 30", janitor)
 
       :ok = GenServer.stop(janitor)
 
@@ -450,14 +448,17 @@ defmodule Locus.DirectLauncherTest do
       File.mkdir_p!(home)
       on_exit(fn -> File.rm_rf!(home) end)
       log = Path.join(home, "stderr")
-      {_out, 0} = System.cmd("mkfifo", ["-m", "600", log])
+      {_out, 0} = System.cmd("mkfifo", ["-m", "600", log], env: no_env())
       reader = Port.open({:spawn_executable, "/bin/cat"}, [:binary, :stream, :eof, args: [log]])
       {:os_pid, os_pid} = Port.info(reader, :os_pid)
 
       on_exit(fn ->
         if running?(os_pid),
           do:
-            System.cmd("/bin/kill", ["-KILL", Integer.to_string(os_pid)], stderr_to_stdout: true)
+            System.cmd("/bin/kill", ["-KILL", Integer.to_string(os_pid)],
+              stderr_to_stdout: true,
+              env: no_env()
+            )
 
         assert_gone([os_pid])
       end)
@@ -480,7 +481,7 @@ defmodule Locus.DirectLauncherTest do
     test "removing a home whose reader has already ended does not wait on its fifo" do
       {home, reader, os_pid} = stranded_reader!()
       Port.close(reader)
-      System.cmd("kill", ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true)
+      System.cmd("kill", ["-9", Integer.to_string(os_pid)], stderr_to_stdout: true, env: no_env())
       assert_gone([os_pid])
 
       task = Task.async(fn -> DirectLauncher.remove_home(home) end)

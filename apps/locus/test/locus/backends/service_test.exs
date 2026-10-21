@@ -808,7 +808,11 @@ defmodule Locus.Backends.ServiceTest do
     @describetag launcher: :direct
 
     test "is answered, and the owner's secrets are masked in every answered field", ctx do
-      {node, 0} = System.cmd("node", ["-e", "process.stdout.write(process.execPath)"])
+      {node, 0} =
+        System.cmd("node", ["-e", "process.stdout.write(process.execPath)"],
+          env: Locus.Test.ProcessFamily.without_cyfr()
+        )
+
       token = "tok-0123456789abcdef"
       # A value that is also a tool's description, so the catalogue shows it masked.
       description = "Answers its arguments"

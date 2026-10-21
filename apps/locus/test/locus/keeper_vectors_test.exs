@@ -66,8 +66,7 @@ defmodule Locus.KeeperVectorsTest do
   setup do
     {peer, channel} = channel_pair()
     attach_dir = FakeKeeper.short_tmp_dir()
-    name = :"keeper_vectors_#{System.unique_integer([:positive])}"
-    {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
+    {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: nil)
     Process.unlink(client)
     :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
     Process.put(:peer_buffer, "")
@@ -77,7 +76,7 @@ defmodule Locus.KeeperVectorsTest do
       File.rm_rf!(attach_dir)
     end)
 
-    {:ok, v: @vectors, peer: peer, name: name, client: client}
+    {:ok, v: @vectors, peer: peer, name: client, client: client}
   end
 
   # A run of `command`, answered with the log lines it produced.
@@ -405,8 +404,7 @@ defmodule Locus.KeeperVectorsTest do
   defp fresh_client! do
     {peer, channel} = channel_pair()
     attach_dir = FakeKeeper.short_tmp_dir()
-    name = :"keeper_vectors_fresh_#{System.unique_integer([:positive])}"
-    {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: name)
+    {:ok, client} = Keeper.start_link(channel: channel, attach_dir: attach_dir, name: nil)
     Process.unlink(client)
     :ok = :socket.setopt(channel, {:otp, :controlling_process}, client)
     Process.put(:peer_buffer, "")
@@ -416,7 +414,7 @@ defmodule Locus.KeeperVectorsTest do
       File.rm_rf!(attach_dir)
     end)
 
-    {peer, name}
+    {peer, client}
   end
 
   test "a runner's spawn is the vectors' bounded, isolated runner spawn with a control channel, byte for byte",
@@ -620,7 +618,7 @@ defmodule Locus.KeeperVectorsTest do
 
     for bytes <- refused do
       {peer, name} = fresh_client!()
-      client = Process.whereis(name)
+      client = name
       {%{ref: ref}, request, _spawned} = spawned_runner!(v, peer, name)
       conn = attach(v, :sys.get_state(client).attach_path, request["attach"]["token"])
       assert_receive {Keeper, ^ref, :attached}, 5_000

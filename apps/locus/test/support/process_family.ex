@@ -9,7 +9,8 @@ defmodule Locus.Test.ProcessFamily do
   `running?/1` says whether an OS process still runs, `assert_gone/1`
   waits until none of some do, and `event_until/2` reads a runner's
   events until one is awaited. `ps` is named by absolute path, so a test
-  that moves this node's PATH still sees its processes.
+  that moves this node's PATH still sees its processes. `no_env/0` and
+  `without_cyfr/0` are the environments the suite's own commands run in.
   """
 
   import ExUnit.Assertions
@@ -18,13 +19,32 @@ defmodule Locus.Test.ProcessFamily do
   alias Locus.DirectLauncher
   alias Locus.DirectLauncher.Runner
 
+  @doc """
+  The `env` of a command that needs nothing of this node's environment:
+  every inherited name unset. A command named without a path is found on
+  this node's PATH before it starts.
+  """
+  @spec no_env() :: [{String.t(), nil}]
+  def no_env, do: for({name, _value} <- System.get_env(), do: {name, nil})
+
+  @doc """
+  The `env` of a command that needs this node's environment, as a
+  version manager's shim of a toolchain does, and none of CYFR's
+  settings: every inherited `CYFR_*` name unset.
+  """
+  @spec without_cyfr() :: [{String.t(), nil}]
+  def without_cyfr,
+    do:
+      for({name, _value} <- System.get_env(), String.starts_with?(name, "CYFR_"), do: {name, nil})
+
   # A process that has exited is gone even while its parent has yet to
   # reap it: a zombie holds no memory and runs nothing.
   @doc "Whether the OS process `os_pid` runs."
   @spec running?(non_neg_integer()) :: boolean()
   def running?(os_pid) do
     case System.cmd("/bin/ps", ["-o", "stat=", "-p", Integer.to_string(os_pid)],
-           stderr_to_stdout: true
+           stderr_to_stdout: true,
+           env: no_env()
          ) do
       {stat, 0} -> not String.starts_with?(String.trim(stat), "Z")
       {_none, _status} -> false

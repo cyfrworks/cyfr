@@ -48,10 +48,12 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def start_link(opts),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.fetch!(opts, :name))
 
-  @doc "Start a scripted keeper for the calling test, answering its name."
-  @spec start!() :: atom()
-  def start! do
-    name = :"scripted_keeper_#{System.unique_integer([:positive])}"
+  @doc """
+  Start a scripted keeper for the calling test under `name`, an alias of
+  the test module's own, and answer it.
+  """
+  @spec start!(module()) :: module()
+  def start!(name) when is_atom(name) do
     ExUnit.Callbacks.start_supervised!({__MODULE__, name: name})
     name
   end

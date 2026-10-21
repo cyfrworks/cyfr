@@ -51,7 +51,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
         Supervisor.restart_child(Locus.Runtime.Supervisor, Locus.Runtime.WorkerService.Tree)
     end)
 
-    keeper = ScriptedKeeper.start!()
+    keeper = ScriptedKeeper.start!(__MODULE__.Keeper)
     if tags[:refusing], do: :ok = ScriptedKeeper.refuse(keeper, :memory_unavailable)
     {:ok, settings} = Locus.Runtime.Settings.pool([keeper: :direct, pool_size: 1], %{})
 
