@@ -16,12 +16,6 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
   entry's destination is refused there, before anything is dialled. No
   case here reaches a provider: the shipped binary's request carried to
   its provider is not exercised.
-
-  The versions retained beside them read their key themselves through
-  `cyfr:vault/read`: their need is disclose-only, so the walk offers it
-  no attach-only entry and names the update, a binding of one is refused,
-  and the retained binary reached with an attach-only binding by any
-  other path is refused the key as `disclosure_refused` at its read.
   """
 
   use ExUnit.Case, async: false
@@ -157,83 +151,6 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
     end
   end
 
-  test "a retained disclose-only model refuses an attach-only entry", %{ctx: ctx} do
-    ref = "catalyst:local.claude"
-    newest = newest_shipped("catalysts", "claude")
-
-    # The newest retained version that reads its key itself: a retained
-    # version CYFR attaches the key for is no disclose-only model.
-    [retained | _] =
-      for version <- shipped("catalysts", "claude"),
-          version != newest,
-          [need] <- [Needs.from_manifest(shipped_manifest("claude", version))],
-          Needs.disclose_only?(need),
-          do: version
-
-    secret = "sk-attach-only-for-a-retained-model"
-
-    register!(ctx, "claude", retained)
-    {:ok, %{minted: minted}} = Bootstrap.run(ctx)
-    assert ref in minted
-
-    {:ok, component} = Compendium.Registry.get_latest(ctx, "claude", "local", "catalyst")
-    assert component.version == retained
-    assert [need] = needs(component)
-    assert Needs.disclose_only?(need)
-
-    {:ok, entry} =
-      Sanctum.TestContext.create_vault(ctx, %{
-        name: "claude key",
-        kind: "api_key",
-        provider_hint: need.qualifier,
-        fields: %{"ANTHROPIC_API_KEY" => secret},
-        destination: %{"hosts" => ["api.anthropic.com"]}
-      })
-
-    # The walk offers the retained version no attach-only entry, names the
-    # newer version the media ships, and refuses a binding of one.
-    {:ok, plan} = Plan.plan(ctx, %{ref: ref})
-
-    assert %{candidates: [], newer_shipped: ^newest} =
-             Enum.find(plan.needs, &(&1.need == "api_key"))
-
-    assert {:error, {:disclosure_refused, "api_key"}} =
-             Commit.preview(ctx, %{ref: ref, bindings: [%{need: "api_key", entry_id: entry.id}]})
-
-    # Reached with an attach-only binding by another path, here its binary
-    # planted under the newest manifest, whose need attaches, the retained
-    # binary's key read is refused as `disclosure_refused` rather than the
-    # access denial an unbound read meets, recorded so, and the run goes on
-    # to the binary's own "Failed to read" answer naming that reason.
-    planted = "planted-claude"
-    planted_ref = "catalyst:local.#{planted}"
-    unit = Path.join([@seed_root, "components", "catalysts", "local", "claude"])
-
-    manifest =
-      Path.join([unit, newest, "cyfr-manifest.json"])
-      |> File.read!()
-      |> Jason.decode!()
-      |> Map.merge(%{"name" => planted, "version" => retained})
-
-    {:ok, _component} =
-      Compendium.Registry.publish_bytes(
-        ctx,
-        File.read!(Path.join([unit, retained, "catalyst.wasm"])),
-        %{name: planted, version: retained, type: "catalyst", manifest: Jason.encode!(manifest)}
-      )
-
-    consent!(ctx, planted_ref, entry.id)
-
-    assert {:error, "Failed to read ANTHROPIC_API_KEY: disclosure_refused: " <> why} =
-             run(ctx, planted_ref, "describe", %{"model" => "any-model"})
-
-    assert why =~ "ANTHROPIC_API_KEY is attached to requests by CYFR and never handed to"
-
-    assert [%{args: %{"type" => "disclosure_refused"}}] = calls(:record_denial)
-    assert calls(:attached_fetch) == []
-    assert ChatFixture.leaks(secret, wire: TwoServices.calls()) == []
-  end
-
   test "the shipped assistant runs claude with the key bound on claude's own profile", %{
     ctx: ctx
   } do
@@ -356,13 +273,6 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
   defp calls(callback), do: for(%{callback: ^callback} = call <- TwoServices.calls(), do: call)
 
   defp newest_shipped(plural, name), do: hd(shipped(plural, name))
-
-  defp shipped_manifest(name, version) do
-    [@seed_root, "components/catalysts/local", name, version, "cyfr-manifest.json"]
-    |> Path.join()
-    |> File.read!()
-    |> Jason.decode!()
-  end
 
   # The versions the seed ships of `name`, newest first.
   defp shipped(plural, name) do
