@@ -134,7 +134,6 @@ defmodule Locus.Runtime.Relay do
   # The most body bytes one `fetch_chunk` carries: a slice of the credit,
   # so no one chunk holds the channel's writer for long.
   @chunk_bytes 262_144
-  @fetch_timeout_ms 30_000
 
   @purposes %{"fetch" => :fetch, "stream" => :stream}
 
@@ -933,7 +932,7 @@ defmodule Locus.Runtime.Relay do
     end
   end
 
-  defp fetch_timeout(bound), do: HttpRequestValidation.timeout_ms(bound.limits, @fetch_timeout_ms)
+  defp fetch_timeout(bound), do: HttpRequestValidation.timeout_ms(bound.limits)
 
   defp head_once(relay, re, resp) do
     unless Process.get({__MODULE__, :headed}) do

@@ -4,28 +4,26 @@
 defmodule Locus.Runtime.HttpRequestValidationTest do
   use ExUnit.Case, async: true
 
-  import ExUnit.CaptureLog
-
   alias Locus.Runtime.HttpRequestValidation
   alias Locus.Runtime.Test.EdgeFixtures
   alias Locus.Runtime.Test.ScriptedHost
   alias Prima.AttachedRequest
 
-  # A scripted host, the client of an attempt on it — which asks for each
+  # A scripted host and the client of an attempt on it, which asks for each
   # request's address through an `egress_pin` host call, pinned from the
-  # host's table — and the component reference.
+  # host's table.
   defp attached_host(pins \\ %{"localhost" => "127.0.0.1"}) do
     host = ScriptedHost.start!()
     ScriptedHost.pins(host, pins)
     attempt = ScriptedHost.attempt!(host)
-    {host, attempt.client, attempt.component_ref}
+    {host, attempt.client}
   end
 
   # Every call goes through the full production entry with the host client a
   # real caller supplies.
   defp validate(json, edge, limits, opts \\ []) do
-    {_host, client, ref} = attached_host()
-    HttpRequestValidation.validate(json, edge, limits, client, ref, opts)
+    {_host, client} = attached_host()
+    HttpRequestValidation.validate(json, edge, limits, client, opts)
   end
 
   defp encode(overrides) do
@@ -44,17 +42,16 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
     EdgeFixtures.edge(Keyword.merge([domains: ["localhost"], methods: ["GET", "POST"]], opts))
   end
 
-  describe "validate/6" do
+  describe "validate/5" do
     test "returns a validated request with the pinned address, the pin and the method atom" do
-      {host, client, ref} = attached_host()
+      {host, client} = attached_host()
 
       assert {:ok, request} =
                HttpRequestValidation.validate(
                  encode(%{}),
                  localhost_edge(),
                  EdgeFixtures.limits(),
-                 client,
-                 ref
+                 client
                )
 
       assert request.ip == "127.0.0.1"
@@ -69,7 +66,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
     end
 
     test "a stream's request is pinned for a stream" do
-      {host, client, ref} = attached_host()
+      {host, client} = attached_host()
 
       assert {:ok, _request} =
                HttpRequestValidation.validate(
@@ -77,7 +74,6 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
                  localhost_edge(),
                  EdgeFixtures.limits(),
                  client,
-                 ref,
                  purpose: :stream
                )
 
@@ -88,15 +84,14 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
       # The consented private-address policy is the host's: the engine
       # connects to the private address the host pinned, and to nothing
       # it resolved itself.
-      {_host, client, ref} = attached_host(%{"localhost" => "10.0.0.5"})
+      {_host, client} = attached_host(%{"localhost" => "10.0.0.5"})
 
       assert {:ok, request} =
                HttpRequestValidation.validate(
                  encode(%{}),
                  localhost_edge(),
                  EdgeFixtures.limits(),
-                 client,
-                 ref
+                 client
                )
 
       assert request.ip == "10.0.0.5"
@@ -152,7 +147,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
     test "request size is enforced before the address is pinned" do
       edge = EdgeFixtures.edge(domains: ["*"], methods: ["POST"])
       limits = EdgeFixtures.limits(max_request_size: 16)
-      {host, client, ref} = attached_host()
+      {host, client} = attached_host()
 
       request =
         encode(%{
@@ -162,7 +157,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
         })
 
       assert {:error, :request_too_large, msg} =
-               HttpRequestValidation.validate(request, edge, limits, client, ref)
+               HttpRequestValidation.validate(request, edge, limits, client)
 
       assert ScriptedHost.requests(host, "egress_pin") == []
 
@@ -172,9 +167,8 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
     end
 
     test "headers count toward max_request_size, not just the body" do
-      # Measuring the body alone let a guest move megabytes through header
-      # values — into host memory and out to the upstream — while the
-      # consented ceiling read as enforced.
+      # Header values count against the ceiling, so a guest cannot move
+      # megabytes through them into host memory and out to the upstream.
       edge = EdgeFixtures.edge(domains: ["*"], methods: ["POST"])
       limits = EdgeFixtures.limits(max_request_size: 512)
 
@@ -206,22 +200,21 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
 
     test "an address the host refuses is its refusal, which the host has recorded" do
       edge = EdgeFixtures.edge(domains: ["localhost"], methods: ["GET"])
-      {_host, client, ref} = attached_host(%{"localhost" => :denied})
+      {_host, client} = attached_host(%{"localhost" => :denied})
 
       assert {:refused, :private_ip_blocked, msg} =
                HttpRequestValidation.validate(
                  encode(%{}),
                  edge,
                  EdgeFixtures.limits(),
-                 client,
-                 ref
+                 client
                )
 
       assert msg =~ "localhost"
     end
 
     test "a hop to another origin is refused even when a pin is answered for it" do
-      {_host, client, ref} =
+      {_host, client} =
         attached_host(%{
           "api.example.test" => "203.0.113.10",
           "static.cdn.example.test" => "203.0.113.12"
@@ -235,7 +228,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
 
       request = fn url ->
         json = encode(%{"url" => url, "headers" => headers})
-        HttpRequestValidation.validate(json, edge, EdgeFixtures.limits(), client, ref)
+        HttpRequestValidation.validate(json, edge, EdgeFixtures.limits(), client)
       end
 
       assert {:ok, first} = request.(start)
@@ -299,7 +292,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
     end
 
     test "a header that frames, routes or overrides the request is refused, named, before the pin" do
-      {host, client, ref} = attached_host()
+      {host, client} = attached_host()
 
       names =
         Prima.Network.framing_headers() ++
@@ -318,7 +311,6 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
                  localhost_edge(),
                  EdgeFixtures.limits(),
                  client,
-                 ref,
                  purpose: purpose
                ) == {:error, :invalid_request, "A request cannot set the #{spelled} header."},
                "#{purpose} #{inspect(headers)}"
@@ -329,8 +321,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
                encode(%{"headers" => [["Host", "a.internal"], ["HOST", "b.internal"]]}),
                localhost_edge(),
                EdgeFixtures.limits(),
-               client,
-               ref
+               client
              ) == {:error, :invalid_request, "A request cannot set the Host header."}
 
       assert ScriptedHost.requests(host, "egress_pin") == []
@@ -347,8 +338,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
                  }),
                  localhost_edge(),
                  EdgeFixtures.limits(),
-                 client,
-                 ref
+                 client
                )
 
       assert headers == [
@@ -423,7 +413,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
     end
 
     test "asks for no pin and carries the request CYFR makes, read as CYFR reads it" do
-      {host, client, ref} = attached_host()
+      {host, client} = attached_host()
 
       assert {:ok, request} =
                HttpRequestValidation.validate(
@@ -435,8 +425,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
                  }),
                  localhost_edge(),
                  EdgeFixtures.limits(),
-                 client,
-                 ref
+                 client
                )
 
       assert %AttachedRequest{
@@ -459,8 +448,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
                  attached_request(%{}),
                  localhost_edge(),
                  EdgeFixtures.limits(),
-                 client,
-                 ref
+                 client
                )
 
       assert again.attached.call_id != attached.call_id
@@ -586,21 +574,10 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
     end
   end
 
-  describe "timeout_ms/2" do
+  describe "timeout_ms/1" do
     test "derives the timeout from the node limits" do
-      assert HttpRequestValidation.timeout_ms(EdgeFixtures.limits(timeout: "30s"), 60_000) ==
-               30_000
-
-      assert HttpRequestValidation.timeout_ms(EdgeFixtures.limits(timeout: "2m"), 60_000) ==
-               120_000
-    end
-
-    test "falls back only when the limits carry an unparseable duration" do
-      limits = %{EdgeFixtures.limits() | timeout: "bogus"}
-
-      capture_log(fn ->
-        assert HttpRequestValidation.timeout_ms(limits, 60_000) == 60_000
-      end)
+      assert HttpRequestValidation.timeout_ms(EdgeFixtures.limits(timeout: "30s")) == 30_000
+      assert HttpRequestValidation.timeout_ms(EdgeFixtures.limits(timeout: "2m")) == 120_000
     end
   end
 
@@ -608,7 +585,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
     # The rate is the relay's service end's to take (`Locus.Runtime.Relay`), before
     # it connects: a runner's own `take_rate` is refused there.
     test "the runner takes no rate itself: it pins, and the relay takes the rate" do
-      {host, client, ref} = attached_host()
+      {host, client} = attached_host()
       ScriptedHost.script(host, "take_rate", {:error, {:guest_error, "rate_limited", "denied"}})
 
       assert {:ok, _request} =
@@ -616,8 +593,7 @@ defmodule Locus.Runtime.HttpRequestValidationTest do
                  encode(%{}),
                  localhost_edge(),
                  EdgeFixtures.limits(),
-                 client,
-                 ref
+                 client
                )
 
       assert ScriptedHost.requests(host, "take_rate") == []

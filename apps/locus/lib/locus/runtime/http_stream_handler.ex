@@ -65,10 +65,6 @@ defmodule Locus.Runtime.HttpStreamHandler do
   alias Prima.Limits
   alias Locus.Runtime.{HostClient, HttpHandler, HttpRequestValidation}
 
-  # Fallback stream timeout, used only when the node limits carry an
-  # unparseable duration (limits are validated when the blob parses).
-  @stream_timeout_ms 60_000
-
   # The cache entry must outlive the stream timeout so the timeout branch in
   # stream_read/3 — which stops the collector process and buffer agent — runs
   # instead of a bare cache expiry that would strand them.
@@ -198,7 +194,7 @@ defmodule Locus.Runtime.HttpStreamHandler do
         "Maximum concurrent streams (#{@max_concurrent_streams}) exceeded"
       )
     else
-      case HttpRequestValidation.validate(json_request, edge, limits, host, component_ref,
+      case HttpRequestValidation.validate(json_request, edge, limits, host,
              allow_multipart: false,
              purpose: :stream
            ) do
@@ -253,7 +249,7 @@ defmodule Locus.Runtime.HttpStreamHandler do
 
   defp start_stream(request, exec_ref, host, component_ref, limits) do
     handle_id = generate_handle_id()
-    timeout_ms = HttpRequestValidation.timeout_ms(limits, @stream_timeout_ms)
+    timeout_ms = HttpRequestValidation.timeout_ms(limits)
 
     # Create a buffer agent to collect chunks. A :queue keeps both ends O(1):
     # the byte ceiling bounds total size but not chunk count, and an SSE

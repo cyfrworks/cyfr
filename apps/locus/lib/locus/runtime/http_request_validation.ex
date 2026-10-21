@@ -39,7 +39,7 @@ defmodule Locus.Runtime.HttpRequestValidation do
   refused, by CYFR and again by the engine (`Locus.Runtime.Egress.pin/3`):
   the request carries the guest's credentials.
 
-  `validate/6` returns a validated request map (including the pinned
+  `validate/5` returns a validated request map (including the pinned
   address, the pin and the Req method atom) that each handler then
   sends through the relay its own way (buffered fetch vs. polling
   stream). Handlers own the relay's fetch, response handling, and
@@ -61,8 +61,6 @@ defmodule Locus.Runtime.HttpRequestValidation do
   guest wrote them; the validated request carries `:attached`, the
   request to send, and no `:pinned`.
   """
-
-  require Logger
 
   alias Locus.Runtime.EdgeGuard
   alias Locus.Runtime.HostClient
@@ -113,18 +111,11 @@ defmodule Locus.Runtime.HttpRequestValidation do
     * `:purpose` — what the pin is asked for, or the attached request is
       made for: `:fetch` (default) or `:stream`.
   """
-  @spec validate(String.t(), Edge.t() | nil, Limits.t(), HostClient.t(), String.t(), keyword()) ::
+  @spec validate(String.t(), Edge.t() | nil, Limits.t(), HostClient.t(), keyword()) ::
           {:ok, validated_request()}
           | {:error, atom(), String.t()}
           | {:refused, atom(), String.t()}
-  def validate(
-        json_request,
-        edge,
-        %Limits{} = limits,
-        %HostClient{} = host,
-        _component_ref,
-        opts \\ []
-      ) do
+  def validate(json_request, edge, %Limits{} = limits, %HostClient{} = host, opts \\ []) do
     purpose = Keyword.get(opts, :purpose, :fetch)
 
     with :ok <- envelope_bound(limits, json_request),
@@ -184,11 +175,11 @@ defmodule Locus.Runtime.HttpRequestValidation do
   end
 
   @doc """
-  Ask CYFR again for the pin of a request `validate/6` pinned, right
+  Ask CYFR again for the pin of a request `validate/5` pinned, right
   before the request is sent, as it was asked (its purpose, and a
   redirect's hop from the same pin), so a request sent later than it was
   validated is decided against what the run has read by then. Answers the
-  request with its fresh pin, or a refusal as `validate/6` answers one. A
+  request with its fresh pin, or a refusal as `validate/5` answers one. A
   request naming a connection asks nothing: CYFR pins the request it makes.
   """
   @spec repin(validated_request(), HostClient.t()) ::
@@ -226,25 +217,13 @@ defmodule Locus.Runtime.HttpRequestValidation do
   defp engine_url(answer), do: answer
 
   @doc """
-  The node's consented timeout in milliseconds.
-
-  Node limits are validated when the blob parses, so the fallback only
-  fires for a hand-built Limits in a test.
+  The node's consented timeout in milliseconds. Node limits are validated
+  when the blob parses, so their timeout always parses.
   """
-  @spec timeout_ms(Limits.t(), non_neg_integer()) :: non_neg_integer()
-  def timeout_ms(%Limits{} = limits, fallback_ms) do
-    case Limits.timeout_ms(limits) do
-      {:ok, ms} ->
-        ms
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Locus.Runtime.HttpRequestValidation] Invalid timeout in node limits: #{reason}. " <>
-            "Falling back to #{fallback_ms}ms."
-        )
-
-        fallback_ms
-    end
+  @spec timeout_ms(Limits.t()) :: non_neg_integer()
+  def timeout_ms(%Limits{} = limits) do
+    {:ok, ms} = Limits.timeout_ms(limits)
+    ms
   end
 
   # ============================================================================

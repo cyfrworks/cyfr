@@ -73,8 +73,6 @@ defmodule Locus.Runtime.HttpHandler do
   alias Locus.Runtime.HostClient
   alias Locus.Runtime.HttpRequestValidation
 
-  @request_timeout 30_000
-
   # How much longer than the node's timeout the handler waits for the
   # relay's next word, which the relay bounds by that timeout itself.
   @relay_grace_ms 5_000
@@ -194,7 +192,7 @@ defmodule Locus.Runtime.HttpHandler do
   end
 
   defp do_execute(json_request, edge, limits, host, component_ref) do
-    case HttpRequestValidation.validate(json_request, edge, limits, host, component_ref) do
+    case HttpRequestValidation.validate(json_request, edge, limits, host) do
       {:ok, request} ->
         perform_request(request, limits, component_ref, host)
 
@@ -540,9 +538,7 @@ defmodule Locus.Runtime.HttpHandler do
 
   defp note_redirect(_host, _request, _status, _headers), do: :ok
 
-  defp request_timeout(limits) do
-    HttpRequestValidation.timeout_ms(limits, @request_timeout)
-  end
+  defp request_timeout(limits), do: HttpRequestValidation.timeout_ms(limits)
 
   # ============================================================================
   # Private: Response Encoding
