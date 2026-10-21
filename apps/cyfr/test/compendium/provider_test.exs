@@ -808,6 +808,63 @@ defmodule Compendium.ProviderTest do
       # The schema does not accept a directory property.
       refute Map.has_key?(action_schema(tool, "register")["properties"], "directory")
     end
+
+    test "a registered formula whose stored manifest does not decode is reported as damage",
+         %{ctx: ctx, test_dir: test_dir} do
+      name = "torn-register"
+
+      setup_dep_test_dir(test_dir, "formula", name, "0.1.0", %{
+        "type" => "formula",
+        "version" => "0.1.0",
+        "description" => "A formula whose row is damaged once registered",
+        "dependencies" => %{
+          "static" => [
+            %{
+              "ref" => "catalyst:local.torn-register-dep:0.1.0",
+              "optional" => false,
+              "reason" => "Required"
+            }
+          ]
+        }
+      })
+
+      # The scan's replacement commits, then announces each row it wrote,
+      # in the scan's own process and before the dependency check reads the
+      # rows: this tenant's announcement of the formula damages its stored
+      # manifest, as a row altered outside the publish path would be.
+      import Ecto.Query, only: [from: 2]
+
+      handler = {__MODULE__, make_ref()}
+      on_exit(fn -> :telemetry.detach(handler) end)
+      athanor_id = ctx.athanor_id
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:cyfr, :compendium, :component, :install],
+          fn _event, _measurements, metadata, _config ->
+            if metadata.athanor_id == athanor_id and metadata.name == name do
+              {1, _} =
+                from(c in Arca.Schemas.Component,
+                  where: c.athanor_id == ^athanor_id and c.name == ^name
+                )
+                |> Arca.Repo.update_all(set: [manifest: "not json"])
+            end
+          end,
+          nil
+        )
+
+      assert {:ok, result} = Provider.handle("component", ctx, %{"action" => "register"})
+
+      assert %{status: "registered"} = Enum.find(result.components, &(&1.name == name))
+
+      # Read as declaring nothing, the formula would have no dependency to
+      # check and the register would answer an empty check.
+      assert result.dependency_check_error ==
+               Sanctum.Refusals.render({:corrupt, {:manifest, "formula:local.#{name}:0.1.0"}})
+
+      assert result.missing_local_deps == []
+    end
   end
 
   # ============================================================================
