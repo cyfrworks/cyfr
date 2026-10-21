@@ -70,9 +70,6 @@
   {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match},
   # The two catch-all clauses the entry above names.
   {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
-  # deadline/1 adds a platform setting typed term(), so Dialyzer types the
-  # sum as number(); the settings roster parses both lifetimes as integers.
-  {"lib/cyfr_web/sse.ex", :missing_range},
   # The step bench's harness, `Cyfr.Test.StepBench`, is test support: it is
   # compiled only under MIX_ENV=test, the one environment the task runs in.
   {"lib/mix/tasks/cyfr.bench.step.ex", :unknown_function},

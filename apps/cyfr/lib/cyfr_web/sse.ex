@@ -140,8 +140,8 @@ defmodule CyfrWeb.SSE do
   `limit_key` platform setting (8 streams by default).
 
   The key carries the credential, not only the person: API-key callers
-  share a nil `user_id`, so without it every integration in an athanor
-  drew on one budget and a single chatty one starved the rest. A frame's
+  share a nil `user_id`, and each key has its own budget, so one chatty
+  integration never starves the others of its athanor. A frame's
   context is counted per frame credential: one frame's streams never
   draw on another's budget.
 
@@ -190,11 +190,13 @@ defmodule CyfrWeb.SSE do
     System.monotonic_time(:millisecond) + setting(max_ms_key)
   end
 
-  # Both limits serve a stale value, so a store outage answers the last
-  # one read and refuses no stream for it.
+  # Every limit and lifetime is an integer setting. Each serves a stale
+  # value, so a store outage answers the last one read and refuses no
+  # stream for it.
   defp setting(key) do
-    {:ok, value} = Arca.PlatformSettings.effective(Atom.to_string(key))
-    value
+    case Arca.PlatformSettings.effective(Atom.to_string(key)) do
+      {:ok, value} when is_integer(value) -> value
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -537,22 +539,18 @@ defmodule CyfrWeb.SSE do
 
   defp unsubscribe_frame(%Context{}), do: :ok
 
-  # The payload's sequence number, where its topic carries one.
-  defp sequence(message) do
-    case Map.get(message, :sequence, Map.get(message, :seq)) do
-      n when is_integer(n) and n >= 0 ->
-        n
-
-      text when is_binary(text) ->
-        case Integer.parse(text) do
-          {n, ""} when n >= 0 -> n
-          _ -> nil
-        end
-
-      _ ->
-        nil
+  # The payload's sequence number, where its topic carries one: an
+  # execution event's `sequence` (`Cyfr.Bus.ExecutionEvent`), the text of a
+  # durable event's number. A delta's `<durable>.<n>` is no number, so its
+  # event carries no id, as a payload of any other topic does not.
+  defp sequence(%{sequence: sequence}) when is_binary(sequence) do
+    case Integer.parse(sequence) do
+      {n, ""} when n >= 0 -> n
+      _ -> nil
     end
   end
+
+  defp sequence(_message), do: nil
 
   # The tick's timer is re-armed on every tick; its current reference is
   # kept in the process dictionary under the stream's own ref, so the
