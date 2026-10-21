@@ -286,10 +286,6 @@ defmodule Prism.Frames do
     end
   end
 
-  @doc "The ids of every credential minted and not yet known revoked."
-  @spec minted(t()) :: [String.t()]
-  def minted(%__MODULE__{minted: minted}), do: minted
-
   @doc "How many frame messages were dropped."
   @spec dropped(t()) :: non_neg_integer()
   def dropped(%__MODULE__{dropped: dropped}), do: dropped

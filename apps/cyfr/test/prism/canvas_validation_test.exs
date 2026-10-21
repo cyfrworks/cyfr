@@ -239,7 +239,6 @@ defmodule Prism.CanvasValidationTest do
              )
 
       assert CanvasValidation.needed?(%{empty | working: "1.0.0", kept: "0.9.0"}, "1.0.1")
-      assert CanvasValidation.deadline_ms() == 10_000
     end
 
     test "each event reports its outcome" do

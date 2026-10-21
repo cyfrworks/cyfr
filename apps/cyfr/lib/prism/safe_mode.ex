@@ -65,10 +65,6 @@ defmodule Prism.SafeMode do
   @enforce_keys [:reason, :canvas, :tincture, :kept]
   defstruct [:reason, :canvas, :tincture, :kept]
 
-  @doc "The reasons safe mode is entered for."
-  @spec reasons() :: [reason()]
-  def reasons, do: @reasons
-
   @doc "The shipped canvas the `:shipped` offer shows."
   @spec shipped_canvas() :: Prima.Layout.ref()
   def shipped_canvas, do: @shipped
