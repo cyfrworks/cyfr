@@ -440,6 +440,9 @@ defmodule Prima.Refusal do
 
   defp row({:corrupt, {:manifest, _ref}}), do: {:corrupt, "The stored manifest is damaged."}
 
+  defp row({:corrupt, {:execution, _id}}),
+    do: {:corrupt, "The stored execution record is damaged."}
+
   # A run's component graph whose stored rows do not hash, so the consent
   # cannot be judged against it. The ref rides in the reason; the sentence
   # names the damaged thing, never a grant to make.

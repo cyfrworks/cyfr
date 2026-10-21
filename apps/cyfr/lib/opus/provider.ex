@@ -187,6 +187,12 @@ defmodule Opus.Provider do
           # about executions outside its chain either way.
           {:error, :not_found} ->
             {:error, {:not_found, "Execution", execution_id}}
+
+          # A row stored damaged, or a store that cannot answer, refuses
+          # the cancel as itself: nothing is judged in chain from a row
+          # that does not read.
+          {:error, _reason} = refused ->
+            refused
         end
 
       _ ->
@@ -536,29 +542,31 @@ defmodule Opus.Provider do
     limit = min(args["limit"] || 20, 1000)
     status_filter = parse_status_filter(args["status"])
 
-    {:ok, records} = Record.list(ctx, limit: limit, status: status_filter)
+    # A row stored damaged refuses the whole listing as itself
+    # (`{:corrupt, {:execution, id}}`), as a store that cannot answer does.
+    with {:ok, records} <- Record.list(ctx, limit: limit, status: status_filter) do
+      # In-chain listings are subtree-scoped for the same reason cancel
+      # and logs are: the caller has no business enumerating the tenant.
+      records = Enum.filter(records, &in_caller_chain?(&1, args))
 
-    # In-chain listings are subtree-scoped for the same reason cancel
-    # and logs are: the caller has no business enumerating the tenant.
-    records = Enum.filter(records, &in_caller_chain?(&1, args))
+      executions =
+        Enum.map(records, fn record ->
+          %{
+            execution_id: record.id,
+            request_id: record.request_id,
+            parent_execution_id: record.parent_execution_id,
+            status: Atom.to_string(record.status),
+            reference: record.reference,
+            component_type: Atom.to_string(record.component_type),
+            started_at: DateTime.to_iso8601(record.started_at),
+            completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
+            duration_ms: record.duration_ms,
+            error: record.error
+          }
+        end)
 
-    executions =
-      Enum.map(records, fn record ->
-        %{
-          execution_id: record.id,
-          request_id: record.request_id,
-          parent_execution_id: record.parent_execution_id,
-          status: Atom.to_string(record.status),
-          reference: record.reference,
-          component_type: Atom.to_string(record.component_type),
-          started_at: DateTime.to_iso8601(record.started_at),
-          completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
-          duration_ms: record.duration_ms,
-          error: record.error
-        }
-      end)
-
-    {:ok, %{executions: executions, count: length(executions), user_id: ctx.user_id}}
+      {:ok, %{executions: executions, count: length(executions), user_id: ctx.user_id}}
+    end
   end
 
   # Logs action — the execution record and a text rendering of its
@@ -596,6 +604,10 @@ defmodule Opus.Provider do
 
       {:error, :not_found} ->
         {:error, {:not_found, "Execution", execution_id}}
+
+      # A row stored damaged, or a store that cannot answer, refuses as itself.
+      {:error, _reason} = refused ->
+        refused
     end
   end
 
@@ -618,6 +630,11 @@ defmodule Opus.Provider do
 
         {:error, :not_cancellable} ->
           {:error, "Execution already completed, failed, or cancelled"}
+
+        # A row stored damaged is refused as the damage it is: nothing was
+        # cancelled, and nothing but writing it again repairs it.
+        {:error, {:corrupt, {:execution, _id}}} = damaged ->
+          damaged
 
         {:error, reason} ->
           Logger.error("[Opus.Provider] Failed to cancel execution: #{inspect(reason)}")

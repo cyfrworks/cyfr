@@ -1366,6 +1366,77 @@ defmodule Opus.ProviderTest do
   end
 
   # ============================================================================
+  # A Damaged Execution Row
+  # ============================================================================
+
+  describe "an execution row stored damaged" do
+    # A row its writer admitted, then given a type outside the set the
+    # row's writers stamp: every read of it is refused as damage.
+    setup %{ctx: ctx} do
+      record = Opus.Record.new(ctx, "reagent:local.damaged:1.0.0", %{})
+      :ok = Opus.Record.write_started(ctx, record)
+
+      {1, _} =
+        from(e in "executions", where: e.id == ^record.id)
+        |> Arca.Repo.update_all(set: [component_type: "widget"])
+
+      {:ok, damaged: record.id}
+    end
+
+    @tag capture_log: true
+    test "list answers the corrupt refusal", %{ctx: ctx, damaged: id} do
+      assert {:error, {:corrupt, {:execution, ^id}} = reason} =
+               Provider.handle("execution", ctx, %{"action" => "list"})
+
+      assert_damaged_record(reason)
+
+      assert {:error, {:corrupt, {:execution, ^id}}} =
+               Provider.handle("execution", ctx, %{"action" => "list", "root_execution_id" => id})
+    end
+
+    @tag capture_log: true
+    test "logs answer the corrupt refusal, in chain and out", %{ctx: ctx, damaged: id} do
+      for lineage <- [%{}, %{"root_execution_id" => id}] do
+        assert {:error, {:corrupt, {:execution, ^id}} = reason} =
+                 Provider.handle(
+                   "execution",
+                   ctx,
+                   Map.merge(%{"action" => "logs", "execution_id" => id}, lineage)
+                 )
+
+        assert_damaged_record(reason)
+      end
+
+      for uri <- ["opus://executions/#{id}", "opus://executions/#{id}/logs"] do
+        assert {:error, {:corrupt, {:execution, ^id}}} = read(ctx, uri)
+      end
+    end
+
+    @tag capture_log: true
+    test "a cancel, in chain and out, answers the corrupt refusal and cancels nothing",
+         %{ctx: ctx, damaged: id} do
+      for lineage <- [%{"root_execution_id" => id}, %{}] do
+        assert {:error, {:corrupt, {:execution, ^id}} = reason} =
+                 Provider.handle(
+                   "execution",
+                   ctx,
+                   Map.merge(%{"action" => "cancel", "execution_id" => id}, lineage)
+                 )
+
+        assert_damaged_record(reason)
+      end
+
+      assert ["running"] =
+               Arca.Repo.all(from(e in "executions", where: e.id == ^id, select: e.status))
+    end
+  end
+
+  defp assert_damaged_record(reason) do
+    assert %Prima.Refusal{class: :corrupt, message: "The stored execution record is damaged."} =
+             Prima.Refusal.classify(reason)
+  end
+
+  # ============================================================================
   # Force Release Action
   # ============================================================================
 

@@ -175,6 +175,7 @@ defmodule Prima.RefusalTest do
     {{:corrupt, {:manifest, "c:local.x:1.0.0"}}, :corrupt},
     {{:corrupt, {:component_graph, "c:local.x:1.0.0"}}, :corrupt},
     {{:corrupt, {:artifact, "sha256:ab12"}}, :corrupt},
+    {{:corrupt, {:execution, "exec_1"}}, :corrupt},
     {{:component_type_mismatch, :formula, :reagent}, :invalid_argument},
     {:invalid_component_type, :invalid_argument},
     {{:corrupt, {:settings, :retention}}, :corrupt},
@@ -601,6 +602,9 @@ defmodule Prima.RefusalTest do
 
       assert Refusal.message({:corrupt, {:manifest, "c:local.x:1.0.0"}}) ==
                "The stored manifest is damaged."
+
+      assert Refusal.message({:corrupt, {:execution, "exec_secret"}}) ==
+               "The stored execution record is damaged."
 
       assert Refusal.message({:corrupt, {:settings, :retention}}) ==
                "The stored retention settings are damaged."
