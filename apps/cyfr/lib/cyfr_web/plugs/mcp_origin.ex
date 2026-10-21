@@ -19,9 +19,11 @@ defmodule CyfrWeb.Plugs.MCPOrigin do
 
   ## Configuration
 
-      config :cyfr, :mcp_allowed_origins, ["http://localhost", "https://localhost"]
-
-  Supports wildcard port matching for localhost origins.
+  The allowlist is `Cyfr.RuntimeConfig.mcp_allowed_origins/0`: the
+  origins `config/runtime.exs` writes from the home's access settings
+  (`:mcp_allowed_origins`, the endpoint's `check_origin` list), extended by
+  `CYFR_MCP_ALLOWED_ORIGINS` (`:mcp_extra_origins`). An allowed localhost
+  origin without a port admits that origin on any port.
   """
 
   import Plug.Conn
