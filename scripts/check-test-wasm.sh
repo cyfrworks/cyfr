@@ -7,10 +7,11 @@
 #
 # Each recipe's build.sh --check builds its fixtures afresh and compares
 # them byte for byte with the checked-in binaries: Locus's math, echo and
-# spin (and CYFR's copy of math), the hostile guests, the worker image's
-# hog, and the Rust fixtures. Every checked-in .wasm outside seed/ is one
-# of a recipe's, or the check fails naming it. --wat-only skips building
-# the Rust fixtures, for a host without their toolchain, and names them.
+# spin (and CYFR's copy of math), the hostile guests, the runtime image
+# suite's hog, and the Rust fixtures. Every checked-in .wasm outside seed/
+# is one of a recipe's, or the check fails naming it. --wat-only skips
+# building the Rust fixtures, for a host without their toolchain, and names
+# them.
 #
 # Every recipe runs even after one fails. Exit 0 when every fixture
 # checked is its source's build; 1 naming each recipe a binary of which is

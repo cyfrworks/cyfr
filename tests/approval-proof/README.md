@@ -48,11 +48,10 @@ a run, sends no request and runs no turn:
   resolution of the account (`Sanctum.Consent.Accounts.resolve/4`), which
   must answer `connection_not_granted`, the answer a turn ends on. It then
   announces, on a thread of hers (made by the `thread` operation's `create`,
-  holding no message), exactly what `Aqua.Loop.end_for_account/2` announces
-  (`apps/cyfr/lib/aqua/loop.ex:1059-1076`): `:consent_required` with the
-  app, her id, the account and its need (none, since the app declares one),
-  and no message (`Aqua.Tape.announce/4`). No turn exists, before or after,
-  and the state shows none.
+  holding no message), exactly what `Aqua.Loop.end_for_account/2` announces:
+  `:consent_required` with the app, her id, the account and its need (none,
+  since the app declares one), and no message (`Aqua.Tape.announce/4`). No
+  turn exists, before or after, and the state shows none.
 
 The actual requests, turns and scheduled or webhook execution are the
 named suite cases under [Shown elsewhere](#shown-elsewhere).
@@ -282,10 +281,10 @@ grant and the loaded edge alone.
 
 The unchanged shipped model artifact → production
 `Opus.Host.AttachedFetch` → local provider stand-in composition is
-**uncovered**. The current artifacts hard-code provider HTTPS origins
-(`seed/components/catalysts/local/openai/1.3.1/src/src/lib.rs:14` and its
-peers); `Opus.Host.Egress.pin/3` has a resolver option which the actual
-host never passes (`apps/cyfr/lib/opus/host/egress.ex:94`). The
+**uncovered**. The shipped artifacts hard-code provider HTTPS origins
+(`BASE_URL` in `seed/components/catalysts/local/openai/1.4.1/src/src/lib.rs`
+and its peers); `Opus.Host.Egress.pin/3` has a resolver option which no
+caller in the host passes. The
 existing suites found in `seed_model_catalysts_test.exs`,
 `model_contract_test.exs`, `TwoServices`, `tests/locus-runtime-image/` and
 `Sanctum.Test.Resolver` do not provide an end-to-end local

@@ -257,7 +257,7 @@ cell_new() {
   fi
   cell_set "$cell" CYFR_PORT "$PORT"
   cell_set "$cell" CYFR_DATABASE "$ADAPTER"
-  cell_set "$cell" CYFR_AUTO_MIGRATE true
+  cell_set "$cell" CYFR_AUTO_MIGRATE on
   cell_set "$cell" CYFR_HOST_API_BIND 127.0.0.1
   cell_set "$cell" CYFR_HOST_API_PORT "$HOST_API_PORT"
   cell_set "$cell" LOCUS_RUNTIME_SERVICE_ID wrk_locus

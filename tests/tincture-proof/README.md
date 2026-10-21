@@ -36,12 +36,12 @@ harness (`tests/browser/`):
   signed-in context, the shell closing and launching again; the first open is
   not counted) and OPENS cold opens (a new context each).
 
-## Pending
+## Limits
 
 - **The completed save.** The save is admitted past the frame's checks and
   dispatched by the gate; with no runtime in the harness it ends
   `unavailable` at `execution`. A save that completes needs the worker
   beside the release and a seeded catalyst that reads the invoke input
-  `{"operation", "params"}`, which no seeded catalyst does today.
-- **Built by Aqua from the guideline.** Memory and model work are deferred and
-  no provider key is configured, so the game is built once, from source.
+  `{"operation", "params"}`, which no seeded catalyst does.
+- **Built by Aqua from the guideline.** The harness runs no model and
+  configures no provider key, so the game is built once, from source.

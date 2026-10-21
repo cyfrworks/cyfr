@@ -55,7 +55,7 @@ export const { chromium, firefox, webkit } = await import("playwright-core").cat
 export const SITE = "cyfr.test";
 export const ATTACKER = "attacker.test";
 // Where the run's authority is mounted (harness.sh `playwright_run`).
-export const AUTHORITY = "/authority";
+const AUTHORITY = "/authority";
 // The harness's own pages, which the front answers on every home.
 export const HARNESS = "/__harness";
 
@@ -608,7 +608,7 @@ export async function openShell(page, base, segment, name) {
   await launchButton(page, name).waitFor({ timeout: 30_000 });
 }
 
-export const launchButton = (page, name) =>
+const launchButton = (page, name) =>
   page.locator(`button[phx-click="select_tincture"][phx-value-tincture="iframe_${name}"]`, { hasText: "Launch" });
 
 // Launch `name` from the picker and answer its frame's element handle and
@@ -669,13 +669,56 @@ export function percentiles(values) {
 export const BROWSERS = ["chromium", "firefox", "webkit"];
 
 // ---------------------------------------------------------------------------
+// The glass, shared by the proofs that pair one
+// ---------------------------------------------------------------------------
+
+// The glass's device channel, watched from inside its own page: an init
+// script (`context.addInitScript(instrumentDevice)`) that logs, on
+// `window.__device`, each frame of every device socket, in or out, as its
+// type, id and error class, and each socket's close.
+export function instrumentDevice() {
+  const Native = window.WebSocket;
+  const device = { log: [], sockets: 0 };
+  window.__device = device;
+  const describe = (data) => {
+    try {
+      const map = JSON.parse(data);
+      return { type: map.type, id: map.id, error: map.error ? (map.error.class || "error") : undefined };
+    } catch {
+      return { type: "unreadable" };
+    }
+  };
+  class Watched extends Native {
+    constructor(url, protocols) {
+      super(url, protocols);
+      if (!/\/device\/websocket/.test(String(url))) return;
+      this.__serial = ++device.sockets;
+      super.addEventListener("message", (event) => device.log.push({ socket: this.__serial, dir: "in", ...describe(event.data) }));
+      super.addEventListener("close", (event) => device.log.push({ socket: this.__serial, event: "close", code: event.code }));
+    }
+    send(data) {
+      if (this.__serial) device.log.push({ socket: this.__serial, dir: "out", ...describe(data) });
+      return super.send(data);
+    }
+  }
+  window.WebSocket = Watched;
+}
+
+// Acknowledge the recovery kit the system layer shows, and wait for the
+// layer to close.
+export async function saveKit(page) {
+  await page.locator('#system-layer-dialog [data-test="recovery-ack"]').click();
+  await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, { timeout: 30_000 });
+}
+
+// ---------------------------------------------------------------------------
 // A proof's asks of its run.sh, and what it may write
 // ---------------------------------------------------------------------------
 
 let asks = 0;
 
 // The server's part of a step, asked of the proof's run.sh through the
-// output directory `outDir` (C9): `request` is written as ask-N.json,
+// output directory `outDir`: `request` is written as ask-N.json,
 // whole once it appears, and the answer is read from answer-N.json, which
 // run.sh writes aside and renames (harness.sh `answer_asks`, which removes
 // the ask first). N counts this process's asks from 1. Where proofs ask

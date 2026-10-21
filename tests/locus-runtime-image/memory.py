@@ -106,7 +106,7 @@ MODELS = {
     "grok": "grok-4",
     "openrouter": "anthropic/claude-sonnet-4.6",
 }
-# The margin the build bound took over the largest seed build's peak (§13).
+# The margin the build bound takes over the largest seed build's peak.
 MARGIN = 1.8
 
 

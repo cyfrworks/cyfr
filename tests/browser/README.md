@@ -19,8 +19,7 @@ runs on the image's own Node. `package-lock.json` pins it with its
 integrity hash, and `npm ci --ignore-scripts` installs it once per
 lockfile, into a cache under `_build/browser-node-modules/<hash>` keyed by
 the SHA-256 of `package-lock.json` and the image, so no binary is fetched
-at test time. `apps/cyfr/assets` has no JavaScript toolchain of its own to
-share. `playwright_run` (`harness.sh`) runs an experiment in the image,
+at test time. `playwright_run` (`harness.sh`) runs an experiment in the image,
 pinned by digest, on the host's network, with `--shm-size=1g`, since
 Chromium and Firefox keep their shared memory in `/dev/shm`, whose Docker
 default of 64 MB is too small. It mounts the cache read-only at
@@ -106,8 +105,8 @@ which no browser trusts, or a home's own certificate, which names another
 host.
 
 **Trust.** `playwright_run` makes every browser of the container trust the
-authority once the run has one; a run without one starts the container as
-before.
+authority once the run has one; a run without one mounts nothing of it, and
+the browsers keep the image's own trust.
 
 | Browser | How it trusts the run's authority |
 |---|---|
@@ -228,42 +227,21 @@ in `harness.sh`, driven by `playwright-core` 1.64.0:
 | Firefox | 157.0 |
 | WebKit | 27.2 |
 
-## Frame facts the rules were frozen against
+## What the frame's rules answer
 
-The facts below hold for a page the harness's proxy answers on the
-server's own origin, where the Prism shell frames tinctures from, holding
-`frame-probe`'s `/t/` page in `<iframe sandbox="allow-scripts">` as the
-shell does, with the probe (`tinctures/frame-probe/probe.js`) making nine
-attempts from inside it, under the policy the `/t/` route served before the
-frame's rules: its CSP was
-`default-src 'self'; script-src 'self' 'nonce-…'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'`,
-and its assets answer `access-control-allow-origin: *`. Every browser reaches
-the server through the harness's proxy under the name `cyfr.test`; the
-proxy answers only the framing page and the 302s of the redirect attempt
-(no `/t/` route redirects) and forwards the rest unchanged. The
-document's origin is `null` in all three browsers. Each column names the
-browser version the facts were observed in.
-
-| Attempt | Chromium 153 | Firefox 155 | WebKit 26.6 |
-|---|---|---|---|
-| self-navigation (`location.assign` to its own page) | allowed: the frame loaded its page again | allowed | allowed |
-| fetch of its own asset (`asset.json`) | allowed: sent with `Origin: null`, answered 200, readable (`type: cors`, the asset's `access-control-allow-origin: *`) | allowed, as Chromium | refused before sending: CSP `connect-src 'self'` does not match the frame's own origin for a `null`-origin document ("Refused to connect … does not appear in the connect-src directive"); nothing reached the server |
-| form POST to its own path | refused: no request; "Blocked form submission … the 'allow-forms' permission is not set" | refused: no request | refused: no request; the same console line as Chromium |
-| `postMessage` to the parent | allowed: arrived with `event.origin` `"null"` | allowed, `"null"` | allowed, `"null"` |
-| `<script>` from another tincture's path on the origin (`frame-neighbour/neighbour.js`) | allowed: sent without `Origin` (no-cors), ran; no CSP report | allowed, ran | allowed, ran |
-| module script of its own (`module.js`) | allowed: sent with `Origin: null` (cors), ran; no CSP report | allowed, as Chromium | allowed, as Chromium |
-| Worker from a `blob:` URL | refused: CSP `worker-src` falls back to `script-src 'self' 'nonce-…'`; the worker's error event | refused: CSP `worker-src` | refused: CSP `worker-src` |
-| `WebAssembly.instantiate` of the smallest module | refused: `CompileError`, `script-src` lacks `'wasm-unsafe-eval'`; CSP report `script-src` | refused: `CompileError` "blocked by CSP"; CSP report `script-src` | refused: `CompileError` naming `'unsafe-eval'` or `'wasm-unsafe-eval'`; no CSP report event |
-| fetch of an asset answered 302 to another asset | allowed when the 302 carries `access-control-allow-origin: *` (followed, `redirected: true`, readable); refused when the 302 carries no CORS header; the server's own 302 (`/chat` to `/login`) refused the same way, neither answer carrying the header | as Chromium | refused before sending, all three: CSP `connect-src`, as the plain fetch |
-
-What the rows mean for rules frozen against them: a sandboxed frame without
-`allow-same-origin` is a `null` origin to every browser, so any data request
-it makes is cross-origin and needs an explicit CORS answer, and WebKit
-refuses it earlier still through `connect-src 'self'`; scripts from any path
-of the origin run under `script-src 'self'` in all three, including another
-tincture's; `worker-src` and WebAssembly are closed by today's `script-src`;
-forms are closed by the sandbox; messages to the parent arrive with origin
-`"null"`, so the parent cannot tell one frame from another by origin.
+A frame sandboxed without `allow-same-origin` is a `null` origin to every
+browser, so every data request it makes is cross-origin and needs an
+explicit CORS answer. Under a page policy of `connect-src 'self'`, WebKit
+refuses such a frame's fetch of its own asset before sending it: CSP
+`connect-src 'self'` does not match the frame's own origin for a
+`null`-origin document ("Refused to connect … does not appear in the
+connect-src directive"), where Chromium and Firefox send the request with
+`Origin: null`. Under a `script-src 'self' 'nonce-…'` with no `worker-src`,
+a Worker from a `blob:` URL is refused in all three, and
+`WebAssembly.instantiate` throws `CompileError` where `script-src` lacks
+`'wasm-unsafe-eval'`. The rules (`Compendium.Tincture.Rules`) therefore
+name the site origin in `connect-src` and open blob workers and
+WebAssembly; what a frame then may do is the table below.
 
 ## Frame facts through the shell
 
@@ -290,7 +268,7 @@ written by each run, holds every request, message, CSP report and console
 line behind a row. Each column names the browser version the facts were
 observed in.
 
-| Attempt | Chromium 153 | Firefox 155 | WebKit 26.6 |
+| Attempt | Chromium 156 | Firefox 157 | WebKit 27.2 |
 |---|---|---|---|
 | self-navigation (`location.assign` to its own page) | allowed: the frame loaded its page again | allowed | allowed |
 | fetch of its own asset (`asset.json`) | allowed: sent with `Origin: null`, answered 200, readable (`type: cors`) | allowed, as Chromium | allowed, as Chromium (`connect-src` names the site origin) |

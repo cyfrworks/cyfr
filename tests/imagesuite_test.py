@@ -177,10 +177,9 @@ class Teardown(unittest.TestCase):
         self.assertIn("attempt 2 of 3", process.stderr.read())
 
     def test_a_down_that_always_fails_keeps_the_stack_and_fails_the_run(self):
-        # Sol's fault probe (assessment 2026-10-17, Sol-5): the daemon does
-        # not answer the teardown. The stack stays registered with its
-        # project directory, the run ends with the FAIL named, and the exit
-        # hook's retries do not turn it into a pass.
+        # A daemon that does not answer the teardown: the stack stays
+        # registered with its project directory, the run ends with the FAIL
+        # named, and the exit hook's retries do not turn it into a pass.
         process, paths, calls = self.suite(body="returns", failing="always")
         stderr = process.stderr.read()
         self.assertNotEqual(process.wait(timeout=30), 0)
@@ -204,9 +203,9 @@ class Teardown(unittest.TestCase):
 
 class FailedDown(unittest.TestCase):
     def test_a_failed_down_stays_registered_with_its_directory(self):
-        # Sol's probe in process: a down whose compose exits 1 every time
-        # keeps the stack for the exit hook to retry, with the project
-        # directory whose .env compose reads.
+        # In process: a down whose compose exits 1 every time keeps the
+        # stack for the exit hook to retry, with the project directory
+        # whose .env compose reads.
         sys.path.insert(0, TESTS)
         self.addCleanup(sys.path.remove, TESTS)
         import imagesuite

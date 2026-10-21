@@ -391,9 +391,11 @@ grep -q 'exit 0$' "$scratch/sparse" || fail 'a run with partitions not started d
 [ -s "$TRACE/mix-calls" ] || fail 'no Mix call was traced'
 [ ! -e "$TRACE/mix-calls-with-build-lock" ] || fail "Mix ran with its build lock on: $(sort -u "$TRACE/mix-calls-with-build-lock" | tr '\n' ' ')"
 
-# Report through the public runner with actual tracked fixture indexes. The
-# early diagnostic payloads lie beyond the existing failure tail; these checks
-# concern the added projection, not the raw tail's pre-existing exposure.
+# The failure report through the public runner, against fixtures whose git
+# indexes are tracked. A case's diagnostic payloads (the SENTINEL lines)
+# come early in the partition's output, before the failure tail the report
+# prints raw: the checks read what the report projects from them (the
+# location, the header counts) and hold that no payload is printed.
 real_git=$(command -v git)
 real_awk=$(command -v awk)
 export REAL_GIT="$real_git" REAL_AWK="$real_awk"
@@ -863,8 +865,9 @@ done
 grep -qF "a stopped run kept its directory and its partitions' disposable database URLs: $killed_dir" "$scratch/after-kill" ||
   fail 'the next run did not name the killed run'
 
-# Eight TERM-resistant partition leaders are stopped together: within C1's
-# 45 s bound for `contain_stop_all 30`, not one after another (8 x 30 s).
+# Eight TERM-resistant partition leaders are stopped together: within the
+# GRACE_S + 15 s that `contain_stop_all 30` returns in (scripts/lib/contain.sh),
+# not one after another (8 x 30 s).
 : > "$TRACE/resistant-leaders"
 TERM_RESISTANT=1 "${clean[@]}" bash "$runner" -n 8 >"$scratch/resistant" 2>&1 &
 resistant=$!
@@ -924,7 +927,7 @@ for ((i=1; i<=8; i++)); do
 done
 echo "eight hung drops stopped ${took}s after the partitions ended"
 
-# The build path (C7): PostgreSQL's own without an explicit one, Mix's
+# The build path: PostgreSQL's own without an explicit one, Mix's
 # default for SQLite, and an explicit one kept on both.
 for adapter in sqlite postgres; do
   case "$adapter" in sqlite) expected=unset ;; postgres) expected=_build/test_pg ;; esac

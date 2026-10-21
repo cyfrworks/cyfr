@@ -38,7 +38,6 @@ env:
   # time a fresh lock directory is taken, and a runner starts every one
   # fresh. One Mix process at a time builds here, so the lock is off.
   MIX_OS_CONCURRENCY_LOCK: 0
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
   dialyzer:
     name: Specs agree with the code

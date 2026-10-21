@@ -158,7 +158,7 @@ project_new() {
   cp "$ROOT/apps/locus/keeper/seccomp/keeper.json" "$WORK/$project/keeper.seccomp.json"
   sed -e "s|^CYFR_PORT=.*|CYFR_PORT=$port|" -e 's|^CYFR_LOCUS_BUILDS_URL=.*|CYFR_LOCUS_BUILDS_URL=|' \
     "$ROOT/.env.example" >"$WORK/$project/.env.example"
-  printf '%s\n' "CYFR_AUTO_MIGRATE=true" "PROOF_APP_IMAGE=$IMAGE" "PROOF_TAILSCALE_IMAGE=$STANDIN_IMAGE" \
+  printf '%s\n' "CYFR_AUTO_MIGRATE=on" "PROOF_APP_IMAGE=$IMAGE" "PROOF_TAILSCALE_IMAGE=$STANDIN_IMAGE" \
     >>"$WORK/$project/.env.example"
   grep -qx "CYFR_PORT=$port" "$WORK/$project/.env.example" || fail "the template names no CYFR_PORT to set"
 }

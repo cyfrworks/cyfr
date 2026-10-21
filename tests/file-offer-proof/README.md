@@ -110,24 +110,3 @@ frees", and `apps/arca/test/arca/file_offers_test.exs`'s "copies each file
 into the sender's snapshot, under the sender's cap, until it ends". This
 proof's cell sets no storage cap, so it shows what the cap counts, never a
 refusal.
-
-## Declared coverage limit
-
-The unchanged shipped model artifact → production
-`Opus.Host.AttachedFetch` → local provider stand-in composition is
-**uncovered**. The current artifacts hard-code provider HTTPS origins
-(`seed/components/catalysts/local/openai/1.3.1/src/src/lib.rs:14` and its
-peers); `Opus.Host.Egress.pin/3` has a resolver option which the actual
-host never passes (`apps/cyfr/lib/opus/host/egress.ex:94`). The
-existing suites found in `seed_model_catalysts_test.exs`,
-`model_contract_test.exs`, `TwoServices`, `tests/locus-runtime-image/` and
-`Sanctum.Test.Resolver` do not provide an end-to-end local
-replacement for that production path. `tests/locus-runtime-image/runners.py`'s
-scenario `shipped_model_attached_request` exercises the shipped artifact
-with a scripted host; `attached_fetch_test.exs` and `model_contract_test.exs`
-exercise production attachment with controlled fixture guests. Neither is
-reported as the full composition, and this proof starts no runner and
-sends no request to a provider. No live provider account or credentials,
-TLS bypass, endpoint parameter or new resolver/transport override is used.
-This is an explicit test-coverage limitation, not a claim that the
-composition passed.
