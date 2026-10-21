@@ -937,9 +937,6 @@ defmodule Locus.DirectLauncher.Runner do
   def refusal(_reason),
     do: %{reason: "spawn_failed", message: "a runner could not be started on this machine"}
 
-  @impl Locus.Runtime.Keeper
-  def stats, do: :unknown
-
   # ---------------------------------------------------------------------------
   # The janitor
   # ---------------------------------------------------------------------------

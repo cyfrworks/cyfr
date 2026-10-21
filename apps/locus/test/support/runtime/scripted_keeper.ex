@@ -111,9 +111,6 @@ defmodule Locus.Runtime.Test.ScriptedKeeper do
   def release(%{keeper: keeper, ref: ref}, grace_ms),
     do: GenServer.cast(keeper, {:release, ref, grace_ms})
 
-  @impl Locus.Runtime.Keeper
-  def stats, do: :unknown
-
   @doc "Every runner spawned through `keeper`, newest first: `%{ref, spec, runner, owner}`."
   @spec spawns(atom()) :: [map()]
   def spawns(keeper), do: GenServer.call(keeper, :spawns)

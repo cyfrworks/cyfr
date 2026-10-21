@@ -95,10 +95,6 @@ defmodule Locus.Runtime.Keeper.Channel do
   def start_link(opts \\ []),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
 
-  @doc "The uid pool a runner is spawned in."
-  @spec pool() :: String.t()
-  def pool, do: @pool
-
   @impl Locus.Runtime.Keeper
   def available(true = _inherited?, _opts), do: :ok
 
@@ -172,23 +168,6 @@ defmodule Locus.Runtime.Keeper.Channel do
   def refusal(_reason),
     do: %{reason: "refused", message: "cyfr-locus refused to start a runner"}
 
-  @impl Locus.Runtime.Keeper
-  def stats, do: stats(__MODULE__)
-
-  @doc "`stats/0` through the adapter `server`."
-  @spec stats(GenServer.server()) ::
-          {:ok,
-           %{size: non_neg_integer(), free: non_neg_integer(), quarantined: non_neg_integer()}}
-          | :unknown
-  def stats(server) do
-    with {:ok, client, _bound} <- client(server),
-         {:ok, stats} <- Locus.Keeper.pool_stats(client, @pool) do
-      {:ok, stats}
-    else
-      _failed -> :unknown
-    end
-  end
-
   defp client(adapter) do
     GenServer.call(adapter, :client)
   catch
@@ -198,7 +177,7 @@ defmodule Locus.Runtime.Keeper.Channel do
   defp answer(:ok), do: :ok
   defp answer({:error, reason}), do: {:error, failure(reason)}
 
-  # The client's failures as the runtime has always named them.
+  # The client's failures in the runtime's names for them.
   defp failure({:launcher_unavailable, :channel_lost}), do: {:spawn_failed, :channel_lost}
   defp failure({:launcher_unavailable, kind}), do: {:keeper_unavailable, kind}
   defp failure(:unknown_spawn), do: :unknown_runner

@@ -369,16 +369,6 @@ defmodule Locus.Runtime.KeeperChannelTest do
     assert_receive {RunnerProcess, ^handle, {:refused, "capacity"}}, 5_000
   end
 
-  test "the pool's stats are asked of the keeper and answered", %{keeper: keeper, name: name} do
-    test = self()
-    spawn_link(fn -> send(test, {:stats, Channel.stats(name)}) end)
-    assert %{"v" => 1, "type" => "pool", "id" => id, "pool" => "runner"} = request(keeper)
-
-    reply(keeper, %{v: 1, type: "pool", id: id, pool: "runner", size: 8, free: 7, quarantined: 0})
-
-    assert_receive {:stats, {:ok, %{size: 8, free: 7, quarantined: 0}}}, 5_000
-  end
-
   test "the channel's loss reaches every handle and ends the client", %{
     keeper: keeper,
     name: name,
