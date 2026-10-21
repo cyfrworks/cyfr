@@ -204,8 +204,20 @@ defmodule Aqua.Providers.ApprovalTest do
       assert message =~ "ISO 8601"
     end
 
-    assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
-             resolve.(%{"decision" => "approve", "scope" => "thread", "lifecycle" => "forever"})
+    # A bound outside its declared shape is refused by the gate's cast of
+    # the declaration, before the provider reads it.
+    for {extra, field} <- [
+          {%{"lifecycle" => "forever"}, "'lifecycle'"},
+          {%{"until" => 1_900_000_000}, "'until'"},
+          {%{"sources" => "web"}, "'sources'"},
+          {%{"sources" => ["web"]}, "'sources[0]'"},
+          {%{"constraint" => %{"kind" => "storage_path"}}, "constraint.patterns"}
+        ] do
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, message}}} =
+               resolve.(Map.merge(%{"decision" => "approve", "scope" => "thread"}, extra))
+
+      assert message =~ field
+    end
 
     assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
   end
@@ -226,12 +238,15 @@ defmodule Aqua.Providers.ApprovalTest do
 
     assert msg =~ "approve takes scope"
 
-    assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, _}}} =
+    # A decision outside the declared enum is the gate's cast's refusal.
+    assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, msg}}} =
              Sanctum.Gate.call_external("approval", ctx, %{
                "action" => "resolve",
                "approval" => approval.id,
                "decision" => "maybe"
              })
+
+    assert msg =~ "'decision'"
 
     assert {:error, {:not_found, "approval", "apr_nothing"}} =
              Sanctum.Gate.call_external("approval", ctx, %{

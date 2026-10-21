@@ -531,8 +531,7 @@ defmodule Emissary.External.ProviderTest do
       for {config, fragment} <- [
             {Map.put(@stdio_config, "url", "https://x/mcp"), "no url"},
             {Map.put(@stdio_config, "headers", %{}), "no headers"},
-            {%{"url" => "https://x/mcp", "backends" => []}, "no backends"},
-            {Map.put(@stdio_config, "transport", "ws"), "Unknown transport"}
+            {%{"url" => "https://x/mcp", "backends" => []}, "no backends"}
           ] do
         assert {:error, {:invalid_argument, message}} =
                  Provider.handle("mcp_servers", ctx, %{
@@ -543,6 +542,19 @@ defmodule Emissary.External.ProviderTest do
 
         assert message =~ fragment
       end
+    end
+
+    test "name a transport the declaration enumerates, and the gate refuses another",
+         %{ctx: ctx} do
+      assert {:error, %Prima.Refusal{stage: :admission, reason: {:invalid_argument, message}}} =
+               Sanctum.Gate.call_external("mcp_servers", Sanctum.TestContext.local(:api), %{
+                 "action" => "create",
+                 "name" => "piped",
+                 "config" => Map.put(@stdio_config, "transport", "ws")
+               })
+
+      assert message =~ "config.transport"
+      assert {:error, :not_found} = Arca.McpServerStorage.get(Sanctum.Context.actor(ctx), "piped")
     end
 
     test "restart is for an enabled stdio server only", %{ctx: ctx} do

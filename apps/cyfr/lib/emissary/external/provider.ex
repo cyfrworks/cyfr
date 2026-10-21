@@ -94,8 +94,9 @@ defmodule Emissary.External.Provider do
   end
 
   # The gate casts the arguments against `definition/0` first
-  # (`Prima.Operation.cast/2`): the action is one this tool declares, and
-  # every required argument is present and of its declared type.
+  # (`Prima.Operation.cast/2`): the action is one this tool declares,
+  # every required argument is present and of its declared type, and an
+  # enumerated one, a config's transport among them, holds one of its values.
   @impl true
   def handle("mcp_servers", %Context{} = ctx, %{"action" => action} = args),
     do: dispatch(action, ctx, args)
@@ -446,9 +447,6 @@ defmodule Emissary.External.Provider do
         end
     end
   end
-
-  defp transport_args(_ctx, _other, _config),
-    do: {:error, {:invalid_argument, "Unknown transport — use http or stdio"}}
 
   defp stdio_available do
     cond do
