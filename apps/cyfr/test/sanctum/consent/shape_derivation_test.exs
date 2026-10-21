@@ -495,6 +495,8 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
                Compendium.Registry.get(ctx, "spoof", "1.0.0", "local", "formula")
 
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      digest = "sha256:" <> String.duplicate("5", 64)
+      {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
 
       assert {:ok, _} =
                Arca.ComponentStorage.insert_component(Sanctum.Context.actor(ctx), %{
@@ -506,7 +508,8 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
                  tags: "[]",
                  category: "test",
                  license: "MIT",
-                 digest: "sha256:" <> String.duplicate("5", 64),
+                 digest: digest,
+                 release_digest: release_digest,
                  size: byte_size(@wasm),
                  exports: "[]",
                  manifest: Jason.encode!(manifest),

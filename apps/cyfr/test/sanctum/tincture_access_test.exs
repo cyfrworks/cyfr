@@ -143,6 +143,7 @@ defmodule Sanctum.TinctureAccessTest do
         description: "Public Dashboard",
         tags: "[]",
         digest: "sha256:test_pub",
+        release_digest: release_digest!("sha256:test_pub", pub_manifest),
         size: 100,
         exports: "[]",
         manifest: Jason.encode!(pub_manifest),
@@ -163,6 +164,7 @@ defmodule Sanctum.TinctureAccessTest do
         description: "Private Dashboard",
         tags: "[]",
         digest: "sha256:test_priv",
+        release_digest: release_digest!("sha256:test_priv", priv_manifest),
         size: 100,
         exports: "[]",
         manifest: Jason.encode!(priv_manifest),
@@ -301,6 +303,8 @@ defmodule Sanctum.TinctureAccessTest do
             description: name,
             tags: "[]",
             digest: "sha256:test_#{name}",
+            # Whatever the stored manifest, the row records a release.
+            release_digest: release_digest!("sha256:test_#{name}", %{}),
             size: 100,
             exports: "[]",
             manifest: stored,
@@ -513,5 +517,10 @@ defmodule Sanctum.TinctureAccessTest do
       assert {:error, :unavailable} = TinctureAccess.public_context("acme")
       assert {:error, :unavailable} = TinctureAccess.public_context("@acme")
     end
+  end
+
+  defp release_digest!(digest, manifest) do
+    {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
+    release_digest
   end
 end

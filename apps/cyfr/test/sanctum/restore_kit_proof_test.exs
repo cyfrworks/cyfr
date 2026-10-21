@@ -151,7 +151,6 @@ defmodule Sanctum.RestoreKitProofTest do
       state: "active",
       registration_digest: Prima.Digest.sha256("reg-#{id}"),
       possession_verified: true,
-      label: "a passkey",
       inserted_at: now,
       updated_at: now
     })
@@ -170,7 +169,6 @@ defmodule Sanctum.RestoreKitProofTest do
       source_kind: "session",
       source_id: "src_#{id}",
       standing: "active",
-      label: "a phone",
       inserted_at: now,
       updated_at: now
     })

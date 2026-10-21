@@ -154,7 +154,6 @@ defmodule Sanctum.Gate.RequestLogTest do
       assert log.status == "error"
       assert log.refusal_class == "forbidden"
       assert log.error == "Not allowed."
-      assert log.error_code == nil
 
       assert %{admission: "refused", refusal_class: "forbidden", reason: "Not allowed."} =
                stored(decision.call_id)
@@ -273,8 +272,6 @@ defmodule Sanctum.Gate.RequestLogTest do
       assert log.status == "error"
       assert log.error == Sanctum.Refusals.render({:not_found, "component", "c1"})
       assert log.duration_ms == 10
-      # The meaning is the class; a JSON-RPC code is a transport's rendering.
-      assert log.error_code == nil
 
       assert %{completion: "failed", completion_class: "not_found"} = stored(decision.call_id)
     end
