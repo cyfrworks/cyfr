@@ -23,7 +23,7 @@ defmodule Locus.Runtime.StorageHandlerTest do
     {:ok, host: host, client: ScriptedHost.attempt!(host, component_ref: @ref).client}
   end
 
-  defp call(client, request, limits \\ nil) do
+  defp call(client, request, limits \\ Prima.Authority.zero_limits()) do
     {:fn, call} =
       StorageHandler.build_storage_imports(limits, client, @ref)["cyfr:storage/files@0.1.0"][
         "call"

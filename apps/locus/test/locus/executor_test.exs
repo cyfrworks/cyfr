@@ -4,9 +4,8 @@
 defmodule Locus.ExecutorTest do
   @moduledoc """
   Which executor a build runs under, and that the unisolated one is the
-  test build's alone: every build knows the keeper, and only the test
-  build's application environment names a direct launcher, which only its
-  test support compiles.
+  test build's alone: only the test build's application environment names
+  a direct launcher, which only its test support compiles.
   """
 
   # One case replaces the application environment the launcher is named by.
@@ -18,8 +17,7 @@ defmodule Locus.ExecutorTest do
   @lib Path.expand("../../lib/locus", __DIR__)
   @mix_exs Path.expand("../../mix.exs", __DIR__)
 
-  test "every build knows the keeper alone; this one, the test build, picks its direct launcher without a keeper" do
-    assert Executor.executors() == [Locus.Keeper]
+  test "the test build picks its direct launcher without a keeper" do
     refute Locus.Keeper.running?()
     assert Executor.direct_launcher() == Locus.DirectLauncher
     assert Executor.executor() == {:ok, Locus.DirectLauncher}
@@ -33,7 +31,6 @@ defmodule Locus.ExecutorTest do
         Application.put_env(:locus, :direct_launcher, name)
         assert Executor.direct_launcher() == nil
         assert Executor.executor() == {:error, :no_keeper}
-        assert Executor.launcher() == {:error, :no_keeper}
       end
     after
       Application.put_env(:locus, :direct_launcher, previous)

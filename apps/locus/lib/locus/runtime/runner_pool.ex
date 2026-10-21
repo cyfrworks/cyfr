@@ -38,9 +38,7 @@ defmodule Locus.Runtime.RunnerPool do
   bound is dropped as gone, with an error naming it, and its assignee, if
   it still had one, hears `{:gone, :retire_bound}`: what is left of its
   process is its keeper's to end, and the pool stops waiting for a report
-  that is not coming. `retire_busy/2` taints every busy runner
-  with no grace and answers once none is left being ended, keeping the
-  fresh and idle ones pooled. A keeper that fails takes the pool with it
+  that is not coming. A keeper that fails takes the pool with it
   through their common supervisor, and every busy runner's assignee
   hears `{:gone, _}` first.
 
@@ -69,15 +67,6 @@ defmodule Locus.Runtime.RunnerPool do
   @retire_bound_ms 10_000
   @max_backoff_ms 30_000
 
-  @typedoc "One runner as the pool sees it."
-  @type runner :: %{
-          pid: pid(),
-          id: String.t(),
-          state: :spawning | :fresh | :idle | :busy | :tainted | :retiring,
-          athanor: String.t() | nil,
-          execution_id: String.t() | nil
-        }
-
   @doc false
   def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
 
@@ -93,9 +82,9 @@ defmodule Locus.Runtime.RunnerPool do
   def start_link(opts),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
 
-  @doc "Serve `service` (`%{service_id, boot, host_url}`), telling `assignee` what busy runners report; the pool fills."
+  @doc "Serve `service` (`%{service_id, boot}`), telling `assignee` what busy runners report; the pool fills."
   @spec serve(GenServer.server(), map(), pid()) :: :ok
-  def serve(pool, %{service_id: _, boot: _, host_url: _} = service, assignee)
+  def serve(pool, %{service_id: _, boot: _} = service, assignee)
       when is_pid(assignee),
       do: GenServer.call(pool, {:serve, service, assignee})
 
@@ -115,20 +104,6 @@ defmodule Locus.Runtime.RunnerPool do
   @spec taint(GenServer.server(), pid(), non_neg_integer()) :: :ok
   def taint(pool, pid, grace_ms) when is_pid(pid) and is_integer(grace_ms) and grace_ms >= 0,
     do: GenServer.call(pool, {:taint, pid, grace_ms})
-
-  @doc """
-  Taint every busy runner and end it at once, with no grace, and answer
-  once every runner being ended has been retired by the keeper or dropped
-  at the retirement bound, so the answer comes within the bound of the
-  latest kill; fresh and idle runners stay pooled. For a caller that must
-  know no runner of the work it started is left, as a test's end does: a
-  runner still running a subtree could otherwise make its next host call
-  after the caller moved on. Exits if that takes longer than `timeout_ms`,
-  the caller's own.
-  """
-  @spec retire_busy(GenServer.server(), timeout()) :: :ok
-  def retire_busy(pool, timeout_ms \\ 30_000),
-    do: GenServer.call(pool, :retire_busy, timeout_ms)
 
   @doc "Send every busy runner a `cancel_child` for `execution_id`."
   @spec cancel_child(GenServer.server(), String.t()) :: :ok
@@ -157,10 +132,6 @@ defmodule Locus.Runtime.RunnerPool do
         }
   def status(pool), do: GenServer.call(pool, :status)
 
-  @doc "Every runner the pool holds (`t:runner/0`)."
-  @spec runners(GenServer.server()) :: [runner()]
-  def runners(pool), do: GenServer.call(pool, :runners)
-
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -180,8 +151,7 @@ defmodule Locus.Runtime.RunnerPool do
        runners: %{},
        refill_scheduled: false,
        refusal: nil,
-       backoff_ms: @refill_backoff_ms,
-       retirees: []
+       backoff_ms: @refill_backoff_ms
      }}
   end
 
@@ -229,16 +199,6 @@ defmodule Locus.Runtime.RunnerPool do
     end
   end
 
-  def handle_call(:retire_busy, from, state) do
-    state =
-      Enum.reduce(state.runners, state, fn
-        {pid, %{state: :busy} = entry}, state -> taint(state, pid, entry, 0)
-        _runner, state -> state
-      end)
-
-    {:noreply, retired(%{state | retirees: [from | state.retirees]})}
-  end
-
   def handle_call({:cancel_child, to, execution_id}, _from, state) do
     for {pid, %{state: :busy}} <- state.runners, to == :busy or to == pid do
       _ = RunnerProcess.send_message(pid, %{type: :cancel_child, execution_id: execution_id})
@@ -268,25 +228,11 @@ defmodule Locus.Runtime.RunnerPool do
     {:reply, %{runners: counts, memory_bytes: state.memory_bytes, refusal: state.refusal}, state}
   end
 
-  def handle_call(:runners, _from, state) do
-    runners =
-      for {pid, entry} <- state.runners,
-          do: %{
-            pid: pid,
-            id: entry.id,
-            state: entry.state,
-            athanor: entry.athanor,
-            execution_id: entry.execution_id
-          }
-
-    {:reply, runners, state}
-  end
-
   @impl true
   def handle_info({RunnerProcess, pid, event}, state) do
     case state.runners[pid] do
       nil -> {:noreply, state}
-      entry -> {:noreply, retired(on_event(event, pid, entry, state))}
+      entry -> {:noreply, on_event(event, pid, entry, state)}
     end
   end
 
@@ -323,7 +269,7 @@ defmodule Locus.Runtime.RunnerPool do
         state = told(state, pid, entry, {:gone, :retire_bound})
         _ = DynamicSupervisor.terminate_child(state.supervisor, pid)
 
-        {:noreply, retired(refill_later(%{state | runners: Map.delete(state.runners, pid)}))}
+        {:noreply, refill_later(%{state | runners: Map.delete(state.runners, pid)})}
 
       _ ->
         {:noreply, state}
@@ -339,7 +285,7 @@ defmodule Locus.Runtime.RunnerPool do
 
       {entry, runners} ->
         if entry.execution_id, do: tell(state, pid, {:gone, {:handle_down, reason}})
-        {:noreply, retired(refill_later(%{state | runners: runners}))}
+        {:noreply, refill_later(%{state | runners: runners})}
     end
   end
 
@@ -476,19 +422,6 @@ defmodule Locus.Runtime.RunnerPool do
     ref
   end
 
-  # Whoever waits for the busy runners' ends is answered once no runner is
-  # being ended.
-  defp retired(%{retirees: []} = state), do: state
-
-  defp retired(state) do
-    if Enum.any?(state.runners, fn {_pid, e} -> e.state in [:tainted, :retiring] end) do
-      state
-    else
-      for from <- state.retirees, do: GenServer.reply(from, :ok)
-      %{state | retirees: []}
-    end
-  end
-
   defp tell(%{assignee: assignee}, pid, event) when is_pid(assignee),
     do: send(assignee, {__MODULE__, pid, event})
 
@@ -526,7 +459,6 @@ defmodule Locus.Runtime.RunnerPool do
           runner_id: id,
           service_id: service.service_id,
           boot: service.boot,
-          host_url: service.host_url,
           watchdog_grace_ms: state.settings.watchdog_grace_ms
         })
       )

@@ -571,7 +571,7 @@ defmodule Locus.Backends.ServiceTest do
 
         length(children) == named and
           Enum.all?(children, fn {_, pid, _, _} ->
-            byte_size(Backend.status(pid).stderr_tail) >= wanted
+            byte_size(Backend.status(pid, 5_000).stderr_tail) >= wanted
           end)
       end,
       5_000
@@ -639,6 +639,8 @@ defmodule Locus.Backends.ServiceTest do
              "Unsupported protocol version 2025-11-25"},
             {without.(mcp("tools/list"), @capabilities_key), mcp_headers(mcp("tools/list")),
              -32_602, "Missing required #{@capabilities_key}"},
+            {put_in(mcp("tools/list"), ["params", "_meta", @capabilities_key], []),
+             mcp_headers(mcp("tools/list")), -32_602, "#{@capabilities_key} must be an object"},
             {mcp("tools/list"), [{"mcp-protocol-version", version}, {"mcp-method", "tools/call"}],
              -32_020, "Mcp-Method header (tools/call)"},
             {mcp("tools/list"), [{"mcp-protocol-version", version}], -32_020,
@@ -806,7 +808,11 @@ defmodule Locus.Backends.ServiceTest do
     @describetag launcher: :direct
 
     test "is answered, and the owner's secrets are masked in every answered field", ctx do
-      {node, 0} = System.cmd("node", ["-e", "process.stdout.write(process.execPath)"])
+      {node, 0} =
+        System.cmd("node", ["-e", "process.stdout.write(process.execPath)"],
+          env: Locus.Test.ProcessFamily.without_cyfr()
+        )
+
       token = "tok-0123456789abcdef"
       # A value that is also a tool's description, so the catalogue shows it masked.
       description = "Answers its arguments"

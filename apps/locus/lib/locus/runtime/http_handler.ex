@@ -52,7 +52,7 @@ defmodule Locus.Runtime.HttpHandler do
 
   ## Architecture
 
-  Follows the same pattern as `cyfr:vault/read` (see `runtime.ex:267-291`).
+  Follows the same pattern as `cyfr:vault/read` (`Locus.Runtime.Engine`).
   The host function is registered as a Wasmex import that the WASM component
   calls synchronously. All edge checks happen before any network I/O via
   `Locus.Runtime.HttpRequestValidation` — the single validation path shared with
@@ -72,8 +72,6 @@ defmodule Locus.Runtime.HttpHandler do
   alias Locus.Runtime.Egress
   alias Locus.Runtime.HostClient
   alias Locus.Runtime.HttpRequestValidation
-
-  @request_timeout 30_000
 
   # How much longer than the node's timeout the handler waits for the
   # relay's next word, which the relay bounds by that timeout itself.
@@ -194,7 +192,7 @@ defmodule Locus.Runtime.HttpHandler do
   end
 
   defp do_execute(json_request, edge, limits, host, component_ref) do
-    case HttpRequestValidation.validate(json_request, edge, limits, host, component_ref) do
+    case HttpRequestValidation.validate(json_request, edge, limits, host) do
       {:ok, request} ->
         perform_request(request, limits, component_ref, host)
 
@@ -540,9 +538,7 @@ defmodule Locus.Runtime.HttpHandler do
 
   defp note_redirect(_host, _request, _status, _headers), do: :ok
 
-  defp request_timeout(limits) do
-    HttpRequestValidation.timeout_ms(limits, @request_timeout)
-  end
+  defp request_timeout(limits), do: HttpRequestValidation.timeout_ms(limits)
 
   # ============================================================================
   # Private: Response Encoding

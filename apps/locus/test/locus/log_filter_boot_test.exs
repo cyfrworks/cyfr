@@ -128,7 +128,7 @@ defmodule Locus.LogFilterBootTest do
   # The events every handler receives at error level while `fun` runs, and
   # the text the default formatter, with `opts` over it, makes of them.
   defp logged(opts, fun) do
-    id = :"#{__MODULE__}.#{System.unique_integer([:positive])}"
+    id = __MODULE__
     :ok = :logger.add_handler(id, __MODULE__, %{level: :error, config: %{test: self()}})
     on_exit(fn -> :logger.remove_handler(id) end)
 

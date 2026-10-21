@@ -7,8 +7,7 @@ defmodule Locus.Runtime.ComponentTypeTest do
   alias Locus.Runtime.ComponentType
 
   describe "parse/1" do
-    test "parses nil as reagent (default)" do
-      # A missing type is an error, not a reagent.
+    test "a missing type is an error, not a reagent" do
       assert {:error, _} = ComponentType.parse(nil)
     end
 
@@ -18,10 +17,10 @@ defmodule Locus.Runtime.ComponentTypeTest do
       assert {:ok, :formula} = ComponentType.parse("formula")
     end
 
-    test "parses atom types" do
-      assert {:ok, :catalyst} = ComponentType.parse(:catalyst)
-      assert {:ok, :reagent} = ComponentType.parse(:reagent)
-      assert {:ok, :formula} = ComponentType.parse(:formula)
+    test "a type is a string: an atom is refused" do
+      for type <- [:catalyst, :reagent, :formula] do
+        assert {:error, "Invalid component type: " <> _} = ComponentType.parse(type)
+      end
     end
 
     test "returns error for invalid type" do
@@ -30,11 +29,16 @@ defmodule Locus.Runtime.ComponentTypeTest do
       assert msg =~ "catalyst, reagent, formula"
     end
 
-    test "every canonical executable type round-trips as string and atom" do
+    test "every canonical executable type parses, and the canonical list is the typespec's" do
+      # The typespec is hand-written (`:catalyst | :reagent | :formula`)
+      # beside a derived value list. A new executable type in
+      # Prima.ComponentRef fails this literal until both the assertion and
+      # the typespec are updated, so the spec cannot go silently stale.
+      assert Prima.ComponentRef.executable_types() == ~w(catalyst reagent formula)
+
       for type <- Prima.ComponentRef.executable_types() do
         atom = String.to_existing_atom(type)
         assert {:ok, ^atom} = ComponentType.parse(type)
-        assert {:ok, ^atom} = ComponentType.parse(atom)
       end
     end
   end
@@ -73,34 +77,6 @@ defmodule Locus.Runtime.ComponentTypeTest do
         assert opts.args == []
         assert opts.env == %{}
       end
-    end
-
-    test "unknown type defaults to nil (secure)" do
-      assert ComponentType.wasi_options(:unknown) == nil
-    end
-  end
-
-  describe "valid?/1" do
-    test "returns true for valid types" do
-      assert ComponentType.valid?(:catalyst)
-      assert ComponentType.valid?(:reagent)
-      assert ComponentType.valid?(:formula)
-    end
-
-    test "returns false for invalid types" do
-      refute ComponentType.valid?(:unknown)
-      refute ComponentType.valid?(:invalid)
-    end
-  end
-
-  describe "valid_types/0" do
-    test "returns list of valid types" do
-      # Also the @type t pin: the typespec is hand-written (`:catalyst |
-      # :reagent | :formula`) beside a derived value list. A new executable
-      # type in Prima.ComponentRef fails this literal until BOTH the
-      # assertion and the typespec are updated — the spec cannot go silently
-      # stale.
-      assert ComponentType.valid_types() == [:catalyst, :reagent, :formula]
     end
   end
 end

@@ -73,12 +73,6 @@
   # deadline/1 adds a platform setting typed term(), so Dialyzer types the
   # sum as number(); the settings roster parses both lifetimes as integers.
   {"lib/cyfr_web/sse.ex", :missing_range},
-  # Wasmex.Components.Store declares no t/0 type; the spec names the store
-  # struct the cache compiles with, and Dialyzer reads it as any().
-  {"lib/locus/runtime/component_cache.ex", :unknown_type},
-  # `Prima.GuestError.render(reason) || "The call failed."` never answers
-  # nil; Dialyzer does not narrow nil out of the `||`'s other branch.
-  {"lib/locus/runtime/formula_handler.ex", :missing_range},
   # The provider is configured as a module atom; the clause for a value of
   # another kind refuses a misconfiguration instead of crashing the
   # callback.

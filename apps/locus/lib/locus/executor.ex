@@ -12,7 +12,7 @@ defmodule Locus.Executor do
   command sees. `Locus.Keeper` runs the command through cyfr-locus: under
   a pooled uid, inside the memory bound the builder runs every build under
   (`Locus.Config.memory_bytes/0`), and it is the one executor of every
-  build (`executors/0`). The suites run a real toolchain on a machine
+  build. The suites run a real toolchain on a machine
   without cyfr-locus through a launcher of their own, compiled from the
   test support alone and named by the test build's application
   environment (`direct_launcher/0`): no release and no development node
@@ -65,10 +65,6 @@ defmodule Locus.Executor do
 
   @callback run(command(), opts()) :: {:ok, outcome()} | {:error, error()}
 
-  @doc "The executors every build knows: the keeper's client alone."
-  @spec executors() :: [module()]
-  def executors, do: [Locus.Keeper]
-
   @doc """
   The launcher the test build runs builds and long-lived processes through
   when no cyfr-locus channel was inherited, or `nil`.
@@ -90,10 +86,11 @@ defmodule Locus.Executor do
   end
 
   @doc """
-  The executor builds run with: the keeper's client when it is running,
-  the test build's direct launcher otherwise where it has one, and
-  `{:error, :no_keeper}` everywhere else. A build is never run outside
-  cyfr-locus by a release.
+  The executor builds run with, and the `Locus.Launcher` a long-lived
+  process is launched with: the keeper's client when it is running, the
+  test build's direct launcher otherwise where it has one, and
+  `{:error, :no_keeper}` everywhere else. Neither a build nor a long-lived
+  process is ever run outside cyfr-locus by a release.
   """
   @spec executor() :: {:ok, module()} | {:error, :no_keeper}
   def executor do
@@ -103,15 +100,6 @@ defmodule Locus.Executor do
       true -> {:error, :no_keeper}
     end
   end
-
-  @doc """
-  The `Locus.Launcher` a long-lived process is launched with, by the rule
-  `executor/0` follows: the keeper's client when it runs, the test
-  build's direct launcher otherwise where it has one, and
-  `{:error, :no_keeper}` everywhere else.
-  """
-  @spec launcher() :: {:ok, module()} | {:error, :no_keeper}
-  def launcher, do: executor()
 
   @doc """
   End the run `pid` is in the middle of, or starts next: everything the

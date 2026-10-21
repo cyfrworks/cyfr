@@ -20,7 +20,7 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
 
   import Prima.Test.Wait
 
-  alias Locus.Runtime.Test.ScriptedHost
+  alias Locus.Runtime.Test.{Runners, ScriptedHost}
   alias Locus.Runtime.{RunnerPool, RunnerProcess, WorkerService}
 
   @moduletag timeout: 90_000
@@ -77,7 +77,7 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
   defp runners, do: elem(WorkerService.status(), 1).runners
 
   defp busy_runner do
-    RunnerPool |> RunnerPool.runners() |> Enum.find(&(&1.state == :busy))
+    RunnerPool |> Runners.runners() |> Enum.find(&(&1.state == :busy))
   end
 
   defp os_pid(%{pid: pid}), do: RunnerProcess.info(pid).os_pid
@@ -85,17 +85,20 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
   # The pool's one runner once it has attached, before any take.
   defp fresh_runner! do
     wait_until(
-      fn -> match?([%{state: :fresh}], RunnerPool.runners(RunnerPool)) end,
+      fn -> match?([%{state: :fresh}], Runners.runners(RunnerPool)) end,
       @boot_ms,
       "the pool's runner to attach"
     )
 
-    [runner] = RunnerPool.runners(RunnerPool)
+    [runner] = Runners.runners(RunnerPool)
     runner
   end
 
   defp alive?(os_pid) do
-    case System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true) do
+    case System.cmd("kill", ["-0", Integer.to_string(os_pid)],
+           stderr_to_stdout: true,
+           env: Locus.Test.ProcessFamily.no_env()
+         ) do
       {_, 0} -> true
       _ -> false
     end
@@ -318,7 +321,7 @@ defmodule Locus.Runtime.RunnerBoundaryTest do
     wait_until(fn -> ScriptedHost.requests(host, "attach") != [] end, @boot_ms)
     wait_until(fn -> busy_runner() != nil end)
 
-    os_pids = for runner <- RunnerPool.runners(RunnerPool), pid = os_pid(runner), do: pid
+    os_pids = for runner <- Runners.runners(RunnerPool), pid = os_pid(runner), do: pid
     assert os_pids != []
 
     Process.exit(Process.whereis(Locus.DirectLauncher.Runner), :kill)

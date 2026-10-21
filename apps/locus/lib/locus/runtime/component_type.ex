@@ -56,9 +56,8 @@ defmodule Locus.Runtime.ComponentType do
 
   ## Wasmex Behavior
 
-  When `WasiP2Options` is provided (even with `allow_http: false`), Wasmtime
-  internally enables clocks, random, and other base WASI interfaces. When `nil`
-  is passed, NO WASI is available at all.
+  `WasiP2Options` (even with `allow_http: false`) has Wasmtime enable clocks,
+  random, and the other base WASI interfaces.
 
   ## Security Model
 
@@ -86,13 +85,12 @@ defmodule Locus.Runtime.ComponentType do
   alias Wasmex.Wasi.WasiP2Options
 
   # Hand-written because a typespec cannot derive from a runtime list; a
-  # test pins it to @valid_types so a new executable type fails loudly here
-  # instead of leaving the spec silently stale.
+  # test pins the canonical type list to it, so a new executable type fails
+  # loudly there instead of leaving the spec silently stale.
   @type t :: :catalyst | :reagent | :formula
 
-  # Both the string and atom parse paths derive from the canonical type
-  # list, so a new executable type added there is accepted here without a
-  # second edit.
+  # Parsing derives from the canonical type list, so a new executable type
+  # added there is accepted here without a second edit.
   @valid_type_strings Prima.ComponentRef.executable_types()
   @valid_types Enum.map(@valid_type_strings, &String.to_atom/1)
 
@@ -101,12 +99,9 @@ defmodule Locus.Runtime.ComponentType do
 
   Returns `{:ok, atom}` or `{:error, reason}`.
   """
-  # No nil clause: a missing type is not a reagent. Every caller either
-  # guards on `is_binary/1` or decides its own default, so inventing one
-  # here only hid the question.
-  @spec parse(String.t() | atom()) :: {:ok, t()} | {:error, String.t()}
-  def parse(type) when type in @valid_types, do: {:ok, type}
-
+  # A missing type is an error, not a reagent: the one caller parses the
+  # type its assignment carries, and there is no default to invent here.
+  @spec parse(String.t()) :: {:ok, t()} | {:error, String.t()}
   def parse(type) when type in @valid_type_strings,
     do: {:ok, String.to_existing_atom(type)}
 
@@ -139,24 +134,20 @@ defmodule Locus.Runtime.ComponentType do
   """
   # Every executable type gets the same sandbox: `allow_http: false`, because
   # egress goes through the host function where the edge is enforced, never
-  # through `wasi:http`. Three identical clauses invited the reading that the
-  # types differ here. They do not.
+  # through `wasi:http`. The types do not differ here.
   #
-  # The guest gets no host environment. This took an `env` argument that
-  # defaulted to `%{}` and that the one caller never passed — a lever for
-  # putting host environment variables inside the sandbox, with no caller
-  # and no test, sitting on the module whose job is to say what the sandbox
-  # allows.
+  # The guest gets no host environment: nothing puts host environment
+  # variables inside the sandbox.
   #
-  # Nor does it get the host's stdout/stderr. Inheriting them handed every
-  # guest — reagents included, whose whole definition is compute with no I/O —
-  # an unbounded write straight into the operator's console and log
-  # aggregation: no `Prima.SecretMasker`, no emit rate limit, no emit size cap,
-  # and a trivial way to fill a disk. `wasmex`'s WASI options are inherit-or-
-  # nothing (there is no capture pipe to point somewhere safe), so this is
-  # `false`. A component that wants to say something says it through `emit`,
-  # which is bounded, masked, sequenced and attributable.
-  @spec wasi_options(t()) :: WasiP2Options.t() | nil
+  # Nor does it get the host's stdout/stderr. Inheriting them would hand
+  # every guest — reagents included, whose whole definition is compute with
+  # no I/O — an unbounded write straight into the operator's console and log
+  # aggregation: no `Prima.SecretMasker`, no emit rate limit, no emit size
+  # cap, and a trivial way to fill a disk. `wasmex`'s WASI options are
+  # inherit-or-nothing (there is no capture pipe to point somewhere safe),
+  # so this is `false`. A component that wants to say something says it
+  # through `emit`, which is bounded, masked, sequenced and attributable.
+  @spec wasi_options(t()) :: WasiP2Options.t()
   def wasi_options(type) when type in @valid_types do
     %WasiP2Options{
       allow_http: false,
@@ -167,18 +158,4 @@ defmodule Locus.Runtime.ComponentType do
       env: %{}
     }
   end
-
-  def wasi_options(_), do: nil
-
-  @doc """
-  Returns the list of valid component types.
-  """
-  @spec valid_types() :: [t()]
-  def valid_types, do: @valid_types
-
-  @doc """
-  Check if a type is valid.
-  """
-  @spec valid?(atom()) :: boolean()
-  def valid?(type), do: type in @valid_types
 end

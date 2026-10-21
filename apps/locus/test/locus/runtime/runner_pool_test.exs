@@ -26,24 +26,22 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
   alias Prima.RunnerControl
   alias Locus.Runtime.{RunnerPool, RunnerProcess}
-  alias Locus.Runtime.Test.{ScriptedHost, ScriptedKeeper}
+  alias Locus.Runtime.Test.{Runners, ScriptedHost, ScriptedKeeper}
 
-  @service %{service_id: "wrk_local", boot: "boot_pool", host_url: "http://127.0.0.1:9"}
+  @service %{service_id: "wrk_local", boot: "boot_pool"}
 
   defp start_pool!(keeper, overrides) do
     {:ok, defaults} = Locus.Runtime.Settings.pool([], %{})
     {keeper_opts, overrides} = Keyword.pop(overrides, :keeper_opts, [])
     {pool_opts, overrides} = Keyword.split(overrides, [:retire_bound_ms])
     settings = Map.merge(defaults, Map.new(overrides))
-    unique = System.unique_integer([:positive])
-    supervisor = :"pool_runners_#{unique}"
-    start_supervised!({DynamicSupervisor, name: supervisor, strategy: :one_for_one})
+    supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
 
     # The command's env carries the keeper's name to the scripted keeper.
     start_supervised!(
       {RunnerPool,
        [
-         name: :"pool_#{unique}",
+         name: nil,
          settings: settings,
          keeper: ScriptedKeeper,
          keeper_opts: keeper_opts,
@@ -149,7 +147,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
   end
 
   setup do
-    keeper = ScriptedKeeper.start!()
+    keeper = ScriptedKeeper.start!(__MODULE__.Keeper)
     {:ok, keeper: keeper}
   end
 
@@ -229,7 +227,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     wait_until(fn -> counts(pool).idle == 1 end)
 
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 0, busy: 0, tainted: 0} end, 2_000)
-    wait_until(fn -> Enum.count(RunnerPool.runners(pool)) == 1 end)
+    wait_until(fn -> Enum.count(Runners.runners(pool)) == 1 end)
     assert [{^id, 0}] = ScriptedKeeper.releases(keeper)
     refute Process.alive?(pid)
   end
@@ -244,7 +242,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {:ok, unclean, unclean_id} = RunnerPool.take(pool, "ath_a", "exec_1")
     complete(spawn_of(keeper, unclean), "exec_1", false)
     assert_receive {RunnerPool, ^unclean, {:complete, "exec_1", false}}
-    wait_until(fn -> Enum.empty?(RunnerPool.runners(pool)) end)
+    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
     assert {unclean_id, 0} in ScriptedKeeper.releases(keeper)
 
     {:ok, exited, exited_id} = RunnerPool.take(pool, "ath_a", "exec_2")
@@ -255,7 +253,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     )
 
     assert_receive {RunnerPool, ^exited, {:exit, ^exited_id, ["att_2", "att_child"]}}
-    wait_until(fn -> Enum.empty?(RunnerPool.runners(pool)) end)
+    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
     assert {exited_id, 0} in ScriptedKeeper.releases(keeper)
 
     {:ok, killed, killed_id} = RunnerPool.take(pool, "ath_a", "exec_3")
@@ -265,7 +263,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     # Ended by the keeper after its grace, without a frame of its own.
     assert_receive {RunnerPool, ^killed, {:gone, _reason}}, 2_000
-    wait_until(fn -> Enum.empty?(RunnerPool.runners(pool)) end)
+    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
   end
 
   test "a killed runner's own exit frame still reaches the assignee, once", %{keeper: keeper} do
@@ -281,11 +279,11 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     assert_receive {RunnerPool, ^pid, {:exit, ^id, ["att_1", "att_child"]}}
     assert counts(pool).tainted == 1
-    # Its end after the grace is not a second event: `retire_busy/1`
+    # Its end after the grace is not a second event: `Runners.retire_busy/2`
     # answers once the keeper has retired it, by when anything the pool
     # tells of its end has been sent.
-    assert :ok = RunnerPool.retire_busy(pool)
-    assert RunnerPool.runners(pool) == []
+    assert :ok = Runners.retire_busy(pool)
+    assert Runners.runners(pool) == []
     refute_received {RunnerPool, ^pid, _}
   end
 
@@ -302,7 +300,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {:ok, exited, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
     ScriptedKeeper.exit(spawn_of(keeper, exited), 1)
     assert_receive {RunnerPool, ^exited, {:gone, _}}
-    wait_until(fn -> Enum.empty?(RunnerPool.runners(pool)) end)
+    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
 
     # Reported once: the exit that follows the close is not a second event.
     refute_receive {RunnerPool, ^closed, _}, 100
@@ -322,7 +320,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 1}
 
     # Its end after the grace is not a second event, and it is gone.
-    wait_until(fn -> Enum.empty?(RunnerPool.runners(pool)) end, 2_000)
+    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end, 2_000)
     refute_received {RunnerPool, ^pid, _}
   end
 
@@ -347,7 +345,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     end
 
     # The fresh runner heard nothing.
-    fresh = Enum.find(RunnerPool.runners(pool), &(&1.state == :fresh))
+    fresh = Enum.find(Runners.runners(pool), &(&1.state == :fresh))
     assert ScriptedKeeper.read(spawn_of(keeper, fresh.pid)) == ""
   end
 
@@ -363,7 +361,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
     )
 
     assert_receive {RunnerPool, ^pid, {:gone, {:protocol, {:not_a_runner_frame, :cancel_child}}}}
-    wait_until(fn -> Enum.empty?(RunnerPool.runners(pool)) end)
+    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
 
     {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_2")
     ScriptedKeeper.write(spawn_of(keeper, pid), "not json\n")
@@ -387,7 +385,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
     wait_until(fn -> ScriptedKeeper.relay_closed?(spawn) end)
     assert ScriptedKeeper.read_relay(spawn) =~ ~s("kind":"close")
-    wait_until(fn -> Enum.empty?(RunnerPool.runners(pool)) end)
+    wait_until(fn -> Enum.empty?(Runners.runners(pool)) end)
   end
 
   test "retiring the busy runners ends each at once and answers once they are gone, keeping the fresh and idle",
@@ -403,17 +401,17 @@ defmodule Locus.Runtime.RunnerPoolTest do
     {:ok, b, b_id} = RunnerPool.take(pool, "ath_c", "exec_2")
     wait_until(fn -> counts(pool) == %{fresh: 1, idle: 1, busy: 2, tainted: 0} end)
 
-    assert :ok = RunnerPool.retire_busy(pool)
+    assert :ok = Runners.retire_busy(pool)
 
     assert counts(pool) == %{fresh: 1, idle: 1, busy: 0, tainted: 0}
     assert {a_id, 0} in ScriptedKeeper.releases(keeper)
     assert {b_id, 0} in ScriptedKeeper.releases(keeper)
-    refute Enum.any?(RunnerPool.runners(pool), &(&1.pid in [a, b]))
+    refute Enum.any?(Runners.runners(pool), &(&1.pid in [a, b]))
     assert_received {RunnerPool, ^a, {:gone, _}}
     assert_received {RunnerPool, ^b, {:gone, _}}
 
     # Nothing busy: answered at once.
-    assert :ok = RunnerPool.retire_busy(pool)
+    assert :ok = Runners.retire_busy(pool)
 
     # The bound's timers of runners retired in time change nothing. A
     # runner killed after them with a grace well past the bound is
@@ -423,7 +421,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
       with_log(fn ->
         {:ok, late, late_id} = RunnerPool.take(pool, "ath_d", "exec_3")
         assert :ok = RunnerPool.taint(pool, late, 400)
-        wait_until(fn -> not Enum.any?(RunnerPool.runners(pool), &(&1.pid == late)) end)
+        wait_until(fn -> not Enum.any?(Runners.runners(pool), &(&1.pid == late)) end)
         late_id
       end)
 
@@ -440,17 +438,17 @@ defmodule Locus.Runtime.RunnerPoolTest do
     spawn = spawn_of(keeper, pid)
 
     never_retired(spawn, fn ->
-      log = capture_log(fn -> assert :ok = RunnerPool.retire_busy(pool, 5_000) end)
+      log = capture_log(fn -> assert :ok = Runners.retire_busy(pool, 5_000) end)
 
       assert log =~ "runner #{id} #{@unretired}"
       assert {id, 0} in ScriptedKeeper.releases(keeper)
-      refute Enum.any?(RunnerPool.runners(pool), &(&1.pid == pid))
+      refute Enum.any?(Runners.runners(pool), &(&1.pid == pid))
       refute Process.alive?(pid)
       assert_received {RunnerPool, ^pid, {:gone, :retire_bound}}
 
       # Nothing is left being ended: answered at once.
       assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
-      assert :ok = RunnerPool.retire_busy(pool, 5_000)
+      assert :ok = Runners.retire_busy(pool, 5_000)
     end)
   end
 
@@ -471,14 +469,14 @@ defmodule Locus.Runtime.RunnerPoolTest do
 
       log =
         capture_log(fn ->
-          wait_until(fn -> RunnerPool.runners(pool) == [] end, 5_000, "the runner to be dropped")
+          wait_until(fn -> Runners.runners(pool) == [] end, 5_000, "the runner to be dropped")
         end)
 
       assert [{^id, 0}] = ScriptedKeeper.releases(keeper)
       assert log =~ "runner #{id} #{@unretired}"
       refute Process.alive?(pid)
       refute_received {RunnerPool, ^pid, {:gone, _}}
-      assert :ok = RunnerPool.retire_busy(pool, 5_000)
+      assert :ok = Runners.retire_busy(pool, 5_000)
     end)
   end
 
@@ -511,7 +509,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
       :ok = :sys.suspend(keeper)
 
       wait_until(
-        fn -> Enum.any?(RunnerPool.runners(pool), &(&1.state == :spawning)) end,
+        fn -> Enum.any?(Runners.runners(pool), &(&1.state == :spawning)) end,
         3_000,
         "the pool to try a runner again"
       )
@@ -553,7 +551,7 @@ defmodule Locus.Runtime.RunnerPoolTest do
       {:ok, pid, _id} = RunnerPool.take(pool, "ath_a", "exec_1")
       assert_receive {RunnerPool, ^pid, {:gone, {:refused, :memory_unavailable}}}
       assert counts(pool) == %{fresh: 0, idle: 0, busy: 0, tainted: 0}
-      assert RunnerPool.runners(pool) == []
+      assert Runners.runners(pool) == []
 
       assert {:error, {:refused, %{reason: "memory_unavailable"}}} =
                RunnerPool.take(pool, "ath_a", "exec_2")

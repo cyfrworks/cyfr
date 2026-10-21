@@ -17,6 +17,11 @@ defmodule Locus.BuilderTest do
   alias Prima.BuilderProtocol
   alias Locus.Builder
 
+  # A build as the service runs one: the request prepared, then its plan run.
+  defp build(request, opts \\ []) do
+    with {:ok, plan} <- Builder.prepare(request), do: Builder.run(plan, opts)
+  end
+
   defp rust(sources, fields \\ %{}) do
     Map.merge(%{language: :rust, target_type: :reagent, resolve: false, sources: sources}, fields)
   end
@@ -164,7 +169,7 @@ defmodule Locus.BuilderTest do
                Builder.prepare(rust(%{"src/lib.rs" => "pub fn hello() {}"}))
 
       assert {:error, {:unavailable, "the javascript toolchain is not installed in this image"}} =
-               Builder.build(scripted("true"))
+               build(scripted("true"))
     end
   end
 
@@ -192,7 +197,7 @@ defmodule Locus.BuilderTest do
       script =
         "mkdir -p dist/assets && echo built >&2 && echo hi > dist/index.html && echo js > dist/assets/app.js"
 
-      assert {:ok, built} = Builder.build(scripted(script), on_progress: on_progress)
+      assert {:ok, built} = build(scripted(script), on_progress: on_progress)
 
       assert built == %{
                language: :javascript,
@@ -215,7 +220,7 @@ defmodule Locus.BuilderTest do
       {on_progress, progress} = collecting()
 
       assert {:error, {:failed, {:status, status}}} =
-               Builder.build(scripted("echo broken >&2; exit 7"), on_progress: on_progress)
+               build(scripted("echo broken >&2; exit 7"), on_progress: on_progress)
 
       assert is_integer(status) and status != 0
       assert {:output, "broken"} in progress.()
@@ -225,7 +230,7 @@ defmodule Locus.BuilderTest do
       {on_progress, progress} = collecting()
 
       assert {:error, {:failed, {:status, 0}}} =
-               Builder.build(scripted("true"), on_progress: on_progress)
+               build(scripted("true"), on_progress: on_progress)
 
       assert {:compiling, "the build produced no output files in dist/"} in progress.()
     end
@@ -238,7 +243,7 @@ defmodule Locus.BuilderTest do
         "mkdir dist && i=0 && while [ $i -le #{max} ]; do : > dist/f$i; i=$((i+1)); done"
 
       assert {:error, {:failed, {:status, 0}}} =
-               Builder.build(scripted(script), on_progress: on_progress)
+               build(scripted(script), on_progress: on_progress)
 
       assert {:compiling, "the build produced more than #{max} files"} in progress.()
     end
@@ -251,7 +256,7 @@ defmodule Locus.BuilderTest do
       script = "mkdir dist && head -c #{max + 1} /dev/zero > dist/big"
 
       assert {:error, {:failed, {:status, 0}}} =
-               Builder.build(scripted(script), on_progress: on_progress)
+               build(scripted(script), on_progress: on_progress)
 
       assert {:validating,
               "the build's outputs total #{max + 1} bytes; at most #{max} are answered"} in progress.()
@@ -265,13 +270,13 @@ defmodule Locus.BuilderTest do
       script = "mkdir dist && head -c #{past} /dev/zero > dist/big"
 
       assert {:error, {:failed, _exit}} =
-               Builder.build(scripted(script), on_progress: on_progress)
+               build(scripted(script), on_progress: on_progress)
 
       assert Enum.any?(progress.(), fn {_stage, message} -> message =~ "was refused" end)
     end
 
     test "past its budget is a timeout naming the budget" do
-      assert {:error, {:timeout, 1_500}} = Builder.build(scripted("sleep 60"), timeout_ms: 1_500)
+      assert {:error, {:timeout, 1_500}} = build(scripted("sleep 60"), timeout_ms: 1_500)
     end
 
     test "installs from its lockfile alone, and one out of step with its manifest is failed" do
@@ -296,7 +301,7 @@ defmodule Locus.BuilderTest do
           })
       }
 
-      assert {:ok, %{outputs: %{"pinned.json" => pinned}}} = Builder.build(tincture(sources))
+      assert {:ok, %{outputs: %{"pinned.json" => pinned}}} = build(tincture(sources))
       assert Jason.decode!(pinned)["version"] == "1.0.0"
 
       # The manifest asks for a dependency the lockfile does not pin: npm ci
@@ -314,7 +319,7 @@ defmodule Locus.BuilderTest do
         )
 
       assert {:error, {:failed, {:status, status}}} =
-               Builder.build(tincture(stale), on_progress: on_progress)
+               build(tincture(stale), on_progress: on_progress)
 
       assert status != 0
 
@@ -333,7 +338,7 @@ defmodule Locus.BuilderTest do
       build =
         scripted("mkdir -p dist && cp env.txt dist/env.txt", %{postinstall: "env > env.txt"})
 
-      assert {:ok, %{outputs: %{"env.txt" => env}}} = Builder.build(build)
+      assert {:ok, %{outputs: %{"env.txt" => env}}} = build(build)
 
       names =
         env |> String.split("\n", trim: true) |> Enum.map(&hd(String.split(&1, "=", parts: 2)))
@@ -372,7 +377,7 @@ defmodule Locus.BuilderTest do
       }
 
       assert {:ok, %{outputs: %{"third-party-notices.json" => notices}}} =
-               Builder.build(tincture(sources))
+               build(tincture(sources))
 
       assert [
                %{
@@ -389,7 +394,7 @@ defmodule Locus.BuilderTest do
 
     test "that ships no package writes no notices" do
       assert {:ok, %{outputs: outputs}} =
-               Builder.build(scripted("mkdir -p dist && echo hi > dist/index.html"))
+               build(scripted("mkdir -p dist && echo hi > dist/index.html"))
 
       refute Map.has_key?(outputs, "third-party-notices.json")
     end
@@ -419,7 +424,7 @@ defmodule Locus.BuilderTest do
       {on_progress, progress} = collecting()
 
       assert {:ok, %{language: :rust, target_type: :reagent, outputs: outputs}} =
-               Builder.build(rust(%{"src/lib.rs" => @lib_rs}), on_progress: on_progress)
+               build(rust(%{"src/lib.rs" => @lib_rs}), on_progress: on_progress)
 
       wasm = BuilderProtocol.component_wasm()
       lock = BuilderProtocol.component_lockfile()
@@ -448,12 +453,12 @@ defmodule Locus.BuilderTest do
       {on_progress, progress} = collecting()
 
       assert {:error, {:failed, {:status, status}}} =
-               Builder.build(rust(sources), on_progress: on_progress)
+               build(rust(sources), on_progress: on_progress)
 
       assert status != 0
       assert Enum.any?(progress.(), fn {_stage, message} -> message =~ "--locked" end)
 
-      assert {:ok, %{outputs: resolved}} = Builder.build(rust(sources, %{resolve: true}))
+      assert {:ok, %{outputs: resolved}} = build(rust(sources, %{resolve: true}))
       assert resolved[lock] =~ ~s(name = "smallvec")
     end
 
@@ -461,7 +466,7 @@ defmodule Locus.BuilderTest do
       {on_progress, progress} = collecting()
 
       assert {:error, {:failed, {:status, status}}} =
-               Builder.build(rust(%{"src/lib.rs" => "this is not valid rust code at all!!"}),
+               build(rust(%{"src/lib.rs" => "this is not valid rust code at all!!"}),
                  on_progress: on_progress
                )
 

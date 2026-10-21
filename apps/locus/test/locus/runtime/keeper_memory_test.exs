@@ -27,7 +27,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
 
   alias Locus.Runtime.Keeper.Channel
   alias Locus.Runtime.{RunnerPool, RunnerProcess}
-  alias Locus.Runtime.Test.ScriptedHost
+  alias Locus.Runtime.Test.{Runners, ScriptedHost}
 
   @stream_attach 3
 
@@ -66,30 +66,31 @@ defmodule Locus.Runtime.KeeperMemoryTest do
   # spawning through it: the adapter's name and the keeper's end.
   defp start_client!(ctx, opts \\ []) do
     {keeper, client_end} = channel(ctx)
-    name = Keyword.get(opts, :name, :"memory_keeper_#{ctx.unique}")
-    client = client_name(ctx)
+    id = make_ref()
 
-    start_supervised!(
-      Supervisor.child_spec(
-        {Locus.Keeper, channel: client_end, attach_dir: ctx.dir, name: client},
-        id: {Locus.Keeper, client},
-        restart: :temporary
+    client =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Locus.Keeper, channel: client_end, attach_dir: ctx.dir, name: nil},
+          id: {Locus.Keeper, id},
+          restart: :temporary
+        )
       )
-    )
 
-    start_supervised!(
-      Supervisor.child_spec(
-        {Channel, [client: client, name: name] ++ Keyword.take(opts, [:memory_bytes])},
-        id: {Channel, name},
-        restart: :temporary
+    adapter =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Channel,
+           [client: client, name: Keyword.get(opts, :name)] ++
+             Keyword.take(opts, [:memory_bytes])},
+          id: {Channel, id},
+          restart: :temporary
+        )
       )
-    )
 
     on_exit(fn -> :socket.close(keeper) end)
-    {name, keeper}
+    {Keyword.get(opts, :name, adapter), keeper}
   end
-
-  defp client_name(ctx), do: :"memory_client_#{ctx.unique}"
 
   defp channel(%{listener: listener, path: path}) do
     {:ok, client_end} = :socket.open(:local, :stream)
@@ -172,9 +173,9 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       for bound <- [nil, 0, 16_777_215, 1_099_511_627_777, -1, 1.0e9, "1G", :unbounded] do
         assert {:error, {:keeper_unavailable, {:malformed, :runner_memory_bytes}}} =
                  Channel.start_link(
-                   client: client_name(ctx),
+                   client: Locus.Keeper,
                    memory_bytes: bound,
-                   name: :"memory_refused_#{ctx.unique}"
+                   name: nil
                  )
       end
     end
@@ -250,14 +251,13 @@ defmodule Locus.Runtime.KeeperMemoryTest do
     # name, as the service tree starts it.
     test "is tainted, released and never handed out again by the pool", ctx do
       {_name, keeper} = start_client!(ctx, name: Channel, memory_bytes: 268_435_456)
-      supervisor = :"memory_pool_runners_#{ctx.unique}"
-      start_supervised!({DynamicSupervisor, name: supervisor, strategy: :one_for_one})
+      supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       {:ok, defaults} = Locus.Runtime.Settings.pool([], %{})
 
       pool =
         start_supervised!(
           {RunnerPool,
-           name: :"memory_pool_#{ctx.unique}",
+           name: nil,
            settings: %{defaults | pool_size: 1},
            keeper: Channel,
            supervisor: supervisor,
@@ -267,7 +267,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       :ok =
         RunnerPool.serve(
           pool,
-          %{service_id: "wrk_local", boot: "boot_memory", host_url: "http://127.0.0.1:9"},
+          %{service_id: "wrk_local", boot: "boot_memory"},
           self()
         )
 
@@ -305,7 +305,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       :gen_tcp.close(relay)
       reply(keeper, %{v: 1, type: "released", spawn_id: spawn_id})
       wait_until(fn -> RunnerPool.status(pool).runners.tainted == 0 end)
-      refute Enum.any?(RunnerPool.runners(pool), &(&1.id == runner))
+      refute Enum.any?(Runners.runners(pool), &(&1.id == runner))
 
       # The athanor's next subtree gets another runner, never this one.
       reply(keeper, %{
@@ -355,15 +355,14 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       end
 
       {_name, keeper} = start_client!(ctx, name: Channel, memory_bytes: 268_435_456)
-      client = Process.whereis(client_name(ctx))
-      supervisor = :"plant_pool_runners_#{ctx.unique}"
-      start_supervised!({DynamicSupervisor, name: supervisor, strategy: :one_for_one})
+      client = :sys.get_state(Channel).client
+      supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       {:ok, defaults} = Locus.Runtime.Settings.pool([], %{})
 
       pool =
         start_supervised!(
           {RunnerPool,
-           name: :"plant_pool_#{ctx.unique}",
+           name: nil,
            settings: %{defaults | pool_size: 1},
            keeper: Channel,
            supervisor: supervisor,
@@ -375,7 +374,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
           :ok =
             RunnerPool.serve(
               pool,
-              %{service_id: "wrk_local", boot: "boot_plant", host_url: "http://127.0.0.1:9"},
+              %{service_id: "wrk_local", boot: "boot_plant"},
               self()
             )
 

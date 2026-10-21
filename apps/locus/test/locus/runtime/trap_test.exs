@@ -14,6 +14,7 @@ defmodule Locus.Runtime.TrapTest do
   use ExUnit.Case, async: true
 
   alias Locus.Runtime.Engine
+  alias Locus.Runtime.Test.ScriptedHost
 
   @guest Path.expand("../../support/runtime/test_wasm/hostile/trapper.wasm", __DIR__)
   @probe Path.expand("../../support/runtime/test_wasm/hostile/vault_probe.wasm", __DIR__)
@@ -41,9 +42,17 @@ defmodule Locus.Runtime.TrapTest do
   @left "Error during function excecution (wasm trap: cannot enter component instance): " <>
           "wasm trap: cannot enter component instance"
 
-  defp run(input) do
-    Engine.execute_component(File.read!(@guest), input, authority: Prima.Authority.zero())
+  # What every run carries: an authority, its node's limits and its
+  # attempt's host client.
+  defp run_opts do
+    [
+      authority: Prima.Authority.zero(),
+      limits: Prima.Authority.zero_limits(),
+      host: ScriptedHost.attempt!(ScriptedHost.start!()).client
+    ]
   end
+
+  defp run(input), do: Engine.execute_component(File.read!(@guest), input, run_opts())
 
   test "a component that traps is reported as a trap, not as an interface failure" do
     # As the process a runner runs a component in does (`Locus.Runtime.Attempt`):
@@ -64,10 +73,10 @@ defmodule Locus.Runtime.TrapTest do
     # A value the interface's `string` cannot carry, handed back by the
     # vault's `get`: the import's result fails conversion under the call.
     assert {:error, message} =
-             Engine.execute_component(File.read!(@probe), %{"operation" => "probe"},
-               authority: Prima.Authority.zero(),
-               component_type: :catalyst,
-               preloaded_fields: %{"PROBE_KEY" => 7}
+             Engine.execute_component(
+               File.read!(@probe),
+               %{"operation" => "probe"},
+               [component_type: :catalyst, preloaded_fields: %{"PROBE_KEY" => 7}] ++ run_opts()
              )
 
     assert message == "Component call failed for #{inspect(@run)}: #{@failed}"
@@ -76,7 +85,7 @@ defmodule Locus.Runtime.TrapTest do
   end
 
   test "a component that runs to completion is answered its output" do
-    assert run(%{"trap" => false}) == {:ok, %{"ran" => true}, %{}}
+    assert run(%{"trap" => false}) == {:ok, %{"ran" => true}}
   end
 
   test "the instance's server survives a trap and answers the next call" do

@@ -64,7 +64,12 @@ defmodule Locus.BuilderServiceTest do
   end
 
   defp alive?(os_pid) do
-    {_out, status} = System.cmd("kill", ["-0", os_pid], stderr_to_stdout: true)
+    {_out, status} =
+      System.cmd("kill", ["-0", os_pid],
+        stderr_to_stdout: true,
+        env: Locus.Test.ProcessFamily.no_env()
+      )
+
     status == 0
   end
 

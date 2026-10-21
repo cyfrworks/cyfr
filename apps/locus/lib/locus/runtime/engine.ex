@@ -21,7 +21,7 @@ defmodule Locus.Runtime.Engine do
   ## Sandboxing
 
   All executions run in isolated Wasmex instances with:
-  - Memory limits (configurable, default 64MB)
+  - Memory limits (the node's consented `max_memory_bytes`)
   - No network access (Reagents) unless explicitly granted (Catalysts)
 
   ## Resource Limits
@@ -37,20 +37,12 @@ defmodule Locus.Runtime.Engine do
   chooses. Either way the engine refuses before the runner's own memory
   bound is reached.
 
-      Locus.Runtime.Engine.execute_component(wasm, input,
-        max_memory_bytes: 32 * 1024 * 1024  # 32MB
-      )
-
   See: https://github.com/tessi/wasmex
   """
 
   require Logger
 
   alias Prima.Authority.Blob.Edge
-
-  # Default memory ceiling for sandboxed execution — the shared 64 MiB
-  # bound, read from its owner rather than re-spelled here.
-  @default_max_memory_bytes Prima.Limits.default_max_memory_bytes()
 
   # What a run's store holds besides its one linear memory. Every shipped
   # component instantiates three core modules with two funcref tables, the
@@ -87,23 +79,26 @@ defmodule Locus.Runtime.Engine do
   - `:reference` - Component reference string (for telemetry and errors)
   - `:digest` - Content digest (the compiled-component cache key); required
     when `wasm` is a function
-  - `:max_memory_bytes` - Memory limit. Defaults to 64MB.
   - `:authority` - The `Prima.Authority` this execution runs under; required:
     a run without one, or with anything else in its place, raises
     `ArgumentError` before anything compiles
+  - `:limits` - The node's `Prima.Limits`; required. Its `max_memory_bytes`
+    bounds the run's store (`store_limits/1`)
   - `:execution_id` - The admitted execution
-  - `:host` - The attached `Locus.Runtime.HostClient` of the execution's attempt:
-    the guest's `emit`, OAuth tokens, storage, HTTP rate checks and egress
-    denials, and a formula's children and catalog tool calls, are its host
-    calls
+  - `:host` - The attached `Locus.Runtime.HostClient` of the execution's
+    attempt; required. The guest's `emit`, OAuth tokens, storage, HTTP rate
+    checks and egress denials, and a formula's children and catalog tool
+    calls, are its host calls
   - `:intercepted` - The `tool.action` names a formula's host runs rather
     than the catalog, as its assignment carries them
 
   ## Examples
 
-      iex> {:ok, result, _metadata} =
+      iex> {:ok, result} =
       ...>   Locus.Runtime.Engine.execute_component(wasm_bytes, %{"a" => 5, "b" => 3},
-      ...>     authority: authority
+      ...>     authority: authority,
+      ...>     limits: Prima.Authority.limits(authority),
+      ...>     host: host
       ...>   )
       iex> result
       %{"sum" => 8}
@@ -112,7 +107,7 @@ defmodule Locus.Runtime.Engine do
           binary() | (-> {:ok, binary()} | {:error, {:artifact, String.t()}}),
           map(),
           keyword()
-        ) :: {:ok, map(), map()} | {:error, term()}
+        ) :: {:ok, map()} | {:error, term()}
   def execute_component(wasm, input, opts \\ [])
       when (is_binary(wasm) or is_function(wasm, 0)) and is_map(input) do
     component_type = Keyword.get(opts, :component_type, :reagent)
@@ -121,12 +116,10 @@ defmodule Locus.Runtime.Engine do
     preloaded_fields = Keyword.get(opts, :preloaded_fields, %{})
     component_ref = Keyword.get(opts, :component_ref)
     edge = Keyword.get(opts, :edge)
-    limits = Keyword.get(opts, :limits)
     execution_id = Keyword.get(opts, :execution_id)
     reference = Keyword.get(opts, :reference)
     digest = Keyword.get(opts, :digest)
     authority = Keyword.get(opts, :authority)
-    host = Keyword.get(opts, :host)
 
     # Admission refuses a run without an authority; this is the last guard:
     # a runtime reached without one dies rather than run on ambient
@@ -136,6 +129,9 @@ defmodule Locus.Runtime.Engine do
             "execution requires an authority but none reached the runtime " <>
               "— an opts filter dropped it"
     end
+
+    %Prima.Limits{} = limits = Keyword.fetch!(opts, :limits)
+    %Locus.Runtime.HostClient{} = host = Keyword.fetch!(opts, :host)
 
     :telemetry.execute(
       [:cyfr, :locus, :runtime, :engine, :authority_entered],
@@ -147,15 +143,10 @@ defmodule Locus.Runtime.Engine do
       }
     )
 
-    max_memory = Keyword.get(opts, :max_memory_bytes, @default_max_memory_bytes)
-
     engine = Locus.Runtime.SharedEngine.get()
 
-    authority_info = %{
-      authority: authority,
-      # The actions a formula's host runs rather than the catalog.
-      intercepted: Keyword.get(opts, :intercepted, [])
-    }
+    # The actions a formula's host runs rather than the catalog.
+    intercepted = Keyword.get(opts, :intercepted, [])
 
     # Build imports and collect cleanup refs
     {imports, cleanup_refs} =
@@ -167,7 +158,7 @@ defmodule Locus.Runtime.Engine do
         limits,
         host,
         execution_id,
-        authority_info
+        intercepted
       )
 
     # Notify caller of cleanup_refs so they can clean up on timeout kill
@@ -177,19 +168,11 @@ defmodule Locus.Runtime.Engine do
     end
 
     try do
-      # Build store explicitly with our shared engine (fixes fuel bug)
-      store_limits = store_limits(max_memory)
+      # The store is built on the shared engine, so every run shares its
+      # configuration and its compiled-component cache.
+      store_limits = store_limits(limits.max_memory_bytes)
 
-      store_result =
-        case wasi_opts do
-          nil ->
-            Wasmex.Components.Store.new(store_limits, engine)
-
-          %Wasmex.Wasi.WasiP2Options{} = wasi ->
-            Wasmex.Components.Store.new_wasi(wasi, store_limits, engine)
-        end
-
-      case store_result do
+      case Wasmex.Components.Store.new_wasi(wasi_opts, store_limits, engine) do
         {:ok, store} ->
           # Get or compile the component (cache hit skips JIT)
           case compile(store, wasm, digest) do
@@ -203,7 +186,7 @@ defmodule Locus.Runtime.Engine do
                   try do
                     result = execute_with_convention(pid, input, component_type: component_type)
                     stop_instance(pid)
-                    add_execution_metadata(result, %{})
+                    result
                   rescue
                     e ->
                       stop_instance(pid)
@@ -282,10 +265,9 @@ defmodule Locus.Runtime.Engine do
     "the engine refused the component"
   end
 
-  # Build all host function imports and collect cleanup refs. The node's
-  # limits and the attempt's host client are the presence signal for
-  # capability-scoped imports: they are always carried under an admitted
-  # authority, while the edge itself may be nil (resources :none) — a nil
+  # Build all host function imports and collect cleanup refs. A catalyst
+  # gets every capability-scoped import and a formula its invoke import,
+  # whatever its edge: the edge may be nil (resources :none), and a nil
   # edge builds the same imports with deny-all resource lists, so a guest's
   # host call fails with a denial instead of a missing import.
   defp build_imports_and_cleanup(
@@ -296,7 +278,7 @@ defmodule Locus.Runtime.Engine do
          limits,
          host,
          execution_id,
-         authority_info
+         intercepted
        ) do
     vault_imports =
       if component_type == :catalyst do
@@ -306,21 +288,21 @@ defmodule Locus.Runtime.Engine do
       end
 
     http_imports =
-      if component_type == :catalyst && limits && host do
+      if component_type == :catalyst do
         Locus.Runtime.HttpHandler.build_http_imports(edge, limits, host, component_ref)
       else
         %{}
       end
 
     {stream_imports, stream_exec_ref} =
-      if component_type == :catalyst && limits && host do
+      if component_type == :catalyst do
         Locus.Runtime.HttpStreamHandler.build_stream_imports(edge, limits, host, component_ref)
       else
         {%{}, nil}
       end
 
     storage_imports =
-      if component_type == :catalyst && limits && host do
+      if component_type == :catalyst do
         Locus.Runtime.StorageHandler.build_storage_imports(limits, host, component_ref)
       else
         %{}
@@ -329,24 +311,24 @@ defmodule Locus.Runtime.Engine do
     # The execution's attempt dispenses every token, so each one is in its
     # masking set before the guest has it.
     oauth_imports =
-      if component_type == :catalyst && host do
+      if component_type == :catalyst do
         Locus.Runtime.OAuthHandler.build_oauth_imports(host)
       else
         %{}
       end
 
     emit_imports =
-      if component_type == :catalyst && host && authority_info.authority do
+      if component_type == :catalyst do
         build_emit_imports(host, limits)
       else
         %{}
       end
 
     {formula_imports, formula_tracker_pid} =
-      if component_type == :formula && host do
+      if component_type == :formula do
         Locus.Runtime.FormulaHandler.build_formula_imports(host,
           limits: limits,
-          intercepted: authority_info.intercepted
+          intercepted: intercepted
         )
       else
         {%{}, nil}
@@ -384,12 +366,13 @@ defmodule Locus.Runtime.Engine do
   @doc """
   Deliver one guest event through the attempt's host client, answering the
   JSON the guest's `emit` returns. An event over the node's
-  `max_request_size` (`limits`, when the node has them) is refused here as
-  a `resource_limit`, before it crosses the wire that would refuse its
-  body; a refused host call answers a `dispatch_error`.
+  `max_request_size` is refused here as a `resource_limit`, before it
+  crosses the wire that would refuse its body; a refused host call answers
+  a `dispatch_error`.
   """
-  @spec emit(Locus.Runtime.HostClient.t(), Prima.Limits.t() | nil, String.t()) :: String.t()
-  def emit(%Locus.Runtime.HostClient{} = host, limits, json_event) when is_binary(json_event) do
+  @spec emit(Locus.Runtime.HostClient.t(), Prima.Limits.t(), String.t()) :: String.t()
+  def emit(%Locus.Runtime.HostClient{} = host, %Prima.Limits{} = limits, json_event)
+      when is_binary(json_event) do
     case Locus.Runtime.EdgeGuard.check_event_size(limits, json_event) do
       :ok ->
         push_event(host, json_event)
@@ -481,7 +464,7 @@ defmodule Locus.Runtime.Engine do
   defp report_denied(host, name, component_ref, reason) do
     if Prima.HostAPI.valid_field_name?(name) do
       Logger.warning(denied_line(reason, name, component_ref))
-      if host, do: _ = Locus.Runtime.HostClient.record_denial(host, reason, name)
+      _ = Locus.Runtime.HostClient.record_denial(host, reason, name)
     else
       Logger.warning(
         "[Locus.Runtime.Engine] '#{component_ref}' asked its vault for a name that is no field name"
@@ -621,18 +604,4 @@ defmodule Locus.Runtime.Engine do
   catch
     :exit, _reason -> :ok
   end
-
-  # ===========================================================================
-  # Execution Metadata Helpers
-  # ===========================================================================
-
-  # Wrap a successful result in the {:ok, output, metadata} shape the
-  # runner consumes. The metadata map is currently empty — it is the seam
-  # where real per-execution metrics ride when the engine can report them;
-  # nothing is fabricated here.
-  defp add_execution_metadata({:ok, output}, metadata) when is_map(metadata) do
-    {:ok, output, metadata}
-  end
-
-  defp add_execution_metadata({:error, _} = error, _metadata), do: error
 end

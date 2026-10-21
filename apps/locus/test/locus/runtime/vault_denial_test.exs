@@ -61,7 +61,7 @@ defmodule Locus.Runtime.VaultDenialTest do
 
     log =
       capture_log(fn ->
-        assert {:ok, %{"status" => 200, "data" => %{"read" => "OEEE"}}, _} =
+        assert {:ok, %{"status" => 200, "data" => %{"read" => "OEEE"}}} =
                  probe(attempt.client)
       end)
 
@@ -133,7 +133,7 @@ defmodule Locus.Runtime.VaultDenialTest do
     # Attach-only: the edge projects both names and nothing was handed.
     log =
       capture_log(fn ->
-        assert {:ok, %{"status" => 200, "data" => %{"read" => "EEEE"}}, _} =
+        assert {:ok, %{"status" => 200, "data" => %{"read" => "EEEE"}}} =
                  probe(attempt.client, %{}, attached_edge(["PROBE_KEY"], %{"Second" => second}))
       end)
 
@@ -145,10 +145,10 @@ defmodule Locus.Runtime.VaultDenialTest do
     assert log =~ "Field 'PROBE_KEY' is attached to requests by CYFR and never handed to"
     refute log =~ "access-denied"
 
-    # A disclosed field, handed over at attach, is answered as ever, and a
+    # A disclosed field, handed over at attach, is answered, and a
     # name the edge projects nowhere is outside the projection.
     capture_log(fn ->
-      assert {:ok, %{"data" => %{"read" => "OEEE"}}, _} =
+      assert {:ok, %{"data" => %{"read" => "OEEE"}}} =
                probe(attempt.client, %{"PROBE_KEY" => @value}, attached_edge(["PROBE_KEY"]))
     end)
 
@@ -161,18 +161,12 @@ defmodule Locus.Runtime.VaultDenialTest do
     }
 
     capture_log(fn ->
-      assert {:ok, %{"data" => %{"read" => "OEEE"}}, _} =
+      assert {:ok, %{"data" => %{"read" => "OEEE"}}} =
                probe(attempt.client, %{"PROBE_KEY" => "pk"}, provided)
     end)
 
     for request <- ScriptedHost.requests(host) do
       refute inspect(request, limit: :infinity, printable_limit: :infinity) =~ @value
     end
-  end
-
-  test "without a host client the refusal still stands, and nothing is reported" do
-    capture_log(fn ->
-      assert {:ok, %{"data" => %{"read" => "OEEE"}}, _} = probe(nil)
-    end)
   end
 end

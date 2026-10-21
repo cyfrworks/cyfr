@@ -64,8 +64,8 @@ defmodule Locus.Runtime.StorageHandler do
   `execute/4` with the node's `limits`, the attempt's host client `host`
   and the component reference its telemetry names.
   """
-  @spec build_storage_imports(Limits.t() | nil, HostClient.t(), String.t()) :: map()
-  def build_storage_imports(limits, %HostClient{} = host, component_ref) do
+  @spec build_storage_imports(Limits.t(), HostClient.t(), String.t()) :: map()
+  def build_storage_imports(%Limits{} = limits, %HostClient{} = host, component_ref) do
     %{
       "cyfr:storage/files@0.1.0" => %{
         "call" => {:fn, fn json_request -> execute(json_request, limits, host, component_ref) end}
@@ -74,8 +74,8 @@ defmodule Locus.Runtime.StorageHandler do
   end
 
   @doc "Run one guest storage request, answering the JSON the guest's `call` returns."
-  @spec execute(String.t(), Limits.t() | nil, HostClient.t(), String.t()) :: String.t()
-  def execute(json_request, limits, %HostClient{} = host, component_ref)
+  @spec execute(String.t(), Limits.t(), HostClient.t(), String.t()) :: String.t()
+  def execute(json_request, %Limits{} = limits, %HostClient{} = host, component_ref)
       when is_binary(json_request) do
     started = System.monotonic_time(:millisecond)
     {action, result} = requested(json_request, limits, host)
@@ -109,8 +109,6 @@ defmodule Locus.Runtime.StorageHandler do
          "Request exceeds the consented max_request_size for this component."}
     end
   end
-
-  defp envelope(_json_request, nil), do: :ok
 
   defp parse(json_request) do
     case Jason.decode(json_request) do

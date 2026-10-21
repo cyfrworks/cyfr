@@ -120,12 +120,6 @@ defmodule Locus.Runtime.Keeper do
   """
   @callback refusal(term()) :: Prima.WorkerAPI.refusal()
 
-  @doc "The keeper's own view of its runner pool, when it has one."
-  @callback stats() ::
-              {:ok,
-               %{size: non_neg_integer(), free: non_neg_integer(), quarantined: non_neg_integer()}}
-              | :unknown
-
   @doc """
   The test build's launcher of runners as plain child processes, or `nil`.
 

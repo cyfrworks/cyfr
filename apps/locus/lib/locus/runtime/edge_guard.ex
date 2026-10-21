@@ -110,17 +110,17 @@ defmodule Locus.Runtime.EdgeGuard do
 
   Generous on purpose: a payload at the consented ceiling must always fit,
   base64 overhead (4/3), JSON escaping and the scaffolding included. This
-  refuses the blob, not the legitimate request.
+  refuses the blob, not the legitimate request. A `max_request_size` of 0
+  is a ceiling like any other, as `Prima.Limits` defines it: no payload,
+  so the envelope holds the framing alone.
   """
   @spec check_envelope_size(Limits.t(), binary()) :: :ok | {:error, :request_too_large}
   def check_envelope_size(%Limits{max_request_size: max}, json)
-      when is_binary(json) and is_integer(max) and max > 0 do
+      when is_binary(json) and is_integer(max) and max >= 0 do
     if byte_size(json) <= max * 2 + envelope_overhead(),
       do: :ok,
       else: {:error, :request_too_large}
   end
-
-  def check_envelope_size(_limits, _json), do: :ok
 
   @doc "Slack allowed above the consented payload ceiling for framing."
   @spec envelope_overhead() :: pos_integer()
@@ -131,9 +131,9 @@ defmodule Locus.Runtime.EdgeGuard do
   or `{:error, :request_too_large, message}`.
 
   Counts what the host will actually hold and put on the wire: the body (or
-  the multipart parts) **plus the URL and headers**. Measuring the body alone
-  meant a guest could move megabytes into header values — into host memory and
-  out to the upstream — while the consented ceiling read as enforced.
+  the multipart parts) **plus the URL and headers**, so a guest cannot move
+  megabytes into header values — into host memory and out to the upstream —
+  past the consented ceiling.
   """
   @spec check_request_size(Limits.t(), map()) ::
           :ok | {:error, :request_too_large, String.t()}
@@ -149,19 +149,9 @@ defmodule Locus.Runtime.EdgeGuard do
   end
 
   @doc """
-  Check an HTTP response body against the node's `max_response_size`.
-  Returns `:ok` or `{:error, :response_too_large, message}`.
-  """
-  @spec check_response_size(Limits.t(), binary() | nil) ::
-          :ok | {:error, :response_too_large, String.t()}
-  def check_response_size(%Limits{} = limits, body) do
-    check_response_bytes(limits, byte_size(body || ""))
-  end
-
-  @doc """
-  The size-arity form of `check_response_size/2` — for the streaming path,
-  where the byte count is known at the abort without assembling the body.
-  One message for both arities, so the denial contract cannot fork.
+  Check a response's size in bytes against the node's `max_response_size`:
+  the count is known at the abort without assembling the body. Returns
+  `:ok` or `{:error, :response_too_large, message}`.
   """
   @spec check_response_bytes(Limits.t(), non_neg_integer()) ::
           :ok | {:error, :response_too_large, String.t()}
@@ -185,10 +175,9 @@ defmodule Locus.Runtime.EdgeGuard do
   @doc """
   Check an event a guest emits against the node's `max_request_size`: the
   encoded event's bytes, which is what the host call carries. Returns
-  `:ok`, also for a node without limits, or
-  `{:error, :request_too_large, message}`.
+  `:ok` or `{:error, :request_too_large, message}`.
   """
-  @spec check_event_size(Limits.t() | nil, binary()) ::
+  @spec check_event_size(Limits.t(), binary()) ::
           :ok | {:error, :request_too_large, String.t()}
   def check_event_size(%Limits{} = limits, json_event) when is_binary(json_event) do
     case refuse_over(limits, byte_size(json_event), "Emitted event") do
@@ -200,8 +189,6 @@ defmodule Locus.Runtime.EdgeGuard do
          "Event exceeds the consented max_request_size for this component."}
     end
   end
-
-  def check_event_size(_limits, json_event) when is_binary(json_event), do: :ok
 
   defp refuse_over(%Limits{} = limits, size, what) do
     if size > limits.max_request_size do

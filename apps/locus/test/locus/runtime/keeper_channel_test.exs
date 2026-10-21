@@ -60,8 +60,8 @@ defmodule Locus.Runtime.KeeperChannelTest do
 
     # The node's client of the keeper on the test's channel, and the
     # runtime's adapter spawning through it.
-    client = :"spawn_client_#{unique}"
-    name = :"spawn_keeper_#{unique}"
+    client = __MODULE__.Client
+    name = __MODULE__.Adapter
 
     start_supervised!(
       Supervisor.child_spec(
@@ -367,16 +367,6 @@ defmodule Locus.Runtime.KeeperChannelTest do
     %{"id" => id} = request(keeper)
     reply(keeper, %{v: 1, type: "error", id: id, code: "capacity"})
     assert_receive {RunnerProcess, ^handle, {:refused, "capacity"}}, 5_000
-  end
-
-  test "the pool's stats are asked of the keeper and answered", %{keeper: keeper, name: name} do
-    test = self()
-    spawn_link(fn -> send(test, {:stats, Channel.stats(name)}) end)
-    assert %{"v" => 1, "type" => "pool", "id" => id, "pool" => "runner"} = request(keeper)
-
-    reply(keeper, %{v: 1, type: "pool", id: id, pool: "runner", size: 8, free: 7, quarantined: 0})
-
-    assert_receive {:stats, {:ok, %{size: 8, free: 7, quarantined: 0}}}, 5_000
   end
 
   test "the channel's loss reaches every handle and ends the client", %{

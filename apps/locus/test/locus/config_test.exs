@@ -371,6 +371,24 @@ defmodule Locus.ConfigTest do
     refute message =~ "not-a-key"
   end
 
+  # Whether the protocol's codec refuses `bytes` as a spawn's memory bound,
+  # on a spawn whose every other member is well formed.
+  defp bound_refused?(bytes) do
+    spawn = %{
+      type: :spawn,
+      id: "1",
+      pool: "build",
+      argv: ["true"],
+      attach: %{path: "/run/a.sock", token: String.duplicate("ab", 32)},
+      memory_bytes: bytes
+    }
+
+    _line = Prima.KeeperProtocol.encode(spawn)
+    false
+  rescue
+    error in ArgumentError -> String.starts_with?(error.message, "memory_bytes ")
+  end
+
   test "the memory bound takes the whole of the keeper's range, both ends, and nothing outside it" do
     # One range, the keeper protocol's.
     assert Config.memory_range() ==
@@ -383,13 +401,20 @@ defmodule Locus.ConfigTest do
       |> File.read!()
       |> Jason.decode!()
 
-    # A spawn's own bound: a whole number refused for what it is, not for
-    # the request it rides on.
-    bounds = fn requests ->
-      for %{"request" => %{"type" => "spawn", "memory_bytes" => bytes}} <- requests,
-          is_integer(bytes),
-          do: bytes
-    end
+    # The whole-number bounds the refused spawns carry, split by what the
+    # protocol's codec refuses on a spawn otherwise well formed: a bound
+    # refused for what it is, and a well-formed bound carried by a spawn
+    # refused for another of its members.
+    {refused, carried} =
+      for(
+        %{"request" => %{"type" => "spawn", "memory_bytes" => bytes}} <-
+          vectors["invalid_requests"],
+        is_integer(bytes),
+        do: bytes
+      )
+      |> Enum.split_with(&bound_refused?/1)
+
+    assert refused != []
 
     accepted =
       for %{"memory_bytes" => bytes} <- vectors["valid_requests"], do: bytes
@@ -403,21 +428,21 @@ defmodule Locus.ConfigTest do
 
     # What the keeper accepts as a spawn's bound, this setting accepts.
     # The same for a build's bound, a backend's and a runner's.
+    # A bound a refused spawn carries beside its malformed member is one
+    # the keeper accepts, and so does this setting.
     for {base, variable, read} <- [
           {full(), "LOCUS_BUILDS_MEMORY_BYTES", & &1[:memory_bytes]},
           {full(), "LOCUS_BACKENDS_MEMORY_BYTES", & &1[:backends_memory_bytes]},
           {runtime, "LOCUS_RUNTIME_MEMORY_BYTES", & &1[:runtime][:runner_memory_bytes]}
         ] do
-      for bytes <- accepted do
+      for bytes <- accepted ++ carried do
         env = env(Map.put(base, variable, Integer.to_string(bytes)))
         assert {:ok, settings} = Config.from_env(env)
         assert read.(settings) == bytes
       end
 
-      # And what the keeper refuses, this setting refuses at the boot.
-      refused = bounds.(vectors["invalid_requests"])
-      assert refused != []
-
+      # And what the keeper refuses as a bound, this setting refuses at
+      # the boot.
       for bytes <- refused do
         env = env(Map.put(base, variable, Integer.to_string(bytes)))
         assert {:error, message} = Config.from_env(env)
@@ -440,13 +465,8 @@ defmodule Locus.ConfigTest do
     assert Config.unknown_names(Config.variables()) == []
     assert {:ok, _settings} = Config.from_env(env(full()), Map.keys(full()))
 
-    # The runtime role's names are the node's too, and the retired names
-    # of the release's log setting are not.
+    # The runtime role's names are the node's too.
     assert Config.unknown_names(Config.variables(:runtime) ++ Config.variables(:runner)) == []
-
-    # Spelled split so the retired names are not themselves found here.
-    retired = ["LOCUS_BUILDS_" <> "LOG_LEVEL", "LOCUS_BUILDS_" <> "LOG_FORMAT"]
-    assert Config.unknown_names(retired) == Enum.sort(retired)
 
     assert {:error, message} =
              Config.from_env(env(full()), Map.keys(full()) ++ ["LOCUS_RUNTIME_POOL_SIZ"])
@@ -553,10 +573,9 @@ defmodule Locus.ConfigTest do
     assert Config.backends_rpc_timeout_ms() == 30_000
     assert Config.backends_memory_bytes() == 536_870_912
 
-    # The facade reads the same settings.
-    assert Locus.Backends.key() == Config.backends_key()
+    # The facade's listener reads the same settings.
+    assert Locus.Backends.bind() == Config.backends_bind()
     assert Locus.Backends.port() == Config.backends_port()
-    assert Locus.Backends.memory_bytes() == Config.backends_memory_bytes()
   end
 
   describe "runtime_from_env/2" do
@@ -717,15 +736,9 @@ defmodule Locus.ConfigTest do
       # A runner knows no address of CYFR's: it reaches CYFR through its relay.
       refute Map.has_key?(settings, :host_url)
 
-      assert {:ok, %{relay: {:fd, 5}}} =
-               Config.runner(Map.put(@runner_env, "RUNTIME_RELAY_FD", "5"))
-
       assert {:ok, %{relay: {:socket, "/tmp/runner/relay.sock"}}} =
                Config.runner(
-                 Map.merge(@runner_env, %{
-                   "RUNTIME_RELAY_FD" => "4",
-                   "RUNTIME_RELAY_SOCKET" => "/tmp/runner/relay.sock"
-                 })
+                 Map.put(@runner_env, "RUNTIME_RELAY_SOCKET", "/tmp/runner/relay.sock")
                )
 
       assert {:ok, %{control_fd: 0, watchdog_grace_ms: 250}} =
@@ -762,9 +775,6 @@ defmodule Locus.ConfigTest do
       assert {:error, {:malformed, "RUNTIME_RUNNER_ID"}} =
                Config.runner(%{@runner_env | "RUNTIME_RUNNER_ID" => "has space"})
 
-      assert {:error, {:malformed, "RUNTIME_RELAY_FD"}} =
-               Config.runner(Map.put(@runner_env, "RUNTIME_RELAY_FD", "2"))
-
       assert {:error, {:malformed, "RUNTIME_RELAY_SOCKET"}} =
                Config.runner(Map.put(@runner_env, "RUNTIME_RELAY_SOCKET", "relay.sock"))
 
@@ -784,12 +794,11 @@ defmodule Locus.ConfigTest do
           runner_id: "runner_1",
           service_id: "wrk_local",
           boot: "boot_1",
-          host_url: "http://127.0.0.1:4300",
           watchdog_grace_ms: 5_000
         })
 
-      # No address of CYFR's, whatever the service holds: the runner's host
-      # calls leave through its relay.
+      # No address of CYFR's: the runner's host calls leave through its
+      # relay.
       assert env == %{
                "RUNTIME_ROLE" => "runner",
                "RUNTIME_RUNNER_ID" => "runner_1",

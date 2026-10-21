@@ -102,7 +102,6 @@ defmodule Locus.Runtime.SettingsTest do
           runner_id: "r",
           service_id: "wrk_local",
           boot: "b",
-          host_url: "http://127.0.0.1:4300",
           watchdog_grace_ms: 5_000
         })
 
@@ -214,7 +213,13 @@ defmodule Locus.Runtime.SettingsTest do
     @source Path.expand("../../../lib/locus/runtime/settings.ex", __DIR__)
 
     # The calls that read the process environment, by module and function.
-    @env_reads [{System, :get_env}, {System, :fetch_env}, {System, :fetch_env!}, {:os, :getenv}]
+    # A module by its alias's segments, or an Erlang module by its atom.
+    @env_reads [
+      {[:System], :get_env},
+      {[:System], :fetch_env},
+      {[:System], :fetch_env!},
+      {:os, :getenv}
+    ]
 
     test "reads no variable by name, spells no LOCUS_ name, and only the RUNTIME_ names it hands a runner" do
       ast = @source |> File.read!() |> Code.string_to_quoted!()
@@ -335,10 +340,10 @@ defmodule Locus.Runtime.SettingsTest do
     renames
   end
 
-  defp module_name({:__aliases__, _, [name]}, aliases),
-    do: Map.get_lazy(aliases, name, fn -> Module.concat([name]) end)
-
-  defp module_name({:__aliases__, _, parts}, _aliases), do: Module.concat(parts)
+  # A module as `@env_reads` names it: an alias by its segments, one the
+  # source renames by the segments of the module it renames.
+  defp module_name({:__aliases__, _, [name]}, aliases), do: Map.get(aliases, name, [name])
+  defp module_name({:__aliases__, _, parts}, _aliases), do: parts
   defp module_name(module, _aliases) when is_atom(module), do: module
   defp module_name(_module, _aliases), do: nil
 

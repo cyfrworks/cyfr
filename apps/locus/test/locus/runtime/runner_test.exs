@@ -46,8 +46,7 @@ defmodule Locus.Runtime.RunnerTest do
     end)
 
     test = self()
-    supervisor = :"runner_attempts_#{System.unique_integer([:positive])}"
-    start_supervised!({DynamicSupervisor, name: supervisor, strategy: :one_for_one})
+    supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
 
     settings = %{
       runner_id: "runner_under_test",

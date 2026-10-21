@@ -17,15 +17,28 @@ defmodule Locus.Runtime.StoreLimitsTest do
 
   use ExUnit.Case, async: true
 
+  alias Locus.Runtime.Test.ScriptedHost
+
   @dir Path.expand("../../support/runtime/test_wasm/hostile", __DIR__)
   @mib 1024 * 1024
 
   defp guest(name), do: File.read!(Path.join(@dir, "#{name}.wasm"))
 
-  defp run(name, max_memory_bytes) do
-    Locus.Runtime.Engine.execute_component(guest(name), %{"hostile" => true},
+  # A run under the zero authority, its node's limits holding the
+  # consented memory.
+  defp run_opts(max_memory_bytes \\ Prima.Limits.default_max_memory_bytes()) do
+    [
       authority: Prima.Authority.zero(),
-      max_memory_bytes: max_memory_bytes
+      limits: %{Prima.Authority.zero_limits() | max_memory_bytes: max_memory_bytes},
+      host: ScriptedHost.attempt!(ScriptedHost.start!()).client
+    ]
+  end
+
+  defp run(name, max_memory_bytes) do
+    Locus.Runtime.Engine.execute_component(
+      guest(name),
+      %{"hostile" => true},
+      run_opts(max_memory_bytes)
     )
   end
 
@@ -89,7 +102,7 @@ defmodule Locus.Runtime.StoreLimitsTest do
   test "a guest growing its memory and its table reaches the bound exactly and is refused past it" do
     # The consented total, in 64 KiB pages, whatever the consent says.
     for max <- [8 * @mib, 64 * @mib, 128 * @mib] do
-      assert {:ok, %{"pages" => pages, "table" => 20_000}, _metadata} = run("grower", max)
+      assert {:ok, %{"pages" => pages, "table" => 20_000}} = run("grower", max)
       assert pages * 65_536 == max
     end
   end
@@ -99,12 +112,10 @@ defmodule Locus.Runtime.StoreLimitsTest do
     math = File.read!(Path.expand("../../support/runtime/test_wasm/math.wasm", __DIR__))
 
     assert {:error, "Component compilation failed: " <> _} =
-             Locus.Runtime.Engine.execute_component(math, %{}, authority: Prima.Authority.zero())
+             Locus.Runtime.Engine.execute_component(math, %{}, run_opts())
 
     # A catalyst run as a reagent is linked without the vault it imports.
     assert {:error, "Component instantiation failed: " <> _} =
-             Locus.Runtime.Engine.execute_component(guest("vault_probe"), %{},
-               authority: Prima.Authority.zero()
-             )
+             Locus.Runtime.Engine.execute_component(guest("vault_probe"), %{}, run_opts())
   end
 end

@@ -25,9 +25,9 @@ defmodule Cyfr.Test.Sandbox do
   only once every child is gone. The runtime's runners are OS
   processes, and their handles' supervisor (`Locus.Runtime.RunnerPool.Runners`) is
   swept through the pool instead (`pooled/0`): every busy runner is ended
-  at once and awaited (`Locus.Runtime.RunnerPool.retire_busy/2`), fresh and idle
+  at once and awaited (`Locus.Runtime.Test.Runners.retire_busy/2`), fresh and idle
   ones stay pooled for the next test, and every report of a runner's exit
-  the service has in flight is awaited (`Locus.Runtime.WorkerService.await_reports/1`),
+  the service has in flight is awaited (`Locus.Runtime.Test.Runners.await_reports/1`),
   so no runner's host call and no report lands after the owner is gone.
   Then the connections open on the listeners of the worker wire
   (`Cyfr.Test.RuntimeService.listeners/0`) are closed: a host call a stopped
@@ -65,7 +65,7 @@ defmodule Cyfr.Test.Sandbox do
   """
 
   # The runtime is a sibling application, not a dependency.
-  @compile {:no_warn_undefined, [Locus.Runtime.RunnerPool, Locus.Runtime.WorkerService]}
+  @compile {:no_warn_undefined, [Locus.Runtime.RunnerPool, Locus.Runtime.Test.Runners]}
 
   @supervisors [
     Aqua.RunnerSupervisor,
@@ -541,8 +541,8 @@ defmodule Cyfr.Test.Sandbox do
   # old one.
   defp retire_runners do
     busy = Locus.Runtime.RunnerPool.status(Locus.Runtime.RunnerPool).runners.busy
-    :ok = Locus.Runtime.RunnerPool.retire_busy(Locus.Runtime.RunnerPool)
-    :ok = Locus.Runtime.WorkerService.await_reports()
+    :ok = Locus.Runtime.Test.Runners.retire_busy(Locus.Runtime.RunnerPool)
+    :ok = Locus.Runtime.Test.Runners.await_reports()
     List.duplicate(:retired, busy)
   catch
     :exit, {:noproc, _call} -> []

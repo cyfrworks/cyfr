@@ -788,8 +788,7 @@ defmodule Locus.Runtime.HttpHandlerTest do
                    request,
                    edge,
                    EdgeFixtures.limits(),
-                   context.client,
-                   "catalyst:local.x:1.0.0"
+                   context.client
                  )
 
         # The relay's service end connects with these; the runner never does.

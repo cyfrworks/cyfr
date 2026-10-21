@@ -43,14 +43,15 @@ defmodule Locus.Runtime.Release do
   @spec role() :: role()
   def role, do: role(System.get_env())
 
-  @doc "The role `env` (a map of environment variables) names."
+  @doc """
+  The role `env` (a map of environment variables) names: the service when
+  `RUNTIME_ROLE` is unset, a runner when it is `runner`, and no role for
+  any other value, which is refused.
+  """
   @spec role(%{optional(String.t()) => String.t()}) :: role()
   def role(env) when is_map(env) do
     case Map.get(env, "RUNTIME_ROLE") do
       nil ->
-        :service
-
-      "service" ->
         :service
 
       "runner" ->
@@ -58,7 +59,8 @@ defmodule Locus.Runtime.Release do
 
       _other ->
         raise ArgumentError,
-              "[Locus.Runtime.Release] RUNTIME_ROLE names no role: service or runner"
+              "[Locus.Runtime.Release] RUNTIME_ROLE names no role: unset for the service, " <>
+                "or runner"
     end
   end
 
@@ -146,9 +148,9 @@ defmodule Locus.Runtime.Release do
   end
 
   # A runner outside a release (a dev or test boot) does not busy-wait its
-  # schedulers: under a loaded host a runner VM's scheduler busy-wait
-  # stretched its boot from 0.2 s to 16 s. A release's runner reads the
-  # release's own `vm.args`, which this leaves untouched.
+  # schedulers: on a loaded host a runner VM's scheduler busy-wait slows its
+  # boot by orders of magnitude. A release's runner reads the release's own
+  # `vm.args`, which this leaves untouched.
   defp emulator_flags({schedulers, online, dirty_cpu, dirty_cpu_online, dirty_io}),
     do: [
       "+S",
