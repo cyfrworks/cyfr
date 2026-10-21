@@ -231,9 +231,7 @@ defmodule Compendium.Provenance do
 
   defp remote_row?(row), do: Compendium.Source.remote?(Map.get(row, :source))
 
-  defp type_of(row) do
-    to_string(Map.get(row, :component_type) || Map.get(row, "component_type") || "")
-  end
+  defp type_of(row), do: row |> Map.get(:component_type) |> to_string()
 
   # The fork's stamp. Lineage lives IN the manifest, deliberately: it
   # travels with the content on push and pull, and provenance stays
@@ -273,8 +271,9 @@ defmodule Compendium.Provenance do
   @wasm_types ~w(catalyst reagent formula)
 
   @doc """
-  The release digest of the unit the seed ships at this row's path —
-  the install media's artifact and manifest, not the athanor's copy.
+  The release digest of the unit the seed ships at this atom-keyed
+  registry row's path — the install media's artifact and manifest, not
+  the athanor's copy.
   A version the seed does not hold is `{:error, :not_shipped}`. Cached
   under a seed-only key: a version directory is immutable.
   """
@@ -282,13 +281,9 @@ defmodule Compendium.Provenance do
   def shipped_release_digest(component) when is_map(component) do
     type = type_of(component)
 
-    publisher =
-      ComponentPath.normalize_publisher(
-        Map.get(component, :publisher) || Map.get(component, "publisher")
-      )
-
-    name = Map.get(component, :name) || Map.get(component, "name")
-    version = Map.get(component, :version) || Map.get(component, "version")
+    publisher = ComponentPath.normalize_publisher(Map.get(component, :publisher))
+    name = Map.get(component, :name)
+    version = Map.get(component, :version)
 
     cond do
       type not in @wasm_types ->
