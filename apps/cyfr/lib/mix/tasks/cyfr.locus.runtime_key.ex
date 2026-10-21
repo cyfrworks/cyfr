@@ -39,7 +39,7 @@ defmodule Mix.Tasks.Cyfr.Locus.RuntimeKey do
   defp root(nil), do: {:error, "CYFR_LOCUS_RUNTIME_ROOT is not set"}
 
   defp root(text) do
-    case WorkerAuth.decode_root(text) do
+    case Prima.MacEnvelope.decode_root(text) do
       {:ok, root} -> {:ok, root}
       :error -> {:error, "CYFR_LOCUS_RUNTIME_ROOT is not 64 hexadecimal digits"}
     end
