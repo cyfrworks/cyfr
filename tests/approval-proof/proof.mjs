@@ -475,6 +475,9 @@ const pagePath = (suffix) => `${base}/a/${encodeURIComponent(segment)}${suffix}`
 
 async function signedIn(browser) {
   const context = await browser.newContext({ viewport });
+  // The page's data-confirm controls ask the browser's native confirm; the
+  // proof agrees to each one as its page asks it.
+  context.on("page", (page) => page.on("dialog", (dialog) => dialog.accept()));
   await context.addCookies([{
     name: "_cyfr_key", value: cookie, url: base, httpOnly: true, secure: true, sameSite: "Lax",
   }]);
@@ -489,14 +492,6 @@ async function open(page, url) {
 // Words the page shows, a flash among them.
 const told = (page, words, timeout = 30_000) =>
   page.getByText(words, { exact: false }).first().waitFor({ timeout }).then(() => true).catch(() => false);
-
-// The page's own confirm for a control marked data-confirm (app.js
-// `showConfirmDialog`), agreed to.
-async function agree(page) {
-  const confirm = page.locator("div.fixed.inset-0 button", { hasText: /^Confirm$/ });
-  await confirm.waitFor({ timeout: 30_000 });
-  await confirm.click();
-}
 
 // The person's first passkey, made by the virtual authenticator and
 // registered from the Settings page through the system layer's ceremony,
@@ -1274,7 +1269,6 @@ async function main() {
     // -----------------------------------------------------------------------
     await open(page, pagePath("/vault"));
     await page.locator(`button[phx-click="revoke"][phx-value-id="${ids[WORK.name]}"]`).click({ timeout: 30_000 });
-    await agree(page);
     const revoked = await told(page, "Entry revoked — 1 profile(s) lose access at next run.");
     const admittedRevoked = await ask({ op: "admit" });
     const revokedAsked = [ownUse(ROOT_C), ownUse(ROOT_C, ACCOUNT)];

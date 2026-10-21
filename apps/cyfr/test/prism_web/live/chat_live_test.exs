@@ -957,7 +957,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     # "Connect a model" is the lite path to a key: the grant for the
     # agent's catalyst, from this page, asked in its system layer.
-    render_click(view, "open_consent", %{"ref" => "catalyst:local.http:1.1.2"})
+    render_click(view, "open_consent", %{"ref" => "catalyst:local.http:1.1.3"})
     assert has_element?(view, "#system-layer-dialog .consent-sheet")
     view |> element(~s(#system-layer-dialog button[phx-click="dismiss"])) |> render_click()
     refute has_element?(view, ".consent-sheet")

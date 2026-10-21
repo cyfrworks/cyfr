@@ -19,29 +19,10 @@
  * nothing.
  */
 
-/** Unpadded base64url of `buffer` (an ArrayBuffer or a view of one). */
-export function bytesToB64url(buffer) {
-  const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
-  let binary = ""
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-}
-
-/** The bytes unpadded (or padded) base64url `text` spells, as an ArrayBuffer. */
-export function b64urlToBytes(text) {
-  if (typeof text !== "string" || !/^[A-Za-z0-9_-]*={0,2}$/.test(text)) {
-    throw new TypeError("not base64url")
-  }
-  const base64 = text.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "")
-  const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4)
-  const binary = atob(padded)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes.buffer
-}
+import {b64url, fromB64url} from "./base64url.js"
 
 function descriptors(list) {
-  return (list || []).map((descriptor) => ({...descriptor, id: b64urlToBytes(descriptor.id)}))
+  return (list || []).map((descriptor) => ({...descriptor, id: fromB64url(descriptor.id)}))
 }
 
 /**
@@ -51,8 +32,8 @@ function descriptors(list) {
 export function creationOptions(json) {
   return {
     ...json,
-    challenge: b64urlToBytes(json.challenge),
-    user: {...json.user, id: b64urlToBytes(json.user.id)},
+    challenge: fromB64url(json.challenge),
+    user: {...json.user, id: fromB64url(json.user.id)},
     excludeCredentials: descriptors(json.excludeCredentials)
   }
 }
@@ -64,7 +45,7 @@ export function creationOptions(json) {
 export function requestOptions(json) {
   return {
     ...json,
-    challenge: b64urlToBytes(json.challenge),
+    challenge: fromB64url(json.challenge),
     allowCredentials: descriptors(json.allowCredentials)
   }
 }
@@ -74,12 +55,12 @@ export function registrationJSON(credential, registration) {
   const response = credential.response
   const answer = {
     id: credential.id,
-    rawId: bytesToB64url(credential.rawId),
+    rawId: b64url(credential.rawId),
     type: credential.type,
     registration,
     response: {
-      clientDataJSON: bytesToB64url(response.clientDataJSON),
-      attestationObject: bytesToB64url(response.attestationObject)
+      clientDataJSON: b64url(response.clientDataJSON),
+      attestationObject: b64url(response.attestationObject)
     }
   }
   if (typeof response.getTransports === "function") answer.response.transports = response.getTransports()
@@ -91,15 +72,15 @@ export function assertionJSON(credential) {
   const response = credential.response
   const answer = {
     id: credential.id,
-    rawId: bytesToB64url(credential.rawId),
+    rawId: b64url(credential.rawId),
     type: credential.type,
     response: {
-      clientDataJSON: bytesToB64url(response.clientDataJSON),
-      authenticatorData: bytesToB64url(response.authenticatorData),
-      signature: bytesToB64url(response.signature)
+      clientDataJSON: b64url(response.clientDataJSON),
+      authenticatorData: b64url(response.authenticatorData),
+      signature: b64url(response.signature)
     }
   }
-  if (response.userHandle) answer.response.userHandle = bytesToB64url(response.userHandle)
+  if (response.userHandle) answer.response.userHandle = b64url(response.userHandle)
   return answer
 }
 

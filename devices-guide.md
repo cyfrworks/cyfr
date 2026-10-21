@@ -61,7 +61,7 @@ Revocation erases nothing already shown on the device. Until revocation or expir
 1. The command line asks this home for a sign-in, prints a link, `https://<home>/cli#code=<secret>`, and a code of eight characters, and waits. The secret is in the link's fragment, which a browser never sends to a server; the `/cli` page reads it and removes it from the address at once.
 2. Open the link in a browser signed in to this home, on the same machine or another device. Prism asks you to approve the command line on the machine it names and shows the code. Approve only if it is the code your terminal shows: a link someone else sent you shows theirs.
 3. Approving issues a session that outlives the one you approve from, so it is a sensitive change (above), confirmed with your passkey, a fresh sign-in or on a device you paired, and its preview names the machine and the code again.
-4. The command line receives its own session, saves it under the context it used (`--context`, or the current one), and says who signed in. It acts as you, in the athanor shown in the approval preview, until you revoke it or `session_ttl_hours` after it signed in (30 days by default).
+4. The command line receives its own session, saves it under the context it used (`--context`, or the current one), and says who signed in. It acts as you, in the athanor shown in the approval preview, until you revoke it or it has gone `session_ttl_hours` without use (30 days by default).
 
 The link signs in once and lives five minutes. A link already used, expired, or one the command line stopped waiting for is refused with that reason: run `cyfr login` again. Not signed in to Prism, you are sent to sign in first; then open the link again, while the command line still waits. Ctrl-C, or the link's expiry, withdraws the sign-in, so an approval after that signs nothing in and one that landed first is ended. A command line killed outright leaves its sign-in to expire, and a session an approval gave it meanwhile is held by no one: revoke it under **Devices**.
 
@@ -89,13 +89,13 @@ A proof covers that one request, is used once and expires with it.
 
 - **A passkey** registered at this home, asserting over the request. Face ID, a fingerprint or a security key.
 - **A fresh sign-in** at the identity provider of the door you signed in with, forced to ask you again. It opens in a new tab, so the asking page stays. The provider must report when you signed in. The page it returns to shows the change again, and confirms only when you approve it in a browser signed in as you.
-- **A code sent to your verified email** is not offered yet: no home has a mail transport.
+- **A code sent to your verified email** is not offered: no home has a mail transport.
 
-A paired device offers a passkey, an email code and a fresh sign-in it begins, which opens in a new tab and is approved there in a browser signed in to this home; each counts as given on that device. A client with no person behind it, an app frame or an API key, shows no confirm control; where one asks, it offers to request confirmation, and you confirm on another of your devices.
+A paired device offers a passkey and a fresh sign-in it begins, which opens in a new tab and is approved there in a browser signed in to this home; each counts as given on that device. A client with no person behind it, an app frame or an API key, shows no confirm control; where one asks, it offers to request confirmation, and you confirm on another of your devices.
 
 ### Adding a device, a passkey or a door
 
-Once you hold a passkey or a paired device at this home, three changes need a confirmation from one of them: pairing another device (or certifying one for another home), registering another passkey, and linking a door. Your passkey's assertion qualifies, and so does a confirmation you give on a device you paired, whichever proof it uses there, a fresh sign-in it begins included. A fresh sign-in, or a code, asked for from a browser that is not a paired device confirms every other change but not these: their request offers only what qualifies and says to confirm with your passkey or on a device you paired.
+Once you hold a passkey or a paired device at this home, three changes need a confirmation from one of them: pairing another device (or certifying one for another home), registering another passkey, and linking a door. Your passkey's assertion qualifies, and so does a confirmation you give on a device you paired, whichever proof it uses there, a fresh sign-in it begins included. A fresh sign-in, asked for from a browser that is not a paired device confirms every other change but not these: their request offers only what qualifies and says to confirm with your passkey or on a device you paired.
 
 Before your first passkey or device, a fresh sign-in confirms the first one, once. Whichever lands first, your first passkey or your first paired device, closes that path for good: revoking every passkey and device later does not reopen it. If you lose them all, recover with your recovery kit or through this home's platform administrator (below).
 

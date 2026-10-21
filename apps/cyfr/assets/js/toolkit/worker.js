@@ -32,7 +32,6 @@ import {
   FEED_STREAM,
   ON_KINDS,
   ROLES,
-  STREAM_ROUTE,
   answer,
   decodeAnswer,
   decodeRequest,
@@ -42,7 +41,8 @@ import {
   fromStreams,
   pairKey,
   recordFromEnvelope,
-  request
+  request,
+  streamUrlOf
 } from "./wire.js"
 
 // A refusal or a failure, as a canvas's module reads it, in the shape the
@@ -210,7 +210,7 @@ export function startModuleWorker(scope, {importModule}) {
   const canvas = Object.freeze({
     /** Draw `tree`: an element tree of toolkit major 1. */
     render(tree) {
-      let json = null
+      let json
       try {
         json = JSON.stringify(tree)
       } catch (_error) {
@@ -277,7 +277,7 @@ export function startStreamsWorker(scope, {fetchFn}) {
 
     booted = true
     credential = boot.credential
-    streamUrl = boot.data_url + STREAM_ROUTE
+    streamUrl = streamUrlOf(boot.data_url)
     declared = new Set(boot.streams.map(pairKey))
     port = boot.port
     port.onmessage = (message) => onRequest(message.data)
@@ -352,7 +352,7 @@ export function startStreamsWorker(scope, {fetchFn}) {
 
     const type = (response.headers.get("content-type") || "").split(";")[0].trim()
     if (type !== STREAM_CONTENT_TYPE) {
-      let body = null
+      let body
       try {
         body = await response.json()
       } catch (_error) {

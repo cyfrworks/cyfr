@@ -10,7 +10,7 @@ tenancy schema migrations, is Apache-2.0.
 
 The boundary is the application directory: everything under
 `apps/sanctum/` is FSL-1.1-Apache-2.0, and everything else in the repo is
-Apache-2.0. Elixir files carry an in-band
+Apache-2.0. Source files carry an in-band
 `SPDX-License-Identifier` header (there is no `REUSE.toml`). The canonical
 license texts live in the `LICENSES/` directory, and the FSL zone is
 enforced mechanically by `.github/workflows/license-lint.yml`.

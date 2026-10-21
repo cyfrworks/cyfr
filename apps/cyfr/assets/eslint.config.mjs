@@ -37,13 +37,5 @@ export default [
     // holding one is refused.
     files: ["js/toolkit/wire.js"],
     rules: {"no-control-regex": "off"}
-  },
-  {
-    // Three initial values every path overwrites (`let x = null` before a
-    // try whose body and catch both assign x): device_key.js:425 and
-    // worker.js:212 and :344. Removing them changes shipped sources, and the
-    // toolkit's tracked bundle with them; this entry goes with that change.
-    files: ["js/system_layer/device_key.js", "js/toolkit/worker.js"],
-    rules: {"no-useless-assignment": "off"}
   }
 ]

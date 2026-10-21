@@ -31,7 +31,7 @@ defmodule Prima.WasmTest do
                 end)
                 |> List.last()
   @seed_catalyst Path.expand(
-                   "../../../../seed/components/catalysts/local/http/1.1.2/catalyst.wasm",
+                   "../../../../seed/components/catalysts/local/http/1.1.3/catalyst.wasm",
                    __DIR__
                  )
 

@@ -741,7 +741,6 @@ ${range(8).map((i) => `.cyfr-chart-key.cyfr-series-${i} { color: var(--cyfr-seri
     surface: { required: ["id", "width", "height"], optional: {} },
     spacer: { required: [], optional: {} }
   };
-  var GRAMMAR_ELEMENTS = Object.freeze(Object.keys(RULES));
   var Refusal = class {
     constructor(path, reason) {
       this.path = path;

@@ -138,6 +138,9 @@
   var isName = (value) => typeof value === "string" && NAME.test(value);
   var isBindingId = (value) => typeof value === "string" && BINDING_ID.test(value);
   var isStreamName = (value) => typeof value === "string" && STREAM_NAME.test(value);
+  function streamUrlOf(dataUrl) {
+    return dataUrl + STREAM_ROUTE;
+  }
   var bounded = (list, max, each) => Array.isArray(list) && list.length <= max && list.every(each);
   function isStreams(streams) {
     if (!bounded(streams, MAX_STREAMS, isStream)) return false;
@@ -396,7 +399,7 @@
     const canvas = Object.freeze({
       /** Draw `tree`: an element tree of toolkit major 1. */
       render(tree) {
-        let json = null;
+        let json;
         try {
           json = JSON.stringify(tree);
         } catch (_error) {
@@ -450,7 +453,7 @@
       if (boot === null || boot.t !== "boot") return;
       booted = true;
       credential = boot.credential;
-      streamUrl = boot.data_url + STREAM_ROUTE;
+      streamUrl = streamUrlOf(boot.data_url);
       declared = new Set(boot.streams.map(pairKey));
       port = boot.port;
       port.onmessage = (message) => onRequest(message.data);
@@ -511,7 +514,7 @@
       }
       const type = (response.headers.get("content-type") || "").split(";")[0].trim();
       if (type !== STREAM_CONTENT_TYPE) {
-        let body = null;
+        let body;
         try {
           body = await response.json();
         } catch (_error) {

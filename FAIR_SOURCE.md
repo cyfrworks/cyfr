@@ -12,7 +12,7 @@ differs from the license texts, the license texts control.
 | Where | License | Why |
 |-------|---------|-----|
 | `apps/sanctum/**` | FSL-1.1-Apache-2.0 | Sanctum — authentication (OIDC/OAuth/API keys), tenancy, policy enforcement, the cipher that encrypts every secret, audit, and the gate: the operation table, admission and dispatch, the request log and the decision record. It is the security and multi-tenancy spine, threaded through the majority of the control plane, so any hosted offering of CYFR must redistribute it. |
-| Everything else (`apps/arca/**` including the tenancy migrations under `apps/arca/priv/repo/migrations/`, `apps/cyfr/lib/{emissary*,prism*,compendium,aqua,cyfr,opus}/`, `apps/{prima,locus}/`, web UIs, docs) | Apache-2.0 | Apache by default; the schema DDL every self-hoster must run is not gated. |
+| Everything else (`apps/arca/**` including the tenancy migrations under `apps/arca/priv/repo/migrations/`, `apps/cyfr/lib/{emissary*,prism*,compendium,aqua,cyfr,opus}/`, `apps/{prima,locus,codex}/`, `apps/cyfr/lib/cyfr_web/`, `apps/cyfr/lib/mix/`, web UIs, docs) | Apache-2.0 | Apache by default; the schema DDL every self-hoster must run is not gated. |
 
 The rule is simply the application directory: everything under
 `apps/sanctum/` is FSL-1.1-Apache-2.0, and everything else in the repo is
@@ -29,7 +29,7 @@ and the other pure primitives every part of CYFR speaks) depend on no other
 app and build alone, with the repository's `wit/` definitions compiled in;
 Sanctum keeps the
 authority's live half (the invoke-budget counter, the consent loader and the
-platform ceiling). Elixir files carry an in-band
+platform ceiling). Source files carry an in-band
 `SPDX-License-Identifier` header (there is no `REUSE.toml`), and the
 [license-lint CI](.github/workflows/license-lint.yml) enforces the boundary
 mechanically.
@@ -116,7 +116,7 @@ FSL-style "Fair Source" licensing is a category — not just CYFR. Adjacent
 precedents include Sentry (FSL), Sourcegraph (FSL), Convex (FSL), HashiCorp
 Terraform / Vault (BUSL), Elastic (Elastic License 2.0), MongoDB (SSPL),
 MariaDB MaxScale (BUSL). The category exists because traditional open source
-licensing left commercial sustainability as a problem; the 2-year change date
+licensing left commercial sustainability as a problem; the two-year delay to Apache
 gives back what's most valuable about open source — long-term forkability,
 auditability, contribution rights — while reserving a short-window commercial
 moat against free-riding.

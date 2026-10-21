@@ -66,14 +66,14 @@ missing or wrong header fails CI.
   `MIX_BUILD_PATH=_build/test_pg CYFR_DATABASE=postgres`. The split
   weighs each file by `scripts/test-partition-weights.tsv`; to regenerate
   it, move it aside, make two runs of
-  `CYFR_TEST_TIMINGS_DIR=<dir> scripts/test-partitioned.sh -n 8 -- --formatter ExUnit.CLIFormatter --formatter Prima.Test.TimingFormatter`,
+  `CYFR_TEST_TIMINGS_DIR=<absolute dir> scripts/test-partitioned.sh -n 8 -- --formatter ExUnit.CLIFormatter --formatter Prima.Test.TimingFormatter`,
   each into a fresh directory, and keep each file's larger
   `elixir scripts/test-timings.exs weights <dir>` value, as its header
   says.
 - If you changed a `@spec` or a function's return shape, run `mix dialyzer`.
   CI runs it too. It is fast once the PLT is built, and the findings it
-  reports today are recorded in [`.dialyzer_ignore.exs`](.dialyzer_ignore.exs)
+  reports are recorded in [`.dialyzer_ignore.exs`](.dialyzer_ignore.exs)
   — fixing one means deleting its line and its reason there, since a filter
-  that no longer matches also fails the build.
+  that matches nothing also fails the build.
 - Don't describe the product as "open source" in user-facing copy — it is
   "Fair Source" / "source available" (see [`FAIR_SOURCE.md`](FAIR_SOURCE.md)).

@@ -370,6 +370,8 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "canvas_wire.json" => [
       {"apps/cyfr/assets/test/toolkit/support.mjs", ~w()},
+      {"apps/cyfr/assets/test/toolkit/wire.test.mjs",
+       ~w(version to_prism_verbs to_toolkit_verbs messages paths)},
       {"apps/prima/test/prima/canvas_wire_test.exs",
        ~w(version to_prism_verbs to_toolkit_verbs messages paths)}
     ],

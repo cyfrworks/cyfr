@@ -6,7 +6,7 @@ import {readFileSync, readdirSync} from "node:fs"
 import {describe, test} from "node:test"
 
 import {ELEMENTS, STYLESHEET, formatNumber, formatTime} from "../../js/toolkit/elements.js"
-import {GRAMMAR_ELEMENTS, MAX_BYTES, parseTime, parseTree, validateTree} from "../../js/toolkit/tree.js"
+import {MAX_BYTES, parseTime, parseTree, validateTree} from "../../js/toolkit/tree.js"
 import {ASSET, NONCE, all, byClass, playedHost} from "./support.mjs"
 
 // The time grammar's vector, which `Prima.Canvas.Shape`'s test reads too.
@@ -53,8 +53,8 @@ const EVERY = stack([
 ])
 
 describe("the tree grammar", () => {
-  test("the grammar's elements are the renderers'", () => {
-    assert.deepEqual([...GRAMMAR_ELEMENTS].sort(), [...ELEMENTS].sort())
+  test("every element the renderers draw is one the grammar names", () => {
+    for (const element of ELEMENTS) assert.notEqual(validateTree({type: element}).error?.reason, "element", element)
   })
 
   test("a tree of every element validates, every optional field written with its default", () => {

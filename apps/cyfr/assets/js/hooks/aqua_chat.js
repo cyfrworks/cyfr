@@ -68,8 +68,7 @@ const AquaChat = {
       if (this.el.value.trim() === "") return
       const form = this.el.form || this.el.closest("form")
       if (!form) return
-      if (typeof form.requestSubmit === "function") form.requestSubmit()
-      else form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+      form.requestSubmit()
     }
     this.el.addEventListener("keydown", this._onKeyDown)
 

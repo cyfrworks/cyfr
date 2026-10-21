@@ -25,9 +25,9 @@ POST /mcp  ──────────────────>  Authenticate
   <──── JSON-RPC response ─────
 ```
 
-Every CLI command (`cyfr run`, `cyfr profile grant`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
+Every CLI command that talks to a server (`cyfr run`, `cyfr profile grant`, etc.) uses this same endpoint. AI agents, frontends, backend services, and CI/CD pipelines all use the same interface.
 
-The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, `/_s` and `/_f`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`) and inbound webhooks (`/hooks`); and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
+The server has one HTTP endpoint (`:4000`), and three sets of routes share it: `/mcp`, the MCP interface this guide describes; the ingress routes — sign-in and sign-out under `/auth`, tinctures under `/t`, `/_s` and `/_f`, canvas pages under `/_c`, the health checks under `/api/health`, an execution's event stream (`/api/executions/:id/events`), inbound webhooks (`/hooks`), and the `/directory/v1`, `/certify/v1` and `/restore` routes; and the Prism console at `/`. Each operation, whichever route reaches it, is admitted or refused by one gate against one table of operations, and an operation the table does not declare is refused.
 
 ---
 
@@ -38,7 +38,7 @@ CYFR supports two authentication methods. Choose the one that fits your use case
 | Method | When to Use | How It Works |
 |--------|-------------|--------------|
 | **API Keys** | Apps and service-to-service callers (frontend, backend, CI/CD) | `Authorization: Bearer cyfr_pk_...` header |
-| **Session Tokens** | Human devs using the CLI (`cyfr login`) | OAuth / OIDC login, session stored in `~/.cyfr/config.json` |
+| **Session Tokens** | Human devs using the CLI (`cyfr login`) | Approval in Prism, or the device flow with `--provider`; the session is stored in `~/.cyfr/config.json` |
 
 ### API Keys
 
@@ -47,7 +47,7 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 | Type | Prefix | Use Case | Security Considerations |
 |------|--------|----------|------------------------|
 | **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
-| **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can read the vault. |
+| **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can list the metadata of stored OAuth client credentials. |
 | **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
@@ -117,7 +117,7 @@ Response (the raw key is shown **only once**):
 
 ```json
 {
-  "key": "cyfr_pk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345",
+  "api_key": "cyfr_pk_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345",
   "name": "react-app",
   "type": "application",
   "scope": ["execute", "component_read", "storage_read"],
@@ -132,12 +132,12 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 | Scope | What It Allows |
 |-------|----------------|
 | `execute` | Run components, manage schedules, compile builds |
-| `vault_read` | Read stored credential metadata (vault entries; material never leaves the vault) |
+| `vault_read` | `oauth.list`: the names of the OAuth providers the athanor has client credentials for, who stored them and when; never the secret |
 | `component_read` | Get component blobs, discover components |
-| `component_manage` | Pull, push, register, remove, scaffold components |
+| `component_manage` | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim and verify publishers, manage registry tokens and members; change Aqua souls, roles, guides and scrolls and their skills |
 | `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
-| `storage_write` | Set retention policies |
-| `admin` | API key management, retention cleanup, session operations, force-release, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
+| `storage_write` | Set retention policies; write, edit and delete component source; write, delete, offer, accept, decline and withdraw files |
+| `admin` | API key management, retention cleanup, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
 | `*` | Wildcard — all permissions |
 
 #### Key Type Defaults and Ceilings
@@ -149,16 +149,6 @@ Each key type has default scopes (applied when none are specified) and a ceiling
 | **Application** | `["execute", "component_read", "storage_read"]` | `["execute", "vault_read", "component_read", "storage_read"]` |
 | **Service** | `["execute", "vault_read", "component_read", "storage_read", "storage_write"]` | `["execute", "vault_read", "component_read", "component_manage", "storage_read", "storage_write"]` |
 | **Admin** | `["*"]` (all) | `["vault_read", "admin", "*"]` |
-
-### Rate Limiting
-
-API keys can have per-key rate limits:
-
-```bash
-cyfr key create --name "rate-limited" --type application --scope execute --rate-limit "100/1m"
-```
-
-Rate limit format: `{count}/{window}` where window is `1m`, `5m`, `1h`, etc.
 
 ### IP Allowlist
 
@@ -202,7 +192,7 @@ Two different credential types serve two different purposes: API keys authentica
 |---|----------|-----------------------------------|----------------------|
 | **Purpose** | Authenticate your **app** to **CYFR** | Authenticate **components** to **service APIs** | Authenticate **components** to **user-scoped APIs** |
 | **Example** | `cyfr_sk_...` in your backend's env | `STRIPE_API_KEY=sk-live-...` | Google/Slack grants |
-| **Who uses it** | Your app (in the `Authorization` header) | WASM components (via `cyfr:vault/read`) | WASM components (via `cyfr:oauth/token`) |
+| **Who uses it** | Your app (in the `Authorization` header) | WASM components (the host attaches the entry, or the component reads it when its need discloses it) | WASM components (via `cyfr:oauth/token`) |
 | **Stored where** | Your app's environment | CYFR's vault (sealed, encrypted at rest) | CYFR's vault (sealed, encrypted at rest) |
 | **Managed by** | `cyfr key create/revoke/rotate` | `vault` verbs + console Vault page; bound via `cyfr profile grant` | `vault.authorize` (browser grant) + `oauth.set_client` (provider app creds); bound via `cyfr profile grant` |
 | **Lifecycle** | Static — set once | Static — rotate without re-consent | Dynamic — host auto-refreshes |
@@ -300,7 +290,7 @@ omitted entirely for methods that name no subject.
 }
 ```
 
-Every result carries `resultType`. Today it is always `"complete"`; treat any
+Every result carries `resultType`. It is always `"complete"`; treat any
 value you do not recognise as an error rather than assuming the result is
 finished.
 
@@ -313,7 +303,7 @@ finished.
 | `MCP-Protocol-Version` | `2026-07-28` | Always — must equal the `_meta` version |
 | `Mcp-Method` | the request's `method` | Always |
 | `Mcp-Name` | `params.name`, or `params.uri` for `resources/read` | Methods that name a subject |
-| `Authorization` | `Bearer cyfr_pk_...`, `Bearer cyfr_sk_...`, or a session token | Always, unless calling a public action |
+| `Authorization` | `Bearer cyfr_pk_...`, `Bearer cyfr_sk_...`, `Bearer cyfr_ak_...`, or a session token | Always, unless calling a public action |
 
 A value that is not plain visible ASCII travels Base64-encoded in the
 specification's sentinel form, `=?base64?<encoded>?=`, and the server decodes it
@@ -321,17 +311,17 @@ before comparing against the body.
 
 ### There Is No Session To Establish
 
-Earlier revisions of MCP opened with an `initialize` handshake and carried an
-`Mcp-Session-Id` afterwards. **Neither exists in `2026-07-28`.** Every request
-authenticates itself and declares its own version, so:
+Protocol `2026-07-28` has no `initialize` handshake and no `Mcp-Session-Id`.
+Every request authenticates itself and declares its own version, so:
 
 - There is no `initialize` call to make. Sending one returns `404` with
   `-32601`.
 - The server never mints or echoes a session id. Do not look for one.
 - `Authorization: Bearer ...` goes on **every** request. Both an API key and a
-  Sanctum session token are accepted in that header, and both are re-checked
-  against the database each time — so revoking either takes effect on the very
-  next call rather than whenever a cached session happens to expire.
+  Sanctum session token are accepted in that header, and both are checked
+  against the database on each call: revoking either takes effect on the very
+  next call to the member that revoked it, and within two seconds on the other
+  members of a cell.
 
 ### Discovering What A Server Speaks
 
@@ -391,7 +381,7 @@ on the wire.
 | -33502 | `consent_required` | The caller has no consent for this component |
 | -33503 | `consent_conflict` | Consent exists but does not cover what was asked |
 | -33504 | `restart_required` | Consent changed under a running execution |
-| -33505 | `confirmation_required` | A sensitive change waits for the person's fresh confirmation and nothing was changed; `error.data.payload.id` is the asking client's own secret for this request — keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation/pending` lists the pending confirmation by its ref, never by that id, and names the client that asked. Once it is confirmed, repeat the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to that id, never as an argument: a repeat before the proof answers the same id and changes nothing, and a value not spelled `cnf_` and 43 base64url characters is refused `-32602` at HTTP 400 ([Readiness and typed errors](#readiness-and-typed-errors)) |
+| -33505 | `confirmation_required` | A sensitive change waits for the person's fresh confirmation and nothing was changed; `error.data.payload.id` is the asking client's own secret for this request — keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation.pending` lists the pending confirmation by its ref, never by that id, and names the client that asked. Once it is confirmed, repeat the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to that id, never as an argument: a repeat before the proof answers the same id and changes nothing, and a value not spelled `cnf_` and 43 base64url characters is refused `-32602` at HTTP 400 ([Readiness and typed errors](#readiness-and-typed-errors)) |
 
 `-33304` is the one to branch on for backoff; the `-335xx` band is the
 consent signals, whose `error.data` payload is described under
@@ -406,7 +396,7 @@ and a failed validation. Branch on `result.isError` for those, not on a code.
 
 Two protocol-level codes are also in play, both standard JSON-RPC:
 `-32601` for an unknown method and `-32022` (`UnsupportedProtocolVersion`),
-which carries the supported list in `error.data`.
+which carries the supported list in `error.data.supported`.
 
 > **MCP Tool Reference**: For a complete mapping of CLI commands to MCP tool/action pairs (useful when building HTTP integrations), see [CLI → MCP Tool Reference](component-guide.md#cli--mcp-tool-reference) in the Component Guide.
 
@@ -457,9 +447,9 @@ Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`
 
 ## Example Scenarios
 
-### React Frontend with Public Key
+### React Frontend with an Application Key
 
-A public key is safe to embed in client-side code. It can execute and search components but cannot access secrets or admin operations.
+An application key is safe to embed in client-side code. It can execute and search components but cannot access secrets or admin operations.
 
 ```javascript
 const CYFR_URL = "https://your-cyfr-server.example.com/mcp";
@@ -502,9 +492,9 @@ const result = await runComponent(
 );
 ```
 
-### Node.js Backend with Secret Key
+### Node.js Backend with a Service Key
 
-Secret keys should live in environment variables, never in source code.
+Service keys should live in environment variables, never in source code.
 
 ```javascript
 const CYFR_URL = process.env.CYFR_URL || "http://localhost:4000/mcp";
@@ -545,7 +535,7 @@ async function cyfr(toolName, args) {
 // Execute a component
 const result = await cyfr("execution", {
   action: "run",
-  reference: "reagent:cyfr.json-transform:1.0.0",
+  reference: "reagent:local.json-transform:1.0.0",
   input: { data: [1, 2, 3] },
   type: "reagent",
 });
@@ -573,9 +563,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build and test component
+        env:
+          CYFR_TOKEN: ${{ secrets.CYFR_ADMIN_KEY }}
         run: |
-          cyfr build compile reagent:local.my-tool:0.1.0
-          cyfr run reagent:local.my-tool:0.1.0 --input '{"test": true}'
+          cyfr --url https://your-cyfr-server.example.com build compile reagent:local.my-tool:0.1.0
+          cyfr --url https://your-cyfr-server.example.com run reagent:local.my-tool:0.1.0 --input '{"test": true}'
 ```
 
 **Raw HTTP alternative:**
@@ -618,7 +610,7 @@ jobs:
             }'
 ```
 
-> **CI/CD tips**: Use `cyfr build toolchains` to verify the runner environment has the required compilation toolchain. Use `cyfr build validate` to validate a pre-compiled WASM binary without compiling from source.
+> **CI/CD tips**: Use `cyfr build toolchains` to verify the builds service has the required compilation toolchain. Use `cyfr build validate` to validate a pre-compiled WASM binary without compiling from source.
 
 ### Python Backend
 
@@ -708,7 +700,7 @@ data/athanors/{athanor_id}/components/
 │   ├── users-api/0.1.0/
 │   └── orders-api/0.1.0/
 ├── catalysts/local/
-│   ├── supabase/0.1.0/
+│   ├── supabase/0.2.0/
 │   └── stripe/0.1.0/
 └── reagents/local/
     ├── user-validator/0.1.0/
@@ -740,7 +732,7 @@ Use `execution.run_stream` instead of `execution.run`. It returns immediately wi
 Connect to the SSE endpoint to receive events as the formula executes:
 
 ```bash
-curl -N http://localhost:4000/api/executions/exec_abc123/events
+curl -N -H "Authorization: Bearer $CYFR_TOKEN" http://localhost:4000/api/executions/exec_abc123/events
 ```
 
 Events use standard SSE format with `event:` set to the event type. An execution's lifecycle (`execution.started`, `execution.completed`, `execution.failed`, `execution.cancelled`, `execution.lapsed`, `execution.result_lost`) is durable — each is a numbered row, and its `id` is that number. What a formula streams while it runs (`emit`) is a delta under the last durable event: its `id` is `<durable>.<n>`, and deltas are not replayed after a server restart.
@@ -748,7 +740,7 @@ Events use standard SSE format with `event:` set to the event type. An execution
 ```
 id: 1
 event: execution.started
-data: {"attempt":"att_...","reference":"formula:local.agent:0.4.0"}
+data: {"attempt":"att_...","sources":[]}
 
 id: 1.1
 event: emit
@@ -772,7 +764,7 @@ When a formula invokes a sub-component whose consent isn't satisfiable — a nee
 ```
 id: 1.5
 event: emit
-data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","profile_id":"prf_...","issues":[{"type":"unbound_need","need":"api_key","message":"The need \"api_key\" has no live credential bound","fix":{"tool":"profile","action":"plan","args":{"ref":"catalyst:local.stripe:0.1.0"}}}],"setup_command":"cyfr profile grant catalyst:local.stripe:0.1.0","message":"This app needs a vault entry for \"api_key\""}
+data: {"kind":"setup_required","component_ref":"catalyst:local.stripe:0.1.0","message":"...","issues":[{"type":"unbound_need","need":"api_key","message":"The need \"api_key\" has no live credential bound","fix":{"tool":"profile","action":"plan","args":{"ref":"catalyst:local.stripe:0.1.0"}}}],"setup_command":"cyfr profile grant catalyst:local.stripe:0.1.0","message":"This app needs a vault entry for \"api_key\""}
 ```
 
 Each issue's `fix` object contains the MCP tool, action, and args to start the consent walk. Frontends can use these to render one-click fix buttons; `setup_command` provides the CLI alternative. A drifted consent surfaces the same way with issue type `consent_required` ("permissions changed since you approved them"). The formula still fails — the event is informational so consumers can act on it.
@@ -781,7 +773,7 @@ Each issue's `fix` object contains the MCP tool, action, and args to start the c
 
 ### Scheduling Recurring Executions
 
-CYFR supports cron-based scheduling for recurring component execution. Create schedules via the MCP `schedule` tool or the `cyfr schedule` CLI commands. Bind each schedule to a consented execution profile using `profile_id` (MCP) or `--profile` (CLI); `cyfr profile list` shows available profile IDs.
+CYFR supports cron-based scheduling for recurring component execution. Create schedules via the MCP `schedule` tool or the `cyfr schedule` CLI commands. Bind each schedule to a consented execution profile using `profile_id` (MCP) or `--profile` (CLI); `cyfr profile list <ref>` shows that component's profile IDs.
 
 **Creating a schedule via MCP:**
 
@@ -795,7 +787,7 @@ CYFR supports cron-based scheduling for recurring component execution. Create sc
       "name": "daily-report",
       "cron_expression": "0 9 * * *",
       "reference": "formula:local.report:1.0.0",
-      "profile_id": "prf_...",
+      "profile_id": "prof_...",
       "input": {"format": "summary"},
       "missed_runs": "catch_up",
       "catch_up_limit": 3
@@ -936,7 +928,7 @@ const result = await runComponent(
 
 **Option A: One Formula per resource** — simpler. Input includes `"action": "create|read|update|delete"`. Good for small apps (e.g., `f:local.users-api:0.1.0`).
 
-**Option B: One Formula per operation** — finer-grained policy, rate limits, and audit per operation. Use when different operations need different security postures (e.g., `f:local.users-delete:0.1.0` requires admin key, `f:local.users-list:0.1.0` allows public key).
+**Option B: One Formula per operation** — finer-grained policy, rate limits, and audit per operation. Use when different operations need different security postures (e.g., `f:local.users-delete:0.1.0` requires an admin key, `f:local.users-list:0.1.0` allows an application key).
 
 ### Where Application Data Lives
 
@@ -969,7 +961,7 @@ An offer ends once: accepted, declined, withdrawn or expired, whichever lands fi
 
 Before a component can run, an operator grants it: which **vault entries** satisfy its manifest `needs`, and how much of its `caps` ask to approve. Nothing auto-applies — the manifest is an ask, and a human commits every grant. The interactive paths are `cyfr profile grant <ref>` and the console's Vault page; everything below is the same flow over MCP.
 
-`cyfr register` scans and registers local components, auto-pulling any missing published dependencies. Grant each component afterwards — a catalyst with nothing granted is rejected with a `POLICY_REQUIRED` / `setup_required` error. Reagents need no grant.
+`cyfr register` scans and registers local components, auto-pulling any missing published dependencies. Grant each component afterwards — a catalyst with nothing granted is rejected with a `consent_required` or `setup_required` error. Every root run needs a granted profile.
 
 ### The vault (`vault` tool)
 
@@ -1023,7 +1015,7 @@ material or grants an unbound component access.
 
 ### Instance entries (`instance_entry` tool)
 
-An instance entry is a credential the platform admin enters once for the whole instance and offers to the people on it, owned by no athanor. It is always attach-only, and its destination names its `methods` and `paths` as well as its hosts. It is an API key or a bundle of fields: `kind` admits `api_key` and `bundle` alone, and an OAuth account is entered in an athanor's own vault, since nothing can yet dispense an instance entry's token. Every action but `offered` is a platform admin's, from an interactive session; `offered` is any signed-in person's read of what they may use and their own use of it today.
+An instance entry is a credential the platform admin enters once for the whole instance and offers to the people on it, owned by no athanor. It is always attach-only, and its destination names its `methods` and `paths` as well as its hosts. It is an API key or a bundle of fields: `kind` admits `api_key` and `bundle` alone, and an OAuth account is entered in an athanor's own vault, since an instance entry's token is never dispensed. Every action but `offered` is a platform admin's, from an interactive session; `offered` is any signed-in person's read of what they may use and their own use of it today.
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
@@ -1098,7 +1090,7 @@ Five typed errors cross every surface (MCP, HTTP, CLI, consoles) with normative 
 | `consent_required` | `{profile_id, current_revision, shape_diff}` | The grant does not cover this run: the component's ask changed since approval (the shape diff shows each component's changes, naming its `node` and marking new or dropped dependencies with `new` or `dropped`), the grant does not admit the run's origin, or it names a storage path spelled other than the storage door reaches it. Review and grant again |
 | `consent_conflict` | `{expected_revision, actual_revision, cause}` | `stale_plan` → re-run plan; `digest_changed` → re-run preview; `race` → retry commit |
 | `restart_required` | `{profile_id, new_revision, missing}` | A new revision landed under a running execution — restart to pick it up |
-| `confirmation_required` | `{id, operation, expires_at}` | A sensitive change needs the person's fresh confirmation before `expires_at`; nothing was changed, and it is no denial. `id` is the asking client's own secret for this one request: keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation/pending` lists the pending confirmation by its ref, derived one way from `id`, never by `id` itself, and names the client that asked. Over MCP the asking client then repeats the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to `id`, which no request log records; a repeat before the proof answers the same `id` and opens nothing, and a repeat after it completes the change once. The CLI repeats for you on a terminal: it shows the ref and repeats each time you press Enter. A plain HTTP endpoint carries no repeat |
+| `confirmation_required` | `{id, operation, expires_at}` | A sensitive change needs the person's fresh confirmation before `expires_at`; nothing was changed, and it is no denial. `id` is the asking client's own secret for this one request: keep it, and never log or show it. The person confirms it with a fresh proof; `confirmation.pending` lists the pending confirmation by its ref, derived one way from `id`, never by `id` itself, and names the client that asked. Over MCP the asking client then repeats the same `tools/call` with `params._meta["cyfr/confirmationId"]` set to `id`, which no request log records; a repeat before the proof answers the same `id` and opens nothing, and a repeat after it completes the change once. The CLI repeats for you on a terminal: it shows the ref and repeats each time you press Enter. A plain HTTP endpoint carries no repeat |
 
 On the MCP wire each arrives as a protocol-level JSON-RPC error — codes `-33501` (`setup_required`), `-33502` (`consent_required`), `-33503` (`consent_conflict`), `-33504` (`restart_required`), `-33505` (`confirmation_required`) — with `error.data` carrying `{"tag": …, "payload": {…}}` and a one-line human summary in `error.message`. A plain HTTP endpoint answers the same `data` beside its `code` and `message`, `confirmation_required` at `428 Precondition Required`. Branch on the code (or `data.tag`); the payload is the table above.
 
@@ -1212,7 +1204,7 @@ themselves.
 ### Platform admins
 
 CYFR is one product: deploy it as-is (sqlite, local FS) or configure OIDC /
-Postgres / a custom registry. There is no separate "edition" or "mode".
+Postgres / a custom registry.
 
 Once authentication is configured, two lists do two jobs. `CYFR_PLATFORM_ADMIN_EMAILS`
 names the server's operators (platform admins): always let in, minted their
@@ -1264,7 +1256,7 @@ operations are rejected.
 ### OIDC (federated identity)
 
 Set `CYFR_AUTH_PROVIDER=oidc` to federate against a generic OIDC issuer. All
-three variables are required when oidc is selected — the server refuses to boot
+three variables, `CYFR_OIDC_ISSUER`, `CYFR_OIDC_CLIENT_ID` and `CYFR_OIDC_CLIENT_SECRET`, are required when oidc is selected — the server refuses to boot
 otherwise rather than silently degrading to no authentication. The issuer must
 not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 
@@ -1306,7 +1298,7 @@ What a cell changes for a client and an operator:
 - **Stdio MCP servers are not available** in a cell.
 - **Per-member ceilings multiply.** `CYFR_OPUS_MAX_CONCURRENT`,
   `CYFR_OPUS_MAX_CONCURRENT_PER_TENANT` and the per-credential
-  stream cap on `execution.subscribe` and `notifications/listen` are each
+  stream cap on the execution event stream and on `subscriptions/listen` are each
   member's, so N members admit N times each. The tenant's durable
   ceilings are rows and hold for the cell: its consented invocation rate,
   its budget reservations and charges, and its storage cap.
@@ -1444,9 +1436,9 @@ This assumes you've completed the Quick Start in the [README](README.md) (instal
 cyfr up
 cyfr login
 
-# 2a. Use existing components (e.g., the included Claude catalyst)
+# 2a. Use existing components (e.g., the shipped Claude catalyst)
 cyfr register
-cyfr profile grant c:moonmoon69.claude
+cyfr profile grant c:local.claude
 
 # 2b. Or create a new component from scratch
 cyfr new catalyst my-api
@@ -1482,12 +1474,12 @@ edit source → cyfr build compile <ref> → cyfr run <ref>
 
 ```
 Vanilla:  cyfr new tincture <name>                    → edit HTML/JS/CSS → cyfr register → reload
-React:    cyfr new tincture <name> --template react   → edit src/App.tsx → cyfr build compile → cyfr register
+React:    cyfr new tincture <name> --template react   → edit src/App.tsx → cyfr build compile
 ```
 
 - `cyfr new tincture <name>` scaffolds vanilla HTML/JS/CSS (SDK is auto-injected at serve time)
-- `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (requires `cyfr build compile` before registering)
-- Built tinctures run `npm ci && vite build` via Locus, installing exactly what `package-lock.json` pins — output is static HTML/JS/CSS, no runtime dependency
+- `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (`cyfr build compile` builds it and registers it)
+- Built tinctures run `npm ci && npm run build` via Locus, installing exactly what `package-lock.json` pins — output is static HTML/JS/CSS, no runtime dependency
 - Tinctures invoke backend components via `cyfr.invoke()` — declare dependencies in manifest `dependencies.static`
 - Open it in the console at `/a/<athanor>/tinctures`, or at `/t/<athanor>/<publisher>/<name>` once it is public
 

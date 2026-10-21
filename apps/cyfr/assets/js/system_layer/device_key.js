@@ -19,7 +19,8 @@
  * digest (`keyDigest`, `Prima.Device.key_digest/1`) is shown as its code
  * (`keyCode`), which the person types on a client of theirs to open an
  * invitation for that key alone. The invitation's link then pairs with
- * the prepared key, its `pair_request` naming the key and its digest.
+ * the prepared key through the page's `pair_start` and `pair_proof`
+ * requests, which carry the key and its digest (`index.js`).
  *
  * The connection (`Glass`) sends `connect` under the certificate it
  * holds, or `renew` when that certificate has expired by this device's
@@ -61,6 +62,8 @@
  * it.
  */
 
+import {b64url, fromB64url} from "./base64url.js"
+
 export const PROTOCOL = "cyfr-device/v1"
 // A challenge as a home issues it (`Prima.DeviceCert.Challenge`): its
 // protocol, its purposes and its nonce's length in bytes.
@@ -73,17 +76,6 @@ export const CONFIRMATIONS = "confirmation.changes"
 export const LISTEN_RETRY_MS = 5_000
 
 export const GLASS_TYPES = ["capabilities", "connect", "intent", "pair_request", "proof", "renew"]
-export const HOME_TYPES = [
-  "answer",
-  "certificate",
-  "challenge",
-  "event",
-  "grant",
-  "pair_answer",
-  "revoke",
-  "standing"
-]
-export const CONTINUOUS_FIELDS = ["stream", "frames", "chunks", "samples", "continuous"]
 
 // Each home message's fields: required, then optional.
 const HOME_FIELDS = {
@@ -97,29 +89,14 @@ const HOME_FIELDS = {
   revoke: [["client_id"], ["grant_id"]]
 }
 
+/** The types the home sends: the keys of HOME_FIELDS. */
+export const HOME_TYPES = Object.keys(HOME_FIELDS)
+
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 // ---------------------------------------------------------------------------
 // Encodings
 // ---------------------------------------------------------------------------
-
-/** Unpadded base64url of `bytes` (an ArrayBuffer or a view of one). */
-export function b64url(bytes) {
-  const view = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  let binary = ""
-  for (const byte of view) binary += String.fromCharCode(byte)
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-}
-
-/** The bytes unpadded base64url `text` spells. */
-export function fromB64url(text) {
-  if (typeof text !== "string" || !/^[A-Za-z0-9_-]*$/.test(text)) throw new TypeError("not base64url")
-  const base64 = text.replace(/-/g, "+").replace(/_/g, "/")
-  const binary = atob(base64 + "=".repeat((4 - (base64.length % 4)) % 4))
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes
-}
 
 /**
  * The JCS (RFC 8785) text of a JSON value: object members sorted by their
@@ -230,10 +207,6 @@ function message(type, fields) {
 export const connectMessage = (clientId, certificate) => message("connect", {client_id: clientId, certificate})
 export const renewMessage = (clientId, certificate) => message("renew", {client_id: clientId, certificate})
 export const proofMessage = (proof) => message("proof", {proof})
-export const capabilitiesMessage = (capabilities) => message("capabilities", {capabilities})
-
-export const pairRequestMessage = (invitationSecret, deviceKey, keyDigest) =>
-  message("pair_request", {invitation_secret: invitationSecret, device_key: deviceKey, key_digest: keyDigest})
 
 /**
  * The digest of the device public key `deviceKey` (its unpadded base64url
@@ -248,9 +221,9 @@ export async function keyDigest(deviceKey, subtle = globalThis.crypto.subtle) {
 export const keyCode = (digest) => (digest.match(/.{1,4}/g) || []).join(" ")
 
 /**
- * One discrete operation. An intent never carries continuous data, so
- * `args` holding a field that marks it as such is refused here, before it
- * is sent, as the home would refuse it by its shape.
+ * One discrete operation. The message holds only the fields written here,
+ * so it carries no continuous field at its top level, where the home
+ * refuses one.
  */
 export function intentMessage(id, operation, args, confirmationId) {
   if (!ID.test(id)) throw new TypeError("an intent's id is an identifier")
@@ -269,8 +242,8 @@ export function decodeHome(map) {
   if (!("protocol" in map) || !("type" in map)) return {error: "missing_field"}
   if (map.protocol !== PROTOCOL) return {error: "wrong_protocol"}
   if (GLASS_TYPES.includes(map.type)) return {error: "wrong_sender"}
+  if (!HOME_TYPES.includes(map.type)) return {error: "unknown_type"}
   const fields = HOME_FIELDS[map.type]
-  if (!fields) return {error: "unknown_type"}
 
   const [required, optional] = fields
   for (const name of Object.keys(map)) {
@@ -442,7 +415,7 @@ async function askIssuer(fetchFn, url, body) {
     throw Object.assign(new Error("The home that certified this device could not be reached."), {ended: false})
   }
 
-  let answer = null
+  let answer
   try {
     answer = await response.json()
   } catch (_error) {
@@ -536,30 +509,6 @@ export function openStore(indexedDB = globalThis.indexedDB, name = "cyfr-glass")
     loadCertify: () => run("readonly", (store) => store.get("certify")).then((value) => value || null),
     saveCertify: (record) => run("readwrite", (store) => store.put(record, "certify")).then(() => record),
     clearCertify: () => run("readwrite", (store) => store.delete("certify")).then(() => null)
-  }
-}
-
-/** A store in memory, with the same calls. */
-export function memoryStore(record = null, pendingRecord = null, certifyRecord = null, preparedRecord = null) {
-  let held = record
-  let pending = pendingRecord
-  let asked = certifyRecord
-  let prepared = preparedRecord
-  return {
-    load: async () => held,
-    save: async (next) => (held = next),
-    clear: async () => (held = null),
-    saveIf: async (clientId, next) => (held && held.clientId === clientId ? ((held = next), true) : false),
-    clearIf: async (clientId) => (held && held.clientId === clientId ? ((held = null), true) : false),
-    loadPrepared: async () => prepared,
-    savePrepared: async (next) => (prepared = next),
-    clearPrepared: async () => (prepared = null),
-    loadPending: async () => pending,
-    savePending: async (next) => (pending = next),
-    clearPending: async () => (pending = null),
-    loadCertify: async () => asked,
-    saveCertify: async (next) => (asked = next),
-    clearCertify: async () => (asked = null)
   }
 }
 

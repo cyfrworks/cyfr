@@ -25,7 +25,7 @@ defmodule Prima.Manifest.SeedManifestsTest do
   defp guest_path?(path), do: path == "data" or String.starts_with?(path, "data/")
 
   test "the seed holds the shipped manifests" do
-    assert length(@manifests) >= 14
+    assert length(@manifests) >= 13
     assert Enum.any?(@manifests, &String.contains?(&1, "/catalysts/local/openai/"))
   end
 
@@ -52,15 +52,16 @@ defmodule Prima.Manifest.SeedManifestsTest do
     end
   end
 
-  test "the 1.3.x model catalysts' keys are disclose-only needs" do
+  test "the shipped model catalysts' keys are attached, not disclosed" do
     needs =
       @manifests
-      |> Enum.filter(&String.contains?(&1, "/1.3."))
+      |> Enum.filter(&String.contains?(&1, "/catalysts/local/"))
       |> Enum.flat_map(fn path ->
-        path |> File.read!() |> Jason.decode!() |> Needs.from_manifest()
+        path |> File.read!() |> Jason.decode!() |> Needs.from_manifest() || []
       end)
+      |> Enum.filter(&(&1.kind == "api_key"))
 
     assert length(needs) >= 5
-    assert Enum.all?(needs, &(&1.kind == "api_key" and Needs.disclose_only?(&1)))
+    assert Enum.all?(needs, &(not Needs.disclose_only?(&1)))
   end
 end

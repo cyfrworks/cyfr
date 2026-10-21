@@ -78,18 +78,18 @@ data/athanors/{athanor_id}/components/catalysts/local/my-api/0.1.0/
 | File storage | — | `cyfr:storage/files` | — | — |
 | Invoke sub-components | — | — | `cyfr:formula/invoke` | — |
 | Emit events (SSE/LiveView) | — | `cyfr:emit/events` | `invoke::emit` | — |
-| MCP tool access | — | — | Via `invoke::call` | — |
+| MCP tool access | — | — | Via `invoke::call` | `cyfr.action` (declared system actions) |
 | Frontend UI | — | — | — | HTML/JS/CSS |
 | Backend component invoke | — | — | — | `cyfr.invoke()` |
 | Public web access | — | — | — | `/t/:athanor/:publisher/:name` (visibility via MCP) |
 
-**Reagents** export `cyfr:reagent/compute::compute(string) -> string`. No imports, no side effects, fully deterministic. Locus rejects any reagent binary with imports.
+**Reagents** export `cyfr:reagent/compute::compute(string) -> string`. They get the sandbox every executable type gets, with no CYFR host interface, and Locus checks only their exports.
 
 **Catalysts** export `cyfr:catalyst/run::run(string) -> string`. Import HTTP, secrets, OAuth tokens, and storage host functions. Capability-gated: egress and storage come from the consent the operator granted.
 
 **Formulas** export `cyfr:formula/run::run(string) -> string`. Import `cyfr:formula/invoke` for orchestrating sub-components. No direct I/O — invoke catalysts for HTTP/secrets/storage.
 
-**Tinctures** are HTML/JS/CSS frontends — not WASM. They display data in the Prism shell (authenticated) or as public web pages. They get data by invoking backend components via `cyfr.invoke()`. No tool execution, no secrets, no MCP access. See [Tincture](#tincture) section below.
+**Tinctures** are HTML/JS/CSS frontends — not WASM. They display data in the Prism shell (authenticated) or as public web pages. They get data by invoking backend components via `cyfr.invoke()`, run the system actions they declare (`cyfr.action`), and get no secrets. See [Tincture](#tincture) section below.
 
 ---
 
@@ -156,13 +156,14 @@ path = "wit"
 [package.metadata.component.target.dependencies]
 "cyfr:vault" = { path = "wit/deps/cyfr-vault" }
 "cyfr:http" = { path = "wit/deps/cyfr-http" }
+# "cyfr:emit" = { path = "wit/deps/cyfr-emit" }      # uncomment if you import emit
 # "cyfr:storage" = { path = "wit/deps/cyfr-storage" }  # uncomment if you import storage
 # "cyfr:oauth" = { path = "wit/deps/cyfr-oauth" }      # uncomment if you import oauth
 ```
 
 ### WIT Worlds
 
-Your `src/wit/world.wit` defines what your component exports and imports. **Catalysts should customize `world.wit` to only import interfaces they actually use** — don't blindly copy the canonical one with all four imports.
+Your `src/wit/world.wit` defines what your component exports and imports. **Catalysts should customize `world.wit` to only import interfaces they actually use** — don't blindly copy the canonical one with all six imports.
 
 **Reagent** — no imports:
 ```wit
@@ -171,7 +172,7 @@ interface compute { compute: func(input: string) -> string; }
 world reagent { export compute; }
 ```
 
-**Catalyst (HTTP + secrets + streamed events)** — e.g. a model catalyst like claude, openai:
+**Catalyst (HTTP + secrets + streamed events)** — e.g. a catalyst that reads its own key:
 ```wit
 package cyfr:catalyst@0.1.0;
 interface run { run: func(input: string) -> string; }
@@ -266,7 +267,7 @@ impl Guest for Component {
         };
 
         // Read a credential field (projected from the bound vault entry)
-        let api_key = match bindings::cyfr::secrets::read::get("MY_API_KEY") {
+        let api_key = match bindings::cyfr::vault::read::get("MY_API_KEY") {
             Ok(key) => key,
             Err(e) => return serde_json::json!({"error": e}).to_string(),
         };
@@ -505,8 +506,8 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `description` | string | Yes | Human-readable summary |
 | `needs` | object | Catalysts (if uses credentials) | Named roles the operator satisfies with vault entries (see below) |
 | `caps` | object | Catalysts/Formulas | The declared capability ask: egress, storage, tools, limits (see below) |
-| `tincture` | object | Tinctures | Frontend config: `entry`, `icon`, `tagline`, `public`, `build`, `window`, `connect`, `media` |
-| `schema` | object | See below | WASM types: input/output JSON Schema. Tinctures: `tables` + `queries` |
+| `tincture` | object | Tinctures | Frontend config: `entry`, `icon`, `tagline`, `public`, `build`, `frame`, `canvas`, `streams`, `actions`, `connect`, `media` |
+| `schema` | object | See below | WASM types: input/output JSON Schema |
 | `examples` | array | Recommended | Copy-pasteable input/output pairs |
 | `defaults` | object | Optional | Vendor-recommended defaults baked into the manifest (see below) |
 | `dependencies` | object | Formulas/Tinctures | Static and dynamic dependency declarations |
@@ -528,7 +529,6 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `needs` | — | Yes (if uses credentials) | — | — |
 | `caps` | — | Yes (if does I/O) | Yes (if calls tools) | — |
 | `schema` (input/output) | Recommended | Recommended | Recommended | — |
-| `schema` (tables/queries) | — | — | — | Yes (if has data) |
 | `examples` | Recommended | Recommended | Recommended | — |
 | `dependencies.static` | — | — | Yes (if invokes sub-components) | Optional |
 | `contracts` | — | Model catalysts | — | — |
@@ -807,7 +807,7 @@ close(handle) -> string   // Clean up — always call when done
 ```
 Protocol: `request` → loop `read` until `done: true` → `close`. Same policy enforcement as fetch. A `read` waits up to 100 ms for a chunk and answers `"data": ""` when none arrived; `status` is the provider's HTTP status once its response began (a non-2xx body streams like any other), and a request that failed before any response answers `{"error": {"type": "request_failed", ...}}`.
 
-**Buffered SSE parsing** — the standard pattern used by all LLM catalysts (claude, openai, gemini):
+**Buffered SSE parsing** — the standard pattern used by all LLM catalysts (claude, openai, grok, openrouter):
 ```rust
 let handle_resp: Value = serde_json::from_str(
     &streaming::request(&req.to_string())
@@ -942,17 +942,13 @@ Error: `{"error": {"type": "...", "message": "..."}}`.
 | `cancel(task_id)` | Task ID string | `{cancelled, task_id}` |
 | `emit(json)` | Any JSON event | `{ok: true, sequence}` |
 
-**Emit event conventions** — standard `kind` values used by agent formulas:
+**Emit event conventions** — the `kind` the host emits itself:
 
 | `kind` | Key fields | When |
 |--------|------------|------|
-| `turn_start` | `turn` | Start of agentic loop iteration |
-| `text_delta` | `content`, `turn` | LLM produced text chunk |
-| `tool_use` | `tool`, `turn` | LLM requested tool call |
-| `tool_result` | `tool`, `preview`, `turn` | Tool execution completed |
-| `setup_required` | `component_ref`, `issues` | Sub-component missing setup (auto-emitted by Executor) |
+| `setup_required` | `component_ref`, `issues` | Sub-component missing setup (emitted by the host) |
 
-Terminal events (`complete`, `error`) are emitted automatically by Executor — don't emit these yourself.
+The terminal lifecycle events (`execution.completed`, `execution.failed`, `execution.cancelled`, `execution.lapsed`, `execution.result_lost`) are emitted by the host — don't emit these yourself.
 
 `call` blocks until complete. `spawn`/`await` for parallel execution. `emit` is fire-and-forget — broadcasts to SSE/LiveView subscribers.
 
@@ -978,7 +974,7 @@ Every CLI command has an MCP equivalent that formulas can call programmatically:
 | CLI Command | MCP Tool | Action | Key Args |
 |---|---|---|---|
 | `cyfr run` | `execution` | `run` | `reference`, `input`, `type` |
-| `cyfr run` (streaming) | `execution` | `run_stream` | `reference`, `input`, `type` → returns `{execution_id, stream_url}` |
+| — | `execution` | `run_stream` | `reference`, `input`, `type` → returns `{execution_id, stream_url}` |
 | `cyfr run --list` | `execution` | `list` | `status`, `limit` |
 | `cyfr run --logs` | `execution` | `logs` | `execution_id` |
 | `cyfr run --cancel` | `execution` | `cancel` | `execution_id` |
@@ -1020,7 +1016,7 @@ A model catalyst fronts an LLM provider. Beyond whatever provider operations it 
 "contracts": ["model/chat@1"]
 ```
 
-The contract is three operations of the ordinary catalyst envelope (`{"operation", "params"}` in, `{"status", "data"}` or `{"status", "error"}` out). The five bundled catalysts (`catalyst:local.{claude,openai,gemini,grok,openrouter}`) implement it in their `src/src/chat.rs`; the provider's request and response shapes are built and read there and never leave the binary. The HTTP call stays in the catalyst: in 1.4.x the key stays in the host: the catalyst names its `api_key` connection on the call and CYFR attaches the key to it, and a retained 1.3.x version reads its key and sets it on the call itself.
+The contract is three operations of the ordinary catalyst envelope (`{"operation", "params"}` in, `{"status", "data"}` or `{"status", "error"}` out). The five bundled catalysts (`catalyst:local.{claude,openai,gemini,grok,openrouter}`) implement it in their `src/src/chat.rs`; the provider's request and response shapes are built and read there and never leave the binary. The HTTP call stays in the catalyst, and the key stays in the host: the catalyst names its `api_key` connection on the call and CYFR attaches the key to it, and a catalyst that reads its own key sets it on the call itself.
 
 **`describe`** — what the catalyst can do, answered without a key:
 
@@ -1046,7 +1042,7 @@ With a `model`, the same answer carries that model's `context_window` and, where
   "context_window": 200000, "max_output_tokens": 64000, "...": "the capabilities above"}}
 ```
 
-The window comes from the provider's models API where it reports one (claude, gemini, openrouter — this takes the key) and from a table in the catalyst otherwise (openai, grok), which knows a model only by an id the provider documents for it (and, for openai, its dated snapshots `<id>-YYYY-MM-DD`). A model the catalyst does not know is refused as `unknown_model` (status 404), and so is a model name outside the provider's id grammar — ASCII letters, digits, `.`, `_`, `-`, plus only the separators that provider's ids use, at most 128 bytes, with no `.` or `..` segment — in `describe` and `chat` alike, before any request is made (the 1.4.x shipped model catalysts read no key, since CYFR attaches it to their requests; the retained 1.3.x versions read theirs). The assistant sizes every request against this answer, and a turn whose model cannot be described does not start.
+The window comes from the provider's models API where it reports one (claude, gemini, openrouter — this takes the key) and from a table in the catalyst otherwise (openai, grok), which knows a model only by an id the provider documents for it (and, for openai, its dated snapshots `<id>-YYYY-MM-DD`). A model the catalyst does not know is refused as `unknown_model` (status 404), and so is a model name outside the provider's id grammar — ASCII letters, digits, `.`, `_`, `-`, plus only the separators that provider's ids use, at most 128 bytes, with no `.` or `..` segment — in `describe` and `chat` alike, before any request is made (the shipped model catalysts read no key, since CYFR attaches it to their requests). The assistant sizes every request against this answer, and a turn whose model cannot be described does not start.
 
 **`models`** — the models the bound key can reach, in one shape:
 
@@ -1118,7 +1114,7 @@ A refusal is typed, with the provider's own body beside it when the refusal is t
 {"status": 429, "error": {"type": "rate_limited", "message": "…", "provider": {"…": "the provider's body"}}}
 ```
 
-`type` is one of `invalid_request` (the request is off the contract — refused before any request is made — or the provider rejected it), `secret_denied` (answered when the read is refused by a catalyst that reads its own key, one whose need it reads itself — no `attach`, or `disclose: true` — as the retained 1.3.x versions do; the 1.4.x shipped model catalysts read no key, since CYFR attaches it), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (status 502: the provider's stream ended before its closing signal, so what arrived is not the whole answer; the assistant retries it, as it does `rate_limited` and `overloaded`), `unknown_model`, `unknown_operation`.
+`type` is one of `invalid_request` (the request is off the contract — refused before any request is made — or the provider rejected it), `secret_denied` (answered when the read is refused by a catalyst that reads its own key, one whose need it reads itself — no `attach`, or `disclose: true`; the shipped model catalysts read no key, since CYFR attaches it), `authentication`, `rate_limited`, `overloaded`, `provider_error`, `incomplete_stream` (status 502: the provider's stream ended before its closing signal, so what arrived is not the whole answer; the assistant retries it, as it does `rate_limited` and `overloaded`), `unknown_model`, `unknown_operation`.
 
 **Streaming.** While `chat` runs, the catalyst streams the answer as events on its execution's event stream through `cyfr:emit/events.emit`, then answers the whole response as above:
 
@@ -1142,7 +1138,7 @@ A **vault entry** is a credential the operator owns — an API key, an OAuth gra
 
 For attachment, declare `attach` and the destination `hosts` (and optionally `paths`). An API key or bundle names the one field to attach in `fields`; an OAuth need names its token's `scopes`. Name the need as `"connection": "<need>"` on the `cyfr:http` request with no credential header of your own. CYFR pins the request once under the component's egress, attaches the value in the host within the entry's destination, and masks it from the answer. The component, runner and worker service receive no attached credential. The need's hosts must also fit its egress ask; the entry's destination and the granted egress are independent bounds.
 
-A need without `attach`, or with `disclose: true`, asks to read the material itself: `cyfr:vault/read.get("ANTHROPIC_API_KEY")` returns only the `fields` its consent names, and only from an entry created or rebound with `disclose: true`. A need may both attach and disclose. An attach-only entry refuses a read as `disclosure_refused`; a disclosed need takes no instance entry. Existing code that reads a field keeps its read interface under an explicitly disclosed grant.
+A need without `attach`, or with `disclose: true`, asks to read the material itself: `cyfr:vault/read.get("ANTHROPIC_API_KEY")` returns only the `fields` its consent names, and only from an entry created or rebound with `disclose: true`. A need may both attach and disclose. An attach-only entry refuses a read as `disclosure_refused`; a disclosed need takes no instance entry. Code that reads a field reads it under an explicitly disclosed grant.
 
 An app may supply a dependency's public configuration in `provides`, keyed by the exact `dependencies.static` reference and then its need name. The dependency must declare a credential need with an `attach` rule. Each provided entry contains a `destination` and a string `values` map. Its value names and string values together span at most 4 KiB; the destination is validated separately. The preview shows the destination and that the publisher supplies it; no vault entry is picked. Provided values are public, attached and read alike, and changing their values or destination changes the consent's shape.
 
@@ -1184,7 +1180,7 @@ All three are frozen at consent time. Nothing auto-applies the manifest's `caps`
 ### Storage (`caps.storage`)
 
 - `paths` — directory prefixes end with `/` (e.g. `"data/"`), exact files without, or `"*"`. Paths must start with `data/` or `components/` and be canonical: no empty, `.` or `..` segment, and no spelling the storage door would serve under another name; a manifest naming one is refused at publish. Empty = hard deny.
-- `actions` — `read`, `write`, `list`, `delete`, `exists`; each must be asked for.
+- `actions` — `read`, `write`, `append`, `list`, `delete`, `exists`; each must be asked for.
 
 ### Tools (`caps.tools`)
 
@@ -1196,7 +1192,7 @@ Patterns are `"*"`, exact (`"execution.run"`), or prefix globs (`"component.*"`)
 
 **Memory and tables.** The engine gives a run one linear memory, which grows no further than the consented `max_memory_bytes` (64 MiB when unasked, at most the platform ceiling's 256 MiB), and at most ten tables of 20,000 elements each, in at most ten instances. A component that declares a second memory, more tables, or a memory or table larger than that is refused when it is instantiated, as `resource_limit`. A `memory.grow` (or `table.grow`) past the bound is refused as WebAssembly specifies: the instruction answers the guest `-1` and the run goes on, so an allocator that cannot grow fails the way its language reports an allocation failure — usually a trap — rather than with `resource_limit`.
 
-**Refused features.** A component may not use the component-model async features (async lifts and lowers, their callbacks, streams, futures and the other async builtins), GC or its reference types (`struct`, `array`, `externref` and the other GC-heap types), or exception handling (tags, `throw`, `try_table`). Each is refused when the component is published, registered or built, and again before it is compiled, with one sentence naming the component's digest. The engine's Wasmtime release has open security advisories in exactly these features, and a GC heap would sit outside the one linear memory above; the refusal lifts with a Wasmtime release that fixes them. The shipped components use none of them. Check yours with `wasm-tools validate --features=-cm-async,-cm-async-stackful,-cm-more-async-builtins,-cm-error-context,-cm-threading,-gc,-gc-types,-exceptions,-legacy-exceptions <component>.wasm`.
+**Refused features.** A component may not use the component-model async features (async lifts and lowers, their callbacks, streams, futures and the other async builtins), GC or its reference types (`struct`, `array`, `externref` and the other GC-heap types), or exception handling (tags, `throw`, `try_table`). Each is refused when the component is published, registered or built, and again before it is compiled, with one sentence naming the component's digest. The engine's Wasmtime release has open security advisories in exactly these features, and a GC heap would sit outside the one linear memory above. The shipped components use none of them. Check yours with `wasm-tools validate --features=-cm-async,-cm-async-stackful,-cm-more-async-builtins,-cm-error-context,-cm-threading,-gc,-gc-types,-exceptions,-legacy-exceptions <component>.wasm`.
 
 ### Flows (`caps.flows`)
 
@@ -1211,8 +1207,8 @@ A flow only lets material reach an exit the grant already allows. It grants no d
 A consent covers every release of the component line unless the operator pins a version. This is safe because the resolved capability is an allowlist: a newer release can only receive less than the consent names, never more. A release that asks for *more* triggers `consent_required` with the shape diff — the operator approves a new revision or the component doesn't run.
 
 > **Restricted tools** — permanently blocked for formulas even with `"tools": ["*"]`:
-> `session.*`, `key.*`, policy and secret mutation, `vault.*`, `profile.*`,
-> `mcp_log.*`, `policy_log.*`, `retention.*`, `record.*`, `component.push/delete`,
+> `session.*`, `key.*`, `vault.*`, `profile.*`,
+> `mcp_log.*`, `policy_log.*`, `retention.*`, `record.*` except `record.payload`, `component.push/delete`,
 > registry identity mutation, webhook/schedule mutation, `profile.publish`,
 > `execution.force_release`, `system.notify`, and MCP-server management.
 > Formulas cannot touch auth, credentials, or the consent plane.
@@ -1301,7 +1297,7 @@ be delivered and asks the sender to send it again.
 1. Scaffold    cyfr new <type> <name>                  (once — creates project structure)
 2. Edit        Edit src/src/lib.rs
 3. Compile     cyfr build compile <type>:local.<name>:<version>   (versioned — targets specific version)
-4. Grant       cyfr profile grant c:local.<name>       (versionless — first time only, covers later versions)
+4. Grant       cyfr profile grant <type>:local.<name>  (versionless — first time only, covers later versions)
 5. Run         cyfr run <type>:local.<name> --input '{...}'       (versionless — uses latest version)
 6. Iterate     Edit → compile → run (a versionless consent persists across version bumps)
 ```
@@ -1352,19 +1348,16 @@ For the full tincture reference (architecture, manifest, SDK, sandbox constraint
 
 | Error | Context | Fix |
 |-------|---------|-----|
-| `FORBIDDEN_IMPORT` | Reagent imports WASI | Check `wasm-tools print \| grep "(import"`. Causes: `std::time`, `std::net`, `std::fs`, RNG, transitive deps |
-| `MISSING_EXPORT` | Required interface not exported | Verify WIT export, `bindings::export!` macro, `Guest` trait |
-| `INVALID_WASM` | Not valid WebAssembly, or uses a refused feature | Verify target is `wasm32-wasip2`, update toolchain, `wasm-tools validate` with the refused features off (**Refused features** under [Limits](#limits-capslimits)) |
-| `SIZE_EXCEEDED` | Binary > 50MB | Enable `lto = true`, `opt-level = "s"`, remove unused deps |
-| `POLICY_REQUIRED` | Catalyst has no granted capabilities | Grant it: `cyfr profile grant c:<ref>` |
-| `DOMAIN_BLOCKED` | HTTP to a domain outside the consent | Declare it in `caps.egress.domains` and re-grant |
-| `RATE_LIMITED` | Too many requests in window | Wait for reset, or re-grant with a higher `limits.rate_limit` |
-| `EXECUTION_TIMEOUT` | Exceeded time limit | Optimize logic, or re-grant with a longer `limits.timeout` |
-| `SECRET_DENIED` | Name outside the vault-entry projection | Declare the name in the need's `fields`; operator re-grants |
-| `AUTHORIZATION_REQUIRED` | OAuth vault entry has no live grant | Re-authorize the entry (console Vault page) |
-| `DIGEST_MISMATCH` | Binary changed since register | `cyfr register` then re-run |
-| `STORAGE_DENIED` | Path outside the consent | Declare it in `caps.storage.paths` and re-grant |
-| `invalid_argument` (reserved path) | A `file` write, edit or delete named `components/.staging/` or `aqua/.staging/`, the server's store of unit revisions: "This folder holds the server's stored unit revisions and only the server changes it — edit or remove a unit at its own path, one unit at a time" | Edit the unit's own file, or remove the unit at its own path (`cyfr remove <ref>`, the AQUA page) |
+| `wrong_world` | The binary's world does not match the type it is declared as | Build it against the world its type demands (`src/wit/world.wit`) |
+| `malformed` (`invalid_wasm`) | Not valid WebAssembly, or uses a refused feature | Verify target is `wasm32-wasip2`, update toolchain, `wasm-tools validate` with the refused features off (**Refused features** under [Limits](#limits-capslimits)) |
+| `too_large` | Binary over 50 MiB | Enable `lto = true`, `opt-level = "s"`, remove unused deps |
+| `consent_required` | The component has no granted capabilities | Grant it: `cyfr profile grant <type>:<ref>` |
+| `domain_blocked` | HTTP to a domain outside the consent | Declare it in `caps.egress.domains` and re-grant |
+| `rate_limited` | Too many requests in window | Wait for reset, or re-grant with a higher `limits.rate_limit` |
+| `secret_denied` | Name outside the vault-entry projection | Declare the name in the need's `fields`; operator re-grants |
+| `authorization_required` | OAuth vault entry has no live grant | Re-authorize the entry (console Vault page) |
+| `corrupt` | The binary changed since it was registered | `cyfr register` then re-run |
+| `invalid_argument` (reserved path) | A `file` write or delete named `components/.staging/` or `aqua/.staging/`, the server's store of unit revisions: "This folder holds the server's stored unit revisions and only the server changes it — edit or remove a unit at its own path, one unit at a time" | Edit the unit's own file, or remove the unit at its own path (`cyfr remove <ref>`, the AQUA page) |
 
 For tincture-specific errors, see the [Tincture Reference](tincture-guide.md#error-reference).
 

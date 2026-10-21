@@ -293,7 +293,7 @@ defmodule Cyfr.TelemetryBridgeTest do
         user_id: @user,
         component_policy: "any",
         binding_digest: "sha256:digest",
-        nodes: ["catalyst:local.openai:1.4.0"],
+        nodes: ["catalyst:local.openai:1.4.1"],
         fields: %{"API_KEY" => "sk-instance-never-bridged"}
       })
 

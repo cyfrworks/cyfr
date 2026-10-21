@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
+// The canvas wire on the toolkit's side, held to `tests/fixtures/canvas_wire.json`:
+// the vector is read through support.mjs.
+
 import assert from "node:assert/strict"
 import {describe, test} from "node:test"
 
@@ -21,11 +24,10 @@ import {
   decodeRequest,
   encode,
   isTinctureRef,
-  pagePath,
   recordFromEnvelope,
   replacesRecord,
   servedPrefix,
-  streamPath
+  streamUrlOf
 } from "../../js/toolkit/wire.js"
 import {CREDENTIAL, FRAME, bootArgs, canvasWire, feedEnvelopes} from "./support.mjs"
 
@@ -70,15 +72,12 @@ describe("the canvas wire is Prima.CanvasWire's", () => {
     )
   })
 
-  test("the paths are the vector's, and a credential or frame id outside its grammar throws", () => {
+  test("the data path and the stream path are the vector's, and a frame id outside its grammar throws", () => {
     for (const row of canvasWire.paths.valid) {
-      assert.equal(pagePath(row.credential, row.frame), row.page_path)
       assert.equal(dataPath(row.frame), row.data_path)
-      assert.equal(streamPath(row.frame), row.stream_path)
+      assert.equal(streamUrlOf(dataPath(row.frame)), row.stream_path)
     }
-    for (const row of canvasWire.paths.invalid) {
-      assert.throws(() => pagePath(row.credential, row.frame), TypeError, row.why)
-    }
+    assert.throws(() => dataPath("not a frame id"), TypeError)
   })
 
   test("a module's served prefix is its credential's", () => {

@@ -16,7 +16,7 @@ defmodule Aqua.ModelCapabilitiesTest do
 
   alias Aqua.Models
 
-  @ref "catalyst:local.claude:1.4.0"
+  @ref "catalyst:local.claude:1.4.1"
 
   setup do
     Arca.Cache.init()
@@ -165,7 +165,8 @@ defmodule Aqua.ModelCapabilitiesTest do
 
     # So is no binding at all, and another release of the catalyst.
     assert {:ok, _} = Models.capabilities(ctx, @ref, "m", nil, run: run)
-    assert {:ok, _} = Models.capabilities(ctx, "catalyst:local.claude:1.4.1", "m", nil, run: run)
+    # claude 1.4.2 is deliberately unshipped: only its cache key is read.
+    assert {:ok, _} = Models.capabilities(ctx, "catalyst:local.claude:1.4.2", "m", nil, run: run)
     assert runs.() == 4
 
     # And another athanor never reads this one's entry.
