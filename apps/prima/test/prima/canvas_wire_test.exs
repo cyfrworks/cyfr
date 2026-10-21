@@ -22,6 +22,8 @@ defmodule Prima.CanvasWireTest do
 
   # A value no refusal may carry.
   @canary "c4n4ry-wire-7d1e"
+  # The canary spelled as an atom, a key no JSON object has.
+  @canary_atom :"c4n4ry-wire-7d1e"
 
   @frame "frm_8f3c2a1b9d"
 
@@ -355,7 +357,7 @@ defmodule Prima.CanvasWireTest do
         {:key, @canary},
         [@canary],
         %{@canary => 1},
-        String.to_atom(@canary),
+        @canary_atom,
         <<0xFF>> <> @canary,
         @canary <> <<0xC3>>
       ]

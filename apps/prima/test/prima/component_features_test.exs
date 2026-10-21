@@ -53,6 +53,10 @@ defmodule Prima.ComponentFeaturesTest do
     {dir, path}
   end
 
+  # The validator runs as the check runs it, with no environment: a nil value
+  # unsets each inherited name.
+  defp no_env, do: Enum.map(System.get_env(), fn {name, _value} -> {name, nil} end)
+
   defp install!(path) do
     Application.put_env(:prima, :wasm_tools, path)
     ComponentFeatures.install!()
@@ -66,11 +70,15 @@ defmodule Prima.ComponentFeaturesTest do
     # An unknown name is a usage error (status 2), never a refusal of the
     # component; each name the check passes is the pinned version's own.
     for flag <- ComponentFeatures.refused() do
-      assert {_output, 0} = System.cmd(validator, ["validate", "--features=-" <> flag, @catalyst])
+      assert {_output, 0} =
+               System.cmd(validator, ["validate", "--features=-" <> flag, @catalyst],
+                 env: no_env()
+               )
     end
 
     assert {_output, 2} =
              System.cmd(validator, ["validate", "--features=-no-such-feature", @catalyst],
+               env: no_env(),
                stderr_to_stdout: true
              )
   end

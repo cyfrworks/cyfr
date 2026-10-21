@@ -69,7 +69,7 @@ defmodule Prima.Manifest.ResultsTest do
     blocks = [
       %{{:quote, canary} => %{"type" => "json"}},
       %{[canary] => %{"type" => "json"}},
-      %{String.to_atom(canary) => %{"type" => "json"}},
+      %{:"c4n4ry-results-58e2" => %{"type" => "json"}},
       %{"quote" => %{"type" => "json", {:key, canary} => 1}},
       %{"quote" => %{"type" => "object", "fields" => %{{:key, canary} => %{"type" => "json"}}}},
       %{"quote" => %{"type" => "enum", "values" => [canary | :bad_tail]}},

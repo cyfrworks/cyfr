@@ -464,9 +464,11 @@ defmodule Prima.LogFilterTest do
   # Every event a handler receives at error level, from here to the end
   # of the test, is sent to the test.
   defp record! do
-    id = :"#{__MODULE__}.#{System.unique_integer([:positive])}"
-    :ok = :logger.add_handler(id, __MODULE__, %{level: :error, config: %{test: self()}})
-    on_exit(fn -> :logger.remove_handler(id) end)
+    # One handler a test, under this module's name; one a killed test left
+    # behind is removed first.
+    _ = :logger.remove_handler(__MODULE__)
+    on_exit(fn -> :logger.remove_handler(__MODULE__) end)
+    :ok = :logger.add_handler(__MODULE__, __MODULE__, %{level: :error, config: %{test: self()}})
   end
 
   # What `fun` returns, the events every handler receives while it runs,

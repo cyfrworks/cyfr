@@ -47,14 +47,21 @@ defmodule Prima.Test.TimingFormatterTest do
   # whose setup outlasts its test once the formatter has read its start,
   # and which then has the formatter held; and a sync one, which therefore
   # starts while the formatter is held, and lets it go once its test has
-  # run, before ExUnit reports the test finished.
+  # run, before ExUnit reports the test finished. The modules are unloaded
+  # when the test ends, so a later definition starts from none of them.
   defp define_inner_suite do
-    suffix = System.unique_integer([:positive])
-    async = Module.concat([__MODULE__, "Async#{suffix}"])
-    param = Module.concat([__MODULE__, "Param#{suffix}"])
-    span = Module.concat([__MODULE__, "Span#{suffix}"])
-    sync = Module.concat([__MODULE__, "Sync#{suffix}"])
-    holder = Module.concat([__MODULE__, "Holder#{suffix}"])
+    async = __MODULE__.Async
+    param = __MODULE__.Param
+    span = __MODULE__.Span
+    sync = __MODULE__.Sync
+    holder = __MODULE__.Holder
+
+    on_exit(fn ->
+      for module <- [async, param, span, sync] do
+        :code.delete(module)
+        :code.purge(module)
+      end
+    end)
 
     Code.compile_string(
       """

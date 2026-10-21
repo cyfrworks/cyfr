@@ -22,8 +22,25 @@ defmodule Prima.WitResponseVectorsTest do
            |> File.read!()
            |> Jason.decode!()
 
+  # Every atom the vectors name, a term's or an encode_error type's: a
+  # vector naming another fails until this roster names it too.
+  @atoms Map.new(
+           ~w(busy cancelled consent_required control_plane_lost enospc error failed filed
+              flow_not_declared guest_error invalid_objects lost message_too_long no_agent
+              not_found not_member ok oops outside revoked setup_required some_internal_state
+              stale_revision timeout type unavailable
+              dispatch_error domain_blocked flow_blocked http_error request_failed
+              resource_limit storage_error storage_unavailable unknown)a,
+           &{Atom.to_string(&1), &1}
+         )
+
+  defp atom!(name),
+    do:
+      Map.get(@atoms, name) ||
+        flunk("the vectors name #{inspect(name)}, an atom the test does not")
+
   # A vector's term, as its file's comment spells one in JSON.
-  defp term(%{"atom" => name}), do: String.to_atom(name)
+  defp term(%{"atom" => name}), do: atom!(name)
   defp term(%{"tuple" => items}), do: items |> Enum.map(&term/1) |> List.to_tuple()
   defp term(%{"map" => members}), do: Map.new(members, fn {k, v} -> {k, term(v)} end)
   defp term(%{"bytes_base64" => bytes}), do: Base.decode64!(bytes)
@@ -77,7 +94,7 @@ defmodule Prima.WitResponseVectorsTest do
     for vector <- cases!("encode_error", 10, ~w(why type message answer)) do
       %{"why" => why, "type" => type, "message" => message, "answer" => answer} = vector
 
-      for type <- [type, String.to_atom(type)] do
+      for type <- [type, atom!(type)] do
         assert_answer(WitResponse.encode_error(type, term(message)), answer, why)
       end
     end

@@ -94,9 +94,11 @@ defmodule Arca.LogFilterBootTest do
   # The events every handler receives at error level while `fun` runs, and
   # the text the default formatter, with `opts` over it, makes of them.
   defp logged(opts, fun) do
-    id = :"#{__MODULE__}.#{System.unique_integer([:positive])}"
-    :ok = :logger.add_handler(id, __MODULE__, %{level: :error, config: %{test: self()}})
-    on_exit(fn -> :logger.remove_handler(id) end)
+    # One handler a test, under this module's name; one a killed test left
+    # behind is removed first.
+    _ = :logger.remove_handler(__MODULE__)
+    on_exit(fn -> :logger.remove_handler(__MODULE__) end)
+    :ok = :logger.add_handler(__MODULE__, __MODULE__, %{level: :error, config: %{test: self()}})
 
     {_result, log} = with_log(opts, fun)
     {drain(), log}
