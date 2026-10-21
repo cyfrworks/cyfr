@@ -463,7 +463,7 @@ defmodule Sanctum.VaultReader do
     aad = CipherAAD.vault_entry(athanor_id, entry.id, entry.provider_hint)
 
     case Sanctum.Cipher.decrypt(sealed, aad) do
-      {:ok, plaintext} -> decode_payload(plaintext)
+      {:ok, plaintext} -> Sanctum.Vault.Payload.decode(plaintext)
       {:error, _} -> {:error, :unseal_failed}
     end
   end
@@ -481,8 +481,6 @@ defmodule Sanctum.VaultReader do
   defp tenant_actor(athanor_id) when is_binary(athanor_id) and athanor_id != "" do
     %Prima.Actor{athanor_id: athanor_id}
   end
-
-  defp decode_payload(plaintext), do: Sanctum.Vault.Payload.decode(plaintext)
 
   # ---------------------------------------------------------------------------
   # Secret material

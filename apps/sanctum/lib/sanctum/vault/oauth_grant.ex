@@ -112,7 +112,7 @@ defmodule Sanctum.Vault.OAuthGrant do
       code_challenge =
         :crypto.hash(:sha256, code_verifier) |> Base.url_encode64(padding: false)
 
-      redirect_uri = build_redirect_uri()
+      redirect_uri = redirect_uri()
 
       pending = %{
         target: target,
@@ -648,8 +648,6 @@ defmodule Sanctum.Vault.OAuthGrant do
   def redirect_uri do
     Sanctum.origin() <> callback_path()
   end
-
-  defp build_redirect_uri, do: redirect_uri()
 
   defp decode_map(nil), do: %{}
 
