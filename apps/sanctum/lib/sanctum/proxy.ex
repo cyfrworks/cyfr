@@ -16,6 +16,12 @@ defmodule Sanctum.Proxy do
   `Emissary.External.Proxy`, and `Cyfr.Application` writes it in at boot
   with `install!/1`. Nothing in the gate or in consent names the transport.
 
+  ## Planes
+
+  An upstream catalogue carries no annotation, so every proxied tool is
+  reached in-chain, and `c:resolve/4` refuses an external-plane call
+  unless the server's own configuration opts in.
+
   ## Two questions
 
   A proxied call is admitted before it runs, like any other. The gate
@@ -128,16 +134,6 @@ defmodule Sanctum.Proxy do
   @callback list_external_tools(Context.t()) :: [map()]
 
   @doc """
-  The plane every proxied tool is reached from.
-
-  An upstream catalogue carries no annotation, so the whole bucket takes
-  one default: in-chain. `c:resolve/4` refuses an external-plane call
-  unless the server's own configuration opts in.
-  """
-  @spec default_planes() :: [Prima.Provider.plane(), ...]
-  def default_planes, do: [:in_chain]
-
-  @doc """
   Install the port's implementation. Called once by `Cyfr.Application` at
   boot, before the operation table serves a call.
 
@@ -159,16 +155,6 @@ defmodule Sanctum.Proxy do
 
     :persistent_term.put(@key, module)
     module
-  end
-
-  @doc """
-  Erase the installed implementation, leaving the port as boot found it.
-  The inverse of `install!/1`, for a test that installs one of its own.
-  """
-  @spec reset() :: :ok
-  def reset do
-    :persistent_term.erase(@key)
-    :ok
   end
 
   @doc """

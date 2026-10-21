@@ -599,7 +599,6 @@ defmodule Sanctum.Passkeys do
            )
        }}
     else
-      {:error, :unavailable} -> {:error, :unavailable}
       _refused -> {:error, :registration_refused}
     end
   end

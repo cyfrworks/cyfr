@@ -265,12 +265,9 @@ defmodule Sanctum.VaultReader do
   # A by-name read records its use only once the material opened.
   defp unseal_fields(actor, entry) do
     case unseal_material(actor, entry) do
-      {:ok, %{"v" => 3, "fields" => fields}} when is_map(fields) ->
+      {:ok, %{"fields" => fields}} ->
         Arca.VaultStorage.touch_last_used(actor, entry.id)
         {:ok, fields}
-
-      {:ok, _other} ->
-        {:error, :invalid_payload}
 
       {:error, reason} ->
         {:error, reason}
@@ -500,8 +497,7 @@ defmodule Sanctum.VaultReader do
   # Every projected field must be in the material: a partial projection
   # would hand the guest less than the operator consented to without saying
   # so, so the first absent field (in sorted order) refuses the whole read.
-  defp resolve_secrets(_ctx, _entry, %{"v" => 3, "fields" => material}, fields)
-       when is_map(material) do
+  defp resolve_secrets(_ctx, _entry, %{"fields" => material}, fields) do
     Enum.reduce_while(fields, {:ok, %{}}, fn name, {:ok, acc} ->
       case Map.fetch(material, name) do
         {:ok, value} -> {:cont, {:ok, Map.put(acc, name, value)}}
@@ -509,9 +505,6 @@ defmodule Sanctum.VaultReader do
       end
     end)
   end
-
-  # Exclude decrypted material from error tuples.
-  defp resolve_secrets(_ctx, _entry, _payload, _fields), do: {:error, :invalid_payload}
 
   # ---------------------------------------------------------------------------
   # OAuth
@@ -550,7 +543,7 @@ defmodule Sanctum.VaultReader do
     end
   end
 
-  defp resolve_oauth(%Context{} = ctx, entry, %{"v" => 3} = payload, resource, provider) do
+  defp resolve_oauth(%Context{} = ctx, entry, payload, resource, provider) do
     case payload["oauth"] do
       %{} = oauth ->
         Sanctum.Vault.OAuth.dispense(
@@ -565,9 +558,6 @@ defmodule Sanctum.VaultReader do
         {:error, :no_oauth_material}
     end
   end
-
-  defp resolve_oauth(_ctx, _entry, _payload, _resource, _provider),
-    do: {:error, :invalid_payload}
 
   # ---------------------------------------------------------------------------
   # Helpers

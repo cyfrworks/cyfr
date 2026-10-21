@@ -39,7 +39,7 @@ defmodule Sanctum.ProviderCredentials do
   `client_secret` may be nil — public OAuth clients have no secret.
   """
   @spec put(Context.t(), String.t(), String.t(), String.t() | nil) :: :ok | {:error, term()}
-  def put(%Context{} = ctx, provider, client_id, client_secret \\ nil) do
+  def put(%Context{} = ctx, provider, client_id, client_secret) do
     with {:ok, :interactive} <- Sanctum.Consent.Authz.authorize_interactive(ctx),
          :ok <- validate_provider(provider),
          :ok <- validate_client_id(client_id),
@@ -88,15 +88,6 @@ defmodule Sanctum.ProviderCredentials do
     end
   end
 
-  @doc "Whether client credentials are stored for a provider (presence only)."
-  @spec configured?(Context.t(), String.t()) :: boolean() | {:error, term()}
-  def configured?(%Context{} = ctx, provider) do
-    with :ok <- Context.require_permission(ctx, :vault_read),
-         :ok <- validate_provider(provider) do
-      Arca.ProviderCredentialStorage.exists?(actor!(ctx), provider)
-    end
-  end
-
   @doc """
   System-plane read for token exchange and refresh.
 
@@ -111,7 +102,7 @@ defmodule Sanctum.ProviderCredentials do
     with :ok <- validate_provider(provider) do
       case Arca.ProviderCredentialStorage.get(Prima.Actor.in_athanor(athanor_id), provider) do
         {:ok, row} ->
-          emit_fetch(provider, :store)
+          emit_fetch(provider)
           unseal(row)
 
         {:error, :not_found} ->
@@ -130,9 +121,8 @@ defmodule Sanctum.ProviderCredentials do
   # The athanor every management path keys on, behind the tenant chokepoint.
   defp athanor!(%Context{} = ctx), do: Context.athanor!(ctx)
 
-  # The actor the credential rows are read and written under. The
-  # product-boundary refusal stays where it was: `athanor!/1` raises
-  # `Sanctum.UnauthorizedError` for an unresolved tenant, so only a
+  # The actor the credential rows are read and written under. `athanor!/1`
+  # raises `Sanctum.UnauthorizedError` for an unresolved tenant, so only a
   # resolved context reaches Arca.
   defp actor!(%Context{} = ctx) do
     _ = athanor!(ctx)
@@ -157,11 +147,11 @@ defmodule Sanctum.ProviderCredentials do
     "OAuth provider credentials not configured for '#{provider}' — run oauth.set_client"
   end
 
-  defp emit_fetch(provider, source) do
+  defp emit_fetch(provider) do
     :telemetry.execute(
       [:cyfr, :sanctum, :provider_credentials, :fetch],
       %{system_time: System.system_time()},
-      %{provider: provider, source: source}
+      %{provider: provider}
     )
   end
 

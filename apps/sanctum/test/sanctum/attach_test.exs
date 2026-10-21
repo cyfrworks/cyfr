@@ -115,7 +115,10 @@ defmodule Sanctum.AttachTest do
 
     on_exit(fn ->
       Facts.clear()
-      if previous, do: Components.install!(previous), else: Components.reset()
+
+      if previous,
+        do: Components.install!(previous),
+        else: Sanctum.TestContext.uninstall_port(Components)
     end)
 
     Facts.put(

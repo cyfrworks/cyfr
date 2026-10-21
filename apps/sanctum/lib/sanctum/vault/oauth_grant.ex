@@ -495,8 +495,8 @@ defmodule Sanctum.Vault.OAuthGrant do
   defp apply_grant(%{target: %{kind: :existing} = target, actor: actor} = pending, bundle, hold) do
     with {:ok, entry} <- Arca.VaultStorage.get(actor, target.entry_id),
          :ok <- still_living(entry),
-         :ok <- same_endpoints(entry, target) do
-      fields = current_fields(actor, entry)
+         :ok <- same_endpoints(entry, target),
+         {:ok, fields} <- current_fields(actor, entry) do
       aad = CipherAAD.vault_entry(actor.athanor_id, entry.id, entry.provider_hint)
 
       with {:ok, json} <- Payload.encode_material(fields, bundle),
@@ -522,14 +522,14 @@ defmodule Sanctum.Vault.OAuthGrant do
     case Arca.VaultStorage.get(actor, target.entry_id) do
       {:ok, entry} ->
         # The retry re-runs the first attempt's checks, not just its
-        # write: the conflicting writer may have been `vault.revoke` —
-        # skipping `still_living/1` here CAS'd fresh live tokens into an
-        # entry the owner had just revoked, re-arming it.
+        # write: the conflicting writer may have been `vault.revoke`, and
+        # fresh live tokens must never re-arm an entry its owner revoked.
         with :ok <- still_living(entry),
-             :ok <- same_endpoints(entry, target) do
+             :ok <- same_endpoints(entry, target),
+             {:ok, fields} <- current_fields(actor, entry) do
           aad = CipherAAD.vault_entry(actor.athanor_id, entry.id, entry.provider_hint)
 
-          with {:ok, json} <- Payload.encode_material(current_fields(actor, entry), bundle),
+          with {:ok, json} <- Payload.encode_material(fields, bundle),
                {:ok, sealed} <- seal(json, aad),
                {:ok, rebound} <- commit_grant(actor, entry, target, sealed, hold) do
             granted(pending, entry, target, rebound)
@@ -594,17 +594,17 @@ defmodule Sanctum.Vault.OAuthGrant do
       else: {:error, :endpoints_immutable}
   end
 
-  # Preserve material fields across a re-auth; an unreadable payload
-  # converts to empty-fields material.
+  # A re-auth keeps the entry's material fields, so its payload must open:
+  # one that does not is damage, refused, never rewritten as empty fields.
   defp current_fields(actor, entry) do
     aad = CipherAAD.vault_entry(actor.athanor_id, entry.id, entry.provider_hint)
 
     with sealed when is_binary(sealed) <- entry.sealed_payload,
          {:ok, plaintext} <- Sanctum.Cipher.decrypt(sealed, aad),
-         {:ok, %{"v" => 3, "fields" => fields}} <- Payload.decode(plaintext) do
-      fields
+         {:ok, %{"fields" => fields}} <- Payload.decode(plaintext) do
+      {:ok, fields}
     else
-      _ -> %{}
+      _ -> {:error, :unseal_failed}
     end
   end
 

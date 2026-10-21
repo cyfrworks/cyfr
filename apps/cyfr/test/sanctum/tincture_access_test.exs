@@ -350,7 +350,7 @@ defmodule Sanctum.TinctureAccessTest do
         real = Sanctum.Consent.Components.impl!()
         on_exit(fn -> Sanctum.Consent.Components.install!(real) end)
 
-        Sanctum.Consent.Components.reset()
+        Sanctum.TestContext.uninstall_port(Sanctum.Consent.Components)
 
         answer =
           try do

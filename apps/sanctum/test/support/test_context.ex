@@ -99,6 +99,20 @@ defmodule Sanctum.TestContext do
   """
   def ensure_platform(user_id), do: Sanctum.Tenancy.Members.ensure(user_id, scope: "platform")
 
+  @doc """
+  Leave `port` (`Sanctum.Consent.Components`, `Sanctum.Proxy`) with no
+  implementation installed, as a boot that installed none leaves it.
+  """
+  def uninstall_port(port) when port in [Sanctum.Consent.Components, Sanctum.Proxy] do
+    :persistent_term.erase({port, :impl})
+    :ok
+  end
+
+  @doc "The tasks `Sanctum.RunningTasks` holds registered for `request_id`."
+  def running_pids(request_id) do
+    for {^request_id, pid} <- :ets.lookup(Sanctum.RunningTasks, request_id), do: pid
+  end
+
   @doc "The membership row `id` names, as the server reads it."
   def membership(id), do: Arca.Members.get(Prima.Actor.system(), id)
 
@@ -139,16 +153,15 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
-  Build a permissive single-user test Context with namespace `"testns"`
-  (override via `:sanctum, :default_test_namespace`), working in the
-  `"ath_test"` athanor.
+  Build a permissive single-user test Context with namespace `"testns"`,
+  working in the `"ath_test"` athanor.
 
   Impersonates a logged-in user (`auth_method: :oidc`) so tests exercise
   the same authorization path production does.
   Use this in tests, factories and fixtures.
   """
   def local do
-    ns = Application.get_env(:sanctum, :default_test_namespace, "testns")
+    ns = "testns"
 
     Context.build(
       user_id: "local|local|#{ns}",

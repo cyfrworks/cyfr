@@ -554,8 +554,7 @@ defmodule Sanctum.Vault do
   # did not disclose. Fields are compared as sets of names, so a name
   # repeated is no new field. An attach-only entry's fields are read by no
   # component, so its field schema widens nothing.
-  @spec rebind_widens?(map(), map()) :: boolean()
-  def rebind_widens?(entry, rebound) do
+  defp rebind_widens?(entry, rebound) do
     not destination_within?(rebound.destination, entry.destination) or
       (rebound.attach_only == false and
          (entry.attach_only != false or
@@ -906,12 +905,12 @@ defmodule Sanctum.Vault do
   # and with it go the tokens the old one held for narrower scope sets;
   # otherwise the current bundle is kept whole — rotating the secret fields
   # must not silently revoke a live grant.
-  defp rotation_oauth(%{"v" => 3} = current, nil), do: {:ok, current["oauth"]}
-  defp rotation_oauth(%{"v" => 3}, oauth) when is_map(oauth), do: {:ok, oauth}
+  defp rotation_oauth(current, nil), do: {:ok, current["oauth"]}
+  defp rotation_oauth(_current, oauth) when is_map(oauth), do: {:ok, oauth}
 
   # Total, like every validator here: a non-map :oauth is a typed refusal,
   # not a FunctionClauseError out of a public API.
-  defp rotation_oauth(%{"v" => 3}, _oauth),
+  defp rotation_oauth(_current, _oauth),
     do: {:error, "oauth must be an object when supplied"}
 
   defp put_change(changes, key, params, encoder) do

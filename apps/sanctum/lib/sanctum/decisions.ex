@@ -175,8 +175,7 @@ defmodule Sanctum.Decisions do
   Record how the admitted call `call_id` ended, on its decision and its
   request-log row: `completion` carries `:result` (the call's
   `{:ok, value} | {:error, reason}`), `:duration_ms`, and for the row
-  `:routed_to` and `:error_text` (a sentence to store in place of the
-  reason's own).
+  `:routed_to`.
 
   `{:ok, _}` is `:succeeded`. `{:error, reason}` takes its class
   (`Sanctum.Refusals.classify/1`) as the completion's class, and is
@@ -282,7 +281,7 @@ defmodule Sanctum.Decisions do
         _class -> :failed
       end
 
-    text = Prima.Sanitizer.sanitize(Map.get(completion, :error_text) || refusal.message)
+    text = Prima.Sanitizer.sanitize(refusal.message)
     {record(outcome, refusal.class, completion), {:error, text}}
   end
 

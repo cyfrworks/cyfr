@@ -357,7 +357,6 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  defp check_blob_digest(%{blob_digest: nil}), do: {:error, {:invalid_consent, :blob_digest}}
   defp check_blob_digest(_), do: {:error, {:invalid_consent, :blob_digest}}
 
   defp parse_blob(consent) do

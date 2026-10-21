@@ -121,7 +121,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
       {%Task{ref: ref_outer}, _} = started("req_chain")
       {%Task{ref: ref_inner}, _} = started("req_chain")
 
-      assert length(RunningTasks.pids("req_chain")) == 2
+      assert length(Sanctum.TestContext.running_pids("req_chain")) == 2
 
       # The caller hung up: everything the request started stops.
       assert :ok == RunningTasks.cancel("req_chain")
@@ -140,7 +140,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
       RunningTasks.unregister("req_chain_done", inner_claim)
       :sys.get_state(RunningTasks)
 
-      assert RunningTasks.pids("req_chain_done") == [outer.pid]
+      assert Sanctum.TestContext.running_pids("req_chain_done") == [outer.pid]
 
       assert :ok == RunningTasks.cancel("req_chain_done")
       assert_receive {:DOWN, ^ref_outer, :process, _pid, :cancelled}, 1_000
@@ -153,7 +153,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
 
       assert :ok = RunningTasks.register("req_same", claim, pid)
       assert :ok = RunningTasks.register("req_same", claim, pid)
-      assert RunningTasks.pids("req_same") == [pid]
+      assert Sanctum.TestContext.running_pids("req_same") == [pid]
 
       assert :ok == RunningTasks.cancel("req_same")
       assert_receive {:DOWN, ^ref, :process, _pid, :cancelled}, 1_000
@@ -171,7 +171,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
       assert_receive {:refused, ^pid, :cancelled}, 1_000
       assert_receive {^ref, :cancelled}, 1_000
       refute_received {:ran, ^pid}
-      assert RunningTasks.pids(request_id) == []
+      assert Sanctum.TestContext.running_pids(request_id) == []
 
       # The marked claim holds no task, so a second cancel finds nothing.
       assert {:error, :not_found} = RunningTasks.cancel(request_id)
@@ -189,7 +189,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
 
       assert_receive {:refused, ^pid, :released}, 1_000
       refute_received {:ran, ^pid}
-      assert RunningTasks.pids(request_id) == []
+      assert Sanctum.TestContext.running_pids(request_id) == []
     end
 
     test "a claimer that dies before its task registers takes the claim with it" do
@@ -239,7 +239,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
       :sys.get_state(RunningTasks)
 
       # The cancel still reaches the task, and its exit leaves nothing.
-      assert RunningTasks.pids(request_id) == [pid]
+      assert Sanctum.TestContext.running_pids(request_id) == [pid]
       assert :ok = RunningTasks.cancel(request_id)
       assert_receive {:DOWN, ^ref, :process, ^pid, :cancelled}, 1_000
 
@@ -263,7 +263,7 @@ defmodule Sanctum.Gate.RunningTasksTest do
         "the finished task's row to go"
       )
 
-      assert RunningTasks.pids("req_cleanup") == []
+      assert Sanctum.TestContext.running_pids("req_cleanup") == []
     end
   end
 

@@ -764,8 +764,7 @@ defmodule Sanctum.Gate.RequestLogTest do
 
       :ok =
         Decisions.close(ctx, admitted.call_id, %{
-          result: {:error, {:internal, "upstream said #{key}"}},
-          error_text: "upstream said #{key}"
+          result: {:error, {:internal, "upstream said #{key}"}}
         })
 
       for call_id <- [refused.call_id, admitted.call_id],

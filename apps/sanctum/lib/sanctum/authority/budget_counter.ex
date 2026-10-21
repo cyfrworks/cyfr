@@ -16,17 +16,15 @@ defmodule Sanctum.Authority.BudgetCounter do
   @table __MODULE__
 
   @doc """
-  Create the counter table. Called once by `Cyfr.Application` from a
-  process that lives as long as the application — an ETS table dies with
-  its owner, and a budget table that vanished would count from zero again,
-  which is looser, never stricter. Public, so any process may charge.
+  Create the counter table. Called once, by `Sanctum.Supervisor.start/2`,
+  from the process that lives as long as the application: an ETS table
+  dies with its owner, and a budget table that vanished would count from
+  zero again, which is looser, never stricter. Public, so any process may
+  charge.
   """
   @spec ensure_table() :: :ok
   def ensure_table do
-    if :ets.whereis(@table) == :undefined do
-      :ets.new(@table, [:named_table, :public, :set, write_concurrency: true])
-    end
-
+    :ets.new(@table, [:named_table, :public, :set, write_concurrency: true])
     :ok
   end
 

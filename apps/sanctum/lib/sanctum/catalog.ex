@@ -850,7 +850,7 @@ defmodule Sanctum.Catalog do
   declarations (the `mcp_servers` tool that manages the servers is, and
   is audited). They are classified as `:external` by
   `tool_kind/2` via namespacing, and get their plane from
-  `Sanctum.Proxy.default_planes/0`.
+  `Sanctum.Proxy`.
 
   Returns `:ok` when all tools are clean, or `{:error, [missing]}` where
   each entry is `%{provider: module, tool: name, action: verb, reason: r}`.

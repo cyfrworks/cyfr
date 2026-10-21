@@ -783,8 +783,6 @@ defmodule Sanctum.Vault.OAuth do
     Payload.encode_material(fields, payload["oauth"])
   end
 
-  defp encode_payload(payload), do: {:error, {:invalid_payload, payload}}
-
   # ---------------------------------------------------------------------------
   # Pieces
   # ---------------------------------------------------------------------------

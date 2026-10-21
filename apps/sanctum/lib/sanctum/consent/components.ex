@@ -198,16 +198,6 @@ defmodule Sanctum.Consent.Components do
   end
 
   @doc """
-  Erase the installed implementation, leaving the port as boot found it.
-  The inverse of `install!/1`, for a test that installs one of its own.
-  """
-  @spec reset() :: :ok
-  def reset do
-    :persistent_term.erase(@key)
-    :ok
-  end
-
-  @doc """
   The installed implementation. Raises
   `Sanctum.Consent.Components.NotInstalledError` when there is none; the
   calls below answer `{:error, :component_facts_unavailable}` instead.

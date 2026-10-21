@@ -148,7 +148,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     ref = "reagent:local.shape-unreadable"
     real = Components.impl!()
     on_exit(fn -> Components.install!(real) end)
-    Components.reset()
+    Sanctum.TestContext.uninstall_port(Components)
 
     refusal = {:error, {:unavailable, "Components"}}
     assert ShapeDerivation.dependency_releases(ctx, row, ref) == refusal

@@ -45,8 +45,7 @@ if config_env() == :test do
   }
 
   config :sanctum,
-    secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!",
-    default_test_namespace: "testns"
+    secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
   # Allow tests to inject a membership-resolution override
   # (`Sanctum.Tenancy`). Compile-time gate: production releases compile

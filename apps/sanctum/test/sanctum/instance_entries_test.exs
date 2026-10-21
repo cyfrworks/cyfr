@@ -110,7 +110,10 @@ defmodule Sanctum.InstanceEntriesTest do
 
     on_exit(fn ->
       Facts.clear()
-      if previous, do: Components.install!(previous), else: Components.reset()
+
+      if previous,
+        do: Components.install!(previous),
+        else: Sanctum.TestContext.uninstall_port(Components)
     end)
 
     test = self()
@@ -460,7 +463,7 @@ defmodule Sanctum.InstanceEntriesTest do
     assert {3, _} = usage(entry.id)
 
     # With the port uninstalled the facts are unreadable: refused, no claim.
-    Components.reset()
+    Sanctum.TestContext.uninstall_port(Components)
 
     assert {:error, :component_not_admitted} =
              InstanceEntries.resolve(alice, entry.id, chat, @shipped)

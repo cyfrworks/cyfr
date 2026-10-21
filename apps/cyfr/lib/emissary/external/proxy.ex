@@ -8,7 +8,7 @@ defmodule Emissary.External.Proxy do
 
   They appear in `tools/list` as `server_name:tool_name` (e.g.
   `notion:create_page`) and are reachable only `:in_chain` — see
-  `Sanctum.Proxy.default_planes/0`. An upstream catalogue is unbounded and
+  `Sanctum.Proxy`. An upstream catalogue is unbounded and
   changes without us, so it carries no compile-time annotation; what bounds
   it instead is the consent a chain's authority holds, which
   `consent_candidates/1` describes.
@@ -214,7 +214,7 @@ defmodule Emissary.External.Proxy do
                 #
                 # No planes entry: an upstream catalogue is unbounded and
                 # changes without us, so the whole bucket is `:in_chain`
-                # (`Sanctum.Proxy.default_planes/0`), answered by the
+                # (`Sanctum.Proxy`), answered by the
                 # dispatch checks from the name shape rather than carried
                 # on the definition.
                 "annotations" => %{
@@ -268,7 +268,7 @@ defmodule Emissary.External.Proxy do
   `plane` is the caller's plane — `:in_chain` from a running chain,
   `:external` from the console or any other direct caller. There is
   deliberately no default: proxied tools are in-chain by declaration
-  (`Sanctum.Proxy.default_planes/0`), and an external-plane call is
+  (`Sanctum.Proxy`), and an external-plane call is
   refused unless the server row opts in with `"console": true` in its
   config. The console's own dispatch path is in-process, so without this
   gate one dynamic tool name on a page would reach any upstream tool. The

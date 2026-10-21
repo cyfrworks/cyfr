@@ -1298,7 +1298,7 @@ defmodule Sanctum.ProvisioningTest do
 
       real = Sanctum.Consent.Components.impl!()
       on_exit(fn -> Sanctum.Consent.Components.install!(real) end)
-      Sanctum.Consent.Components.reset()
+      Sanctum.TestContext.uninstall_port(Sanctum.Consent.Components)
 
       assert_raise Sanctum.Consent.Components.NotInstalledError, fn ->
         Provisioning.provision(group, nil)

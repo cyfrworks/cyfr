@@ -693,21 +693,19 @@ defmodule Sanctum.DeviceCerts do
 
   @doc """
   The paired-client row `client_id` in the athanor `athanor_id`, of the
-  person `user_id` (any person's for `nil`): `{:ok, row}` for an active
+  person `user_id`: `{:ok, row}` for an active
   client paired with a device key, `:revoked` for a revoked one,
   `:not_standing` for a suspended one (a declared restore's, which stands
   for nothing until it is re-enabled, `Sanctum.Pairing.reenable/3`) and
   for one this home does not hold, and `:unavailable` when the store
   cannot answer.
   """
-  @spec paired_client(String.t(), String.t() | nil, String.t()) ::
+  @spec paired_client(String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, :revoked | :not_standing | :unavailable}
   def paired_client(athanor_id, user_id, client_id)
-      when is_binary(athanor_id) and athanor_id != "" and is_binary(client_id) do
-    filters =
-      if is_binary(user_id),
-        do: [user_id: user_id, standing: :all],
-        else: [standing: :all]
+      when is_binary(athanor_id) and athanor_id != "" and is_binary(user_id) and
+             is_binary(client_id) do
+    filters = [user_id: user_id, standing: :all]
 
     case Arca.PairedClients.list(Prima.Actor.in_athanor(athanor_id), filters) do
       {:ok, rows} ->

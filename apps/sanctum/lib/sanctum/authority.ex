@@ -72,12 +72,12 @@ defmodule Sanctum.Authority do
     do: BudgetCounter.try_acquire(budget)
 
   @doc """
-  Register the calling (or named) process as the holder of one charged
-  slot — see `Sanctum.Authority.BudgetGuard`.
+  Register the calling process as the holder of one charged slot — see
+  `Sanctum.Authority.BudgetGuard`.
   """
-  @spec guard_invoke(Authority.t(), pid()) :: :ok
-  def guard_invoke(%Authority{budget: %Budget{} = budget}, pid \\ self()),
-    do: BudgetGuard.guard(budget, pid)
+  @spec guard_invoke(Authority.t()) :: :ok
+  def guard_invoke(%Authority{budget: %Budget{} = budget}),
+    do: BudgetGuard.guard(budget, self())
 
   @doc """
   Take over the guard on one charged slot from `from`, the process that

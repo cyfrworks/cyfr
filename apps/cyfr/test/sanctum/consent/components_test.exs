@@ -49,7 +49,7 @@ defmodule Sanctum.Consent.ComponentsTest do
   # boot did not install it looks like from inside the auth domain.
   defp without_facts(fun) do
     previous = Components.impl!()
-    Components.reset()
+    Sanctum.TestContext.uninstall_port(Components)
 
     try do
       fun.()

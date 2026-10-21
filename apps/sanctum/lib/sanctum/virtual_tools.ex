@@ -207,15 +207,6 @@ defmodule Sanctum.VirtualTools do
     end
   end
 
-  @doc "The planes of a virtual `tool.action`; `[]` when it is not one."
-  @spec planes(term(), term()) :: [atom()]
-  def planes(tool, action) do
-    case action(tool, action) do
-      %{planes: planes} -> planes
-      nil -> []
-    end
-  end
-
   @doc """
   Whether `tool.action` may only ever be `auto`: a UI event the guest
   answers in place, never a catalyst call a card could run.
@@ -252,10 +243,6 @@ defmodule Sanctum.VirtualTools do
   def action_pairs do
     Enum.sort(for tool <- tools(), action <- actions_of(tool), do: "#{tool}.#{action}")
   end
-
-  @doc "The kinds an action may have to run without a card."
-  @spec auto_permitted_kinds() :: [kind()]
-  def auto_permitted_kinds, do: @auto_kinds
 
   @doc """
   Whether an action of `kind` may run without a card: a read, write or

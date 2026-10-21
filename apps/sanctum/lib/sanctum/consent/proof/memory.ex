@@ -49,9 +49,7 @@ defmodule Sanctum.Consent.Proof.Memory do
   @impl GenServer
   def init(_opts) do
     # Private: no other process may read a live proof, not even to count.
-    if :ets.whereis(@table) == :undefined do
-      :ets.new(@table, [:named_table, :private, :set])
-    end
+    :ets.new(@table, [:named_table, :private, :set])
 
     schedule_sweep()
     {:ok, %{}}

@@ -194,14 +194,12 @@ defmodule Sanctum.Attach do
   defp instance_field(_view, :token), do: {:error, {:entry_unavailable, "oauth"}}
   defp instance_field(_view, {:field, field}), do: {:ok, field}
 
-  defp field_value(%{"fields" => %{} = fields}, field) do
+  defp field_value(%{"fields" => fields}, field) do
     case Map.fetch(fields, field) do
       {:ok, value} when is_binary(value) and value != "" -> {:ok, value}
       _absent -> {:error, {:missing_field, field}}
     end
   end
-
-  defp field_value(_payload, _field), do: {:error, :invalid_payload}
 
   # The request inside the destination a resource or an entry names: the
   # entry's stored text read back through the grammar, so a row whose

@@ -2585,13 +2585,7 @@ defmodule Cyfr.Boundaries do
 
   @config_keys_read_by_name %{}
 
-  @config_keys_read_outside_lib %{
-    default_test_namespace:
-      "read by the Sanctum suite's context fixture, in `apps/sanctum/test/support`. " <>
-        "The schema reads each application's `lib` alone: widening it to test " <>
-        "support would change what it means — keys the application reads becomes " <>
-        "keys anything reads — and pull in every fixture's own reads with it."
-  }
+  @config_keys_read_outside_lib %{}
 
   @doc """
   The keys no code reads by a literal `Application.get_env(:app, :key)` —

@@ -31,7 +31,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
   describe "init_device_flow/2" do
     test "returns error when github client_id not configured" do
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
 
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.init_device_flow("github", nil)
@@ -39,7 +38,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
     test "normalizes string provider to atom" do
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
 
       # Both string and atom should work the same way
       assert {:error, {:client_id_not_configured, :github}} =
@@ -53,7 +51,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
   describe "poll_for_session/3" do
     test "returns error when client_id not configured" do
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
 
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.poll_for_session("github", "fake_device_code", nil)
@@ -61,7 +58,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
 
     test "polls beyond the per-code budget answer slow_down without provider contact" do
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
       Prima.Test.RateLimiter.reset!()
       on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
 
@@ -94,7 +90,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
   describe "anonymous sign-in budgets are per-address, and the global sits above them" do
     setup do
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
       Prima.Test.RateLimiter.reset!()
       on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
       :ok
@@ -149,24 +144,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       # crash and must not be exempt from the server-wide breaker.
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.init_device_flow("github", nil)
-    end
-  end
-
-  # Note: Full integration tests for device flow require mocking HTTP calls
-  # or actual OAuth provider setup. The tests above verify the configuration
-  # checking and error handling paths.
-
-  describe "provider normalization" do
-    test "handles both string and atom providers for github" do
-      Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
-
-      # Both should fail with same error
-      assert {:error, {:client_id_not_configured, :github}} =
-               DeviceFlow.init_device_flow("github", nil)
-
-      assert {:error, {:client_id_not_configured, :github}} =
-               DeviceFlow.init_device_flow(:github, nil)
     end
   end
 
@@ -251,7 +228,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       prev_flow = Application.get_env(:sanctum, :device_flow)
       prev_provider = Application.get_env(:sanctum, :auth_provider)
       prev_client = Application.fetch_env(:sanctum, :github_client_id)
-      prev_client_env = System.get_env("CYFR_GITHUB_CLIENT_ID")
 
       on_exit(fn ->
         Prima.Test.RateLimiter.reset!()
@@ -260,8 +236,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
           {:ok, id} -> Application.put_env(:sanctum, :github_client_id, id)
           :error -> Application.delete_env(:sanctum, :github_client_id)
         end
-
-        if prev_client_env, do: System.put_env("CYFR_GITHUB_CLIENT_ID", prev_client_env)
 
         if prev_flow,
           do: Application.put_env(:sanctum, :device_flow, prev_flow),
@@ -278,7 +252,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       # No client id, so an admitted init stops at the configuration and
       # never reaches a provider.
       Application.delete_env(:sanctum, :github_client_id)
-      System.delete_env("CYFR_GITHUB_CLIENT_ID")
 
       # Spend this address's init budget, whatever its number is.
       outcomes = for _ <- 1..200, do: DeviceFlow.init_device_flow("github", ip)

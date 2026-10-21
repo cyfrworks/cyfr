@@ -55,7 +55,6 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
 
   alias Emissary.MCP.PlaneTaxonomyTest.Probes
   alias Sanctum.Catalog
-  alias Sanctum.Proxy
   alias Aqua.Hands
 
   # Sibling-app providers are unavailable when this app's suite runs alone.
@@ -261,10 +260,6 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # ============================================================================
 
   describe "upstream external tools" do
-    test "the bucket default is in-chain" do
-      assert Proxy.default_planes() == [:in_chain]
-    end
-
     test "external tool names remain unreachable over HTTP" do
       # The wiring backstop still holds alongside the per-call gate: the
       # router rejects any name the registered-tool cache does not hold,

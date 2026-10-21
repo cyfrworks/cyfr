@@ -11,7 +11,6 @@ defmodule Sanctum.Authority.BudgetGuardTest do
   alias Sanctum.Authority.BudgetGuard
 
   setup do
-    BudgetCounter.ensure_table()
     {:ok, budget: Budget.new(2)}
   end
 

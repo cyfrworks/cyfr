@@ -32,7 +32,7 @@ defmodule Aqua.Kinds do
   loaded" read the same here, and only the second could otherwise run
   something destructive with no card. The one rule the AQUA page and the
   runtime ceiling (`Aqua.ToolGrants.effective/2`) read; the kinds it
-  admits are `Sanctum.VirtualTools.auto_permitted_kinds/0`.
+  admits are `Sanctum.VirtualTools.auto_permitted_kind?/1`'s.
   """
 
   @spec auto_permitted?(String.t(), String.t()) :: boolean()
