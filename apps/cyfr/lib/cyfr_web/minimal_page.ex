@@ -12,7 +12,7 @@ defmodule CyfrWeb.MinimalPage do
   import Plug.Conn
 
   @doc "Escape a dynamic value for interpolation into a page."
-  @spec h(term()) :: iodata()
+  @spec h(term()) :: String.t()
   def h(value), do: Plug.HTML.html_escape(to_string(value))
 
   @doc """
