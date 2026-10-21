@@ -48,7 +48,7 @@ defmodule CyfrWeb.Plugs.ApiSecurityHeaders do
   """
   @spec maybe_hsts(Plug.Conn.t()) :: Plug.Conn.t()
   def maybe_hsts(%Plug.Conn{} = conn) do
-    if Application.get_env(:cyfr, :hsts, :none) == :endpoint_on_proxy and
+    if Application.fetch_env!(:cyfr, :hsts) == :endpoint_on_proxy and
          Sanctum.ClientIp.ingress(conn) == :proxy and
          not Regex.match?(@loopback_host, conn.host || "") do
       put_resp_header(conn, "strict-transport-security", "max-age=63072000; includeSubDomains")
