@@ -455,13 +455,14 @@ defmodule Opus.WorkerWatchTest do
     end
 
     # The row is failed before the lapse publishes it: a publication that
-    # exits leaves the lapse done, its children failed and its attempt
+    # exits leaves the lapse done, every child failed (one child's event
+    # that cannot be made never leaves a sibling running) and its attempt
     # stopped, never reported as not lapsed.
     @tag :capture_log
-    test "a lapse whose publication exits after its row is failed still stands done",
+    test "a lapse whose publications exit after its rows are failed still stands done",
          %{ctx: ctx} do
       fixture = attached!(ctx, "boot_1", component_type: :formula)
-      child = child!(fixture)
+      children = [child!(fixture), child!(fixture)]
       endpoint = serve!([status("boot_1", [fixture.attempt])])
       watch = watch!(endpoint)
       wait_until(fn -> WorkerWatch.fresh_boot(endpoint, watch) == {:ok, "boot_1"} end, @heard_ms)
@@ -474,13 +475,15 @@ defmodule Opus.WorkerWatchTest do
 
       wait_until(
         fn ->
-          match?(
-            %{status: "failed", error_message: ^message},
-            Arca.Repo.get!(Arca.Schemas.Execution, child.id)
-          )
+          Enum.all?(children, fn child ->
+            match?(
+              %{status: "failed", error_message: ^message},
+              Arca.Repo.get!(Arca.Schemas.Execution, child.id)
+            )
+          end)
         end,
         @heard_ms,
-        "the child failed"
+        "every child failed"
       )
 
       assert {:error, {:uncertain, @lapsed}} = AttemptWaiter.await(fixture.pid, fixture.close)
