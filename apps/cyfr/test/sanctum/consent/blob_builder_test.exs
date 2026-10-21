@@ -251,6 +251,16 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       end
     end
 
+    test "a path spelled other than the storage door reaches it is refused", %{ctx: ctx} do
+      for path <- ["data//reports/", "data/./reports/", "data/reports//"] do
+        assert {:error, {:invalid_argument, why}} =
+                 preview(ctx, %{@ref => %{"storage" => %{"paths" => [path]}}}),
+               "#{path} was accepted"
+
+        assert why =~ "storage path #{path}", why
+      end
+    end
+
     test "the commit refuses it as the preview does", %{ctx: ctx} do
       {:ok, plan} = Plan.plan(ctx, %{ref: @ref})
       {:ok, preview} = Commit.preview(ctx, %{ref: @ref})

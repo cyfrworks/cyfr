@@ -70,8 +70,9 @@ defmodule Sanctum.Consent.BlobBuilder do
   domain the ask names, or a plain host one of its patterns admits
   (`Prima.Network.domain_allowed?/2`); a private range the ask names, or an
   address or narrower range inside one of its ranges; a storage path the
-  ask names, or a guest path the ask admits, read as
-  `Opus.GuestStorage` enforces a grant
+  ask names, or a guest path spelled as the storage door reaches it
+  (`Prima.Manifest.Caps.canonical_storage_path?/1`) that the ask admits,
+  read as `Opus.GuestStorage` enforces a grant
   (`Prima.ComponentPath.path_granted?/2`); and exactly one of the ask's
   values for every other field.
 
@@ -1015,11 +1016,14 @@ defmodule Sanctum.Consent.BlobBuilder do
 
   # A narrowed path is itself a grant, and it lies inside the ask when
   # every path it admits the ask admits too; read by the one reading of a
-  # storage grant, that is the ask admitting it as a path.
+  # storage grant, that is the ask admitting it as a path. It is granted
+  # as the storage door reaches it, so another spelling of a path inside
+  # the ask (`data//x/`) is outside it.
   defp inside?("storage", "paths", value, asked),
     do:
       value in asked or
-        (guest_path?(value) and Prima.ComponentPath.path_granted?(value, asked))
+        (guest_path?(value) and Prima.Manifest.Caps.canonical_storage_path?(value) and
+           Prima.ComponentPath.path_granted?(value, asked))
 
   defp inside?(_kind, _field, value, asked), do: value in asked
 
