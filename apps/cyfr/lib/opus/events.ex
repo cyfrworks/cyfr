@@ -77,9 +77,10 @@ defmodule Opus.Events do
   origin-less event as untrusted.
 
   A delta is numbered and buffered by the stream's buffer process before
-  it is broadcast. A stream whose buffer cannot be started drops the
-  delta, logged and counted, and answers `{:error, :unavailable}`: a
-  delta is never broadcast unnumbered or outside the replay window.
+  it is broadcast. A delta whose buffer cannot be started, or whose
+  replay window cannot be written to the cache, is dropped, logged and
+  counted, and answers `{:error, :unavailable}`: a delta is never
+  broadcast unnumbered or outside the replay window.
   """
   @spec push(String.t(), map(), term(), keyword()) ::
           {:ok, String.t()} | {:error, :missing_athanor | :unavailable}
@@ -100,7 +101,7 @@ defmodule Opus.Events do
              origin: origin
            }
            |> maybe_put_node(opts),
-         {:ok, :ok} <- call_buffer(execution_id, athanor_id, {:buffer, event}) do
+         :ok <- call_buffer(execution_id, athanor_id, {:buffer, event}) do
       broadcast(execution_id, athanor_id, event)
       {:ok, event.sequence}
     else
@@ -133,11 +134,12 @@ defmodule Opus.Events do
   # Write to the athanor's buffer synchronously before broadcasting.
   # Drop and log events without an athanor; never use a default tenant. A
   # durable event's row is its replay (`since/3`), so a buffer that cannot
-  # be reached is logged and the event is still broadcast.
+  # be reached, or a window that cannot be written, is logged and counted
+  # and the event is still broadcast.
   defp deliver(execution_id, ctx, event) do
     with {:ok, athanor_id} <- athanor(execution_id, ctx, event.type) do
       case call_buffer(execution_id, athanor_id, {:buffer, event}) do
-        {:ok, :ok} -> :ok
+        :ok -> :ok
         {:error, reason} -> unavailable(execution_id, event.type, reason)
       end
 
@@ -164,7 +166,7 @@ defmodule Opus.Events do
   defp unavailable(execution_id, type, reason) do
     Logger.error(
       "[Opus.Events] #{type} event for #{execution_id} not buffered: " <>
-        "its buffer is unavailable (#{inspect(reason)})"
+        "its replay window is unavailable (#{inspect(reason)})"
     )
 
     :telemetry.execute([:cyfr, :opus, :execution_events, :broadcast_failure], %{count: 1}, %{
@@ -345,29 +347,47 @@ defmodule Opus.Events do
   @impl true
   def handle_call(:next_delta, _from, state) do
     durable = state.last_durable
-    {:reply, {durable, Sequence.next(state.execution_id, durable)}, state, @idle_timeout}
+    {:reply, {:ok, {durable, Sequence.next(state.execution_id, durable)}}, state, @idle_timeout}
   end
 
   # A call, not a cast: the producer broadcasts only after this returns, so
   # the replay buffer can never lag the live stream. The emit path is
   # rate-limited; the round-trip is fine.
-  def handle_call({:buffer, event}, _from, state) do
-    events = (state.events ++ [event]) |> Enum.take(-@max_events)
+  #
+  # The window holds an event once, by its sequence: a request repeated
+  # after the buffer that took it stopped before answering (`call_buffer/4`)
+  # finds the event in the window this buffer restored from the cache, and
+  # answers it landed. A delta whose window cannot be written stays out of
+  # it, refused, so it is neither broadcast nor replayed later. A durable
+  # event is kept whatever the cache answers, since its row is its replay
+  # and the deltas after it are numbered under it, and its refusal is
+  # answered all the same.
+  def handle_call({:buffer, %{sequence: sequence} = event}, _from, state) do
+    if Enum.any?(state.events, &(&1.sequence == sequence)) do
+      {:reply, :ok, state, @idle_timeout}
+    else
+      events = (state.events ++ [event]) |> Enum.take(-@max_events)
 
+      case {write(state, events), event} do
+        {:ok, _event} -> {:reply, :ok, took(state, events, event), @idle_timeout}
+        {refused, %{delta: nil}} -> {:reply, refused, took(state, events, event), @idle_timeout}
+        {refused, _delta} -> {:reply, refused, state, @idle_timeout}
+      end
+    end
+  end
+
+  defp write(state, events) do
     Arca.Cache.put(
       Arca.Cache.Keys.exec_events(Prima.Actor.in_athanor(state.athanor_id), state.execution_id),
       events,
       @buffer_ttl_ms
     )
-
-    last_durable =
-      case event do
-        %{delta: nil, durable: seq} when is_integer(seq) -> max(state.last_durable, seq)
-        _ -> state.last_durable
-      end
-
-    {:reply, :ok, %{state | events: events, last_durable: last_durable}, @idle_timeout}
   end
+
+  defp took(state, events, %{delta: nil, durable: seq}),
+    do: %{state | events: events, last_durable: max(state.last_durable, seq)}
+
+  defp took(state, events, _delta), do: %{state | events: events}
 
   @impl true
   def handle_info(:timeout, state) do
@@ -386,18 +406,21 @@ defmodule Opus.Events do
 
   # Every buffer read and write goes through the stream's own process, which
   # serializes them. Synchronous: the caller broadcasts only after the write
-  # landed. A buffer that stops on its idle timeout between the lookup and
-  # the call exits the call without handling it; the next attempt finds the
-  # name free (a dead registration resolves to nothing) and starts a fresh
-  # buffer, which restores the window from the cache. A call that timed out
-  # may still land, so it is not repeated.
+  # landed. Answers the buffer's own reply. A buffer that stops between the
+  # lookup and the call, or before it answers the call, exits the call; the
+  # next attempt finds the name free (a dead registration resolves to
+  # nothing) and starts a fresh buffer, which restores the window from the
+  # cache. A repeated write lands once, the window holding an event once by
+  # its sequence; a repeated numbering takes the next number, leaving the
+  # one the stopped buffer took unused. A call that timed out may still be
+  # in the buffer's queue, so it is not repeated.
   @buffer_attempts 3
 
   defp call_buffer(execution_id, athanor_id, request, attempt \\ 1) do
     case ensure_buffer(execution_id, athanor_id) do
       {:ok, pid} ->
         try do
-          {:ok, GenServer.call(pid, request)}
+          GenServer.call(pid, request)
         catch
           :exit, {:timeout, _} = reason ->
             {:error, {:exit, reason}}

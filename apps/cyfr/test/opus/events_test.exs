@@ -333,6 +333,93 @@ defmodule Opus.EventsTest do
              |> Enum.map(& &1.sequence)
   end
 
+  describe "the replay window" do
+    test "a delta whose buffer stopped after writing it, before answering, is replayed once" do
+      record = execution!("ath_evt_x")
+      assert {:ok, "1.1"} = Events.push(record.id, %{"n" => 1}, record, origin: "host")
+      [{buffer, _}] = Registry.lookup(Opus.Events.Registry, record.id)
+      key = Arca.Cache.Keys.exec_events(Prima.Actor.in_athanor("ath_evt_x"), record.id)
+
+      # The buffer writes the next delta into its window, as its own write
+      # does, and stops before it answers: the push asks again, of a fresh
+      # buffer that restores that window.
+      :ok =
+        :sys.install(
+          buffer,
+          {fn
+             _armed, {:in, {:"$gen_call", _from, {:buffer, event}}}, _name ->
+               {:ok, window} = Arca.Cache.get(key)
+               :ok = Arca.Cache.put(key, window ++ [event], :timer.minutes(10))
+               Process.exit(self(), :shutdown)
+               Process.sleep(:infinity)
+
+             armed, _event, _name ->
+               armed
+           end, :armed}
+        )
+
+      ref = Process.monitor(buffer)
+      assert {:ok, "1.2"} = Events.push(record.id, %{"n" => 2}, record, origin: "host")
+      assert_receive {:DOWN, ^ref, :process, ^buffer, :shutdown}, 5_000
+
+      assert ["1.1", "1.2"] =
+               record.id
+               |> Events.since({1, 0}, "ath_evt_x")
+               |> Enum.map(& &1.sequence)
+    end
+
+    @tag :capture_log
+    test "a delta whose window cannot be written is refused and never broadcast; a durable event is still broadcast" do
+      record = execution!("ath_evt_x")
+      id = record.id
+      Events.subscribe(record.id, record)
+      assert {:ok, "1.1"} = Events.push(record.id, %{"n" => 1}, record, origin: "host")
+      assert_receive %Cyfr.Bus.ExecutionEvent{type: "emit", execution_id: ^id, sequence: "1.1"}
+
+      without_cache(fn ->
+        assert {:error, :unavailable} =
+                 Events.push(record.id, %{"n" => 2}, record, origin: "host")
+
+        refute_receive %Cyfr.Bus.ExecutionEvent{type: "emit", execution_id: ^id}, 100
+
+        # Its row is its replay, and the deltas after it are numbered
+        # under it.
+        assert durable!(record, "step.closed", %{"step" => "s1"}) == 2
+        assert_receive %Cyfr.Bus.ExecutionEvent{type: "step.closed", execution_id: ^id}
+      end)
+
+      # The buffer writes its window again once the cache is back, and the
+      # refused delta is not in it.
+      assert {:ok, "2.1"} = Events.push(record.id, %{"n" => 3}, record, origin: "host")
+
+      assert ["1.1", "2", "2.1"] =
+               record.id
+               |> Events.since({1, 0}, "ath_evt_x")
+               |> Enum.map(& &1.sequence)
+    end
+  end
+
+  # Run `fun` with the cache's table gone: the table goes with its one
+  # owner, `Arca.Cache.Sweeper`, and with the owner stopped no write brings
+  # it back.
+  defp without_cache(fun) do
+    on_exit(&restart_cache/0)
+    :ok = Supervisor.terminate_child(Arca.Supervisor, Arca.Cache.Sweeper)
+
+    try do
+      fun.()
+    after
+      restart_cache()
+    end
+  end
+
+  defp restart_cache do
+    case Supervisor.restart_child(Arca.Supervisor, Arca.Cache.Sweeper) do
+      {:ok, _pid} -> :ok
+      {:error, :running} -> :ok
+    end
+  end
+
   # Stop a live buffer the way the idle timeout does, and wait until the
   # Registry entry is cleared — the entry is cleaned asynchronously after
   # the DOWN.
