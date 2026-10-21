@@ -104,8 +104,8 @@ defmodule CyfrWeb.SignInResponse do
   end
 
   @doc """
-  Put a flash message only if flash is available on the conn — some test
-  paths exercise these responses without the full browser plug stack.
+  Put a flash message when the conn has fetched its flash; a conn without
+  one is answered unchanged.
   """
   def put_flash_if_available(conn, kind, msg) do
     Phoenix.Controller.put_flash(conn, kind, msg)

@@ -132,8 +132,6 @@ defmodule CyfrWeb.Plugs.WebhookRateLimit do
         {conn, {:ip_unknown, ip(conn)}, @unknown_max, @unknown_window_ms}
 
       {:error, reason} ->
-        require Logger
-
         Logger.warning(
           "[WebhookRateLimit] storage lookup failed slug=#{slug} reason=#{inspect(reason)} — falling back to default per-slug limit"
         )

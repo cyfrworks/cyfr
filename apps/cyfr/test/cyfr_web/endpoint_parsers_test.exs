@@ -166,7 +166,7 @@ defmodule CyfrWeb.EndpointParsersTest do
   end
 
   describe "every other body" do
-    test "keeps its route's cap, read only up to it, and the endpoint's own 413" do
+    test "is held to its route's cap, read only up to it, and answered with the endpoint's own 413" do
       directory_cap = Prima.Identity.max_entry_bytes()
 
       webhook_cap =
@@ -187,7 +187,7 @@ defmodule CyfrWeb.EndpointParsersTest do
 
         {413, _headers, sent} = assert_error_sent(413, fn -> call(conn) end)
 
-        # Rendered by the endpoint (`CyfrWeb.ErrorJSON`), as before.
+        # Rendered by the endpoint (`CyfrWeb.ErrorJSON`).
         assert Jason.decode!(sent) == %{
                  "errors" => %{"detail" => Plug.Conn.Status.reason_phrase(413)}
                }
@@ -981,7 +981,7 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
       transports = CyfrWeb.Endpoint.socket_transports()
 
       # Derived from the mounts (`__sockets__/0`): these are the ones the
-      # endpoint declares today, and a new mount or transport joins the sweep.
+      # endpoint declares, and a new mount or transport joins the sweep.
       # A long-poll POST carries what its mount's WebSocket frames would, and
       # is held to that frame bound; a POST to a WebSocket's path carries no
       # message, and is held to a host call's body.
