@@ -123,29 +123,6 @@ defmodule Aqua.Providers.Thread do
         ),
         Operation.new(
           "thread",
-          "messages",
-          "Messages thread",
-          [
-            Arg.new("thread", :string,
-              required: true,
-              description: "Thread id (all actions except create and list)"
-            ),
-            Arg.new("after_seq", :integer,
-              description:
-                "events: replay messages after this seq. Omit to start from the beginning."
-            ),
-            Arg.new("limit", :integer,
-              description:
-                "events: rows per page (default and ceiling 500). Page by passing the returned cursor as after_seq."
-            )
-          ],
-          kind: :read,
-          sources: [:pinned, :filed, :files_by_grant, :vault_disclosed, :outside],
-          planes: [:external],
-          consent: :interactive
-        ),
-        Operation.new(
-          "thread",
           "send",
           "Send thread",
           [
@@ -524,7 +501,6 @@ defmodule Aqua.Providers.Thread do
   @impl true
   def handle("thread", %Context{} = ctx, args), do: dispatch(ctx, args)
   def handle("turn", %Context{} = ctx, args), do: turn(ctx, args)
-  def handle(tool, _ctx, _args), do: {:error, {:not_found, "tool", tool}}
 
   # ---------------------------------------------------------------------------
   # `turn`
@@ -556,9 +532,6 @@ defmodule Aqua.Providers.Thread do
 
   defp turn(_ctx, %{"action" => "recover"}),
     do: {:error, {:invalid_argument, "turn.recover requires a 'thread' and a 'turn'"}}
-
-  defp turn(_ctx, %{"action" => action}), do: {:error, {:unknown_action, "turn.#{action}"}}
-  defp turn(_ctx, _args), do: {:error, {:invalid_argument, "turn requires an 'action'"}}
 
   # The turn vocabulary on top of the thread one: a turn a live member is
   # running is a conflict, not a refusal; a turn that is not the caller's
@@ -667,8 +640,6 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  defp act("messages", ctx, id, args), do: act("events", ctx, id, args)
-
   # The files a message carries are written under its id before the
   # send names them, so the bytes are the sender's own write.
   defp act("attach", ctx, id, %{"message_id" => message_id, "files" => files})
@@ -692,9 +663,6 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  defp act("attach", _ctx, _id, _args),
-    do: {:error, {:invalid_argument, "attach requires 'message_id' and 'files'"}}
-
   # A send refused after its files were stored, or a held one given up:
   # the files this caller's own session stored under the message go, and
   # nothing anyone else stored (`Aqua.Attachments.discard_unsent/3`).
@@ -708,9 +676,6 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  defp act("discard", _ctx, _id, _args),
-    do: {:error, {:invalid_argument, "discard requires 'message_id'"}}
-
   defp act("revoke_grant", ctx, id, %{
          "agent_name" => agent,
          "tool" => tool,
@@ -722,11 +687,6 @@ defmodule Aqua.Providers.Thread do
       {:error, reason} -> {:error, refusal(reason, id)}
     end
   end
-
-  defp act("revoke_grant", _ctx, _id, _args),
-    do:
-      {:error,
-       {:invalid_argument, "revoke_grant requires 'agent_name', 'tool' and 'tool_action'"}}
 
   defp act("restart_for_consent", ctx, id, args) do
     result = %{profile_id: args["profile_id"], revision: args["revision"]}
@@ -774,9 +734,6 @@ defmodule Aqua.Providers.Thread do
     end
   end
 
-  defp act("approve", _ctx, _id, _args),
-    do: {:error, {:invalid_argument, "approve requires 'message_id'"}}
-
   defp act("decline", ctx, id, %{"message_id" => message_id} = args) when is_binary(message_id) do
     with {:ok, scope} <- decline_scope(args["scope"]),
          {:ok, approval} <- card_approval(ctx, id, message_id),
@@ -792,9 +749,6 @@ defmodule Aqua.Providers.Thread do
       {:error, reason} -> {:error, refusal(reason, id)}
     end
   end
-
-  defp act("decline", _ctx, _id, _args),
-    do: {:error, {:invalid_argument, "decline requires 'message_id'"}}
 
   # The durable truth of a thread is `messages.seq`, so replay is a
   # cursor over rows. Deliberately NOT `Opus.events_since/3`:
@@ -862,13 +816,6 @@ defmodule Aqua.Providers.Thread do
         say_aloud(ctx, id, ids, target_athanor, target_thread)
     end
   end
-
-  defp act("aloud", _ctx, _id, _args),
-    do:
-      {:error,
-       {:invalid_argument, "aloud requires 'message_ids', 'target_athanor' and 'target_thread'"}}
-
-  defp act(action, _ctx, _id, _args), do: {:error, {:unknown_action, "thread.#{action}"}}
 
   defp say_aloud(ctx, id, ids, target_athanor, target_thread) do
     case Aqua.Aloud.post(ctx, id, ids, target_athanor, target_thread) do

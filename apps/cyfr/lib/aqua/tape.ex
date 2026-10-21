@@ -414,8 +414,9 @@ defmodule Aqua.Tape do
       })
 
   @doc """
-  Stop a root turn on a call whose outcome is unknown: the durable
-  boundary of D6, in one transaction (`TurnStorage.pause_uncertain/3`).
+  Stop a root turn on a call whose outcome is unknown: the step marked
+  `uncertain`, its siblings settled and the turn paused `uncertain`, in one
+  transaction (`TurnStorage.pause_uncertain/3`).
   `attrs`: `:step_id`, `:generation`, `:reason`, `:content`. The aborted
   row is broadcast after commit.
   """
@@ -614,11 +615,6 @@ defmodule Aqua.Tape do
   @spec turn(Context.t(), String.t()) :: {:ok, turn()} | {:error, term()}
   def turn(%Context{} = ctx, turn_id), do: TurnStorage.get(Sanctum.Context.actor(ctx), turn_id)
 
-  @doc "The turn a message opened."
-  @spec turn_of_message(Context.t(), String.t()) :: {:ok, turn()} | {:error, term()}
-  def turn_of_message(%Context{} = ctx, message_id),
-    do: TurnStorage.turn_of_message(Sanctum.Context.actor(ctx), message_id)
-
   @doc "A turn's steps in order."
   @spec steps(Context.t(), turn()) :: {:ok, [step()]} | {:error, term()}
   def steps(%Context{} = ctx, turn), do: TurnStorage.steps(Sanctum.Context.actor(ctx), turn.id)
@@ -664,8 +660,6 @@ defmodule Aqua.Tape do
   def agent_revision(%Context{} = ctx, %{agent_revision_digest: digest}) when is_binary(digest),
     do: Arca.AgentRevisions.get(Context.actor(ctx), digest)
 
-  def agent_revision(_ctx, _turn), do: {:error, :no_revision}
-
   @doc """
   Announce an ephemeral console event on the thread's topic — a
   delta, the tool activity, the usage, the sender's intents — without a
@@ -674,11 +668,6 @@ defmodule Aqua.Tape do
   @spec announce(Context.t(), String.t(), Cyfr.Bus.ThreadEvent.kind(), term()) :: :ok
   def announce(%Context{} = ctx, thread_id, kind, data \\ nil),
     do: broadcast(ctx, thread_id, kind, data)
-
-  @doc "The `tool_call` payloads of the calls a turn and its clones closed."
-  @spec closed_calls(Context.t(), turn()) :: {:ok, [map()]} | {:error, term()}
-  def closed_calls(%Context{} = ctx, turn),
-    do: TurnStorage.closed_calls(Sanctum.Context.actor(ctx), turn.id)
 
   @doc "The decoded `payload` of a message row."
   @spec payload(row()) :: map()
@@ -692,12 +681,6 @@ defmodule Aqua.Tape do
   @doc "The thread a turn belongs to."
   @spec thread(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def thread(%Context{} = ctx, thread_id), do: Threads.get(Sanctum.Context.actor(ctx), thread_id)
-
-  @doc "The newest rows of a thread, for a viewer."
-  @spec latest_messages(Context.t(), String.t(), pos_integer()) ::
-          [row()] | {:error, term()}
-  def latest_messages(%Context{} = ctx, thread_id, n),
-    do: Threads.latest_messages(Sanctum.Context.actor(ctx), thread_id, n)
 
   # ---------------------------------------------------------------------------
   # Internal
@@ -729,8 +712,7 @@ defmodule Aqua.Tape do
 
   defp attachments_of(nil), do: nil
 
-  defp attachments_of(payload) when is_map(payload),
-    do: payload[:attachments] || payload["attachments"]
+  defp attachments_of(payload) when is_map(payload), do: payload["attachments"]
 
   defp same_work?(nil, nil, nil), do: true
 

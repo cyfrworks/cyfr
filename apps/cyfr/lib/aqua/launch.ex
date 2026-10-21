@@ -407,6 +407,5 @@ defmodule Aqua.Launch do
   defp approver(_ctx, _approval), do: {:error, {:approver_unavailable, :denied}}
 
   defp execution_id(%{execution_id: id}) when is_binary(id), do: id
-  defp execution_id(%{"execution_id" => id}) when is_binary(id), do: id
   defp execution_id(_result), do: nil
 end

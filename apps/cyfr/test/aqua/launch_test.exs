@@ -61,11 +61,18 @@ defmodule Aqua.LaunchTest do
     {:ok, %{profile_id: profile_id, consent_id: consent_id}} =
       Opus.authority_for(ctx, :default, @soul)
 
-    {:ok, %{capability_digest: capability}} = Compendium.AgentIndex.snapshot(ctx, "aqua")
+    {:ok, %{revision_digest: revision, capability_digest: capability}} =
+      Compendium.AgentIndex.snapshot(ctx, "aqua")
 
     {:ok, thread} = Threads.create(Sanctum.Context.actor(ctx))
 
-    pins = %{profile_id: profile_id, consent_id: consent_id, agent_capability_digest: capability}
+    pins = %{
+      profile_id: profile_id,
+      consent_id: consent_id,
+      agent_revision_digest: revision,
+      agent_capability_digest: capability
+    }
+
     {:ok, ctx: ctx, thread: thread, pins: pins, approver: approver!(ctx)}
   end
 

@@ -273,7 +273,7 @@ defmodule Aqua.TurnSourcesTest do
          %{ctx: ctx, thread: thread, host: host} do
       # The flush runs under an allow that follows the host.
       {:ok, _} =
-        Aqua.ToolGrants.put(ctx, %{
+        Sanctum.ToolGrants.put(ctx, %{
           scope: "thread",
           effect: "allow",
           thread_id: thread.id,

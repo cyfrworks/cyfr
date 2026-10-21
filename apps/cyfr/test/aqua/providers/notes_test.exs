@@ -411,29 +411,6 @@ defmodule Aqua.Providers.NotesTest do
 
     assert String.starts_with?(execution, "exec_")
 
-    # The thread's lineage key is `thread_id`: the retired key (spelled
-    # split for the vocabulary gate) is neither stamped from lineage nor
-    # read as the thread when a guest supplies it.
-    retired = "conver" <> "sation_id"
-
-    old_lineage = [
-      lineage: %{String.to_atom(retired) => "thread_1", root_execution_id: "exec_1"}
-    ]
-
-    retired_args = args |> Map.put("name", "retired") |> Map.put(retired, "thread_1")
-
-    assert {:error,
-            %Prima.Refusal{
-              stage: :admission,
-              reason: {:invalid_argument, "Unknown field: " <> ^retired}
-            }} =
-             in_chain(ctx, retired_args, auth, old_lineage)
-
-    assert {:ok, _} = in_chain(ctx, Map.delete(retired_args, retired), auth, old_lineage)
-
-    assert {:ok, %{thread: nil, execution: "exec_1"}} =
-             in_chain(ctx, %{"action" => "read", "name" => "retired"}, auth)
-
     # The same formula started by a key or a schedule is refused inside the
     # chain exactly as it is at the door — the click was a session's.
     for method <- [:api_key, :scheduled] do

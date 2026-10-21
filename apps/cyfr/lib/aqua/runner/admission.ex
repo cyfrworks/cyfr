@@ -20,10 +20,6 @@ defmodule Aqua.Runner.Admission do
 
   @type decision :: :post | {:turn, String.t()}
 
-  @doc "The message-size bound, in bytes."
-  @spec max_message_bytes() :: pos_integer()
-  def max_message_bytes, do: @max_message_bytes
-
   @doc """
   Admit `text` from `ctx` into the thread, or refuse it with the
   reason the sender is told: `:empty`, `:message_too_long`, `:archived`,

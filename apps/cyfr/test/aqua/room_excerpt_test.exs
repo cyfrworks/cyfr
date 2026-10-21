@@ -7,6 +7,9 @@ defmodule Aqua.RoomExcerptTest do
   use ExUnit.Case, async: false
 
   alias Aqua.RoomExcerpt
+
+  # The excerpt's byte bound: half the runner's 32 KiB message cap.
+  @max_bytes 16 * 1024
   alias Arca.ThreadStorage, as: Threads
   alias Arca.Schemas.Message
 
@@ -76,7 +79,7 @@ defmodule Aqua.RoomExcerptTest do
     assert text =~ "AQUA: Friday it is."
     refute text =~ "kept a note"
     refute text =~ "intent"
-    assert byte_size(text) <= RoomExcerpt.max_bytes() + 200
+    assert byte_size(text) <= @max_bytes + 200
   end
 
   test "the header falls back to the thread's own title", %{
@@ -112,7 +115,7 @@ defmodule Aqua.RoomExcerptTest do
         do: say(in_room, thread, %{content: "line #{i} " <> String.duplicate("x", 3_000)})
 
     assert {:ok, text} = RoomExcerpt.read(me, room(room, thread, %{title: "Long"}))
-    assert byte_size(text) <= RoomExcerpt.max_bytes() + 200
+    assert byte_size(text) <= @max_bytes + 200
     refute text =~ "line 1 "
     assert text =~ "line 12 "
 
@@ -127,12 +130,12 @@ defmodule Aqua.RoomExcerptTest do
     room: room,
     thread: thread
   } do
-    say(in_room, thread, %{content: "huge " <> String.duplicate("é", RoomExcerpt.max_bytes())})
+    say(in_room, thread, %{content: "huge " <> String.duplicate("é", @max_bytes)})
 
     assert {:ok, text} = RoomExcerpt.read(me, room(room, thread, %{title: "Huge"}))
     assert text =~ "huge "
     assert String.ends_with?(text, "…")
     assert String.valid?(text)
-    assert byte_size(text) <= RoomExcerpt.max_bytes() + 200
+    assert byte_size(text) <= @max_bytes + 200
   end
 end

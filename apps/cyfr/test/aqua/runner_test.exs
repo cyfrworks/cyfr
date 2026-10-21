@@ -1351,7 +1351,8 @@ defmodule Aqua.RunnerTest do
         %{live: %{task: %Aqua.Loop.Worker.Handle{ref: task_ref}}} = :sys.get_state(pids.runner)
 
         :sys.replace_state(pids.runner, fn state ->
-          :ok = Runner.unsubscribe(thread.id, ctx.athanor_id)
+          actor = Prima.Actor.in_athanor(ctx.athanor_id)
+          :ok = Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.thread(actor, thread.id))
           state
         end)
 
@@ -1422,7 +1423,8 @@ defmodule Aqua.RunnerTest do
         # committed decision whose PubSub notification never arrived.
         %{paused: %{expiry: expiry}, idle_ref: idle} =
           :sys.replace_state(runner, fn state ->
-            :ok = Runner.unsubscribe(thread.id, ctx.athanor_id)
+            actor = Prima.Actor.in_athanor(ctx.athanor_id)
+            :ok = Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.thread(actor, thread.id))
             state
           end)
 

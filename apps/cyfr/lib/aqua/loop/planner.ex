@@ -171,20 +171,14 @@ defmodule Aqua.Loop.Planner do
     end
   end
 
-  defp call_id(%{payload: payload}) do
-    case payload do
-      %{"tool_call_id" => id} when is_binary(id) -> id
-      json when is_binary(json) -> decoded_call_id(json)
-      _ -> nil
-    end
-  end
-
-  defp decoded_call_id(json) do
+  defp call_id(%{payload: json}) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, %{"tool_call_id" => id}} when is_binary(id) -> id
       _ -> nil
     end
   end
+
+  defp call_id(_row), do: nil
 
   @doc """
   The projection with old tool results bounded: every `tool_result` row
@@ -252,14 +246,24 @@ defmodule Aqua.Loop.Planner do
     }
   end
 
+  @doc """
+  The summary a compaction may commit, or `:empty_summary`.
+
+  A compaction row commits its boundary seqs, so the projection drops every
+  row before `first_kept_seq` and renders the summary in their place. An empty
+  summary would drop them behind nothing. Any reply carrying no text block
+  produces one, not only a reply that is all tool calls.
+  """
+  @spec summary_text(String.t()) :: {:ok, String.t()} | {:error, :empty_summary}
+  def summary_text(summary) when is_binary(summary) do
+    if String.trim(summary) == "", do: {:error, :empty_summary}, else: {:ok, summary}
+  end
+
   @doc "A quarter of the bytes, never less than one token."
   @spec estimate_tokens(non_neg_integer() | binary() | map() | list()) :: pos_integer()
   def estimate_tokens(bytes) when is_integer(bytes), do: max(div(bytes, 4), 1)
   def estimate_tokens(text) when is_binary(text), do: estimate_tokens(byte_size(text))
   def estimate_tokens(term), do: term |> Jason.encode!() |> byte_size() |> estimate_tokens()
-
-  @doc "How many newest rows `prune/1` leaves whole."
-  def preserve_recent, do: @preserve_recent
 
   @doc """
   The rows the model reads: everything from the latest compaction's
@@ -278,20 +282,14 @@ defmodule Aqua.Loop.Planner do
     end
   end
 
-  defp first_kept_seq(%{payload: payload}) do
-    case payload do
-      %{"first_kept_seq" => seq} when is_integer(seq) -> seq
-      json when is_binary(json) -> decoded_first_kept(json)
-      _ -> 0
-    end
-  end
-
-  defp decoded_first_kept(json) do
+  defp first_kept_seq(%{payload: json}) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, %{"first_kept_seq" => seq}} when is_integer(seq) -> seq
       _ -> 0
     end
   end
+
+  defp first_kept_seq(_row), do: 0
 
   # Rows of one model step — its reply, its calls and their results —
   # form one group; every other row is a group of its own.
@@ -323,19 +321,11 @@ defmodule Aqua.Loop.Planner do
     |> Enum.reject(&(&1 == []))
   end
 
-  defp step_of(%{kind: kind} = row) when kind in ["text", "tool_call", "tool_result"] do
-    case row.payload do
-      json when is_binary(json) ->
-        case Jason.decode(json) do
-          {:ok, %{"step_id" => step}} when is_binary(step) -> step
-          _ -> nil
-        end
-
-      %{"step_id" => step} when is_binary(step) ->
-        step
-
-      _ ->
-        nil
+  defp step_of(%{kind: kind, payload: json})
+       when kind in ["text", "tool_call", "tool_result"] and is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, %{"step_id" => step}} when is_binary(step) -> step
+      _ -> nil
     end
   end
 

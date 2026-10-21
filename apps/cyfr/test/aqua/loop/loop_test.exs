@@ -91,7 +91,7 @@ defmodule Aqua.LoopTest do
 
     # The graph is keyed the way `Opus.Admission` steps: by name. Asking with
     # the version answers nothing, and a cap of nil is a size check that
-    # never fires — which is what the loop did while it asked that way.
+    # never fires.
     assert {:error, :unknown_node} = Prima.Authority.node_limits(authority, versioned)
 
     assert {:ok, %Prima.Limits{max_request_size: cap}} =
@@ -100,66 +100,34 @@ defmodule Aqua.LoopTest do
     assert is_integer(cap) and cap > 0
   end
 
-  test "the loop resolves a cap for the spec it actually holds", %{ctx: ctx, thread: thread} do
-    start_supervised!({ScriptedWorker, ref: @model, script: []})
+  test "the spec a turn runs on carries the cap its catalyst is consented at", %{
+    ctx: ctx,
+    thread: thread
+  } do
+    turn = accept!(ctx, thread, "hello")
+    script!([reply("hi")])
+    assert :completed = Task.await(run(ctx, turn), 30_000)
+
+    {:ok, pinned} = Tape.turn(ctx, turn.id)
+    {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
+    {:ok, spec} = Aqua.Loop.Turn.build(ctx, pinned, authority: authority, excerpt?: false)
+
+    # The spec holds a versioned ref, and the graph is keyed by name. Read
+    # with what the spec holds, the cap is nil and the size trigger never
+    # fires, which from outside looks like a request that fits.
+    assert String.starts_with?(spec.catalyst, @model <> ":")
+    assert is_integer(spec.request_cap) and spec.request_cap > 0
+  end
+
+  test "a turn that pins no agent revision is refused, never run on the roster's entry", %{
+    ctx: ctx,
+    thread: thread
+  } do
     turn = accept!(ctx, thread, "hello")
     {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
-    {:ok, spec} = Aqua.Loop.Turn.build(ctx, turn, authority: authority, excerpt?: false)
 
-    # The spec holds a versioned ref, and the graph is keyed by name. Asking
-    # with what the spec holds answers nothing, and the size trigger then
-    # never fires — indistinguishable, from outside, from a request that fits.
-    assert String.starts_with?(spec.catalyst, @model <> ":")
-    assert is_integer(Aqua.Loop.catalyst_request_cap(spec))
-  end
-
-  describe "summary_text/1" do
-    test "a summary with words is committed" do
-      assert {:ok, "what was said"} = Aqua.Loop.summary_text("what was said")
-    end
-
-    test "a reply carrying no text is refused, so the boundary does not advance" do
-      # The loop filters the reply to text blocks and joins them, so a
-      # reply of only tool calls — or of no content at all — arrives here as
-      # "". Committing it would render an empty summary in place of every row
-      # before `first_kept_seq`.
-      assert {:error, :empty_summary} = Aqua.Loop.summary_text("")
-      assert {:error, :empty_summary} = Aqua.Loop.summary_text("   \n\t ")
-    end
-  end
-
-  describe "group/1" do
-    test "a write between reads runs alone, and the reads on either side do not join it" do
-      read1 = item("files", %{"action" => "read", "path" => "a"})
-      write = item("files", %{"action" => "write", "path" => "b", "content" => "x"})
-      read2 = item("files", %{"action" => "read", "path" => "c"})
-
-      assert [{:concurrent, [^read1]}, {:exclusive, ^write}, {:concurrent, [^read2]}] =
-               Aqua.Loop.group([read1, write, read2])
-    end
-
-    test "consecutive reads share a group and consecutive writes do not" do
-      r1 = item("files", %{"action" => "read", "path" => "a"})
-      r2 = item("files", %{"action" => "read", "path" => "b"})
-      w1 = item("files", %{"action" => "write", "path" => "c", "content" => "x"})
-      w2 = item("files", %{"action" => "write", "path" => "d", "content" => "y"})
-
-      assert [{:concurrent, [^r1, ^r2]}, {:exclusive, ^w1}, {:exclusive, ^w2}] =
-               Aqua.Loop.group([r1, r2, w1, w2])
-    end
-
-    test "a write last, and a write first, each stand alone" do
-      read = item("files", %{"action" => "read", "path" => "a"})
-      write = item("files", %{"action" => "write", "path" => "b", "content" => "x"})
-
-      assert [{:concurrent, [^read]}, {:exclusive, ^write}] = Aqua.Loop.group([read, write])
-      assert [{:exclusive, ^write}, {:concurrent, [^read]}] = Aqua.Loop.group([write, read])
-    end
-  end
-
-  defp item(name, args) do
-    {:ok, call} = Aqua.Loop.Binding.resolve(name, args)
-    %{step: %{kind: "tool"}, call: {:ok, call}}
+    assert {:error, :no_pin} =
+             Aqua.Loop.Turn.build(ctx, turn, authority: authority, excerpt?: false)
   end
 
   defp accept!(ctx, thread, text) do
@@ -634,7 +602,7 @@ defmodule Aqua.LoopTest do
       action: "keep"
     }
 
-    {:ok, _} = Aqua.ToolGrants.put(ctx, Map.put(grant, :effect, "allow"))
+    {:ok, _} = Sanctum.ToolGrants.put(ctx, Map.put(grant, :effect, "allow"))
 
     turn = accept!(ctx, thread, "@aqua keep a note")
 
@@ -667,7 +635,7 @@ defmodule Aqua.LoopTest do
 
     defp bounded!(ctx, thread, pair, bounds) do
       {:ok, _} =
-        Aqua.ToolGrants.put(
+        Sanctum.ToolGrants.put(
           ctx,
           Map.merge(
             %{scope: "thread", effect: "allow", thread_id: thread.id, agent_name: "aqua"},
@@ -709,7 +677,7 @@ defmodule Aqua.LoopTest do
       a = other_execution!(ctx)
 
       {:ok, _} =
-        Aqua.ToolGrants.put(ctx, %{
+        Sanctum.ToolGrants.put(ctx, %{
           scope: "agent",
           effect: "allow",
           agent_name: "aqua",
@@ -892,7 +860,7 @@ defmodule Aqua.LoopTest do
       assert :auto = Aqua.Loop.Policy.decide(call, policy, place)
 
       {:ok, _} =
-        Aqua.ToolGrants.put(ctx, %{
+        Sanctum.ToolGrants.put(ctx, %{
           scope: "agent",
           effect: "deny",
           agent_name: "aqua",
@@ -1680,7 +1648,7 @@ defmodule Aqua.LoopTest do
   # stored damaged since the card was drawn closes the launch's step in the
   # damaged head's sentence, never a stale approval and never an outcome
   # that could not be confirmed: the thread's row the pane draws, and what
-  # an MCP client reads of the thread (`thread.messages`, since no tool
+  # an MCP client reads of the thread (`thread.events`, since no tool
   # dispatches a launch), carry it. Nothing of the app starts.
   test "a launch whose app's own head is stored damaged after its card was drawn says so in " <>
          "the thread, and starts nothing",
@@ -1895,7 +1863,7 @@ defmodule Aqua.LoopTest do
     assert @app_read in turn_sources(ctx, turn)
   end
 
-  # What an MCP client reads of `thread` (`thread.messages`, through the
+  # What an MCP client reads of `thread` (`thread.events`, through the
   # router as the transport dispatches it): its rows, decoded from the
   # tool result's one text block.
   defp mcp_thread_messages(ctx, thread) do
@@ -1905,7 +1873,7 @@ defmodule Aqua.LoopTest do
       method: "tools/call",
       params: %{
         "name" => "thread",
-        "arguments" => %{"action" => "messages", "thread" => thread.id}
+        "arguments" => %{"action" => "events", "thread" => thread.id}
       }
     }
 
@@ -1983,7 +1951,7 @@ defmodule Aqua.LoopTest do
     # The soul's own definition stops naming execution.run, and its grant
     # is walked again for the shape that moved.
     {:ok, _} =
-      Aqua.AgentConfig.call_aqua(ctx, %{
+      Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
         "name" => "aqua",
         "tool_policy_patch" => %{"execution.run" => nil}

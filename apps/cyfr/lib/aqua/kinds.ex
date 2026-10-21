@@ -4,8 +4,8 @@
 defmodule Aqua.Kinds do
   @moduledoc """
   What an operation is to the assistant: its kind, whether it may ever
-  run without a card, the verbs a tool has, and whether a chat can run
-  it at all — read from the catalog's annotations and the virtual-tool
+  run without a card, the verbs a tool has and the standing it takes —
+  read from the catalog's annotations and the virtual-tool
   catalog, one rule for the AQUA page and the runtime ceiling alike. The
   classification is the gate's (`Sanctum.Catalog.tool_kind/2`,
   `Sanctum.Catalog.tool_actions/1`), which the `aqua` tool's door in the
@@ -34,7 +34,6 @@ defmodule Aqua.Kinds do
   runtime ceiling (`Aqua.ToolGrants.effective/2`) read; the kinds it
   admits are `Sanctum.VirtualTools.auto_permitted_kinds/0`.
   """
-
   @spec auto_permitted?(String.t(), String.t()) :: boolean()
   defdelegate auto_permitted?(tool, action), to: Sanctum.Catalog
 
@@ -43,29 +42,23 @@ defmodule Aqua.Kinds do
   virtual tool, the registry's `action` enum otherwise — and `[]` for a
   tool neither holds. What a `tool.*` glob stands for.
   """
-
   @spec actions_of(String.t()) :: [String.t()]
   defdelegate actions_of(tool), to: Sanctum.Catalog, as: :tool_actions
 
   @doc "Whether the virtual catalog or the registry holds a tool of this name."
-
   @spec catalogued?(String.t()) :: boolean()
-
   def catalogued?(tool) when is_binary(tool),
     do: Sanctum.VirtualTools.tool?(tool) or actions_of(tool) != []
 
   def catalogued?(_tool), do: false
 
-  # The standing rule of a tool.action, from the same declaration `kind_for/2`
-
-  # reads. The virtual catalog and the external namespace declare none, so
-
-  # both keep the default (any standing scope); an internal tool answers
-
-  # from its registry annotation.
-
+  @doc """
+  The standing rule of a `tool.action`, from the same declaration
+  `kind_for/2` reads. The virtual catalog and the external namespace
+  declare none, so both keep the default (any standing scope); an
+  internal tool answers from its registry annotation.
+  """
   @spec standing_for(String.t(), String.t()) :: :thread | false | nil
-
   def standing_for(tool, action) when is_binary(tool) and is_binary(action) do
     cond do
       Sanctum.VirtualTools.tool?(tool) -> nil
@@ -75,43 +68,4 @@ defmodule Aqua.Kinds do
   end
 
   def standing_for(_, _), do: nil
-
-  # An approved proposal is executed inside the chain, so an action that
-
-  # plane refuses is not worth offering — the card would fail on the click.
-
-  # Only a refusal the registry actually asserts counts: a virtual tool (the
-
-  # formula dispatches those itself) and a `tool.*` glob stand, and so does
-
-  # anything the registry has never heard of.
-
-  @doc "Whether a `tool.action` an allowlist marks `ask` is one a card can run."
-  @spec proposable?(String.t()) :: boolean()
-  def proposable?(key), do: not refused?(key) and not auto_only?(key)
-
-  defp auto_only?(key) do
-    case String.split(key, ".", parts: 2) do
-      [tool, action] -> Sanctum.VirtualTools.auto_only?(tool, action)
-      _ -> false
-    end
-  end
-
-  defp refused?(key) do
-    case String.split(key, ".", parts: 2) do
-      [_tool, "*"] -> false
-      [tool, action] -> refused?(tool, action)
-      _ -> false
-    end
-  end
-
-  @doc "Whether a chat would refuse `tool.action` outright."
-  @spec refused?(String.t(), String.t()) :: boolean()
-  def refused?(tool, action) do
-    if Sanctum.VirtualTools.tool?(tool) do
-      is_nil(Sanctum.VirtualTools.kind_for(tool, action))
-    else
-      Aqua.Ops.in_chain_refused?(tool, action)
-    end
-  end
 end

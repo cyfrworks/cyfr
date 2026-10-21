@@ -133,7 +133,7 @@ defmodule Aqua.SeedContractTest do
     asking =
       for {name, key, mode} <- seed_policy(),
           {tool, action} <- exact(key),
-          Hands.auto_only?(tool, action),
+          Sanctum.VirtualTools.auto_only?(tool, action),
           mode != "auto",
           do: "#{name}: #{key}"
 

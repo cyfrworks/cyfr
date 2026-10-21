@@ -122,7 +122,6 @@ defmodule Aqua.Providers.Approval do
 
   @impl true
   def handle("approval", %Context{} = ctx, args), do: dispatch(ctx, args)
-  def handle(tool, _ctx, _args), do: {:error, {:not_found, "tool", tool}}
 
   # The interactive-surface gate is the `consent: :interactive`
   # declaration on every action, enforced by the registry before this
@@ -164,9 +163,6 @@ defmodule Aqua.Providers.Approval do
 
   defp dispatch(_ctx, %{"action" => "list"}),
     do: {:error, {:invalid_argument, "list requires 'thread'"}}
-
-  defp dispatch(_ctx, _args),
-    do: {:error, {:invalid_argument, "approval requires an 'action'"}}
 
   defp choice("approve", scope, _reason) when scope in [nil, "once", "thread", "always"],
     do: {:ok, %{decision: :approved, scope: Aqua.ApprovalScope.parse(scope || "once")}}

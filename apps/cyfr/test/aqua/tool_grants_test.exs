@@ -31,7 +31,7 @@ defmodule Aqua.ToolGrantsTest do
         overrides
       )
 
-    ToolGrants.put(ctx, attrs)
+    Sanctum.ToolGrants.put(ctx, attrs)
   end
 
   describe "refusal_message/1" do
@@ -91,7 +91,7 @@ defmodule Aqua.ToolGrantsTest do
   describe "resolve/2" do
     test "an allow with no other bound is bounded by its sources: a declared 'ask' still asks" do
       declared = %{"component.pull" => "ask"}
-      grants = [%{effect: "allow", tool: "component", action: "pull"}]
+      grants = [%{scope: "thread", effect: "allow", tool: "component", action: "pull"}]
 
       # Each call is decided as it is made (`Sanctum.ToolGrants.admits?/2`),
       # never by a plain `auto` for the whole turn.
@@ -108,7 +108,7 @@ defmodule Aqua.ToolGrantsTest do
 
     test "a deny beats a declared 'auto' and pins the pair as denied" do
       declared = %{"component.pull" => "auto", "files.read" => "auto"}
-      grants = [%{effect: "deny", tool: "component", action: "pull"}]
+      grants = [%{scope: "thread", effect: "deny", tool: "component", action: "pull"}]
 
       # Kept as an exact "deny", not dropped: every policy reader falls back
       # to a `tool.*` glob only for an ABSENT key, so a dropped pair would
@@ -122,8 +122,8 @@ defmodule Aqua.ToolGrantsTest do
       declared = %{}
 
       grants = [
-        %{effect: "allow", tool: "component", action: "pull"},
-        %{effect: "deny", tool: "component", action: "pull"}
+        %{scope: "thread", effect: "allow", tool: "component", action: "pull"},
+        %{scope: "thread", effect: "deny", tool: "component", action: "pull"}
       ]
 
       assert ToolGrants.resolve(declared, grants) == %{"component.pull" => "deny"}
@@ -131,7 +131,7 @@ defmodule Aqua.ToolGrantsTest do
 
     test "a deny is not defeated, or inverted, by a glob" do
       # Standing denies must override both exact and globbed ask/auto policies.
-      deny = [%{effect: "deny", tool: "component", action: "pull"}]
+      deny = [%{scope: "thread", effect: "deny", tool: "component", action: "pull"}]
 
       composed = ToolGrants.resolve(%{"component.*" => "ask"}, deny)
       assert composed["component.pull"] == "deny"

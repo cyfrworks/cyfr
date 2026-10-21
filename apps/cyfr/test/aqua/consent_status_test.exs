@@ -54,10 +54,9 @@ defmodule Aqua.ConsentStatusTest do
 
   test "a source with no row and no profile has no consent to judge", %{ctx: ctx} do
     assert {:ok, :absent} = ConsentStatus.state(ctx, "formula:local.nothing-here")
-    assert {:ok, :absent} = Aqua.consent_state(ctx, "formula:local.nothing-here")
 
     # The soul of an athanor whose tree holds none.
-    assert {:ok, :absent} = Aqua.consent_state(ctx)
+    assert {:ok, :absent} = ConsentStatus.state(ctx, Prima.AgentRef.soul_ref())
   end
 
   test "an athanor with nothing drifted lists nothing, as a list", %{ctx: ctx} do
@@ -69,7 +68,7 @@ defmodule Aqua.ConsentStatusTest do
     unfocused = %{ctx | athanor_id: nil}
 
     assert {:error, :forbidden} = ConsentStatus.state(unfocused, "formula:local.x")
-    assert {:error, :forbidden} = Aqua.consent_state(unfocused)
+    assert {:error, :forbidden} = ConsentStatus.state(unfocused, Prima.AgentRef.soul_ref())
     assert {:error, :forbidden} = Aqua.stale_consent_refs(unfocused)
   end
 

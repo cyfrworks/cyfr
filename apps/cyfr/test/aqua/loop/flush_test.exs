@@ -64,19 +64,6 @@ defmodule Aqua.Loop.FlushTest do
     {:ok, ctx: ctx, thread: thread}
   end
 
-  describe "the gate before the grant store is asked" do
-    test "room for the flush, the summary and the next request under the cap" do
-      assert Aqua.Loop.flush_room?(0, false)
-      assert Aqua.Loop.flush_room?(27, false)
-      refute Aqua.Loop.flush_room?(28, false)
-      refute Aqua.Loop.flush_room?(29, false)
-    end
-
-    test "a turn an unknown outcome restricts flushes nothing" do
-      refute Aqua.Loop.flush_room?(0, true)
-    end
-  end
-
   test "under a standing auto, the model keeps a note before the summary, and says nothing", %{
     ctx: ctx,
     thread: thread
@@ -427,7 +414,7 @@ defmodule Aqua.Loop.FlushTest do
       action: "keep"
     }
 
-    {:ok, _} = Aqua.ToolGrants.put(ctx, Map.put(grant, :effect, "allow"))
+    {:ok, _} = Sanctum.ToolGrants.put(ctx, Map.put(grant, :effect, "allow"))
     grant
   end
 

@@ -95,7 +95,7 @@ defmodule Aqua.Loop.CloneTest do
     do: Arca.Repo.all(from(t in Arca.Schemas.Turn, where: t.parent_turn_id == ^turn.id))
 
   defp call_under(role) do
-    ref = AgentSource.ref(role)
+    ref = Prima.AgentRef.ref(role)
     Enum.find(ScriptedWorker.calls(), &(ref in &1.authority.chain))
   end
 
@@ -585,7 +585,7 @@ defmodule Aqua.Loop.CloneTest do
   test "a member's own role, consented through the soul's walk, clones under the soul's consent",
        %{ctx: ctx, thread: thread} do
     {:ok, %{"cloneable" => true}} =
-      Aqua.AgentConfig.call_aqua(ctx, %{"action" => "create", "name" => "scout"})
+      Cyfr.Test.AquaTool.call(ctx, %{"action" => "create", "name" => "scout"})
 
     {:ok, %{minted: [], skipped: skipped}} = Bootstrap.run(ctx)
     assert {"agent:local.scout", :not_vouched} in skipped

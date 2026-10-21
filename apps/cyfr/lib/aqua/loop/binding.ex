@@ -27,7 +27,6 @@ defmodule Aqua.Loop.Binding do
   """
 
   alias Aqua.Hands
-  alias Sanctum.Context
 
   defmodule Call do
     @moduledoc "One model-visible call, resolved to what runs it."
@@ -340,8 +339,4 @@ defmodule Aqua.Loop.Binding do
       _ -> ""
     end
   end
-
-  @doc false
-  def guest?(%Context{plane: :guest}), do: true
-  def guest?(_), do: false
 end

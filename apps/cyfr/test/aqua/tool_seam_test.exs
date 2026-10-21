@@ -93,15 +93,14 @@ defmodule Aqua.ToolSeamTest do
   # Every production beam of the assistant, `Aqua` and `Aqua.*`, as
   # `{module, path}`; test support compiled into the same ebin is left out.
   defp assistant_beams do
-    for path <-
-          :cyfr
-          |> Application.app_dir("ebin")
-          |> Path.join("Elixir.Aqua*.beam")
-          |> Path.wildcard(),
-        name = path |> Path.basename(".beam") |> String.replace_prefix("Elixir.", ""),
+    ebin = Application.app_dir(:cyfr, "ebin")
+
+    for module <- Application.spec(:cyfr, :modules),
+        name = inspect(module),
         name == "Aqua" or String.starts_with?(name, "Aqua."),
+        path = Path.join(ebin, Atom.to_string(module) <> ".beam"),
         Beams.production?(path),
-        do: {Module.concat([name]), String.to_charlist(path)}
+        do: {module, String.to_charlist(path)}
   end
 
   # The gate dispatch `beam` calls or captures.

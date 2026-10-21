@@ -9,7 +9,6 @@ defmodule Aqua.AquaToolEditsTest do
   """
   use ExUnit.Case, async: false
 
-  alias Aqua.AgentConfig
   alias Compendium.AquaAgent
   alias Compendium.AquaPath
 
@@ -35,7 +34,7 @@ defmodule Aqua.AquaToolEditsTest do
     %{ctx: ctx}
   end
 
-  defp call(ctx, args), do: AgentConfig.call_aqua(ctx, args)
+  defp call(ctx, args), do: Cyfr.Test.AquaTool.call(ctx, args)
 
   defp policy(ctx, name) do
     {:ok, %{"tool_policy" => policy}} = call(ctx, %{"action" => "get", "name" => name})
@@ -148,7 +147,7 @@ defmodule Aqua.AquaToolEditsTest do
 
   test "a prompt save names the version it edited and is refused over a newer one", %{ctx: ctx} do
     {:ok, %{"content_digest" => digest}} = call(ctx, %{"action" => "get", "name" => "scout"})
-    assert digest == Compendium.Providers.Aqua.content_digest("")
+    assert digest == Prima.Digest.sha256_hex("")
 
     assert {:ok, _} =
              call(ctx, %{

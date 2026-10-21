@@ -51,8 +51,7 @@ defmodule Aqua.Runner do
   running. Finding no local runner is not finding no runner: the thread
   row is read, and a thread whose claim belongs to a turn a live peer
   holds is that peer's, so no runner is started for it, nothing is
-  recovered and no recovery is counted against it. Three members joining
-  in turn used to end one healthy turn `uncertain` that way.
+  recovered and no recovery is counted against it.
 
   A runner that does start finds the thread's open turns and does what
   their rows say (`Aqua.Runner.RecoveryTable`), taking a turn only from
@@ -225,13 +224,6 @@ defmodule Aqua.Runner do
   def subscribe(thread_id, athanor_id) do
     actor = Prima.Actor.in_athanor(athanor_id)
     Cyfr.Bus.subscribe(actor, Cyfr.Bus.thread(actor, thread_id))
-  end
-
-  @doc "Undo `subscribe/2` for the calling process."
-  @spec unsubscribe(String.t(), String.t()) :: :ok | {:error, term()}
-  def unsubscribe(thread_id, athanor_id) do
-    actor = Prima.Actor.in_athanor(athanor_id)
-    Cyfr.Bus.unsubscribe(actor, Cyfr.Bus.thread(actor, thread_id))
   end
 
   @doc "Tell a thread's viewers about a row appended outside a turn (a line said aloud)."

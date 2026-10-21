@@ -316,8 +316,7 @@ defmodule Aqua.Notes do
   Make a filed note's outside material the person's own: clear the
   outside sources its provenance carries, over the revision read just
   before, after a card that named its sources. `sources_seen` are the
-  sources the card showed (`Prima.Source`s or their canonical JSON
-  objects); a note whose sources are not exactly those, a note changed
+  sources the card showed, as their canonical JSON objects; a note whose sources are not exactly those, a note changed
   since it was read, a note that carries no outside source and a pinned
   name are refused, and nothing is written. Its other sources stay, since
   what it was made from inside the athanor (a disclosed vault value, a
@@ -325,10 +324,10 @@ defmodule Aqua.Notes do
   thread and execution it came from with it, and the person who endorsed
   it is who kept it now.
   """
-  @spec endorse(Context.t(), String.t(), [Prima.Source.t() | map()]) ::
+  @spec endorse(Context.t(), String.t(), [map()]) ::
           {:ok, %{endorsed: String.t(), athanor_id: String.t()}} | {:error, refusal()}
   def endorse(%Context{} = ctx, name, sources_seen) when is_list(sources_seen) do
-    seen = sources_seen |> Enum.map(&as_source/1) |> Prima.Source.set()
+    seen = decode_sources_list(sources_seen)
 
     with :ok <- check_name(name),
          :ok <- refuse_pinned(name, "endorse", "pin"),
@@ -361,27 +360,17 @@ defmodule Aqua.Notes do
     do: {:error, {:invalid_argument, "endorse names the sources the card showed"}}
 
   @doc """
-  The sources a notes read answered carries: the provenance of the note a
-  `read/4` answered, or of each match a search answered, in either key
-  spelling. An answer that is not a read's carries none.
+  The sources a notes read answered carries, as the `notes` tool answers
+  it (`Aqua.Providers.Notes`): the provenance of the note a `read`
+  answered, or of each match a `search` answered, each source in its JSON
+  form. An answer that is not a read's carries none.
   """
   @spec sources_of_answer(term()) :: [Prima.Source.t()]
-  def sources_of_answer({:ok, %{} = answer}) do
-    notes =
-      cond do
-        has_field?(answer, :sources) -> [answer]
-        has_field?(answer, :matches) -> List.wrap(field(answer, :matches))
-        has_field?(answer, :notes) -> List.wrap(field(answer, :notes))
-        true -> []
-      end
+  def sources_of_answer({:ok, %{sources: sources}}) when is_list(sources),
+    do: decode_sources_list(sources)
 
-    notes
-    |> Enum.flat_map(fn
-      %{} = note -> note |> field(:sources) |> List.wrap() |> Enum.map(&as_source/1)
-      _other -> []
-    end)
-    |> Prima.Source.set()
-  end
+  def sources_of_answer({:ok, %{matches: matches}}) when is_list(matches),
+    do: matches |> Enum.flat_map(& &1.sources) |> decode_sources_list()
 
   def sources_of_answer(_answer), do: []
 
@@ -401,45 +390,23 @@ defmodule Aqua.Notes do
 
   def chain_sources(%Context{}, _none), do: []
 
-  defp has_field?(map, key), do: Map.has_key?(map, key) or Map.has_key?(map, Atom.to_string(key))
-  defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
-
-  defp as_source(%Prima.Source{} = source), do: source
-  defp as_source(other), do: Prima.Source.from_json(other)
+  defp decode_sources_list(sources),
+    do: sources |> Enum.map(&Prima.Source.from_json/1) |> Prima.Source.set()
 
   @doc """
-  One sentence for what a write answered — the line a tape shows when an
-  approved card kept something, in the runner's voice. One per outcome
-  this module mints (`keep/4` new or replacing, `pin/4` setting or
-  clearing, `forget/2`, `endorse/3`), read from either key spelling since an answer
-  may have crossed the wire; `nil` for anything that is not a write's
-  answer, so a caller can post nothing rather than guess.
+  One sentence for what a write answered, as the `notes` tool answers it:
+  one per outcome this module mints (`keep/4` new or replacing, `pin/4`
+  setting or clearing, `forget/2`, `endorse/3`); `nil` for anything that
+  is not a write's answer, so a caller can post nothing rather than guess.
   """
   @spec describe(term()) :: String.t() | nil
-  def describe(%{} = result) do
-    field = fn key -> Map.get(result, key) || Map.get(result, Atom.to_string(key)) end
+  def describe(%{kept: name, replaced: true}), do: "📝 Replaced the note: #{name}"
+  def describe(%{kept: name}), do: "📝 Kept a note: #{name}"
 
-    cond do
-      name = field.(:kept) ->
-        if field.(:replaced), do: "📝 Replaced the note: #{name}", else: "📝 Kept a note: #{name}"
-
-      name = field.(:pinned) ->
-        "📝 Pinned #{name}"
-
-      name = field.(:cleared) ->
-        "📝 Cleared #{name}"
-
-      name = field.(:forgot) ->
-        "📝 Forgot the note: #{name}"
-
-      name = field.(:endorsed) ->
-        "📝 Made the note your own: #{name}"
-
-      true ->
-        nil
-    end
-  end
-
+  def describe(%{pinned: name}), do: "📝 Pinned #{name}"
+  def describe(%{cleared: name}), do: "📝 Cleared #{name}"
+  def describe(%{forgot: name}), do: "📝 Forgot the note: #{name}"
+  def describe(%{endorsed: name}), do: "📝 Made the note your own: #{name}"
   def describe(_result), do: nil
 
   # ---------------------------------------------------------------------------
@@ -457,15 +424,11 @@ defmodule Aqua.Notes do
     end
   end
 
-  @doc "How many filed notes the index shows a turn; the rest are found with `search/3`."
-  @spec index_limit() :: pos_integer()
-  def index_limit, do: @index_limit
-
   @doc """
   The filed notes of the focused athanor as name and first line, sorted by
   name — what a turn is shown so it can read one on demand — each with
   the sources its provenance carries. No timestamps and no sizes, so the
-  same pile renders the same bytes. Bounded to `index_limit/0` entries,
+  same pile renders the same bytes. Bounded to #{@index_limit} entries,
   with a count of what lies beyond: a pile an agent can grow must not
   grow every prompt with it.
   """
@@ -515,10 +478,6 @@ defmodule Aqua.Notes do
   page and its successor never overlap or skip.
   """
   @type page(entry) :: %{notes: [entry], more: boolean(), next: String.t() | nil}
-
-  @doc "The largest page a read answers."
-  @spec page_max() :: pos_integer()
-  def page_max, do: @page_max
 
   @doc """
   The note names in the scope, with the athanor each lives in — a page of

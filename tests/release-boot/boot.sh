@@ -619,7 +619,7 @@ serves() {
   esac
 
   local body answer
-  body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"thread","arguments":{"action":"messages","thread":"%s"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$thread_id")"
+  body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"thread","arguments":{"action":"events","thread":"%s"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$thread_id")"
   answer="$(curl -fsS -m 30 -X POST "http://127.0.0.1:$PORT/mcp" \
     -H "authorization: Bearer $token" -H 'content-type: application/json' \
     -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' \
@@ -630,9 +630,9 @@ import json, sys
 result = json.load(sys.stdin)["result"]
 messages = json.loads(result["content"][0]["text"])["messages"]
 sys.exit(0 if not result["isError"] and [m["content"] for m in messages] == ["the backup proof thread"] else 1)'; then
-    echo "$what: thread.messages -> the thread's message"
+    echo "$what: thread.events -> the thread's message"
   else
-    fail "$what: thread.messages answered without the message: $answer"
+    fail "$what: thread.events answered without the message: $answer"
   fi
 }
 serves "the cell"
@@ -687,10 +687,10 @@ server_stop
 # ---------------------------------------------------------------------------
 
 # What `$1` answers to the person's pre-backup session over /mcp: the HTTP
-# status of a `thread.messages` call.
+# status of a `thread.events` call.
 mcp_status() {
   local body
-  body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"thread","arguments":{"action":"messages","thread":"%s"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$thread_id")"
+  body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"thread","arguments":{"action":"events","thread":"%s"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"release-boot","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$thread_id")"
   curl -sS -m 30 -o "$WORK/mcp" -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
     -H "authorization: Bearer $token" -H 'content-type: application/json' \
     -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' \

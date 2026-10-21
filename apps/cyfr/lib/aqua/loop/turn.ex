@@ -7,7 +7,8 @@ defmodule Aqua.Loop.Turn do
   agent as the turn pinned it — the revision bytes, whose capability
   digest must equal the one the turn started under — the roster and the
   roles the soul may clone into, the effective policy composed with the
-  standing rows, the resolved model catalyst with its capabilities, the
+  standing rows, the resolved model catalyst with its capabilities and
+  the request size its consent caps it at (`request_cap`), the
   system prompt and the sources it read, the tool surface (with the
   accounts the soul's launches may name, read once here for every
   request the spec makes, `Aqua.Hands.launch_accounts/1`), the room
@@ -46,6 +47,7 @@ defmodule Aqua.Loop.Turn do
     :catalyst,
     :model,
     :capabilities,
+    :request_cap,
     :system,
     :tools,
     :deadline_ms,
@@ -76,13 +78,12 @@ defmodule Aqua.Loop.Turn do
 
     with {:ok, thread} <- Tape.thread(ctx, turn.thread_id),
          {:ok, roster} <- Aqua.AgentConfig.roster(ctx),
-         {:ok, agent} <- agent(ctx, turn, roster),
+         {:ok, agent} <- agent(ctx, turn),
          soul? = Prima.AgentRef.soul?(agent["name"]),
          roles = if(soul?, do: roles(roster), else: []),
          {:ok, grants} <-
            Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [agent["name"]]),
-         policy =
-           Aqua.ToolGrants.resolve(agent["tool_policy"] || %{}, grants[agent["name"]] || []),
+         policy = Aqua.ToolGrants.resolve(agent["tool_policy"], Map.fetch!(grants, agent["name"])),
          {:ok, catalyst, model} <- model(ctx, turn, agent, opts),
          {:ok, capabilities} <- capabilities(ctx, authority, catalyst, model, turn) do
       options = decode(turn.options)
@@ -105,6 +106,7 @@ defmodule Aqua.Loop.Turn do
         catalyst: catalyst,
         model: model,
         capabilities: capabilities,
+        request_cap: request_cap(authority, catalyst),
         system: prompt.text,
         sources: prompt.sources,
         tools:
@@ -143,10 +145,6 @@ defmodule Aqua.Loop.Turn do
   @spec with_turn(t(), Tape.turn()) :: t()
   def with_turn(%__MODULE__{} = spec, turn), do: %{spec | turn: turn}
 
-  @doc "The roster entries the soul may clone into, as the request offers them."
-  @spec role_entries(t()) :: [map()]
-  def role_entries(%__MODULE__{roles: roles}), do: roles
-
   @doc "The role names the soul may clone into."
   @spec role_names(t()) :: [String.t()]
   def role_names(%__MODULE__{roles: roles}), do: Enum.map(roles, & &1["name"])
@@ -166,40 +164,37 @@ defmodule Aqua.Loop.Turn do
 
   # A turn runs the agent it pinned — the soul or a clone's role — from the
   # revision bytes, parsed, with their capability digest checked against
-  # the pin. A turn without a pin (a revision the tree no longer holds is
-  # refused, never replaced) takes the roster's current entry.
-  defp agent(ctx, turn, roster) do
+  # the pin. Every start and every clone pins both, so a turn that pins
+  # neither, or only one, is refused; a revision the tree no longer holds
+  # is refused too, never replaced.
+  defp agent(ctx, %{agent_revision_digest: revision, agent_capability_digest: capability} = turn)
+       when is_binary(revision) and is_binary(capability) do
     case Tape.agent_revision(ctx, turn) do
       {:ok, bytes} -> pinned_agent(turn, bytes)
-      {:error, :no_revision} -> roster_agent(turn, roster)
       {:error, reason} -> {:error, {:agent_unavailable, reason}}
     end
   end
 
+  defp agent(_ctx, _turn), do: {:error, :no_pin}
+
   defp pinned_agent(turn, bytes) do
     with {:ok, parsed} <- Compendium.parse_agent(turn.agent, bytes),
          {:ok, digest} <- Compendium.agent_capability_digest(parsed) do
-      if is_nil(turn.agent_capability_digest) or digest == turn.agent_capability_digest,
+      if digest == turn.agent_capability_digest,
         do: {:ok, agent_map(parsed)},
         else: {:error, :agent_changed}
     end
   end
 
-  defp roster_agent(turn, roster) do
-    case Enum.find(roster, &(&1["name"] == turn.agent)) do
-      nil -> {:error, :no_agent}
-      entry -> {:ok, agent_map(entry)}
-    end
-  end
-
-  # One shape for a parsed revision and a roster entry.
+  # One shape for a parsed revision and a roster entry
+  # (`Aqua.AgentConfig.roster/1`).
   defp agent_map(%{name: name} = parsed) do
     %{
       "name" => name,
-      "title" => parsed.title || name,
-      "description" => parsed.description || "",
-      "prompt" => parsed.prompt || "",
-      "tool_policy" => parsed.tool_policy || %{},
+      "title" => parsed.title,
+      "description" => parsed.description,
+      "prompt" => parsed.prompt,
+      "tool_policy" => parsed.tool_policy,
       "catalyst_ref" => parsed.catalyst_ref,
       "model" => parsed.model
     }
@@ -208,10 +203,10 @@ defmodule Aqua.Loop.Turn do
   defp agent_map(%{"name" => name} = entry) do
     %{
       "name" => name,
-      "title" => entry["title"] || name,
-      "description" => entry["description"] || "",
-      "prompt" => entry["content"] || entry["prompt"] || "",
-      "tool_policy" => entry["tool_policy"] || %{},
+      "title" => entry["title"],
+      "description" => entry["description"],
+      "prompt" => entry["content"],
+      "tool_policy" => entry["tool_policy"],
       "catalyst_ref" => entry["catalyst_ref"],
       "model" => entry["model"]
     }
@@ -221,11 +216,7 @@ defmodule Aqua.Loop.Turn do
     role_type = role_type()
 
     for %{"type" => ^role_type, "name" => name} = entry <- roster do
-      %{
-        "name" => name,
-        "title" => entry["title"] || name,
-        "description" => entry["description"] || ""
-      }
+      %{"name" => name, "title" => entry["title"], "description" => entry["description"]}
     end
   end
 
@@ -273,6 +264,21 @@ defmodule Aqua.Loop.Turn do
 
       {{:error, _}, _} ->
         {:error, {:catalyst_not_in_athanor, agent["catalyst_ref"]}}
+    end
+  end
+
+  # The request size the consent graph caps the catalyst at, or nil. Read
+  # by name, without the version: the spec carries a versioned ref because
+  # that is what resolved, but the graph keys every node by name
+  # (`Opus.Admission` steps by name), so a versioned key finds nothing and
+  # a cap of nil is a check that never fires.
+  defp request_cap(authority, catalyst) do
+    with {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(catalyst),
+         {:ok, %Prima.Limits{max_request_size: cap}} <-
+           Prima.Authority.node_limits(authority, name_ref) do
+      cap
+    else
+      _ -> nil
     end
   end
 
@@ -374,7 +380,7 @@ defmodule Aqua.Loop.Turn do
     name = agent["name"]
 
     with {:ok, grants} <- Aqua.ToolGrants.for_agents(ctx, turn.thread_id, [name]) do
-      {:ok, Aqua.ToolGrants.resolve(agent["tool_policy"] || %{}, grants[name] || [])}
+      {:ok, Aqua.ToolGrants.resolve(agent["tool_policy"], Map.fetch!(grants, name))}
     end
   end
 
@@ -386,8 +392,6 @@ defmodule Aqua.Loop.Turn do
       _ -> %{}
     end
   end
-
-  defp decode(%{} = map), do: map
 
   defp excerpt(ctx, %{
          "room" => %{"athanor_id" => athanor_id, "thread_id" => thread_id} = room
