@@ -1073,15 +1073,19 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
                {:error, :corrupt}
     end
 
-    test "the registry's own reads still read it as none", %{ctx: ctx} do
+    test "the registry's own reads hand over the stored bytes, which a strict reader refuses",
+         %{ctx: ctx} do
       publish!(ctx, "shape-corrupt-registry", "1.0.0")
       corrupt_manifest!("shape-corrupt-registry")
 
-      assert {:ok, %{manifest: nil}} =
-               Compendium.Registry.get_latest(ctx, "shape-corrupt-registry", "local", "reagent")
-
-      assert {:ok, %{manifest: nil}} =
-               Compendium.Registry.get(ctx, "shape-corrupt-registry", "1.0.0", "local", "reagent")
+      for read <- [
+            Compendium.Registry.get_latest(ctx, "shape-corrupt-registry", "local", "reagent"),
+            Compendium.Registry.get(ctx, "shape-corrupt-registry", "1.0.0", "local", "reagent")
+          ] do
+        assert {:ok, %{manifest: stored}} = read
+        assert is_binary(stored)
+        assert Prima.Manifest.decode_strict(stored) == {:error, :malformed_manifest}
+      end
     end
   end
 end
