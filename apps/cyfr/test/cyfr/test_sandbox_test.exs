@@ -132,7 +132,10 @@ defmodule Cyfr.Test.SandboxTest do
         Agent.stop(seen)
 
         pooled =
-          Map.new(Locus.Runtime.RunnerPool.runners(Locus.Runtime.RunnerPool), &{&1.id, &1.state})
+          Map.new(
+            Locus.Runtime.Test.Runners.runners(Locus.Runtime.RunnerPool),
+            &{&1.id, &1.state}
+          )
 
         refute Map.has_key?(pooled, busy), "the busy runner outlived the sweep"
 
@@ -191,7 +194,7 @@ defmodule Cyfr.Test.SandboxTest do
 
       assert_receive {:held, ^root_id, _call}, 30_000
 
-      runners = Locus.Runtime.RunnerPool.runners(Locus.Runtime.RunnerPool)
+      runners = Locus.Runtime.Test.Runners.runners(Locus.Runtime.RunnerPool)
       assert [%{id: busy}] = for(%{state: :busy} = runner <- runners, do: runner)
       fresh = for %{state: :fresh, id: id} <- runners, do: id
       Agent.update(seen, fn _ -> %{busy: busy, fresh: fresh} end)
