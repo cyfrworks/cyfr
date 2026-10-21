@@ -9,7 +9,7 @@
 #
 #   boots    the deployment file `cyfr init` writes, a local home — the
 #            stack's keys, the empty CORS allowlist, authentication
-#            configured — with CYFR_AUTO_MIGRATE=true. The release migrates
+#            configured — with CYFR_AUTO_MIGRATE=on. The release migrates
 #            the schema itself (nothing else can: the database carries no
 #            schema before it starts) and answers /api/health/ready, the
 #            readiness check the image's HEALTHCHECK runs. A boot that
@@ -662,7 +662,7 @@ else
 fi
 # The origin's storage root goes too, for the same reason.
 rm -rf "$ORIGIN"
-sed -i 's/^CYFR_AUTO_MIGRATE=.*/CYFR_AUTO_MIGRATE=false/' "$COPY/.env"
+sed -i 's/^CYFR_AUTO_MIGRATE=.*/CYFR_AUTO_MIGRATE=off/' "$COPY/.env"
 echo "copied: the database, the storage root, keyring.json and .env"
 
 step "the copy boots with nothing to migrate and passes both fingerprints"

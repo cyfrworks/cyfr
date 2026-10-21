@@ -43,7 +43,7 @@
 #             adapter jobs)
 #   cluster   with --close only, after every other leg: the real-member
 #             suite alone on its own database, against an object store
-#             the gate does not start (CYFR_CLUSTER=1 refuses local
+#             the gate does not start (CYFR_CLUSTER=on refuses local
 #             storage): the one at CYFR_TEST_S3_ENDPOINT, by default
 #             http://127.0.0.1:9000, as CI's cluster job starts MinIO there
 #   vocab     the CI vocabulary job's own script, read from test.yml

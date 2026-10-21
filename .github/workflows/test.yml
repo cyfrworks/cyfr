@@ -646,7 +646,7 @@ jobs:
     # One cell runs on several members, and a cluster flag is not evidence
     # of it. This job runs the two-node suite: two `:peer` nodes,
     # each running the whole application against one Postgres and one
-    # object store, under every refusal CYFR_CLUSTER=1 names. Every other
+    # object store, under every refusal CYFR_CLUSTER=on names. Every other
     # job in this workflow runs one node, so nothing else here can tell a
     # claim that holds from a claim that only looks like it does.
     services:
@@ -678,7 +678,7 @@ jobs:
         uses: ./.github/actions/setup-elixir
         with:
           cache-key-prefix: mix-cluster
-      # CYFR_CLUSTER=1 refuses local storage: two members would each hold
+      # CYFR_CLUSTER=on refuses local storage: two members would each hold
       # half of every athanor. The same image and credentials the s3-minio
       # job uses, pinned by digest; the PostgreSQL service images in this
       # workflow are pinned by tag (postgres:18.6).
