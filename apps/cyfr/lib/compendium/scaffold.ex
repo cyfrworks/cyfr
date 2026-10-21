@@ -122,8 +122,10 @@ defmodule Compendium.Scaffold do
 
   - `ctx` - Sanctum context
   - `name` - Component name (lowercase alphanumeric + hyphens)
-  - `type` - Component type: "reagent", "catalyst", or "formula"
+  - `type` - Component type: "reagent", "catalyst", "formula" or "tincture"
   - `version` - Semver version string (e.g. "0.1.0")
+  - `opts` - `template:` names a tincture's template
+    (`Compendium.tincture_templates/0`); the vanilla one when absent
 
   ## Returns
 

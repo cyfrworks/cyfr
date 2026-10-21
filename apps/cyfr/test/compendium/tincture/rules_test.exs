@@ -29,6 +29,15 @@ defmodule Compendium.Tincture.RulesTest do
   @endpoint "https://cyfr.test"
   @nonce "bm9uY2Utb2YtdGhlLXBhZ2U"
 
+  # The sandbox tokens no frame ever carries, whatever it is granted.
+  @forbidden ~w(
+    allow-same-origin
+    allow-top-navigation allow-top-navigation-by-user-activation
+    allow-top-navigation-to-custom-protocols
+    allow-popups allow-popups-to-escape-sandbox
+    allow-forms
+  )
+
   @runs "reagent:local.runs"
 
   defp manifest(tincture),
@@ -93,23 +102,11 @@ defmodule Compendium.Tincture.RulesTest do
       end
     end
 
-    test "no grant emits a forbidden token, and a map that would is caught" do
+    test "no grant emits a forbidden token" do
       all = Rules.frame_capabilities()
       {:ok, tokens} = Rules.sandbox_tokens(all)
 
-      for forbidden <- ~w(allow-same-origin allow-top-navigation allow-popups allow-forms) do
-        assert forbidden in Rules.forbidden_sandbox_tokens()
-        refute forbidden in tokens
-      end
-
-      assert Rules.sandbox_violations(%{"pointer_lock" => ["allow-pointer-lock"]}) == []
-
-      assert Rules.sandbox_violations(%{
-               "pointer_lock" => ["allow-pointer-lock"],
-               "storage" => ["allow-same-origin"],
-               "links" => ["allow-popups", "allow-top-navigation"]
-             })
-             |> Enum.sort() == ["allow-popups", "allow-same-origin", "allow-top-navigation"]
+      for forbidden <- @forbidden, do: refute(forbidden in tokens)
     end
   end
 
@@ -182,7 +179,7 @@ defmodule Compendium.Tincture.RulesTest do
     end
 
     # The canvas policy is its own function; every other tincture's page is
-    # served under exactly the header it was before the canvas existed.
+    # served under the frame policy alone, byte for byte.
     test "a tincture that is no canvas keeps its policy byte for byte" do
       assert Rules.csp(manifest(%{"connect" => ["api.example.com"]}), %{
                endpoint: @endpoint,
@@ -571,8 +568,7 @@ defmodule Compendium.Tincture.RulesTest do
       assert Rules.canvas_sandbox_tokens() == ["allow-scripts"]
       assert Compendium.tincture_canvas_sandbox_tokens() == ["allow-scripts"]
 
-      for token <- Rules.canvas_sandbox_tokens(),
-          do: refute(token in Rules.forbidden_sandbox_tokens())
+      for token <- Rules.canvas_sandbox_tokens(), do: refute(token in @forbidden)
     end
   end
 
@@ -1018,8 +1014,5 @@ defmodule Compendium.Tincture.RulesTest do
     assert Compendium.tincture_allow_attribute(["gamepad"]) == Rules.allow_attribute(["gamepad"])
     assert Compendium.tincture_templates() == Rules.templates()
     assert Compendium.tincture_lockfile_required?(%{}) == Rules.lockfile_required?(%{})
-
-    opts = %{endpoint: @endpoint, nonce: @nonce}
-    assert Compendium.tincture_csp(%{}, opts) == Rules.csp(%{}, opts)
   end
 end

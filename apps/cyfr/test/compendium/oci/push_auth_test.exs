@@ -24,7 +24,8 @@ defmodule Compendium.OCI.PushAuthTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     bypass = Bypass.open()
-    # `Reference.api_base/1` maps `localhost:` to http:// (not 127.0.0.1) so Bypass works.
+    # A loopback registry is reached over http (`Compendium.RegistryHost.base_url/1`),
+    # so Bypass answers it.
     registry = "localhost:#{bypass.port}"
     ref = %Reference{registry: registry, repository: "#{@namespace}/catalysts/foo", tag: "1.0.0"}
 

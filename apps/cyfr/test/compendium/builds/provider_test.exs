@@ -126,11 +126,6 @@ defmodule Compendium.Builds.ProviderTest do
 
       assert err_msg(msg) =~ "base64"
     end
-
-    test "returns error when wasm_base64 missing" do
-      assert {:error, msg} = Provider.handle("build", local_ctx(), %{"action" => "validate"})
-      assert err_msg(msg) =~ "wasm_base64"
-    end
   end
 
   # ============================================================================
@@ -138,11 +133,6 @@ defmodule Compendium.Builds.ProviderTest do
   # ============================================================================
 
   describe "handle build.compile" do
-    test "returns error when reference is missing" do
-      assert {:error, msg} = Provider.handle("build", local_ctx(), %{"action" => "compile"})
-      assert err_msg(msg) =~ "reference"
-    end
-
     test "returns error for invalid reference format" do
       assert {:error, msg} =
                Provider.handle("build", local_ctx(), %{
@@ -215,28 +205,7 @@ defmodule Compendium.Builds.ProviderTest do
     end
   end
 
-  # ============================================================================
-  # Invalid / Unknown
-  # ============================================================================
-
-  describe "handle - invalid action" do
-    test "returns error for unknown action" do
-      assert {:error, msg} = Provider.handle("build", local_ctx(), %{"action" => "destroy"})
-      assert err_msg(msg) =~ "Invalid build action"
-    end
-
-    test "returns error for missing action" do
-      assert {:error, msg} = Provider.handle("build", local_ctx(), %{})
-      assert err_msg(msg) =~ "action"
-    end
-
-    test "returns error for unknown tool" do
-      assert {:error, msg} = Provider.handle("unknown", local_ctx(), %{"action" => "list"})
-      assert err_msg(msg) =~ "Unknown tool"
-    end
-  end
-
-  # Providers answer typed reasons now where the class is clear; the shared
+  # Providers answer typed reasons where the class is clear; the shared
   # renderer is the one spelling of every sentence, so tests assert through
   # it — a reason it cannot render is itself a failure. Plain strings pass
   # through unchanged.

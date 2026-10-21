@@ -44,19 +44,9 @@ defmodule Compendium.Registry.Client do
 
     case request(:get, path, [], nil, ctx) do
       {:ok, 200, _headers, body} ->
-        case Jason.decode(body) do
-          {:ok, %{"components" => components} = data} ->
-            {:ok,
-             %{
-               components: normalize_components(components),
-               total: data["total"] || length(components)
-             }}
-
-          {:ok, unexpected} ->
-            {:error, Errors.parse_error("search", unexpected)}
-
-          {:error, reason} ->
-            {:error, Errors.parse_error("search", reason)}
+        case listing(body) do
+          {:ok, components, total} -> {:ok, %{components: components, total: total}}
+          {:error, reason} -> {:error, Errors.parse_error("search", reason)}
         end
 
       {:ok, status, _headers, body} ->
@@ -74,7 +64,6 @@ defmodule Compendium.Registry.Client do
   Discover components on the cyfr.run registry.
 
   Sends GET /v1/components with publisher/namespace filter.
-  Replaces the fragile _catalog approach for default-mode deployments.
   """
   @spec discover(Context.t(), map()) :: {:ok, map()} | {:error, Errors.t() | corrupt()}
   def discover(%Context{} = ctx, params) when is_map(params) do
@@ -83,17 +72,14 @@ defmodule Compendium.Registry.Client do
 
     case request(:get, path, [], nil, ctx) do
       {:ok, 200, _headers, body} ->
-        case Jason.decode(body) do
-          {:ok, %{"components" => components} = data} ->
+        case listing(body) do
+          {:ok, components, total} ->
             {:ok,
              %{
                registry: Compendium.RegistryHost.canonical_host(),
-               components: normalize_components(components),
-               total: data["total"] || length(components)
+               components: components,
+               total: total
              }}
-
-          {:ok, unexpected} ->
-            {:error, Errors.parse_error("discover", unexpected)}
 
           {:error, reason} ->
             {:error, Errors.parse_error("discover", reason)}
@@ -113,17 +99,12 @@ defmodule Compendium.Registry.Client do
   @doc """
   Get component metadata from the cyfr.run index.
 
-  Sends GET /v1/components/:type/:publisher/:name[/:version].
+  Sends GET /v1/components/:type/:publisher/:name/:version.
   """
-  @spec get_component(Context.t(), String.t(), String.t(), String.t(), String.t() | nil) ::
+  @spec get_component(Context.t(), String.t(), String.t(), String.t(), String.t()) ::
           {:ok, map()} | {:error, Errors.t() | corrupt()}
-  def get_component(%Context{} = ctx, type, publisher, name, version \\ nil) do
-    path =
-      if version do
-        "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}/#{seg(version)}"
-      else
-        "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}"
-      end
+  def get_component(%Context{} = ctx, type, publisher, name, version) do
+    path = "/v1/components/#{seg(type)}/#{seg(publisher)}/#{seg(name)}/#{seg(version)}"
 
     case request(:get, path, [], nil, ctx) do
       {:ok, 200, _headers, body} ->
@@ -662,20 +643,10 @@ defmodule Compendium.Registry.Client do
     {:error, err}
   end
 
-  defp log_token_returning_result(_op, other), do: other
-
-  defp api_base_url do
-    # REST API host (e.g. "cyfr.run"). Tests point this at a non-routable
-    # address (e.g. "127.0.0.1:19") to force connection-refused errors, or at
-    # a Bypass HTTP server (with :registry_scheme override) for wire-level
-    # happy-path tests. Host comes from `Compendium.RegistryHost.canonical_rest_host/0` so
-    # Identity + Client share a single source of truth.
-    "#{scheme()}://#{Compendium.RegistryHost.canonical_rest_host()}"
-  end
-
-  # `https` in production; tests override to `http` to talk to a Bypass
-  # server without a TLS dance.
-  defp scheme, do: Application.get_env(:cyfr, :registry_scheme, "https")
+  # The REST API host (`Compendium.RegistryHost.canonical_rest_host/0`, the
+  # one source Identity reads too), under the scheme its host takes.
+  defp api_base_url,
+    do: Compendium.RegistryHost.base_url(Compendium.RegistryHost.canonical_rest_host())
 
   # Resolves a push token from CredentialStore and emits `Bearer` for REST API
   # calls. For non-namespace-scoped endpoints (e.g. `/v1/identity/probe`,
@@ -761,28 +732,40 @@ defmodule Compendium.Registry.Client do
     end
   end
 
-  # Decoded registry JSON is string-keyed; every in-process consumer of a
-  # tool result speaks atoms (`PrismWeb.Ops`' stated contract). The
-  # wire is unaffected — JSON encodes both spellings identically — so this
-  # decode boundary is where the two dialects meet: known keys become the
-  # atoms consumers read, unknown remote additions stay strings and are
-  # read by nothing. `to_existing_atom` only, so a remote answer can never
-  # mint atoms.
-  defp normalize_components(components) when is_list(components) do
-    Enum.map(components, fn
-      comp when is_map(comp) ->
-        Map.new(comp, fn {k, v} when is_binary(k) ->
-          try do
-            {String.to_existing_atom(k), v}
-          rescue
-            ArgumentError -> {k, v}
-          end
-        end)
+  # A cyfr.run component entry as the atom-keyed row a tool result
+  # carries (`PrismWeb.Ops`' contract): the fields named here, and nothing
+  # else of the entry. The wire names the owning slug `namespace_slug`;
+  # the row carries it under that name and as `publisher`, the name every
+  # local row uses, so a merged listing reads one field for both.
+  @component_fields ~w(id name version component_type namespace_slug description digest
+                       size tags category license status status_reason created_at updated_at)a
 
-      other ->
-        other
-    end)
+  # A `/v1/components` answer: its entries, each an object, and its total.
+  defp listing(body) do
+    case Jason.decode(body) do
+      {:ok, %{"components" => entries, "total" => total} = answer}
+      when is_list(entries) and is_integer(total) ->
+        if Enum.all?(entries, &is_map/1),
+          do: {:ok, Enum.map(entries, &component_row/1), total},
+          else: {:error, answer}
+
+      {:ok, unexpected} ->
+        {:error, unexpected}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
-  defp normalize_components(other), do: other
+  defp component_row(entry) do
+    row =
+      for field <- @component_fields, Map.has_key?(entry, Atom.to_string(field)), into: %{} do
+        {field, Map.fetch!(entry, Atom.to_string(field))}
+      end
+
+    case row do
+      %{namespace_slug: slug} -> Map.put(row, :publisher, slug)
+      row -> row
+    end
+  end
 end

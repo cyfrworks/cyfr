@@ -46,8 +46,8 @@ defmodule Compendium.TinctureValidator do
          :ok <- check_no_symlinks(directory_path, directory_path),
          :ok <- check_version(manifest, file_sizes(directory_path)) do
       {digest, size} = compute_digest(directory_path)
-      # exports always [] — tinctures have no WASM exports; kept for return-shape
-      # compatibility with Prima.Wasm so Registry can use either validator uniformly
+      # exports always [] — tinctures have no WASM exports; the answer has
+      # Prima.Wasm's shape, so Registry reads either validator's alike
       {:ok, %{digest: digest, size: size, exports: []}}
     end
   end
@@ -62,9 +62,7 @@ defmodule Compendium.TinctureValidator do
           {:ok, map()} | {:error, String.t()}
   def validate_from_pairs(pairs) when is_list(pairs) do
     files =
-      pairs
-      |> Enum.reject(fn {segs, _content} -> segs |> List.last() |> excluded?() end)
-      |> Map.new(fn {segs, content} -> {Enum.join(segs, "/"), content} end)
+      Map.new(pairs, fn {segs, content} -> {Enum.join(segs, "/"), content} end)
 
     with {:ok, raw} <- fetch_pair(files, Compendium.ComponentPath.manifest_name()),
          {:ok, manifest} <- decode_json(raw),
@@ -115,7 +113,6 @@ defmodule Compendium.TinctureValidator do
   defp file_sizes(directory_path) do
     directory_path
     |> list_files_recursive()
-    |> Enum.reject(&excluded?/1)
     |> Enum.map(&{Path.relative_to(&1, directory_path), File.stat!(&1).size})
   end
 
@@ -167,22 +164,11 @@ defmodule Compendium.TinctureValidator do
     end
   end
 
-  # Traversal rules come from Prima.PathSafety (the repo-wide SSOT); keep the
-  # user-facing messages this validator has always produced.
+  # Traversal rules come from Prima.PathSafety (the repo-wide SSOT); the
+  # sentences below are this validator's own.
   # The served-file prefix (`Prima.TinctureUrl.asset_prefix/0`) is never a
   # directory of a version, so no path inside one reads as that prefix.
   @reserved_dirs [Prima.TinctureUrl.asset_prefix()]
-
-  # Exclude SQLite WAL and shared-memory files before hashing and storing
-  # the tree. A tincture may still ship data.db as an asset.
-  @excluded_files ~w(data.db-wal data.db-shm)
-
-  @doc """
-  Whether a shipped file is excluded from a tincture: never hashed, never
-  stored. Takes a path or a bare name; the basename decides.
-  """
-  @spec excluded?(String.t()) :: boolean()
-  def excluded?(path) when is_binary(path), do: Path.basename(path) in @excluded_files
 
   # arca:bypass-ok=D — tar-extract tmp dir scan; see module note.
   defp check_reserved_dirs(dir) do
@@ -202,7 +188,6 @@ defmodule Compendium.TinctureValidator do
   defp compute_digest(directory_path) do
     directory_path
     |> list_files_recursive()
-    |> Enum.reject(&excluded?/1)
     |> Enum.map(&{Path.relative_to(&1, directory_path), File.read!(&1)})
     |> Prima.Digest.file_set()
   end

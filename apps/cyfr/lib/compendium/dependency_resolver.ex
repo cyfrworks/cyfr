@@ -19,14 +19,12 @@ defmodule Compendium.DependencyResolver do
 
   The block's grammar is `Prima.Manifest.Dependencies`, which the consent
   blob reads too — a dependency a row records and an edge a consent
-  carries are one parse. `component_id` names the component the entries
-  are read for; it does not change the parse.
+  carries are one parse.
 
   Returns `{:ok, [dep_map]}` or `{:error, reason}`.
   """
-  @spec extract_from_manifest(map() | nil, String.t()) :: {:ok, [map()]} | {:error, term()}
-  def extract_from_manifest(manifest, component_id) when is_binary(component_id),
-    do: Prima.Manifest.Dependencies.from_manifest(manifest)
+  @spec extract_from_manifest(map() | nil) :: {:ok, [map()]} | {:error, term()}
+  def extract_from_manifest(manifest), do: Prima.Manifest.Dependencies.from_manifest(manifest)
 
   @doc """
   Resolve the full dependency tree for a component.
@@ -37,17 +35,16 @@ defmodule Compendium.DependencyResolver do
   Returns `{:ok, tree}` where tree is a list of dependency nodes,
   each annotated with their own sub-dependencies.
   """
-  @spec resolve_tree(Context.t(), String.t(), map()) :: {:ok, list()} | {:error, term()}
-  def resolve_tree(%Context{} = ctx, component_id, manifest) do
-    do_resolve_tree(ctx, component_id, manifest, MapSet.new(), 0)
-  end
+  @spec resolve_tree(Context.t(), map()) :: {:ok, list()} | {:error, term()}
+  def resolve_tree(%Context{} = ctx, manifest),
+    do: do_resolve_tree(ctx, manifest, MapSet.new(), 0)
 
-  defp do_resolve_tree(_ctx, _component_id, _manifest, _visited, depth) when depth > @max_depth do
+  defp do_resolve_tree(_ctx, _manifest, _visited, depth) when depth > @max_depth do
     {:ok, []}
   end
 
-  defp do_resolve_tree(ctx, component_id, manifest, visited, depth) do
-    case extract_from_manifest(manifest, component_id) do
+  defp do_resolve_tree(ctx, manifest, visited, depth) do
+    case extract_from_manifest(manifest) do
       {:ok, []} ->
         {:ok, []}
 
@@ -66,8 +63,8 @@ defmodule Compendium.DependencyResolver do
               # Try to find this dependency in the local registry and recurse
               children =
                 case resolve_dep_manifest(ctx, dep) do
-                  {:ok, child_id, child_manifest} ->
-                    case do_resolve_tree(ctx, child_id, child_manifest, new_visited, depth + 1) do
+                  {:ok, child_manifest} ->
+                    case do_resolve_tree(ctx, child_manifest, new_visited, depth + 1) do
                       {:ok, child_deps} -> child_deps
                       {:error, _} -> []
                     end
@@ -129,23 +126,19 @@ defmodule Compendium.DependencyResolver do
   @spec has_dynamic_deps?(map() | nil) :: boolean()
   def has_dynamic_deps?(nil), do: false
 
-  def has_dynamic_deps?(manifest) when is_map(manifest) do
-    dynamic =
-      get_in(manifest, ["dependencies", "dynamic"]) || get_in(manifest, [:dependencies, :dynamic])
-
-    dynamic != nil
-  end
+  def has_dynamic_deps?(manifest) when is_map(manifest),
+    do: get_in(manifest, ["dependencies", "dynamic"]) != nil
 
   # ============================================================================
   # Private Helpers
   # ============================================================================
 
-  defp check_dep_exists(ctx, dep) do
-    name = dep[:dep_name] || dep["dep_name"]
-    version = dep[:dep_version] || dep["dep_version"]
-    namespace = dep[:dep_namespace] || dep["dep_namespace"]
-    component_type = dep[:dep_type] || dep["dep_type"]
-
+  defp check_dep_exists(ctx, %{
+         dep_name: name,
+         dep_version: version,
+         dep_namespace: namespace,
+         dep_type: component_type
+       }) do
     if version == nil do
       # Versionless dep — check if any version exists
       case Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx),
@@ -167,12 +160,12 @@ defmodule Compendium.DependencyResolver do
     end
   end
 
-  defp resolve_dep_manifest(ctx, dep) do
-    name = dep[:dep_name] || dep["dep_name"]
-    version = dep[:dep_version] || dep["dep_version"]
-    namespace = dep[:dep_namespace] || dep["dep_namespace"]
-    component_type = dep[:dep_type] || dep["dep_type"]
-
+  defp resolve_dep_manifest(ctx, %{
+         dep_name: name,
+         dep_version: version,
+         dep_namespace: namespace,
+         dep_type: component_type
+       }) do
     result =
       if version == nil do
         # Versionless deps resolve through the registry's semver-aware
@@ -191,8 +184,7 @@ defmodule Compendium.DependencyResolver do
 
     case result do
       {:ok, component} ->
-        manifest = Prima.Manifest.decode(component.manifest)
-        {:ok, component.id, manifest}
+        {:ok, Prima.Manifest.decode(component.manifest)}
 
       {:error, _} = err ->
         err

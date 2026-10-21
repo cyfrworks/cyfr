@@ -122,7 +122,7 @@ defmodule Compendium.Activation do
       digest when is_binary(digest) ->
         Arca.Cache.Keys.activation(
           Prima.Actor.in_athanor(athanor_id),
-          node_key(component),
+          Prima.ComponentRow.node_key(component),
           digest
         )
 
@@ -137,7 +137,11 @@ defmodule Compendium.Activation do
     :telemetry.execute(
       [:cyfr, :compendium, :activation, :resolve],
       %{count: 1},
-      %{athanor_id: ctx.athanor_id, node_key: node_key(component), cached: cached?}
+      %{
+        athanor_id: ctx.athanor_id,
+        node_key: Prima.ComponentRow.node_key(component),
+        cached: cached?
+      }
     )
   end
 
@@ -187,15 +191,6 @@ defmodule Compendium.Activation do
 
   defp graph_from_rows(rows), do: Map.new(rows, fn {key, row} -> {key, release_digest(row)} end)
 
-  @doc """
-  The name-level key a component row occupies in an activation graph.
-
-  The shape is `Prima.ComponentRow`'s, where consent reads it too: a
-  stored graph and the key a consent names it by are one spelling.
-  """
-  @spec node_key(map()) :: String.t()
-  defdelegate node_key(component), to: Prima.ComponentRow
-
   # ============================================================================
   # Private
   # ============================================================================
@@ -207,7 +202,7 @@ defmodule Compendium.Activation do
   # Accumulates the full component row per node key; resolve/2 and
   # resolve_verified/2 project what they need from the rows.
   defp walk(ctx, component, acc, depth) do
-    key = node_key(component)
+    key = Prima.ComponentRow.node_key(component)
 
     cond do
       Map.has_key?(acc, key) ->
@@ -221,7 +216,7 @@ defmodule Compendium.Activation do
         acc = Map.put(acc, key, component)
         manifest = manifest(component)
 
-        case Compendium.DependencyResolver.extract_from_manifest(manifest, key) do
+        case Compendium.DependencyResolver.extract_from_manifest(manifest) do
           {:ok, deps} -> walk_deps(ctx, deps, acc, depth)
           {:error, _} -> {:error, {:incomplete, {:unresolvable_dependency, key}}}
         end
@@ -272,11 +267,9 @@ defmodule Compendium.Activation do
 
   defp release_digest(component), do: field(component, :release_digest)
 
-  # Component rows arrive as Ecto structs from storage and as plain maps
-  # from the registry's build path; neither implements Access.
-  defp field(component, key) do
-    Map.get(component, key) || Map.get(component, Atom.to_string(key))
-  end
+  # Component rows arrive atom-keyed, as Ecto structs from storage and as
+  # plain maps from the registry; neither implements Access.
+  defp field(component, key), do: Map.get(component, key)
 
   # A manifest that does not decode declares nothing: no dependencies, and
   # a release digest that no longer matches. The line names the component,
@@ -287,7 +280,10 @@ defmodule Compendium.Activation do
         manifest
 
       {:error, :malformed_manifest} ->
-        Logger.warning("[Compendium.Activation] manifest malformed: #{node_key(row)}")
+        Logger.warning(
+          "[Compendium.Activation] manifest malformed: #{Prima.ComponentRow.node_key(row)}"
+        )
+
         %{}
     end
   end

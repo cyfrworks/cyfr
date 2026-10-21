@@ -19,8 +19,9 @@ defmodule Compendium.GuideProtocolDriftTest do
   @project_root Path.expand("../../../..", __DIR__)
   @guides ~w(integration-guide.md component-guide.md tincture-guide.md)
 
-  # Methods and headers unsupported by the current protocol.
-  @retired_methods ~w(
+  # Methods this protocol revision does not define: a sample calling one
+  # is answered with a protocol error.
+  @undefined_methods ~w(
     initialize
     notifications/initialized
     resources/subscribe
@@ -30,14 +31,15 @@ defmodule Compendium.GuideProtocolDriftTest do
     tasks/list
   )
 
-  # Last-Event-ID is supported by /api/executions/:id/events and may appear in guides.
-  @retired_headers ~w(Mcp-Session-Id)
+  # Headers this protocol revision does not define. Last-Event-ID is
+  # defined (/api/executions/:id/events) and may appear in guides.
+  @undefined_headers ~w(Mcp-Session-Id)
 
   # Version strings only ever appear in a `…protocol…version…` context in the
   # guides (headers, `_meta` keys, client constants). Anchoring on that context
-  # catches ANY stale revision — including future ones — without a
-  # hand-maintained retired list, while ignoring unrelated dates (timestamps,
-  # provider api_version fields).
+  # catches any revision the server does not support, without a hand-kept
+  # list, while ignoring unrelated dates (timestamps, provider api_version
+  # fields).
   @version_site_re ~r/protocol[-_\/]?version[^\d]{0,10}(\d{4}-\d{2}-\d{2})/i
 
   defp guide(name), do: File.read!(Path.join(@project_root, name))
@@ -64,7 +66,7 @@ defmodule Compendium.GuideProtocolDriftTest do
       for version <- versions do
         assert version in Protocol.supported(),
                """
-               #{unquote(name)} still shows protocol version #{version}.
+               #{unquote(name)} shows protocol version #{version}, which the server does not support.
 
                This file is compiled into Compendium.Providers.Aqua, so the agent
                reads it as authoritative. Use #{Protocol.version()}.
@@ -72,13 +74,13 @@ defmodule Compendium.GuideProtocolDriftTest do
       end
     end
 
-    test "#{name} shows no retired method in a sample" do
+    test "#{name} shows only methods the protocol defines in a sample" do
       text = samples(unquote(name))
 
-      for method <- @retired_methods do
+      for method <- @undefined_methods do
         refute String.contains?(text, "\"#{method}\""),
                """
-               #{unquote(name)} shows a `#{method}` call, which this revision removed.
+               #{unquote(name)} shows a `#{method}` call, which this protocol revision does not define.
 
                A sample that cannot succeed is worse than no sample: the agent
                will follow it and receive a protocol error it has no way to
@@ -87,12 +89,12 @@ defmodule Compendium.GuideProtocolDriftTest do
       end
     end
 
-    test "#{name} shows no retired header in a sample" do
+    test "#{name} shows only headers the protocol defines in a sample" do
       text = samples(unquote(name))
 
-      for header <- @retired_headers do
+      for header <- @undefined_headers do
         refute String.contains?(text, header),
-               "#{unquote(name)} still documents the `#{header}` header, which this revision removed."
+               "#{unquote(name)} documents the `#{header}` header, which this protocol revision does not define."
       end
     end
   end
@@ -121,9 +123,9 @@ defmodule Compendium.GuideProtocolDriftTest do
   end
 
   # The invoke error-type table is the same class of authority: the agent
-  # writes formulas that branch on these. The guide once documented two
-  # types no code produced (`invalid_type`, `execution_failed`) and omitted
-  # five that are — so generated error handling matched nothing.
+  # writes formulas that branch on these, so a type the guide names and no
+  # code produces, or one it omits, leaves generated error handling matching
+  # nothing.
   # A formula's invoke errors are rendered in two places: the runner's
   # `Locus.Runtime.FormulaHandler`, and CYFR's answer to a child or catalog tool call
   # it refuses (`Opus.Host.Children`).

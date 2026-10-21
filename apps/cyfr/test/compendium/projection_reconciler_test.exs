@@ -310,7 +310,7 @@ defmodule Compendium.ProjectionReconcilerTest do
   describe "the process" do
     # Never restarted: a case about a reconciler that is gone keeps it gone.
     defp start!(opts) do
-      name = :"projection_reconciler_#{System.unique_integer([:positive])}"
+      name = :projection_reconciler_under_test
       opts = Keyword.merge([name: name, enabled: true], opts)
 
       pid =

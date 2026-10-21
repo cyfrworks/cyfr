@@ -34,15 +34,11 @@ defmodule Compendium.OCI.Blob do
     )
   end
 
-  @doc """
-  Check if a blob exists in the registry.
-
-  Issues `HEAD /v2/<repo>/blobs/<digest>`.
-  Returns `{:ok, true}` if exists, `{:ok, false}` if not.
-  """
+  # Whether the registry holds a blob: `HEAD /v2/<repo>/blobs/<digest>`,
+  # `{:ok, true}` when it does, `{:ok, false}` when it does not.
   @spec exists?(Context.t() | nil, Reference.t(), String.t()) ::
           {:ok, boolean()} | {:error, term()}
-  def exists?(ctx, %Reference{} = ref, digest) do
+  defp exists?(ctx, %Reference{} = ref, digest) do
     path = "/v2/#{ref.repository}/blobs/#{digest}"
 
     case Transport.request(ctx, :head, path, ref) do
@@ -70,7 +66,7 @@ defmodule Compendium.OCI.Blob do
            max_response_bytes: max_blob_bytes()
          ) do
       {:ok, 200, _headers, body} ->
-        actual_digest = compute_digest(body)
+        actual_digest = Prima.Digest.sha256(body)
 
         if actual_digest == digest do
           {:ok, body}
@@ -116,7 +112,7 @@ defmodule Compendium.OCI.Blob do
   @spec upload(Context.t() | nil, Reference.t(), binary(), String.t()) ::
           {:ok, String.t()} | {:error, term()}
   def upload(ctx, %Reference{} = ref, content, content_type \\ Prima.MediaType.binary()) do
-    digest = compute_digest(content)
+    digest = Prima.Digest.sha256(content)
 
     # Check if blob already exists
     case exists?(ctx, ref, digest) do
@@ -245,7 +241,7 @@ defmodule Compendium.OCI.Blob do
 
     case Sanctum.Egress.pinned_request(:get, url, [], nil, opts) do
       {:ok, 200, _headers, body} ->
-        actual_digest = compute_digest(body)
+        actual_digest = Prima.Digest.sha256(body)
 
         if actual_digest == expected_digest do
           {:ok, body}
@@ -269,9 +265,6 @@ defmodule Compendium.OCI.Blob do
         {:error, Errors.connection_error(registry, reason)}
     end
   end
-
-  @doc false
-  defdelegate compute_digest(content), to: Prima.Digest, as: :sha256
 
   defp get_header(headers, name) do
     Enum.find_value(headers, fn

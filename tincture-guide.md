@@ -356,7 +356,7 @@ A version serves a file only of one of these types; publishing a version that se
 | `.woff2` | `font/woff2` |
 <!-- /tincture:served-types -->
 
-`cyfr-manifest.json`, `schema.sql`, `data.db` and dotfiles are never served. A version's decompressed size is stated at publish and refused over the registry's ceiling (256 MiB by default).
+`cyfr-manifest.json` and dotfiles are never served. A version's decompressed size is stated at publish and refused over the registry's ceiling (256 MiB by default).
 
 ---
 

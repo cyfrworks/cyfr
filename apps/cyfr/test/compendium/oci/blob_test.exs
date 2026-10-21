@@ -35,7 +35,8 @@ defmodule Compendium.OCI.BlobTest do
 
     registry = Bypass.open()
     storage = Bypass.open()
-    # `Reference.api_base/1` maps `localhost:` to http://, so Bypass works.
+    # A loopback registry is reached over http (`Compendium.RegistryHost.base_url/1`),
+    # so Bypass answers it.
     name = "localhost:#{registry.port}"
     ref = %Reference{registry: name, repository: "#{@namespace}/catalysts/foo", tag: "1.0.0"}
 
@@ -65,7 +66,7 @@ defmodule Compendium.OCI.BlobTest do
   defp blob(label) do
     Enum.find_value(0..1_000, fn n ->
       bytes = "#{label} #{n}"
-      digest = Blob.compute_digest(bytes)
+      digest = Prima.Digest.sha256(bytes)
       if digest =~ ~r/\Asha256:[a-f]/, do: {bytes, digest}
     end)
   end
@@ -124,7 +125,7 @@ defmodule Compendium.OCI.BlobTest do
             %Errors{reason: :digest_mismatch, detail: %{expected: ^digest, actual: actual}}} =
              Blob.download(ctx(), ref, digest)
 
-    assert actual == Blob.compute_digest("other bytes")
+    assert actual == Prima.Digest.sha256("other bytes")
     assert_receive {:registry, _path, _authorization}, 5_000
     assert_receive :storage_reached, 5_000
   end

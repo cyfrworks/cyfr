@@ -35,11 +35,9 @@ defmodule Compendium.Component do
         canonical = canonical_ref(ref)
 
         # ONE key type on the way out. The registry row arrives atom-keyed
-        # (an Ecto struct dump) while the enrichment below adds string
-        # keys; readers of the mixed map grew `[:k] || ["k"]` at every
-        # site, and the one read that didn't (`["signature_verified"]` in
-        # the executor's telemetry) answered nil — every execution reported
-        # unverified, verified OCI components included.
+        # while the enrichment below adds string keys, so the row is
+        # string-keyed first: every reader of the answer reads one key
+        # shape (`["signature_verified"]` among them).
         result =
           component
           |> Map.new(fn {k, v} -> {to_string(k), v} end)
@@ -53,11 +51,9 @@ defmodule Compendium.Component do
             result
           end
 
-        if ref.type == Compendium.AgentSource.type() do
-          {:ok, result}
-        else
-          {:ok, maybe_enrich_with_dependencies(ctx, component, result)}
-        end
+        if ref.type == Prima.AgentRef.type(),
+          do: {:ok, result},
+          else: maybe_enrich_with_dependencies(ctx, component, result)
 
       {:error, reason} ->
         {:error, reason}
@@ -89,40 +85,42 @@ defmodule Compendium.Component do
       {:ok, component, ref} ->
         canonical_ref = canonical_ref(ref)
 
-        manifest = decode_manifest(component[:manifest] || component["manifest"], canonical_ref)
-
-        needs = declared_needs(manifest)
-        deps = extract_dependency_refs(manifest)
-
-        description =
-          component[:description] || component["description"] || manifest["description"]
-
-        # A component with a profile answers "ready" from its consent:
-        # every bound need still live and digest-matching. Without a
-        # profile, only a component that requires nothing reads ready —
-        # anything with a required need is waiting on the consent walk.
-        consent = Compendium.ConsentSetupPlan.section(ctx, canonical_ref)
-
-        ready =
-          case consent do
-            nil -> not Enum.any?(needs, & &1.required)
-            consent -> consent.ready
-          end
-
-        {:ok,
-         %{
-           component_ref: canonical_ref,
-           description: description,
-           type: ref.type,
-           needs: needs,
-           dependencies: deps,
-           consent: consent,
-           ready: ready
-         }}
+        with {:ok, manifest} <- decode_manifest(component.manifest, canonical_ref),
+             do: setup_plan(ctx, component, ref, canonical_ref, manifest)
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp setup_plan(ctx, component, ref, canonical_ref, manifest) do
+    needs = declared_needs(manifest)
+    deps = extract_dependency_refs(manifest)
+
+    description = component.description || manifest["description"]
+
+    # A component with a profile answers "ready" from its consent:
+    # every bound need still live and digest-matching. Without a
+    # profile, only a component that requires nothing reads ready —
+    # anything with a required need is waiting on the consent walk.
+    consent = Compendium.ConsentSetupPlan.section(ctx, canonical_ref)
+
+    ready =
+      case consent do
+        nil -> not Enum.any?(needs, & &1.required)
+        consent -> consent.ready
+      end
+
+    {:ok,
+     %{
+       component_ref: canonical_ref,
+       description: description,
+       type: ref.type,
+       needs: needs,
+       dependencies: deps,
+       consent: consent,
+       ready: ready
+     }}
   end
 
   # ============================================================================
@@ -160,11 +158,8 @@ defmodule Compendium.Component do
 
         case result do
           {:ok, component} ->
-            resolved_version = component[:version] || version
-            resolved_type = type || component[:component_type] || component[:type]
-
             {:ok, component,
-             %{namespace: namespace, name: name, version: resolved_version, type: resolved_type}}
+             %{namespace: namespace, name: name, version: component.version, type: type}}
 
           {:error, :not_found} ->
             {:error, {:not_found, {:component, reference}}}
@@ -178,18 +173,16 @@ defmodule Compendium.Component do
     end
   end
 
-  @doc """
-  Parse a component reference — canonical (`type:namespace.name:version`)
-  or the flexible short forms (`c:local.tool`) — into
-  `{:ok, namespace, name, version, type}` for registry lookup. The one
-  grammar for every resolver (`Prima.ComponentRef.normalize_flexible/1`,
-  fields validated); the namespace doubles as the publisher filter, and
-  version may be nil.
-  """
+  # Parse a component reference — canonical (`type:namespace.name:version`)
+  # or the flexible short forms (`c:local.tool`) — into
+  # `{:ok, namespace, name, version, type}` for registry lookup. The one
+  # grammar for every resolver (`Prima.ComponentRef.normalize_flexible/1`,
+  # fields validated); the namespace doubles as the publisher filter, and
+  # version may be nil.
   @spec parse_reference(term()) ::
           {:ok, String.t(), String.t(), String.t() | nil, String.t() | nil}
           | {:error, String.t()}
-  def parse_reference(reference) when is_binary(reference) do
+  defp parse_reference(reference) when is_binary(reference) do
     case Prima.ComponentRef.normalize_flexible(reference) do
       {:ok, %Prima.ComponentRef{type: type, namespace: namespace, name: name, version: version}} ->
         {:ok, namespace, name, version, type}
@@ -199,7 +192,7 @@ defmodule Compendium.Component do
     end
   end
 
-  def parse_reference(_), do: {:error, "Reference must be a string"}
+  defp parse_reference(_), do: {:error, "Reference must be a string"}
 
   defp canonical_ref(ref) do
     Prima.ComponentRef.to_string(%Prima.ComponentRef{
@@ -215,18 +208,18 @@ defmodule Compendium.Component do
   # ============================================================================
 
   defp maybe_enrich_with_dependencies(ctx, component, result) do
-    manifest =
-      decode_manifest(component[:manifest] || component["manifest"], result["component_ref"])
+    with {:ok, manifest} <- decode_manifest(component.manifest, result["component_ref"]),
+         do: {:ok, enrich_with_dependencies(ctx, manifest, result)}
+  end
 
+  defp enrich_with_dependencies(ctx, manifest, result) do
     static_deps = get_in(manifest, ["dependencies", "static"]) || []
     has_dynamic = Compendium.DependencyResolver.has_dynamic_deps?(manifest)
 
     if static_deps == [] and not has_dynamic do
       result
     else
-      component_id = component[:id] || component["id"]
-
-      case Compendium.DependencyResolver.resolve_tree(ctx, component_id, manifest) do
+      case Compendium.DependencyResolver.resolve_tree(ctx, manifest) do
         {:ok, tree} ->
           flat_deps = flatten_dep_tree(tree)
           availability = Compendium.DependencyResolver.classify_availability(ctx, flat_deps)
@@ -255,16 +248,17 @@ defmodule Compendium.Component do
     end)
   end
 
-  # A manifest that does not decode declares nothing. The line names the
+  # A stored manifest that does not decode is damage: the read refuses it
+  # rather than read a component that declares nothing. The line names the
   # component, never the manifest's bytes.
   defp decode_manifest(value, ref) do
     case Prima.Manifest.decode_strict(value) do
       {:ok, manifest} ->
-        manifest
+        {:ok, manifest}
 
       {:error, :malformed_manifest} ->
         Logger.warning("[Compendium.Component] manifest malformed: #{ref}")
-        %{}
+        {:error, {:corrupt, {:manifest, ref}}}
     end
   end
 
@@ -276,20 +270,18 @@ defmodule Compendium.Component do
     Prima.Manifest.Needs.from_manifest(manifest) || []
   end
 
-  defp extract_dependency_refs(component) do
-    deps = component["dependencies"] || component[:dependencies] || %{}
-    static = deps["static"] || deps[:static] || []
-
-    Enum.map(static, fn
+  # The decoded manifest's `dependencies.static` entries: a ref string, or
+  # an object naming its ref (`Prima.Manifest`'s grammar).
+  defp extract_dependency_refs(manifest) do
+    manifest
+    |> get_in(["dependencies", "static"])
+    |> List.wrap()
+    |> Enum.map(fn
       dep when is_binary(dep) ->
         %{ref: dep, optional: false, reason: nil}
 
       dep ->
-        %{
-          ref: dep["ref"] || dep[:ref],
-          optional: dep["optional"] || dep[:optional] || false,
-          reason: dep["reason"] || dep[:reason]
-        }
+        %{ref: dep["ref"], optional: dep["optional"] || false, reason: dep["reason"]}
     end)
   end
 end

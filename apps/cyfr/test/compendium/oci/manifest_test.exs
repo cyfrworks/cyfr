@@ -70,7 +70,7 @@ defmodule Compendium.OCI.ManifestTest do
   describe "parse/1" do
     # A digest is a path segment — it lands in `/v2/…/blobs/<digest>` and in
     # cache filenames — so the parser holds descriptors to the same grammar a
-    # reference's own digest has always been held to.
+    # reference's own digest is held to.
     defp digest(seed),
       do: "sha256:" <> (:crypto.hash(:sha256, seed) |> Base.encode16(case: :lower))
 
@@ -145,33 +145,6 @@ defmodule Compendium.OCI.ManifestTest do
       json = Jason.encode!(%{"schemaVersion" => 1})
       assert {:error, msg} = Manifest.parse(json)
       assert msg =~ "Unsupported manifest schema version"
-    end
-  end
-
-  describe "wasm_layer/1" do
-    test "finds WASM layer" do
-      parsed = %{
-        layers: [
-          %{
-            "mediaType" => "application/vnd.cyfr.reagent.v1+wasm",
-            "digest" => "sha256:abc",
-            "size" => 100
-          }
-        ]
-      }
-
-      assert {:ok, layer} = Manifest.wasm_layer(parsed)
-      assert layer["digest"] == "sha256:abc"
-    end
-
-    test "returns error when no WASM layer" do
-      parsed = %{
-        layers: [
-          %{"mediaType" => "application/octet-stream", "digest" => "sha256:abc"}
-        ]
-      }
-
-      assert {:error, _} = Manifest.wasm_layer(parsed)
     end
   end
 
@@ -261,7 +234,7 @@ defmodule Compendium.OCI.ManifestTest do
       assert Enum.at(media_types, 2) == Manifest.source_media_type()
     end
 
-    test "build with no opts (regression) produces 1 layer" do
+    test "build with no opts produces 1 layer" do
       config = %{"name" => "test", "version" => "1.0.0"}
       wasm = <<0, 97, 115, 109>>
 
@@ -351,7 +324,7 @@ defmodule Compendium.OCI.ManifestTest do
         ]
       }
 
-      assert {:ok, wl} = Manifest.wasm_layer(parsed)
+      assert {:ok, wl} = Manifest.content_layer(parsed)
       assert wl["digest"] == "sha256:wasm"
       assert {:ok, rl} = Manifest.readme_layer(parsed)
       assert rl["digest"] == "sha256:readme"
@@ -399,9 +372,9 @@ defmodule Compendium.OCI.ManifestTest do
 
       assert parsed.config["digest"] == config_digest
 
-      # WASM layer
-      assert {:ok, wasm_layer} = Manifest.wasm_layer(parsed)
-      assert wasm_layer["digest"] == wasm_digest
+      # Content layer
+      assert {:ok, content_layer} = Manifest.content_layer(parsed)
+      assert content_layer["digest"] == wasm_digest
 
       # README layer
       assert {:ok, readme_layer} = Manifest.readme_layer(parsed)

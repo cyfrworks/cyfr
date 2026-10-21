@@ -28,8 +28,6 @@ defmodule Compendium.OCI.Cache do
 
   require Logger
 
-  alias Compendium.OCI.Blob, as: BlobUtil
-
   # The global root this cache lives under — one spelling for the segment
   # builders below (membership in `Arca.Storage.global_prefixes/0` is
   # witnessed in the tests).
@@ -53,7 +51,7 @@ defmodule Compendium.OCI.Cache do
   def get_blob("sha256:" <> hex = digest) do
     case Arca.get(actor(), blob_segments(hex)) do
       {:ok, bytes} ->
-        if BlobUtil.compute_digest(bytes) == digest do
+        if Prima.Digest.sha256(bytes) == digest do
           {:ok, bytes}
         else
           Logger.error("[OCI.Cache.get_blob] Corrupt cache entry for #{digest}, removing")
@@ -163,24 +161,6 @@ defmodule Compendium.OCI.Cache do
   @spec forget_entitlement(String.t(), String.t(), String.t()) :: :ok
   def forget_entitlement(credential, registry, repository),
     do: Arca.Cache.invalidate(entitlement_key(credential, registry, repository))
-
-  @doc """
-  Clear the entire cache.
-  """
-  @spec clear() :: :ok | {:error, term()}
-  def clear do
-    case Arca.delete_tree(actor(), [@cache_root, "oci"]) do
-      :ok ->
-        :ok
-
-      {:error, :not_found} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("[OCI.Cache.clear] Failed to clear cache: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
 
   # ============================================================================
   # Private — path segments

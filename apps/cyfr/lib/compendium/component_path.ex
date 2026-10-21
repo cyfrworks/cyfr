@@ -34,7 +34,7 @@ defmodule Compendium.ComponentPath do
 
   @behaviour Arca.Storage.UnitLocator
 
-  @type_plurals Enum.map(Prima.ComponentRef.valid_types(), &(&1 <> "s"))
+  @type_plurals Enum.map(Prima.ComponentRef.valid_types(), &Prima.ComponentPath.type_plural/1)
 
   @manifest_name "cyfr-manifest.json"
 
@@ -277,7 +277,4 @@ defmodule Compendium.ComponentPath do
   def publisher_dir(type, publisher) do
     base_prefix() ++ [type_plural(type), normalize_publisher(publisher)]
   end
-
-  @doc "Known type plural strings."
-  def type_plurals, do: @type_plurals
 end

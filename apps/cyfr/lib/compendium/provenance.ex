@@ -8,7 +8,7 @@ defmodule Compendium.Provenance do
   - `:bundled` — the athanor's copy of a unit the server ships.
   - `:bundled_modified` — a shipped copy whose bytes differ from what
     ships. Only the surfaces that compare bytes answer it (`status/2`,
-    `drift/2`, `Compendium.AquaTemplate.status/1`); a reset restores what
+    `Compendium.AquaTemplate.status/1`); a reset restores what
     the release ships.
   - `:user` — the athanor's own: scaffolded, built, or forked here.
   - `:remote` — pulled from a registry (`source` `"oci"`/`"published"`).
@@ -18,7 +18,7 @@ defmodule Compendium.Provenance do
   the tree's answer (`Arca.Overlay.unit_status/2`). A row can cache the
   answer for display, but the tree wins.
 
-  `shipped_versions/2` lists bundled versions for a name; `drift/2` compares
+  `shipped_versions/2` lists bundled versions for a name; `status/2` compares
   the tenant copy with its shipped counterpart.
   """
 
@@ -44,14 +44,11 @@ defmodule Compendium.Provenance do
     end
   end
 
-  @doc """
-  The one translation from an overlay unit state to provenance — every
-  surface that speaks provenance (components and aqua alike) derives its
-  words here, so the two cannot drift.
-  """
-  @spec of_status(Arca.Overlay.unit_status()) :: t()
-  def of_status(status) when status in [:available, :shipped], do: :bundled
-  def of_status(status) when status in [:own, :absent], do: :user
+  # The one translation from an overlay unit state to provenance, which
+  # `of/2` and `annotate/2` share.
+  @spec of_status(Arca.Overlay.unit_status()) :: :bundled | :user
+  defp of_status(status) when status in [:available, :shipped], do: :bundled
+  defp of_status(status) when status in [:own, :absent], do: :user
 
   @doc """
   The wire spelling of a provenance — the MCP boundary stringifies
@@ -61,33 +58,6 @@ defmodule Compendium.Provenance do
   @spec label(t()) :: String.t()
   def label(provenance) when provenance in [:bundled, :bundled_modified, :user, :remote],
     do: Atom.to_string(provenance)
-
-  @doc """
-  Classify every component the athanor's registry holds, in one pass: the
-  rows list once, the overlay walks twice (`Arca.Overlay.unit_statuses/2`)
-  — no per-component probes. Keyed `{name, version, publisher}`.
-  """
-  @spec map(Context.t()) ::
-          {:ok, %{{String.t(), String.t(), String.t()} => t()}} | {:error, term()}
-  def map(%Context{} = ctx) do
-    with {:ok, statuses} <- Arca.Overlay.unit_statuses(Sanctum.Context.actor(ctx), "components"),
-         {:ok, rows} <-
-           Arca.ComponentStorage.list_components(Sanctum.Context.actor(ctx), limit: :none) do
-      {:ok,
-       Map.new(rows, fn row ->
-         publisher = ComponentPath.normalize_publisher(Map.get(row, :publisher))
-         {{row.name, row.version, publisher}, classify_row(statuses, row)}
-       end)}
-    end
-  end
-
-  defp classify_row(statuses, row) do
-    if Compendium.Source.remote?(Map.get(row, :source)) do
-      :remote
-    else
-      of_status(Map.get(statuses, version_dir(row), :absent))
-    end
-  end
 
   # A strictly newer shipped version exists than the row's own — the
   # conservative predicate: an unparsable seed directory name never
@@ -131,23 +101,6 @@ defmodule Compendium.Provenance do
         {:error, _} = error ->
           error
       end
-    end
-  end
-
-  @doc """
-  How a bundled copy differs from what the release shipped —
-  `{:ok, :pristine}` for a byte-identical copy, `{:ok, {:modified, diff}}`
-  with the added/removed/changed relative paths otherwise. Any other
-  provenance answers `{:error, :not_bundled}`. A thin reading of
-  `status/2`.
-  """
-  @spec drift(Context.t(), map()) ::
-          {:ok, :pristine | {:modified, map()}} | {:error, term()}
-  def drift(%Context{} = ctx, component) do
-    case status(ctx, component) do
-      {:ok, %{drift: nil}} -> {:error, :not_bundled}
-      {:ok, %{drift: drift}} -> {:ok, drift}
-      {:error, _} = error -> error
     end
   end
 
@@ -370,7 +323,7 @@ defmodule Compendium.Provenance do
            Arca.get_json(Prima.Actor.system(), prefix ++ [ComponentPath.manifest_name()]),
          {:ok, bytes} <-
            Arca.get(Prima.Actor.system(), prefix ++ [ComponentPath.wasm_name(type)]) do
-      digest = Prima.Wasm.compute_digest(bytes)
+      digest = Prima.Digest.sha256(bytes)
       Compendium.ReleaseDigest.compute(digest, Prima.Manifest.decode(manifest))
     else
       {:error, :not_found} -> {:error, :not_shipped}

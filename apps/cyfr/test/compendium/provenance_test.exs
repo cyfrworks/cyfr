@@ -77,31 +77,18 @@ defmodule Compendium.ProvenanceTest do
       })
 
     assert Provenance.of(ctx, remote) == {:ok, :remote}
-
-    # The batch map agrees with the one-row classification.
-    {:ok, provenance_map} = Provenance.map(ctx)
-    assert provenance_map[{"bundled-tool", "1.0.0", "local"}] == :bundled
-    assert provenance_map[{"own-tool", "0.1.0", "local"}] == :user
-    assert provenance_map[{"remote-tool", "1.0.0", "local"}] == :remote
   end
 
-  test "of_status/1 covers every overlay state; label/1 is closed" do
-    assert Provenance.of_status(:available) == :bundled
-    assert Provenance.of_status(:shipped) == :bundled
-    assert Provenance.of_status(:own) == :user
-    assert Provenance.of_status(:absent) == :user
-
+  test "label/1 is closed over the provenance vocabulary" do
     for provenance <- [:bundled, :bundled_modified, :user, :remote] do
       assert Provenance.label(provenance) == Atom.to_string(provenance)
     end
 
-    # Each function is closed over its own vocabulary: a word from the
-    # other's, or from none, raises rather than minting a label or a
-    # provenance. (A literal call the compiler refuses at the call site;
-    # what these guard is a word that reaches them at runtime.)
-    for {closed, word} <- [{&Provenance.label/1, :shipped}, {&Provenance.of_status/1, :hidden}] do
-      assert_raise FunctionClauseError, fn -> closed.(word) end
-    end
+    # A word from outside the vocabulary raises rather than minting a
+    # label. (A literal call the compiler refuses at the call site; what
+    # this guards is a word that reaches it at runtime.)
+    label = &Provenance.label/1
+    assert_raise FunctionClauseError, fn -> label.(:shipped) end
   end
 
   test "shipped_versions/2 reads the release catalog from the seed", %{ctx: _ctx} do
@@ -136,20 +123,20 @@ defmodule Compendium.ProvenanceTest do
     refute remote_entry.superseded
   end
 
-  test "drift/2 answers pristine and modified honestly", %{ctx: ctx, bundled: bundled} do
-    assert {:ok, :pristine} = Provenance.drift(ctx, bundled)
+  test "status/2 answers drift pristine and modified honestly", %{ctx: ctx, bundled: bundled} do
+    assert {:ok, %{drift: :pristine}} = Provenance.status(ctx, bundled)
 
     # An edit that leaves the shipped content as it was is still pristine
     # by bytes — the diff decides.
     :ok = Arca.put(Sanctum.Context.actor(ctx), @bundled_dir ++ ["notes.txt"], "x")
     :ok = Arca.delete(Sanctum.Context.actor(ctx), @bundled_dir ++ ["notes.txt"])
-    assert {:ok, :pristine} = Provenance.drift(ctx, bundled)
+    assert {:ok, %{drift: :pristine}} = Provenance.status(ctx, bundled)
 
     :ok =
       Arca.put(Sanctum.Context.actor(ctx), @bundled_dir ++ ["reagent.wasm"], @valid_wasm <> <<0>>)
 
-    assert {:ok, {:modified, %{changed: [["reagent.wasm"]]}}} =
-             Provenance.drift(ctx, bundled)
+    assert {:ok, %{drift: {:modified, %{changed: [["reagent.wasm"]]}}}} =
+             Provenance.status(ctx, bundled)
   end
 
   test "deleting a bundled component refuses — the resurrection bug stays dead", %{
@@ -260,9 +247,6 @@ defmodule Compendium.ProvenanceTest do
               drift: {:modified, %{changed: [["reagent.wasm"]]}}
             }} = Provenance.status(ctx, bundled)
 
-    # drift/2 is a thin reading of the same answer.
-    assert {:ok, {:modified, _}} = Provenance.drift(ctx, bundled)
-
     {:ok, remote} =
       Registry.publish_bytes(ctx, @valid_wasm, %{
         name: "remote-tool",
@@ -271,7 +255,6 @@ defmodule Compendium.ProvenanceTest do
       })
 
     assert {:ok, %{provenance: :remote, drift: nil}} = Provenance.status(ctx, remote)
-    assert {:error, :not_bundled} = Provenance.drift(ctx, remote)
   end
 
   test "annotate/2 carries fork lineage, and malformed lineage never raises", %{ctx: ctx} do

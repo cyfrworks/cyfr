@@ -5,8 +5,8 @@ defmodule Compendium.OCI.Client do
   @moduledoc """
   High-level OCI Distribution client for Compendium.
 
-  Provides pull, push, and discover operations that integrate with
-  the local component registry.
+  Provides the pull and push operations that integrate with the local
+  component registry.
   """
 
   require Logger
@@ -64,6 +64,7 @@ defmodule Compendium.OCI.Client do
          {:ok, readme_bytes} <- maybe_fetch_layer(ctx, ref, parsed, &Manifest.readme_layer/1),
          {:ok, source_bytes} <- maybe_fetch_layer(ctx, ref, parsed, &Manifest.source_layer/1),
          {:ok, cyfr_manifest} <- parse_config(config_bytes),
+         {:ok, component_ref} <- pinned_version(component_ref, ref, cyfr_manifest),
          # The digest fetch_manifest answered is the one the pull stores,
          # whether it came from the registry or the cache; the signature is
          # checked against exactly that manifest, never the tag, which may
@@ -130,48 +131,6 @@ defmodule Compendium.OCI.Client do
 
       {:error, reason} ->
         Logger.error("[Compendium.OCI.Client] Pull failed for #{oci_ref}: #{inspect(reason)}")
-        # A refusal of the table (a damaged stored credential) answers as
-        # itself; anything else is this operation's failure, in words.
-        if Prima.Refusal.reason?(reason),
-          do: {:error, reason},
-          else: {:error, "OCI operation failed: #{failure_text(reason)}"}
-    end
-  end
-
-  @doc """
-  Pull and return WASM bytes directly.
-
-  Returns `{:ok, wasm_bytes}` without registering in the database.
-  """
-  @spec pull_bytes(String.t()) :: {:ok, binary()} | {:error, term()}
-  def pull_bytes(oci_ref) when is_binary(oci_ref) do
-    with {:ok, ref} <- Reference.parse(oci_ref),
-         :ok <- Compendium.RegistryHost.validate_host(ref.registry),
-         {:ok, manifest_json, _manifest_digest, _manifest_opts} <- fetch_manifest(nil, ref),
-         {:ok, parsed} <- Manifest.parse(manifest_json),
-         {:ok, wasm_layer} <- Manifest.wasm_layer(parsed),
-         wasm_digest = wasm_layer["digest"],
-         {:ok, wasm_bytes} <- fetch_blob(nil, ref, wasm_digest) do
-      {:ok, wasm_bytes}
-    else
-      {:error, %Errors{} = err} ->
-        Logger.error(
-          "[Compendium.OCI.Client] Pull bytes failed for #{oci_ref}: #{Errors.to_log_string(err)}"
-        )
-
-        hint = Errors.actionable_hint(err)
-        msg = Errors.to_string(err)
-        {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
-
-      {:error, reason} when is_binary(reason) ->
-        Logger.error("[Compendium.OCI.Client] Pull bytes failed for #{oci_ref}: #{reason}")
-        {:error, reason}
-
-      {:error, reason} ->
-        Logger.error(
-          "[Compendium.OCI.Client] Pull bytes failed for #{oci_ref}: #{inspect(reason)}"
-        )
-
         # A refusal of the table (a damaged stored credential) answers as
         # itself; anything else is this operation's failure, in words.
         if Prima.Refusal.reason?(reason),
@@ -290,100 +249,6 @@ defmodule Compendium.OCI.Client do
   end
 
   # ============================================================================
-  # Discover
-  # ============================================================================
-
-  @doc """
-  Discover CYFR components on a remote registry.
-
-  Flow:
-  1. GET `/v2/_catalog` (paginated) for repository list
-  2. Filter by CYFR-convention paths
-  3. GET `/v2/<repo>/tags/list` for each
-  4. Return structured results
-
-  ## Parameters
-
-  - `registry` - Registry hostname (e.g., "registry.cyfr.run")
-  - `namespace` - Optional publisher namespace to filter by
-
-  ## Returns
-
-  - `{:ok, results}` with list of discovered components
-  - `{:error, reason}` on failure
-  """
-  @spec discover(String.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
-  def discover(registry, namespace \\ nil) when is_binary(registry) do
-    with :ok <- Compendium.RegistryHost.validate_host(registry) do
-      discover_repos(registry, namespace)
-    end
-  end
-
-  defp discover_repos(registry, namespace) do
-    # Build a dummy reference for transport (we only need registry)
-    ref = %Reference{registry: registry, repository: "_catalog", tag: nil}
-
-    case list_repositories(nil, ref) do
-      {:ok, repos} ->
-        # Filter to CYFR-convention repos: publisher/types/name
-        cyfr_repos =
-          repos
-          |> Enum.filter(&cyfr_repo?/1)
-          |> maybe_filter_namespace(namespace)
-
-        # Get tags for each repo, collecting errors for failed repos
-        {results, errors} =
-          Enum.reduce(cyfr_repos, {[], []}, fn repo, {comps, errs} ->
-            repo_ref = %Reference{registry: registry, repository: repo, tag: nil}
-
-            case list_tags(nil, repo_ref) do
-              {:ok, tags} ->
-                entries =
-                  Enum.map(tags, fn tag ->
-                    %{
-                      repository: repo,
-                      tag: tag,
-                      oci_reference: "#{registry}/#{repo}:#{tag}",
-                      component: parse_repo_to_component(repo, tag)
-                    }
-                  end)
-
-                {comps ++ entries, errs}
-
-              {:error, reason} ->
-                {comps, errs ++ ["Failed to list tags for #{repo}: #{failure_text(reason)}"]}
-            end
-          end)
-
-        result = %{
-          registry: registry,
-          components: results,
-          total: length(results)
-        }
-
-        result = if errors != [], do: Map.put(result, :errors, errors), else: result
-
-        {:ok, result}
-
-      {:error, %Errors{} = err} ->
-        Logger.error(
-          "[Compendium.OCI.Client] Discover failed for #{registry}: #{Errors.to_log_string(err)}"
-        )
-
-        hint = Errors.actionable_hint(err)
-        msg = Errors.to_string(err)
-        {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
-
-      {:error, reason} ->
-        Logger.error(
-          "[Compendium.OCI.Client] Discover failed for #{registry}: #{inspect(reason)}"
-        )
-
-        {:error, reason}
-    end
-  end
-
-  # ============================================================================
   # Private: Manifest Operations
   # ============================================================================
 
@@ -413,7 +278,7 @@ defmodule Compendium.OCI.Client do
   # pull parses must hash to it: an entry whose body does not is discarded
   # and refetched, as a pin's is.
   defp cached_tag(ctx, ref, tag, credential, cached_manifest, cached_digest) do
-    if Blob.compute_digest(cached_manifest) == cached_digest do
+    if Prima.Digest.sha256(cached_manifest) == cached_digest do
       revalidate_tag(ctx, ref, tag, credential, cached_manifest, cached_digest)
     else
       Logger.warning(
@@ -455,7 +320,7 @@ defmodule Compendium.OCI.Client do
   # the verified path; refetch and let the remote verification decide (a
   # genuine pull then overwrites the entry).
   defp cached_pin(ctx, ref, credential, cached_manifest) do
-    if Blob.compute_digest(cached_manifest) == ref.digest do
+    if Prima.Digest.sha256(cached_manifest) == ref.digest do
       with :ok <- entitled(ctx, ref, credential), do: {:ok, cached_manifest, ref.digest, []}
     else
       Logger.warning(
@@ -513,7 +378,7 @@ defmodule Compendium.OCI.Client do
         # docker-content-digest header is advisory only; a registry cannot
         # vouch for its own honesty. For a digest-pinned ref the computed
         # hash must equal the pin, or the pull is refused.
-        computed = Blob.compute_digest(body)
+        computed = Prima.Digest.sha256(body)
         claimed = get_header(headers, "docker-content-digest")
 
         if claimed && claimed != computed do
@@ -571,7 +436,7 @@ defmodule Compendium.OCI.Client do
     case Transport.request(ctx, :put, path, ref, headers, manifest_json) do
       {:ok, status, resp_headers, _body} when status in [201, 202] ->
         digest =
-          get_header(resp_headers, "docker-content-digest") || Blob.compute_digest(manifest_json)
+          get_header(resp_headers, "docker-content-digest") || Prima.Digest.sha256(manifest_json)
 
         {:ok, digest}
 
@@ -740,18 +605,13 @@ defmodule Compendium.OCI.Client do
   end
 
   defp get_wasm_bytes(ctx, component) do
-    digest = component[:digest] || component["digest"]
+    digest = component.digest
 
     case Registry.get_blob(ctx, digest) do
       {:ok, bytes} -> {:ok, bytes}
       {:error, _} -> {:error, "Failed to read WASM blob for digest: #{digest}"}
     end
   end
-
-  # SQLite runtime artifacts that must never be published (transient files
-  # created when something opens a SQLite database). `data.db` itself is a
-  # regular shipped asset — devs may include one deliberately.
-  @tincture_excluded ~w(data.db-wal data.db-shm)
 
   defp get_tincture_archive(ctx, component) do
     publisher = Compendium.ComponentPath.normalize_publisher(component[:publisher])
@@ -764,9 +624,7 @@ defmodule Compendium.OCI.Client do
         component[:version]
       )
 
-    entries =
-      collect_arca_files(ctx, version_dir, version_dir)
-      |> Enum.reject(fn {rel_path, _} -> Path.basename(rel_path) in @tincture_excluded end)
+    entries = collect_arca_files(ctx, version_dir, version_dir)
 
     case entries do
       [] ->
@@ -908,6 +766,18 @@ defmodule Compendium.OCI.Client do
     end
   end
 
+  # A digest-pinned ref names no version: the component is stored under the
+  # version its own config declares, which the digest covers.
+  defp pinned_version(component_ref, %Reference{tag: nil, digest: digest}, cyfr_manifest)
+       when is_binary(digest) do
+    case cyfr_manifest["version"] do
+      version when is_binary(version) -> {:ok, %{component_ref | version: version}}
+      _ -> {:error, "Config blob of #{digest} declares no version"}
+    end
+  end
+
+  defp pinned_version(component_ref, _ref, _cyfr_manifest), do: {:ok, component_ref}
+
   defp parse_config(config_bytes) do
     case Jason.decode(config_bytes) do
       {:ok, config} when is_map(config) -> {:ok, config}
@@ -1002,80 +872,6 @@ defmodule Compendium.OCI.Client do
 
   defp readme_unit_files(nil), do: []
   defp readme_unit_files(readme_bytes), do: [{["README.md"], readme_bytes}]
-
-  # ============================================================================
-  # Private: Discovery
-  # ============================================================================
-
-  defp list_repositories(ctx, ref) do
-    path = "/v2/_catalog"
-
-    case Transport.request(ctx, :get, path, ref) do
-      {:ok, 200, _headers, body} ->
-        case Jason.decode(body) do
-          {:ok, %{"repositories" => repos}} ->
-            {:ok, repos}
-
-          other ->
-            Logger.error(
-              "[Compendium.OCI.Client] Unexpected catalog response format from #{ref.registry}: #{inspect(other)}"
-            )
-
-            {:error, "Unexpected catalog response format from #{ref.registry}"}
-        end
-
-      {:ok, status, _headers, body} ->
-        {:error, Errors.from_response(status, body, ref.registry)}
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp list_tags(ctx, ref) do
-    path = "/v2/#{ref.repository}/tags/list"
-
-    case Transport.request(ctx, :get, path, ref) do
-      {:ok, 200, _headers, body} ->
-        case Jason.decode(body) do
-          {:ok, %{"tags" => tags}} when is_list(tags) -> {:ok, tags}
-          _ -> {:error, "Unexpected tags response format for #{ref.repository}"}
-        end
-
-      {:ok, status, _headers, body} ->
-        {:error, Errors.from_response(status, body, ref.registry)}
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp cyfr_repo?(repo) do
-    # CYFR convention: publisher/<type plural>/name. The plurals are derived
-    # from the canonical type list rather than written out again, so a new
-    # component type is recognized here without a second edit.
-    parts = String.split(repo, "/")
-    length(parts) == 3 and Enum.at(parts, 1) in Compendium.ComponentPath.type_plurals()
-  end
-
-  defp maybe_filter_namespace(repos, nil), do: repos
-
-  defp maybe_filter_namespace(repos, namespace) do
-    Enum.filter(repos, fn repo ->
-      String.starts_with?(repo, namespace <> "/")
-    end)
-  end
-
-  defp parse_repo_to_component(repo, tag) do
-    case String.split(repo, "/") do
-      [publisher, type_plural, name] ->
-        type = String.trim_trailing(type_plural, "s")
-        %{type: type, publisher: publisher, name: name, version: tag}
-
-      _ ->
-        nil
-    end
-  end
 
   # Push tokens are opaque (no embedded publisher name), so the destination
   # namespace is resolved before pushing. A component developed under the

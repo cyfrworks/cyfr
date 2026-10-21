@@ -128,15 +128,18 @@ defmodule Compendium.Registry do
          {:ok, component_type} <- get_required(metadata, :type),
          :ok <- validate_name(name),
          :ok <- validate_version(version),
+         :ok <- validate_type(component_type),
          :ok <- reject_tincture_publish_bytes(component_type),
          # Asserts the binary implements its declared type's world — the
          # executor resolves vault material before a missing export would
          # otherwise surface, so the mismatch must refuse here.
          {:ok, validation} <- Validator.validate(wasm_bytes, component_type),
          publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
+         # Before the unit is committed: the publisher is a path segment.
+         :ok <- validate_publisher(publisher),
          :ok <- validate_publish_namespace(publisher, ctx),
          :ok <- validate_publish_origin(publisher, Keyword.get(opts, :origin)),
-         manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
+         manifest_bytes = Map.get(metadata, :manifest),
          {:ok, manifest_map} <- decode_manifest_strict(manifest_bytes),
          :ok <- validate_manifest_type(manifest_map, component_type),
          {:ok, warnings} <- validate_manifest_capability_blocks(ctx, manifest_map),
@@ -268,7 +271,7 @@ defmodule Compendium.Registry do
     result =
       with {:ok, component} <-
              build_component(ctx, name, version, metadata, validation, publisher, build_opts),
-           :ok <- validate_dependencies(component, opts[:manifest]),
+           :ok <- validate_dependencies(opts[:manifest]),
            {:ok, _} <-
              save_component(ctx, component, opts[:allow_overwrite], name, version, opts[:claim]) do
         invalidate_executor_caches(ctx)
@@ -339,6 +342,8 @@ defmodule Compendium.Registry do
          :ok <- validate_name(name),
          :ok <- validate_version(version),
          publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
+         # Before the unit is committed: the publisher is a path segment.
+         :ok <- validate_publisher(publisher),
          :ok <- validate_publish_namespace(publisher, ctx),
          # This ingress only ever carries registry-sourced archives (local
          # tinctures register from the filesystem), so the local-namespace
@@ -590,7 +595,7 @@ defmodule Compendium.Registry do
              ),
            # Refs validate before any row moves: a manifest gone
            # dep-broken keeps the existing row standing.
-           :ok <- validate_dependencies(component, manifest),
+           :ok <- validate_dependencies(manifest),
            do: {:ok, component}
     end
   end
@@ -774,7 +779,7 @@ defmodule Compendium.Registry do
           {:ok, map()} | {:error, :not_found | term()}
   def latest_row(%Context{} = ctx, name, publisher \\ nil, component_type \\ nil)
       when is_binary(name) do
-    if component_type == Compendium.AgentSource.type() do
+    if component_type == Prima.AgentRef.type() do
       # An agent is a source node projected from the athanor's aqua/ tree,
       # never a registry row; its one version is the file as it stands.
       Compendium.AgentSource.latest_row(ctx, name)
@@ -794,22 +799,12 @@ defmodule Compendium.Registry do
         {:error, :not_found}
 
       {:ok, components} ->
-        {:ok, latest_of(components)}
+        {:ok, Prima.ComponentRow.latest_of(components)}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
-
-  @doc """
-  The semver-latest of a list of rows, `inserted_at` as the tiebreak —
-  the one place ROWS (not bare strings) are ordered. Registered versions
-  are validated semver; the comparator (`Prima.Semver`) is total
-  regardless. The ordering is `Prima.ComponentRow`'s, where the consent
-  bootstrap picks a name's newest row with the same rule.
-  """
-  @spec latest_of([map()]) :: map() | nil
-  defdelegate latest_of(rows), to: Prima.ComponentRow
 
   @doc """
   Get component WASM binary by digest.
@@ -1110,12 +1105,6 @@ defmodule Compendium.Registry do
     end
   end
 
-  # Default cap for a decompressed tincture archive (256 MB). Tinctures are
-  # frontend bundles — typically a few MB — so this is generous headroom while
-  # still bounding a decompression bomb. Operators may override via
-  # `config :cyfr, :tincture_max_decompressed_bytes`.
-  @default_tincture_max_decompressed 256 * 1024 * 1024
-
   @doc """
   The decompressed-tincture ceiling (config-overridable). Public because it
   is also the largest blob any pull may legitimately carry, so the OCI blob
@@ -1124,11 +1113,7 @@ defmodule Compendium.Registry do
   """
   @spec tincture_max_decompressed_bytes() :: pos_integer()
   def tincture_max_decompressed_bytes do
-    Application.get_env(
-      :cyfr,
-      :tincture_max_decompressed_bytes,
-      @default_tincture_max_decompressed
-    )
+    Application.fetch_env!(:cyfr, :tincture_max_decompressed_bytes)
   end
 
   # The publish's own files written into the extracted archive's scratch
@@ -1206,9 +1191,6 @@ defmodule Compendium.Registry do
     current_dir
     # arca:bypass-ok=D — list the tar-extract scratch dir.
     |> File.ls!()
-    # The validator owns which files a tincture excludes, so what is hashed
-    # and what is stored cannot come apart.
-    |> Enum.reject(&Compendium.TinctureValidator.excluded?/1)
     |> Enum.reduce_while({:ok, acc}, fn entry, {:ok, {list, n}} ->
       path = Path.join(current_dir, entry)
 
@@ -1245,12 +1227,12 @@ defmodule Compendium.Registry do
   # from the manifest at activation time (`Compendium.Activation`), so
   # nothing is stored here — a bad ref simply refuses the registration.
 
-  defp validate_dependencies(_component, nil), do: :ok
+  defp validate_dependencies(nil), do: :ok
 
-  defp validate_dependencies(component, manifest) when is_binary(manifest) do
+  defp validate_dependencies(manifest) when is_binary(manifest) do
     case Jason.decode(manifest) do
       {:ok, decoded} ->
-        validate_dependencies(component, decoded)
+        validate_dependencies(decoded)
 
       {:error, err} ->
         Logger.warning(
@@ -1261,10 +1243,8 @@ defmodule Compendium.Registry do
     end
   end
 
-  defp validate_dependencies(component, manifest) when is_map(manifest) do
-    component_id = component[:id] || component["id"]
-
-    case DependencyResolver.extract_from_manifest(manifest, component_id) do
+  defp validate_dependencies(manifest) when is_map(manifest) do
+    case DependencyResolver.extract_from_manifest(manifest) do
       {:ok, _deps} ->
         :ok
 
@@ -1384,9 +1364,8 @@ defmodule Compendium.Registry do
     Enum.map(rows, &decode_row_json_fields/1)
   end
 
-  # Local components arrive as the plain, atom-keyed rows
-  # `Arca.ComponentStorage` answers and remote components as maps; either
-  # has its JSON-text columns decoded here.
+  # The plain, atom-keyed rows `Arca.ComponentStorage` answers, their
+  # JSON-text columns decoded.
   defp decode_row_json_fields(row, manifest \\ :decoded) when is_map(row) do
     row
     |> Map.update(:tags, [], &decode_json/1)
@@ -1395,19 +1374,19 @@ defmodule Compendium.Registry do
   end
 
   defp decode_manifest_json(nil, _row, _mode), do: nil
-  defp decode_manifest_json(value, _row, _mode) when is_map(value), do: value
 
-  # A manifest that does not decode reads as none, or — for the consent
-  # facts port — as the bytes storage holds, which consent refuses as
-  # corrupt. The line names the component, never the manifest's bytes.
-  defp decode_manifest_json(value, row, mode) when is_binary(value) do
+  # A manifest that does not decode is damage, and reaches every reader as
+  # the bytes storage holds: `Prima.Manifest.decode_strict/1` refuses them,
+  # where nil would read as a component that declares nothing. The line
+  # names the component, never the manifest's bytes.
+  defp decode_manifest_json(value, row, _mode) when is_binary(value) do
     case Prima.Json.decode(value) do
       {:ok, map} when is_map(map) ->
         map
 
       _malformed ->
         Logger.warning("[Compendium.Registry] manifest malformed: #{component_ref(row)}")
-        if mode == :as_stored, do: value
+        value
     end
   end
 
@@ -1424,7 +1403,6 @@ defmodule Compendium.Registry do
   end
 
   defp decode_json(nil), do: []
-  defp decode_json(value) when is_list(value), do: value
 
   defp decode_json(value) when is_binary(value) do
     case Prima.Json.decode(value) do
@@ -1462,7 +1440,7 @@ defmodule Compendium.Registry do
   # ============================================================================
 
   defp get_required(map, key) do
-    case Map.get(map, key) || Map.get(map, to_string(key)) do
+    case Map.get(map, key) do
       nil -> {:error, {:missing_required, key}}
       "" -> {:error, {:missing_required, key}}
       value -> {:ok, value}
@@ -1511,6 +1489,20 @@ defmodule Compendium.Registry do
     end
   end
 
+  defp validate_type(component_type) do
+    case Prima.ComponentRef.validate_type(component_type) do
+      :ok -> :ok
+      {:error, msg} -> {:error, {:invalid_type, msg}}
+    end
+  end
+
+  defp validate_publisher(publisher) do
+    case Prima.ComponentRef.validate_publisher(publisher) do
+      :ok -> :ok
+      {:error, msg} -> {:error, {:invalid_publisher, msg}}
+    end
+  end
+
   defp validate_version(version) do
     case Prima.ComponentRef.validate_version(version) do
       :ok -> :ok
@@ -1518,16 +1510,11 @@ defmodule Compendium.Registry do
     end
   end
 
-  @doc """
-  Validate component-identity attributes before storage.
-
-  Component-identity rules live here, with the registry (the component domain) —
-  not in the Arca storage layer, which persists already-validated bytes. Checks
-  that name/version/component_type/publisher are present and each passes its
-  `Prima.ComponentRef` field validator. Returns `:ok` or `{:error, reason}`.
-  """
-  @spec validate_attrs(map()) :: :ok | {:error, term()}
-  def validate_attrs(attrs) when is_map(attrs) do
+  # Component-identity rules live here, with the registry (the component
+  # domain) — not in the Arca storage layer, which persists
+  # already-validated bytes: name/version/component_type/publisher are
+  # present and each passes its `Prima.ComponentRef` field validator.
+  defp validate_attrs(attrs) do
     with {:ok, name} <- require_field(attrs, :name),
          {:ok, version} <- require_field(attrs, :version),
          {:ok, type} <- require_field(attrs, :component_type),
@@ -1541,7 +1528,7 @@ defmodule Compendium.Registry do
   end
 
   defp require_field(attrs, key) do
-    case Map.get(attrs, key) || Map.get(attrs, to_string(key)) do
+    case Map.get(attrs, key) do
       nil -> {:error, {:missing_required, key}}
       "" -> {:error, {:missing_required, key}}
       value -> {:ok, value}

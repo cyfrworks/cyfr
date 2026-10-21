@@ -64,7 +64,7 @@ defmodule Compendium.Providers.SourceTest do
     scope = %{
       ctx: ctx,
       edge: %Edge{storage: %{paths: ["components/"], actions: ["write", "append", "delete"]}},
-      limits: nil,
+      limits: Prima.Limits.defaults(:reagent),
       quota: nil,
       hold: fn %{io: io} ->
         case io.() do

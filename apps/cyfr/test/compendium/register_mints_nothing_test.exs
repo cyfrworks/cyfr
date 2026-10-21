@@ -122,13 +122,12 @@ defmodule Compendium.RegisterMintsNothingTest do
   end
 
   describe "the attack this closes" do
-    # The scenario the whole change exists for. A catalyst holding a
-    # storage write grant over `components/` can put bytes on the athanor's
-    # own overlay tree — `Compendium.Source`'s own doc says `"filesystem"`
-    # means "bundled seed OR the athanor's own overlay", so the scanner
-    # could not tell them from the operator's. With `register` minting,
-    # writing bytes and calling it was a self-service owner consent over
-    # caps the component's own manifest declared.
+    # A catalyst holding a storage write grant over `components/` can put
+    # bytes on the athanor's own overlay tree — `Compendium.Source`'s
+    # `"filesystem"` means "bundled seed OR the athanor's own overlay", so
+    # the scanner cannot tell them from the operator's. A `register` that
+    # minted consent would make writing bytes and calling it a self-service
+    # owner consent over caps the component's own manifest declared.
     #
     # Bytes are written here through `Arca.put` under the internal-writes
     # scope, which is what a storage grant reduces to at the seam.
@@ -162,14 +161,5 @@ defmodule Compendium.RegisterMintsNothingTest do
       assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref),
              "bytes a catalyst could have written earned an owner consent"
     end
-  end
-
-  test "Bootstrap exposes no ref-targeted mint" do
-    # `run_for/2` took caller-named refs and minted owner consent for them.
-    # That is the shape the hole had; a new caller would reopen it.
-    Code.ensure_loaded!(Sanctum.Consent.Bootstrap)
-
-    refute function_exported?(Sanctum.Consent.Bootstrap, :run_for, 2),
-           "Sanctum.Consent.Bootstrap.run_for/2 is back — see this module's doc"
   end
 end

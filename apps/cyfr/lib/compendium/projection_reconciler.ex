@@ -84,8 +84,6 @@ defmodule Compendium.ProjectionReconciler do
   @conflicts 3
   @reconciling {__MODULE__, :reconciling}
 
-  @defaults [enabled: true, interval_ms: :timer.minutes(1), settle_after_ms: :timer.seconds(60)]
-
   @type root :: String.t()
 
   # ---------------------------------------------------------------------------
@@ -288,7 +286,9 @@ defmodule Compendium.ProjectionReconciler do
   defp settle_after_ms(opts),
     do: Keyword.get_lazy(opts, :settle_after_ms, fn -> config()[:settle_after_ms] end)
 
-  defp config, do: Keyword.merge(@defaults, Application.get_env(:cyfr, __MODULE__, []))
+  # `config/config.exs` holds the three settings; `config/test.exs` turns
+  # the process off.
+  defp config, do: Application.fetch_env!(:cyfr, __MODULE__)
 
   # ---------------------------------------------------------------------------
   # The process

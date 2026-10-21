@@ -125,7 +125,7 @@ defmodule Compendium.Pull do
     manifest = Prima.Manifest.decode(Map.get(component, :manifest))
 
     with {:ok, deps} <-
-           DependencyResolver.extract_from_manifest(manifest, component_id(component)) do
+           DependencyResolver.extract_from_manifest(manifest) do
       %{missing: missing, optional_missing: optional} =
         DependencyResolver.classify_availability(ctx, deps)
 
@@ -214,9 +214,6 @@ defmodule Compendium.Pull do
       {:ok, component}
     end
   end
-
-  defp component_id(%{id: id}) when is_binary(id), do: id
-  defp component_id(component), do: to_string(component[:name] || "component")
 
   defp to_oci_ref(%Prima.ComponentRef{version: nil} = cref) do
     registry = Compendium.RegistryHost.canonical_host()

@@ -3,27 +3,14 @@
 
 defmodule Compendium.Provider do
   @moduledoc """
-  MCP tool provider for Compendium component registry.
+  The Compendium MCP tool provider: the `component`, `aqua` and `registry`
+  tools, each with its actions declared by its tool module
+  (`Compendium.Providers.Component`, `Compendium.Providers.Aqua`,
+  `Compendium.Providers.Registry`, `definition/0`), and the
+  `compendium://` resources.
 
-  Provides tools with action-based dispatch:
-  - `component` - Component discovery and registry operations
-    - `search` - Search components by type, category, tags
-    - `inspect` - Get component metadata, schema, and dependency tree (when deps declared)
-    - `pull` - Pull component from OCI registry
-    - `push` - Push a local component to the OCI registry
-    - `categories` - List available categories
-    - `list` - List all installed components (local-only)
-    - `delete` - Delete a component from the registry
-    - `read_resource` - Read a `compendium://` resource
-  - `aqua` - AQUA agent system and documentation guides (list, get, create, update, delete)
-
-  ## Architecture Note
-
-  This module lives in the `compendium` app, keeping tool definitions
-  close to their implementation.
-
-  Implements the ToolProvider protocol (tools/0 and handle/3)
-  which the operation table validates at boot.
+  Implements `Prima.Provider` (`tools/0`, `handle/3`), which the operation
+  table validates at boot.
   """
 
   @behaviour Prima.Provider
@@ -62,9 +49,10 @@ defmodule Compendium.Provider do
         probed_registry_health(Compendium.RegistryHost.canonical_host())
 
       true ->
-        # The test env turns the probe off: a real DNS + TLS round-trip with
-        # a 3s timeout inside a test is 3s of wall clock and a straggling
-        # socket at test exit, and the answer means nothing there.
+        # The test env turns the probe off (`config/test.exs`): the suite's
+        # registry is a loopback address no registry answers at, so the
+        # probe's answer says nothing about the code under test, and its
+        # memo would carry that answer from one test into the next.
         "unknown"
     end
   end
@@ -113,7 +101,6 @@ defmodule Compendium.Provider do
   end
 
   alias Sanctum.Context
-  alias Compendium.Providers.Shared
 
   # ============================================================================
   # Resources
@@ -159,14 +146,11 @@ defmodule Compendium.Provider do
   defp read_resource(%Context{} = ctx, "compendium://assets/" <> rest),
     do: read_component_asset(ctx, rest)
 
-  defp read_resource(_ctx, uri) when is_binary(uri),
+  defp read_resource(_ctx, uri),
     do: {:error, {:invalid_argument, "Unknown resource URI: #{uri}"}}
 
-  defp read_resource(_ctx, _uri),
-    do: {:error, {:invalid_argument, "Missing required argument: uri"}}
-
   defp read_component_metadata(ctx, reference) do
-    case Shared.resolve_component(ctx, reference) do
+    case Compendium.Component.resolve_component(ctx, reference) do
       {:ok, component, _ref} ->
         case Jason.encode(component) do
           {:ok, json} -> {:ok, %{content: json, mimeType: Prima.MediaType.json()}}
@@ -186,7 +170,7 @@ defmodule Compendium.Provider do
         # ingress refuses with a type, never a raise) before the resolved
         # ref builds the real segments.
         with {:ok, asset_segments} <- validate_asset_path(path),
-             {:ok, _component, ref} <- Shared.resolve_component(ctx, reference) do
+             {:ok, _component, ref} <- Compendium.Component.resolve_component(ctx, reference) do
           asset_path =
             Compendium.ComponentPath.version_dir(
               ref.type,
@@ -226,7 +210,7 @@ defmodule Compendium.Provider do
   end
 
   # ============================================================================
-  # ToolProvider Protocol (validated at runtime)
+  # Prima.Provider (validated at boot)
   # ============================================================================
 
   @impl true
@@ -254,10 +238,6 @@ defmodule Compendium.Provider do
 
   def handle("registry", ctx, args),
     do: ctx |> Compendium.Providers.Registry.handle(args) |> index("Component index")
-
-  def handle(tool, _ctx, _args) do
-    {:error, "Unknown tool: #{tool}"}
-  end
 
   # A projection the tree has moved past, answered by a facade the tool
   # reached without saying so itself: unavailable, in the surface's words.

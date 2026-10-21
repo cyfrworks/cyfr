@@ -99,9 +99,11 @@ defmodule Compendium.ComponentPathTest do
   end
 
   describe "type_plural/1" do
-    test "is the one pluralization rule the compile-time roster follows" do
-      assert ComponentPath.type_plurals() ==
-               Enum.map(Prima.ComponentRef.valid_types(), &ComponentPath.type_plural/1)
+    test "is the one pluralization rule the parser's roster follows" do
+      for type <- Prima.ComponentRef.valid_types() do
+        assert {:ok, %{type: ^type}} =
+                 ComponentPath.parse(ComponentPath.version_dir(type, "local", "x", "1.0.0"))
+      end
     end
   end
 
@@ -142,15 +144,6 @@ defmodule Compendium.ComponentPathTest do
 
       assert ComponentPath.version_dir("catalyst", nil, "foo", "1.0.0") ==
                ComponentPath.version_dir("catalyst", "local", "foo", "1.0.0")
-    end
-  end
-
-  describe "type_plurals/0" do
-    test "returns known type plurals" do
-      assert "catalysts" in ComponentPath.type_plurals()
-      assert "reagents" in ComponentPath.type_plurals()
-      assert "formulas" in ComponentPath.type_plurals()
-      assert "tinctures" in ComponentPath.type_plurals()
     end
   end
 end

@@ -25,10 +25,10 @@ defmodule Compendium.DependencyResolverTest do
   end
 
   # ============================================================================
-  # extract_from_manifest/2
+  # extract_from_manifest/1
   # ============================================================================
 
-  describe "extract_from_manifest/2" do
+  describe "extract_from_manifest/1" do
     test "extracts static dependencies from manifest" do
       manifest = %{
         "dependencies" => %{
@@ -47,7 +47,7 @@ defmodule Compendium.DependencyResolverTest do
         }
       }
 
-      assert {:ok, deps} = DependencyResolver.extract_from_manifest(manifest, "comp_test")
+      assert {:ok, deps} = DependencyResolver.extract_from_manifest(manifest)
       assert length(deps) == 2
 
       claude = Enum.find(deps, &(&1.dep_name == "claude"))
@@ -64,16 +64,16 @@ defmodule Compendium.DependencyResolverTest do
 
     test "returns empty list when no dependencies declared" do
       manifest = %{"type" => "formula", "version" => "1.0.0"}
-      assert {:ok, []} = DependencyResolver.extract_from_manifest(manifest, "comp_test")
+      assert {:ok, []} = DependencyResolver.extract_from_manifest(manifest)
     end
 
     test "returns empty list for nil manifest" do
-      assert {:ok, []} = DependencyResolver.extract_from_manifest(nil, "comp_test")
+      assert {:ok, []} = DependencyResolver.extract_from_manifest(nil)
     end
 
     test "returns empty list when static is nil" do
       manifest = %{"dependencies" => %{"dynamic" => %{"discovery" => "component.search"}}}
-      assert {:ok, []} = DependencyResolver.extract_from_manifest(manifest, "comp_test")
+      assert {:ok, []} = DependencyResolver.extract_from_manifest(manifest)
     end
 
     test "returns error for invalid ref" do
@@ -85,7 +85,7 @@ defmodule Compendium.DependencyResolverTest do
         }
       }
 
-      assert {:error, _reason} = DependencyResolver.extract_from_manifest(manifest, "comp_test")
+      assert {:error, _reason} = DependencyResolver.extract_from_manifest(manifest)
     end
 
     test "accepts versionless dependency ref" do
@@ -97,7 +97,7 @@ defmodule Compendium.DependencyResolverTest do
         }
       }
 
-      assert {:ok, [dep]} = DependencyResolver.extract_from_manifest(manifest, "comp_test")
+      assert {:ok, [dep]} = DependencyResolver.extract_from_manifest(manifest)
       assert dep.dep_name == "claude"
       assert dep.dep_type == "catalyst"
       assert dep.dep_namespace == "local"
@@ -113,7 +113,7 @@ defmodule Compendium.DependencyResolverTest do
         }
       }
 
-      assert {:ok, [dep]} = DependencyResolver.extract_from_manifest(manifest, "comp_test")
+      assert {:ok, [dep]} = DependencyResolver.extract_from_manifest(manifest)
       assert dep.optional == false
     end
   end
@@ -229,13 +229,13 @@ defmodule Compendium.DependencyResolverTest do
   end
 
   # ============================================================================
-  # resolve_tree/3
+  # resolve_tree/2
   # ============================================================================
 
-  describe "resolve_tree/3" do
+  describe "resolve_tree/2" do
     test "returns empty tree when no dependencies", %{ctx: ctx} do
       manifest = %{"type" => "formula"}
-      assert {:ok, []} = DependencyResolver.resolve_tree(ctx, "comp_test", manifest)
+      assert {:ok, []} = DependencyResolver.resolve_tree(ctx, manifest)
     end
 
     test "returns tree with deps", %{ctx: ctx} do
@@ -247,7 +247,7 @@ defmodule Compendium.DependencyResolverTest do
         }
       }
 
-      assert {:ok, tree} = DependencyResolver.resolve_tree(ctx, "comp_test", manifest)
+      assert {:ok, tree} = DependencyResolver.resolve_tree(ctx, manifest)
       assert length(tree) == 1
 
       node = hd(tree)
@@ -302,7 +302,7 @@ defmodule Compendium.DependencyResolverTest do
 
       manifest = %{"dependencies" => %{"static" => [%{"ref" => "reagent:local.multi-ver"}]}}
 
-      assert {:ok, [node]} = DependencyResolver.resolve_tree(ctx, "comp_root", manifest)
+      assert {:ok, [node]} = DependencyResolver.resolve_tree(ctx, manifest)
       assert node.dep_name == "multi-ver"
       assert [child] = node.children
       assert child.dep_name == "marker-dep"

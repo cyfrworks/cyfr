@@ -83,7 +83,7 @@ defmodule Compendium.AquaAgentTest do
 
     # An absent policy is the empty allowlist; an empty one parses too.
     assert {:ok, %{tool_policy: %{}}} = AquaAgent.parse("x", "---\ntitle: X\n---\n\nprompt\n")
-    assert :ok = AquaAgent.check_tool_policy(%{})
+    assert :ok = AquaAgent.validate_tool_policy(%{}, AquaAgent.soul_type())
   end
 
   test "a policy outside the grammar refuses the file with its typed reason" do
@@ -104,12 +104,16 @@ defmodule Compendium.AquaAgentTest do
     assert {:error, :tool_policy_not_a_map} =
              AquaAgent.parse("x", "---\ntool_policy: auto\n---\n\nprompt\n")
 
-    # The same rule, asked directly — the tool door calls this one.
-    assert {:error, {:tool_policy_invalid_value, "a.b", "allow"}} =
-             AquaAgent.check_tool_policy(%{"a.b" => "allow"})
+    # The same rule at the tool door.
+    soul = AquaAgent.soul_type()
 
-    assert {:error, {:tool_policy_invalid_key, 1}} = AquaAgent.check_tool_policy(%{1 => "auto"})
-    assert {:error, :tool_policy_not_a_map} = AquaAgent.check_tool_policy("auto")
+    assert {:error, {:tool_policy_invalid_value, "a.b", "allow"}} =
+             AquaAgent.validate_tool_policy(%{"a.b" => "allow"}, soul)
+
+    assert {:error, {:tool_policy_invalid_key, 1}} =
+             AquaAgent.validate_tool_policy(%{1 => "auto"}, soul)
+
+    assert {:error, :tool_policy_not_a_map} = AquaAgent.validate_tool_policy("auto", soul)
   end
 
   # The security-relevant subset: what an agent is and may do, never what
@@ -237,10 +241,12 @@ defmodule Compendium.AquaAgentTest do
       assert {:error, :tool_policy_not_a_map} =
                AquaAgent.validate_tool_policy("auto", AquaAgent.role_type())
 
-      # The parser keeps grammar only: a role copied in before its shipped
-      # version dropped the key still loads.
-      assert {:ok, %{tool_policy: %{"execution.run" => "auto"}}} =
+      # A role file holding the key is refused as a whole; the soul's loads.
+      assert {:error, {:tool_policy_no_effect, "execution.run"}} =
                AquaAgent.parse("artisan", with_policy("  execution.run: auto\n"))
+
+      assert {:ok, %{tool_policy: %{"execution.run" => "auto"}}} =
+               AquaAgent.parse("aqua", with_policy("  execution.run: auto\n"))
     end
 
     test "a role's delegation glob and the search gate pass" do

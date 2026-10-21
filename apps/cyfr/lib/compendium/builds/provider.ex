@@ -127,10 +127,6 @@ defmodule Compendium.Builds.Provider do
     end
   end
 
-  def handle("build", _ctx, %{"action" => "validate"}) do
-    {:error, {:invalid_argument, "Missing required argument: wasm_base64"}}
-  end
-
   def handle("build", %Context{} = ctx, %{"action" => "compile", "reference" => reference} = args)
       when is_binary(reference) do
     opts = [
@@ -147,28 +143,6 @@ defmodule Compendium.Builds.Provider do
   def handle("build", %Context{} = ctx, %{"action" => "status", "build_id" => build_id})
       when is_binary(build_id),
       do: Builds.status(ctx, build_id)
-
-  def handle("build", _ctx, %{"action" => "status"}) do
-    {:error, {:invalid_argument, "Missing required argument: build_id"}}
-  end
-
-  def handle("build", _ctx, %{"action" => "compile"}) do
-    {:error, {:invalid_argument, "Missing required argument: reference"}}
-  end
-
-  def handle("build", _ctx, %{"action" => action}) do
-    {:error,
-     {:invalid_argument,
-      "Invalid build action: #{action}. Use: compile, validate, toolchains, or status"}}
-  end
-
-  def handle("build", _ctx, _args) do
-    {:error, {:invalid_argument, "Missing required argument: action"}}
-  end
-
-  def handle(tool, _ctx, _args) do
-    {:error, "Unknown tool: #{tool}"}
-  end
 
   defp validate(wasm_base64) do
     if byte_size(wasm_base64) > @max_base64_size do

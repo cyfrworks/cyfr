@@ -33,14 +33,4 @@ defmodule Compendium.ComponentTest do
     assert Prima.Refusal.message(reason) ==
              "Component not found: reagent:local.no-such-thing:9.9.9"
   end
-
-  test "the MCP tool surface delegates — the two resolvers cannot drift", %{ctx: ctx} do
-    for reference <- ["not a ref !!", "reagent:local.no-such-thing:9.9.9"] do
-      assert Compendium.Providers.Shared.resolve_component(ctx, reference) ==
-               Component.resolve_component(ctx, reference)
-    end
-
-    assert Compendium.Providers.Shared.parse_reference("c:local.tool:1.0.0") ==
-             Component.parse_reference("c:local.tool:1.0.0")
-  end
 end

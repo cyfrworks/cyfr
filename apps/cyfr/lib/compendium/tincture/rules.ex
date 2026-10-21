@@ -121,6 +121,7 @@ defmodule Compendium.Tincture.Rules do
     "audio_autoplay" => "autoplay"
   }
 
+  # The sandbox tokens no frame ever carries, whatever it is granted.
   @forbidden_sandbox_tokens ~w(
     allow-same-origin
     allow-top-navigation allow-top-navigation-by-user-activation
@@ -226,10 +227,6 @@ defmodule Compendium.Tincture.Rules do
   @spec canvas_sandbox_tokens() :: [String.t()]
   def canvas_sandbox_tokens, do: @canvas_sandbox
 
-  @doc "The sandbox tokens no frame ever carries, whatever it is granted."
-  @spec forbidden_sandbox_tokens() :: [String.t()]
-  def forbidden_sandbox_tokens, do: @forbidden_sandbox_tokens
-
   @doc """
   The frame's `sandbox` tokens for the capabilities its grant holds:
   `allow-scripts` always, `allow-pointer-lock` only when `pointer_lock` is
@@ -247,20 +244,6 @@ defmodule Compendium.Tincture.Rules do
 
       {:ok, @sandbox_always ++ granted_tokens}
     end
-  end
-
-  @doc """
-  The sandbox tokens a capability-to-token map would emit that no frame
-  may carry: the check this module's own map passes at compile time,
-  answered for any map.
-  """
-  @spec sandbox_violations(%{String.t() => [String.t()]}) :: [String.t()]
-  def sandbox_violations(map) when is_map(map) do
-    for {_capability, tokens} <- map,
-        token <- tokens,
-        token in @forbidden_sandbox_tokens,
-        uniq: true,
-        do: token
   end
 
   @doc """

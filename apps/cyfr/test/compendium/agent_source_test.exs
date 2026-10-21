@@ -66,10 +66,6 @@ defmodule Compendium.AgentSourceTest do
     assert String.starts_with?(soul.release_digest, "sha256:")
     assert {:ok, ^soul} = Registry.get_latest(ctx, "aqua", "local", "agent")
     assert {:error, :not_found} = Registry.get_latest(ctx, "nobody", "local", "agent")
-    assert AgentSource.ref("web") == "agent:local.web"
-    assert AgentSource.soul_ref() == @soul
-    assert AgentSource.agent_ref?("agent:local.web")
-    refute AgentSource.agent_ref?("catalyst:local.web")
   end
 
   test "snapshot keeps the bytes and parses the same ones", %{ctx: ctx} do

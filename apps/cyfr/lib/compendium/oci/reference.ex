@@ -24,11 +24,10 @@ defmodule Compendium.OCI.Reference do
           registry: String.t(),
           repository: String.t(),
           tag: String.t() | nil,
-          digest: String.t() | nil,
-          default_registry: boolean()
+          digest: String.t() | nil
         }
 
-  defstruct [:registry, :repository, :tag, :digest, default_registry: false]
+  defstruct [:registry, :repository, :tag, :digest]
 
   @default_tag "latest"
 
@@ -46,8 +45,7 @@ defmodule Compendium.OCI.Reference do
         registry: "registry.cyfr.run",
         repository: "alice/catalysts/claude",
         tag: "0.1.0",
-        digest: nil,
-        default_registry: false
+        digest: nil
       }}
 
       iex> Compendium.OCI.Reference.parse("registry.acme.example/team/reagents/data-processor:1.2.0")
@@ -55,8 +53,7 @@ defmodule Compendium.OCI.Reference do
         registry: "registry.acme.example",
         repository: "team/reagents/data-processor",
         tag: "1.2.0",
-        digest: nil,
-        default_registry: false
+        digest: nil
       }}
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, String.t()}
@@ -162,9 +159,7 @@ defmodule Compendium.OCI.Reference do
   Returns the API base URL for the registry.
   """
   @spec api_base(t()) :: String.t()
-  def api_base(%__MODULE__{registry: registry}) do
-    registry_api_url(registry)
-  end
+  def api_base(%__MODULE__{registry: registry}), do: Compendium.RegistryHost.base_url(registry)
 
   @doc """
   Check if a string looks like an OCI reference (contains `/` or a registry hostname).
@@ -205,15 +200,8 @@ defmodule Compendium.OCI.Reference do
     # Parse registry and repository from the path
     with :ok <- validate_digest(digest),
          :ok <- validate_tag(tag),
-         {:ok, registry, repository, defaulted} <- split_registry_repo(ref_without_tag) do
-      {:ok,
-       %__MODULE__{
-         registry: registry,
-         repository: repository,
-         tag: tag,
-         digest: digest,
-         default_registry: defaulted
-       }}
+         {:ok, registry, repository} <- split_registry_repo(ref_without_tag) do
+      {:ok, %__MODULE__{registry: registry, repository: repository, tag: tag, digest: digest}}
     end
   end
 
@@ -262,15 +250,15 @@ defmodule Compendium.OCI.Reference do
 
   # Determine which part of the path is the registry and which is the repository.
   # A registry host is identified by containing a "." or ":" (port), or being "localhost".
-  # Returns {:ok, registry, repository, default_registry?} where default_registry? is true
-  # when the default registry was applied (no explicit registry in the input).
+  # Returns {:ok, registry, repository}; with no registry host in the input
+  # the repository is on the default registry.
   defp split_registry_repo(ref) do
     parts = String.split(ref, "/")
 
     case parts do
       [single] ->
         # No slash at all — treat as repository on default registry
-        {:ok, default_registry(), single, true}
+        {:ok, default_registry(), single}
 
       [first | rest] ->
         if registry_host?(first) do
@@ -279,11 +267,11 @@ defmodule Compendium.OCI.Reference do
           if repo == "" do
             {:error, "OCI reference has registry but no repository: #{ref}"}
           else
-            {:ok, first, repo, false}
+            {:ok, first, repo}
           end
         else
           # No registry host detected — use default registry
-          {:ok, default_registry(), ref, true}
+          {:ok, default_registry(), ref}
         end
     end
   end
@@ -291,8 +279,4 @@ defmodule Compendium.OCI.Reference do
   defp registry_host?(part) do
     String.contains?(part, ".") or String.contains?(part, ":") or part == "localhost"
   end
-
-  defp registry_api_url("docker.io"), do: "https://registry-1.docker.io"
-  defp registry_api_url("localhost:" <> _ = host), do: "http://#{host}"
-  defp registry_api_url(registry), do: "https://#{registry}"
 end

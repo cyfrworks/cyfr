@@ -252,12 +252,13 @@ defmodule Compendium.ActivationTest do
       assert graph["reagent:local.present"] == leaf.release_digest
     end
 
-    test "a node without a release digest makes the activation incomplete", %{ctx: ctx} do
-      component = publish!(ctx, "legacy")
-      legacy = %{component | release_digest: nil}
+    test "a damaged row without a release digest makes the activation incomplete",
+         %{ctx: ctx} do
+      component = publish!(ctx, "undigested")
+      damaged = %{component | release_digest: nil}
 
-      assert {:error, {:incomplete, {:missing_release_digest, "reagent:local.legacy"}}} =
-               Activation.resolve(ctx, legacy)
+      assert {:error, {:incomplete, {:missing_release_digest, "reagent:local.undigested"}}} =
+               Activation.resolve(ctx, damaged)
     end
   end
 
@@ -324,7 +325,7 @@ defmodule Compendium.ActivationTest do
       import Ecto.Query
 
       component = publish!(ctx, "verified-forged")
-      key = Activation.node_key(component)
+      key = Prima.ComponentRow.node_key(component)
 
       {1, _} =
         Arca.Repo.update_all(

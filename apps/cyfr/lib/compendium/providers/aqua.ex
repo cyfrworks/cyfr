@@ -497,10 +497,6 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  def handle(_ctx, %{"action" => "get"}) do
-    {:error, {:invalid_argument, "Missing required argument: name"}}
-  end
-
   # --- create ---
   # A role, flat in the closet. The soul is never created: its name is
   # reserved, it ships with the server, and `update` is how it changes.
@@ -511,10 +507,6 @@ defmodule Compendium.Providers.Aqua do
          :ok <- validate_tool_policy(args["tool_policy"], AquaAgent.role_type()) do
       create_role(ctx, name, args)
     end
-  end
-
-  def handle(_ctx, %{"action" => "create"}) do
-    {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
   # --- update ---
@@ -563,10 +555,6 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  def handle(_ctx, %{"action" => "update"}) do
-    {:error, {:invalid_argument, "Missing required argument: name"}}
-  end
-
   # --- delete ---
   # A shipped role, edited or not, cannot be deleted (a reset restores
   # it) — disabling is the closet-removal verb. A member-created role
@@ -602,10 +590,6 @@ defmodule Compendium.Providers.Aqua do
           {:error, {:unavailable, "Storage"}}
       end
     end
-  end
-
-  def handle(_ctx, %{"action" => "delete"}) do
-    {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
   # --- reset ---
@@ -721,10 +705,6 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  def handle(_ctx, %{"action" => "skill_get"}) do
-    {:error, {:invalid_argument, "Missing required argument: name"}}
-  end
-
   # A scroll is a dir unit with `SKILL.md` as its sentinel. Creating one
   # lands the manifest through the overlay's unit commit — sentinel last,
   # rollback on failure — so a half-written scroll never reads as one. The
@@ -755,10 +735,6 @@ defmodule Compendium.Providers.Aqua do
           passthrough_or_unavailable(reason, "aqua.skill_create #{name}")
       end
     end
-  end
-
-  def handle(_ctx, %{"action" => "skill_create"}) do
-    {:error, {:invalid_argument, "Missing required argument: name"}}
   end
 
   # Updating rewrites the manifest alone, as one serialized
@@ -800,10 +776,6 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  def handle(_ctx, %{"action" => "skill_update"}) do
-    {:error, {:invalid_argument, "Missing required argument: name"}}
-  end
-
   # Same disposition as an agent: a shipped scroll is restored by a reset,
   # never deleted; the athanor's own goes.
   def handle(%Context{} = ctx, %{"action" => "skill_delete", "name" => name}) do
@@ -833,28 +805,11 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  def handle(_ctx, %{"action" => "skill_delete"}) do
-    {:error, {:invalid_argument, "Missing required argument: name"}}
-  end
-
   # --- skill_reset ---
 
   def handle(%Context{} = ctx, %{"action" => "skill_reset", "name" => name}) do
     with :ok <- validate_name(name) do
       restore_unit(ctx, AquaPath.skill_dir(name), "Scroll", name)
-    end
-  end
-
-  def handle(_ctx, %{"action" => "skill_reset"}) do
-    {:error, {:invalid_argument, "Missing required argument: name"}}
-  end
-
-  # The terminal clause answers both shapes the dispatcher already
-  # distinguishes: no `action` at all, and one this tool does not know.
-  def handle(_ctx, args) do
-    case args do
-      %{"action" => action} -> {:error, {:unknown_action, "aqua.#{action}"}}
-      _ -> {:error, :action_missing}
     end
   end
 
@@ -1012,13 +967,10 @@ defmodule Compendium.Providers.Aqua do
     end
   end
 
-  @doc """
-  The digest of a prompt as `get` answers it in `content_digest`, and as
-  `update` compares an `expected_digest` against — so an editor can say
-  which version it edited.
-  """
-  @spec content_digest(String.t()) :: String.t()
-  def content_digest(content) when is_binary(content), do: Prima.Digest.sha256_hex(content)
+  # The digest of a prompt as `get` answers it in `content_digest`, and as
+  # `update` compares an `expected_digest` against — so an editor can say
+  # which version it edited.
+  defp content_digest(content) when is_binary(content), do: Prima.Digest.sha256_hex(content)
 
   defp check_expected_digest(_agent, nil), do: :ok
 
@@ -1070,8 +1022,8 @@ defmodule Compendium.Providers.Aqua do
     with :ok <- validate_tool_policy(merged, type), do: {:ok, merged}
   end
 
-  # `nil` for an updatable field removes it (v2 semantics); an absent key
-  # leaves it alone. `content` swaps the prompt body.
+  # `nil` for an updatable field removes it; an absent key leaves it
+  # alone. `content` swaps the prompt body.
   defp apply_updates(agent, args) do
     agent
     |> maybe_update(args, "title", :title, agent.name)
@@ -1169,9 +1121,10 @@ defmodule Compendium.Providers.Aqua do
   # fail to parse back, and then what a person may WRITE — no automatic
   # destructive or external action on any agent, no `ask` on a role (a
   # cloned role has no card to raise), no key a role has no use for, no UI
-  # event held at ask. The parser keeps grammar only, so a hand-edited file
-  # still loads and the runtime ceiling demotes what this door would have
-  # refused. An absent argument leaves the policy alone (`apply_updates/2`).
+  # event held at ask. The parser holds a file to the grammar and the
+  # no-effect rule only, so a hand-edited file that says more still loads
+  # and the runtime ceiling demotes what this door would have refused. An
+  # absent argument leaves the policy alone (`apply_updates/2`).
   defp validate_tool_policy(nil, _type), do: :ok
 
   defp validate_tool_policy(policy, type) do

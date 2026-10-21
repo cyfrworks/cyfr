@@ -42,8 +42,8 @@ defmodule Compendium.OCI.Transport do
   Retries on 5xx errors with exponential backoff.
 
   `ctx` is required (caller-first, matching the codebase convention) so the
-  per-namespace push token is attached on writes. Pass `nil` only for the
-  genuinely-public catalog reads (`discover`, `pull_bytes`).
+  per-namespace push token is attached on writes. Pass `nil` only for a
+  genuinely-public read (a repository's tag list, `Compendium.Pull`).
 
   ## Options
 

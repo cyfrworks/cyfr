@@ -699,7 +699,6 @@ defmodule Compendium.CanvasTest do
 
       assert {:ok, %{toolkit: [1], streams: streams} = catalog} = Canvas.catalog(ctx)
       assert streams == Enum.sort_by(shaped, & &1.name)
-      assert Compendium.canvas_catalog(ctx) == {:ok, catalog}
       assert catalog.toolkit == Compendium.tincture_toolkit_majors()
 
       # A canvas reads exactly a feed's results, by the feed's name, and

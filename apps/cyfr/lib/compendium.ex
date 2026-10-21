@@ -83,10 +83,6 @@ defmodule Compendium do
   @spec tincture_asset_rules() :: Tincture.asset_rules()
   defdelegate tincture_asset_rules(), to: Tincture, as: :asset_rules
 
-  @doc "Whether a `tincture.connect` entry is a bare domain. See `Prima.Manifest`."
-  @spec valid_tincture_connect_domain?(term()) :: boolean()
-  defdelegate valid_tincture_connect_domain?(domain), to: Tincture, as: :valid_connect_domain?
-
   # ---------------------------------------------------------------------------
   # The tincture frame's rules (`Compendium.Tincture.Rules`)
   # ---------------------------------------------------------------------------
@@ -110,10 +106,6 @@ defmodule Compendium do
   @doc "A frame's `allow` attribute for its granted capabilities (`Compendium.Tincture.Rules.allow_attribute/1`)."
   @spec tincture_allow_attribute([String.t()]) :: {:ok, String.t()} | {:error, Rules.refusal()}
   defdelegate tincture_allow_attribute(granted), to: Rules, as: :allow_attribute
-
-  @doc "The entry page's Content Security Policy (`Compendium.Tincture.Rules.csp/2`)."
-  @spec tincture_csp(map(), Rules.csp_opts()) :: String.t()
-  defdelegate tincture_csp(manifest, opts), to: Rules, as: :csp
 
   @doc """
   A tincture document's policy, its entry CSP with the `sandbox` directive
@@ -257,14 +249,6 @@ defmodule Compendium do
            }}
           | {:error, term()}
   defdelegate canvas_versions(ctx, name), to: Compendium.Canvas, as: :versions
-
-  @doc """
-  What a canvas may read: the toolkit majors and every canvas-readable
-  stream with its subject grammar, shape, filter and whether it refreshes
-  (`Compendium.Canvas.catalog/1`).
-  """
-  @spec canvas_catalog(Context.t()) :: {:ok, Compendium.Canvas.catalog()}
-  defdelegate canvas_catalog(ctx), to: Compendium.Canvas, as: :catalog
 
   @doc """
   The versions this install's seed bundle ships for the local component

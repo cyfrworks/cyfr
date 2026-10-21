@@ -82,10 +82,6 @@ defmodule Compendium.Canvas do
   @spec module_max_bytes() :: pos_integer()
   def module_max_bytes, do: @module_max_bytes
 
-  @doc "The file a written canvas version's module is, inside the version."
-  @spec module_file() :: String.t()
-  def module_file, do: @module_file
-
   @doc "The outcomes a validation reports to `activate/2`: a tree, no tree, or a dead candidate."
   @spec outcomes() :: [String.t()]
   def outcomes, do: @outcomes

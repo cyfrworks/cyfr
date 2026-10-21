@@ -34,12 +34,10 @@ defmodule Compendium.SignInSyncTest do
 
     bypass = Bypass.open()
     original_url = Application.get_env(:cyfr, :registry_url)
-    original_scheme = Application.get_env(:cyfr, :registry_scheme)
     original_oci = Application.get_env(:cyfr, :oci_registry_url)
     original_budget = Application.get_env(:cyfr, :returning_probe_ms)
 
     Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
-    Application.put_env(:cyfr, :registry_scheme, "http")
     Application.put_env(:cyfr, :oci_registry_url, "registry.test")
 
     on_exit(fn ->
@@ -50,7 +48,6 @@ defmodule Compendium.SignInSyncTest do
       end
 
       restore.(:registry_url, original_url)
-      restore.(:registry_scheme, original_scheme)
       restore.(:oci_registry_url, original_oci)
       restore.(:returning_probe_ms, original_budget)
     end)

@@ -13,7 +13,6 @@ defmodule Compendium.OCI.ReferenceTest do
       assert ref.repository == "cyfr/reagents/data-processor"
       assert ref.tag == "1.2.0"
       assert ref.digest == nil
-      assert ref.default_registry == false
     end
 
     test "parses reference with digest" do
@@ -28,8 +27,6 @@ defmodule Compendium.OCI.ReferenceTest do
 
       assert ref.digest ==
                "sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
-
-      assert ref.default_registry == false
     end
 
     test "parses docker.io reference" do
@@ -37,7 +34,6 @@ defmodule Compendium.OCI.ReferenceTest do
       assert ref.registry == "docker.io"
       assert ref.repository == "library/nginx"
       assert ref.tag == "latest"
-      assert ref.default_registry == false
     end
 
     test "parses reference without tag" do
@@ -45,7 +41,6 @@ defmodule Compendium.OCI.ReferenceTest do
       assert ref.registry == "ghcr.io"
       assert ref.repository == "cyfr/catalysts/claude"
       assert ref.tag == nil
-      assert ref.default_registry == false
     end
 
     test "parses localhost registry with port" do
@@ -53,7 +48,6 @@ defmodule Compendium.OCI.ReferenceTest do
       assert ref.registry == "localhost:5000"
       assert ref.repository == "test/repo"
       assert ref.tag == "v1"
-      assert ref.default_registry == false
     end
 
     test "parses reference with no explicit registry" do
@@ -61,14 +55,12 @@ defmodule Compendium.OCI.ReferenceTest do
       assert ref.registry == Compendium.RegistryHost.canonical_host()
       assert ref.repository == "cyfr/reagents/data-processor"
       assert ref.tag == "1.0.0"
-      assert ref.default_registry == true
     end
 
     test "single-segment reference defaults registry" do
       assert {:ok, ref} = Reference.parse("myrepo")
       assert ref.registry == Compendium.RegistryHost.canonical_host()
       assert ref.repository == "myrepo"
-      assert ref.default_registry == true
     end
 
     test "returns error for empty string" do
@@ -225,19 +217,18 @@ defmodule Compendium.OCI.ReferenceTest do
   end
 
   describe "api_base/1" do
-    test "docker.io uses registry-1.docker.io" do
-      ref = %Reference{registry: "docker.io", repository: "test", tag: nil}
-      assert Reference.api_base(ref) == "https://registry-1.docker.io"
+    test "a registry off this machine is reached over https" do
+      for registry <- ["registry.cyfr.run", "ghcr.io", "10.0.0.5:5000", "localhost.example"] do
+        ref = %Reference{registry: registry, repository: "test", tag: nil}
+        assert Reference.api_base(ref) == "https://" <> registry
+      end
     end
 
-    test "ghcr.io uses https" do
-      ref = %Reference{registry: "ghcr.io", repository: "test", tag: nil}
-      assert Reference.api_base(ref) == "https://ghcr.io"
-    end
-
-    test "localhost uses http" do
-      ref = %Reference{registry: "localhost:5000", repository: "test", tag: nil}
-      assert Reference.api_base(ref) == "http://localhost:5000"
+    test "a loopback registry is reached over http" do
+      for registry <- ["localhost:5000", "localhost", "127.0.0.1:19", "127.1.2.3", "[::1]:5000"] do
+        ref = %Reference{registry: registry, repository: "test", tag: nil}
+        assert Reference.api_base(ref) == "http://" <> registry
+      end
     end
   end
 end
