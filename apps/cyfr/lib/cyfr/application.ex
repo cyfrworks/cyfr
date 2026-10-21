@@ -1013,7 +1013,7 @@ defmodule Cyfr.Application do
   # produce cross-deployment colliding user ids and silently break login.
   # Surface it at boot so a deploy fails loudly instead of every login.
   defp validate_oidc_issuer_config! do
-    if Cyfr.RuntimeConfig.auth_provider() == Sanctum.Auth.OIDC do
+    if Sanctum.Auth.provider() == Sanctum.Auth.OIDC do
       case check_oidc_issuer(Sanctum.Auth.OIDC.issuer()) do
         :ok -> :ok
         {:error, message} -> raise "[Cyfr] FATAL: #{message}"

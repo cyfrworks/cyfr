@@ -114,7 +114,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
   end
 
   defp get_context(conn) do
-    auth_provider = Cyfr.RuntimeConfig.auth_provider()
+    auth_provider = Sanctum.Auth.provider()
 
     if is_nil(auth_provider) do
       # No auth configured — the operator runs without sign-in. Requests reach

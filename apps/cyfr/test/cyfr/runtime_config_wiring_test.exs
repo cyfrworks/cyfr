@@ -102,7 +102,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
         assert is_list(repo_config)
 
-        case Cyfr.RuntimeConfig.repo_adapter() do
+        case Arca.repo_adapter() do
           Ecto.Adapters.SQLite3 ->
             # SQLite-only keys must be present here and never in a Postgres
             # build — the split config.exs documents.
@@ -827,7 +827,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "agreeing with the built adapter is accepted" do
       built =
-        case Cyfr.RuntimeConfig.repo_adapter() do
+        case Arca.repo_adapter() do
           Ecto.Adapters.SQLite3 -> "sqlite"
           Ecto.Adapters.Postgres -> "postgres"
         end
@@ -839,7 +839,7 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
     test "asking for the adapter that was NOT built refuses the boot" do
       other =
-        case Cyfr.RuntimeConfig.repo_adapter() do
+        case Arca.repo_adapter() do
           Ecto.Adapters.SQLite3 -> "postgres"
           Ecto.Adapters.Postgres -> "sqlite"
         end

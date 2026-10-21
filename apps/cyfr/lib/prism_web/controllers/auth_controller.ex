@@ -701,7 +701,7 @@ defmodule PrismWeb.AuthController do
   defp authenticate_with_provider(auth) do
     # Dispatch to the configured provider; only `Sanctum.Auth.OIDC` accepts a
     # callback.
-    case Cyfr.RuntimeConfig.auth_provider() do
+    case Sanctum.Auth.provider() do
       nil ->
         {:error, :auth_provider_not_configured}
 

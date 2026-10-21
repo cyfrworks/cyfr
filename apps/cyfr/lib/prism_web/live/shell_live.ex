@@ -345,7 +345,7 @@ defmodule PrismWeb.ShellLive do
       # The public address: the home's own origin (`Sanctum.origin/0`) plus
       # the tincture's path.
       url =
-        Cyfr.RuntimeConfig.origin() <>
+        Sanctum.origin() <>
           Prima.TinctureUrl.path(tincture.athanor_segment, tincture.publisher, tincture.name)
 
       {:noreply,

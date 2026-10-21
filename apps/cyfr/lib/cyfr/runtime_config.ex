@@ -20,7 +20,7 @@ defmodule Cyfr.RuntimeConfig do
 
   1. **Boot-time parsers** take environment values and return validated
      configuration, evaluated once by `runtime.exs`.
-  2. **Runtime accessors**, such as `auth_provider/0` and `cookie_secure?/0`,
+  2. **Runtime accessors**, such as `cookie_secure?/0`,
      provide shared defaults for settings read by multiple modules.
   """
 
@@ -99,23 +99,6 @@ defmodule Cyfr.RuntimeConfig do
       _ -> {:error, "CYFR_AUTH_PROVIDER=oidc requires #{Enum.join(missing, ", ")}."}
     end
   end
-
-  @doc """
-  The compiled repo adapter (`config :arca, :repo_adapter`, set at compile
-  time from CYFR_DATABASE). One accessor with one default so runtime.exs and
-  the application's DB setup cannot disagree about what was built.
-  """
-  @spec repo_adapter() :: module()
-  defdelegate repo_adapter(), to: Arca
-
-  @doc """
-  The configured auth provider module, or `nil` when the deployment runs
-  without sign-in. The identity domain owns the key
-  (`:sanctum, :auth_provider`) and the selection; this accessor is what
-  the surfaces and the boot checks read it by.
-  """
-  @spec auth_provider() :: module() | nil
-  defdelegate auth_provider(), to: Sanctum.Auth, as: :provider
 
   @doc """
   Browser cross-origin allowlist: `config/config.exs` configures the empty
@@ -232,14 +215,6 @@ defmodule Cyfr.RuntimeConfig do
   """
   @spec require_signed_pulls?() :: boolean()
   def require_signed_pulls?, do: Application.get_env(:cyfr, :require_signed_pulls, false)
-
-  @doc """
-  Returns `public_url/0` when configured, otherwise this deployment's own
-  origin (`:sanctum, :fallback_origin`, kept in step with the endpoint's
-  host and port). TLS deployments must set CYFR_PUBLIC_URL.
-  """
-  @spec origin() :: String.t()
-  defdelegate origin(), to: Sanctum
 
   @doc """
   MCP Origin-header allowlist (DNS-rebinding guard), read by the Origin

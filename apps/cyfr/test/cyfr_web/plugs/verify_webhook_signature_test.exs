@@ -157,7 +157,7 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
   # An outage, simulated: the table is gone. Postgres drops the tables that
   # reference `webhooks` along with it.
   defp drop_webhooks! do
-    if Cyfr.RuntimeConfig.repo_adapter() == Ecto.Adapters.Postgres,
+    if Arca.repo_adapter() == Ecto.Adapters.Postgres,
       do: Arca.Repo.query!("DROP TABLE webhooks CASCADE"),
       else: Arca.Repo.query!("DROP TABLE webhooks")
   end
