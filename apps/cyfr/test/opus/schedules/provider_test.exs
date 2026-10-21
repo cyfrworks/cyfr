@@ -735,6 +735,98 @@ defmodule Opus.Schedules.ProviderTest do
     end
   end
 
+  describe "a target whose installed dependency's stored manifest is damaged" do
+    @torn_child "reagent:local.torn-child:1.0.0"
+
+    defp publish_torn_target!(ctx) do
+      for {name, manifest} <- [
+            {"torn-child", %{}},
+            {"torn-root", %{"dependencies" => %{"static" => [%{"ref" => @torn_child}]}}}
+          ] do
+        {:ok, _} =
+          Compendium.Registry.publish_bytes(ctx, @valid_wasm, %{
+            name: name,
+            version: "1.0.0",
+            type: "reagent",
+            manifest:
+              Jason.encode!(
+                Map.merge(%{"name" => name, "version" => "1.0.0", "type" => "reagent"}, manifest)
+              )
+          })
+      end
+
+      Sanctum.Test.ConsentFixtures.bindable_profile(ctx, "reagent:local.torn-root",
+        profile_id: "prof-torn"
+      )
+    end
+
+    defp tear_child! do
+      Arca.Repo.update_all(
+        Ecto.Query.from(c in Arca.Schemas.Component, where: c.name == "torn-child"),
+        set: [manifest: "{not json"]
+      )
+    end
+
+    @tag :capture_log
+    test "create, update and re-resolve answer the damage and leave the schedules as they were",
+         %{ctx: ctx} do
+      publish_torn_target!(ctx)
+
+      {:ok, created} =
+        Provider.handle("schedule", ctx, %{
+          "action" => "create",
+          "profile_id" => "prof-torn",
+          "name" => "torn-target",
+          "cron_expression" => "0 * * * *",
+          "reference" => "reagent:local.torn-root:1.0.0"
+        })
+
+      {:ok, other} =
+        Provider.handle("schedule", ctx, %{
+          "action" => "create",
+          "profile_id" => "prof-cron",
+          "name" => "torn-other",
+          "cron_expression" => "0 * * * *",
+          "reference" => "reagent:local.test:1.0.0"
+        })
+
+      tear_child!()
+      damage = {:corrupt, {:manifest, @torn_child}}
+
+      assert {:error, ^damage} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "create",
+                 "profile_id" => "prof-torn",
+                 "name" => "torn-again",
+                 "cron_expression" => "0 * * * *",
+                 "reference" => "reagent:local.torn-root:1.0.0"
+               })
+
+      assert {:error, ^damage} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "re_resolve",
+                 "schedule_id" => created.schedule_id
+               })
+
+      assert {:error, ^damage} =
+               Provider.handle("schedule", ctx, %{
+                 "action" => "update",
+                 "schedule_id" => other.schedule_id,
+                 "reference" => "reagent:local.torn-root:1.0.0"
+               })
+
+      actor = Sanctum.Context.actor(ctx)
+      assert {:error, :not_found} = Arca.CronSchedule.get_by_id_or_name(actor, "torn-again")
+
+      {:ok, torn} = Arca.CronSchedule.get_by_id_or_name(actor, created.schedule_id)
+      assert torn.resolved_reference == "reagent:local.torn-root:1.0.0"
+
+      {:ok, untouched} = Arca.CronSchedule.get_by_id_or_name(actor, other.schedule_id)
+      assert untouched.reference == "reagent:local.test:1.0.0"
+      assert untouched.resolved_reference == "reagent:local.test:1.0.0"
+    end
+  end
+
   describe "re-resolve action" do
     test "re-resolve returns error for nonexistent schedule", %{ctx: ctx} do
       assert {:error, msg} =

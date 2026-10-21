@@ -26,11 +26,6 @@ defmodule Opus.Schedules.Provider do
   # The one kind of row this tool reads and writes.
   @kind "schedule"
 
-  # The refusals a profile binding answers besides its sentences
-  # (`Sanctum.Consent.RegistrationBinding.refusal/1`): an outage or a damaged
-  # row is answered as a classed `Prima.Refusal`.
-  @binding_refusals [:invalid_argument, :consent_class_required]
-
   @behaviour Prima.Provider
 
   @impl true
@@ -626,32 +621,38 @@ defmodule Opus.Schedules.Provider do
   end
 
   # Apply component existence and profile-consent checks when rebinding
-  # a schedule to a resolved version.
+  # a schedule to a resolved version. Their refusals answer as themselves;
+  # only the store's write is rendered as a storage error.
   defp re_resolve_to(ctx, schedule, pinned, id) do
     with :ok <- verify_component_exists(ctx, pinned),
-         :ok <- authorize_profile_binding(ctx, pinned, schedule.profile_id),
-         {:ok, updated} <-
-           Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
+         :ok <- authorize_profile_binding(ctx, pinned, schedule.profile_id) do
+      case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{
              resolved_reference: pinned
            }) do
-      Opus.Schedules.Scheduler.update(updated.id)
-      {:ok, format_schedule(updated)}
-    else
-      {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, {tag, _detail}} = refused when tag in @binding_refusals -> refused
-      {:error, %Prima.Refusal{}} = refused -> refused
-      {:error, reason} -> store_refusal(reason, id)
+        {:ok, updated} ->
+          Opus.Schedules.Scheduler.update(updated.id)
+          {:ok, format_schedule(updated)}
+
+        {:error, reason} ->
+          store_refusal(reason, id)
+      end
     end
   end
 
+  # A component the registry does not hold is a sentence to act on; any
+  # other refusal of its inspection (its stored manifest damaged, the
+  # store unavailable) answers as itself, never as a missing component.
   defp verify_component_exists(ctx, resolved_reference) do
     case Compendium.inspect_component(ctx, resolved_reference) do
       {:ok, _} ->
         :ok
 
-      {:error, _} ->
+      {:error, {:not_found, _}} ->
         {:error,
          "Component '#{resolved_reference}' not found in registry. Register or pull it first."}
+
+      {:error, _} = refused ->
+        refused
     end
   end
 
