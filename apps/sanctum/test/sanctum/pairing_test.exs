@@ -136,13 +136,16 @@ defmodule Sanctum.PairingTest do
     )
   end
 
+  # A proof as the glass and the channel send it: its JSON map.
+  defp signed(challenge, private), do: Proof.encode(Proof.sign(challenge, private))
+
   # The glass's two calls: the challenge for its key, then its proof.
   defp complete(secret, {device_key, private}, source \\ @source) do
     with {:ok, %{challenge: challenge}} <-
            Pairing.complete(glass(source), secret, %{device_key: device_key}) do
       Pairing.complete(glass(source), secret, %{
         device_key: device_key,
-        proof: Proof.sign(challenge, private)
+        proof: signed(challenge, private)
       })
     end
   end
@@ -158,13 +161,14 @@ defmodule Sanctum.PairingTest do
     with {:ok, invitation} <-
            session_ctx
            |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-           |> Pairing.begin(%{key_digest: digest}),
+           |> Pairing.begin(%{"key_digest" => digest}),
          do: {:ok, Map.put(invitation, :key, key)}
   end
 
   # The arguments `begin/2` takes for the key pair `key`, and the change it
   # asks to confirm.
-  defp for_key({device_key, _private}), do: %{key_digest: Prima.Device.key_digest(device_key)}
+  defp for_key({device_key, _private}),
+    do: %{"key_digest" => Prima.Device.key_digest(device_key)}
 
   defp change_for({device_key, _private}),
     do: Pairing.invitation_change(Prima.Device.key_digest(device_key))
@@ -235,7 +239,7 @@ defmodule Sanctum.PairingTest do
     %{
       client_id: device.client_id,
       device_key: device.device_key,
-      proof: Proof.sign(challenge, device.private)
+      proof: signed(challenge, device.private)
     }
   end
 
@@ -309,7 +313,7 @@ defmodule Sanctum.PairingTest do
     test "a client with no person behind it confirms nothing" do
       nobody = [
         ctx(auth_method: :oidc, plane: :guest),
-        ctx(auth_method: :api_key, api_key_type: :admin),
+        ctx(auth_method: :api_key),
         ctx(auth_method: :api_key, plane: :guest),
         ctx(auth_method: :tincture),
         ctx(auth_method: :webhook),
@@ -590,7 +594,7 @@ defmodule Sanctum.PairingTest do
       assert {:ok, %{client_id: client_id, certificate: %DeviceCert{} = certificate}} =
                Pairing.complete(glass(), invitation.invitation_secret, %{
                  device_key: device_key,
-                 proof: Proof.sign(challenge, private)
+                 proof: signed(challenge, private)
                })
 
       # The client the invitation reserved, standing on the device key it
@@ -642,7 +646,7 @@ defmodule Sanctum.PairingTest do
       assert {:ok, %{certificate: certificate}} =
                Pairing.complete(stranger.session_ctx, invitation.invitation_secret, %{
                  device_key: device_key,
-                 proof: Proof.sign(challenge, private)
+                 proof: signed(challenge, private)
                })
 
       assert certificate.subject.user_id == user.id
@@ -682,7 +686,7 @@ defmodule Sanctum.PairingTest do
       # Signed by another key than the one submitted.
       assert Pairing.complete(glass(), invitation.invitation_secret, %{
                device_key: device_key,
-               proof: Proof.sign(challenge, other_private)
+               proof: signed(challenge, other_private)
              }) == {:error, :proof_refused}
 
       # A proof that is not one at all.
@@ -698,7 +702,7 @@ defmodule Sanctum.PairingTest do
       assert {:ok, _} =
                Pairing.complete(glass(), invitation.invitation_secret, %{
                  device_key: device_key,
-                 proof: Proof.sign(challenge, private)
+                 proof: signed(challenge, private)
                })
     end
 
@@ -726,7 +730,7 @@ defmodule Sanctum.PairingTest do
           ] do
         assert Pairing.complete(glass(), invitation.invitation_secret, %{
                  device_key: device_key,
-                 proof: Proof.sign(changed, private)
+                 proof: signed(changed, private)
                }) == {:error, :proof_refused},
                inspect(Map.take(changed, [:home, :client_id, :athanor, :purpose]))
       end
@@ -745,7 +749,7 @@ defmodule Sanctum.PairingTest do
 
       assert Pairing.complete(glass(), invitation.invitation_secret, %{
                device_key: device_key,
-               proof: Proof.sign(stale, private)
+               proof: signed(stale, private)
              }) == {:error, :proof_refused}
     end
 
@@ -810,22 +814,25 @@ defmodule Sanctum.PairingTest do
       # The leave revoked the pending invitation with the seat.
       assert Pairing.complete(glass(), invitation.invitation_secret, %{
                device_key: device_key,
-               proof: Proof.sign(challenge, private)
+               proof: signed(challenge, private)
              }) == {:error, :invalid_invitation}
 
       assert clients(user.id) == []
       assert Arca.Repo.all(from(c in DeviceCertificate, where: c.user_id == ^user.id)) == []
     end
 
-    test "a person whose keys are not here is refused, and nothing is issued", %{
+    test "a person with no identity row is damage: refused, and nothing is issued", %{
       session_ctx: session_ctx,
       user: user
     } do
       {:ok, invitation} = begin!(session_ctx)
+
+      # Every person is minted with their identity row; one gone is damage,
+      # never a local person.
       Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id == ^user.id))
 
       assert complete(invitation.invitation_secret, invitation.key) ==
-               {:error, :remote_identity_unavailable}
+               {:error, {:corrupt, :person_identity}}
 
       assert clients(user.id) == []
       assert invitation_row(invitation.invitation_secret).state == "pending"
@@ -1085,7 +1092,7 @@ defmodule Sanctum.PairingTest do
         assert Pairing.renew(ctx, %{
                  client_id: device.client_id,
                  device_key: device.device_key,
-                 proof: Proof.sign(challenge, private)
+                 proof: signed(challenge, private)
                }) == {:error, :proof_refused}
       end
 
@@ -1093,7 +1100,7 @@ defmodule Sanctum.PairingTest do
       assert Pairing.renew(ctx, %{
                client_id: device.client_id,
                device_key: other_key,
-               proof: Proof.sign(challenge(device, :renew, device_key: other_key), other_private)
+               proof: signed(challenge(device, :renew, device_key: other_key), other_private)
              }) == {:error, :proof_refused}
     end
 
@@ -1593,7 +1600,7 @@ defmodule Sanctum.PairingTest do
 
       assert Pairing.complete(glass(), invitation.invitation_secret, %{
                device_key: other_key,
-               proof: Proof.sign(challenge, other_private)
+               proof: signed(challenge, other_private)
              }) == {:error, :key_mismatch}
 
       assert clients(user.id) == []
@@ -1775,7 +1782,7 @@ defmodule Sanctum.PairingTest do
         Pairing.complete(
           glass(),
           secret,
-          Map.put(submission, :proof, Proof.sign(challenge, private))
+          Map.put(submission, :proof, signed(challenge, private))
         )
       end
     end
@@ -1820,7 +1827,7 @@ defmodule Sanctum.PairingTest do
       assert {:error, :certificate_required} =
                Pairing.complete(glass(), invitation.invitation_secret, %{
                  device_key: device_key,
-                 proof: Proof.sign(challenge, private)
+                 proof: signed(challenge, private)
                })
 
       assert {:error, :certificate_required} =

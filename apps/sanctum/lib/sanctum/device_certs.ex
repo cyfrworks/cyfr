@@ -35,7 +35,7 @@ defmodule Sanctum.DeviceCerts do
 
   ## On every request
 
-  `verify_request/3` takes only a device context `verify_connect/3`
+  `verify_request/2` takes only a device context `verify_connect/3`
   produced, and a certificate for it: the one that context was
   established under (its credential deadline is the certificate's
   expiry), or, for the renewal exchange's context, the replacement the
@@ -448,23 +448,16 @@ defmodule Sanctum.DeviceCerts do
   the certificate's expiry and `validated_at` now, its request
   correlation and address carried on; any other context is refused
   `:client_mismatch`.
-
-  `opts`: `:now`, this home's clock in Unix milliseconds, which defaults
-  to the system's.
   """
-  @spec verify_request(DeviceCert.t(), Context.t(), keyword()) ::
-          {:ok, Context.t()} | {:error, refusal()}
+  @spec verify_request(DeviceCert.t(), Context.t()) :: {:ok, Context.t()} | {:error, refusal()}
   def verify_request(
         %DeviceCert{} = certificate,
-        %Context{auth_method: :device, authenticated: true, client_id: client_id} = ctx,
-        opts
+        %Context{auth_method: :device, authenticated: true, client_id: client_id} = ctx
       )
-      when is_binary(client_id) and is_list(opts) do
-    now = Keyword.get(opts, :now) || now_ms()
-
+      when is_binary(client_id) do
     with :ok <- names_context(certificate, ctx),
          {:ok, %Context{user_id: user_id} = checked} <-
-           checked_request(certificate, ctx, now,
+           checked_request(certificate, ctx, now_ms(),
              request_id: ctx.request_id,
              client_ip: ctx.client_ip
            ) do
@@ -474,8 +467,7 @@ defmodule Sanctum.DeviceCerts do
     end
   end
 
-  def verify_request(%DeviceCert{}, _not_a_device_context, opts) when is_list(opts),
-    do: {:error, :client_mismatch}
+  def verify_request(%DeviceCert{}, _not_a_device_context), do: {:error, :client_mismatch}
 
   # A certificate and the client it is presented for: the context's, or,
   # inside `verify_connect/3` once the proof verified, the client the

@@ -524,7 +524,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
     {:ok, paired} =
       Sanctum.Pairing.complete(glass, secret, %{
         device_key: device_key,
-        proof: Prima.DeviceCert.Proof.sign(challenge, private)
+        proof: Prima.DeviceCert.Proof.encode(Prima.DeviceCert.Proof.sign(challenge, private))
       })
 
     paired
@@ -539,7 +539,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
     secret = reauth_confirmed!(ctx, ctx, subject, token, pairing_change(digest))
 
     {:ok, invitation} =
-      Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{key_digest: digest})
+      Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{"key_digest" => digest})
 
     paired = complete!(invitation.invitation_secret, key)
     certificate = paired.certificate
@@ -577,7 +577,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
       assert {row.proof, row.confirmed_client_id} == {"oidc_reauth", device.client_id}
 
       assert {:ok, invitation} =
-               Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{key_digest: digest})
+               Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{"key_digest" => digest})
 
       assert %{confirmer_kind: "device", confirmer_id: confirmer} =
                Arca.Repo.get_by!(Arca.Schemas.PairingInvitation,
@@ -615,7 +615,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
       secret = reauth_confirmed!(ctx, ctx, subject, token, pairing_change(digest))
       assert record(ctx, Prima.Confirmation.ref(secret)).confirmed_client_id == nil
 
-      assert Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{key_digest: digest}) ==
+      assert Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{"key_digest" => digest}) ==
                {:error, Sanctum.Pairing.addition_refusal()}
     end
 
@@ -656,7 +656,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
       assert {:ok, %{state: "confirmed"}} = OIDC.reauth_decide(ticket, token, :approve)
       assert record(ctx, ref).confirmed_client_id == nil
 
-      assert Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{key_digest: digest}) ==
+      assert Sanctum.Pairing.begin(%{ctx | confirmation_id: secret}, %{"key_digest" => digest}) ==
                {:error, Sanctum.Pairing.addition_refusal()}
     end
 

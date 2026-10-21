@@ -139,7 +139,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
     {:ok, invitation} =
       session_ctx
       |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-      |> Pairing.begin(%{key_digest: digest})
+      |> Pairing.begin(%{"key_digest" => digest})
 
     glass = Context.build(%{authenticated: false, client_ip: @source})
     submission = %{device_key: device_key}
@@ -151,7 +151,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
       Pairing.complete(
         glass,
         invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.sign(pairing, private))
+        Map.put(submission, :proof, Proof.encode(Proof.sign(pairing, private)))
       )
 
     {:ok, challenge} =
@@ -172,7 +172,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
         challenge
       )
 
-    {:ok, ctx} = DeviceCerts.verify_request(certificate, ctx, [])
+    {:ok, ctx} = DeviceCerts.verify_request(certificate, ctx)
     {client_id, ctx}
   end
 

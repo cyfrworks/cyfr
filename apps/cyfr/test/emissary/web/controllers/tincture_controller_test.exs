@@ -626,11 +626,29 @@ defmodule Emissary.Web.TinctureControllerTest do
       {:ok, reader: reader, session: session, ctx: ctx}
     end
 
-    defp credential(ctx, name \\ "auth-dash", opts \\ []) do
+    defp credential(ctx, name \\ "auth-dash") do
       {:ok, %{credential: credential}} =
-        Sanctum.TinctureAuth.mint_asset_credential(ctx, release_digest(name), opts)
+        Sanctum.TinctureAuth.mint_asset_credential(ctx, release_digest(name))
 
       credential
+    end
+
+    # The asset credential's window set to `seconds`, beside whatever the
+    # run installed, and restored after.
+    defp window!(seconds) do
+      previous = Arca.PlatformSettings.installed()
+
+      on_exit(fn ->
+        if previous,
+          do: Arca.PlatformSettings.install_defaults!(previous),
+          else: Arca.PlatformSettings.uninstall()
+      end)
+
+      Arca.PlatformSettings.install_defaults!(
+        Map.merge(previous || %{}, %{
+          "asset_credential_window_s" => %{default: seconds, stale: :serve}
+        })
+      )
     end
 
     defp served(credential, file, name \\ "auth-dash"),
@@ -685,7 +703,8 @@ defmodule Emissary.Web.TinctureControllerTest do
       assert String.to_integer(seconds) in 1..left
 
       # A shorter window is a shorter lifetime.
-      short = credential(ctx, "auth-dash", window_s: 60)
+      window!(60)
+      short = credential(ctx)
 
       ["private, max-age=" <> seconds] =
         get_resp_header(get(build_conn(), served(short, ["app.js"])), "cache-control")
@@ -790,7 +809,8 @@ defmodule Emissary.Web.TinctureControllerTest do
     end
 
     test "a file requested after the window is refused", %{conn: conn, ctx: ctx} do
-      credential = credential(ctx, "auth-dash", window_s: 1)
+      window!(1)
+      credential = credential(ctx)
       path = served(credential, ["app.js"])
 
       assert get(conn, path).status in [200, 401]

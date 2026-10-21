@@ -55,19 +55,21 @@ defmodule Sanctum.Directory.Client do
   for the caller to announce. `cached/1` reads the cache back as a
   `Prima.Identity.State`, and `state/1` reads a cached row as one.
 
-  Registration, appends, recoveries and outcomes write no cache: they
-  concern a person's own identity, whose head their identity row holds.
+  Registration, appends and recoveries write no cache: they concern a
+  person's own identity, whose head their identity row holds.
 
   ## Refusals
 
   Before any request: `Prima.Identity.locate/2`'s refusals,
-  `:insecure_directory`, and for a recovery `:wrong_identifier` or
-  `:directory_changed`. The transport's: `:egress_refused`, `:unreachable`,
-  `:timeout`, `:redirected`, `:response_too_large`, `:invalid_response`,
-  and `{:rate_limited, seconds}` from this member's shed. The directory's
-  (`Emissary.Web.DirectoryController`'s codes): `:not_served`,
-  `:not_found`, `:read_only`, `:body_too_large`, `{:stale_head, head}`,
-  `{:stale_policy, recorded}`, `:request_id_reused`, `:conflict`,
+  `:insecure_directory`, for an append `:invalid_entry` or `:not_rotate`,
+  and for a recovery `:invalid_request`, `:wrong_identifier` or
+  `:directory_changed`. The transport's: `:egress_refused`,
+  `:unreachable`, `:timeout`, `:redirected`, `:response_too_large`,
+  `:invalid_response`, and `{:rate_limited, seconds}` from this member's
+  shed. The directory's (`Emissary.Web.DirectoryController`'s codes):
+  `:not_served`, `:not_found`, `:read_only`, `:body_too_large`,
+  `{:stale_head, head}`, `{:stale_policy, recorded}`,
+  `:request_id_reused`, `:conflict`,
   `{:refused, :invalid | :unverified | :wrong_identifier, reason | nil}`,
   `:corrupt`, and the retryable `{:rate_limited, seconds}`,
   `{:capacity, seconds}` (a quota, or an identifier's day of rotations,
@@ -189,12 +191,13 @@ defmodule Sanctum.Directory.Client do
   end
 
   @doc """
-  Append a signed rotation (its `Prima.Identity.Entry`, JSON map or
-  canonical bytes) to `identifier`'s log.
+  Append a signed rotation to `identifier`'s log: `entry` is its
+  canonical JSON bytes, as `Sanctum.Person.sign_rotate/2` stages them.
+  Bytes that are not a signed entry are `:invalid_entry`, and a signed
+  entry of another kind is `:not_rotate`, before any request.
   """
-  @spec append(String.t(), genesis(), Entry.t() | map() | binary(), opts()) ::
-          {:ok, accepted()} | {:error, reason()}
-  def append(identifier, genesis, entry, opts \\ []) do
+  @spec append(String.t(), genesis(), binary(), opts()) :: {:ok, accepted()} | {:error, reason()}
+  def append(identifier, genesis, entry, opts \\ []) when is_binary(entry) do
     with {:ok, ctx} <- prepare(identifier, genesis, opts),
          {:ok, rotation} <- rotation(entry),
          {:ok, body} <-
@@ -333,20 +336,13 @@ defmodule Sanctum.Directory.Client do
       else: base
   end
 
-  defp rotation(%Entry{} = entry), do: rotation(Entry.encode(entry))
-
-  defp rotation(bytes) when is_binary(bytes) do
-    case Jason.decode(bytes) do
-      {:ok, %{} = map} -> rotation(map)
+  # `Prima.Identity.Entry.decode/1` reads a signed entry only.
+  defp rotation(bytes) do
+    with {:ok, %{} = map} <- Jason.decode(bytes),
+         {:ok, %Entry{} = entry} <- Entry.decode(map) do
+      if entry.kind == :rotate, do: {:ok, entry}, else: {:error, :not_rotate}
+    else
       _other -> {:error, :invalid_entry}
-    end
-  end
-
-  defp rotation(map) when is_map(map) do
-    case Entry.decode(map) do
-      {:ok, %Entry{kind: :rotate, sig: sig} = entry} when is_binary(sig) -> {:ok, entry}
-      {:ok, %Entry{}} -> {:error, :not_rotate}
-      {:error, _reason} -> {:error, :invalid_entry}
     end
   end
 

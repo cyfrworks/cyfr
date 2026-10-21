@@ -519,10 +519,13 @@ defmodule Emissary.Web.DirectoryControllerTest do
                Client.resolve(alice.identifier, genesis, opts)
 
       rotated = rotation(alice)
-      assert {:ok, %{seq: 1}} = Client.append(alice.identifier, genesis, rotated, opts)
+      another = Identity.canonical(rotation(alice))
+
+      assert {:ok, %{seq: 1}} =
+               Client.append(alice.identifier, genesis, Identity.canonical(rotated), opts)
 
       assert {:error, {:stale_head, head}} =
-               Client.append(alice.identifier, genesis, rotation(alice), opts)
+               Client.append(alice.identifier, genesis, another, opts)
 
       assert head == Identity.hash(rotated)
 

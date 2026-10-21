@@ -16,7 +16,7 @@ defmodule Sanctum.TinctureAuth do
   credential** in the path (`/_s/<credential>/…`, `Prima.TinctureUrl`):
   signed, opaque and URL-safe, carrying no secret, stable for one person,
   one version digest and one window under one source, and held to that
-  source's rows at every fetch (`mint_asset_credential/3`,
+  source's rows at every fetch (`mint_asset_credential/2`,
   `verify_asset_credential/2`). The window is the platform setting
   `asset_credential_window_s`, capped by the source's remaining life. A
   canvas's host page is served under the same credential, for the frame
@@ -234,14 +234,13 @@ defmodule Sanctum.TinctureAuth do
   session or key context: stable for the person, the version digest and
   the window, so a browser's cache holds across page loads.
 
-  The window is the platform setting `asset_credential_window_s`, or
-  `window_s:` when a caller asks for a shorter one. The credential expires
-  at the end of the half-window bucket after the current one, so what it
-  has left is always more than half the window and never more than the
-  window, and the same source minting again within one bucket gets the
-  same credential; it never outlives its source's own expiry. A window
-  that is not a positive number of seconds, or a setting that cannot be
-  read as one, is `:invalid_window`.
+  The window is the platform setting `asset_credential_window_s`. The
+  credential expires at the end of the half-window bucket after the
+  current one, so what it has left is always more than half the window
+  and never more than the window, and the same source minting again
+  within one bucket gets the same credential; it never outlives its
+  source's own expiry. A setting that cannot be read as a positive number
+  of seconds is `:invalid_window`.
 
   Refused on a member that does not hold the control plane
   (`:not_owner`), for a context that is not a person's session or key
@@ -250,14 +249,14 @@ defmodule Sanctum.TinctureAuth do
   cannot answer (`:unavailable`), and `:invalid_version` for a digest that
   is not one.
   """
-  @spec mint_asset_credential(Context.t(), String.t(), keyword()) ::
+  @spec mint_asset_credential(Context.t(), String.t()) ::
           {:ok, %{credential: String.t(), expires_at: DateTime.t()}}
           | {:error, mint_refusal() | :invalid_window | :invalid_version}
-  def mint_asset_credential(%Context{} = ctx, version_digest, opts \\ []) when is_list(opts) do
+  def mint_asset_credential(%Context{} = ctx, version_digest) do
     with :ok <- owner(),
          :ok <- primary(ctx),
          :ok <- version_digest(version_digest),
-         {:ok, window} <- window(opts),
+         {:ok, window} <- setting("asset_credential_window_s", :invalid_window),
          {:ok, claims} <- claims(ctx),
          {:ok, %{now: now, source_expires_at: source}} <-
            Sanctum.Caller.derived_standing(claims, client_ip: ctx.client_ip) do
@@ -344,15 +343,6 @@ defmodule Sanctum.TinctureAuth do
   defp cap({start, expires}, %DateTime{} = source),
     do: {start, min(expires, DateTime.to_unix(source))}
 
-  defp window(opts) do
-    with {:ok, setting} <- setting("asset_credential_window_s", :invalid_window) do
-      case Keyword.get(opts, :window_s, setting) do
-        asked when is_integer(asked) and asked > 0 -> {:ok, min(asked, setting)}
-        _other -> {:error, :invalid_window}
-      end
-    end
-  end
-
   # A positive number of seconds from the platform settings: anything else
   # — no value, zero, a store that was never installed — is `absent`, and
   # a store that cannot answer is `:unavailable`.
@@ -437,7 +427,7 @@ defmodule Sanctum.TinctureAuth do
   now, capped by the source's own expiry. A frame id that is not one is
   `:missing_frame_id`; a setting that cannot be read as a positive number
   of seconds is `:missing_deadline`. Otherwise refused as
-  `mint_asset_credential/3` refuses, `:invalid_reference` for a reference
+  `mint_asset_credential/2` refuses, `:invalid_reference` for a reference
   that does not name a tincture version, `:invalid_version` for a digest
   that is not one, `:invalid_grant_revision`, and `:conflict` for a frame id the
   athanor already holds.

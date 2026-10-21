@@ -94,7 +94,7 @@ defmodule Sanctum.IssuanceTest do
 
     session_ctx
     |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-    |> Pairing.begin(%{key_digest: digest})
+    |> Pairing.begin(%{"key_digest" => digest})
   end
 
   # A `pairing.begin` confirmation of the person `user_id` in `actor`'s
@@ -184,7 +184,7 @@ defmodule Sanctum.IssuanceTest do
       Pairing.complete(
         glass,
         invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.sign(challenge, private))
+        Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
       )
 
     %{client_id: client_id, certificate: certificate, device_key: device_key, private: private}
@@ -202,7 +202,7 @@ defmodule Sanctum.IssuanceTest do
         challenge
       )
 
-    {:ok, ctx} = DeviceCerts.verify_request(device.certificate, ctx, [])
+    {:ok, ctx} = DeviceCerts.verify_request(device.certificate, ctx)
     ctx
   end
 
@@ -864,7 +864,7 @@ defmodule Sanctum.IssuanceTest do
              Pairing.complete(
                glass,
                secret,
-               Map.put(submission, :proof, Proof.sign(challenge, private))
+               Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
              )
 
     assert {:ok, %{state: "pending"}} = Arca.PairingInvitations.lookup(secret_hash)
@@ -1084,7 +1084,7 @@ defmodule Sanctum.IssuanceTest do
 
       assert {:error, :not_standing} =
                revoked_in_window(session_ctx, device.client_id, &checked_point/2, fn ->
-                 Pairing.begin(confirmed, %{key_digest: digest})
+                 Pairing.begin(confirmed, %{"key_digest" => digest})
                end)
 
       assert count.() == opened
@@ -1117,7 +1117,10 @@ defmodule Sanctum.IssuanceTest do
         )
 
       on_exit(fn -> :telemetry.detach(handler) end)
-      assert {:ok, %{client_id: "pcl_" <> _}} = Pairing.begin(confirmed, %{key_digest: digest})
+
+      assert {:ok, %{client_id: "pcl_" <> _}} =
+               Pairing.begin(confirmed, %{"key_digest" => digest})
+
       :telemetry.detach(handler)
 
       statements = statements()
@@ -1249,7 +1252,7 @@ defmodule Sanctum.IssuanceTest do
         Pairing.complete(
           glass,
           invitation.invitation_secret,
-          Map.put(submission, :proof, Proof.sign(challenge, private))
+          Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
         )
 
       device = %{
@@ -1389,7 +1392,7 @@ defmodule Sanctum.IssuanceTest do
         in_window(
           first_client_read,
           fn ->
-            {:ok, verified} = DeviceCerts.verify_request(device.certificate, ctx, [])
+            {:ok, verified} = DeviceCerts.verify_request(device.certificate, ctx)
             mint(verified)
           end,
           fn ->

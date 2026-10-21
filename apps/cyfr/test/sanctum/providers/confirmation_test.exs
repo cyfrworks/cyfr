@@ -592,7 +592,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
     {:ok, invitation} =
       session_ctx
       |> TestContext.confirmed(:device_pairing, Sanctum.Pairing.invitation_change(key_digest))
-      |> Sanctum.Pairing.begin(%{key_digest: key_digest})
+      |> Sanctum.Pairing.begin(%{"key_digest" => key_digest})
 
     glass = Context.build(%{authenticated: false, client_ip: source})
     submission = %{device_key: device_key}
@@ -604,7 +604,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
       Sanctum.Pairing.complete(
         glass,
         invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.sign(challenge, private))
+        Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
       )
 
     {:ok, connect} =
@@ -625,7 +625,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
         connect
       )
 
-    {:ok, ctx} = Sanctum.DeviceCerts.verify_request(certificate, ctx, [])
+    {:ok, ctx} = Sanctum.DeviceCerts.verify_request(certificate, ctx)
     ctx
   end
 

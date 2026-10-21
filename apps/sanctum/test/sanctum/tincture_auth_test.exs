@@ -134,24 +134,16 @@ defmodule Sanctum.TinctureAuthTest do
       refute other == one
     end
 
-    test "a window of zero is refused, asked for or set", %{source: ctx} do
-      assert {:error, :invalid_window} =
-               TinctureAuth.mint_asset_credential(ctx, @digest, window_s: 0)
-
+    test "a window set to zero is refused", %{source: ctx} do
       settings!(0, 3_600)
       assert {:error, :invalid_window} = TinctureAuth.mint_asset_credential(ctx, @digest)
     end
 
-    test "a shorter window may be asked for, never a longer one", %{source: ctx} do
-      {:ok, %{credential: short}} = TinctureAuth.mint_asset_credential(ctx, @digest, window_s: 60)
+    test "the window is the setting's: a shorter one set is a shorter lifetime", %{source: ctx} do
+      settings!(60, 3_600)
+      {:ok, %{credential: short}} = TinctureAuth.mint_asset_credential(ctx, @digest)
       {:ok, %{remaining_s: left}} = TinctureAuth.verify_asset_credential(short)
       assert left > 30 and left <= 60
-
-      {:ok, %{credential: long}} =
-        TinctureAuth.mint_asset_credential(ctx, @digest, window_s: 86_400)
-
-      {:ok, %{remaining_s: capped}} = TinctureAuth.verify_asset_credential(long)
-      assert capped <= 3_600
     end
 
     test "never outlives its source's remaining life", %{source: ctx, session: session} do

@@ -31,7 +31,7 @@ defmodule Emissary.Web.DeviceChannel do
   `standing`: the client, its athanor and its certificate's expiry.
 
   Each discrete `intent` after that is checked first
-  (`Sanctum.DeviceCerts.verify_request/3`: the certificate strictly
+  (`Sanctum.DeviceCerts.verify_request/2`: the certificate strictly
   unexpired on this home's clock, still chained to the person's current
   live key, and the paired client and its person still standing, read
   anew), then dispatched through the gate under the client's context,
@@ -362,7 +362,7 @@ defmodule Emissary.Web.DeviceChannel do
   end
 
   def handle_info({__MODULE__, :keepalive, token}, %{keepalive: {token, _timer}} = state) do
-    case Sanctum.DeviceCerts.verify_request(state.cert, state.client, []) do
+    case Sanctum.DeviceCerts.verify_request(state.cert, state.client) do
       {:ok, client} ->
         {:push, {:ping, ""}, keepalive(%{state | client: carried(client, state)})}
 
@@ -535,7 +535,7 @@ defmodule Emissary.Web.DeviceChannel do
          ) do
       {:ok, %{certificate: issued}} ->
         with {:ok, certificate} <- DeviceCert.decode(issued),
-             {:ok, client} <- Sanctum.DeviceCerts.verify_request(certificate, ctx, []) do
+             {:ok, client} <- Sanctum.DeviceCerts.verify_request(certificate, ctx) do
           verified(state, client, certificate, [{:certificate, %{certificate: certificate}}])
         else
           # The gate decided the renewal under its call id; the refusal of
@@ -592,7 +592,7 @@ defmodule Emissary.Web.DeviceChannel do
   defp admit(%{id: id, operation: operation} = intent, state) do
     state = if operation == @open_stream, do: hear_standing(state), else: state
 
-    case Sanctum.DeviceCerts.verify_request(state.cert, state.client, []) do
+    case Sanctum.DeviceCerts.verify_request(state.cert, state.client) do
       {:ok, client} ->
         dispatch(intent, %{state | client: carried(client, state)})
 
@@ -835,7 +835,7 @@ defmodule Emissary.Web.DeviceChannel do
         {:push, event(grant, message), state}
 
       true ->
-        case Sanctum.DeviceCerts.verify_request(state.cert, state.client, []) do
+        case Sanctum.DeviceCerts.verify_request(state.cert, state.client) do
           {:ok, client} ->
             {:push, event(grant, message), %{state | client: carried(client, state)}}
 
@@ -864,7 +864,7 @@ defmodule Emissary.Web.DeviceChannel do
   end
 
   defp recheck(state) do
-    case Sanctum.DeviceCerts.verify_request(state.cert, state.client, []) do
+    case Sanctum.DeviceCerts.verify_request(state.cert, state.client) do
       {:ok, client} -> {:ok, %{state | client: carried(client, state)}}
       {:error, :unavailable} -> {:ok, state}
       {:error, reason} -> refuse(assign_call(state), reason)

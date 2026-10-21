@@ -270,13 +270,14 @@ defmodule Sanctum.Pairing do
 
   @typedoc """
   What the new glass submits to `complete/3`: its device public key
-  (32 raw bytes), once it holds the `pair` challenge its `proof`, and,
-  for a remote person's invitation, the `certificate` their own home
-  issued for the reserved client (with both calls).
+  (32 raw bytes), once it holds the `pair` challenge its `proof` as the
+  glass sends it (`Prima.DeviceCert.Proof`'s JSON map), and, for a remote
+  person's invitation, the `certificate` their own home issued for the
+  reserved client (with both calls).
   """
   @type submission :: %{
           required(:device_key) => binary(),
-          optional(:proof) => Proof.t() | map() | nil,
+          optional(:proof) => map() | nil,
           optional(:certificate) => DeviceCert.t() | nil
         }
 
@@ -289,11 +290,14 @@ defmodule Sanctum.Pairing do
   @typedoc "A paired client and the certificate it connects under."
   @type paired :: %{client_id: String.t(), certificate: DeviceCert.t()}
 
-  @typedoc "What a device submits to `renew/2`: its client, its device key and its proof."
+  @typedoc """
+  What a device submits to `renew/2`: its client, its device key and its
+  proof, as its channel forwards it (`Prima.DeviceCert.Proof`'s JSON map).
+  """
   @type renewal :: %{
           required(:client_id) => String.t(),
           required(:device_key) => binary(),
-          required(:proof) => Proof.t() | map()
+          required(:proof) => map()
         }
 
   @typedoc """
@@ -330,6 +334,8 @@ defmodule Sanctum.Pairing do
       their current live key, or has expired.
     * `:identity_stale` — a remote person's directory could not be read
       fresh.
+    * `{:corrupt, :person_identity}` — the invitation's person has no
+      identity row, which every person is minted with: damage.
     * `:remote_identity_unavailable` — a renewal of a remote person's
       certificate, which their own home certifies again instead.
     * `:not_standing` — the person is denied, the athanor archived or the
@@ -353,6 +359,7 @@ defmodule Sanctum.Pairing do
           | :certificate_unexpected
           | :certificate_refused
           | :identity_stale
+          | {:corrupt, :person_identity}
           | :remote_identity_unavailable
           | :not_standing
           | :revoked
@@ -368,9 +375,8 @@ defmodule Sanctum.Pairing do
 
   @doc """
   Open a pairing invitation for the person of `ctx` in the athanor in
-  focus (the module doc). `args` names `key_digest` (or `"key_digest"`),
-  the digest of the device key the new glass shows
-  (`Prima.Device.key_digest/1`).
+  focus (the module doc). `args` names `"key_digest"`, the digest of the
+  device key the new glass shows (`Prima.Device.key_digest/1`).
 
   The `device_pairing` confirmation is asked first, for exactly that key
   digest (`Sanctum.Consent.Authz.check/3`), and consumed inside the
@@ -443,7 +449,7 @@ defmodule Sanctum.Pairing do
   end
 
   defp key_digest_argument(args) do
-    digest = Map.get(args, :key_digest, Map.get(args, "key_digest"))
+    digest = Map.get(args, "key_digest")
 
     if Prima.Device.key_digest?(digest),
       do: {:ok, digest},
@@ -578,7 +584,9 @@ defmodule Sanctum.Pairing do
   # with no certificate offered; or the person's own home, whose
   # certificate for exactly this invitation's client, the device key, this
   # home and the athanor is verified under the head their directory names
-  # now (`Sanctum.DeviceCerts.remote_subject/3`, read live).
+  # now (`Sanctum.DeviceCerts.remote_subject/3`, read live). Every person
+  # is minted with their identity row (`Sanctum.Tenancy.Users`), so a
+  # person with none is damage, never a local person.
   defp issuer(invitation, device_key, certificate, now) do
     case Arca.PersonIdentities.get(Prima.Actor.system(), invitation.user_id) do
       {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
@@ -591,7 +599,7 @@ defmodule Sanctum.Pairing do
         local_issuer(invitation.user_id, certificate)
 
       {:error, :not_found} ->
-        local_issuer(invitation.user_id, certificate)
+        {:error, {:corrupt, :person_identity}}
 
       {:error, _unanswered} ->
         {:error, :unavailable}
@@ -763,7 +771,7 @@ defmodule Sanctum.Pairing do
 
   defp redeemed({:error, :database_error}), do: {:error, :unavailable}
   defp redeemed({:error, :first_method_used}), do: {:error, addition_refusal()}
-  defp redeemed({:error, :no_identity}), do: {:error, :unavailable}
+  defp redeemed({:error, :no_identity}), do: {:error, {:corrupt, :person_identity}}
   defp redeemed({:error, reason}), do: {:error, reason}
 
   @doc """
@@ -1139,16 +1147,14 @@ defmodule Sanctum.Pairing do
   # Proofs
   # ---------------------------------------------------------------------------
 
-  defp read_proof(%Proof{} = proof), do: {:ok, proof}
-
-  defp read_proof(map) when is_map(map) do
-    case Proof.decode(map) do
+  # The proof as the glass or the channel sends it, its JSON map
+  # (`Prima.DeviceCert.Proof.decode/1`, which refuses anything else).
+  defp read_proof(proof) do
+    case Proof.decode(proof) do
       {:ok, proof} -> {:ok, proof}
       {:error, _malformed} -> {:error, :proof_refused}
     end
   end
-
-  defp read_proof(_proof), do: {:error, :proof_refused}
 
   # A challenge this home issued expires at most one lifetime from now: one
   # that expires later was not issued here.

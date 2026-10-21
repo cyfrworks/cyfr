@@ -104,7 +104,7 @@ defmodule Sanctum.DeviceCertsTest do
 
     session_ctx
     |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-    |> Pairing.begin(%{key_digest: digest})
+    |> Pairing.begin(%{"key_digest" => digest})
   end
 
   defp revoke!(session_ctx, client_id) do
@@ -132,7 +132,7 @@ defmodule Sanctum.DeviceCertsTest do
       Pairing.complete(
         glass,
         invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.sign(challenge, private))
+        Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
       )
 
     %{client_id: client_id, certificate: certificate, device_key: device_key, private: private}
@@ -221,7 +221,7 @@ defmodule Sanctum.DeviceCertsTest do
   end
 
   # The person's live key replaced as a rotation activates one: a new pair,
-  # its private half sealed to them as their live key.
+  # its private half sealed to them as their live key. Answers the pair.
   defp rotate_live_key!(user_id) do
     {public, private} = :crypto.generate_key(:eddsa, :ed25519)
     {:ok, sealed} = Sanctum.Cipher.encrypt(private, Sanctum.CipherAAD.person_key(user_id, :live))
@@ -231,7 +231,21 @@ defmodule Sanctum.DeviceCertsTest do
         set: [live_public_key: public, live_key_sealed: sealed]
       )
 
-    public
+    {public, private}
+  end
+
+  # `device`'s certificate as the person's live key signs one stamped
+  # `not_before` and `expires_at` (Unix milliseconds), the live key first
+  # replaced by a pair this test holds, as a rotation replaces it. The
+  # renewal exchange's context names no certificate, so it holds any of
+  # its client's, as it holds the replacement a renewal issued.
+  defp stamped!(device, not_before, expires_at) do
+    {_public, live_private} = rotate_live_key!(device.certificate.subject.user_id)
+
+    DeviceCert.sign(
+      %{device.certificate | not_before: not_before, expires_at: expires_at},
+      live_private
+    )
   end
 
   # What `Sanctum.DeviceCerts` hands establish once a device verified:
@@ -771,7 +785,7 @@ defmodule Sanctum.DeviceCertsTest do
   # Every request
   # ---------------------------------------------------------------------------
 
-  describe "verify_request/3" do
+  describe "verify_request/2" do
     test "takes only a device context a proof produced: a certificate alone verifies nothing", %{
       session_ctx: session_ctx
     } do
@@ -780,7 +794,7 @@ defmodule Sanctum.DeviceCertsTest do
 
       # A certificate, which is not secret, and the client id it names,
       # with no proof, answer no context.
-      assert DeviceCerts.verify_request(device.certificate, %{client_id: device.client_id}, []) ==
+      assert DeviceCerts.verify_request(device.certificate, %{client_id: device.client_id}) ==
                {:error, :client_mismatch}
 
       # Nor does any context but a device context a proof produced.
@@ -790,32 +804,34 @@ defmodule Sanctum.DeviceCertsTest do
             %{ctx | authenticated: false},
             %{ctx | auth_method: :oidc}
           ] do
-        assert DeviceCerts.verify_request(device.certificate, other, []) ==
-                 {:error, :client_mismatch}
+        assert DeviceCerts.verify_request(device.certificate, other) == {:error, :client_mismatch}
       end
 
       # A device context verifies the certificate it was established
       # under, and no other of the same client.
-      assert {:ok, _ctx} = DeviceCerts.verify_request(device.certificate, ctx, [])
+      assert {:ok, _ctx} = DeviceCerts.verify_request(device.certificate, ctx)
       later = %{ctx | credential_deadline: DateTime.add(ctx.credential_deadline, 1, :second)}
 
-      assert DeviceCerts.verify_request(device.certificate, later, []) ==
-               {:error, :client_mismatch}
+      assert DeviceCerts.verify_request(device.certificate, later) == {:error, :client_mismatch}
     end
 
     test "expiry is strict on this home's clock: at it, within the tolerance and past it", %{
       session_ctx: session_ctx
     } do
       device = pair!(session_ctx)
-      {:ok, ctx} = connect(device)
-      expires_at = device.certificate.expires_at
+      {:ok, renewal} = renew(device, @source)
+      now = System.os_time(:millisecond)
+      issued = now - 600_000
 
       assert {:ok, _ctx} =
-               DeviceCerts.verify_request(device.certificate, ctx, now: expires_at - 1)
+               DeviceCerts.verify_request(stamped!(device, issued, now + 60_000), renewal)
 
-      for now <- [expires_at, expires_at + 30_000, expires_at + 120_000] do
-        assert DeviceCerts.verify_request(device.certificate, ctx, now: now) == {:error, :expired},
-               "now = expires_at + #{now - expires_at} ms"
+      # Expiring at the moment it is stamped, so at or before the check, and
+      # 30 s and 120 s before it: the tolerance never extends a lifetime.
+      for expires_at <- [System.os_time(:millisecond), now - 30_000, now - 120_000] do
+        assert DeviceCerts.verify_request(stamped!(device, issued, expires_at), renewal) ==
+                 {:error, :expired},
+               "expires_at - now = #{expires_at - now} ms"
       end
     end
 
@@ -823,15 +839,16 @@ defmodule Sanctum.DeviceCertsTest do
       session_ctx: session_ctx
     } do
       device = pair!(session_ctx)
-      {:ok, ctx} = connect(device)
-      not_before = device.certificate.not_before
+      {:ok, renewal} = renew(device, @source)
+      now = System.os_time(:millisecond)
+      expires_at = now + 600_000
 
-      # This home's clock 30 s behind the issuer's, inside the 60 s tolerance.
+      # Issued by a clock 30 s ahead of this home's, inside the 60 s tolerance.
       assert {:ok, _ctx} =
-               DeviceCerts.verify_request(device.certificate, ctx, now: not_before - 30_000)
+               DeviceCerts.verify_request(stamped!(device, now + 30_000, expires_at), renewal)
 
-      # 120 s behind, beyond it.
-      assert DeviceCerts.verify_request(device.certificate, ctx, now: not_before - 120_000) ==
+      # 120 s ahead, beyond it.
+      assert DeviceCerts.verify_request(stamped!(device, now + 120_000, expires_at), renewal) ==
                {:error, :not_yet_valid}
     end
 
@@ -845,7 +862,7 @@ defmodule Sanctum.DeviceCertsTest do
       rotate_live_key!(user.id)
       refute live_key(user.id) == before
 
-      assert DeviceCerts.verify_request(device.certificate, ctx, []) == {:error, :bad_signature}
+      assert DeviceCerts.verify_request(device.certificate, ctx) == {:error, :bad_signature}
     end
 
     test "a certificate for another home is refused", %{session_ctx: session_ctx} do
@@ -854,7 +871,7 @@ defmodule Sanctum.DeviceCertsTest do
       Application.put_env(:sanctum, :public_url, "https://elsewhere.example")
       refute Person.home() == device.certificate.audience
 
-      assert DeviceCerts.verify_request(device.certificate, ctx, []) == {:error, :wrong_audience}
+      assert DeviceCerts.verify_request(device.certificate, ctx) == {:error, :wrong_audience}
     end
 
     test "the key is read from the certificate's own subject, never the connection's claim", %{
@@ -867,7 +884,7 @@ defmodule Sanctum.DeviceCertsTest do
 
       # The person's own certificate, signed by no key of theirs.
       forged = device.certificate |> Map.put(:sig, nil) |> DeviceCert.sign(forged_private)
-      assert DeviceCerts.verify_request(forged, ctx, []) == {:error, :bad_signature}
+      assert DeviceCerts.verify_request(forged, ctx) == {:error, :bad_signature}
 
       # At connect: a certificate naming another person, and one naming a
       # subject no person of this home holds keys for, each proven by the
@@ -899,12 +916,12 @@ defmodule Sanctum.DeviceCertsTest do
       {:ok, ctx} = connect(device)
 
       # The second device's certificate under the first one's context.
-      assert DeviceCerts.verify_request(second.certificate, ctx, []) == {:error, :client_mismatch}
+      assert DeviceCerts.verify_request(second.certificate, ctx) == {:error, :client_mismatch}
 
-      assert DeviceCerts.verify_request(device.certificate, %{ctx | athanor_id: "ath_other"}, []) ==
+      assert DeviceCerts.verify_request(device.certificate, %{ctx | athanor_id: "ath_other"}) ==
                {:error, :client_mismatch}
 
-      assert DeviceCerts.verify_request(device.certificate, %{ctx | user_id: "usr_other"}, []) ==
+      assert DeviceCerts.verify_request(device.certificate, %{ctx | user_id: "usr_other"}) ==
                {:error, :client_mismatch}
     end
 
@@ -942,9 +959,9 @@ defmodule Sanctum.DeviceCertsTest do
       # Revoked: the pairing's own end.
       revoked = pair!(session_ctx)
       {:ok, ctx} = connect(revoked)
-      assert {:ok, _} = DeviceCerts.verify_request(revoked.certificate, ctx, [])
+      assert {:ok, _} = DeviceCerts.verify_request(revoked.certificate, ctx)
       {:ok, _row} = revoke!(session_ctx, revoked.client_id)
-      assert DeviceCerts.verify_request(revoked.certificate, ctx, []) == {:error, :revoked}
+      assert DeviceCerts.verify_request(revoked.certificate, ctx) == {:error, :revoked}
 
       # Left: a second member keeps the group open while the person leaves,
       # and the leave revokes the client they paired there with the seat.
@@ -953,7 +970,7 @@ defmodule Sanctum.DeviceCertsTest do
       other = seated!()
       {:ok, _} = Members.ensure(other.user.id, scope: "athanor", athanor_id: athanor.id)
       :ok = Members.remove_member(athanor, user_id: user.id)
-      assert DeviceCerts.verify_request(left.certificate, ctx, []) == {:error, :revoked}
+      assert DeviceCerts.verify_request(left.certificate, ctx) == {:error, :revoked}
       assert DeviceCerts.client_standing(ctx) == {:error, :revoked}
     end
 
@@ -962,7 +979,7 @@ defmodule Sanctum.DeviceCertsTest do
       {:ok, ctx} = connect(device)
       {:ok, _} = Users.deny(user)
 
-      assert {:error, reason} = DeviceCerts.verify_request(device.certificate, ctx, [])
+      assert {:error, reason} = DeviceCerts.verify_request(device.certificate, ctx)
       assert reason in [:revoked, :not_standing]
       assert {:error, _} = DeviceCerts.client_standing(ctx)
     end
@@ -975,7 +992,7 @@ defmodule Sanctum.DeviceCertsTest do
       {:ok, ctx} = connect(device)
       {:ok, _} = Athanors.archive(athanor)
 
-      assert {:error, reason} = DeviceCerts.verify_request(device.certificate, ctx, [])
+      assert {:error, reason} = DeviceCerts.verify_request(device.certificate, ctx)
       assert reason in [:revoked, :not_standing]
     end
 
@@ -986,7 +1003,7 @@ defmodule Sanctum.DeviceCertsTest do
       {:ok, ctx} = connect(device)
       stale = %{ctx | validated_at: ~U[2020-01-01 00:00:00Z], request_id: "req_held"}
 
-      assert {:ok, fresh} = DeviceCerts.verify_request(device.certificate, stale, [])
+      assert {:ok, fresh} = DeviceCerts.verify_request(device.certificate, stale)
       assert DateTime.compare(fresh.validated_at, stale.validated_at) == :gt
       assert fresh.client_id == device.client_id
       assert fresh.request_id == "req_held"
@@ -1241,7 +1258,7 @@ defmodule Sanctum.DeviceCertsTest do
       # connect and a renewal are refused as a client whose standing ended.
       assert DeviceCerts.client_standing(ctx) == {:error, :not_standing}
       refute Pairing.can_confirm?(ctx)
-      assert DeviceCerts.verify_request(device.certificate, ctx, []) == {:error, :not_standing}
+      assert DeviceCerts.verify_request(device.certificate, ctx) == {:error, :not_standing}
       assert {:error, :not_standing} = connect(device)
       assert {:error, :not_standing} = renew(device, @source)
 
@@ -1279,7 +1296,7 @@ defmodule Sanctum.DeviceCertsTest do
                Pairing.renew(renewal, %{
                  client_id: device.client_id,
                  device_key: device.device_key,
-                 proof: proof
+                 proof: Proof.encode(proof)
                })
 
       assert client_id == device.client_id
@@ -1497,7 +1514,7 @@ defmodule Sanctum.DeviceCertsTest do
         Pairing.complete(
           glass,
           invitation.invitation_secret,
-          Map.put(submission, :proof, Proof.sign(challenge, private))
+          Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
         )
 
       device = %{
@@ -1550,7 +1567,7 @@ defmodule Sanctum.DeviceCertsTest do
       assert user_id == user.id
 
       assert {:ok, %Context{client_id: client_id}} =
-               DeviceCerts.verify_request(device.certificate, ctx, [])
+               DeviceCerts.verify_request(device.certificate, ctx)
 
       assert client_id == device.client_id
 
@@ -1643,7 +1660,7 @@ defmodule Sanctum.DeviceCertsTest do
       Sanctum.Test.DirectoryServer.rotate!(directory.dir, identity)
       {:ok, _} = Sanctum.IdentityFreshness.fresh!(identity.identifier)
 
-      assert {:error, :bad_signature} = DeviceCerts.verify_request(device.certificate, ctx, [])
+      assert {:error, :bad_signature} = DeviceCerts.verify_request(device.certificate, ctx)
       assert {:error, _refused} = remote_connect(device)
 
       # A remote certificate is not renewed here.
@@ -1671,7 +1688,7 @@ defmodule Sanctum.DeviceCertsTest do
       assert {:error, :identity_stale} =
                Sanctum.Caller.revalidate_session(%{ctx | validated_at: nil})
 
-      assert {:error, :identity_stale} = DeviceCerts.verify_request(device.certificate, ctx, [])
+      assert {:error, :identity_stale} = DeviceCerts.verify_request(device.certificate, ctx)
 
       # Its pause is no failed proof: nothing is counted against the bounds.
       assert {:error, :identity_stale} = remote_connect(device)

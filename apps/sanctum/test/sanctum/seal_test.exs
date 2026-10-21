@@ -75,7 +75,7 @@ defmodule Sanctum.SealTest do
     {:ok, invitation} =
       ctx
       |> Sanctum.TestContext.confirmed(:device_pairing, Pairing.invitation_change(digest))
-      |> Pairing.begin(%{key_digest: digest})
+      |> Pairing.begin(%{"key_digest" => digest})
 
     glass = Context.build(%{authenticated: false, client_ip: @source})
     submission = %{device_key: device_key}
@@ -87,7 +87,7 @@ defmodule Sanctum.SealTest do
       Pairing.complete(
         glass,
         invitation.invitation_secret,
-        Map.put(submission, :proof, Proof.sign(challenge, private))
+        Map.put(submission, :proof, Proof.encode(Proof.sign(challenge, private)))
       )
 
     {:ok, connect} =
