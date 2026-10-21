@@ -40,7 +40,7 @@ defmodule Locus.Runtime.FormulaHandler do
   | `await-any` | Blocks until FIRST task completes |
   | `poll` | Non-blocking status check |
   | `cancel` | Cancel a spawned task |
-  | `emit` | Push a progress/UI event through the formula's attempt, a `push_deltas` host call (`Locus.Runtime.Engine.emit/2`) |
+  | `emit` | Push a progress/UI event through the formula's attempt, a `push_deltas` host call (`Locus.Runtime.Engine.emit/3`) |
 
   A called child's runner answers the calling process, and a spawned
   child's the tracker task that spawned it; either is killed when the
