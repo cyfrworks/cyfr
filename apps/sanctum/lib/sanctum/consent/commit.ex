@@ -1930,7 +1930,7 @@ defmodule Sanctum.Consent.Commit do
            disclosed: false,
            policy: view,
            field_names: [],
-           oauth_scopes: view.oauth_scopes,
+           oauth_scopes: [],
            destination: view.destination
          }}
 
@@ -2010,9 +2010,9 @@ defmodule Sanctum.Consent.Commit do
         {:ok, declared_need}
 
       %{kind: kind} ->
-        # Component-typed needs bind at the child edge, which no fixture
-        # exercises yet; refusing beats binding somewhere surprising, and
-        # the unbound edge fails safe to ZeroAuthority at dispatch.
+        # A component-typed need takes no credential binding: one named
+        # here is refused rather than bound somewhere surprising, and its
+        # unbound child edge fails safe to ZeroAuthority at dispatch.
         {:error, {:component_typed_need_binding_unsupported, need, kind}}
     end
   end
@@ -2065,9 +2065,9 @@ defmodule Sanctum.Consent.Commit do
 
   # An OAuth projection is held to what its entry can dispense, here and
   # not first at a run: scopes the entry lacks are refused as the reader
-  # refuses them, and fewer than it holds only where its provider
-  # attenuates a refresh (`Sanctum.Vault.OAuth.attenuates_scope?/1`), since
-  # otherwise the person would be shown a narrowing no token honours.
+  # refuses them, and fewer than it holds are refused too, since a token is
+  # dispensed for every scope its entry holds and the person would be
+  # shown a narrowing no token honours.
   defp check_scope_projection(%{kind: "oauth"} = bound, [_ | _] = scopes) do
     held = bound.oauth_scopes |> Enum.uniq() |> Enum.sort()
     projected = scopes |> Enum.uniq() |> Enum.sort()
@@ -2077,9 +2077,7 @@ defmodule Sanctum.Consent.Commit do
         :ok
 
       [] ->
-        if Sanctum.Vault.OAuth.attenuates_scope?(bound.provider),
-          do: :ok,
-          else: {:error, :scope_not_attenuable}
+        {:error, :scope_not_attenuable}
 
       missing ->
         {:error, {:scope_projection_unsatisfiable, missing}}

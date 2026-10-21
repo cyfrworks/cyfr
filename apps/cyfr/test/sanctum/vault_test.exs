@@ -843,7 +843,7 @@ defmodule Sanctum.VaultTest do
       assert after_row.binding_digest == before.binding_digest
 
       # So a consent naming the one scope is still a narrower projection of
-      # an entry its provider cannot narrow, and never the broad token.
+      # the entry, refused, and never served the broad token.
       narrower = %{
         entry_id: view.id,
         binding_digest: after_row.binding_digest,
@@ -1170,7 +1170,6 @@ defmodule Sanctum.VaultTest do
       %{endpoints: preset} = Sanctum.Vault.OAuth.preset("google")
 
       assert Jason.decode!(row!(ctx, view.id).oauth_endpoints) == preset
-      refute Sanctum.Vault.OAuth.attenuates_scope?("google")
 
       {:ok, entry} = Arca.VaultStorage.get(actor(ctx), view.id)
       {:ok, digest} = VaultReader.binding_digest(entry)
@@ -1254,10 +1253,10 @@ defmodule Sanctum.VaultTest do
       end
     end
 
-    test "other kinds store what they are given, as before", %{ctx: ctx} do
+    test "another kind stores no endpoints, whatever it is given", %{ctx: ctx} do
       view = create!(ctx, %{oauth_endpoints: %{"token_url" => "https://other.example/token"}})
 
-      assert row!(ctx, view.id).oauth_endpoints == ~s({"token_url":"https://other.example/token"})
+      assert row!(ctx, view.id).oauth_endpoints == nil
     end
 
     test "the refusals are said in their own words, never as an unavailable vault",
@@ -1316,36 +1315,29 @@ defmodule Sanctum.VaultTest do
     end
   end
 
-  describe "an OAuth bundle's tokens for narrower scope sets" do
-    @held %{"gmail.readonly" => %{"access_token" => "tok-narrow", "expires_at" => nil}}
+  describe "an OAuth entry's bundle across a rotate" do
+    test "a rotate without a bundle keeps the entry's; one with a bundle replaces it",
+         %{ctx: ctx} do
+      held = %{"access_token" => "tok-live", "refresh_token" => "rt"}
 
-    test "a rotate without a bundle keeps them; one with a bundle replaces them", %{ctx: ctx} do
-      view =
-        create!(
-          ctx,
-          oauth_params(%{
-            fields: %{"note" => "n"},
-            oauth: %{"access_token" => "tok-wide", "refresh_token" => "rt", "tokens" => @held}
-          })
-        )
+      view = create!(ctx, oauth_params(%{fields: %{"note" => "n"}, oauth: held}))
 
       assert {:ok, 1} =
                rotate(ctx, %{id: view.id, fields: %{"note" => "n2"}, expected_payload_rev: 0})
 
-      assert %{"fields" => %{"note" => "n2"}, "oauth" => %{"tokens" => @held}} =
-               payload!(ctx, view.id)
+      assert %{"fields" => %{"note" => "n2"}, "oauth" => ^held} = payload!(ctx, view.id)
+
+      regranted = %{"access_token" => "tok-regranted", "refresh_token" => "rt-2"}
 
       assert {:ok, 2} =
                rotate(ctx, %{
                  id: view.id,
                  fields: %{"note" => "n2"},
-                 oauth: %{"access_token" => "tok-regranted", "refresh_token" => "rt-2"},
+                 oauth: regranted,
                  expected_payload_rev: 1
                })
 
-      assert %{"oauth" => oauth} = payload!(ctx, view.id)
-      assert oauth["access_token"] == "tok-regranted"
-      refute Map.has_key?(oauth, "tokens")
+      assert %{"oauth" => ^regranted} = payload!(ctx, view.id)
     end
   end
 

@@ -180,9 +180,7 @@ defmodule Sanctum.Vault.OAuthGrant do
       bundle = %{
         "access_token" => response["access_token"],
         "refresh_token" => response["refresh_token"],
-        "expires_at" => VaultOAuth.compute_expires_at(response["expires_in"]),
-        "token_type" => response["token_type"] || "bearer",
-        "scopes" => scopes
+        "expires_at" => VaultOAuth.compute_expires_at(response["expires_in"])
       }
 
       pending |> put_in([:target, :scopes], scopes) |> apply_grant(bundle, hold) |> unheld()
@@ -196,8 +194,8 @@ defmodule Sanctum.Vault.OAuthGrant do
   # not signed out: the callback says to try again, as when the store
   # cannot answer.
   #
-  # Answers the revalidated context, or nil for a grant no context
-  # started, which its write is then held by (`write_hold/1`).
+  # Answers the revalidated context, which the write is then held by
+  # (`write_hold/1`).
   defp still_standing(%{context: %Context{} = ctx, actor: actor}) do
     case Sanctum.Caller.revalidate_session(ctx) do
       {:ok, %Context{} = fresh} -> with :ok <- same_athanor(fresh, actor), do: {:ok, fresh}
@@ -206,22 +204,18 @@ defmodule Sanctum.Vault.OAuthGrant do
     end
   end
 
-  defp still_standing(%{actor: actor}), do: with(:ok <- channel(actor), do: {:ok, nil})
-
   # The write holds what the revalidated context stands on: a paired
   # device's client and certificate, locked in the write's own transaction
   # (`Sanctum.Issuance.device_hold/1`), so a revocation that commits after
   # the revalidation and before the write refuses it; nothing for a
-  # session or a channel, as before. A device context with no binding of
-  # its own opens nothing.
+  # session or a channel. A device context with no binding of its own
+  # opens nothing.
   defp write_hold(%Context{} = ctx) do
     case Sanctum.Issuance.device_hold(ctx) do
       {:ok, hold} -> {:ok, hold}
       {:error, _no_binding} -> {:error, :unauthenticated}
     end
   end
-
-  defp write_hold(nil), do: {:ok, []}
 
   # A write its device no longer stands for, any of the standing refusals
   # (`Sanctum.Issuance`), is refused as the recheck refuses one: the
@@ -369,9 +363,10 @@ defmodule Sanctum.Vault.OAuthGrant do
     end
   end
 
+  # The code goes to the token endpoint the grant was started against, in
+  # its auth style and over https alone (`Sanctum.Vault.OAuth.token_request/4`,
+  # the one POST a refresh makes too).
   defp exchange(pending, creds, code, redirect_uri) do
-    endpoints = pending.target.endpoints
-
     body_params = %{
       "grant_type" => "authorization_code",
       "code" => code,
@@ -379,15 +374,11 @@ defmodule Sanctum.Vault.OAuthGrant do
       "code_verifier" => pending.code_verifier
     }
 
-    auth_style = endpoints["auth_style"] || "params"
-    {headers, body_params} = VaultOAuth.apply_auth_style(auth_style, creds, body_params)
-    headers = [{"content-type", "application/x-www-form-urlencoded"} | headers]
-
-    case VaultOAuth.http_post(
-           endpoints["token_url"],
-           headers,
-           URI.encode_query(body_params),
-           :auth_code
+    case VaultOAuth.token_request(
+           pending.target.provider,
+           pending.target.endpoints,
+           creds,
+           body_params
          ) do
       {:ok, response} ->
         token_response(response)
@@ -442,8 +433,8 @@ defmodule Sanctum.Vault.OAuthGrant do
   # A cipher fault (a missing or rotated keyring — `Cipher.encrypt/2`
   # RAISES on those; its success type is `{:ok, binary}` only) at this
   # point is unrecoverable either way: the single-use authorization code
-  # is already spent. But a typed refusal reaches the operator with the
-  # cause; an unrescued raise was a 500 with the grant half-applied.
+  # is already spent. It is answered as a refusal naming the cause, so the
+  # operator reads why and the grant is never left half-applied.
   defp seal(json, aad) do
     Sanctum.Cipher.encrypt(json, aad)
   rescue
@@ -480,7 +471,6 @@ defmodule Sanctum.Vault.OAuthGrant do
                id: id,
                name: target.name,
                kind: "oauth",
-               provenance: "user",
                status: "active",
                sealed_payload: sealed,
                binding_digest: digest
@@ -642,8 +632,7 @@ defmodule Sanctum.Vault.OAuthGrant do
   @doc """
   The OAuth callback route, spelled once: the router mounts it, the
   callback controller rebuilds the redirect_uri from it, and the grant
-  sends it to the provider — three copies of one wire contract collapse
-  to this accessor (a moved route silently broke the flow before).
+  sends it to the provider, so the three read one wire contract.
   """
   @spec callback_path() :: String.t()
   def callback_path, do: "/auth/oauth/callback"

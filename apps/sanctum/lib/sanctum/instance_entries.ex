@@ -44,7 +44,11 @@ defmodule Sanctum.InstanceEntries do
   `{:error, {:person_denied, user_id}}`, each under the listed people's
   locks (`Arca.InstanceEntries`), with nothing written.
 
-  An entry is always attach-only, and its destination
+  An entry holds an API key or a bundle of fields
+  (`Prima.CredentialKinds.instance/0`), never an OAuth grant: a stored row
+  of another kind is damage, refused `{:error, :corrupt}` wherever it
+  would be bound, resolved or rotated, and offered to no one. An entry is
+  always attach-only, and its destination
   (`Prima.Destination`) names its methods and paths. Its component
   policy is exactly `any` or `shipped`: omitted at creation it is `any`,
   and null, empty, unknown or collection-valued input is refused.
@@ -123,9 +127,7 @@ defmodule Sanctum.InstanceEntries do
           kind: String.t(),
           provider_hint: String.t(),
           status: String.t(),
-          provenance: String.t(),
           field_names: [String.t()],
-          oauth_scopes: [String.t()],
           destination: %{String.t() => term()} | nil,
           attach_only: true,
           binding_digest: String.t() | nil,
@@ -140,17 +142,12 @@ defmodule Sanctum.InstanceEntries do
           updated_at: DateTime.t() | nil
         }
 
-  @typedoc """
-  An entry offered to a person: what it reaches and for whom, never
-  material. `oauth_scopes` are the scopes an OAuth entry was authorized
-  for, `[]` for any other kind.
-  """
+  @typedoc "An entry offered to a person: what it reaches and for whom, never material."
   @type offer_view :: %{
           id: String.t(),
           name: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
-          oauth_scopes: [String.t()],
           destination: %{String.t() => term()} | nil,
           component_policy: String.t()
         }
@@ -166,7 +163,6 @@ defmodule Sanctum.InstanceEntries do
           name: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
-          oauth_scopes: [String.t()],
           destination: %{String.t() => term()} | nil,
           component_policy: String.t(),
           used_today: non_neg_integer(),
@@ -189,23 +185,17 @@ defmodule Sanctum.InstanceEntries do
           name: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
-          oauth_scopes: [String.t()],
           destination: %{String.t() => term()} | nil,
           component_policy: String.t(),
           binding_digest: String.t() | nil
         }
 
-  @typedoc """
-  What a carried binding is held to: the entry's kind, provider, status,
-  digest and the scopes an OAuth entry was authorized for (`[]` for
-  another kind).
-  """
+  @typedoc "What a carried binding is held to: the entry's kind, provider, status and digest."
   @type binding_facts :: %{
           kind: String.t(),
           provider_hint: String.t(),
           status: String.t(),
-          binding_digest: String.t() | nil,
-          oauth_scopes: [String.t()]
+          binding_digest: String.t() | nil
         }
 
   @typedoc "The running node's facts, taken from the attempt and never from a request."
@@ -282,8 +272,12 @@ defmodule Sanctum.InstanceEntries do
     end
   end
 
+  # A damaged row (`held_kind/1`) is offered to no one.
   defp offered_entries(ctx) do
-    with :ok <- person(ctx), do: Store.offered(Context.actor(ctx), [])
+    with :ok <- person(ctx),
+         {:ok, entries} <- Store.offered(Context.actor(ctx), []) do
+      {:ok, Enum.filter(entries, &(held_kind(&1) == :ok))}
+    end
   end
 
   @doc """
@@ -345,8 +339,9 @@ defmodule Sanctum.InstanceEntries do
   (`t:binding_view/0`). The refusals are `resolve/4`'s, in its order, up
   to the status: an anonymous caller (`{:error, :anonymous_denied}`), a
   person not active on this server (`{:error, :denied}`), an entry not
-  offered to them (`{:error, :not_offered}`) and one offered but not
-  active (`{:error, {:entry_unavailable, status}}`). Nothing is unsealed
+  offered to them (`{:error, :not_offered}`), a damaged row
+  (`{:error, :corrupt}`) and one offered but not active
+  (`{:error, {:entry_unavailable, status}}`). Nothing is unsealed
   and no use is claimed: whether a node may use the entry is the
   component policy's (`admits?/3`), and a request's is the attach path's.
   """
@@ -355,6 +350,7 @@ defmodule Sanctum.InstanceEntries do
     with :ok <- person(ctx),
          :ok <- standing(ctx.user_id),
          {:ok, entry} <- Store.get_offered(Context.actor(ctx), entry_id, active_only: false),
+         :ok <- held_kind(entry),
          :ok <- active(entry) do
       {:ok, Map.put(offer_view(entry), :binding_digest, entry.binding_digest)}
     end
@@ -363,23 +359,18 @@ defmodule Sanctum.InstanceEntries do
   @doc """
   The facts a boot's revision with no person holds a carried instance
   binding to (`Sanctum.Consent.Bootstrap`, its only caller): the entry's
-  `kind`, `provider_hint`, `status`, stored `binding_digest` and
-  `oauth_scopes`, read under the platform's actor, or
-  `{:error, :not_found}`. Metadata only:
+  `kind`, `provider_hint`, `status` and stored `binding_digest`, read
+  under the platform's actor, `{:error, :not_found}`, or
+  `{:error, :corrupt}` for a damaged row. Metadata only:
   it unseals nothing, offers nothing and names no person, so it decides
   no one's use; the attach path (`resolve/4`) holds each request to the
   audience, the policy and the caps.
   """
   @spec binding_facts(String.t()) :: {:ok, binding_facts()} | {:error, term()}
   def binding_facts(entry_id) when is_binary(entry_id) do
-    with {:ok, entry} <- Store.get(actor(), entry_id) do
-      {:ok,
-       entry
-       |> Map.take([:kind, :provider_hint, :status, :binding_digest])
-       |> Map.put(
-         :oauth_scopes,
-         if(entry.kind == "oauth", do: decode_list(entry.oauth_scopes), else: [])
-       )}
+    with {:ok, entry} <- Store.get(actor(), entry_id),
+         :ok <- held_kind(entry) do
+      {:ok, Map.take(entry, [:kind, :provider_hint, :status, :binding_digest])}
     end
   end
 
@@ -392,9 +383,9 @@ defmodule Sanctum.InstanceEntries do
 
     * `:name` (required) — unique among living instance entries
     * `:kind` (required) — `"api_key" | "bundle"`. An `oauth` entry is
-      refused `{:kind_unavailable, "oauth"}`: nothing can dispense an
-      instance entry's token, since an OAuth dispense refreshes under an
-      athanor's actor and storage
+      refused `{:kind_unavailable, "oauth"}`: an OAuth account is an
+      athanor's own entry, since its dispense refreshes the token under
+      that athanor's actor and storage
     * `:fields` — `%{name => value}` material (default empty)
     * `:provider_hint` — immutable; defaults `""`
     * `:destination` (required) — a `Prima.Destination` map naming its
@@ -448,7 +439,6 @@ defmodule Sanctum.InstanceEntries do
                  id: id,
                  name: name,
                  kind: kind,
-                 provenance: "user",
                  status: "active",
                  sealed_payload: sealed,
                  binding_digest: digest,
@@ -482,6 +472,7 @@ defmodule Sanctum.InstanceEntries do
       when is_binary(id) and is_map(fields) and is_integer(expected) do
     with :ok <- administer(ctx),
          {:ok, entry} <- rotatable(id),
+         :ok <- held_kind(entry),
          :ok <- expected_revision(entry, expected),
          :ok <- check_schema(entry, fields),
          :ok <-
@@ -490,8 +481,7 @@ defmodule Sanctum.InstanceEntries do
              arguments: params,
              resource: entry.name
            }),
-         {:ok, current} <- unseal(entry),
-         {:ok, json} <- Payload.encode_material(fields, current["oauth"]),
+         {:ok, json} <- Payload.encode_material(fields, nil),
          {:ok, sealed} <- seal(json, CipherAAD.instance_entry(entry.id, entry.provider_hint)),
          {:ok, %{payload_rev: rev}} <-
            Store.commit_payload(actor(), id, %{
@@ -506,9 +496,8 @@ defmodule Sanctum.InstanceEntries do
 
   def rotate(%Context{}, _params), do: {:error, :invalid_rotation}
 
-  # A rotation is decided against the revision its caller read: the stored
-  # OAuth block is merged only into that revision, and a moved one is a
-  # conflict before anything is confirmed, unsealed or merged.
+  # A rotation is decided against the revision its caller read: a moved one
+  # is a conflict before anything is confirmed or sealed.
   defp expected_revision(%{payload_rev: rev}, rev), do: :ok
   defp expected_revision(_entry, _expected), do: {:error, :payload_conflict}
 
@@ -838,8 +827,10 @@ defmodule Sanctum.InstanceEntries do
 
   In order: the context's person is active on this server, read from
   their own row before any audience (`{:error, :denied}` for one denied
-  or with no row); the entry is offered to them (`{:error, :not_offered}`)
-  and active (`{:error, {:entry_unavailable, status}}`); the stored component policy admits the node (`admits?/3`,
+  or with no row); the entry is offered to them (`{:error, :not_offered}`),
+  of an instance entry's kind (`{:error, :corrupt}` for a damaged row) and
+  active (`{:error, {:entry_unavailable, status}}`); the stored component
+  policy admits the node (`admits?/3`,
   `{:error, :component_not_admitted}`); the request stays inside the
   entry's destination (`{:error, :destination_mismatch}`); and one use is
   claimed under the entry's caps or, unset, the settings' defaults
@@ -859,6 +850,7 @@ defmodule Sanctum.InstanceEntries do
     with :ok <- person(ctx),
          :ok <- standing(ctx.user_id),
          {:ok, entry} <- Store.get_offered(Context.actor(ctx), entry_id, active_only: false),
+         :ok <- held_kind(entry),
          :ok <- active(entry),
          :ok <- admitted(ctx, entry, facts),
          :ok <- inside(entry, uri, method),
@@ -915,6 +907,19 @@ defmodule Sanctum.InstanceEntries do
 
   defp active(%{status: "active"}), do: :ok
   defp active(%{status: status}), do: {:error, {:entry_unavailable, status}}
+
+  # A row of a kind no instance entry holds (`@kinds`) is damage: nothing
+  # offers, binds, resolves or rotates it. Its id alone is logged.
+  defp held_kind(%{kind: kind}) when kind in @kinds, do: :ok
+
+  defp held_kind(entry) do
+    Logger.warning(
+      "[Sanctum.InstanceEntries] instance entry #{entry.id} is of a kind no instance " <>
+        "entry holds and is refused"
+    )
+
+    {:error, :corrupt}
+  end
 
   defp admitted(ctx, entry, facts) do
     if admits?(ctx, entry, facts), do: :ok, else: {:error, :component_not_admitted}
@@ -1193,9 +1198,7 @@ defmodule Sanctum.InstanceEntries do
       kind: entry.kind,
       provider_hint: entry.provider_hint,
       status: entry.status,
-      provenance: entry.provenance,
       field_names: decode_list(entry.field_names),
-      oauth_scopes: decode_list(entry.oauth_scopes),
       destination: decode_destination(entry.destination),
       attach_only: true,
       binding_digest: entry.binding_digest,
@@ -1217,7 +1220,6 @@ defmodule Sanctum.InstanceEntries do
       name: entry.name,
       kind: entry.kind,
       provider_hint: entry.provider_hint,
-      oauth_scopes: if(entry.kind == "oauth", do: decode_list(entry.oauth_scopes), else: []),
       destination: decode_destination(entry.destination),
       component_policy: entry.component_policy
     }

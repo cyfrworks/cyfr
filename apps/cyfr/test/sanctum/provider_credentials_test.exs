@@ -64,7 +64,7 @@ defmodule Sanctum.ProviderCredentialsTest do
                ProviderCredentials.fetch_for_oauth(ctx.athanor_id, "google")
     end
 
-    test "a context that is no paired device's takes no device hold, and stores as before",
+    test "a context that is no paired device's takes no device hold, and stores",
          %{ctx: ctx} do
       confirmed =
         Sanctum.TestContext.confirmed_change(

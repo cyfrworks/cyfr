@@ -81,8 +81,8 @@ defmodule Sanctum.VaultReaderTest do
       {entry, resource} = mint_material_entry(ctx, %{"a" => "sealed-a", "b" => "sealed-b"})
       before = last_used_at(ctx, entry)
 
-      # An edge stored before projections named their fields carries no
-      # projection at all; the rest are the same defect spelled otherwise.
+      # An edge that carries no projection at all, and the same defect
+      # spelled otherwise.
       unnamed = [
         Map.delete(resource, :projection),
         %{resource | projection: nil},
@@ -99,7 +99,7 @@ defmodule Sanctum.VaultReaderTest do
             assert {:error, :corrupt} = VaultReader.fetch(ctx, edge, @dispense)
           end)
 
-        assert log =~ "re-consent to the component's current version"
+        assert log =~ "consent to the component again"
         refute log =~ "sealed-"
       end
 
@@ -204,7 +204,7 @@ defmodule Sanctum.VaultReaderTest do
           attach_only: true,
           kind: "oauth",
           provider_hint: "google",
-          oauth: %{"access_token" => "tok-attached", "token_type" => "bearer"},
+          oauth: %{"access_token" => "tok-attached"},
           oauth_scopes: Jason.encode!(["gmail.readonly"])
         })
 
@@ -327,7 +327,7 @@ defmodule Sanctum.VaultReaderTest do
         mint_material_entry(ctx, %{}, %{
           kind: "oauth",
           provider_hint: "google",
-          oauth: %{"access_token" => "tok-once", "token_type" => "bearer"},
+          oauth: %{"access_token" => "tok-once"},
           oauth_scopes: Jason.encode!(["gmail.readonly"])
         })
 
@@ -347,7 +347,7 @@ defmodule Sanctum.VaultReaderTest do
         mint_material_entry(ctx, %{}, %{
           kind: "oauth",
           provider_hint: "google",
-          oauth: %{"access_token" => "tok-other", "token_type" => "bearer"},
+          oauth: %{"access_token" => "tok-other"},
           oauth_scopes: Jason.encode!(["gmail.readonly"])
         })
 
@@ -480,7 +480,7 @@ defmodule Sanctum.VaultReaderTest do
                VaultReader.unseal_for(ctx.athanor_id, "attached", "https://api.example.com/mcp")
     end
 
-    test "a missing or inactive entry is refused as before", %{ctx: ctx} do
+    test "a missing or inactive entry is refused", %{ctx: ctx} do
       mint_material_entry(ctx, %{"k" => "v"}, %{name: "revoked", status: "revoked"})
       url = "https://api.example.com/mcp"
 
@@ -512,7 +512,7 @@ defmodule Sanctum.VaultReaderTest do
       assert last_used_at(ctx, entry) == before
     end
 
-    test "a missing or inactive entry is refused as before", %{ctx: ctx} do
+    test "a missing or inactive entry is refused", %{ctx: ctx} do
       mint_material_entry(ctx, %{"k" => "v"}, %{name: "revoked-env", status: "revoked"})
 
       assert {:error, :not_found} = VaultReader.unseal_disclosed(ctx.athanor_id, "absent")
@@ -571,7 +571,7 @@ defmodule Sanctum.VaultReaderTest do
   end
 
   describe "oauth_token/4 — material" do
-    @valid_oauth %{"access_token" => "tok-live", "token_type" => "bearer"}
+    @valid_oauth %{"access_token" => "tok-live"}
     @readonly Jason.encode!(["gmail.readonly"])
 
     test "dispenses a valid token without touching any provider", %{ctx: ctx} do
@@ -616,8 +616,8 @@ defmodule Sanctum.VaultReaderTest do
 
       assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, of_acme, "acme", @dispense)
 
-      # An entry naming no provider, as no create writes one now, serves no
-      # provider's dispense at all.
+      # An entry naming no provider, which a create refuses and the store
+      # holds only as damage, serves no provider's dispense at all.
       {_entry, of_none} =
         mint_material_entry(ctx, %{}, %{
           provider_hint: "",
@@ -649,12 +649,11 @@ defmodule Sanctum.VaultReaderTest do
     end
 
     test "a narrower projection never dispenses the full-scope token", %{ctx: ctx} do
-      # Google's preset does not attenuate a refresh, so a token for fewer
-      # scopes than the entry holds cannot be had: the entry's broader one
-      # is never served in its place, whether it is live or expired, and no
+      # An entry holds one token, for its own scopes: the broader token is
+      # never served for fewer, whether it is live or expired, and no
       # refresh is attempted for it.
       attempts = attach_refresh_counter()
-      live = %{"access_token" => "tok-wide", "refresh_token" => "rt-1", "token_type" => "bearer"}
+      live = %{"access_token" => "tok-wide", "refresh_token" => "rt-1"}
       expired = Map.put(live, "expires_at", "2020-01-01T00:00:00Z")
 
       for oauth <- [live, expired] do
@@ -732,7 +731,7 @@ defmodule Sanctum.VaultReaderTest do
             assert {:error, :corrupt} = VaultReader.oauth_token(ctx, edge, "google", @dispense)
           end)
 
-        assert log =~ "re-consent to the component's current version"
+        assert log =~ "consent to the component again"
         refute log =~ "tok-live"
       end
 
@@ -766,244 +765,6 @@ defmodule Sanctum.VaultReaderTest do
 
       assert {:error, :anonymous_denied} =
                VaultReader.oauth_token(%{ctx | anonymous: true}, resource, "google", @dispense)
-    end
-  end
-
-  # A provider no shipped preset is, shown to attenuate a refresh: its
-  # preset says a refresh's `scope` yields a token limited to it, and its
-  # token endpoint answers what the test scripts, in order, telling the
-  # test each request it was sent (`:sanctum, :scripted_oauth_provider`).
-  defmodule ScriptedProvider do
-    @moduledoc false
-
-    @hint "scripted-idp"
-    @endpoints %{
-      "authorize_url" => "https://idp.scripted.test/authorize",
-      "token_url" => "https://idp.scripted.test/token"
-    }
-
-    def hint, do: @hint
-    def endpoints, do: @endpoints
-
-    def preset(@hint), do: %{endpoints: @endpoints, attenuates_scope: true}
-    def preset(_hint), do: nil
-
-    def post(url, _headers, body) do
-      {test, answer} =
-        Agent.get_and_update(__MODULE__, fn
-          {test, [next | rest]} -> {{test, next}, {test, rest}}
-          {test, []} -> {{test, {:error, "unscripted request"}}, {test, []}}
-        end)
-
-      send(test, {:token_request, url, URI.decode_query(body)})
-      answer
-    end
-  end
-
-  describe "oauth_token/4 — a provider that attenuates a refresh" do
-    @wide ["mail.read", "mail.send"]
-    @bundle %{
-      "access_token" => "tok-wide",
-      "refresh_token" => "rt-1",
-      "token_type" => "bearer",
-      "scopes" => @wide
-    }
-
-    setup %{ctx: ctx} do
-      prior = Application.fetch_env(:sanctum, :scripted_oauth_provider)
-      Application.put_env(:sanctum, :scripted_oauth_provider, ScriptedProvider)
-
-      on_exit(fn ->
-        case prior do
-          {:ok, value} -> Application.put_env(:sanctum, :scripted_oauth_provider, value)
-          :error -> Application.delete_env(:sanctum, :scripted_oauth_provider)
-        end
-      end)
-
-      hint = ScriptedProvider.hint()
-
-      entering =
-        Sanctum.TestContext.confirmed(ctx, :credential_entry, %{
-          operation: "oauth.set_client",
-          arguments: %{provider: hint, client_id: "cid", client_secret: "csec"},
-          resource: hint
-        })
-
-      :ok = Sanctum.ProviderCredentials.put(entering, hint, "cid", "csec")
-
-      {entry, resource} =
-        mint_material_entry(ctx, %{}, %{
-          provider_hint: hint,
-          oauth: @bundle,
-          oauth_endpoints: Jason.encode!(ScriptedProvider.endpoints()),
-          oauth_scopes: Jason.encode!(@wide)
-        })
-
-      narrower = Map.put(resource, :projection, %{fields: [], scopes: ["mail.read"]})
-      %{entry: entry, whole: resource, narrower: narrower}
-    end
-
-    defp script!(answers) do
-      test = self()
-
-      start_supervised!(%{
-        id: ScriptedProvider,
-        start: {Agent, :start_link, [fn -> {test, answers} end, [name: ScriptedProvider]]}
-      })
-
-      :ok
-    end
-
-    defp held(ctx, entry) do
-      {:ok, row} = Arca.VaultStorage.get(actor(ctx), entry.id)
-      aad = CipherAAD.vault_entry(ctx.athanor_id, entry.id, entry.provider_hint)
-      {:ok, plaintext} = Sanctum.Cipher.decrypt(row.sealed_payload, aad)
-      {:ok, payload} = Payload.decode(plaintext)
-      {row, payload["oauth"]}
-    end
-
-    test "dispenses a token obtained with the narrower scope, then holds it", %{
-      ctx: ctx,
-      entry: entry,
-      whole: whole,
-      narrower: narrower
-    } do
-      script!([
-        {:ok, %{"access_token" => "tok-narrow", "scope" => "mail.read", "expires_in" => 3600}}
-      ])
-
-      assert {:ok, "tok-narrow"} =
-               VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
-
-      # The refresh asked for exactly the projected scopes, with the
-      # entry's refresh token, at the entry's own token endpoint.
-      assert_received {:token_request, "https://idp.scripted.test/token", params}
-      assert params["grant_type"] == "refresh_token"
-      assert params["refresh_token"] == "rt-1"
-      assert params["scope"] == "mail.read"
-
-      {_row, oauth} = held(ctx, entry)
-      assert %{"mail.read" => %{"access_token" => "tok-narrow"}} = oauth["tokens"]
-      assert oauth["access_token"] == "tok-wide"
-
-      # The same projection again is answered from what is held: one
-      # refresh, then the cache.
-      assert {:ok, "tok-narrow"} =
-               VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
-
-      refute_received {:token_request, _, _}
-
-      # And the whole projection is still the entry's own token.
-      assert {:ok, "tok-wide"} =
-               VaultReader.oauth_token(ctx, whole, ScriptedProvider.hint(), @dispense)
-    end
-
-    test "refuses when the provider answers wider, holding nothing", %{
-      ctx: ctx,
-      entry: entry,
-      narrower: narrower
-    } do
-      script!([
-        {:ok, %{"access_token" => "tok-wider", "scope" => "mail.read mail.send"}},
-        {:ok, %{"access_token" => "tok-elsewhere", "scope" => "mail.read calendar"}}
-      ])
-
-      for _answer <- 1..2 do
-        assert {:error, :scope_not_attenuable} =
-                 VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
-
-        assert_received {:token_request, _, %{"scope" => "mail.read"}}
-      end
-
-      {row, oauth} = held(ctx, entry)
-      refute Map.has_key?(oauth, "tokens")
-      assert oauth["access_token"] == "tok-wide"
-      assert oauth["refresh_token"] == "rt-1"
-      assert row.payload_rev == entry.payload_rev
-    end
-
-    test "refuses an answer naming no scope, and keeps the refresh token it rotated", %{
-      ctx: ctx,
-      entry: entry,
-      narrower: narrower
-    } do
-      script!([
-        {:ok, %{"access_token" => "tok-unsaid", "refresh_token" => "rt-2", "expires_in" => 3600}}
-      ])
-
-      assert {:error, :scope_not_attenuable} =
-               VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
-
-      # The provider may already have retired rt-1 on answering, so its
-      # successor is kept, while the access token it named is neither held
-      # nor dispensed.
-      {_row, oauth} = held(ctx, entry)
-      refute Map.has_key?(oauth, "tokens")
-      assert oauth["refresh_token"] == "rt-2"
-      assert oauth["access_token"] == "tok-wide"
-    end
-
-    test "callers asking for one scope set at once share one refresh", %{
-      ctx: ctx,
-      narrower: narrower
-    } do
-      script!([
-        {:ok, %{"access_token" => "tok-narrow", "scope" => "mail.read", "expires_in" => 3600}}
-      ])
-
-      results =
-        1..4
-        |> Enum.map(fn _ ->
-          Task.async(fn ->
-            VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
-          end)
-        end)
-        |> Task.await_many(30_000)
-
-      assert Enum.all?(results, &(&1 == {:ok, "tok-narrow"}))
-      assert_received {:token_request, _, _}
-      refute_received {:token_request, _, _}
-    end
-
-    test "a full-scope refresh keeps the tokens held for narrower scope sets", %{
-      ctx: ctx,
-      entry: entry,
-      whole: whole,
-      narrower: narrower
-    } do
-      script!([
-        {:ok, %{"access_token" => "tok-narrow", "scope" => "mail.read", "expires_in" => 3600}},
-        {:ok, %{"access_token" => "tok-wide-2", "expires_in" => 3600}}
-      ])
-
-      assert {:ok, "tok-narrow"} =
-               VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
-
-      # The entry's own token expires; its refresh sends no scope.
-      {_row, oauth} = held(ctx, entry)
-      expire_whole!(ctx, entry, oauth)
-
-      assert {:ok, "tok-wide-2"} =
-               VaultReader.oauth_token(ctx, whole, ScriptedProvider.hint(), @dispense)
-
-      assert_received {:token_request, _, %{"scope" => "mail.read"}}
-      assert_received {:token_request, _, full}
-      refute Map.has_key?(full, "scope")
-
-      {_row, oauth} = held(ctx, entry)
-      assert %{"mail.read" => %{"access_token" => "tok-narrow"}} = oauth["tokens"]
-
-      assert {:ok, "tok-narrow"} =
-               VaultReader.oauth_token(ctx, narrower, ScriptedProvider.hint(), @dispense)
-    end
-
-    defp expire_whole!(ctx, entry, oauth) do
-      {:ok, row} = Arca.VaultStorage.get(actor(ctx), entry.id)
-      aad = CipherAAD.vault_entry(ctx.athanor_id, entry.id, entry.provider_hint)
-      expired = Map.put(oauth, "expires_at", "2020-01-01T00:00:00Z")
-      {:ok, json} = Payload.encode_material(%{}, expired)
-      {:ok, sealed} = Sanctum.Cipher.encrypt(json, aad)
-      :ok = Arca.VaultStorage.rotate_payload(actor(ctx), entry.id, row.payload_rev, sealed)
     end
   end
 

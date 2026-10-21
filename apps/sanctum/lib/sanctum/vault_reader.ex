@@ -5,17 +5,14 @@ defmodule Sanctum.VaultReader do
   Resolve a consent edge's vault resource into credential material.
 
   This is the **only** path by which an authority execution reaches
-  credentials — the callee-keyed grant plane is never consulted. Every
-  check fails closed, in order:
+  credentials. Every check fails closed, in order:
 
   1. the caller is not anonymous (a public invocation must never reach
      operator credentials, whatever its edges say)
   2. the edge's projection names what it reads: a key or bundle edge its
-     non-empty `fields` (`fetch/2`), an OAuth edge its non-empty `scopes`
-     (`oauth_token/3`). An edge without one — including every edge stored
-     before projections named their fields — is corrupt and dispenses
-     nothing; re-consenting to the component's current version writes a
-     named projection
+     non-empty `fields` (`fetch/3`), an OAuth edge its non-empty `scopes`
+     (`oauth_token/4`). An edge without one is corrupt and dispenses
+     nothing; consenting to the component again writes a named projection
   3. the entry exists in the caller's tenant and is `active`
   4. the binding digest **derived from the row's binding fields** equals
      the consent's copy — the stored column is a cache, never an
@@ -54,10 +51,9 @@ defmodule Sanctum.VaultReader do
   itself: secret fields resolve from the sealed `fields` map, OAuth tokens
   dispense through `Sanctum.Vault.OAuth` with refresh single-flighted per
   entry. An OAuth `projection.scopes` is enforced at dispense: the
-  requested scopes must be a subset of what the entry was authorized for,
-  and a projection naming fewer is answered only by a token a refresh the
-  provider attenuates obtained for exactly those scopes, never by the
-  entry's broader token (`Sanctum.Vault.OAuth.dispense/5`).
+  requested scopes must be exactly the ones the entry was authorized for,
+  and a projection naming fewer is refused, never answered the entry's
+  broader token (`Sanctum.Vault.OAuth.dispense/5`).
   """
 
   require Logger
@@ -102,7 +98,6 @@ defmodule Sanctum.VaultReader do
           | :destination_mismatch
           | :disclosure_refused
           | :unseal_failed
-          | :invalid_payload
           | {:invalid_payload, atom() | tuple()}
           | {:provider_mismatch, String.t()}
           | {:scope_projection_unsatisfiable, [String.t()]}
@@ -151,8 +146,7 @@ defmodule Sanctum.VaultReader do
   for no provider (`{:provider_mismatch, provider}`) — a consent for one
   provider can never dispense another's token. Scopes the
   entry lacks are refused `{:scope_projection_unsatisfiable, missing}`,
-  and fewer than it holds are dispensed only where its provider
-  attenuates a refresh (`:scope_not_attenuable` otherwise). A token is
+  and fewer than it holds `:scope_not_attenuable`. A token is
   dispensed only from a disclosed entry: an attach-only one answers
   `{:error, :disclosure_refused}` before it is unsealed. The binding's
   lifetime is held as `fetch/3` holds it, after every other check, so a
@@ -533,8 +527,8 @@ defmodule Sanctum.VaultReader do
 
   # A projection asking for scopes the entry was never authorized for is
   # unsatisfiable and refused, never silently served with a broader token.
-  # Whether fewer than the entry holds can be served is the dispense's to
-  # decide, by the provider's attenuation. `oauth_projection/1` has already
+  # One asking for fewer than the entry holds is the dispense's to refuse
+  # (`Sanctum.Vault.OAuth.dispense/5`). `oauth_projection/1` has already
   # refused an edge that names no scopes.
   defp check_scope_projection(entry, %{projection: %{scopes: scopes}}) do
     case scopes -- decode_list(entry.oauth_scopes, "oauth_scopes") do
@@ -578,7 +572,7 @@ defmodule Sanctum.VaultReader do
     Logger.warning(
       "[Sanctum.VaultReader] the consent edge for vault entry #{entry_label(resource)} " <>
         "names no projection and dispenses nothing; " <>
-        "re-consent to the component's current version"
+        "consent to the component again to write one"
     )
 
     {:error, :corrupt}

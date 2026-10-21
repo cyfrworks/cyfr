@@ -3,8 +3,7 @@
 
 defmodule Sanctum.ProseErrorInventoryTest do
   @moduledoc """
-  The prose errors Sanctum still answers, listed, so their number can only
-  fall.
+  The prose errors Sanctum answers, listed, so their number can only fall.
 
   A bare sentence, `{:error, "…"}`, is classed `internal` by the refusal
   vocabulary (`Prima.Refusal`): a person told a rate limit or a duplicate
@@ -69,8 +68,8 @@ defmodule Sanctum.ProseErrorInventoryTest do
      "Sanctum.Providers.TinctureVisibility.handle/2"} => 1,
     {"apps/sanctum/lib/sanctum/providers/webhook.ex", "Sanctum.Providers.Webhook.handle/2"} => 19,
     {"apps/sanctum/lib/sanctum/vault.ex", "Sanctum.Vault.rotation_oauth/2"} => 1,
-    {"apps/sanctum/lib/sanctum/vault/oauth.ex", "Sanctum.Vault.OAuth.http_post/4"} => 3,
-    {"apps/sanctum/lib/sanctum/vault/oauth.ex", "Sanctum.Vault.OAuth.https_or_refuse/1"} => 1,
+    {"apps/sanctum/lib/sanctum/vault/oauth.ex", "Sanctum.Vault.OAuth.http_post/3"} => 3,
+    {"apps/sanctum/lib/sanctum/vault/oauth.ex", "Sanctum.Vault.OAuth.require_https/1"} => 1,
     {"apps/sanctum/lib/sanctum/vault/oauth_grant.ex",
      "Sanctum.Vault.OAuthGrant.malformed_response/0"} => 1,
     {"apps/sanctum/lib/sanctum/vault/oauth_grant.ex", "Sanctum.Vault.OAuthGrant.seal/2"} => 1,

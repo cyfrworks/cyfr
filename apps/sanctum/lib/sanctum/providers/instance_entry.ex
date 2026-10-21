@@ -591,8 +591,8 @@ defmodule Sanctum.Providers.InstanceEntry do
     do:
       {:invalid_argument,
        "kind_unavailable: an instance entry is an API key or a bundle of fields; an OAuth " <>
-         "account is entered in an athanor's own vault, since nothing can yet dispense an " <>
-         "instance entry's token"}
+         "account is entered in an athanor's own vault, whose refresh of its token runs " <>
+         "under that athanor"}
 
   defp fmt({:entry_unavailable, status}) when is_binary(status),
     do: {:invalid_argument, "entry_unavailable: the entry is #{status}"}

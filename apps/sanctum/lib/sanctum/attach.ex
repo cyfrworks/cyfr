@@ -27,11 +27,12 @@ defmodule Sanctum.Attach do
        `Sanctum.VaultReader.load_and_unseal/2` (active, at the consented
        binding digest, unsealed), then its destination against the
        request; an instance entry through `Sanctum.InstanceEntries`, held
-       first to the digest the consent approved (`:binding_went_stale`)
-       and refused for an OAuth entry (`{:entry_unavailable, "oauth"}`),
+       first to the digest the consent approved (`:binding_went_stale`),
        then resolved under its audience, component policy, destination
-       and caps (`Sanctum.InstanceEntries.resolve/4`); a provided value
-       from the resource itself, held to its destination.
+       and caps (`Sanctum.InstanceEntries.resolve/4`); an instance entry
+       holds no token, so an OAuth projection of one attaches nothing
+       (`:no_oauth_material`); a provided value from the resource itself,
+       held to its destination.
 
   An OAuth entry's value is the token `Sanctum.Vault.OAuth.dispense/5`
   answers for the projection's scopes. The answer's `masking` lists the
@@ -168,11 +169,11 @@ defmodule Sanctum.Attach do
   # An instance entry is the instance's: offered to the context's person,
   # held to the digest the consent approved before any claim, and resolved
   # under its live policy, destination and caps. An instance entry holds
-  # no token, so an OAuth one attaches nothing.
+  # no token, so a projection naming scopes attaches nothing from one.
   defp instance(ctx, vault, take, request, facts) do
     with {:ok, view} <- InstanceEntries.binding(ctx, vault.entry_id),
          :ok <- same_binding(view, vault),
-         {:ok, field} <- instance_field(view, take),
+         {:ok, field} <- instance_field(take),
          {:ok, _view, payload} <-
            InstanceEntries.resolve(ctx, vault.entry_id, request, %{
              node_ref: facts.node_ref,
@@ -190,9 +191,8 @@ defmodule Sanctum.Attach do
 
   defp same_binding(_view, _vault), do: {:error, :binding_went_stale}
 
-  defp instance_field(%{kind: "oauth"}, _take), do: {:error, {:entry_unavailable, "oauth"}}
-  defp instance_field(_view, :token), do: {:error, {:entry_unavailable, "oauth"}}
-  defp instance_field(_view, {:field, field}), do: {:ok, field}
+  defp instance_field(:token), do: {:error, :no_oauth_material}
+  defp instance_field({:field, field}), do: {:ok, field}
 
   defp field_value(%{"fields" => fields}, field) do
     case Map.fetch(fields, field) do

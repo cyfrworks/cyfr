@@ -355,7 +355,7 @@ defmodule Sanctum.AttachTest do
         entry!(ctx, %{
           kind: "oauth",
           provider_hint: "google",
-          oauth: %{"access_token" => "ya29.attach", "token_type" => "Bearer"},
+          oauth: %{"access_token" => "ya29.attach"},
           oauth_scopes: ["scope.a"]
         })
 
@@ -613,33 +613,16 @@ defmodule Sanctum.AttachTest do
       assert usage(entry.id) == 0
     end
 
-    test "an OAuth instance entry attaches nothing, with no claim or unseal", %{
+    test "an OAuth projection attaches nothing from one, with no claim", %{
       ctx: ctx,
       admin: admin
     } do
-      # Creating one is refused (`Sanctum.InstanceEntries.create/2`), so the
-      # row is written by the store directly.
-      api = instance!(admin)
-      {:ok, stored} = Arca.InstanceEntries.get(Prima.Actor.system(), api.id)
+      # An instance entry holds a key or a bundle of fields, never a token.
+      entry = instance!(admin)
+      {vault, facts} = instance_bound!(ctx, entry)
+      vault = %{vault | projection: %{fields: [], scopes: ["scope.a"]}}
 
-      {:ok, oauth} =
-        Arca.InstanceEntries.put(Prima.Actor.system(), %{
-          name: "shared-oauth-#{System.unique_integer([:positive])}",
-          kind: "oauth",
-          provider_hint: "google",
-          field_names: "[]",
-          binding_digest: stored.binding_digest,
-          destination: stored.destination,
-          status: "active",
-          sealed_payload: "never opened",
-          audience: "everyone",
-          component_policy: "any",
-          created_by: admin.user_id
-        })
-
-      {vault, facts} = instance_bound!(ctx, oauth)
-
-      assert {:error, {:entry_unavailable, "oauth"}} =
+      assert {:error, :no_oauth_material} =
                Attach.resolve(
                  ctx,
                  vault,
@@ -648,7 +631,7 @@ defmodule Sanctum.AttachTest do
                  facts
                )
 
-      assert usage(oauth.id) == 0
+      assert usage(entry.id) == 0
     end
 
     test "at its cap, refused with the reset", %{ctx: ctx, admin: admin} do

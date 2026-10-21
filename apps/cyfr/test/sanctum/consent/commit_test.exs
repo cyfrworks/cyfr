@@ -848,15 +848,15 @@ defmodule Sanctum.Consent.CommitTest do
       view
     end
 
-    test "a consent narrowing scopes on a candidate that cannot be narrowed is refused at commit",
+    test "a consent narrowing an OAuth entry's scopes is refused at commit",
          %{ctx: ctx} do
       ref = "reagent:local.commit-narrow"
       publish!(ctx, "commit-narrow", "1.0.0", @mail_needs)
       entry = oauth_entry!(ctx, ["gmail.readonly", "gmail.send"])
 
       # The need's own scopes, and the same narrowing named outright, are
-      # fewer than the entry holds, and Google's preset does not attenuate
-      # a refresh: no preview offers it.
+      # fewer than the entry holds, and a token is dispensed for every
+      # scope its entry holds: no preview offers it.
       narrowed = [
         %{ref: ref, bindings: [%{need: "mail", entry_id: entry.id}]},
         %{ref: ref, bindings: [%{need: "mail", entry_id: entry.id, scopes: ["gmail.readonly"]}]}

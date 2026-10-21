@@ -13,10 +13,11 @@ defmodule Sanctum.Consent.Plan do
   bindings no longer match and the commit surfaces `consent_conflict`
   instead of granting against stale facts.
 
-  Needs vocabulary: until manifests declare named needs, every component
-  exposes the single ingress slot, spelled `"@ingress"` in decisions —
-  the edge the bound credential rides. The blob edge-key grammar reserves
-  `@`-prefixed names, so a future manifest need can never collide.
+  Needs vocabulary: a manifest's declared needs are its slots, and a
+  manifest that declares no needs exposes the single ingress slot,
+  spelled `"@ingress"` in decisions — the edge the bound credential
+  rides. The blob edge-key grammar reserves `@`-prefixed names, so a
+  declared need can never collide with it.
 
   A dependency edge of the closure whose target declares a credential
   need is a `dependency_needs` row: who lends, what it needs, and which
@@ -57,11 +58,9 @@ defmodule Sanctum.Consent.Plan do
   policy fails its digest or does not parse, refuses the plan
   `{:corrupt, {:profile, profile_id}}`: its narrowing is unknown.
 
-  `candidates` are the athanor's active entries. An OAuth candidate answers
-  `narrowable`, whether a token for fewer of its scopes can be dispensed,
-  which is so only where its provider attenuates a refresh
-  (`Sanctum.Vault.OAuth.attenuates_scope?/1`); a need asking for fewer
-  scopes than a candidate that is not narrowable holds is not met by it.
+  `candidates` are the athanor's active entries. An OAuth entry's token is
+  dispensed for every scope the entry holds, never fewer, so a need is met
+  only by an OAuth candidate holding exactly its scopes.
 
   ## Each need's choice
 
@@ -72,8 +71,8 @@ defmodule Sanctum.Consent.Plan do
       entries offered to the person (`Sanctum.InstanceEntries.offered/1`)
       of the need's kind whose `provider_hint` is the need's qualifier,
       each `%{source: "own" | "instance", entry_id | instance_entry_id,
-      name, kind, provider, destination, disclosed}`, `narrowable` beside
-      an OAuth one, which must hold the need's scopes as above. An
+      name, kind, provider, destination, disclosed}`, an OAuth one
+      holding exactly the need's scopes, as above. An
       instance entry is a candidate only where its component policy
       admits the node the need is bound on (`admits?/3`, with the node's
       release digest in the closure). A need the component reads itself —
@@ -131,7 +130,6 @@ defmodule Sanctum.Consent.Plan do
   alias Sanctum.Consent.ShapeDerivation
   alias Sanctum.Consent.ShapeDigest
   alias Sanctum.Context
-  alias Sanctum.Vault.OAuth
 
   require Logger
 
@@ -691,7 +689,6 @@ defmodule Sanctum.Consent.Plan do
         destination: canonical_destination(entry.destination),
         disclosed: not entry.attach_only
       }
-      |> put_narrowable(entry)
 
     if matches?(candidate, entry.oauth_scopes, need) and
          (candidate.disclosed or not reads_itself?(need)),
@@ -712,9 +709,8 @@ defmodule Sanctum.Consent.Plan do
         destination: canonical_destination(entry.destination),
         disclosed: false
       }
-      |> put_narrowable(entry)
 
-    if not reads_itself?(need) and matches?(candidate, entry.oauth_scopes, need) and
+    if not reads_itself?(need) and matches?(candidate, [], need) and
          Sanctum.InstanceEntries.admits?(ctx, entry, facts),
        do: [candidate],
        else: []
@@ -729,21 +725,12 @@ defmodule Sanctum.Consent.Plan do
       scopes_met?(candidate, scopes, need)
   end
 
-  # An OAuth candidate holds the need's scopes and either exactly them or
-  # can be narrowed to them, since a token for fewer scopes than an entry
-  # holds is dispensed only where its provider attenuates a refresh.
-  defp scopes_met?(%{kind: "oauth"} = candidate, scopes, need) do
-    held = scope_set(scopes)
-    wanted = scope_set(need.scopes)
-    wanted -- held == [] and (wanted == held or candidate.narrowable)
-  end
+  # An OAuth candidate holds exactly the need's scopes: its token is
+  # dispensed for every scope the entry holds, never fewer.
+  defp scopes_met?(%{kind: "oauth"}, scopes, need),
+    do: scope_set(scopes) == scope_set(need.scopes)
 
   defp scopes_met?(_candidate, _scopes, _need), do: true
-
-  defp put_narrowable(%{kind: "oauth"} = candidate, entry),
-    do: Map.put(candidate, :narrowable, OAuth.attenuates_scope?(entry.provider_hint))
-
-  defp put_narrowable(candidate, _entry), do: candidate
 
   defp canonical_destination(%{} = map) do
     case Prima.Destination.from_map(map) do
@@ -796,18 +783,10 @@ defmodule Sanctum.Consent.Plan do
   defp identity(%{source: "own", entry_id: id}), do: %{entry_id: id}
   defp identity(%{source: "instance", instance_entry_id: id}), do: %{instance_entry_id: id}
 
-  # The athanor's active entries, each OAuth one saying whether a token for
-  # fewer of its scopes can be dispensed (`narrowable`): only where its
-  # provider attenuates a refresh. Other kinds carry no such key.
+  # The athanor's active entries.
   defp candidates(ctx) do
-    with {:ok, entries} <- Sanctum.Vault.list(ctx) do
-      {:ok,
-       for %{status: "active"} = entry <- entries do
-         if entry.kind == "oauth",
-           do: Map.put(entry, :narrowable, OAuth.attenuates_scope?(entry.provider_hint)),
-           else: entry
-       end}
-    end
+    with {:ok, entries} <- Sanctum.Vault.list(ctx),
+         do: {:ok, Enum.filter(entries, &(&1.status == "active"))}
   end
 
   # What the profile's head holds: the origins it admits, its bindings,
@@ -843,7 +822,7 @@ defmodule Sanctum.Consent.Plan do
   included): what the head granted that the ask no longer names opens as
   nothing, and a field that, so kept, equals the ask names nothing. Each
   limit is the narrower of the head's and the ask's: the ask's where it
-  is now lower, and for a rate limit, which bounds a burst and a rate at
+  is lower, and for a rate limit, which bounds a burst and a rate at
   once, the overlap, the smaller count over the longer window. Where the
   ask has not moved since the head, everything the head grants lies
   inside it, so the head's grant is named whole.

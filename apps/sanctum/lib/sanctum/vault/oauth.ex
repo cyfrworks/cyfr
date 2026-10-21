@@ -7,32 +7,25 @@ defmodule Sanctum.Vault.OAuth do
   token lifecycle.
 
   **Presets.** One table (`preset/1`) names the endpoints of each provider
-  this instance ships an arc for and whether that provider attenuates a
-  refresh (`attenuates_scope?/1`). An entry's endpoints are fixed when it
+  this instance ships an arc for. An entry's endpoints are fixed when it
   is created, from its provider's preset or, for a provider with none,
   given explicitly and held to `validate_endpoints/1`; they never change
-  afterwards. Attenuation is never stored on an entry: it is the
-  provider's, read from the table each time.
+  afterwards.
 
-  **Dispense.** `dispense/5` answers a token for the projection's scopes.
-  A projection naming exactly the entry's scopes is answered the sealed
-  bundle's token while it is valid, and an expired bundle is refreshed
-  against the entry's own `oauth_endpoints`, which the loader has already
-  verified against the consent's binding digest. A projection naming fewer
-  is answered only where the provider attenuates a refresh: by a token
-  held for that scope set (`oauth.tokens`, `Sanctum.Vault.Payload`), or one
-  a refresh sending `scope` obtains, whose answer must name a scope set
-  within the request. Otherwise it is refused `:scope_not_attenuable`
-  before any lock or request, and the entry's broader token is never
-  served for it. Provider client credentials come from
-  `Sanctum.ProviderCredentials` by tenant, never from the caller's
-  permission set.
+  **Dispense.** `dispense/5` answers a token for the projection's scopes,
+  which must be exactly the entry's. The sealed bundle's token is answered
+  while it is valid, and an expired bundle is refreshed against the
+  entry's own `oauth_endpoints`, which the loader has already verified
+  against the consent's binding digest. A projection naming fewer scopes
+  than the entry holds is refused `:scope_not_attenuable` before any lock
+  or request, so the entry's broader token is never served for it.
+  Provider client credentials come from `Sanctum.ProviderCredentials` by
+  tenant, never from the caller's permission set.
 
   Refresh is single-flighted per **vault entry** on
-  `{:vault_oauth_refresh, athanor_id, entry_id}`, whatever scope set it
-  asks for: the entry holds one refresh token, so one lock per entry is one
-  lock per refresh token, and a provider that rotates it on use is never
-  raced. Each leader and follower checks the token of its own scope set.
+  `{:vault_oauth_refresh, athanor_id, entry_id}`: the entry holds one
+  refresh token, so one lock per entry is one lock per refresh token, and
+  a provider that rotates it on use is never raced.
   `Sanctum.OAuth.RefreshLock` serializes the cell on that key, not just
   this member. The athanor in the key, in every read and write below and
   in the AEAD AAD is the CALLER's, carried on the actor; a row never names
@@ -70,19 +63,10 @@ defmodule Sanctum.Vault.OAuth do
   @expiry_buffer_seconds 60
   @max_expires_in 86_400 * 365
 
-  @typedoc """
-  A provider's preset: the endpoints an entry of its hint is created with,
-  and whether the provider is shown to attenuate a refresh to the scopes
-  it sends.
-  """
-  @type preset :: %{endpoints: %{String.t() => term()}, attenuates_scope: boolean()}
+  @typedoc "A provider's preset: the endpoints an entry of its hint is created with."
+  @type preset :: %{endpoints: %{String.t() => term()}}
 
-  # The providers this instance has shipped an arc for. Every preset's
-  # `attenuates_scope` is false. A preset is switched on only by a change
-  # that records the provider's documentation that a refresh's `scope`
-  # parameter yields a token limited to it, and a live test against the
-  # provider showing it; until then a narrower projection of its entries
-  # is refused rather than served the entry's broader token.
+  # The providers this instance has shipped an arc for.
   @presets %{
     "google" => %{
       endpoints: %{
@@ -90,8 +74,7 @@ defmodule Sanctum.Vault.OAuth do
         "token_url" => "https://oauth2.googleapis.com/token",
         "auth_style" => "params",
         "extra_params" => %{"access_type" => "offline", "prompt" => "consent"}
-      },
-      attenuates_scope: false
+      }
     }
   }
 
@@ -122,15 +105,6 @@ defmodule Sanctum.Vault.OAuth do
   end
 
   def preset(_provider_hint), do: nil
-
-  @doc """
-  Whether `provider_hint`'s provider is shown to attenuate a refresh:
-  false for a provider without a preset, and false for every preset this
-  instance ships.
-  """
-  @spec attenuates_scope?(String.t() | nil) :: boolean()
-  def attenuates_scope?(provider_hint),
-    do: match?(%{attenuates_scope: true}, preset(provider_hint))
 
   @doc """
   Hold explicit endpoints to the endpoint rule: an `authorize_url` and a
@@ -172,8 +146,9 @@ defmodule Sanctum.Vault.OAuth do
   # configuration file or variable sets (as `:sanctum, :oidc_reauth_client`
   # is), names a module whose `preset/1` answers a preset for a hint the
   # shipped table does not hold and whose `post/3` answers that preset's
-  # token endpoint in the network's place. It never replaces a shipped
-  # preset, and a release never sets it.
+  # token endpoint, for a code exchange and a refresh alike, in the
+  # network's place. It never replaces a shipped preset, and a release
+  # never sets it.
   defp scripted_preset(provider_hint) do
     case scripted() do
       nil ->
@@ -184,14 +159,13 @@ defmodule Sanctum.Vault.OAuth do
           nil ->
             nil
 
-          %{endpoints: %{} = endpoints, attenuates_scope: attenuates}
-          when is_boolean(attenuates) ->
-            %{endpoints: endpoints, attenuates_scope: attenuates}
+          %{endpoints: %{} = endpoints} ->
+            %{endpoints: endpoints}
 
           other ->
             raise ArgumentError,
                   "a scripted OAuth preset is malformed: #{Prima.LoggerContext.shape(other)}, " <>
-                    "expected a map of endpoints and a boolean attenuates_scope"
+                    "expected a map of endpoints"
         end
     end
   end
@@ -226,10 +200,9 @@ defmodule Sanctum.Vault.OAuth do
 
   Scopes equal as a set to the entry's are answered the bundle's token,
   refreshed through the entry-keyed single-flight lock when expired.
-  Narrower scopes are answered only where the entry's provider attenuates a
-  refresh, and refused `:scope_not_attenuable` with no lock taken and no
-  request made where it does not. Scopes the entry lacks are refused
-  `{:scope_projection_unsatisfiable, missing}`.
+  Fewer scopes than the entry holds are refused `:scope_not_attenuable`,
+  and scopes the entry lacks `{:scope_projection_unsatisfiable, missing}`,
+  each with no lock taken and no request made.
 
   `entry` is the row the caller validated the consent's binding against,
   and `oauth` its bundle. Every read of the row after waiting on or taking
@@ -247,11 +220,16 @@ defmodule Sanctum.Vault.OAuth do
       when is_binary(athanor_id) and is_list(scopes) do
     requested = scopes |> Enum.uniq() |> Enum.sort()
 
-    with {:ok, fence} <- fence(entry) do
-      case projection_class(entry, requested) do
-        :whole -> dispense_whole(actor, entry, oauth, provider, fence)
-        :narrower -> dispense_narrower(actor, entry, oauth, provider, requested, fence)
-        {:error, _} = refused -> refused
+    with {:ok, fence} <- fence(entry),
+         :ok <- whole_projection(entry, requested) do
+      if token_valid?(oauth) do
+        {:ok, oauth["access_token"]}
+      else
+        RefreshLock.run(
+          lock_key(actor, entry.id),
+          fn -> refresh_as_leader(actor, entry.id, provider, fence) end,
+          fn -> recheck(actor, entry.id, fence) end
+        )
       end
     end
   end
@@ -266,77 +244,43 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
-  defp projection_class(entry, requested) do
+  # The entry's one token is for its own scopes, so a projection is
+  # answered only when it names exactly them: a token for fewer would be
+  # the broader token served as a narrower grant.
+  defp whole_projection(entry, requested) do
     held = entry_scopes(entry)
 
     case requested -- held do
-      [] when requested == held ->
-        :whole
-
-      [] ->
-        if attenuates_scope?(entry.provider_hint),
-          do: :narrower,
-          else: {:error, :scope_not_attenuable}
-
-      missing ->
-        {:error, {:scope_projection_unsatisfiable, missing}}
+      [] when requested == held -> :ok
+      [] -> {:error, :scope_not_attenuable}
+      missing -> {:error, {:scope_projection_unsatisfiable, missing}}
     end
   end
 
-  defp dispense_whole(actor, entry, oauth, provider, fence) do
-    if token_valid?(oauth) do
-      {:ok, oauth["access_token"]}
-    else
-      RefreshLock.run(
-        lock_key(actor, entry.id),
-        fn -> refresh_as_leader(actor, entry.id, provider, fence) end,
-        fn -> recheck(actor, entry.id, fence) end
-      )
-    end
-  end
-
-  defp dispense_narrower(actor, entry, oauth, provider, requested, fence) do
-    key = Payload.scope_key(requested)
-
-    case held_token(oauth, key) do
-      {:ok, _token} = held ->
-        held
-
-      :none ->
-        RefreshLock.run(
-          lock_key(actor, entry.id),
-          fn -> narrower_as_leader(actor, entry.id, provider, requested, fence) end,
-          fn -> recheck_narrower(actor, entry.id, key, fence) end
-        )
-    end
-  end
-
-  # One lock per entry, so one per stored refresh token, whatever scope
-  # set a refresh asks for.
+  # One lock per entry, so one per stored refresh token.
   defp lock_key(%Prima.Actor{athanor_id: athanor_id}, entry_id),
     do: {:vault_oauth_refresh, athanor_id, entry_id}
 
-  @doc false
-  # The pure half of a full-scope refresh: fold the provider's response
-  # into the current payload, preserving fields, scopes and the tokens held
-  # for narrower scope sets. Public for tests — the HTTP and CAS halves are
-  # exercised separately.
+  @doc """
+  Fold a token endpoint's refresh answer, `response`, into `payload`, the
+  entry's decoded payload whose bundle is `oauth`: the answer's access
+  token and expiry replace the bundle's, its refresh token replaces the
+  bundle's only when it names one, and the payload's fields are kept.
+  Pure: nothing is sealed or written.
+  """
+  @spec apply_refresh_response(Payload.t(), map(), map()) :: Payload.t()
   def apply_refresh_response(payload, oauth, response) do
-    new_oauth =
-      %{
-        "access_token" => response["access_token"],
-        "refresh_token" => response["refresh_token"] || oauth["refresh_token"],
-        "expires_at" => compute_expires_at(response["expires_in"]),
-        "token_type" => response["token_type"] || oauth["token_type"] || "bearer"
-      }
-      |> Prima.MapUtil.put_present("scopes", oauth["scopes"])
-      |> Prima.MapUtil.put_present("tokens", oauth["tokens"])
+    new_oauth = %{
+      "access_token" => response["access_token"],
+      "refresh_token" => response["refresh_token"] || oauth["refresh_token"],
+      "expires_at" => compute_expires_at(response["expires_in"])
+    }
 
     Map.put(payload, "oauth", new_oauth)
   end
 
   # ---------------------------------------------------------------------------
-  # Leader / follower: the entry's own scopes
+  # Leader / follower
   # ---------------------------------------------------------------------------
 
   # The leader re-reads the row inside the lock: a refresh that completed
@@ -386,31 +330,30 @@ defmodule Sanctum.Vault.OAuth do
     with {:ok, token_url} <- fetch_token_url(endpoints),
          # The scheme refusal lands before credentials are read or any
          # telemetry fires — a refresh token is never sent in the clear,
-         # and the same rule runs again inside http_post for every caller.
-         :ok <- require_https(token_url, :refresh_token),
+         # and the same rule runs again inside `token_request/4`.
+         :ok <- require_https(token_url),
          {:ok, creds} <- fetch_provider_creds(actor, provider) do
       body_params = %{
         "grant_type" => "refresh_token",
         "refresh_token" => oauth["refresh_token"]
       }
 
-      # Use the entry’s provider_hint for every refresh telemetry event.
-      emit_telemetry(entry, entry.provider_hint, :attempt)
+      emit_telemetry(entry, :attempt)
 
-      case token_post(entry, endpoints, creds, token_url, body_params) do
+      case token_request(entry.provider_hint, endpoints, creds, body_params) do
         {:ok, response} ->
           case refreshed_scopes(entry, response) do
             :ok ->
               write_back(actor, entry, apply_refresh_response(payload, oauth, response), oauth)
 
             {:error, _} = refused ->
-              emit_telemetry(entry, entry.provider_hint, :error)
+              emit_telemetry(entry, :error)
               keep_rotated(actor, entry, payload, oauth, response)
               refused
           end
 
         {:error, reason} ->
-          emit_telemetry(entry, entry.provider_hint, :error)
+          emit_telemetry(entry, :error)
 
           {:error,
            {:authorization_required, "the refresh failed for entry #{entry.id}: #{reason}"}}
@@ -418,14 +361,13 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
-  # A full refresh asks for no scope, so its token is for the entry's own
+  # A refresh asks for no scope, so its token is for the entry's own
   # scopes. An answer naming another set, wider or narrower, is a token the
   # entry's binding does not describe: it is neither held nor dispensed,
   # since an entry's scopes move only by re-authorization
   # (`Sanctum.Vault.OAuthGrant`), but a refresh token it rotated is kept,
-  # as a refused narrower answer keeps one, and so is one whose scope is
-  # malformed (`answered_scope/1`). An answer naming no scope is the
-  # entry's own (RFC 6749 §5.1).
+  # and so is one whose scope is malformed (`answered_scope/1`). An answer
+  # naming no scope is the entry's own (RFC 6749 §5.1).
   defp refreshed_scopes(entry, response) do
     held = entry |> entry_scopes() |> Enum.flat_map(&String.split/1) |> Enum.uniq() |> Enum.sort()
 
@@ -444,148 +386,6 @@ defmodule Sanctum.Vault.OAuth do
              {:authorization_required,
               "the provider refreshed this connection for other scopes than it holds; " <>
                 "re-authorize it"}}
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Leader / follower: a narrower scope set
-  # ---------------------------------------------------------------------------
-
-  defp narrower_as_leader(actor, entry_id, provider, requested, fence) do
-    key = Payload.scope_key(requested)
-
-    with {:ok, entry, payload} <- load_fresh(actor, entry_id, fence) do
-      oauth = payload["oauth"]
-
-      cond do
-        not is_map(oauth) ->
-          {:error, :no_oauth_material}
-
-        match?({:ok, _}, held_token(oauth, key)) ->
-          held_token(oauth, key)
-
-        not is_binary(oauth["refresh_token"]) ->
-          {:error,
-           {:authorization_required,
-            "this connection carries no refresh token, so no token for fewer scopes " <>
-              "can be obtained (entry #{entry_id})"}}
-
-        true ->
-          perform_narrower_refresh(actor, entry, payload, oauth, provider, requested)
-      end
-    end
-  end
-
-  defp recheck_narrower(actor, entry_id, key, fence) do
-    case load_fresh(actor, entry_id, fence) do
-      {:ok, _entry, %{"oauth" => oauth}} when is_map(oauth) ->
-        case held_token(oauth, key) do
-          {:ok, _token} = held -> held
-          :none -> :stale
-        end
-
-      _ ->
-        :stale
-    end
-  end
-
-  defp perform_narrower_refresh(actor, entry, payload, oauth, provider, requested) do
-    endpoints = decode_endpoints(entry.oauth_endpoints)
-
-    with {:ok, token_url} <- fetch_token_url(endpoints),
-         :ok <- require_https(token_url, :refresh_token),
-         {:ok, creds} <- fetch_provider_creds(actor, provider) do
-      body_params = %{
-        "grant_type" => "refresh_token",
-        "refresh_token" => oauth["refresh_token"],
-        "scope" => Enum.join(requested, " ")
-      }
-
-      emit_telemetry(entry, entry.provider_hint, :attempt)
-
-      case token_post(entry, endpoints, creds, token_url, body_params) do
-        {:ok, response} ->
-          narrower_answer(actor, entry, payload, oauth, requested, response)
-
-        {:error, reason} ->
-          emit_telemetry(entry, entry.provider_hint, :error)
-
-          {:error,
-           {:authorization_required, "the refresh failed for entry #{entry.id}: #{reason}"}}
-      end
-    end
-  end
-
-  # An answer is held for its scope set only when it names a scope set
-  # within the request: an answer naming none says nothing of what the
-  # token reaches, and one naming more is the broader token the projection
-  # must never be served. A refused answer's access token is neither held
-  # nor dispensed, but a refresh token it rotated is kept, since the
-  # provider may already have retired the one this refresh presented.
-  defp narrower_answer(actor, entry, payload, oauth, requested, response) do
-    key = Payload.scope_key(requested)
-
-    case attenuated_token(response, requested) do
-      {:ok, token} ->
-        held = %{
-          "access_token" => token,
-          "expires_at" => compute_expires_at(response["expires_in"])
-        }
-
-        update = fn bundle ->
-          bundle
-          |> Map.put("tokens", Map.put(bundle["tokens"] || %{}, key, held))
-          |> put_rotated(response)
-        end
-
-        case commit_update(actor, entry, payload, oauth, update) do
-          :ok ->
-            emit_telemetry(entry, entry.provider_hint, :ok)
-            answer_fenced(actor, entry, token)
-
-          # A rotate brought its own bundle mid-refresh: the token this
-          # refresh obtained descends from a family the re-auth abandoned,
-          # so only what the rotate holds for this scope set is answered.
-          {:superseded, fresh_oauth} ->
-            case held_token(fresh_oauth, key) do
-              {:ok, _token} = held -> held
-              :none -> {:error, :payload_conflict}
-            end
-
-          {:error, _} = refused ->
-            refused
-        end
-
-      {:error, _} = refused ->
-        emit_telemetry(entry, entry.provider_hint, :error)
-        keep_rotated(actor, entry, payload, oauth, response)
-        refused
-    end
-  end
-
-  defp attenuated_token(response, requested) do
-    sent = Enum.flat_map(requested, &String.split/1)
-
-    case answered_scope(response) do
-      :malformed ->
-        {:error, malformed_scope()}
-
-      {:ok, []} ->
-        {:error, :scope_not_attenuable}
-
-      {:ok, answered} ->
-        cond do
-          answered -- sent != [] ->
-            {:error, :scope_not_attenuable}
-
-          not is_binary(response["access_token"]) ->
-            {:error,
-             {:authorization_required,
-              "the token endpoint answered no access token for fewer scopes"}}
-
-          true ->
-            {:ok, response["access_token"]}
-        end
     end
   end
 
@@ -645,19 +445,9 @@ defmodule Sanctum.Vault.OAuth do
 
   defp keep_rotated(_actor, _entry, _payload, _oauth, _response), do: :ok
 
-  # The token held for a scope set, while it is valid.
-  defp held_token(oauth, key) when is_map(oauth) do
-    case oauth["tokens"] do
-      %{^key => held} -> if token_valid?(held), do: {:ok, held["access_token"]}, else: :none
-      _ -> :none
-    end
-  end
-
-  defp held_token(_oauth, _key), do: :none
-
   # Apply `update` to the bundle read inside the lock and write it at the
   # revision read. A conflict is reconciled as `merge_after_conflict/4`
-  # reconciles a full-scope refresh: the re-read is fenced on the binding
+  # reconciles a refresh's write: the re-read is fenced on the binding
   # `entry` was read at, a rotate that brought its own bundle wins outright
   # (`{:superseded, its_bundle}`), and one that kept the bundle has the
   # update folded into what it wrote, once.
@@ -698,19 +488,17 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
-  @doc false
   # CAS at the revision read inside the lock. A conflict means a write that
   # advanced the revision landed mid-refresh (a rotate or a
   # re-authorization) — and by then the provider has already rotated the
   # refresh token this refresh consumed, so simply dropping the response
   # would strand the entry on a dead token family (permanent re-consent).
   # The conflict is resolved by what that write actually stored — see
-  # merge_after_conflict/4. Public for tests, like apply_refresh_response/3:
-  # the HTTP half is exercised separately.
-  def write_back(%Prima.Actor{} = actor, entry, new_payload, consumed_oauth) do
+  # merge_after_conflict/4.
+  defp write_back(%Prima.Actor{} = actor, entry, new_payload, consumed_oauth) do
     case seal_and_cas(actor, entry, new_payload) do
       :ok ->
-        emit_telemetry(entry, entry.provider_hint, :ok)
+        emit_telemetry(entry, :ok)
         answer_fenced(actor, entry, get_in(new_payload, ["oauth", "access_token"]))
 
       {:error, :payload_conflict} ->
@@ -769,7 +557,7 @@ defmodule Sanctum.Vault.OAuth do
 
           case seal_and_cas(actor, fresh_entry, merged) do
             :ok ->
-              emit_telemetry(fresh_entry, fresh_entry.provider_hint, :ok)
+              emit_telemetry(fresh_entry, :ok)
               answer_fenced(actor, entry, get_in(merged, ["oauth", "access_token"]))
 
             {:error, _} ->
@@ -827,8 +615,8 @@ defmodule Sanctum.Vault.OAuth do
   # may already have rotated the refresh token it presented, though, and
   # retired the one consumed: where the row as it stands still holds that
   # consumed token, the rotated one alone is written into it, at the row's
-  # own revision, with no access token and no narrower token, so nothing
-  # widens and the entry is never left on a token the provider retired.
+  # own revision, with no access token, so nothing widens and the entry is
+  # never left on a token the provider retired.
   # The moved binding holds the same token family; a re-authorization that
   # brought its own refresh token is left as it is. One attempt: a second
   # conflict means another writer owns the row now.
@@ -908,8 +696,8 @@ defmodule Sanctum.Vault.OAuth do
     end
   end
 
-  # Scheme policy lives in `require_https/2` inside http_post — one rule
-  # for both token-endpoint dialects, not a second spelling here.
+  # The scheme rule is `require_https/1`, which `token_request/4` holds every
+  # POST to; this reads the URL alone.
   defp fetch_token_url(%{"token_url" => url}) when is_binary(url), do: {:ok, url}
   defp fetch_token_url(_), do: {:error, :no_token_url}
 
@@ -917,34 +705,36 @@ defmodule Sanctum.Vault.OAuth do
     Sanctum.ProviderCredentials.fetch_for_oauth(athanor_id, provider)
   end
 
-  # A refresh's POST, in the entry's auth style, to its token endpoint: over
-  # the network, or to the suites' scripted provider for a hint only it
-  # answers. The scheme rule holds for both.
-  defp token_post(entry, endpoints, creds, token_url, body_params) do
+  @doc false
+  # A POST of `body_params` to the token endpoint `endpoints` names, in
+  # their auth style, for a code exchange (`Sanctum.Vault.OAuthGrant`) and a
+  # refresh alike: over the network, or to the suites' scripted provider for
+  # a hint only it answers (`scripted_preset/1`). Either way the token URL
+  # is held to `require_https/1` first, so neither a code nor a refresh
+  # token is ever sent in the clear. Answers the endpoint's decoded JSON, or
+  # a sentence.
+  @spec token_request(String.t(), map(), map(), map()) :: {:ok, term()} | {:error, String.t()}
+  def token_request(provider_hint, endpoints, creds, body_params) do
+    token_url = endpoints["token_url"]
     auth_style = endpoints["auth_style"] || "params"
     {headers, body_params} = apply_auth_style(auth_style, creds, body_params)
     headers = [{"content-type", "application/x-www-form-urlencoded"} | headers]
     body = URI.encode_query(body_params)
 
-    case scripted_provider(entry.provider_hint) do
-      nil ->
-        http_post(token_url, headers, body)
-
-      module ->
-        with :ok <- require_https(token_url, :refresh_token),
-             do: module.post(token_url, headers, body)
+    with :ok <- require_https(token_url) do
+      case scripted_provider(provider_hint) do
+        nil -> http_post(token_url, headers, body)
+        module -> module.post(token_url, headers, body)
+      end
     end
   end
 
-  @doc false
-  # Shared with Sanctum.Vault.OAuthGrant — the grant exchange speaks the
-  # same auth styles and token endpoint dialect as refresh.
-  def apply_auth_style("header", creds, body_params) do
+  defp apply_auth_style("header", creds, body_params) do
     encoded = Base.encode64("#{creds["client_id"]}:#{creds["client_secret"] || ""}")
     {[{"authorization", "Basic #{encoded}"}], body_params}
   end
 
-  def apply_auth_style(_params, creds, body_params) do
+  defp apply_auth_style(_params, creds, body_params) do
     params = %{"client_id" => creds["client_id"]}
 
     params =
@@ -955,55 +745,39 @@ defmodule Sanctum.Vault.OAuth do
     {[], Map.merge(body_params, params)}
   end
 
-  @doc false
   # The token URL is an entry's endpoint (a preset's, or one given and
   # validated when the entry was created), so this POST rides the pinned
   # SSRF path like every other outbound request: resolve-validate once,
   # connect to the validated IP, never follow redirects. A private token
   # endpoint (an internal IdP) is reachable only when the operator named it
-  # in the private-egress allowlist. The scheme rule is `require_https/2` —
-  # the ONE spelling for both token-endpoint dialects, keyed on what the
-  # POST carries.
-  def http_post(url, headers, body, credential \\ :refresh_token) do
-    with :ok <- require_https(url, credential) do
-      case Sanctum.Egress.pinned_request(:post, url, headers, body,
-             private_policy: :operator,
-             receive_timeout: 15_000,
-             # A token response is a small JSON object; the endpoint is
-             # caller-supplied, so the ceiling streams rather than trusting it.
-             max_response_bytes: 1024 * 1024
-           ) do
-        {:ok, status, _resp_headers, resp_body} when status in 200..299 ->
-          case Jason.decode(resp_body) do
-            {:ok, data} -> {:ok, data}
-            {:error, _} -> {:error, "invalid JSON response from token endpoint"}
-          end
+  # in the private-egress allowlist.
+  defp http_post(url, headers, body) do
+    case Sanctum.Egress.pinned_request(:post, url, headers, body,
+           private_policy: :operator,
+           receive_timeout: 15_000,
+           # A token response is a small JSON object; the endpoint is
+           # caller-supplied, so the ceiling streams rather than trusting it.
+           max_response_bytes: 1024 * 1024
+         ) do
+      {:ok, status, _resp_headers, resp_body} when status in 200..299 ->
+        case Jason.decode(resp_body) do
+          {:ok, data} -> {:ok, data}
+          {:error, _} -> {:error, "invalid JSON response from token endpoint"}
+        end
 
-        {:ok, status, _resp_headers, _resp_body} ->
-          {:error, "token exchange failed (status #{status})"}
+      {:ok, status, _resp_headers, _resp_body} ->
+        {:error, "token exchange failed (status #{status})"}
 
-        {:error, reason} ->
-          Logger.warning("[Sanctum.Vault.OAuth] HTTP request failed: #{inspect(reason)}")
-          {:error, "token endpoint unreachable"}
-      end
+      {:error, reason} ->
+        Logger.warning("[Sanctum.Vault.OAuth] HTTP request failed: #{inspect(reason)}")
+        {:error, "token endpoint unreachable"}
     end
   end
 
-  # Refresh-token exchange always requires HTTPS. Authorization-code exchange
-  # allows HTTP only on a server without an auth provider configured.
-  defp require_https(url, :refresh_token), do: https_or_refuse(url)
-
-  defp require_https(url, :auth_code) do
-    if Sanctum.auth_configured?(), do: https_or_refuse(url), else: :ok
-  end
-
-  defp https_or_refuse(url) do
-    if String.starts_with?(url, "https://") do
-      :ok
-    else
-      {:error, "token_url must use https://"}
-    end
-  end
+  # A token endpoint is reached over https alone, for every grant type: an
+  # authorization code and a refresh token are both credentials.
+  defp require_https("https://" <> _rest), do: :ok
+  defp require_https(_url), do: {:error, "token_url must use https://"}
 
   defp token_valid?(%{"expires_at" => nil, "access_token" => token}) when is_binary(token),
     do: true
@@ -1063,11 +837,12 @@ defmodule Sanctum.Vault.OAuth do
     DateTime.to_iso8601(DateTime.utc_now())
   end
 
-  defp emit_telemetry(entry, provider, status) do
+  # Every refresh event names the entry's own provider.
+  defp emit_telemetry(entry, status) do
     :telemetry.execute(
       [:cyfr, :sanctum, :vault, :oauth_refresh],
       %{system_time: System.system_time()},
-      %{entry_id: entry.id, provider: provider, status: status}
+      %{entry_id: entry.id, provider: entry.provider_hint, status: status}
     )
   end
 end
