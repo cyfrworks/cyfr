@@ -263,10 +263,8 @@ config :cyfr, :max_backends_per_server, 4
 config :cyfr, :provisioning_required_pull_budget_ms, :timer.minutes(10)
 
 # How long a returning sign-in waits on the cyfr.run probe before
-# proceeding without it (`Sanctum.SignIn`), in milliseconds, and the
-# retention sweep interval (`Cyfr.RetentionScheduler`).
+# proceeding without it (`Sanctum.SignIn`), in milliseconds.
 config :cyfr, :returning_probe_ms, 5_000
-config :cyfr, :retention_scheduler_interval, :timer.hours(6)
 
 # The reconciler of the component registry and the agent index
 # (`Compendium.ProjectionReconciler`): whether it runs, how often it

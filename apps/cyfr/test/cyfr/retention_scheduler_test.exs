@@ -22,12 +22,6 @@ defmodule Cyfr.RetentionSchedulerTest do
   @kind "retention"
 
   setup tags do
-    # Ensure no lingering scheduler
-    case GenServer.whereis(RetentionScheduler) do
-      nil -> :ok
-      pid -> GenServer.stop(pid)
-    end
-
     # handle_continue(:first_run, ...) runs a cycle, which hits the DB
     Cyfr.Test.Sandbox.setup!(tags)
 
@@ -36,17 +30,6 @@ defmodule Cyfr.RetentionSchedulerTest do
 
   describe "init/1" do
     test "starts with {:continue, :first_run}" do
-      prev_interval = Application.get_env(:cyfr, :retention_scheduler_interval)
-
-      # Use a very long interval to avoid actual cleanup during test
-      Application.put_env(:cyfr, :retention_scheduler_interval, :timer.hours(999))
-
-      on_exit(fn ->
-        if prev_interval,
-          do: Application.put_env(:cyfr, :retention_scheduler_interval, prev_interval),
-          else: Application.delete_env(:cyfr, :retention_scheduler_interval)
-      end)
-
       assert {:ok, %{interval: _}, {:continue, :first_run}} = RetentionScheduler.init([])
     end
   end
@@ -81,18 +64,18 @@ defmodule Cyfr.RetentionSchedulerTest do
       assert untouched.detail == nil
     end
 
-    test "a tick on a member that holds no slot asks the store nothing", %{key: key} do
+    test "a tick on a member that holds no slot asks the store nothing" do
       Arca.ControlPlane.record(:lost)
       on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
 
-      state = %{interval: :timer.hours(999), job: [key: key, owner: "member-a"]}
+      state = %{interval: :timer.hours(999)}
 
       assert {:noreply, ^state} =
                Arca.Test.QueryCounter.assert_queries(0, fn ->
                  RetentionScheduler.handle_info(:run_cleanup, state)
                end)
 
-      assert {:error, :not_found} = JobClaims.read(@kind, key)
+      assert {:error, :not_found} = JobClaims.read(@kind, JobClaims.cell_key())
     end
 
     test "a cycle that completes releases the row and records that it finished", %{key: key} do

@@ -3,19 +3,17 @@
 
 defmodule Cyfr.RetentionScheduler do
   @moduledoc """
-  Periodic retention cleanup, enabled when retention is configured, and
-  run by one member of the cell at a time.
+  Periodic retention cleanup, run by one member of the cell at a time.
 
-  When retention is disabled, this GenServer returns `:ignore` and never
-  starts. When enabled, each tick asks for the cell's `retention` claim
+  Each tick asks for the cell's `retention` claim
   (`Arca.JobClaims`, key `"cell"`) and, holding it, runs one cycle: every
   kind in `Arca.Retention.kinds/0` inside every active athanor, each
   under its own settings, plus the declared sweeps below — among them the
   host's own decisions, the ones made before any tenant was resolved,
   purged past the `decision_retention_days` platform setting. The tick
-  repeats on a configurable interval (default 6 hours) to prevent
-  unbounded storage growth. Every step runs behind one crash barrier: a
-  fault in one is logged and the cycle moves on.
+  repeats every 6 hours to prevent unbounded storage growth. Every step
+  runs behind one crash barrier: a fault in one is logged and the cycle
+  moves on.
 
   ## The athanors it walks
 
@@ -90,7 +88,7 @@ defmodule Cyfr.RetentionScheduler do
 
   alias Arca.JobClaims
 
-  @default_interval_ms :timer.hours(6)
+  @interval_ms :timer.hours(6)
 
   @kind "retention"
   # The carry sweep's batch, how many batches of carry actions one cycle
@@ -150,9 +148,8 @@ defmodule Cyfr.RetentionScheduler do
 
   @impl true
   def init(_opts) do
-    interval = interval()
-    Logger.info("[RetentionScheduler] Starting with interval #{div(interval, 60_000)}m")
-    {:ok, %{interval: interval}, {:continue, :first_run}}
+    Logger.info("[RetentionScheduler] Starting with interval #{div(@interval_ms, 60_000)}m")
+    {:ok, %{interval: @interval_ms}, {:continue, :first_run}}
   end
 
   @impl true
@@ -179,9 +176,8 @@ defmodule Cyfr.RetentionScheduler do
   Run one retention cycle under the cell's `retention` claim.
 
   `opts`: `:key` (the claim key, `"cell"` by default), `:owner` (the
-  member the claim is taken for, this boot by default), `:lease_ms`,
-  `:renew_ms` and `:interval` (how old a recorded cycle may be and still
-  be resumed).
+  member the claim is taken for, this boot by default), `:renew_ms` and
+  `:interval` (how old a recorded cycle may be and still be resumed).
 
   The four answers are different facts, and a caller must tell them
   apart: the cycle ran to its end, a live peer holds the claim and this
@@ -196,10 +192,9 @@ defmodule Cyfr.RetentionScheduler do
   def cycle(opts \\ []) when is_list(opts) do
     key = Keyword.get(opts, :key, JobClaims.cell_key())
     owner = Keyword.get(opts, :owner, Prima.Boot.id())
-    lease_ms = Keyword.get(opts, :lease_ms, @lease_ms)
 
-    case JobClaims.claim(@kind, key, owner, lease_ms) do
-      {:ok, claim} -> open(claim, opts, lease_ms)
+    case JobClaims.claim(@kind, key, owner, @lease_ms) do
+      {:ok, claim} -> open(claim, opts, @lease_ms)
       {:busy, %{owner: peer}} -> {:busy, peer}
       {:error, :database_error} = unavailable -> unavailable
     end
@@ -209,14 +204,9 @@ defmodule Cyfr.RetentionScheduler do
   # The cycle
   # ---------------------------------------------------------------------------
 
-  defp tick(state) do
-    opts =
-      state
-      |> Map.get(:job, [])
-      |> Keyword.put_new(:interval, Map.get(state, :interval, @default_interval_ms))
-
-    if Arca.ControlPlane.held?() and mine?(Keyword.get(opts, :key, JobClaims.cell_key())) do
-      report(cycle(opts))
+  defp tick(%{interval: interval}) do
+    if Arca.ControlPlane.held?() and mine?(JobClaims.cell_key()) do
+      report(cycle(interval: interval))
     end
   end
 
@@ -233,7 +223,7 @@ defmodule Cyfr.RetentionScheduler do
   defp open(claim, opts, lease_ms) do
     case cell_now() do
       {:ok, now} ->
-        cursor = resume(claim, now, Keyword.get(opts, :interval, interval()))
+        cursor = resume(claim, now, Keyword.get(opts, :interval, @interval_ms))
 
         walk(%{
           claim: claim,
@@ -772,9 +762,6 @@ defmodule Cyfr.RetentionScheduler do
   catch
     :exit, _reason -> :unavailable
   end
-
-  defp interval,
-    do: Application.get_env(:cyfr, :retention_scheduler_interval, @default_interval_ms)
 
   defp schedule(interval), do: Process.send_after(self(), :run_cleanup, interval)
 
