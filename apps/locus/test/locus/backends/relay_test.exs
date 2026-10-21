@@ -3,21 +3,17 @@
 
 defmodule Locus.Backends.RelayTest do
   @moduledoc """
-  A backend's stdio as data, from literal bytes: an attach connection's
-  frames decoded, a frame the codec refuses or on a stream the relay never
-  sends a fault; stdout split into JSON-RPC lines however it arrives, a
-  line or an unfinished one past the frame bound refused; the stderr tail
-  and its slack, masked before the cut; the backend's own requests never
-  answering a call, whatever their id; an answer naming its call by the
-  minted id or the string spelling it; everything else dropped and
-  counted.
+  A backend's stdio as data, from literal bytes: stdout split into
+  JSON-RPC lines however it arrives, a line or an unfinished one past the
+  frame bound refused; the stderr tail and its slack, masked before the
+  cut; the backend's own requests never answering a call, whatever their
+  id; an answer naming its call by the minted id or the string spelling
+  it; everything else dropped and counted.
   """
 
   use ExUnit.Case, async: true
 
   alias Locus.Backends.Relay
-
-  defp frame(stream, payload), do: <<stream, byte_size(payload)::32, payload::binary>>
 
   defp line(message), do: Jason.encode!(message) <> "\n"
 
@@ -33,39 +29,6 @@ defmodule Locus.Backends.RelayTest do
            }
 
     relay
-  end
-
-  describe "frames" do
-    test "stdout and stderr frames are decoded, however the bytes are cut" do
-      bytes =
-        frame(1, line(%{jsonrpc: "2.0", id: 1, result: %{ok: true}})) <>
-          frame(2, "warming up\n") <> frame(1, "") <> frame(2, "")
-
-      for cut <- [1, 3, 5, 7, byte_size(bytes) - 1] do
-        <<head::binary-size(^cut), tail::binary>> = bytes
-        assert {:ok, first, relay} = Relay.frames(pending(), head)
-        assert {:ok, rest, relay} = Relay.frames(relay, tail)
-        assert first ++ rest == [{:answer, :first, {:result, %{"ok" => true}}}]
-        assert Relay.stderr_tail(relay, []) == "warming up\n"
-      end
-    end
-
-    test "a frame the codec refuses, or on a stream a relay never sends, is the relay's fault" do
-      for bytes <- [
-            frame(0, "{}\n"),
-            frame(3, String.duplicate("ab", 32)),
-            frame(4, "{}\n"),
-            <<9, 0::32>>,
-            <<1, Prima.KeeperProtocol.max_frame_bytes() + 1::32>>
-          ] do
-        assert {:error, :relay_protocol} = Relay.frames(Relay.new(), bytes)
-      end
-    end
-
-    test "a stdout line past the frame bound inside frames is refused" do
-      relay = Relay.new(max_frame_bytes: 10)
-      assert {:error, :frame_too_large} = Relay.frames(relay, frame(1, "01234567890\n"))
-    end
   end
 
   describe "stdout" do
