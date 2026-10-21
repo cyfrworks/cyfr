@@ -71,7 +71,7 @@ func TestAllocateInOrderUntilExhausted(t *testing.T) {
 	if !reflect.DeepEqual(got, []int{1, 2, 3}) {
 		t.Fatalf("allocated %v", got)
 	}
-	if st := p.Stats(); st != (Stats{Size: 3, InUse: 3}) {
+	if st := p.Stats(); st != (Stats{Size: 3}) {
 		t.Fatalf("stats %+v", st)
 	}
 }
@@ -101,7 +101,7 @@ func TestBusyCandidateIsQuarantinedAndSkipped(t *testing.T) {
 	if !reflect.DeepEqual(p.Quarantined(), []int{1}) {
 		t.Fatalf("quarantined %v", p.Quarantined())
 	}
-	if st := p.Stats(); st != (Stats{Size: 3, Free: 1, InUse: 1, Quarantined: 1}) {
+	if st := p.Stats(); st != (Stats{Size: 3, Free: 1, Quarantined: 1}) {
 		t.Fatalf("stats %+v", st)
 	}
 }

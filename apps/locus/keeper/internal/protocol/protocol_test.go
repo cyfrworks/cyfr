@@ -261,10 +261,9 @@ func TestControlIsDecodedAndDefaultsToNone(t *testing.T) {
 	}
 }
 
-func TestMemoryBoundIsDecodedForEveryPoolAndDefaultsToNone(t *testing.T) {
+func TestMemoryBoundIsDecodedForEveryPool(t *testing.T) {
 	v := loadVectors(t)
 	bounds := map[string][]uint64{}
-	var unbounded int
 	for _, raw := range v.ValidRequests {
 		req, err := ParseRequest(raw)
 		if err != nil {
@@ -276,14 +275,18 @@ func TestMemoryBoundIsDecodedForEveryPoolAndDefaultsToNone(t *testing.T) {
 				t.Fatalf("%s decoded a memory bound", raw)
 			}
 		case req.MemoryBytes == nil:
-			unbounded++
+			t.Fatalf("spawn %s decoded without a memory bound", req.ID)
 		default:
 			bounds[req.Pool] = append(bounds[req.Pool], *req.MemoryBytes)
 		}
 	}
-	want := map[string][]uint64{"build": {1 << 30, MinMemoryBytes, MaxMemoryBytes}, "runner": {512 << 20}}
-	if !reflect.DeepEqual(bounds, want) || unbounded == 0 {
-		t.Fatalf("vectors: bounds %v, want %v; %d spawns without one", bounds, want, unbounded)
+	want := map[string][]uint64{
+		"backends": {512 << 20, 512 << 20},
+		"build":    {1 << 30, MinMemoryBytes, MaxMemoryBytes},
+		"runner":   {384 << 20, 384 << 20, 512 << 20},
+	}
+	if !reflect.DeepEqual(bounds, want) {
+		t.Fatalf("vectors: bounds %v, want %v", bounds, want)
 	}
 	if MinMemoryBytes != 16<<20 || MaxMemoryBytes != 1<<40 {
 		t.Fatalf("bounds %d..%d", uint64(MinMemoryBytes), uint64(MaxMemoryBytes))
@@ -295,8 +298,8 @@ func TestMemoryBoundIsDecodedForEveryPoolAndDefaultsToNone(t *testing.T) {
 			refused++
 		}
 	}
-	if refused < 8 {
-		t.Fatalf("%d vectors refuse a malformed memory bound, want zero, below, above, negative, fractional, not a number, misplaced and on another request", refused)
+	if refused < 10 {
+		t.Fatalf("%d vectors refuse a malformed memory bound, want absent, null, zero, below, above, negative, fractional, not a number, misplaced and on another request", refused)
 	}
 }
 
@@ -314,11 +317,66 @@ func TestRlimitsDefaultToTheCeilings(t *testing.T) {
 	}
 }
 
+func TestSpawnRequiresMemoryBound(t *testing.T) {
+	for _, pool := range []string{"build", "backends", "runner"} {
+		for _, c := range []struct {
+			name    string
+			present bool
+			value   any
+			bound   uint64
+			detail  string
+		}{
+			{name: "absent", detail: "memory_bytes is required"},
+			{name: "null", present: true, detail: "memory_bytes is required"},
+			{name: "zero", present: true, value: uint64(0), detail: "memory_bytes must be within 16777216..1099511627776"},
+			{name: "below minimum", present: true, value: uint64(MinMemoryBytes - 1), detail: "memory_bytes must be within 16777216..1099511627776"},
+			{name: "above maximum", present: true, value: uint64(MaxMemoryBytes + 1), detail: "memory_bytes must be within 16777216..1099511627776"},
+			{name: "minimum", present: true, value: uint64(MinMemoryBytes), bound: MinMemoryBytes},
+			{name: "maximum", present: true, value: uint64(MaxMemoryBytes), bound: MaxMemoryBytes},
+		} {
+			t.Run(pool+"/"+c.name, func(t *testing.T) {
+				message := map[string]any{
+					"v": Version, "type": TypeSpawn, "id": "memory-check", "pool": pool,
+					"argv": []string{"true"}, "env": map[string]string{},
+					"attach": Attach{Path: "/run/a.sock", Token: strings.Repeat("a", 64)},
+				}
+				if c.present {
+					message["memory_bytes"] = c.value
+				}
+				if pool == "runner" {
+					message["isolation"] = IsolationNetns
+					message["control"] = true
+				}
+				line, err := json.Marshal(message)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req, refused := ParseRequest(line)
+				if c.detail == "" {
+					if refused != nil {
+						t.Fatalf("valid bound refused: %+v", refused)
+					}
+					if req == nil || req.MemoryBytes == nil || *req.MemoryBytes != c.bound {
+						t.Fatalf("bound %d decoded to %+v", c.bound, req)
+					}
+					return
+				}
+				if req != nil || refused == nil {
+					t.Fatalf("invalid bound returned request %+v, refusal %+v", req, refused)
+				}
+				if refused.Detail != c.detail || refused.Reply() != NewError("memory-check", "", CodeBadRequest) {
+					t.Fatalf("refusal %+v, reply %+v", refused, refused.Reply())
+				}
+			})
+		}
+	}
+}
+
 func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 	for _, line := range []string{
 		`not json`,
 		`{"v":1,"type":"pool","id":"1","pool":"backends"} {"v":1}`,
-		`{"v":1,"type":"spawn","id":"1","pool":"backends","argv":"secret-value"}`,
+		`{"v":1,"type":"spawn","id":"1","pool":"backends","argv":"secret-value","memory_bytes":536870912}`,
 		`[]`,
 		``,
 	} {
@@ -337,7 +395,7 @@ func TestMalformedJSONIsRefusedWithoutEchoingInput(t *testing.T) {
 }
 
 func TestEnvValueNeverAppearsInARefusal(t *testing.T) {
-	line := `{"v":1,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
+	line := `{"v":1,"type":"spawn","id":"1","pool":"backends","argv":["x"],"env":{"TOKEN":"secret-value\u0000"},"memory_bytes":536870912,"attach":{"path":"/run/a.sock","token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}`
 	_, err := ParseRequest([]byte(line))
 	if err == nil {
 		t.Fatal("a NUL in an env value was accepted")

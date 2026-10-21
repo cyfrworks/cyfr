@@ -291,19 +291,19 @@ func probeIsolation(self string, cfg Config, accounts map[int]Account) error {
 }
 
 // delegateMemory prepares the keeper's cgroup for memory-bounded spawns, or
-// reports why a spawn asking for a bound will be refused here.
+// reports why spawns will be refused here.
 func delegateMemory(log *logx.Logger) *cgroup.Manager {
 	self, err := os.ReadFile(cgroup.SelfPath)
 	if err != nil {
-		log.Info("memory bounds are unavailable; a spawn asking for one is refused: %v", err)
+		log.Info("memory bounds are unavailable; spawns are refused: %v", err)
 		return nil
 	}
 	m, err := cgroup.Delegate(cgroup.Root, self)
 	if err != nil {
-		log.Info("memory bounds are unavailable; a spawn asking for one is refused: %v", err)
+		log.Info("memory bounds are unavailable; spawns are refused: %v", err)
 		return nil
 	}
-	log.Info("memory bounds are enforced: a cgroup under %s for each spawn asking for one", cgroup.Root)
+	log.Info("memory bounds are enforced: a cgroup under %s for each spawn", cgroup.Root)
 	return m
 }
 
@@ -331,7 +331,7 @@ type spawn struct {
 	home    string
 	leader  *child
 	relay   *child
-	// group is the spawn's memory-bounded cgroup, nil without a bound.
+	// group is the spawn's memory-bounded cgroup, nil until it is created.
 	group *cgroup.Group
 
 	// exitReported closes once `exited` has been sent for the leader.
@@ -656,8 +656,8 @@ func (s *server) handleSpawn(req *protocol.Request) {
 		s.send(protocol.NewError(req.ID, "", protocol.CodeBadRequest))
 		return
 	}
-	if req.MemoryBytes != nil && s.memory == nil {
-		s.log.Warn("spawn %s refused: it asks for a memory bound, which is unavailable here", req.ID)
+	if s.memory == nil {
+		s.log.Warn("spawn %s refused: its memory bound is unavailable here", req.ID)
 		s.send(protocol.NewError(req.ID, "", protocol.CodeMemoryUnavailable))
 		return
 	}
@@ -788,18 +788,14 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		}
 	}
 
-	// A bounded spawn's group exists before its stage does, and the stage
+	// The spawn's group exists before its stage does, and the stage
 	// is moved into it while it still waits for its spec, so nothing of the
 	// spawn runs outside the bound; the stage checks where it is for itself.
-	var groupPath string
-	if req.MemoryBytes != nil {
-		group, err := s.memory.Create(cgroup.Name(sp.account.UID), *req.MemoryBytes)
-		if err != nil {
-			return protocol.CodeInternal, err
-		}
-		sp.group = group
-		groupPath = group.Path()
+	group, err := s.memory.Create(cgroup.Name(sp.account.UID), *req.MemoryBytes)
+	if err != nil {
+		return protocol.CodeInternal, err
 	}
+	sp.group = group
 
 	spec, err := json.Marshal(stage.Spec{
 		UID:      sp.account.UID,
@@ -811,7 +807,7 @@ func (s *server) launch(sp *spawn, req *protocol.Request) (string, error) {
 		Env:      req.Env,
 		Limits:   req.Rlimits.Resolve(),
 		Control:  req.Control,
-		Cgroup:   groupPath,
+		Cgroup:   group.Path(),
 	})
 	if err != nil {
 		return protocol.CodeInternal, err

@@ -116,11 +116,10 @@ const (
 	stateQuarantined
 )
 
-// Stats counts a pool's uids by state.
+// Stats reports a pool's size and its free and quarantined uids.
 type Stats struct {
 	Size        int
 	Free        int
-	InUse       int
 	Quarantined int
 }
 
@@ -197,14 +196,11 @@ func (p *Pool) Quarantined() []int {
 	return out
 }
 
-// Stats counts the pool's uids by state.
+// Stats reports the pool's size and its free and quarantined uids.
 func (p *Pool) Stats() Stats {
 	st := Stats{Size: p.spec.Size(), Free: len(p.free)}
 	for _, s := range p.state {
-		switch s {
-		case stateInUse:
-			st.InUse++
-		case stateQuarantined:
+		if s == stateQuarantined {
 			st.Quarantined++
 		}
 	}

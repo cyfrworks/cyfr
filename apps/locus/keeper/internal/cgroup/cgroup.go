@@ -17,11 +17,11 @@
 // Groups can be made only where the keeper's own cgroup is the root of a
 // cgroup namespace mounted writable, as a container started with Docker's
 // `writable-cgroups=true` security option has it; Delegate reports anything
-// else as the reason bounds are unavailable, and the keeper then refuses a
-// spawn that asks for one. cgroup v2 lets a group hold processes or enable
-// controllers for its children, not both, so Delegate first moves every
+// else as the reason bounds are unavailable, and the keeper then refuses
+// spawns. cgroup v2 lets a group hold processes or enable controllers for
+// its children, not both, so Delegate first moves every
 // process of the namespace root, the keeper among them, into the leaf
-// group `keeper`; what the keeper starts without a bound stays there.
+// group `keeper`; the client and the keeper's other helpers stay there.
 //
 // Where the host mounts cgroup2 with `nsdelegate`, as systemd does, the
 // kernel refuses a write from inside the namespace to the root's own limits,

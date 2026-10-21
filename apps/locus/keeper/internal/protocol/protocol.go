@@ -31,18 +31,18 @@
 // command, and a reserved name (ReservedEnv, ReservedEnvPrefixes) is
 // refused.
 //
-// A spawn's `memory_bytes`, from MinMemoryBytes to MaxMemoryBytes, bounds
-// the memory of everything the spawn runs, whatever its pool: the keeper
-// puts the command in a cgroup of its own (package cgroup) limited to that
-// many bytes with no swap, so its processes, the pages of what it writes to
+// A spawn's required `memory_bytes`, from MinMemoryBytes to MaxMemoryBytes,
+// bounds the memory of everything the spawn runs, whatever its pool: the
+// keeper puts the command in a cgroup of its own (package cgroup) limited
+// to that many bytes with no swap, so its processes, the pages of what it writes to
 // a tmpfs home and the kernel memory charged to it never exceed the bound
 // together. When they cannot stay under it the kernel kills every process
 // of the spawn, and the leader's `exited` carries `"memory_exceeded": true`,
 // read from the cgroup's own counters and never inferred from the signal;
 // every other `exited` carries false. A keeper that cannot give a spawn
-// such a cgroup refuses the request as CodeMemoryUnavailable: a bound asked
-// for is enforced or the command does not run. A spawn without
-// `memory_bytes` has no bound of its own.
+// such a cgroup refuses the request as CodeMemoryUnavailable: the bound is
+// enforced or the command does not run. Missing, null and zero
+// `memory_bytes` are refused as CodeBadRequest.
 //
 // A spawn with `"control": true` also gets a control channel: the keeper
 // makes an AF_UNIX stream socketpair, installs one end as the command's file
@@ -115,8 +115,8 @@ const (
 	CodeUnknownSpawn = "unknown_spawn"
 	CodeNotRunning   = "not_running"
 	CodeInternal     = "internal"
-	// CodeMemoryUnavailable refuses a spawn asking for a memory bound the
-	// keeper cannot enforce where it runs.
+	// CodeMemoryUnavailable refuses a spawn whose memory bound the keeper
+	// cannot enforce where it runs.
 	CodeMemoryUnavailable = "memory_unavailable"
 )
 
@@ -249,7 +249,7 @@ type Request struct {
 	Argv    []string          `json:"argv,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 	Rlimits *Rlimits          `json:"rlimits,omitempty"`
-	// MemoryBytes is a spawn's memory bound; nil asks for none.
+	// MemoryBytes is required for a spawn and absent for other requests.
 	MemoryBytes *uint64 `json:"memory_bytes,omitempty"`
 	Control     bool    `json:"control,omitempty"`
 	// Isolation is IsolationNetns for a spawn of an isolated pool and
@@ -270,8 +270,6 @@ type RequestError struct {
 	SpawnID string
 	Detail  string
 }
-
-func (e *RequestError) Error() string { return e.Code + ": " + e.Detail }
 
 // Reply returns the `error` message answering this refusal.
 func (e *RequestError) Reply() ErrorReply {
@@ -360,7 +358,10 @@ func validateSpawn(req *Request) error {
 	if err := req.Rlimits.validate(); err != nil {
 		return err
 	}
-	if m := req.MemoryBytes; m != nil && (*m < MinMemoryBytes || *m > MaxMemoryBytes) {
+	if req.MemoryBytes == nil {
+		return errors.New("memory_bytes is required")
+	}
+	if m := *req.MemoryBytes; m < MinMemoryBytes || m > MaxMemoryBytes {
 		return fmt.Errorf("memory_bytes must be within %d..%d", uint64(MinMemoryBytes), uint64(MaxMemoryBytes))
 	}
 	if req.Isolation != "" && req.Isolation != IsolationNetns {

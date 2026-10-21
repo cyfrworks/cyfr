@@ -415,8 +415,9 @@ func setLimits(l protocol.Limits) error {
 }
 
 // closeOnExecFrom marks every descriptor from first upward close-on-exec,
-// so the executed command holds only fds 0-2. Descriptors are marked rather
-// than closed because the Go runtime still uses some of them until exec.
+// preserving stdio and any control or relay descriptors below first.
+// Descriptors are marked rather than closed because the Go runtime still
+// uses some of them until exec.
 func closeOnExecFrom(first int) error {
 	err := unix.CloseRange(uint(first), math.MaxUint32, unix.CLOSE_RANGE_CLOEXEC)
 	if err == nil {
