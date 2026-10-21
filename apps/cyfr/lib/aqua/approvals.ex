@@ -157,7 +157,7 @@ defmodule Aqua.Approvals do
       other ->
         raise ArgumentError,
               "config :cyfr, Aqua.Approvals, expiry_hours: must be a positive integer, " <>
-                "got: #{inspect(other)}"
+                "got #{Prima.LoggerContext.shape(other)}"
     end
   end
 
@@ -422,9 +422,6 @@ defmodule Aqua.Approvals do
   # is never judged under the caller's.
   defp unloaded({:unknown_origin, _spelling}), do: "the turn records no origin"
   defp unloaded(reason), do: Aqua.Ops.render_refusal(reason)
-
-  defp capability_holds(_ctx, %{agent_capability_digest: nil}),
-    do: {:error, "the turn pinned no agent — send the message again"}
 
   defp capability_holds(ctx, %{agent: name, agent_capability_digest: pinned}) do
     with {:ok, agent} <- Compendium.agent(ctx, name),
