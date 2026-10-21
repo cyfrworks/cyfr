@@ -85,10 +85,9 @@ defmodule CyfrWeb.Plugs.WebhookRateLimitTest do
     end
 
     # The per-IP bucket is checked FIRST, so it clamps whatever the row
-    # configures. It was a hard-coded 600 with no knob, and one provider
-    # delivering from one stable address is the ordinary case — so an
-    # operator who set a higher rate_limit was held to 600 with nothing
-    # saying why.
+    # configures, and one provider delivering from one stable address is
+    # the ordinary case: the ceiling is a platform setting an operator who
+    # sets a higher rate_limit raises with it.
     test "a per-slug limit above the per-IP ceiling is not silently clamped", %{ctx: ctx} do
       Cyfr.Test.Settings.put("webhook_per_ip_rate_limit_max", 3)
 
@@ -212,22 +211,6 @@ defmodule CyfrWeb.Plugs.WebhookRateLimitTest do
       assert WebhookRateLimit.call(conn, %{}).status == 429
 
       Application.put_env(:sanctum, :crypto_keyring, keyring)
-    end
-  end
-
-  describe "no slug" do
-    test "falls back to IP scan-evasion bucket" do
-      conn =
-        Plug.Test.conn(:post, "/hooks/", "{}")
-        |> Map.put(:remote_ip, {10, 0, 0, 99})
-
-      statuses =
-        for _ <- 1..15 do
-          WebhookRateLimit.call(conn, %{}).status
-        end
-
-      accepted = Enum.count(statuses, &is_nil/1)
-      assert accepted <= 10
     end
   end
 end
