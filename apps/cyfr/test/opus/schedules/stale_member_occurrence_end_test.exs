@@ -107,7 +107,7 @@ defmodule Opus.Schedules.StaleMemberOccurrenceEndTest do
       boot: boot
     } do
       assert {:error, :not_owner} =
-               Scheduler.complete(schedule, occurrence, "exec_done", %{"ran" => true}, boot)
+               Scheduler.complete(schedule, occurrence, "exec_done", %{"ran" => true})
 
       assert [%{state: "claimed", claimed_by: ^boot, ended_at: nil}] =
                occurrences(actor, schedule.id)
@@ -116,7 +116,7 @@ defmodule Opus.Schedules.StaleMemberOccurrenceEndTest do
     end
 
     test "a stale member's recovery moves only the claim: it ends nothing under it, and the successor's end stands",
-         %{actor: actor, schedule: schedule, occurrence: occurrence, boot: boot, slot: slot} do
+         %{actor: actor, occurrence: occurrence, boot: boot, slot: slot} do
       # Recovery is not an end: the stale member can move the claim ...
       assert :ok = ScheduleOccurrences.recover(actor, occurrence.id, boot, "stale-recoverer")
 
@@ -135,15 +135,6 @@ defmodule Opus.Schedules.StaleMemberOccurrenceEndTest do
 
       assert {:error, :not_owner} =
                ScheduleOccurrences.settle_dead(actor, occurrence.id, "stale-recoverer", nil)
-
-      assert {:error, :not_owner} =
-               Scheduler.complete(
-                 schedule,
-                 occurrence,
-                 "exec_stale",
-                 %{"ran" => true},
-                 "stale-recoverer"
-               )
 
       assert outcomes(occurrence.id) == []
 

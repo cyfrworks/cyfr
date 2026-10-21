@@ -59,10 +59,9 @@ defmodule Sanctum.Gate.ErrorAdoptionTest do
     "apps/prima/lib/prima/authority/blob.ex" => 23,
     "apps/prima/lib/prima/component_ref.ex" => 20,
     "apps/cyfr/lib/emissary/external/server.ex" => 19,
-    # The concurrency argument's own refusal is a sentence about the value
-    # offered; the two that were the tool's catch-alls are typed now, so
-    # the action-coverage case reads one vocabulary.
-    "apps/cyfr/lib/opus/schedules/provider.ex" => 16,
+    # What is wrong with the values offered (an empty field, a cron
+    # expression, a reference that does not resolve) and the cap reached.
+    "apps/cyfr/lib/opus/schedules/provider.ex" => 6,
     "apps/cyfr/lib/opus/provider.ex" => 12,
     # An upstream registry's own diagnostics, which are its words and not
     # this vocabulary's.

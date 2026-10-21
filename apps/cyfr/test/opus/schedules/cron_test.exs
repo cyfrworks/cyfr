@@ -65,19 +65,6 @@ defmodule Opus.Schedules.CronTest do
     end
   end
 
-  describe "valid?/1" do
-    test "returns true for valid expressions" do
-      assert Cron.valid?("* * * * *")
-      assert Cron.valid?("*/5 * * * *")
-      assert Cron.valid?("0 9 * * 1-5")
-    end
-
-    test "returns false for invalid expressions" do
-      refute Cron.valid?("bad")
-      refute Cron.valid?("60 * * * *")
-    end
-  end
-
   describe "next_run/2" do
     test "finds next minute for every-minute cron" do
       {:ok, cron} = Cron.parse("* * * * *")

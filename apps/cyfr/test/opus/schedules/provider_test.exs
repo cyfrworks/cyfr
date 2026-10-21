@@ -98,11 +98,21 @@ defmodule Opus.Schedules.ProviderTest do
               "catch_up_limit" => Opus.Schedules.Scheduler.max_catch_up() + 1
             },
             %{"missed_runs" => "skip", "catch_up_limit" => 2},
-            %{"catch_up_limit" => 2},
-            %{"missed_runs" => "sometimes"}
+            %{"catch_up_limit" => 2}
           ] do
         assert {:error, {:invalid_argument, _}} = create!(ctx, extra), inspect(extra)
       end
+
+      # A policy outside the declared two never reaches the handler.
+      assert {:error, {:invalid_argument, "Field 'missed_runs' is not an allowed value"}} =
+               cast(%{
+                 "action" => "create",
+                 "profile_id" => "prof-cron",
+                 "name" => "sometimes",
+                 "cron_expression" => "*/5 * * * *",
+                 "reference" => "reagent:local.test:1.0.0",
+                 "missed_runs" => "sometimes"
+               })
 
       {:ok, %{schedules: listed}} = Provider.handle("schedule", ctx, %{"action" => "list"})
       assert listed == []
@@ -480,36 +490,21 @@ defmodule Opus.Schedules.ProviderTest do
   end
 
   describe "profile binding" do
-    test "create without a profile_id is refused", %{ctx: ctx} do
-      assert {:error, message} =
-               Provider.handle("schedule", ctx, %{
+    # The declaration refuses an unbound schedule before any handler runs:
+    # the gate casts every call against it (`Prima.Operation.cast/2`).
+    test "create without a profile_id is refused by its declaration" do
+      assert {:error, {:invalid_argument, "Missing required field: profile_id"}} =
+               cast(%{
                  "action" => "create",
                  "name" => "unbound",
                  "cron_expression" => "0 * * * *",
                  "reference" => "reagent:local.test:1.0.0"
                })
-
-      assert message =~ "profile_id is required"
     end
 
-    test "update with an explicit nil profile_id (unbind) is refused", %{ctx: ctx} do
-      {:ok, created} =
-        Provider.handle("schedule", ctx, %{
-          "action" => "create",
-          "profile_id" => "prof-cron",
-          "name" => "no-unbind",
-          "cron_expression" => "0 * * * *",
-          "reference" => "reagent:local.test:1.0.0"
-        })
-
-      assert {:error, message} =
-               Provider.handle("schedule", ctx, %{
-                 "action" => "update",
-                 "schedule_id" => created.schedule_id,
-                 "profile_id" => nil
-               })
-
-      assert message =~ "profile_id is required"
+    test "update with an explicit nil profile_id (unbind) is refused by its declaration" do
+      assert {:error, {:invalid_argument, "Field 'profile_id' must be a string"}} =
+               cast(%{"action" => "update", "schedule_id" => "sched_x", "profile_id" => nil})
     end
 
     test "update that re-points the reference re-runs the binding gate", %{ctx: ctx} do
@@ -776,15 +771,6 @@ defmodule Opus.Schedules.ProviderTest do
       assert msg =~ "Failed to re-resolve"
     end
 
-    test "re-resolve requires schedule_id", %{ctx: _ctx} do
-      assert {:error, msg} =
-               Provider.handle("schedule", %Context{}, %{
-                 "action" => "re_resolve"
-               })
-
-      assert msg =~ "Missing required argument: schedule_id"
-    end
-
     test "re-resolve re-checks the profile binding against the new version", %{ctx: ctx} do
       # Changing a schedule version must pass the same profile-binding gates as creation and update.
       {:ok, created} =
@@ -815,16 +801,17 @@ defmodule Opus.Schedules.ProviderTest do
   end
 
   describe "invalid actions" do
-    test "rejects unknown action", %{ctx: ctx} do
-      assert {:error, _} = Provider.handle("schedule", ctx, %{"action" => "nope"})
+    test "the declaration refuses an unknown or missing action" do
+      assert {:error, {:unknown_action, "schedule.nope"}} = cast(%{"action" => "nope"})
+      assert {:error, :action_missing} = cast(%{})
     end
 
-    test "rejects missing action", %{ctx: ctx} do
-      assert {:error, _} = Provider.handle("schedule", ctx, %{})
-    end
-
-    test "rejects unknown tool" do
-      assert {:error, _} = Provider.handle("unknown", %Context{}, %{})
+    test "the declaration refuses a call that names no schedule" do
+      for action <- ~w(get update pause resume delete re_resolve) do
+        assert {:error, {:invalid_argument, "Missing required field: schedule_id"}} =
+                 cast(%{"action" => action}),
+               action
+      end
     end
   end
 
@@ -880,6 +867,12 @@ defmodule Opus.Schedules.ProviderTest do
       assert {:ok, 3} = Arca.CronSchedule.count_active(Context.actor(ctx), "schedule")
       assert {:ok, 4} = Arca.CronSchedule.count_active(Context.actor(ctx), "feed")
     end
+  end
+
+  # The gate's cast of a call against the tool's declaration.
+  defp cast(args) do
+    [tool] = Provider.tools()
+    Prima.Operation.cast(tool, args)
   end
 
   defp schedule_args(name) do

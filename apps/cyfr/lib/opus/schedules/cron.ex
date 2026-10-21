@@ -30,7 +30,7 @@ defmodule Opus.Schedules.Cron do
   }
 
   @doc """
-  Parses a cron expression string into a `%CronExpr{}` struct.
+  Parses a cron expression string into a `%Opus.Schedules.Cron{}` struct.
 
   Returns `{:ok, expr}` or `{:error, reason}`.
   """
@@ -56,14 +56,6 @@ defmodule Opus.Schedules.Cron do
       _ ->
         {:error, "Expected 5 fields (minute hour dom month dow), got: #{expr}"}
     end
-  end
-
-  @doc """
-  Returns true if the cron expression string is valid.
-  """
-  @spec valid?(String.t()) :: boolean()
-  def valid?(expr) do
-    match?({:ok, _}, parse(expr))
   end
 
   @doc """
@@ -107,8 +99,9 @@ defmodule Opus.Schedules.Cron do
         "Etc/UTC"
       )
 
-    # Consecutive Feb-29s are 1461 days apart, so a 4×365-day horizon
-    # declared a just-fired leap-day schedule impossible and orphaned it.
+    # Consecutive Feb-29s are 1461 days apart: the horizon is four leap
+    # years and a day, so a leap-day schedule that has just fired still
+    # finds its next run.
     max_dt = DateTime.add(from, (4 * 366 + 1) * 86_400, :second)
     find_next(cron, candidate, max_dt)
   end

@@ -1187,17 +1187,28 @@ defmodule Opus.Schedules.OwnershipFenceTest do
       assert [%{state: "uncertain"}] = occurrences(actor, schedule.id)
     end
 
-    test "graces a live member's lapsed occurrence for exactly two ticks of its own clock" do
-      occurrence = %{id: "occ_graced"}
-      first = System.monotonic_time(:millisecond)
+    test "graces a live member's lapsed occurrence until two ticks of its own clock have passed",
+         %{ctx: ctx, actor: actor} do
+      claimant!(Prima.Boot.id())
+      schedule = create_schedule(ctx)
+      occurrence_id = lapsed_live!(ctx, schedule, DateTime.utc_now())
+      scheduler = scheduler!()
+      _ = :sys.get_state(scheduler)
 
       # First seen: recorded, not ended.
-      assert {[], %{lapsed_seen: %{"occ_graced" => ^first}}} =
-               Scheduler.graced([occurrence], %{lapsed_seen: %{}}, first)
+      assert Map.has_key?(seen(scheduler), occurrence_id)
+      assert [%{state: "started"}] = occurrences(actor, schedule.id)
 
-      seen = %{lapsed_seen: %{"occ_graced" => first}}
-      assert {[], _} = Scheduler.graced([occurrence], seen, first + 2 * @tick_ms - 1)
-      assert {[^occurrence], _} = Scheduler.graced([occurrence], seen, first + 2 * @tick_ms)
+      # A second short of two ticks: still graced, and its sighting kept.
+      seen_ago!(scheduler, 2 * @tick_ms - 1_000)
+      standing_fires!(scheduler)
+      assert [%{state: "started"}] = occurrences(actor, schedule.id)
+      assert Map.has_key?(seen(scheduler), occurrence_id)
+
+      # Two ticks, read on the pass's own clock at or after them: ended.
+      seen_ago!(scheduler, 2 * @tick_ms)
+      standing_fires!(scheduler)
+      assert [%{state: "uncertain"}] = occurrences(actor, schedule.id)
     end
 
     test "forgets an occurrence it saw lapsed once it is no longer lapsed", %{ctx: ctx} do

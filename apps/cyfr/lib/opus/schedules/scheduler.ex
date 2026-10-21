@@ -174,9 +174,7 @@ defmodule Opus.Schedules.Scheduler do
   alias Cyfr.Bus.{FeedPublished, ScheduleCompleted, Schedules}
   alias Opus.Schedules.Cron
 
-  @db_load_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError, RuntimeError]
-  @db_fire_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError]
-  @db_timer_errors Arca.Repo.Errors.db_errors() ++ [DBConnection.OwnershipError, ArgumentError]
+  @db_errors Arca.Repo.Errors.db_errors()
 
   @max_timer_ms 60 * 60 * 1_000
   @max_load_retries 5
@@ -212,7 +210,6 @@ defmodule Opus.Schedules.Scheduler do
   def pause(schedule_id), do: GenServer.cast(__MODULE__, {:pause, schedule_id})
   def resume(schedule_id), do: GenServer.cast(__MODULE__, {:resume, schedule_id})
   def update(schedule_id), do: GenServer.cast(__MODULE__, {:update, schedule_id})
-  def reload, do: GenServer.cast(__MODULE__, :reload)
 
   @doc "The most missed times a `catch_up` schedule's episode fires (its `catch_up_limit` ceiling)."
   @spec max_catch_up() :: pos_integer()
@@ -273,10 +270,6 @@ defmodule Opus.Schedules.Scheduler do
 
   def handle_cast({:remove, schedule_id}, state), do: {:noreply, cancel_timer(schedule_id, state)}
   def handle_cast({:pause, schedule_id}, state), do: {:noreply, cancel_timer(schedule_id, state)}
-
-  def handle_cast(:reload, state) do
-    {:noreply, state |> cancel_all_timers() |> load_all_schedules()}
-  end
 
   @impl true
   # A member that does not hold its cell slot claims no occurrence: the
@@ -418,13 +411,11 @@ defmodule Opus.Schedules.Scheduler do
   # A task exit that is not the run failing: the scheduler is going down,
   # the run left its occurrence to recovery, or its reason was lost
   # (`:noproc`).
-  @doc false
-  @spec failed_run?(term()) :: boolean()
-  def failed_run?(:normal), do: false
-  def failed_run?(:noproc), do: false
-  def failed_run?(:shutdown), do: false
-  def failed_run?({:shutdown, _}), do: false
-  def failed_run?(_reason), do: true
+  defp failed_run?(:normal), do: false
+  defp failed_run?(:noproc), do: false
+  defp failed_run?(:shutdown), do: false
+  defp failed_run?({:shutdown, _}), do: false
+  defp failed_run?(_reason), do: true
 
   # The exits that leave the run's occurrence open for recovery to reach:
   # the run's own word for it, and an exit whose reason never reached this
@@ -441,8 +432,9 @@ defmodule Opus.Schedules.Scheduler do
   # asked of it: a start never waits on a task supervisor that is busy or
   # held. A run already gone is answered `:noproc` and asks the same; a
   # process linked to the supervisor that is not a run asks at most one
-  # pass more. With no task supervisor there is nothing to watch, and the
-  # two-tick pass asked for at the start still comes.
+  # pass more. A task supervisor between its own restarts is registered
+  # under no name and its runs ended with it: nothing is watched, and the
+  # two-tick pass asked for at the start reaches what they left.
   defp adopt_runs(state) do
     with sup when is_pid(sup) <- Process.whereis(Opus.Schedules.TaskSupervisor),
          {:links, links} <- Process.info(sup, :links),
@@ -475,9 +467,8 @@ defmodule Opus.Schedules.Scheduler do
         %{state | load_retry_count: 0}
     end
   rescue
-    e in @db_load_errors ->
-      level = if match?(%DBConnection.OwnershipError{}, e), do: :warning, else: :error
-      load_retry(state, Exception.message(e), level)
+    e in @db_errors ->
+      load_retry(state, Exception.message(e))
   catch
     :exit, reason ->
       load_retry(state, Prima.LogFilter.format_exception(:exit, reason), :warning)
@@ -559,9 +550,7 @@ defmodule Opus.Schedules.Scheduler do
   # What is no longer answered lapsed is forgotten, so the seen-set is
   # bounded by the open set; a restart forgets it all, and waits two ticks
   # more.
-  @doc false
-  @spec graced([map()], map(), integer()) :: {[map()], map()}
-  def graced(lapsed_live, state, seen_at) do
+  defp graced(lapsed_live, state, seen_at) do
     seen = Map.new(lapsed_live, &{&1.id, Map.get(state.lapsed_seen, &1.id, seen_at)})
     graced = Enum.filter(lapsed_live, &(seen_at - Map.fetch!(seen, &1.id) >= @standing_ms))
     {graced, %{state | lapsed_seen: seen}}
@@ -696,7 +685,7 @@ defmodule Opus.Schedules.Scheduler do
         recover_later(state)
     end
   rescue
-    e in @db_load_errors ->
+    e in @db_errors ->
       Logger.warning(
         "[Opus.Schedules.Scheduler] occurrence recovery failed: #{Exception.message(e)}"
       )
@@ -851,7 +840,7 @@ defmodule Opus.Schedules.Scheduler do
         state
     end
   rescue
-    e in @db_fire_errors ->
+    e in @db_errors ->
       Logger.warning(
         "[Opus.Schedules.Scheduler] fire_schedule #{schedule_id} failed (#{Exception.message(e)}), retrying in 30s"
       )
@@ -873,15 +862,14 @@ defmodule Opus.Schedules.Scheduler do
 
   defp fire_active_schedule(schedule, ctx, state) do
     case runnable(schedule) do
-      {:error, :unresolved_reference} ->
+      {:error, :damaged_reference} ->
         Logger.error(
-          "[Opus.Schedules.Scheduler] schedule #{schedule.id} has no resolved_reference. " <>
-            "Cannot execute with unresolved reference '#{schedule.reference}'. " <>
-            "Re-create or update the schedule to pin a resolved version."
+          "[Opus.Schedules.Scheduler] schedule #{schedule.id} is damaged: its row holds no " <>
+            "pinned reference, skipping execution"
         )
 
-        emit_schedule_failed(schedule.id, ctx, :unresolved_reference)
-        record_error(ctx, schedule.id, "No resolved reference — re-create or update the schedule")
+        emit_schedule_failed(schedule.id, ctx, :damaged_reference)
+        record_error(ctx, schedule.id, "Damaged schedule: no pinned reference")
         schedule_timer(schedule.id, state)
 
       {:error, :invalid_input} ->
@@ -934,16 +922,18 @@ defmodule Opus.Schedules.Scheduler do
     end
   end
 
-  # What a run needs of the row, fail-closed: a resolved reference and
-  # input that decodes.
-  defp runnable(%{resolved_reference: nil}), do: {:error, :unresolved_reference}
-
-  defp runnable(schedule) do
+  # What a run needs of the row, fail-closed: the pinned reference every
+  # write stores, and input that decodes. A row without the pin is damaged
+  # and runs nothing.
+  defp runnable(%{resolved_reference: reference} = schedule)
+       when is_binary(reference) and reference != "" do
     case decode_json(schedule.input) do
-      {:ok, input} -> {:ok, schedule.resolved_reference, input}
+      {:ok, input} -> {:ok, reference, input}
       {:error, :invalid_json} -> {:error, :invalid_input}
     end
   end
+
+  defp runnable(_damaged), do: {:error, :damaged_reference}
 
   # Claiming and advancing are one write, decided on the cell's clock: the
   # claim asks the expression for the time after the one it fires, or
@@ -1181,11 +1171,9 @@ defmodule Opus.Schedules.Scheduler do
             duration_ms: duration_ms
           }
 
-          feed_completed(schedule, occurrence, ctx, feed, Map.get(result, :output, result), fired)
+          feed_completed(schedule, occurrence, ctx, feed, result.output, fired)
 
-        {:ok, result} ->
-          output = Map.get(result, :output, result)
-
+        {:ok, %{output: output}} ->
           closed = %{
             result: {:ok, output},
             duration_ms: duration_ms,
@@ -1456,13 +1444,13 @@ defmodule Opus.Schedules.Scheduler do
   # name another note than the one read, and the record says `absent`,
   # which publishes only over nothing or over this schedule's own earlier
   # outcome, never over a note the run did not read.
-  @spec complete(map(), map(), String.t(), term(), String.t()) ::
+  @spec complete(map(), map(), String.t(), term()) ::
           {:ok, 1} | {:error, :stale | :not_owner | :no_athanor | :database_error | term()}
-  def complete(schedule, occurrence, execution_id, output, claimed_by \\ claimant()) do
+  def complete(schedule, occurrence, execution_id, output) do
     ScheduleOccurrences.finish(
       Prima.Actor.in_athanor(occurrence.athanor_id),
       occurrence.id,
-      claimed_by,
+      claimant(),
       execution_id,
       "completed",
       also: &record_outcome(&1, schedule, execution_id, output)
@@ -1515,9 +1503,6 @@ defmodule Opus.Schedules.Scheduler do
       do: occurrence,
       else: %{occurrence | note_revision_read: nil}
   end
-
-  defp bound_read(occurrence, _read_before, _finished),
-    do: %{occurrence | note_revision_read: nil}
 
   # An end answered `:stale` found the occurrence another member's now,
   # or already ended; one refused `:not_owner` found this member's slot
@@ -1636,7 +1621,7 @@ defmodule Opus.Schedules.Scheduler do
           schedule_id: schedule.id,
           execution_id: completed.execution_id,
           occurrence_id: occurrence.id,
-          completed_at: Map.get(row, :last_run_at),
+          completed_at: row.last_run_at,
           keep_outcome: keep?,
           note_name: note_name,
           output: completed.output
@@ -1788,7 +1773,7 @@ defmodule Opus.Schedules.Scheduler do
         state
     end
   rescue
-    e in @db_timer_errors ->
+    e in @db_errors ->
       Logger.warning(
         "[Opus.Schedules.Scheduler] schedule_timer #{schedule_id} failed (#{Exception.message(e)}), retrying in 30s"
       )
@@ -1820,11 +1805,6 @@ defmodule Opus.Schedules.Scheduler do
         Process.cancel_timer(timer_ref)
         %{state | timers: Map.delete(state.timers, schedule_id)}
     end
-  end
-
-  defp cancel_all_timers(state) do
-    Enum.each(state.timers, fn {_id, ref} -> Process.cancel_timer(ref) end)
-    %{state | timers: %{}}
   end
 
   defp compute_next_run(cron_expression) do
