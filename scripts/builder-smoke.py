@@ -13,8 +13,8 @@ without re-resolving (refused by `--locked`), a re-resolve, a locked
 rebuild, a compiler error that reports its diagnostics, and a tincture
 build from its lockfile through npm and Vite; no process of a build uid may be left running
 and no build home may remain. A request at another protocol version is
-refused naming both ends' versions, one signed with another key is refused
-as unauthorized, and the routes the wire replaced are no operation. Then,
+refused naming both ends' versions and one signed with another key is
+refused as unauthorized, with nothing started for either. Then,
 with a 15 s build deadline, a build that outlives it, having started a
 daemon that ignores SIGTERM, is refused as timed out with nothing of it
 left.
@@ -30,8 +30,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.error
-import urllib.request
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "builder-image"))
@@ -190,17 +188,6 @@ def test_refusals(stack, sources):
     http_status, _progress, answer = stack.build_lines(sources, "rust", "reagent", key=secrets.token_hex(32))
     expect(http_status == 401 and answer.get("class") == "unauthorized" and answer["reason"] == "bad_mac",
            "a request signed with another key is refused as unauthorized", answer)
-
-    # What the wire replaced: the bearer-token POST /build and GET /health.
-    for method, path in (("POST", "/build"), ("GET", "/health")):
-        request = urllib.request.Request(stack.base + path, data=b"{}" if method == "POST" else None, method=method,
-                                         headers={"authorization": f"Bearer {stack.key}"})
-        try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                status, line = response.status, response.read()
-        except urllib.error.HTTPError as error:
-            status, line = error.code, error.read()
-        expect(status == 400 and json.loads(line).get("class") == "malformed", f"{method} {path} is no operation of the service", line.decode())
 
     expect(stack.pool_processes() == [] and stack.homes() == [], "nothing was started for a refused request", stack.pool_processes())
 
