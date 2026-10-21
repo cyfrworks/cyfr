@@ -82,11 +82,11 @@ if [ "$1" = run ] && [ "${2:-}" = --no-start ] && [ "${3:-}" = -e ] && [ -n "${C
   mkdir -p "$TRACE/real-mix-tmp"
   TMPDIR="$TRACE/real-mix-tmp" exec "$REAL_MIX" "$@"
 fi
-# The runner's assignment, as T03's tests stand in for it: `mix run
-# --no-start --no-compile HELPER assign DIR COUNT TABLE REQUIRED FAILED --
-# NAMES...` writes DIR/assign/p1..pCOUNT, each the partition's units,
-# NUL-terminated, dealing the named paths round robin, or one unit to
-# every partition when none is named.
+# The runner's assignment, as tests/test-partitioned-test.sh stands in for
+# it: `mix run --no-start --no-compile HELPER assign DIR COUNT TABLE
+# REQUIRED FAILED -- NAMES...` writes DIR/assign/p1..pCOUNT, each the
+# partition's units, NUL-terminated, dealing the named paths round robin,
+# or one unit to every partition when none is named.
 if [ "$1" = run ] && [ "${5:-}" = assign ]; then
   dir=$6 count=$7
   shift 11
@@ -126,7 +126,7 @@ FAKE
 chmod +x "$scratch/bin/mix"
 
 # start_gate NAME [VAR=value...] -- GATE ARGS...: starts the gate as every
-# harness test starts a wrapper (C1), as the leader of a session of its
+# harness test starts a wrapper, as the leader of a session of its
 # own, with SIGINT and SIGHUP at their defaults (an asynchronous command
 # starts with SIGINT ignored, a caller may have HUP ignored, and a shell
 # cannot trap a signal ignored at its start). Its
@@ -893,7 +893,6 @@ until_true 60 test -s "$scratch/kill.trace/held.postgres_test_compile" || fail "
 steps="$(cat "$scratch/kill.trace/held.sqlite_test_compile") $(cat "$scratch/kill.trace/held.postgres_test_compile")"
 legs=$(pgrep -P "$k" | tr '\n' ' ')
 [ -n "$legs" ] || fail 'the SIGKILL case found no leg to watch'
-# shellcheck disable=SC2086
 alive_all() { local p; for p in "$@"; do alive "$p" || return 1; done; }
 # shellcheck disable=SC2086
 alive_all $steps || fail 'the held steps were not running before the SIGKILL'
