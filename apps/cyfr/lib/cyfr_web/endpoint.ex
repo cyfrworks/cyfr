@@ -37,31 +37,24 @@ defmodule CyfrWeb.Endpoint do
 
   use Phoenix.Endpoint, otp_app: :cyfr
 
-  # The session will be stored in the cookie and signed,
-  # this means its contents can be read but not tampered with.
-  # Set :encryption_salt if you would also like to encrypt it.
+  # The session is stored in the cookie and signed: its contents can be
+  # read but not tampered with. The salt is a domain separator, not a key
+  # (signing strength comes from secret_key_base); a release always signs
+  # under the one `config/runtime.exs` sets, and dev and test under this.
   @default_session_salt "CZdqUO1/"
 
   @doc """
-  Session cookie options. Public so tests can assert the security flags.
-  Must emit `http_only: true`, `same_site: "Lax"`, and `secure:` tied to
-  `:cookie_secure` (true in prod, false in dev/test). Thirty days: the
-  browser session is the one credential a person's devices hold.
+  Session cookie options, for the session plug and the live socket's
+  connect info. They emit `http_only: true`, `same_site: "Lax"`, and
+  `secure:` tied to `:cookie_secure` (true in prod, false in dev/test).
+  Thirty days: the browser session is the one credential a person's
+  devices hold.
   """
   def session_options do
-    salt = Application.get_env(:cyfr, :session_salt, @default_session_salt)
-
-    # The salt is a domain separator, not a key (signing strength comes
-    # from secret_key_base) — but a release running on the repo's default
-    # deserves to know, once, like the derived-keyring warning at boot.
-    if salt == @default_session_salt and Cyfr.RuntimeConfig.release?() do
-      warn_default_salt_once()
-    end
-
     [
       store: :cookie,
       key: "_cyfr_key",
-      signing_salt: salt,
+      signing_salt: Application.get_env(:cyfr, :session_salt, @default_session_salt),
       same_site: "Lax",
       http_only: true,
       secure: Cyfr.RuntimeConfig.cookie_secure?(),
@@ -240,10 +233,9 @@ defmodule CyfrWeb.Endpoint do
   # anonymous caller costs no read and decode of 28 MB.
   plug(:parse_body)
 
-  plug(Plug.MethodOverride)
   plug(Plug.Head)
   plug(:dynamic_session)
-  # Security headers are a pipeline concern now: the API/MCP/webhook
+  # Security headers are a pipeline concern: the API/MCP/webhook
   # pipelines carry the closed set (`CyfrWeb.Plugs.ApiSecurityHeaders`),
   # the browser pipeline the LiveView-compatible one
   # (`CyfrWeb.Plugs.BrowserCSP`), and tinctures their own.
@@ -338,23 +330,5 @@ defmodule CyfrWeb.Endpoint do
       end
 
     Plug.Session.call(conn, opts)
-  end
-
-  # session_options/0 runs per request; the warning belongs in the log once.
-  defp warn_default_salt_once do
-    if :persistent_term.get({__MODULE__, :salt_warned}, false) == false do
-      :persistent_term.put({__MODULE__, :salt_warned}, true)
-
-      require Logger
-
-      Logger.warning(
-        "[CyfrWeb.Endpoint] No CYFR_SESSION_SALT set — session cookies " <>
-          "are signed under the repo's default salt. Signing strength still " <>
-          "comes from CYFR_SECRET_KEY_BASE; set an explicit salt to decouple " <>
-          "this deployment's cookie domain from every other CYFR install."
-      )
-    end
-
-    :ok
   end
 end
