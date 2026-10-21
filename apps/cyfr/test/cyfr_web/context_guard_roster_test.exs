@@ -6,9 +6,9 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   Every console callback that holds a session context passes
   `CyfrWeb.ContextGuard`, and the roster of those callbacks is exact.
 
-  The roster is the session-bearing callback inventory taken when the
-  guard was introduced: the routed LiveViews, the nested ones, the
-  LiveComponents and the tasks whose results come back to a socket. The
+  The roster is the session-bearing callback inventory: the routed
+  LiveViews, the nested ones, the LiveComponents and the tasks whose
+  results come back to a socket. The
   tree is read against it both ways — a LiveView, component or task the
   roster does not name fails here until it is guarded and named, and a
   roster row whose module is gone fails too.
@@ -77,7 +77,9 @@ defmodule CyfrWeb.ContextGuardRosterTest do
         do: {name, path}
   end
 
-  defp mod(name), do: Module.concat(PrismWeb, name)
+  # A rostered name is a module of the loaded application, so its atom
+  # exists; a name that is not raises.
+  defp mod(name), do: Module.safe_concat(PrismWeb, name)
 
   test "every LiveView in the console is rostered as routed, nested or public, and nothing else" do
     found = sources() |> modules_using("live_view") |> Map.keys() |> MapSet.new()
