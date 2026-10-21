@@ -23,7 +23,7 @@ defmodule Locus.Runtime.Runner do
   its service it holds it (`child`), so a kill of that child reaches this
   runner. The attempt
   processes renew their leases and enforce the guest's timeout, bounded
-  by the subtree's deadline, as always; the runner adds the watchdog: at
+  by the subtree's deadline; the runner adds the watchdog: at
   the assignment's `deadline` plus the configured grace, a subtree still
   running has a guest that ignored its bound, and the VM halts
   (`Locus.Runtime.Release.halt/1`) so no native thread outlives it, with an `exit`

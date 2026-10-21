@@ -15,11 +15,10 @@ defmodule Locus.Runtime.SharedEngine do
 
   ## Fuel Enforcement
 
-  Fuel-based CPU limits require `consume_fuel: true` on the engine AND
-  calling `set_fuel/2` on each store. Wasmex does not currently expose
-  `set_fuel` for Component Model stores (`Wasmex.Components.Store`),
-  so fuel enforcement is not yet possible for components. The engine
-  uses `consume_fuel: false` until Wasmex adds this capability.
+  Fuel-based CPU limits require `consume_fuel: true` on the engine and
+  `set_fuel/2` on each store. Wasmex exposes no `set_fuel` for Component
+  Model stores (`Wasmex.Components.Store`), so the engine runs with
+  `consume_fuel: false` and enforces no fuel.
 
   ## CPU-Time Limitation
 

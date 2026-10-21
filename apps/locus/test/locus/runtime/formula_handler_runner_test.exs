@@ -383,8 +383,8 @@ defmodule Locus.Runtime.FormulaHandlerRunnerTest do
       assert_receive {:admitted, child_id}
       assert [%{args: %{"guest_fn" => "spawn"}}] = ScriptedHost.requests(host, "admit_child")
 
-      # Same success envelope the legacy dispatch wraps results in, while
-      # the child is still held at its artifact fetch.
+      # The success envelope every call's result is wrapped in, while the
+      # child is still held at its artifact fetch.
       assert %{
                "status" => "completed",
                "output" => %{"execution_id" => ^child_id, "stream_url" => stream_url}

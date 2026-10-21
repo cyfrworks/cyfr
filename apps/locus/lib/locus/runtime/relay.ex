@@ -27,8 +27,8 @@ defmodule Locus.Runtime.Relay do
 
   ## Host calls
 
-  The runner signs and seals each host call under the attempt's keys, as
-  ever. Before it posts one, this process verifies its header under the
+  The runner signs and seals each host call under the attempt's keys.
+  Before it posts one, this process verifies its header under the
   attempt's call key it holds (`Prima.WorkerAuth.verify_host_call_header_under/3`)
   and refuses, with a `close`, a header that names another attempt, runner,
   boot or member than the ones it holds, a body the header does not name

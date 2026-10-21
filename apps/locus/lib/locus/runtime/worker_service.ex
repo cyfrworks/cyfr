@@ -369,8 +369,8 @@ defmodule Locus.Runtime.WorkerService do
   # `complete` last, before it answers the `take` that hands the runner out
   # again (`Locus.Runtime.RunnerPool`). So every frame of the previous subtree is
   # already in this mailbox, behind this start. They are read now, in
-  # order, against that subtree, up to its `complete`, which ends it as it
-  # always does: a `child` it announced joins it and is ended with it, and
+  # order, against that subtree, up to its `complete`, which ends it as any
+  # `complete` does: a `child` it announced joins it and is ended with it, and
   # none of its frames can reach the new subtree. Should the `complete` not
   # be there, the pool's order was broken: the assignment is forgotten all
   # the same, so the new subtree never inherits it, and the break is logged.
@@ -406,7 +406,7 @@ defmodule Locus.Runtime.WorkerService do
   # belongs to a subtree whose clean `complete` is already queued, so it has
   # ended with it: it is only remembered as ended, never counted against the
   # bound or answered by ending the runner, which the pool has already taken
-  # for the next subtree. Every other frame is read as it always is.
+  # for the next subtree. Every other frame is read as any frame is.
   defp read_queued_frames(state, pid) do
     receive do
       {RunnerPool, ^pid, {:child, execution_id, _attempt}} ->

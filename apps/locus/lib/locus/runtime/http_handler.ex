@@ -52,7 +52,7 @@ defmodule Locus.Runtime.HttpHandler do
 
   ## Architecture
 
-  Follows the same pattern as `cyfr:vault/read` (see `runtime.ex:267-291`).
+  Follows the same pattern as `cyfr:vault/read` (`Locus.Runtime.Engine`).
   The host function is registered as a Wasmex import that the WASM component
   calls synchronously. All edge checks happen before any network I/O via
   `Locus.Runtime.HttpRequestValidation` — the single validation path shared with
