@@ -90,8 +90,6 @@
   {Credo.Check.Warning.UnsafeToAtom, "apps/cyfr/test/cyfr/platform_settings_test.exs",
    ":erlang.binary_to_atom", 3},
   {Credo.Check.Warning.UnsafeToAtom, "apps/cyfr/test/cyfr/telemetry_catalog_test.exs",
-   ":erlang.binary_to_atom", 1},
-  {Credo.Check.Warning.UnsafeToAtom, "apps/cyfr/test/cyfr/telemetry_catalog_test.exs",
    "String.to_atom", 1},
   {Credo.Check.Warning.UnsafeToAtom, "apps/cyfr/test/cyfr/test_timings_script_test.exs",
    "Module.concat", 2},
