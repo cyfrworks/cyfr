@@ -19,7 +19,8 @@
  * digest (`keyDigest`, `Prima.Device.key_digest/1`) is shown as its code
  * (`keyCode`), which the person types on a client of theirs to open an
  * invitation for that key alone. The invitation's link then pairs with
- * the prepared key, its `pair_request` naming the key and its digest.
+ * the prepared key through the page's `pair_start` and `pair_proof`
+ * requests, which carry the key and its digest (`index.js`).
  *
  * The connection (`Glass`) sends `connect` under the certificate it
  * holds, or `renew` when that certificate has expired by this device's
