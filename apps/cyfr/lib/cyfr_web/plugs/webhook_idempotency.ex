@@ -5,10 +5,12 @@ defmodule CyfrWeb.Plugs.WebhookIdempotency do
   @moduledoc """
   Idempotency dedup for inbound webhooks.
 
-  Runs **after** `CyfrWeb.Plugs.VerifyWebhookSignature` so we only burn
-  dedup rows on requests that proved their signature. Lookup is keyed on
-  `(webhook_id, idempotency_key)` where the key is read from the per-webhook
-  configurable header (e.g. GitHub's `X-GitHub-Delivery`, Stripe's event id).
+  Runs **after** `CyfrWeb.Plugs.VerifyWebhookSignature`, which halts every
+  request it does not verify and assigns the verified webhook row, so we
+  only burn dedup rows on requests that proved their signature. Lookup is
+  keyed on `(webhook_id, idempotency_key)` where the key is read from the
+  per-webhook configurable header (e.g. GitHub's `X-GitHub-Delivery`,
+  Stripe's event id).
 
   ## Behavior
 
@@ -35,12 +37,11 @@ defmodule CyfrWeb.Plugs.WebhookIdempotency do
 
   ## Why the claim is released on failure
 
-  Claim before dispatch to serialize duplicate deliveries. Failed requests release their claim for retry.
-
-  So a non-2xx response gives the claim back on the way out, and the retry is
-  a fresh delivery. A hard crash still leaves the row, which the TTL sweep
-  clears; that is the same exposure as before, now bounded to the case where
-  nothing could have run a `before_send` anyway.
+  The claim is made before dispatch, so duplicate deliveries are
+  serialized, and a failed request releases its claim for the sender's
+  retry: a non-2xx response gives the claim back on the way out, and the
+  retry is a fresh delivery. A hard crash, where nothing could run a
+  `before_send`, leaves the row, which the TTL sweep clears.
   """
 
   import Plug.Conn
@@ -49,13 +50,8 @@ defmodule CyfrWeb.Plugs.WebhookIdempotency do
 
   def init(opts), do: opts
 
-  def call(conn, _opts) do
-    webhook = conn.assigns[:webhook]
-
+  def call(%Plug.Conn{assigns: %{webhook: webhook}} = conn, _opts) do
     cond do
-      is_nil(webhook) ->
-        conn
-
       is_binary(webhook.idempotency_key_header) ->
         case fetch_key(conn, webhook.idempotency_key_header) do
           nil ->
@@ -83,9 +79,7 @@ defmodule CyfrWeb.Plugs.WebhookIdempotency do
   end
 
   defp signature_nonce(conn, webhook) do
-    header = webhook.signature_header || Sanctum.Webhook.default_signature_header()
-
-    case fetch_key(conn, header) do
+    case fetch_key(conn, webhook.signature_header) do
       nil -> nil
       signature -> "sig:" <> Prima.Digest.sha256(signature)
     end
