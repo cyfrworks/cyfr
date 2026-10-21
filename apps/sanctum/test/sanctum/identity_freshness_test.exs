@@ -1311,8 +1311,7 @@ defmodule Sanctum.IdentityFreshnessTest do
         user_id: person.user.id,
         source_kind: "device_cert",
         source_id: Prima.Digest.sha256(device_key),
-        device_public_key: device_key,
-        label: "phone"
+        device_public_key: device_key
       })
 
     {client, device_key}

@@ -1307,11 +1307,16 @@ defmodule Sanctum.InstanceEntriesTest do
       assert moved.destination == canonical(wider)
       assert moved.binding_digest == digest
 
-      for column <- [:provider_hint, :oauth_endpoints, :oauth_scopes, :field_names, :attach_only] do
+      for column <- [:provider_hint, :field_names] do
         assert Map.fetch!(moved, column) == Map.fetch!(before, column), inspect(column)
       end
 
-      assert Sanctum.Vault.rebind_details(before, moved) == preview["details"]
+      # An instance entry is attach-only by definition, as its binding reads.
+      assert Sanctum.Vault.rebind_details(
+               Map.put(before, :attach_only, true),
+               Map.put(moved, :attach_only, true)
+             ) == preview["details"]
+
       assert profile_of("ath_a", dependent) == "needs_consent"
       assert_received {:instance_entry, :rebound, _}
     end

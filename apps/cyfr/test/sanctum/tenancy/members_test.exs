@@ -1121,7 +1121,6 @@ defmodule Sanctum.Tenancy.MembersTest do
           source_kind: "session",
           source_id: "src_#{System.unique_integer([:positive])}",
           standing: "active",
-          label: "a browser",
           inserted_at: now,
           updated_at: now
         }

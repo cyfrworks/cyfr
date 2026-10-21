@@ -300,6 +300,7 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
       description: "Test component",
       tags: "[]",
       digest: "sha256:test",
+      release_digest: release_digest!("sha256:test", manifest),
       size: 100,
       exports: "[]",
       manifest: Jason.encode!(manifest),
@@ -316,6 +317,11 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
     }
 
     assert {:ok, _} = Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), attrs)
+  end
+
+  defp release_digest!(digest, manifest) do
+    {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
+    release_digest
   end
 
   defp operation(name) do

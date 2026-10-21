@@ -94,6 +94,9 @@ defmodule Sanctum.Consent.BootstrapTest do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     for i <- 1..101 do
+      digest = "sha256:#{:crypto.hash(:sha256, "bulk-#{i}") |> Base.encode16(case: :lower)}"
+      {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, %{})
+
       {:ok, _} =
         Arca.ComponentStorage.put_component(Sanctum.Context.actor(ctx), %{
           id: Ecto.UUID.generate(),
@@ -104,7 +107,8 @@ defmodule Sanctum.Consent.BootstrapTest do
           tags: "[]",
           category: "test",
           license: "MIT",
-          digest: "sha256:#{:crypto.hash(:sha256, "bulk-#{i}") |> Base.encode16(case: :lower)}",
+          digest: digest,
+          release_digest: release_digest,
           size: 1,
           exports: "[]",
           manifest: "{}",

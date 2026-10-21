@@ -496,17 +496,12 @@ defmodule Sanctum.PairingTest do
       args = for_key(device_key())
       authenticator = Sanctum.TestContext.passkey!(session_ctx.user_id)
 
-      {1, _} =
-        Arca.Repo.update_all(from(p in PairedClient, where: p.id == ^device.client_id),
-          set: [label: "Kitchen tablet"]
-        )
-
       assert {:error, {:confirmation_required, %{id: id}}} = Pairing.begin(device_ctx, args)
       row = record!(device_ctx, id)
       "sha256:" <> hex = row.digest
 
-      # The record names the device that asked, by its name.
-      assert Jason.decode!(row.asker) == %{"kind" => "client", "name" => "Kitchen tablet"}
+      # The record names that a device asked, by its kind.
+      assert Jason.decode!(row.asker) == %{"kind" => "client"}
 
       assertion =
         Sanctum.TestContext.Authenticator.assertion(
@@ -519,7 +514,6 @@ defmodule Sanctum.PairingTest do
 
       assert record!(device_ctx, id).confirmed_client_id == device.client_id
 
-      # The revocation's preview names the device by its name.
       {:ok, _} =
         Sanctum.TestContext.confirming(session_ctx, &Pairing.revoke(&1, device.client_id))
 
