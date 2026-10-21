@@ -822,9 +822,16 @@ defmodule Opus.Record do
 
   @doc """
   Load an execution record by ID.
+
+  Options:
+  - `:chain` - the root of the chain an in-chain caller is scoped to (nil,
+    the default, scopes nothing). A row that is neither that root nor
+    stamped with it is `{:error, :outside_chain}`, judged on its stored id
+    and root before the rest of the row is read, so a row outside the
+    chain answers the same whether it is intact or damaged.
   """
-  @spec get(Context.t(), String.t()) :: {:ok, t()} | {:error, term()}
-  def get(%Context{} = ctx, id) do
+  @spec get(Context.t(), String.t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def get(%Context{} = ctx, id, opts \\ []) do
     case Arca.Execution.get_tenant(Sanctum.Context.actor(ctx), id) do
       nil ->
         {:error, :not_found}
@@ -840,6 +847,7 @@ defmodule Opus.Record do
         result = execution_to_map(record)
 
         with :ok <- read_authorized(ctx, result),
+             :ok <- in_chain(result, Keyword.get(opts, :chain)),
              {:ok, record} <- from_row(result) do
           {:ok, hydrate_output(ctx, record)}
         end
@@ -874,11 +882,17 @@ defmodule Opus.Record do
   Options:
   - `:limit` - Maximum number of records (default: 20)
   - `:status` - Filter by status (:running, :completed, :failed, :all)
+  - `:chain` - the root of the chain an in-chain caller is scoped to (nil,
+    the default, scopes nothing): of the rows the limit takes, only that
+    root and the rows stamped with it, judged on their stored id and root
+    before any row is read, so a row outside the chain, intact or
+    damaged, is never read
   """
   @spec list(Context.t(), keyword()) :: {:ok, [t()]} | {:error, term()}
   def list(%Context{} = ctx, opts \\ []) do
     limit = Keyword.get(opts, :limit, 20)
     status_filter = Keyword.get(opts, :status, :all)
+    chain = Keyword.get(opts, :chain)
 
     opts = [limit: limit]
 
@@ -896,8 +910,11 @@ defmodule Opus.Record do
         {:error, reason}
 
       records ->
-        Enum.reduce_while(records, {:ok, []}, fn row, {:ok, acc} ->
-          case from_row(execution_to_map(row)) do
+        records
+        |> Enum.map(&execution_to_map/1)
+        |> Enum.filter(&(in_chain(&1, chain) == :ok))
+        |> Enum.reduce_while({:ok, []}, fn result, {:ok, acc} ->
+          case from_row(result) do
             {:ok, record} -> {:cont, {:ok, [record | acc]}}
             {:error, _} = damaged -> {:halt, damaged}
           end
@@ -915,6 +932,13 @@ defmodule Opus.Record do
       {:error, _} -> {:error, :not_found}
     end
   end
+
+  # Whether a stored row is the chain's root or stamped with it, read on
+  # its id and root columns alone, which a row damaged elsewhere still holds.
+  defp in_chain(_result, nil), do: :ok
+  defp in_chain(%{id: root}, root), do: :ok
+  defp in_chain(%{root_execution_id: root}, root), do: :ok
+  defp in_chain(_result, _root), do: {:error, :outside_chain}
 
   # ===========================================================================
   # Private - Struct Conversion

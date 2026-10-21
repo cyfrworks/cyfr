@@ -1430,6 +1430,37 @@ defmodule Opus.ProviderTest do
       assert ["running"] =
                Arca.Repo.all(from(e in "executions", where: e.id == ^id, select: e.status))
     end
+
+    # The chain is judged before the row is read: a caller in another
+    # chain hears what an intact stranger's row answers, never the damage.
+    @tag capture_log: true
+    test "outside the caller's chain it answers as any stranger's row does",
+         %{ctx: ctx, damaged: id} do
+      root = Opus.Record.new(ctx, "reagent:local.caller:1.0.0", %{})
+      :ok = Opus.Record.write_started(ctx, root)
+      intact = Opus.Record.new(ctx, "reagent:local.stranger:1.0.0", %{})
+      :ok = Opus.Record.write_started(ctx, intact)
+      lineage = %{"root_execution_id" => root.id}
+
+      for action <- ["logs", "cancel"], stranger <- [intact.id, id] do
+        assert Provider.handle(
+                 "execution",
+                 ctx,
+                 Map.merge(%{"action" => action, "execution_id" => stranger}, lineage)
+               ) == {:error, "Execution not found in this chain: #{stranger}"},
+               "#{action} #{stranger}"
+      end
+
+      assert {:ok, %{executions: [%{execution_id: listed}]}} =
+               Provider.handle("execution", ctx, Map.put(lineage, "action", "list"))
+
+      assert listed == root.id
+
+      assert ["running", "running"] =
+               Arca.Repo.all(
+                 from(e in "executions", where: e.id in ^[id, intact.id], select: e.status)
+               )
+    end
   end
 
   defp assert_damaged_record(reason) do

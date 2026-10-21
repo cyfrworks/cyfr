@@ -73,7 +73,7 @@ defmodule Opus.Provider do
   end
 
   # The gate admitted the read (authenticated, `:storage_read`, the
-  # external plane); `Opus.Record.get/2` supplies the tenant
+  # external plane); `Opus.Record.get/3` supplies the tenant
   # scoping under the caller's own context.
   defp read_resource(%Context{} = ctx, "opus://executions/" <> rest) do
     case parse_execution_uri(rest) do
@@ -160,43 +160,49 @@ defmodule Opus.Provider do
     end
   end
 
-  # In-chain callers see only their own subtree. `root_execution_id`
-  # arrives on args, but only ever host-injected: `call_in_chain` drops
-  # the guest's copy before re-adding the lineage it was told. Absent
-  # means an external-plane call, which keeps the tenant-wide view.
-  defp in_caller_chain?(record, args) do
-    case args["root_execution_id"] do
-      root when is_binary(root) and root != "" ->
-        record.id == root or record.root_execution_id == root
+  # In-chain callers see only their own subtree: the chain they are scoped
+  # to. `root_execution_id` arrives on args, but only ever host-injected:
+  # `call_in_chain` drops the guest's copy before re-adding the lineage it
+  # was told. Absent means an external-plane call, which keeps the
+  # tenant-wide view.
+  defp caller_chain(%{"root_execution_id" => root}) when is_binary(root) and root != "",
+    do: root
 
-      _ ->
-        true
+  defp caller_chain(_args), do: nil
+
+  # The record a logs or cancel names, read in the caller's chain. The
+  # chain is judged first, on the row's stored id and root
+  # (`Opus.Record.get/3`'s `:chain`): a row outside it answers the one
+  # chain refusal whether it is intact or damaged, and only a row the
+  # caller may read reports its damage.
+  defp read_in_chain(ctx, execution_id, args) do
+    case Record.get(ctx, execution_id, chain: caller_chain(args)) do
+      {:ok, record} ->
+        {:ok, record}
+
+      {:error, :outside_chain} ->
+        chain_scoped_refusal(execution_id)
+
+      # A missing row reports as missing; the caller learns nothing
+      # about executions outside its chain either way.
+      {:error, :not_found} ->
+        {:error, {:not_found, "Execution", execution_id}}
+
+      # A row stored damaged, or a store that cannot answer, refuses as itself.
+      {:error, _reason} = refused ->
+        refused
     end
   end
 
+  # An in-chain cancel reads its row in the chain before anything is
+  # cancelled; an external-plane cancel leaves the read to the cancel.
   defp check_chain_scope(ctx, execution_id, args) do
-    case args["root_execution_id"] do
-      root when is_binary(root) and root != "" ->
-        case Record.get(ctx, execution_id) do
-          {:ok, record} ->
-            if in_caller_chain?(record, args),
-              do: :ok,
-              else: chain_scoped_refusal(execution_id)
-
-          # A missing row reports as missing; the caller learns nothing
-          # about executions outside its chain either way.
-          {:error, :not_found} ->
-            {:error, {:not_found, "Execution", execution_id}}
-
-          # A row stored damaged, or a store that cannot answer, refuses
-          # the cancel as itself: nothing is judged in chain from a row
-          # that does not read.
-          {:error, _reason} = refused ->
-            refused
-        end
-
-      _ ->
+    case caller_chain(args) do
+      nil ->
         :ok
+
+      _root ->
+        with {:ok, _record} <- read_in_chain(ctx, execution_id, args), do: :ok
     end
   end
 
@@ -542,13 +548,13 @@ defmodule Opus.Provider do
     limit = min(args["limit"] || 20, 1000)
     status_filter = parse_status_filter(args["status"])
 
-    # A row stored damaged refuses the whole listing as itself
-    # (`{:corrupt, {:execution, id}}`), as a store that cannot answer does.
-    with {:ok, records} <- Record.list(ctx, limit: limit, status: status_filter) do
-      # In-chain listings are subtree-scoped for the same reason cancel
-      # and logs are: the caller has no business enumerating the tenant.
-      records = Enum.filter(records, &in_caller_chain?(&1, args))
-
+    # In-chain listings are subtree-scoped for the same reason cancel and
+    # logs are: the caller has no business enumerating the tenant. A row
+    # the listing reads stored damaged refuses it whole, as itself
+    # (`{:corrupt, {:execution, id}}`), as a store that cannot answer
+    # does; a row outside the caller's chain is never read.
+    with {:ok, records} <-
+           Record.list(ctx, limit: limit, status: status_filter, chain: caller_chain(args)) do
       executions =
         Enum.map(records, fn record ->
           %{
@@ -576,38 +582,26 @@ defmodule Opus.Provider do
         %Context{} = ctx,
         %{"action" => "logs", "execution_id" => execution_id} = args
       ) do
-    case Record.get(ctx, execution_id) do
-      {:ok, record} ->
-        if not in_caller_chain?(record, args) do
-          chain_scoped_refusal(execution_id)
-        else
-          logs = format_execution_logs(record)
+    with {:ok, record} <- read_in_chain(ctx, execution_id, args) do
+      logs = format_execution_logs(record)
 
-          {:ok,
-           %{
-             execution_id: record.id,
-             request_id: record.request_id,
-             user_id: record.user_id,
-             status: Atom.to_string(record.status),
-             started_at: DateTime.to_iso8601(record.started_at),
-             completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
-             duration_ms: record.duration_ms,
-             error: record.error,
-             component_type: Atom.to_string(record.component_type),
-             component_digest: record.component_digest,
-             reference: record.reference,
-             input: record.input,
-             output: record.output,
-             logs: logs
-           }}
-        end
-
-      {:error, :not_found} ->
-        {:error, {:not_found, "Execution", execution_id}}
-
-      # A row stored damaged, or a store that cannot answer, refuses as itself.
-      {:error, _reason} = refused ->
-        refused
+      {:ok,
+       %{
+         execution_id: record.id,
+         request_id: record.request_id,
+         user_id: record.user_id,
+         status: Atom.to_string(record.status),
+         started_at: DateTime.to_iso8601(record.started_at),
+         completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
+         duration_ms: record.duration_ms,
+         error: record.error,
+         component_type: Atom.to_string(record.component_type),
+         component_digest: record.component_digest,
+         reference: record.reference,
+         input: record.input,
+         output: record.output,
+         logs: logs
+       }}
     end
   end
 
