@@ -280,11 +280,11 @@ defmodule Locus.Runtime.HttpHandler do
   # any other naming its pin, with its method, its path and query, its
   # headers and its body, a multipart body encoded here. Answers the relay
   # and the fetch's ref, or a refusal for a request the relay cannot
-  # carry. Shared with `Locus.Runtime.HttpStreamHandler`.
+  # carry. A guest's client is its runner's, which always carries the
+  # relay (`Locus.Runtime.Runner`). Shared with
+  # `Locus.Runtime.HttpStreamHandler`.
   @spec relay_fetch(HostClient.t(), map()) ::
           {:ok, GenServer.server(), non_neg_integer()} | {:error, atom()}
-  def relay_fetch(%HostClient{relay: nil}, _request), do: {:error, :no_relay}
-
   def relay_fetch(%HostClient{relay: relay} = host, %{attached: attached}) do
     keys = %{call: host.call_key, seal: host.seal_key}
 
@@ -384,9 +384,6 @@ defmodule Locus.Runtime.HttpHandler do
 
   def fetch_error("private_ip_blocked", _limits),
     do: {:private_ip_blocked, "metadata IP blocked"}
-
-  def fetch_error(:no_relay, _limits),
-    do: {:http_error, "HTTP request failed: the runner has no relay"}
 
   def fetch_error(:unsendable, _limits),
     do: {:invalid_request, "The request cannot be sent: its path or headers are malformed"}
