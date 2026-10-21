@@ -29,7 +29,6 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io/cyfrworks
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # The verification: each called workflow bounds its own jobs.

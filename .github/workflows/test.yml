@@ -139,7 +139,6 @@ env:
   # time a fresh lock directory is taken, and a runner starts every one
   # fresh. One Mix process at a time builds here, so the lock is off.
   MIX_OS_CONCURRENCY_LOCK: 0
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
   # The checks whose answer does not depend on the database adapter, once
   # per run. Their step names stay as they were. scripts/commit-gate.sh
@@ -412,8 +411,7 @@ jobs:
         working-directory: apps/cyfr/assets
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Node 24, the runtime FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 gives the
-      # actions.
+      # Node 24, the runtime every pinned action runs on.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
