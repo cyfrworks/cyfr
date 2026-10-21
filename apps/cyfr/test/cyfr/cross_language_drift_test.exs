@@ -517,7 +517,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/codex/internal/access/head_test.go", ~w(derive boot profiles names words)},
       {"apps/codex/internal/access/refusals_test.go", ~w(refusals)},
       {"apps/cyfr/test/cyfr/cross_language_drift_test.exs", ~w(refusals)},
-      {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(derive boot profiles names words)},
+      {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(derive boot profiles names)},
       {"tests/compose-proof/run.sh", ~w(refusals boot)},
       {"tests/release-boot/boot.sh", ~w(boot)}
     ],

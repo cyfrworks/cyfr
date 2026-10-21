@@ -69,9 +69,10 @@ defmodule Cyfr.Boundaries do
 
   And the registers:
 
-    * `ports/0` and `internal_strategies/0` — the four ports of
-      `ARCHITECTURE.md`, and the two behaviours Sanctum declares that are not
-      ports.
+    * `ports/0` — the four ports of `ARCHITECTURE.md`; `sanctum_behaviours/0`
+      adds the two behaviours Sanctum declares that are not ports.
+    * `admission_entries/0` — every site that decides a request before, or
+      instead of, the gate and records the decision itself.
     * `actor_paths/0` — every way a `%Prima.Actor{}` is constructed, with
       the reason for each. Four is how you get six.
     * `system_responsibilities/0` — every write the server makes on work
@@ -255,9 +256,8 @@ defmodule Cyfr.Boundaries do
   @typedoc "A scanned tree of code lines, for the checks that read a line's text."
   @type scanned :: [{Path.t(), [{String.t(), pos_integer()}]}]
 
-  @doc "Every product-namespace name in `named`, as `{path, line, module}`."
-  @spec product_reaches(named()) :: [{Path.t(), pos_integer(), String.t()}]
-  def product_reaches(named) do
+  # Every product-namespace name in `named`, as `{path, line, module}`.
+  defp product_reaches(named) do
     for {path, names} <- named,
         {module, number} <- names,
         (module |> String.split(".") |> hd()) in @product_roots,
@@ -2583,8 +2583,6 @@ defmodule Cyfr.Boundaries do
   @spec config_applications() :: [atom()]
   def config_applications, do: [:arca, :cyfr, :sanctum]
 
-  @config_keys_read_by_name %{}
-
   @config_keys_read_outside_lib %{
     default_test_namespace:
       "read by the Sanctum suite's context fixture, in `apps/sanctum/test/support`. " <>
@@ -2592,15 +2590,6 @@ defmodule Cyfr.Boundaries do
         "support would change what it means — keys the application reads becomes " <>
         "keys anything reads — and pull in every fixture's own reads with it."
   }
-
-  @doc """
-  The keys no code reads by a literal `Application.get_env(:app, :key)` —
-  each is read under a key the caller computes, and a scan of the source
-  cannot see it. The honest record of them, so a key nothing reads at all
-  is not mistaken for one of these.
-  """
-  @spec config_keys_read_by_name() :: %{atom() => String.t()}
-  def config_keys_read_by_name, do: @config_keys_read_by_name
 
   @doc """
   The keys a configuration file sets that nothing under any `lib` reads,
@@ -2619,53 +2608,59 @@ defmodule Cyfr.Boundaries do
   one of them is inert in both. A name-keyed roster cannot see it, because
   by name the key is declared.
   """
-  @spec unread_config_keys(named_keys :: [{atom(), atom()}], scanned()) :: [{atom(), atom()}]
+  @spec unread_config_keys(named_keys :: [{String.t(), String.t()}], scanned()) ::
+          [{String.t(), String.t()}]
   def unread_config_keys(declared, scanned) do
     read = config_pairs_read(scanned)
+    outside_lib = MapSet.new(Map.keys(@config_keys_read_outside_lib), &Atom.to_string/1)
 
     declared
-    |> Enum.reject(fn {_app, key} ->
-      Map.has_key?(@config_keys_read_by_name, key) or
-        Map.has_key?(@config_keys_read_outside_lib, key)
-    end)
+    |> Enum.reject(fn {_app, key} -> MapSet.member?(outside_lib, key) end)
     |> Enum.reject(&MapSet.member?(read, &1))
     |> Enum.sort()
   end
 
   @config_pair ~r/Application\.(?:get_env|fetch_env!?|compile_env!?)\(\s*:([a-z_]+),\s*:([a-z_0-9]+)/
 
-  @doc "Every `{application, key}` pair `scanned` reads by a literal name."
-  @spec config_pairs_read(scanned()) :: MapSet.t({atom(), atom()})
-  def config_pairs_read(scanned) do
+  # Every `{application, key}` pair `scanned` reads by a literal name, as
+  # the names it spells: a key the scan finds in a module that is not
+  # loaded has no atom, and the checks report exactly such keys.
+  defp config_pairs_read(scanned) do
     for {_path, lines} <- scanned,
         code = Enum.map_join(lines, "\n", &elem(&1, 0)),
         [app, key] <- Regex.scan(@config_pair, code, capture: :all_but_first),
         into: MapSet.new(),
-        do: {String.to_atom(app), String.to_atom(key)}
+        do: {app, key}
   end
 
-  @doc "Every key of this repository's three applications that `scanned` reads."
-  @spec config_keys_read(scanned()) :: MapSet.t(atom())
+  @doc """
+  Every key of this repository's three applications that `scanned` reads,
+  by its name.
+  """
+  @spec config_keys_read(scanned()) :: MapSet.t(String.t())
   def config_keys_read(scanned) do
+    applications = Enum.map(config_applications(), &Atom.to_string/1)
+
     for {app, key} <- config_pairs_read(scanned),
-        app in config_applications(),
+        app in applications,
         into: MapSet.new(),
         do: key
   end
 
   @doc """
   The keys `scanned` reads that no configuration file declares and this
-  schema does not classify.
+  schema does not classify, by name.
 
-  `declared` is `%{key => [file, …]}`.
+  `declared` is `%{key => [file, …]}`, each key by its name.
   """
-  @spec config_violations(scanned(), %{atom() => [String.t()]}) :: [atom()]
+  @spec config_violations(scanned(), %{String.t() => [String.t()]}) :: [String.t()]
   def config_violations(scanned, declared) do
+    declared = for {key, [_ | _]} <- declared, into: MapSet.new(), do: key
+    classified = MapSet.new(Map.keys(@config_key_classes), &Atom.to_string/1)
+
     scanned
     |> config_keys_read()
-    |> Enum.filter(fn key ->
-      Map.get(declared, key, []) == [] and not Map.has_key?(@config_key_classes, key)
-    end)
+    |> Enum.reject(&(MapSet.member?(declared, &1) or MapSet.member?(classified, &1)))
     |> Enum.sort()
   end
 
@@ -3008,13 +3003,6 @@ defmodule Cyfr.Boundaries do
         ]
   def admission_entries, do: @admission_entries
 
-  @doc """
-  The behaviours Sanctum declares that are not ports: named internal
-  strategies, declared and implemented inside the application.
-  """
-  @spec internal_strategies() :: [map()]
-  def internal_strategies, do: @internal_strategies
-
   @doc "Every behaviour name Sanctum may declare — a port's, or an internal strategy's."
   @spec sanctum_behaviours() :: [String.t()]
   def sanctum_behaviours do
@@ -3276,9 +3264,8 @@ defmodule Cyfr.Boundaries do
   @spec filesystem_seam() :: map()
   def filesystem_seam, do: @filesystem_seam
 
-  @doc "Whether the seam exempts the whole file, by where it is or by what it says."
-  @spec filesystem_exempt?(Path.t(), String.t()) :: boolean()
-  def filesystem_exempt?(path, source) do
+  # Whether the seam exempts the whole file, by where it is or by what it says.
+  defp filesystem_exempt?(path, source) do
     Enum.any?(@filesystem_seam.exempt, &shell_match?(&1, path)) or
       source =~ @filesystem_seam.entire_module
   end

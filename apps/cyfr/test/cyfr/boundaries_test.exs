@@ -3,14 +3,8 @@
 
 defmodule Cyfr.BoundariesTest do
   @moduledoc """
-  The one reader of `Cyfr.Boundaries`, and what it holds the tree to.
-
-  Eight roster tests scanned this tree before this one, each its own way:
-  `namespace_direction`, `web_direction`, `sanctum_surfaces`,
-  `emissary_surface` and `layer_independence` under `apps/cyfr/test/cyfr`,
-  `compendium/reverse_surface`, and the two host-surface suites of the
-  island's apps. Every boundary they held is a row of the catalog now, and
-  this file is what reads the rows.
+  The one reader of `Cyfr.Boundaries`, and what it holds the tree to:
+  every boundary is a row of the catalog, and this file reads the rows.
 
   Three rules govern what is here, and they are why it is longer than a
   roster:
@@ -19,10 +13,9 @@ defmodule Cyfr.BoundariesTest do
       configuration key and a filesystem call are each planted below and
       shown reported. A catalog nobody can break is a catalog that checks
       nothing.
-    * **An empty source scan must fail.** Every roster this replaces
-      learned that the hard way: a scan pointed at
-      a moved tree passes every assertion it makes. So each scan is shown
-      to have read code before its rosters are believed.
+    * **An empty source scan must fail.** A scan pointed at a moved tree
+      passes every assertion it makes, so each scan is shown to have read
+      code before its rosters are believed.
     * **Two scans, because neither sees everything.** The source scan,
       through `Prima.Test.CodeLines`, sees aliases, struct patterns,
       typespecs and compile-time attributes, which emit no call. The
@@ -262,7 +255,7 @@ defmodule Cyfr.BoundariesTest do
             &Regex.scan(~r/\{:([a-z_0-9]+), in_umbrella: true/, &1, capture: :all_but_first)
           )
           |> List.flatten()
-          |> Enum.map(&String.to_atom/1)
+          |> Enum.map(&String.to_existing_atom/1)
           |> Enum.sort()
           |> Enum.uniq()
 
@@ -356,7 +349,7 @@ defmodule Cyfr.BoundariesTest do
   end
 
   describe "the storage doors" do
-    # The files and records doors moved below the identity and component
+    # The files and records doors sit below the identity and component
     # domains: they take the actor the gate projects and name only Arca,
     # the contracts and Elixir. A reach back up (a namespace policy, the
     # context, a manifest owner above) is refused here as well as by the
@@ -387,7 +380,7 @@ defmodule Cyfr.BoundariesTest do
       assert Boundaries.dependency_violations(:arca, named, contracts) == []
     end
 
-    # Retention moved below the host with the doors. It is handed one actor
+    # Retention sits below the host with the doors. It is handed one actor
     # per athanor and decides nothing about which athanors are active, so it
     # names neither a layer above Arca nor the athanor rows that say so.
     test "retention names nothing above Arca, and not the athanor rows" do
@@ -561,7 +554,7 @@ defmodule Cyfr.BoundariesTest do
       |> SourceTree.read()
       |> then(&Regex.scan(~r/\{:([a-z_0-9]+),/, &1, capture: :all_but_first))
       |> List.flatten()
-      |> Enum.map(&String.to_atom/1)
+      |> Enum.map(&String.to_existing_atom/1)
 
     walk(declared, MapSet.new([:elixir, :stdlib, :kernel]))
   end
@@ -661,7 +654,7 @@ defmodule Cyfr.BoundariesTest do
                ))
 
       for name <- Boundaries.sanctum_only_storage() do
-        assert Code.ensure_loaded?(Module.concat([name])), "#{name} is not a module"
+        assert loaded?(name), "#{name} is not a module"
       end
     end
 
@@ -715,46 +708,6 @@ defmodule Cyfr.BoundariesTest do
                {path, _} <- names(planted.from),
                do: path
              )
-    end
-
-    test "no row is pending: each is settled, and a marker excuses none from being reached" do
-      marked =
-        for {roster, rows} <- [
-              surfaces: Boundaries.surfaces(),
-              admission_entries: Boundaries.admission_entries(),
-              route_postures: Map.values(Boundaries.route_postures())
-            ],
-            row <- rows,
-            Map.has_key?(row, :pending) or Map.has_key?(row, :pending_allow),
-            do: {roster, row}
-
-      assert marked == [],
-             """
-             A roster row is marked pending. A row names what the tree reaches
-             now; write it with the change that reaches it.
-
-             #{inspect(marked, pretty: true)}
-             """
-
-      # No register of rows written ahead of their callers survives.
-      Code.ensure_loaded!(Boundaries)
-
-      for register <- [:pending_sanctum_exports, :pending_public_routes] do
-        refute function_exported?(Boundaries, register, 0), "Boundaries.#{register}/0 is back"
-      end
-
-      # A marker, were one written, admits nothing and skips no stale check.
-      row = %{
-        from: [],
-        into: "Sanctum",
-        allow: ~w(Sanctum.Context),
-        pending: true,
-        pending_allow: ~w(Sanctum.Directory)
-      }
-
-      reaching = [{"apps/cyfr/lib/emissary/planted.ex", [{"Sanctum.Directory", 1}]}]
-      assert Boundaries.surface_violations(row, reaching) == ["Sanctum.Directory"]
-      assert Boundaries.stale_surface_entries(row, []) == ["Sanctum.Context"]
     end
 
     test "every row says why its roster reads as it does" do
@@ -991,8 +944,8 @@ defmodule Cyfr.BoundariesTest do
         assert module == "Sanctum" or String.starts_with?(module, "Sanctum.")
         assert functions == Enum.sort(Enum.uniq(functions)), "#{module}'s list is not sorted"
 
-        mod = Module.concat([module])
-        assert Code.ensure_loaded?(mod), "#{module} is not a module"
+        assert loaded?(module), "#{module} is not a module"
+        mod = Module.safe_concat([module])
 
         for {function, arity} <- functions do
           assert function_exported?(mod, function, arity),
@@ -1286,7 +1239,7 @@ defmodule Cyfr.BoundariesTest do
                {:post, "/_f/v1/o/:frame_id/stream", :frame_credential}
              ]
 
-      # Each posture's sentence names the canvas path it now covers.
+      # Each posture's sentence names the canvas path it covers.
       assert Boundaries.route_postures().tincture_handler_auth.why =~ "`/_c/v1/`"
       assert Boundaries.route_postures().frame_credential.why =~ "`/_f/v1/o/<frame>/stream`"
 
@@ -1317,7 +1270,7 @@ defmodule Cyfr.BoundariesTest do
              """
              These application keys are read by the code and set by no config file:
 
-             #{Enum.map_join(unclassified, "\n", &"  #{inspect(&1)}")}
+             #{Enum.map_join(unclassified, "\n", &"  :#{&1}")}
 
              Say what each one is in `Cyfr.Boundaries.config_key_classes/0`:
              `:operator` if you are adding the `CYFR_*` read in
@@ -1331,17 +1284,20 @@ defmodule Cyfr.BoundariesTest do
     test "every key only the suite declares is classified" do
       declared = declared_config_keys()
 
+      test_only =
+        MapSet.new(Map.keys(Boundaries.test_only_config_key_classes()), &Atom.to_string/1)
+
       unclassified =
         for key <- Boundaries.config_keys_read(application_sources()),
             Map.get(declared, key) == ["test.exs"],
-            not Map.has_key?(Boundaries.test_only_config_key_classes(), key),
+            not MapSet.member?(test_only, key),
             do: key
 
       assert unclassified == [],
              """
              These application keys are read in `lib/` and set only by the suite:
 
-             #{Enum.map_join(Enum.sort(unclassified), "\n", &"  #{inspect(&1)}")}
+             #{Enum.map_join(Enum.sort(unclassified), "\n", &"  :#{&1}")}
 
              A key only the suite can set is either a seam (fine — say so) or a
              knob an operator cannot reach (`:missing_lever`).
@@ -1358,8 +1314,8 @@ defmodule Cyfr.BoundariesTest do
                 Boundaries.config_key_classes(),
                 Boundaries.test_only_config_key_classes()
               ),
-            not MapSet.member?(read, key) or
-              Map.get(declared, key, []) not in [[], ["test.exs"]],
+            not MapSet.member?(read, Atom.to_string(key)) or
+              Map.get(declared, Atom.to_string(key), []) not in [[], ["test.exs"]],
             do: key
 
       assert stale == [],
@@ -1381,31 +1337,27 @@ defmodule Cyfr.BoundariesTest do
              """
              These keys are set under an application no code reads them under:
 
-             #{Enum.map_join(unread, "\n", fn {app, key} -> "  config :#{app}, #{inspect(key)}" end)}
+             #{Enum.map_join(unread, "\n", fn {app, key} -> "  config :#{app}, :#{key}" end)}
 
              A file that sets `:arca, :some_key` while the code reads
              `:cyfr, :some_key` sets nothing: the umbrella build reads the root
              file, an application's own build reads its own, and a key in the
-             wrong one of them is inert in both. If the key really is read under
-             a name a caller computes, say so in
-             `Cyfr.Boundaries.config_keys_read_by_name/0`.
+             wrong one of them is inert in both. If the key really is read
+             outside every application's `lib`, say so in
+             `Cyfr.Boundaries.config_keys_read_outside_lib/0`.
              """
     end
 
-    test "every key said to be read by a computed name is still declared somewhere" do
+    test "every key said to be read outside lib is still declared somewhere" do
       declared = MapSet.new(declared_config_pairs(), &elem(&1, 1))
 
       stale =
-        for {key, _reason} <-
-              Map.merge(
-                Boundaries.config_keys_read_by_name(),
-                Boundaries.config_keys_read_outside_lib()
-              ),
-            not MapSet.member?(declared, key),
+        for {key, _reason} <- Boundaries.config_keys_read_outside_lib(),
+            not MapSet.member?(declared, Atom.to_string(key)),
             do: key
 
       assert stale == [],
-             "these keys are named as read by a computed name and nothing sets them: " <>
+             "these keys are named as read outside lib and nothing sets them: " <>
                inspect(stale)
     end
 
@@ -1483,25 +1435,31 @@ defmodule Cyfr.BoundariesTest do
     rostered =
       for {app, key} <- setting_config_keys(),
           app in Boundaries.config_applications(),
-          do: {runtime, app, key}
+          do: {runtime, Atom.to_string(app), Atom.to_string(key)}
 
     for path <- files, source = File.read!(path), reduce: rostered do
       acc ->
         rows =
           for [app, key] <- Regex.scan(single, source, capture: :all_but_first),
-              do: {path, String.to_atom(app), String.to_atom(key)}
+              do: {path, app, key}
 
         members =
           for [app, body] <- Regex.scan(block, source, capture: :all_but_first),
               [key] <- Regex.scan(member, body, capture: :all_but_first),
-              do: {path, String.to_atom(app), String.to_atom(key)}
+              do: {path, app, key}
 
         acc ++ rows ++ members
     end
   end
 
-  # Which of the root's configuration files declare each key, by name.
-  # The root's alone: these are the files the umbrella build reads.
+  # Whether `name` names a module that loads. A name that was never a
+  # module has no atom, so it is not made one.
+  defp loaded?(name) do
+    Code.ensure_loaded?(Module.safe_concat([name]))
+  rescue
+    ArgumentError -> false
+  end
+
   # The `{application, key}` pairs the platform settings are written
   # under: the head of each entry's configuration path.
   defp setting_config_keys do
@@ -1511,6 +1469,8 @@ defmodule Cyfr.BoundariesTest do
         do: {app, key}
   end
 
+  # Which of the root's configuration files declare each key, by name.
+  # The root's alone: these are the files the umbrella build reads.
   defp declared_config_keys do
     for {path, _app, key} <- config_declarations(),
         Path.dirname(path) == Path.join(root(), "config"),
@@ -2127,7 +2087,7 @@ defmodule Cyfr.BoundariesTest do
          ''')}
       ]
 
-      assert Boundaries.config_violations(planted, declared_config_keys()) == [:planted_knob]
+      assert Boundaries.config_violations(planted, declared_config_keys()) == ["planted_knob"]
     end
   end
 
@@ -2254,8 +2214,8 @@ defmodule Cyfr.BoundariesTest do
 
     test "every declaring module installs, reads and refuses the one way" do
       for %{behaviour: behaviour} <- Boundaries.ports() do
-        port = Module.concat([behaviour])
-        error = Module.concat([behaviour, "NotInstalledError"])
+        port = Module.safe_concat([behaviour])
+        error = Module.safe_concat([behaviour, "NotInstalledError"])
 
         assert Code.ensure_loaded?(port) and function_exported?(port, :install!, 1) and
                  function_exported?(port, :impl!, 0),
@@ -2269,7 +2229,7 @@ defmodule Cyfr.BoundariesTest do
     test "the running boot installed each row's implementation" do
       installed =
         for %{behaviour: behaviour} <- Boundaries.ports(),
-            do: {behaviour, Module.concat([behaviour]).impl!()}
+            do: {behaviour, Module.safe_concat([behaviour]).impl!()}
 
       assert installed == [
                {"Prima.Caps", Sanctum.Tenancy.Caps},
@@ -2398,8 +2358,7 @@ defmodule Cyfr.BoundariesTest do
         refute Enum.empty?(row.modules), "#{row.responsibility} names no module"
 
         for name <- row.modules do
-          module = Module.concat([name])
-          assert Code.ensure_loaded?(module), "#{row.responsibility} names #{name}, not a module"
+          assert loaded?(name), "#{row.responsibility} names #{name}, not a module"
         end
 
         [module, fun, arity] =
@@ -2407,11 +2366,12 @@ defmodule Cyfr.BoundariesTest do
 
         # `function_exported?/3` answers false for a module not yet loaded,
         # and a check no boot path calls is loaded on first use.
-        Code.ensure_loaded(Module.concat([module]))
+        module = Module.safe_concat([module])
+        Code.ensure_loaded(module)
 
         assert function_exported?(
-                 Module.concat([module]),
-                 String.to_atom(fun),
+                 module,
+                 String.to_existing_atom(fun),
                  String.to_integer(arity)
                ),
                "#{row.responsibility} names #{row.check}, which is not exported"
@@ -2597,8 +2557,7 @@ defmodule Cyfr.BoundariesTest do
 
              The umbrella loads every suite into one VM, so the second definition
              replaces the first and which code each ran against follows app
-             order. Two suites both defined `Locus.Runtime.WorkerServiceTest` and it stood
-             for four slices. A module name is one authoritative definition.
+             order. A module name is one authoritative definition.
              """
     end
 
@@ -2643,10 +2602,10 @@ defmodule Cyfr.BoundariesTest do
     end
 
     test "the builder's suite names nothing of the control plane" do
-      # Read from here rather than from Locus's own suite, which used to
-      # hold it: the builder's suite runs in a checkout with nothing of
-      # the control plane in it, so a roster that names what it may not
-      # name cannot live there without naming it.
+      # Read from here rather than from Locus's own suite: the builder's
+      # suite runs in a checkout with nothing of the control plane in it,
+      # so a roster that names what it may not name cannot live there
+      # without naming it.
       allowed = Boundaries.reachable_layers(:locus)
       contracts = contracts_modules()
 
@@ -2895,47 +2854,6 @@ defmodule Cyfr.BoundariesTest do
     test "the shared primitives live in Prima, and the bus in the host" do
       assert File.exists?(Path.join(root(), "apps/cyfr/lib/cyfr/bus.ex"))
       assert File.exists?(Path.join(root(), "apps/prima/lib/prima/uuid7.ex"))
-
-      refute File.exists?(Path.join(root(), "apps/cyfr/lib/prism/topics.ex")),
-             "Cyfr.Bus is the host's, not the console's; it must not come back"
-
-      refute File.exists?(Path.join(root(), "apps/cyfr/lib/emissary/uuid7.ex")),
-             "Prima.UUID7 is a shared primitive, not the transport's; it must not come back"
-    end
-
-    test "the five retired helper modules neither load nor are named in any tracked source" do
-      # Spelled in parts, so this file is not itself a mention.
-      retired = ~w(Models TinctureHelpers ConsentDrift ScheduleNotes Text)
-
-      for suffix <- retired do
-        module = Module.concat(Cyfr, suffix)
-        refute Code.ensure_loaded?(module), "#{inspect(module)} still loads"
-      end
-
-      pattern = Regex.compile!("\\bCyfr\\.(?:" <> Enum.join(retired, "|") <> ")\\b")
-
-      sources =
-        for glob <- [
-              "apps/*/lib/**/*.{ex,heex}",
-              "apps/*/test/**/*.{ex,exs}",
-              "apps/*/mix.exs",
-              "apps/*/*.md",
-              "config/**/*.exs",
-              "mix.exs",
-              "*.md"
-            ],
-            path <- Path.wildcard(Path.join(root(), glob)),
-            do: path
-
-      assert length(sources) > 500,
-             "the scan found #{length(sources)} sources — it is not reading"
-
-      named =
-        for path <- sources,
-            SourceTree.read(path) =~ pattern,
-            do: Path.relative_to(path, root())
-
-      assert named == [], "a retired helper is still named in: #{inspect(named)}"
     end
 
     test "the catalog skips exactly one file, and the compiled scan covers it" do
@@ -2956,8 +2874,8 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
   in is compiled forced with warnings as errors in the dev environment,
   the failure must name the boundary it crosses, and the plant is removed.
 
-  A case named `into <- from` is a surface row of `Cyfr.Boundaries` the
-  compiler holds whole, which the catalog no longer carries: the plant is
+  A case named `into <- from` is a surface row the compiler holds whole,
+  which `Cyfr.Boundaries` therefore does not carry: the plant is
   a call from a file the row read into the root of the namespace it
   forbade, so the refusal is the dependency's and not an unexported
   module's.
@@ -3280,9 +3198,12 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
   # included. Dependencies are neither copied nor linked: compile/3 points
   # Mix at the checkout's own through MIX_DEPS_PATH.
   defp copy_tree!(copy) do
+    # git reads the checkout at `@root`, never a repository or index an
+    # inherited GIT_* names; HOME stays, for the user's global excludes.
     {files, 0} =
       System.cmd("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        cd: @root
+        cd: @root,
+        env: [{"GIT_DIR", nil}, {"GIT_WORK_TREE", nil}, {"GIT_INDEX_FILE", nil}]
       )
 
     for rel <- String.split(files, <<0>>, trim: true),

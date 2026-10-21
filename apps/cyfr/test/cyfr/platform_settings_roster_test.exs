@@ -73,19 +73,18 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         do: {key, stale}
   end
 
-  # A setting still written to the application environment (a
-  # restart-scoped one) is written under the application its reader reads
-  # it under, found in the code: a literal read of `{app, key}`, or a key
-  # `Cyfr.Boundaries` records as read by a name the caller computes.
+  # A setting written to the application environment (a restart-scoped
+  # one) is written under the application its reader reads it under, found
+  # in the code as a literal read of `{app, key}`.
   defp misplaced(entries, reads) do
-    by_name = Cyfr.Boundaries.config_keys_read_by_name()
-
     for %Entry{app: app, config: [head | _], key: key} <- entries,
         app != :logger,
-        not MapSet.member?(reads, {app, head}),
-        not Map.has_key?(by_name, head),
+        not MapSet.member?(reads, {Atom.to_string(app), name_of(head)}),
         do: {key, app, head}
   end
+
+  # A configuration key's name, or a module's as source spells it.
+  defp name_of(atom), do: atom |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
 
   # Restart-scoped settings are read once at boot from the application
   # environment, where the boot wrote a pinned value and the setting's
@@ -99,10 +98,6 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # under the host.
   @keywords ~w(caps locus_runtime_watch)
 
-  # The worker watch's group under its name before the rename: no setting,
-  # and nothing reads or writes it.
-  @retired_keywords ~w(worker_watch)
-
   # Every use of a live setting's value in the application environment,
   # under any application, by one of `verbs`: `{path, app, key}`. The key
   # is one of `names`, by default the settings' store keys and
@@ -114,7 +109,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     for {path, source} <- sources,
         {app, key} <- config_keys(source, verbs),
         MapSet.member?(names, key),
-        do: {path, String.to_atom(app), String.to_atom(key)}
+        do: {path, app, key}
   end
 
   defp live_names,
@@ -137,9 +132,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # (`put_env(:app, Module, key: value)`, or a default), indexed
   # (`get_env(:app, Module)[:key]`), piped
   # (`get_env(:app, Module) |> Keyword.get(:key)`) or passed
-  # (`Keyword.get(get_env(:app, Module, []), :key)`). A key the caller
-  # computes, or one read later from a configuration it bound, is the
-  # boundary roster's (`Cyfr.Boundaries.config_keys_read_by_name/0`).
+  # (`Keyword.get(get_env(:app, Module, []), :key)`).
   defp config_uses(source, verbs) do
     verbs = Enum.join(verbs, "|")
 
@@ -191,12 +184,12 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     case Regex.scan(~r/^\s*defmodule\s+([A-Z][\w.]*)/m, binary_part(source, 0, offset),
            capture: :all_but_first
          ) do
-      [] -> :__MODULE__
-      names -> Module.concat([List.last(List.last(names))])
+      [] -> "__MODULE__"
+      names -> List.last(List.last(names))
     end
   end
 
-  defp module_named(name, _source, _offset), do: Module.concat([name])
+  defp module_named(name, _source, _offset), do: name
 
   # The island (Locus) reads none of the roster's settings: it declares its
   # own under its own prefixes, and may name a key of its own alike
@@ -217,7 +210,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     for {_path, source} <- sources,
         {app, key, module} <- config_uses(source, ~w(get_env fetch_env!?)),
         into: MapSet.new(),
-        do: {String.to_atom(app), module || String.to_atom(key)}
+        do: {app, module || key}
   end
 
   # The suites and the configuration, less this file, whose plants name
@@ -624,7 +617,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
              """
              These read a platform setting from the application environment:
 
-             #{Enum.map_join(reads, "\n", fn {path, app, key} -> "  #{path}: #{inspect(app)}, #{inspect(key)}" end)}
+             #{Enum.map_join(reads, "\n", fn {path, app, key} -> "  #{path}: :#{app}, :#{key}" end)}
 
              A live setting is read through `Arca.PlatformSettings.effective/1`,
              which answers the environment's pin, the stored row or the default.
@@ -645,53 +638,18 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         {"apps/cyfr/lib/passed.ex",
          "Keyword.get(Application.get_env(:cyfr, __MODULE__, []), :locus_runtime_watch, [])"},
         {"apps/sanctum/lib/default.ex",
-         "Application.get_env(:sanctum, Sanctum.Planted, caps: [])"},
-        # The retired group is no live setting's.
-        {"apps/cyfr/lib/retired.ex", "Application.get_env(:cyfr, :worker_watch, [])"}
+         "Application.get_env(:sanctum, Sanctum.Planted, caps: [])"}
       ]
 
       assert env_reads(planted, ~w(get_env fetch_env!?)) == [
-               {"apps/sanctum/lib/planted.ex", :sanctum, :caps},
-               {"apps/cyfr/lib/planted.ex", :cyfr, :mcp_rate_limit_max},
-               {"apps/arca/lib/planted.ex", :arca, :session_ttl_hours},
-               {"apps/cyfr/lib/opus/planted.ex", :cyfr, :locus_runtime_watch},
-               {"apps/cyfr/lib/indexed.ex", :cyfr, :mcp_rate_limit_max},
-               {"apps/arca/lib/piped.ex", :arca, :session_ttl_hours},
-               {"apps/cyfr/lib/passed.ex", :cyfr, :locus_runtime_watch},
-               {"apps/sanctum/lib/default.ex", :sanctum, :caps}
-             ]
-    end
-
-    test "nothing reads or writes the worker watch's group under its retired name" do
-      uses =
-        env_reads(
-          tree("apps/*/lib/**/*.ex") ++ suite_sources(),
-          ~w(get_env fetch_env!? get_all_env compile_env!? put_env),
-          @retired_keywords
-        )
-
-      assert uses == [],
-             """
-             These use the worker watch's group under its name before the rename,
-             `:worker_watch`; its bounds are `locus_runtime_watch_*` settings:
-
-             #{Enum.map_join(uses, "\n", fn {path, app, key} -> "  #{path}: #{inspect(app)}, #{inspect(key)}" end)}
-             """
-
-      planted = [
-        {"apps/cyfr/lib/get.ex", "Application.get_env(:cyfr, :worker_watch, [])"},
-        {"apps/cyfr/lib/fetch.ex", "Application.fetch_env!(:cyfr, :worker_watch)[:poll_ms]"},
-        {"apps/cyfr/test/put_test.exs", "Application.put_env(:cyfr, :worker_watch, poll_ms: 10)"},
-        {"apps/cyfr/lib/keyed.ex", "Application.get_env(:cyfr, Opus.Watch)[:worker_watch]"},
-        # The live group stays the live check's.
-        {"apps/cyfr/lib/live.ex", "Application.get_env(:cyfr, :locus_runtime_watch, [])"}
-      ]
-
-      assert env_reads(planted, ~w(get_env fetch_env!? put_env), @retired_keywords) == [
-               {"apps/cyfr/lib/get.ex", :cyfr, :worker_watch},
-               {"apps/cyfr/lib/fetch.ex", :cyfr, :worker_watch},
-               {"apps/cyfr/test/put_test.exs", :cyfr, :worker_watch},
-               {"apps/cyfr/lib/keyed.ex", :cyfr, :worker_watch}
+               {"apps/sanctum/lib/planted.ex", "sanctum", "caps"},
+               {"apps/cyfr/lib/planted.ex", "cyfr", "mcp_rate_limit_max"},
+               {"apps/arca/lib/planted.ex", "arca", "session_ttl_hours"},
+               {"apps/cyfr/lib/opus/planted.ex", "cyfr", "locus_runtime_watch"},
+               {"apps/cyfr/lib/indexed.ex", "cyfr", "mcp_rate_limit_max"},
+               {"apps/arca/lib/piped.ex", "arca", "session_ttl_hours"},
+               {"apps/cyfr/lib/passed.ex", "cyfr", "locus_runtime_watch"},
+               {"apps/sanctum/lib/default.ex", "sanctum", "caps"}
              ]
     end
 
@@ -707,7 +665,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
              These set a platform setting in the application environment, where
              no reader reads it:
 
-             #{Enum.map_join(puts, "\n", fn {path, app, key} -> "  #{path}: #{inspect(app)}, #{inspect(key)}" end)}
+             #{Enum.map_join(puts, "\n", fn {path, app, key} -> "  #{path}: :#{app}, :#{key}" end)}
 
              A test sets one through `Cyfr.Test.Settings.put/2` (the Sanctum
              suite, `Sanctum.Test.Settings.put/2`).
@@ -720,8 +678,8 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       ]
 
       assert env_reads(planted, ~w(put_env)) == [
-               {"apps/arca/test/planted_test.exs", :arca, :session_ttl_hours},
-               {"apps/cyfr/test/keyed_test.exs", :cyfr, :mcp_rate_limit_max}
+               {"apps/arca/test/planted_test.exs", "arca", "session_ttl_hours"},
+               {"apps/cyfr/test/keyed_test.exs", "cyfr", "mcp_rate_limit_max"}
              ]
     end
 
@@ -909,10 +867,10 @@ defmodule Cyfr.PlatformSettingsRosterTest do
   # with the files that program is. A name the program reads appears in
   # one of them, quoted for the Codex CLI's Go.
   @readers [
-    {"the Codex CLI", {"apps/codex/**/*.go", :quoted}},
-    {"the installer", {"scripts/install.sh", :bare}},
-    {"the image's entrypoint", {"docker-entrypoint.sh", :bare}},
-    {"the test harness", {"{apps/*/test,tests,scripts}/**/*", :bare}}
+    {"the Codex CLI", {["apps/codex/**/*.go"], :quoted}},
+    {"the installer", {["scripts/install.sh"], :bare}},
+    {"the image's entrypoint", {["docker-entrypoint.sh"], :bare}},
+    {"the test harness", {["apps/*/test/**/*", "tests/**/*", "scripts/**/*"], :bare}}
   ]
 
   # `{name, program}` for each program a row names that does not read it.
@@ -925,12 +883,11 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         do: {name, program}
   end
 
-  defp reads?({glob, form}, name) do
+  defp reads?({globs, form}, name) do
     needle = if form == :quoted, do: ~s("#{name}), else: name
 
-    @root
-    |> Path.join(glob)
-    |> Path.wildcard()
+    globs
+    |> Enum.flat_map(&Path.wildcard(Path.join(@root, &1)))
     |> Enum.reject(&(File.dir?(&1) or String.ends_with?(&1, "_test.go")))
     |> Enum.any?(&(&1 |> File.read!() |> String.contains?(needle)))
   end

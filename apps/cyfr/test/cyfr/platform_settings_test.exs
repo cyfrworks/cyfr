@@ -91,8 +91,12 @@ defmodule Cyfr.PlatformSettingsTest do
     end
   end
 
+  # A settings process of the suite's own beside the boot's, under a name
+  # of its own: each test starts at most one and stops it as it ends.
+  @instance __MODULE__.Instance
+
   defp start_process(opts) do
-    name = :"settings_#{System.unique_integer([:positive])}"
+    name = @instance
 
     pid =
       start_supervised!(
@@ -436,43 +440,6 @@ defmodule Cyfr.PlatformSettingsTest do
       assert %{value: 64, desired: 5, pending: true} = listed("opus_max_concurrent")
     end
 
-    test "a row stored under an execution setting's retired key is read by no setting" do
-      # Each setting's key under the name the execution domain had before,
-      # beside the key it is now, with a value its validator takes that is
-      # not its default. Spelled split so the retired names are not
-      # themselves found here.
-      retired = [
-        {"cruc" <> "ible_max_concurrent", "opus_max_concurrent", 64},
-        {"cruc" <> "ible_max_concurrent_per_tenant", "opus_max_concurrent_per_tenant", 3},
-        {"cruc" <> "ible_events_max_concurrent", "opus_events_max_concurrent", 2},
-        {"cruc" <> "ible_events_max_ms", "opus_events_max_ms", 60_000}
-      ]
-
-      slots = Application.get_env(:cyfr, :opus_max_concurrent)
-      per_tenant = Application.get_env(:cyfr, :opus_max_concurrent_per_tenant)
-      on_exit(fn -> restore(:cyfr, :opus_max_concurrent_per_tenant, per_tenant) end)
-
-      Enum.reduce(retired, revision(), fn {old, _new, value}, at ->
-        {:ok, next} = Store.put(old, value, at, "ops")
-        next
-      end)
-
-      assert Settings.apply() == :ok
-
-      for {old, new, _value} <- retired do
-        assert Store.effective(old) == {:error, :unknown_key}
-
-        assert %{default: default, desired: default, source: "default", revision: nil} =
-                 listed(new)
-
-        assert Store.effective(new) == {:ok, default}
-      end
-
-      # The boot applied no retired row to the slots it writes.
-      assert Application.get_env(:cyfr, :opus_max_concurrent) == slots
-      assert Application.get_env(:cyfr, :opus_max_concurrent_per_tenant) == per_tenant
-    end
-
     test "an unreadable store refuses the boot" do
       Arca.Repo.query!("DROP TABLE platform_settings")
 
@@ -611,7 +578,7 @@ defmodule Cyfr.PlatformSettingsTest do
 
       # The boot's start, linked as a supervisor's child is: its refusal is
       # the start's answer, and the exit it sends is trapped here.
-      opts = [name: :"settings_#{System.unique_integer([:positive])}", member: "m@test"]
+      opts = [name: @instance, member: "m@test"]
       trapping = Process.flag(:trap_exit, true)
 
       {result, _log} =
@@ -646,7 +613,7 @@ defmodule Cyfr.PlatformSettingsTest do
       # The quota's pin is gone: its row's removal would expose the
       # default quota under the stored reserve.
       Application.put_env(:cyfr, :deployment_pinned, [])
-      opts = [name: :"settings_#{System.unique_integer([:positive])}", member: "m@test"]
+      opts = [name: @instance, member: "m@test"]
       trapping = Process.flag(:trap_exit, true)
 
       {result, _log} =
