@@ -24,7 +24,7 @@ defmodule Opus.WorkerWatchTest do
   Two terminal writers for one attempt leave one terminal row and give
   its capacity back once. The bounds are validated when the watch starts,
   and dispatch addresses a start to the boot the watch heard within one
-  poll interval.
+  poll interval, reading `:unknown` from a watch that exits as it reads.
   """
 
   use ExUnit.Case, async: false
@@ -47,6 +47,7 @@ defmodule Opus.WorkerWatchTest do
   # only bounds one that never ends.
   @heard_ms 10_000
   @watch :worker_watch_under_test
+  @exiting :worker_watch_exiting
   @not_a_status %{"no" => "status"}
 
   # A worker service whose status answers from a script the test sets: a
@@ -669,6 +670,70 @@ defmodule Opus.WorkerWatchTest do
 
       assert :ignore = WorkerWatch.start_link([])
       assert WorkerWatch.fresh_boot(%{id: "wrk_local", url: "http://127.0.0.1:4200"}) == :unknown
+    end
+  end
+
+  describe "the heard table" do
+    # The table goes with the watch that owns it. Readers read it in a loop
+    # while the watch is killed, so in some round one has found the table
+    # and reads it as it goes; each answers what it heard, then `:unknown`.
+    test "a watch that exits while it is read answers :unknown, never a raise" do
+      endpoint = serve!([status("boot_1")])
+      test = self()
+
+      for _round <- 1..5 do
+        watch =
+          start_supervised!(
+            Supervisor.child_spec(
+              {WorkerWatch,
+               workers: [endpoint],
+               poll_ms: 60_000,
+               lease_ms: @lease_ms,
+               misses: 3,
+               name: @exiting},
+              id: @exiting,
+              restart: :temporary
+            )
+          )
+
+        wait_until(
+          fn -> WorkerWatch.fresh_boot(endpoint, @exiting) == {:ok, "boot_1"} end,
+          @heard_ms
+        )
+
+        # The heard status is recorded; the next poll is a minute away.
+        _state = :sys.get_state(watch)
+
+        readers =
+          for _reader <- 1..max(System.schedulers_online(), 4),
+              do: spawn_monitor(fn -> read_until_unknown(endpoint, test) end)
+
+        for {reader, _ref} <- readers, do: assert_receive({:reading, ^reader}, @heard_ms)
+
+        ref = Process.monitor(watch)
+        Process.exit(watch, :kill)
+        assert_receive {:DOWN, ^ref, :process, ^watch, :killed}, @heard_ms
+
+        for {reader, ref} <- readers do
+          assert_receive {:DOWN, ^ref, :process, ^reader, reason}, @heard_ms
+          assert reason == :normal
+        end
+
+        assert WorkerWatch.fresh_boot(endpoint, @exiting) == :unknown
+      end
+    end
+  end
+
+  defp read_until_unknown(endpoint, test) do
+    {:ok, "boot_1"} = WorkerWatch.fresh_boot(endpoint, @exiting)
+    send(test, {:reading, self()})
+    reading(endpoint)
+  end
+
+  defp reading(endpoint) do
+    case WorkerWatch.fresh_boot(endpoint, @exiting) do
+      {:ok, "boot_1"} -> reading(endpoint)
+      :unknown -> :ok
     end
   end
 

@@ -191,19 +191,30 @@ defmodule Opus.WorkerWatch do
   @doc """
   The boot of the worker service at `endpoint` as the watch `name` heard
   it within the last poll interval, or `:unknown`: no watch runs under
-  that name (its `:worker_watch_enabled` switch is off), it has not heard
-  from that endpoint, the endpoint's last answer was a miss, its boot
-  changed, or the boot it heard is older than one interval.
+  that name (its `:worker_watch_enabled` switch is off) or the watch exited
+  as it was read, it has not heard from that endpoint, the endpoint's last
+  answer was a miss, its boot changed, or the boot it heard is older than
+  one interval.
   """
   @spec fresh_boot(WorkerAPI.endpoint(), atom()) :: {:ok, String.t()} | :unknown
   def fresh_boot(%{id: id, url: url}, name \\ __MODULE__) when is_atom(name) do
     with table when table != :undefined <- :ets.whereis(name),
-         [{^id, ^url, boot, heard_at, poll_ms}] <- :ets.lookup(table, id),
+         [{^id, ^url, boot, heard_at, poll_ms}] <- lookup(table, id),
          true <- System.monotonic_time(:millisecond) - heard_at <= poll_ms do
       {:ok, boot}
     else
       _unheard -> :unknown
     end
+  end
+
+  # The table goes with the watch that owns it, which can exit between the
+  # lookup of its name above and this read: a table that is gone has heard
+  # nothing. Any other failure of the read raises.
+  defp lookup(table, id) do
+    :ets.lookup(table, id)
+  rescue
+    error in ArgumentError ->
+      if :ets.info(table) == :undefined, do: [], else: reraise(error, __STACKTRACE__)
   end
 
   # ---------------------------------------------------------------------------
