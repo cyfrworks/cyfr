@@ -173,6 +173,8 @@ defmodule Prima.RefusalTest do
     {{:corrupt, {:digest, "The artifact"}}, :corrupt},
     {{:corrupt, {:profile, "prof_1"}}, :corrupt},
     {{:corrupt, {:manifest, "c:local.x:1.0.0"}}, :corrupt},
+    {{:dependency_unreadable, "reagent:local.x:1.0.0", :malformed_manifest}, :corrupt},
+    {:projection_unavailable, :unavailable},
     {{:corrupt, :person_identity}, :corrupt},
     {{:corrupt, {:component_graph, "c:local.x:1.0.0"}}, :corrupt},
     {{:corrupt, {:artifact, "sha256:ab12"}}, :corrupt},
@@ -437,6 +439,22 @@ defmodule Prima.RefusalTest do
         assert is_binary(message) and message != "", "#{inspect(reason)} has no sentence"
         assert Refusal.reason?(reason) or is_binary(reason)
       end
+    end
+
+    test "an unreadable dependency is damage, and an index behind its files is unavailable" do
+      assert %Refusal{
+               class: :corrupt,
+               message:
+                 "A dependency's stored manifest is damaged, so its dependencies cannot be read."
+             } =
+               Refusal.classify(
+                 {:dependency_unreadable, "reagent:local.x:1.0.0", :malformed_manifest}
+               )
+
+      assert %Refusal{
+               class: :unavailable,
+               message: "The component index is catching up with its files — retry shortly"
+             } = Refusal.classify(:projection_unavailable)
     end
 
     test "every class has a sentence, and the table reaches all sixteen" do

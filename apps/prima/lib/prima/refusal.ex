@@ -438,6 +438,12 @@ defmodule Prima.Refusal do
 
   defp row({:corrupt, {:manifest, _ref}}), do: {:corrupt, "The stored manifest is damaged."}
 
+  # A dependency whose stored manifest or dependency block does not read:
+  # its subtree is unknown, which is damage, never an empty one.
+  defp row({:dependency_unreadable, ref, _reason}) when is_binary(ref),
+    do:
+      {:corrupt, "A dependency's stored manifest is damaged, so its dependencies cannot be read."}
+
   # A person's identity row is minted with their person row; one missing
   # is damage, never a local person who has not enrolled.
   defp row({:corrupt, :person_identity}),
@@ -489,6 +495,11 @@ defmodule Prima.Refusal do
 
   defp row(:slot_not_held),
     do: {:not_owner, "This server does not hold its member slot — retry shortly"}
+
+  # The component index has not caught up with the tree it projects: an
+  # answer from it would be stale, so none is given.
+  defp row(:projection_unavailable),
+    do: {:unavailable, "The component index is catching up with its files — retry shortly"}
 
   # The athanor exists and is being filled. A turn waits for that; reads of
   # the tree answer meanwhile.
