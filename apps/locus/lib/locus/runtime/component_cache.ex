@@ -34,7 +34,7 @@ defmodule Locus.Runtime.ComponentCache do
   @spec get_or_compile(
           String.t(),
           (-> {:ok, binary()} | {:error, term()}),
-          Wasmex.Components.Store.t()
+          %Wasmex.Components.Store{}
         ) :: {:ok, Wasmex.Components.Component.t()} | {:error, term()}
   def get_or_compile(digest, fetch, store)
       when is_binary(digest) and digest != "" and is_function(fetch, 0) do
