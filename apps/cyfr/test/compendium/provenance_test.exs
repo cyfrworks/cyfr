@@ -371,6 +371,21 @@ defmodule Compendium.ProvenanceTest do
              Provenance.shipped_release_digest(%{component_type: "tincture"})
   end
 
+  test "shipped_release_digest/1 refuses a seed manifest that is not an object" do
+    Arca.Test.UnitFixtures.seed_component!("reagent", "local", "listed-manifest", "1.0.0",
+      manifest: "[]",
+      wasm: @valid_wasm
+    )
+
+    assert {:error, :malformed_manifest} =
+             Provenance.shipped_release_digest(%{
+               component_type: "reagent",
+               publisher: "local",
+               name: "listed-manifest",
+               version: "1.0.0"
+             })
+  end
+
   test "deleting a user component still deletes outright", %{ctx: ctx} do
     {:ok, _} =
       Registry.publish_bytes(ctx, @valid_wasm, %{
