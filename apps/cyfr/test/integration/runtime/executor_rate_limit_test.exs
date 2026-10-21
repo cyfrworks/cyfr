@@ -6,7 +6,6 @@ defmodule Locus.Runtime.ExecutorRateLimitTest do
 
   alias Sanctum.Context
 
-  @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
 
   setup tags do
@@ -23,12 +22,13 @@ defmodule Locus.Runtime.ExecutorRateLimitTest do
       user_id: "test_user_#{:rand.uniform(100_000)}",
       athanor_id: Sanctum.TestContext.athanor_id(),
       scope: :athanor,
-      permissions: MapSet.new([:read, :write, :execute])
+      permissions: MapSet.new([:read, :write, :execute]),
+      origin: :programmatic
     }
 
     # Register the test WASM in Compendium using admin context
     admin_ctx = Sanctum.TestContext.local()
-    wasm_bytes = File.read!(@math_wasm_path)
+    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, _component} =
       Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
@@ -54,22 +54,12 @@ defmodule Locus.Runtime.ExecutorRateLimitTest do
     test "allows execution when under rate limit", %{ctx: ctx, ref: ref} do
       input = %{"a" => 5, "b" => 3}
 
-      # First execution should not be rate-limited.
-      # math.wasm is a core module so Component Model load may fail,
-      # but the important thing is the rate limiter allowed it through.
-      result =
-        Opus.Dispatch.run(ctx, ref, input,
-          type: "reagent",
-          authority: Prima.Authority.zero()
-        )
-
-      case result do
-        {:ok, _} ->
-          :ok
-
-        {:error, msg} ->
-          refute msg =~ "rate limit", "Expected execution to proceed, but was rate-limited"
-      end
+      # The first execution is not rate-limited: it runs and completes.
+      assert {:ok, %{status: :completed}} =
+               Opus.Dispatch.run(ctx, ref, input,
+                 type: "reagent",
+                 authority: Prima.Authority.zero()
+               )
     end
 
     test "passing the policy gate records one policy_consultation row", %{ctx: ctx, ref: ref} do

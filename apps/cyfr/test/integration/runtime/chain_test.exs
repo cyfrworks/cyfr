@@ -5,11 +5,9 @@ Code.require_file("support/formula_host_helper.exs", __DIR__)
 defmodule Locus.Runtime.ChainTest do
   # Runs under the authority `Opus.Admission` decides (whose own
   # cases are `Opus.AdmissionTest`), against the in-memory consent
-  # source and a real published component (math.wasm — a core module that
-  # fails at component compile, which is irrelevant: every property
-  # asserted here is decided before compilation). What a run entered with
-  # is the authority its runner was handed, at its attach or at its
-  # admission, read on the suite's wire.
+  # source and real published components (the suite's guests). What a run
+  # entered with is the authority its runner was handed, at its attach or
+  # at its admission, read on the suite's wire.
   use ExUnit.Case, async: false
 
   import Prima.Test.Wait, only: [wait_until: 2]
@@ -20,7 +18,6 @@ defmodule Locus.Runtime.ChainTest do
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
 
-  @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   # Activation digests as the resolver spells them; an assignment carries
   # nothing else.
   @root_act Prima.Digest.sha256("root-act")
@@ -48,7 +45,7 @@ defmodule Locus.Runtime.ChainTest do
 
     Sanctum.TestContext.ready!(ctx.athanor_id)
     admin_ctx = Sanctum.TestContext.local()
-    wasm_bytes = File.read!(@math_wasm_path)
+    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, root_component} =
       Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
@@ -459,10 +456,9 @@ defmodule Locus.Runtime.ChainTest do
       # path executes under the blob — the blob is the policy. Reaching the
       # runtime witness proves it.
       admin_ctx = Sanctum.TestContext.local()
-      wasm_bytes = File.read!(@math_wasm_path)
 
       {:ok, cat} =
-        Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
+        Compendium.Registry.publish_bytes(admin_ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "chain-cat",
           version: "0.1.0",
           type: "catalyst",

@@ -10,8 +10,6 @@ defmodule Sanctum.Consent.BootstrapTest do
   alias Sanctum.Consent.Bootstrap
   alias Sanctum.Consent.Loader
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
-
   setup tags do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!(tags)
@@ -42,7 +40,7 @@ defmodule Sanctum.Consent.BootstrapTest do
           "publisher" => "local",
           "description" => "bootstrap test"
         },
-        wasm: @wasm
+        wasm: Cyfr.Test.Guests.wasm(type)
       )
 
     component
@@ -155,7 +153,7 @@ defmodule Sanctum.Consent.BootstrapTest do
             },
             "caps" => caps
           },
-          wasm: @wasm
+          wasm: Cyfr.Test.Guests.wasm(:catalyst)
         )
 
       component

@@ -29,7 +29,6 @@ defmodule Opus.StartRefusalTest do
   @compile {:no_warn_undefined, [Locus.Runtime.Keeper.Channel]}
 
   @service "wrk_refusing"
-  @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
   @node "reagent:local.start-refusal"
   @ref "reagent:local.start-refusal:0.1.0"
 
@@ -88,7 +87,7 @@ defmodule Opus.StartRefusalTest do
     ctx = Sanctum.TestContext.local(:api)
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "start-refusal",
         version: "0.1.0",
         type: "reagent",

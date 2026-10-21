@@ -19,7 +19,7 @@ defmodule Sanctum.Consent.AccountsTest do
   alias Sanctum.Consent.Accounts
   alias Sanctum.Consent.{Commit, Plan}
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Arca.Cache.init()

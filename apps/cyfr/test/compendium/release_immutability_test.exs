@@ -8,10 +8,10 @@ defmodule Compendium.ReleaseImmutabilityTest do
 
   alias Compendium.Registry
 
-  # Two distinct, both-valid artifacts: the test module, and the same module
-  # plus an empty "cyfr" custom section — different bytes, same behaviour,
-  # exactly the shape a rebuild produces.
-  @wasm_a File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
+  # Two distinct, both-valid artifacts: the reagent guest, and the same
+  # component plus an empty "cyfr" custom section — different bytes, same
+  # behaviour, exactly the shape a rebuild produces.
+  @wasm_a Cyfr.Test.Guests.wasm(:reagent)
   @wasm_b @wasm_a <> <<0x00, 0x05, 0x04>> <> "cyfr"
 
   setup tags do

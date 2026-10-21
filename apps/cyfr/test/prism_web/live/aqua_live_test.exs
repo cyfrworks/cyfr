@@ -140,14 +140,6 @@ defmodule PrismWeb.AquaLiveTest do
   defp soul_names_missing_catalyst!(ctx),
     do: soul_names_catalyst!(ctx, "catalyst:moonmoon69.claude")
 
-  # Minimal valid WASM with a `run` export — enough to publish a row, which
-  # is what a pull that lands leaves behind.
-  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-          <<0x03, 0x02, 0x01, 0x00>> <>
-          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
   # The page talks to its sections with `send_update`; a test that is about
   # a section's own state says so the same way.
   defp send_update_agents(view, assigns) do
@@ -651,7 +643,7 @@ defmodule PrismWeb.AquaLiveTest do
       # What a pull that succeeds leaves behind: the row, with a required
       # need and no consent bound to it yet.
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "newmodel",
           version: "0.1.0",
           type: "catalyst",
@@ -702,7 +694,7 @@ defmodule PrismWeb.AquaLiveTest do
       :ok = soul_names_catalyst!(ctx, ref)
 
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "brokenmodel",
           version: "0.1.0",
           type: "catalyst",
@@ -777,7 +769,7 @@ defmodule PrismWeb.AquaLiveTest do
       :ok = soul_names_catalyst!(ctx, ref)
 
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "keyed",
           version: "0.1.0",
           type: "catalyst",
@@ -880,7 +872,7 @@ defmodule PrismWeb.AquaLiveTest do
       # The grant is asked in the page's system layer; confirmed there, the
       # page hears it.
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "kept-key",
           version: "0.1.0",
           type: "catalyst",

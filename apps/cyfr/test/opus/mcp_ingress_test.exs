@@ -15,7 +15,6 @@ defmodule Opus.MCPIngressTest do
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
 
-  @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @node "reagent:local.ingress-math"
 
   setup do
@@ -39,7 +38,7 @@ defmodule Opus.MCPIngressTest do
     admin_ctx = Sanctum.TestContext.local()
 
     {:ok, component} =
-      Compendium.Registry.publish_bytes(admin_ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(admin_ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "ingress-math",
         version: "0.1.0",
         type: "reagent",
@@ -134,8 +133,7 @@ defmodule Opus.MCPIngressTest do
     TwoServices.watch!()
     seed_profile(ctx, component)
 
-    assert {:error, message} = run(ctx, %{})
-    assert message =~ "Component compilation failed"
+    assert {:ok, %{status: "completed", result: %{"ran" => true}}} = run(ctx, %{})
 
     assert [%{profile_id: "prof-ingress"}] = entered()
   end
@@ -164,7 +162,7 @@ defmodule Opus.MCPIngressTest do
     assert message =~ "prof-ingress"
 
     TwoServices.watch!()
-    assert {:error, _} = run(ctx, %{"profile" => "work"})
+    assert {:ok, %{status: "completed"}} = run(ctx, %{"profile" => "work"})
     assert [%{profile_id: "prof-ingress-2"}] = entered()
   end
 

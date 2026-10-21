@@ -20,7 +20,6 @@ defmodule Opus.AdmissionTest do
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
 
-  @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
   @root_node "reagent:local.chain-root"
   @target_node "reagent:local.chain-target"
 
@@ -45,7 +44,7 @@ defmodule Opus.AdmissionTest do
 
     Sanctum.TestContext.ready!(ctx.athanor_id)
     admin_ctx = Sanctum.TestContext.local()
-    wasm_bytes = File.read!(@math_wasm_path)
+    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, root_component} =
       Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
@@ -363,7 +362,7 @@ defmodule Opus.AdmissionTest do
     }
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(person, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(person, Cyfr.Test.Guests.wasm(:reagent), %{
         name: name,
         version: "1.0.0",
         type: "reagent",
@@ -750,10 +749,9 @@ defmodule Opus.AdmissionTest do
 
     setup %{ctx: ctx} do
       api = Sanctum.TestContext.local(:api)
-      wasm = File.read!(@math_wasm_path)
 
       {:ok, _} =
-        Compendium.Registry.publish_bytes(api, wasm, %{
+        Compendium.Registry.publish_bytes(api, Cyfr.Test.Guests.wasm(:formula), %{
           name: "account-formula",
           version: "0.1.0",
           type: "formula"
@@ -763,7 +761,7 @@ defmodule Opus.AdmissionTest do
       # its manifest asks for give it its own release digest, so calling
       # the other is never a self-call.
       {:ok, _} =
-        Compendium.Registry.publish_bytes(api, wasm, %{
+        Compendium.Registry.publish_bytes(api, Cyfr.Test.Guests.wasm(:formula), %{
           name: "account-root",
           version: "0.1.0",
           type: "formula",

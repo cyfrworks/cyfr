@@ -303,7 +303,6 @@ defmodule Aqua.LaunchTest do
            "../../../locus/test/support/runtime/test_wasm/hostile/attached_header_probe.wasm",
            __DIR__
          )
-  @math_wasm Path.expand("../support/test_wasm/math.wasm", __DIR__)
   @default_secret "sk-launch-default-0c1d"
   @named_secret "sk-launch-supabase2-7e9a"
   @rule %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
@@ -407,7 +406,7 @@ defmodule Aqua.LaunchTest do
     }
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: name,
         version: "1.0.0",
         type: "reagent",

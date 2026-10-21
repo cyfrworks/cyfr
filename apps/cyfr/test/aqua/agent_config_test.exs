@@ -68,17 +68,10 @@ defmodule Aqua.AgentConfigTest do
     assert pristine?(ctx)
   end
 
-  # Minimal valid WASM with a `run` export — enough to publish a row.
-  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-          <<0x03, 0x02, 0x01, 0x00>> <>
-          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
   test "a catalyst the athanor holds resolves to its newest installed release", %{ctx: ctx} do
     for version <- ["9.0.0", "10.0.0"] do
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "resolver-model",
           version: version,
           type: "catalyst",

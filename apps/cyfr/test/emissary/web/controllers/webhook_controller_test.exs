@@ -391,8 +391,6 @@ defmodule Emissary.Web.WebhookControllerTest do
                        %{status: :error, error: ^sentence}}
     end
 
-    @math_wasm_path Path.expand("../../../support/test_wasm/math.wasm", __DIR__)
-
     # A hook whose target runs: a published component, its profile's head
     # consent activating that release, and a scripted worker service that
     # answers the run.
@@ -403,12 +401,17 @@ defmodule Emissary.Web.WebhookControllerTest do
 
     defp runnable_hook!(ctx, opts \\ %{}) do
       {type, opts} = Map.pop(opts, :test_component_type, "reagent")
-      wasm_path = if type == "catalyst", do: @catalyst_wasm_path, else: @math_wasm_path
+
+      wasm =
+        if type == "catalyst",
+          do: File.read!(@catalyst_wasm_path),
+          else: Cyfr.Test.Guests.wasm(type)
+
       name = "wh-run-#{System.unique_integer([:positive])}"
       reference = "#{type}:local.#{name}"
 
       {:ok, component} =
-        Compendium.Registry.publish_bytes(ctx, File.read!(wasm_path), %{
+        Compendium.Registry.publish_bytes(ctx, wasm, %{
           name: name,
           version: "1.0.0",
           type: type

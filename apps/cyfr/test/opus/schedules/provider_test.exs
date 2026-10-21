@@ -9,17 +9,7 @@ defmodule Opus.Schedules.ProviderTest do
   alias Opus.Schedules.Provider
   alias Sanctum.Context
 
-  # Valid minimal WASM with export section
-  # magic + version
-  # type section
-  # function section
-  # export section
-  # code section
-  @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-                <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-                <<0x03, 0x02, 0x01, 0x00>> <>
-                <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-                <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+  @valid_wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)

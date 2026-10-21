@@ -36,7 +36,6 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
   alias Prima.{WorkerAuth, WorkerWire}
 
   @scripted "reagent:local.ta"
-  @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
 
   setup tags do
     Arca.Cache.init()
@@ -72,7 +71,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     {:ok, _} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "ta",
         version: "1.0.0",
         type: "reagent"

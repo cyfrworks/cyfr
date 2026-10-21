@@ -55,7 +55,6 @@ defmodule Cyfr.TwoWorkersTest do
   @moduletag timeout: 180_000
   @moduletag :capture_log
 
-  @math_wasm Path.expand("../support/test_wasm/math.wasm", __DIR__)
   @stub TwoServices.stub()
   @scripted TwoServices.scripted()
   @soul "agent:local.aqua"
@@ -109,7 +108,7 @@ defmodule Cyfr.TwoWorkersTest do
       assert @soul in minted and @stub in minted
 
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm), %{
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
           name: "two-workers",
           version: "1.0.0",
           type: "reagent"

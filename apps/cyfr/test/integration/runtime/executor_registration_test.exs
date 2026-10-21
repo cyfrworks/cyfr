@@ -6,7 +6,6 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
 
   alias Sanctum.Context
 
-  @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.reg-math:0.1.0"
 
   setup tags do
@@ -25,7 +24,7 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
     }
 
     admin_ctx = Sanctum.TestContext.local()
-    wasm_bytes = File.read!(@math_wasm_path)
+    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, _component} =
       Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
@@ -51,9 +50,8 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
   test "a synchronous run leaves no registry entry behind", %{ctx: ctx} do
     execution_id = "exec_reg_sync_#{System.unique_integer([:positive])}"
 
-    # math.wasm is a core module, not a Component Model binary, so the run
-    # fails at compile — irrelevant here: registration wraps the execution
-    # window either way, and the entry must be gone afterwards.
+    # Registration wraps the execution window, and the entry must be gone
+    # afterwards.
     _result =
       Opus.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
         type: "reagent",

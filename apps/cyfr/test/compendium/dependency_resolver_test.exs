@@ -262,15 +262,10 @@ defmodule Compendium.DependencyResolverTest do
   # Helpers
   # ============================================================================
 
-  # Valid minimal WASM binary with export section
-  @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-                <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-                <<0x03, 0x02, 0x01, 0x00>> <>
-                <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-                <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+  @valid_wasm Cyfr.Test.Guests.wasm(:reagent)
 
   defp register_test_component(ctx, name, version, type) do
-    Compendium.Registry.publish_bytes(ctx, @valid_wasm, %{
+    Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(type), %{
       name: name,
       version: version,
       type: type,

@@ -248,7 +248,7 @@ defmodule Sanctum.Consent.RegistrationBindingTest do
       {:ok, _} =
         publish_fixture(
           admin_ctx,
-          File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+          Cyfr.Test.Guests.wasm(:reagent)
         )
 
       on_exit(fn ->

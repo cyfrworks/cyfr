@@ -103,8 +103,8 @@ session token, answers `answer-N.json`.
 
 The feeds are `candles` (actions `buy`, a run, and `refresh`),
 `broken-die` and `broken-crash`, bound through the console at 60 minutes
-on the fixture's source `catalyst:local.candles`, a core wasm module that
-no run can execute.
+on the fixture's source `catalyst:local.candles`, the suite's catalyst
+guest, whose answer is no feed envelope, so a fire's result is refused.
 
 ## The steps
 

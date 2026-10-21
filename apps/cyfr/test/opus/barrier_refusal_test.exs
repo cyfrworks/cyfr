@@ -18,7 +18,6 @@ defmodule Opus.BarrierRefusalTest do
   alias Prima.Authority
   alias Opus.Admission
 
-  @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
   @reference "reagent:local.barrier-target:0.1.0"
   @lifecycle [[:cyfr, :opus, :execute, :start], [:cyfr, :opus, :execute, :exception]]
   @parent_ended "Execution refused: its parent execution is no longer running"
@@ -42,7 +41,7 @@ defmodule Opus.BarrierRefusalTest do
     ctx = Sanctum.TestContext.local(:api)
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "barrier-target",
         version: "0.1.0",
         type: "reagent",

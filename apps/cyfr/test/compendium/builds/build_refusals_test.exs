@@ -16,7 +16,7 @@ defmodule Compendium.Builds.BuildRefusalsTest do
   alias Compendium.Builds.Provider
   alias Cyfr.Test.ScriptedBuilder
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
   @reference "reagent:local.refused:0.1.0"
 
   setup tags do

@@ -16,7 +16,7 @@ defmodule Aqua.ConsentStatusTest do
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
 
-  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)

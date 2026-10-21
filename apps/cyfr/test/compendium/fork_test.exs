@@ -173,12 +173,7 @@ defmodule Compendium.ForkTest do
     test "the stamped lineage is queryable end to end", %{ctx: ctx} do
       # Fork → register → the row's manifest carries the stamp and the
       # provenance surface reports the upstream line.
-      valid_wasm =
-        <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-          <<0x03, 0x02, 0x01, 0x00>> <>
-          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+      valid_wasm = Cyfr.Test.Guests.wasm(:reagent)
 
       # Pulled components carry rows; upstream_status reads what this
       # install KNOWS, so the upstream line must be registered. The

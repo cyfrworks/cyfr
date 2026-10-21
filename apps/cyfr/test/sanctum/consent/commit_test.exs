@@ -18,7 +18,7 @@ defmodule Sanctum.Consent.CommitTest do
   alias Sanctum.Consent.Plan
   alias Sanctum.Providers.Profile
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   # The component domain's facts, but for a placement it cannot read.
   defmodule PlacementUnavailable do
@@ -2915,7 +2915,7 @@ defmodule Sanctum.Consent.CommitRebindRaceTest do
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
   @attach %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
   @inference %{
     "hosts" => ["api.openai.com"],

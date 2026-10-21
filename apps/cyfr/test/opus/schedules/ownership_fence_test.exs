@@ -42,7 +42,6 @@ defmodule Opus.Schedules.OwnershipFenceTest do
 
   @reference "reagent:local.test"
   @profile_id "prof_test"
-  @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
 
   @keys [
     {Arca.ControlPlane, :standing},
@@ -1278,7 +1277,7 @@ defmodule Opus.Schedules.OwnershipFenceTest do
   # The grant admits the runs a schedule starts and the person's own.
   defp consented!(ctx) do
     {:ok, component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "test",
         version: "1.0.0",
         type: "reagent"
@@ -1860,7 +1859,6 @@ defmodule Opus.Schedules.OwnershipFenceFeedsTest do
   @reference "catalyst:local.markets"
   @pinned "catalyst:local.markets:1.0.0"
   @profile_id "prof_feeds"
-  @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
 
   @keys [
     {Arca.ControlPlane, :standing},
@@ -1965,7 +1963,7 @@ defmodule Opus.Schedules.OwnershipFenceFeedsTest do
   # feeds name with its head consent, admitting scheduled runs.
   defp consented!(ctx) do
     {:ok, component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: "markets",
         version: "1.0.0",
         type: "catalyst"

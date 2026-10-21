@@ -602,7 +602,6 @@ defmodule Sanctum.ProviderTest do
     # that class, with nothing logged as a reason no table knows.
     @plan_dep "reagent:local.mcp-plan-dep"
     @plan_app "reagent:local.mcp-plan-app"
-    @plan_wasm Path.join(__DIR__, "../support/test_wasm/math.wasm")
 
     setup %{ctx: ctx} do
       Arca.Cache.init()
@@ -705,7 +704,7 @@ defmodule Sanctum.ProviderTest do
             "version" => "1.0.0",
             "publisher" => "local"
           }),
-        wasm: File.read!(@plan_wasm)
+        wasm: Cyfr.Test.Guests.wasm(:reagent)
       )
   end
 

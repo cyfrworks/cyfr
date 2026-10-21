@@ -18,7 +18,7 @@ defmodule Compendium.Builds.ClientTest do
   alias Prima.BuilderProtocol
   alias Cyfr.Test.ScriptedBuilder
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
   @fixture ScriptedBuilder.fixture()
   @athanor "ath_01a09fee-045b-770b-b745-a62792bb8798"
   @sources %{"Cargo.toml" => "[package]\n", "src/lib.rs" => "// a reagent\n"}

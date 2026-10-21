@@ -17,7 +17,7 @@ defmodule Compendium.RegisterMintsNothingTest do
 
   use ExUnit.Case, async: false
 
-  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Arca.Cache.init()

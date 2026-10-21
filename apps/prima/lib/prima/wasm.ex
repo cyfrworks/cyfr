@@ -3,31 +3,28 @@
 
 defmodule Prima.Wasm do
   @moduledoc """
-  WASM binary validation for the Compendium registry.
+  WebAssembly component validation for the Compendium registry.
 
-  Validates pre-built WASM artifacts before publishing.
+  Validates pre-built artifacts before publishing. Only component-model
+  binaries are admitted: a core WebAssembly module is refused
+  (`{:core_module, sentence}`), since registration is where an artifact
+  enters and `Locus.Runtime.Engine` executes components only.
 
   ## Validation Steps
 
-  1. Magic bytes check - Verify `\\0asm` header
-  2. Size limits - Enforce maximum artifact size (50MB)
-  3. Version check - Verify WASM binary version
-  4. Export extraction - Parse and extract exported functions
+  1. Size limits - Enforce maximum artifact size (50MB)
+  2. Magic bytes check - Verify `\\0asm` header
+  3. Preamble check - A component's layer preamble; a core module's
+     version 1 is refused as a core module, anything else as unsupported
+  4. Export extraction - Parse the component's top-level world exports
   5. Content digest - Compute SHA-256 hash for deduplication
-  6. Features - A component is valid WebAssembly that uses none of the
+  6. Features - The component is valid WebAssembly that uses none of the
      features the runtime refuses (`Prima.ComponentFeatures`), checked
      last, after `validate/2`'s world
 
-  ## Component Type Detection
-
-  For component-model binaries the suggested type is read from the world
-  the binary actually exports (`Prima.WIT.type_for_export/1`) —
-  and `validate/2` asserts the declared type's world outright. For core
-  modules (which `Locus.Runtime.Engine` refuses to execute) a best-effort export
-  heuristic remains:
-  - `catalyst` - Has I/O-related exports (http, socket capabilities)
-  - `reagent` - Pure compute, no I/O
-  - `formula` - Has `execute` export (workflow orchestration)
+  The suggested type is read from the world the binary actually exports
+  (`Prima.WIT.type_for_export/1`), and `validate/2` asserts the declared
+  type's world outright.
 
   ## Usage
 
@@ -36,7 +33,8 @@ defmodule Prima.Wasm do
       #      valid: true,
       #      digest: "sha256:abc123...",
       #      size: 12345,
-      #      exports: ["run", "init"],
+      #      exports: ["cyfr:reagent/compute@0.1.0"],
+      #      exports_complete: true,
       #      suggested_type: :reagent
       #    }
 
@@ -47,7 +45,7 @@ defmodule Prima.Wasm do
   # WASM magic bytes: \0asm
   @wasm_magic <<0x00, 0x61, 0x73, 0x6D>>
 
-  # WASM version 1 (MVP)
+  # A core module's version 1 (MVP)
   @wasm_version_1 <<0x01, 0x00, 0x00, 0x00>>
 
   # Component Model preamble (layer 0)
@@ -56,17 +54,16 @@ defmodule Prima.Wasm do
   # Maximum artifact size (50MB)
   @max_size 50 * 1024 * 1024
 
-  # Minimum valid WASM size (magic + version = 8 bytes)
+  # Minimum valid WASM size (magic + version or preamble = 8 bytes)
   @min_size 8
 
-  # WASM section IDs (only export section is currently used)
-  @section_export 7
-
-  # Export kinds
-  @export_func 0
+  # The sentence a core module is refused with, which `Prima.Refusal`
+  # answers as it is.
+  @core_module_refusal "The binary is a core WebAssembly module, not a component; " <>
+                         "CYFR registers and runs WebAssembly components only."
 
   @doc """
-  Validate a WASM binary and extract metadata.
+  Validate a WebAssembly component and extract metadata.
 
   ## Parameters
 
@@ -75,17 +72,19 @@ defmodule Prima.Wasm do
   ## Returns
 
   - `{:ok, metadata}` - Validation successful
-  - `{:error, reason}` - Validation failed
+  - `{:error, {:core_module, sentence}}` - The binary is a core module
+  - `{:error, reason}` - Validation failed otherwise
 
   ## Metadata Fields
 
   - `:valid` - Always true on success
   - `:digest` - SHA-256 content hash (hex encoded)
   - `:size` - Binary size in bytes
-  - `:exports` - List of exported function names
-  - `:suggested_type` - Suggested component type based on exports
-  - `:version` - WASM binary version
+  - `:exports` - The component's top-level export names
+  - `:exports_complete` - Whether every export record was parsed
+  - `:suggested_type` - The type whose world the exports match
   """
+  @spec validate(term()) :: {:ok, map()} | {:error, term()}
   def validate(bytes) when is_binary(bytes) do
     with {:ok, validation} <- inspect_binary(bytes) do
       check_features(validation, bytes)
@@ -97,77 +96,45 @@ defmodule Prima.Wasm do
   defp inspect_binary(bytes) do
     with :ok <- check_size(bytes),
          :ok <- check_magic(bytes),
-         {:ok, format} <- check_version(bytes) do
-      digest = Prima.Digest.sha256(bytes)
+         :ok <- check_preamble(bytes) do
+      # The component's top-level export names — parsed from the
+      # component-model export sections, so the answer is the world the
+      # binary actually implements, not a guess.
+      {exports, complete?} = extract_component_exports(bytes)
 
-      case format do
-        :core_module ->
-          case extract_exports(bytes) do
-            {:ok, exports} ->
-              suggested_type = suggest_type(exports)
-
-              {:ok,
-               %{
-                 valid: true,
-                 digest: digest,
-                 size: byte_size(bytes),
-                 exports: exports,
-                 suggested_type: suggested_type,
-                 version: 1,
-                 format: :core_module
-               }}
-
-            {:error, reason} ->
-              {:error, {:wasm_parse_failed, reason}}
-          end
-
-        :component ->
-          # The component's top-level export names — parsed from the
-          # component-model export sections, so the answer is the world the
-          # binary actually implements, not a guess.
-          {exports, complete?} = extract_component_exports(bytes)
-
-          {:ok,
-           %{
-             valid: true,
-             digest: digest,
-             size: byte_size(bytes),
-             exports: exports,
-             suggested_type: component_suggested_type(exports),
-             version: 1,
-             format: :component,
-             exports_complete: complete?
-           }}
-      end
+      {:ok,
+       %{
+         valid: true,
+         digest: Prima.Digest.sha256(bytes),
+         size: byte_size(bytes),
+         exports: exports,
+         suggested_type: component_suggested_type(exports),
+         exports_complete: complete?
+       }}
     end
   end
 
   # A component is held to the features the runtime admits
-  # (`Prima.ComponentFeatures`) after everything this module parses; a
-  # core module runs nowhere, so its registration stays a parse-and-store.
-  defp check_features(%{format: :component} = validation, bytes) do
+  # (`Prima.ComponentFeatures`) after everything this module parses.
+  defp check_features(validation, bytes) do
     with :ok <- Prima.ComponentFeatures.check(bytes), do: {:ok, validation}
   end
 
-  defp check_features(validation, _bytes), do: {:ok, validation}
-
   @doc """
-  `validate/1`, then assert the binary implements the world its declared
-  type demands.
+  `validate/1`, then assert the component implements the world its
+  declared type demands.
 
-  Only component-model binaries are asserted — a core module cannot
-  execute at all (`Locus.Runtime.Engine` refuses it), so its registration stays a
-  parse-and-store. The point of asserting here, at registration, is
-  ordering: the executor resolves vault material and builds the full host
-  import surface BEFORE the missing export would surface as a generic
-  call failure, so a mistyped or hostile-typed artifact must be refused
-  before it ever reaches that pipeline.
+  The point of asserting here, at registration, is ordering: the executor
+  resolves vault material and builds the full host import surface BEFORE
+  the missing export would surface as a generic call failure, so a
+  mistyped or hostile-typed artifact must be refused before it ever
+  reaches that pipeline.
 
   Fail-closed on an export section this parser cannot walk: refusing a
   novel encoding with an honest sentence beats registering an artifact
   whose world nothing verified.
   """
-  @spec validate(binary(), String.t() | atom()) :: {:ok, map()} | {:error, term()}
+  @spec validate(term(), String.t() | atom()) :: {:ok, map()} | {:error, term()}
   def validate(bytes, expected_type) when is_binary(bytes) do
     type = to_string(expected_type)
 
@@ -179,9 +146,7 @@ defmodule Prima.Wasm do
 
   def validate(_bytes, _expected_type), do: {:error, :not_binary}
 
-  defp check_declared_world(%{format: :core_module} = validation, _type), do: {:ok, validation}
-
-  defp check_declared_world(%{format: :component} = validation, type) do
+  defp check_declared_world(validation, type) do
     case Prima.WIT.expected_exports(type) do
       [] ->
         # Not an executable type (or unknown): nothing to demand.
@@ -220,31 +185,6 @@ defmodule Prima.Wasm do
     end
   end
 
-  @doc """
-  Suggest component type based on exported functions.
-
-  Best-effort heuristic for CORE MODULES only — component-model binaries
-  answer from the world they export (see `validate/1`), which is a fact,
-  not a guess. The caller should treat this as a hint — the definitive
-  type is set by the user via the `target_type` parameter at
-  compile/publish time, and `validate/2` holds a component to it.
-  """
-  def suggest_type(exports) when is_list(exports) do
-    cond do
-      # Formula components have an execute function
-      "execute" in exports ->
-        :formula
-
-      # Catalysts typically have capability-related exports
-      has_capability_exports?(exports) ->
-        :catalyst
-
-      # Default to reagent (pure compute)
-      true ->
-        :reagent
-    end
-  end
-
   # ============================================================================
   # Validation Steps
   # ============================================================================
@@ -262,113 +202,13 @@ defmodule Prima.Wasm do
   defp check_magic(<<@wasm_magic, _rest::binary>>), do: :ok
   defp check_magic(_), do: {:error, :invalid_magic_bytes}
 
-  defp check_version(<<@wasm_magic, @wasm_version_1, _rest::binary>>), do: {:ok, :core_module}
-  defp check_version(<<@wasm_magic, @component_preamble, _rest::binary>>), do: {:ok, :component}
+  defp check_preamble(<<@wasm_magic, @component_preamble, _rest::binary>>), do: :ok
 
-  defp check_version(<<@wasm_magic, version::binary-size(4), _rest::binary>>) do
+  defp check_preamble(<<@wasm_magic, @wasm_version_1, _rest::binary>>),
+    do: {:error, {:core_module, @core_module_refusal}}
+
+  defp check_preamble(<<@wasm_magic, version::binary-size(4), _rest::binary>>) do
     {:error, {:unsupported_version, version}}
-  end
-
-  defp check_version(_), do: {:error, :invalid_version}
-
-  # ============================================================================
-  # Export Extraction
-  # ============================================================================
-
-  @doc """
-  Extract exported function names from WASM binary.
-  Returns {:ok, [name, ...]} or {:error, reason}.
-  """
-  def extract_exports(bytes) when is_binary(bytes) do
-    # Skip magic (4) + version (4)
-    <<_header::binary-size(8), sections::binary>> = bytes
-
-    case parse_sections(sections) do
-      {:ok, section_map} ->
-        case section_map |> Map.get(@section_export, <<>>) |> parse_export_section() do
-          {:ok, entries} ->
-            exports =
-              entries
-              |> Enum.filter(fn {_name, kind} -> kind == @export_func end)
-              |> Enum.map(fn {name, _kind} -> name end)
-
-            {:ok, exports}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  rescue
-    # A pattern or clause that does not match is a malformed WASM structure.
-    MatchError -> {:error, :wasm_parse_failed}
-    FunctionClauseError -> {:error, :wasm_parse_failed}
-  end
-
-  # Parse all sections into a map of section_id => content
-  defp parse_sections(binary, acc \\ %{})
-
-  defp parse_sections(<<>>, acc), do: {:ok, acc}
-
-  defp parse_sections(<<section_id::8, rest::binary>>, acc) do
-    case parse_leb128_u32(rest) do
-      {:ok, size, remaining} when byte_size(remaining) >= size ->
-        <<content::binary-size(^size), next::binary>> = remaining
-        # Only store sections we care about (export section)
-        new_acc =
-          if section_id == @section_export, do: Map.put(acc, section_id, content), else: acc
-
-        parse_sections(next, new_acc)
-
-      {:ok, size, remaining} ->
-        {:error, {:section_truncated, section_id, size, byte_size(remaining)}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp parse_sections(_invalid, _acc), do: {:error, :invalid_section_format}
-
-  # Parse export section content
-  defp parse_export_section(<<>>) do
-    {:ok, []}
-  end
-
-  defp parse_export_section(content) do
-    case parse_leb128_u32(content) do
-      {:ok, count, rest} ->
-        parse_exports_vec(rest, count, [])
-
-      {:error, _reason} ->
-        {:error, :export_section_parse_failed}
-    end
-  end
-
-  defp parse_exports_vec(_binary, 0, acc), do: {:ok, Enum.reverse(acc)}
-
-  defp parse_exports_vec(binary, count, acc) do
-    case parse_export_entry(binary) do
-      {:ok, name, kind, rest} ->
-        parse_exports_vec(rest, count - 1, [{name, kind} | acc])
-
-      {:error, _reason} ->
-        {:error, :export_entry_parse_failed}
-    end
-  end
-
-  # Parse a single export entry: name (string) + kind (byte) + index (u32)
-  defp parse_export_entry(binary) do
-    with {:ok, name_len, rest1} <- parse_leb128_u32(binary),
-         true <- byte_size(rest1) >= name_len,
-         <<name::binary-size(^name_len), kind::8, rest2::binary>> <- rest1,
-         {:ok, _index, rest3} <- parse_leb128_u32(rest2) do
-      {:ok, name, kind, rest3}
-    else
-      _ -> {:error, :invalid_export_entry}
-    end
   end
 
   # ============================================================================
@@ -376,7 +216,7 @@ defmodule Prima.Wasm do
   # ============================================================================
 
   # Component-model export section id (component sections are their own
-  # id space — 11 is `export`, unrelated to the core module's 7).
+  # id space, in which 11 is `export`).
   @component_section_export 11
 
   # Walk the component's top-level sections and collect the export names
@@ -468,25 +308,4 @@ defmodule Prima.Wasm do
 
   defp parse_leb128_u32(<<>>, _result, _shift), do: {:error, :incomplete_leb128}
   defp parse_leb128_u32(_binary, _result, _shift), do: {:error, :leb128_overflow}
-
-  # ============================================================================
-  # Type Detection Helpers
-  # ============================================================================
-
-  # Check if exports indicate I/O capabilities (core module heuristic only).
-  defp has_capability_exports?(exports) do
-    capability_indicators = [
-      "http_request",
-      "http_get",
-      "http_post",
-      "socket_connect",
-      "socket_send",
-      "socket_recv",
-      "fs_read",
-      "fs_write",
-      "env_get"
-    ]
-
-    Enum.any?(capability_indicators, &(&1 in exports))
-  end
 end

@@ -23,7 +23,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   alias Sanctum.Providers.Profile
   alias Prima.Test.AuthorityFixtures, as: Fixtures
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
   @dep "reagent:local.sel-dep"
   @role_a "reagent:local.sel-role-a"
   @role_b "reagent:local.sel-role-b"

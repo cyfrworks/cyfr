@@ -235,7 +235,7 @@ defmodule Compendium.ManifestNeedsCapsTest do
           else: Application.delete_env(:arca, :base_path)
       end)
 
-      wasm = File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
+      wasm = Cyfr.Test.Guests.wasm(:reagent)
       {:ok, ctx: Sanctum.TestContext.local(), wasm: wasm}
     end
 

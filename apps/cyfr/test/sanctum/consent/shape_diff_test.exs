@@ -6,7 +6,7 @@ defmodule Sanctum.Consent.ShapeDiffTest do
 
   alias Sanctum.Consent.ShapeDiff
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Arca.Cache.init()

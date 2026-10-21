@@ -19,17 +19,7 @@ defmodule Compendium.AutoIndexerTest do
   alias Compendium.AutoIndexer
   alias Compendium.Registry
 
-  # Valid minimal WASM with export section
-  # magic + version
-  # type section
-  # function section
-  # export section
-  # code section
-  @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-                <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-                <<0x03, 0x02, 0x01, 0x00>> <>
-                <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-                <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+  @valid_wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -70,7 +60,7 @@ defmodule Compendium.AutoIndexerTest do
 
     Arca.Test.UnitFixtures.tenant_component!(fixture_ctx, type, publisher, name, version,
       manifest: manifest,
-      wasm: @valid_wasm
+      wasm: Cyfr.Test.Guests.wasm(type)
     )
   end
 
@@ -229,7 +219,7 @@ defmodule Compendium.AutoIndexerTest do
         Jason.encode!(%{"type" => "catalyst", "version" => "0.1.0", "description" => "Bundled"})
       )
 
-      File.write!(Path.join(bundle_dir, "catalyst.wasm"), @valid_wasm)
+      File.write!(Path.join(bundle_dir, "catalyst.wasm"), Cyfr.Test.Guests.wasm(:catalyst))
 
       # Nothing in the athanor's tree yet: the walk sees only what the
       # athanor holds, so the shipped bundle registers once it is copied in.

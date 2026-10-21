@@ -650,19 +650,12 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     refute has_element?(pane, ~s(button[phx-click="stop"]))
   end
 
-  # Minimal valid WASM with a `run` export: enough to publish a row.
-  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-          <<0x03, 0x02, 0x01, 0x00>> <>
-          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
   # A component in `ctx`'s athanor a turn can ask a grant for.
   defp grantable!(ctx) do
     name = "pane-grant-#{System.unique_integer([:positive])}"
 
     {:ok, _} =
-      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: name,
         version: "0.1.0",
         type: "catalyst",
@@ -744,7 +737,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     }
 
     {:ok, _} =
-      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: name,
         version: "0.1.0",
         type: "catalyst",
@@ -963,7 +956,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
       {:ok, _} = Sanctum.TestContext.mark_provisioned(room)
 
       {:ok, _} =
-        Compendium.Registry.publish_bytes(in_room, @wasm, %{
+        Compendium.Registry.publish_bytes(in_room, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "claude",
           version: "0.1.0",
           type: "catalyst",

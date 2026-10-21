@@ -26,7 +26,6 @@ defmodule Opus.Providers.TinctureTest do
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
 
-  @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
   @dep "reagent:local.tinc-mcp-dep"
   @dep_ref "reagent:local.tinc-mcp-dep:0.1.0"
   # `Sanctum.TestContext.athanor!/0`'s group slug: the fixture athanor's
@@ -271,7 +270,7 @@ defmodule Opus.Providers.TinctureTest do
       end)
 
       {:ok, _dep} =
-        Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
           name: "tinc-mcp-dep",
           version: "0.1.0",
           type: "reagent"

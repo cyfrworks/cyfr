@@ -79,8 +79,6 @@ defmodule Opus.Host.StorageTest do
   alias Opus.Host.StorageTest.{AnsweringAdapter, GatedAdapter}
   alias Cyfr.Test.AttemptFixtures
 
-  @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
-
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
@@ -381,7 +379,7 @@ defmodule Opus.Host.StorageTest do
   describe "fetch_artifact" do
     test "answers the bytes of the attempt's own component, and nothing by another digest" do
       ctx = Sanctum.TestContext.local(:api)
-      wasm = File.read!(@math_wasm_path)
+      wasm = Cyfr.Test.Guests.wasm(:reagent)
 
       {:ok, _component} =
         Compendium.Registry.publish_bytes(ctx, wasm, %{

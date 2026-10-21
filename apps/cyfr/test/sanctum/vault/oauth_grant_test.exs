@@ -772,7 +772,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
 
     test "changed scopes are a rebind: digest moves, bound profile flips", %{ctx: ctx} do
       # Bind a profile to the entry through the real consent walk.
-      wasm = File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+      wasm = Cyfr.Test.Guests.wasm(:reagent)
 
       {:ok, _} =
         Compendium.Registry.publish_bytes(ctx, wasm, %{

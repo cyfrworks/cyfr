@@ -189,6 +189,8 @@ defmodule Prima.RefusalTest do
     {{:timeout, :parent_deadline}, :timeout},
     {{:rate_limited, 5}, :rate_limited},
     {{:attestation_failed, :signed_pulls_required}, :forbidden},
+    {{:core_module, "The binary is a core WebAssembly module, not a component."},
+     :invalid_argument},
     {{:setup_required, :registry_binding}, :setup_required},
     {{:invoke_denied, :depth_cap}, :forbidden},
     {{:invoke_denied, :invoke_budget_exhausted}, :forbidden},

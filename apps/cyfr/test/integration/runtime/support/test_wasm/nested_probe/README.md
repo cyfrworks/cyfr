@@ -5,8 +5,7 @@
 
 A minimal `cyfr:formula` world component (`export run; import invoke`) used
 by `Locus.Runtime.Test.NestedExecution` to build **real** nested WASM executions in
-tests. Unlike `../math.wasm` (a WASI-P1 core module that cannot execute as
-a component), `nested_probe.wasm` is a genuine Component Model binary.
+tests.
 
 Input selects the operation:
 

@@ -12,7 +12,6 @@ defmodule Locus.Runtime.AuthorityPlumbingTest do
   alias Cyfr.Test.TwoServices
   alias Sanctum.Context
 
-  @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.authority-plumb:0.1.0"
 
   setup tags do
@@ -33,7 +32,7 @@ defmodule Locus.Runtime.AuthorityPlumbingTest do
     }
 
     admin_ctx = Sanctum.TestContext.local()
-    wasm_bytes = File.read!(@math_wasm_path)
+    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, _component} =
       Compendium.Registry.publish_bytes(admin_ctx, wasm_bytes, %{
@@ -67,10 +66,6 @@ defmodule Locus.Runtime.AuthorityPlumbingTest do
     {:ok, decoded} = Prima.Authority.from_wire(Prima.Authority.to_wire(authority))
     decoded
   end
-
-  # math.wasm is a core module, not a Component Model binary, so every run
-  # here fails at component compile. That is irrelevant: its runner attaches,
-  # and the authority check runs, before compilation is attempted.
 
   test "an :authority passed to a dispatched run reaches its runner as its assignment carries it",
        %{ctx: ctx} do

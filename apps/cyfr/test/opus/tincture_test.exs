@@ -24,7 +24,6 @@ defmodule Opus.TinctureTest do
   alias Prima.Test.AuthorityFixtures
   alias Sanctum.Test.ConsentFixtures
 
-  @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
   @dep "reagent:local.tinc-dep"
   @dep_ref "reagent:local.tinc-dep:0.1.0"
   # `Sanctum.TestContext.athanor!/0`'s group slug.
@@ -54,7 +53,7 @@ defmodule Opus.TinctureTest do
     end)
 
     {:ok, dep} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "tinc-dep",
         version: "0.1.0",
         type: "reagent"
@@ -283,7 +282,7 @@ defmodule Opus.TinctureTest do
       owner_b = %{ctx | athanor_id: other.id}
 
       {:ok, _dep} =
-        Compendium.Registry.publish_bytes(owner_b, File.read!(@math_wasm_path), %{
+        Compendium.Registry.publish_bytes(owner_b, Cyfr.Test.Guests.wasm(:reagent), %{
           name: "tinc-dep",
           version: "0.1.0",
           type: "reagent"

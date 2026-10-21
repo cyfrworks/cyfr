@@ -31,7 +31,7 @@ defmodule Compendium.BuildsTest do
 
   import Prima.Test.Wait
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
   @reference "reagent:local.adder:0.1.0"
   @unit ComponentPath.version_dir("reagent", "local", "adder", "0.1.0")
   @wasm_path ComponentPath.wasm_path("reagent", "local", "adder", "0.1.0")

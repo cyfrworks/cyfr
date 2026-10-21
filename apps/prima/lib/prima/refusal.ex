@@ -656,6 +656,10 @@ defmodule Prima.Refusal do
            "component-model async, GC or exception handling."}
   end
 
+  # A core WebAssembly module where a component is published, registered
+  # or built (`Prima.Wasm`), refused in that module's own sentence.
+  defp row({:core_module, sentence}) when is_binary(sentence), do: {:invalid_argument, sentence}
+
   # A component the validator refuses with every feature it knows on.
   defp row({:component_invalid, digest}) when is_binary(digest) do
     if component_digest?(digest),

@@ -1349,6 +1349,7 @@ For the full tincture reference (architecture, manifest, SDK, sandbox constraint
 | Error | Context | Fix |
 |-------|---------|-----|
 | `wrong_world` | The binary's world does not match the type it is declared as | Build it against the world its type demands (`src/wit/world.wit`) |
+| `core_module` | The binary is a core WebAssembly module, not a component | Build a component: target `wasm32-wasip2` with `cargo component build` |
 | `malformed` (`invalid_wasm`) | Not valid WebAssembly, or uses a refused feature | Verify target is `wasm32-wasip2`, update toolchain, `wasm-tools validate` with the refused features off (**Refused features** under [Limits](#limits-capslimits)) |
 | `too_large` | Binary over 50 MiB | Enable `lto = true`, `opt-level = "s"`, remove unused deps |
 | `consent_required` | The component has no granted capabilities | Grant it: `cyfr profile grant <type>:<ref>` |

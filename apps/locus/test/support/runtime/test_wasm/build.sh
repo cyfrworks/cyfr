@@ -7,11 +7,10 @@
 # nothing else: each core module parsed and stripped of its custom
 # sections; math kept a core module, echo and spin given the reagent
 # world's WIT and made components, which record the version of the tool
-# that made them. CYFR's suite holds a byte copy of math.wasm, written and
-# compared with Locus's.
+# that made them.
 #
 # Usage, from anywhere in the repository:
-#   build.sh            build and write each .wasm and CYFR's copy
+#   build.sh            build and write each .wasm
 #   build.sh --check    build and compare with the checked-in binaries
 #
 # Exit 0 built or identical; 1 a binary differs; 2 usage; 69
@@ -20,7 +19,6 @@ set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd -P)"
 root="$(cd "$here/../../../../../.." && pwd -P)"
-copy="$root/apps/cyfr/test/support/test_wasm/math.wasm"
 
 case "${1:-}" in
   --check | "") ;;
@@ -87,12 +85,6 @@ if [ "${1:-}" = --check ]; then
       status=1
     fi
   done
-  if cmp -s "$work/math.wasm" "$copy"; then
-    echo "CYFR's math.wasm is byte-identical to a fresh build"
-  else
-    echo "CYFR's math.wasm ($copy) differs from a fresh build" >&2
-    status=1
-  fi
   exit "$status"
 fi
 
@@ -100,4 +92,3 @@ for entry in $fixtures; do
   name="${entry%%:*}"
   cp "$work/$name.wasm" "$here/$name.wasm"
 done
-cp "$work/math.wasm" "$copy"

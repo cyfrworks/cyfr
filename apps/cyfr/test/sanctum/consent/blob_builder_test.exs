@@ -22,7 +22,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
   alias Sanctum.Consent.Commit
   alias Sanctum.Consent.Plan
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
   @ref "reagent:local.narrow-source"
   @dep "reagent:local.narrow-dep"
 

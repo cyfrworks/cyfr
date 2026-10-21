@@ -40,7 +40,6 @@ defmodule Opus.FeedsTest do
   @reference "catalyst:local.markets"
   @pinned "catalyst:local.markets:1.0.0"
   @profile_id "prof_feeds"
-  @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
   @vectors_path Path.expand("../../../../tests/fixtures/feed.json", __DIR__)
   @external_resource @vectors_path
 
@@ -1000,7 +999,7 @@ defmodule Opus.FeedsTest do
 
   defp consented!(ctx) do
     {:ok, component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: "markets",
         version: "1.0.0",
         type: "catalyst"

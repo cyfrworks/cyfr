@@ -10,7 +10,7 @@ defmodule Compendium.ConsentSetupPlanTest do
   alias Sanctum.Consent.Plan
   alias Sanctum.Vault
 
-  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Arca.Cache.init()

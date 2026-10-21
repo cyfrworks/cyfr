@@ -102,7 +102,7 @@ defmodule Aqua.HandsLaunchAccountsTest do
   alias Aqua.Hands
   alias Sanctum.Consent.{Commit, Plan}
 
-  @wasm File.read!(Path.expand("../support/test_wasm/math.wasm", __DIR__))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Arca.Cache.init()
