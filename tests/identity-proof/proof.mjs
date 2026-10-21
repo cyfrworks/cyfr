@@ -22,7 +22,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 import {
-  ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, signedIn, sleep, startProxy, virtualAuthenticator, waitFor,
+  ask as askRunSh, instrumentDevice, launchBrowser, readHomes, redact as redactKnown, saveKit, signedIn, sleep, startProxy,
+  virtualAuthenticator, waitFor,
 } from "../browser/lib.mjs";
 
 const [homesFile, segmentA, cookieA, outDir] = process.argv.slice(2);
@@ -59,39 +60,6 @@ const redact = (text) => redactKnown(text, secrets);
 // The homes' part of a step, asked of run.sh (lib.mjs `ask`). `secret: true`
 // removes the answer once read; run.sh has removed the ask.
 const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 300_000, refuseError: true, ...options });
-
-// ---------------------------------------------------------------------------
-// The glass's device channel, watched from inside its own page
-// (tests/pairing-proof/proof.mjs's instrument, reduced to what this proof reads)
-// ---------------------------------------------------------------------------
-
-function instrumentDevice() {
-  const Native = window.WebSocket;
-  const device = { log: [], sockets: 0 };
-  window.__device = device;
-  const describe = (data) => {
-    try {
-      const map = JSON.parse(data);
-      return { type: map.type, id: map.id, error: map.error ? (map.error.class || "error") : undefined };
-    } catch {
-      return { type: "unreadable" };
-    }
-  };
-  class Watched extends Native {
-    constructor(url, protocols) {
-      super(url, protocols);
-      if (!/\/device\/websocket/.test(String(url))) return;
-      this.__serial = ++device.sockets;
-      super.addEventListener("message", (event) => device.log.push({ socket: this.__serial, dir: "in", ...describe(event.data) }));
-      super.addEventListener("close", (event) => device.log.push({ socket: this.__serial, event: "close", code: event.code }));
-    }
-    send(data) {
-      if (this.__serial) device.log.push({ socket: this.__serial, dir: "out", ...describe(data) });
-      return super.send(data);
-    }
-  }
-  window.WebSocket = Watched;
-}
 
 const storedDevice = (page) => page.evaluate(() => new Promise((resolve, reject) => {
   const open = indexedDB.open("cyfr-glass", 1);
@@ -186,11 +154,6 @@ async function readKit(page) {
   const lines = { identifier: await line("kit-identifier"), directory_url: await line("kit-directory"), recovery_secret: await line("kit-secret") };
   secrets.push(lines.recovery_secret);
   return lines;
-}
-
-async function saveKit(page) {
-  await page.locator(`${layer} [data-test="recovery-ack"]`).click();
-  await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, { timeout: 30_000 });
 }
 
 // Where a secret the proof handled might have gone in the page's own
