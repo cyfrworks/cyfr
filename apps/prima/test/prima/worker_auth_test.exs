@@ -258,12 +258,13 @@ defmodule Prima.WorkerAuthTest do
 
     test "every valid root text decodes to the root, and every invalid one is refused",
          %{v: v, root: root} do
-      for text <- v["root_text"]["valid"], do: assert({:ok, ^root} = WorkerAuth.decode_root(text))
+      for text <- v["root_text"]["valid"],
+          do: assert({:ok, ^root} = MacEnvelope.decode_root(text))
 
       for text <- v["root_text"]["invalid"],
-          do: assert(:error = WorkerAuth.decode_root(text), inspect(text))
+          do: assert(:error = MacEnvelope.decode_root(text), inspect(text))
 
-      assert :error = WorkerAuth.decode_root(nil)
+      assert :error = MacEnvelope.decode_root(nil)
     end
   end
 
