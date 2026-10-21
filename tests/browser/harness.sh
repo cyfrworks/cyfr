@@ -2,9 +2,8 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # The browser harness's shell side, sourced after tests/release-boot/
-# release.sh by tests/browser/run.sh, the proofs (tests/tincture-proof/,
-# tests/hostile-frame-proof/, tests/canvas-proof/) and the multi-home smoke
-# (tests/multi-home-smoke/run.sh).
+# release.sh by tests/browser/run.sh, by each browser proof's scripts
+# under tests/ and by the tests of the proofs' shared plumbing.
 #
 # A home is a cell on a `.test` hostname of its own, a public home of that
 # name (CYFR_ACCESS=public), one or several at once, each reached by every
@@ -27,7 +26,7 @@
 # loopback.
 #
 # A proof that asks the server for its part mid-run does it through its
-# output directory (C9: `ask-<id>.json` written by the proof, answered
+# output directory (`ask-<id>.json` written by the proof, answered
 # `answer-<id>.json` here); this file holds that loop (`answer_asks`,
 # `proof_await`), and lib.mjs the proof's side of it (`ask`).
 

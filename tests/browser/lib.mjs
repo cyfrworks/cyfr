@@ -55,7 +55,7 @@ export const { chromium, firefox, webkit } = await import("playwright-core").cat
 export const SITE = "cyfr.test";
 export const ATTACKER = "attacker.test";
 // Where the run's authority is mounted (harness.sh `playwright_run`).
-export const AUTHORITY = "/authority";
+const AUTHORITY = "/authority";
 // The harness's own pages, which the front answers on every home.
 export const HARNESS = "/__harness";
 
@@ -608,7 +608,7 @@ export async function openShell(page, base, segment, name) {
   await launchButton(page, name).waitFor({ timeout: 30_000 });
 }
 
-export const launchButton = (page, name) =>
+const launchButton = (page, name) =>
   page.locator(`button[phx-click="select_tincture"][phx-value-tincture="iframe_${name}"]`, { hasText: "Launch" });
 
 // Launch `name` from the picker and answer its frame's element handle and
@@ -675,7 +675,7 @@ export const BROWSERS = ["chromium", "firefox", "webkit"];
 let asks = 0;
 
 // The server's part of a step, asked of the proof's run.sh through the
-// output directory `outDir` (C9): `request` is written as ask-N.json,
+// output directory `outDir`: `request` is written as ask-N.json,
 // whole once it appears, and the answer is read from answer-N.json, which
 // run.sh writes aside and renames (harness.sh `answer_asks`, which removes
 // the ask first). N counts this process's asks from 1. Where proofs ask
