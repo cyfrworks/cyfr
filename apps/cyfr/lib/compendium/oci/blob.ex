@@ -10,7 +10,9 @@ defmodule Compendium.OCI.Blob do
 
   Every operation takes the caller `ctx` first so the per-namespace push
   token is attached on authenticated requests (uploads). `nil` is accepted
-  for anonymous/public reads.
+  for anonymous/public reads. The token goes to the registry's own origin
+  alone: a download redirect and an upload location on another origin are
+  sent without it.
   """
 
   alias Compendium.OCI.{Errors, Reference, Transport}
@@ -186,8 +188,14 @@ defmodule Compendium.OCI.Blob do
     end
   end
 
+  # The PUT goes to the upload session's `Location`, relative or absolute.
+  # The OCI distribution spec lets a registry hand the session to another
+  # server (a storage service, a signed URL), so a location on another
+  # origin is a credential-free upload: `Transport.request_url/8` attaches
+  # the caller's push token on the registry's own origin alone. Either
+  # target passes the same private-egress check first.
   defp put_blob(ctx, ref, location, content, digest, content_type) do
-    # Normalize relative Location URLs to absolute (some registries return relative paths)
+    # A relative location is the registry's own path.
     location = normalize_url(location, ref)
 
     case Sanctum.Network.validate_redirect_url(location,

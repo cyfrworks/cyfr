@@ -9,7 +9,9 @@ defmodule Compendium.OCI.Transport do
   protection) and adds:
   - Automatic auth header injection via `OCI.Auth`, recomputed per attempt
     so a retry picks up a rotated token; a stored token that cannot be read
-    refuses the request (`:registry_unavailable`) before anything is sent
+    refuses the request (`:registry_unavailable`) before anything is sent.
+    The credential goes to the registry's own origin alone: a URL on any
+    other origin is sent without it (`request_url/8`)
   - Retry with backoff, idempotency-gated for ambiguous failures — the
     policy is `Compendium.Transport.Retry`, shared with the REST transport
   - Consistent return format: `{:ok, status, headers, body}` or `{:error, reason}`
@@ -79,8 +81,15 @@ defmodule Compendium.OCI.Transport do
   end
 
   @doc """
-  Perform an HTTP request to an arbitrary URL (used for blob uploads where
-  the registry may return a different location URL).
+  Perform an HTTP request to a URL the registry named, such as a blob
+  upload's `Location`.
+
+  The caller's credential for `registry` is attached only when `url` is on
+  the registry's own origin: the scheme, host and port of
+  `Compendium.RegistryHost.base_url/1`. A URL on any other origin is sent
+  with no credential, and none is read for it. The OCI distribution spec
+  lets a registry hand an upload to another server, and says a client
+  does not forward `Authorization` across a host boundary.
 
   `ctx` is required (caller-first) for the same reason as `request/7`,
   and `opts` carries the same `:max_response_bytes`.
@@ -167,7 +176,8 @@ defmodule Compendium.OCI.Transport do
     # A push token that cannot be read is the credential store's answer, not
     # the registry's: it comes back at once, with no request sent and no
     # retry, and is never replaced by an anonymous request.
-    with {:ok, auth_headers} <- Auth.auth_headers(registry, repository, namespace_slug, ctx) do
+    with {:ok, auth_headers} <-
+           credential_headers(url, registry, repository, namespace_slug, ctx) do
       headers = auth_headers ++ extra_headers
 
       # pinned_request validates the resolved IP and connects to it directly (no
@@ -317,6 +327,31 @@ defmodule Compendium.OCI.Transport do
           opts,
           attempt + 1
         )
+    end
+  end
+
+  # The registry's credential is bound to the registry's origin: a URL on
+  # another one carries none, and no credential is read for it.
+  defp credential_headers(url, registry, repository, namespace_slug, ctx) do
+    if registry_origin?(url, registry),
+      do: Auth.auth_headers(registry, repository, namespace_slug, ctx),
+      else: {:ok, []}
+  end
+
+  # A URL with no scheme or host has no origin, and is never the registry's.
+  defp registry_origin?(url, registry) do
+    target = origin(url)
+    target != nil and target == origin(Compendium.RegistryHost.base_url(registry))
+  end
+
+  defp origin(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host, port: port}
+      when is_binary(scheme) and is_binary(host) and host != "" ->
+        {String.downcase(scheme), String.downcase(host), port}
+
+      _ ->
+        nil
     end
   end
 

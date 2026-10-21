@@ -7,7 +7,9 @@ defmodule Compendium.OCI.BlobTest do
   target on a pin of its own: the request carries none of the caller's
   registry credential, its bytes must match the digest asked for, and a
   target the operator's private-egress allowlist no longer names is
-  refused before anything is sent to it.
+  refused before anything is sent to it. A blob upload goes to the
+  location the registry's upload session names, and the caller's
+  credential goes with it only on the registry's own origin.
   """
 
   use ExUnit.Case, async: false
@@ -152,5 +154,72 @@ defmodule Compendium.OCI.BlobTest do
     assert reason =~ "127.0.0.1"
     assert_receive {:registry, _path, ["Bearer " <> @token]}, 5_000
     refute_received :storage_reached
+  end
+
+  describe "an upload" do
+    # The registry holds no blob, opens an upload session at `location` and
+    # takes a PUT to it should the location be its own, telling the test
+    # each request's method, path and authorization.
+    defp opens_session(registry, location) do
+      test = self()
+
+      Bypass.expect(registry, fn conn ->
+        authorization = Plug.Conn.get_req_header(conn, "authorization")
+        send(test, {:registry, conn.method, conn.request_path, authorization})
+
+        case conn.method do
+          "HEAD" ->
+            Plug.Conn.resp(conn, 404, "")
+
+          "POST" ->
+            conn
+            |> Plug.Conn.put_resp_header("location", location)
+            |> Plug.Conn.resp(202, "")
+
+          "PUT" ->
+            takes_upload(conn, test)
+        end
+      end)
+    end
+
+    # The PUT's answer, telling the test what it was sent.
+    defp takes_upload(conn, test) do
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test, {:upload, conn.request_path, conn.query_string, conn.req_headers, body})
+      Plug.Conn.resp(conn, 201, "")
+    end
+
+    test "on another origin carries no credential, and the blob lands there", c do
+      %{registry: registry, storage: storage, ref: ref} = c
+      {bytes, digest} = blob("uploaded elsewhere")
+      test = self()
+      opens_session(registry, "http://127.0.0.1:#{storage.port}/upload/session?state=s1")
+      Bypass.expect_once(storage, &takes_upload(&1, test))
+
+      assert {:ok, ^digest} = Blob.upload(ctx(), ref, bytes)
+
+      # The registry's own hops carried the caller's token: there was one to leak.
+      bearer = "Bearer " <> @token
+      assert_receive {:registry, "HEAD", _path, [^bearer]}, 5_000
+      assert_receive {:registry, "POST", path, [^bearer]}, 5_000
+      assert path == "/v2/#{ref.repository}/blobs/uploads/"
+
+      assert_receive {:upload, "/upload/session", query, headers, ^bytes}, 5_000
+      assert URI.decode_query(query) == %{"state" => "s1", "digest" => digest}
+      refute List.keymember?(headers, "authorization", 0)
+      refute Enum.any?(headers, fn {_name, value} -> value =~ @token end)
+    end
+
+    test "on the registry's own origin carries the credential", c do
+      %{registry: registry, ref: ref} = c
+      {bytes, digest} = blob("uploaded here")
+      opens_session(registry, "http://localhost:#{registry.port}/upload/session")
+
+      assert {:ok, ^digest} = Blob.upload(ctx(), ref, bytes)
+
+      assert_receive {:upload, "/upload/session", query, headers, ^bytes}, 5_000
+      assert URI.decode_query(query) == %{"digest" => digest}
+      assert {"authorization", "Bearer " <> @token} in headers
+    end
   end
 end

@@ -7,7 +7,8 @@ defmodule Compendium.OCI.TransportTest do
   idempotency-gated, a 401 surfaces for re-login rather than negotiating,
   and an SSRF refusal is never dialled at all. A push token that cannot
   be read refuses the request before anything is sent; only a caller with
-  no token goes anonymous.
+  no token goes anonymous. The token goes to the registry's own origin
+  alone.
   """
 
   use ExUnit.Case, async: false
@@ -18,8 +19,10 @@ defmodule Compendium.OCI.TransportTest do
   # The backoff base as this build compiled it (`Compendium.Transport.Retry`).
   @base_ms Application.compile_env(:cyfr, :transport_retry_base_ms, 500)
 
+  # The registry's own origin: a loopback registry is reached over http
+  # (`Compendium.RegistryHost.base_url/1`).
   @url "http://127.0.0.1:9/v2/testns/thing/blobs/uploads/"
-  @registry "oci.test"
+  @registry "127.0.0.1:9"
   @repository "testns/thing"
 
   setup do
@@ -184,6 +187,26 @@ defmodule Compendium.OCI.TransportTest do
 
       assert {:ok, 200, _headers, ""} =
                Transport.request_url(ctx, :get, @url, @registry, @repository)
+
+      assert_received {:authorization, []}
+      assert attempts() == 1
+    end
+
+    test "a URL off the registry's origin is sent with no credential, and reads none",
+         %{ctx: ctx} do
+      # A row that does not open: read, it would refuse the request.
+      plant!(ctx, ~s({"type":"push_token","token":""}))
+      stub(authorization(self()))
+
+      # The same address under another host name is another origin.
+      assert {:ok, 200, _headers, ""} =
+               Transport.request_url(
+                 ctx,
+                 :put,
+                 "http://localhost:9/upload/session",
+                 @registry,
+                 @repository
+               )
 
       assert_received {:authorization, []}
       assert attempts() == 1
