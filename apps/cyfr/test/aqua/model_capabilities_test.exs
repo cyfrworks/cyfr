@@ -16,7 +16,7 @@ defmodule Aqua.ModelCapabilitiesTest do
 
   alias Aqua.Models
 
-  @ref "catalyst:local.claude:1.4.0"
+  @ref "catalyst:local.claude:1.4.1"
 
   setup do
     Arca.Cache.init()
