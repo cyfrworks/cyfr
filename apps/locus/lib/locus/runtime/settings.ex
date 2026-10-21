@@ -91,7 +91,7 @@ defmodule Locus.Runtime.Settings do
           service_id: String.t(),
           boot: String.t(),
           control_fd: non_neg_integer(),
-          relay: {:fd, pos_integer()} | {:socket, String.t()},
+          relay: {:fd, 4} | {:socket, String.t()},
           watchdog_grace_ms: pos_integer()
         }
 

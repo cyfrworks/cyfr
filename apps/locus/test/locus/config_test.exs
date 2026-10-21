@@ -716,15 +716,9 @@ defmodule Locus.ConfigTest do
       # A runner knows no address of CYFR's: it reaches CYFR through its relay.
       refute Map.has_key?(settings, :host_url)
 
-      assert {:ok, %{relay: {:fd, 5}}} =
-               Config.runner(Map.put(@runner_env, "RUNTIME_RELAY_FD", "5"))
-
       assert {:ok, %{relay: {:socket, "/tmp/runner/relay.sock"}}} =
                Config.runner(
-                 Map.merge(@runner_env, %{
-                   "RUNTIME_RELAY_FD" => "4",
-                   "RUNTIME_RELAY_SOCKET" => "/tmp/runner/relay.sock"
-                 })
+                 Map.put(@runner_env, "RUNTIME_RELAY_SOCKET", "/tmp/runner/relay.sock")
                )
 
       assert {:ok, %{control_fd: 0, watchdog_grace_ms: 250}} =
@@ -760,9 +754,6 @@ defmodule Locus.ConfigTest do
 
       assert {:error, {:malformed, "RUNTIME_RUNNER_ID"}} =
                Config.runner(%{@runner_env | "RUNTIME_RUNNER_ID" => "has space"})
-
-      assert {:error, {:malformed, "RUNTIME_RELAY_FD"}} =
-               Config.runner(Map.put(@runner_env, "RUNTIME_RELAY_FD", "2"))
 
       assert {:error, {:malformed, "RUNTIME_RELAY_SOCKET"}} =
                Config.runner(Map.put(@runner_env, "RUNTIME_RELAY_SOCKET", "relay.sock"))

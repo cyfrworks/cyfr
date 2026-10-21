@@ -66,10 +66,10 @@ defmodule Locus.Config do
   `RUNTIME_SERVICE_ID` and `RUNTIME_BOOT_ID` the worker service and boot
   it presents from, `RUNTIME_CONTROL_FD` the file descriptor its control
   channel is on (3 by default; 0 means the channel is its standard input
-  and output), `RUNTIME_RELAY_FD` the file descriptor its relay to the
-  service is on (4 by default, `Locus.Runtime.Relay.Runner`), or
-  `RUNTIME_RELAY_SOCKET` the unix socket the test build's direct launcher
-  gives it in its place, and `RUNTIME_WATCHDOG_GRACE_MS` how far past its
+  and output), `RUNTIME_RELAY_SOCKET` the unix socket the test build's
+  direct launcher gives it for its relay to the service in place of the
+  file descriptor 4 cyfr-locus places it on (`Locus.Runtime.Relay.Runner`),
+  and `RUNTIME_WATCHDOG_GRACE_MS` how far past its
   assignment's deadline it may live (`Locus.Runtime.Settings`' default
   when unset). A runner is given no address of CYFR's: it has no network,
   and every host call it makes leaves through its relay. A runner that
@@ -191,7 +191,6 @@ defmodule Locus.Config do
     {"RUNTIME_SERVICE_ID", :runner, :service_id},
     {"RUNTIME_BOOT_ID", :runner, :boot},
     {"RUNTIME_CONTROL_FD", :runner, :control_fd},
-    {"RUNTIME_RELAY_FD", :runner, :relay_fd},
     {"RUNTIME_RELAY_SOCKET", :runner, :relay_socket},
     {"RUNTIME_WATCHDOG_GRACE_MS", :runner, :watchdog_grace_ms}
   ]
@@ -546,8 +545,9 @@ defmodule Locus.Config do
     end
   end
 
-  # The keeper's descriptor 4, or the unix socket the test build's direct
-  # launcher names in its place: an absolute path, which wins when set.
+  # The descriptor cyfr-locus places every runner's relay on, 4, or the
+  # unix socket the test build's direct launcher names in its place: an
+  # absolute path, which wins when set.
   defp relay(env) do
     socket = variable(:runner, :relay_socket)
 
@@ -561,12 +561,7 @@ defmodule Locus.Config do
         {:error, {:malformed, socket}}
 
       :error ->
-        name = variable(:runner, :relay_fd)
-
-        case Integer.parse(Map.get(env, name, "4")) do
-          {fd, ""} when fd > 2 -> {:ok, {:fd, fd}}
-          _ -> {:error, {:malformed, name}}
-        end
+        {:ok, {:fd, 4}}
     end
   end
 
@@ -587,7 +582,6 @@ defmodule Locus.Config do
       key when key in [:runner_id, :boot] -> "1 to 256 bytes of printable ASCII without spaces"
       :service_id -> Locus.Runtime.Credentials.expected(:service_id)
       :control_fd -> "a file descriptor number, 0 for standard input and output"
-      :relay_fd -> "a file descriptor number above 2"
       :relay_socket -> "an absolute path to a unix socket"
       :watchdog_grace_ms -> "a positive integer of milliseconds"
     end
