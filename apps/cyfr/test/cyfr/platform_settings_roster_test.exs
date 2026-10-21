@@ -849,6 +849,27 @@ defmodule Cyfr.PlatformSettingsRosterTest do
     end
   end
 
+  describe "the deployment's sentences" do
+    # The image sets no CYFR_DATA_PATH: its storage root is the default
+    # under the runtime stage's working directory, which the row names.
+    test "CYFR_DATA_PATH's sentence names the root the image runs with" do
+      dockerfile = File.read!(Path.join(@root, "Dockerfile"))
+      refute dockerfile =~ ~r/^ENV\s+CYFR_DATA_PATH\b/m
+
+      [workdir] =
+        ~r/^WORKDIR\s+(\S+)\s*$/m
+        |> Regex.scan(dockerfile, capture: :all_but_first)
+        |> List.last()
+
+      {:ok, %{base_path: base}} = Cyfr.RuntimeConfig.resolve_paths(fn _name -> nil end)
+      default = Path.relative_to_cwd(base)
+      {"CYFR_DATA_PATH", sentence} = List.keyfind(Roster.deployment_docs(), "CYFR_DATA_PATH", 0)
+
+      assert sentence =~ "default `#{default}`"
+      assert sentence =~ "`#{Path.join(workdir, default)}` in the image"
+    end
+  end
+
   describe "the names other programs own" do
     test "each is read by every program its sentence names" do
       assert unread(Roster.foreign()) == []
