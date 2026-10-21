@@ -33,7 +33,7 @@ defmodule Sanctum.ExecutionStandingTest do
   end
 
   defp ctx(athanor_id),
-    do: Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+    do: Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
 
   defp verify(grant) do
     {:ok, answer} =

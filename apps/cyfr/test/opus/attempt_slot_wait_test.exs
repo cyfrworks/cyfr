@@ -620,7 +620,7 @@ defmodule Opus.AttemptSlotWaitTest do
     {:ok, charges} = Arca.BudgetReservations.charges(Sanctum.Context.actor(ctx), budget)
 
     %{
-      in_flight: Sanctum.Authority.budget(authority).in_flight,
+      in_flight: Sanctum.TestContext.invoke_budget(authority).in_flight,
       charged: Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), budget).charged,
       charges: charges |> Enum.map(& &1.holder_execution_id) |> Enum.sort(),
       child_slots: Slots.status(@slots).child_active

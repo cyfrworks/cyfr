@@ -155,7 +155,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert_receive {:scripted_probe, runner, ^child_id}, 5_000
     refute runner == task.pid
 
-    assert Sanctum.Authority.budget(auth).in_flight == 1
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 1
 
     assert {:ok, [charge_row]} =
              Arca.BudgetReservations.charges(Prima.Actor.in_athanor(athanor_id), auth.budget.id)
@@ -191,7 +191,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     assert data["content"] == [%{"type" => "text", "text" => "hi"}]
 
-    assert Sanctum.Authority.budget(auth).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
     assert {:ok, []} =
              Arca.BudgetReservations.charges(Prima.Actor.in_athanor(athanor_id), auth.budget.id)
@@ -227,7 +227,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
 
     assert %{status: "failed"} = Arca.Repo.get(Arca.Schemas.Execution, child_id)
 
-    wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end)
+    wait_until(fn -> Sanctum.TestContext.invoke_budget(auth).in_flight == 0 end)
     wait_until(fn -> Prima.Slots.status(Opus.Slots).child_active == 0 end)
 
     assert {:ok, []} =
@@ -245,7 +245,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert %{state: "failed", outcome: "error"} =
              Arca.ExecutionAttempts.current(Prima.Actor.in_athanor(athanor_id), child_id)
 
-    assert Sanctum.Authority.budget(auth).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
     assert {:ok, []} =
              Arca.BudgetReservations.charges(Prima.Actor.in_athanor(athanor_id), auth.budget.id)
@@ -270,7 +270,7 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     assert {:error, :hold_expired} = run(fx)
     assert Arca.ExecutionAttempts.current(Prima.Actor.in_athanor(athanor_id), child_id) == nil
     assert Arca.Repo.get(Arca.Schemas.Execution, child_id) == nil
-    assert Sanctum.Authority.budget(auth).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
     assert ScriptedWorker.calls() == []
   end
 

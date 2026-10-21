@@ -50,7 +50,7 @@ defmodule Sanctum.Person do
     * `:unavailable` — the keys cannot be opened: the store or the keyring
       cannot answer, or a sealed key does not open as its role.
 
-  A person assertion (`sign_assertion/3`) answers, besides these, the
+  A person assertion (`sign_assertion/2`) answers, besides these, the
   `confirmation_required` signal and the confirmation's other refusals,
   `{:invalid_argument, _}` for a sign-in no pending carry of theirs names,
   and `{:conflict, _}` for one that can no longer be signed.

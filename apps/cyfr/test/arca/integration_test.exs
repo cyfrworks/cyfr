@@ -254,8 +254,7 @@ defmodule Arca.IntegrationTest do
         athanor_id: athanor,
         permissions: MapSet.new([:*]),
         scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil
+        auth_method: :oidc
       }
 
       user2_ctx = %Context{
@@ -264,8 +263,7 @@ defmodule Arca.IntegrationTest do
         athanor_id: athanor,
         permissions: MapSet.new([:*]),
         scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil
+        auth_method: :oidc
       }
 
       # Each user creates 3 executions in the SAME athanor (6 total)
@@ -337,7 +335,6 @@ defmodule Arca.IntegrationTest do
         permissions: MapSet.new([:*]),
         scope: :athanor,
         auth_method: :oidc,
-        api_key_type: nil,
         authenticated: true
       }
 
@@ -365,8 +362,7 @@ defmodule Arca.IntegrationTest do
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
         scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil
+        auth_method: :oidc
       }
 
       _user2_ctx = %Context{
@@ -375,8 +371,7 @@ defmodule Arca.IntegrationTest do
         athanor_id: "ath_test",
         permissions: MapSet.new([:*]),
         scope: :athanor,
-        auth_method: :oidc,
-        api_key_type: nil
+        auth_method: :oidc
       }
 
       # User 1 creates an execution via SQLite

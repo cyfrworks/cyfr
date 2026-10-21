@@ -52,7 +52,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
         created_by: "system"
       })
 
-    ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor.id, scope: :athanor)
+    ctx = Sanctum.Context.internal(user_id: "_seed", athanor_id: athanor.id, scope: :athanor)
     {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "components")
     {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), "aqua")
     {:ok, %{errors: 0}} = Compendium.AutoIndexer.scan(ctx: ctx)

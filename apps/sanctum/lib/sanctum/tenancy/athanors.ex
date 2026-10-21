@@ -404,7 +404,7 @@ defmodule Sanctum.Tenancy.Athanors do
   def purge_storage(%{id: _} = athanor) do
     with {:ok, current} <- get(athanor.id) do
       if current.status == "archived" do
-        ctx = Sanctum.internal_context(athanor_id: current.id, scope: :athanor)
+        ctx = Sanctum.Context.internal(athanor_id: current.id, scope: :athanor)
 
         with :ok <- Arca.delete_tree(Sanctum.Context.actor(ctx), []) do
           # The write gate invalidates the whole-tree counter, but the

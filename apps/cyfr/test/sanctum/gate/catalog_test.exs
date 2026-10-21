@@ -532,7 +532,6 @@ defmodule Sanctum.Gate.CatalogTest do
         permissions: MapSet.new([:*]),
         scope: :athanor,
         auth_method: nil,
-        api_key_type: nil,
         request_id: nil
       }
 
@@ -790,7 +789,6 @@ defmodule Sanctum.Gate.CatalogTest do
         permissions: MapSet.new(),
         scope: nil,
         auth_method: nil,
-        api_key_type: nil,
         request_id: nil
       }
 
@@ -1161,7 +1159,6 @@ defmodule Sanctum.Gate.CatalogTest do
       key = %{
         ctx
         | auth_method: :api_key,
-          api_key_type: :application,
           permissions: MapSet.new([:storage_read, :storage_write])
       }
 

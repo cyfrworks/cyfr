@@ -45,18 +45,6 @@ defmodule Sanctum.Authority.BudgetCounter do
   @spec release(Budget.t()) :: :ok
   def release(%Budget{id: id}), do: release_one(id)
 
-  @doc "What is in flight against the cap."
-  @spec snapshot(Budget.t()) :: %{in_flight: non_neg_integer(), cap: non_neg_integer()}
-  def snapshot(%Budget{id: id, cap: cap}) do
-    in_flight =
-      case :ets.lookup(@table, id) do
-        [{^id, n}] -> max(n, 0)
-        [] -> 0
-      end
-
-    %{in_flight: in_flight, cap: cap}
-  end
-
   # A count back at zero drops its row; `delete_object` only removes the
   # exact `{id, 0}`, so a concurrent acquire that already moved it on is
   # untouched.

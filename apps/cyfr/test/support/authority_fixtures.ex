@@ -17,7 +17,7 @@ defmodule Sanctum.Test.AuthorityFixtures do
   def reserve!(%Authority{} = auth, athanor_id, origin) when is_atom(origin) do
     {:ok, grant} =
       Sanctum.ExecutionStanding.capture(
-        Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+        Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
       )
 
     {:ok, _} =

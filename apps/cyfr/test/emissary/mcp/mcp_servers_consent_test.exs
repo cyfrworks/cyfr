@@ -27,7 +27,6 @@ defmodule Emissary.MCP.McpServersConsentTest do
     %{
       ctx
       | auth_method: :api_key,
-        api_key_type: :admin,
         permissions: MapSet.new(permissions)
     }
   end

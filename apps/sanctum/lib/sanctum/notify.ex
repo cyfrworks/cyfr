@@ -6,9 +6,8 @@ defmodule Sanctum.Notify do
   What a person's tray shows: members joining or leaving, invites,
   allowlist requests, executions finishing, approvals waiting, schedules
   failing, a passkey registered under the first-method rule or the
-  administrator's authorization, a passkey the platform administrator
-  recovered, and grants the server no longer admits until they are made
-  again — about one athanor, or, for its operators, about the server.
+  administrator's authorization, and a passkey the platform administrator
+  recovered — about one athanor, or, for its operators, about the server.
 
   This module owns the vocabulary (`t:kind/0`, `kinds/0`) and the
   announcements; it names no topic and never broadcasts. A foundation

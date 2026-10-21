@@ -13,6 +13,8 @@ defmodule Sanctum.Vault.OAuthGrantTest do
   alias Sanctum.Vault.Payload
   alias Sanctum.VaultReader
 
+  import Ecto.Query, only: [from: 2]
+
   @provider "google"
   @scopes ["https://www.googleapis.com/auth/gmail.readonly"]
 
@@ -736,6 +738,36 @@ defmodule Sanctum.Vault.OAuthGrantTest do
       assert payload["fields"] == %{"note" => "kept"}
       assert payload["oauth"]["access_token"] == "at-2"
       assert after_entry.binding_digest == digest_before
+    end
+
+    test "an entry whose stored payload does not open is refused, never rewritten as empty fields",
+         %{ctx: ctx} do
+      view = idp_entry!(ctx, "G-damaged", %{"note" => "kept"})
+      actor = Sanctum.Context.actor(ctx)
+
+      # The payload sealed under another entry's AAD: stored bytes this
+      # entry cannot open.
+      {:ok, other_json} = Payload.encode_material(%{}, %{"access_token" => "other"})
+      other_aad = CipherAAD.vault_entry(ctx.athanor_id, "vlt_other", RaceIdp.hint())
+      {:ok, foreign} = Sanctum.Cipher.encrypt(other_json, other_aad)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(v in Arca.Schemas.VaultEntry, where: v.id == ^view.id),
+          set: [sealed_payload: foreign]
+        )
+
+      {:ok, entry} = Arca.VaultStorage.get(actor, view.id)
+
+      script!([{:ok, %{"access_token" => "at-2", "refresh_token" => "rt-2"}}])
+      {state, pending} = mint_pending!(ctx, existing_target(entry, @scopes))
+
+      assert {:error, :unseal_failed} =
+               OAuthGrant.complete(state, "code-damaged", pending.redirect_uri)
+
+      {:ok, after_entry} = Arca.VaultStorage.get(actor, view.id)
+      assert after_entry.sealed_payload == foreign
+      assert after_entry.payload_rev == entry.payload_rev
     end
 
     test "changed scopes are a rebind: digest moves, bound profile flips", %{ctx: ctx} do

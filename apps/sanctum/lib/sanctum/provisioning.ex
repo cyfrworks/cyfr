@@ -997,7 +997,7 @@ defmodule Sanctum.Provisioning do
   @doc "The server's own context inside `athanor_id` — what a fill runs as."
   @spec seed_ctx(String.t()) :: Context.t()
   def seed_ctx(athanor_id) do
-    Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
+    Sanctum.Context.internal(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
   end
 
   # ---- the person's own athanor ----------------------------------------------

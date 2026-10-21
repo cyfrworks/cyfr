@@ -191,7 +191,7 @@ defmodule Sanctum.Consent.BootstrapTest do
 
     # The server's own context a boot's seed sync runs under: no person.
     defp seed(ctx),
-      do: Sanctum.internal_context(user_id: "_seed", athanor_id: ctx.athanor_id, scope: :athanor)
+      do: Sanctum.Context.internal(user_id: "_seed", athanor_id: ctx.athanor_id, scope: :athanor)
 
     # What a first mint that could not read the instance entries skips.
     @unavailable {:unavailable, "Instance entries"}
@@ -366,7 +366,7 @@ defmodule Sanctum.Consent.BootstrapTest do
       offer!()
 
       seed_ctx =
-        Sanctum.internal_context(user_id: "_seed", athanor_id: ctx.athanor_id, scope: :athanor)
+        Sanctum.Context.internal(user_id: "_seed", athanor_id: ctx.athanor_id, scope: :athanor)
 
       assert {:ok, %{minted: minted}} = Bootstrap.run(seed_ctx)
       assert @model in minted

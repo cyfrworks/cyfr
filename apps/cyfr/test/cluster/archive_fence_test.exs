@@ -28,7 +28,7 @@ defmodule Cyfr.Cluster.ArchiveFenceTest do
     athanor = Cell.call(:a, Fixtures, :athanor!, ["fence"])
 
     ctx =
-      Sanctum.internal_context(
+      Sanctum.Context.internal(
         user_id: "usr_cluster",
         athanor_id: athanor.id,
         scope: :athanor,
@@ -89,7 +89,7 @@ defmodule Cyfr.Cluster.ArchiveFenceTest do
     athanor = Cell.call(:a, Fixtures, :athanor!, ["reopen"])
 
     ctx =
-      Sanctum.internal_context(
+      Sanctum.Context.internal(
         user_id: "usr_cluster",
         athanor_id: athanor.id,
         scope: :athanor,

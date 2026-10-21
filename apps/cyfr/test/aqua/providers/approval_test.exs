@@ -94,7 +94,7 @@ defmodule Aqua.Providers.ApprovalTest do
   test "a standing credential and a running agent are refused; a session sees the tool", %{
     ctx: ctx
   } do
-    star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
+    star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
 
     assert {:error,
             %Prima.Refusal{

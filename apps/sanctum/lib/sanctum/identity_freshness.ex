@@ -13,9 +13,9 @@ defmodule Sanctum.IdentityFreshness do
   clock. `fresh?/2` answers the cached head while it is within
   `identity_freshness_seconds` of that clock, and past the bound reads the
   person's directory again through `Sanctum.Directory.Client`. The
-  directory is the one the genesis names: the cached genesis when there
-  is one, and only when nothing is cached the `:genesis` the caller
-  passes. Freshness never comes from the person's own home, which may be
+  directory is the one the cached genesis names; with nothing cached it
+  pauses, and only a live read (`fresh!/2`) takes the `:genesis` the
+  caller passes. Freshness never comes from the person's own home, which may be
   the stolen one. The bound limits how long an honest directory's answer
   is reused here; it limits nothing a dishonest directory does, since an
   old head it keeps serving still verifies as current.
@@ -145,12 +145,13 @@ defmodule Sanctum.IdentityFreshness do
 
   Answers `{:ok, head}`, `{:refused, :identity_stale}` past the bound when
   the directory cannot refresh it, or `{:error, :unavailable}` when the
-  store or the setting cannot answer.
+  store or the setting cannot answer. With nothing cached it pauses.
+  `opts` takes only the directory client's `:resolver` and `:cacerts`.
   """
-  @spec fresh?(String.t(), opts()) ::
+  @spec fresh?(String.t(), resolver: module(), cacerts: [binary()]) ::
           {:ok, head()} | {:refused, :identity_stale} | {:error, :unavailable}
   def fresh?(identifier, opts \\ []) when is_binary(identifier) do
-    {genesis, client_opts} = options!(opts)
+    client_opts = client_options!(opts)
 
     with {:ok, bound} <- bound() do
       case Arca.DirectoryHeads.fresh(system(), identifier, bound) do
@@ -159,9 +160,6 @@ defmodule Sanctum.IdentityFreshness do
 
         {:ok, %{head: head}} ->
           past_bound(identifier, {head.genesis, head.directory_url}, bound, client_opts)
-
-        {:error, :not_found} when not is_nil(genesis) ->
-          past_bound(identifier, {genesis, directory_of(genesis)}, bound, client_opts)
 
         {:error, :not_found} ->
           stale(identifier, nil, bound, :past_bound, :not_cached)

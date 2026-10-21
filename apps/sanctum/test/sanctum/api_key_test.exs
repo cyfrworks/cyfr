@@ -608,7 +608,6 @@ defmodule Sanctum.ApiKeyTest do
           scope: :athanor,
           auth_method: :oidc,
           authenticated: true,
-          api_key_type: nil,
           request_id: nil
         })
 

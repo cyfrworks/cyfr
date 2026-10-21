@@ -825,6 +825,6 @@ defmodule Prism.TinctureRegistryTest do
   # The registry is shell-plane only: every reader carries the member's
   # Context, and the athanor it names is the one listed.
   defp lookup(athanor_id) do
-    Sanctum.internal_context(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
+    Sanctum.Context.internal(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
   end
 end

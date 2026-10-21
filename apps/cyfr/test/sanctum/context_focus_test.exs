@@ -116,7 +116,7 @@ defmodule Sanctum.ContextFocusTest do
     assert {:error, :unavailable} = Context.focus(c, a.id)
     assert {:error, :unavailable} = Context.focus(c, a)
 
-    sys = Sanctum.internal_context(user_id: "_test", athanor_id: a.id, scope: :athanor)
+    sys = Sanctum.Context.internal(user_id: "_test", athanor_id: a.id, scope: :athanor)
     assert {:error, :unavailable} = Context.refocus(sys, a.id)
   end
 
@@ -131,7 +131,7 @@ defmodule Sanctum.ContextFocusTest do
     # The system plane crosses tenants by design (recovery resolving a
     # stored agent has no member to speak as) — but a closed furnace stays
     # closed to it too.
-    sys = Sanctum.internal_context(user_id: "_test", athanor_id: a.id, scope: :athanor)
+    sys = Sanctum.Context.internal(user_id: "_test", athanor_id: a.id, scope: :athanor)
     assert {:ok, %{athanor_id: bid, scope: :athanor} = crossed} = Context.refocus(sys, b.id)
     assert bid == b.id
 

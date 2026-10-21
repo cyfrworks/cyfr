@@ -327,7 +327,7 @@ defmodule Prism.TinctureRegistry do
     # Server-built roster scan (not cron), routed through the single
     # server-internal builder (auth_method: :system) and scoped to the one
     # athanor being scanned — its context is what names its tree.
-    Sanctum.internal_context(
+    Sanctum.Context.internal(
       user_id: "_system_scan",
       athanor_id: athanor_id,
       scope: :athanor,

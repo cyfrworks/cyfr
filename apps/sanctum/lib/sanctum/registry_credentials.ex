@@ -146,22 +146,6 @@ defmodule Sanctum.RegistryCredentials do
   end
 
   @doc """
-  Delete the caller's credential for one `(registry, namespace_slug)`.
-  Idempotent. A failed delete is a failed revocation and never reads as
-  `:ok`.
-  """
-  @spec delete(Context.t(), String.t(), String.t()) :: :ok | {:error, :unavailable | :forbidden}
-  def delete(%Context{} = ctx, registry, namespace_slug)
-      when is_binary(registry) and is_binary(namespace_slug) do
-    with {:ok, user_id} <- person(ctx) do
-      case Arca.RegistryTokenStorage.delete(user_id, registry, namespace_slug) do
-        :ok -> :ok
-        {:error, _unreadable} -> {:error, :unavailable}
-      end
-    end
-  end
-
-  @doc """
   Decide the caller's issuing of another push token for `namespace_slug`
   at `registry`, labelled `label`: a credential that outlives the
   session, so the fresh confirmation `credential_issuance` needs

@@ -119,7 +119,7 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
       {:error, msg} when is_binary(msg) -> refute msg =~ "Denied by chain authority"
     end
 
-    assert Sanctum.Authority.budget(auth).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
     assert %{charged: 0} =
              Arca.BudgetReservations.lookup(Prima.Actor.in_athanor(@athanor), auth.budget.id)
@@ -138,7 +138,7 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
     lineage: lineage
   } do
     on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
-    before = Sanctum.Authority.budget(auth)
+    before = Sanctum.TestContext.invoke_budget(auth)
     Arca.ControlPlane.record(:lost)
 
     # A stale owner admits no work: the gate's own refusal, before any handler.
@@ -147,7 +147,7 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
              call(ctx, auth, charge, lineage)
 
     Arca.ControlPlane.record(:unclaimed)
-    assert Sanctum.Authority.budget(auth) == before
+    assert Sanctum.TestContext.invoke_budget(auth) == before
 
     assert %{charged: 0} =
              Arca.BudgetReservations.lookup(Prima.Actor.in_athanor(@athanor), auth.budget.id)
@@ -204,7 +204,7 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
             }} = call(ctx, auth, charge, lineage)
 
     assert msg =~ "Denied by chain authority"
-    assert Sanctum.Authority.budget(auth).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
     assert {:ok, [%{id: "other"}]} =
              Arca.BudgetReservations.charges(Prima.Actor.in_athanor(@athanor), auth.budget.id)
@@ -280,6 +280,6 @@ defmodule Sanctum.Gate.CatalogChargeRowTest do
              )
 
     assert msg =~ "Denied by chain authority"
-    assert Sanctum.Authority.budget(auth).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
   end
 end

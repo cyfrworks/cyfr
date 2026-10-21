@@ -448,7 +448,7 @@ defmodule MultiTenantIsolationTest do
     # which would break Namespace.lookup → context_from_metadata → ALL
     # production MCP-plug API-key auth.
     test "a platform/system context bypasses the require_tenant! chokepoint" do
-      sys = Sanctum.internal_context(permissions: [:execute])
+      sys = Sanctum.Context.internal(permissions: [:execute])
       assert sys.scope == :platform
       assert is_nil(sys.athanor_id)
 

@@ -709,7 +709,7 @@ defmodule Opus.AdmissionTest do
 
     test "a spawn charges the root budget and a denied spawn does not", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
       {:ok, decision} =
         Admission.step_invoke(
@@ -719,9 +719,9 @@ defmodule Opus.AdmissionTest do
           child_opts(ctx, guest_fn: :spawn)
         )
 
-      assert Sanctum.Authority.budget(decision.authority).in_flight == 1
+      assert Sanctum.TestContext.invoke_budget(decision.authority).in_flight == 1
       :ok = Sanctum.Authority.release_invoke(decision.authority)
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
       # Depth-capped spawn consumes nothing.
       deep =
@@ -737,7 +737,7 @@ defmodule Opus.AdmissionTest do
                  child_opts(ctx, guest_fn: :spawn)
                )
 
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
     end
   end
 

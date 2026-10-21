@@ -639,7 +639,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       ctx = conn.assigns[:context]
 
       assert ctx.auth_method == :api_key
-      assert ctx.api_key_type == :application
       # Application keys get default scopes: execute, component_read, storage_read
       assert ctx.permissions ==
                MapSet.new([:execute, :component_read, :storage_read])

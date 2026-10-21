@@ -544,7 +544,7 @@ defmodule Sanctum.IdentityFreshnessTest do
       assert {identifier, directory} == {person.identifier, dir.url}
     end
 
-    test "with nothing cached and no genesis given, it pauses and asks no directory", context do
+    test "with nothing cached, it pauses and asks no directory", context do
       _dir = directory!(context)
       identifier = "per_" <> String.duplicate("c", 64)
 
@@ -554,23 +554,6 @@ defmodule Sanctum.IdentityFreshnessTest do
       end)
 
       assert requests() == []
-    end
-
-    test "the genesis passed is a locator only while nothing is cached", context do
-      dir = directory!(context)
-      person = remote!(context, dir.url)
-      other = remote!(context, dir.url)
-      stale!(person.identifier)
-
-      # Another genesis passed for a cached identifier is not read: the
-      # cached binding is the one resolved.
-      assert {:ok, %{identifier: identifier}} =
-               IdentityFreshness.fresh?(
-                 person.identifier,
-                 [genesis: Identity.canonical(other.genesis)] ++ opts(context)
-               )
-
-      assert identifier == person.identifier
     end
 
     test "a store that cannot answer is unavailable, never a verdict", context do
@@ -586,6 +569,11 @@ defmodule Sanctum.IdentityFreshnessTest do
     test "it takes only the locator and the client's options", context do
       assert_raise ArgumentError, fn ->
         IdentityFreshness.fresh?("per_" <> String.duplicate("d", 64), directory: "https://x.test")
+      end
+
+      # A bounded read takes no locator: with nothing cached it pauses.
+      assert_raise ArgumentError, fn ->
+        IdentityFreshness.fresh?("per_" <> String.duplicate("d", 64), genesis: %{})
       end
 
       assert_raise ArgumentError, fn ->
@@ -909,6 +897,23 @@ defmodule Sanctum.IdentityFreshnessTest do
   end
 
   describe "fresh!/2" do
+    test "the genesis passed is a locator only while nothing is cached", context do
+      dir = directory!(context)
+      person = remote!(context, dir.url)
+      other = remote!(context, dir.url)
+      stale!(person.identifier)
+
+      # Another genesis passed for a cached identifier is not read: the
+      # cached binding is the one resolved.
+      assert {:ok, %{identifier: identifier}} =
+               IdentityFreshness.fresh!(
+                 person.identifier,
+                 [genesis: Identity.canonical(other.genesis)] ++ opts(context)
+               )
+
+      assert identifier == person.identifier
+    end
+
     test "reads the directory however recently the head was verified", context do
       dir = directory!(context)
       person = remote!(context, dir.url)

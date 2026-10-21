@@ -454,7 +454,6 @@ defmodule Sanctum.Gate.StreamsTest do
           ctx
           | auth_method: :api_key,
             api_key_id: "key_streams",
-            api_key_type: :application,
             origin: :programmatic
         },
         device: %{ctx | auth_method: :device, client_id: "cli_streams", origin: :interactive}

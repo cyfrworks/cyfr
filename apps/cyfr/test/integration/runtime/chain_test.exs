@@ -623,7 +623,7 @@ defmodule Locus.Runtime.ChainTest do
 
       assert %{"task_id" => _} = Jason.decode!(spawn_fn.(request))
       assert [_child_id] = admitted(host.execution_id)
-      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end, 5_000)
+      wait_until(fn -> Sanctum.TestContext.invoke_budget(auth).in_flight == 0 end, 5_000)
     end
 
     test "an in-chain run_stream is admitted spawn-shaped under the edge's authority", %{
@@ -662,7 +662,7 @@ defmodule Locus.Runtime.ChainTest do
 
       assert [child_id] = admitted(parent_id)
       assert entered!(child_id).cursor == {:bound, @target_node}
-      wait_until(fn -> Sanctum.Authority.budget(auth).in_flight == 0 end, 5_000)
+      wait_until(fn -> Sanctum.TestContext.invoke_budget(auth).in_flight == 0 end, 5_000)
     end
 
     test "an oversized emit is refused by the node's own request limit", %{ctx: ctx} do
@@ -692,7 +692,7 @@ defmodule Locus.Runtime.ChainTest do
   describe "run_child/5 as a spawn" do
     test "a spawn-shaped child holds the slot for the call and releases it on return", %{ctx: ctx} do
       auth = authority_with_edges(%{@target_node => %{}})
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
       _result =
         Opus.run_child(
@@ -703,7 +703,7 @@ defmodule Locus.Runtime.ChainTest do
           child_opts(ctx, guest_fn: :spawn)
         )
 
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
     end
 
     test "with a charge identity the hold is a row, taken before the run and given back after", %{
@@ -742,7 +742,7 @@ defmodule Locus.Runtime.ChainTest do
           child_opts(ctx, guest_fn: :spawn, charge: charge)
         )
 
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
       assert %{charged: 0} =
                Arca.BudgetReservations.lookup(Sanctum.Context.actor(ctx), auth.budget.id)
@@ -768,7 +768,7 @@ defmodule Locus.Runtime.ChainTest do
                  child_opts(ctx, guest_fn: :spawn, charge: charge)
                )
 
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
     end
 
     test "a hold past its admission window refuses the child before it runs", %{ctx: ctx} do
@@ -819,7 +819,7 @@ defmodule Locus.Runtime.ChainTest do
                )
 
       assert Arca.Repo.get(Arca.Schemas.Execution, child_id) == nil
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
     end
   end
 end

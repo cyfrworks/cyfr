@@ -73,10 +73,10 @@ defmodule Sanctum.Authority.WirePropertyTest do
     assert twin.budget.id == auth.budget.id
 
     assert :ok = Sanctum.Authority.try_acquire_invoke(auth)
-    assert Sanctum.Authority.budget(twin).in_flight == 1
+    assert Sanctum.TestContext.invoke_budget(twin).in_flight == 1
     assert {:error, :invoke_budget_exhausted} = Sanctum.Authority.try_acquire_invoke(twin)
     :ok = Sanctum.Authority.release_invoke(twin)
-    assert Sanctum.Authority.budget(auth).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
   end
 
   test "Blob.to_map is the inverse of Blob.parse" do

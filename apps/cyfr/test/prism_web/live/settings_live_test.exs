@@ -668,7 +668,7 @@ defmodule PrismWeb.SettingsLiveTest do
       athanor_id = seated_athanor().id
 
       seed_ctx =
-        Sanctum.internal_context(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
+        Sanctum.Context.internal(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
 
       ship = fn name, version, provider, need ->
         {:ok, _} =

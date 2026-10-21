@@ -97,7 +97,7 @@ defmodule Opus.ArchiveFenceTest do
   # A run over the API: the admission path every root here models.
   defp ctx(athanor_id),
     do:
-      Sanctum.internal_context(
+      Sanctum.Context.internal(
         user_id: "usr_fence",
         athanor_id: athanor_id,
         scope: :athanor,

@@ -65,7 +65,6 @@ defmodule Sanctum.Context do
           | :tincture
           | :system
           | nil
-  @type api_key_type :: :application | :service | :admin | nil
   @type plane :: :external | :guest
 
   @typedoc """
@@ -166,7 +165,6 @@ defmodule Sanctum.Context do
           permissions: MapSet.t(atom()),
           scope: scope(),
           auth_method: auth_method(),
-          api_key_type: api_key_type(),
           request_id: String.t() | nil,
           call_id: String.t() | nil,
           api_key_id: String.t() | nil,
@@ -197,7 +195,6 @@ defmodule Sanctum.Context do
     :permissions,
     :scope,
     :auth_method,
-    :api_key_type,
     :request_id,
     :call_id,
     :api_key_id,
@@ -340,7 +337,6 @@ defmodule Sanctum.Context do
   - `:scope` - Scope atom (`:athanor` default; `:platform` only through `internal/1`)
   - `:platform_admin` - Boolean (default: false); the operator capability
   - `:auth_method` - Authentication method atom
-  - `:api_key_type` - API key type atom
   - `:api_key_id` - API key identifier
   - `:session_token_hash` - session row key (SHA-256 of the session token)
   - `:door` - the identity key of the door that admitted a sign-in
@@ -469,7 +465,6 @@ defmodule Sanctum.Context do
       permissions: permissions,
       scope: scope,
       auth_method: Map.get(attrs, :auth_method),
-      api_key_type: Map.get(attrs, :api_key_type),
       request_id: Map.get(attrs, :request_id),
       call_id: Map.get(attrs, :call_id),
       api_key_id: Map.get(attrs, :api_key_id),

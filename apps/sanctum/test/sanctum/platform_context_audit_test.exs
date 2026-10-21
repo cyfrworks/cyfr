@@ -46,8 +46,8 @@ defmodule Sanctum.PlatformContextAuditTest do
     assert_received {:platform_ctx, %{count: 1}, %{sanctioned: true}}
   end
 
-  test "Sanctum.internal_context(scope: :platform) is sanctioned and does not raise" do
-    assert %Context{scope: :platform} = Sanctum.internal_context(user_id: "svc")
+  test "Sanctum.Context.internal(scope: :platform) is sanctioned and does not raise" do
+    assert %Context{scope: :platform} = Sanctum.Context.internal(user_id: "svc")
     assert_received {:platform_ctx, %{count: 1}, %{sanctioned: true, user_id: "svc"}}
   end
 

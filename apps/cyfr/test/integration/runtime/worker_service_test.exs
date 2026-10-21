@@ -116,7 +116,7 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
     assert_receive {:held, id, _held}, 30_000
     runner = runner_of(ctx, id)
 
-    assert Sanctum.Authority.budget(authority).in_flight == 1
+    assert Sanctum.TestContext.invoke_budget(authority).in_flight == 1
     assert Slots.status(@slots).child_active == children_before + 1
     assert [%{admitted_at: %DateTime{}}] = charges(ctx, authority)
 
@@ -133,7 +133,7 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
     wait_until(fn -> reported_exit?(runner) end, 10_000, "the runner's exit report")
     wait_until(fn -> RuntimeService.status().attempts == [] end, 10_000)
     wait_until(fn -> Slots.status(@slots).child_active == children_before end)
-    assert Sanctum.Authority.budget(authority).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(authority).in_flight == 0
     assert charges(ctx, authority) == []
     refute_received {:ran, _}
   end
@@ -212,7 +212,7 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
     assert Enum.all?(ids, &(runner_of(ctx, &1) == runner))
     root_authority = reserved_authority(ctx, root_id)
 
-    assert Sanctum.Authority.budget(root_authority).in_flight == 3
+    assert Sanctum.TestContext.invoke_budget(root_authority).in_flight == 3
     assert length(charges(ctx, root_authority)) == 3
     assert Slots.status(@slots).child_active == children_before + 3
 
@@ -244,7 +244,7 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
     wait_until(fn -> Slots.status(@slots).child_active == children_before end)
     wait_until(fn -> Slots.status(@slots).active == slots_before end)
 
-    wait_until(fn -> Sanctum.Authority.budget(root_authority).in_flight == 0 end)
+    wait_until(fn -> Sanctum.TestContext.invoke_budget(root_authority).in_flight == 0 end)
     wait_until(fn -> charges(ctx, root_authority) == [] end)
   end
 

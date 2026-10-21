@@ -259,7 +259,7 @@ defmodule Opus.Host.ChildrenTest do
       assert [{^pid, {:dispatched, ^endpoint}}] =
                Registry.lookup(Opus.Registry, child.execution_id)
 
-      assert Sanctum.Authority.budget(authority).in_flight == 1
+      assert Sanctum.TestContext.invoke_budget(authority).in_flight == 1
       assert [%{holder_execution_id: holder, admitted_at: %DateTime{}}] = charges(ctx, authority)
       assert holder == child.execution_id
       assert Prima.Slots.status(Opus.Slots).child_active == children_before + 1
@@ -267,7 +267,7 @@ defmodule Opus.Host.ChildrenTest do
       assert %{"ok" => "gave up"} = fail!(child, "gave up")
 
       wait_until(fn -> Attempt.whereis(child.execution_id) == nil end)
-      assert Sanctum.Authority.budget(authority).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(authority).in_flight == 0
       assert charges(ctx, authority) == []
       assert Prima.Slots.status(Opus.Slots).child_active == children_before
       assert %{status: "failed"} = Arca.Repo.get!(Arca.Schemas.Execution, child.execution_id)
@@ -280,7 +280,7 @@ defmodule Opus.Host.ChildrenTest do
       assert %{"ok" => answer} = admit(fixture, "#{@target}:1.0.0", %{}, guest_fn: "call")
       child = child!(fixture, answer)
 
-      assert Sanctum.Authority.budget(authority).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(authority).in_flight == 0
       assert charges(ctx, authority) == []
       assert %{"ok" => _} = fail!(child, "done")
     end
@@ -305,7 +305,7 @@ defmodule Opus.Host.ChildrenTest do
       assert denied =~ "Denied by chain authority"
 
       assert children_of(fixture) == []
-      assert Sanctum.Authority.budget(authority).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(authority).in_flight == 0
       assert charges(ctx, authority) == []
     end
 
@@ -423,12 +423,12 @@ defmodule Opus.Host.ChildrenTest do
 
       assert children_of(fixture) == [child.execution_id]
       assert %{child_key: ^key} = Arca.Repo.get!(Arca.Schemas.Execution, child.execution_id)
-      assert Sanctum.Authority.budget(authority).in_flight == 1
+      assert Sanctum.TestContext.invoke_budget(authority).in_flight == 1
       assert [_charge] = charges(ctx, authority)
 
       assert %{"ok" => _} = fail!(child, "done")
       wait_until(fn -> Attempt.whereis(child.execution_id) == nil end)
-      assert Sanctum.Authority.budget(authority).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(authority).in_flight == 0
     end
 
     test "a different key admits another child", %{ctx: ctx} do
@@ -471,7 +471,7 @@ defmodule Opus.Host.ChildrenTest do
       end
 
       assert children_of(fixture) == []
-      assert Sanctum.Authority.budget(authority).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(authority).in_flight == 0
       assert charges(ctx, authority) == []
     end
 
@@ -499,7 +499,7 @@ defmodule Opus.Host.ChildrenTest do
       for %{"error" => refusal} <- answers, do: assert(refusal == "lost")
 
       assert children_of(fixture) == [child.execution_id]
-      assert Sanctum.Authority.budget(authority).in_flight == 1
+      assert Sanctum.TestContext.invoke_budget(authority).in_flight == 1
       assert [_charge] = charges(ctx, authority)
       assert %{"ok" => _} = fail!(child, "done")
     end
@@ -514,7 +514,7 @@ defmodule Opus.Host.ChildrenTest do
 
       assert %{"ok" => answer} = admit(fixture, "#{@target}:1.0.0", %{"a" => 1})
       child = child!(fixture, answer)
-      assert Sanctum.Authority.budget(authority).in_flight == 1
+      assert Sanctum.TestContext.invoke_budget(authority).in_flight == 1
       assert [_charge] = charges(ctx, authority)
       pid = Attempt.whereis(child.execution_id)
 
@@ -530,7 +530,7 @@ defmodule Opus.Host.ChildrenTest do
                Arca.ExecutionAttempts.current(Sanctum.Context.actor(ctx), child.execution_id)
 
       refute Process.alive?(pid)
-      assert Sanctum.Authority.budget(authority).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(authority).in_flight == 0
       assert charges(ctx, authority) == []
       assert Prima.Slots.status(Opus.Slots).child_active == children_before
 

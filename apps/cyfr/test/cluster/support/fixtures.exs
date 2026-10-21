@@ -187,7 +187,7 @@ defmodule Cyfr.Cluster.Fixtures do
   defp standing(athanor_id) do
     {:ok, grant} =
       Sanctum.ExecutionStanding.capture(
-        Sanctum.internal_context(athanor_id: athanor_id, scope: :athanor)
+        Sanctum.Context.internal(athanor_id: athanor_id, scope: :athanor)
       )
 
     [grant: grant, verify: &Sanctum.ExecutionStanding.verify/1]

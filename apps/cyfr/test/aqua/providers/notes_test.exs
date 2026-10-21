@@ -648,7 +648,7 @@ defmodule Aqua.Providers.NotesTest do
     # The host-only root stops the guest; this stops the credential. A key
     # scoped to an athanor must not reach the creator's personal tree
     # through "mine" — or the athanor's notes through anything.
-    star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
+    star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
 
     assert {:error,
             %Prima.Refusal{

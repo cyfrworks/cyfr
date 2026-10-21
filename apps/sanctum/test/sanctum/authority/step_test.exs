@@ -38,7 +38,7 @@ defmodule Sanctum.Authority.StepTest do
                  )
       end
 
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
       assert {:child_zero, _} =
                Sanctum.Authority.step(auth, :spawn, Fixtures.invoke("formula:local.a"))
@@ -69,7 +69,7 @@ defmodule Sanctum.Authority.StepTest do
       assert {:deny, :invoke_budget_exhausted} =
                Sanctum.Authority.step(grandchild, :spawn, Fixtures.invoke("formula:local.c"))
 
-      assert Sanctum.Authority.budget(auth) == %{in_flight: 2, cap: 2}
+      assert Sanctum.TestContext.invoke_budget(auth) == %{in_flight: 2, cap: 2}
     end
 
     test "a denied spawn consumes nothing" do
@@ -84,7 +84,7 @@ defmodule Sanctum.Authority.StepTest do
                  )
       end
 
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
       assert {:child_zero, _} =
                Sanctum.Authority.step(auth, :spawn, Fixtures.invoke("formula:local.a"))
@@ -97,7 +97,7 @@ defmodule Sanctum.Authority.StepTest do
       Sanctum.Authority.step(auth, :poll, {:task, "task_1"})
       Sanctum.Authority.step(auth, :spawn, {:event, %{"msg" => "hi"}})
 
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
     end
   end
 
@@ -112,10 +112,10 @@ defmodule Sanctum.Authority.StepTest do
       assert {:deny, :tool_not_granted} =
                Sanctum.Authority.step(auth, :spawn, tool("storage", "write"))
 
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
 
       assert {:allow_tool, _} = Sanctum.Authority.step(auth, :spawn, tool("storage", "read"))
-      assert Sanctum.Authority.budget(auth).in_flight == 1
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 1
 
       assert {:deny, :invoke_budget_exhausted} =
                Sanctum.Authority.step(auth, :spawn, tool("storage", "read"))
@@ -137,7 +137,7 @@ defmodule Sanctum.Authority.StepTest do
         assert {:allow_tool, _} = Sanctum.Authority.step(auth, :call, tool("storage", "read"))
       end
 
-      assert Sanctum.Authority.budget(auth).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(auth).in_flight == 0
     end
   end
 

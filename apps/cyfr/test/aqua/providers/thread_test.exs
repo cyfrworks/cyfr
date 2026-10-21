@@ -142,7 +142,7 @@ defmodule Aqua.Providers.ThreadTest do
       ctx: ctx,
       thread: thread
     } do
-      star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
+      star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
 
       assert {:error,
               %Prima.Refusal{
@@ -201,7 +201,7 @@ defmodule Aqua.Providers.ThreadTest do
       # `authorize_interactive/1` admits `:oidc` and nothing else. The
       # plane gate says nothing about this axis: a `*` key is on the
       # external plane and would sail through it.
-      star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
+      star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
 
       assert {:error,
               %Prima.Refusal{
@@ -213,7 +213,7 @@ defmodule Aqua.Providers.ThreadTest do
                  "thread" => thread.id
                })
 
-      scoped = %{ctx | auth_method: :api_key, api_key_type: :application}
+      scoped = %{ctx | auth_method: :api_key}
 
       assert {:error,
               %Prima.Refusal{
@@ -230,7 +230,7 @@ defmodule Aqua.Providers.ThreadTest do
     test "a surface that would be refused is not shown the tool", %{ctx: ctx} do
       # Discovery reads the same annotation dispatch enforces: an API key
       # is not offered a door it cannot open.
-      star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
+      star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
 
       shown = Visibility.filter_for_context(Sanctum.Catalog.list_tools(), star)
       refute Enum.any?(shown, &(&1["name"] == "thread"))

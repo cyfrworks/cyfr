@@ -121,7 +121,7 @@ defmodule Sanctum.TestContext do
   shipped AQUA tree and the bundle — without marking it provisioned.
   """
   def shipped!(athanor_id) when is_binary(athanor_id) do
-    ctx = Sanctum.internal_context(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
+    ctx = Sanctum.Context.internal(user_id: "_seed", athanor_id: athanor_id, scope: :athanor)
 
     for root <- Arca.Storage.overlay_roots() do
       {:ok, _copied} = Arca.Overlay.materialize_shipped(Sanctum.Context.actor(ctx), root)
@@ -216,10 +216,6 @@ defmodule Sanctum.TestContext do
         ArgumentError,
         "no admission path #{inspect(path)}: one of #{inspect(Map.keys(@admission_paths))}"
       )
-
-  @doc "The admission paths `via/2` knows, each with the origin it gives."
-  @spec admission_paths() :: %{atom() => Prima.Origin.t()}
-  def admission_paths, do: @admission_paths
 
   @doc """
   The context's identity signed in: the `users` row minted (or found)
@@ -512,6 +508,31 @@ defmodule Sanctum.TestContext do
 
         ctx
     end
+  end
+
+  @doc """
+  Remove `ctx`'s person's stored registry credential for one
+  `(registry, namespace_slug)`, as losing it would.
+  """
+  def drop_registry_credential!(%Context{user_id: user_id}, registry, namespace_slug),
+    do: :ok = Arca.RegistryTokenStorage.delete(user_id, registry, namespace_slug)
+
+  @doc """
+  The invoke-budget counter of `authority`'s root (or of a bare budget) on
+  this node: its slots in flight and its cap, read from the counter's
+  table (`Sanctum.Authority.BudgetCounter`), one row per budget id with
+  work in flight.
+  """
+  def invoke_budget(%Prima.Authority{budget: budget}), do: invoke_budget(budget)
+
+  def invoke_budget(%Prima.Authority.Budget{id: id, cap: cap}) do
+    in_flight =
+      case :ets.lookup(Sanctum.Authority.BudgetCounter, id) do
+        [{^id, n}] -> max(n, 0)
+        [] -> 0
+      end
+
+    %{in_flight: in_flight, cap: cap}
   end
 
   @doc """

@@ -263,8 +263,8 @@ defmodule Sanctum.ApiKey do
 
   defp encode_allowlist(nil), do: {:ok, nil}
 
-  # The shape is checked here, not only that it encodes. `ip_matches?/2`
-  # takes binary patterns only, and the MCP input validator checks
+  # The shape is checked here, not only that it encodes. `ip_allowed?/2`
+  # matches binary entries only, and the MCP input validator checks
   # `type: array` without descending into `items`, so a key stored with
   # `"ip_allowlist": [1, 2]` would raise on every later `validate/2`: a
   # 500 on the authentication path and a key that can never be used.
@@ -726,7 +726,6 @@ defmodule Sanctum.ApiKey do
       permissions: permissions,
       scope: :athanor,
       auth_method: :api_key,
-      api_key_type: metadata.type,
       # The key's id and the binding that names it, stamped together here
       # and nowhere else.
       api_key_id: metadata[:id],

@@ -13,14 +13,6 @@ defmodule Compendium.Registry.CredentialStoreTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-
-    # Clean up any namespace slots from prior runs.
-    for user <- [@user, @user2],
-        reg <- [@reg, @other_reg],
-        slug <- ["alice", "bob", "stripe.com"] do
-      CredentialStore.delete(as(user), reg, slug)
-    end
-
     :ok
   end
 
@@ -165,21 +157,6 @@ defmodule Compendium.Registry.CredentialStoreTest do
                entries
                |> Enum.reject(&match?(%{status: :corrupt}, &1))
                |> CredentialStore.push_tokens()
-    end
-  end
-
-  describe "delete/3" do
-    test "removes a single namespace slot without touching siblings" do
-      put!(@user, @reg, "alice")
-      put!(@user, @reg, "stripe.com")
-
-      assert :ok = CredentialStore.delete(as(@user), @reg, "alice")
-      assert {:error, :not_found} = CredentialStore.get(as(@user), @reg, "alice")
-      assert {:ok, _} = CredentialStore.get(as(@user), @reg, "stripe.com")
-    end
-
-    test "delete is idempotent" do
-      assert :ok = CredentialStore.delete(as(@user), @reg, "never-existed")
     end
   end
 

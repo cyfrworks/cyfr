@@ -454,8 +454,8 @@ defmodule Cyfr.Boundaries do
         "the glue and application namespace: boot wiring, the operation table, " <>
           "admission, the invoke budget, the vault edge a run is attached with, and " <>
           "the policy record of every admission. `Sanctum` bare is the domain's own " <>
-          "front door — `internal_context/1` and `system_context/0` mint the contexts " <>
-          "the server's own work runs under, `auth_configured?/0` says whether this " <>
+          "front door — `system_context/0` mints the context the server's own work " <>
+          "runs under, `auth_configured?/0` says whether this " <>
           "deployment has sign-in, and `build_tincture_context/2` is a tincture " <>
           "invocation's. A call on the root is a reach like any other and is rostered " <>
           "like one; no roster before this one could see it. `Sanctum.Caller` is " <>
@@ -1842,7 +1842,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum" => [
       auth_configured?: 0,
       build_tincture_context: 2,
-      internal_context: 1,
       origin: 0,
       public_url: 0,
       reconcile_platform_admins: 2,
@@ -1958,7 +1957,7 @@ defmodule Cyfr.Boundaries do
       purge_global: 2,
       refused: 3
     ],
-    "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 3],
+    "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 2],
     "Sanctum.Directory" => [append: 2, recover: 2, register: 1, resolve: 1],
     "Sanctum.Door" => [admit_identity: 2, platform_admin_emails: 0, refusal_message: 0],
     "Sanctum.Door.Store" => [requests: 0],
@@ -2013,7 +2012,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Refusals" => [classify: 1, classify: 2, code_override: 1, known?: 1, render: 1],
     "Sanctum.RegistryCredentials" => [
       confirm_issuance: 4,
-      delete: 3,
       get: 3,
       list: 2,
       put_push_token: 6

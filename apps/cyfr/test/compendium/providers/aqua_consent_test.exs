@@ -43,7 +43,7 @@ defmodule Compendium.Providers.AquaConsentTest do
   test "a standing credential cannot write the soul, a role or a scroll", %{ctx: ctx} do
     # A `*` admin key holds every permission and is still refused: the
     # consent class admits a surface, never a permission atom.
-    star = %{ctx | auth_method: :api_key, api_key_type: :admin, permissions: MapSet.new([:*])}
+    star = %{ctx | auth_method: :api_key, permissions: MapSet.new([:*])}
 
     calls = [
       {"skill_create", %{"name" => "sneak", "description" => "d", "content" => "c"}},

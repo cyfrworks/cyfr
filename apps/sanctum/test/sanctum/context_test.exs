@@ -819,7 +819,7 @@ defmodule Sanctum.ContextTest do
     test "projects the tenancy scope and the system provenance the stores authorize on" do
       # The server's own contexts: both authorities, so Arca reads across
       # athanors and may mutate the seed and global paths.
-      for ctx <- [Sanctum.system_context(), Sanctum.internal_context()] do
+      for ctx <- [Sanctum.system_context(), Sanctum.Context.internal([])] do
         actor = Context.actor(ctx)
 
         assert actor.scope == :platform
@@ -837,7 +837,7 @@ defmodule Sanctum.ContextTest do
       # An internal task working inside one athanor: system authority, one
       # tenant's rows.
       inside_one =
-        Context.actor(Sanctum.internal_context(athanor_id: "ath_1", scope: :athanor))
+        Context.actor(Sanctum.Context.internal(athanor_id: "ath_1", scope: :athanor))
 
       assert inside_one.scope == :athanor
       assert inside_one.system
@@ -852,7 +852,7 @@ defmodule Sanctum.ContextTest do
 
       # Provenance alone never grants the platform read.
       platform_scheduled =
-        Context.actor(Sanctum.internal_context(auth_method: :scheduled))
+        Context.actor(Sanctum.Context.internal(auth_method: :scheduled))
 
       assert platform_scheduled.scope == :platform
       refute platform_scheduled.system

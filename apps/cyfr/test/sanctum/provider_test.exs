@@ -421,7 +421,6 @@ defmodule Sanctum.ProviderTest do
         permissions: MapSet.new([:execute]),
         scope: :athanor,
         auth_method: :api_key,
-        api_key_type: :application,
         authenticated: true
       }
 

@@ -174,7 +174,7 @@ defmodule PrismWeb.VaultLiveTest do
 
   defp seed_ctx,
     do:
-      Sanctum.internal_context(user_id: "_test", athanor_id: seated_athanor().id, scope: :athanor)
+      Sanctum.Context.internal(user_id: "_test", athanor_id: seated_athanor().id, scope: :athanor)
 
   # The entries the shipped OpenAI need's plan names as its candidates.
   defp openai_candidates(ctx) do
@@ -1299,7 +1299,7 @@ defmodule PrismWeb.VaultLiveTest do
 
       for athanor_id <- [home.id, group.id] do
         seed_ctx =
-          Sanctum.internal_context(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
+          Sanctum.Context.internal(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
 
         {:ok, _} =
           Arca.Test.UnitFixtures.ship_and_register!(

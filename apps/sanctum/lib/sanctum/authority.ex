@@ -15,10 +15,10 @@ defmodule Sanctum.Authority do
       The caller releases the slot via `release_invoke/1` when the spawned
       work completes.
     * The invoke-budget counter (`Sanctum.Authority.BudgetCounter`) behind
-      the budget id: `try_acquire_invoke/1`, `guard_invoke/2`,
-      `take_over_invoke/2`, `release_invoke/1` and `budget/1`. The id names the root's reservation
-      row (`Arca.BudgetReservations`), which is the authority on what is in
-      flight; the counter on this node is a pre-check.
+      the budget id: `try_acquire_invoke/1`, `guard_invoke/1`,
+      `take_over_invoke/2` and `release_invoke/1`. The id names the root's
+      reservation row (`Arca.BudgetReservations`), which is the authority
+      on what is in flight; the counter on this node is a pre-check.
   """
 
   alias Prima.Authority
@@ -63,7 +63,7 @@ defmodule Sanctum.Authority do
   @doc """
   Take one root-keyed invoke-budget slot. Every acquire must be paired with
   `release_invoke/1` when the spawned work completes — and the process
-  doing the work registers itself with `guard_invoke/2` so a slot whose
+  doing the work registers itself with `guard_invoke/1` so a slot whose
   holder is brutally killed (the cancel and await-timeout paths) is
   released by the guard's `:DOWN` compensation instead of leaking.
   """
@@ -92,7 +92,4 @@ defmodule Sanctum.Authority do
   @spec release_invoke(Authority.t()) :: :ok
   def release_invoke(%Authority{budget: %Budget{} = budget}),
     do: BudgetGuard.release(budget, self())
-
-  @spec budget(Authority.t()) :: %{in_flight: non_neg_integer(), cap: non_neg_integer()}
-  def budget(%Authority{budget: %Budget{} = budget}), do: BudgetCounter.snapshot(budget)
 end

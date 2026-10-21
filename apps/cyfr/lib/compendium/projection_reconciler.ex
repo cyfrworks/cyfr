@@ -470,7 +470,7 @@ defmodule Compendium.ProjectionReconciler do
 
   # The server's own context inside one athanor, reading its tree.
   defp athanor(athanor_id) do
-    Sanctum.internal_context(
+    Sanctum.Context.internal(
       user_id: "_projection",
       athanor_id: athanor_id,
       scope: :athanor,

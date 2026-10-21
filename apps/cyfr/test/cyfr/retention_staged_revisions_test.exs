@@ -38,7 +38,7 @@ defmodule Cyfr.RetentionStagedRevisionsTest do
       })
 
     ctx =
-      Sanctum.internal_context(
+      Sanctum.Context.internal(
         user_id: "system",
         athanor_id: athanor.id,
         scope: :athanor,

@@ -1068,9 +1068,9 @@ defmodule Sanctum.Catalog do
     do: Atom.to_string(permission) in Sanctum.Atoms.known_permissions()
 
   @doc """
-  Every provider named in config, loaded or not. The status roster reads
-  this set, so a configured provider that failed to load is reported as
-  such rather than silently absent.
+  Every provider named in config, loaded or not: the boot refuses one that
+  cannot load unless it is lenient, and `available_providers/0` is the set
+  it then loads, which the services and their status read.
 
   The single reader of `:sanctum, :tool_providers` — config always sets the
   key, so the default is an empty list, never a hidden second roster.

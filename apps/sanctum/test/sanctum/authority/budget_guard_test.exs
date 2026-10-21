@@ -37,7 +37,7 @@ defmodule Sanctum.Authority.BudgetGuardTest do
     Process.exit(holder, :kill)
 
     wait_until(
-      fn -> BudgetCounter.snapshot(budget).in_flight == 0 end,
+      fn -> Sanctum.TestContext.invoke_budget(budget).in_flight == 0 end,
       2_000,
       "the killed holder's slot to come back"
     )
@@ -61,7 +61,7 @@ defmodule Sanctum.Authority.BudgetGuardTest do
       end)
 
     assert_receive :released, 1000
-    assert BudgetCounter.snapshot(budget).in_flight == 1
+    assert Sanctum.TestContext.invoke_budget(budget).in_flight == 1
 
     # The holder dies AFTER its explicit release; the demonitored guard
     # must not release the second (still legitimately held) slot.
@@ -75,10 +75,10 @@ defmodule Sanctum.Authority.BudgetGuardTest do
     # short for the compensation to run reads exactly like a compensation
     # that correctly did not fire.
     :sys.get_state(BudgetGuard)
-    assert BudgetCounter.snapshot(budget).in_flight == 1
+    assert Sanctum.TestContext.invoke_budget(budget).in_flight == 1
 
     :ok = BudgetCounter.release(budget)
-    assert BudgetCounter.snapshot(budget).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(budget).in_flight == 0
   end
 
   # A holder the test drives, killed when the test ends whether or not it
@@ -146,12 +146,12 @@ defmodule Sanctum.Authority.BudgetGuardTest do
       Process.exit(from, :kill)
       assert_receive {:DOWN, ^ref, :process, ^from, :killed}, 1_000
       :sys.get_state(BudgetGuard)
-      assert BudgetCounter.snapshot(budget).in_flight == 1
+      assert Sanctum.TestContext.invoke_budget(budget).in_flight == 1
 
       Process.exit(to, :kill)
 
       wait_until(
-        fn -> BudgetCounter.snapshot(budget).in_flight == 0 end,
+        fn -> Sanctum.TestContext.invoke_budget(budget).in_flight == 0 end,
         2_000,
         "the new holder's slot to come back"
       )
@@ -163,7 +163,7 @@ defmodule Sanctum.Authority.BudgetGuardTest do
       Process.exit(from, :kill)
       assert_receive {:DOWN, ^ref, :process, ^from, :killed}, 1_000
       :sys.get_state(BudgetGuard)
-      assert BudgetCounter.snapshot(budget).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(budget).in_flight == 0
 
       assert :released = BudgetGuard.handover(budget, from, self())
       refute Map.has_key?(:sys.get_state(BudgetGuard).guards, {budget.id, self()})
@@ -173,7 +173,7 @@ defmodule Sanctum.Authority.BudgetGuardTest do
   test "a release with no guard registered releases directly", %{budget: budget} do
     :ok = BudgetCounter.try_acquire(budget)
     :ok = BudgetGuard.release(budget, self())
-    assert BudgetCounter.snapshot(budget).in_flight == 0
+    assert Sanctum.TestContext.invoke_budget(budget).in_flight == 0
   end
 
   describe "release_after_exit/2 — what a failed release call means for the slot" do
@@ -191,24 +191,24 @@ defmodule Sanctum.Authority.BudgetGuardTest do
                  {:timeout, {GenServer, :call, [BudgetGuard, {:release, budget, self()}, 5000]}}
                )
 
-      assert BudgetCounter.snapshot(budget).in_flight == 1
+      assert Sanctum.TestContext.invoke_budget(budget).in_flight == 1
 
       :ok = BudgetCounter.release(budget)
-      assert BudgetCounter.snapshot(budget).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(budget).in_flight == 0
     end
 
     test "an exit that means the call never landed releases directly", %{budget: budget} do
       :ok = BudgetCounter.try_acquire(budget)
 
       assert :ok = BudgetGuard.release_after_exit(budget, {:noproc, {GenServer, :call, []}})
-      assert BudgetCounter.snapshot(budget).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(budget).in_flight == 0
     end
 
     test "a guard that died mid-handling still gives the slot back", %{budget: budget} do
       :ok = BudgetCounter.try_acquire(budget)
 
       assert :ok = BudgetGuard.release_after_exit(budget, :shutdown)
-      assert BudgetCounter.snapshot(budget).in_flight == 0
+      assert Sanctum.TestContext.invoke_budget(budget).in_flight == 0
     end
   end
 end
