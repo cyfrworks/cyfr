@@ -11,7 +11,6 @@
       file: "apps/cyfr/lib/emissary/router.ex",
       pipelines: %{
         "api" => [":accepts", "CyfrWeb.Plugs.ApiSecurityHeaders"],
-        "auth_api_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "authenticated_api" => [
           "CyfrWeb.Plugs.CallIdentity",
           ":accepts",
@@ -209,15 +208,6 @@
           pipe_through: ["api", "health_throttle"]
         },
         %{
-          verb: "DELETE",
-          path: "/auth/logout",
-          plug: "Emissary.Web.SessionController",
-          plug_opts: ":logout",
-          auth: "handler_auth",
-          live_view: nil,
-          pipe_through: ["api", "auth_api_throttle"]
-        },
-        %{
           verb: "GET",
           path: "/auth/oauth/callback",
           plug: "Emissary.Web.OAuthCallbackController",
@@ -225,15 +215,6 @@
           auth: "public_oauth_state",
           live_view: nil,
           pipe_through: ["oauth_callback", "oauth_callback_throttle"]
-        },
-        %{
-          verb: "GET",
-          path: "/auth/whoami",
-          plug: "Emissary.Web.SessionController",
-          plug_opts: ":whoami",
-          auth: "handler_auth",
-          live_view: nil,
-          pipe_through: ["api", "auth_api_throttle"]
         },
         %{
           verb: "OPTIONS",

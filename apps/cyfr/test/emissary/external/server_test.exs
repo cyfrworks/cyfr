@@ -80,7 +80,8 @@ defmodule Emissary.External.ServerTest do
     } do
       pid = start_server(name, athanor_id)
 
-      cap = Application.get_env(:cyfr, :external_server_max_in_flight, 8)
+      # The calls one server process admits in flight.
+      cap = 8
 
       fakes = for _ <- 1..cap, do: spawn(fn -> Process.sleep(:infinity) end)
       caller = self()
@@ -95,7 +96,7 @@ defmodule Emissary.External.ServerTest do
       end)
 
       assert {:error, message} = GenServer.call(pid, {:call_tool, "anything", %{}}, 1_000)
-      assert message =~ "busy"
+      assert message =~ "busy (#{cap} calls in flight)"
       assert message =~ "retry"
 
       Enum.each(fakes, &Process.exit(&1, :kill))
@@ -258,69 +259,126 @@ defmodule Emissary.External.ServerTest do
   describe "header vault resolution" do
     setup tags do
       Cyfr.Test.Sandbox.setup!(tags)
-      :ok
+      bypass = Bypass.open()
+
+      {:ok,
+       bypass: bypass, at: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => bypass.port}}
     end
 
     @inside "https://api.example.com/mcp"
 
-    test "reports only the header name on a missing vault entry" do
-      assert {:error, message} =
-               Server.resolve_headers(
-                 %{"authorization" => "vault:EXT_MISSING"},
-                 {"ath_test", @inside}
-               )
+    # An upstream that lists no tools and tells the test the headers each
+    # request carried.
+    defp listening(bypass, path \\ "/mcp") do
+      test = self()
 
+      Bypass.stub(bypass, "POST", path, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test, {:upstream_headers, Map.new(conn.req_headers)})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "jsonrpc" => "2.0",
+            "id" => Jason.decode!(body)["id"],
+            "result" => %{"tools" => []}
+          })
+        )
+      end)
+    end
+
+    test "reports only the header name on a missing vault entry", %{name: name} do
+      pid =
+        start_server(name, "ath_test",
+          url: @inside,
+          headers: %{"authorization" => "vault:EXT_MISSING"}
+        )
+
+      assert {:error, message} = GenServer.call(pid, :get_tools, 30_000)
       assert message =~ "authorization"
       refute message =~ "EXT_MISSING"
     end
 
-    test "a scheme-prefixed reference resolves to the scheme and the entry's value" do
+    test "a scheme-prefixed reference resolves to the scheme and the entry's value", %{
+      name: name,
+      bypass: bypass,
+      at: at
+    } do
       ctx = Sanctum.TestContext.local()
+      listening(bypass)
 
       {:ok, _} =
         Sanctum.TestContext.create_vault(ctx, %{
           name: "ext-bearer",
           kind: "api_key",
           fields: %{"token" => "sk-ext-0123456789"},
-          destination: @destination
+          destination: at
         })
 
-      assert {:ok, %{"authorization" => "Bearer sk-ext-0123456789", "accept" => "text/plain"}} =
-               Server.resolve_headers(
-                 %{"authorization" => "Bearer vault:ext-bearer", "accept" => "text/plain"},
-                 {ctx.athanor_id, @inside}
-               )
+      pid =
+        start_server(name, ctx.athanor_id,
+          url: "http://127.0.0.1:#{bypass.port}/mcp",
+          headers: %{"authorization" => "Bearer vault:ext-bearer", "accept" => "text/plain"}
+        )
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+
+      assert {:ok, []} = GenServer.call(pid, :get_tools, 30_000)
+      assert_receive {:upstream_headers, headers}
+      assert headers["authorization"] == "Bearer sk-ext-0123456789"
+      assert headers["accept"] == "text/plain"
     end
 
-    test "an entry whose destination does not cover the server's URL is refused unsealed" do
+    test "an entry whose destination does not cover the server's URL is refused unsealed", %{
+      name: name,
+      bypass: bypass,
+      at: at
+    } do
       ctx = Sanctum.TestContext.local()
+      listening(bypass, "/v1/mcp")
 
       {:ok, entry} =
         Sanctum.TestContext.create_vault(ctx, %{
-          name: "openai-key",
+          name: "scoped-key",
           kind: "api_key",
-          fields: %{"token" => "sk-openai-0123456789"},
-          destination: %{"hosts" => ["api.openai.com"], "paths" => ["/v1"]}
+          fields: %{"token" => "sk-scoped-0123456789"},
+          destination: Map.put(at, "paths", ["/v1"])
         })
 
-      headers = %{"authorization" => "Bearer vault:openai-key"}
+      headers = %{"authorization" => "Bearer vault:scoped-key"}
 
-      for url <- [
-            "https://evil.example/mcp",
-            "https://api.openai.com/v2/mcp",
-            nil
-          ] do
-        assert {:error, :destination_mismatch} =
-                 Server.resolve_headers(headers, {ctx.athanor_id, url}),
-               inspect(url)
+      for {url, n} <-
+            Enum.with_index([
+              "http://localhost:#{bypass.port}/v1/mcp",
+              "http://127.0.0.1:#{bypass.port}/v2/mcp",
+              nil
+            ]) do
+        server = "#{name}-#{n}"
+        pid = start_server(server, ctx.athanor_id, url: url, headers: headers)
+        on_exit(fn -> Emissary.External.ServerSupervisor.stop(server, ctx.athanor_id) end)
+
+        assert {:error, sentence} = GenServer.call(pid, :get_tools, 30_000), inspect(url)
+        assert sentence == Sanctum.Refusals.render(:destination_mismatch)
+        assert :sys.get_state(pid).headers == %{}
       end
 
+      refute_received {:upstream_headers, _}
       assert {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry.id)
       assert row.last_used_at == nil
 
       # Inside the entry's host and paths, it is sent.
-      assert {:ok, %{"authorization" => "Bearer sk-openai-0123456789"}} =
-               Server.resolve_headers(headers, {ctx.athanor_id, "https://api.openai.com/v1/mcp"})
+      pid =
+        start_server(name, ctx.athanor_id,
+          url: "http://127.0.0.1:#{bypass.port}/v1/mcp",
+          headers: headers
+        )
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+
+      assert {:ok, []} = GenServer.call(pid, :get_tools, 30_000)
+      assert_receive {:upstream_headers, %{"authorization" => "Bearer sk-scoped-0123456789"}}
     end
 
     # An instance entry is never named by a definition whose URL a member
@@ -363,11 +421,18 @@ defmodule Emissary.External.ServerTest do
       assert instance_state(entry.id) == before
     end
 
-    test "a reference this server does not resolve is refused, never sent as a literal" do
-      for unresolved <- ["secret:EXT_TOKEN", "Token secret:EXT_TOKEN"] do
-        assert {:error, message} =
-                 Server.resolve_headers(%{"x-client" => unresolved}, {"ath_test", @inside})
+    test "a reference this server does not resolve is refused, never sent as a literal", %{
+      name: name
+    } do
+      for {unresolved, n} <- Enum.with_index(["secret:EXT_TOKEN", "Token secret:EXT_TOKEN"]) do
+        server = "#{name}-#{n}"
 
+        pid =
+          start_server(server, "ath_test", url: @inside, headers: %{"x-client" => unresolved})
+
+        on_exit(fn -> Emissary.External.ServerSupervisor.stop(server, "ath_test") end)
+
+        assert {:error, message} = GenServer.call(pid, :get_tools, 30_000)
         assert message =~ "x-client"
         refute message =~ "EXT_TOKEN"
       end
@@ -375,63 +440,107 @@ defmodule Emissary.External.ServerTest do
   end
 
   describe "credential masking" do
-    defp masking_state do
-      %{
-        raw_headers: %{
-          "authorization" => "vault:MASK_TOKEN",
-          "x-custom-key" => "literal-credential-value",
-          "content-type" => "application/json"
-        },
-        headers: %{
-          "authorization" => "Bearer sk-super-secret-token",
-          "x-custom-key" => "literal-credential-value",
-          "content-type" => "application/json"
-        }
-      }
+    # A tool call's answer is masked of every credential the process sent:
+    # the upstream answers each call with `text`, built from the headers it
+    # was sent.
+    setup tags do
+      Cyfr.Test.Sandbox.setup!(tags)
+      bypass = Bypass.open()
+      {:ok, ctx: Sanctum.TestContext.local(), bypass: bypass}
     end
 
-    test "masks resolved secret header values echoed by the upstream" do
-      result = %{
-        "content" => [
-          %{"text" => "debug: got header Bearer sk-super-secret-token from you"}
-        ]
-      }
+    defp call_answering(name, ctx, bypass, headers, text) do
+      Bypass.stub(bypass, "POST", "/mcp", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        request = Jason.decode!(body)
 
-      masked = Server.mask_credentials(result, masking_state())
-      text = masked["content"] |> hd() |> Map.fetch!("text")
+        result =
+          case request["method"] do
+            "tools/list" -> %{"tools" => [%{"name" => "echo", "inputSchema" => %{}}]}
+            "tools/call" -> %{"echo" => text.(Map.new(conn.req_headers))}
+          end
 
-      refute text =~ "sk-super-secret-token"
-      assert text =~ "[REDACTED]"
-    end
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => request["id"], "result" => result})
+        )
+      end)
 
-    test "masks the bare token after a scheme prefix" do
-      masked =
-        Server.mask_credentials(
-          %{"echo" => "token was sk-super-secret-token"},
-          masking_state()
+      pid =
+        start_server(name, ctx.athanor_id,
+          url: "http://127.0.0.1:#{bypass.port}/mcp",
+          headers: headers
         )
 
-      refute masked["echo"] =~ "sk-super-secret-token"
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop(name, ctx.athanor_id) end)
+
+      assert {:ok, %{"echo" => echo}} = Server.call_tool(pid, "echo", %{})
+      echo
     end
 
-    test "masks credential-shaped literal headers but not innocuous ones" do
-      masked =
-        Server.mask_credentials(
-          %{"a" => "literal-credential-value", "b" => "application/json"},
-          masking_state()
+    test "masks resolved secret header values, and the bare token after its scheme", %{
+      name: name,
+      ctx: ctx,
+      bypass: bypass
+    } do
+      {:ok, _} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "mask-token",
+          kind: "api_key",
+          fields: %{"token" => "sk-super-secret-token"},
+          destination: %{"hosts" => ["127.0.0.1"], "scheme" => "http", "port" => bypass.port}
+        })
+
+      echo =
+        call_answering(
+          name,
+          ctx,
+          bypass,
+          %{"authorization" => "Bearer vault:mask-token"},
+          fn headers ->
+            [
+              "debug: got header #{headers["authorization"]} from you",
+              "token was " <> String.replace_prefix(headers["authorization"], "Bearer ", "")
+            ]
+          end
         )
 
-      assert masked["a"] == "[REDACTED]"
-      assert masked["b"] == "application/json"
+      assert echo == ["debug: got header [REDACTED] from you", "token was [REDACTED]"]
     end
 
-    test "masks the literal value of every header Prima names a credential carrier" do
-      names = Prima.Network.credential_headers() ++ ["X-Session-Token", "X-Client-Secret"]
+    test "masks credential-shaped literal headers but not innocuous ones", %{
+      name: name,
+      ctx: ctx,
+      bypass: bypass
+    } do
+      echo =
+        call_answering(
+          name,
+          ctx,
+          bypass,
+          %{"x-custom-key" => "literal-credential-value", "x-trace" => "innocuous-value"},
+          fn headers -> [headers["x-custom-key"], headers["x-trace"]] end
+        )
+
+      assert echo == ["[REDACTED]", "innocuous-value"]
+    end
+
+    test "masks the literal value of every header Prima names a credential carrier", %{
+      name: name,
+      ctx: ctx,
+      bypass: bypass
+    } do
+      names = Prima.Network.credential_headers() ++ ["x-session-token", "x-client-secret"]
       values = Map.new(names, &{&1, "literal-value-of-#{&1}"})
-      state = %{raw_headers: values, headers: values}
 
-      masked = Server.mask_credentials(%{"echo" => Map.values(values)}, state)
-      assert Enum.uniq(masked["echo"]) == ["[REDACTED]"]
+      echo =
+        call_answering(name, ctx, bypass, values, fn headers ->
+          Enum.map(names, &headers[&1])
+        end)
+
+      assert Enum.uniq(echo) == ["[REDACTED]"]
     end
   end
 
@@ -755,11 +864,18 @@ defmodule Emissary.External.ServerTest do
 
       # An entry that is not there refuses the set alike, in the header's
       # own words, with the covered one still unread.
+      missing = name <> "-missing"
+
+      pid =
+        start_server(missing, ctx.athanor_id,
+          url: "https://api.example.com/mcp",
+          headers: %{"a-covered" => "vault:covered-key", "b-missing" => "vault:no-such-key"}
+        )
+
+      on_exit(fn -> Emissary.External.ServerSupervisor.stop(missing, ctx.athanor_id) end)
+
       assert {:error, "Failed to resolve header 'b-missing'"} =
-               Server.resolve_headers(
-                 %{"a-covered" => "vault:covered-key", "b-missing" => "vault:no-such-key"},
-                 {ctx.athanor_id, "https://api.example.com/mcp"}
-               )
+               GenServer.call(pid, :get_tools, 30_000)
 
       assert {:ok, %{last_used_at: nil}} =
                Arca.VaultStorage.get(Sanctum.Context.actor(ctx), covered.id)

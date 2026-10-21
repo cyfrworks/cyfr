@@ -896,10 +896,9 @@ defmodule Emissary.Web.DeviceChannelTest do
 
     test "a stream that declares a refresh answers its current state after the grant, at every open",
          %{session_ctx: session_ctx} do
-      record =
-        Opus.Record.new(%{session_ctx | origin: :interactive}, "reagent:local.test:0.1.0", %{})
-
-      :ok = Opus.Record.write_started(record)
+      interactive = %{session_ctx | origin: :interactive}
+      record = Opus.Record.new(interactive, "reagent:local.test:0.1.0", %{})
+      :ok = Opus.Record.write_started(interactive, record)
       device = pair!(session_ctx)
 
       # A first connection, and the reconnect after it: each open is a new

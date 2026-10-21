@@ -124,14 +124,13 @@ defmodule Prism.Router do
       # Sign-in routes. GitHub/Google sign in by device flow on `/login`;
       # `/auth/:provider` is the OIDC kickoff. Static paths
       # sit above `/:provider` so they cannot be captured as a provider name;
-      # the API's `/auth` paths and the OAuth grant callback are expanded
-      # before this scope by the composition router.
+      # the OAuth grant callback is expanded before this scope by the
+      # composition router.
       scope "/auth", PrismWeb do
         pipe_through [:sign_in_identity, :auth_browser]
 
         # POST, never GET: signing someone out must not be one <img src> away
-        # — the browser pipeline's CSRF token guards the state change. The
-        # API callers' sign-out is `DELETE /auth/logout`, by bearer token.
+        # — the browser pipeline's CSRF token guards the state change.
         post "/logout", AuthController, :browser_logout, metadata: %{auth: :browser_public_auth}
 
         get "/post-legal-accept", AuthController, :post_legal_accept,

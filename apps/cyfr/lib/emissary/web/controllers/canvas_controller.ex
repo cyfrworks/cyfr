@@ -64,13 +64,12 @@ defmodule Emissary.Web.CanvasController do
                ~s(</script></head><body><script type="application/json" id="cyfr-toolkit-worker">) <>
                @worker_data <> "</script></body></html>"
 
-  @doc false
   # Whether `source` may be inlined as the page's script: it holds no
   # `</script`, in any ASCII case as the HTML parser matches it, which would
   # end the element early, and no `<!--`, which would change how the parser
   # reads the rest of it.
   @spec page_safe?(String.t()) :: boolean()
-  def page_safe?(source) when is_binary(source),
+  defp page_safe?(source) when is_binary(source),
     do: not String.contains?(String.downcase(source, :ascii), ["</script", "<!--"])
 
   @doc false

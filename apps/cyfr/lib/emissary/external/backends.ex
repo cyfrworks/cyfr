@@ -297,15 +297,6 @@ defmodule Emissary.External.Backends do
   def status(athanor_id, server_id),
     do: call({:status, {athanor_id, server_id}}, 2 * @control_timeout_ms)
 
-  @doc false
-  # The bounds a status is asked and read within: the wire's.
-  @spec status_bounds() :: %{owners: pos_integer(), bytes: pos_integer()}
-  def status_bounds,
-    do: %{
-      owners: LocusBackends.max_status_owners(),
-      bytes: LocusBackends.max_status_answer_bytes()
-    }
-
   @doc """
   Release, at once and without reading the store, every live owner of the
   athanor whose env templates reference one of `names` (`:any`: any entry),

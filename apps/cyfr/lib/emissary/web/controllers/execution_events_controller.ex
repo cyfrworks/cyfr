@@ -278,9 +278,8 @@ defmodule Emissary.Web.ExecutionEventsController do
     end
   end
 
-  @doc false
   @spec parse_cursor(String.t()) :: {non_neg_integer(), non_neg_integer()}
-  def parse_cursor(value) when is_binary(value) do
+  defp parse_cursor(value) when is_binary(value) do
     case String.split(value, ".", parts: 2) do
       [durable] -> {parse_int(durable), 0}
       [durable, n] -> {parse_int(durable), parse_int(n)}

@@ -199,10 +199,11 @@ defmodule Emissary.External.BackendDefinitionTest do
     end
   end
 
-  # The keeper's vectors and the backends wire's hold the list the keeper
-  # and the backends service refuse, so a backend CYFR accepts is one
-  # neither of them refuses for its names.
-  test "the reserved names and prefixes are the keeper's and the backends wire's vectors'" do
+  # The keeper's vectors and the backends wire's hold the prefixes the
+  # keeper and the backends service refuse, and the wire's the names the
+  # service lets hold a literal, so a backend CYFR accepts is one neither
+  # of them refuses for its env.
+  test "the reserved prefixes and the literal names are the keeper's and the backends wire's vectors'" do
     vectors = fn name ->
       Path.expand("../../../../../tests/fixtures/#{name}", __DIR__)
       |> File.read!()
@@ -212,12 +213,12 @@ defmodule Emissary.External.BackendDefinitionTest do
     keeper = vectors.("keeper_protocol.json")
     wire = vectors.("locus_backends.json")
 
-    assert [_ | _] = keeper["reserved_env_prefixes"]
-    assert BackendDefinition.reserved_prefixes() == keeper["reserved_env_prefixes"]
-    assert BackendDefinition.reserved_prefixes() == wire["reserved_env_prefixes"]
-    assert BackendDefinition.literal_names() == wire["literal_env_names"]
+    assert [_ | _] = prefixes = keeper["reserved_env_prefixes"]
+    assert wire["reserved_env_prefixes"] == prefixes
+    assert Prima.LocusBackends.reserved_env_prefixes() == prefixes
+    assert Prima.LocusBackends.literal_env_names() == wire["literal_env_names"]
 
-    for name <- Prima.LocusBackends.reserved_env_names() do
+    for name <- Prima.LocusBackends.reserved_env_names() ++ Enum.map(prefixes, &(&1 <> "TOKEN")) do
       assert refused([backend(%{"env" => %{name => "vault:x"}})]) =~ "reserved"
     end
   end
@@ -233,7 +234,7 @@ defmodule Emissary.External.BackendDefinitionTest do
 
     assert refused([backend(%{"env" => %{"API_KEY" => 42}})]) =~ "string value"
 
-    for name <- BackendDefinition.literal_names() do
+    for name <- Prima.LocusBackends.literal_env_names() do
       assert {:ok, _} = BackendDefinition.validate([backend(%{"env" => %{name => "1"}})])
     end
   end

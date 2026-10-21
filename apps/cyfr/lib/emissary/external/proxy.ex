@@ -166,7 +166,8 @@ defmodule Emissary.External.Proxy do
 
   @doc """
   Invalidate the cached external tools list for the given tenant.
-  Called after add, delete, enable, disable, and refresh operations.
+  Called after a server is created, updated, deleted, enabled, disabled,
+  refreshed or restarted, and when its tool catalogue changes.
   """
   @spec invalidate_external_tools_cache(Context.t()) :: :ok
   def invalidate_external_tools_cache(%Context{} = ctx) do

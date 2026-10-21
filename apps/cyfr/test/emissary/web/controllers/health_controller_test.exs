@@ -41,13 +41,6 @@ defmodule Emissary.Web.HealthControllerTest do
       assert response["checks"]["resource_registry"] == "ok"
     end
 
-    test "the write probe's root is a real global root" do
-      # The controller owns the probe spelling (probe_dir/0 — the sweep
-      # consumes it); this pins its root to the roster so a renamed row
-      # cannot leave the probe writing into a refused root.
-      assert hd(Emissary.Web.HealthController.probe_dir()) in Arca.Storage.global_prefixes()
-    end
-
     test "an empty but reachable database is still ready", %{conn: conn} do
       # A freshly migrated node has a schema and no rows. The probe asks
       # the database for a value it computes itself, so "nothing stored
@@ -166,10 +159,10 @@ defmodule Emissary.Web.HealthControllerTest do
     end
 
     test "a stranded probe key is overwritten, not accumulated", %{conn: conn} do
-      # The probe writes ONE fixed key and deletes it — a past failed
-      # delete strands at most one object, reclaimed by the next probe's
-      # overwrite (the retention sweep is the belt for legacy strays).
-      # Bust the result cache so this request runs a real probe.
+      # The probe writes ONE fixed key under the global `system/` root and
+      # deletes it: a failed delete strands at most one object, which the
+      # next probe's write overwrites. Bust the result cache so this
+      # request runs a real probe.
       Arca.Cache.invalidate({Emissary.Web.HealthController, :ready_cache})
 
       ctx = Sanctum.internal_context(user_id: "_test", permissions: [:storage_write])
@@ -177,7 +170,7 @@ defmodule Emissary.Web.HealthControllerTest do
       :ok =
         Arca.put(
           Sanctum.Context.actor(ctx),
-          Emissary.Web.HealthController.probe_dir() ++ [".write_probe"],
+          ["system", "health", ".write_probe"],
           "stranded"
         )
 
@@ -185,10 +178,7 @@ defmodule Emissary.Web.HealthControllerTest do
       assert json_response(conn, 200)["checks"]["storage"] == "ok"
 
       assert {:ok, []} =
-               Arca.list_typed(
-                 Sanctum.Context.actor(ctx),
-                 Emissary.Web.HealthController.probe_dir()
-               )
+               Arca.list_typed(Sanctum.Context.actor(ctx), ["system", "health"])
     end
   end
 end

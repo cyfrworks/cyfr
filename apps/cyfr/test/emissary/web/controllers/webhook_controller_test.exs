@@ -219,8 +219,7 @@ defmodule Emissary.Web.WebhookControllerTest do
       conn = post_signed(conn, slug, secret, body, "x-hub-signature-256")
 
       # Signature OK → controller accepts and dispatches async → 200 accepted.
-      # (Pre-async: this would hit the controller and return 500 on missing
-      # component; now the missing-component error surfaces via telemetry.)
+      # A missing component is the run's refusal, reported by telemetry.
       assert conn.status == 200
       response = json_response(conn, 200)
       assert response["status"] == "accepted"
@@ -601,8 +600,8 @@ defmodule Emissary.Web.WebhookControllerTest do
       %{slug: slug, secret: secret} = create_hook!(ctx, "no-engine")
 
       previous = Application.get_env(:cyfr, :locus_runtime_workers)
-      Application.put_env(:cyfr, :locus_runtime_workers, [])
       on_exit(fn -> Application.put_env(:cyfr, :locus_runtime_workers, previous) end)
+      Application.put_env(:cyfr, :locus_runtime_workers, [])
 
       conn = post_signed(conn, slug, secret, ~s({"event":"x"}))
       assert conn.status == 503

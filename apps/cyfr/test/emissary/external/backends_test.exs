@@ -43,7 +43,6 @@ defmodule Emissary.External.BackendsTest do
   @root :crypto.strong_rand_bytes(32)
   @secret "ghp_backends-test-secret-0123456789"
   @generation_key {Arca.ControlPlane, :generation}
-  @project_root Path.expand("../../../../..", __DIR__)
   # A member of the cell that is not this one. Every claim assertion below
   # reads the one row of a freshly inserted server id, so it measures this
   # test's own delta on a key nothing else in the suite writes.
@@ -1192,7 +1191,7 @@ defmodule Emissary.External.BackendsTest do
                Backends.status(ctx.athanor_id, row.id)
 
       assert_receive {:control, "status", %{"owners" => owners}, _fields}, 2_000
-      assert length(owners) <= Backends.status_bounds().owners
+      assert length(owners) <= LocusBackends.max_status_owners()
     end
 
     test "each refusal of the service is its typed result, and a service that cannot be reached is unavailable",
@@ -1219,11 +1218,25 @@ defmodule Emissary.External.BackendsTest do
       start_controller(fake)
       row = stdio_row(ctx, "verbose", %{"NODE_ENV" => "production"})
       connect(ctx, row)
-      Scripted.set(fake, :stderr_bytes, Backends.status_bounds().bytes + 1)
+      Scripted.set(fake, :stderr_bytes, LocusBackends.max_status_answer_bytes() + 1)
       assert {:error, :status_too_large} = Backends.status(ctx.athanor_id, row.id)
 
       Scripted.set(fake, :stderr_bytes, 0)
       assert {:ok, %{"e" => 1}} = Backends.status(ctx.athanor_id, row.id)
+    end
+
+    # The controller asks a status for at most `max_status_owners/0` owners
+    # and reads its answer no further than `max_status_answer_bytes/0`
+    # (`Prima.LocusBackends`): the bounds the service keeps.
+    test "the bounds a status is asked and read within are the wire's, as its vector file states them" do
+      bounds =
+        Path.expand("../../../../../tests/fixtures/locus_backends.json", __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+        |> Map.fetch!("bounds")
+
+      assert LocusBackends.max_status_owners() == bounds["max_status_owners"]
+      assert LocusBackends.max_status_answer_bytes() == bounds["max_status_answer_bytes"]
     end
 
     test "a refused signature, and a refusal or an answer at another protocol version, are their own typed results",
@@ -1247,18 +1260,6 @@ defmodule Emissary.External.BackendsTest do
       assert {:error, {:backends_status, 409}} = Backends.status(ctx.athanor_id, row.id)
 
       assert {:ok, %{"e" => 1}} = Backends.status(ctx.athanor_id, row.id)
-    end
-
-    test "the bounds the controller keeps are the wire's, as its vector file states them" do
-      vectors =
-        Path.join(@project_root, "tests/fixtures/locus_backends.json")
-        |> File.read!()
-        |> Jason.decode!()
-
-      assert Backends.status_bounds() == %{
-               owners: vectors["bounds"]["max_status_owners"],
-               bytes: vectors["bounds"]["max_status_answer_bytes"]
-             }
     end
   end
 

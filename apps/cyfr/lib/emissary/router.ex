@@ -3,10 +3,9 @@
 
 defmodule Emissary.Router do
   @moduledoc """
-  Emissary's routes, with the pipelines they pass through: MCP, the HTTP
-  API's sign-out and session read, the vault's OAuth grant callback,
-  tincture serving, a canvas's host page and the tincture data routes
-  (a canvas's among them), health, the
+  Emissary's routes, with the pipelines they pass through: MCP, the
+  vault's OAuth grant callback, tincture serving, a canvas's host page and
+  the tincture data routes (a canvas's among them), health, the
   execution-events stream, inbound webhooks, the identity directory, a
   certified device's renewal and the restore ingress.
 
@@ -51,17 +50,6 @@ defmodule Emissary.Router do
         plug CyfrWeb.Plugs.ApiSecurityHeaders
       end
 
-      # Client-driven auth-API endpoints (logout, whoami) self-gate in the
-      # controller (401/400 without a token) but were otherwise unmetered — a
-      # session-token brute-force / Session.get amplification surface. The
-      # IdP-driven callbacks stay unthrottled (shared-NAT corporate IPs).
-      pipeline :auth_api_throttle do
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :auth_api,
-          max_requests: 30,
-          window_ms: 60_000
-      end
-
       # Authenticated HTTP routes use the shared context resolver with API
       # error rendering and a separate rate-limit bucket.
       pipeline :authenticated_api do
@@ -82,8 +70,8 @@ defmodule Emissary.Router do
       CyfrWeb.Pipelines.oauth_callback_throttle()
 
       # The OAuth grant callback serves a BROWSER page (CyfrWeb.MinimalPage,
-      # no session) — `:api`'s `accepts ["json"]` 406'd any client that sent a
-      # strict `Accept: text/html`, which is what a browser redirect carries.
+      # no session), so it accepts `text/html`, which is what a browser
+      # redirect carries; `:api`'s `accepts ["json"]` would refuse it 406.
       #
       # It completes a `vault.authorize` the gate admitted, under the state
       # that admission left, and records its own refusals: an admission
@@ -112,7 +100,7 @@ defmodule Emissary.Router do
         plug CyfrWeb.Plugs.TinctureRateLimit,
           bucket: :page,
           max_requests: 60,
-          window_ms: CyfrWeb.Plugs.TinctureRateLimit.default_window_ms()
+          window_ms: Cyfr.RuntimeConfig.tincture_rate_window_ms()
       end
 
       # The tincture data routes (`Prima.TinctureWire`): a frame's invoke,
@@ -138,8 +126,8 @@ defmodule Emissary.Router do
         # holds, answered in the wire's own refusal shape.
         plug CyfrWeb.Plugs.TinctureRateLimit,
           bucket: :invoke,
-          max_requests: CyfrWeb.Plugs.TinctureRateLimit.default_invoke_max(),
-          window_ms: CyfrWeb.Plugs.TinctureRateLimit.default_window_ms(),
+          max_requests: Cyfr.RuntimeConfig.tincture_default_invoke_max(),
+          window_ms: Cyfr.RuntimeConfig.tincture_rate_window_ms(),
           errors: Emissary.Web.TinctureDataController
       end
 
@@ -151,7 +139,7 @@ defmodule Emissary.Router do
         plug CyfrWeb.Plugs.TinctureRateLimit,
           bucket: :asset,
           max_requests: 300,
-          window_ms: CyfrWeb.Plugs.TinctureRateLimit.default_window_ms()
+          window_ms: Cyfr.RuntimeConfig.tincture_rate_window_ms()
       end
 
       # Anonymous and internet-reachable behind the tls proxy, and /ready does
@@ -236,16 +224,6 @@ defmodule Emissary.Router do
         post "/", MCPController, :handle, metadata: %{auth: :authenticate_plug}
         get "/", MCPController, :method_not_allowed, metadata: %{auth: :authenticate_plug}
         delete "/", MCPController, :method_not_allowed, metadata: %{auth: :authenticate_plug}
-      end
-
-      # Auth API routes (logout, whoami). The composition router expands these
-      # before the browser's `/auth/:provider` wildcard, so neither path is
-      # captured as a provider name.
-      scope "/auth", Emissary.Web do
-        pipe_through [:api, :auth_api_throttle]
-
-        delete "/logout", SessionController, :logout, metadata: %{auth: :handler_auth}
-        get "/whoami", SessionController, :whoami, metadata: %{auth: :handler_auth}
       end
 
       # OAuth callback for catalyst OAuth providers (not user auth). Expanded

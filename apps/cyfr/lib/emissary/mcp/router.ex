@@ -37,8 +37,8 @@ defmodule Emissary.MCP.Router do
   The anonymous surface — which tool actions a caller with no credential may
   reach — is the set of actions annotated `auth: :anonymous`, read through
   `Sanctum.Visibility`, which also decides what such a caller may
-  *see*. Discovery and invocation read one declaration: when each held its
-  own list, discovery advertised writes that invocation refused.
+  *see*. Discovery and invocation read one declaration, so discovery
+  advertises no action that invocation refuses.
 
   ## Resource Methods
 
@@ -218,7 +218,7 @@ defmodule Emissary.MCP.Router do
   # ============================================================================
   # Resource Methods
   # The lists are unauthenticated metadata; a read is admitted by the
-  # declared operation's gate (`read_resource/3`).
+  # declared operation's gate (`read_resource/2`).
   # ============================================================================
 
   defp dispatch_method(_ctx, "resources/list", params, _id) do
@@ -232,10 +232,10 @@ defmodule Emissary.MCP.Router do
   end
 
   # Require a nonempty URI string; reject other values as invalid_params.
-  defp dispatch_method(ctx, "resources/read", params, id) do
+  defp dispatch_method(ctx, "resources/read", params, _id) do
     case params do
       %{"uri" => uri} when is_binary(uri) and uri != "" ->
-        read_resource(ctx, uri, id)
+        read_resource(ctx, uri)
 
       %{"uri" => _} ->
         refused(
@@ -307,7 +307,7 @@ defmodule Emissary.MCP.Router do
   defp input_action(%{"action" => action}) when is_binary(action), do: action
   defp input_action(_input), do: nil
 
-  defp read_resource(ctx, uri, _id) do
+  defp read_resource(ctx, uri) do
     read =
       with {:ok, tool, action} <- Sanctum.Resources.resolve(uri) do
         Sanctum.Gate.call_external(tool, ctx, %{"action" => action, "uri" => uri},
@@ -438,15 +438,21 @@ defmodule Emissary.MCP.Router do
   end
 
   @default_page_size 50
-  # Defense-in-depth ceiling on a client-supplied cursor offset. Not a real
-  # overflow risk (Elixir ints are arbitrary-precision and a too-large offset
-  # just yields an empty page), but it bounds any pathological value up front.
+  # The largest offset a cursor may name. A listing this server answers is
+  # far shorter, so a larger one is no cursor it issued.
   @max_cursor_offset 1_000_000
 
+  # A cursor is one this server issued (`encode_cursor/1`): anything else
+  # is refused `-32602`, as the specification asks of an invalid cursor,
+  # never read as the first page.
   defp paginate(items, key, params) do
-    cursor = is_map(params) && params["cursor"]
-    offset = decode_cursor(cursor)
+    case decode_cursor(if(is_map(params), do: params["cursor"])) do
+      {:ok, offset} -> {:ok, page(items, key, offset)}
+      :error -> {:error, :invalid_params, "Invalid cursor"}
+    end
+  end
 
+  defp page(items, key, offset) do
     page = Enum.slice(items, offset, @default_page_size)
     next_offset = offset + length(page)
 
@@ -462,34 +468,28 @@ defmodule Emissary.MCP.Router do
     # Every page carries its own hints; the specification treats each page as an
     # independently cacheable response with its own freshness clock, and requires
     # one scope across all pages of a list.
-    {:ok, cacheable(result, @catalogue_ttl_ms, @catalogue_scope)}
+    cacheable(result, @catalogue_ttl_ms, @catalogue_scope)
   end
 
-  defp decode_cursor(nil), do: 0
-  defp decode_cursor(false), do: 0
+  defp decode_cursor(nil), do: {:ok, 0}
 
   defp decode_cursor(cursor) when is_binary(cursor) do
-    case Base.url_decode64(cursor, padding: false) do
-      {:ok, raw} ->
-        case Integer.parse(raw) do
-          {offset, ""} when offset >= 0 -> min(offset, @max_cursor_offset)
-          _ -> 0
-        end
-
-      :error ->
-        0
+    with {:ok, raw} <- Base.url_decode64(cursor, padding: false),
+         {offset, ""} when offset in 0..@max_cursor_offset <- Integer.parse(raw) do
+      {:ok, offset}
+    else
+      _ -> :error
     end
   end
+
+  defp decode_cursor(_cursor), do: :error
 
   defp encode_cursor(offset) do
     Base.url_encode64(Integer.to_string(offset), padding: false)
   end
 
-  # `tools/list` took an extra `component_ref` parameter that returned the
-  # in-chain view of the catalogue. It is gone: the specification defines
-  # `cursor` as the only parameter, and nothing in this repository — no client,
-  # no guide, no test — ever sent it. The view it produced is still reachable
-  # where it is actually used, through the `tools` tool
-  # (`Sanctum.Providers.System`), which is how a running component
-  # discovers what it may call.
+  # `tools/list` takes `cursor` alone, as the specification defines it. A
+  # running component discovers what it may call through the `tools` tool
+  # (`Sanctum.Providers.System`), which answers the in-chain view of the
+  # catalogue.
 end

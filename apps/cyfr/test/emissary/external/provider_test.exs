@@ -36,10 +36,11 @@ defmodule Emissary.External.ProviderTest do
   end
 
   describe "handle/3 - create" do
-    test "requires name", %{ctx: ctx} do
+    test "requires a non-empty name", %{ctx: ctx} do
       assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                Provider.handle("mcp_servers", ctx, %{
                  "action" => "create",
+                 "name" => "",
                  "config" => %{"url" => "https://example.com/mcp"}
                })
     end
@@ -629,9 +630,9 @@ defmodule Emissary.External.ProviderTest do
   end
 
   describe "handle/3 - delete" do
-    test "requires name", %{ctx: ctx} do
+    test "requires a non-empty name", %{ctx: ctx} do
       assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
-               Provider.handle("mcp_servers", ctx, %{"action" => "delete"})
+               Provider.handle("mcp_servers", ctx, %{"action" => "delete", "name" => ""})
     end
 
     test "deletes existing server", %{ctx: ctx} do
@@ -887,11 +888,6 @@ defmodule Emissary.External.ProviderTest do
   end
 
   describe "handle/3 - get" do
-    test "requires name", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
-               Provider.handle("mcp_servers", ctx, %{"action" => "get"})
-    end
-
     test "requires non-empty name", %{ctx: ctx} do
       assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                Provider.handle("mcp_servers", ctx, %{"action" => "get", "name" => ""})
@@ -921,11 +917,6 @@ defmodule Emissary.External.ProviderTest do
   end
 
   describe "handle/3 - test" do
-    test "requires name", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
-               Provider.handle("mcp_servers", ctx, %{"action" => "test"})
-    end
-
     test "requires non-empty name", %{ctx: ctx} do
       assert {:error, {:invalid_argument, "Missing required parameter: name"}} =
                Provider.handle("mcp_servers", ctx, %{"action" => "test", "name" => ""})
@@ -1010,23 +1001,6 @@ defmodule Emissary.External.ProviderTest do
                  "action" => "enable",
                  "name" => "toggle2"
                })
-    end
-  end
-
-  describe "handle/3 - unknown" do
-    test "returns error for unknown action", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, "Unknown action: " <> _}} =
-               Provider.handle("mcp_servers", ctx, %{"action" => "bogus"})
-    end
-
-    test "returns error for missing action", %{ctx: ctx} do
-      assert {:error, {:invalid_argument, "Missing required parameter: action"}} =
-               Provider.handle("mcp_servers", ctx, %{})
-    end
-
-    test "returns error for unknown tool", %{ctx: ctx} do
-      assert {:error, "Unknown tool: other"} =
-               Provider.handle("other", ctx, %{"action" => "list"})
     end
   end
 

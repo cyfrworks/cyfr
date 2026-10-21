@@ -229,8 +229,12 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
   # ============================================================================
 
   describe "agent virtual tools" do
-    test "the second audit arm passes" do
-      assert Hands.audit_planes() == :ok
+    test "every virtual action declares a kind" do
+      for {tool, %{actions: actions}} <- Hands.catalog(),
+          {action, annotation} <- actions do
+        kind = Map.get(annotation, :kind)
+        assert is_atom(kind) and not is_nil(kind), "#{tool}.#{action} declares no kind"
+      end
     end
 
     test "every virtual action is in-chain only" do

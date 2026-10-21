@@ -36,7 +36,7 @@ defmodule Emissary.External.Servers do
   """
   @spec server_config(map(), Context.t()) :: keyword()
   def server_config(%{id: id, name: name, url: url} = server, %Context{} = ctx) do
-    config = config_map(server)
+    config = Arca.McpServerStorage.config(server)
 
     [
       id: id,
@@ -67,19 +67,6 @@ defmodule Emissary.External.Servers do
     case Emissary.External.ServerSupervisor.ensure_started(server_config(server, ctx)) do
       {:ok, _pid} -> Emissary.External.Server.get_tools(server.name, ctx.athanor_id)
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
-  The config map of either a stored server row (`Arca.McpServerStorage`; decode its
-  raw `config_json`) or a freshly-built `%{config: map}` — the create path,
-  which already holds the parsed config and has no column to read.
-  """
-  @spec config_map(map()) :: map()
-  def config_map(server) do
-    case Map.get(server, :config) do
-      config when is_map(config) -> config
-      _ -> Arca.McpServerStorage.config(server)
     end
   end
 end

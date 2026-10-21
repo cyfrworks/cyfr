@@ -25,7 +25,7 @@ defmodule Emissary.Web.Plugs.MCPRequestMetadata do
   ## A confirmation's repeat
 
   A `tools/call` repeats a sensitive change under
-  `params._meta["cyfr/confirmationId"]` (`confirmation_id_key/0`), whose value
+  `params._meta["cyfr/confirmationId"]`, whose value
   is the secret id the `confirmation_required` signal answered. The secret
   rides the request metadata because no request-log row records it; its key
   is in the redaction vocabulary (`Prima.Sanitizer`), so no log line does
@@ -42,10 +42,6 @@ defmodule Emissary.Web.Plugs.MCPRequestMetadata do
   alias Prima.MCP.Protocol
 
   @confirmation_id_key "cyfr/confirmationId"
-
-  @doc "The request metadata key a `tools/call` repeats a sensitive change under."
-  @spec confirmation_id_key() :: String.t()
-  def confirmation_id_key, do: @confirmation_id_key
 
   def init(opts), do: opts
 

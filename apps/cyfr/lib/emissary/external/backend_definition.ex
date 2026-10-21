@@ -11,8 +11,8 @@ defmodule Emissary.External.BackendDefinition do
       [%{"name" => "github", "command" => "npx -y @modelcontextprotocol/server-github",
          "env" => %{"GITHUB_PERSONAL_ACCESS_TOKEN" => "vault:gh-token"}}]
 
-  `validate/1` accepts a list of at most `max_backends/0` backends
-  (`:max_backends_per_server`, default 4) and answers it normalized, or
+  `validate/1` accepts a list of at most `max_backends/0` backends (4)
+  and answers it normalized, or
   `{:error, {:invalid_argument, message}}`:
 
     * a name matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique;
@@ -23,12 +23,13 @@ defmodule Emissary.External.BackendDefinition do
     * an env name matches `^[A-Z_][A-Z0-9_]{0,63}$` and is none of the
       wire's reserved names (`Prima.LocusBackends.reserved_env_names/0`:
       `PATH HOME USER LOGNAME SHELL TMPDIR PWD`), nor prefixed with one of
-      `reserved_prefixes/0` (`CYFR_`, `LOCUS_`, `KEEPER_`) — the keeper sets
-      the names, and the prefixes are CYFR's, Locus's and the keeper's, the
-      list the keeper and the service refuse too;
+      `Prima.LocusBackends.reserved_env_prefixes/0` (`CYFR_`, `LOCUS_`,
+      `KEEPER_`) — the keeper sets the names, and the prefixes are CYFR's,
+      Locus's and the keeper's, the list the keeper and the service refuse
+      too;
     * an env value is a vault template (`Prima.VaultRef`); only the
-      non-secret names in `literal_names/0` may hold a literal, of at most
-      4096 bytes, instead.
+      non-secret names in `Prima.LocusBackends.literal_env_names/0` may
+      hold a literal, of at most 4096 bytes, instead.
 
   `warnings/1` answers what a definition does that the administrator may
   choose but is told of, one sentence each: a command that holds one of
@@ -46,21 +47,14 @@ defmodule Emissary.External.BackendDefinition do
   @name ~r/\A[a-z0-9][a-z0-9-]{0,31}\z/
   @env_name ~r/\A[A-Z_][A-Z0-9_]{0,63}\z/
   @max_literal_bytes 4096
+  @max_backends 4
 
   @typedoc "One validated backend."
   @type backend :: %{String.t() => String.t() | %{String.t() => String.t()}}
 
-  @doc "The most backends one server may define (`:max_backends_per_server`)."
+  @doc "The most backends one server may define."
   @spec max_backends() :: pos_integer()
-  def max_backends, do: Application.get_env(:cyfr, :max_backends_per_server, 4)
-
-  @doc "The env names that may hold a literal value: the wire's (`Prima.LocusBackends`)."
-  @spec literal_names() :: [String.t()]
-  def literal_names, do: LocusBackends.literal_env_names()
-
-  @doc "The prefixes no env name may carry: the wire's (`Prima.LocusBackends`)."
-  @spec reserved_prefixes() :: [String.t()]
-  def reserved_prefixes, do: LocusBackends.reserved_env_prefixes()
+  def max_backends, do: @max_backends
 
   @doc "Validate and normalize a stdio server's backends."
   @spec validate(term()) :: {:ok, [backend()]} | {:error, {:invalid_argument, String.t()}}
@@ -223,7 +217,7 @@ defmodule Emissary.External.BackendDefinition do
         )
 
       key in LocusBackends.reserved_env_names() or
-          String.starts_with?(key, reserved_prefixes()) ->
+          String.starts_with?(key, LocusBackends.reserved_env_prefixes()) ->
         invalid("Backend '#{backend}' env name #{key} is reserved")
 
       VaultRef.unresolved_ref?(value) ->
@@ -235,10 +229,10 @@ defmodule Emissary.External.BackendDefinition do
       VaultRef.vault_ref?(value) ->
         {:ok, {key, value}}
 
-      key not in literal_names() ->
+      key not in LocusBackends.literal_env_names() ->
         invalid(
           "Backend '#{backend}' env #{key} must reference a vault entry (\"vault:ENTRY\"); " <>
-            "only #{Enum.join(literal_names(), ", ")} may hold a literal"
+            "only #{Enum.join(LocusBackends.literal_env_names(), ", ")} may hold a literal"
         )
 
       byte_size(value) > @max_literal_bytes or String.contains?(value, <<0>>) ->

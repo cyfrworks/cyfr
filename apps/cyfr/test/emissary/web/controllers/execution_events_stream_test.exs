@@ -79,11 +79,15 @@ defmodule Emissary.Web.ExecutionEventsStreamTest do
     )
   end
 
-  test "the cursor is <durable> or <durable>.<n>" do
-    assert ExecutionEventsController.parse_cursor("40") == {40, 0}
-    assert ExecutionEventsController.parse_cursor("40.10") == {40, 10}
-    assert ExecutionEventsController.parse_cursor("junk") == {0, 0}
-    assert ExecutionEventsController.parse_cursor("-1.2") == {0, 2}
+  test "a Last-Event-ID that names no event delivered resumes from the start",
+       %{conn: conn, exec: exec} do
+    two = durable!(exec, "execution.completed", %{"status" => "completed"})
+    publish!(exec, "execution.completed", two)
+
+    for cursor <- ["junk", "-1.2", "", "x.y"] do
+      assert ids(stream(conn, exec, [{"last-event-id", cursor}]).resp_body) == ["1", "2"],
+             inspect(cursor)
+    end
   end
 
   test "replay is the rows in order, each with its deltas, and Last-Event-ID resumes from either",

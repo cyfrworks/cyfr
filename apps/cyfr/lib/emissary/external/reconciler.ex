@@ -49,7 +49,7 @@ defmodule Emissary.External.Reconciler do
   every live server process on this member
   (`Emissary.External.ServerSupervisor.live/0`), rereads the revision
   tokens of the entries it resolved against
-  (`Emissary.External.Server.vault_revisions/2`,
+  (`Emissary.External.Server.vault_revisions/1`,
   `Sanctum.VaultReader.revisions/2`: the payload revision and the binding
   digest) and restarts, as above, any whose token moved — a rotation or a
   rebind — or whose entry is no longer active. A lost signal of any
@@ -63,10 +63,6 @@ defmodule Emissary.External.Reconciler do
   alias Cyfr.Bus.{AthanorArchived, VaultEntryChanged}
 
   @relevant_verbs [:rotate, :rebind, :revoke, :delete, :rename]
-
-  @doc "The vault verbs this reconciler acts on."
-  @spec relevant_verbs() :: [atom()]
-  def relevant_verbs, do: @relevant_verbs
 
   # A reconcile that raises or hits a transient storage error is retried
   # instead of being dropped: a swallowed failure leaves a revoked credential
@@ -250,12 +246,11 @@ defmodule Emissary.External.Reconciler do
 
   defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
 
-  @doc false
   # The revision pass, one athanor at a time. A server that is not
   # connected resolved nothing and is skipped; an athanor whose revisions
   # or rows cannot be read is left for the next pass, counted.
   @spec sweep_revisions() :: :ok
-  def sweep_revisions do
+  defp sweep_revisions do
     Emissary.External.ServerSupervisor.live()
     |> Enum.flat_map(fn {name, athanor_id, pid} ->
       case Emissary.External.Server.vault_revisions(pid) do

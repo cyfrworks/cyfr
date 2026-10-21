@@ -119,13 +119,11 @@ defmodule Emissary.Web.HealthController do
     end
   end
 
-  @doc "The readiness probe's directory under the `system/` global root."
-  @spec probe_dir() :: [String.t()]
-  def probe_dir, do: ["system", "health"]
+  # The readiness probe's directory under the `system/` global root.
+  @probe_dir ["system", "health"]
 
   # Round-trips a tiny write through Arca so a full disk, a read-only volume,
-  # or broken object-store credentials flip readiness — the boot-time raw-File
-  # probe in Cyfr.Application only covers first start, not runtime decay.
+  # or broken object-store credentials flip readiness while the node runs.
   defp check_storage do
     ctx =
       Sanctum.internal_context(
@@ -134,13 +132,14 @@ defmodule Emissary.Web.HealthController do
       )
 
     # ONE fixed key: the put overwrites whatever a past failed delete
-    # stranded, so the probe self-cleans without ever listing or sweeping
-    # the directory (this endpoint is unauthenticated — on an object store
-    # a per-probe sweep was a billable LIST + batch DELETE per cache
-    # window). Concurrent probes racing on the shared key are covered by
-    # the `:not_found` arm below. "system" is in
-    # `Arca.Storage.global_prefixes/0` — witnessed in the controller test.
-    path = probe_dir() ++ [".write_probe"]
+    # stranded, so the probe self-cleans without listing or sweeping the
+    # directory, which on an object store would be a billable LIST and
+    # batch DELETE per cache window of an unauthenticated endpoint.
+    # Concurrent probes racing on the shared key are covered by the
+    # `:not_found` arm below. "system" is in
+    # `Arca.Storage.global_prefixes/0`, the one kind of root the probe's
+    # system actor may write.
+    path = @probe_dir ++ [".write_probe"]
 
     with :ok <-
            Arca.put(
