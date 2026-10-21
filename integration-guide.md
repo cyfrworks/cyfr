@@ -150,16 +150,6 @@ Each key type has default scopes (applied when none are specified) and a ceiling
 | **Service** | `["execute", "vault_read", "component_read", "storage_read", "storage_write"]` | `["execute", "vault_read", "component_read", "component_manage", "storage_read", "storage_write"]` |
 | **Admin** | `["*"]` (all) | `["vault_read", "admin", "*"]` |
 
-### Rate Limiting
-
-API keys can have per-key rate limits:
-
-```bash
-cyfr key create --name "rate-limited" --type application --scope execute --rate-limit "100/1m"
-```
-
-Rate limit format: `{count}/{window}` where window is `1m`, `5m`, `1h`, etc.
-
 ### IP Allowlist
 
 Restrict which IPs can use a key (recommended for admin keys):
