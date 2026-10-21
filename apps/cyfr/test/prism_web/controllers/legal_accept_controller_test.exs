@@ -82,10 +82,9 @@ defmodule PrismWeb.LegalAcceptControllerTest do
     assert response(conn, 400) =~ "Login session expired"
   end
 
-  # `policies=""` made `Enum.all?([], …)` vacuously true, so a submission
-  # that ticked nothing at all was accepted and sent on to be recorded.
-  # cyfr.run enforces that a version was accepted, not that this person was
-  # shown each policy in it — that half is ours to hold.
+  # An empty roster acknowledges nothing, so it is refused rather than
+  # vacuously satisfied. cyfr.run enforces that a version was accepted, not
+  # that this person was shown each policy in it — that half is ours to hold.
   test "POST naming no policies at all is refused, not vacuously accepted", %{conn: conn} do
     conn = log_in_user(conn, test_user())
 
@@ -95,6 +94,21 @@ defmodule PrismWeb.LegalAcceptControllerTest do
         ] do
       refused = post(conn, "/legal/accept/submit", params)
       assert response(refused, 400) =~ "All policy checkboxes must be ticked"
+    end
+  end
+
+  test "POST whose policies field is not one text field is refused", %{conn: conn} do
+    conn = log_in_user(conn, test_user())
+
+    for policies <- [["terms"], %{"0" => "terms"}] do
+      refused =
+        post(conn, "/legal/accept/submit", %{
+          "policy_version" => "v3",
+          "policies" => policies,
+          "ack_terms" => "on"
+        })
+
+      assert response(refused, 400) =~ "policies must be a comma-separated list of policy names"
     end
   end
 

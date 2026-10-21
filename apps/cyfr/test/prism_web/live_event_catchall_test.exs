@@ -17,6 +17,8 @@ defmodule PrismWeb.LiveEventCatchallTest do
   import ExUnit.CaptureLog
 
   defp live_modules do
+    compiled = Map.new(Application.spec(:cyfr, :modules), &{inspect(&1), &1})
+
     Prima.Test.SourceTree.files!(Path.join(__DIR__, "../../lib/prism_web/**/*.ex"))
     |> Enum.filter(fn path ->
       source = File.read!(path)
@@ -26,7 +28,7 @@ defmodule PrismWeb.LiveEventCatchallTest do
     end)
     |> Enum.map(fn path ->
       [module] = Regex.run(~r/^defmodule ([\w.]+) do/m, File.read!(path), capture: :all_but_first)
-      {Path.basename(path), Module.concat([module])}
+      {Path.basename(path), Map.fetch!(compiled, module)}
     end)
   end
 

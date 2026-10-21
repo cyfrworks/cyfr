@@ -93,8 +93,6 @@ defmodule Prism.Router do
           window_ms: 60_000
       end
 
-      # Focus is in the URL: `/a/<athanor>/…` — a person's athanor as
-      # `@<namespace>`, a group's by slug. Two tabs can be two athanors, and
       # A chat attachment's bytes, for the member reading the thread on another
       # device. Its own pipeline: no `:accepts` (a browser asks for an image or
       # a PDF, not html), the session cookie for who, the URL's athanor for
@@ -274,7 +272,9 @@ defmodule Prism.Router do
           metadata: %{auth: :browser_focus_handler}
       end
 
-      # Opening an athanor is a link. `PrismWeb.Focus` resolves the segment and narrows
+      # Opening an athanor is a link: focus is in the URL, `/a/<athanor>/…` —
+      # a person's athanor as `@<namespace>`, a group's by slug — so two tabs
+      # can be two athanors. `PrismWeb.Focus` resolves the segment and narrows
       # the context (`Sanctum.Context.focus/2`) before the page mounts.
       scope "/", PrismWeb do
         pipe_through :browser

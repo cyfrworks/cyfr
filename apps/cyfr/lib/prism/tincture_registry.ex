@@ -416,7 +416,7 @@ defmodule Prism.TinctureRegistry do
               publisher: publisher,
               version: version,
               athanor_id: athanor_id,
-              # Filled by the enumerating scan (scan_athanor/2).
+              # Filled by the enumerating scan (scan_athanor/1).
               athanor_segment: nil,
               entry_url: nil,
               title: manifest["description"] || name,

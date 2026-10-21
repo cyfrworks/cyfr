@@ -69,10 +69,6 @@ defmodule Prism.CanvasValidation do
   @typedoc "The shell's tool call: a `tool/action` name and its arguments, under its context."
   @type call :: (String.t(), map() -> {:ok, term()} | {:error, term()})
 
-  @doc "How long a candidate has, from its frame's open, to answer a tree."
-  @spec deadline_ms() :: pos_integer()
-  def deadline_ms, do: @deadline_ms
-
   @doc """
   Whether `newest`, a canvas's newest installed version, is validated
   before the canvas opens: it is not `document`'s working version, not its

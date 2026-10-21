@@ -139,9 +139,7 @@ defmodule PrismWeb.ApiKeysLive do
     case call_tool(socket, "key/revoke", %{"name" => id}) do
       {:ok, _} ->
         keys =
-          Enum.reject(socket.assigns.keys, fn k ->
-            to_string(k[:name] || k[:id]) == id
-          end)
+          Enum.reject(socket.assigns.keys, &(&1.name == id))
 
         {:noreply,
          socket
@@ -350,14 +348,14 @@ defmodule PrismWeb.ApiKeysLive do
               <.button
                 variant="ghost"
                 phx-click="rotate"
-                phx-value-id={key[:name] || key[:id]}
+                phx-value-id={key.name}
               >
                 Rotate
               </.button>
               <.button
                 variant="ghost"
                 phx-click="revoke"
-                phx-value-id={key[:name] || key[:id]}
+                phx-value-id={key.name}
                 data-confirm="Are you sure?"
               >
                 Revoke
@@ -383,11 +381,8 @@ defmodule PrismWeb.ApiKeysLive do
     end
   end
 
-  defp key_type_color("admin"), do: "red"
   defp key_type_color(:admin), do: "red"
-  defp key_type_color("service"), do: "yellow"
   defp key_type_color(:service), do: "yellow"
-  defp key_type_color("application"), do: "green"
   defp key_type_color(:application), do: "green"
   defp key_type_color(_), do: "gray"
 

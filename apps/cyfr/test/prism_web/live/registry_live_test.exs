@@ -56,6 +56,28 @@ defmodule PrismWeb.RegistryLiveTest do
     {:ok, view: view}
   end
 
+  # `registry.whoami` names the person's publisher namespaces, and the page
+  # lists each beside the personal one. The test registry is a closed
+  # port, so the namespace is kept unconfirmed and its listing is refused.
+  test "a publisher namespace the person holds a push token for is one the page reads",
+       %{conn: conn} do
+    user = test_user()
+    conn = log_in_user(conn, user)
+    ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: seated_athanor().id}
+
+    :ok =
+      Compendium.Registry.CredentialStore.put_push_token(
+        ctx,
+        Compendium.RegistryHost.canonical_host(),
+        "acme.dev",
+        "cyfr_pt_fake_acme",
+        "owner"
+      )
+
+    {view, _html} = mount_athanor(conn, "/registry")
+    assert "acme.dev" in :sys.get_state(view.pid).socket.assigns.namespaces
+  end
+
   defp open_appeal(view) do
     render_click(view, "open-appeal", %{"id" => "reagent:acme.widget:1.0.0"})
   end

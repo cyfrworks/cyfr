@@ -39,9 +39,6 @@ defmodule Prism.Labels do
     components: "Components"
   }
 
-  @doc "The recognised modes."
-  def modes, do: @modes
-
   @doc """
   The mode a person without a saved preference sees. On a server with a
   door — an auth provider — everyone but the operators lands in `lite`,
@@ -59,8 +56,8 @@ defmodule Prism.Labels do
   @doc "Normalise a mode already resolved for a person (a layout assign)."
   @spec mode(term()) :: String.t()
   def mode(mode) when mode in @modes, do: mode
-  # The same rule as `mode/2` with no user: a bare "dev" here briefly
-  # showed the dev chrome to lite viewers while assigns settled.
+  # The same rule as `mode/2` with no user: a mode not yet resolved reads
+  # as the default, never as `dev`.
   def mode(_), do: default(nil)
 
   @doc "The label for `noun` in `mode`."

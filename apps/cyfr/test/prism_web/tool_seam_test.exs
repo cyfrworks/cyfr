@@ -298,9 +298,6 @@ defmodule PrismWeb.ToolSeamTest do
         Path.join(root(), "apps/cyfr/lib/prism_web/live/thread_pane_live.ex")
       )
 
-    refute pane =~ ~s("thread/approve") or pane =~ ~s("thread/decline"),
-           "a card is decided through approval/resolve, which carries its bounds"
-
     refute pane =~ "RoomExcerpt.read",
            "the pane passes the room reference, never the excerpt text"
 

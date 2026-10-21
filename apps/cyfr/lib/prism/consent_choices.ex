@@ -868,10 +868,10 @@ defmodule Prism.ConsentChoices do
 
   defp lower(_field, _raw, _asked, _current), do: :unchanged
 
-  # A plan answered through `PrismWeb.Ops` is atom-keyed; a field read
-  # here takes either spelling.
+  # A plan answered through `PrismWeb.Ops` is atom-keyed (`Sanctum.Consent.Plan`),
+  # and so is every map in it a field is read from here.
   def field(nil, _key), do: nil
-  def field(map, key) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+  def field(map, key) when is_map(map), do: Map.get(map, key)
 
   def declared?(need), do: field(need, :kind) in @credential_kinds
 
@@ -879,8 +879,6 @@ defmodule Prism.ConsentChoices do
     case field(need, :suggested) do
       %{entry_id: id} = suggested when is_binary(id) -> suggested
       %{instance_entry_id: id} = suggested when is_binary(id) -> suggested
-      %{"entry_id" => id} when is_binary(id) -> %{entry_id: id}
-      %{"instance_entry_id" => id} when is_binary(id) -> %{instance_entry_id: id}
       _none -> nil
     end
   end

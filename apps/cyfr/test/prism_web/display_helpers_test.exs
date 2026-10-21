@@ -9,14 +9,11 @@ defmodule PrismWeb.DisplayHelpersTest do
   describe "f/2" do
     test "an atom key that is present answers its value, false and nil among them" do
       assert f(%{on: false}, :on) == false
-      assert f(%{"on" => true, on: false}, :on) == false
-      assert f(%{"on" => "stale", on: nil}, :on) == nil
+      assert f(%{on: nil}, :on) == nil
       assert f(%{on: "yes"}, :on) == "yes"
     end
 
-    test "the string key is read only when the atom key is absent" do
-      assert f(%{"on" => false}, :on) == false
-      assert f(%{"on" => "yes"}, :on) == "yes"
+    test "an absent key, or no map yet, reads nil" do
       assert f(%{}, :on) == nil
       assert f(nil, :on) == nil
     end

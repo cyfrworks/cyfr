@@ -379,9 +379,6 @@ defmodule PrismWeb.SchedulesLive do
         {:ok, %{schedules: list}} ->
           list
 
-        {:ok, list} when is_list(list) ->
-          list
-
         other ->
           Logger.warning("[SchedulesLive] schedule list failed: #{inspect(other)}")
           []
@@ -422,24 +419,13 @@ defmodule PrismWeb.SchedulesLive do
         {:ok, %{components: list}} ->
           list
 
-        {:ok, %{"components" => list}} ->
-          list
-
-        {:ok, list} when is_list(list) ->
-          list
-
         other ->
           Logger.warning("[SchedulesLive] component list failed: #{inspect(other)}")
           []
       end
 
-    refs =
-      Enum.map(all, fn c ->
-        c[:component_ref] || c[:id]
-      end)
-      |> Enum.reject(&is_nil/1)
-
-    assign(socket, :components, refs)
+    # Every row of `component.list` carries its versioned reference.
+    assign(socket, :components, Enum.map(all, & &1.component_ref))
   end
 
   defp status_badge_color("active"), do: "green"
@@ -635,7 +621,7 @@ defmodule PrismWeb.SchedulesLive do
             <tbody class="divide-y divide-gray-800">
               <%= for sched <- @schedules do %>
                 <tr class={[
-                  if(f(sched, :id) == @focused_id,
+                  if(f(sched, :schedule_id) == @focused_id,
                     do: "bg-gray-800/80",
                     else: "hover:bg-gray-800/50"
                   )

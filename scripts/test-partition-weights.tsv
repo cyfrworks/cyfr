@@ -579,7 +579,6 @@
 0.3	apps/cyfr/test/prism_web/live/command_palette_test.exs
 2.5	apps/cyfr/test/prism_web/live/components_live_test.exs
 1.1	apps/cyfr/test/prism_web/live/consent_sheet_component_test.exs
-0.0	apps/cyfr/test/prism_web/live/dashboard_live_test.exs
 0.6	apps/cyfr/test/prism_web/live/enforcements_live_test.exs
 2.0	apps/cyfr/test/prism_web/live/files_live_test.exs
 0.8	apps/cyfr/test/prism_web/live/login_live_test.exs
@@ -598,6 +597,7 @@
 0.2	apps/cyfr/test/prism_web/live/shell_live_test.exs
 0.8	apps/cyfr/test/prism_web/live/shell_live_visibility_test.exs
 3.1	apps/cyfr/test/prism_web/live/shell_prompts_test.exs
+0.0	apps/cyfr/test/prism_web/live/shell_redirect_test.exs
 1.0	apps/cyfr/test/prism_web/live/shell_tincture_url_test.exs
 1.6	apps/cyfr/test/prism_web/live/system_layer_pairing_test.exs
 2.4	apps/cyfr/test/prism_web/live/system_layer_recovery_test.exs

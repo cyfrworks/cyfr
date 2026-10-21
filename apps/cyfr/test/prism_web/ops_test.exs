@@ -24,10 +24,9 @@ defmodule PrismWeb.OpsTest do
     end)
   end
 
-  test "fetch_list unwraps both list shapes to one", %{socket: socket} do
+  test "fetch_list unwraps the list under its key", %{socket: socket} do
     Catalog.with_providers([Probe.List], fn ->
       assert {:ok, [%{id: 1}]} = Ops.fetch_list(socket, "helper_list_probe/wrapped", :items)
-      assert {:ok, [%{id: 2}]} = Ops.fetch_list(socket, "helper_list_probe/bare", :items)
     end)
   end
 

@@ -102,12 +102,6 @@ defmodule PrismWeb.BuildsLive do
         {:ok, %{toolchains: tc}} when is_map(tc) ->
           normalize_toolchains(tc)
 
-        {:ok, %{toolchains: list}} when is_list(list) ->
-          list
-
-        {:ok, list} when is_list(list) ->
-          list
-
         other ->
           Logger.warning("[BuildsLive] build/toolchains failed: #{inspect(other)}")
           []
@@ -316,9 +310,9 @@ defmodule PrismWeb.BuildsLive do
             :for={tc <- @toolchains}
             class="rounded-lg bg-gray-800 border border-gray-700 p-3"
           >
-            <p class="text-sm font-medium text-white">{tc[:name] || tc}</p>
-            <p :if={tc[:description]} class="text-xs text-gray-400 mt-1">
-              {tc[:description]}
+            <p class="text-sm font-medium text-white">{tc.name}</p>
+            <p :if={tc.description} class="text-xs text-gray-400 mt-1">
+              {tc.description}
             </p>
           </div>
         </div>

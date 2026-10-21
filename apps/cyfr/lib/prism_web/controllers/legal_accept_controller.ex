@@ -43,8 +43,16 @@ defmodule PrismWeb.LegalAcceptController do
     end
   end
 
+  # The form's `policies` is one comma-separated text field, or absent; any
+  # other shape is refused before a roster is read from it.
   def submit(conn, %{"policy_version" => version} = params) when is_binary(version) do
-    submit_checked(conn, params, version, policy_roster(version, params))
+    case params["policies"] do
+      policies when is_binary(policies) or is_nil(policies) ->
+        submit_checked(conn, params, version, policy_roster(version, policies))
+
+      _malformed ->
+        error_page(conn, 400, "policies must be a comma-separated list of policy names")
+    end
   end
 
   def submit(conn, _params), do: error_page(conn, 400, "policy_version is required")
@@ -66,13 +74,13 @@ defmodule PrismWeb.LegalAcceptController do
   # actually rendered: `show/2` caches the bodies under the version, so the
   # submit that follows reads what the person was shown rather than what
   # their form says they were shown. The form's list is the fallback for a
-  # cold cache, and an empty roster is refused either way — `policies=""`
-  # made `Enum.all?([], …)` vacuously true, and recorded an acceptance with
-  # nothing ticked at all.
-  defp policy_roster(version, params) do
+  # cold cache, and an empty roster is refused either way
+  # (`all_acknowledged?/2`).
+  @spec policy_roster(String.t(), String.t() | nil) :: [String.t()]
+  defp policy_roster(version, policies) do
     case Arca.Cache.get({:legal_bodies, version}) do
       {:ok, [_ | _] = bodies} -> Enum.map(bodies, fn {name, _title, _md} -> name end)
-      _ -> String.split(params["policies"] || "", ",", trim: true)
+      _ -> String.split(policies || "", ",", trim: true)
     end
   end
 
@@ -184,15 +192,14 @@ defmodule PrismWeb.LegalAcceptController do
   # An empty roster is refused rather than vacuously satisfied: nothing to
   # acknowledge means nothing was agreed to, and recording an acceptance
   # would be recording agreement to nothing.
+  @spec all_acknowledged?(map(), [String.t()]) :: boolean()
   defp all_acknowledged?(_params, []), do: false
 
-  defp all_acknowledged?(params, names) when is_list(names) do
+  defp all_acknowledged?(params, names) do
     Enum.all?(names, fn name ->
       params["ack_" <> String.replace(name, "-", "_")] == "on"
     end)
   end
-
-  defp all_acknowledged?(_params, _names), do: false
 
   defp current_provider(conn), do: PendingProbe.current_provider(conn)
 

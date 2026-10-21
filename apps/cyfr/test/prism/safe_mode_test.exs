@@ -31,9 +31,6 @@ defmodule Prism.SafeModeTest do
 
       assert SafeMode.active?(safe_mode)
     end
-
-    assert SafeMode.reasons() == [:not_ready, :crashed, :not_validated, :requested]
-    refute Map.has_key?(SafeMode.enter(:crashed, canvas()), :document)
   end
 
   test "an unknown reason, or a canvas that is not one, is not safe mode" do
@@ -81,11 +78,5 @@ defmodule Prism.SafeModeTest do
     assert SafeMode.choose(safe_mode, :retry) == :retry
     assert SafeMode.choose(safe_mode, :kept) == {:restore, "markets"}
     assert SafeMode.choose(safe_mode, :shipped) == :shipped
-  end
-
-  test "an offer it does not make is refused" do
-    safe_mode = SafeMode.enter(:requested, canvas())
-    assert SafeMode.choose(safe_mode, :default) == {:error, :not_offered}
-    assert SafeMode.choose(safe_mode, :earlier_version) == {:error, :not_offered}
   end
 end

@@ -240,8 +240,8 @@ end
 
 defmodule Sanctum.Gate.Probe.List do
   @moduledoc """
-  Answers each list shape a console page meets: a list under a key, a
-  bare list, a map with no list, and a refusal sentence.
+  Answers each list result a console page meets: a list under a key, a
+  map with no list, and a refusal sentence.
   """
   @behaviour Prima.Provider
 
@@ -254,7 +254,7 @@ defmodule Sanctum.Gate.Probe.List do
   def tools do
     [
       Operation.tool(
-        for action <- ~w(wrapped bare shapeless refused) do
+        for action <- ~w(wrapped shapeless refused) do
           Operation.new("helper_list_probe", action, "List probe", [],
             kind: :read,
             planes: [:external]
@@ -268,7 +268,6 @@ defmodule Sanctum.Gate.Probe.List do
   def handle("helper_list_probe", _ctx, %{"action" => "wrapped"}),
     do: {:ok, %{items: [%{id: 1}]}}
 
-  def handle("helper_list_probe", _ctx, %{"action" => "bare"}), do: {:ok, [%{id: 2}]}
   def handle("helper_list_probe", _ctx, %{"action" => "shapeless"}), do: {:ok, %{count: 3}}
   def handle("helper_list_probe", _ctx, %{"action" => "refused"}), do: {:error, "Not allowed."}
 end

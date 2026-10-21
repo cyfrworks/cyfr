@@ -82,13 +82,6 @@
   # `Prima.GuestError.render(reason) || "The call failed."` never answers
   # nil; Dialyzer does not narrow nil out of the `||`'s other branch.
   {"lib/locus/runtime/formula_handler.ex", :missing_range},
-  # The provider is configured as a module atom; the clause for a value of
-  # another kind refuses a misconfiguration instead of crashing the
-  # callback.
-  {"lib/prism_web/controllers/auth_controller.ex", :pattern_match_cov},
-  # Every caller passes all_acknowledged?/2 a list of names; its last
-  # clause refuses anything else rather than recording an acceptance.
-  {"lib/prism_web/controllers/legal_accept_controller.ex", :pattern_match_cov},
   # h/1 answers the binary Plug.HTML.html_escape/1 makes; the spec states
   # iodata(), which is how callers interpolate it into a page.
   {"lib/cyfr_web/minimal_page.ex", :extra_range},
