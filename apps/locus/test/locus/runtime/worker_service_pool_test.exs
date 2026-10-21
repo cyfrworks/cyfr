@@ -260,18 +260,7 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
   end
 
   test "awaiting the reports answers once every report in flight is answered", context do
-    test = self()
-
-    ScriptedHost.script(context.host, "runner_exited", fn _args, _caller ->
-      send(test, {:report_held, self()})
-
-      receive do
-        :go -> {:ok, true}
-      after
-        10_000 -> {:ok, true}
-      end
-    end)
-
+    hold_reports!(context)
     assert :ok = Runners.await_reports()
 
     {_root, runner} = started!(context)
@@ -284,10 +273,9 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
     assert Task.await(waiting, 5_000) == :ok
   end
 
-  # The service holds a report from the callback that starts it: one
-  # stopped before it has run anything more is in flight all the same, and
-  # a test's end waits for it.
-  test "a report is in flight from its start, before it has run", context do
+  # A report held by the scripted host: `runner_exited` answers once the
+  # test sends the holder `:go`.
+  defp hold_reports!(context) do
     test = self()
 
     ScriptedHost.script(context.host, "runner_exited", fn _args, _caller ->
@@ -299,38 +287,97 @@ defmodule Locus.Runtime.WorkerServicePoolTest do
         10_000 -> {:ok, true}
       end
     end)
+  end
 
+  # The service holds a report from the callback that starts it: one
+  # stopped before it has run a single instruction is in flight all the
+  # same, and a test's end waits for it. The report is caught at its
+  # spawn: with one normal scheduler and this test at the highest
+  # priority, the trace message runs the test before the report is ever
+  # scheduled, which its zero reductions confirm.
+  test "a report is in flight from its start, before it has run", context do
+    hold_reports!(context)
     assert :ok = Runners.await_reports()
     service = Process.whereis(WorkerService)
     {_root, runner} = started!(context)
 
-    # The report the runner's exit starts, as the service spawns it.
     1 = :erlang.trace(service, true, [:procs])
+    :blocked_normal = :erlang.system_flag(:multi_scheduling, :block_normal)
+    priority = Process.flag(:priority, :max)
 
     report =
       try do
         ScriptedKeeper.exit(runner, 137)
 
         receive do
-          {:trace, ^service, :spawn, report, _mfa} -> report
+          {:trace, ^service, :spawn, report, _mfa} ->
+            true = :erlang.suspend_process(report)
+            report
         after
           5_000 -> flunk("the service started no report")
         end
       after
+        Process.flag(:priority, priority)
+        :erlang.system_flag(:multi_scheduling, :unblock_normal)
         :erlang.trace(service, false, [:procs])
       end
 
-    true = :erlang.suspend_process(report)
-    assert report in Runners.reports_in_flight()
+    try do
+      assert Process.info(report, :reductions) == {:reductions, 0}
+      assert report in Runners.reports_in_flight()
 
-    waiting = Task.async(fn -> Runners.await_reports() end)
-    assert Task.yield(waiting, 200) == nil
+      waiting = Task.async(fn -> Runners.await_reports() end)
+      assert Task.yield(waiting, 200) == nil
 
-    true = :erlang.resume_process(report)
-    assert_receive {:report_held, held}, 5_000
-    assert Task.yield(waiting, 200) == nil
+      true = :erlang.resume_process(report)
+      assert_receive {:report_held, held}, 5_000
+      assert Task.yield(waiting, 200) == nil
+      send(held, :go)
+      assert Task.await(waiting, 5_000) == :ok
+    after
+      # A suspended report is resumed whatever failed above.
+      if match?({:status, :suspended}, Process.info(report, :status)),
+        do: :erlang.resume_process(report)
+    end
+  end
+
+  # A report is the service's: it ends with the service, however the
+  # service ends, so none outlives the boot it reports for and a test's
+  # end never waits on one nothing holds.
+  test "a report ends with its service when the service stops", context do
+    {report, held} = held_report!(context)
+    ref = Process.monitor(report)
+
+    :ok = stop_supervised(WorkerService)
+
+    assert_receive {:DOWN, ^ref, :process, ^report, _reason}, 5_000
     send(held, :go)
-    assert Task.await(waiting, 5_000) == :ok
+  end
+
+  test "a report ends with its service when the service is killed", context do
+    {report, held} = held_report!(context)
+    ref = Process.monitor(report)
+    service = Process.whereis(WorkerService)
+
+    Process.exit(service, :kill)
+
+    assert_receive {:DOWN, ^ref, :process, ^report, :killed}, 5_000
+    send(held, :go)
+
+    # The service the suite's supervisor starts again holds no report.
+    wait_until(fn -> Process.whereis(WorkerService) not in [nil, service] end)
+    assert :ok = Runners.await_reports()
+  end
+
+  # A runner's exit, its report held by the scripted host: the report's
+  # pid and the holder.
+  defp held_report!(context) do
+    hold_reports!(context)
+    {_root, runner} = started!(context)
+    ScriptedKeeper.exit(runner, 137)
+    assert_receive {:report_held, held}, 5_000
+    assert [report] = Runners.reports_in_flight()
+    {report, held}
   end
 
   @tag :refusing

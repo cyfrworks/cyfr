@@ -52,7 +52,11 @@ defmodule Locus.Runtime.WorkerService do
   runner listed; an attempt already closed is named harmlessly, since CYFR
   lapses only a running attempt that runner still holds. A runner is
   reported once. A report runs in a process of its own beside the
-  service, which never waits on CYFR. A
+  service, which never waits on CYFR, and is the service's: it ends with
+  the service, however the service ends, since a report carries this
+  boot and a restarted service holds none of its predecessor's attempts.
+  The attempts an ended report would have named lapse on their leases,
+  and the service logs each runner whose report it ended. A
   `start` no runner can be found for answers `{:error, :unavailable}`,
   and while the keeper refuses runners `{:error, {:unavailable, sentence}}`
   with the keeper's account of why; the listener refuses either `503`,
@@ -151,6 +155,9 @@ defmodule Locus.Runtime.WorkerService do
 
   @impl true
   def init(_opts) do
+    # Its reports are linked to it (`report/4`): a report's end is a
+    # message, and the service's end takes every report with it.
+    Process.flag(:trap_exit, true)
     credentials = Locus.Runtime.Credentials.load!()
     :ok = Locus.Runtime.Credentials.install(credentials)
     settings = Locus.Runtime.Settings.pool!()
@@ -235,9 +242,18 @@ defmodule Locus.Runtime.WorkerService do
   end
 
   @impl true
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
-      when is_map_key(state.reports, ref),
-      do: {:noreply, %{state | reports: Map.delete(state.reports, ref)}}
+  def handle_info({:EXIT, pid, reason}, state) when is_map_key(state.reports, pid) do
+    {runner, reports} = Map.pop(state.reports, pid)
+
+    if reason != :normal do
+      Logger.error(
+        "[Locus.Runtime.WorkerService] the report of runner #{runner} ended: " <>
+          Prima.LogFilter.inspect_reason(reason)
+      )
+    end
+
+    {:noreply, %{state | reports: reports}}
+  end
 
   def handle_info({:DOWN, _ref, :process, pid, reason}, state),
     do: {:noreply, gone(state, pid, {:handle_down, reason})}
@@ -301,6 +317,24 @@ defmodule Locus.Runtime.WorkerService do
         message
     end)
   end
+
+  # Every report still in flight ends with the service, whatever its
+  # reason: a stop reason of `:normal` would not take a linked report
+  # down, and a kill, which runs no `terminate/2`, takes each down through
+  # its link. The attempts each would have named lapse on their leases.
+  @impl true
+  def terminate(_reason, %{reports: reports}) when map_size(reports) > 0 do
+    Logger.warning(
+      "[Locus.Runtime.WorkerService] the service ends with the reports of runners " <>
+        "#{reports |> Map.values() |> Enum.join(", ")} in flight; they end with it, " <>
+        "and the attempts they name lapse on their leases"
+    )
+
+    for pid <- Map.keys(reports), do: Process.exit(pid, :shutdown)
+    :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
 
   # ---------------------------------------------------------------------------
   # Starting
@@ -602,14 +636,15 @@ defmodule Locus.Runtime.WorkerService do
   # A report of the end of `runner`, which held `assignment` and whose
   # `exit` listed `open`, runs in a process of its own beside the service,
   # which never waits on CYFR; `Locus.Runtime.HostClient.runner_exited/5`
-  # bounds it. The service holds each report it starts, monitored, from
-  # the callback that starts it until the report ends (`:reports`), so no
-  # report is in flight that the service does not hold.
+  # bounds it. The service holds each report it starts, linked, from the
+  # callback that starts it until the report ends (`:reports`, by pid), so
+  # no report is in flight that the service does not hold, and none
+  # outlives the service.
   defp report(%{credentials: credentials, boot: boot} = state, runner, assignment, open) do
     {attempts, left_out} = named(assignment, open)
 
-    {pid, ref} =
-      spawn_monitor(fn ->
+    pid =
+      spawn_link(fn ->
         Process.put(:"$callers", assignment.callers)
         Prima.LoggerContext.restore(assignment.logger)
 
@@ -633,7 +668,7 @@ defmodule Locus.Runtime.WorkerService do
         end
       end)
 
-    %{state | reports: Map.put(state.reports, ref, pid)}
+    %{state | reports: Map.put(state.reports, pid, runner)}
   end
 
   # What the report of one runner's end names: the subtree's root, then the

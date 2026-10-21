@@ -69,10 +69,11 @@ defmodule Locus.Runtime.Test.Runners do
   @doc """
   The runner exit reports the worker service of this VM holds in flight,
   by pid. The service holds a report from the callback that starts it,
-  before the report has run, until it ends; the read is answered between
-  the service's callbacks, so it misses none.
+  before the report has run, until it ends, and a report ends with the
+  service that started it; the read is answered between the service's
+  callbacks, so it misses none.
   """
   @spec reports_in_flight() :: [pid()]
   def reports_in_flight,
-    do: Map.values(:sys.get_state(Locus.Runtime.WorkerService).reports)
+    do: Map.keys(:sys.get_state(Locus.Runtime.WorkerService).reports)
 end
