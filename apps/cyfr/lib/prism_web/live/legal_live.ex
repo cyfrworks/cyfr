@@ -7,8 +7,8 @@ defmodule PrismWeb.LegalLive do
   the client, including terms, privacy, acceptable use and content policies.
 
   Each tab triggers a fresh fetch (cached server-side at 5min by the
-  upstream Cache-Control); markdown is rendered by the existing
-  `MarkdownContent` JS hook (same one AgentLive uses).
+  upstream Cache-Control); markdown is rendered by the
+  `MarkdownContent` JS hook.
   """
 
   use PrismWeb, :live_view

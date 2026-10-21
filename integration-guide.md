@@ -1461,7 +1461,7 @@ cyfr key create --name "my-app" --type service
 #    Authorization: Bearer cyfr_sk_...
 ```
 
-The Prism dashboard is available at `http://localhost:4000` (the same endpoint as the API) for visual monitoring of executions, builds, components, and real-time agent formula progress.
+The Prism console is served at `http://localhost:4000`, the same endpoint as the API: the chat at `/chat`, and each athanor's pages under `/a/<athanor>/…`, among them its executions, activities, builds and components, each updating as a run progresses.
 
 From here, your app can POST to `/mcp` with the API key and execute any component you've configured.
 
@@ -1489,6 +1489,6 @@ React:    cyfr new tincture <name> --template react   → edit src/App.tsx → c
 - `cyfr new tincture <name> --template react` scaffolds a React + TypeScript + Vite project (requires `cyfr build compile` before registering)
 - Built tinctures run `npm ci && vite build` via Locus, installing exactly what `package-lock.json` pins — output is static HTML/JS/CSS, no runtime dependency
 - Tinctures invoke backend components via `cyfr.invoke()` — declare dependencies in manifest `dependencies.static`
-- View at `localhost:4000` (Prism → Tinctures tab) or `/t/:athanor/:publisher/:name` if public
+- Open it in the console at `/a/<athanor>/tinctures`, or at `/t/<athanor>/<publisher>/<name>` once it is public
 
 See the [Component Guide](component-guide.md) for the full development loop and component authoring details.
