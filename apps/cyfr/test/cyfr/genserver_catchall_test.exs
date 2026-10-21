@@ -273,8 +273,8 @@ defmodule Cyfr.GenServerCatchallTest do
       # The suite logs at :warning; this synchronous test lowers it and
       # puts it back.
       previous = Logger.level()
-      Logger.configure(level: :debug)
       on_exit(fn -> Logger.configure(level: previous) end)
+      Logger.configure(level: :debug)
 
       log =
         capture_log([level: :debug], fn ->

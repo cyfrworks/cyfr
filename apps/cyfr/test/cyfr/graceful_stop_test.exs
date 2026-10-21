@@ -379,7 +379,7 @@ defmodule Cyfr.GracefulStopTest do
 
   describe "the running application's endpoint" do
     test "serves no listener under test, so the lookup answers nothing and prep_stop leaves it be" do
-      assert App.endpoint_servers() == []
+      assert App.endpoint_servers(CyfrWeb.Endpoint) == []
       refute LiveSocket.draining?()
 
       endpoint = Process.whereis(CyfrWeb.Endpoint)
