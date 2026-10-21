@@ -198,7 +198,7 @@ in the tree.
 The unchanged shipped model artifact → production
 `Opus.Host.AttachedFetch` → local provider stand-in composition is
 **uncovered**. The current artifacts hard-code provider HTTPS origins
-(`seed/components/catalysts/local/openai/1.3.1/src/src/lib.rs:14` and its
+(`seed/components/catalysts/local/openai/1.4.1/src/src/lib.rs:13` and its
 peers); `Opus.Host.Egress.pin/3` has a resolver option which the actual
 host never passes (`apps/cyfr/lib/opus/host/egress.ex:94`). The
 existing suites found in `seed_model_catalysts_test.exs`,

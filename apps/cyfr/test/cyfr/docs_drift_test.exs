@@ -323,11 +323,6 @@ defmodule Cyfr.DocsDriftTest do
   @workflow Path.join(@repo_root, ".github/workflows/test.yml")
   @fossil_step "Tier A/B fossil patterns must be absent"
 
-  # A shipped component version is immutable, and this one's README and
-  # manifest say the retired name; it changes only in a new version.
-  # Exact: the exception must still hold a hit.
-  @retired_name_exceptions ["seed/components/formulas/local/list-models/0.6.2/"]
-
   # The directories that are namespaces: each application under apps/, and
   # each directory under the control plane's lib/ with a facade module
   # beside it, less the web tiers, which belong to their namespace.
@@ -424,17 +419,9 @@ defmodule Cyfr.DocsDriftTest do
           line =~ pattern,
           do: {rel, n}
 
-    excepted? = fn {rel, _} -> String.starts_with?(rel, @retired_name_exceptions) end
-    {excepted, stray} = Enum.split_with(hits, excepted?)
-
-    assert stray == [],
+    assert hits == [],
            "these lines say the retired name of the athanor: " <>
-             Enum.map_join(stray, ", ", fn {rel, n} -> "#{rel}:#{n}" end)
-
-    for prefix <- @retired_name_exceptions do
-      assert Enum.any?(excepted, fn {rel, _} -> String.starts_with?(rel, prefix) end),
-             "#{prefix} no longer says the retired name; remove its exception"
-    end
+             Enum.map_join(hits, ", ", fn {rel, n} -> "#{rel}:#{n}" end)
   end
 
   # Check storage trees in the three compile-embedded operator guides.
