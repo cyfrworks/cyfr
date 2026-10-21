@@ -106,36 +106,25 @@ defmodule Locus.Runtime.FormulaHandler do
   ## Options
 
   - `:limits` - The node's `Prima.Limits` (batch timeout, max concurrent
-    tasks, request size)
+    tasks, request size); required
   - `:intercepted` - The `tool.action` names the formula's assignment says
     its host runs rather than the catalog (default `[]`)
   """
   @spec build_formula_imports(HostClient.t(), keyword()) :: {map(), pid()}
-  def build_formula_imports(%HostClient{} = host, opts \\ []) do
+  def build_formula_imports(%HostClient{} = host, opts) do
     parent_execution_id = host.execution_id
-    limits = opts[:limits]
-
-    batch_timeout_ms =
-      case limits && Limits.batch_timeout_ms(limits) do
-        {:ok, ms} -> ms
-        _ -> 300_000
-      end
-
-    max_tasks = if limits, do: limits.max_concurrent_tasks, else: 10
+    %Limits{} = limits = Keyword.fetch!(opts, :limits)
+    {:ok, batch_timeout_ms} = Limits.batch_timeout_ms(limits)
+    max_tasks = limits.max_concurrent_tasks
 
     tracker =
-      case AsyncTracker.start_link(
-             parent_execution_id: parent_execution_id,
-             max_tasks: max_tasks,
-             batch_timeout_ms: batch_timeout_ms
-           ) do
+      case AsyncTracker.start_link(max_tasks: max_tasks) do
         {:ok, pid} ->
           pid
 
         {:error, reason} ->
-          # The runner's boundary rescues this into a failed execution; a
-          # bare MatchError here read as a host bug rather than the capacity
-          # condition it is.
+          # The runner's boundary rescues this into a failed execution that
+          # names the capacity condition it is.
           raise "async tracker could not start: #{Prima.LoggerContext.shape(reason)}"
       end
 
@@ -301,14 +290,14 @@ defmodule Locus.Runtime.FormulaHandler do
 
   ## Options
 
-  - `:limits` - The node's `Prima.Limits` (request size)
+  - `:limits` - The node's `Prima.Limits` (request size); required
   - `:intercepted` - The `tool.action` names the host runs (default `[]`)
   """
   @spec execute(String.t(), HostClient.t(), keyword()) :: String.t()
-  def execute(json_request, %HostClient{} = host, opts \\ []) do
+  def execute(json_request, %HostClient{} = host, opts) do
     start_time = System.monotonic_time(:millisecond)
 
-    case parse_mcp_request(json_request, opts[:limits]) do
+    case parse_mcp_request(json_request, Keyword.fetch!(opts, :limits)) do
       {:ok, %{tool: tool, action: action, args: args}} ->
         name = "#{tool}.#{action}"
 
@@ -502,7 +491,7 @@ defmodule Locus.Runtime.FormulaHandler do
   # ============================================================================
 
   defp handle_spawn(json_request, host, tracker, opts) do
-    case parse_mcp_request(json_request, opts[:limits]) do
+    case parse_mcp_request(json_request, Keyword.fetch!(opts, :limits)) do
       {:ok, %{tool: tool, action: action, args: args}} ->
         name = "#{tool}.#{action}"
 
@@ -564,11 +553,11 @@ defmodule Locus.Runtime.FormulaHandler do
       case await_child(child) do
         {:ok, output} ->
           emit_telemetry(host.execution_id, "execution.run", :ok, start_time)
-          {encode_success(output), %{tool: "execution", action: "run"}}
+          encode_success(output)
 
         {:error, message} ->
           emit_telemetry(host.execution_id, "execution.run", :error, start_time)
-          {encode_error(:dispatch_error, message), %{tool: "execution", action: "run"}}
+          encode_error(:dispatch_error, message)
       end
     end
 
@@ -576,7 +565,7 @@ defmodule Locus.Runtime.FormulaHandler do
     # task runs the child; any other exit means the task never started.
     spawned =
       try do
-        AsyncTracker.spawn_task(tracker, fun, "execution.run")
+        AsyncTracker.spawn_task(tracker, fun)
       catch
         :exit, {:timeout, _} = reason -> {:unreachable, reason}
         :exit, reason -> {:error, {:tracker_unreachable, reason}}
@@ -618,11 +607,11 @@ defmodule Locus.Runtime.FormulaHandler do
         case HostClient.tool_call(host, tool, args_with_action, :spawn) do
           {:ok, result} ->
             emit_telemetry(host.execution_id, tool_action, :ok, start_time)
-            {encode_success(result), %{tool: tool, action: action}}
+            encode_success(result)
 
           {:error, refusal} ->
             emit_telemetry(host.execution_id, tool_action, :error, start_time)
-            {encode_refusal(refusal), %{tool: tool, action: action}}
+            encode_refusal(refusal)
         end
       rescue
         e ->
@@ -633,11 +622,11 @@ defmodule Locus.Runtime.FormulaHandler do
               Prima.LogFilter.format_exception(:error, e, __STACKTRACE__)
           )
 
-          {encode_error(:dispatch_error, "The call failed."), %{tool: tool, action: action}}
+          encode_error(:dispatch_error, "The call failed.")
       end
     end
 
-    case AsyncTracker.spawn_task(tracker, fun, tool_action) do
+    case AsyncTracker.spawn_task(tracker, fun) do
       {:ok, task_id} ->
         Locus.Runtime.Telemetry.formula_spawn(host.execution_id, task_id, tool_action)
         safe_encode(%{"task_id" => task_id})
@@ -654,16 +643,10 @@ defmodule Locus.Runtime.FormulaHandler do
     start = System.monotonic_time(:millisecond)
 
     case AsyncTracker.await_task(tracker, task_id, timeout_ms) do
-      {:ok, {json_result, metadata}} ->
+      {:ok, json_result} when is_binary(json_result) ->
         duration_ms = System.monotonic_time(:millisecond) - start
         Locus.Runtime.Telemetry.formula_await(task_id, :completed, duration_ms)
-        build_await_response(task_id, json_result, metadata)
-
-      {:ok, result} when is_binary(result) ->
-        # Direct string result (no metadata wrapper)
-        duration_ms = System.monotonic_time(:millisecond) - start
-        Locus.Runtime.Telemetry.formula_await(task_id, :completed, duration_ms)
-        build_await_response(task_id, result, %{})
+        build_await_response(task_id, json_result)
 
       {:error, :timeout} ->
         duration_ms = System.monotonic_time(:millisecond) - start
@@ -818,11 +801,8 @@ defmodule Locus.Runtime.FormulaHandler do
       {:ok, :pending} ->
         safe_encode(%{"status" => "pending"})
 
-      {:ok, {json_result, metadata}} ->
-        build_await_response(task_id, json_result, metadata)
-
-      {:ok, result} when is_binary(result) ->
-        build_await_response(task_id, result, %{})
+      {:ok, json_result} when is_binary(json_result) ->
+        build_await_response(task_id, json_result)
 
       {:error, :unknown_task} ->
         encode_error(:invalid_request, "Unknown task_id: #{task_id}")
@@ -891,8 +871,6 @@ defmodule Locus.Runtime.FormulaHandler do
     end
   end
 
-  defp envelope_bound(_json_string, _limits), do: :ok
-
   # ============================================================================
   # Private: Response Encoding
   # ============================================================================
@@ -920,7 +898,7 @@ defmodule Locus.Runtime.FormulaHandler do
     })
   end
 
-  defp build_await_response(task_id, json_result, metadata) do
+  defp build_await_response(task_id, json_result) do
     # Parse the invocation result to extract status/output/error
     base =
       case Jason.decode(json_result) do
@@ -939,26 +917,16 @@ defmodule Locus.Runtime.FormulaHandler do
 
     base
     |> Map.put("task_id", task_id)
-    |> Map.merge(format_metadata(metadata))
     |> safe_encode()
   end
 
-  defp format_metadata(%{execution_id: eid, duration_ms: ms}) do
-    result = %{"duration_ms" => ms}
-    if eid, do: Map.put(result, "execution_id", eid), else: result
-  end
-
-  defp format_metadata(_), do: %{}
-
-  defp format_task_result(task_id, {:ok, {json_result, metadata}}) do
+  defp format_task_result(task_id, {:ok, json_result}) when is_binary(json_result) do
     case Jason.decode(json_result) do
       {:ok, %{"status" => "completed", "output" => output}} ->
         %{"status" => "completed", "output" => output, "task_id" => task_id}
-        |> Map.merge(format_metadata(metadata))
 
       {:ok, %{"error" => error}} ->
         %{"status" => "error", "error" => error, "task_id" => task_id}
-        |> Map.merge(format_metadata(metadata))
 
       _ ->
         %{
@@ -967,10 +935,6 @@ defmodule Locus.Runtime.FormulaHandler do
           "task_id" => task_id
         }
     end
-  end
-
-  defp format_task_result(task_id, {:ok, result}) when is_binary(result) do
-    format_task_result(task_id, {:ok, {result, %{}}})
   end
 
   defp format_task_result(task_id, {:error, :timeout}) do
@@ -1011,10 +975,8 @@ defmodule Locus.Runtime.FormulaHandler do
   # Guest-facing reason text, through the one vocabulary: a crafted binary
   # passes, and everything else renders through `Prima.GuestError` or is
   # logged and generalized — never `inspect/1`, and never an atom's own
-  # name. Spelling an unrecognised atom was how `:busy` and `:archived`
-  # reached a guest as internal vocabulary; a refusal either has a
-  # sentence in the vocabulary or it is internal, and there is no third
-  # case.
+  # name, which is internal vocabulary. A refusal either has a sentence in
+  # the vocabulary or it is internal, and there is no third case.
   defp guest_reason(reason) when is_binary(reason), do: reason
 
   defp guest_reason(reason) do
@@ -1038,6 +1000,9 @@ defmodule Locus.Runtime.FormulaHandler do
   def render_reason(reason) do
     # `nil` means the term is internal — logged where it was produced, never
     # handed to the guest.
-    Prima.GuestError.render(reason) || "The call failed."
+    case Prima.GuestError.render(reason) do
+      nil -> "The call failed."
+      message -> message
+    end
   end
 end
