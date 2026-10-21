@@ -512,8 +512,8 @@ defmodule Prima.Refusal do
   defp row(:execution_unavailable),
     do: {:unavailable, "The execution engine is unavailable — retry shortly"}
 
-  defp row(:engine_starting),
-    do: {:unavailable, "The execution engine is starting — retry shortly"}
+  defp row(:no_worker_for_target),
+    do: {:unavailable, "No worker serves this webhook's target; try again when one does."}
 
   defp row(:message_too_long),
     do: {:invalid_argument, "The message is longer than the 32 KiB bound"}

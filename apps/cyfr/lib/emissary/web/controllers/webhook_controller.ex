@@ -208,7 +208,7 @@ defmodule Emissary.Web.WebhookController do
           run_in_task(ctx, webhook, input, telemetry_meta, start_time, claim)
         end)
       else
-        {:error, :engine_starting}
+        {:error, :no_worker_for_target}
       end
 
     case spawn_result do

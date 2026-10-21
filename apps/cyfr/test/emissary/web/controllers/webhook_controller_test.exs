@@ -381,6 +381,16 @@ defmodule Emissary.Web.WebhookControllerTest do
       Arca.Repo.all(from(e in Arca.Schemas.Execution, where: e.call_id == ^call_id))
     end
 
+    # A delivery refused before its task is spawned is closed in the
+    # request: its stop telemetry, sent before the response, carries the
+    # sentence of `:no_worker_for_target`.
+    defp assert_refused_no_worker do
+      sentence = Sanctum.Refusals.render(:no_worker_for_target)
+
+      assert_received {:telemetry, [:cyfr, :emissary, :webhook, :invoke, :stop], _,
+                       %{status: :error, error: ^sentence}}
+    end
+
     @math_wasm_path Path.expand("../../../support/test_wasm/math.wasm", __DIR__)
 
     # A hook whose target runs: a published component, its profile's head
@@ -641,12 +651,13 @@ defmodule Emissary.Web.WebhookControllerTest do
       conn = post_signed(conn, slug, secret, ~s({"event":"x"}))
       assert conn.status == 503
       Application.put_env(:cyfr, :locus_runtime_workers, previous)
+      assert_refused_no_worker()
 
       assert [decision] = Arca.Repo.all(Arca.Schemas.DecisionLog)
       assert decision.tool == "webhook"
       assert decision.admission == "admitted"
       assert decision.completion == "failed"
-      assert is_binary(decision.completion_class)
+      assert decision.completion_class == "unavailable"
 
       assert [row] = log_rows_for(decision.request_id)
       assert row.id == decision.call_id
@@ -676,10 +687,12 @@ defmodule Emissary.Web.WebhookControllerTest do
       conn = post_signed(conn, slug, secret, ~s({"event":"x"}))
       assert json_response(conn, 503)["code"] == "unavailable"
       Application.put_env(:cyfr, :locus_runtime_workers, previous)
+      assert_refused_no_worker()
 
       assert [decision] = Arca.Repo.all(Arca.Schemas.DecisionLog)
       assert decision.tool == "webhook"
       assert decision.completion == "failed"
+      assert decision.completion_class == "unavailable"
       assert [row] = log_rows_for(decision.request_id)
       assert row.status == "error"
       assert executions_for(decision.call_id) == []

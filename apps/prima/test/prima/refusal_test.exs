@@ -311,7 +311,7 @@ defmodule Prima.RefusalTest do
     {{:payload_not_retained, :expired}, :unavailable},
     {:not_cancellable, :conflict},
     {:not_running, :conflict},
-    {:engine_starting, :unavailable},
+    {:no_worker_for_target, :unavailable},
     {{:slot_refused, "The execution slots are full"}, :conflict},
     {:replayed, :conflict},
     {:capacity, :rate_limited},
@@ -456,6 +456,13 @@ defmodule Prima.RefusalTest do
         assert %Refusal{class: ^class, message: ^sentence} = Refusal.classify(reason),
                "#{inspect(reason)} reads as #{inspect(Refusal.classify(reason))}"
       end
+    end
+
+    test "a webhook delivery whose target no worker serves reads as unavailable, in its words" do
+      assert %Refusal{
+               class: :unavailable,
+               message: "No worker serves this webhook's target; try again when one does."
+             } = Refusal.classify(:no_worker_for_target)
     end
 
     test "an access row whose payload lacks a part is no sentence of its own" do
