@@ -12,8 +12,8 @@ defmodule Arca.Storage do
 
   All file/blob/cache I/O in CYFR flows through this behaviour. Adding a new
   `File.*` / `Path.wildcard` call elsewhere in `apps/cyfr/lib` is a
-  regression — it means the same code no longer behaves identically on the
-  local filesystem and on a configured object-store adapter. The execution
+  regression — the same code would then behave differently on the local
+  filesystem and on a configured object-store adapter. The execution
   and build workers (`apps/locus/lib/locus/runtime`, `apps/locus/lib`) hold no tenant state
   and reach storage only through the control plane; the files they touch are
   a runner's or a build's own sandbox (group D), and the same scan holds
@@ -30,7 +30,7 @@ defmodule Arca.Storage do
   | Group | When | Why bypass is OK | Examples |
   |-------|------|------------------|----------|
   | A | Inside the adapter itself | The adapter IS the layer that translates segments to bytes. | `Arca.Adapters.Local`, any configured object-store adapter |
-  | B | Pre-Arca bootstrap | Code runs before `Arca.Repo` / config is up; chicken-and-egg. | `Cyfr.Application.ensure_db_directory!`, `verify_db_writable!` |
+  | B | Pre-Arca bootstrap | Code runs before `Arca.Repo` / config is up; chicken-and-egg. | `Arca.Supervisor`'s `ensure_db_directory!` and `verify_db_writable!`, `Cyfr.EnvFiles` reading the operator's `.env` |
   | C | Compile-time embedded resources | Module attribute `@external_resource` — not runtime I/O. | `@sdk_source`, `@component_guide`, `@wit_files_*` |
   | D | Local-only sandbox / OS toolchain / user-import boundary | Tar extraction tmp dirs, cargo build sandbox, user-supplied filesystem paths during publish. After validation, content rejoins Arca. | `Compendium.Registry.extract_and_store_tincture`, `Locus.Builder`, `Locus.Keeper` |
   | E | Repo-local code generation | The output is a source file under version control, never an athanor's tree; there is no tenant, adapter or context in reach. | `Mix.Tasks.Ops.Gen.Cli` |
@@ -718,7 +718,7 @@ defmodule Arca.Storage do
   prefix plus `objects/<generation>/<path>`, and S3 caps a key at 1,024
   bytes, so the longest logical path S3 stores is shorter than the
   logical limit by the prefix and the key's overhead
-  (`Arca.Adapters.S3`), as it was by the prefix and `data/` before.
+  (`Arca.Adapters.S3`).
 
   ## Examples
 

@@ -956,7 +956,7 @@ defmodule Prima.SlotsTest do
   # ---------------------------------------------------------------------------
 
   describe "refusal/1" do
-    test "every refusal has a sentence, and the execution ones read as before" do
+    test "every refusal has a sentence, and the execution ones have their own wording" do
       for reason <- [:capacity, :key_cap, :key_unreaped, :timeout, :cancelled, :unavailable] do
         sentence = Slots.refusal(reason)
         assert byte_size(sentence) > 0

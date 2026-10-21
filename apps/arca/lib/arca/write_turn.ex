@@ -17,9 +17,9 @@ defmodule Arca.WriteTurn do
   write lock and the lease's live fence stay the only mutual exclusion,
   and a turn only decides that a renewal goes next. A writer asks for its
   turn once it holds its connection and before any mutating statement —
-  inside `Arca.Repo`'s lock step, which then takes the lock as it always
-  does — and gives it back once its transaction has committed or rolled
-  back (`Arca.Repo.locking_transaction/2`, `write_turn:`). A turn holder
+  inside `Arca.Repo`'s lock step, which then takes the lock — and gives
+  it back once its transaction has committed or rolled back
+  (`Arca.Repo.locking_transaction/2`, `write_turn:`). A turn holder
   therefore never waits for a pool, and the wait for a turn spends the
   writer's own absolute deadline, never restarting it.
 

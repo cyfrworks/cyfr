@@ -804,7 +804,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert {:ok, []} = Arca.ExecutionStanding.retired_attempts(server(), nil, 100)
     end
 
-    test "a run admitted after the restore is taken up as before" do
+    test "a run admitted after the restore is taken up like any other" do
       fixture = home!()
       marked!()
       assert {:ok, _change} = SecurityTransitions.restore(slot: :none)

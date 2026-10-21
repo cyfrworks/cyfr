@@ -151,8 +151,8 @@ defmodule Prima.Manifest do
 
   Registration must never accept a manifest it cannot parse — a malformed
   manifest would otherwise register a component with zero declared
-  capabilities and skip all manifest validation. Reads of historical rows
-  keep using the lenient `decode/1`.
+  capabilities and skip all manifest validation. Reads of stored rows
+  use the lenient `decode/1`.
   """
   @spec decode_strict(nil | map() | binary()) :: {:ok, map()} | {:error, :malformed_manifest}
   def decode_strict(nil), do: {:ok, %{}}

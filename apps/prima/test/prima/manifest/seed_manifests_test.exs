@@ -6,7 +6,7 @@ defmodule Prima.Manifest.SeedManifestsTest do
   Every manifest CYFR ships under `seed/components/` parses under the one
   manifest grammar, attaching and disclosing included: a shipped version
   is immutable, so a need its manifest declares without `attach` is read
-  as disclose-only, with no legacy branch, and no shipped manifest is
+  as disclose-only by that same grammar, and no shipped manifest is
   refused by a rule written after it.
   """
 

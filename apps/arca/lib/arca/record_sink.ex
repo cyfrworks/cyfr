@@ -20,7 +20,7 @@ defmodule Arca.RecordSink do
 
   ## Where it starts
 
-  Directly after `Arca.Repo` in the supervision tree, and that order is a
+  After `Arca.Repo` in the supervision tree, and that order is a
   data-integrity constraint rather than a convenience: a supervisor stops
   its children in reverse start order, so starting after the repo is what
   makes the sink stop **before** it. The buffered rows `terminate/2`

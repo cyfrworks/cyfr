@@ -212,7 +212,7 @@ defmodule Arca.RateWindowsTest do
   end
 
   describe "two members, one bucket" do
-    # Nothing in a boot holds an allowance any more, so sixteen processes
+    # Nothing in a boot holds an allowance, so sixteen processes
     # claiming one bucket are sixteen members claiming it: the row is the
     # only thing between them, and it is what this asserts.
     test "sixteen claiming at once admit the cap between them and no more", %{

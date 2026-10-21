@@ -1028,7 +1028,7 @@ defmodule Arca.MembersLockTest do
     {:ok, user: user, facts: %{email: user.email, email_verified: true}}
   end
 
-  # Two racers: on SQLite a waiter now sleeps inside the driver only one
+  # Two racers: on SQLite a waiter sleeps inside the driver only one
   # quantum at a time (`Arca.Repo.prepare_transaction/2`), but two is what
   # the barrier needs and more only lengthens the wait.
   test "concurrent idempotent grants write one row, and exactly one says it wrote it", %{

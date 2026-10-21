@@ -255,7 +255,7 @@ defmodule Prima.EffectsTest do
          %{findings: findings} do
       for {module, {:compile_time, effects}} <- @roster do
         reached = for {^module, where, class, _mfa} <- findings, class in effects, do: where
-        assert reached != [], "#{inspect(module)} no longer reaches #{inspect(effects)}"
+        assert reached != [], "#{inspect(module)} does not reach #{inspect(effects)}"
         assert Enum.uniq(reached) == [:body]
       end
     end
@@ -418,7 +418,7 @@ defmodule Prima.EffectsTest do
         do: {module, found, expected}
   end
 
-  # A row naming a module that no longer compiles here.
+  # A row naming a module that does not compile here.
   defp absent_rows(modules, roster),
     do: for({module, _row} <- roster, module not in modules, do: module) |> Enum.sort()
 

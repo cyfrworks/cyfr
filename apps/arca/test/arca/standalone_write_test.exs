@@ -137,7 +137,7 @@ defmodule Arca.StandaloneWriteTest do
       assert insert =~ ~r/^INSERT INTO "cell_leases"/
     end
 
-    # Unnamed, it raises as before, rolled back.
+    # A constraint the changeset does not name raises, rolled back.
     assert_raise Ecto.ConstraintError, fn ->
       Arca.Repo.insert!(%{lease(node) | owner: "boot_c"})
     end
