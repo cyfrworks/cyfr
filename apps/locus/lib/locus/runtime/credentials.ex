@@ -115,10 +115,6 @@ defmodule Locus.Runtime.Credentials do
   @spec current() :: t() | nil
   def current, do: :persistent_term.get(@key, nil)
 
-  @doc "The 32 bytes `text`, a worker key as 64 hexadecimal digits, spells."
-  @spec decode_key(term()) :: {:ok, binary()} | :error
-  def decode_key(text), do: Prima.MacEnvelope.decode_root(text)
-
   defp service_id(nil), do: {:error, {:missing, :service_id}}
 
   defp service_id(id) when is_binary(id) do
@@ -129,8 +125,9 @@ defmodule Locus.Runtime.Credentials do
 
   defp service_key(nil), do: {:error, {:missing, :service_key}}
 
+  # The 32 bytes a worker key's 64 hexadecimal digits spell.
   defp service_key(text) do
-    case decode_key(text) do
+    case Prima.MacEnvelope.decode_root(text) do
       {:ok, key} -> {:ok, key}
       :error -> {:error, {:malformed, :service_key}}
     end
