@@ -23,14 +23,8 @@ defmodule CyfrWeb.Plugs.ApiSecurityHeadersTest do
   @hsts "max-age=63072000; includeSubDomains"
 
   setup do
-    original = Application.fetch_env(:cyfr, :hsts)
-
-    on_exit(fn ->
-      case original do
-        {:ok, value} -> Application.put_env(:cyfr, :hsts, value)
-        :error -> Application.delete_env(:cyfr, :hsts)
-      end
-    end)
+    original = Application.fetch_env!(:cyfr, :hsts)
+    on_exit(fn -> Application.put_env(:cyfr, :hsts, original) end)
 
     Application.put_env(:cyfr, :hsts, :endpoint_on_proxy)
 

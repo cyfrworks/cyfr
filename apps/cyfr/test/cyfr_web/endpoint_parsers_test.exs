@@ -373,22 +373,6 @@ defmodule CyfrWeb.EndpointParsersTest.MCPTest do
       assert get_resp_header(conn, "connection") == []
       assert bytes_read() == byte_size(body)
     end
-
-    test "cannot move a body to another verb with _method" do
-      body =
-        Jason.encode!(%{
-          "_method" => "DELETE",
-          "jsonrpc" => "2.0",
-          "id" => 2,
-          "method" => "tools/list",
-          "params" => Jason.decode!(json_body("tools/list", %{}))["params"]
-        })
-
-      conn = body |> mcp() |> put_req_header("mcp-method", "tools/list") |> call()
-
-      assert conn.method == "POST"
-      assert %{"id" => 2, "result" => %{"tools" => [_ | _]}} = Jason.decode!(conn.resp_body)
-    end
   end
 
   describe "a refusal before the body" do

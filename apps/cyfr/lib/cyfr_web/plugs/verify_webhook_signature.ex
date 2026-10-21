@@ -7,7 +7,9 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
 
   Pipeline expectation: runs **after** `Plug.Parsers` (so
   `conn.assigns[:raw_body]` has been populated by
-  `CyfrWeb.Plugs.RawBodyReader` when the request path is `/hooks/*`).
+  `CyfrWeb.Plugs.RawBodyReader` when the request path is `/hooks/*`) and
+  after `CyfrWeb.Plugs.WebhookRateLimit`, whose lookup of the route's
+  slug (`conn.assigns[:webhook_lookup]`) it judges the request against.
 
   ## Behavior
 
@@ -16,9 +18,11 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
     * 503 — the webhook store, or the skew window a timestamped delivery
       is checked against, could not answer. Never a 404, which would read
       as "no such hook" to a sender that retries on 5xx only.
-    * 401 — signature header missing, malformed, or mismatched.
-    * 500 — defensive: raw body wasn't captured (body_reader didn't run) or
-      secret decryption failed. Should never happen in practice.
+    * 401 — signature or timestamp header missing, malformed, or
+      mismatched, or a timestamp outside the skew window.
+    * 400 — no raw body was captured: the sender used a content type no
+      parser reads, so there is nothing to verify a signature over.
+    * 500 — the stored signing secret could not be opened.
 
   On success:
     * Assigns the webhook row (`Sanctum.Webhook.resolve_ingress/1`'s, with
@@ -41,9 +45,9 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
 
   def init(opts), do: opts
 
-  def call(%Plug.Conn{path_params: %{"slug" => slug}} = conn, _opts) when is_binary(slug) do
+  def call(%Plug.Conn{path_params: %{"slug" => slug}} = conn, _opts) do
     conn =
-      case lookup_active_webhook(conn, slug) do
+      case active_webhook(conn.assigns.webhook_lookup) do
         {:ok, webhook} ->
           verify(conn, webhook)
 
@@ -59,38 +63,16 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
     drop_lookup(conn)
   end
 
-  def call(conn, _opts) do
-    emit_telemetry(nil, nil, :no_slug)
-    deny_404(conn)
-  end
-
   # ============================================================================
   # Internal
   # ============================================================================
 
-  # `WebhookRateLimit` runs before us in the pipeline and caches the lookup
-  # on `conn.assigns[:webhook_lookup]`. Use that when present to avoid a
-  # second indexed query per request. Fall through to a fresh query when the
-  # assign is absent — that's the "called directly from a unit test" path
-  # (verify_webhook_signature_test.exs builds conns without the rate limiter).
-  defp lookup_active_webhook(conn, slug) do
-    case conn.assigns[:webhook_lookup] do
-      {:ok, %{enabled: true} = webhook} -> {:ok, webhook}
-      {:ok, _disabled} -> :not_found
-      {:error, :not_found} -> :not_found
-      {:error, _} -> :unavailable
-      nil -> fresh_lookup(slug)
-    end
-  end
-
-  defp fresh_lookup(slug) do
-    case Sanctum.Webhook.resolve_ingress(slug) do
-      {:ok, %{enabled: true} = webhook} -> {:ok, webhook}
-      {:ok, _disabled} -> :not_found
-      {:error, :not_found} -> :not_found
-      {:error, _} -> :unavailable
-    end
-  end
+  # The lookup `WebhookRateLimit` made of the slug before this plug runs
+  # (`Sanctum.Webhook.resolve_ingress/1`'s answer), judged once.
+  defp active_webhook({:ok, %{enabled: true} = webhook}), do: {:ok, webhook}
+  defp active_webhook({:ok, _disabled}), do: :not_found
+  defp active_webhook({:error, :not_found}), do: :not_found
+  defp active_webhook({:error, :unavailable}), do: :unavailable
 
   defp verify(conn, webhook) do
     with {:ok, raw_body} <- fetch_raw_body(conn),
@@ -115,13 +97,10 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
   # nothing after verification needs it.
   defp drop_lookup(conn), do: %{conn | assigns: Map.delete(conn.assigns, :webhook_lookup)}
 
-  # Map verification failure reasons to telemetry + HTTP response. Status
-  # bucketing is unchanged; the wrapper just adds an observability hook so
-  # operators can see *why* a webhook is failing.
+  # A verification failure is counted under its reason, with the webhook
+  # it was judged against, so an operator sees why a webhook is failing,
+  # and answered by its status.
   defp deny_with_telemetry(conn, webhook, reason) do
-    # The webhook row is in hand here — reading it back off an assign only
-    # set on the success path made webhook_id structurally nil on every
-    # failure event.
     emit_telemetry(webhook.slug, webhook.id, reason)
 
     case reason do
@@ -139,24 +118,17 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
       # The skew window could not be read: refused, and retried by the
       # sender like any outage.
       :unavailable -> deny_503(conn)
-      _ -> deny_500(conn)
     end
   end
 
-  # `slug` may be nil (no_slug case). Reason is normalized to an atom so
-  # downstream handlers can pattern-match without parsing tuples.
+  # `webhook_id` is nil where no active webhook holds the slug. The reason
+  # is one atom of a closed set: the lookup's two outcomes and the
+  # verification's reasons above.
   defp emit_telemetry(slug, webhook_id, reason) do
-    reason_atom =
-      case reason do
-        atom when is_atom(atom) -> atom
-        {atom, _} when is_atom(atom) -> atom
-        _ -> :unknown
-      end
-
     :telemetry.execute(
       [:cyfr, :emissary, :webhook, :verify_failed],
       %{count: 1},
-      %{slug: slug, webhook_id: webhook_id, reason: reason_atom}
+      %{slug: slug, webhook_id: webhook_id, reason: reason}
     )
   end
 
@@ -173,10 +145,10 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
   end
 
   # When `timestamp_header` is unset on the webhook row, replay protection is
-  # off — return `{:ok, nil}` so `verify_signature/4` skips the timestamp check.
-  # When set, the request MUST carry the named header (missing → 401).
+  # off — return `{:ok, nil}` so `Sanctum.Webhook.verify_with_grace/4` skips
+  # the timestamp check. When set, the request MUST carry the named header
+  # (missing → 401).
   defp fetch_timestamp(_conn, nil), do: {:ok, nil}
-  defp fetch_timestamp(_conn, ""), do: {:ok, nil}
 
   defp fetch_timestamp(conn, header) when is_binary(header) do
     case get_req_header(conn, header) do
@@ -201,9 +173,8 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignature do
 
   # The sender used a content type no parser matches, so `RawBodyReader`
   # never ran and there is no raw body to verify a signature over. That is
-  # a malformed REQUEST, not a server fault: answering 500 logged an error
-  # for every mis-configured sender and told them to retry something that
-  # can never succeed.
+  # a malformed request, not a server fault, and a retry of it can never
+  # succeed.
   defp deny_400(conn) do
     CyfrWeb.ApiError.halt(
       conn,

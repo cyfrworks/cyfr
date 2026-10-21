@@ -16,6 +16,9 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
 
   alias CyfrWeb.Plugs.Authenticate
 
+  # The plug as a pipeline mounts it: its options through `init/1`.
+  defp authenticate(conn, opts \\ []), do: Authenticate.call(conn, Authenticate.init(opts))
+
   # Test auth provider that returns an authenticated user
   defmodule TestAuthProvider do
     @behaviour Sanctum.Auth
@@ -175,53 +178,6 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     %{user_id: user.id, identifier: identifier, token: token}
   end
 
-  # The Mcp-Session-Id header must not authenticate or change the resolved caller.
-  describe "call/2 — the retired session header" do
-    test "a request with no credential still gets a context", %{conn: conn} do
-      conn = Authenticate.call(conn, [])
-
-      refute conn.halted
-      assert conn.assigns[:context]
-    end
-
-    # The property is not "the header is rejected" but "the header is not read":
-    # whatever it says, the resolved context is the one the request would have
-    # had without it. Asserting equality against that baseline is stronger than
-    # asserting any particular outcome, because it fails if the value is ever
-    # fed into a lookup again.
-    test "a real session id in the header changes nothing", %{conn: conn} do
-      ctx = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-      {:ok, session} = Sanctum.Session.create(ctx)
-
-      assert unchanged_by_session_header(conn, session.token)
-
-      Sanctum.Session.destroy(session.token)
-    end
-
-    test "an unknown session id changes nothing either", %{conn: conn} do
-      assert unchanged_by_session_header(conn, "sess_nonexistent")
-    end
-
-    defp unchanged_by_session_header(conn, header_value) do
-      body = %{"method" => "tools/call"}
-
-      baseline =
-        conn
-        |> Map.put(:body_params, body)
-        |> Authenticate.call([])
-
-      with_header =
-        conn
-        |> put_req_header("mcp-session-id", header_value)
-        |> Map.put(:body_params, body)
-        |> Authenticate.call([])
-
-      refute baseline.halted
-      refute with_header.halted
-      with_header.assigns[:context] == baseline.assigns[:context]
-    end
-  end
-
   # Authenticate session tokens through the Authorization header.
   describe "call/2 — a session token as a bearer credential" do
     test "authenticates and resolves the stored context", %{conn: conn} do
@@ -258,11 +214,11 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer " <> session.token)
-        |> Authenticate.call([])
+        |> authenticate()
 
       refute conn.halted
       assert conn.assigns[:context].user_id == user.id
-      assert conn.assigns[:auth_method] == :session_token
+      assert conn.assigns[:context].auth_method == :oidc
 
       Sanctum.Session.destroy(session.token)
     end
@@ -303,7 +259,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
         conn
         |> put_req_header("authorization", "Bearer " <> session.token)
         |> Map.put(:body_params, %{"method" => "tools/call"})
-        |> Authenticate.call([])
+        |> authenticate()
 
       assert conn.halted
       assert conn.status == 401
@@ -321,7 +277,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer " <> session.token)
-        |> Authenticate.call([])
+        |> authenticate()
 
       assert conn.halted
       assert conn.status == 503
@@ -333,7 +289,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer " <> remote.token)
-        |> Authenticate.call([])
+        |> authenticate()
 
       refute conn.halted
       assert conn.assigns[:context].user_id == remote.user_id
@@ -353,7 +309,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
           conn
           |> put_req_header("authorization", "Bearer " <> remote.token)
           |> Map.put(:body_params, %{"method" => "tools/call"})
-          |> Authenticate.call([])
+          |> authenticate()
         end)
 
       assert log =~ "freshness bound"
@@ -382,7 +338,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
         conn
         |> put_req_header("authorization", "Bearer not-a-real-session-token")
         |> Map.put(:body_params, %{"method" => "tools/call"})
-        |> Authenticate.call([])
+        |> authenticate()
 
       assert conn.halted
       assert conn.status == 401
@@ -393,7 +349,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     # so the request proceeds — the plug does not pre-empt it.
     @tag auth: :person
     test "an unclaimed bearer is left to a configured auth provider", %{conn: conn} do
-      conn = Authenticate.call(conn, [])
+      conn = authenticate(conn)
 
       refute conn.halted
       assert conn.assigns[:context].authenticated
@@ -401,12 +357,19 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
   end
 
   describe "call/2 — the ConnCase's test provider" do
+    test "a request with no credential still gets a context", %{conn: conn} do
+      conn = authenticate(conn)
+
+      refute conn.halted
+      assert conn.assigns[:context]
+    end
+
     test "a bearer the test provider does not claim is refused, not served", %{conn: conn} do
       for bearer <- ["a-token-nobody-knows", "cyfr-test-actor.not-base64!", "cyfr-test-actor."] do
         conn =
           conn
           |> put_req_header("authorization", "Bearer " <> bearer)
-          |> Authenticate.call([])
+          |> authenticate()
 
         assert conn.halted, "#{bearer} was served"
         assert conn.status == 401
@@ -415,7 +378,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
 
     test "the test person holds the person permissions, never the wildcard", %{conn: conn} do
-      conn = conn |> authenticate_as() |> Authenticate.call([])
+      conn = conn |> authenticate_as() |> authenticate()
 
       refute conn.halted
 
@@ -424,7 +387,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
 
     test "an override is merged into the test person", %{conn: conn} do
-      conn = conn |> authenticate_as(email: "override@example.com") |> Authenticate.call([])
+      conn = conn |> authenticate_as(email: "override@example.com") |> authenticate()
 
       refute conn.halted
       assert conn.assigns.context.email == "override@example.com"
@@ -467,7 +430,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
 
     test "returns unauthenticated context when no auth provider configured", %{conn: conn} do
-      conn = Authenticate.call(conn, [])
+      conn = authenticate(conn)
 
       ctx = conn.assigns[:context]
       assert ctx.user_id == nil
@@ -495,7 +458,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
 
     test "creates context from authenticated user", %{conn: conn} do
-      conn = Authenticate.call(conn, [])
+      conn = authenticate(conn)
 
       ctx = conn.assigns[:context]
       assert ctx.user_id == "test_user_123"
@@ -524,7 +487,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     end
 
     test "returns unauthenticated context when auth provider returns nil", %{conn: conn} do
-      conn = Authenticate.call(conn, [])
+      conn = authenticate(conn)
 
       ctx = conn.assigns[:context]
       assert ctx.user_id == nil
@@ -554,7 +517,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer valid_token")
-        |> Authenticate.call([])
+        |> authenticate()
 
       ctx = conn.assigns[:context]
       assert ctx.user_id == "bearer_user"
@@ -566,14 +529,14 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer invalid_token")
-        |> Authenticate.call([])
+        |> authenticate()
 
       assert conn.halted
       assert conn.status == 401
     end
 
     test "missing Authorization header returns unauthenticated context", %{conn: conn} do
-      conn = Authenticate.call(conn, [])
+      conn = authenticate(conn)
 
       ctx = conn.assigns[:context]
       # No auth returns unauthenticated context
@@ -633,7 +596,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{api_key}")
-        |> Authenticate.call([])
+        |> authenticate()
 
       refute conn.halted
       ctx = conn.assigns[:context]
@@ -643,15 +606,13 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       # Application keys get default scopes: execute, component_read, storage_read
       assert ctx.permissions ==
                MapSet.new([:execute, :component_read, :storage_read])
-
-      assert conn.assigns[:auth_method] == :api_key
     end
 
     test "returns 401 for invalid API key", %{conn: conn} do
       conn =
         conn
         |> put_req_header("authorization", "Bearer cyfr_pk_invalid123456789012345678")
-        |> Authenticate.call(errors: Emissary.Web.MCPError)
+        |> authenticate(errors: Emissary.Web.MCPError)
 
       assert conn.halted
       assert conn.status == 401
@@ -672,7 +633,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
         conn =
           conn
           |> put_req_header("authorization", authorization)
-          |> Authenticate.call([])
+          |> authenticate()
 
         assert conn.status == 401, "expected 401 for #{authorization}"
         assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
@@ -684,7 +645,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer some_other_token")
-        |> Authenticate.call([])
+        |> authenticate()
 
       # Should fall back to TestAuthProvider which returns test_user_123
       refute conn.halted
@@ -708,10 +669,10 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{session.token}")
-        |> Authenticate.call([])
+        |> authenticate()
 
       refute conn.halted
-      assert conn.assigns[:auth_method] == :session_token
+      assert conn.assigns[:context].auth_method == :oidc
       assert conn.assigns[:context].user_id == ctx.user_id
       assert conn.assigns[:context].authenticated
     end
@@ -726,7 +687,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{session.token}")
-        |> Authenticate.call([])
+        |> authenticate()
 
       resolved = conn.assigns[:context]
       refute resolved && resolved.user_id == ctx.user_id && resolved.authenticated
@@ -737,23 +698,9 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{api_key}")
-        |> Authenticate.call([])
+        |> authenticate()
 
       refute conn.halted
-      assert conn.assigns[:auth_method] == :api_key
-      assert conn.assigns[:context].auth_method == :api_key
-    end
-
-    test "the bearer credential decides, whatever the retired header says",
-         %{conn: conn, api_key: api_key} do
-      conn =
-        conn
-        |> put_req_header("authorization", "Bearer #{api_key}")
-        |> put_req_header("mcp-session-id", "sess_something_else_entirely")
-        |> Authenticate.call([])
-
-      refute conn.halted
-      assert conn.assigns[:auth_method] == :api_key
       assert conn.assigns[:context].auth_method == :api_key
     end
 
@@ -761,7 +708,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("authorization", "Bearer #{api_key}")
-        |> Authenticate.call([])
+        |> authenticate()
 
       refute conn.halted
       ctx = conn.assigns[:context]
@@ -799,7 +746,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
          %{conn: conn} do
       Application.delete_env(:sanctum, :auth_provider)
 
-      conn = Authenticate.call(conn, [])
+      conn = authenticate(conn)
 
       refute conn.halted
       refute conn.assigns[:context].authenticated
@@ -809,7 +756,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
          %{conn: conn} do
       Application.put_env(:sanctum, :auth_provider, __MODULE__.NilAuthProvider)
 
-      conn = Authenticate.call(conn, [])
+      conn = authenticate(conn)
 
       refute conn.halted
       refute conn.assigns[:context].authenticated
@@ -818,7 +765,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     test "auth provider *error* fails closed with 503", %{conn: conn} do
       Application.put_env(:sanctum, :auth_provider, __MODULE__.ErrorAuthProvider)
 
-      conn = Authenticate.call(conn, errors: Emissary.Web.MCPError)
+      conn = authenticate(conn, errors: Emissary.Web.MCPError)
 
       assert conn.halted
       assert conn.status == 503
@@ -829,7 +776,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     test "allows an authenticated user with a resolved athanor through", %{conn: conn} do
       Application.put_env(:sanctum, :auth_provider, __MODULE__.StubAuthProvider)
 
-      conn = Authenticate.call(conn, [])
+      conn = authenticate(conn)
 
       refute conn.halted
       ctx = conn.assigns[:context]
@@ -841,7 +788,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     test "rejects an authenticated user with no resolved athanor with 403", %{conn: conn} do
       Application.put_env(:sanctum, :auth_provider, __MODULE__.TestAuthProvider)
 
-      conn = Authenticate.call(conn, errors: Emissary.Web.MCPError)
+      conn = authenticate(conn, errors: Emissary.Web.MCPError)
 
       assert conn.halted
       assert conn.status == 403
@@ -902,13 +849,13 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
     # Both end with an athanor-less context, but 403 "contact your
     # administrator" is a permanent-sounding answer to a transient fault,
     # and sends the person to an operator who cannot see it. The session
-    # path already answered 503 for the same failure; this one does now too.
+    # path answers 503 for the same failure, and so does this one.
     test "a failed membership read is 503, not 403", %{conn: conn} do
       import ExUnit.CaptureLog
 
       log =
         capture_log(fn ->
-          conn = Authenticate.call(conn, errors: Emissary.Web.MCPError)
+          conn = authenticate(conn, errors: Emissary.Web.MCPError)
 
           assert conn.halted
           assert conn.status == 503
@@ -916,7 +863,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
           refute body["error"]["message"] =~ "no athanor"
         end)
 
-      # Resolution + its error logging is centralized in Sanctum.Tenancy.
+      # Sanctum.Tenancy resolves the membership and logs its failure.
       assert log =~ "[Sanctum.Tenancy] resolve override failed"
       assert log =~ "resolve_failed"
     end
@@ -927,7 +874,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("x-forwarded-for", "")
-        |> Authenticate.call([])
+        |> authenticate()
 
       # Should not crash, should use remote_ip fallback
       refute conn.halted
@@ -938,7 +885,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("x-forwarded-for", "not-an-ip, also-not-an-ip")
-        |> Authenticate.call([])
+        |> authenticate()
 
       # Should not crash, should use remote_ip fallback
       refute conn.halted
@@ -949,7 +896,7 @@ defmodule CyfrWeb.Plugs.AuthenticateTest do
       conn =
         conn
         |> put_req_header("x-forwarded-for", "192.168.1.1, 10.0.0.1, 172.16.0.1")
-        |> Authenticate.call([])
+        |> authenticate()
 
       # Should take first IP
       refute conn.halted

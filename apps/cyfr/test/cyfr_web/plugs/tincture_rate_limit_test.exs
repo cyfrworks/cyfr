@@ -50,10 +50,15 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
     |> TinctureRateLimit.init()
   end
 
+  # A request on the tincture route, with the params its match binds.
   defp build_conn(ip \\ {127, 0, 0, 1}, tincture \\ "test-app", publisher \\ "local") do
     Plug.Test.conn(:get, "/t/home/#{publisher}/#{tincture}")
     |> Map.put(:remote_ip, ip)
-    |> Map.put(:path_params, %{"publisher" => publisher, "tincture_name" => tincture})
+    |> Map.put(:path_params, %{
+      "athanor" => "home",
+      "publisher" => publisher,
+      "tincture_name" => tincture
+    })
   end
 
   # A request the proxy listener accepted, the one listener whose
@@ -103,19 +108,21 @@ defmodule CyfrWeb.Plugs.TinctureRateLimitTest do
       refute TinctureRateLimit.call(build_conn(), opts(bucket: :test_asset)).halted
     end
 
-    test "falls back to path segments when path_params are absent" do
-      conn =
-        Plug.Test.conn(:get, "/t/home/pub-x/app-x/assets/app.js")
-        |> Map.put(:remote_ip, {127, 0, 0, 3})
-
+    test "two athanors hosting the same publisher and name have independent limits" do
       for _ <- 1..3 do
-        refute TinctureRateLimit.call(conn, opts()).halted
+        TinctureRateLimit.call(build_conn({127, 0, 0, 3}), opts())
       end
 
-      assert TinctureRateLimit.call(conn, opts()).halted
+      other =
+        {127, 0, 0, 3}
+        |> build_conn()
+        |> Map.update!(:path_params, &Map.put(&1, "athanor", "other"))
+
+      assert TinctureRateLimit.call(build_conn({127, 0, 0, 3}), opts()).halted
+      refute TinctureRateLimit.call(other, opts()).halted
     end
 
-    test "routes without tincture segments key as unknown (per-IP)" do
+    test "routes without the tincture route's params key as unknown (per-IP)" do
       conn =
         Plug.Test.conn(:post, "/_f/v1/invoke")
         |> Map.put(:remote_ip, {127, 0, 0, 4})

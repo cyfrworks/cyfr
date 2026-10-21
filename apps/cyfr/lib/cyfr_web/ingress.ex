@@ -56,10 +56,6 @@ defmodule CyfrWeb.Ingress do
   # name the admission roster and the listener census know it by.
   @proxy __MODULE__.Proxy
 
-  @doc "The proxy listener's child id, the name the admission roster gives it."
-  @spec proxy_listener() :: module()
-  def proxy_listener, do: @proxy
-
   @doc false
   # Phoenix's adapter callback: the endpoint's listeners as children of
   # its supervisor, the loopback listener always and the proxy listener
@@ -118,13 +114,7 @@ defmodule CyfrWeb.Ingress do
   # The plug a listener hands its requests to, as Phoenix's Bandit adapter
   # picks it: the endpoint, behind the code reloader's sync when that is on.
   defp endpoint_plug(code_reload?, endpoint) do
-    if code_reload? &&
-         Code.ensure_loaded?(Phoenix.Endpoint.SyncCodeReloadPlug) &&
-         function_exported?(Phoenix.Endpoint.SyncCodeReloadPlug, :call, 2) do
-      {Phoenix.Endpoint.SyncCodeReloadPlug, {endpoint, []}}
-    else
-      endpoint
-    end
+    if code_reload?, do: {Phoenix.Endpoint.SyncCodeReloadPlug, {endpoint, []}}, else: endpoint
   end
 
   @impl Plug

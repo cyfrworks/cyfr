@@ -6,18 +6,19 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
 
   alias CyfrWeb.Plugs.MCPOrigin
 
-  setup do
-    prior = Application.get_env(:cyfr, :mcp_allowed_origins)
+  # A test that sets its own allowlist restores the suite's afterwards,
+  # registering the restore before the change.
+  defp put_origins(origins) do
+    prior = Application.fetch_env(:cyfr, :mcp_allowed_origins)
 
     on_exit(fn ->
-      if is_nil(prior) do
-        Application.delete_env(:cyfr, :mcp_allowed_origins)
-      else
-        Application.put_env(:cyfr, :mcp_allowed_origins, prior)
+      case prior do
+        {:ok, value} -> Application.put_env(:cyfr, :mcp_allowed_origins, value)
+        :error -> Application.delete_env(:cyfr, :mcp_allowed_origins)
       end
     end)
 
-    :ok
+    Application.put_env(:cyfr, :mcp_allowed_origins, origins)
   end
 
   defp call(origin) do
@@ -32,23 +33,20 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
     assert conn.status == nil
   end
 
-  test "default config allows localhost variants" do
-    Application.delete_env(:cyfr, :mcp_allowed_origins)
-
+  test "the suite's local-home allowlist admits localhost variants" do
     for origin <- ["http://localhost", "https://localhost", "http://127.0.0.1:4000"] do
-      refute call(origin).halted, "expected #{origin} to be allowed by default"
+      refute call(origin).halted, "expected #{origin} to be allowed"
     end
   end
 
-  test "default config rejects a non-localhost origin" do
-    Application.delete_env(:cyfr, :mcp_allowed_origins)
+  test "the suite's local-home allowlist refuses a non-localhost origin" do
     conn = call("https://test.otakuent.net")
     assert conn.halted
     assert conn.status == 403
   end
 
   test "configured CYFR_HOST origin is allowed" do
-    Application.put_env(:cyfr, :mcp_allowed_origins, [
+    put_origins([
       "https://test.otakuent.net",
       "http://test.otakuent.net",
       "http://localhost"
@@ -60,7 +58,7 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
   end
 
   test "localhost matches with any port" do
-    Application.put_env(:cyfr, :mcp_allowed_origins, ["http://localhost"])
+    put_origins(["http://localhost"])
     refute call("http://localhost:4000").halted
     refute call("http://localhost:5173").halted
   end
@@ -73,7 +71,7 @@ defmodule CyfrWeb.Plugs.MCPOriginTest do
     {:ok, access} =
       Cyfr.RuntimeConfig.resolve_access(%{file: nil, process: process, release?: true})
 
-    Application.put_env(:cyfr, :mcp_allowed_origins, access.check_origins)
+    put_origins(access.check_origins)
   end
 
   test "a tailnet home allows its own https origin and the localhost ones on its port alone" do

@@ -7,10 +7,10 @@ defmodule CyfrWeb.WireDialectTest do
   @moduledoc """
   Every non-empty error body on the HTTP surface renders through an
   `CyfrWeb.ErrorRenderer` (`ApiError` for plain HTTP, `MCPError` for
-  JSON-RPC). A hand-rolled `send_resp` is how one resource once answered
-  the same condition in two wire dialects — the tincture GET's text/plain
-  "Not Found" beside its invoke's JSON `{"code":"not_found"}` — and how a
-  signed-asset route collapsed five distinct refusals into one untyped 404.
+  JSON-RPC). A hand-rolled `send_resp` answers a condition in a wire
+  dialect of its own — a text/plain "Not Found" beside a JSON
+  `{"code":"not_found"}` for the same resource — or collapses distinct
+  refusals into one untyped status.
 
   The HTTP surface is two trees, the host's web tier (`apps/cyfr/lib/cyfr_web`)
   and Emissary's adapters (`apps/cyfr/lib/emissary/web`); nothing else renders

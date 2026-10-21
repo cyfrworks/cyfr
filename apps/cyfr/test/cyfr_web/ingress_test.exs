@@ -108,7 +108,7 @@ defmodule CyfrWeb.IngressTest do
   defp ports(endpoint) do
     children = Supervisor.which_children(endpoint)
     {_, loopback, _, _} = List.keyfind(children, {endpoint, :http}, 0)
-    {_, proxy, _, _} = List.keyfind(children, CyfrWeb.Ingress.proxy_listener(), 0)
+    {_, proxy, _, _} = List.keyfind(children, CyfrWeb.Ingress.Proxy, 0)
     [{_, server, _, _}] = Supervisor.which_children(proxy)
     %{loopback: port(loopback), proxy: port(server)}
   end

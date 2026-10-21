@@ -63,16 +63,6 @@
   # the {date, time} tuple Logger hands a formatter, and Dialyzer reads the
   # unknown type as any().
   {"lib/prima/json_formatter.ex", :unknown_type},
-  # The plug's refusal mapping and its telemetry each end in a clause for a
-  # reason outside today's closed set of atoms (a tuple clause and two
-  # catch-alls), so a reason added later still answers 500 and is counted
-  # instead of crashing the plug.
-  {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match},
-  # The two catch-all clauses the entry above names.
-  {"lib/cyfr_web/plugs/verify_webhook_signature.ex", :pattern_match_cov},
-  # deadline/1 adds a platform setting typed term(), so Dialyzer types the
-  # sum as number(); the settings roster parses both lifetimes as integers.
-  {"lib/cyfr_web/sse.ex", :missing_range},
   # The provider is configured as a module atom; the clause for a value of
   # another kind refuses a misconfiguration instead of crashing the
   # callback.
@@ -80,9 +70,6 @@
   # Every caller passes all_acknowledged?/2 a list of names; its last
   # clause refuses anything else rather than recording an acceptance.
   {"lib/prism_web/controllers/legal_accept_controller.ex", :pattern_match_cov},
-  # h/1 answers the binary Plug.HTML.html_escape/1 makes; the spec states
-  # iodata(), which is how callers interpolate it into a page.
-  {"lib/cyfr_web/minimal_page.ex", :extra_range},
   # The Finch version locked wraps a transport failure in
   # Finch.TransportError, so the clause for a bare Mint.TransportError no
   # longer matches; the clause after it answers those failures.

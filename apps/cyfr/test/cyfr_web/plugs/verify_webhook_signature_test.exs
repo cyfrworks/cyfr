@@ -32,13 +32,22 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
     result
   end
 
+  # A delivery as the pipeline hands it to the plug: on the `/hooks/:slug`
+  # route, its raw body read, and the slug's lookup made as
+  # `WebhookRateLimit` makes it before this plug runs.
   defp build_request(slug, body, headers) do
     conn =
-      Plug.Test.conn(:post, "/hooks/" <> slug, body)
-      |> Map.put(:path_params, %{"slug" => slug})
+      slug
+      |> hook_conn(body)
       |> Plug.Conn.assign(:raw_body, body)
 
     Enum.reduce(headers, conn, fn {k, v}, c -> Plug.Conn.put_req_header(c, k, v) end)
+  end
+
+  defp hook_conn(slug, body) do
+    Plug.Test.conn(:post, "/hooks/" <> slug, body)
+    |> Map.put(:path_params, %{"slug" => slug})
+    |> Plug.Conn.assign(:webhook_lookup, Webhook.resolve_ingress(slug))
   end
 
   defp hmac_hex(secret, body) do
@@ -124,7 +133,7 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
   test "503 when the rate limiter's cached lookup says the store could not answer" do
     conn =
       build_request("wh_any", "{}", [{"x-cyfr-signature", "sha256=00"}])
-      |> Plug.Conn.assign(:webhook_lookup, {:error, :database_error})
+      |> Plug.Conn.assign(:webhook_lookup, {:error, :unavailable})
 
     result = VerifyWebhookSignature.call(conn, [])
 
@@ -134,9 +143,10 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
     assert result.resp_body =~ "unavailable"
   end
 
-  test "503 when the store cannot answer a fresh lookup, never a 404" do
+  test "503 when the store cannot answer the slug's lookup, never a 404" do
     drop_webhooks!()
     conn = build_request("wh_any", "{}", [{"x-cyfr-signature", "sha256=00"}])
+    assert conn.assigns.webhook_lookup == {:error, :unavailable}
 
     result = VerifyWebhookSignature.call(conn, [])
 
@@ -219,20 +229,17 @@ defmodule CyfrWeb.Plugs.VerifyWebhookSignatureTest do
     body = "{}"
     sig = "sha256=" <> hmac_hex(secret, body)
 
+    # No raw body: what a sender using an unsupported content type
+    # produces. `Plug.Parsers`' `pass: ["*/*"]` means no parser matches, so
+    # `RawBodyReader` never runs and there is nothing to verify against,
+    # and a retry can never succeed.
     conn =
-      Plug.Test.conn(:post, "/hooks/" <> slug, body)
-      |> Map.put(:path_params, %{"slug" => slug})
+      slug
+      |> hook_conn(body)
       |> Plug.Conn.put_req_header("x-cyfr-signature", sig)
-
-    # Note: no Plug.Conn.assign(:raw_body, body)
 
     result = VerifyWebhookSignature.call(conn, [])
 
-    # This is what a sender using an unsupported content type produces:
-    # `Plug.Parsers`' `pass: ["*/*"]` means no parser matches, so
-    # `RawBodyReader` never runs and there is nothing to verify against.
-    # Answering 500 logged an error for every mis-configured sender and
-    # told them to retry something that can never succeed.
     assert result.halted
     assert result.status == 400
   end

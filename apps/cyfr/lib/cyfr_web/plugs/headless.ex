@@ -4,11 +4,11 @@
 defmodule CyfrWeb.Plugs.Headless do
   @moduledoc """
   A headless node serves the API, MCP and public tinctures and nothing a
-  browser would open: with `CYFR_HEADLESS=true` (`config :cyfr, :headless`)
+  browser would open: with `CYFR_HEADLESS=on` (`config :cyfr, :headless`)
   every route on the `:browser` pipeline answers 404 — the sign-in pages,
   the web OAuth flow, `/a/<athanor>` and the rest of Prism. Codex still
   signs in through the `session` tool on `/mcp` (the device flow), and a
-  catalyst's OAuth callback rides `:api`, so neither notices.
+  catalyst's OAuth callback rides `:oauth_callback`, so neither notices.
 
   Routes are compiled into the router; refusing them in the pipeline is
   the one place a runtime flag can act. First in the pipeline, so nothing

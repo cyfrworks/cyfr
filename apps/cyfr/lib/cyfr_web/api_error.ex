@@ -76,14 +76,6 @@ defmodule CyfrWeb.ApiError do
     |> Phoenix.Controller.json(body(refusal))
   end
 
-  @doc "Render a refusal and halt the pipeline. The plug form of `refuse/2`."
-  @spec halt(Plug.Conn.t(), term()) :: Plug.Conn.t()
-  def halt(%Plug.Conn{} = conn, reason) do
-    conn
-    |> refuse(reason)
-    |> Plug.Conn.halt()
-  end
-
   @doc """
   Render an error and halt the pipeline. The plug form of `send/4`.
   """
