@@ -14,7 +14,6 @@ type KeyCreateForm struct {
 	Name        string
 	Type        string
 	Scopes      []string
-	RateLimit   string
 	IPAllowlist string
 }
 
@@ -54,12 +53,6 @@ func RunKeyCreateForm(ctx context.Context) (*KeyCreateForm, error) {
 					huh.NewOption("admin", "admin"),
 				).
 				Value(&f.Scopes),
-
-			huh.NewInput().
-				Title("Rate limit").
-				Description("e.g. 100/1m, leave empty for none").
-				Placeholder("100/1m").
-				Value(&f.RateLimit),
 
 			huh.NewInput().
 				Title("IP allowlist").

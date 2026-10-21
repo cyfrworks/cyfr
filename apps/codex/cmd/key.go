@@ -26,7 +26,6 @@ func init() {
 	keyCreateCmd.Flags().String("name", "", "Key name (required in non-interactive mode)")
 	keyCreateCmd.Flags().String("type", "application", "Key type: application, service, admin")
 	keyCreateCmd.Flags().StringSlice("scope", nil, "Permission scopes (execute, vault_read, component_read, component_manage, storage_read, storage_write, admin)")
-	keyCreateCmd.Flags().String("rate-limit", "", "Rate limit (e.g., '100/1m')")
 	keyCreateCmd.Flags().StringSlice("ip-allowlist", nil, "Allowed IPs/CIDRs")
 }
 
@@ -40,7 +39,7 @@ var keyCmd = &cobra.Command{
 var keyCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new API key",
-	Long: `Generate a new API key with the given name, type, and optional scopes, rate limit, and IP allowlist.
+	Long: `Generate a new API key with the given name and type. Scopes and an IP allowlist are optional.
 Run without --name for an interactive form.
 
 Default scopes per type (applied when --scope is omitted):
@@ -49,12 +48,11 @@ Default scopes per type (applied when --scope is omitted):
   admin:       * (all permissions)`,
 	Example: `  cyfr key create --name my-service --type service
   cyfr key create --name ci-runner --type application --scope execute,component_read
-  cyfr key create --name prod --type admin --rate-limit 100/1m --ip-allowlist 10.0.0.0/8`,
+  cyfr key create --name prod --type admin --ip-allowlist 10.0.0.0/8`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, _ := cmd.Flags().GetString("name")
 		keyType, _ := cmd.Flags().GetString("type")
 		scope, _ := cmd.Flags().GetStringSlice("scope")
-		rateLimit, _ := cmd.Flags().GetString("rate-limit")
 		ipAllowlist, _ := cmd.Flags().GetStringSlice("ip-allowlist")
 
 		// If --name not provided, try interactive mode
@@ -75,9 +73,6 @@ Default scopes per type (applied when --scope is omitted):
 			if len(form.Scopes) > 0 {
 				scope = form.Scopes
 			}
-			if form.RateLimit != "" {
-				rateLimit = form.RateLimit
-			}
 			if form.IPAllowlist != "" {
 				ipAllowlist = strings.Split(form.IPAllowlist, ",")
 			}
@@ -87,9 +82,6 @@ Default scopes per type (applied when --scope is omitted):
 			Type: ops.Value(keyType)}
 		if len(scope) > 0 {
 			toolArgs.Scope = ops.Value(scope)
-		}
-		if rateLimit != "" {
-			toolArgs.RateLimit = ops.Value(rateLimit)
 		}
 		if len(ipAllowlist) > 0 {
 			toolArgs.IpAllowlist = ops.Value(ipAllowlist)
@@ -107,7 +99,7 @@ Default scopes per type (applied when --scope is omitted):
 var keyGetCmd = &cobra.Command{
 	Use:     "get <name>",
 	Short:   "Get key info",
-	Long:    "Show metadata for an API key including type, scopes, and rate limits.",
+	Long:    "Show metadata for an API key including type and scopes.",
 	Example: "  cyfr key get my-service",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
