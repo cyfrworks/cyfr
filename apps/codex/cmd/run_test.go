@@ -3,10 +3,7 @@
 
 package cmd
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestParseReference_LocalRef_ReturnsRegistry(t *testing.T) {
 	tests := []struct {
@@ -21,24 +18,11 @@ func TestParseReference_LocalRef_ReturnsRegistry(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result, err := parseReference(tt.input, tt.compType)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			result := parseReference(tt.input, tt.compType)
 			if result != tt.want {
 				t.Errorf("got %q, want %q", result, tt.want)
 			}
 		})
-	}
-}
-
-func TestParseReference_DirectWasm_RejectsLocalFile(t *testing.T) {
-	_, err := parseReference("./components/catalysts/local/claude/0.1.0/catalyst.wasm", "catalyst")
-	if err == nil {
-		t.Fatal("expected an error for a local file path")
-	}
-	if !strings.Contains(err.Error(), "Local file execution is no longer supported") {
-		t.Errorf("expected 'Local file execution is no longer supported' in error, got: %v", err)
 	}
 }
 
@@ -52,37 +36,11 @@ func TestParseReference_RegistryRefWithTypeInjected(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result, err := parseReference(tt.input, "catalyst")
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			result := parseReference(tt.input, "catalyst")
 			if result != tt.want {
 				t.Errorf("got %q, want %q", result, tt.want)
 			}
 		})
-	}
-}
-
-// The following tests verify error paths. parseReference now returns the
-// error instead of exiting, so they assert on it directly.
-
-func TestParseReference_DirectWasm_OutsideProject(t *testing.T) {
-	_, err := parseReference("/some/outside/path/outside.wasm", "catalyst")
-	if err == nil {
-		t.Fatal("expected an error for a local file path")
-	}
-	if !strings.Contains(err.Error(), "Local file execution is no longer supported") {
-		t.Errorf("expected 'Local file execution is no longer supported' in error, got: %v", err)
-	}
-}
-
-func TestParseReference_DirectWasm_Nonexistent(t *testing.T) {
-	_, err := parseReference("./nonexistent.wasm", "catalyst")
-	if err == nil {
-		t.Fatal("expected an error for a local file path")
-	}
-	if !strings.Contains(err.Error(), "Local file execution is no longer supported") {
-		t.Errorf("expected 'Local file execution is no longer supported' in error, got: %v", err)
 	}
 }
 
@@ -135,10 +93,7 @@ func TestParseReference_AtSignPassthrough(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseReference(tt.input, tt.compType)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			result := parseReference(tt.input, tt.compType)
 			if result != tt.want {
 				t.Errorf("parseReference(%q) = %q, want %q ('@' must NOT be rewritten — personal slugs are bare, '@' is reserved for digest refs)", tt.input, result, tt.want)
 			}
@@ -192,10 +147,7 @@ func TestParseReference_TypeInjection(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseReference(tt.input, tt.compType)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			result := parseReference(tt.input, tt.compType)
 			if result != tt.want {
 				t.Errorf("got %q, want %q", result, tt.want)
 			}

@@ -173,7 +173,7 @@ func readShippedTemplate(t *testing.T) string {
 // operators' setting commented once and nowhere assigned, so the
 // assignment init appends is the only one, the
 // local head's keys assigned once each, no key of another mode's head
-// assigned and no retired name anywhere. And each key stackKeys writes is
+// assigned. Each key stackKeys writes is
 // assigned there once, empty, or with the value init completes (the
 // builds URL), so the editor writes every one on its own line.
 func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
@@ -207,9 +207,6 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 		if _, assigned := f.value(key); assigned {
 			t.Errorf("the shipped template assigns %s, which a local home's head omits", key)
 		}
-	}
-	if strings.Contains(text, retiredProxySetting) {
-		t.Errorf("the shipped template names the retired %s", retiredProxySetting)
 	}
 	for _, key := range []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar, corsOriginsVar} {
 		if v, assigned := f.value(key); !assigned || v != "" || len(f.assignments(key)) != 1 {
@@ -858,8 +855,7 @@ func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { retur
 // `cyfr init` stops on a scaffold its release's signed checksums.txt does
 // not name, rather than warn and go on to an unpinned warm pull: the real
 // download path, under the vector file's test trust root, answers a
-// verification failure, and init reads it as one. Found by review: the
-// mismatch read as a transport failure.
+// verification failure, and init reads it as one.
 func TestInitRefusesAlteredScaffold(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "fixtures", "release_manifest.json"))
 	if err != nil {
@@ -933,7 +929,7 @@ func TestInitIgnoresTheSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(string(got), "\n")
-	for _, want := range []string{"/backups/", "/data/", "/.cyfr/", ".env", ".env.local", ".env.*.local", "..env.tmp-*"} {
+	for _, want := range []string{"/backups/", "/data/", "/.cyfr/", ".env", "..env.tmp-*"} {
 		if !slices.Contains(lines, want) {
 			t.Errorf(".gitignore lacks %s:\n%s", want, got)
 		}

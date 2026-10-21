@@ -68,19 +68,15 @@ func TestUpRefusesAnIncoherentEnvBeforeAnythingStarts(t *testing.T) {
 	}
 }
 
-// retiredProxySetting is the setting the proxy mode had before the access
-// mode, spelled in two so no tracked file names it whole.
-const retiredProxySetting = "CYFR_" + "BEHIND_PROXY"
-
-// A retired name, the old proxy setting's, passes the access coherence
-// check, which reads only the access settings, and the release refuses it at
-// boot as a name it does not read: the start fails, and `cyfr up` reads
+// An undeclared setting passes the access coherence check, which reads
+// only access settings. The release refuses it at boot; `cyfr up` reads
 // the boot's refusal from cyfr's log through the engine and prints it,
 // rather than a bare failed start.
-func TestUpSurfacesTheBootRefusalOfARetiredName(t *testing.T) {
-	const fatal = "[Cyfr] FATAL: " + retiredProxySetting + " is not a variable this server reads: no platform setting, deployment variable or compose-only name declares it. Remove it, or use the name `.env.example` gives."
+func TestUpSurfacesTheBootRefusal(t *testing.T) {
+	const unknownSetting = "CYFR_UNKNOWN_TEST_SETTING"
+	const fatal = "[Cyfr] FATAL: " + unknownSetting + " is not a variable this server reads: no platform setting, deployment variable or compose-only name declares it. Remove it, or use the name `.env.example` gives."
 	s := newUpdateScenario(t, shippedCompose(t), nil)
-	s.edit(".env", scenarioEnv+retiredProxySetting+"=true\n")
+	s.edit(".env", scenarioEnv+unknownSetting+"=true\n")
 	s.answer("up.exit", "1")
 	s.answer("logs.out", "ERROR! Config provider Config.Reader failed with:\n** (RuntimeError) "+fatal+"\n    (elixir 1.19.0) lib/config/provider.ex:137\n")
 	err := runUp(context.Background(), &bytes.Buffer{})

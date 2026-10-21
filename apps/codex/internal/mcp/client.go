@@ -97,14 +97,6 @@ func (c *Client) setCredential(req *http.Request) {
 	}
 }
 
-// Close releases client-side state. The credential authenticates each request
-// on its own, so there is no server-side session to terminate — the token
-// outlives the process and is revoked by logging out, not by closing a client.
-func (c *Client) Close() error {
-	c.SessionID = ""
-	return nil
-}
-
 // Discover asks the server which protocol revisions it speaks, and fails if
 // none of them is ours. There is no handshake to perform — every request carries
 // its own version — so this is purely a compatibility check a caller may run
@@ -390,36 +382,6 @@ func (c *Client) callTool(ctx context.Context, name string, encoded json.RawMess
 	return map[string]any{}, nil
 }
 
-// ListTools returns the list of available MCP tools.
-func (c *Client) ListTools(ctx context.Context) ([]Tool, error) {
-	req := JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      int(c.nextID.Add(1)),
-		Method:  "tools/list",
-	}
-
-	resp, err := c.doRequest(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("list tools: %w", err)
-	}
-
-	if resp.Error != nil {
-		return nil, fmt.Errorf("list tools error: %s", resp.Error.Message)
-	}
-
-	resultBytes, err := json.Marshal(resp.Result)
-	if err != nil {
-		return nil, fmt.Errorf("marshal result: %w", err)
-	}
-
-	var toolsResult ToolsListResult
-	if err := json.Unmarshal(resultBytes, &toolsResult); err != nil {
-		return nil, fmt.Errorf("unmarshal tools: %w", err)
-	}
-
-	return toolsResult.Tools, nil
-}
-
 func (c *Client) doRequest(ctx context.Context, req JSONRPCRequest) (*JSONRPCResponse, error) {
 	// No retry-on-expiry: the credential authenticates each request on its own,
 	// so a rejected one will be rejected again. A revoked or expired token needs
@@ -427,7 +389,7 @@ func (c *Client) doRequest(ctx context.Context, req JSONRPCRequest) (*JSONRPCRes
 	return c.doRequestOnce(ctx, req, "", "", nil)
 }
 
-// ConsentError is a protocol error in the -33501..-33505 range.
+// ConsentError is a typed consent or confirmation refusal.
 // Its error.data contains {"tag": ..., "payload": {...}}. Commands recover
 // it with errors.As and render it via formatConsentError. A
 // confirmation_required error is never a success: the change waits for the
@@ -446,7 +408,6 @@ var consentTagByCode = map[int]string{
 	-33501: "setup_required",
 	-33502: "consent_required",
 	-33503: "consent_conflict",
-	-33504: "restart_required",
 	-33505: "confirmation_required",
 }
 

@@ -26,7 +26,11 @@ import (
 // root is mounted writable (`docker run --security-opt writable-cgroups=true`).
 func boundedKeeper(t *testing.T) *keeper {
 	t.Helper()
-	k := newKeeper(t)
+	return newKeeper(t).withMemory(t)
+}
+
+func (k *keeper) withMemory(t *testing.T) *keeper {
+	t.Helper()
 	self, err := os.ReadFile(cgroup.SelfPath)
 	if err != nil {
 		t.Fatal(err)

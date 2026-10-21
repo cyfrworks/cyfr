@@ -300,7 +300,6 @@ func TestCallTool_ConsentCodesNameTheirTag(t *testing.T) {
 		-33501: "setup_required",
 		-33502: "consent_required",
 		-33503: "consent_conflict",
-		-33504: "restart_required",
 		-33505: "confirmation_required",
 	}
 	if len(consentTagByCode) != len(want) {
@@ -348,39 +347,6 @@ func TestCallTool_Bare404(t *testing.T) {
 	}
 }
 
-func TestClose_SendsNothing(t *testing.T) {
-	var anyRequest bool
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		anyRequest = true
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL)
-	c.SessionID = "sess-to-close"
-
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
-	// There is no server-side session to terminate, so Close talks to nobody —
-	// the credential is revoked by logging out, not by closing a client.
-	if anyRequest {
-		t.Error("expected Close to send no request")
-	}
-	if c.SessionID != "" {
-		t.Errorf("expected SessionID to be cleared, got %q", c.SessionID)
-	}
-}
-
-func TestClose_NoSession(t *testing.T) {
-	c := NewClient("http://example.com")
-	// Close with no session should be a no-op
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close with no session should not error, got: %v", err)
-	}
-}
-
 func TestCallTool_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -395,38 +361,6 @@ func TestCallTool_HTTPError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "HTTP 500") {
 		t.Errorf("expected error containing 'HTTP 500', got %q", err.Error())
-	}
-}
-
-func TestListTools(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := JSONRPCResponse{
-			JSONRPC: "2.0",
-			ID:      1,
-			Result: map[string]any{
-				"tools": []map[string]any{
-					{"name": "tool-a", "description": "Tool A"},
-					{"name": "tool-b", "description": "Tool B"},
-				},
-			},
-		}
-		json.NewEncoder(w).Encode(resp)
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL)
-	tools, err := c.ListTools(t.Context())
-	if err != nil {
-		t.Fatalf("ListTools failed: %v", err)
-	}
-	if len(tools) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(tools))
-	}
-	if tools[0].Name != "tool-a" {
-		t.Errorf("expected first tool 'tool-a', got %q", tools[0].Name)
-	}
-	if tools[1].Name != "tool-b" {
-		t.Errorf("expected second tool 'tool-b', got %q", tools[1].Name)
 	}
 }
 
@@ -552,7 +486,7 @@ func TestRequestHeaders(t *testing.T) {
 			JSONRPC: "2.0",
 			ID:      req.ID,
 			Result: map[string]any{
-				"tools": []any{},
+				"supportedVersions": []string{protocolVersion},
 			},
 		}
 		json.NewEncoder(w).Encode(resp)
@@ -561,7 +495,9 @@ func TestRequestHeaders(t *testing.T) {
 
 	c := NewClient(srv.URL)
 	c.SessionID = "my-session"
-	_, _ = c.ListTools(t.Context())
+	if err := c.Discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // ---------------------------------------------------------------------------

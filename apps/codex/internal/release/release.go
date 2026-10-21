@@ -46,8 +46,8 @@ var apiURL = "https://api.github.com/repos/cyfrworks/cyfr/releases?per_page=20"
 // pre-release (e.g. "0.6.0"): the greatest such tag by Compare, so the
 // order the API lists releases in never picks an older line's later patch.
 // Drafts, releases GitHub marks as pre-releases, tags with a pre-release
-// and tags that are no release version (legacy "v*" and "porta-v*"
-// desktop releases among them) are skipped; none left is ErrNoRelease.
+// and tags outside the release-version grammar are skipped; none left
+// is ErrNoRelease.
 func Latest(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {

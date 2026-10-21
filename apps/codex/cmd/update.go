@@ -128,7 +128,7 @@ const (
 )
 
 // bundledServices are the services of the bundled stack besides cyfr, whose
-// fields ensureCyfrComposeFields keeps; caddy and tailscale are the public
+// fields ensureComposeFields keeps; caddy and tailscale are the public
 // and tailnet profiles' proxies, optional to a project that never runs one.
 var bundledServices = []string{"locus-runtime", "locus-builds", "locus-backends", "locus-builds-guard", "locus-backends-guard"}
 
@@ -1162,7 +1162,7 @@ func (u *updater) readConfig() error {
 		}
 		c.storageMounts = append([]storageMount{{host: resolved, dir: true}}, nested...)
 		// The root the snapshot copies is the one compose resolves, which
-		// the switch keeps: ensureCyfrComposeFields adds no mount at a
+		// the switch keeps: ensureComposeFields adds no mount at a
 		// target already bound.
 		fmt.Fprintf(u.out, "Storage root %s is %s on the host.\n", dataPath, resolved)
 		for _, n := range nested {
@@ -1909,7 +1909,7 @@ func copyTree(root, dst string, exclude map[string]bool, out io.Writer) error {
 // ---- the switch -----------------------------------------------------------------
 
 // switchImages writes the planned compose file over one that is still the
-// file the plan read, then lets ensureCyfrComposeFields add any field cyfr
+// file the plan read, then lets ensureComposeFields add any field cyfr
 // requires.
 func (u *updater) switchImages() error {
 	current, err := os.ReadFile(u.compose.path)
@@ -2066,21 +2066,11 @@ var requiredEnvFiles = []string{
 	".env",
 }
 
-// ensureCyfrComposeFields parses docker-compose.yml, locates the cyfr service,
-// and ensures all required fields are present. Missing volumes, ports,
-// env_file entries, and container_name are added. Existing user content
-// (env vars, networks, labels, custom additions) is preserved.
-//
-// Returns a list of human-readable descriptions of what was added (empty if
-// nothing was missing). Returns an error if the file can't be parsed as YAML
-// or if no cyfr service can be found.
-func ensureCyfrComposeFields(path string) ([]string, error) {
-	return ensureComposeFields(path, nil)
-}
-
-// ensureComposeFields is ensureCyfrComposeFields with bound, when not nil,
-// the container paths compose itself resolves a mount of the cyfr service
-// at: no default mount is added at one of them, whatever form binds it.
+// ensureComposeFields adds the cyfr service's required fields while
+// preserving custom settings. bound names the mount targets compose resolves,
+// so no default mount shadows one supplied by an override or another source.
+// It returns descriptions of the additions, or an error when the file cannot
+// be read, parsed or written, or contains no cyfr service.
 func ensureComposeFields(path string, bound map[string]bool) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

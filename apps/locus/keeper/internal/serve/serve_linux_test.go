@@ -263,20 +263,18 @@ func (k *keeper) reply(t *testing.T) map[string]any {
 // and uid, and the relay's connection read past its attach frame.
 func (k *keeper) spawn(t *testing.T, id, script string, env map[string]string, control bool) (string, int, *relayConn) {
 	t.Helper()
-	return k.spawnBounded(t, id, script, env, control, 0)
+	return k.spawnBounded(t, id, script, env, control, 64<<20)
 }
 
-// spawnRequest is the parsed request for a spawn of `/bin/sh -c script`,
-// with a memory bound when memoryBytes is not zero.
+// spawnRequest is the parsed request for a spawn of `/bin/sh -c script`
+// with the given memory bound.
 func spawnRequest(t *testing.T, attach, id, script string, env map[string]string, control bool, memoryBytes uint64) *protocol.Request {
 	t.Helper()
 	message := map[string]any{
 		"v": protocol.Version, "type": protocol.TypeSpawn, "id": id, "pool": "runner",
 		"argv": []string{"/bin/sh", "-c", script}, "env": env, "control": control,
-		"attach": map[string]string{"path": attach, "token": testToken},
-	}
-	if memoryBytes != 0 {
-		message["memory_bytes"] = memoryBytes
+		"memory_bytes": memoryBytes,
+		"attach":       map[string]string{"path": attach, "token": testToken},
 	}
 	line, err := json.Marshal(message)
 	if err != nil {
@@ -284,12 +282,12 @@ func spawnRequest(t *testing.T, attach, id, script string, env map[string]string
 	}
 	req, rerr := protocol.ParseRequest(line)
 	if rerr != nil {
-		t.Fatal(rerr)
+		t.Fatal(rerr.Detail)
 	}
 	return req
 }
 
-// spawnBounded is spawn with a memory bound, none when memoryBytes is zero.
+// spawnBounded is spawn with the given memory bound.
 func (k *keeper) spawnBounded(t *testing.T, id, script string, env map[string]string, control bool, memoryBytes uint64) (string, int, *relayConn) {
 	t.Helper()
 	req := spawnRequest(t, k.attach, id, script, env, control, memoryBytes)
@@ -395,7 +393,7 @@ func TestServeRefusesAnUndeclaredKeeperVariableNamingIt(t *testing.T) {
 }
 
 func TestRunnerLifecycleUnderAPooledUID(t *testing.T) {
-	k := newKeeper(t)
+	k := boundedKeeper(t)
 	t.Setenv("SPAWN_TEST_CANARY", "leaked")
 
 	// A runner: its control channel is fd 3, its environment is the
@@ -461,7 +459,7 @@ sleep 60`
 }
 
 func TestRunnerExitEndsItsControlStreamAndRetiresIt(t *testing.T) {
-	k := newKeeper(t)
+	k := boundedKeeper(t)
 	spawnID, uid, rc := k.spawn(t, "2", `printf 'bye\n' >&3; exit 7`, map[string]string{}, true)
 	rc.readUntil(t, func() bool { return false })
 	if string(rc.got[frame.StreamControl]) != "bye\n" || !rc.ended[frame.StreamControl] || !rc.ended[frame.StreamStdout] || !rc.ended[frame.StreamStderr] {
@@ -478,7 +476,7 @@ func TestRunnerExitEndsItsControlStreamAndRetiresIt(t *testing.T) {
 }
 
 func TestASpawnWithoutControlHasNoFd3(t *testing.T) {
-	k := newKeeper(t)
+	k := boundedKeeper(t)
 	script := `if [ -e /proc/self/fd/3 ]; then echo fd3:open; else echo fd3:closed; fi`
 	spawnID, uid, rc := k.spawn(t, "3", script, map[string]string{}, false)
 	rc.readUntil(t, func() bool { return false })
@@ -543,7 +541,7 @@ func TestIsolationMustMatchThePool(t *testing.T) {
 			waiters: map[int]*child{},
 			channel: ours,
 		}
-		req := spawnRequest(t, "/run/a.sock", "9", "true", map[string]string{}, true, 0)
+		req := spawnRequest(t, "/run/a.sock", "9", "true", map[string]string{}, true, 64<<20)
 		req.Isolation = c.isolation
 		s.handleSpawn(req)
 		line, _, err := protocol.NewLineReader(theirs).Next()
@@ -584,8 +582,8 @@ func newIsolatedKeeper(t *testing.T) *keeper {
 	return k
 }
 
-// The probe proves every step an isolated spawn's stage takes before it
-// executes anything, and passes where the host allows them.
+// The probe checks an isolated stage's namespace mappings, credentials and
+// capability drop, and passes where the host allows them.
 func TestTheProbeProvesIsolationWhereTheHostAllowsIt(t *testing.T) {
 	newIsolatedKeeper(t)
 }
@@ -595,7 +593,7 @@ func TestTheProbeProvesIsolationWhereTheHostAllowsIt(t *testing.T) {
 // reaches nothing: the loopback is down and no other interface exists. Its
 // uid, home, control channel and retirement are those of any spawn.
 func TestAnIsolatedSpawnHasItsOwnNamespaceAndNoCapability(t *testing.T) {
-	k := newIsolatedKeeper(t)
+	k := newIsolatedKeeper(t).withMemory(t)
 	keeperNet, err := os.Readlink("/proc/self/ns/net")
 	if err != nil {
 		t.Fatal(err)
@@ -666,13 +664,10 @@ echo done`
 	}
 }
 
-// The keeper places an isolated stage in its spawn's bounded group from the
-// parent side before the spec releases it, so the command starts inside
-// its bound, in its own namespace.
 // An isolated spawn's relay, its fd 4, is carried on stream 5 once the
 // client opens it, both ways.
 func TestAnIsolatedSpawnsRelayIsCarriedOnceOpened(t *testing.T) {
-	k := newIsolatedKeeper(t)
+	k := newIsolatedKeeper(t).withMemory(t)
 	script := `printf 'call\n' >&4; IFS= read -r answer <&4; echo "got:$answer"`
 	spawnID, uid, rc := k.spawn(t, "1", script, map[string]string{}, true)
 	rc.send(t, frame.StreamRelay, nil)
@@ -691,11 +686,10 @@ func TestAnIsolatedSpawnsRelayIsCarriedOnceOpened(t *testing.T) {
 	assertRetired(t, k, uid)
 }
 
-// A client that never opens stream 5, as the runtime's client today, never
-// receives a frame on it, its end included, though the spawn wrote to its
-// relay and exited.
+// A client that never opens stream 5 receives no frame on it, its end
+// included, though the spawn wrote to its relay and exited.
 func TestAnIsolatedSpawnsRelayIsSilentUnopened(t *testing.T) {
-	k := newIsolatedKeeper(t)
+	k := newIsolatedKeeper(t).withMemory(t)
 	spawnID, uid, rc := k.spawn(t, "1", `printf 'call\n' >&4; printf 'bye\n' >&3; echo done`, map[string]string{}, true)
 	rc.readUntil(t, func() bool { return false })
 	if _, sent := rc.got[frame.StreamRelay]; sent || rc.ended[frame.StreamRelay] {
@@ -714,17 +708,11 @@ func TestAnIsolatedSpawnsRelayIsSilentUnopened(t *testing.T) {
 	assertRetired(t, k, uid)
 }
 
+// The keeper places an isolated stage in its spawn's bounded group from the
+// parent side before the spec releases it, so the command starts inside
+// its bound, in its own namespace.
 func TestAnIsolatedSpawnRunsInItsBoundedGroup(t *testing.T) {
-	k := newIsolatedKeeper(t)
-	self, err := os.ReadFile(cgroup.SelfPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	memory, err := cgroup.Delegate(cgroup.Root, self)
-	if err != nil {
-		t.Skipf("no memory bound can be enforced here: %v", err)
-	}
-	k.s.memory = memory
+	k := newIsolatedKeeper(t).withMemory(t)
 	keeperNet, err := os.Readlink("/proc/self/ns/net")
 	if err != nil {
 		t.Fatal(err)

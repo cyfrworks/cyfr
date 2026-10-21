@@ -661,18 +661,8 @@ func printDepTree(nodes []any, indent string) {
 		if n, ok := node.(map[string]any); ok {
 			ref := n["dependency_ref"]
 			marker := ""
-			if opt, ok := n["optional"]; ok {
-				// optional may be int (0/1) or bool
-				switch v := opt.(type) {
-				case bool:
-					if v {
-						marker = " (optional)"
-					}
-				case float64:
-					if v != 0 {
-						marker = " (optional)"
-					}
-				}
+			if opt, _ := n["optional"].(bool); opt {
+				marker = " (optional)"
 			}
 			if cycle, ok := n["cycle"].(bool); ok && cycle {
 				marker += " (cycle)"
@@ -703,25 +693,6 @@ func pluralize(word string, count int) string {
 		return word[:len(word)-1] + "ies"
 	}
 	return word + "s"
-}
-
-// resolveAllVersions resolves a component reference for admin operations
-// (grants, policies). If a version is present, returns a single-element slice.
-// If no version is given, returns a single name-level ref (e.g., "catalyst:local.claude")
-// which the server interprets as applying to all versions of the component.
-//
-// Refs containing '@' are passed through unchanged — ref.ParseRef + Validate
-// reject them (personal slugs are bare; '@' is invalid anywhere in a ref).
-func resolveAllVersions(_ *mcp.Client, s string) []string {
-	parsed := ref.ParseRef(s)
-	if parsed.HasVersion {
-		return []string{s}
-	}
-
-	// Pass name-level ref directly to the server.
-	// The server's normalize_or_name_ref handles this correctly,
-	// applying grants/policies to all versions of the component.
-	return []string{parsed.NameRef()}
 }
 
 // resolveComponentRef fills in an omitted component version.

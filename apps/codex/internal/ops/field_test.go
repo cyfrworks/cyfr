@@ -22,7 +22,7 @@ func TestFieldPreservesPresence(t *testing.T) {
 	}{
 		{input{}, `{}`},
 		{input{Count: Value(0), Enabled: Value(false), Name: Value("")}, `{"count":0,"enabled":false,"name":""}`},
-		{input{Nullable: Null[string]()}, `{"nullable":null}`},
+		{input{Nullable: Value[*string](nil)}, `{"nullable":null}`},
 		{input{Nullable: Nullable("")}, `{"nullable":""}`},
 		{input{Items: Value([]string{})}, `{"items":[]}`},
 	} {

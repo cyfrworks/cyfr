@@ -152,7 +152,7 @@ func ParseRef(s string) ParsedRef {
 //
 // A missing Type is NOT a validation error — many CLI code paths accept
 // typeless refs and infer the type elsewhere. Callers that require a type
-// should check [ParsedRef.HasTypePrefix] separately.
+// check whether ParsedRef.Type is empty separately.
 func Validate(p ParsedRef) error {
 	if p.Name == "" {
 		return fmt.Errorf("invalid ref: name is required")
@@ -387,30 +387,6 @@ func comparePreIdent(a, b string) int {
 	default:
 		return strings.Compare(a, b)
 	}
-}
-
-// HasTypePrefix reports whether the parsed ref had an explicit type prefix.
-func (p ParsedRef) HasTypePrefix() bool {
-	return p.Type != ""
-}
-
-// NameRef returns a name-level reference without a version.
-// An empty namespace defaults to "local" and type shorthands expand,
-// e.g. "c:claude" becomes "catalyst:local.claude".
-func (p ParsedRef) NameRef() string {
-	var b strings.Builder
-	if p.Type != "" {
-		b.WriteString(ExpandType(p.Type))
-		b.WriteByte(':')
-	}
-	ns := p.Namespace
-	if ns == "" {
-		ns = "local"
-	}
-	b.WriteString(ns)
-	b.WriteByte('.')
-	b.WriteString(p.Name)
-	return b.String()
 }
 
 // WithVersion returns the ref string rebuilt with the given version.

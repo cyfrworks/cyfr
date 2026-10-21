@@ -99,12 +99,11 @@
       "setup_required": -33501,
       "consent_required": -33502,
       "consent_conflict": -33503,
-      "restart_required": -33504,
       "confirmation_required": -33505
     },
     "fallback_code": -32603
   },
-  "consent_tags": ["setup_required", "consent_required", "consent_conflict", "restart_required", "confirmation_required"],
+  "consent_tags": ["setup_required", "consent_required", "consent_conflict", "confirmation_required"],
   "consent_errors": [
     {
       "why": "setup_required naming the node and its need",
@@ -145,20 +144,6 @@
           "code": -33503,
           "message": "Consent conflict: the consent changed while deciding — re-run the grant",
           "data": {"tag": "consent_conflict", "payload": {}}
-        }
-      }
-    },
-    {
-      "why": "restart_required",
-      "tag": "restart_required",
-      "payload": {"ref": "formula:local.digest:1.0.0"},
-      "response": {
-        "jsonrpc": "2.0",
-        "id": 5,
-        "error": {
-          "code": -33504,
-          "message": "Approved — re-run the command to continue (the in-flight run was stopped)",
-          "data": {"tag": "restart_required", "payload": {"ref": "formula:local.digest:1.0.0"}}
         }
       }
     },

@@ -62,11 +62,3 @@ func KeyValue(data map[string]any) {
 func Success(msg string) {
 	fmt.Println(msg)
 }
-
-// Debugf writes diagnostics to stderr when CYFR_DEBUG is set,
-// including otherwise silent network and config-save failures.
-func Debugf(format string, args ...any) {
-	if os.Getenv("CYFR_DEBUG") != "" {
-		fmt.Fprintf(os.Stderr, "[debug] "+format+"\n", args...)
-	}
-}

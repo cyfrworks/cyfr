@@ -23,7 +23,6 @@ var (
 func init() {
 	// Top-level
 	registryCmd.AddCommand(registryWhoamiCmd)
-	registryCmd.AddCommand(registryProbeCmd)
 	registryCmd.AddCommand(registryGetNamespaceCmd)
 
 	// publisher
@@ -52,7 +51,7 @@ func init() {
 }
 
 // ----------------------------------------------------------------------------
-// registry whoami — two-action compose (same shape as top-level `cyfr whoami`)
+// registry whoami — registry identity and memberships
 // ----------------------------------------------------------------------------
 
 var registryWhoamiCmd = &cobra.Command{
@@ -75,48 +74,6 @@ you only want the registry state.`,
 			return nil
 		}
 		output.KeyValue(result)
-		return nil
-	},
-}
-
-// ----------------------------------------------------------------------------
-// registry probe — manual re-sync of push tokens
-// ----------------------------------------------------------------------------
-
-var registryProbeCmd = &cobra.Command{
-	Use:   "probe",
-	Short: "Re-sync push tokens with cyfr.run",
-	Long: `Refreshes the cyfr.run push-token state for the current session.
-
-Normally the probe runs automatically during ` + "`cyfr login`" + ` — this
-command exists as the manual retry path for when memberships change on
-another device, or when the automatic probe transiently failed.
-
-# In-place re-probe not yet supported
-
-This command currently DOES NOT re-probe in-place. It forwards the user
-to ` + "`cyfr login`" + ` instead because:
-
-  1. /v1/identity/probe requires an IdP access_token to prove identity.
-  2. codex does not cache the access_token between commands — it's a
-     single-use secret that device_poll returns once, ` + "`cmd/login.go`" + `
-     consumes for the one-shot personal-namespace claim, and discards.
-  3. A true re-probe would require either (a) caching the access_token
-     securely between commands (needs keychain / OS secret store) or (b) a
-     server-side session-token-backed probe (new MCP action that uses the
-     Sanctum session to re-verify via the IdP on the server's behalf).
-
-Until either path lands, ` + "`cyfr login`" + ` is the canonical refresh. The
-server-side behavior is idempotent — a fresh DeviceFlow on an already-valid
-session re-runs the probe, re-populates CredentialStore entries, and
-returns the same session_id back.`,
-	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Fprintln(cmd.ErrOrStderr(),
-			"`cyfr registry probe` currently forwards to `cyfr login` — see "+
-				"`cyfr registry probe --help` for the rationale.")
-		fmt.Fprintln(cmd.ErrOrStderr(),
-			"Run `cyfr login` to refresh push tokens for your namespaces.")
 		return nil
 	},
 }

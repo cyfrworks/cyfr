@@ -1074,7 +1074,6 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr aqua list/get/status/reset/skills` | Read the AQUA soul, roles, guides and scrolls, see which files are shipped, edited or yours, and reset to shipped `[i]` |
 | `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `threads/` read-only |
 | `cyfr registry whoami` | Show registry identity (push tokens, claimed namespaces) |
-| `cyfr registry probe` | Force a re-probe against cyfr.run (re-mints push tokens) |
 | `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |
 | `cyfr registry publisher claim/verify <domain>` | Claim + DNS-verify a publisher namespace `[i]` |
 | `cyfr registry tokens list/issue/revoke <ns>` | Manage push tokens for a namespace; issuing one needs a fresh confirmation given in Prism `[i]` |
@@ -1097,7 +1096,7 @@ Use `--no-interactive` or set `CYFR_NO_INTERACTIVE=1` to disable interactive pro
 
 `cyfr` normally reads its credential from `~/.cyfr/config.json` (written by `cyfr login`). A CI job or container passes one directly instead: `--token <cyfr_...>` on any command, or `CYFR_TOKEN` in the environment — a `cyfr_` API key minted with `cyfr key create`, or a session token. The flag wins over the environment, which wins over the stored config.
 
-CLI environment variables: `CYFR_TOKEN` (credential), `CYFR_NO_INTERACTIVE=1` (no prompts), `CYFR_NO_UPDATE_CHECK=1` (no release check — air-gapped installs), `CYFR_DEBUG=1` (verbose request/response detail on stderr).
+CLI environment variables: `CYFR_TOKEN` (credential), `CYFR_NO_INTERACTIVE=1` (no prompts), `CYFR_NO_UPDATE_CHECK=1` (no release check — air-gapped installs).
 
 ## Glossary
 

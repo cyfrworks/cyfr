@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// Package stage prepares and executes one spawned process. `cyfr-locus
-// stage` starts already running as the allocated uid and gid with no
-// supplementary groups, in a session of its own. It reads its Spec from
-// fd 3, creates the home, applies the limits, builds the environment from
-// nothing, and executes the command with the backend's pipes on fds 0-2
-// and, for a spawn with a control channel, that channel's socket on fd 3.
+// Package stage prepares and executes one spawned process in a session of
+// its own. A stage sharing the keeper's namespaces starts as the allocated
+// uid and gid with no supplementary groups. An isolated stage keeps the
+// keeper's ids until the keeper maps its namespace; after reading its Spec
+// from fd 3 it becomes the allocated ids and drops its capabilities. The
+// stage creates the home, applies the limits, builds the environment from
+// nothing, and executes the command with stdio on fds 0-2, its control
+// channel on fd 3 when requested, and its relay on fd 4 when isolated.
 package stage
 
 import (
@@ -40,9 +42,9 @@ type Spec struct {
 	// ControlFD, to become the command's fd 3.
 	Control bool `json:"control"`
 	// Cgroup is the memory-bounded group the keeper moved this process
-	// into before it sent the spec, as /proc/self/cgroup names it; empty
-	// for a spawn without a bound. The stage executes the command only
-	// from inside it.
+	// into before it sent the spec, as /proc/self/cgroup names it. The stage
+	// executes the command only from inside it; an empty internal spec
+	// skips this check. Client spawn requests always require a bound.
 	Cgroup string `json:"cgroup"`
 }
 
