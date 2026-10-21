@@ -1009,7 +1009,7 @@ func TestUpdateRefusesAForeignLiveSlot(t *testing.T) {
 // A cell on several hosts: one host was updated and started first, so its
 // member runs the target release. The next host's update admits that live
 // member, before the stop and in the offline read, and goes on; a member
-// of another release, or of none, is still refused.
+// of another release is refused.
 func TestUpdateAdmitsAMemberAlreadyOnTheTargetRelease(t *testing.T) {
 	// Read once: each scenario moves the test into its own project.
 	compose := shippedCompose(t)
@@ -1025,20 +1025,18 @@ func TestUpdateAdmitsAMemberAlreadyOnTheTargetRelease(t *testing.T) {
 		t.Errorf("the update did not start the switched stack:\n%s", strings.Join(s.log(), "\n"))
 	}
 
-	for name, release := range map[string]string{"another release": `"0.7.9"`, "no release": `null`} {
-		t.Run(name, func(t *testing.T) {
-			other := `{"node":"cyfr@first-host","owner":"o2","release":` + release + `,"lease_until":"2026-10-16T12:00:12Z"}`
-			s := newUpdateScenario(t, compose, nil)
-			s.answer("rpc.out", "CYFR_ROSTER="+`{"self":"cyfr@abc","release":"0.8.0","slots":[`+other+`]}`+"\n")
-			out, err := s.run(context.Background())
-			if err == nil || !strings.Contains(err.Error(), "cyfr@first-host") {
-				t.Fatalf("update answered %v\n%s", err, out)
-			}
-			s.nothingStopped()
-			s.composeUnchanged()
-			s.noBackups()
-		})
-	}
+	t.Run("another release", func(t *testing.T) {
+		other := `{"node":"cyfr@first-host","owner":"o2","release":"0.7.9","lease_until":"2026-10-16T12:00:12Z"}`
+		s := newUpdateScenario(t, compose, nil)
+		s.answer("rpc.out", "CYFR_ROSTER="+`{"self":"cyfr@abc","release":"0.8.0","slots":[`+other+`]}`+"\n")
+		out, err := s.run(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "cyfr@first-host (release 0.7.9)") {
+			t.Fatalf("update answered %v\n%s", err, out)
+		}
+		s.nothingStopped()
+		s.composeUnchanged()
+		s.noBackups()
+	})
 
 	// Offline, a member of the target release beside one of another is still
 	// refused, once the window closes, and the old stack starts again.

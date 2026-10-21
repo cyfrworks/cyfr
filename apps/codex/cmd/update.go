@@ -1397,15 +1397,8 @@ func (u *updater) revertScaffold(reason error) error {
 type rosterSlot struct {
 	Node       string  `json:"node"`
 	Owner      *string `json:"owner"`
-	Release    *string `json:"release"`
+	Release    string  `json:"release"`
 	LeaseUntil string  `json:"lease_until"`
-}
-
-func (s rosterSlot) release() string {
-	if s.Release == nil || *s.Release == "" {
-		return "an unknown release"
-	}
-	return "release " + *s.Release
 }
 
 // markedLine answers the payload of the one line of output starting with
@@ -1464,7 +1457,7 @@ func (u *updater) readRoster() error {
 	var foreign []string
 	for _, slot := range *answer.Slots {
 		if slot.Node != answer.Self && !u.onTarget(slot) {
-			foreign = append(foreign, fmt.Sprintf("%s (%s)", slot.Node, slot.release()))
+			foreign = append(foreign, fmt.Sprintf("%s (release %s)", slot.Node, slot.Release))
 		}
 	}
 	if len(foreign) > 0 {
@@ -1489,9 +1482,9 @@ func (u *updater) listRunning(ctx context.Context) error {
 }
 
 // onTarget reports whether slot's member runs the release this update
-// installs; a slot naming no release does not.
+// installs.
 func (u *updater) onTarget(slot rosterSlot) bool {
-	return slot.Release != nil && *slot.Release == u.version
+	return slot.Release == u.version
 }
 
 // ---- stop, re-read, snapshot -----------------------------------------------------
@@ -1614,7 +1607,7 @@ func (u *updater) waitLiveSlots(admit func(rosterSlot) bool) (string, []rosterSl
 func slotNames(slots []rosterSlot) string {
 	var nodes []string
 	for _, slot := range slots {
-		nodes = append(nodes, fmt.Sprintf("%s (%s)", slot.Node, slot.release()))
+		nodes = append(nodes, fmt.Sprintf("%s (release %s)", slot.Node, slot.Release))
 	}
 	return strings.Join(nodes, ", ")
 }

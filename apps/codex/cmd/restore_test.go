@@ -388,7 +388,7 @@ func TestRestoreRemovesAWALTheSnapshotDoesNotHold(t *testing.T) {
 // back and docker-compose.yml and .env are as they were.
 func TestRestoreRefusesALiveMemberOfAnyRelease(t *testing.T) {
 	compose := shippedCompose(t)
-	for name, release := range map[string]string{"the snapshot's": `"0.8.0"`, "the running": `"0.9.0"`, "another": `"0.7.0"`, "none": `null`} {
+	for name, release := range map[string]string{"the snapshot's": `"0.8.0"`, "the running": `"0.9.0"`, "another": `"0.7.0"`} {
 		t.Run(name, func(t *testing.T) {
 			r := newRestoreScenario(t, compose, nil, nil)
 			r.edit(".env", editedEnv)
