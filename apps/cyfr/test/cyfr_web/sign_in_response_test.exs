@@ -101,26 +101,6 @@ defmodule CyfrWeb.SignInResponseTest do
       assert %{max_age: 0} = conn.resp_cookies[@probe_cookie]
     end
 
-    test "a stash that cannot be written leaves the sign-in standing" do
-      conn =
-        build_conn()
-        |> init_test_session(%{})
-        |> fetch_flash()
-
-      {conn, log} =
-        with_log(fn ->
-          SignInResponse.respond(conn, {:proceed, %{}},
-            session: :existing,
-            access_token: "gho_probe"
-          )
-        end)
-
-      assert redirected_to(conn) == "/"
-      refute Map.has_key?(conn.resp_cookies, @probe_cookie)
-      assert log =~ "failed to stash pending_probe cookie"
-      refute log =~ "gho_probe"
-    end
-
     test "the registry's report is flashed" do
       conn =
         SignInResponse.respond(

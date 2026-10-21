@@ -25,6 +25,10 @@ defmodule CyfrWeb.ConnCase do
   gives a bare `conn`, which reaches the plug as an anonymous caller.
   `auth` on an async test raises, because the provider that reads the
   bearer is global application environment.
+
+  The `conn` carries the endpoint's `secret_key_base`, as the endpoint
+  sets it on every request it serves, so a test that calls a plug or a
+  controller action directly signs and encrypts cookies as a request does.
   """
 
   use ExUnit.CaseTemplate
@@ -71,7 +75,10 @@ defmodule CyfrWeb.ConnCase do
               "application environment, so only a sync test may authenticate"
     end
 
-    conn = Phoenix.ConnTest.build_conn()
+    conn = %{
+      Phoenix.ConnTest.build_conn()
+      | secret_key_base: Application.fetch_env!(:cyfr, CyfrWeb.Endpoint)[:secret_key_base]
+    }
 
     case tags[:auth] do
       :person -> authenticate_as(conn)
