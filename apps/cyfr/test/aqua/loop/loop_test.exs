@@ -86,7 +86,7 @@ defmodule Aqua.LoopTest do
     {:ok, authority} = Opus.authority_for(ctx, :default, @soul)
 
     # What `Aqua.AgentConfig` resolves, and so what the spec holds.
-    versioned = @model <> ":1.3.1"
+    versioned = @model <> ":1.4.1"
     {:ok, name_ref} = Prima.ComponentRef.to_name_ref(versioned)
 
     # The graph is keyed the way `Opus.Admission` steps: by name. Asking with
