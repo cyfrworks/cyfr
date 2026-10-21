@@ -27,8 +27,8 @@ defmodule Cyfr.Platform.Settings.Roster do
   harness), which a shell may export beside a server. `unknown/2` is the
   refusal: a `CYFR_*` name in the boot's `.env` files that none of the
   first three classes declares, or one in its process environment that
-  none of the four declares, refuses the boot naming it. That is how a
-  retired name is refused without a list of retired names.
+  none of the four declares, refuses the boot naming it: a name the server
+  does not read is never set to no effect.
 
   Every declaration carries the sentence `configuration-guide.md` gives
   it, which `mix cyfr.gen.configuration_guide` renders from this module.
