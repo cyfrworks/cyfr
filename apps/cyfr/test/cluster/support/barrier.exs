@@ -16,9 +16,9 @@ defmodule Cyfr.Cluster.Barrier do
 
   The barrier lives on a member rather than on the control node, because
   the control node is not distributed (`Cyfr.Cluster.Cell`) and cannot be
-  reached from inside a member. It is addressed by `{name, node}`, so
-  either member can host it and the other reaches it over distribution —
-  which is also why no case that cuts distribution may use one.
+  reached from inside a member. It is addressed by its pid, so either
+  member can host it and the other reaches it over distribution — which
+  is also why no case that cuts distribution may use one.
   """
 
   @compile {:no_warn_undefined, Cyfr.Cluster.Cell}
@@ -42,49 +42,37 @@ defmodule Cyfr.Cluster.Barrier do
   @spec race(keyword({module(), atom(), [term()]})) :: keyword()
   def race(funs) when is_list(funs) do
     [{host_id, _} | _] = funs
-    host = Cyfr.Cluster.Cell.member(host_id).node
-    name = :"barrier_#{System.unique_integer([:positive])}"
-    count = length(funs)
-
-    :ok = Cyfr.Cluster.Cell.call(host_id, __MODULE__, :open, [name, count])
+    barrier = Cyfr.Cluster.Cell.call(host_id, __MODULE__, :open, [length(funs)])
 
     tasks =
       for {id, fun} <- funs do
         {id,
          Task.async(fn ->
-           Cyfr.Cluster.Cell.call(id, __MODULE__, :run, [{name, host}, fun], 60_000)
+           Cyfr.Cluster.Cell.call(id, __MODULE__, :run, [barrier, fun], 60_000)
          end)}
       end
 
     results = for {id, task} <- tasks, do: {id, Task.await(task, 60_000)}
-    :ok = Cyfr.Cluster.Cell.call(host_id, __MODULE__, :close, [name])
+    :ok = Cyfr.Cluster.Cell.call(host_id, __MODULE__, :close, [barrier])
     results
   end
 
   @doc false
   # Opened on the host member. A plain process rather than a GenServer:
   # it has one job and it must not outlive the race that opened it.
-  @spec open(atom(), pos_integer()) :: :ok
-  def open(name, count) do
-    pid = spawn(fn -> gather(count, []) end)
-    Process.register(pid, name)
-    :ok
-  end
+  @spec open(pos_integer()) :: pid()
+  def open(count), do: spawn(fn -> gather(count, []) end)
 
   @doc false
-  @spec close(atom()) :: :ok
-  def close(name) do
-    case Process.whereis(name) do
-      nil -> :ok
-      pid -> Process.exit(pid, :kill)
-    end
-
+  @spec close(pid()) :: :ok
+  def close(barrier) do
+    Process.exit(barrier, :kill)
     :ok
   end
 
   @doc false
   # Called on each member: arrive, wait for the last party, then act.
-  @spec run({atom(), node()}, {module(), atom(), [term()]}) :: term()
+  @spec run(pid(), {module(), atom(), [term()]}) :: term()
   def run(barrier, {module, function, args}) do
     arrive(barrier)
     apply(module, function, args)
@@ -97,7 +85,7 @@ defmodule Cyfr.Cluster.Barrier do
   barrier that never releases is a case whose other party never ran, and
   a hanging suite says less than a failing one.
   """
-  @spec arrive({atom(), node()}) :: :ok
+  @spec arrive(pid()) :: :ok
   def arrive(barrier) do
     send(barrier, {:arrived, self()})
 

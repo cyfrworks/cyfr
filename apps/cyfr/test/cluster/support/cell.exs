@@ -72,6 +72,11 @@ defmodule Cyfr.Cluster.Cell do
   @name __MODULE__
   @host ~c"127.0.0.1"
 
+  # Each member's node name, by its id, with the host above: a node name is
+  # an atom, so this spells each rather than minting one.
+  @node_names %{a: :cyfr_cell_a, b: :cyfr_cell_b}
+  @nodes %{a: :"cyfr_cell_a@127.0.0.1", b: :"cyfr_cell_b@127.0.0.1"}
+
   # Long enough for the whole application to come up on a cold VM under a
   # loaded machine, and short enough that a member that will never boot is
   # a failure rather than a hang.
@@ -410,7 +415,7 @@ defmodule Cyfr.Cluster.Cell do
   defp boot(member) do
     {:ok, peer, node} =
       :peer.start(%{
-        name: member.id |> node_basename() |> String.to_atom(),
+        name: Map.fetch!(@node_names, member.id),
         host: @host,
         longnames: true,
         connection: :standard_io,
@@ -644,9 +649,12 @@ defmodule Cyfr.Cluster.Cell do
 
   defp safe_call(_member, _module, _function, _args, _timeout), do: :error
 
+  # Each member runs under the cell's cookie (`-setcookie`), and holds its
+  # own for every peer again.
   defp restore_cookies(members) do
     for one <- members, other <- members, one.node != other.node do
-      safe_call(one, :erlang, :set_cookie, [other.node, String.to_atom(cookie())])
+      with {:ok, own} <- safe_call(one, :erlang, :get_cookie, []),
+           do: safe_call(one, :erlang, :set_cookie, [other.node, own])
     end
 
     :ok
@@ -666,9 +674,7 @@ defmodule Cyfr.Cluster.Cell do
   defp put_member(state, member),
     do: %{state | members: Enum.map(state.members, &if(&1.id == member.id, do: member, else: &1))}
 
-  defp node_basename(id), do: "cyfr_cell_#{id}"
-
-  defp node_name(id), do: :"#{node_basename(id)}@#{@host}"
+  defp node_name(id), do: Map.fetch!(@nodes, id)
 
   # A loopback port nothing holds, for a member to bind and to advertise.
   # The socket is closed before the member starts, which is the usual
