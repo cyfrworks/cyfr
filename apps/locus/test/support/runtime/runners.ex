@@ -53,10 +53,11 @@ defmodule Locus.Runtime.Test.Runners do
   @doc """
   Answer once no runner exit the worker service of this VM reports is in
   flight. The service reports each exit in a process of its own, spawned
-  as it handles the runner's end, which ends once CYFR answers or the
-  report gives up (`Locus.Runtime.HostClient.runner_exited/5` bounds it);
-  the service handles what it was already sent before the reports are
-  looked for. Fails past `timeout_ms`.
+  as it handles the runner's end and labelled as that report, which ends
+  once CYFR answers or the report gives up
+  (`Locus.Runtime.HostClient.runner_exited/5` bounds it); the service
+  handles what it was already sent before the reports are looked for.
+  Fails past `timeout_ms`.
   """
   @spec await_reports(non_neg_integer()) :: :ok
   def await_reports(timeout_ms \\ 70_000) do
@@ -64,14 +65,11 @@ defmodule Locus.Runtime.Test.Runners do
     wait_until(fn -> reports() == [] end, timeout_ms, "the runner exit reports in flight")
   end
 
-  # A report is the one process the service spawns from a function of its
-  # own; the service itself starts through proc_lib.
+  # A report is the process labelled `{Locus.Runtime.WorkerService,
+  # :report, runner}`; a process that has ended has no label.
   defp reports do
     for pid <- Process.list(),
-        match?(
-          {:initial_call, {Locus.Runtime.WorkerService, _fun, 0}},
-          Process.info(pid, :initial_call)
-        ),
+        match?({Locus.Runtime.WorkerService, :report, _runner}, :proc_lib.get_label(pid)),
         do: pid
   end
 end

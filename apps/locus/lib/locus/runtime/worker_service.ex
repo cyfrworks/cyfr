@@ -597,12 +597,14 @@ defmodule Locus.Runtime.WorkerService do
   # A report of the end of `runner`, which held `assignment` and whose
   # `exit` listed `open`, runs in a process of its own beside the service,
   # which never waits on CYFR; `Locus.Runtime.HostClient.runner_exited/5`
-  # bounds it.
+  # bounds it. The process is labelled as the report it is
+  # (`Process.set_label/1`), so a crash report and the observer name it.
   defp report(%{credentials: credentials, boot: boot} = state, runner, assignment, open) do
     {attempts, left_out} = named(assignment, open)
 
     _pid =
       spawn(fn ->
+        Process.set_label({__MODULE__, :report, runner})
         Process.put(:"$callers", assignment.callers)
         Prima.LoggerContext.restore(assignment.logger)
 
