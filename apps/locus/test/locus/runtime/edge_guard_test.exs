@@ -242,9 +242,14 @@ defmodule Locus.Runtime.EdgeGuardTest do
                )
     end
 
-    test "a limits struct with no numeric ceiling checks nothing" do
-      assert :ok = EdgeGuard.check_envelope_size(limits(max_request_size: nil), "anything")
-      assert :ok = EdgeGuard.check_envelope_size(limits(max_request_size: 0), "anything")
+    test "a zero ceiling is a ceiling: the envelope holds the framing alone" do
+      l = limits(max_request_size: 0)
+      framing = EdgeGuard.envelope_overhead()
+
+      assert :ok = EdgeGuard.check_envelope_size(l, String.duplicate("x", framing))
+
+      assert {:error, :request_too_large} =
+               EdgeGuard.check_envelope_size(l, String.duplicate("x", framing + 1))
     end
   end
 
@@ -254,9 +259,9 @@ defmodule Locus.Runtime.EdgeGuardTest do
 
       assert :ok = EdgeGuard.check_request_size(l, %{body: String.duplicate("x", 50), url: ""})
 
-      # Body alone under the limit, but the headers carry it over: measuring
-      # the body alone let a guest move megabytes through header values
-      # while the consented ceiling read as enforced.
+      # Body alone under the limit, but the headers carry it over: header
+      # values count against the ceiling, so a guest cannot move megabytes
+      # through them.
       assert {:error, :request_too_large, message} =
                EdgeGuard.check_request_size(l, %{
                  body: String.duplicate("x", 50),
@@ -291,23 +296,14 @@ defmodule Locus.Runtime.EdgeGuardTest do
     end
   end
 
-  describe "check_response_size/2 and check_response_bytes/2" do
-    test "both arities give the same answer and the same message" do
-      l = limits(max_response_size: 100)
-      body = String.duplicate("x", 101)
-
-      assert {:error, :response_too_large, message} = EdgeGuard.check_response_size(l, body)
-      assert {:error, :response_too_large, ^message} = EdgeGuard.check_response_bytes(l, 101)
-
-      assert message == "Response body (101 bytes) exceeds limit (100 bytes)"
-    end
-
-    test "the ceiling itself is allowed; one byte past it is not" do
+  describe "check_response_bytes/2" do
+    test "the ceiling itself is allowed; one byte past it is refused in the denial's words" do
       l = limits(max_response_size: 100)
 
       assert :ok = EdgeGuard.check_response_bytes(l, 100)
-      assert {:error, :response_too_large, _} = EdgeGuard.check_response_bytes(l, 101)
-      assert :ok = EdgeGuard.check_response_size(l, nil)
+      assert :ok = EdgeGuard.check_response_bytes(l, 0)
+      assert {:error, :response_too_large, message} = EdgeGuard.check_response_bytes(l, 101)
+      assert message == "Response body (101 bytes) exceeds limit (100 bytes)"
     end
   end
 end
