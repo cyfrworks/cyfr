@@ -8,7 +8,7 @@ WebAssembly text it is built from.
 
 | File | Is |
 |---|---|
-| `math.wasm` | a core module exporting `sum`, `add` and `multiply`, each over two i32s; CYFR's suite holds a byte copy (`apps/cyfr/test/support/test_wasm/math.wasm`) |
+| `math.wasm` | a core module exporting `sum` and `multiply`, each over two i32s; CYFR's suite holds a byte copy (`apps/cyfr/test/support/test_wasm/math.wasm`) |
 | `echo.wasm` | a reagent component whose `compute` answers its input unchanged |
 | `spin.wasm` | a reagent component whose `compute` never returns, so only the runner's watchdog ends it |
 | `hostile/` | components that push against the engine's bounds or use a refused feature, with their own `build.sh` and README |
