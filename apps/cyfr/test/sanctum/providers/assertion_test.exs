@@ -101,7 +101,7 @@ defmodule Sanctum.Providers.AssertionTest do
   # browser's `/carry` page asks.
   defp carry!(ctx, destination \\ @hub) do
     {:ok, carry} =
-      call(ctx, %{"action" => "carry_begin", "destination" => destination, "operation" => "join"})
+      call(ctx, %{"action" => "carry_begin", "destination" => destination})
 
     carry
   end

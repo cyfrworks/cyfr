@@ -167,7 +167,6 @@ const (
 	LayoutEdit                      = "edit"
 	LayoutGet                       = "get"
 	McpLogCorrelate                 = "correlate"
-	McpLogFanOuts                   = "fan_outs"
 	McpLogGet                       = "get"
 	McpLogList                      = "list"
 	McpLogStats                     = "stats"
@@ -276,7 +275,6 @@ const (
 	SessionCliRevoke                = "cli_revoke"
 	SessionDeviceInit               = "device_init"
 	SessionDevicePoll               = "device_poll"
-	SessionLogin                    = "login"
 	SessionLogout                   = "logout"
 	SessionReadResource             = "read_resource"
 	SessionUse                      = "use"
@@ -345,7 +343,7 @@ var Actions = map[string][]string{
 	"instance_entry":      {"create", "delete", "list", "offered", "people", "rebind", "revoke", "rotate", "set_audience", "set_caps", "set_component_policy", "usage"},
 	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
-	"mcp_log":             {"correlate", "fan_outs", "get", "list", "stats"},
+	"mcp_log":             {"correlate", "get", "list", "stats"},
 	"mcp_servers":         {"create", "delete", "disable", "enable", "get", "list", "refresh", "restart", "test", "update"},
 	"member":              {"add", "leave", "list", "remove"},
 	"notes":               {"endorse", "forget", "keep", "list", "pin", "read", "search"},
@@ -360,7 +358,7 @@ var Actions = map[string][]string{
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "login", "logout", "read_resource", "use", "whoami"},
+	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "logout", "read_resource", "use", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"system":              {"notify", "status"},
 	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "follow", "get", "list", "messages", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
@@ -2399,21 +2397,6 @@ func (args McpLogCorrelateArgs) MarshalJSON() ([]byte, error) {
 	}{Action: McpLogCorrelate, fields: fields(args)})
 }
 
-// McpLogFanOutsArgs carries arguments for mcp_log.fan_outs.
-type McpLogFanOutsArgs struct {
-	// Batch of request IDs for fan_outs action
-	RequestIds []string `json:"request_ids"`
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args McpLogFanOutsArgs) MarshalJSON() ([]byte, error) {
-	type fields McpLogFanOutsArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: McpLogFanOuts, fields: fields(args)})
-}
-
 // McpLogGetArgs carries arguments for mcp_log.get.
 type McpLogGetArgs struct {
 	// Request ID
@@ -3235,8 +3218,6 @@ func (args PersonAssertArgs) MarshalJSON() ([]byte, error) {
 type PersonCarryBeginArgs struct {
 	// carry_begin: the home to sign in at, as its origin
 	Destination string `json:"destination"`
-	// carry_begin: what the carry is for; join is the one operation
-	Operation Field[string] `json:"operation,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -3363,7 +3344,7 @@ func (args PersonEnrollAbandonArgs) MarshalJSON() ([]byte, error) {
 type PersonEnrollHolderArgs struct {
 	// enroll_holder: an existing kit's recovery seed, which signs the change (32 bytes, unpadded base64url)
 	RecoverySecret string `json:"recovery_secret"`
-	// enroll_holder: the recovery holder to add
+	// enroll_holder: the printed kit to add
 	Holder PersonEnrollHolderArgsHolder `json:"holder"`
 	// The attempt's request id: a retry under the same id resumes the same attempt (enroll, rotate, enroll_holder)
 	RequestId string `json:"request_id"`
@@ -3379,8 +3360,6 @@ func (args PersonEnrollHolderArgs) MarshalJSON() ([]byte, error) {
 }
 
 type PersonEnrollHolderArgsHolder struct {
-	// The kind of recovery holder added; a printed kit is the one kind
-	Kind string `json:"kind"`
 	// The added kit's recovery seed, drawn by the trusted form (32 bytes, unpadded base64url)
 	RecoverySecret string `json:"recovery_secret"`
 }
@@ -5010,19 +4989,6 @@ func (args SessionDevicePollArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SessionDevicePoll, fields: fields(args)})
-}
-
-// SessionLoginArgs carries arguments for session.login.
-type SessionLoginArgs struct {
-}
-
-// MarshalJSON supplies the operation's fixed action discriminator.
-func (args SessionLoginArgs) MarshalJSON() ([]byte, error) {
-	type fields SessionLoginArgs
-	return json.Marshal(struct {
-		Action string `json:"action"`
-		fields
-	}{Action: SessionLogin, fields: fields(args)})
 }
 
 // SessionLogoutArgs carries arguments for session.logout.

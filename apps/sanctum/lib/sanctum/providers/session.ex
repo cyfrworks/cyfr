@@ -36,14 +36,8 @@ defmodule Sanctum.Providers.Session do
     # Anonymous-allowed: `whoami` and the device-flow login actions need
     # to work before a credential exists, and `logout` only ever
     # destroys the caller's own session.
-    # Point the session at another athanor the caller may work in.
     Operation.tool(
       [
-        Operation.new("session", "login", "Login session", [],
-          auth: :anonymous,
-          kind: :write,
-          planes: [:external]
-        ),
         Operation.new("session", "logout", "Logout session", [],
           auth: :anonymous,
           reduces_authority: true,
@@ -286,9 +280,6 @@ defmodule Sanctum.Providers.Session do
         {:error,
          {:invalid_argument, "session.use needs a session — a key is bound to one athanor"}}
 
-      {:error, reason} when is_binary(reason) ->
-        {:error, reason}
-
       {:error, _} ->
         {:error, {:unavailable, "Storage"}}
     end
@@ -296,11 +287,6 @@ defmodule Sanctum.Providers.Session do
 
   def handle(_ctx, %{"action" => "use"}),
     do: {:error, {:invalid_argument, "Missing required argument: athanor"}}
-
-  def handle(%Context{} = _ctx, %{"action" => "login"}) do
-    # Login requires browser redirect in Sanctum
-    {:ok, %{message: "Login requires browser authentication", redirect: "/auth/login"}}
-  end
 
   # Revoke the Sanctum session authenticated by this request.
   def handle(%Context{session_token_hash: hash}, %{"action" => "logout"})
@@ -466,7 +452,7 @@ defmodule Sanctum.Providers.Session do
   end
 
   def handle(%Context{} = ctx, %{"action" => "read_resource", "uri" => "sanctum://permissions"}) do
-    self_description(%{permissions: Sanctum.Providers.Shared.format_permissions(ctx.permissions)})
+    self_description(%{permissions: permission_names(ctx.permissions)})
   end
 
   def handle(_ctx, %{"action" => "read_resource", "uri" => uri}) when is_binary(uri) do
@@ -660,5 +646,10 @@ defmodule Sanctum.Providers.Session do
     "Device-flow CLI auth requires the GitHub/Google OAuth provider. " <>
       "This deployment is configured with a different auth provider; " <>
       "use the web flow at `/auth/oidcc` instead."
+  end
+
+  # The caller's permissions as the wire names them, sorted.
+  defp permission_names(permissions) do
+    permissions |> MapSet.to_list() |> Enum.map(&to_string/1) |> Enum.sort()
   end
 end

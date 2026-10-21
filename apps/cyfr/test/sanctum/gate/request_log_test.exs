@@ -388,7 +388,7 @@ defmodule Sanctum.Gate.RequestLogTest do
           input: %{
             "action" => "enroll_holder",
             "recovery_secret" => signing,
-            "holder" => %{"kind" => "kit", "recovery_secret" => added},
+            "holder" => %{"recovery_secret" => added},
             "request_id" => "req_kit"
           }
         })
@@ -399,7 +399,7 @@ defmodule Sanctum.Gate.RequestLogTest do
 
       input = decode_json(stored)
       assert input["recovery_secret"] == "[REDACTED]"
-      assert input["holder"] == %{"kind" => "kit", "recovery_secret" => "[REDACTED]"}
+      assert input["holder"] == %{"recovery_secret" => "[REDACTED]"}
       assert input["request_id"] == "req_kit"
     end
 

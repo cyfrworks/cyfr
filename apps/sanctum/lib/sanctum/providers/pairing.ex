@@ -11,7 +11,7 @@ defmodule Sanctum.Providers.Pairing do
   re-enable one a declared restore suspended (`restore_reenable`); and
   list them.
 
-  `complete` is `auth: :anonymous`, as `session.login` is: the glass that
+  `complete` is `auth: :anonymous`: the glass that
   sends it holds neither a session nor a certificate, so the single-use
   invitation carries the person and athanor, and a session cookie the
   browser still holds never chooses the person. Every other action is a

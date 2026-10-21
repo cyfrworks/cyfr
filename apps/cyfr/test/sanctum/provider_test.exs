@@ -228,11 +228,6 @@ defmodule Sanctum.ProviderTest do
       assert result.session_expires_at == nil
     end
 
-    test "login returns redirect info", %{ctx: ctx} do
-      {:ok, result} = Provider.handle("session", ctx, %{"action" => "login"})
-      assert result.redirect == "/auth/login"
-    end
-
     test "logout retires the session that called it", %{ctx: ctx} do
       ctx = Sanctum.TestContext.issuer!(ctx)
       {:ok, session} = Sanctum.Session.create(ctx)

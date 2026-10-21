@@ -92,10 +92,6 @@
   # h/1 answers the binary Plug.HTML.html_escape/1 makes; the spec states
   # iodata(), which is how callers interpolate it into a page.
   {"lib/cyfr_web/minimal_page.ex", :extra_range},
-  # The Finch version locked wraps a transport failure in
-  # Finch.TransportError, so the clause for a bare Mint.TransportError no
-  # longer matches; the clause after it answers those failures.
-  {"lib/sanctum/auth/device_flow.ex", :pattern_match},
   # max_prefix_for/1's last clause answers 0 for a value that is not a
   # tuple, which no caller passes today.
   {"lib/prima/cidr.ex", :pattern_match_cov},
@@ -105,12 +101,6 @@
   # fail/2 throws on purpose: the encoder catches {:jcs, _} at its entry and
   # answers it as an error.
   {"lib/prima/jcs.ex", :no_return},
-  # Sanctum.ApiKey.revoke/2 refuses with atoms only today; the clause that
-  # passes a readable binary refusal through is the provider convention.
-  {"lib/sanctum/providers/key.ex", :guard_fail},
-  # session.use's lookups refuse with atoms only today; the clause that
-  # passes a readable binary refusal through is the provider convention.
-  {"lib/sanctum/providers/session.ex", :guard_fail},
   # `valid_personal_slug?(slug) || {:error, :invalid_slug}` answers the
   # refusal for false; Dialyzer does not narrow false out of the `||`'s
   # other branch, so it sees the `with` fall through on false.

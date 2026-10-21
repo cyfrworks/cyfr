@@ -183,10 +183,7 @@ defmodule PrismWeb.CarryLive do
       when is_binary(destination) do
     destination = String.trim(destination)
 
-    case call_tool(socket, "person/carry_begin", %{
-           "destination" => destination,
-           "operation" => "join"
-         }) do
+    case call_tool(socket, "person/carry_begin", %{"destination" => destination}) do
       {:ok, began} ->
         {:noreply,
          socket

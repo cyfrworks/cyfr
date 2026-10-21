@@ -519,9 +519,6 @@ defmodule Sanctum.Providers.Vault do
   defp fmt(:schema_change_requires_rebind),
     do: "schema_change_requires_rebind: rotate keeps the field schema; use rebind to change it"
 
-  defp fmt(:oauth_pointer_requires_reauth),
-    do: "oauth_pointer_requires_reauth: re-authorize the provider to convert this entry"
-
   defp fmt(:not_found), do: "not_found"
 
   defp fmt({:invalid_argument, message} = refusal) when is_binary(message), do: refusal

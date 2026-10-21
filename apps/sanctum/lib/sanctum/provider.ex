@@ -7,23 +7,25 @@ defmodule Sanctum.Provider do
 
   ## Tools
 
-  - `session` - Session management (login, logout, whoami, use)
-  - `key` - API key management (create, get, list, revoke, rotate)
-  - `tincture_visibility` - Tincture public/private visibility (get)
-  - `athanor` - The athanors a person belongs to (list, create a group, rename, archive)
-  - `member` - Who is in an athanor (list, add, remove, leave)
-  - `door` - The server allowlist, platform admins only (allow, deny, list, requests)
-  - `vault` - The athanor's credential entries (Connections)
-  - `profile` - Consent profiles: plan, preview, commit, grant, revoke
+  Each tool's actions are declared once, in its definition (`Prima.Operation`);
+  the catalog (`Sanctum.Catalog`) is their one roster.
+
+  - `session` - The caller's own session, its sign-ins and its athanor
+  - `key` - API keys
+  - `tincture_visibility` - Whether a tincture is public
+  - `athanor` - The athanors a person belongs to
+  - `member` - Who is in an athanor
+  - `door` - The server allowlist, platform admins only
+  - `vault` - The athanor's credential entries
+  - `profile` - Consent profiles and their grants
   - `oauth` - OAuth grant flow for vault entries
-  - `webhook` - Inbound webhook management
+  - `webhook` - Inbound webhooks
   - `person` - A person's identity at their own home: enrollment, the kit, the
     live key, doors, device certificates, the sign-in carry and its assertion
-  - `pairing` - Paired devices (begin, complete, renew, revoke, list)
-  - `passkey` - Passkeys at this home (register, list, revoke, recover_admin)
+  - `pairing` - Paired devices
+  - `passkey` - Passkeys at this home
   - `confirmation` - Pending confirmations of sensitive changes
   - `instance_entry` - The instance's own credentials, offered to the people on it
-    (platform admins manage them; anyone may list what is offered to them)
 
   ## Resources
 
@@ -33,11 +35,8 @@ defmodule Sanctum.Provider do
   Both are read through `session.read_resource`, which answers from the
   caller's established context alone and reads no stored tenant data.
 
-  ## Architecture Note
-
-  Tool definitions live next to their implementation under `lib/sanctum`.
-  Authentication tools (login/logout) are handled differently as they
-  require browser redirects.
+  Tool definitions live next to their implementation under
+  `lib/sanctum/providers`.
   """
 
   @behaviour Prima.Provider
@@ -81,7 +80,7 @@ defmodule Sanctum.Provider do
   end
 
   # ============================================================================
-  # ToolProvider Protocol
+  # Prima.Provider callbacks
   # ============================================================================
 
   @impl true

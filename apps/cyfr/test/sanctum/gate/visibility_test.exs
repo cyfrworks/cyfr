@@ -590,7 +590,7 @@ defmodule Sanctum.Gate.VisibilityTest do
 
       expected =
         MapSet.new(~w(
-          session.login session.logout session.whoami
+          session.logout session.whoami
           session.device_init session.device_poll session.read_resource
           session.cli_begin session.cli_poll session.cli_cancel
           system.status tincture.invoke_public pairing.complete

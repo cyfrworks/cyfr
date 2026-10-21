@@ -295,10 +295,9 @@ defmodule Sanctum.Providers.System do
     end
   end
 
-  # "unknown" is a probe that deliberately did not run (test env) — not
-  # evidence of degradation.
+  # "unknown" is a probe that did not run, not evidence of degradation.
   defp overall(services) do
-    if Enum.all?(services, fn {_k, v} -> v in ["ok", "stub", "unknown"] end),
+    if Enum.all?(services, fn {_k, v} -> v in ["ok", "unknown"] end),
       do: "ok",
       else: "degraded"
   end

@@ -103,7 +103,7 @@ defmodule Sanctum.Gate.DecisionsTest do
 
   describe "the calls the audit leaves out (Sanctum.Catalog.recorded?/2)" do
     test "discovery and the audit's own reads are not recorded" do
-      for action <- ~w(list get correlate fan_outs stats) do
+      for action <- ~w(list get correlate stats) do
         refute Catalog.recorded?("mcp_log", action)
       end
 
@@ -141,7 +141,7 @@ defmodule Sanctum.Gate.DecisionsTest do
              |> Enum.map(fn {tool, action, _} -> "#{tool}.#{action}" end)
              |> Enum.sort() ==
                ~w(decision.correlate decision.get decision.get_global decision.list
-                  decision.list_global file.offers mcp_log.correlate mcp_log.fan_outs mcp_log.get
+                  decision.list_global file.offers mcp_log.correlate mcp_log.get
                   mcp_log.list mcp_log.stats record.get record.list record.payload system.status
                   tools.list)
     end

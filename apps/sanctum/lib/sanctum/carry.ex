@@ -10,9 +10,9 @@ defmodule Sanctum.Carry do
 
   ## Beginning
 
-  `begin/3` (`person.carry_begin`) is the person's explicit start, under
-  their session, for exactly one destination home other than this one and
-  the one operation `join`. The person must be enrolled here (their keys
+  `begin/2` (`person.carry_begin`) is the person's explicit start, under
+  their session, for exactly one destination home other than this one, to
+  join it (the envelope's one operation, `Prima.Carry`). The person must be enrolled here (their keys
   local): the payload is `%{"genesis" => genesis}`, the genesis their
   identity rests on (`Arca.IdentityAttempts.genesis/2`), which a relying
   home holds to the identifier before it resolves anything, and the
@@ -65,27 +65,25 @@ defmodule Sanctum.Carry do
   alias Prima.Identity.Encoding
   alias Sanctum.Context
 
-  @operations ["join"]
   @outcomes ["admitted", "refused"]
 
   @doc """
-  Begin a sign-in carry to `destination` (a home's origin) for `operation`
-  (`"join"`, the one operation), for the person of `ctx` (the module doc).
+  Begin a sign-in carry to `destination` (a home's origin), to join it, for
+  the person of `ctx` (the module doc).
 
   Answers `%{action_id, envelope, payload, fragment, destination,
   return_url, expires_at}`, the envelope as its JSON map.
 
-  Refusals: `{:invalid_argument, _}` (another operation, a destination that
+  Refusals: `{:invalid_argument, _}` (a destination that
   is no home's origin or is this home, a carry too large), `:not_enrolled`,
   `:not_found` (the person's keys are at another home), `{:conflict, _}`
   (twenty carries already pending), `:unauthenticated`, `:unavailable`.
   """
-  @spec begin(Context.t(), String.t(), String.t() | nil) :: {:ok, map()} | {:error, term()}
-  def begin(%Context{} = ctx, destination, operation \\ "join") when is_binary(destination) do
+  @spec begin(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def begin(%Context{} = ctx, destination) when is_binary(destination) do
     actor = Context.actor(ctx)
 
     with {:ok, user_id} <- person(ctx),
-         :ok <- operation(operation),
          {:ok, destination} <- destination(destination),
          {:ok, identity} <- enrolled(actor, user_id),
          {:ok, payload} <- payload(actor, user_id),
@@ -303,11 +301,6 @@ defmodule Sanctum.Carry do
   end
 
   defp person(%Context{}), do: {:error, :unauthenticated}
-
-  defp operation(operation) when operation in [nil | @operations], do: :ok
-
-  defp operation(_operation),
-    do: {:error, {:invalid_argument, "A sign-in carry serves one operation, join"}}
 
   defp outcome(outcome) when outcome in @outcomes, do: :ok
 

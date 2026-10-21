@@ -93,7 +93,7 @@ defmodule Sanctum.RecoveryTest do
   defp holder_args(signer, added, id) do
     %{
       "recovery_secret" => b64(signer),
-      "holder" => %{"kind" => "kit", "recovery_secret" => b64(added)},
+      "holder" => %{"recovery_secret" => b64(added)},
       "request_id" => id
     }
   end
@@ -795,20 +795,9 @@ defmodule Sanctum.RecoveryTest do
                )
     end
 
-    test "a device as holder, a seed that holds nothing and a holder twice are refused",
-         context do
+    test "a seed that holds nothing and a holder twice are refused", context do
       person = enrolled!(context)
       added = seed()
-
-      device = %{
-        holder_args(person.seed, added, request_id())
-        | "holder" => %{"kind" => "device", "recovery_secret" => b64(added)}
-      }
-
-      assert {:error, {:invalid_argument, message}} =
-               Recovery.enroll_holder(person.ctx, device, context.opts)
-
-      assert message =~ "device"
 
       assert {:error, :not_a_holder} =
                Recovery.enroll_holder(

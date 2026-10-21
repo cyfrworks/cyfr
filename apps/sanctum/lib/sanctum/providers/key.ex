@@ -5,8 +5,6 @@ defmodule Sanctum.Providers.Key do
   @moduledoc """
   API key tool handlers for the Sanctum MCP provider — create, get, list,
   revoke, rotate, and re-enable API keys.
-
-  Extracted from `Sanctum.Provider`; behaviour preserved exactly.
   """
 
   require Logger
@@ -175,9 +173,6 @@ defmodule Sanctum.Providers.Key do
         {:error, :already_exists} ->
           {:error, {:conflict, "Key already exists: #{name}"}}
 
-        {:error, {:invalid_key_type, type}} ->
-          {:error, "Invalid key type: #{type}. Use: application, service, or admin"}
-
         {:error, {:scope_exceeds_ceiling, scope_list, ceiling}} ->
           {:error,
            "Scope #{inspect(scope_list)} exceeds allowed scopes for this key type: #{inspect(ceiling)}"}
@@ -195,8 +190,7 @@ defmodule Sanctum.Providers.Key do
           {:error, conflict}
 
         # No re-log: the storage layer already logged this failure with the
-        # exception detail (Arca.ApiKeyStorage); a second error line here
-        # carried nothing the first lacked.
+        # exception detail (Arca.ApiKeyStorage).
         {:error, _reason} ->
           {:error, "Failed to create key"}
       end
@@ -214,9 +208,6 @@ defmodule Sanctum.Providers.Key do
     else
       {:error, :not_found} ->
         {:error, {:not_found, "Key", name}}
-
-      {:error, reason} when is_binary(reason) ->
-        {:error, reason}
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Key] Failed to revoke key: #{inspect(reason)}")

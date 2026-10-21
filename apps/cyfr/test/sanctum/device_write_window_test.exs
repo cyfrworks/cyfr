@@ -678,7 +678,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
   defp holder_args(signer, added, id) do
     %{
       "recovery_secret" => Encoding.b64(signer),
-      "holder" => %{"kind" => "kit", "recovery_secret" => Encoding.b64(added)},
+      "holder" => %{"recovery_secret" => Encoding.b64(added)},
       "request_id" => id
     }
   end

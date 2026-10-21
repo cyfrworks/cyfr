@@ -170,65 +170,18 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     end
   end
 
-  # The post-door decision — what cyfr.run says about the person and what
-  # follows — is one function for the CLI and the browser:
-  # `Sanctum.SignIn.complete/3`, exercised in sign_in_complete_test.exs.
-
   describe "wire/1 — the CLI poll contract" do
     # `cyfr login` (apps/codex/cmd/login.go) reads these exact keys; every
     # change here is a cross-language wire change and must be deliberate.
     @user %{id: "u1", email: "u@example.com", name: "U"}
 
-    test "proceed" do
+    test "a signed-in result is its status, user and session token" do
       assert DeviceFlow.wire(%{
                status: "complete",
                user: @user,
                session_token: "tok",
-               outcome: {:proceed, %{unsynced: [], probe: :ok}}
-             }) == %{
-               status: "complete",
-               user: @user,
-               session_token: "tok",
-               needs_personal_namespace: false
-             }
-    end
-
-    test "proceed carries the report's warnings and probe error" do
-      wired =
-        DeviceFlow.wire(%{
-          status: "complete",
-          user: @user,
-          session_token: "tok",
-          outcome: {:proceed, %{unsynced: ["ns1"], probe: :failed}}
-        })
-
-      assert wired.credential_store_warnings == ["ns1"]
-      assert wired.probe_error == "probe_failed"
-    end
-
-    test "a policy owed or a namespace conflict is a probe error on a signed-in result" do
-      owed =
-        DeviceFlow.wire(%{
-          status: "complete",
-          user: @user,
-          session_token: "tok",
-          outcome: {:proceed, %{unsynced: [], probe: :legal_required}}
-        })
-
-      assert owed.session_token == "tok"
-      assert owed.needs_personal_namespace == false
-      assert owed.probe_error == "policy_acceptance_required"
-
-      conflict =
-        DeviceFlow.wire(%{
-          status: "complete",
-          user: @user,
-          session_token: "tok",
-          outcome: {:proceed, %{unsynced: [], probe: :namespace_conflict}}
-        })
-
-      assert conflict.probe_error == "namespace_conflict"
-      refute Map.has_key?(conflict, :access_token)
+               outcome: {:proceed, %{unsynced: [], probe: :skipped}}
+             }) == %{status: "complete", user: @user, session_token: "tok"}
     end
 
     test "outcome-less statuses pass through untouched" do

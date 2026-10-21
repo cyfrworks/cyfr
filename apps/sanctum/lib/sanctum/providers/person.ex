@@ -57,7 +57,7 @@ defmodule Sanctum.Providers.Person do
       (`Sanctum.SignIn.link_door/3`, `unlink_door/2`) — the door linked or
       unlinked, by its key, provider, issuer and subject.
     * `person.carry_begin` and `person.carry_complete`
-      (`Sanctum.Carry.begin/3`, `complete/3`) — the pending carry, its
+      (`Sanctum.Carry.begin/2`, `complete/3`) — the pending carry, its
       envelope, payload and fragment; then its recorded outcome and the
       destination this home's row names.
     * `person.carry_list` (`Sanctum.Carry.pending/1`) — `%{actions: [...]}`,
@@ -190,16 +190,9 @@ defmodule Sanctum.Providers.Person do
           Arg.new(
             "holder",
             {:record,
-             [
-               Arg.new("kind", :string,
-                 required: true,
-                 enum: ["kit"],
-                 description: "The kind of recovery holder added; a printed kit is the one kind"
-               ),
-               recovery_secret("The added kit's recovery seed, drawn by the trusted form")
-             ]},
+             [recovery_secret("The added kit's recovery seed, drawn by the trusted form")]},
             required: true,
-            description: "enroll_holder: the recovery holder to add"
+            description: "enroll_holder: the printed kit to add"
           ),
           request_id()
         ],
@@ -215,10 +208,6 @@ defmodule Sanctum.Providers.Person do
           Arg.new("destination", :string,
             required: true,
             description: "carry_begin: the home to sign in at, as its origin"
-          ),
-          Arg.new("operation", :string,
-            enum: ["join"],
-            description: "carry_begin: what the carry is for; join is the one operation"
           )
         ],
         kind: :write,
@@ -390,9 +379,9 @@ defmodule Sanctum.Providers.Person do
   def handle(%Context{}, %{"action" => "unlink_door"}),
     do: {:error, {:invalid_argument, "unlink_door needs the door's identity key"}}
 
-  def handle(%Context{} = ctx, %{"action" => "carry_begin", "destination" => destination} = args)
+  def handle(%Context{} = ctx, %{"action" => "carry_begin", "destination" => destination})
       when is_binary(destination),
-      do: answer(Carry.begin(ctx, destination, Map.get(args, "operation")))
+      do: answer(Carry.begin(ctx, destination))
 
   def handle(%Context{}, %{"action" => "carry_begin"}),
     do: {:error, {:invalid_argument, "carry_begin needs the destination home"}}

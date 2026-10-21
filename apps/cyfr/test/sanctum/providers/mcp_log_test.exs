@@ -37,7 +37,7 @@ defmodule Sanctum.Providers.McpLogTest do
       tools = MCP.tools()
       tool = Enum.find(tools, &(&1.name == "mcp_log"))
       actions = tool.input_schema["properties"]["action"]["enum"]
-      assert actions == ["list", "get", "correlate", "fan_outs", "stats"]
+      assert actions == ["list", "get", "correlate", "stats"]
 
       for operation <- tool.operations do
         assert operation.kind == :read
@@ -183,7 +183,6 @@ defmodule Sanctum.Providers.McpLogTest do
       extra_args = fn
         {_, "get"} -> %{"id" => "guard_probe"}
         {_, "correlate"} -> %{"request_id" => "guard_probe"}
-        {_, "fan_outs"} -> %{"request_ids" => ["guard_probe"]}
         _ -> %{}
       end
 
