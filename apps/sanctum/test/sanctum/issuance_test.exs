@@ -282,7 +282,7 @@ defmodule Sanctum.IssuanceTest do
                identity: nil
              } = ctx.credential_binding
 
-      assert {:ok, %{athanor_id: athanor_id}} = Sanctum.Tenancy.Members.get(seat_id)
+      assert {:ok, %{athanor_id: athanor_id}} = Sanctum.TestContext.membership(seat_id)
       assert athanor_id == athanor.id
 
       assert {:ok, expectation} = Issuance.expectation(ctx, [])
@@ -617,7 +617,7 @@ defmodule Sanctum.IssuanceTest do
     athanor: athanor,
     session_ctx: session_ctx
   } do
-    {:ok, platform} = Members.ensure_platform(user.id)
+    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
     assert {platform.scope, platform.athanor_id} == {"platform", nil}
 
     # A live session focused on the athanor that names the person's
@@ -716,7 +716,7 @@ defmodule Sanctum.IssuanceTest do
     session_ctx: session_ctx
   } do
     device = pair!(session_ctx)
-    {:ok, platform} = Members.ensure_platform(user.id)
+    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
 
     # Seated, the device stands on the seat, and the platform row is only
     # the capability flag.
@@ -755,7 +755,7 @@ defmodule Sanctum.IssuanceTest do
     session_ctx: session_ctx
   } do
     device = pair!(session_ctx)
-    {:ok, platform} = Members.ensure_platform(user.id)
+    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
     {:ok, standing} = DeviceCerts.standing(user.id, athanor.id)
     {:ok, client} = DeviceCerts.paired_client(athanor.id, user.id, device.client_id)
 
@@ -787,7 +787,7 @@ defmodule Sanctum.IssuanceTest do
     athanor: athanor,
     session_ctx: session_ctx
   } do
-    {:ok, platform} = Members.ensure_platform(user.id)
+    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
 
     # What a tincture asset or frame credential minted from this session
     # names: its person, athanor, generations, source and focus basis.
@@ -811,7 +811,7 @@ defmodule Sanctum.IssuanceTest do
     user: user
   } do
     n = System.unique_integer([:positive])
-    {:ok, platform} = Members.ensure_platform(user.id)
+    {:ok, platform} = Sanctum.TestContext.ensure_platform(user.id)
 
     # A group the person holds no seat in, kept open by its own member.
     {:ok, other} =

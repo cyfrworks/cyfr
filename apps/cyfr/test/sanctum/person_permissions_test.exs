@@ -20,7 +20,7 @@ defmodule Sanctum.PersonPermissionsTest do
       for pair <- Sanctum.Catalog.tool_actions(),
           [tool, action] = String.split(pair, ".", parts: 2),
           {:ok, {_module, meta}} <- [Sanctum.Catalog.lookup(tool)],
-          permission = Annotations.permission(meta, action),
+          permission = Map.get(Annotations.annotation(meta, action) || %{}, :permission),
           not is_nil(permission),
           uniq: true,
           do: permission

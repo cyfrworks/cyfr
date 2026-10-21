@@ -91,7 +91,7 @@ defmodule CyfrWeb.ContextGuardTest do
   defp operator!(conn) do
     ops = test_user()
     Application.put_env(:sanctum, :platform_admin_emails, [ops.email])
-    {:ok, _} = Members.ensure_platform(ops.user_id)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
     {conn, token, hash} = signed_in(conn, ops)
     {ops, conn, token, hash}
   end

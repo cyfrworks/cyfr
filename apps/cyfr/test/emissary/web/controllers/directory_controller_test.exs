@@ -279,9 +279,7 @@ defmodule Emissary.Web.DirectoryControllerTest do
   end
 
   describe "POST /directory/v1/:identifier/recover" do
-    test "a lost accepted answer is answered the same, and the outcome is the entry", %{
-      conn: conn
-    } do
+    test "a lost accepted answer is answered the same", %{conn: conn} do
       alice = register!(conn, person())
       req = request(alice)
 
@@ -290,15 +288,6 @@ defmodule Emissary.Web.DirectoryControllerTest do
 
       assert json_response(recover(build_conn(), alice.identifier, req), 200) == first
       assert {:ok, %Entry{kind: :recover, request: ^req}} = Entry.decode(entry)
-
-      assert %{"outcome" => "accepted", "entry" => ^entry, "seq" => 1} =
-               json_response(
-                 get(
-                   build_conn(),
-                   "/directory/v1/#{alice.identifier}/requests/#{req.request_id}"
-                 ),
-                 200
-               )
     end
 
     test "a stale revision is 409 with its recorded refusal, the same for the same request id",
@@ -314,15 +303,6 @@ defmodule Emissary.Web.DirectoryControllerTest do
 
       assert %{"error" => "stale_policy", "recorded" => ^recorded} =
                json_response(recover(build_conn(), alice.identifier, late), 409)
-
-      assert %{"outcome" => "stale_policy", "recorded" => ^recorded} =
-               json_response(
-                 get(
-                   build_conn(),
-                   "/directory/v1/#{alice.identifier}/requests/#{late.request_id}"
-                 ),
-                 200
-               )
     end
 
     test "a request naming another directory is 422", %{conn: conn} do
@@ -552,9 +532,6 @@ defmodule Emissary.Web.DirectoryControllerTest do
                Client.recover(alice.identifier, genesis, req, opts)
 
       assert {:ok, ^recovered} = Client.recover(alice.identifier, genesis, req, opts)
-
-      assert {:ok, %{outcome: :accepted, seq: 2}} =
-               Client.outcome(alice.identifier, genesis, req.request_id, opts)
 
       late = request(alice)
 

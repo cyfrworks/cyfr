@@ -42,10 +42,6 @@ defmodule Sanctum.Consent.Proof.Memory do
     GenServer.call(__MODULE__, {:consume, token, bindings})
   end
 
-  @doc "Outstanding (unconsumed, unexpired) proof count — for tests and observability."
-  @spec outstanding() :: non_neg_integer()
-  def outstanding, do: GenServer.call(__MODULE__, :outstanding)
-
   # ============================================================================
   # GenServer
   # ============================================================================
@@ -86,13 +82,6 @@ defmodule Sanctum.Consent.Proof.Memory do
       [] ->
         {:reply, {:error, :not_found}, state}
     end
-  end
-
-  @impl GenServer
-  def handle_call(:outstanding, _from, state) do
-    now = System.monotonic_time(:millisecond)
-    live = :ets.select_count(@table, [{{:_, :_, :"$1"}, [{:>, :"$1", now}], [true]}])
-    {:reply, live, state}
   end
 
   @impl GenServer

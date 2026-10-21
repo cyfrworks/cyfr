@@ -40,7 +40,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     # Set up, like an athanor people actually chat in: a turn pins the
     # baseline consent, and sending is held while one is being prepared.
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+    {:ok, athanor} = Sanctum.TestContext.mark_provisioned(athanor)
     Process.put(:chat_athanor, athanor)
 
     # Filled like an athanor people actually chat in, with its soul's
@@ -159,7 +159,7 @@ defmodule PrismWeb.ChatLiveTest do
         created_by: "system"
       })
 
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+    {:ok, athanor} = Sanctum.TestContext.mark_provisioned(athanor)
     user_id = Sanctum.TestContext.local().user_id
     ctx = %{Sanctum.TestContext.local(:prism) | user_id: user_id, athanor_id: athanor.id}
     {:ok, _} = Sanctum.Tenancy.Members.ensure(user_id, scope: "athanor", athanor_id: athanor.id)
@@ -535,7 +535,7 @@ defmodule PrismWeb.ChatLiveTest do
     alice = test_user()
     bob = test_user()
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Two #{alice.namespace}")
-    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(group)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(group)
     ready_athanor!(group.id, alice.user_id)
     alice_conn = log_in_user(conn, alice, athanor_id: group.id)
     bob_conn = log_in_user(build_conn(), bob, athanor_id: group.id)
@@ -614,7 +614,7 @@ defmodule PrismWeb.ChatLiveTest do
     {:ok, group} =
       Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Files #{alice.namespace}")
 
-    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(group)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(group)
     ready_athanor!(group.id, alice.user_id)
     Cyfr.Test.ScriptedWorker.script([model_reply("Read them.")])
     alice_conn = log_in_user(conn, alice, athanor_id: group.id)
@@ -703,7 +703,7 @@ defmodule PrismWeb.ChatLiveTest do
     {:ok, group} =
       Sanctum.Tenancy.Athanors.create_group(alice.user_id, "Drafts #{alice.namespace}")
 
-    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(group)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(group)
     ready_athanor!(group.id, alice.user_id)
     Cyfr.Test.ScriptedWorker.script([model_reply("Kept.")])
     alice_conn = log_in_user(conn, alice, athanor_id: group.id)
@@ -792,7 +792,7 @@ defmodule PrismWeb.ChatLiveTest do
 
     # The fill completing reaches both the page and its pane without a
     # reload: provisioning broadcasts on the athanor's own topic.
-    {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(row)
+    {:ok, filled} = Sanctum.TestContext.mark_provisioned(row)
     Sanctum.Notify.broadcast(group.id, :athanor_changed, %{name: filled.name})
 
     refute render(view) =~ "still being set up"
@@ -855,7 +855,7 @@ defmodule PrismWeb.ChatLiveTest do
     Cyfr.Test.ScriptedWorker.script([model_reply("Held, then heard")])
     ready_athanor!(group.id, alice.user_id)
     {:ok, row} = Sanctum.Tenancy.Athanors.get(group.id)
-    {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(row)
+    {:ok, filled} = Sanctum.TestContext.mark_provisioned(row)
     Sanctum.Notify.broadcast(group.id, :athanor_changed, %{name: filled.name})
 
     # Both panes offer the send; the turn it opens ends with the reply.

@@ -61,7 +61,7 @@ defmodule Sanctum.Tenancy.MembersTest do
 
     test "takes the grant and every session together, then announces the revocation" do
       uid = person_id()
-      {:ok, _} = Members.ensure_platform(uid)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
       token = session_for(uid)
       Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
 
@@ -142,12 +142,12 @@ defmodule Sanctum.Tenancy.MembersTest do
   describe "get/1" do
     test "returns membership by id", %{athanor: athanor} do
       {:ok, mem} = Members.create(attrs(athanor.id))
-      assert {:ok, found} = Members.get(mem.id)
+      assert {:ok, found} = Sanctum.TestContext.membership(mem.id)
       assert found.id == mem.id
     end
 
     test "returns not_found" do
-      assert {:error, :not_found} = Members.get("mem_nonexistent")
+      assert {:error, :not_found} = Sanctum.TestContext.membership("mem_nonexistent")
     end
   end
 
@@ -163,20 +163,20 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       assert {:ok, %{id: id, status: "invited"}} = Members.remove(invitation)
       assert id == invitation.id
-      assert {:error, :not_found} = Members.get(invitation.id)
+      assert {:error, :not_found} = Sanctum.TestContext.membership(invitation.id)
       assert {:error, :not_found} = Members.remove(invitation)
     end
 
     test "an active row is not an invitation: not found, and it stays", %{athanor: athanor} do
       {:ok, seat} = Members.create(attrs(athanor.id))
       assert {:error, :not_found} = Members.remove(seat)
-      assert {:ok, %{status: "active"}} = Members.get(seat.id)
+      assert {:ok, %{status: "active"}} = Sanctum.TestContext.membership(seat.id)
       assert Members.member?(seat.user_id, athanor.id)
 
       # A platform grant names no athanor and is never an invitation either.
-      {:ok, grant} = Members.ensure_platform("user_" <> Ecto.UUID.generate())
+      {:ok, grant} = Sanctum.TestContext.ensure_platform("user_" <> Ecto.UUID.generate())
       assert {:error, :not_found} = Members.remove(grant)
-      assert {:ok, %{scope: "platform"}} = Members.get(grant.id)
+      assert {:ok, %{scope: "platform"}} = Sanctum.TestContext.membership(grant.id)
     end
 
     test "an invitation claimed since it was read is the claimant's seat: not found, and the seat stands",
@@ -197,7 +197,7 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       assert {:error, :not_found} = Members.remove(invitation)
       assert Members.member?(user_id, athanor.id)
-      assert {:ok, %{id: id, status: "active"}} = Members.get(invitation.id)
+      assert {:ok, %{id: id, status: "active"}} = Sanctum.TestContext.membership(invitation.id)
       assert id == invitation.id
     end
   end

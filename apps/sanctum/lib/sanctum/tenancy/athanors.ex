@@ -263,31 +263,6 @@ defmodule Sanctum.Tenancy.Athanors do
     |> String.slice(0, 80)
   end
 
-  @doc """
-  How an athanor is named to one of its members: a frozen pair by the
-  OTHER person — to `user_id`, a DM is whoever they are talking to, never
-  the stored "A & B" — and any other athanor by its own name. The stored
-  name stands in when the other seat cannot be read (an ended pair holds
-  one member).
-  """
-  @spec pair_label(athanor(), String.t() | nil) :: String.t()
-  def pair_label(%{roster: "frozen", id: id, name: name}, user_id)
-      when is_binary(user_id) do
-    with {:ok, rows} <- Sanctum.Tenancy.Members.list_by_athanor(id),
-         %{user_id: other} <- Enum.find(rows, &other_seat?(&1, user_id)) do
-      Sanctum.Tenancy.Users.display_name(other)
-    else
-      _ -> name
-    end
-  end
-
-  def pair_label(%{name: name}, _user_id), do: name
-
-  defp other_seat?(%{user_id: other, status: "active"}, user_id) when is_binary(other),
-    do: other != user_id
-
-  defp other_seat?(_row, _user_id), do: false
-
   @spec get(String.t()) :: {:ok, athanor()} | {:error, :not_found | :database_error}
   def get(id) when is_binary(id), do: Arca.Athanors.get(server(), id)
 
@@ -546,39 +521,6 @@ defmodule Sanctum.Tenancy.Athanors do
 
   defp reopenable(_rows), do: :ok
 
-  @doc """
-  Record that provisioning (seed + consents) completed — and forget any
-  earlier failure recorded on the row.
-  """
-  @spec mark_provisioned(athanor()) :: {:ok, athanor()} | {:error, term()}
-  def mark_provisioned(%{id: _} = athanor) do
-    now = DateTime.utc_now()
-
-    set_provisioning(athanor,
-      provisioned_at: now,
-      provisioning_failed_at: nil,
-      provisioning_failure: nil,
-      updated_at: now
-    )
-  end
-
-  @doc """
-  Record that a fill failed: when, at which `step`, and `detail`. The
-  record is the server's own — no settings patch writes or clears it — and
-  a completed fill clears it. Members' open views hear of the change.
-  """
-  @spec record_provisioning_failure(athanor(), atom() | String.t(), String.t()) ::
-          {:ok, athanor()} | {:error, term()}
-  def record_provisioning_failure(%{id: _} = athanor, step, detail) when is_binary(detail) do
-    now = DateTime.utc_now()
-
-    set_provisioning(athanor,
-      provisioning_failed_at: now,
-      provisioning_failure: Jason.encode!(%{"step" => to_string(step), "detail" => detail}),
-      updated_at: now
-    )
-  end
-
   @doc "The last failed fill on the row, or nil: `%{step, detail, at}`."
   @spec provisioning_failure(athanor()) ::
           %{step: String.t(), detail: String.t(), at: DateTime.t()} | nil
@@ -590,14 +532,6 @@ defmodule Sanctum.Tenancy.Athanors do
   end
 
   def provisioning_failure(%{}), do: nil
-
-  defp set_provisioning(%{id: id}, set) do
-    with :ok <- Arca.Athanors.set(in_athanor(id), set),
-         {:ok, updated} <- get(id) do
-      Sanctum.Notify.broadcast(id, :athanor_changed, %{name: updated.name})
-      {:ok, updated}
-    end
-  end
 
   @spec list_by_ids([String.t()]) :: [athanor()]
   def list_by_ids([]), do: []

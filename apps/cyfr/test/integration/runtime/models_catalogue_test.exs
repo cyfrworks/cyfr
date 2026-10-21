@@ -58,7 +58,7 @@ defmodule Locus.Runtime.ModelsCatalogueTest do
     # The athanor is filled by hand above; marked so, a listing starts no
     # fill of its own behind this test.
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(ctx.athanor_id)
-    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
 
     assert {:ok, catalogue} = Aqua.models(ctx)
 

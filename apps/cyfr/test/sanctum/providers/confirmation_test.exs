@@ -435,11 +435,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
                  refusal(call(session_ctx, "confirm", args))
       end
 
-      # A plain OAuth sign-in declares it proves no freshness, and no
-      # re-authentication method names one.
-      refute Sanctum.Auth.OAuth.proves_freshness?()
-      refute Sanctum.Auth.OIDC.proves_freshness?()
-
+      # No re-authentication method names a plain OAuth provider.
       assert {:error, _refused} =
                call(session_ctx, "reauth", %{"ref" => ref(id), "method" => "github"})
 

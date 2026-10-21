@@ -51,22 +51,19 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
-  Mark `athanor_id` filled — what a test says when it drives a turn —
-  with the shipped AQUA tree and bundle copied in, as a fill copies
-  them, so the athanor has a soul to answer with.
-
-  A turn pins the baseline consent provisioning mints, so an athanor a
-  test chats in is one that has been set up. Left off by default: the
-  seeded rows are bare athanors, as a fresh server's are, and a
-  server-wide sweep must not find work on every one of them.
+  Mark `athanor_id` filled, as a fill's last write marks it, and nothing
+  more — what a test says when it roots a run, which `Opus.run_root/5`
+  admits only in a ready athanor (`Sanctum.Provisioning.ready/1`). The
+  row is made first when the test named an athanor no fixture made.
+  It copies no shipped tree in.
   """
-  def provisioned!(athanor_id) when is_binary(athanor_id) do
+  def ready!(athanor_id) when is_binary(athanor_id) do
+    Arca.Test.Actor.ensure_athanor_row(athanor_id)
     {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
-    shipped!(athanor_id)
 
     case athanor.provisioned_at do
       nil ->
-        {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+        {:ok, filled} = mark_provisioned(athanor)
         filled
 
       _ ->
@@ -75,25 +72,35 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
-  Mark `athanor_id` filled, as a fill's last write marks it, and nothing
-  more — what a test says when it roots a run, which `Opus.run_root/5`
-  admits only in a ready athanor (`Sanctum.Provisioning.ready/1`). The
-  row is made first when the test named an athanor no fixture made.
-  Unlike `provisioned!/1` it copies no shipped tree in.
+  Record `athanor` provisioned and forget any failure on its row, as a
+  settled fill writes it (`Sanctum.Provisioning`), with no claim behind
+  it: a fixture's, never a server's. Members' open views hear of it.
   """
-  def ready!(athanor_id) when is_binary(athanor_id) do
-    Arca.Test.Actor.ensure_athanor_row(athanor_id)
-    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
+  def mark_provisioned(%{id: id}) do
+    now = DateTime.utc_now()
 
-    case athanor.provisioned_at do
-      nil ->
-        {:ok, filled} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
-        filled
-
-      _ ->
-        athanor
+    with :ok <-
+           Arca.Athanors.set(Prima.Actor.in_athanor(id),
+             provisioned_at: now,
+             provisioning_failed_at: nil,
+             provisioning_failure: nil,
+             updated_at: now
+           ),
+         {:ok, updated} <- Sanctum.Tenancy.Athanors.get(id) do
+      Sanctum.Notify.broadcast(id, :athanor_changed, %{name: updated.name})
+      {:ok, updated}
     end
   end
+
+  @doc """
+  Seat `user_id` as a platform admin with no sign-in behind it: a
+  fixture's operator, never one the door admitted
+  (`Sanctum.Tenancy.Members.grant_platform/2` is the server's).
+  """
+  def ensure_platform(user_id), do: Sanctum.Tenancy.Members.ensure(user_id, scope: "platform")
+
+  @doc "The membership row `id` names, as the server reads it."
+  def membership(id), do: Arca.Members.get(Prima.Actor.system(), id)
 
   @doc """
   Copy every shipped unit the athanor lacks into `athanor_id` — the
@@ -342,18 +349,28 @@ defmodule Sanctum.TestContext do
     end
   end
 
+  # The action each credential site this suite confirms decides under
+  # (`Sanctum.Pairing`'s table of actions).
+  @confirmed_actions %{
+    "key.create" => :credential_issuance,
+    "key.rotate" => :credential_issuance,
+    "webhook.create" => :credential_issuance,
+    "webhook.rotate" => :credential_issuance,
+    "vault.create" => :credential_entry,
+    "vault.rotate" => :credential_entry,
+    "vault.authorize" => :credential_entry,
+    "oauth.set_client" => :credential_entry
+  }
+
   @doc """
   `confirmed/3` for the change the deciding site of `operation`
-  (`tool.action`) passes for `arguments`, naming `resource`: the action is
-  the table's (`Sanctum.Pairing.action_for/1`). Every credential site
-  names its resource by name (the entry, the key, the webhook, the OAuth
-  provider).
+  (`tool.action`) passes for `arguments`, naming `resource`, under the
+  action that site decides. Every credential site names its resource by
+  name (the entry, the key, the webhook, the OAuth provider).
   """
   @spec confirmed_change(Context.t(), String.t(), map(), String.t() | nil) :: Context.t()
   def confirmed_change(%Context{} = ctx, operation, arguments, resource) do
-    action =
-      Sanctum.Pairing.action_for(operation) ||
-        raise ArgumentError, "#{operation} confirms nothing"
+    action = Map.fetch!(@confirmed_actions, operation)
 
     confirmed(ctx, action, %{operation: operation, arguments: arguments, resource: resource})
   end

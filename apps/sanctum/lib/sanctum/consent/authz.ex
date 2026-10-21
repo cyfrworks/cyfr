@@ -49,7 +49,7 @@ defmodule Sanctum.Consent.Authz do
   `Arca.PendingConfirmations`), proven by a passkey assertion or a fresh
   re-authentication, and consumed once.
 
-  An action that needs no fresh confirmation (`Sanctum.Pairing.fresh_required?/2`)
+  An action that needs no fresh confirmation (`Sanctum.Pairing.sensitive?/1`)
   is answered `:ok`: the site's own checks of who may act decide. For a
   sensitive change:
 
@@ -262,7 +262,7 @@ defmodule Sanctum.Consent.Authz do
   and the device must still stand on them as an issuance's must
   (`Sanctum.Issuance.device_held/1`). A revocation that committed after
   the device's standing was read refuses the change with one of the
-  issuance's standing refusals (`Sanctum.Issuance.standing_refusals/0`),
+  issuance's standing refusals (`t:Sanctum.Issuance.standing_refusal/0`),
   and one that starts later waits for the caller's commit.
   """
   @spec consume(Context.t(), {Sanctum.Pairing.action(), change()}) ::
@@ -452,7 +452,7 @@ defmodule Sanctum.Consent.Authz do
   defp decide(ctx, action, change, mode) do
     with :ok <- known_action(action),
          {:ok, change} <- change(change) do
-      if Sanctum.Pairing.fresh_required?(action, ctx),
+      if Sanctum.Pairing.sensitive?(action),
         do: sensitive(ctx, action, change, mode),
         else: :ok
     end

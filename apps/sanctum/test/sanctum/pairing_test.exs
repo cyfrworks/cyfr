@@ -284,7 +284,7 @@ defmodule Sanctum.PairingTest do
   describe "the action table" do
     @describetag database: false
 
-    test "is closed: today's rows and the seven this plan adds" do
+    test "is closed" do
       assert Pairing.actions() == Enum.sort([:grant, :approval | @sensitive])
     end
 
@@ -294,89 +294,6 @@ defmodule Sanctum.PairingTest do
       for action <- @sensitive, do: assert(Pairing.sensitive?(action), inspect(action))
 
       assert_raise FunctionClauseError, fn -> Pairing.sensitive?(:anything) end
-    end
-
-    test "each operation that confirms something maps to its action, and no other does" do
-      expected = %{
-        "vault.create" => :credential_entry,
-        "vault.rotate" => :credential_entry,
-        "vault.rebind" => :credential_entry,
-        "vault.authorize" => :credential_entry,
-        "oauth.set_client" => :credential_entry,
-        "instance_entry.create" => :credential_entry,
-        "instance_entry.rotate" => :credential_entry,
-        "instance_entry.rebind" => :credential_entry,
-        "instance_entry.set_audience" => :credential_sharing,
-        "instance_entry.set_component_policy" => :credential_sharing,
-        "key.create" => :credential_issuance,
-        "key.rotate" => :credential_issuance,
-        "webhook.create" => :credential_issuance,
-        "webhook.rotate" => :credential_issuance,
-        "registry.tokens_issue" => :credential_issuance,
-        "pairing.revoke" => :pairing_revocation,
-        "person.enroll" => :recovery_material,
-        "person.kit" => :recovery_material,
-        "person.enroll_holder" => :recovery_material,
-        "passkey.register" => :passkey_registration,
-        "passkey.revoke" => :passkey_registration,
-        "passkey.recover_admin" => :passkey_registration,
-        "pairing.begin" => :device_pairing,
-        "person.certify" => :device_pairing,
-        "person.assert" => :remote_sign_in,
-        "person.rotate" => :key_rotation,
-        "person.link_door" => :sign_in_methods,
-        "person.unlink_door" => :sign_in_methods,
-        "seal.change" => :seal_change,
-        "key.reenable" => :restore_reenable,
-        "webhook.reenable" => :restore_reenable,
-        "pairing.reenable" => :restore_reenable,
-        "passkey.reenable" => :restore_reenable,
-        "person.close_recovery" => :restore_close
-      }
-
-      for {operation, action} <- expected do
-        assert Pairing.action_for(operation) == action, operation
-        assert action in Pairing.actions()
-      end
-
-      # The unlock and the transfer have no operation yet, and a read or an
-      # everyday change confirms nothing: an instance entry's caps, revoke
-      # and delete need the session alone, as its reads do. A rebind names
-      # its action for the widening its site decides; a narrowing one asks
-      # nothing (`Sanctum.VaultTest`, `Sanctum.InstanceEntriesTest`).
-      for operation <- ~w(vault.list vault.rename key.revoke profile.commit person.kit_ack
-                          pairing.complete pairing.list pairing.renew vault/create
-                          instance_entry.set_caps instance_entry.revoke
-                          instance_entry.delete instance_entry.list instance_entry.usage
-                          instance_entry.offered) do
-        assert Pairing.action_for(operation) == nil, operation
-      end
-    end
-  end
-
-  describe "fresh_required?/2" do
-    @describetag database: false
-
-    test "answers the table, the same for every person and every client" do
-      for action <- Pairing.actions(),
-          context <- [
-            ctx(auth_method: :oidc),
-            ctx(auth_method: :api_key),
-            ctx(auth_method: :device)
-          ] do
-        assert Pairing.fresh_required?(action, context) == Pairing.sensitive?(action),
-               inspect(action)
-      end
-
-      refute Pairing.fresh_required?(:grant, ctx(auth_method: :oidc))
-      refute Pairing.fresh_required?(:approval, ctx(auth_method: :oidc))
-      assert Pairing.fresh_required?(:credential_issuance, ctx(auth_method: :api_key))
-      assert Pairing.fresh_required?(:vault_unlock, ctx(auth_method: :oidc))
-      assert Pairing.fresh_required?(:home_transfer, ctx(auth_method: :oidc))
-
-      assert_raise FunctionClauseError, fn ->
-        Pairing.fresh_required?(:delete_everything, ctx(auth_method: :oidc))
-      end
     end
   end
 

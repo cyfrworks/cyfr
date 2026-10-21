@@ -219,17 +219,23 @@ defmodule Sanctum.Tenancy.AthanorsTest do
     end
   end
 
-  describe "mark_provisioned/1 and list_by_ids/1" do
-    test "records provisioning and lists by ids" do
+  describe "provisioning_failure/1 and list_by_ids/1" do
+    test "reads the failure a fill recorded, and lists by ids" do
       a = group!()
       b = group!()
 
-      {:ok, a} = Athanors.record_provisioning_failure(a, :closure, "unreachable")
+      :ok =
+        Arca.Athanors.set(Prima.Actor.in_athanor(a.id),
+          provisioning_failed_at: DateTime.utc_now(),
+          provisioning_failure: Jason.encode!(%{"step" => "closure", "detail" => "unreachable"})
+        )
+
+      {:ok, a} = Athanors.get(a.id)
 
       assert %{step: "closure", detail: "unreachable", at: %DateTime{}} =
                Athanors.provisioning_failure(a)
 
-      {:ok, a} = Athanors.mark_provisioned(a)
+      {:ok, a} = Sanctum.TestContext.mark_provisioned(a)
       assert a.provisioned_at != nil
       # a successful run forgets the earlier failure
       refute Athanors.provisioning_failure(a)

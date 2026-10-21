@@ -93,18 +93,21 @@ defmodule Sanctum.Tenancy.CapsTest do
              athanor_storage_bytes: {:ok, nil}
            }
 
-    assert {:error, {:limit_reached, :max_athanors, 10_000}} = Caps.check(:max_athanors, 10_000)
+    assert {:error, {:limit_reached, :max_athanors, 10_000}} =
+             Caps.check_counted(:max_athanors, fn -> {:ok, 10_000} end)
 
     # Zero turns a cap off, never "nothing allowed".
     put_caps(max_athanors: 0, max_members_per_group: 0, athanor_storage_bytes: 0)
     assert Caps.get(:max_athanors) == {:ok, nil}
     assert Caps.get(:max_members_per_group) == {:ok, nil}
     assert Caps.get(:athanor_storage_bytes) == {:ok, nil}
-    assert :ok = Caps.check(:max_athanors, 1_000_000)
+    assert :ok = Caps.check_counted(:max_athanors, fn -> {:ok, 1_000_000} end)
 
     put_caps(max_athanors: 3)
-    assert :ok = Caps.check(:max_athanors, 2)
-    assert {:error, {:limit_reached, :max_athanors, 3}} = Caps.check(:max_athanors, 3)
+    assert :ok = Caps.check_counted(:max_athanors, fn -> {:ok, 2} end)
+
+    assert {:error, {:limit_reached, :max_athanors, 3}} =
+             Caps.check_counted(:max_athanors, fn -> {:ok, 3} end)
   end
 
   test "a cap the store cannot answer refuses, never reads as off" do
@@ -120,7 +123,8 @@ defmodule Sanctum.Tenancy.CapsTest do
         assert {:error, {:cap_unverifiable, :max_athanors}} =
                  Caps.check_counted(:max_athanors, fn -> raise "must not be counted" end)
 
-        assert {:error, {:cap_unverifiable, :max_athanors}} = Caps.check(:max_athanors, 0)
+        assert {:error, {:cap_unverifiable, :max_athanors}} =
+                 Caps.check_counted(:max_athanors, fn -> {:ok, 0} end)
 
         assert {:error, :storage_unverifiable} =
                  Caps.check_storage(Sanctum.Context.actor(Sanctum.TestContext.local()), 1)

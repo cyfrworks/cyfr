@@ -234,13 +234,8 @@ defmodule Sanctum.Test.DirectoryServer do
   def handler(dir) do
     fn
       %{method: "GET", target: target} ->
-        case String.split(URI.parse(target).path, "/") do
-          ["", "directory", "v1", identifier, "requests", request_id] ->
-            outcome(dir, identifier, request_id)
-
-          ["", "directory", "v1", identifier] ->
-            page(dir, identifier, target)
-        end
+        ["", "directory", "v1", identifier] = String.split(URI.parse(target).path, "/")
+        page(dir, identifier, target)
 
       %{method: "POST", target: "/directory/v1/genesis", body: body} ->
         register(dir, body)
@@ -371,33 +366,6 @@ defmodule Sanctum.Test.DirectoryServer do
           end
       end
     end)
-  end
-
-  defp outcome(dir, identifier, request_id) do
-    case Agent.get(dir, &Map.get(&1.recorded, {identifier, request_id})) do
-      nil ->
-        json(404, %{"error" => "not_found"})
-
-      %{outcome: :accepted, entry: entry, seq: seq} ->
-        json(200, %{
-          "outcome" => "accepted",
-          "identifier" => identifier,
-          "request_id" => request_id,
-          "request_digest" => Identity.request_digest(entry.request),
-          "seq" => seq,
-          "entry_hash" => Identity.hash(entry),
-          "entry" => Entry.encode(entry)
-        })
-
-      %{outcome: :stale_policy, request: request, revision: revision} ->
-        json(200, %{
-          "outcome" => "stale_policy",
-          "identifier" => identifier,
-          "request_id" => request_id,
-          "request_digest" => Identity.request_digest(request),
-          "recorded" => %{"revision" => revision}
-        })
-    end
   end
 
   defp recorded_answer(identifier, %{outcome: :accepted} = recorded),

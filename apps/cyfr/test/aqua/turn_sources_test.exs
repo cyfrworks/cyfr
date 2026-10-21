@@ -57,7 +57,7 @@ defmodule Aqua.TurnSourcesTest do
       Athanors.create_group(user.user_id, "Sources #{System.unique_integer([:positive])}")
 
     conn = log_in_user(conn, user, athanor_id: room.id)
-    {:ok, _} = Athanors.mark_provisioned(room)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(room)
     ctx = ready_athanor!(room.id, user.user_id)
     # The loops' work stops before the paths it runs under are restored.
     Cyfr.Test.Sandbox.stop_work_on_exit()

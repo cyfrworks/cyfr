@@ -319,7 +319,7 @@ defmodule Sanctum.DeviceCertsTest do
       assert %{source_kind: :device, source_id: ^client_id, focus_basis: basis, identity: nil} =
                ctx.credential_binding
 
-      assert {:ok, %{athanor_id: athanor_id}} = Members.get(basis)
+      assert {:ok, %{athanor_id: athanor_id}} = Sanctum.TestContext.membership(basis)
       assert athanor_id == athanor.id
     end
 

@@ -251,8 +251,8 @@ defmodule Sanctum.Consent.Commit do
   the caller learns which of the app's bindings a grant for another need
   replaced.
   """
-  @spec grant(Context.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def grant(%Context{} = ctx, %{profile_id: profile_id} = params, _opts \\ []) do
+  @spec grant(Context.t(), map()) :: {:ok, map()} | {:error, term()}
+  def grant(%Context{} = ctx, %{profile_id: profile_id} = params) do
     with {:ok, :interactive} <- Authz.authorize_interactive(ctx),
          {:ok, profile} <- Arca.ProfileStorage.get(Sanctum.Context.actor(ctx), profile_id),
          :ok <- check_grantable_profile(profile),

@@ -48,7 +48,7 @@ defmodule Aqua.ModelsTest do
     n = System.unique_integer([:positive])
     user = "local|idp|models-#{n}"
     {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Models #{n}")
-    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
     ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
 
     assert {:ok, %{"models" => %{}, "refs" => %{}, "errors" => %{}}} = Aqua.models(ctx)
@@ -70,7 +70,7 @@ defmodule Aqua.ModelsTest do
     n = System.unique_integer([:positive])
     user = "local|idp|models-unread-#{n}"
     {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Models unread #{n}")
-    {:ok, _} = Sanctum.Tenancy.Athanors.mark_provisioned(athanor)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(athanor)
     ctx = %{Sanctum.TestContext.local() | user_id: user, athanor_id: athanor.id}
     soul = Compendium.agent_soul_type()
 

@@ -59,15 +59,9 @@ defmodule Sanctum.Issuance do
   # whose client or certificate no longer stands (`:not_standing`).
   @standing_refusals [:missing_generation, :stale_generation, :unauthenticated, :not_standing]
 
-  @typedoc "One of the standing refusals (`standing_refusals/0`)."
+  @typedoc "One of the standing refusals (`standing_refusal?/1`)."
   @type standing_refusal ::
           :missing_generation | :stale_generation | :unauthenticated | :not_standing
-
-  @doc false
-  # The standing refusals, for a surface that answers them
-  # (`standing_refusal/1`) rather than reporting a failure.
-  @spec standing_refusals() :: [atom()]
-  def standing_refusals, do: @standing_refusals
 
   @doc false
   # Whether `reason` is one of the standing refusals, in a guard.

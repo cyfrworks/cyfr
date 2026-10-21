@@ -43,7 +43,7 @@ defmodule Sanctum.Consent.Plan do
   never wider, and a surface can offer to grant a consumed `once` binding
   again; `head_narrowing`, per consent-graph node the narrowing the head
   holds against the ask as it stands, in the decisions' `subset` shape
-  (`head_narrowing/4`, the one definition `Sanctum.Consent.Commit.grant/3`
+  (`head_narrowing/4`, the one definition `Sanctum.Consent.Commit.grant/2`
   re-issues too), so a re-grant opens as narrow as its head, and a method
   newly asked for, or a dependency a release added, opens off; and, when
   the component's shape moved since the head, `shape_diff`, the head as
@@ -863,7 +863,7 @@ defmodule Sanctum.Consent.Plan do
 
   The one definition of what a re-grant keeps: a plan answers it as
   `head_narrowing`, which the grant sheet opens on, and
-  `Sanctum.Consent.Commit.grant/3` re-issues it.
+  `Sanctum.Consent.Commit.grant/2` re-issues it.
   """
   @spec head_narrowing(String.t(), map(), String.t(), String.t()) ::
           {:ok, map()} | {:error, {:corrupt, {:profile, String.t()}}}

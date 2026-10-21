@@ -363,7 +363,7 @@ defmodule Sanctum.Context do
     attrs |> Map.new() |> build()
   end
 
-  @valid_scopes Sanctum.Atoms.scope_atoms()
+  @valid_scopes Prima.TenancyScope.atoms()
 
   # Validate auth_method against its declared vocabulary at context construction.
   @valid_auth_methods [

@@ -33,7 +33,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
         user.id
       end
 
-    {:ok, _} = Members.ensure_platform(ops)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops)
 
     ctx = fn user_id, athanor_id, opts ->
       Context.build(

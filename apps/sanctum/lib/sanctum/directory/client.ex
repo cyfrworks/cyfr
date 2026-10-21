@@ -4,7 +4,7 @@
 defmodule Sanctum.Directory.Client do
   @moduledoc """
   This home's client for any identity directory (`ARCHITECTURE.md` §9.1):
-  registration, resolution, appends, recoveries and recorded outcomes.
+  registration, resolution, appends and recoveries.
 
   ## Which directory
 
@@ -230,21 +230,6 @@ defmodule Sanctum.Directory.Client do
   end
 
   @doc """
-  The recorded outcome of recovery request `request_id` under
-  `identifier`: `%{outcome: :accepted, entry: …}` with its position and
-  hash, or `%{outcome: :stale_policy, recorded: …}`, each with the
-  request's digest.
-  """
-  @spec outcome(String.t(), genesis(), String.t(), opts()) :: {:ok, map()} | {:error, reason()}
-  def outcome(identifier, genesis, request_id, opts \\ []) do
-    with {:ok, ctx} <- prepare(identifier, genesis, opts),
-         :ok <- request_id(request_id),
-         {:ok, body} <- call(ctx, :get, "/" <> identifier <> "/requests/" <> request_id, nil) do
-      recorded(body, identifier, request_id)
-    end
-  end
-
-  @doc """
   This home's cached head of `identifier`: the verified state it stored,
   decoded, and the row (its genesis, directory and `verified_at`).
   """
@@ -346,10 +331,6 @@ defmodule Sanctum.Directory.Client do
     if opts[:cacerts],
       do: Keyword.put(base, :transport_opts, cacerts: opts[:cacerts]),
       else: base
-  end
-
-  defp request_id(request_id) do
-    if Encoding.id?(request_id), do: :ok, else: {:error, {:invalid_field, "request_id"}}
   end
 
   defp rotation(%Entry{} = entry), do: rotation(Entry.encode(entry))
@@ -545,52 +526,6 @@ defmodule Sanctum.Directory.Client do
   end
 
   defp recovery_entry(_value, _hash, _request), do: {:error, :invalid_response}
-
-  defp recorded(%{"outcome" => "accepted"} = body, identifier, request_id) do
-    with %{"identifier" => ^identifier, "request_id" => ^request_id, "request_digest" => digest} <-
-           body,
-         {:ok, answer} <- accepted(body, identifier, nil),
-         {:ok, %Entry{kind: :recover, request: request} = entry} <- Entry.decode(body["entry"]),
-         true <- Identity.hash(entry) == answer.entry_hash,
-         true <- request.request_id == request_id and Identity.request_digest(request) == digest do
-      {:ok,
-       Map.merge(answer, %{
-         outcome: :accepted,
-         request_id: request_id,
-         request_digest: digest,
-         entry: entry
-       })}
-    else
-      _ -> {:error, :invalid_response}
-    end
-  end
-
-  defp recorded(%{"outcome" => "stale_policy"} = body, identifier, request_id) do
-    case body do
-      %{
-        "identifier" => ^identifier,
-        "request_id" => ^request_id,
-        "request_digest" => digest,
-        "recorded" => %{} = recorded
-      } ->
-        if Encoding.digest?(digest),
-          do:
-            {:ok,
-             %{
-               identifier: identifier,
-               outcome: :stale_policy,
-               request_id: request_id,
-               request_digest: digest,
-               recorded: recorded
-             }},
-          else: {:error, :invalid_response}
-
-      _other ->
-        {:error, :invalid_response}
-    end
-  end
-
-  defp recorded(_body, _identifier, _request_id), do: {:error, :invalid_response}
 
   # ---- resolution --------------------------------------------------------------
 

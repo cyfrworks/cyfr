@@ -67,7 +67,7 @@ defmodule Cyfr.BootstrapTest do
         verified: true
       })
 
-    {:ok, _} = Members.ensure_platform(user.id)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(user.id)
     user
   end
 
@@ -430,7 +430,7 @@ defmodule Cyfr.BootstrapTest do
               verified: true
             })
 
-          {:ok, _} = Members.ensure_platform(user.id)
+          {:ok, _} = Sanctum.TestContext.ensure_platform(user.id)
           {:ok, user}
         end)
 

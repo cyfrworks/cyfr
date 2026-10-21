@@ -1013,46 +1013,4 @@ defmodule Sanctum.TinctureAuth do
   # module, never the storage layer's own word.
   defp stored({:error, :database_error}), do: {:error, :unavailable}
   defp stored(other), do: other
-
-  @sensitive_query_keys ~w(_t _key _session)
-
-  @doc """
-  The credential query params this surface has to scrub: no URL carries a
-  credential in its query, and a stray one is redacted wherever it arrives.
-
-  `Sanctum.RedactionRosterTest` holds `Prima.Sanitizer` to this list: the
-  same names arrive again as decoded params, where the query-string scrub
-  below cannot reach them.
-  """
-  @spec sensitive_query_keys() :: [String.t()]
-  def sensitive_query_keys, do: @sensitive_query_keys
-
-  @doc """
-  Redact tincture credential query params (`_t`, `_key`, `_session`) in a
-  query string, replacing each value with `[REDACTED]`.
-
-  Defense-in-depth: even with header-preferred auth, a stray credential query
-  param must never reach an access log / error report. Operators should ALSO
-  redact these keys at their reverse proxy (documented in the deploy notes).
-  """
-  @spec redact_query_string(String.t() | nil) :: String.t()
-  def redact_query_string(qs) when is_binary(qs) and qs != "" do
-    qs
-    |> URI.decode_query()
-    |> Enum.map_join("&", fn {k, v} ->
-      v = if k in @sensitive_query_keys, do: "[REDACTED]", else: v
-      URI.encode_www_form(k) <> "=" <> URI.encode_www_form(v)
-    end)
-  end
-
-  def redact_query_string(_), do: ""
-
-  @doc """
-  Replace `conn.query_string` with its redacted form so any downstream log
-  sink / error renderer never observes a raw tincture credential.
-  """
-  @spec scrub_conn(Plug.Conn.t()) :: Plug.Conn.t()
-  def scrub_conn(%Plug.Conn{} = conn) do
-    %{conn | query_string: redact_query_string(conn.query_string)}
-  end
 end

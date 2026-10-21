@@ -134,10 +134,6 @@ defmodule Sanctum.Tenancy.Members do
     end
   end
 
-  @doc "Ensure the platform-admin row for `user_id`."
-  @spec ensure_platform(String.t()) :: {:ok, membership()} | {:error, term()}
-  def ensure_platform(user_id), do: ensure(user_id, scope: "platform")
-
   @doc """
   The platform grant an admitted operator sign-in asks for, checked
   against exactly the identity facts that sign-in asserted
@@ -157,10 +153,6 @@ defmodule Sanctum.Tenancy.Members do
       {:error, _reason} = refusal -> refusal
     end
   end
-
-  @doc "Every platform-admin row — the server's operators, as the rows say."
-  @spec list_platform() :: {:ok, [membership()]} | {:error, :database_error}
-  def list_platform, do: Arca.Members.list_platform(server())
 
   @doc """
   Remove the platform-admin row for `user_id`, if any. A failure is
@@ -193,9 +185,6 @@ defmodule Sanctum.Tenancy.Members do
         refusal
     end
   end
-
-  @spec get(String.t()) :: {:ok, membership()} | {:error, :not_found | :database_error}
-  def get(id), do: Arca.Members.get(server(), id)
 
   @doc "Is `user_id` an active member of the athanor?"
   @spec member?(String.t() | nil, String.t()) :: boolean()

@@ -1044,7 +1044,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
         verified: true
       })
 
-    {:ok, _} = Members.ensure_platform(user.id)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(user.id)
 
     {:ok, session} =
       Sanctum.TestContext.create_session(

@@ -245,8 +245,4 @@ defmodule Sanctum.Auth.Identity do
     do: reserved_provider?(Atom.to_string(provider))
 
   def reserved_provider?(provider), do: provider in @reserved_providers
-
-  @doc "The built-in providers, by name."
-  @spec builtin_providers() :: [String.t()]
-  def builtin_providers, do: @builtin |> Map.keys() |> Enum.sort()
 end

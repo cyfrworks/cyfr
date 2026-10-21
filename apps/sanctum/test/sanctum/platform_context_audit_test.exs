@@ -88,7 +88,7 @@ defmodule Sanctum.PlatformContextAuditTest do
       alice = "github|https://github.com|s4-alice-#{n}"
       ops = "github|https://github.com|s4-ops-#{n}"
       {:ok, group} = Sanctum.Tenancy.Athanors.create_group(alice, "Audit #{n}")
-      {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops)
 
       person = fn user_id, athanor_id, admin? ->
         Context.build(

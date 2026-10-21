@@ -216,9 +216,6 @@ defmodule Sanctum.Directory.ClientTest do
       assert {:error, :identifier_mismatch} =
                Client.recover(bob.identifier, genesis(alice), request(alice), opts(ctx))
 
-      assert {:error, :identifier_mismatch} =
-               Client.outcome(bob.identifier, genesis(alice), "req_1", opts(ctx))
-
       refute_received {:resolved, _}
       assert requests() == []
     end
@@ -665,9 +662,6 @@ defmodule Sanctum.Directory.ClientTest do
 
       assert {:error, {:stale_policy, ^recorded}} =
                Client.recover(alice.identifier, genesis(alice), request(alice), opts(ctx))
-
-      assert {:error, :not_found} =
-               Client.outcome(alice.identifier, genesis(alice), "req_9", opts(ctx))
     end
 
     test "rate limits, mirrors, refusals and an unserved directory are decoded", ctx do
@@ -748,55 +742,6 @@ defmodule Sanctum.Directory.ClientTest do
 
       assert {:error, :invalid_response} =
                Client.recover(alice.identifier, genesis(alice), sent, opts(ctx))
-    end
-
-    test "a recorded outcome is decoded, accepted or refused", ctx do
-      {:ok, holder} = Agent.start_link(fn -> nil end)
-
-      dir =
-        directory(ctx, "dir-a.test", fn %{target: target} ->
-          {person, request} = Agent.get(holder, & &1)
-          digest = Identity.request_digest(request)
-
-          case String.split(target, "/") |> List.last() do
-            "req_1" ->
-              {:ok, entry} = Entry.recover(person.head, request)
-
-              json(200, %{
-                "identifier" => person.identifier,
-                "request_id" => "req_1",
-                "request_digest" => digest,
-                "outcome" => "accepted",
-                "seq" => 1,
-                "entry_hash" => Identity.hash(entry),
-                "entry" => Entry.encode(entry)
-              })
-
-            "req_2" ->
-              json(200, %{
-                "identifier" => person.identifier,
-                "request_id" => "req_2",
-                "request_digest" => digest,
-                "outcome" => "stale_policy",
-                "recorded" => %{"outcome" => "stale_policy"}
-              })
-          end
-        end)
-
-      alice = person(dir.url)
-      Agent.update(holder, fn _ -> {alice, request(alice)} end)
-
-      assert {:ok, %{outcome: :accepted, seq: 1, entry: %Entry{kind: :recover}}} =
-               Client.outcome(alice.identifier, genesis(alice), "req_1", opts(ctx))
-
-      assert {:ok, %{outcome: :stale_policy, recorded: %{"outcome" => "stale_policy"}}} =
-               Client.outcome(alice.identifier, genesis(alice), "req_2", opts(ctx))
-
-      # An accepted record whose entry embeds another request is not taken.
-      Agent.update(holder, fn {person, _} -> {person, request(alice, "req_other")} end)
-
-      assert {:error, :invalid_response} =
-               Client.outcome(alice.identifier, genesis(alice), "req_1", opts(ctx))
     end
   end
 end

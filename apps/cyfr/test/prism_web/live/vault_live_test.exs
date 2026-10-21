@@ -1388,7 +1388,7 @@ defmodule PrismWeb.VaultLiveTest do
       assert has_element?(view, policy, "Any consented component")
 
       ops = test_user()
-      {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(ops.user_id)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
       admin = %{person_ctx(ops, Sanctum.TestContext.athanor_id()) | platform_admin: true}
 
       assert {:ok, :changed} =

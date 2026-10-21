@@ -364,9 +364,6 @@ defmodule Emissary.Router do
 
         post "/:identifier/recover", DirectoryController, :recover,
           metadata: %{auth: :directory_signed}
-
-        get "/:identifier/requests/:request_id", DirectoryController, :outcome,
-          metadata: %{auth: :public_directory}
       end
 
       # A certified device's renewal (`person.renew_certificate`), from the

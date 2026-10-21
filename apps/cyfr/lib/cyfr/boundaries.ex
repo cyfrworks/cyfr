@@ -2341,7 +2341,6 @@ defmodule Cyfr.Boundaries do
     {:get, "/auth/:provider"},
     {:post, "/auth/logout"},
     {:get, "/directory/v1/:identifier"},
-    {:get, "/directory/v1/:identifier/requests/:request_id"},
     {:post, "/directory/v1/genesis"},
     {:get, "/login"},
     {:get, "/pair"},
@@ -2853,7 +2852,6 @@ defmodule Cyfr.Boundaries do
     %{module: Emissary.Web.DirectoryController, site: :resolve, plane: :external, origin: :none},
     %{module: Emissary.Web.DirectoryController, site: :append, plane: :external, origin: :none},
     %{module: Emissary.Web.DirectoryController, site: :recover, plane: :external, origin: :none},
-    %{module: Emissary.Web.DirectoryController, site: :outcome, plane: :external, origin: :none},
     # Restore, an entry path because no person exists yet to admit an
     # operation, and the recovery kit, its own ingress: the installation
     # capability, the kit, its proof and the kit credential. The kit

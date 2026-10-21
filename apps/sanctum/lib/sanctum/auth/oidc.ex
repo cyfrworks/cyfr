@@ -230,15 +230,6 @@ defmodule Sanctum.Auth.OIDC do
   def issuer, do: Application.get_env(:sanctum, :oidc_issuer)
 
   @doc """
-  A plain sign-in through this issuer proves who someone is, never that
-  they are present now: an issuer may answer it from its own session. It
-  is no fresh proof; only a re-authentication its person then approves
-  is (`reauth_callback/1`, `reauth_decide/3`).
-  """
-  @spec proves_freshness?() :: false
-  def proves_freshness?, do: false
-
-  @doc """
   The client id and secret of the configured `oidcc` Ueberauth provider,
   the one registration at the issuer both the sign-in and the
   re-authentication use. `{:error, :unavailable}` when this home signs no

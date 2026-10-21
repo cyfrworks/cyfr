@@ -758,7 +758,7 @@ defmodule Sanctum.Consent.AuthzTest do
       end
 
       for action <- Sanctum.Pairing.actions(), action not in [:grant, :approval] do
-        assert Sanctum.Pairing.fresh_required?(action, session_ctx), inspect(action)
+        assert Sanctum.Pairing.sensitive?(action), inspect(action)
       end
     end
 

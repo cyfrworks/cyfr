@@ -174,7 +174,6 @@ defmodule Sanctum.Providers.CliSignInTest do
 
   test "the action table names the approval a credential issuance, as an API key's",
        %{session_ctx: session_ctx} do
-    assert Sanctum.Pairing.action_for("session.cli_approve") == :credential_issuance
     assert Sanctum.Pairing.sensitive?(:credential_issuance)
 
     # A session's own approval, with no proof, opens a confirmation and

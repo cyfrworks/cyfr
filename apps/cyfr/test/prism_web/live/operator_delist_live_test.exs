@@ -64,7 +64,7 @@ defmodule PrismWeb.OperatorDelistLiveTest do
        %{conn: conn} do
     operator = test_user()
     Application.put_env(:sanctum, :platform_admin_emails, [operator.email])
-    {:ok, _} = Members.ensure_platform(operator.user_id)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(operator.user_id)
 
     conn = log_in_user(conn, operator)
     token = Plug.Conn.get_session(conn, session_key())

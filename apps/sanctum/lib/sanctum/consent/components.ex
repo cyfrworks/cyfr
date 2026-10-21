@@ -233,7 +233,7 @@ defmodule Sanctum.Consent.Components do
   @doc "The newest registry row for a name, publisher and type."
   @spec get_latest(Context.t(), String.t(), String.t() | nil, String.t() | nil) ::
           {:ok, map()} | {:error, term()}
-  def get_latest(%Context{} = ctx, name, publisher \\ nil, type \\ nil) when is_binary(name),
+  def get_latest(%Context{} = ctx, name, publisher, type) when is_binary(name),
     do: get_component(ctx, name, nil, publisher, type)
 
   @doc """

@@ -1068,12 +1068,6 @@ defmodule Sanctum.Catalog do
     do: Atom.to_string(permission) in Sanctum.Atoms.known_permissions()
 
   @doc """
-  The planes an action may be annotated with.
-  """
-  @spec valid_planes() :: [Prima.Provider.plane()]
-  defdelegate valid_planes(), to: Operation
-
-  @doc """
   Every provider named in config, loaded or not. The status roster reads
   this set, so a configured provider that failed to load is reported as
   such rather than silently absent.
@@ -1106,18 +1100,6 @@ defmodule Sanctum.Catalog do
         false
       end
     end)
-  end
-
-  @doc """
-  Every `tool.action` served outside a running chain: the declared
-  actions whose planes include `:external`.
-  """
-  @spec external_tool_actions() :: [String.t()]
-  def external_tool_actions do
-    for tool <- declared_tools(),
-        {action, annotation} <- Annotations.actions_of(tool),
-        :external in Map.get(annotation, :planes, []),
-        do: "#{tool.name}.#{action}"
   end
 
   @doc """

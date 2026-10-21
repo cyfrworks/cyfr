@@ -151,7 +151,13 @@ defmodule Emissary.MCP.PlaneTaxonomyTest do
       assert in_chain_only == MapSet.new(~w(source.tree source.read source.grep
                                             source.write source.edit source.delete))
 
-      external = MapSet.new(Catalog.external_tool_actions())
+      external =
+        MapSet.new(
+          for {tool, verb, %{planes: planes}} <- annotated_actions(),
+              :external in planes,
+              do: "#{tool}.#{verb}"
+        )
+
       assert MapSet.disjoint?(in_chain_only, external)
 
       ctx = Sanctum.TestContext.local()

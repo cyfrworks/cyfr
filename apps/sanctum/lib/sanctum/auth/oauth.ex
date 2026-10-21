@@ -22,7 +22,7 @@ defmodule Sanctum.Auth.OAuth do
   decision (`Sanctum.Door`), taken before any session is minted.
 
   A plain OAuth sign-in proves who someone is and never that they are
-  present now (`proves_freshness?/0`): the provider may answer it from its
+  present now: the provider may answer it from its
   own session, and a device-flow grant can be approved on another device
   at any time. So it never confirms a sensitive change; a pending
   confirmation is proven by a passkey, a forced-fresh OpenID Connect
@@ -30,10 +30,6 @@ defmodule Sanctum.Auth.OAuth do
   """
 
   @behaviour Sanctum.Auth
-
-  @doc "A plain OAuth sign-in proves no freshness, so it never counts as a fresh proof."
-  @spec proves_freshness?() :: false
-  def proves_freshness?, do: false
 
   @impl true
   @doc """

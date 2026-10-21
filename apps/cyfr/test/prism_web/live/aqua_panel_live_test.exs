@@ -49,8 +49,8 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     # Both athanors are set up: a turn pins the baseline consent, and the
     # composer is held on an athanor that is still being prepared.
-    {:ok, mine} = Athanors.mark_provisioned(mine)
-    {:ok, _} = Athanors.mark_provisioned(room)
+    {:ok, mine} = Sanctum.TestContext.mark_provisioned(mine)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(room)
 
     conn = log_in_user(conn, user, athanor_id: room.id)
     :ok = Sanctum.TestContext.shipped!(mine.id)

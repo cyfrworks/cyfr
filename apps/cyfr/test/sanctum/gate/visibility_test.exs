@@ -83,7 +83,7 @@ defmodule Sanctum.Gate.VisibilityTest do
   # What the action's own annotation declares, read apart from discovery.
   defp anonymous?(name, action) do
     {:ok, {_module, meta}} = Catalog.lookup(name)
-    Annotations.auth(meta, action) == :anonymous
+    match?(%{auth: :anonymous}, Annotations.annotation(meta, action))
   end
 
   defp action_enum(tool_def) do

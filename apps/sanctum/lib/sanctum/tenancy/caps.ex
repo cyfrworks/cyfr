@@ -110,20 +110,6 @@ defmodule Sanctum.Tenancy.Caps do
     end
   end
 
-  @doc "`:ok` while `current` is below the cap (or the cap is off)."
-  @spec check(key(), non_neg_integer()) ::
-          :ok
-          | {:error, {:limit_reached, key(), pos_integer()}}
-          | {:error, {:cap_unverifiable, key()}}
-  def check(key, current) when key in @keys and is_integer(current) do
-    case get(key) do
-      {:ok, nil} -> :ok
-      {:ok, cap} when current < cap -> :ok
-      {:ok, cap} -> {:error, {:limit_reached, key, cap}}
-      {:error, :unavailable} -> unreadable(key)
-    end
-  end
-
   @doc """
   `check/2` over a current that must be counted first — and may not be
   countable. `count_fun` runs only while the cap is configured, and a

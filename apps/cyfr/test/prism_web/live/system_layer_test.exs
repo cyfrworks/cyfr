@@ -219,7 +219,7 @@ defmodule PrismWeb.SystemLayerTest do
   # A platform administrator's page, the layer the Settings page mounts.
   defp signed_in_admin(%{conn: conn}) do
     user = test_user()
-    {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(user.user_id)
+    {:ok, _} = Sanctum.TestContext.ensure_platform(user.user_id)
     %{view: view, ctx: ctx} = signed_in(%{conn: conn}, user)
     %{view: view, ctx: %{ctx | platform_admin: true}, user: user}
   end
@@ -4117,7 +4117,7 @@ defmodule PrismWeb.SystemLayerTest do
     # layer and repeats each once confirmed (`Asker`).
     defp asking_admin(%{conn: conn}) do
       user = test_user()
-      {:ok, _} = Sanctum.Tenancy.Members.ensure_platform(user.user_id)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(user.user_id)
       conn = log_in_user(conn, user)
       athanor = seated_athanor()
 

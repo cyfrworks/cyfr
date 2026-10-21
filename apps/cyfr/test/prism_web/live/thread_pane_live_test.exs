@@ -960,7 +960,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     # profile whose head exists: the empty state reads the model through
     # `Aqua.model_status/2`.
     setup %{room: room, in_room: in_room} do
-      {:ok, _} = Athanors.mark_provisioned(room)
+      {:ok, _} = Sanctum.TestContext.mark_provisioned(room)
 
       {:ok, _} =
         Compendium.Registry.publish_bytes(in_room, @wasm, %{
@@ -1063,7 +1063,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
   # profile, and a key bound to that profile. The seed path it moves is
   # restored only once the work the test's views started has stopped.
   defp connected_room!(room, user) do
-    {:ok, _} = Athanors.mark_provisioned(room)
+    {:ok, _} = Sanctum.TestContext.mark_provisioned(room)
     ctx = ready_athanor!(room.id, user.user_id)
     Cyfr.Test.Sandbox.stop_work_on_exit()
     ctx
@@ -1388,7 +1388,7 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     # A store that answers with no agents is a room with no model, which
     # is one to connect.
     setup %{room: room} do
-      {:ok, _} = Athanors.mark_provisioned(room)
+      {:ok, _} = Sanctum.TestContext.mark_provisioned(room)
       :ok
     end
 

@@ -1025,7 +1025,7 @@ defmodule Sanctum.Providers.Profile do
   # could not be read, or whose profile row or head does not decode, or
   # whose head's bytes fail their digest or do not parse
   # (`Sanctum.Consent.Plan.plan/2`, `Sanctum.Consent.Commit.preview/2`,
-  # `commit/3` and `grant/3`), is answered typed, as `grants` answers it:
+  # `commit/3` and `grant/2`), is answered typed, as `grants` answers it:
   # the gate classes it `unavailable` or `corrupt` through
   # `Sanctum.Unauthorized`, whose sentence it reads as, and a client
   # branches on that class. So, in `Prima.Refusal`'s rows, are the
