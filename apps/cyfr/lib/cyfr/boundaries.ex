@@ -368,8 +368,8 @@ defmodule Cyfr.Boundaries do
           "consent state: the assistant composes them with an agent's policy and " <>
           "checks which may stand, and reads and writes the rows only through it. " <>
           "`Sanctum.Provisioning` is `Aqua.AgentConfig`'s two in-process agent reads " <>
-          "alone — the first-need hook: a turn reads its athanor's tree in-process " <>
-          "now rather than through the `aqua` tool, and the bundle a group athanor " <>
+          "alone — the first-need hook: a turn reads its athanor's tree in-process, " <>
+          "and the bundle a group athanor " <>
           "is filled with on first read has to be there before the turn roots an " <>
           "authority in it. `Sanctum.ExecutionStanding` is `Aqua.Tape`'s check over " <>
           "the grant a turn's root attempt stores, handed to the turn's writes. " <>
@@ -458,7 +458,7 @@ defmodule Cyfr.Boundaries do
           "the server's own work runs under, `auth_configured?/0` says whether this " <>
           "deployment has sign-in, and `build_tincture_context/2` is a tincture " <>
           "invocation's. A call on the root is a reach like any other and is rostered " <>
-          "like one; no roster before this one could see it. `Sanctum.Caller` is " <>
+          "like one. `Sanctum.Caller` is " <>
           "here for `drop_memo/1` alone: the identity domain announces that an " <>
           "established-caller memo is no longer good and never broadcasts, so the " <>
           "host's own watch (`Cyfr.StandingWatch`) is what carries the drop to " <>
@@ -714,9 +714,9 @@ defmodule Cyfr.Boundaries do
       into: "Compendium",
       allow: [],
       reason:
-        "the overlay's locators were wired through `Arca.Storage.UnitLocator` so the " <>
-          "storage layer would not compile against the component domain; the closed " <>
-          "`source` roster it enforces on write is `Prima.ComponentSource` now. " <>
+        "the overlay's locators are wired through `Arca.Storage.UnitLocator` so the " <>
+          "storage layer does not compile against the component domain; the closed " <>
+          "`source` roster it enforces on write is `Prima.ComponentSource`. " <>
           "A foundation's build does not see the host's boundaries: its pruned code path " <>
           "makes a call an undefined-module warning that names no boundary, and a bare name " <>
           "compiles."
@@ -964,8 +964,8 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "everything consent reads about a component comes through the " <>
-          "`Sanctum.Consent.Components` port, and the sign-in probe moved the other " <>
-          "way: `Compendium.SignInSync` holds it and calls down. " <>
+          "`Sanctum.Consent.Components` port, and the sign-in probe is the component " <>
+          "domain's: `Compendium.SignInSync` holds it and calls down. " <>
           "A foundation's build does not see the host's boundaries: its pruned code path " <>
           "makes a call an undefined-module warning that names no boundary, and a bare name " <>
           "compiles."

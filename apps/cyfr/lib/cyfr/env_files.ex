@@ -31,13 +31,8 @@ defmodule Cyfr.EnvFiles do
   cannot keep by the file and line that open it. Every other option and
   failure is Dotenvy's own.
   """
-  @spec source!(Dotenvy.input_source() | [Dotenvy.input_source()], keyword()) ::
-          %{optional(String.t()) => String.t()}
-  def source!(inputs, opts \\ [])
-
-  def source!(input, opts) when is_binary(input) or is_map(input), do: source!([input], opts)
-
-  def source!(inputs, opts) when is_list(inputs) do
+  @spec source!([Dotenvy.input_source()], keyword()) :: %{optional(String.t()) => String.t()}
+  def source!(inputs, opts \\ []) when is_list(inputs) do
     refuse_unkept!(inputs, %{})
 
     case parse(fn -> Dotenvy.source(inputs, Keyword.put(opts, :sys_cmd_fn, &kept/3)) end) do

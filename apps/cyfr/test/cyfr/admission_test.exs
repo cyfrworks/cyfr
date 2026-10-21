@@ -24,7 +24,7 @@ defmodule Cyfr.AdmissionTest do
 
   describe "the roster" do
     test "names five built paths and two declared ones, each once" do
-      assert Admission.paths() == [
+      assert Enum.map(Admission.roster(), & &1.path) == [
                :loopback,
                :http,
                :host_api,
@@ -34,18 +34,19 @@ defmodule Cyfr.AdmissionTest do
                :compositor
              ]
 
-      assert Admission.built() == [:loopback, :http, :host_api, :scheduler, :device_channel]
+      assert for(%{built: true, path: path} <- Admission.roster(), do: path) ==
+               [:loopback, :http, :host_api, :scheduler, :device_channel]
     end
 
     # Whichever of the endpoint's listeners accepted a request, it meets
     # every one of the endpoint's entries and sockets; each listener is
     # named by the child the listener census finds it as.
     test "the endpoint's two listeners are two paths, carrying the endpoint's entries and sockets" do
-      assert {:ok, loopback} = Admission.fetch(:loopback)
-      assert {:ok, proxy} = Admission.fetch(:http)
+      loopback = row(:loopback)
+      proxy = row(:http)
 
       assert loopback.listener == inspect(CyfrWeb.Endpoint)
-      assert proxy.listener == inspect(CyfrWeb.Ingress.proxy_listener())
+      assert proxy.listener == inspect(CyfrWeb.Ingress.Proxy)
       assert loopback.entries == proxy.entries
       assert loopback.sockets == proxy.sockets
       assert {"/live", "CyfrWeb.LiveSocket"} in loopback.sockets
@@ -77,23 +78,16 @@ defmodule Cyfr.AdmissionTest do
     end
 
     test "the device channel is a built path carried by its own entry and the gate" do
-      assert {:ok, row} = Admission.fetch(:device_channel)
+      row = row(:device_channel)
+      assert row.built
       assert row.sockets == [{"/device", "Emissary.Web.DeviceChannel"}]
       assert row.listener == "CyfrWeb.Endpoint"
       assert Enum.sort(row.entries) == ["Emissary.Web.DeviceChannel", "Sanctum.Gate"]
     end
 
-    test "a path declared and deferred admits nothing, and names nothing it would carry" do
+    test "a path declared and deferred names nothing it would carry" do
       for path <- [:unix_socket, :compositor] do
-        assert Admission.fetch(path) == {:error, :deferred}
-        row = Enum.find(Admission.roster(), &(&1.path == path))
-        assert %{built: false, listener: nil, sockets: [], entries: []} = row
-      end
-    end
-
-    test "a path not on the roster admits nothing" do
-      for path <- [:bluetooth, "http", nil, {:http}] do
-        assert Admission.fetch(path) == {:error, :not_on_roster}
+        assert %{built: false, listener: nil, sockets: [], entries: []} = row(path)
       end
     end
 
@@ -207,4 +201,5 @@ defmodule Cyfr.AdmissionTest do
   end
 
   defp entry_modules(entries), do: entries |> Enum.map(&inspect(&1.module)) |> Enum.uniq()
+  defp row(path), do: Enum.find(Admission.roster(), &(&1.path == path))
 end

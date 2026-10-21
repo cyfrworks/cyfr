@@ -25,7 +25,10 @@ defmodule Cyfr.Release do
       bin/cyfr eval "Cyfr.Release.cipher_audit()"
       bin/cyfr eval "Cyfr.Release.rotate_cipher_keys()"
 
-  Add the new key to `CYFR_CRYPTO_KEYRING` and make it `primary`, restart, then
+  Add the new key to `CYFR_CRYPTO_KEYRING` and make it `primary`, keeping the
+  old label among the keys. The next boot refuses the changed keyring and
+  names its fingerprint (`Cyfr.KeyringFingerprint`); set
+  `CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT` to it for that one boot, then
   run the rotation: it re-encrypts every sealed row onto the primary key,
   skipping rows already there. Read `cipher_audit/0` first to see the spread,
   and again afterwards to confirm nothing is left on the old label — only then

@@ -5,7 +5,7 @@ defmodule Cyfr.Bus.FrameCredential do
   @moduledoc """
   A frame credential of one person was suspended or revoked, on the global
   `Cyfr.Bus.frame_credentials/1` topic keyed by the person: a stream held
-  open under that credential is re-established at once. `id` is the
+  open under that credential ends at once. `id` is the
   credential's row id, never its bearer.
   """
 

@@ -840,8 +840,7 @@ defmodule Cyfr.Platform.Settings.Roster do
   # ---------------------------------------------------------------------------
 
   # A whole number of `unit` in `range`, from the environment's text (read
-  # by the strict reader the boot has always used, `Prima.EnvValue`) or as
-  # an integer.
+  # by the boot's strict reader, `Prima.EnvValue`) or as an integer.
   defp whole(_first.._last//1 = range, unit) do
     bounded(range, unit, &Prima.EnvValue.whole_number(&1, "value", range, unit))
   end

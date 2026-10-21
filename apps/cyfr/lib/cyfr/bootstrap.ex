@@ -22,7 +22,7 @@ defmodule Cyfr.Bootstrap do
   `Sanctum.reconcile_platform_admins/2` does the work in one transaction
   under this member's slot and the claim, and answers the renewed claim.
   This module then releases that claim, and verifies the slot is still
-  this member's (`Arca.ControlPlane.verify_held/1`). Only that checked
+  this member's (`Arca.ControlPlane.check_held/1`). Only that checked
   `:ok` lets `init/1` answer `:ignore`, which is what lets the supervisor
   start the children after it: every child that admits work, and the
   endpoint after them (`Cyfr.Application`). Anything else — no slot, a

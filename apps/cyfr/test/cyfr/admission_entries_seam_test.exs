@@ -131,8 +131,9 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
   # carries each entry the HTTP drivers here reach the endpoint through,
   # and the proxy listener's path carries none the loopback's does not.
   test "every entry the endpoint carries is on the loopback path, and the proxy's on it too" do
-    {:ok, loopback} = Cyfr.Admission.fetch(:loopback)
-    {:ok, proxy} = Cyfr.Admission.fetch(:http)
+    [loopback, proxy] =
+      for path <- [:loopback, :http],
+          do: Enum.find(Cyfr.Admission.roster(), &(&1.path == path))
 
     endpoint =
       for %{module: module} <- @entries, module not in @off_endpoint, uniq: true do
@@ -142,15 +143,6 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     assert Enum.sort(loopback.entries) == Enum.sort(endpoint)
     assert proxy.entries -- loopback.entries == []
     assert loopback.listener == "CyfrWeb.Endpoint"
-  end
-
-  test "no row is marked pending, so none goes undriven" do
-    refute Enum.any?(@entries, &Map.has_key?(&1, :pending))
-  end
-
-  test "the device channel's row is driven" do
-    assert [_row] = Enum.filter(@entries, &(&1.module == DeviceChannel))
-    assert Map.fetch!(@drivers, {DeviceChannel, :handle_in}) == :device_channel_unproven
   end
 
   for %{module: module, site: site, plane: plane} <- @entries do

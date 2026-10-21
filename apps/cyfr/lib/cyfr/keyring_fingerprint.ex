@@ -123,9 +123,6 @@ defmodule Cyfr.KeyringFingerprint do
 
         value when is_binary(value) ->
           " #{@accept_var} is set to \"#{value}\", which names neither."
-
-        _value ->
-          " #{@accept_var} is set to a value that names neither."
       end
 
     "[Cyfr] FATAL: the crypto keyring is not the one this database was sealed with — " <>

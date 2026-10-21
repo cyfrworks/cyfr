@@ -209,28 +209,6 @@ defmodule Cyfr.Admission do
   @spec roster() :: [row()]
   def roster, do: @roster
 
-  @doc "Every path on the roster, built or declared."
-  @spec paths() :: [path()]
-  def paths, do: Enum.map(@roster, & &1.path)
-
-  @doc "The paths that admit: every built path."
-  @spec built() :: [path()]
-  def built, do: Enum.map(@built, & &1.path)
-
-  @doc """
-  The row of a built path. A path the roster declares and defers is
-  `{:error, :deferred}`; anything else is `{:error, :not_on_roster}`.
-  Either way it admits nothing.
-  """
-  @spec fetch(term()) :: {:ok, row()} | {:error, :deferred | :not_on_roster}
-  def fetch(path) do
-    case Enum.find(@roster, &(&1.path == path)) do
-      %{built: true} = row -> {:ok, row}
-      %{built: false} -> {:error, :deferred}
-      nil -> {:error, :not_on_roster}
-    end
-  end
-
   @doc """
   One sentence per listener in `listeners` that no built path enters by,
   naming it; empty when every one is on the roster. A listener is named by
