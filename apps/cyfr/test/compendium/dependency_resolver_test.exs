@@ -4,6 +4,8 @@
 defmodule Compendium.DependencyResolverTest do
   use ExUnit.Case, async: false
 
+  require Ecto.Query
+
   alias Compendium.DependencyResolver
 
   setup tags do
