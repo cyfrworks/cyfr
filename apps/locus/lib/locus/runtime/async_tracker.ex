@@ -103,7 +103,9 @@ defmodule Locus.Runtime.AsyncTracker do
   end
 
   @doc """
-  Block until FIRST task succeeds. Returns its result and remaining pending IDs.
+  Block until the first of the tasks finishes, completed or failed. Returns
+  its result, `{:ok, _}` or `{:error, _}`, and the remaining pending IDs, or
+  `{:error, :timeout}` when none finishes in time.
   """
   @spec await_any(pid(), [String.t()], non_neg_integer()) ::
           {:ok, String.t(), term(), [String.t()]} | {:error, :timeout}

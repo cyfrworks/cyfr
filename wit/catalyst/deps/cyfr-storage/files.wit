@@ -3,8 +3,13 @@
 
 package cyfr:storage@0.1.0;
 
-/// File storage operations. The host enforces path safety, allowed_storage_paths
-/// policy, and user-scoped path isolation. Input and output are JSON-encoded strings.
+/// File storage operations in the running component's athanor, which the
+/// host takes from the execution and never from a request: a path is
+/// relative to that athanor's tree. The host checks each request against
+/// the storage the component's consent edge grants: the action must be one
+/// of its storage actions and the path one its storage paths allow, under a
+/// guest scope (`data/` or `components/`), relative and with no traversal.
+/// Input and output are JSON-encoded strings.
 interface files {
     /// Execute a storage operation. JSON format:
     /// Read:   {"action": "read", "path": "data/file.txt"}
