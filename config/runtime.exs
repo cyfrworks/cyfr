@@ -368,8 +368,12 @@ if config_env() != :test do
 
   if env_key_base do
     case Cyfr.RuntimeConfig.check_secret_key_base(env_key_base) do
-      :ok -> config :sanctum, :secret_key_base, env_key_base
-      {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+      :ok ->
+        config :sanctum, :secret_key_base, env_key_base
+        config :cyfr, CyfrWeb.Endpoint, secret_key_base: env_key_base
+
+      {:error, message} ->
+        raise "[Cyfr] FATAL: #{message}"
     end
   end
 

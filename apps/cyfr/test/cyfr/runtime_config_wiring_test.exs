@@ -211,6 +211,17 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       end
     end
 
+    test "set, a development boot's identity domain and endpoint take the one key base",
+         %{tmp_dir: dir} do
+      key_base = Base.encode64(:crypto.strong_rand_bytes(48))
+
+      with_env(%{"CYFR_SECRET_KEY_BASE" => key_base, "RELEASE_ROOT" => dir}, fn ->
+        config = read_dev_config!()
+        assert config[:sanctum][:secret_key_base] == key_base
+        assert config[:cyfr][CyfrWeb.Endpoint][:secret_key_base] == key_base
+      end)
+    end
+
     for {label, value, reason} <- [
           {"whitespace-only", "  \t ", "is blank"},
           {"63 bytes", "short-key-base-" <> String.duplicate("q", 47) <> "!",

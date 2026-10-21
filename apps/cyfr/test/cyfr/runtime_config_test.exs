@@ -632,8 +632,8 @@ defmodule Cyfr.RuntimeConfigTest do
 
       codes = for %{"refusal" => %{"code" => code}} <- boot, uniq: true, do: code
 
-      # Every boot refusal of the plan's table, and the malformed setting,
-      # is among the vectors.
+      # Every boot refusal the access resolver makes, and the malformed
+      # setting, is among the vectors.
       assert Enum.sort(codes) ==
                Enum.sort(~w(access_source_conflict access_assertion_from_file access_missing
                             access_unknown_mode access_local_mismatch access_tailnet_host_invalid

@@ -280,11 +280,7 @@ config :arca,
 
 # Sanctum test configuration
 config :sanctum,
-  secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!",
-  # Namespace populated on Context.local() / Context.fixture-shaped contexts.
-  # Production contexts should never use this — they get namespace from
-  # CredentialStore via the session-resolution path.
-  default_test_namespace: "testns"
+  secret_key_base: "test_dev_key_base_min_64_chars_for_aes256_key_derivation_padding!"
 
 # The runtime root every key CYFR issues derives from (`Prima.WorkerAuth`),
 # fixed for the suite so the runtime's worker service of a test boot holds the
