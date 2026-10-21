@@ -619,17 +619,15 @@ defmodule Locus.Backends.Owners do
     control_done(state)
   end
 
-  defp pool({:ok, %{size: size, free: free} = pool})
-       when is_integer(size) and size >= 0 and is_integer(free) and free >= 0,
-       do: {:ok, Map.put_new(pool, :quarantined, 0)}
+  defp pool({:ok, %{size: size, free: free, quarantined: quarantined} = pool})
+       when is_integer(size) and size >= 0 and is_integer(free) and free >= 0 and
+              is_integer(quarantined) and quarantined >= 0,
+       do: {:ok, pool}
 
   defp pool(_result), do: :error
 
   # The uids a backend may hold: every uid of the pool not quarantined.
-  defp capacity(%{size: size, quarantined: quarantined}) when is_integer(quarantined),
-    do: size - quarantined
-
-  defp capacity(%{size: size}), do: size
+  defp capacity(%{size: size, quarantined: quarantined}), do: size - quarantined
 
   # ————— work of its own, in processes of its own —————
 
