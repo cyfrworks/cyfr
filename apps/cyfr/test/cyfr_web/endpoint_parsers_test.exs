@@ -907,12 +907,12 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
       body = ~s({"pad":") <> :binary.copy(<<?x>>, 64) <> ~s("})
 
       {status, headers} =
-        :delete
-        |> request("/auth/logout", body, "application/json")
+        :post
+        |> request("/no-route-matches-this", body, "application/json")
         |> declared(byte_size(body))
         |> answer()
 
-      assert status == 401
+      assert status == 404
       assert bytes_read() == byte_size(body)
       refute List.keymember?(headers, "connection", 0)
     end
@@ -1367,11 +1367,16 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
       :ok =
         :gen_tcp.send(
           socket,
-          head("DELETE", "/auth/logout", "text/plain", "content-length: #{@flood_bytes}\r\n")
+          head(
+            "POST",
+            "/no-route-matches-this",
+            "text/plain",
+            "content-length: #{@flood_bytes}\r\n"
+          )
         )
 
       response = closed(socket)
-      assert response =~ ~r{\AHTTP/1\.1 401 }, "answered #{inspect(response)}"
+      assert response =~ ~r{\AHTTP/1\.1 404 }, "answered #{inspect(response)}"
       assert response =~ ~r{\r\nconnection: close\r\n}i
     end
 
@@ -1382,12 +1387,12 @@ defmodule CyfrWeb.EndpointParsersTest.UnauthenticatedBodyTest do
       for _request <- 1..2 do
         :ok =
           :gen_tcp.send(socket, [
-            head("DELETE", "/auth/logout", "application/json", "content-length: 2\r\n"),
+            head("POST", "/no-route-matches-this", "application/json", "content-length: 2\r\n"),
             body
           ])
 
         response = whole_response(socket, "")
-        assert response =~ ~r{\AHTTP/1\.1 401 }, "answered #{inspect(response)}"
+        assert response =~ ~r{\AHTTP/1\.1 404 }, "answered #{inspect(response)}"
         refute response =~ ~r{\r\nconnection: close\r\n}i
       end
     end

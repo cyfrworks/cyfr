@@ -30,31 +30,11 @@
   # cannot match by the spec; it refuses an answer of another shape instead
   # of caching it.
   {"lib/arca/usage.ex", :pattern_match},
-  # resolve_component/2's `type || component[:component_type] || …` tests
-  # for nil two values the specs make binaries (the parsed ref's type and the
-  # registry row's component type), so neither nil branch is taken by them.
-  {"lib/compendium/component.ex", :guard_fail},
   # The resolver's visited set is built by MapSet.new/0 and carried down the
   # recursion, the s3.ex case: MapSet.member?/2 on the struct literal reads
   # as a call without the opaque term. The regex entry for this file below
   # is the same set.
   {"lib/compendium/dependency_resolver.ex", :call_without_opaque},
-  # Compendium.OCI.Reference's spec makes repository a binary, so the
-  # `ref.repository || ""` fallback in do_oci_pull/2 never takes its nil
-  # branch by the spec.
-  {"lib/compendium/providers/component.ex", :guard_fail},
-  # Every result reaching enrich_tincture_media/2 carries a components list,
-  # so its pass-through clause for any other shape is covered.
-  {"lib/compendium/providers/component.ex", :pattern_match_cov},
-  # t() names every provenance; of_status/1 translates an overlay unit state,
-  # which yields only :bundled or :user, and its spec states the type.
-  {"lib/compendium/provenance.ex", :extra_range},
-  # log_token_returning_result/2's four callers each pass {:ok, _} or
-  # {:error, _}; its fall-through clause passes on any other shape.
-  {"lib/compendium/registry/client.ex", :pattern_match_cov},
-  # :inet.gethostname/0's spec answers only {:ok, name}; the "cyfr-host"
-  # fallback keeps the device label total.
-  {"lib/compendium/registry/credential_store.ex", :pattern_match_cov},
   # Logger.Formatter defines no time/0 type in this Elixir; the spec names
   # the {date, time} tuple Logger hands a formatter, and Dialyzer reads the
   # unknown type as any().
@@ -111,7 +91,7 @@
   # refusal for false; Dialyzer does not narrow false out of the `||`'s
   # other branch, so it sees the `with` fall through on false.
   {"lib/sanctum/sign_in.ex", :missing_range},
-  # Three opaque-term warnings dialyxir cannot classify: its own formatter
+  # Opaque-term warnings dialyxir cannot classify: its own formatter
   # raises on them (`Dialyxir.WarningHelpers.ordinal/1`) and prints the raw
   # dialyzer text, so a `{file, kind}` filter never sees a kind to match.
   # Matched by regex instead. Every one is a struct built in one module and
@@ -119,10 +99,7 @@
   # noise from the loose `%__MODULE__{}` schema types, not a defect.
   # This one: list_pages/5's recursive call with the seen-token MapSet.
   ~r{lib/arca/adapters/s3\.ex:\d+:\d+:.*opaque},
-  # The first entry's kind for dependency_resolver.ex: do_resolve_tree/5's
+  # The first entry's kind for dependency_resolver.ex: do_resolve_tree/4's
   # recursive call with the visited MapSet.
-  ~r{lib/compendium/dependency_resolver\.ex:\d+:\d+:.*opaque},
-  # The first entry's kind for mcp_controller.ex: Process.demonitor/2 on the
-  # monitor reference a Task carries, an opaque Task.ref().
-  ~r{lib/emissary/web/controllers/mcp_controller\.ex:\d+:\d+:.*opaque}
+  ~r{lib/compendium/dependency_resolver\.ex:\d+:\d+:.*opaque}
 ]

@@ -95,6 +95,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
        Opus.ArchiveWatch,
        Opus.Sweeper,
        Opus.WorkerWatch,
+       Opus.Host.Egress.Pins,
        Opus.HostListener
      ]},
     {Aqua.Supervisor,
@@ -162,6 +163,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Aqua.Loop.Worker,
     Aqua.ScheduleNotes,
     Opus.HostListener,
+    Opus.Host.Egress.Pins,
     Opus.WorkerWatch,
     Opus.Sweeper,
     Opus.ArchiveWatch,

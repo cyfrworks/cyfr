@@ -136,7 +136,7 @@ defmodule Sanctum.SessionTest do
           "personal"
         )
 
-      :ok = Compendium.Registry.CredentialStore.delete(person, registry, "sess#{n}")
+      :ok = Sanctum.RegistryCredentials.delete(person, registry, "sess#{n}")
       Sanctum.Namespace.invalidate(user_id)
       assert {:ok, %{authenticated: true}} = Session.load(session.token, surface: :console)
     end

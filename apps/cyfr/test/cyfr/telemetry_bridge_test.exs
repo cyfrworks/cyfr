@@ -616,19 +616,17 @@ defmodule Cyfr.TelemetryBridgeTest do
 
       # Admitted nowhere: the terminal write has no running row to close.
       record =
-        Opus.Record.new(ctx, "reagent:local.never-admitted:0.1.0", %{},
-          component_type: :reagent,
-          grant: grant
-        )
+        Opus.Record.new(ctx, "reagent:local.never-admitted:0.1.0", %{}, component_type: :reagent)
 
       close = %Opus.Close{
         ctx: ctx,
         record: record,
+        admission: [grant: grant, retention_class: "api"],
         limits: Prima.Authority.zero_limits(),
         started: true
       }
 
-      Opus.Close.complete(close, [], %{"ok" => true}, %{})
+      Opus.Close.complete(close, [], %{"ok" => true})
       Opus.Close.fail(close, [], "it failed")
 
       id = record.id

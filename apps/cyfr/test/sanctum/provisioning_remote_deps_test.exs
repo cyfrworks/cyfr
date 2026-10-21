@@ -886,7 +886,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
       {"someone/catalysts/#{name}",
        %{
          manifest: manifest_json,
-         manifest_digest: Compendium.OCI.Blob.compute_digest(manifest_json),
+         manifest_digest: Prima.Digest.sha256(manifest_json),
          blobs: %{config_digest => config, wasm_digest => @wasm}
        }}
     end)

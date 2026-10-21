@@ -69,7 +69,7 @@ defmodule Sanctum.NamespaceTest do
       assert Namespace.lookup(user_id) == "alice"
 
       # And losing every token loses nothing.
-      :ok = CredentialStore.delete(person, registry, "stripe.com")
+      :ok = Sanctum.RegistryCredentials.delete(person, registry, "stripe.com")
       Namespace.invalidate(user_id)
       assert Namespace.lookup(user_id) == "alice"
     end

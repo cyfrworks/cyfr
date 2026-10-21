@@ -156,7 +156,6 @@
 0.7	apps/cyfr/test/aqua/providers/notes_test.exs
 0.5	apps/cyfr/test/aqua/providers/thread_test.exs
 0.1	apps/cyfr/test/aqua/recovery_policy_test.exs
-0.0	apps/cyfr/test/aqua/role_policy_test.exs
 0.1	apps/cyfr/test/aqua/room_excerpt_test.exs
 0.0	apps/cyfr/test/aqua/roster_test.exs
 0.1	apps/cyfr/test/aqua/runner/recovery_table_test.exs
@@ -426,8 +425,8 @@
 0.1	apps/cyfr/test/emissary/mcp/plane_taxonomy_test.exs
 0.2	apps/cyfr/test/emissary/mcp/progress_test.exs
 0.3	apps/cyfr/test/emissary/mcp/resource_admission_test.exs
-0.0	apps/cyfr/test/emissary/mcp/resource_provider_test.exs
 0.0	apps/cyfr/test/emissary/mcp/resource_read_audit_test.exs
+0.0	apps/cyfr/test/emissary/mcp/resource_scheme_test.exs
 0.2	apps/cyfr/test/emissary/mcp/router_tenancy_test.exs
 0.6	apps/cyfr/test/emissary/mcp/router_test.exs
 0.1	apps/cyfr/test/emissary/mcp/server_discover_test.exs
@@ -452,7 +451,6 @@
 5.7	apps/cyfr/test/emissary/web/controllers/mcp_transport_test.exs
 0.1	apps/cyfr/test/emissary/web/controllers/oauth_callback_controller_test.exs
 0.4	apps/cyfr/test/emissary/web/controllers/restore_controller_test.exs
-0.2	apps/cyfr/test/emissary/web/controllers/session_controller_test.exs
 4.3	apps/cyfr/test/emissary/web/controllers/tincture_controller_test.exs
 9.7	apps/cyfr/test/emissary/web/controllers/tincture_data_controller_test.exs
 0.7	apps/cyfr/test/emissary/web/controllers/webhook_controller_test.exs
@@ -531,7 +529,7 @@
 4.5	apps/cyfr/test/opus/host_test.exs
 0.0	apps/cyfr/test/opus/keys_test.exs
 0.6	apps/cyfr/test/opus/lease_watch_test.exs
-0.4	apps/cyfr/test/opus/mcp_cutover_test.exs
+0.4	apps/cyfr/test/opus/mcp_ingress_test.exs
 7.6	apps/cyfr/test/opus/provider_test.exs
 2.1	apps/cyfr/test/opus/providers/feed_test.exs
 0.3	apps/cyfr/test/opus/rates_test.exs

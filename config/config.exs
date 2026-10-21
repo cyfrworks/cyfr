@@ -246,12 +246,6 @@ config :cyfr, :tincture_max_decompressed_bytes, 256 * 1024 * 1024
 config :arca, :cache_max_binary_bytes, 256 * 1024 * 1024
 config :arca, :cache_max_compiled_components, 32
 
-# Concurrent in-flight calls one external MCP server process admits before
-# refusing (`Emissary.MCP`), and the backends one stdio server may define
-# (`Emissary.External.BackendDefinition`).
-config :cyfr, :external_server_max_in_flight, 8
-config :cyfr, :max_backends_per_server, 4
-
 # The deadline, in milliseconds, for one provisioning attempt's required
 # dependency pulls: the closure of every component the bundle cannot run
 # without, pulled when an athanor is first filled and at the seed sync

@@ -38,6 +38,7 @@ defmodule Cyfr.ApplicationTest do
     Opus.ArchiveWatch => 5_000,
     Opus.Sweeper => 5_000,
     Opus.WorkerWatch => 5_000,
+    Opus.Host.Egress.Pins => 5_000,
     Aqua.ScheduleNotes => 5_000,
     Aqua.Loop.Worker => 5_000,
     Aqua.TaskSupervisor => 30_000,
@@ -313,6 +314,7 @@ defmodule Cyfr.ApplicationTest do
                Opus.ArchiveWatch,
                Opus.Sweeper,
                Opus.WorkerWatch,
+               Opus.Host.Egress.Pins,
                Opus.HostListener
              ]},
             {Aqua.Supervisor, [Aqua.ScheduleNotes, Aqua.WorkerTree, Aqua.RunnerTree]},

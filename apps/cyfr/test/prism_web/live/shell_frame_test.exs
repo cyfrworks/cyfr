@@ -278,7 +278,8 @@ defmodule PrismWeb.ShellFrameTest do
       assert attribute(bare, "sandbox") == "allow-scripts"
       assert attribute(bare, "allow") == nil
 
-      for tag <- [tag, bare], token <- Compendium.Tincture.Rules.forbidden_sandbox_tokens() do
+      for tag <- [tag, bare],
+          token <- ~w(allow-same-origin allow-top-navigation allow-popups allow-forms) do
         refute attribute(tag, "sandbox") =~ token
       end
 

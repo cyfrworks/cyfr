@@ -17,11 +17,9 @@ defmodule PrismWeb.AquaLiveTest do
   # The AQUA page shows the tree of the athanor in focus — a person's own
   # on their page, the group's on the group's — and every write lands
   # there through the `aqua` and `notes` tools. These drive the LiveView
-  # itself: the AgentConfig-level test cannot catch a handler that reads
+  # itself: a test of the tool alone cannot catch a handler that reads
   # the wrong context or a card that offers a verb the tool refuses.
   use PrismWeb.ConnCase, async: false
-
-  alias Aqua.AgentConfig
 
   setup do
     test_path = Path.join(System.tmp_dir!(), "aqua_live_#{:rand.uniform(1_000_000)}")
@@ -41,7 +39,8 @@ defmodule PrismWeb.AquaLiveTest do
     :ok
   end
 
-  defp get_agent(ctx, name), do: AgentConfig.call_aqua(ctx, %{"action" => "get", "name" => name})
+  defp get_agent(ctx, name),
+    do: Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => name})
 
   # The storage adapter for the rest of the test.
   defp storage!(adapter) do
@@ -82,7 +81,7 @@ defmodule PrismWeb.AquaLiveTest do
     group_ctx = %{mine_ctx | athanor_id: group.id}
 
     {:ok, _} =
-      AgentConfig.call_aqua(mine_ctx, %{
+      Cyfr.Test.AquaTool.call(mine_ctx, %{
         "action" => "create",
         "name" => "tom",
         "title" => "Tom",
@@ -117,18 +116,18 @@ defmodule PrismWeb.AquaLiveTest do
   # in the suite's shared tree, so a write left behind is the next test's
   # starting state.
   defp soul_names_catalyst!(ctx, ref) do
-    {:ok, soul} = Aqua.AgentConfig.agent(ctx, "aqua")
+    {:ok, soul} = Cyfr.Test.AquaTool.call(ctx, %{"action" => "get", "name" => "aqua"})
     was = soul["catalyst_ref"] || ""
 
     {:ok, _} =
-      Aqua.AgentConfig.call_aqua(ctx, %{
+      Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
         "name" => "aqua",
         "catalyst_ref" => ref
       })
 
     on_exit(fn ->
-      Aqua.AgentConfig.call_aqua(ctx, %{
+      Cyfr.Test.AquaTool.call(ctx, %{
         "action" => "update",
         "name" => "aqua",
         "catalyst_ref" => was
@@ -214,10 +213,14 @@ defmodule PrismWeb.AquaLiveTest do
       {:ok, %{"title" => shipped_title}} = get_agent(ctx, "aqua")
 
       {:ok, _} =
-        AgentConfig.call_aqua(ctx, %{"action" => "update", "name" => "aqua", "title" => "Mine"})
+        Cyfr.Test.AquaTool.call(ctx, %{"action" => "update", "name" => "aqua", "title" => "Mine"})
 
       {:ok, _} =
-        AgentConfig.call_aqua(ctx, %{"action" => "create", "name" => "scout", "content" => "# S"})
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "scout",
+          "content" => "# S"
+        })
 
       {view, html} = mount_athanor(conn, "/aqua")
       assert html =~ "Restore shipped files"
@@ -236,7 +239,11 @@ defmodule PrismWeb.AquaLiveTest do
     test "removing everything the athanor made deletes a member-made role too",
          %{conn: conn, ctx: ctx} do
       {:ok, _} =
-        AgentConfig.call_aqua(ctx, %{"action" => "create", "name" => "scout", "content" => "# S"})
+        Cyfr.Test.AquaTool.call(ctx, %{
+          "action" => "create",
+          "name" => "scout",
+          "content" => "# S"
+        })
 
       {view, _html} = mount_athanor(conn, "/aqua")
       assert has_element?(view, "#aqua-card-scout", "yours")
@@ -395,7 +402,7 @@ defmodule PrismWeb.AquaLiveTest do
     test "the scrolls disclosure opens when a scroll exists, and one is written, edited and deleted here",
          %{conn: conn, ctx: ctx} do
       {:ok, %{"skills" => [shipped | _]}} =
-        AgentConfig.call_aqua(ctx, %{"action" => "skill_list"})
+        Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_list"})
 
       # The server ships a scroll, so the disclosure is open from the start.
       {view, html} = mount_athanor(conn, "/aqua")
@@ -447,7 +454,7 @@ defmodule PrismWeb.AquaLiveTest do
       shipped_description = shipped["description"]
 
       assert {:ok, %{"description" => ^shipped_description}} =
-               AgentConfig.call_aqua(ctx, %{"action" => "skill_get", "name" => shipped["name"]})
+               Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_get", "name" => shipped["name"]})
 
       view |> with_target("#aqua-scrolls-section") |> render_click("skill_new", %{})
 
@@ -466,7 +473,7 @@ defmodule PrismWeb.AquaLiveTest do
       refute html =~ "Use pdftk."
 
       assert {:ok, %{"content" => "# PDF forms\nUse pdftk."}} =
-               AgentConfig.call_aqua(ctx, %{"action" => "skill_get", "name" => "pdf-forms"})
+               Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_get", "name" => "pdf-forms"})
 
       # Open it, edit it: the open scroll shows the new body.
       assert view
@@ -493,7 +500,7 @@ defmodule PrismWeb.AquaLiveTest do
       refute html =~ "Use pdftk."
 
       assert {:ok, %{"content" => "# PDF forms\nUse qpdf."}} =
-               AgentConfig.call_aqua(ctx, %{"action" => "skill_get", "name" => "pdf-forms"})
+               Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_get", "name" => "pdf-forms"})
 
       # The athanor's own scroll is deleted, with the verb spelled as such.
       assert has_element?(view, "#aqua-scroll-open button[phx-click=skill_delete]", "Delete")
@@ -503,7 +510,7 @@ defmodule PrismWeb.AquaLiveTest do
       |> render_click("skill_delete", %{"name" => "pdf-forms"})
 
       assert {:error, _} =
-               AgentConfig.call_aqua(ctx, %{"action" => "skill_get", "name" => "pdf-forms"})
+               Cyfr.Test.AquaTool.call(ctx, %{"action" => "skill_get", "name" => "pdf-forms"})
 
       refute has_element?(view, "#aqua-scroll-open")
       refute has_element?(view, "#aqua-scrolls button[phx-value-name=pdf-forms]")
@@ -1025,7 +1032,7 @@ defmodule PrismWeb.AquaLiveTest do
       theirs = Map.put(theirs, "vault.list", "ask")
 
       {:ok, _} =
-        AgentConfig.call_aqua(ctx, %{
+        Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "update",
           "name" => "aqua",
           "tool_policy" => theirs
@@ -1041,7 +1048,7 @@ defmodule PrismWeb.AquaLiveTest do
 
       # …and a toggle on the soul's card, after yet another edit, keeps both.
       {:ok, _} =
-        AgentConfig.call_aqua(ctx, %{
+        Cyfr.Test.AquaTool.call(ctx, %{
           "action" => "update",
           "name" => "aqua",
           "tool_policy" => Map.put(policy, "vault.get", "ask")

@@ -68,7 +68,7 @@ defmodule Arca.PublishedUnitConsumersTest do
     scope = %{
       ctx: ctx,
       edge: %Prima.Authority.Blob.Edge{storage: %{paths: ["components/"], actions: ["write"]}},
-      limits: nil,
+      limits: Prima.Limits.defaults(:reagent),
       quota: %{max_bytes: held, max_files: 100},
       hold: fn %{io: io} ->
         case io.() do

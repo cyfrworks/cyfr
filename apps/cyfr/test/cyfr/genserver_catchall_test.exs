@@ -161,7 +161,8 @@ defmodule Cyfr.GenServerCatchallTest do
             ctx: ctx,
             authority: Prima.Authority.zero(),
             component_ref: "catalyst:local.catchall:0.1.0",
-            close: %Opus.Close{ctx: ctx, record: record}
+            close: %Opus.Close{ctx: ctx, record: record, admission: []},
+            worker: Cyfr.Test.AttemptFixtures.unreachable_worker("wrk_catchall")
           )
 
         assert capture_log(fn ->
