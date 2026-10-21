@@ -67,7 +67,10 @@ cat > "$scratch/bin/mix" <<'FAKE'
 printf '%s|%s|%s|%s|%s|%s\n' "${MIX_ENV:--}" "${CYFR_DATABASE:--}" "${MIX_BUILD_PATH:--}" "${MIX_TEST_PARTITION:--}" "$PWD" "$*" >> "$TRACE/mix.calls"
 case "$PWD" in
   */island_*/apps/*) app=${PWD##*/}; key="island_${app}_$1"
-    [ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || echo "$PWD $1" >> "$TRACE/island-with-build-lock" ;;
+    [ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || echo "$PWD $1" >> "$TRACE/island-with-build-lock"
+    # What the island holds: its top level, and what apps/, config/,
+    # tests/ and seed/ hold.
+    [ "$1" != compile ] || (cd ../.. && { ls -A; for d in apps config tests seed; do [ ! -d "$d" ] || ls -A "$d" | sed "s|^|$d/|"; done; } | LC_ALL=C sort) > "$TRACE/island.$app.tree" ;;
   *) key="${CYFR_DATABASE:-none}_${MIX_ENV:-dev}_$1" ;;
 esac
 # The Rust test fixtures' recipe writes each fixture's Cargo.toml with
@@ -187,7 +190,7 @@ for l in lines[start + 1:]:
     if m:
         roster[(m[1], m[2], m[3])] = 0
 have = set(re.findall(r"\bstep (?:static|postgres|vocab|cluster) ([a-z_]+)", gate))
-have |= {"islands:" + a for a in re.findall(r"'(prima|arca|sanctum|locus) apps/", gate)}
+have |= {"islands:" + a for m in re.findall(r"^\s*run_islands ([a-z ]+)", gate, re.M) for a in m.split()}
 
 CI_RUNS = {
     ("dialyzer.yml", "dialyzer", "run: mix compile --warnings-as-errors"): ["compile_sqlite_dev"],
@@ -531,6 +534,55 @@ start_leg() {
   mkdir -p "$scratch/$name.log"
   start_gate "$name" GATE_LEG_LOGDIR="$scratch/$name.log" GATE_LEG_PARTS=2 GATE_LEG_CLOSE=false "$@" -- "$gate" --leg "$leg"
 }
+# --- the islands' copy lists ----------------------------------------------------
+# Each island's list is read from its test.yml job: the application, the
+# lock, its apps, deps and the WIT tree at least. A planted copy reaches
+# the list; a line the gate does not mirror, a copy to another directory
+# and a missing job each fail it with the reason.
+island_list() { (cd "$1" && . "$gate" && island_spec "$2"); }
+for isl in prima arca sanctum locus; do
+  spec=$(island_list "$root" "$isl") || fail "the $isl island's list could not be read from test.yml"
+  [ "${spec%% *}" = "$isl" ] || fail "the $isl island's list names another application: $spec"
+  for p in mix.lock "apps/$isl" deps wit; do
+    case " $spec " in *" $p "*) ;; *) fail "the $isl island's list lacks $p: $spec" ;; esac
+  done
+done
+plant_islands() {
+  mkdir -p "$scratch/islands-$1/.github/workflows"
+  python3 -I - "$root/.github/workflows/test.yml" "$scratch/islands-$1/.github/workflows/test.yml" "$2" "$3" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:]
+s = open(src).read()
+assert s.count(old) == 1, old
+open(dst, "w").write(s.replace(old, new))
+PY
+}
+arca_copy='          cp config/database_choice.exs "$island/config/"
+          cd "$island/apps/arca"'
+plant_islands added "$arca_copy" '          cp config/database_choice.exs "$island/config/"
+          cp -R tests/fixtures "$island/tests/"
+          cd "$island/apps/arca"'
+[ "$(island_list "$scratch/islands-added" arca)" = "$(island_list "$root" arca) tests/fixtures" ] ||
+  fail "a copy planted in the arca job did not reach the gate's list: $(island_list "$scratch/islands-added" arca)"
+plant_islands unknown "$arca_copy
+          mix compile --warnings-as-errors
+          mix test" "$arca_copy
+          mix compile --warnings-as-errors
+          mix test --include slow"
+! island_list "$scratch/islands-unknown" arca 2>"$scratch/islands-unknown.err" || fail 'an island step the gate does not mirror was read'
+has_line 'runs a line the gate does not mirror: mix test --include slow' "$scratch/islands-unknown.err" ||
+  fail "an island step the gate does not mirror failed without its reason: $(cat "$scratch/islands-unknown.err")"
+plant_islands elsewhere "$arca_copy" '          cp config/database_choice.exs "$island/"
+          cd "$island/apps/arca"'
+! island_list "$scratch/islands-elsewhere" arca 2>"$scratch/islands-elsewhere.err" || fail 'a copy to another directory was read'
+has_line 'copies config/database_choice.exs to \$island/, which the gate does not mirror' "$scratch/islands-elsewhere.err" ||
+  fail "a copy to another directory failed without its reason: $(cat "$scratch/islands-elsewhere.err")"
+plant_islands missing '  arca-independence:' '  arca-elsewhere:'
+! island_list "$scratch/islands-missing" arca 2>"$scratch/islands-missing.err" || fail 'a missing island job was read'
+has_line 'test.yml has no arca-independence job' "$scratch/islands-missing.err" ||
+  fail "a missing island job failed without its reason: $(cat "$scratch/islands-missing.err")"
+echo 'ok: the islands copy what test.yml copies'
+
 # A selection git cannot read fails the postgres leg after its compiles,
 # with its marker, and no test runs.
 start_leg pgread postgres GIT_DIR=/nonexistent
@@ -682,6 +734,13 @@ has_line '^==> gate passed in ' "$scratch/pass.out" || fail "a passing gate did 
 # ran nothing cannot pass here.
 for suite in static.sqlite_suite postgres.pg_tests islands.prima islands.arca islands.sanctum; do
   has_line "^    ${suite//./\\.}: .*Result: " "$scratch/pass.out" || fail "the passing gate's $suite reported no result: $(cat "$scratch/pass.out")"
+done
+# Each island held what its test.yml job gives it, and nothing else.
+for isl in prima arca sanctum; do
+  read -r -a paths <<<"$(island_list "$root" "$isl")"
+  want=$(for p in "${paths[@]:1}"; do echo "${p%%/*}"; case $p in */*) echo "$p" ;; esac; done | LC_ALL=C sort -u)
+  [ "$(cat "$scratch/pass.trace/island.$isl.tree")" = "$want" ] ||
+    fail "the $isl island held $(tr '\n' ' ' < "$scratch/pass.trace/island.$isl.tree"), not test.yml's $(echo $want)"
 done
 echo 'ok: a whole gate that passes, every suite with a result'
 

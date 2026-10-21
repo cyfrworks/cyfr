@@ -50,8 +50,9 @@
 #   islands   prima, arca and sanctum compiled and tested under
 #             MIX_ENV=test, as CI's island jobs are, so each island's
 #             test/support compiles with warnings as errors, from a copy
-#             that holds only what CI gives them, once the SQLite suite's
-#             partitions have exited; locus with --close
+#             that holds only what CI gives them (each read from its
+#             test.yml job), once the SQLite suite's partitions have
+#             exited; locus with --close
 # Every gate forces the test rebuild on both adapters. Each leg discards
 # the caller's MIX_BUILD_PATH: static builds its MIX_ENV=test steps in
 # _build/test and its MIX_ENV=dev steps in Mix's default, postgres and
@@ -437,8 +438,55 @@ island_phase() {
   return "$status"
 }
 
+# What test.yml's island job for application $1 (`$1-independence`)
+# gives the island, on stdout as one line: the application, then each path
+# its step copies in, in the step's order, and `_tools` where it installs
+# the pinned wasm-tools there. The step is read whole: each line is one the
+# gate mirrors (a `cp` of tracked paths, each to the island's directory of
+# the same name, the wasm-tools install, `cd` into the application,
+# `mix compile --warnings-as-errors` and `mix test`) or setup that changes
+# nothing the island holds (`set`, `island=`, `mkdir -p`); any other line
+# fails it, so the gate's island cannot drift from CI's.
+island_spec() {
+  python3 -I - .github/workflows/test.yml "$1" <<'PY'
+import re, shlex, sys, yaml
+
+path, app = sys.argv[1], sys.argv[2]
+job = (yaml.safe_load(open(path))["jobs"]).get(app + "-independence")
+if job is None:
+    sys.exit(f"test.yml has no {app}-independence job")
+steps = [s for s in job.get("steps", []) if f'cd "$island/apps/{app}"' in s.get("run", "")]
+if len(steps) != 1:
+    sys.exit(f"test.yml's {app}-independence job has {len(steps)} steps that enter the island, not one")
+copied, ran = [], set()
+for line in steps[0]["run"].split("\n"):
+    line = line.strip()
+    if not line or line.startswith("#") or re.fullmatch(r"set -[a-z]+ pipefail|island=\S+|mkdir -p( \"\$island/[a-z]+\")+", line):
+        continue
+    words = shlex.split(line)
+    if line == 'scripts/wasm-tools.sh install "$island/_tools"':
+        copied.append("_tools")
+    elif line in (f'cd "$island/apps/{app}"', "mix compile --warnings-as-errors", "mix test"):
+        ran.add(line)
+    elif words[0] == "cp" and len(words) >= 3:
+        sources = [w for w in words[1:-1] if w != "-R"]
+        for src in sources:
+            parent = src.rsplit("/", 1)[0] + "/" if "/" in src else ""
+            if src.startswith(("-", "/")) or ".." in src.split("/") or words[-1] != "$island/" + parent:
+                sys.exit(f"test.yml's {app} island copies {src} to {words[-1]}, which the gate does not mirror: {line}")
+        copied += sources
+    else:
+        sys.exit(f"test.yml's {app} island runs a line the gate does not mirror: {line}")
+for need in (f'cd "$island/apps/{app}"', "mix compile --warnings-as-errors", "mix test"):
+    if need not in ran:
+        sys.exit(f"test.yml's {app} island does not run {need}")
+print(" ".join([app] + copied))
+PY
+}
+
 # An island is an application compiled and tested from a copy holding only
-# what CI copies for it (the copy lists are test.yml's), deps linked in.
+# what CI gives it (island_spec reads the list from test.yml): deps and
+# the pinned tools are linked in, the rest copied.
 # Its build directory is the copy's own and one Mix process at a time
 # uses it, so Mix's build lock excludes no one there, and it is off: Mix
 # through 1.20.4 can wait forever on a lock it holds itself, the second
@@ -446,25 +494,26 @@ island_phase() {
 # islands leg and starts its phases' sessions itself, so it stops them on
 # TERM, which the leg sends it when the leg is stopped.
 island() {
-  local name=$1 a status=0
-  shift
+  local name=$1 spec a paths status=0
   ISLAND_COPY=
   trap 'trap "" INT TERM; contain_stop_all 180 >/dev/null; [ -z "$ISLAND_COPY" ] || rm -rf "$ISLAND_COPY"; exit 143' TERM INT
-  ISLAND_COPY=$(mktemp -d "$LOGDIR/island_${name}.XXXX") || return 1
-  mkdir -p "$ISLAND_COPY/apps" "$ISLAND_COPY/config" "$ISLAND_COPY/tests" "$ISLAND_COPY/seed"
-  cp mix.lock "$ISLAND_COPY/"; ln -s "$ROOT/deps" "$ISLAND_COPY/deps"; ln -s "$ROOT/_tools" "$ISLAND_COPY/_tools"
-  [ -d wit ] && cp -R wit "$ISLAND_COPY/"
-  for a in "$@"; do
-    case "$a" in
-      apps/*) cp -R "$a" "$ISLAND_COPY/apps/" ;;
-      config/*) cp "$a" "$ISLAND_COPY/config/" ;;
-      tests/*) cp -R "$a" "$ISLAND_COPY/tests/" ;;
-      seed/*) cp -R "$a" "$ISLAND_COPY/seed/" ;;
-    esac
-  done
   ISLAND_LOG="$LOGDIR/islands.$name.log"
   : > "$ISLAND_LOG"
-  if cd "$ISLAND_COPY/apps/$name"; then
+  if ! spec=$(island_spec "$name" 2>>"$ISLAND_LOG"); then
+    echo "==> islands.$name: test.yml's copy list could not be read: $(tail -n 1 "$ISLAND_LOG")" >&2
+    echo "$name=1" >> "$LOGDIR/islands.summary"
+    return 1
+  fi
+  ISLAND_COPY=$(mktemp -d "$LOGDIR/island_${name}.XXXX") || return 1
+  read -r -a paths <<<"$spec"
+  for a in "${paths[@]:1}"; do
+    case "$a" in
+      deps|_tools) ln -s "$ROOT/$a" "$ISLAND_COPY/$a" ;;
+      */*) mkdir -p "$ISLAND_COPY/${a%/*}" && cp -R "$a" "$ISLAND_COPY/${a%/*}/" ;;
+      *) cp -R "$a" "$ISLAND_COPY/" ;;
+    esac || status=1
+  done
+  if [ "$status" -eq 0 ] && cd "$ISLAND_COPY/apps/$name"; then
     island_phase "$name" compile mix compile --warnings-as-errors &&
       island_phase "$name" test mix test
     status=$?
@@ -497,15 +546,14 @@ stop_islands() {
   ISLAND_PIDS=()
 }
 
-# Runs the islands named, one argument word list each, concurrently.
+# Runs the islands named concurrently.
 run_islands() {
-  local status=0 p spec
+  local status=0 p name
   ISLAND_PIDS=()
-  for spec in "$@"; do
+  for name in "$@"; do
     # The function runs as the asynchronous subshell itself, so its pid is
     # the one its trap is on.
-    # shellcheck disable=SC2086
-    island $spec &
+    island "$name" &
     ISLAND_PIDS+=("$!")
   done
   for p in "${ISLAND_PIDS[@]}"; do wait "$p" || status=1; done
@@ -517,18 +565,14 @@ leg_islands() {
   local status=0
   # The islands run their own SQLite suites: they start once the static
   # leg's partitions have exited, so no two SQLite suites share the
-  # machine's I/O. Run concurrently, the control-plane and athanor tests
-  # of the suite and of the arca island answered `:database_error` on the
-  # SQLite writer's wait on one gate in three.
+  # machine's I/O, under which a SQLite writer's wait outlasts its bound.
   await_leg islands static || return
   # Under --close the PostgreSQL suite's partitions follow the SQLite
-  # suite's; the islands' own SQLite writers waited out its I/O too.
+  # suite's, and the islands' SQLite writers wait out its I/O too.
   if $CLOSE; then await_leg islands postgres || return; fi
-  run_islands 'prima apps/prima tests/fixtures seed/components' \
-    'arca apps/prima apps/arca config/database_choice.exs' \
-    'sanctum apps/prima apps/arca apps/sanctum config/database_choice.exs' || status=1
+  run_islands prima arca sanctum || status=1
   if $CLOSE; then
-    run_islands 'locus apps/prima apps/locus tests/fixtures config/locus_runtime.exs' || status=1
+    run_islands locus || status=1
   fi
   # An island runs in a subshell of the leg, so its refused start comes
   # back through the summary.
