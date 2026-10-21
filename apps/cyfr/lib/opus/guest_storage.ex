@@ -128,7 +128,7 @@ defmodule Opus.GuestStorage do
   @type scope :: %{
           ctx: Context.t(),
           edge: Edge.t() | nil,
-          limits: Limits.t() | nil,
+          limits: Limits.t(),
           quota: quota() | nil,
           hold: hold()
         }
@@ -148,8 +148,9 @@ defmodule Opus.GuestStorage do
   the edge and profile kind of `authority`, the node's `limits` and the
   attempt's `hold`.
   """
-  @spec scope(Context.t(), Authority.t(), Limits.t() | nil, hold()) :: scope()
-  def scope(%Context{} = ctx, %Authority{} = authority, limits, hold) when is_function(hold, 1) do
+  @spec scope(Context.t(), Authority.t(), Limits.t(), hold()) :: scope()
+  def scope(%Context{} = ctx, %Authority{} = authority, %Limits{} = limits, hold)
+      when is_function(hold, 1) do
     %{
       ctx: ctx,
       edge: edge(authority),
@@ -318,7 +319,7 @@ defmodule Opus.GuestStorage do
   # Measured on the decoded content; content that does not decode is
   # refused by the operation itself.
   defp write_size(op, content, %Limits{max_request_size: max})
-       when op in @writing and is_binary(content) and is_integer(max) do
+       when op in @writing and is_binary(content) do
     case Base.decode64(content) do
       {:ok, decoded} when byte_size(decoded) > max ->
         guest_error(
@@ -331,7 +332,7 @@ defmodule Opus.GuestStorage do
     end
   end
 
-  defp write_size(_op, _content, _limits), do: :ok
+  defp write_size(_op, _content, %Limits{}), do: :ok
 
   # Usage is what the write's scope visibly holds, and the incoming size is
   # the visible delta of the decoded content: what it adds to the file it
@@ -652,15 +653,14 @@ defmodule Opus.GuestStorage do
     )
   end
 
-  defp response_size(%Limits{max_response_size: max}, what, size)
-       when is_integer(max) and size > max do
+  defp response_size(%Limits{max_response_size: max}, what, size) when size > max do
     guest_error(
       :response_too_large,
       "Storage #{what} (#{size} bytes) exceeds limit (#{max} bytes)"
     )
   end
 
-  defp response_size(_limits, _what, _size), do: :ok
+  defp response_size(%Limits{}, _what, _size), do: :ok
 
   # An adapter's reason names the backend and how it failed: the guest is
   # told only the verb.

@@ -79,7 +79,7 @@ defmodule Locus.Runtime.AuthorityPlumbingTest do
 
     _result =
       Opus.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
-        type: :reagent,
+        type: "reagent",
         execution_id: execution_id,
         authority: authority
       )
@@ -91,7 +91,7 @@ defmodule Locus.Runtime.AuthorityPlumbingTest do
     # Admission raises for a missing authority, and the raise closes the
     # run failed before it reaches the runtime.
     assert {:error, message} =
-             Opus.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: :reagent)
+             Opus.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2}, type: "reagent")
 
     assert message =~ "without an authority is not a thing"
     refute attached?()

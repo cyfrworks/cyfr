@@ -35,7 +35,7 @@ defmodule Opus.Events.Sequence do
            {2, 1},
            {{execution_id, durable}, 0}
          ) do
-      n when n > 0 -> n
+      n when is_integer(n) and n > 0 -> n
     end
   end
 

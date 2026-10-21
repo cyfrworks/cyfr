@@ -24,7 +24,7 @@ defmodule Opus.ProviderTest do
     # Every execution roots under a profile's consent: bootstrap mints one
     # through the production DB source, and the loader reads it back.
 
-    # Checkout the Ecto sandbox to isolate SQLite data between tests
+    # Check out the Ecto sandbox to isolate data between tests
     Cyfr.Test.Sandbox.setup!(tags)
 
     rand_id = :rand.uniform(100_000)
@@ -133,13 +133,6 @@ defmodule Opus.ProviderTest do
   # Resources
   # ============================================================================
 
-  describe "resources/0" do
-    test "returns no concrete resources" do
-      resources = Provider.resources()
-      assert resources == []
-    end
-  end
-
   describe "resource_templates/0" do
     test "returns execution resource templates" do
       templates = Provider.resource_templates()
@@ -154,10 +147,9 @@ defmodule Opus.ProviderTest do
   # ============================================================================
   # Execution Tool - Run Action
   #
-  # Note: math.wasm is a core module (not a WASI P2 Component Model binary),
-  # so executions fail at runtime with "Component Model load failed". However,
-  # the Executor still writes started + failed records to SQLite, so we can
-  # verify record-keeping behavior by inspecting the failed records.
+  # math.wasm is a core module, not a component, so its runs fail; each run
+  # still writes its record started and then failed, which is what these
+  # cases inspect.
   # ============================================================================
 
   describe "the origin a run over the API runs under" do
@@ -836,7 +828,7 @@ defmodule Opus.ProviderTest do
     {:ok, name_ref} = Prima.ComponentRef.to_name_ref(ref)
     {:ok, candidates} = Sanctum.Consent.profiles(ctx, name_ref)
     {:ok, profile} = Prima.Authority.RootSelect.select(candidates, selector)
-    {:ok, _ref, _type, component} = Opus.Admission.inspect_component(ctx, ref)
+    {:ok, component, _ref} = Compendium.Component.resolve_component(ctx, ref)
 
     shape =
       case Sanctum.Consent.ShapeDerivation.live_digest(ctx, profile.source_ref) do
@@ -1242,8 +1234,7 @@ defmodule Opus.ProviderTest do
       now = NaiveDateTime.utc_now()
       [paused, running, foreign] = for _ <- 1..3, do: Prima.UUID7.execution_id()
 
-      reference =
-        Jason.encode!(%{type: "reagent", publisher: "local", name: "filter", version: "1.0.0"})
+      reference = "reagent:local.filter:1.0.0"
 
       for {id, status, athanor} <- [
             {paused, "paused", ctx.athanor_id},
@@ -1318,11 +1309,6 @@ defmodule Opus.ProviderTest do
       assert is_binary(logs_result.logs)
     end
 
-    test "returns error for missing execution_id", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("execution", ctx, %{"action" => "logs"})
-      assert err_msg(msg) =~ "Missing required"
-    end
-
     test "returns error for non-existent execution", %{ctx: ctx} do
       # Typed at the provider; every boundary renders it to one sentence.
       {:error, reason} =
@@ -1341,11 +1327,6 @@ defmodule Opus.ProviderTest do
   # ============================================================================
 
   describe "execution tool - cancel action" do
-    test "returns error for missing execution_id", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("execution", ctx, %{"action" => "cancel"})
-      assert err_msg(msg) =~ "Missing required"
-    end
-
     test "returns error for non-existent execution", %{ctx: ctx} do
       {:error, reason} =
         Provider.handle("execution", ctx, %{
@@ -1385,22 +1366,6 @@ defmodule Opus.ProviderTest do
   end
 
   # ============================================================================
-  # Invalid/Missing Action
-  # ============================================================================
-
-  describe "execution tool - invalid action" do
-    test "returns error for invalid action", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("execution", ctx, %{"action" => "invalid"})
-      assert err_msg(msg) =~ "Invalid execution action"
-    end
-
-    test "returns error for missing action", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("execution", ctx, %{})
-      assert err_msg(msg) =~ "Missing required"
-    end
-  end
-
-  # ============================================================================
   # Force Release Action
   # ============================================================================
 
@@ -1422,11 +1387,26 @@ defmodule Opus.ProviderTest do
       for action <- ["status", "force_release"] do
         {:ok, result} = Provider.handle("execution", admin_ctx, %{"action" => action})
 
-        refute Map.has_key?(result, :tenants), "execution.#{action} named the executing athanors"
+        refute Map.has_key?(result, :keys), "execution.#{action} named the executing athanors"
         refute Map.has_key?(result, :holders), "execution.#{action} named the slots' holders"
-        assert is_integer(result.tenant_active)
-        assert is_integer(result.tenant_max)
+        refute Map.has_key?(result, :unreaped), "execution.#{action} named the penalised athanors"
+        assert is_integer(result.key_active)
+        assert is_integer(result.key_unreaped)
+        assert is_integer(result.key_max)
       end
+    end
+
+    test "a member's status names no other athanor's unreaped kills, only its own count", %{
+      ctx: ctx
+    } do
+      foreign = "ath_unreaped_" <> Integer.to_string(System.unique_integer([:positive]))
+      on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, foreign) end)
+      {:ok, 1} = Prima.Slots.note_unreaped(Opus.Slots, foreign, "exec_foreign_kill")
+
+      {:ok, result} = Provider.handle("execution", ctx, %{"action" => "status"})
+
+      refute inspect(result) =~ foreign
+      assert result.key_unreaped == 0
     end
 
     test "dispatch refuses a member and hides the action from them", %{ctx: ctx} do
@@ -1531,22 +1511,11 @@ defmodule Opus.ProviderTest do
   end
 
   # ============================================================================
-  # Unknown Tool
-  # ============================================================================
-
-  describe "unknown tool" do
-    test "returns error for unknown tool", %{ctx: ctx} do
-      {:error, msg} = Provider.handle("unknown_tool", ctx, %{})
-      assert err_msg(msg) =~ "Unknown tool"
-    end
-  end
-
-  # ============================================================================
   # Verify Block
   #
-  # Note: math.wasm is a core module, so executions fail at runtime with
-  # "Component Model load failed". The key assertion is that the error is NOT
-  # about signature verification -- proving verification passed successfully.
+  # math.wasm is a core module, so its runs fail. The key assertion is that
+  # the error is NOT about signature verification, which shows verification
+  # passed.
   # ============================================================================
 
   describe "execution tool - verify block" do
@@ -1697,13 +1666,13 @@ defmodule Opus.ProviderTest do
   # ============================================================================
   # Crash-Resilient Storage
   #
-  # Note: math.wasm is a core module, so executions fail at runtime with
-  # "Component Model load failed". The Executor still writes started + failed
-  # records to SQLite, so crash-resilient storage is testable with failed records.
+  # math.wasm is a core module, so its runs fail; each run's record is
+  # written started and then failed, so crash-resilient storage is testable
+  # with failed records.
   # ============================================================================
 
   describe "execution tool - crash-resilient storage" do
-    test "writes execution record to SQLite before execution", %{ctx: ctx, ref: ref} do
+    test "writes the execution record before execution", %{ctx: ctx, ref: ref} do
       _result =
         Provider.handle("execution", ctx, %{
           "action" => "run",
@@ -1716,13 +1685,13 @@ defmodule Opus.ProviderTest do
       assert list_result.count >= 1
       execution_id = hd(list_result.executions).execution_id
 
-      # Check that execution record exists in SQLite
+      # Check that the execution record exists
       db_record = Arca.Repo.get(Arca.Schemas.Execution, execution_id)
       assert db_record != nil
       assert db_record.id == execution_id
     end
 
-    test "marks execution as failed in SQLite after core module execution", %{ctx: ctx, ref: ref} do
+    test "marks execution as failed after core module execution", %{ctx: ctx, ref: ref} do
       _result =
         Provider.handle("execution", ctx, %{
           "action" => "run",
@@ -1741,7 +1710,7 @@ defmodule Opus.ProviderTest do
       assert db_record.completed_at != nil
     end
 
-    test "marks execution as failed in SQLite for unregistered component", %{ctx: ctx} do
+    test "marks execution as failed for unregistered component", %{ctx: ctx} do
       # Unregistered component should fail and write a record
       _result =
         Provider.handle("execution", ctx, %{
@@ -1750,7 +1719,7 @@ defmodule Opus.ProviderTest do
           "input" => %{}
         })
 
-      # Check SQLite for a failed execution record
+      # Check for a failed execution record
       records =
         Arca.Execution.list(Prima.Actor.in_athanor(ctx.athanor_id),
           user_id: ctx.user_id,
@@ -1770,8 +1739,8 @@ defmodule Opus.ProviderTest do
   # ============================================================================
   # Telemetry Events
   #
-  # Note: math.wasm is a core module, so executions fail at runtime. The
-  # Executor emits start + exception telemetry events on failure (not stop).
+  # math.wasm is a core module, so its runs fail, and a failed run emits
+  # start and exception telemetry events (not stop).
   # ============================================================================
 
   describe "execution tool - telemetry" do

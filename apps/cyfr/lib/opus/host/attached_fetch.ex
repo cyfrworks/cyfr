@@ -12,7 +12,7 @@ defmodule Opus.Host.AttachedFetch do
 
   `Opus.Host` verifies the call and reads its args
   (`Prima.AttachedRequest`, which refuses a credential, routing or
-  framing header by shape) before `run/4` acts. The attempt must be held
+  framing header by shape) before `run/3` acts. The attempt must be held
   by the calling runner and live, as for an `egress_pin` (`:chain`);
   otherwise the call is `lost` or `unavailable` and nothing is resolved.
   What decides is the run's admitted authority and what CYFR holds for the
@@ -38,7 +38,7 @@ defmodule Opus.Host.AttachedFetch do
        `domain_blocked`), and the request is within the node's
        `max_request_size` (`request_too_large`);
     5. the URL is pinned once, under the attempt's authority, through
-       `Opus.Host.Egress.pin/3` with the purpose `:attached`: the
+       `Opus.Host.Egress.pin/2` with the purpose `:attached`: the
        decision a guest's own fetch gets, metadata refused and a private
        address only under the grant's `private_ips`
        (`private_ip_blocked`, `dns_error`, `invalid_request`);
@@ -132,22 +132,19 @@ defmodule Opus.Host.AttachedFetch do
   # frame's sequence number and whether an `end` or `error` was written.
   @written {__MODULE__, :written}
 
-  @typedoc "What `run/4` answers: `:ok` once the frames were written, or the refusal."
+  @typedoc "What `run/3` answers: `:ok` once the frames were written, or the refusal."
   @type answer ::
           :ok | {:error, :lost | :unavailable | Prima.HostAPI.attached_refusal()}
 
   @doc """
   Make the attached request `request` for the attempt of `caller` (the
   verified header), writing its answer's frames with `emit`, as the
-  module doc orders it. Options: `:resolver`, passed to
-  `Opus.Host.Egress.pin/3` (a module answering `getaddr/2` as
-  `:inet` does), which `Opus.Host` never passes.
+  module doc orders it.
   """
-  @spec run(Attempt.caller(), AttachedRequest.t(), Prima.HostAPI.emit(), keyword()) :: answer()
-  def run(caller, %AttachedRequest{} = request, emit, opts \\ [])
-      when is_function(emit, 1) and is_list(opts) do
+  @spec run(Attempt.caller(), AttachedRequest.t(), Prima.HostAPI.emit()) :: answer()
+  def run(caller, %AttachedRequest{} = request, emit) when is_function(emit, 1) do
     with {:ok, chain} <- Attempt.call(caller.execution_id, caller, :chain) do
-      case admit(caller, chain, request, opts) do
+      case admit(caller, chain, request) do
         {:ok, admitted} ->
           transfer(caller, chain, request, admitted, emit)
 
@@ -168,7 +165,7 @@ defmodule Opus.Host.AttachedFetch do
   # Admission
   # ---------------------------------------------------------------------------
 
-  defp admit(caller, chain, request, opts) do
+  defp admit(caller, chain, request) do
     {:ok, uri} = Prima.Network.parse_url(request.url)
     vault = default_vault(chain.authority)
 
@@ -177,7 +174,7 @@ defmodule Opus.Host.AttachedFetch do
          :ok <- within_destination(vault, uri, request.method),
          :ok <- egress(chain.authority, uri, request.method),
          :ok <- request_size(chain.limits, request),
-         {:ok, pin} <- pin(caller, request, uri, opts),
+         {:ok, pin} <- pin(caller, request, uri),
          :ok <- rate(caller, chain),
          {:ok, attached} <- resolve(chain, vault, request, uri, granted),
          :ok <- audit(caller, chain, vault, request.connection, uri),
@@ -284,14 +281,8 @@ defmodule Opus.Host.AttachedFetch do
 
   # 4. The grant's egress, as the worker service checks a guest's own
   # fetch, and its request size.
-  defp egress(authority, uri, method) do
-    edge =
-      case authority do
-        %Authority{resources: %Edge{} = edge} -> edge
-        _none -> nil
-      end
-
-    egress = (edge && edge.egress) || %{}
+  defp egress(%Authority{resources: %Edge{} = edge}, uri, method) do
+    egress = edge.egress || %{}
     methods = Map.get(egress, :methods) || []
     schemes = Map.get(egress, :schemes) || []
     scheme = String.downcase(uri.scheme)
@@ -345,14 +336,12 @@ defmodule Opus.Host.AttachedFetch do
 
   # 5. One pin, under the attempt's authority. Its refusals are recorded
   # by the pin itself, as a guest fetch's are.
-  defp pin(caller, request, uri, opts) do
+  defp pin(caller, request, uri) do
     host = host_of(uri)
-    pin_opts = Keyword.take(opts, [:resolver])
 
     case Egress.pin(
            step(caller, "pin"),
-           %{url: request.url, purpose: :attached, from: nil, need: request.connection},
-           pin_opts
+           %{url: request.url, purpose: :attached, from: nil, need: request.connection}
          ) do
       {:ok, %PinnedTarget{} = pin} ->
         {:ok, pin}
@@ -792,34 +781,11 @@ defmodule Opus.Host.AttachedFetch do
     do: {:halt, %{answer | refused: refused}}
 
   defp decide({:data, _data}, answer), do: {:cont, answer}
-  defp decide({:trailers, _fields}, answer), do: {:cont, answer}
 
   # How an answer read to its end stands: a held refusal of the final head
   # is a refusal still.
-  defp ended(%{refused: refused}) when is_binary(refused), do: {:refused, refused}
   defp ended(%{pending: refused}) when is_binary(refused), do: {:refused, refused}
   defp ended(_answer), do: :relayed
-
-  @doc false
-  # What the hook decides for an answer handed over as `pieces`, in order,
-  # relaying nothing: `{:refused, sentence}`, or `{:head, status, headers}`
-  # for the head it would relay. For the decision's own test.
-  @spec decision([term()]) :: {:refused, String.t()} | {:head, integer() | nil, list()}
-  def decision(pieces) when is_list(pieces) do
-    pieces
-    |> Enum.reduce_while(unread(), fn piece, answer ->
-      case decide(piece, answer) do
-        {:cont, answer} -> {:cont, answer}
-        {:halt, answer} -> {:halt, answer}
-      end
-    end)
-    |> then(fn answer ->
-      case ended(answer) do
-        {:refused, refused} -> {:refused, refused}
-        :relayed -> {:head, answer.status, answer.headers || []}
-      end
-    end)
-  end
 
   # A watcher of its own stops the request when its caller ends, and ends
   # itself when the request does.

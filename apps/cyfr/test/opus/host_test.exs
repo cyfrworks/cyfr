@@ -1272,6 +1272,19 @@ defmodule Opus.HostTest do
 
       assert message =~ "child_key"
       assert [^id] = children_of(fixture)
+
+      # The default is asked for by leaving the member out: a null, or a
+      # name no account carries, names no account, and admits nothing.
+      for connection <- [nil, "Work|Home"] do
+        refused = %{args | "connection" => connection, "child_key" => "ck_no_account"}
+
+        assert %{"error" => "guest_error", "type" => "invalid_request", "message" => message} =
+                 AttemptFixtures.call(fixture, "admit_child", refused)
+
+        assert message == "Invalid connection: not an account name", inspect(connection)
+      end
+
+      assert [^id] = children_of(fixture)
     end
 
     @tag :capture_log

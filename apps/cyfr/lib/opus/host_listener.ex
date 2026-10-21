@@ -44,15 +44,15 @@ defmodule Opus.HostListener do
   Each of those is answered on a connection the listener closes, and the
   body is never read. Then:
 
-    6. the body is at most `Prima.HostAPI.max_body_bytes/0`, else `413`,
+    7. the body is at most `Prima.HostAPI.max_body_bytes/0`, else `413`,
        sent before the rest of the body is read, on a connection the
        listener closes once it has dropped the rest (below), and is the
        one the header named (`Prima.WorkerAuth.verify_body/2`), else
        `401`;
-    7. a host call's body opens as the `:body` of the call the header
+    8. a host call's body opens as the `:body` of the call the header
        names, under the attempt's seal key derived from the root
        (`Prima.WorkerAuth.open_call/4`), else `401`;
-    8. the body is at this wire's version, else `400` `unknown_version`,
+    9. the body is at this wire's version, else `400` `unknown_version`,
        read before its `op`, and its `op` is the route's callback with
        arguments that are an object, else `400` `malformed`
        (`Prima.WorkerWire.read_request_body/2`).
@@ -138,11 +138,12 @@ defmodule Opus.HostListener do
           | {:drain_ms, non_neg_integer()}
 
   @doc """
-  The listener's child spec: a supervisor of the nonce memory, the node's
-  pin table (`Opus.Host.Egress`) and the Bandit server, serving HTTP/1.1
-  alone, bound to `:bind` (default loopback) on `:port` (required).
-  On shutdown the server stops accepting and lets the connections already
-  open finish for `:drain_ms` (default 5 000) before it closes them.
+  The listener's child spec: a supervisor of the nonce memory and the
+  Bandit server, serving HTTP/1.1 alone, bound to `:bind` on `:port`
+  (0 for any free one). On shutdown the server stops accepting and lets
+  the connections already open finish for `:drain_ms` before it closes
+  them. All three are required. The node's pin table
+  (`Opus.Host.Egress.Pins`) is started before it, by `Opus.Supervisor`.
   """
   @spec child_spec([option()]) :: Supervisor.child_spec()
   def child_spec(opts) when is_list(opts) do
@@ -593,9 +594,8 @@ defmodule Opus.HostListener do
   defmodule Supervisor do
     @moduledoc false
     # One listener: the nonce table, owned here so a request that crashes
-    # forgets nothing, its sweeper, the node's pin table (the first
-    # listener's; a later one starts none) and the Bandit server the nonce
-    # table is handed to.
+    # forgets nothing, its sweeper and the Bandit server the nonce table
+    # is handed to.
 
     use Elixir.Supervisor
 
@@ -614,14 +614,13 @@ defmodule Opus.HostListener do
 
     @impl true
     def init(opts) do
-      bind = Keyword.get(opts, :bind, {127, 0, 0, 1})
+      bind = Keyword.fetch!(opts, :bind)
       port = Keyword.fetch!(opts, :port)
-      drain_ms = Keyword.get(opts, :drain_ms, 5_000)
+      drain_ms = Keyword.fetch!(opts, :drain_ms)
       nonces = Opus.HostListener.Nonces.new()
 
       children = [
         {Opus.HostListener.Nonces, nonces},
-        Opus.Host.Egress.Pins,
         # HTTP/1.1 alone, as every Bandit listener of the product serves;
         # host_listener_http2_test.exs holds it.
         Elixir.Supervisor.child_spec(

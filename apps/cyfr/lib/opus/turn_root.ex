@@ -59,11 +59,10 @@ defmodule Opus.TurnRoot do
         }
 
   @doc """
-  Claim the root for `agent_ref` under the profile `opts[:profile]`
-  selects (`:default` when absent): load the authority, admit the row
-  with its attempt and reservation, take the `:root` slot on the calling
-  process, start the keeper. `opts` also: `:turn_id`, `:thread_id`,
-  `:envelope` (the input the row's envelope describes) and
+  Claim the root for `agent_ref` under its default profile: load the
+  authority, admit the row with its attempt and reservation, take the
+  `:root` slot on the calling process, start the keeper. `opts`:
+  `:turn_id`, `:envelope` (the input the row's envelope describes) and
   `:tick_ms` (the keeper's period). A refused slot
   answers `{:error, {:slot_refused, sentence}}` and fails the row; a row
   that ended while the claim waited for its slot answers
@@ -73,14 +72,9 @@ defmodule Opus.TurnRoot do
   @spec claim(Context.t(), String.t(), keyword()) :: {:ok, claim()} | {:error, term()}
   def claim(%Context{} = ctx, agent_ref, opts \\ []) do
     with {:ok, %{authority: authority, stamp: stamp}} <-
-           Admission.authority_and_stamp_for(
-             ctx,
-             Keyword.get(opts, :profile, :default),
-             agent_ref,
-             Keyword.take(opts, [:live_shape_digest])
-           ),
+           Admission.authority_and_stamp_for(ctx, :default, agent_ref),
          record = build_record(ctx, agent_ref, authority, stamp, opts),
-         :ok <- Record.write_started(record),
+         :ok <- Record.write_started(ctx, record, retention_class: "chat_step"),
          {:ok, token} <- claim_slot(ctx, record) do
       {:ok, keeper} =
         LeaseWatch.start(record.id, record.attempt, Keyword.take(opts, [:tick_ms]))
@@ -128,7 +122,7 @@ defmodule Opus.TurnRoot do
           with {:ok, turn} <-
                  Arca.TurnStorage.pause(Sanctum.Context.actor(ctx), turn_id, %{
                    fence: Keyword.get(opts, :fence),
-                   reason: Keyword.get(opts, :reason, "approval"),
+                   reason: Keyword.fetch!(opts, :reason),
                    launch_step_id: Keyword.get(opts, :launch_step_id)
                  }),
                do: {:ok, %{turn: turn, aborted: nil}}
@@ -152,13 +146,13 @@ defmodule Opus.TurnRoot do
   Resume a paused turn root from the process that will hold it: the slot
   first (a refusal leaves everything paused), then the rows, under the
   grant the root's attempt stores (`Arca.TurnStorage.resume/3`: a root
-  whose athanor was archived since stays paused), then a keeper. `opts`: `:turn_id`, `:fence`, `:timeout_ms`, `:tick_ms`.
+  whose athanor was archived since stays paused), then a keeper. `opts`:
+  `:turn_id`, `:fence`, `:tick_ms`.
   Answers the claim the loop keeps.
   """
   @spec resume(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def resume(%Context{} = ctx, execution_id, opts) do
-    with {:ok, token} <-
-           take_slot(ctx, execution_id, Keyword.get(opts, :timeout_ms, @slot_wait_ms)) do
+    with {:ok, token} <- take_slot(ctx, execution_id, @slot_wait_ms) do
       until = Record.lease_until()
 
       case Arca.TurnStorage.resume(Sanctum.Context.actor(ctx), Keyword.fetch!(opts, :turn_id), %{
@@ -190,8 +184,7 @@ defmodule Opus.TurnRoot do
   @doc """
   Adopt a root whose successor attempt a takeover already opened
   (`Arca.TurnStorage.takeover/3`): the slot and a keeper for
-  `opts[:attempt]`, nothing else. `opts`: `:attempt`, `:timeout_ms`,
-  `:tick_ms`. A row no longer running at that attempt once the slot is
+  `opts[:attempt]`, nothing else. `opts`: `:attempt`, `:tick_ms`. A row no longer running at that attempt once the slot is
   held answers `{:error, :not_running}` (`{:error, :unavailable}` when it
   could not be read), the slot given back.
   """
@@ -199,8 +192,7 @@ defmodule Opus.TurnRoot do
   def adopt(%Context{} = ctx, execution_id, opts) do
     attempt = Keyword.fetch!(opts, :attempt)
 
-    with {:ok, token} <-
-           take_slot(ctx, execution_id, Keyword.get(opts, :timeout_ms, @slot_wait_ms)),
+    with {:ok, token} <- take_slot(ctx, execution_id, @slot_wait_ms),
          {:ok, token} <- hold_live(ctx, execution_id, attempt, token) do
       {:ok, keeper} =
         LeaseWatch.start(execution_id, attempt, Keyword.take(opts, [:tick_ms]))
@@ -228,22 +220,15 @@ defmodule Opus.TurnRoot do
   """
   @spec release(Context.t(), String.t(), keyword()) :: :ok
   def release(%Context{} = ctx, execution_id, opts) do
-    case Keyword.get(opts, :claim) do
-      %{keeper: keeper, token: token} = claim ->
-        LeaseWatch.stop(keeper)
+    %{keeper: keeper, token: token} = claim = Keyword.fetch!(opts, :claim)
+    LeaseWatch.stop(keeper)
 
-        case Keyword.get(opts, :failed) do
-          error when is_binary(error) -> fail_open_root(ctx, execution_id, claim.attempt, error)
-          _ -> :ok
-        end
-
-        give_back(token)
-
-      _ ->
-        :ok
+    case Keyword.get(opts, :failed) do
+      error when is_binary(error) -> fail_open_root(ctx, execution_id, claim.attempt, error)
+      _ -> :ok
     end
 
-    :ok
+    give_back(token)
   end
 
   # A row the turn's terminal write already closed matches nothing here.
@@ -271,8 +256,7 @@ defmodule Opus.TurnRoot do
         kind: "turn",
         turn_id: Keyword.get(opts, :turn_id),
         profile_id: authority.profile_id,
-        reservation: %{budget_id: authority.budget.id, cap: authority.budget.cap},
-        retention_class: "chat_step"
+        reservation: %{budget_id: authority.budget.id, cap: authority.budget.cap}
       )
 
     case stamp do

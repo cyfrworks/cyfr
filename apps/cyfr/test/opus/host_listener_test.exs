@@ -59,7 +59,7 @@ defmodule Opus.HostListenerTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
-    listener = start_supervised!({HostListener, port: 0})
+    listener = start_supervised!({HostListener, bind: {127, 0, 0, 1}, port: 0, drain_ms: 5_000})
     {:ok, listener: listener, url: "http://127.0.0.1:#{HostListener.port(listener)}"}
   end
 
@@ -98,7 +98,9 @@ defmodule Opus.HostListenerTest do
 
     key = Keyword.get(opts, :call_key, fixture.call_key)
     {:ok, header} = WorkerAuth.host_call_header(key, fields, sealed)
-    path = Keyword.get_lazy(opts, :path, fn -> WorkerWire.host_route(String.to_atom(op)) end)
+
+    path =
+      Keyword.get_lazy(opts, :path, fn -> WorkerWire.host_route(String.to_existing_atom(op)) end)
 
     {status, answer} = post(url, path, [header], Keyword.get(opts, :body, sealed), raw: true)
     {status, open_answer(seal_key, fields, answer)}
@@ -895,10 +897,11 @@ defmodule Opus.HostListenerTest do
     # The Bandit server is started with the drain as its
     # `shutdown_timeout`: on shutdown it stops accepting and lets the
     # calls already open finish for that long.
-    test "reaches the server's options, 5 s unless the supervisor names another", %{
-      listener: listener
-    } do
-      drained = start_supervised!({HostListener, port: 0, drain_ms: 1_234}, id: :drained)
+    test "reaches the server's options as the supervisor names it", %{listener: listener} do
+      drained =
+        start_supervised!({HostListener, bind: {127, 0, 0, 1}, port: 0, drain_ms: 1_234},
+          id: :drained
+        )
 
       assert drain(listener) == 5_000
       assert drain(drained) == 1_234
@@ -917,7 +920,10 @@ defmodule Opus.HostListenerTest do
       {:ok, held} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false])
       {:ok, {_, port}} = :inet.sockname(held)
 
-      bound = start_supervised!({HostListener, bind: @second_loopback, port: port}, id: :bound)
+      bound =
+        start_supervised!({HostListener, bind: @second_loopback, port: port, drain_ms: 5_000},
+          id: :bound
+        )
 
       assert listening_address(bound) == {@second_loopback, port}
       assert {404, _} = post("http://127.0.0.2:#{port}", "/nowhere", [], "", raw: true)

@@ -30,10 +30,10 @@ defmodule Opus.WorkerClient do
   An answer is a `200` read up to `Prima.HostAPI.max_answer_bytes/0` and
   read at this wire's version (`Prima.WorkerWire.read_answer/1`):
   `{"v": 1, "ok": value}` is the callback's success and
-  `{"v": 1, "error": name}` its refusal; any other status, an answer
-  without `v` or at another version, a refusal of `unknown_version` (a
-  worker service at another version of the wire is not this cell's), or
-  anything else in an answer's place, is a lost answer. A lost answer is retried once, with a fresh nonce, when
+  `{"v": 1, "error": name}` naming `malformed` or `not_found` its
+  refusal; any other status, an answer without `v` or at another
+  version, any other name, or anything else in an answer's place, is a
+  lost answer. A lost answer is retried once, with a fresh nonce, when
   `Prima.WorkerAPI.retry/1` allows it (`kill` and `status`), never for
   `start`: its assignment's claim window bounds the worker service, and
   dispatch reconciles against the attempt.
@@ -54,20 +54,11 @@ defmodule Opus.WorkerClient do
 
   @connect_timeout_ms 5_000
 
-  # The refusals a worker service answers by name (`Prima.WorkerWire`);
-  # anything else in an answer's place is a lost answer. A worker service
-  # that names `unknown_version` speaks another version of the wire, so
-  # its answer is lost too, under the callback's retry class.
-  @refusals %{
-    "lost" => :lost,
-    "unavailable" => :unavailable,
-    "replayed" => :replayed,
-    "malformed" => :malformed,
-    "bad_mac" => :bad_mac,
-    "unknown_version" => :lost,
-    "claim_expired" => :claim_expired,
-    "not_found" => :not_found
-  }
+  # The refusals a worker service answers at `200`, by name
+  # (`tests/fixtures/worker_api.json`): a start's `malformed` and a kill's
+  # `not_found`. Its other refusals come at another status, and anything
+  # else in an answer's place is a lost answer.
+  @refusals %{"malformed" => :malformed, "not_found" => :not_found}
 
   @typedoc "What the transport itself answers when the worker service did not."
   @type transport_refusal :: :lost | :unavailable
@@ -81,7 +72,7 @@ defmodule Opus.WorkerClient do
   """
   @spec start(WorkerAPI.endpoint(), Prima.Assignment.token(), binary(), String.t()) ::
           :ok
-          | {:error, :malformed | {:unavailable, String.t()} | transport_refusal() | atom()}
+          | {:error, :malformed | :not_found | {:unavailable, String.t()} | transport_refusal()}
   def start(%{id: id, url: url} = endpoint, token, input, sealed_keys)
       when is_binary(id) and is_binary(url) and is_binary(token) and is_binary(input) and
              is_binary(sealed_keys) do
@@ -96,7 +87,7 @@ defmodule Opus.WorkerClient do
 
   @doc "Stop the execution `execution_id` on `endpoint` (`c:Prima.WorkerAPI.kill/1`)."
   @spec kill(WorkerAPI.endpoint(), String.t()) ::
-          :ok | {:error, :not_found | transport_refusal() | atom()}
+          :ok | {:error, :malformed | :not_found | transport_refusal()}
   def kill(%{id: id, url: url} = endpoint, execution_id)
       when is_binary(id) and is_binary(url) and is_binary(execution_id) do
     case request(endpoint, :kill, %{"execution_id" => execution_id}) do
@@ -114,7 +105,7 @@ defmodule Opus.WorkerClient do
   shape is lost.
   """
   @spec status(WorkerAPI.endpoint()) ::
-          {:ok, WorkerAPI.status()} | {:error, transport_refusal() | atom()}
+          {:ok, WorkerAPI.status()} | {:error, :malformed | :not_found | transport_refusal()}
   def status(%{id: id, url: url} = endpoint) when is_binary(id) and is_binary(url) do
     with {:ok, answer} <- request(endpoint, :status, %{}) do
       case WorkerAPI.read_status(answer) do

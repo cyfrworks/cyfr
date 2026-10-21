@@ -29,7 +29,7 @@ defmodule Opus.AttemptRecoveryTest do
     record =
       Record.new(ctx, "catalyst:local.test:1.0.0", %{"x" => 1}, component_type: :catalyst)
 
-    :ok = Record.write_started(record)
+    :ok = Record.write_started(ctx, record)
 
     {1, _} =
       Arca.Repo.update_all(
@@ -49,7 +49,9 @@ defmodule Opus.AttemptRecoveryTest do
 
     # The dead runner's result arrives late and is refused by the fence.
     assert {:error, :not_running} =
-             Record.write_completed(Record.complete(record, %{"late" => true}))
+             Record.write_completed_ledger(Record.complete(record, %{"late" => true}),
+               retention_class: "api"
+             )
 
     assert %{status: "failed", output: nil} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
 
@@ -71,7 +73,7 @@ defmodule Opus.AttemptRecoveryTest do
     ctx: ctx
   } do
     record = Record.new(ctx, "catalyst:local.test:1.0.0", %{"x" => 1}, component_type: :catalyst)
-    :ok = Record.write_started(record)
+    :ok = Record.write_started(ctx, record)
 
     # The lease a member writes is `lease_seconds` past the CELL's clock.
     # A member reading its own would fold its drift from the database into
@@ -123,7 +125,7 @@ defmodule Opus.AttemptRecoveryTest do
     record =
       Record.new(ctx, "catalyst:local.test:1.0.0", %{"x" => 1}, component_type: :catalyst)
 
-    :ok = Record.write_started(record)
+    :ok = Record.write_started(ctx, record)
 
     {1, _} =
       Arca.Repo.update_all(
@@ -148,16 +150,18 @@ defmodule Opus.AttemptRecoveryTest do
   test "a completion closes the attempt with the row, and a cancel from a read-back record closes the current one",
        %{ctx: ctx} do
     record = Record.new(ctx, "catalyst:local.test:1.0.0", %{}, component_type: :catalyst)
-    :ok = Record.write_started(record)
+    :ok = Record.write_started(ctx, record)
 
-    assert :ok =
-             Record.write_completed(Record.complete(record, %{"ok" => true}))
+    assert {:ok, _ledger} =
+             Record.write_completed_ledger(Record.complete(record, %{"ok" => true}),
+               retention_class: "api"
+             )
 
     assert %{state: "completed", outcome: "ok"} =
              ExecutionAttempts.get(Sanctum.Context.actor(ctx), record.attempt)
 
     other = Record.new(ctx, "catalyst:local.test:1.0.0", %{}, component_type: :catalyst)
-    :ok = Record.write_started(other)
+    :ok = Record.write_started(ctx, other)
     {:ok, read_back} = Record.get(ctx, other.id)
     assert read_back.attempt == other.attempt
     assert {:ok, %{status: :cancelled}} = Record.cancel(ctx, other.id)

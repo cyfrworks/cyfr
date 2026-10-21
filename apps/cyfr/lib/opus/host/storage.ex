@@ -33,7 +33,7 @@ defmodule Opus.Host.Storage do
   (`Sanctum.Policy.Enforcement.record/1`), audits a field denial
   (`Prima.HostAPI.field_denials/0`) as `[:cyfr, :opus, :secret, :denied]`
   with the field name its guest asked for — a `secret_denied` one, a field
-  outside its projection, as it always was, and a `disclosure_refused`
+  outside its projection, and a `disclosure_refused`
   one, a field of an entry CYFR attaches and never discloses, with its
   `reason` beside the field so the two stay apart — and ignores any other
   refusal type. A denial is attributed to the attempt the call was checked

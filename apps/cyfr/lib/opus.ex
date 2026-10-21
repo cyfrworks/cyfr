@@ -19,7 +19,7 @@ defmodule Opus do
 
   A root's row records the origin of the context it is started in
   (`Prima.Origin`), which the admission entry that built the context set
-  and no option names (`Opus.Record.new/4`). A child's row carries
+  and no option names (`Opus.Record.write_started/3`). A child's row carries
   its parent's, read where it is admitted, so a chain rooted by a
   schedule stays `schedule` however deep it runs.
 
@@ -147,20 +147,6 @@ defmodule Opus do
       )
     end
   end
-
-  @doc """
-  Invoke one of a tincture's dependencies for a caller, rooted at the
-  profile `route` selects — `:public` the published public profile at the
-  tincture's public address, `:protected` its owner profile in the
-  caller's athanor — with `args` the gate's cast of the
-  `tincture.invoke_public`/`invoke_protected` arguments: `"publisher"`,
-  `"tincture_name"`, `"reference"` and `"input"`, and for `:public` the
-  address, `"athanor"`. The tincture and its profile are read again on
-  every call. A guest-planed context refuses. See `Opus.Tincture`.
-  """
-  @spec invoke_tincture(Context.t(), map(), Opus.Tincture.route()) ::
-          {:ok, Opus.Tincture.result()} | {:error, Prima.Refusal.t()}
-  defdelegate invoke_tincture(ctx, args, route), to: Opus.Tincture, as: :invoke
 
   @doc """
   Derive, without running anything, the authority a `run_root/5` of this
@@ -507,10 +493,10 @@ defmodule Opus do
   @doc """
   Claim a turn's logical root: the `kind: "turn"` execution, its attempt,
   its reservation and a `:root` slot on the calling process, with the
-  agent's authority loaded and no guest started. `opts`: `:profile`
-  (a `RootSelect` selector, `:default` when absent), `:turn_id`,
-  `:thread_id`, `:envelope` (the input keys the row records). Answers the
-  claim the loop keeps (`t:Opus.TurnRoot.claim/0`).
+  agent's authority loaded under its default profile and no guest
+  started. `opts`: `:turn_id`, `:envelope` (the input keys the row
+  records) and `:tick_ms`. Answers the claim the loop keeps
+  (`t:Opus.TurnRoot.claim/0`).
   """
   @spec claim_turn_root(Context.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   defdelegate claim_turn_root(ctx, agent_ref, opts \\ []), to: TurnRoot, as: :claim
@@ -569,14 +555,6 @@ defmodule Opus do
   @spec feeds(Context.t()) ::
           {:ok, [Opus.Feeds.feed()]} | {:error, :no_athanor | :database_error}
   defdelegate feeds(ctx), to: Opus.Feeds, as: :list
-
-  @doc """
-  The execution records of the context's athanor. Options: `:limit`
-  (default 20) and `:status` (`:running`, `:completed`, `:failed` or
-  `:all`).
-  """
-  @spec list(Context.t(), keyword()) :: {:ok, [Record.t()]} | {:error, term()}
-  defdelegate list(ctx, opts \\ []), to: Record
 
   @doc """
   The executions the ingress request `request_id` started in the context's
@@ -654,6 +632,6 @@ defmodule Opus do
   defdelegate resume_lease_watch(keeper), to: Opus.LeaseWatch, as: :resume
 
   @doc "Stop a lease keeper; a keeper that is gone answers `:ok` (`Opus.LeaseWatch.stop/1`)."
-  @spec stop_lease_watch(pid() | nil) :: :ok
+  @spec stop_lease_watch(pid()) :: :ok
   defdelegate stop_lease_watch(keeper), to: Opus.LeaseWatch, as: :stop
 end

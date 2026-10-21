@@ -11,8 +11,8 @@ defmodule Opus.Rates do
   (`Arca.RateWindows`): there is no table here, no owner process and no
   count in this boot's memory, which is the whole of what this module is.
   Two members admit an athanor's consented rate once between them, and a
-  member that restarts forgets nothing — a counter that died with its
-  node used to hand every bucket a fresh window on every restart.
+  member that restarts forgets nothing: no restart hands a bucket a fresh
+  window.
 
   ## Buckets
 
@@ -109,70 +109,35 @@ defmodule Opus.Rates do
     end
   end
 
-  def check(%Prima.Actor{}, _bucket, _limit_source), do: missing_tenant("check")
-
-  @doc """
-  What the bucket reads now, counting nothing: `{:ok, used, remaining,
-  window_ms}`, or `{:ok, :unlimited}` when no limit is configured.
-  """
-  @spec status(Prima.Actor.t(), String.t(), map() | nil) ::
-          {:ok, non_neg_integer(), non_neg_integer(), non_neg_integer()}
-          | {:ok, :unlimited}
-          | {:error, :missing_tenant}
-          | {:error, :unavailable}
-  def status(%Prima.Actor{athanor_id: athanor_id} = actor, bucket, limit_source)
-      when is_binary(athanor_id) and athanor_id != "" do
-    case consented(limit_source) do
-      :unlimited ->
-        {:ok, :unlimited}
-
-      :invalid ->
-        # `check/3` denies on a consented limit it cannot read; status is
-        # the diagnostics path and reports that state rather than crashing
-        # on it.
-        {:ok, 0, 0, 0}
-
-      {cap, window_ms} ->
-        case Arca.RateWindows.estimate(actor, bucket, cap, window_ms) do
-          {:ok, used, remaining, width} -> {:ok, used, remaining, width}
-          {:error, reason} -> unavailable(reason, "status")
-        end
-    end
-  end
-
-  def status(%Prima.Actor{}, _bucket, _limit_source), do: missing_tenant("status")
+  def check(%Prima.Actor{}, _bucket, _limit_source), do: missing_tenant()
 
   # ---- internal --------------------------------------------------------------
 
   defp verdict({:ok, remaining}), do: {:ok, remaining}
   defp verdict({:refused, retry_after_ms}), do: {:error, :rate_limited, retry_after_ms}
-  defp verdict({:error, reason}), do: unavailable(reason, "check")
-
   # A store that could not answer and a row that would not settle are one
   # thing to the caller — the rate could not be decided — and both deny.
-  # `:no_athanor` cannot reach here: every entry guards the athanor first.
-  defp unavailable(reason, operation) do
+  # `:no_athanor` cannot reach here: `check/3` guards the athanor first.
+  defp verdict({:error, reason}) do
     Logger.warning(
-      "[Opus.Rates] the rate authority could not answer #{operation} " <>
-        "(#{inspect(reason)}) — denying"
+      "[Opus.Rates] the rate authority could not answer (#{inspect(reason)}) — denying"
     )
 
     {:error, :unavailable}
   end
 
-  defp missing_tenant(operation) do
+  defp missing_tenant do
     Logger.warning(
-      "[Opus.Rates] no athanor resolved during #{operation} — rejecting to prevent " <>
-        "cross-tenant rate limit collision"
+      "[Opus.Rates] no athanor resolved — rejecting to prevent cross-tenant rate limit collision"
     )
 
     {:error, :missing_tenant}
   end
 
-  # The cap and the window a limit source consents to. Any map carrying a
-  # `:rate_limit` key of `%{requests: n, window: "1m"}` — callers pass the
-  # node's consented `Prima.Limits.rate_limit`, or a platform-config bucket
-  # like the emit cap. A nil map or a nil `:rate_limit` is unlimited.
+  # The cap and the window a limit source consents to: a map carrying a
+  # `:rate_limit` key of `%{requests: n, window: "1m"}`, the node's
+  # consented `Prima.Limits.rate_limit`. A nil map or a nil `:rate_limit`
+  # is unlimited.
   defp consented(nil), do: :unlimited
   defp consented(%{rate_limit: nil}), do: :unlimited
 
@@ -194,8 +159,6 @@ defmodule Opus.Rates do
   # Duration grammar is Prima.Limits' — one parser for every enforcement
   # window, so "1h" cannot mean an hour in one limiter and a fallback minute
   # in another. Unparseable is unparseable, never a default.
-  defp parse_window(window) when is_integer(window), do: {:ok, window}
-
   defp parse_window(window) do
     case Prima.Limits.parse_duration(window) do
       {:ok, ms} ->

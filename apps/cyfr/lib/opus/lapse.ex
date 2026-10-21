@@ -86,15 +86,14 @@ defmodule Opus.Lapse do
       false
   end
 
-  # The stamp the lapsing attempt carries, as the scan read it.
+  # The stamp the lapsing attempt carries, as the scan read it. Both
+  # columns are required of every attempt row; a row without a valid
+  # stamp is damaged, and its lapse fails (logged above) rather than
+  # writing under another stamp.
   defp stamp(%{athanor_id: athanor_id, athanor_generation: generation}) do
-    case Prima.ExecutionGrant.new(athanor_id, generation) do
-      {:ok, grant} -> grant
-      {:error, :invalid_grant} -> :stored
-    end
+    {:ok, grant} = Prima.ExecutionGrant.new(athanor_id, generation)
+    grant
   end
-
-  defp stamp(_record), do: :stored
 
   @doc """
   Lapse each of `attempts` that was dispatched to the worker service

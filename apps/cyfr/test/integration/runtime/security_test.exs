@@ -106,13 +106,9 @@ defmodule Locus.Runtime.SecurityTest do
       assert opts.inherit_stderr == false
     end
 
-    test "component type defaults to :reagent when nil" do
-      assert {:error, _} = ComponentType.parse(nil)
-    end
-
-    test "invalid component type returns error" do
+    test "an empty or unknown component type is refused" do
+      assert {:error, _} = ComponentType.parse("")
       assert {:error, _} = ComponentType.parse("unknown")
-      assert {:error, _} = ComponentType.parse(:invalid)
     end
   end
 
@@ -201,7 +197,7 @@ defmodule Locus.Runtime.SecurityTest do
     test "execution cancellation is tenant-scoped", %{ctx: ctx} do
       # Create a running execution record directly (no WASM needed)
       record = Opus.Record.new(ctx, "reagent:local.test:0.1.0", %{})
-      :ok = Opus.Record.write_started(record)
+      :ok = Opus.Record.write_started(ctx, record)
 
       # A different tenant cannot cancel (tenant boundary enforced)
       other_ctx =

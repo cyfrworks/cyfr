@@ -21,18 +21,19 @@ defmodule Opus.CloseAfterCancelTest do
   describe "a completion after a cancel closed the row" do
     test "answers the cancel and leaves the cancelled row standing", %{ctx: ctx} do
       record = Record.new(ctx, "catalyst:local.test:1.0.0", %{}, component_type: :catalyst)
-      :ok = Record.write_started(record)
+      :ok = Record.write_started(ctx, record)
       assert {:ok, %{status: :cancelled}} = Record.cancel(ctx, record.id)
 
       close = %Close{
         ctx: ctx,
         record: record,
+        admission: [retention_class: "api"],
         limits: Prima.Authority.zero_limits(),
         started: true
       }
 
       assert {:error, "Execution cancelled"} =
-               Close.complete(close, [], %{"late" => true}, %{})
+               Close.complete(close, [], %{"late" => true})
 
       assert %{status: "cancelled", output: nil} =
                Arca.Repo.get!(Arca.Schemas.Execution, record.id)
@@ -40,17 +41,18 @@ defmodule Opus.CloseAfterCancelTest do
 
     test "a completion whose write lands still answers its result", %{ctx: ctx} do
       record = Record.new(ctx, "catalyst:local.test:1.0.0", %{}, component_type: :catalyst)
-      :ok = Record.write_started(record)
+      :ok = Record.write_started(ctx, record)
 
       close = %Close{
         ctx: ctx,
         record: record,
+        admission: [retention_class: "api"],
         limits: Prima.Authority.zero_limits(),
         started: true
       }
 
       assert {:ok, %{status: :completed, output: %{"ok" => true}}} =
-               Close.complete(close, [], %{"ok" => true}, %{})
+               Close.complete(close, [], %{"ok" => true})
 
       assert %{status: "completed"} = Arca.Repo.get!(Arca.Schemas.Execution, record.id)
     end

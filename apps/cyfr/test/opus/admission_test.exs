@@ -1147,7 +1147,8 @@ defmodule Opus.AdmissionTest do
     # reads as damage is in the family or is damage the loader typed
     # already (`head_corrupt`, `lender_corrupt`), and the family names no
     # member the status does not read as damage. Admission answers the
-    # family in the loader's one reading of it, and every other member as
+    # family in the loader's one reading of it
+    # (`Sanctum.Consent.Loader.damage_refusal/3`), and every other member as
     # the loader gave it.
     test "is the loader's one family, exactly the answers the consent status reads as damage" do
       members = declared(Sanctum.Consent.Loader, :load_error)
@@ -1159,7 +1160,11 @@ defmodule Opus.AdmissionTest do
         named = spelled(member)
         status_damage? = Aqua.ConsentStatus.classify_refusal(reason) == {:error, :corrupt}
         damage? = Sanctum.Consent.Loader.damage?(reason)
-        answer = Admission.root_refusal(reason, "prof_own", @own_root)
+
+        answer =
+          if damage?,
+            do: Sanctum.Consent.Loader.damage_refusal(reason, "prof_own", @own_root),
+            else: reason
 
         if typed_damage?(reason) do
           assert {named, status_damage?, damage?} == {named, true, false}
@@ -1168,15 +1173,10 @@ defmodule Opus.AdmissionTest do
         end
 
         if damage? do
-          assert {named, answer} ==
-                   {named, Sanctum.Consent.Loader.damage_refusal(reason, "prof_own", @own_root)}
-
           assert {named, answer in @damage_answers} == {named, true}
 
           assert {named, Aqua.ConsentStatus.classify_refusal(answer)} ==
                    {named, {:error, :corrupt}}
-        else
-          assert {named, answer} == {named, reason}
         end
       end
     end

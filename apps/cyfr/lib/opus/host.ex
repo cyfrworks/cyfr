@@ -434,7 +434,7 @@ defmodule Opus.Host do
 
   @impl HostAPI
   def attached_fetch(caller, %AttachedRequest{} = request, emit) when is_function(emit, 1),
-    do: AttachedFetch.run(caller, request, emit, [])
+    do: AttachedFetch.run(caller, request, emit)
 
   # Reached from `runner_exited/2` once the report has verified and names
   # this member: `report` is the verified report header.

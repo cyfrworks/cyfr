@@ -11,10 +11,10 @@ defmodule Opus.Attempt do
   `Opus.Admission` opens it once the run's row is admitted,
   registered under the execution's id (with the attempt id as its value)
   in `Opus.Attempt.Registry` and supervised by
-  `Opus.Attempt.Supervisor`. The process that opens it is its
-  waiter (`Opus.Dispatch.await/2`) until it hands the attempt to
-  the runner that claimed it (`hand_over/1`), as a formula's child run in
-  its parent's runner is handed over. It holds:
+  `Opus.Attempt.Supervisor`. The process that opens it is its waiter
+  (`Opus.Dispatch`, which waits for its answer) until it hands the attempt
+  to the runner that claimed it (`hand_over/1`), as a formula's child run
+  in its parent's runner is handed over. It holds:
 
   - the close state (`Opus.Close`): the admitted row, the
     admission context and the node's limits, which only this process
@@ -109,8 +109,9 @@ defmodule Opus.Attempt do
   neither kills a runner the worker service already reported ended nor
   counts that kill against the athanor: a crash, a memory kill or a
   deadline the worker service enforced costs the tenant no unreaped kill
-  it did not earn. A run whose row a caller ended keeps the old path, so
-  the kill a cancel made is still counted where the run's end is seen.
+  it did not earn. A run whose row a caller ended is not closed by the
+  attempt: its waiter kills the runner, and the kill a cancel made is
+  counted where the run's end is seen.
 
   A stop by its supervisor runs to the end: a waiter already gone is
   reacted to as above, whether or not its exit was handled yet, and what
@@ -269,7 +270,7 @@ defmodule Opus.Attempt do
           declared_needs: [String.t()],
           activation_digest: String.t() | nil,
           roster: [map()],
-          worker: Prima.WorkerAPI.endpoint() | nil,
+          worker: Prima.WorkerAPI.endpoint(),
           deadline: non_neg_integer() | nil,
           limits: Prima.Limits.t()
         }
@@ -280,18 +281,19 @@ defmodule Opus.Attempt do
 
   Required options: `:execution_id`, `:attempt` (the attempt id that owns
   the row), `:ctx` (the admission context), `:authority`, `:component_ref`
-  (the node's reference, which keys its `oauth:` rate) and `:close` (the
-  run's close state). Optional: `:fence` (default 1), `:need` (the need
-  its edge was reached through), `:limits` (default the authority's node
-  limits), `:stream_id` (the stream its guest's events go on, default the
-  execution's), `:budget_id` (the root whose emit budget they draw on,
+  (the node's reference, which keys its `oauth:` rate), `:close` (the
+  run's close state) and `:worker` (the `t:Prima.WorkerAPI.endpoint/0` of
+  the worker service the run is dispatched to). The attempt runs at fence
+  1, the fence its row opens at (`Arca.ExecutionAttempts`). Optional:
+  `:need` (the need its edge was reached through), `:limits` (default the
+  authority's node limits), `:stream_id` (the stream its guest's events go
+  on, default the execution's), `:budget_id` (the root whose emit budget they draw on,
   default the execution's), `:root_execution_id` (default the execution's),
   `:call_id` (the admission decision the row was started under, as the row
   records it), `:declared_needs` (default `[]`) and `:activation_digest` (the
   resolver's, for its guest's children), `:roster` (the delegation roster
-  of its admitted input, default `[]`), `:step_spans`, `:worker`,
-  `:service_id` and `:boot_id` (the `t:Prima.WorkerAPI.endpoint/0`, the id
-  and the boot of the worker service the run is dispatched to), `:deadline` (the
+  of its admitted input, default `[]`), `:step_spans`, `:service_id` and
+  `:boot_id` (the id and the boot of that worker service), `:deadline` (the
   run's subtree deadline in Unix ms, which caps its children's), `:digest` (the digest of the
   component's artifact, which the runner fetches), `:held_invoke` (true
   when the waiter holds a charged invoke-budget slot of the authority's
@@ -623,7 +625,7 @@ defmodule Opus.Attempt do
     state = %__MODULE__{
       execution_id: execution_id,
       attempt: Keyword.fetch!(opts, :attempt),
-      fence: Keyword.get(opts, :fence, 1),
+      fence: 1,
       ctx: ctx,
       authority: authority,
       component_ref: Keyword.fetch!(opts, :component_ref),
@@ -644,7 +646,7 @@ defmodule Opus.Attempt do
       declared_needs: Keyword.get(opts, :declared_needs, []),
       activation_digest: Keyword.get(opts, :activation_digest),
       roster: Keyword.get(opts, :roster, []),
-      worker: Keyword.get(opts, :worker),
+      worker: Keyword.fetch!(opts, :worker),
       service_id: Keyword.get(opts, :service_id),
       boot_id: Keyword.get(opts, :boot_id),
       deadline: Keyword.get(opts, :deadline),
@@ -1070,8 +1072,6 @@ defmodule Opus.Attempt do
     lapse(state)
   end
 
-  defp kill_runner(%__MODULE__{worker: nil}), do: :ok
-
   # A run still waiting for its slot was never started: it has no runner.
   defp kill_runner(%__MODULE__{slot: {:waiting, _holder, _from}}), do: :ok
 
@@ -1084,8 +1084,6 @@ defmodule Opus.Attempt do
     :ok
   end
 
-  # A run dispatched to no worker service has no runner whose attempt lapses.
-  defp lapse(%__MODULE__{worker: nil}), do: :ok
   defp lapse(state), do: Lapse.dispatched(state.service_id, state.boot_id, nil, [state.attempt])
 
   # ---------------------------------------------------------------------------
@@ -1365,7 +1363,7 @@ defmodule Opus.Attempt do
       secrets = masking_set(state)
 
       close_run(state, &completed_answer/1, fn ->
-        Close.complete(state.close, secrets, outcome.output, %{})
+        Close.complete(state.close, secrets, outcome.output)
       end)
     else
       refuse_outcome(state)

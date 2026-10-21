@@ -90,7 +90,15 @@ defmodule Opus.Host.ToolFlowTest do
 
     test_path = Path.join(System.tmp_dir!(), "tool_flow_#{System.unique_integer([:positive])}")
     previous = Application.get_env(:arca, :base_path)
+    previous_resolver = Application.fetch_env(:cyfr, :egress_resolver)
     ctx = Sanctum.TestContext.local(:api)
+
+    on_exit(fn ->
+      case previous_resolver do
+        {:ok, resolver} -> Application.put_env(:cyfr, :egress_resolver, resolver)
+        :error -> Application.delete_env(:cyfr, :egress_resolver)
+      end
+    end)
 
     on_exit(fn ->
       Prima.Slots.forgive_unreaped(Opus.Slots, ctx.athanor_id)
@@ -236,7 +244,19 @@ defmodule Opus.Host.ToolFlowTest do
   defp pin(fixture, url) do
     {:ok, args} = Prima.PinnedTarget.request_args(url, :fetch, nil)
     {:ok, request} = Prima.PinnedTarget.read_request(args)
-    Opus.Host.Egress.pin(AttemptFixtures.caller(fixture), request, resolver: Resolver)
+    # This one pin resolves through the fixed resolver; every other pin
+    # of the test resolves as the suite's do.
+    previous = Application.fetch_env(:cyfr, :egress_resolver)
+    Application.put_env(:cyfr, :egress_resolver, Resolver)
+
+    try do
+      Opus.Host.Egress.pin(AttemptFixtures.caller(fixture), request)
+    after
+      case previous do
+        {:ok, resolver} -> Application.put_env(:cyfr, :egress_resolver, resolver)
+        :error -> Application.delete_env(:cyfr, :egress_resolver)
+      end
+    end
   end
 
   defp denials(fixture) do

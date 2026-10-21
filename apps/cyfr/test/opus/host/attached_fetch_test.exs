@@ -347,6 +347,39 @@ defmodule Opus.Host.AttachedFetchTest do
         "HTTP/1.1 101 Switching Protocols\r\ncontent-range: bytes 0-9/100\r\n\r\n" <>
           binary_part("key: " <> key, 0, 10)
 
+    # An informational block of the status the path names, carrying a
+    # content coding and a range, then the final answer.
+    defp answer("/informational-" <> status, _key),
+      do:
+        "HTTP/1.1 #{status} Info\r\ncontent-encoding: gzip\r\ncontent-range: bytes 0-9/100\r\n\r\n" <>
+          fixed("HTTP/1.1 200 OK", [{"content-type", "text/plain"}], "body")
+
+    # An informational block carrying a content coding, then a body with
+    # no final head before it.
+    defp answer("/informational-body-" <> status, key),
+      do:
+        "HTTP/1.1 #{status} Info\r\ncontent-encoding: gzip\r\nconnection: close\r\n\r\n" <>
+          gz(key)
+
+    # A final head of the status the path names, in a content coding, and
+    # a 206 with no range at all.
+    defp answer("/encoded-" <> status, _key),
+      do: fixed("HTTP/1.1 #{status} Answer", [{"content-encoding", "br"}], "")
+
+    defp answer("/bare-206", key),
+      do: fixed("HTTP/1.1 206 Partial Content", [], binary_part("key: " <> key, 0, 10))
+
+    # A status line of the code the path names, with nothing after it.
+    defp answer("/status-" <> status, _key), do: fixed("HTTP/1.1 #{status} Answer", [], "")
+
+    # A chunked body whose trailer section names a content coding and a
+    # range, as a head would.
+    defp answer("/trailer-coding", _key),
+      do:
+        "HTTP/1.1 200 OK\r\nx-kept: kept\r\ntransfer-encoding: chunked\r\n" <>
+          "trailer: content-encoding, content-range\r\nconnection: close\r\n\r\n" <>
+          "4\r\nbody\r\n0\r\ncontent-encoding: gzip\r\ncontent-range: bytes 0-9/100\r\n\r\n"
+
     defp answer(_path, _key), do: fixed("HTTP/1.1 200 OK", [], "plain")
   end
 
@@ -394,6 +427,15 @@ defmodule Opus.Host.AttachedFetchTest do
       Path.join(System.tmp_dir!(), "attached_fetch_#{System.unique_integer([:positive])}")
 
     original_base_path = Application.get_env(:arca, :base_path)
+    original_resolver = Application.fetch_env(:cyfr, :egress_resolver)
+
+    on_exit(fn ->
+      case original_resolver do
+        {:ok, resolver} -> Application.put_env(:cyfr, :egress_resolver, resolver)
+        :error -> Application.delete_env(:cyfr, :egress_resolver)
+      end
+    end)
+
     Application.put_env(:arca, :base_path, test_path)
 
     on_exit(fn ->
@@ -556,9 +598,10 @@ defmodule Opus.Host.AttachedFetchTest do
 
     caller = AttemptFixtures.caller(fixture)
 
-    Task.async(fn ->
-      AttachedFetch.run(caller, request, emit, Keyword.take(opts, [:resolver]))
-    end)
+    # The pin resolves through the scripted resolver a case names, else
+    # through `:inet` (`Opus.Host.Egress`).
+    Application.put_env(:cyfr, :egress_resolver, Keyword.get(opts, :resolver, :inet))
+    Task.async(fn -> AttachedFetch.run(caller, request, emit) end)
   end
 
   defp fetched(fixture, request, opts \\ []),
@@ -578,7 +621,7 @@ defmodule Opus.Host.AttachedFetchTest do
           :ok
         end
 
-    held(fn -> AttachedFetch.run(caller, request, emit, []) end)
+    held(fn -> AttachedFetch.run(caller, request, emit) end)
   end
 
   # `fun` run by a caller that runs on until it is sent `:release`: what it
@@ -1944,72 +1987,103 @@ defmodule Opus.Host.AttachedFetchTest do
   # ---------------------------------------------------------------------------
 
   describe "the decision on an answer as the client hands it over" do
+    setup do
+      parent = self()
+      start_supervised!({Task, fn -> RawUpstream.run(parent) end})
+      assert_receive {:raw_port, raw}, 5_000
+      {:ok, raw: raw}
+    end
+
     @encoded_sentence "HTTP request failed: an encoded answer is not relayed"
     @partial_sentence "HTTP request failed: a partial answer is not relayed"
 
-    test "an informational block is set aside, whatever its lines, and the final head decides" do
-      early = [{"content-encoding", "gzip"}, {"content-range", "bytes 0-9/100"}]
-      final = [{"content-type", "text/plain"}]
-
+    test "an informational block is set aside, whatever its lines, and the final head decides",
+         %{ctx: ctx, raw: raw} do
       for status <- [100, 102, 103, 199] do
-        assert {:head, 200, ^final} =
-                 AttachedFetch.decision([
-                   {:status, status},
-                   {:headers, early},
-                   {:status, 200},
-                   {:headers, final},
-                   {:data, "body"}
-                 ])
+        {read, _sent} = raw_fetch(ctx, raw, "/informational-#{status}")
+
+        assert [%{kind: :head, status: 200, headers: headers} | _] = read, "#{status}"
+        assert {"content-type", "text/plain"} in headers
+        refute List.keymember?(headers, "content-encoding", 0)
+        refute List.keymember?(headers, "content-range", 0)
+        assert body_of(read) == "body"
+        assert List.last(read).kind == :end
       end
     end
 
-    test "a block a client takes as the final head is checked, whatever its status code" do
-      for status <- [100, 102, 103, 199],
-          {lines, sentence} <- [
-            {[{"content-encoding", "gzip"}], @encoded_sentence},
-            {[{"transfer-encoding", "gzip, chunked"}], @encoded_sentence},
-            {[{"content-range", "bytes 0-9/100"}], @partial_sentence}
-          ],
-          ending <- [[{:data, "key"}], []] do
-        assert {:refused, ^sentence} =
-                 AttachedFetch.decision([{:status, status}, {:headers, lines}] ++ ending)
+    test "a body after an informational block in a content coding is never relayed", %{
+      ctx: ctx,
+      raw: raw
+    } do
+      for status <- [100, 102, 103, 199] do
+        {read, _sent} = raw_fetch(ctx, raw, "/informational-body-#{status}")
+
+        assert [%{kind: :error}] = read, "#{status}"
+        refute inspect(read) =~ @secret
       end
     end
 
-    test "a final head is refused before any body, at any status from 200" do
-      for status <- [200, 204, 206, 302, 404, 599] do
-        assert {:refused, _sentence} =
-                 AttachedFetch.decision([
-                   {:status, status},
-                   {:headers, [{"content-encoding", "br"}]}
-                 ])
+    test "a final head is refused before any body, at any status from 200", %{
+      ctx: ctx,
+      raw: raw
+    } do
+      for status <- [200, 204, 302, 404, 599] do
+        {read, _sent} = raw_fetch(ctx, raw, "/encoded-#{status}")
+        assert [%{kind: :error, message: @encoded_sentence}] = read, "#{status}"
       end
 
-      assert {:refused, @partial_sentence} =
-               AttachedFetch.decision([{:status, 206}, {:headers, []}])
+      # A 206 is a part, whatever else its head says.
+      {read, _sent} = raw_fetch(ctx, raw, "/encoded-206")
+      assert [%{kind: :error, message: @partial_sentence}] = read
+
+      {read, _sent} = raw_fetch(ctx, raw, "/bare-206")
+      assert [%{kind: :error, message: @partial_sentence}] = read
     end
 
-    test "a 101, and a status outside 100..599, are refused at the status" do
-      assert {:refused, "HTTP request failed: an answer switching protocols is not relayed"} =
-               AttachedFetch.decision([{:status, 101}, {:headers, []}, {:data, "x"}])
+    test "a status outside 100..599 is refused at the status, and 599 is an answer", %{
+      ctx: ctx,
+      raw: raw
+    } do
+      # A status line of fewer than three digits is no answer the client
+      # reads at all.
+      for status <- [0, 99] do
+        {read, _sent} = raw_fetch(ctx, raw, "/status-#{status}")
 
-      for status <- [0, 99, 600, 999] do
-        assert {:refused, "HTTP request failed: an answer with no valid status is not relayed"} =
-                 AttachedFetch.decision([{:status, status}])
+        assert [
+                 %{
+                   kind: :error,
+                   type: "http_error",
+                   message: "HTTP request failed: invalid_status_line"
+                 }
+               ] =
+                 read,
+               "#{status}"
       end
 
-      assert {:head, 599, []} = AttachedFetch.decision([{:status, 599}, {:headers, []}])
+      for status <- [600, 999] do
+        {read, _sent} = raw_fetch(ctx, raw, "/status-#{status}")
+
+        assert [
+                 %{
+                   kind: :error,
+                   message: "HTTP request failed: an answer with no valid status is not relayed"
+                 }
+               ] = read,
+               "#{status}"
+      end
+
+      {read, _sent} = raw_fetch(ctx, raw, "/status-599")
+      assert [%{kind: :head, status: 599} | _] = read
+      assert List.last(read).kind == :end
     end
 
-    test "a trailer section decides nothing" do
-      assert {:head, 200, [{"x-kept", "kept"}]} =
-               AttachedFetch.decision([
-                 {:status, 200},
-                 {:headers, [{"x-kept", "kept"}]},
-                 {:data, "body"},
-                 {:trailers, [{"content-encoding", "gzip"}]},
-                 {:headers, [{"content-range", "bytes 0-9/100"}]}
-               ])
+    test "a trailer section decides nothing", %{ctx: ctx, raw: raw} do
+      {read, _sent} = raw_fetch(ctx, raw, "/trailer-coding")
+
+      assert [%{kind: :head, status: 200, headers: headers} | _] = read
+      assert {"x-kept", "kept"} in headers
+      assert body_of(read) == "body"
+      assert List.last(read).kind == :end
     end
   end
 
@@ -2019,7 +2093,7 @@ defmodule Opus.Host.AttachedFetchTest do
 
   describe "through the host listener" do
     setup do
-      listener = start_supervised!({HostListener, port: 0})
+      listener = start_supervised!({HostListener, bind: {127, 0, 0, 1}, port: 0, drain_ms: 5_000})
       {:ok, url: "http://127.0.0.1:#{HostListener.port(listener)}"}
     end
 

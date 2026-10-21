@@ -56,7 +56,7 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
     # window either way, and the entry must be gone afterwards.
     _result =
       Opus.Dispatch.run(ctx, @test_ref, %{"a" => 1, "b" => 2},
-        type: :reagent,
+        type: "reagent",
         execution_id: execution_id
       )
 
@@ -76,7 +76,7 @@ defmodule Locus.Runtime.ExecutorRegistrationTest do
 
         result =
           Opus.Dispatch.run(ctx, @test_ref, %{"a" => 2, "b" => 3},
-            type: :reagent,
+            type: "reagent",
             execution_id: execution_id
           )
 

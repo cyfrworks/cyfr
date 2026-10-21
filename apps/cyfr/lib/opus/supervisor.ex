@@ -4,7 +4,8 @@
 defmodule Opus.Supervisor do
   @moduledoc """
   The execution domain's processes: the slots, the attempt tree, the
-  background roots, the watches and sweeper, and the host API listener.
+  background roots, the watches and sweeper, the node's pin table and the
+  host API listener.
   `rest_for_one`, because the watches, the sweeper and the listener read
   the attempt registries and the slots before them, and the listener must
   never outlive a fresh attempt tree: a restart of either restarts every
@@ -69,10 +70,15 @@ defmodule Opus.Supervisor do
         Supervisor.child_spec(Opus.Sweeper, shutdown: 5_000),
         # Hears from each configured worker service every poll interval and
         # lapses what a boot it stopped hearing from, or saw replaced, was
-        # running; started only when `:worker_watch_enabled`, which follows
-        # `:execution_sweeper_enabled`. 5 s: its terminate releasing the
-        # claims it holds.
+        # running; started only when `:worker_watch_enabled` (default
+        # true). 5 s: its terminate releasing the claims it holds.
         Supervisor.child_spec(Opus.WorkerWatch, shutdown: 5_000),
+        # The node's table of the pins its attempts were answered
+        # (`Opus.Host.Egress`), which a redirect is checked against. Before
+        # the listener whose calls write it, so a restart of the table
+        # restarts the listener with it. 5 s: its stop, which holds no work
+        # in flight.
+        Supervisor.child_spec(Opus.Host.Egress.Pins, shutdown: 5_000),
         # The host API: where the worker services post their runners' host
         # calls, which each service verifies and relays, and their exit
         # reports. After the attempt tree

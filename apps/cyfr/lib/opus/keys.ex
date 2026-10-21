@@ -34,18 +34,16 @@ defmodule Opus.Keys do
 
   @key {__MODULE__, :root}
 
-  @doc "The worker root. Only CYFR holds it."
+  @doc """
+  The worker root. Only CYFR holds it. `mint/0` sets it at application
+  start, before any process that issues or verifies a key; a read before
+  that raises rather than mint a root no other process would share.
+  """
   @spec root() :: binary()
-  def root do
-    case :persistent_term.get(@key, nil) do
-      nil -> mint()
-      root -> root
-    end
-  end
+  def root, do: :persistent_term.get(@key)
 
   @doc false
-  # Set once at application start; the lazy path in `root/0` covers only a
-  # caller that beat the start.
+  # Set once at application start (`Cyfr.Application`).
   def mint do
     root =
       case Application.get_env(:cyfr, :locus_runtime_root) do
@@ -81,24 +79,21 @@ defmodule Opus.Keys do
   def attempt_keys(attempt) when is_map(attempt), do: WorkerAuth.attempt_keys(root(), attempt)
 
   @doc """
-  The generation assignments are issued under and host calls must present
-  (`generation/1` of the control plane's answer).
+  The generation assignments are issued under and host calls must present,
+  from the control plane's answer.
   """
   @spec generation() :: {:ok, pos_integer()} | {:error, :unavailable}
-  def generation, do: generation(Arca.ControlPlane.generation())
+  def generation, do: generation_of(Arca.ControlPlane.generation())
 
-  @doc """
-  The generation a control-plane answer (`Arca.ControlPlane.generation/0`)
-  issues and checks keys under: the claim's own, `1` for `:none` (a boot
-  that claims no control plane), and `{:error, :unavailable}` for anything
-  else, a refusal to read the claim included.
-  """
-  @spec generation(term()) :: {:ok, pos_integer()} | {:error, :unavailable}
-  def generation({:ok, generation}) when is_integer(generation) and generation > 0,
+  # The generation a control-plane answer (`Arca.ControlPlane.generation/0`)
+  # issues and checks keys under: the claim's own, `1` for `:none` (a boot
+  # that claims no control plane), and `{:error, :unavailable}` for anything
+  # else, a refusal to read the claim included.
+  defp generation_of({:ok, generation}) when is_integer(generation) and generation > 0,
     do: {:ok, generation}
 
-  def generation(:none), do: {:ok, 1}
-  def generation(_unknown), do: {:error, :unavailable}
+  defp generation_of(:none), do: {:ok, 1}
+  defp generation_of(_unknown), do: {:error, :unavailable}
 
   @doc """
   This member's identity in the cell: the boot every assignment it issues

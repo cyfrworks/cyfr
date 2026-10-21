@@ -163,7 +163,7 @@ defmodule Opus.StartRefusalTest do
 
     result =
       Opus.Dispatch.run(ctx, @ref, %{"a" => 1, "b" => 2},
-        type: :reagent,
+        type: "reagent",
         authority: authority(),
         execution_id: id
       )

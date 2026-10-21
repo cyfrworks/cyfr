@@ -378,7 +378,7 @@ defmodule Opus.Providers.TinctureTest do
   # binding its edge to the dependency and admitting `origins`.
   defp public_profile!(ctx, node, origins) do
     id = "prof_public_#{System.unique_integer([:positive])}"
-    {:ok, _ref, _type, component} = Opus.Admission.inspect_component(ctx, node)
+    {:ok, component, _ref} = Compendium.Component.resolve_component(ctx, node)
     {:ok, %{graph: activation}} = Compendium.Activation.resolve_verified(ctx, component)
 
     :ok =
@@ -410,14 +410,5 @@ defmodule Opus.Providers.TinctureTest do
           vault_refs: []
         }
       )
-  end
-
-  test "an action the tool does not declare falls to its catch-all" do
-    assert {:error, {:invalid_argument, message}} =
-             Tincture.handle("tincture", Sanctum.TestContext.local(:prism), %{
-               "action" => "invoke"
-             })
-
-    assert message =~ "Invalid tincture action"
   end
 end

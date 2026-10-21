@@ -28,9 +28,6 @@ defmodule Opus.FacadeTest do
     events_since: 3,
     feeds: 1,
     get: 2,
-    invoke_tincture: 3,
-    list: 1,
-    list: 2,
     list_by_request: 3,
     pause_turn_root: 3,
     release_turn_root: 3,
@@ -77,7 +74,6 @@ defmodule Opus.FacadeTest do
     # once the keeper's watch is gone, an exit the stop let through has
     # reached this process.
     Prima.Test.Wait.wait_until(fn -> keeper not in monitors(self()) end)
-    assert :ok = Opus.stop_lease_watch(nil)
   end
 
   # The processes monitoring `pid`.

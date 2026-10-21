@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
-defmodule Opus.MCPCutoverTest do
+defmodule Opus.MCPIngressTest do
   # The CLI/MCP ingress is data-driven: a profile roots the execution
   # under its consent, no profile refuses with consent guidance (nothing
   # runs), and selection never guesses. A rooted run runs on the
@@ -16,23 +16,23 @@ defmodule Opus.MCPCutoverTest do
   alias Sanctum.Test.ConsentFixtures
 
   @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
-  @node "reagent:local.cutover-math"
+  @node "reagent:local.ingress-math"
 
   setup do
     Arca.Cache.init()
     Cyfr.Test.Sandbox.setup!()
 
-    test_path = Path.join(System.tmp_dir!(), "mcp_cutover_#{:rand.uniform(100_000)}")
+    test_path = Path.join(System.tmp_dir!(), "mcp_ingress_#{:rand.uniform(100_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, test_path)
 
     ctx = %Context{
-      user_id: "cutover_user_#{:rand.uniform(100_000)}",
+      user_id: "ingress_user_#{:rand.uniform(100_000)}",
       athanor_id: Sanctum.TestContext.athanor_id(),
       scope: :athanor,
       permissions: MapSet.new([:execute]),
       authenticated: true,
-      request_id: "req_cutover",
+      request_id: "req_ingress",
       origin: :interactive
     }
 
@@ -40,10 +40,10 @@ defmodule Opus.MCPCutoverTest do
 
     {:ok, component} =
       Compendium.Registry.publish_bytes(admin_ctx, File.read!(@math_wasm_path), %{
-        name: "cutover-math",
+        name: "ingress-math",
         version: "0.1.0",
         type: "reagent",
-        description: "Cutover test component"
+        description: "MCP ingress test component"
       })
 
     on_exit(fn ->
@@ -80,7 +80,7 @@ defmodule Opus.MCPCutoverTest do
   end
 
   defp seed_profile(ctx, component, overrides \\ []) do
-    profile_id = Keyword.get(overrides, :id, "prof-cutover")
+    profile_id = Keyword.get(overrides, :id, "prof-ingress")
     label = Keyword.get(overrides, :label, "default")
 
     blob =
@@ -106,8 +106,8 @@ defmodule Opus.MCPCutoverTest do
         scope: :versionless,
         pinned_version: "",
         invoke_mode: :open_inert,
-        shape_digest: "sha256:shape-cutover",
-        commit_digest: "sha256:commit-cutover",
+        shape_digest: "sha256:shape-ingress",
+        commit_digest: "sha256:commit-ingress",
         resolved_policy: blob,
         activation: %{@node => Keyword.get(overrides, :digest, component.release_digest)},
         vault_refs: []
@@ -137,7 +137,7 @@ defmodule Opus.MCPCutoverTest do
     assert {:error, message} = run(ctx, %{})
     assert message =~ "Component compilation failed"
 
-    assert [%{profile_id: "prof-cutover"}] = entered()
+    assert [%{profile_id: "prof-ingress"}] = entered()
   end
 
   test "an explicit selector that matches nothing surfaces, never falls back", %{
@@ -157,22 +157,22 @@ defmodule Opus.MCPCutoverTest do
     component: component
   } do
     seed_profile(ctx, component)
-    seed_profile(ctx, component, id: "prof-cutover-2", label: "work")
+    seed_profile(ctx, component, id: "prof-ingress-2", label: "work")
 
     assert {:error, message} = run(ctx, %{})
     assert message =~ "profile_ambiguous"
-    assert message =~ "prof-cutover"
+    assert message =~ "prof-ingress"
 
     TwoServices.watch!()
     assert {:error, _} = run(ctx, %{"profile" => "work"})
-    assert [%{profile_id: "prof-cutover-2"}] = entered()
+    assert [%{profile_id: "prof-ingress-2"}] = entered()
   end
 
   test "consent drift surfaces the consent_required payload", %{ctx: ctx, component: component} do
     seed_profile(ctx, component, digest: "sha256:stale-grant")
 
     assert {:error, {:consent_required, payload}} = run(ctx, %{})
-    assert %{profile_id: "prof-cutover", current_revision: 1} = payload
+    assert %{profile_id: "prof-ingress", current_revision: 1} = payload
   end
 
   test "run_stream roots under the profile too", %{ctx: ctx, component: component} do
@@ -187,7 +187,7 @@ defmodule Opus.MCPCutoverTest do
              })
 
     wait_until(fn -> TwoServices.entered(id) != nil end, 30_000, "the run's attach")
-    assert %{profile_id: "prof-cutover"} = TwoServices.entered(id)
+    assert %{profile_id: "prof-ingress"} = TwoServices.entered(id)
 
     # The stream's run is not this test's to end: it closes on its own, its
     # attempt stops, and every runner exit the service reports is answered,

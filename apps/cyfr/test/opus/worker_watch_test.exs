@@ -246,7 +246,7 @@ defmodule Opus.WorkerWatchTest do
     # Exactly one writer's row stands. A complete that found the row
     # lapsed already is answered lost by an attempt that stops; one held
     # when it was checked, whose write the lapse beat, is answered the
-    # lapsed row (`Opus.Close.complete/4` answers a row closed before its
+    # lapsed row (`Opus.Close.complete/3` answers a row closed before its
     # result), a failure, never its output.
     case lapsed do
       [] ->

@@ -103,7 +103,33 @@ defmodule Opus.Host.EgressTest do
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
+
+    # Names resolve through the scripted resolver the application names
+    # (`Opus.Host.Egress`), restored to what the suite had once the test
+    # ends.
+    previous = Application.fetch_env(:cyfr, :egress_resolver)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, resolver} -> Application.put_env(:cyfr, :egress_resolver, resolver)
+        :error -> Application.delete_env(:cyfr, :egress_resolver)
+      end
+    end)
+
+    Application.put_env(:cyfr, :egress_resolver, Resolver)
     :ok
+  end
+
+  # `fun` with names resolving through `resolver`, then through the
+  # scripted `Resolver` again.
+  defp resolving_through(resolver, fun) do
+    Application.put_env(:cyfr, :egress_resolver, resolver)
+
+    try do
+      fun.()
+    after
+      Application.put_env(:cyfr, :egress_resolver, Resolver)
+    end
   end
 
   defp pin(fixture, url, purpose, opts \\ []) do
@@ -114,10 +140,9 @@ defmodule Opus.Host.EgressTest do
 
     caller = Keyword.get_lazy(opts, :caller, fn -> AttemptFixtures.caller(fixture) end)
 
-    Egress.pin(caller, request,
-      now: Keyword.get_lazy(opts, :now, &now/0),
-      resolver: Keyword.get(opts, :resolver, Resolver)
-    )
+    resolving_through(Keyword.get(opts, :resolver, Resolver), fn ->
+      Egress.pin(caller, request)
+    end)
   end
 
   defp denials(fixture) do
@@ -506,8 +531,9 @@ defmodule Opus.Host.EgressTest do
 
       assert {:ok, request} = PinnedTarget.read_request(args)
 
+      before = now()
+      answer = Egress.pin(AttemptFixtures.caller(fixture), request)
       at = now()
-      answer = Egress.pin(AttemptFixtures.caller(fixture), request, now: at, resolver: Resolver)
       expected = Jason.decode!(vector["answer"])
 
       case WorkerWire.read_answer(expected) do
@@ -515,7 +541,7 @@ defmodule Opus.Host.EgressTest do
           assert {:ok, %PinnedTarget{} = pin} = answer, vector["name"]
           pinned = PinnedTarget.to_wire(pin)
           assert Map.drop(pinned, ["id", "expires_at"]) == Map.drop(wire, ["id", "expires_at"])
-          assert pin.expires_at == at + @window
+          assert pin.expires_at in (before + @window)..(at + @window)
           assert wire["expires_at"] == vector["fields"]["ts"] + @window
           assert PinnedTarget.valid_id?(pin.id)
           Map.put(pins, wire["id"], {vector["name"], pin.id})
@@ -666,7 +692,8 @@ defmodule Opus.Host.EgressTest do
       Resolver.script("api.example.test", :inet, [{203, 0, 113, 10}])
       Resolver.script("other.example.test", :inet, [{203, 0, 113, 12}])
 
-      assert {:ok, %PinnedTarget{id: from}} = pin(fixture, "https://api.example.test/a", :fetch)
+      assert {:ok, %PinnedTarget{id: from, expires_at: expires_at}} =
+               pin(fixture, "https://api.example.test/a", :fetch)
 
       for url <- ["https://API.example.test/b", "https://api.example.test:443/b"] do
         assert {:ok, %PinnedTarget{host: "api.example.test", port: 443}} =
@@ -691,19 +718,20 @@ defmodule Opus.Host.EgressTest do
                  pin(fixture, "https://api.example.test/b", :redirect, from: id)
       end
 
-      # One remembered past its own expiry, while its request may still be
-      # answered, and no longer after that.
-      assert {:ok, _pin} =
-               pin(fixture, "https://api.example.test/c", :redirect,
-                 from: from,
-                 now: now() + @window + 1
-               )
+      # Kept a window past its own expiry, while its request may still be
+      # answered; a row past its keep is refused, and the sweep drops it.
+      key = {AttemptFixtures.caller(fixture).attempt, from}
+      assert [{^key, _origin, keep_until}] = :ets.lookup(Egress, key)
+      assert keep_until == expires_at + @window
+
+      true = :ets.update_element(Egress, key, {3, now() - 1})
 
       assert {:error, :redirect_credentials} =
-               pin(fixture, "https://api.example.test/c", :redirect,
-                 from: from,
-                 now: now() + 3 * @window
-               )
+               pin(fixture, "https://api.example.test/c", :redirect, from: from)
+
+      send(Egress.Pins, :sweep)
+      :sys.get_state(Egress.Pins)
+      assert :ets.lookup(Egress, key) == []
     end
 
     test "that its names refuse is never resolved" do
@@ -761,22 +789,6 @@ defmodule Opus.Host.EgressTest do
       assert {:error, :redirect_credentials} =
                pin(fixture, "http://[2001:db8::20]:8081/next", :redirect, from: from)
     end
-
-    test "from a pin remembered under another shape is refused, and the sweep drops it" do
-      fixture = attached!(["*"])
-      caller = AttemptFixtures.caller(fixture)
-      Resolver.script("api.example.test", :inet, [{203, 0, 113, 10}])
-      key = {caller.attempt, "pin_old_shape"}
-
-      true = :ets.insert(Egress, {key, "api.example.test", "https", now() + @window})
-
-      assert {:error, :redirect_credentials} =
-               pin(fixture, "https://api.example.test/b", :redirect, from: "pin_old_shape")
-
-      send(Egress.Pins, :sweep)
-      :sys.get_state(Egress.Pins)
-      assert :ets.lookup(Egress, key) == []
-    end
   end
 
   describe "a refusal" do
@@ -819,11 +831,7 @@ defmodule Opus.Host.EgressTest do
       Resolver.script("api.example.test", :inet, [{203, 0, 113, 10}])
 
       attached = fn url ->
-        Egress.pin(
-          AttemptFixtures.caller(fixture),
-          %{url: url, purpose: :attached, from: nil},
-          resolver: Resolver
-        )
+        Egress.pin(AttemptFixtures.caller(fixture), %{url: url, purpose: :attached, from: nil})
       end
 
       # The control plane's own pin is decided as a guest's fetch is.

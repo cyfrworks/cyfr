@@ -23,12 +23,12 @@ defmodule Opus.Provider do
   name is `"opus"` and its resources are `opus://executions/…`.
   It declares no stream.
 
-  Implements the ToolProvider protocol (tools/0 and handle/3)
-  which the operation table validates at boot.
+  Implements `Prima.Provider` (`tools/0` and `handle/3`), whose operation
+  table is validated at boot.
 
-  ## Simplified Lifecycle
+  ## Lifecycle
 
-  Components must be registered before execution. The workflow is:
+  Components are registered before they run:
 
       Develop in components/ → Register via `cyfr register` → Execute by name
   """
@@ -48,11 +48,6 @@ defmodule Opus.Provider do
   # ============================================================================
   # Resources
   # ============================================================================
-
-  @impl true
-  def resources do
-    []
-  end
 
   @doc """
   Returns the execution resource templates (RFC 6570 URI templates). A
@@ -124,7 +119,7 @@ defmodule Opus.Provider do
           reference: record.reference,
           component_type: Atom.to_string(record.component_type),
           component_digest: record.component_digest,
-          started_at: record.started_at && DateTime.to_iso8601(record.started_at),
+          started_at: DateTime.to_iso8601(record.started_at),
           completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
           duration_ms: record.duration_ms,
           error: record.error,
@@ -154,9 +149,6 @@ defmodule Opus.Provider do
   defp get_execution_logs_resource(ctx, exec_id) do
     case Record.get(ctx, exec_id) do
       {:ok, record} ->
-        # Format execution record as logs.
-        # In the future, this will also include component-emitted debug
-        # output via the planned `cyfr:debug/log` WIT interface.
         logs = format_execution_logs(record)
         {:ok, %{content: logs, mimeType: "text/plain"}}
 
@@ -172,13 +164,10 @@ defmodule Opus.Provider do
   # arrives on args, but only ever host-injected: `call_in_chain` drops
   # the guest's copy before re-adding the lineage it was told. Absent
   # means an external-plane call, which keeps the tenant-wide view.
-  #
-  # A legacy row with no root stamped fails closed for in-chain callers —
-  # unattributable lineage is not permission to reach across chains.
   defp in_caller_chain?(record, args) do
     case args["root_execution_id"] do
       root when is_binary(root) and root != "" ->
-        record.id == root or Map.get(record, :root_execution_id) == root
+        record.id == root or record.root_execution_id == root
 
       _ ->
         true
@@ -216,7 +205,7 @@ defmodule Opus.Provider do
       "Status: #{record.status}",
       "Component Type: #{record.component_type}",
       "Component Digest: #{record.component_digest || "unknown"}",
-      "Started: #{Prima.Time.iso8601(record.started_at) || "N/A"}",
+      "Started: #{Prima.Time.iso8601(record.started_at)}",
       "Completed: #{Prima.Time.iso8601(record.completed_at) || "N/A"}",
       "Duration: #{record.duration_ms || 0}ms",
       "",
@@ -255,34 +244,23 @@ defmodule Opus.Provider do
   end
 
   # ============================================================================
-  # ToolProvider Protocol (validated at runtime)
+  # Prima.Provider (validated at boot)
   # ============================================================================
 
   @impl true
   def tools do
     alias Prima.{Arg, Operation}
-    # External-plane only, and `host: :intercepted`: a running
-    # component's execution request never reaches the catalog — the
-    # formula host intercepts it and runs it as a CHILD of the
-    # chain's authority (`Opus.run_child/5`), and an approved
-    # card's is run the same way by the assistant. The annotation
-    # says so, and every surface that offers actions to a chain
-    # reads it from here.
-    # Slot diagnostics are tenant-operational: global counters
-    # with no chain grain to scope them to. Classify it out of the
-    # in-chain plane rather than serve a number that means nothing
-    # to the caller.
-    # Releasing every athanor's slots is the operator's lever
-    # alone. Until the in-flight executions it released drain, the
-    # node runs OVER-admitted by that many slots — the recovery
-    # trades wedged slots for a temporary over-cap.
-    # run action params
-    # list action params
-    # logs/cancel action params
-    # verify block (optional signer validation)
+
     [
       Operation.tool(
         [
+          # External-plane only, and `host: :intercepted`: a running
+          # component's execution request never reaches the catalog — the
+          # formula host intercepts it and runs it as a CHILD of the
+          # chain's authority (`Opus.run_child/5`), and an approved
+          # card's is run the same way by the assistant. The annotation
+          # says so, and every surface that offers actions to a chain
+          # reads it from here.
           Operation.new(
             "execution",
             "run",
@@ -420,11 +398,19 @@ defmodule Opus.Provider do
             planes: [:external, :in_chain],
             permission: :execute
           ),
+          # Slot diagnostics are tenant-operational: global counters
+          # with no chain grain to scope them to, so the operation is out
+          # of the in-chain plane rather than serving a number that means
+          # nothing to the caller.
           Operation.new("execution", "status", "Status execution", [],
             kind: :read,
             planes: [:external],
             permission: :execute
           ),
+          # Releasing every athanor's slots is the operator's lever
+          # alone. Until the in-flight executions it released drain, the
+          # node runs OVER-admitted by that many slots — the recovery
+          # trades wedged slots for a temporary over-cap.
           Operation.new("execution", "force_release", "Force release execution", [],
             scope: :platform,
             kind: :destructive,
@@ -479,11 +465,6 @@ defmodule Opus.Provider do
   # Tool Handlers - Action-based dispatch
   # ============================================================================
 
-  # A guest-planed context reaching run/run_stream would re-root a fresh
-  # Authority from an in-chain call — the confused-deputy shape run_child
-  # exists to prevent. Components invoke children through the formula host,
-  # which intercepts these actions before dispatch; nothing legitimate arrives
-  # here guest-planed. Fail closed regardless of the identity's permissions.
   @doc """
   What an execution read's answer carries (the `logs` and `list`
   operations' `sources:` declaration, `Prima.Operation.answer_sources/3`):
@@ -514,6 +495,11 @@ defmodule Opus.Provider do
   defp answered_ids(%{execution_id: id}) when is_binary(id), do: [id]
   defp answered_ids(_answer), do: []
 
+  # A guest-planed context reaching run/run_stream would re-root a fresh
+  # Authority from an in-chain call — the confused-deputy shape run_child
+  # exists to prevent. Components invoke children through the formula host,
+  # which intercepts these actions before dispatch; nothing legitimate arrives
+  # here guest-planed. Fail closed regardless of the identity's permissions.
   @impl true
   def handle("execution", %Context{plane: :guest}, %{"action" => action})
       when action in ["run", "run_stream"] do
@@ -532,7 +518,7 @@ defmodule Opus.Provider do
   # place.
   def handle("execution", %Context{} = ctx, %{"action" => action} = args)
       when action in ["run", "run_stream"] do
-    reference = args["reference"] || ""
+    reference = args["reference"]
 
     cond do
       Prima.AgentRef.agent_ref?(reference) ->
@@ -561,10 +547,10 @@ defmodule Opus.Provider do
         %{
           execution_id: record.id,
           request_id: record.request_id,
-          parent_execution_id: Map.get(record, :parent_execution_id),
+          parent_execution_id: record.parent_execution_id,
           status: Atom.to_string(record.status),
           reference: record.reference,
-          component_type: record.component_type && to_string(record.component_type),
+          component_type: Atom.to_string(record.component_type),
           started_at: DateTime.to_iso8601(record.started_at),
           completed_at: record.completed_at && DateTime.to_iso8601(record.completed_at),
           duration_ms: record.duration_ms,
@@ -575,11 +561,8 @@ defmodule Opus.Provider do
     {:ok, %{executions: executions, count: length(executions), user_id: ctx.user_id}}
   end
 
-  # Logs action — retrieve execution record and a text rendering of it.
-  # Today the `logs` field is a synthesized prose dump of the record's
-  # metadata. In the future, component-emitted debug output (via the
-  # planned `cyfr:debug/log` WIT interface, scoped per component world)
-  # will be appended to that field.
+  # Logs action — the execution record and a text rendering of its
+  # metadata in `logs`.
   def handle(
         "execution",
         %Context{} = ctx,
@@ -616,10 +599,6 @@ defmodule Opus.Provider do
     end
   end
 
-  def handle("execution", _ctx, %{"action" => "logs"}) do
-    {:error, {:invalid_argument, "Missing required argument: execution_id"}}
-  end
-
   # Cancel action - cancel a running execution (kills process + updates record)
   def handle(
         "execution",
@@ -645,10 +624,6 @@ defmodule Opus.Provider do
           {:error, "Failed to cancel execution"}
       end
     end
-  end
-
-  def handle("execution", _ctx, %{"action" => "cancel"}) do
-    {:error, {:invalid_argument, "Missing required argument: execution_id"}}
   end
 
   # Status action - execution slot diagnostics
@@ -681,10 +656,6 @@ defmodule Opus.Provider do
       when is_binary(uri),
       do: read_resource(ctx, uri)
 
-  def handle("execution", _ctx, %{"action" => "read_resource"}) do
-    {:error, {:invalid_argument, "Missing required argument: uri"}}
-  end
-
   # Which runs a grant admitted: the profile is read through its owner
   # first, in the caller's athanor, so another athanor's profile or none
   # at all is refused, and a profile of this athanor with no runs answers
@@ -707,24 +678,10 @@ defmodule Opus.Provider do
     {:error, {:invalid_argument, "Missing required argument: profile_id"}}
   end
 
-  # Invalid action
-  def handle("execution", _ctx, %{"action" => action}) do
-    {:error, {:invalid_argument, "Invalid execution action: #{action}"}}
-  end
-
-  # Missing action
-  def handle("execution", _ctx, _args) do
-    {:error, {:invalid_argument, "Missing required argument: action"}}
-  end
-
-  def handle(tool, _ctx, _args) do
-    {:error, "Unknown tool: #{tool}"}
-  end
-
   # Start the execution in the background and answer its id and stream URL;
   # the caller follows the SSE endpoint for intermediate events.
   defp start_root("run_stream", ctx, args) do
-    reference = args["reference"] || ""
+    reference = args["reference"]
     input = args["input"] || %{}
 
     execution_id = Record.generate_id()
@@ -768,7 +725,7 @@ defmodule Opus.Provider do
 
   # Run the component to completion as a root.
   defp start_root("run", ctx, args) do
-    reference = args["reference"] || ""
+    reference = args["reference"]
     input = args["input"] || %{}
 
     # Build options for the root run
@@ -896,19 +853,14 @@ defmodule Opus.Provider do
 
   defp format_root_result(other), do: other
 
-  # The execution slots' status (`Prima.Slots.status/1`) in the operator's
-  # vocabulary: its keys are athanors, so the per-key cap and counts are
-  # presented as the per-tenant ones this tool has always shown.
-  defp slot_status do
-    {keys, status} = Map.pop!(Prima.Slots.status(@slots), :keys)
-    {key_max, status} = Map.pop!(status, :key_max)
-    Map.merge(status, %{tenant_max: key_max, tenants: keys})
-  end
+  # The execution slots' status (`Prima.Slots.status/1`), in the slots'
+  # own keys: a key is an athanor, `key_max` its per-athanor cap.
+  defp slot_status, do: Prima.Slots.status(@slots)
 
   # The status is global: every athanor currently executing, with live
-  # counts and holder pids. The server's own contexts keep the full
-  # diagnostic; a person gets the shared totals plus the count of the
-  # athanor in focus — other athanors' identifiers and activity levels are
+  # counts, holder pids and unreaped kills. The server's own contexts keep
+  # the full diagnostic; a person gets the shared totals plus the counts of
+  # the athanor in focus — other athanors' identifiers and activity levels are
   # not theirs to enumerate. A platform administrator is answered as any
   # person is: their capability is over the instance, whose slots the
   # totals describe, and not a seat in the athanors holding them.
@@ -916,8 +868,9 @@ defmodule Opus.Provider do
 
   defp scoped_slot_status(%Context{} = ctx, status) do
     status
-    |> Map.drop([:holders, :tenants])
-    |> Map.put(:tenant_active, Map.get(status.tenants, ctx.athanor_id, 0))
+    |> Map.drop([:holders, :keys, :unreaped])
+    |> Map.put(:key_active, Map.get(status.keys, ctx.athanor_id, 0))
+    |> Map.put(:key_unreaped, Map.get(status.unreaped, ctx.athanor_id, 0))
   end
 
   # Build the root run's options from MCP args
@@ -957,8 +910,7 @@ defmodule Opus.Provider do
       reached_outside: Record.reached_outside(ctx, meta.execution_id),
       # The tree's ledger as its root's terminal write left it: what its
       # result carries into whoever launched it.
-      sources:
-        result |> Map.get(:sources, [Prima.Source.outside(nil)]) |> Prima.Source.to_json_list()
+      sources: Prima.Source.to_json_list(result.sources)
     }
   end
 

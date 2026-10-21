@@ -30,6 +30,7 @@ defmodule Opus.AttemptMaskingTest do
   @token "ya29.token-0123456789"
   @field @token <> "-and-field"
   @redacted "[REDACTED]"
+  @lapsed "Execution terminated: runner stopped without cleanup"
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -190,7 +191,12 @@ defmodule Opus.AttemptMaskingTest do
 
     assert Enum.map(emitted(live), & &1["text"]) == ["held "]
     assert %{"error" => "lost"} = push(fixture, %{"type" => "note"})
-    assert Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id).status == "running"
+
+    # Its row lapses, with the lapse's sentence and nothing it held.
+    row = Arca.Repo.get!(Arca.Schemas.Execution, fixture.execution_id)
+    assert %{status: "failed", error_message: @lapsed} = row
+    refute_unmasked(row)
+    refute_unmasked(event_rows(ctx, fixture.execution_id))
   end
 
   test "its status names the attempt and its claim, and nothing it masks or holds back",

@@ -3,7 +3,7 @@
 
 defmodule Opus.TinctureTest do
   @moduledoc """
-  `Opus.invoke_tincture/3`: a tincture invoking one of its
+  `Opus.Tincture.invoke/3`: a tincture invoking one of its
   dependencies, rooted at the profile its route selects.
 
   The route decides the profile and nothing else does: a public profile
@@ -108,7 +108,7 @@ defmodule Opus.TinctureTest do
   # binds its edge to the dependency.
   defp profile!(ctx, node, kind, status \\ :active) do
     id = "prof_#{kind}_#{System.unique_integer([:positive])}"
-    {:ok, _ref, _type, component} = Opus.Admission.inspect_component(ctx, node)
+    {:ok, component, _ref} = Compendium.Component.resolve_component(ctx, node)
     {:ok, %{graph: activation}} = Compendium.Activation.resolve_verified(ctx, component)
 
     :ok =
@@ -168,7 +168,7 @@ defmodule Opus.TinctureTest do
       ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
 
       assert {:ok, result} =
-               Opus.invoke_tincture(ctx, args("tinc-owner", :protected), :protected)
+               Opus.Tincture.invoke(ctx, args("tinc-owner", :protected), :protected)
 
       assert result.status == :completed
       assert is_binary(result.execution_id)
@@ -183,7 +183,7 @@ defmodule Opus.TinctureTest do
       worker!()
 
       assert {:error, %Prima.Refusal{class: :consent_required, reason: :no_profile} = refusal} =
-               Opus.invoke_tincture(ctx, args("tinc-pub-only", :protected), :protected)
+               Opus.Tincture.invoke(ctx, args("tinc-pub-only", :protected), :protected)
 
       assert refusal.message == Prima.Refusal.message(:consent_required)
       assert ScriptedWorker.calls() == []
@@ -199,7 +199,7 @@ defmodule Opus.TinctureTest do
       assert ctx.authenticated
 
       assert {:error, %Prima.Refusal{class: :not_found}} =
-               Opus.invoke_tincture(ctx, args("tinc-owner-only", :public), :public)
+               Opus.Tincture.invoke(ctx, args("tinc-owner-only", :public), :public)
 
       assert ScriptedWorker.calls() == []
     end
@@ -223,14 +223,14 @@ defmodule Opus.TinctureTest do
       # A public path that is not a person at a page is programmatic, and
       # a public profile that names it not is asked to grant again.
       assert {:error, %Prima.Refusal{class: :consent_required}} =
-               Opus.invoke_tincture(
+               Opus.Tincture.invoke(
                  Sanctum.TestContext.via(anonymous, :api),
                  args("tinc-public", :public),
                  :public
                )
 
       assert {:ok, %{status: :completed}} =
-               Opus.invoke_tincture(anonymous, args("tinc-public", :public), :public)
+               Opus.Tincture.invoke(anonymous, args("tinc-public", :public), :public)
 
       # The run is the public identity's, in the tincture's own athanor.
       assert [%{authority: authority}] = ScriptedWorker.calls()
@@ -244,7 +244,7 @@ defmodule Opus.TinctureTest do
 
       # An address naming no athanor is not found, whatever the caller's.
       assert {:error, %Prima.Refusal{class: :not_found}} =
-               Opus.invoke_tincture(
+               Opus.Tincture.invoke(
                  ctx,
                  Map.put(args("tinc-elsewhere", :public), "athanor", "no-such-athanor"),
                  :public
@@ -318,7 +318,7 @@ defmodule Opus.TinctureTest do
       :erlang.trace(self(), true, [:call, {:tracer, collector}])
 
       result =
-        Opus.invoke_tincture(
+        Opus.Tincture.invoke(
           ctx,
           Map.put(args("tinc-across", :public), "athanor", other.slug),
           :public
@@ -368,7 +368,7 @@ defmodule Opus.TinctureTest do
       ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
 
       assert {:ok, %{status: :completed, execution_id: execution_id}} =
-               Opus.invoke_tincture(ctx, args("tinc-seeded", :protected), :protected)
+               Opus.Tincture.invoke(ctx, args("tinc-seeded", :protected), :protected)
 
       # Its static dependency is an invoke, whose result may carry every
       # class; the outside source names nothing.
@@ -384,7 +384,7 @@ defmodule Opus.TinctureTest do
       ScriptedWorker.fresh_limits!(ctx, [@dep_ref])
 
       assert {:ok, %{status: :completed, execution_id: execution_id}} =
-               Opus.invoke_tincture(ctx, args("tinc-narrow", :protected), :protected)
+               Opus.Tincture.invoke(ctx, args("tinc-narrow", :protected), :protected)
 
       assert_seed(ctx, execution_id, [Prima.Source.outside(nil)])
     end
@@ -397,7 +397,7 @@ defmodule Opus.TinctureTest do
       worker!()
 
       assert {:error, %Prima.Refusal{class: :consent_required}} =
-               Opus.invoke_tincture(ctx, args("tinc-stale", :protected), :protected)
+               Opus.Tincture.invoke(ctx, args("tinc-stale", :protected), :protected)
 
       assert ScriptedWorker.calls() == []
     end
@@ -412,7 +412,7 @@ defmodule Opus.TinctureTest do
               %Prima.Refusal{
                 class: :consent_required,
                 reason: {:profile_unavailable, :needs_consent}
-              }} = Opus.invoke_tincture(ctx, args("tinc-reconsent", :protected), :protected)
+              }} = Opus.Tincture.invoke(ctx, args("tinc-reconsent", :protected), :protected)
 
       assert ScriptedWorker.calls() == []
     end
@@ -423,7 +423,7 @@ defmodule Opus.TinctureTest do
       worker!()
 
       assert {:error, %Prima.Refusal{class: :not_found}} =
-               Opus.invoke_tincture(ctx, args("tinc-unpublished", :public), :public)
+               Opus.Tincture.invoke(ctx, args("tinc-unpublished", :public), :public)
     end
 
     # One outage and one call per test: on PostgreSQL the failed read
@@ -442,7 +442,7 @@ defmodule Opus.TinctureTest do
         Arca.Repo.query!("ALTER TABLE components RENAME TO components_unavailable")
 
         assert {:error, %Prima.Refusal{class: :unavailable, reason: :unavailable}} =
-                 Opus.invoke_tincture(ctx, args("tinc-facts-out", unquote(route)), unquote(route))
+                 Opus.Tincture.invoke(ctx, args("tinc-facts-out", unquote(route)), unquote(route))
 
         assert ScriptedWorker.calls() == []
       end
@@ -458,7 +458,7 @@ defmodule Opus.TinctureTest do
         Arca.Repo.query!("ALTER TABLE profiles RENAME TO profiles_unavailable")
 
         assert {:error, %Prima.Refusal{class: :unavailable, reason: :unavailable}} =
-                 Opus.invoke_tincture(ctx, args(unquote(name), :public), :public)
+                 Opus.Tincture.invoke(ctx, args(unquote(name), :public), :public)
 
         assert ScriptedWorker.calls() == []
       end
@@ -469,7 +469,7 @@ defmodule Opus.TinctureTest do
 
       for route <- [:public, :protected] do
         assert {:error, %Prima.Refusal{class: :not_found}} =
-                 Opus.invoke_tincture(ctx, args("tinc-missing", route), route)
+                 Opus.Tincture.invoke(ctx, args("tinc-missing", route), route)
       end
     end
   end
@@ -482,7 +482,7 @@ defmodule Opus.TinctureTest do
       for route <- [:public, :protected] do
         assert {:error,
                 %Prima.Refusal{class: :forbidden, reason: {:guest_plane_call, "tincture"}}} =
-                 Opus.invoke_tincture(guest, args("tinc-any", route), route)
+                 Opus.Tincture.invoke(guest, args("tinc-any", route), route)
       end
     end
 
@@ -497,7 +497,7 @@ defmodule Opus.TinctureTest do
       assert {:error,
               %Prima.Refusal{class: :invalid_argument, reason: {:invalid_reference, _}} =
                 refusal} =
-               Opus.invoke_tincture(
+               Opus.Tincture.invoke(
                  ctx,
                  Map.put(args("tinc-empty-ref", :protected), "reference", ""),
                  :protected
@@ -507,13 +507,13 @@ defmodule Opus.TinctureTest do
       assert ScriptedWorker.calls() == []
     end
 
-    test "with no worker service answering, the engine is not ready", %{ctx: ctx} do
+    test "with no worker service answering, execution is unavailable", %{ctx: ctx} do
       node = tincture!(ctx, "tinc-no-engine")
       _owner = profile!(ctx, node, :owner)
       Application.put_env(:cyfr, :locus_runtime_workers, [])
 
-      assert {:error, %Prima.Refusal{class: :unavailable, reason: :engine_starting}} =
-               Opus.invoke_tincture(ctx, args("tinc-no-engine", :protected), :protected)
+      assert {:error, %Prima.Refusal{class: :unavailable, reason: :execution_unavailable}} =
+               Opus.Tincture.invoke(ctx, args("tinc-no-engine", :protected), :protected)
     end
   end
 
@@ -543,7 +543,7 @@ defmodule Opus.TinctureTest do
       worker!()
 
       assert {:error, %Prima.Refusal{class: :consent_required}} =
-               Opus.invoke_tincture(ctx, args("tinc-telemetry", :protected), :protected)
+               Opus.Tincture.invoke(ctx, args("tinc-telemetry", :protected), :protected)
 
       assert_receive {^ref, [:cyfr, :opus, :tincture, :invoke, :start], _, start}
       assert start.tincture_ref == node

@@ -18,7 +18,7 @@ defmodule Opus.Providers.Tincture do
   authority — and `invoke_protected` works in the caller's own athanor. Every surface — the HTTP tincture endpoint, the
   console shell's iframe bridge and `/mcp` — reaches the invocation through
   the gate, which authorizes, casts and logs the call once;
-  `Opus.invoke_tincture/3` does the rest. Neither action is reachable
+  `Opus.Tincture.invoke/3` does the rest. Neither action is reachable
   from a running chain.
   """
 
@@ -31,12 +31,6 @@ defmodule Opus.Providers.Tincture do
 
   @impl true
   def service, do: "opus"
-
-  @impl true
-  def resources, do: []
-
-  @impl true
-  def resource_templates, do: []
 
   @impl true
   def tools do
@@ -104,10 +98,6 @@ defmodule Opus.Providers.Tincture do
   @impl true
   def handle("tincture", %Context{} = ctx, %{"action" => action} = args)
       when is_map_key(@routes, action) do
-    Opus.invoke_tincture(ctx, args, Map.fetch!(@routes, action))
+    Opus.Tincture.invoke(ctx, args, Map.fetch!(@routes, action))
   end
-
-  def handle("tincture", _ctx, _args),
-    do:
-      {:error, {:invalid_argument, Prima.Provider.invalid_action("tincture", Map.keys(@routes))}}
 end

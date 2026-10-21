@@ -31,7 +31,7 @@ defmodule Opus.StepSpansTest do
 
     :telemetry.attach_many(
       handler,
-      StepSpans.events(),
+      StepBench.span_events(),
       fn event, measurements, metadata, _config ->
         send(test, {:span, event, measurements, metadata})
       end,
@@ -48,7 +48,7 @@ defmodule Opus.StepSpansTest do
 
       # The chat step names its child; the catalyst's `describe` does not.
       step =
-        for event <- StepSpans.events() do
+        for event <- StepBench.span_events() do
           assert_receive {:span, ^event, measurements, %{execution_id: id} = metadata}
                          when is_binary(id)
 
