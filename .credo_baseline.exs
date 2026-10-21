@@ -40,7 +40,6 @@
    "System.cmd", 1},
   {Credo.Check.Warning.LeakyEnvironment, "apps/prima/test/prima/component_features_test.exs",
    "System.cmd", 2},
-  {Credo.Check.Warning.MixEnv, "apps/cyfr/lib/mix/tasks/cyfr.bench.step.ex", "Mix.env", 2},
   {Credo.Check.Warning.UnsafeToAtom, "apps/arca/lib/arca/tool_grant_storage.ex",
    ":erlang.binary_to_atom", 1},
   {Credo.Check.Warning.UnsafeToAtom, "apps/arca/test/arca/decision_log_test.exs",
