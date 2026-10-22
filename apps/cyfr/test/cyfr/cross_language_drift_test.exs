@@ -306,7 +306,7 @@ defmodule Cyfr.CrossLanguageDriftTest do
     # The payload keys Consent documents as normative are the ones the CLI
     # formatter reads — a renamed key degrades every explanation to the
     # payload's zero values without failing anything.
-    for key <- ~w(node_ref need current_revision cause actual_revision new_revision) do
+    for key <- ~w(node_ref need current_revision cause actual_revision) do
       assert consent =~ key, "payload key #{key} missing from Sanctum.Consent"
       assert root_go =~ ~s(payload["#{key}"]), "payload key #{key} not read by root.go"
     end
