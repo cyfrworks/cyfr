@@ -82,9 +82,9 @@ defmodule Compendium.ProvenanceTest do
 
     # A word from outside the vocabulary raises rather than minting a
     # label. The compiler refuses a literal call; what this guards is a
-    # word that reaches it at runtime, as a stored row's would.
-    outside = String.to_atom("shipped")
-    assert_raise FunctionClauseError, fn -> Provenance.label(outside) end
+    # word that reaches it at runtime, as a stored row's would, so the
+    # call is dynamic.
+    assert_raise FunctionClauseError, fn -> apply(Provenance, :label, [:shipped]) end
   end
 
   test "shipped_versions/2 reads the release catalog from the seed", %{ctx: _ctx} do
