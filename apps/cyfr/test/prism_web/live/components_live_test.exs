@@ -447,16 +447,13 @@ defmodule PrismWeb.ComponentsLiveTest do
   end
 
   describe "a component whose dependency is stored damaged" do
-    # The page's setup plan reads the component's own manifest, so it
-    # still offers to ask for the grant; the grant plan reads the closure,
-    # finds the dependency's stored manifest damaged, and the sheet opens
-    # naming that damage, with no rows and nothing to confirm. A commit
-    # over it is refused too (`Sanctum.Consent.PlanTest`).
+    # Inspecting the component walks its dependencies and finds one stored
+    # damaged: the card says so in the detail's place and offers no grant.
+    # A grant over it is refused too (`Sanctum.Consent.PlanTest`).
     @damaged_dep "reagent:local.shelf-damaged-dep"
     @damaged_app "reagent:local.shelf-damaged-app"
 
-    test "the grant opens naming the damaged dependency, with nothing to confirm",
-         %{conn: conn, ctx: ctx} do
+    test "the card shows the damage and offers no grant", %{conn: conn, ctx: ctx} do
       ship_component!(ctx, "shelf-damaged-dep", %{
         "needs" => %{
           "api_key" => %{
@@ -484,17 +481,15 @@ defmodule PrismWeb.ComponentsLiveTest do
 
       {view, _html} = mount_athanor(conn, "/components")
       render_click(view, "toggle_expand", %{"ref" => @damaged_app})
-      view |> element("button[phx-click=open_consent]", "Grant access") |> render_click()
       render(view)
 
       assert has_element?(
                view,
-               ~s(#system-layer-dialog [data-test="grant-unresolved"]),
-               "The dependency #{@damaged_dep} is stored damaged and cannot be granted."
+               ~s([data-test="detail-refused"]),
+               Prima.Refusal.message({:corrupt, {:manifest, @damaged_dep}})
              )
 
-      refute has_element?(view, ~s(#system-layer-dialog [data-test="grant-rows"]))
-      assert has_element?(view, ~s(#system-layer-dialog [data-test="prompt-confirm"][disabled]))
+      refute has_element?(view, "button[phx-click=open_consent]")
       assert {:ok, []} = Sanctum.Consent.profiles(ctx, @damaged_app)
 
       Cyfr.Test.Sandbox.end_views()

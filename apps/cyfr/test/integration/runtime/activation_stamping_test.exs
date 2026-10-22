@@ -88,29 +88,25 @@ defmodule Locus.Runtime.ActivationStampingTest do
     end
   end
 
-  test "an unresolvable activation leaves the execution untouched", %{ctx: ctx} do
-    # Erase the probe's release digest: its activation is now incomplete.
+  test "an unresolvable activation refuses the run, which writes no execution", %{ctx: ctx} do
+    # A stored manifest that does not decode leaves the probe's activation
+    # unresolvable: the run is refused as that damage, and no execution
+    # row is written for it.
     {:ok, _} =
       Arca.Repo.query(
-        "UPDATE components SET release_digest = NULL WHERE name = 'nested-probe'",
+        "UPDATE components SET manifest = '{not json' WHERE name = 'nested-probe'",
         []
       )
 
     Arca.Cache.delete_match({:component_meta, :_, :_})
+    before = Arca.Repo.aggregate(Arca.Schemas.Execution, :count)
 
-    # The consent loader would refuse this as drift, so best-effort
-    # stamping is exercised where it still runs: a direct execution under
-    # an authority that carries no activation of its own.
-    {:ok, result} =
-      Opus.Dispatch.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
-        type: "formula",
-        authority: Prima.Authority.zero()
-      )
+    assert {:error, {:corrupt, {:manifest, _ref}}} =
+             Opus.Dispatch.run(ctx, Probe.probe_ref(), %{"op" => "echo"},
+               type: "formula",
+               authority: Prima.Authority.zero()
+             )
 
-    assert result.status == :completed
-
-    row = execution_row(result.metadata.execution_id)
-    assert row.activation_digest == nil
-    assert row.activation_graph == nil
+    assert Arca.Repo.aggregate(Arca.Schemas.Execution, :count) == before
   end
 end
