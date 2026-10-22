@@ -691,14 +691,20 @@ no_line 'cargo-component' "$scratch/cargo-home.err" || fail "a gate refused carg
 echo 'ok: cargo-component missing'
 
 # --- go, trivy and docker --------------------------------------------------------
-# path_without TOOL: a PATH holding no TOOL: the stand-ins but TOOL, then
-# every directory of PATH that has none.
+# path_without TOOL: a PATH holding no TOOL, one directory of links to
+# every other program the stand-ins and PATH hold, as the setsid case
+# builds its own, so it holds bash wherever TOOL lives.
 path_without() {
-  local tool=$1 d f out="$scratch/no-$1"
+  local tool=$1 d f b out="$scratch/no-$1"
   mkdir -p "$out"
-  for f in "$scratch"/bin/*; do [ "${f##*/}" = "$tool" ] || ln -sf "$f" "$out/"; done
-  IFS=: read -r -a path_dirs <<<"$PATH"
-  for d in "${path_dirs[@]}"; do [ -x "$d/$tool" ] || out="$out:$d"; done
+  IFS=: read -r -a path_dirs <<<"$scratch/bin:$PATH"
+  for d in "${path_dirs[@]}"; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+      b=${f##*/}
+      [ "$b" != "$tool" ] && [ -x "$f" ] && [ ! -e "$out/$b" ] && ln -s "$f" "$out/$b"
+    done
+  done
   echo "$out"
 }
 # No go, no trivy under --close, a go other than go.mod's, a docker with no
@@ -716,11 +722,13 @@ refused_for() {
   [ ! -e "$scratch/$name.log" ] || fail "a gate refused for $name made its log directory"
   no_mix_ran "$name" || fail "a gate refused for $name went on to the legs"
 }
-refused_for nogo 'go is not on PATH' "PATH=$(path_without go)"
-refused_for notrivy 'trivy is not on PATH' "PATH=$(path_without trivy)" --close
+nogo_path=$(path_without go)
+notrivy_path=$(path_without trivy)
+refused_for nogo 'go is not on PATH' "PATH=$nogo_path"
+refused_for notrivy 'trivy is not on PATH' "PATH=$notrivy_path" --close
 refused_for goversion "go on PATH is go1.0.0 and apps/codex/go.mod names go1\\.[0-9.]+, which CI.s setup-go installs" STUB_GO_VERSION=go1.0.0
 refused_for nodaemon 'docker reaches no daemon' STUB_DOCKER_DOWN=1
-run_gate notrivy-open PATH="$(path_without trivy)" -- "$gate" -l "$scratch/a-file"
+run_gate notrivy-open PATH="$notrivy_path" -- "$gate" -l "$scratch/a-file"
 [ "$gate_rc" = 64 ] && has_line 'the log directory .* is not a directory' "$scratch/notrivy-open.err" ||
   fail "a gate without --close asked for trivy: $gate_rc $(cat "$scratch/notrivy-open.err")"
 echo 'ok: go, trivy and docker missing, and go not the version go.mod names'
