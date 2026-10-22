@@ -88,21 +88,24 @@ jobs:
             exit 1
           fi
 
+          # Each header is read through a here-string: under pipefail a
+          # `printf | grep -q` fails whenever grep has matched and exited
+          # before printf wrote the header's last line.
           fail=0
           while IFS= read -r f; do
             head3="$(head -3 "$f")"
 
             if is_fsl_zone "$f"; then
-              if ! printf '%s' "$head3" | grep -qF "$FSL"; then
+              if ! grep -qF "$FSL" <<<"$head3"; then
                 echo "::error file=$f::FSL-zone file is missing the FSL-1.1-Apache-2.0 header"
                 fail=1
               fi
             else
-              if ! printf '%s' "$head3" | grep -qF "$APACHE"; then
+              if ! grep -qF "$APACHE" <<<"$head3"; then
                 echo "::error file=$f::file is missing the Apache-2.0 header"
                 fail=1
               fi
-              if printf '%s' "$head3" | grep -qF "$FSL"; then
+              if grep -qF "$FSL" <<<"$head3"; then
                 echo "::error file=$f::FSL header outside the FSL zone (should be Apache-2.0)"
                 fail=1
               fi
