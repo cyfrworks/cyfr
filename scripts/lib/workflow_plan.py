@@ -4,6 +4,10 @@
 
     python3 -I scripts/lib/workflow_plan.py ROOT WORKFLOW JOB PLAN_DIR TEMP_DIR \
         [KEY=VALUE]... [--except STEP]... [--only STEP] [--env NAME=VALUE]...
+    python3 -I scripts/lib/workflow_plan.py --trivy-version ROOT
+
+The second form prints the one trivy release every trivy-action step of
+the workflows pins, and fails when they pin more than one.
 
 KEY=VALUE picks the job's matrix entry (each key the matrix has, its value
 one the matrix lists; an `include` entry is picked by the keys given).
@@ -21,7 +25,8 @@ runs, from its `if:` with the job's earlier steps passed (`ok`), failed
 (`failed`), either (`always`) or never (`never`), the condition evaluated
 on the matrix entry. DEADLINE is the job's `timeout-minutes` in seconds.
 KIND is `run` (the step's script), `trivy` (aquasecurity/trivy-action as
-the trivy command line it runs), `build` (docker/build-push-action as
+the trivy command line it runs, failing unless the trivy on PATH is the
+release the step pins), `build` (docker/build-push-action as
 `docker build`, under --only), `built` (the same step in a whole job: the
 image the gate built is checked present; for both, PLAN_DIR/SLUG.tags
 lists the step's tags), `artifact` (actions/upload-
@@ -44,6 +49,7 @@ build-args, a step's output), an unknown action or `with:` input, a
 or a step that writes GITHUB_ENV or GITHUB_PATH.
 """
 
+import glob
 import os
 import re
 import shlex
@@ -327,8 +333,13 @@ def trivy_script(step, ctx):
         flags.append("--ignore-unfixed")
     if "trivyignores" in w:
         flags.append(f"--ignorefile {shlex.quote(w['trivyignores'])}")
-    lines = [f"echo 'trivy-action pins trivy {w.get('version', '(its default)')}; this host runs:'",
-             "trivy --version | head -n 1"]
+    if not re.fullmatch(r"v?\d+\.\d+\.\d+", w.get("version", "")):
+        raise Refused("the scan pins no trivy release")
+    pin = w["version"].lstrip("v")
+    # The gate installs the pinned trivy ahead on PATH; a scan by any other
+    # would not be CI's.
+    lines = [f"trivy --version | grep -qx {shlex.quote('Version: ' + pin)} ||"
+             f" {{ echo {shlex.quote('the trivy on PATH is not ' + pin + ', the version the step pins')} >&2; exit 1; }}"]
     if kind == "image":
         if "image-ref" not in w:
             raise Refused("the image scan names no image")
@@ -476,7 +487,26 @@ def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_en
             out.write("\t".join(map(str, row)) + "\n")
 
 
+def trivy_version(root):
+    """The one trivy release every trivy-action step of the workflows pins."""
+    pins = set()
+    for path in sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml"))):
+        for job in (yaml.safe_load(open(path)).get("jobs") or {}).values():
+            for step in job.get("steps") or []:
+                if str(step.get("uses", "")).split("@")[0] == "aquasecurity/trivy-action":
+                    pins.add(str((step.get("with") or {}).get("version", "")).lstrip("v"))
+    if len(pins) != 1 or not re.fullmatch(r"\d+\.\d+\.\d+", next(iter(pins))):
+        raise Refused(f"the workflows' trivy-action steps pin {sorted(pins)}, not one release")
+    return next(iter(pins))
+
+
 def main(argv):
+    if len(argv) == 2 and argv[0] == "--trivy-version":
+        try:
+            print(trivy_version(os.path.abspath(argv[1])))
+        except Refused as e:
+            sys.exit(f"workflow_plan: {e}")
+        return
     if len(argv) < 5:
         sys.exit(__doc__.split("\n\n")[1])
     root, wf_name, job_name, plan_dir, temp = argv[:5]

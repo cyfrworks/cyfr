@@ -61,15 +61,17 @@
 #   audit     license-lint.yml's spdx-headers job (both assertions),
 #             security.yml's go-audit job for each Go module (govulncheck at
 #             the version the job installs, through
-#             scripts/security-scan.sh) and its elixir-audit job (mix
-#             compile, hex.audit, deps.audit, deps.unlock --check-unused,
-#             sobelow --config)
+#             scripts/security-scan.sh), its elixir-audit job (mix compile,
+#             hex.audit, deps.audit, deps.unlock --check-unused, sobelow
+#             --config) and its npm-audit job (npm audit of every shipped
+#             tincture lockfile, through scripts/security-scan.sh)
 #   boot      test.yml's release-boot job: tests/release-boot/boot.sh on
 #             SQLite, then on PostgreSQL on a database the leg creates
 #             empty on the gate's server and drops once the boot has ended,
 #             once both adapters' suites have exited
-#   harness   with --close only, after the cluster leg: both images built
-#             from the tree (Dockerfile.locus as test.yml's locus-image job
+#   harness   with --close only, after the cluster leg: trivy installed at
+#             the version the workflows pin (scripts/lib/trivy-install.sh),
+#             both images built from the tree (Dockerfile.locus as test.yml's locus-image job
 #             builds it, Dockerfile as its locus-backends-image job does,
 #             under the tags those builds give them), test.yml's
 #             builder-image, locus-runtime-image and locus-backends-image
@@ -82,8 +84,8 @@
 # step read from its workflow (run_job, scripts/lib/workflow_plan.py), so
 # the gate's copy and CI's cannot drift: every step under its job's
 # timeout-minutes, and once one fails only a step whose `if:` runs after a
-# failure. The trivy-action steps run this host's trivy with the inputs
-# CI gives the action. A close holds the host longer than heavy-check's
+# failure. The trivy-action steps run the trivy the harness leg installed,
+# at the step's own pin, with the inputs CI gives the action. A close holds the host longer than heavy-check's
 # default: scripts/heavy-check.sh -t 10800 -- scripts/commit-gate.sh
 # --close.
 # Every gate forces the test rebuild on both adapters. Each leg discards
@@ -100,8 +102,13 @@
 # naming where it looked, before any leg starts: passing with those tests
 # excluded would hold a commit to less than CI does. So is a gate without
 # go, a go other than the version both go.mod files name (what CI's
-# setup-go installs), a docker that reaches no daemon, or, with --close,
-# without trivy, each named.
+# setup-go installs) or a docker that reaches no daemon, each named. The
+# close's trivy and the audit's govulncheck are installed per run at CI's
+# pins, so no host copy is asked for.
+# What a leg makes outside its steps is in a ledger before it is made
+# (the ledger section below): the legs undo it, the gate undoes what a leg
+# that died left, and a gate killed with its legs is finished by the next
+# gate of the checkout, which stops with 1 when that cannot be done.
 # Not part of this gate, so a closing record names each with its own
 # result: these checks of the workflows a pull request runs, each a job
 # (every step of it) or one step of a job, by the names the workflows give
@@ -111,7 +118,6 @@
 #   keeper-ci.yml keeper: go test as root with writable-cgroups=true (the real kernel)
 #   security.yml security-scan-harness
 #   security.yml installer-verify
-#   security.yml npm-audit
 #   test.yml static: Read the Rust fixtures' toolchain pin
 #   test.yml static: Test the model catalysts
 #   test.yml static: Every stamped seed guest is built from its source
@@ -287,7 +293,11 @@ deadline_for() {
     dialyzer) echo 2400 ;;
     # A database made or dropped in the postgres image, its first pull
     # included.
-    boot_database|boot_database_drop) echo 300 ;;
+    boot_database) echo 300 ;;
+    # One docker call of a leg's own (docker_call): a tag, a listing, a
+    # removal, a DROP in the postgres image.
+    docker) echo 300 ;;
+    trivy_install) echo 600 ;;
     *) echo 1800 ;;
   esac
 }
@@ -320,7 +330,9 @@ step() {
   log="$LOGDIR/$leg.$name.log"
   secs=$(deadline_for "$name")
   if contain_start -g 180 "$@" >"$log" 2>&1 </dev/null; then
+    ledger_session "$CONTAIN_PID"
     contain_wait "$CONTAIN_PID" "$secs" 180 || status=$?
+    ledger_session
     if [ "$status" -eq 124 ]; then
       echo "==> $leg.$name stopped at its ${secs}s deadline" | tee -a "$log" >&2
     fi
@@ -648,6 +660,7 @@ run_job() {
     echo "$slug=1" >> "$LOGDIR/$leg.summary"
     return 1
   fi
+  ledger_add temp "$temp"
   mkdir -p "$temp"
   while IFS=$'\t' read -r s when secs kind name <&3; do
     case "$kind" in setup|-) continue ;; esac
@@ -658,6 +671,10 @@ run_job() {
       *) continue ;;
     esac
     ran=$((ran + 1))
+    # A build's tags are in the ledger before it moves them.
+    if [ "$kind" = build ]; then
+      while IFS= read -r a; do [ -z "$a" ] || ledger_add build "$a"; done < "$dir/$s.tags"
+    fi
     if ! STEP_DEADLINE=$secs step "$leg" "${slug}_$s" bash "$dir/$s.sh"; then
       [ -n "$failed" ] || failed=$name
       status=1
@@ -677,6 +694,248 @@ run_job() {
   return "$status"
 }
 
+# --- the ledger ---------------------------------------------------------------
+# What a leg makes that outlives its steps (a RUNNER_TEMP or tool
+# directory, the boot leg's database, the image suites' project prefix, the
+# image store as it stood, the tags the builds give, a hold tag) is written
+# to its ledger file, LEDGER/LEG, one `KIND VALUE` line, before it is made.
+# ledger_clean undoes what a ledger file lists, in dependency order: what
+# the suites left under a prefix, then the tags given back, then the holds,
+# only once every tag is back, then the database dropped and the
+# directories removed. A line goes only once its undoing is confirmed, so a
+# failure keeps it and fails the cleanup. The leg runs it as it ends, its
+# steps stopped, however it ends that leaves it running; the gate, which
+# outlives its legs, runs it again for each leg that has ended and at its
+# own exit; and a ledger whose gate is gone (killed with its legs) is
+# finished by the next gate of the checkout before any leg starts, as
+# contain.sh's registry is swept by the shell that owns it.
+# LEDGER_HOME is the checkout's, under TMPDIR beside that registry; a
+# gate's own ledger is LEDGER_HOME/PID.TOKEN, its `owner` file holding the
+# gate's pid and start time. Every docker call here runs contained under
+# the docker deadline (docker_call).
+
+# The session of the step the leg is running, as the ledger's one
+# `session` line, or none: a leg runs one step at a time.
+ledger_session() {
+  [ -n "${LEDGER_FILE:-}" ] || return 0
+  { grep -v '^session ' "$LEDGER_FILE" 2>/dev/null || :; [ -z "${1:-}" ] || echo "session $1"; } > "$LEDGER_FILE.new" &&
+    mv "$LEDGER_FILE.new" "$LEDGER_FILE"
+  [ -s "$LEDGER_FILE" ] || rm -f "$LEDGER_FILE"
+}
+
+# A ledger line for this leg.
+ledger_add() {
+  if [ -n "${2:-}" ]; then printf '%s %s\n' "$1" "$2"; else printf '%s\n' "$1"; fi >> "$LEDGER_FILE"
+}
+
+# The values of KIND in ledger file $1.
+ledger_lines() { [ ! -f "$1" ] || sed -n "s/^$2 //p" "$1"; }
+
+# Takes line $2 from ledger file $1.
+ledger_drop() {
+  awk -v l="$2" '$0 != l' "$1" > "$1.new" && mv "$1.new" "$1"
+}
+
+# One docker command, contained under the docker deadline, its stdout in
+# DOCKER_OUT and its stderr appended to log $1. Returns docker's status,
+# 124 at the deadline, or the status containment refused it with.
+DOCKER_OUT=
+DOCKER_SCRATCH=
+docker_call() {
+  local log=$1 out s=0
+  shift
+  out="$DOCKER_SCRATCH/.docker.$$"
+  DOCKER_OUT=
+  if contain_start -g 30 docker "$@" >"$out" 2>>"$log" </dev/null; then
+    contain_wait "$CONTAIN_PID" "$(deadline_for docker)" 30 || s=$?
+    [ -z "$CONTAIN_SURVIVORS" ] || [ "$s" -ne 0 ] || s=1
+    [ "$s" -ne 124 ] || echo "==> docker $1 stopped at its deadline" >> "$log"
+  else
+    s=$?
+    # The leg exits with the refusal, as a refused step makes it.
+    [ -n "$REFUSED" ] || REFUSED=$s
+    echo "==> docker $1 could not start: $s" >> "$log"
+  fi
+  DOCKER_OUT=$(cat "$out" 2>/dev/null) || :
+  rm -f "$out"
+  return "$s"
+}
+
+# Every tagged image, `repository:tag id` a line, in DOCKER_OUT.
+docker_images() {
+  docker_call "$1" image ls --no-trunc --format '{{.Repository}}:{{.Tag}} {{.ID}}' || return 1
+  DOCKER_OUT=$(printf '%s\n' "$DOCKER_OUT" | sed -e '/^<none>:/d' -e '/^$/d')
+}
+
+# The containers, then the networks, then the volumes whose names start
+# with prefix $3 removed, each named on stderr, and then none left: any
+# removal or listing that fails, or anything left, fails it.
+ledger_sweep() {
+  local log=$2 prefix=$3 kind id name s=0 pass
+  for pass in remove verify; do
+    for kind in container network volume; do
+      case $kind in
+        container) docker_call "$log" ps -a --format '{{.ID}} {{.Names}}' ;;
+        network) docker_call "$log" network ls --format '{{.ID}} {{.Name}}' ;;
+        volume) docker_call "$log" volume ls --format '{{.Name}} {{.Name}}' ;;
+      esac || { s=1; continue; }
+      while read -r id name; do
+        case "$name" in "$prefix"?*) ;; *) continue ;; esac
+        if [ "$pass" = verify ]; then
+          echo "==> the $kind $name is still there after its removal" >&2
+          s=1
+          continue
+        fi
+        echo "==> removing the $kind $name a suite left" >&2
+        case $kind in
+          container) docker_call "$log" rm -f "$id" ;;
+          network) docker_call "$log" network rm "$id" ;;
+          volume) docker_call "$log" volume rm -f "$id" ;;
+        esac || { echo "==> the $kind $name could not be removed" >&2; s=1; }
+      done <<<"$DOCKER_OUT"
+    done
+  done
+  return "$s"
+}
+
+# The tags the store held before the leg (FILE.before) given back: every
+# tag that names an image the builds made and did not name it before is
+# taken off, or given back to the image it named then; then the store is
+# read again and nothing is left to give back. The images the builds made
+# are the ones their tags name when a restore first reads them, kept as
+# `built` lines, since a restore that fails midway may already have taken
+# those tags off.
+ledger_restore() {
+  local file=$1 log=$2 tag ref id old built holds pass todo s=0
+  grep -qx 'images' "$file" || return 0
+  for tag in $(ledger_lines "$file" build); do
+    if docker_call "$log" image inspect --format '{{.Id}}' "$tag" && [ -n "$DOCKER_OUT" ] &&
+      ! grep -qxF "built $DOCKER_OUT" "$file"; then
+      echo "built $DOCKER_OUT" >> "$file"
+    fi
+  done
+  built=" $(ledger_lines "$file" built | tr '\n' ' ') "
+  holds=" $(ledger_lines "$file" hold | tr '\n' ' ') "
+  for pass in restore verify; do
+    docker_images "$log" || return 1
+    todo=0
+    while read -r ref id; do
+      [ -n "$ref" ] || continue
+      case "$holds" in *" $ref "*) continue ;; esac
+      case "$built" in *" $id "*) ;; *) continue ;; esac
+      ! grep -qxF "$ref $id" "$file.before" || continue
+      todo=1
+      [ "$pass" = restore ] || continue
+      old=$(awk -v r="$ref" '$1 == r { print $2; exit }' "$file.before")
+      if [ -n "$old" ]; then
+        docker_call "$log" tag "$old" "$ref" || { echo "==> $ref could not be given back to $old" >&2; s=1; }
+      else
+        docker_call "$log" image rm "$ref" || { echo "==> the tag $ref could not be taken off" >&2; s=1; }
+      fi
+    done <<<"$DOCKER_OUT"
+    [ "$pass" = restore ] || [ "$todo" -eq 0 ] || s=1
+  done
+  [ "$s" -eq 0 ] || return 1
+  ledger_drop "$file" images
+  for tag in $(ledger_lines "$file" build); do ledger_drop "$file" "build $tag"; done
+  for id in $(ledger_lines "$file" built); do ledger_drop "$file" "built $id"; done
+}
+
+# ledger_clean FILE LOG [stop]: with `stop`, the step session the file
+# names is stopped first, with everything it started; without it (a later
+# gate's recovery, when the session's watchdog has long stopped it and its
+# id may be another's) the line is only dropped.
+ledger_clean() {
+  local file=$1 log=$2 v s=0
+  [ -s "$file" ] || { rm -f "$file" "$file.before"; return 0; }
+  for v in $(ledger_lines "$file" session); do
+    if [ "${3:-}" != stop ] || contain_stop "$v" 30 >/dev/null 2>>"$log"; then
+      ledger_drop "$file" "session $v"
+    else
+      echo "==> the step session $v outlived its stop" >&2
+      s=1
+    fi
+  done
+  for v in $(ledger_lines "$file" prefix); do
+    ledger_sweep "$file" "$log" "$v" && ledger_drop "$file" "prefix $v" || s=1
+  done
+  ledger_restore "$file" "$log" || s=1
+  # A hold goes only once every tag is back: until then it keeps each
+  # image the store held before referenced.
+  # A hold whose removal failed goes from the file only when a listing
+  # that succeeds no longer shows it.
+  if ! grep -qx 'images' "$file" && [ -n "$(ledger_lines "$file" hold)" ]; then
+    for v in $(ledger_lines "$file" hold); do docker_call "$log" image rm "$v" || :; done
+    if docker_images "$log"; then
+      for v in $(ledger_lines "$file" hold); do
+        if printf '%s\n' "$DOCKER_OUT" | grep -q "^$v "; then
+          echo "==> the hold tag $v could not be taken off" >&2
+          s=1
+        else
+          ledger_drop "$file" "hold $v"
+        fi
+      done
+    else
+      s=1
+    fi
+  fi
+  for v in $(ledger_lines "$file" database); do
+    if docker_call "$log" run --rm --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
+      psql -v ON_ERROR_STOP=1 -q "$PG_SERVER/postgres" -c "DROP DATABASE IF EXISTS \"$v\" WITH (FORCE)"; then
+      ledger_drop "$file" "database $v"
+    else
+      echo "==> the database $v could not be dropped" >&2
+      s=1
+    fi
+  done
+  while IFS= read -r v; do
+    [ -n "$v" ] || continue
+    rm -rf "$v" && ledger_drop "$file" "temp $v" || s=1
+  done <<<"$(ledger_lines "$file" temp)"
+  if [ -s "$file" ]; then
+    echo "==> left in $file: $(tr '\n' ';' < "$file")" >&2
+    return 1
+  fi
+  rm -f "$file" "$file.before"
+  return "$s"
+}
+
+# The ledger files of ledger directory $1 undone (with `stop` as $2, as
+# ledger_clean takes it), the directory removed once they all are.
+ledger_clean_dir() {
+  local dir=$1 f s=0
+  for f in "$dir"/*; do
+    case "${f##*/}" in owner|*.before|*.log|*.new|'*') continue ;; esac
+    ledger_clean "$f" "$dir/cleanup.log" "${2:-}" || s=1
+  done
+  [ "$s" -eq 0 ] || return 1
+  rm -rf "$dir"
+  rmdir "$LEDGER_HOME" 2>/dev/null || :
+}
+
+# Whether the gate ledger $1's owner file names is still running.
+ledger_owner_alive() {
+  local pid start
+  read -r pid start < "$1/owner" 2>/dev/null || return 1
+  [ -n "$pid" ] && [ "$(ps -o lstart= -p "$pid" 2>/dev/null | { read -r now; printf '%s' "$now"; })" = "$start" ]
+}
+
+# Each ledger a gate that is gone left in LEDGER_HOME, finished.
+ledger_recover() {
+  local dir
+  [ -d "$LEDGER_HOME" ] || return 0
+  for dir in "$LEDGER_HOME"/*; do
+    [ -d "$dir" ] || continue
+    ! ledger_owner_alive "$dir" || continue
+    echo "==> finishing what the gate of $dir left" >&2
+    DOCKER_SCRATCH=$dir
+    if ! ledger_clean_dir "$dir"; then
+      echo "==> what the gate of $dir left could not be undone (its log: $dir/cleanup.log); the gate stops" >&2
+      return 1
+    fi
+  done
+}
+
 # CI's Go jobs on Linux: codex-ci.yml's whole test job, and keeper-ci.yml's
 # keeper job but its run as root in a container with writable cgroups,
 # which stays CI's. The -race suites load every core, so they start once
@@ -694,20 +953,22 @@ leg_go() {
 # The licence lint and the dependency audits as license-lint.yml and
 # security.yml run them. govulncheck is the version security.yml installs,
 # built into the run's own directory ahead on PATH; the Elixir audit's Mix
-# builds under a build path of its own, beside the legs' builds.
+# builds under a build path of its own, beside the legs' builds; npm audit
+# reads every shipped tincture lockfile.
 leg_audit() {
   local status=0 gobin="$LOGDIR/audit.gobin"
   run_job audit spdx license-lint.yml spdx-headers || status=1
   [ -z "$REFUSED" ] || return 1
+  ledger_add temp "$gobin"
   run_job audit govuln_codex security.yml go-audit tree=apps/codex --env "GOBIN=$gobin" --env "PATH=$gobin:$PATH" || status=1
   [ -z "$REFUSED" ] || return 1
   run_job audit govuln_keeper security.yml go-audit tree=apps/locus/keeper --env "GOBIN=$gobin" --env "PATH=$gobin:$PATH" || status=1
   [ -z "$REFUSED" ] || return 1
   run_job audit elixir_audit security.yml elixir-audit --env "MIX_BUILD_PATH=$ROOT/_build/audit" || status=1
-  cleanup_audit
+  [ -z "$REFUSED" ] || return 1
+  run_job audit npm_audit security.yml npm-audit || status=1
   return "$status"
 }
-cleanup_audit() { rm -rf "$LOGDIR/audit.gobin"; }
 
 # test.yml's release-boot job: the release built and booted by
 # tests/release-boot/boot.sh on each adapter in turn, since both start
@@ -716,42 +977,29 @@ cleanup_audit() { rm -rf "$LOGDIR/audit.gobin"; }
 # apart from the suites' builds and from each other. SQLite boots with no
 # database URL; PostgreSQL on a database this leg creates empty on the
 # gate's server, beside which boot.sh creates and drops its own
-# (`pg_run_database`), and which the leg drops once the boot has ended,
-# however it ended. The release builds load every core, so the boots
-# start once both adapters' suites have exited, as the go leg does.
-BOOT_DATABASE=
+# (`pg_run_database`). The database's name is in the ledger before its
+# CREATE runs, so a CREATE that completed whatever its client answered is
+# dropped with the ledger, however the leg ended. The release builds load
+# every core, so the boots start once both adapters' suites have exited,
+# as the go leg does.
 leg_boot() {
-  local status=0
+  local status=0 db
   await_leg boot static || return
   await_leg boot postgres || return
   STEP_DEADLINE=1800 step boot boot_sqlite env -u CYFR_DATABASE_URL tests/release-boot/boot.sh sqlite || status=1
   [ -z "$REFUSED" ] || return 1
-  BOOT_DATABASE="cyfr_gate_boot_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
-  if ! pg_admin boot_database "CREATE DATABASE \"$BOOT_DATABASE\""; then
-    BOOT_DATABASE=
-    return 1
-  fi
-  STEP_DEADLINE=1800 step boot boot_postgres env CYFR_DATABASE_URL="$PG_SERVER/$BOOT_DATABASE" \
+  db="cyfr_gate_boot_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+  ledger_add database "$db"
+  step boot boot_database docker run --rm --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
+    psql -v ON_ERROR_STOP=1 -q "$PG_SERVER/postgres" -c "CREATE DATABASE \"$db\"" || return 1
+  STEP_DEADLINE=1800 step boot boot_postgres env CYFR_DATABASE_URL="$PG_SERVER/$db" \
     tests/release-boot/boot.sh postgres || status=1
-  cleanup_boot || status=1
   return "$status"
 }
 
-# One statement on the gate's server, in the postgres image boot.sh's own
-# clients run, as a step of the boot leg.
-pg_admin() {
-  step boot "$1" docker run --rm --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
-    psql -v ON_ERROR_STOP=1 -q "$PG_SERVER/postgres" -c "$2"
-}
-
-# Drops the leg's database, once its boot has stopped.
-cleanup_boot() {
-  [ -n "$BOOT_DATABASE" ] || return 0
-  pg_admin boot_database_drop "DROP DATABASE IF EXISTS \"$BOOT_DATABASE\" WITH (FORCE)" || return 1
-  BOOT_DATABASE=
-}
-
-# With --close, after every other leg: both images built from the tree
+# With --close, after every other leg: trivy installed at the version the
+# workflows' trivy-action steps pin (scripts/lib/trivy-install.sh) into the
+# run's tool directory ahead on PATH, both images built from the tree
 # under the tags test.yml's builds give them, then test.yml's image jobs
 # (each suite, the Compose proof's six cases and the setup proof in the
 # backends job, and each image's scan), the browser job's four shards and
@@ -759,28 +1007,42 @@ cleanup_boot() {
 # image did not build fails at its first step that needs it. The image
 # suites name every compose project and container they start from
 # HARNESS_PREFIX (STACK_PROJECT_PREFIX), so what a suite stopped midway
-# left is found by name and removed after its job, and once the leg ends,
-# however it ends, every tag it gave the images it built is taken off
-# again, a tag that named another image before the leg naming it again.
+# left is removed after its job. Before building, the leg reads the image
+# store and gives every image tagged there a hold tag, so moving an
+# image's last name to one the leg built cannot delete it, as an image
+# store that keeps no unnamed image (containerd's) otherwise would; the
+# ledger then gives each name back and takes the holds off.
 HARNESS_PREFIX=
 leg_harness() {
-  local status=0
+  local status=0 log="$LOGDIR/harness.docker.log" tools="$LOGDIR/harness.tools" version
   HARNESS_PREFIX="cyfr-gate-$$-"
-  harness_images > "$LOGDIR/harness.images.before" || { echo 'images_read=1' >> "$LOGDIR/harness.summary"; return 1; }
-  harness_hold || { echo 'images_held=1' >> "$LOGDIR/harness.summary"; cleanup_harness; return 1; }
+  ledger_add prefix "$HARNESS_PREFIX"
+  docker_images "$log" || { echo 'images_read=1' >> "$LOGDIR/harness.summary"; return 1; }
+  printf '%s\n' "$DOCKER_OUT" | sed '/^$/d' > "$LEDGER_FILE.before"
+  ledger_add images ''
+  harness_hold "$log" || { echo 'images_held=1' >> "$LOGDIR/harness.summary"; return 1; }
+  ledger_add temp "$tools"
+  if version=$(python3 -I "$ROOT/scripts/lib/workflow_plan.py" --trivy-version "$ROOT" 2>>"$log"); then
+    step harness trivy_install scripts/lib/trivy-install.sh "$version" "$tools" || status=1
+  else
+    echo 'trivy_version=1' >> "$LOGDIR/harness.summary"
+    status=1
+  fi
+  [ -z "$REFUSED" ] || return 1
+  export PATH="$tools:$PATH"
   run_job harness build_locus test.yml locus-image --only 'Build the Locus image once' || status=1
   [ -z "$REFUSED" ] || return 1
   run_job harness build_app test.yml locus-backends-image --only 'Build the app image' || status=1
   [ -z "$REFUSED" ] || return 1
   run_job harness builder_image test.yml builder-image --env "STACK_PROJECT_PREFIX=$HARNESS_PREFIX" || status=1
-  harness_sweep
   [ -z "$REFUSED" ] || return 1
+  ledger_sweep "$LEDGER_FILE" "$log" "$HARNESS_PREFIX" || status=1
   run_job harness runtime_image test.yml locus-runtime-image --env "STACK_PROJECT_PREFIX=$HARNESS_PREFIX" || status=1
-  harness_sweep
   [ -z "$REFUSED" ] || return 1
+  ledger_sweep "$LEDGER_FILE" "$log" "$HARNESS_PREFIX" || status=1
   run_job harness backends_image test.yml locus-backends-image --env "STACK_PROJECT_PREFIX=$HARNESS_PREFIX" || status=1
-  harness_sweep
   [ -z "$REFUSED" ] || return 1
+  ledger_sweep "$LEDGER_FILE" "$log" "$HARNESS_PREFIX" || status=1
   run_job harness browser_a test.yml browser shard=a || status=1
   [ -z "$REFUSED" ] || return 1
   run_job harness browser_b test.yml browser shard=b || status=1
@@ -790,83 +1052,18 @@ leg_harness() {
   run_job harness browser_d test.yml browser shard=d || status=1
   [ -z "$REFUSED" ] || return 1
   run_job harness repo_scan security.yml repo-scan || status=1
-  cleanup_harness || status=1
   return "$status"
 }
 
-# Every tagged image, `repository:tag id` a line; a store that cannot be
-# read fails, so no tag is taken for one the leg gave.
-harness_images() {
-  local list
-  list=$(docker image ls --no-trunc --format '{{.Repository}}:{{.Tag}} {{.ID}}') || return 1
-  printf '%s\n' "$list" | sed -e '/^<none>:/d' -e '/^$/d'
-}
-
-# Every image tagged before the leg takes one hold tag of the leg's, so
-# moving its last name to an image the leg built cannot delete it, as an
-# image store that keeps no unnamed image (containerd's) otherwise would,
-# and the name can be given back.
+# One hold tag of the leg's on every image the store held tagged, each in
+# the ledger before it is given.
 harness_hold() {
   local id n=0
-  : > "$LOGDIR/harness.images.holds"
-  for id in $(awk '{ print $2 }' "$LOGDIR/harness.images.before" | LC_ALL=C sort -u); do
-    docker tag "$id" "${HARNESS_PREFIX}hold:$n" || return 1
-    echo "${HARNESS_PREFIX}hold:$n" >> "$LOGDIR/harness.images.holds"
+  for id in $(awk '{ print $2 }' "$LEDGER_FILE.before" | LC_ALL=C sort -u); do
+    ledger_add hold "${HARNESS_PREFIX}hold:$n"
+    docker_call "$1" tag "$id" "${HARNESS_PREFIX}hold:$n" || return 1
     n=$((n + 1))
   done
-}
-
-# The containers, then the networks, then the volumes whose names start
-# with HARNESS_PREFIX, removed, each named on stderr.
-harness_sweep() {
-  local id name
-  [ -n "$HARNESS_PREFIX" ] || return 0
-  docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | while read -r id name; do
-    case "$name" in "$HARNESS_PREFIX"*) echo "==> harness: removing the container $name a suite left" >&2; docker rm -f "$id" >/dev/null 2>&1 ;; esac
-  done
-  docker network ls --format '{{.ID}} {{.Name}}' 2>/dev/null | while read -r id name; do
-    case "$name" in "$HARNESS_PREFIX"*) echo "==> harness: removing the network $name a suite left" >&2; docker network rm "$id" >/dev/null 2>&1 ;; esac
-  done
-  docker volume ls --format '{{.Name}}' 2>/dev/null | while read -r name; do
-    case "$name" in "$HARNESS_PREFIX"*) echo "==> harness: removing the volume $name a suite left" >&2; docker volume rm -f "$name" >/dev/null 2>&1 ;; esac
-  done
-  return 0
-}
-
-# Every tag that names an image the leg built (each tag its build steps
-# give, as their plans list them) and did not name it before the leg is
-# taken off, or given back to the image it named then; then the hold tags
-# go.
-cleanup_harness() {
-  local ref id old tag hold s=0
-  harness_sweep
-  [ -f "$LOGDIR/harness.images.before" ] || return 0
-  : > "$LOGDIR/harness.images.built"
-  for tag in $(cat "$LOGDIR"/harness.build_*.plan/*.tags 2>/dev/null); do
-    docker image inspect --format '{{.Id}}' "$tag" >> "$LOGDIR/harness.images.built" 2>/dev/null || :
-  done
-  if [ -s "$LOGDIR/harness.images.built" ]; then
-    if harness_images > "$LOGDIR/harness.images.after"; then
-      while read -r ref id; do
-        case "$ref" in "${HARNESS_PREFIX}hold:"*) continue ;; esac
-        grep -qxF "$id" "$LOGDIR/harness.images.built" || continue
-        ! grep -qxF "$ref $id" "$LOGDIR/harness.images.before" || continue
-        old=$(awk -v r="$ref" '$1 == r { print $2; exit }' "$LOGDIR/harness.images.before")
-        if [ -n "$old" ]; then
-          docker tag "$old" "$ref" || s=1
-        else
-          docker image rm "$ref" >/dev/null || s=1
-        fi
-      done < "$LOGDIR/harness.images.after"
-    else
-      s=1
-    fi
-  fi
-  if [ -f "$LOGDIR/harness.images.holds" ]; then
-    while read -r hold; do docker image rm "$hold" >/dev/null || s=1; done < "$LOGDIR/harness.images.holds"
-    rm -f "$LOGDIR/harness.images.holds"
-  fi
-  return "$s"
 }
 
 # Whether process $1 exists and has not exited. A leg is the gate's child,
@@ -930,25 +1127,34 @@ if [ "${1:-}" = --leg ]; then
   if [ -n "${GATE_LEG_PG_PATHS:-}" ]; then
     while IFS= read -r p; do PG_PATHS+=("$p"); done <<<"$GATE_LEG_PG_PATHS"
   fi
-  unset GATE_LEG_LOGDIR GATE_LEG_PARTS GATE_LEG_CLOSE GATE_LEG_PEER_STATIC GATE_LEG_PEER_POSTGRES GATE_LEG_PG_PATHS
+  LEDGER=${GATE_LEG_LEDGER:-}
+  unset GATE_LEG_LOGDIR GATE_LEG_PARTS GATE_LEG_CLOSE GATE_LEG_PEER_STATIC GATE_LEG_PEER_POSTGRES GATE_LEG_PG_PATHS GATE_LEG_LEDGER
   case "$CLOSE" in true|false) ;; *) echo 'a leg runs only under the gate' >&2; exit 64 ;; esac
-  [ -d "$LOGDIR" ] || { echo 'a leg runs only under the gate' >&2; exit 64; }
+  [ -d "$LOGDIR" ] && [ -d "$LEDGER" ] || { echo 'a leg runs only under the gate' >&2; exit 64; }
+  LEDGER_FILE="$LEDGER/$leg" DOCKER_SCRATCH=$LEDGER
   cd "$ROOT" || exit 1
   unset MIX_BUILD_PATH
+  # What the leg made outside its steps is undone from its ledger once its
+  # steps have stopped, however the leg ends; the gate undoes what is left.
+  leg_cleanup() {
+    [ -s "$LEDGER_FILE" ] || return 0
+    local c=0
+    ledger_clean "$LEDGER_FILE" "$LOGDIR/$leg.cleanup.log" stop || c=1
+    echo "cleanup=$c" >> "$LOGDIR/$leg.summary"
+    return "$c"
+  }
   # The gate stops a leg with TERM, through contain_stop_all. A leg starts
   # as an asynchronous child with SIGINT ignored, so it cannot trap INT.
-  # A leg that made something outside its steps (a database, image tags)
-  # undoes it in cleanup_<leg> once its steps have stopped.
   leg_signal() {
     trap '' TERM
     stop_islands
     contain_stop_all 180 >/dev/null || :
-    if declare -F "cleanup_$leg" >/dev/null; then "cleanup_$leg" >/dev/null 2>&1 || :; fi
-    rm -rf "$LOGDIR/$leg".*.temp
+    leg_cleanup || :
     exit 143
   }
   trap leg_signal TERM
   "leg_$leg"; s=$?
+  leg_cleanup || s=1
   : > "$LOGDIR/$leg.done"
   if [ -n "$REFUSED" ]; then exit "$REFUSED"; fi
   [ "$s" -eq 0 ] || exit 1
@@ -983,6 +1189,7 @@ OWNER=false
 # for a signal the gate does not trap (USR1, say) with $? at 0 and then
 # dies of it, so 0 is reported only for a run that reached its end with 0.
 COMPLETED=false
+LEDGER=
 # Every exit path after option parsing: whatever still runs is stopped,
 # the registry swept and removed when this gate made it, and the
 # `_EXIT=` line written last.
@@ -992,6 +1199,12 @@ gate_exit() {
   trap '' INT TERM HUP
   [ "$s" -ne 0 ] || $COMPLETED || s=1
   contain_stop_all 240 || { [ "$s" -ne 0 ] || s=1; }
+  # What a leg left, and the ledger with it; a ledger that cannot be
+  # undone stays for the next gate.
+  if [ -n "$LEDGER" ] && [ -d "$LEDGER" ] && ! ledger_clean_dir "$LEDGER" stop; then
+    echo "==> what the legs made could not all be undone; the next gate finishes it (see $LEDGER/cleanup.log)" >&2
+    [ "$s" -ne 0 ] || s=1
+  fi
   if $OWNER; then
     contain_sweep_registry 240 || { [ "$s" -ne 0 ] || s=1; }
     rm -f "$CONTAIN_REGISTRY"
@@ -1023,10 +1236,10 @@ if ! command -v cargo-component >/dev/null 2>&1; then
   echo "==> cargo-component is neither in $CARGO_BIN nor on PATH: the tests tagged :requires_cargo_component would be excluded, and CI runs them (cargo install cargo-component --locked, with rustup's wasm32-wasip2 target)" >&2
   exit 69
 fi
-# The go, audit and boot legs run Go and Docker as CI's jobs do, and the
-# close's scans run trivy: each is refused with 69 here, naming what is
-# missing, as is a go other than the version each Go module's go.mod
-# names, which CI's setup-go installs, and a docker that reaches no daemon.
+# The go, audit and boot legs run Go and Docker as CI's jobs do: each is
+# refused with 69 here, naming what is missing, as is a go other than the
+# version each Go module's go.mod names, which CI's setup-go installs, and
+# a docker that reaches no daemon.
 need_tool() {
   command -v "$1" >/dev/null 2>&1 && return 0
   echo "==> $1 is not on PATH: $2" >&2
@@ -1034,7 +1247,6 @@ need_tool() {
 }
 need_tool go 'the go leg runs the Go suites of codex-ci.yml and keeper-ci.yml with it, and the audit leg builds govulncheck with it'
 need_tool docker "the go leg's Compose tests, the release boots and the close's image jobs run Docker"
-if $CLOSE; then need_tool trivy "the close runs security.yml's repository scans and each image job's scan with it"; fi
 # The binary's own version, read outside any module: inside one that
 # names a newer go, a go held to itself refuses to answer.
 have=$(cd / && GOTOOLCHAIN=local go env GOVERSION 2>/dev/null) || have=
@@ -1050,6 +1262,10 @@ if ! docker version --format '{{.Server.Version}}' >/dev/null 2>&1; then
   echo "==> docker reaches no daemon: the go leg's Compose tests, the release boots and the close's image jobs need one" >&2
   exit 69
 fi
+# What an earlier gate of this checkout left, finished before anything
+# else runs.
+LEDGER_HOME="${TMPDIR:-/tmp}/cyfr-gate-ledger.$(printf '%s' "$ROOT" | cksum | awk '{ print $1 }')"
+ledger_recover || exit 1
 
 # A log directory holds this run's logs alone, so the verdict reads
 # nothing an earlier run left.
@@ -1101,7 +1317,12 @@ fi
 start=$SECONDS
 echo "==> commit gate at $(git rev-parse --short HEAD) ($(uname -s)), logs in $LOGDIR"
 
-export GATE_LEG_LOGDIR="$LOGDIR" GATE_LEG_PARTS="$PARTS" GATE_LEG_CLOSE="$CLOSE"
+# This gate's ledger, which its legs write.
+LEDGER="$LEDGER_HOME/$$.$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+(umask 077 && mkdir -p "$LEDGER") || exit 1
+ps -o lstart= -p "$$" | { read -r started; printf '%s %s\n' "$$" "$started"; } > "$LEDGER/owner" || exit 1
+DOCKER_SCRATCH=$LEDGER
+export GATE_LEG_LOGDIR="$LOGDIR" GATE_LEG_PARTS="$PARTS" GATE_LEG_CLOSE="$CLOSE" GATE_LEG_LEDGER="$LEDGER"
 GATE_LEG_PG_PATHS=$(printf '%s\n' ${PG_PATHS[@]+"${PG_PATHS[@]}"})
 export GATE_LEG_PG_PATHS
 # Each leg leads a session of its own under a watchdog with the leg
@@ -1135,6 +1356,16 @@ leg_result() {
   contain_wait "${!pid_var}" 0 240 || s=$?
   if [ -n "$CONTAIN_SURVIVORS" ]; then
     echo "==> the $leg leg left $CONTAIN_SURVIVORS after KILL" >&2
+    [ "$s" -ne 0 ] || s=1
+  fi
+  # What the leg left in its ledger (it died, or its own cleanup failed).
+  if [ -s "$LEDGER/$leg" ]; then
+    echo "==> the $leg leg left what it made; undoing it" >&2
+    if ledger_clean "$LEDGER/$leg" "$LOGDIR/$leg.cleanup.log" stop; then
+      echo 'gate_cleanup=0' >> "$LOGDIR/$leg.summary"
+    else
+      echo 'gate_cleanup=1' >> "$LOGDIR/$leg.summary"
+    fi
     [ "$s" -ne 0 ] || s=1
   fi
   if [ "$s" -eq 0 ]; then

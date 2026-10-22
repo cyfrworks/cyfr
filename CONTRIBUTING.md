@@ -60,8 +60,9 @@ missing or wrong header fails CI.
   `scripts/heavy-check.sh -t 10800 -- scripts/commit-gate.sh --close`. The
   gate's header lists what each runs and which of CI's checks stay CI's
   alone. Besides `cargo-component` it needs `go` at the version both
-  `go.mod` files name, a running Docker daemon and, for a close, `trivy`,
-  and it refuses to run without them.
+  `go.mod` files name and a running Docker daemon, and it refuses to run
+  without them; it installs `govulncheck` and the close's `trivy` itself,
+  at the versions CI pins.
 - Run the tests for what you touched as operating-system partitions:
   `scripts/test-partitioned.sh <test paths>` on SQLite, and
   `scripts/test-partitioned.sh -a postgres <test paths>` on PostgreSQL.

@@ -136,9 +136,12 @@ chmod +x "$scratch/bin/mix"
 # PASS line for each test named. docker keeps an image store in
 # docker.images (`ref id` lines: a build gives each tag an id of its own, a
 # tag copies one; as containerd's store, it keeps no image that no ref
-# names, so a tag of a vanished id fails) and containers in
-# docker.containers (`id name`); it
-# answers `version` with a failure under STUB_DOCKER_DOWN.
+# names, so a tag of a vanished id fails), containers in
+# docker.containers (`id name`) and the databases a psql in the postgres
+# image made in databases; it answers `version` with a failure under
+# STUB_DOCKER_DOWN, fails each call STUB_DOCKER_FAIL names (`rm`, `tag:SRC:TARGET`,
+# `create-lost`) and takes ten seconds over each verb STUB_DOCKER_SLOW
+# names.
 cat > "$scratch/bin/go" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s|%s|%s\n' "$PWD" "${GOBIN:-}" "$*" >> "$TRACE/go.calls"
@@ -164,10 +167,19 @@ FAKE
 for tool in gofmt govulncheck; do
   printf '#!/usr/bin/env bash\nprintf "%%s|%s %%s\\n" "$PWD" "$*" >> "$TRACE/tools.calls"\n' "$tool" > "$scratch/bin/$tool"
 done
-cat > "$scratch/bin/trivy" <<'FAKE'
+# The host's trivy is another version than the workflows pin: a scan that
+# ran it would fail its version check. The release the curl stand-in
+# serves holds the trivy the close installs, which records `installed` in
+# trivy.calls and answers the pinned version.
+printf '#!/usr/bin/env bash\necho "host|$PWD|$*" >> "$TRACE/trivy.calls"\necho "Version: 0.0.1"\n' > "$scratch/bin/trivy"
+trivy_pin=$(python3 -I "$root/scripts/lib/workflow_plan.py" --trivy-version "$root") || fail 'the workflows pin no one trivy release'
+mkdir -p "$scratch/trivy-release"
+cat > "$scratch/trivy-release/trivy" <<FAKE
 #!/usr/bin/env bash
-printf '%s|%s\n' "$PWD" "$*" >> "$TRACE/trivy.calls"
-[ "${1:-}" != --version ] || echo 'Version: 0.0.0-stand-in'
+[ "\${1:-}" != --version ] || { echo 'Version: $trivy_pin'; exit 0; }
+FAKE
+cat >> "$scratch/trivy-release/trivy" <<'FAKE'
+printf 'installed|%s|%s\n' "$PWD" "$*" >> "$TRACE/trivy.calls"
 if [ "${1:-}" = fs ]; then
   if [ -f .trivyignore.yaml ] && [ -f mix.exs ] && [ ! -e _build ] && [ ! -e deps ]; then echo tracked; else echo "untracked: $(ls -A | tr '\n' ' ')"; fi >> "$TRACE/trivy.trees"
 fi
@@ -176,9 +188,11 @@ FAKE
 cat > "$scratch/bin/docker" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$TRACE/docker.calls"
-images="$TRACE/docker.images" containers="$TRACE/docker.containers"
-touch "$images" "$containers"
+images="$TRACE/docker.images" containers="$TRACE/docker.containers" databases="$TRACE/databases"
+touch "$images" "$containers" "$databases"
 id_of() { awk -v r="$1" '$1 == r || $2 == r { print $2; exit }' "$images"; }
+fails() { case " ${STUB_DOCKER_FAIL:-} " in *" $1 "*) echo "stand-in: $1 fails" >&2; return 0 ;; esac; return 1; }
+case " ${STUB_DOCKER_SLOW:-} " in *" $1 "*) sleep 10 ;; esac
 case "$1" in
   version) [ -z "${STUB_DOCKER_DOWN:-}" ] || exit 1; echo 29.0.0 ;;
   info) echo 2 ;;
@@ -193,6 +207,7 @@ case "$1" in
       shift
     done ;;
   tag)
+    ! fails "tag:$2:$3" || exit 1
     id=$(id_of "$2"); [ -n "$id" ] || exit 1
     grep -v "^$3 " "$images" > "$images.new" || :; mv "$images.new" "$images"
     echo "$3 $id" >> "$images" ;;
@@ -202,10 +217,26 @@ case "$1" in
       inspect)
         ref=${!#}; id=$(awk -v r="$ref" '$1 == r { print $2; exit }' "$images"); [ -n "$id" ] || exit 1
         case "$*" in *'{{.Id}}'*) echo "$id" ;; esac ;;
-      rm) grep -v "^$3 " "$images" > "$images.new" || :; mv "$images.new" "$images" ;;
+      rm)
+        grep -q "^$3 " "$images" || exit 1
+        grep -v "^$3 " "$images" > "$images.new" || :; mv "$images.new" "$images" ;;
     esac ;;
   ps) cat "$containers" ;;
-  rm) grep -v "^${!#} " "$containers" > "$containers.new" || :; mv "$containers.new" "$containers" ;;
+  rm)
+    ! fails rm || exit 1
+    grep -v "^${!#} " "$containers" > "$containers.new" || :; mv "$containers.new" "$containers" ;;
+  run)
+    # psql in the postgres image: a CREATE adds the database, refused when
+    # it exists; a DROP IF EXISTS takes it. Under create-lost the CREATE
+    # completes and its client fails all the same.
+    sql=${!#} name=$(printf '%s' "${!#}" | sed -n 's/.*DATABASE[^"]*"\([^"]*\)".*/\1/p')
+    case "$sql" in
+      'CREATE DATABASE'*)
+        ! grep -qxF "$name" "$databases" || exit 1
+        echo "$name" >> "$databases"
+        ! fails create-lost || exit 1 ;;
+      'DROP DATABASE IF EXISTS'*) grep -vxF "$name" "$databases" > "$databases.new" || :; mv "$databases.new" "$databases" ;;
+    esac ;;
 esac
 exit 0
 FAKE
@@ -226,7 +257,41 @@ for a in "$@"; do
 done
 exec "$REAL_PYTHON3" "$@"
 FAKE
-chmod +x "$scratch/bin/go" "$scratch/bin/gofmt" "$scratch/bin/govulncheck" "$scratch/bin/trivy" "$scratch/bin/docker" "$scratch/bin/python3"
+chmod +x "$scratch/trivy-release/trivy"
+# curl serves trivy's release from the stand-in (an archive of the
+# trivy above and a checksums file naming its sha256, or under
+# STUB_TRIVY_BAD_SUM another), recording each URL in curl.calls, and
+# fetches anything else for real; npm records an audit in tools.calls and
+# runs anything else as itself.
+REAL_CURL=$(command -v curl) || fail 'no curl on PATH'
+REAL_NPM=$(command -v npm) || fail 'no npm on PATH'
+tar -czf "$scratch/trivy-archive.tar.gz" -C "$scratch/trivy-release" trivy
+cat > "$scratch/bin/curl" <<'FAKE'
+#!/usr/bin/env bash
+url=${!#} out= prev=
+for a in "$@"; do [ "$prev" != -o ] || out=$a; prev=$a; done
+case "$url" in
+  https://github.com/aquasecurity/trivy/releases/download/*)
+    echo "$url" >> "$TRACE/curl.calls"
+    name=${url##*/}
+    case "$name" in
+      *_checksums.txt)
+        sum=$(sha256sum "$TRIVY_RELEASE.tar.gz" | cut -d' ' -f1)
+        [ -z "${STUB_TRIVY_BAD_SUM:-}" ] || sum=$(printf '%064d' 0)
+        for p in Linux-64bit Linux-ARM64 macOS-64bit macOS-ARM64; do echo "$sum  ${name%_checksums.txt}_$p.tar.gz"; done > "$out" ;;
+      *.tar.gz) cp "$TRIVY_RELEASE.tar.gz" "$out" ;;
+      *) exit 22 ;;
+    esac
+    exit 0 ;;
+esac
+exec "$REAL_CURL" "$@"
+FAKE
+cat > "$scratch/bin/npm" <<'FAKE'
+#!/usr/bin/env bash
+if [ "${1:-}" = audit ]; then printf '%s|npm %s\n' "$PWD" "$*" >> "$TRACE/tools.calls"; exit 0; fi
+exec "$REAL_NPM" "$@"
+FAKE
+chmod +x "$scratch/bin/go" "$scratch/bin/gofmt" "$scratch/bin/govulncheck" "$scratch/bin/trivy" "$scratch/bin/docker" "$scratch/bin/python3" "$scratch/bin/curl" "$scratch/bin/npm"
 # The release boot and the close's proofs, which each start releases and
 # browsers, stand in through BASH_ENV, which bash sources before a script
 # runs: each records `script arguments` and what its environment chooses
@@ -252,7 +317,9 @@ FAKE
 # harness test starts a wrapper, as the leader of a session of its
 # own, with SIGINT and SIGHUP at their defaults (an asynchronous command
 # starts with SIGINT ignored, a caller may have HUP ignored, and a shell
-# cannot trap a signal ignored at its start). Its
+# cannot trap a signal ignored at its start), and TMPDIR, where its
+# registry and ledgers live, $scratch/NAME.tmp unless the case names one,
+# so no stand-in ledger is ever a real gate's to finish. Its
 # stdout and stderr go to $scratch/NAME.out and .err, its trace to
 # $scratch/NAME.trace, and its pid to $gate_pid.
 start_gate() {
@@ -260,11 +327,12 @@ start_gate() {
   shift
   while [ "$1" != -- ]; do vars+=("$1"); shift; done
   shift
-  mkdir -p "$scratch/$name.trace"
+  mkdir -p "$scratch/$name.trace" "$scratch/$name.tmp"
   contain_start -g 60 perl -e '$SIG{INT} = $SIG{HUP} = "DEFAULT"; exec @ARGV or die "exec $ARGV[0]: $!\n"' \
     env -u HEAVY_CHECK_HELD -u CONTAIN_REGISTRY -u CONTAIN_CLOSE_FDS -u CONTAIN_HOLD_FDS \
     TRACE="$scratch/$name.trace" PATH="$scratch/bin:$PATH" REAL_MIX="$REAL_MIX" CYFR_DATABASE_URL='postgres://u:p@host/base' \
-    REAL_PYTHON3="$REAL_PYTHON3" GATE_ROOT="$root" BASH_ENV="$scratch/stub.bash_env" \
+    REAL_PYTHON3="$REAL_PYTHON3" GATE_ROOT="$root" BASH_ENV="$scratch/stub.bash_env" TMPDIR="$scratch/$name.tmp" \
+    REAL_CURL="$REAL_CURL" REAL_NPM="$REAL_NPM" TRIVY_RELEASE="$scratch/trivy-archive" \
     ${vars[@]+"${vars[@]}"} bash "$@" >"$scratch/$name.out" 2>"$scratch/$name.err" </dev/null
   gate_pid=$CONTAIN_PID
 }
@@ -707,10 +775,9 @@ path_without() {
   done
   echo "$out"
 }
-# No go, no trivy under --close, a go other than go.mod's, a docker with no
-# daemon: each refused with 69, naming it, before the log directory or any
-# leg. Without --close trivy is not asked for: the log directory check,
-# given a file, is what refuses that gate.
+# No go, a go other than go.mod's, a docker with no daemon: each refused
+# with 69, naming it, before the log directory or any leg. No trivy is
+# asked for: the close installs its own (the close case runs without one).
 # refused_for NAME REASON VAR [GATE FLAG]
 refused_for() {
   local name=$1 reason=$2 var=$3
@@ -725,22 +792,25 @@ refused_for() {
 nogo_path=$(path_without go)
 notrivy_path=$(path_without trivy)
 refused_for nogo 'go is not on PATH' "PATH=$nogo_path"
-refused_for notrivy 'trivy is not on PATH' "PATH=$notrivy_path" --close
 refused_for goversion "go on PATH is go1.0.0 and apps/codex/go.mod names go1\\.[0-9.]+, which CI.s setup-go installs" STUB_GO_VERSION=go1.0.0
 refused_for nodaemon 'docker reaches no daemon' STUB_DOCKER_DOWN=1
-run_gate notrivy-open PATH="$notrivy_path" -- "$gate" -l "$scratch/a-file"
-[ "$gate_rc" = 64 ] && has_line 'the log directory .* is not a directory' "$scratch/notrivy-open.err" ||
-  fail "a gate without --close asked for trivy: $gate_rc $(cat "$scratch/notrivy-open.err")"
-echo 'ok: go, trivy and docker missing, and go not the version go.mod names'
+echo 'ok: go and docker missing, and go not the version go.mod names'
 
 # --- a leg run alone ----------------------------------------------------------------
+# The ledger home a gate run with TMPDIR $1 keeps, as the gate names it.
+ledger_home() { echo "$1/cyfr-gate-ledger.$(printf '%s' "$root" | cksum | awk '{ print $1 }')"; }
 # start_leg NAME LEG [VAR=value...]: the leg as the gate starts it, with a
-# fresh log directory and the gate's options in its environment.
+# fresh log directory, the gate's options in its environment, and a ledger
+# in the case's TMPDIR whose gate is gone (no process started then), as a
+# killed gate would leave it for the next.
 start_leg() {
-  local name=$1 leg=$2
+  local name=$1 leg=$2 ledger
   shift 2
-  mkdir -p "$scratch/$name.log"
-  start_gate "$name" GATE_LEG_LOGDIR="$scratch/$name.log" GATE_LEG_PARTS=2 GATE_LEG_CLOSE=false "$@" -- "$gate" --leg "$leg"
+  ledger="$(ledger_home "$scratch/$name.tmp")/leg.$name"
+  mkdir -p "$scratch/$name.log" "$ledger"
+  echo '1 never' > "$ledger/owner"
+  start_gate "$name" GATE_LEG_LOGDIR="$scratch/$name.log" GATE_LEG_PARTS=2 GATE_LEG_CLOSE=false \
+    GATE_LEG_LEDGER="$ledger" "$@" -- "$gate" --leg "$leg"
 }
 # --- the islands' copy lists ----------------------------------------------------
 # Each island's list is read from its test.yml job: the application, the
@@ -959,7 +1029,8 @@ for leg in go audit boot; do
 done
 for job in 'go.codex_test: codex-ci.yml test: 6 steps' 'go.keeper: keeper-ci.yml keeper: 5 steps' \
   'audit.spdx: license-lint.yml spdx-headers: 2 steps' 'audit.govuln_codex: security.yml go-audit tree=apps/codex: 2 steps' \
-  'audit.govuln_keeper: security.yml go-audit tree=apps/locus/keeper: 2 steps' 'audit.elixir_audit: security.yml elixir-audit: 5 steps'; do
+  'audit.govuln_keeper: security.yml go-audit tree=apps/locus/keeper: 2 steps' 'audit.elixir_audit: security.yml elixir-audit: 5 steps' \
+  'audit.npm_audit: security.yml npm-audit: 1 step'; do
   grep -qxF "    $job passed" "$scratch/pass.out" || fail "the passing gate did not report $job passed: $(cat "$scratch/pass.out")"
 done
 # Each Go step as its workflow runs it, in its module; the keeper's run as
@@ -979,6 +1050,13 @@ for want in "$root/apps/codex|gofmt -l ." "$root/apps/locus/keeper|gofmt -l . ..
   grep -qxF -- "$want" "$pt/tools.calls" || fail "the gate did not run $want: $(cat "$pt/tools.calls")"
 done
 no_line 'writable-cgroups=true' "$pt/docker.calls" || fail "the gate ran the keeper's suite as root"
+# npm audit of every shipped tincture lockfile, as security.yml's job runs it.
+locks=$(cd "$root" && find seed/components -name package-lock.json -not -path '*/node_modules/*' | sort)
+[ -n "$locks" ] || fail 'no shipped lockfile for the npm audit to read'
+[ "$(grep '|npm audit' "$pt/tools.calls" | sort)" = "$(for l in $locks; do echo "$root/${l%/package-lock.json}|npm audit --omit=dev --audit-level=high"; done | sort)" ] ||
+  fail "npm audit did not read every shipped lockfile: $(grep 'npm audit' "$pt/tools.calls")"
+# Nothing the legs made is left, and no ledger.
+[ -z "$(ls -A "$scratch/pass.tmp")" ] || fail "the passing gate left $(ls -A "$scratch/pass.tmp") in TMPDIR"
 # The Elixir audit's Mix under its own build path, in the environment
 # security.yml gives it.
 for want in "-|-|$root/_build/audit|-|$root|compile" "-|-|$root/_build/audit|-|$root|hex.audit" \
@@ -1014,7 +1092,8 @@ echo 'ok: the go, audit and boot legs as their workflows run them'
 mkdir -p "$scratch/close.trace"
 printf '%s\n' 'cyfr-locus:smoke sha256:older' 'cyfr:latest sha256:users' 'postgres:18.6 sha256:pg' > "$scratch/close.trace/docker.images"
 cp "$scratch/close.trace/docker.images" "$scratch/close.images.before"
-run_gate close -- "$gate" --close -n 2 -l "$scratch/close.log"
+# The close runs on a PATH holding no trivy: it installs its own.
+run_gate close PATH="$notrivy_path" -- "$gate" --close -n 2 -l "$scratch/close.log"
 [ "$gate_rc" = 0 ] || fail "a close whose every step passes exited $gate_rc: $(cat "$scratch/close.err")"
 framed close "$gate_pid" 0
 ct="$scratch/close.trace" cl=$(cd "$scratch/close.log" && pwd -P)
@@ -1083,7 +1162,11 @@ diff <(sed "s/PREFIX/$prefix/" "$scratch/close.want") "$scratch/close.got" > "$s
   fail "the close's suites and proofs are not the jobs' in their order: $(cat "$scratch/close.diff")"
 # The scans: each image's as its job's step runs it, then the repository's
 # secret and misconfiguration scans, each of the tree git tracks.
-[ "$(grep -v -- '|--version$' "$ct/trivy.calls" | sed 's/^[^|]*|//')" = 'image --format table --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --ignorefile .trivyignore.yaml cyfr-locus:smoke
+no_line '^host\|' "$ct/trivy.calls" || fail "a scan ran a trivy the close did not install: $(cat "$ct/trivy.calls")"
+[ "$(tr '\n' ' ' < "$ct/curl.calls")" = "https://github.com/aquasecurity/trivy/releases/download/v$trivy_pin/trivy_${trivy_pin}_Linux-64bit.tar.gz https://github.com/aquasecurity/trivy/releases/download/v$trivy_pin/trivy_${trivy_pin}_checksums.txt " ] ||
+  fail "the close did not fetch trivy $trivy_pin and its checksums: $(cat "$ct/curl.calls")"
+has_line '^trivy_install=0$' "$scratch/close.log/harness.summary" || fail 'the close did not install trivy'
+[ "$(sed 's/^installed|[^|]*|//' "$ct/trivy.calls")" = 'image --format table --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --ignorefile .trivyignore.yaml cyfr-locus:smoke
 image --format table --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --ignorefile .trivyignore.yaml cyfr-locus:runtime
 image --format table --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --ignorefile .trivyignore.yaml cyfr:push
 fs --scanners secret --format table --exit-code 1 .
@@ -1110,7 +1193,9 @@ no_line "^c0ffee " "$ct/docker.containers" || fail "the container a suite left w
 has_line '^rm -f c0ffee$' "$ct/docker.calls" || fail 'the leftover container was not removed by its id'
 diff <(sort "$scratch/close.images.before") <(sort "$ct/docker.images") > "$scratch/close.images.diff" ||
   fail "the close left the image store changed: $(cat "$scratch/close.images.diff")"
-[ -z "$(find "$scratch/close.log" -maxdepth 1 -name '*.temp')" ] || fail "a job's RUNNER_TEMP was left: $(find "$scratch/close.log" -maxdepth 1 -name '*.temp')"
+[ -z "$(find "$scratch/close.log" -maxdepth 1 -name '*.temp' -o -maxdepth 1 -name harness.tools)" ] ||
+  fail "a job's RUNNER_TEMP or the run's trivy was left: $(find "$scratch/close.log" -maxdepth 1 -name '*.temp' -o -maxdepth 1 -name harness.tools)"
+[ -z "$(ls -A "$scratch/close.tmp")" ] || fail "the close left $(ls -A "$scratch/close.tmp") in TMPDIR"
 echo 'ok: a close builds both images, runs the image jobs, the browser shards and the scans as CI does, and leaves no image or container'
 
 # --- a close stopped in a proof; a boot at its deadline ---------------------------
@@ -1143,7 +1228,7 @@ no_line "^deadbeef " "$scratch/hterm.trace/docker.containers" || fail 'a close s
 start_leg harness-ls harness STUB_DOCKER_LS_FAILS=1
 gate_status "$gate_pid"
 [ "$gate_rc" = 1 ] || fail "a harness leg that could not read the image store exited $gate_rc"
-[ "$(tr '\n' ' ' < "$scratch/harness-ls.log/harness.summary")" = 'images_read=1 ' ] ||
+[ "$(tr '\n' ' ' < "$scratch/harness-ls.log/harness.summary")" = 'images_read=1 cleanup=0 ' ] ||
   fail "an unreadable image store was not recorded alone: $(tr '\n' ' ' < "$scratch/harness-ls.log/harness.summary")"
 no_line '^build ' "$scratch/harness-ls.trace/docker.calls" || fail 'a harness leg built images over an unreadable store'
 echo 'ok: a close stopped in a proof takes its image tags off and its suites'"'"' leftovers away'
@@ -1159,12 +1244,138 @@ stalled=$(cat "$scratch/bootdl.trace/stalled.harness")
 gate_status "$b"; [ "$gate_rc" = 1 ] || fail "a gate whose boot reached its deadline exited $gate_rc"
 dead "$stalled" || fail 'the stalled boot outlived its deadline'
 has_line '^boot_postgres=124$' "$scratch/bootdl.log/boot.summary" || fail "the stalled boot was not recorded at its deadline: $(cat "$scratch/bootdl.log/boot.summary")"
-has_line '^boot_database_drop=0$' "$scratch/bootdl.log/boot.summary" || fail "the boot leg did not drop its database after the deadline: $(cat "$scratch/bootdl.log/boot.summary")"
+has_line '^cleanup=0$' "$scratch/bootdl.log/boot.summary" || fail "the boot leg did not drop its database after the deadline: $(cat "$scratch/bootdl.log/boot.summary")"
+[ ! -s "$scratch/bootdl.trace/databases" ] || fail "the boot leg's database is still there: $(cat "$scratch/bootdl.trace/databases")"
 db=$(sed -n 's/.*CREATE DATABASE "\([a-z0-9_]*\)"$/\1/p' "$scratch/bootdl.trace/docker.calls")
 [ -n "$db" ] && has_line "DROP DATABASE IF EXISTS \"$db\" WITH \(FORCE\)$" "$scratch/bootdl.trace/docker.calls" ||
   fail "the database the boot leg created was not dropped: $(grep DATABASE "$scratch/bootdl.trace/docker.calls")"
 has_line '^==> boot +FAILED ' "$scratch/bootdl.out" || fail 'the boot leg was not reported failed'
 echo 'ok: a boot at its deadline is stopped and its database dropped'
+
+# --- what the legs make, undone however they end ---------------------------------
+# seed NAME: the case's image store, one tag the close also gives
+# (cyfr-locus:smoke, on an image it alone names) and one it leaves alone,
+# kept as NAME.images.before.
+seed() {
+  mkdir -p "$scratch/$1.trace"
+  printf '%s\n' 'cyfr-locus:smoke sha256:older' 'cyfr:latest sha256:users' > "$scratch/$1.trace/docker.images"
+  cp "$scratch/$1.trace/docker.images" "$scratch/$1.images.before"
+}
+same_store() { diff <(sort "$scratch/$1.images.before") <(sort "$scratch/$1.trace/docker.images"); }
+# next_gate NAME: the next gate of the checkout, on NAME's TMPDIR and image
+# store, refused at its log directory once it has finished what was left.
+next_gate() {
+  echo text > "$scratch/$1.not-a-dir"
+  run_gate "$1-next" TMPDIR="$scratch/$1.tmp" TRACE="$scratch/$1.trace" -- "$gate" -l "$scratch/$1.not-a-dir"
+  [ "$gate_rc" = 64 ] || fail "the gate after $1 exited $gate_rc: $(cat "$scratch/$1-next.err")"
+  has_line '==> finishing what the gate of ' "$scratch/$1-next.err" || fail "the gate after $1 finished nothing: $(cat "$scratch/$1-next.err")"
+  [ -z "$(ls -A "$scratch/$1.tmp")" ] || fail "the gate after $1 left its ledger: $(find "$scratch/$1.tmp")"
+}
+
+# A tag that cannot be given back fails the leg and keeps its hold, so the
+# image the store held stays referenced; the next gate, the failure gone,
+# gives it back and takes the hold off.
+seed restore
+start_leg restore harness STUB_DOCKER_FAIL=tag:sha256:older:cyfr-locus:smoke
+gate_status "$gate_pid"
+[ "$gate_rc" = 1 ] || fail "a harness leg whose restore failed exited $gate_rc"
+has_line ' sha256:older$' "$scratch/restore.trace/docker.images" || fail "a failed restore lost the image the store held: $(cat "$scratch/restore.trace/docker.images")"
+has_line '^cleanup=1$' "$scratch/restore.log/harness.summary" || fail 'a failed restore was not recorded'
+next_gate restore
+same_store restore || fail "the gate after a failed restore did not give the store back: $(cat "$scratch/restore.trace/docker.images")"
+echo 'ok: a failed restore keeps the hold and fails the leg; the next gate finishes it'
+
+# A container that cannot be removed fails the leg, and stays in its
+# ledger for the next gate, which removes it.
+seed sweep
+start_leg sweep harness STUB_DOCKER_FAIL=rm
+gate_status "$gate_pid"
+[ "$gate_rc" = 1 ] || fail "a harness leg whose container could not be removed exited $gate_rc"
+has_line '^c0ffee ' "$scratch/sweep.trace/docker.containers" || fail 'the stand-in removed what it was told to refuse'
+has_line 'could not be removed' "$scratch/sweep.err" || fail "a failed removal was not named: $(cat "$scratch/sweep.err")"
+next_gate sweep
+no_line '^c0ffee ' "$scratch/sweep.trace/docker.containers" || fail 'the gate after a failed removal left the container'
+same_store sweep || fail "the gate after a failed removal did not give the store back: $(cat "$scratch/sweep.trace/docker.images")"
+echo 'ok: a failed removal fails the leg; the next gate removes what is left'
+
+# A refused start (a bad descriptor base) leaves nothing: the leg's first
+# docker call is contained, so it is refused before anything is made.
+seed refusal
+start_leg refusal harness CONTAIN_FD_BASE=x
+gate_status "$gate_pid"
+[ "$gate_rc" = 64 ] || fail "a harness leg whose start was refused exited $gate_rc"
+same_store refusal || fail "a refused harness leg changed the image store: $(cat "$scratch/refusal.trace/docker.images")"
+[ -z "$(find "$scratch/refusal.log" -maxdepth 1 -name '*.temp')" ] || fail 'a refused harness leg left a RUNNER_TEMP'
+echo 'ok: a refused start leaves no hold, tag or RUNNER_TEMP'
+
+# A docker call past its deadline is stopped: a hold that takes ten
+# seconds under a three-second deadline fails the leg at once.
+seed holddl
+start_leg holddl harness STUB_DOCKER_SLOW=tag GATE_STEP_DEADLINE=3
+began=$SECONDS
+gate_status "$gate_pid"
+[ "$gate_rc" = 1 ] || fail "a harness leg whose hold reached its deadline exited $gate_rc"
+[ $((SECONDS - began)) -lt 9 ] || fail "a hold past its deadline held the leg $((SECONDS - began))s"
+has_line '^images_held=1$' "$scratch/holddl.log/harness.summary" || fail "the hold's deadline was not recorded: $(cat "$scratch/holddl.log/harness.summary")"
+has_line 'stopped at its deadline' "$scratch/holddl.log/harness.docker.log" || fail 'the hold was not stopped at its deadline'
+same_store holddl || fail "a hold stopped at its deadline left the store changed: $(cat "$scratch/holddl.trace/docker.images")"
+echo 'ok: a docker call of the leg is held to its deadline'
+
+# A CREATE that completed while its client failed: the name was in the
+# ledger first, so the leg drops it.
+mkdir -p "$scratch/create.log"
+: > "$scratch/create.log/static.done"; : > "$scratch/create.log/postgres.done"
+start_leg create boot STUB_DOCKER_FAIL=create-lost
+gate_status "$gate_pid"
+[ "$gate_rc" = 1 ] || fail "a boot leg whose CREATE answered a failure exited $gate_rc"
+db=$(sed -n 's/.*CREATE DATABASE "\([a-z0-9_]*\)"$/\1/p' "$scratch/create.trace/docker.calls")
+[ -n "$db" ] && has_line "DROP DATABASE IF EXISTS \"$db\" WITH \(FORCE\)$" "$scratch/create.trace/docker.calls" ||
+  fail "a CREATE that completed was not dropped: $(grep DATABASE "$scratch/create.trace/docker.calls")"
+[ ! -s "$scratch/create.trace/databases" ] || fail "the boot leg left its database: $(cat "$scratch/create.trace/databases")"
+echo 'ok: a CREATE whose client failed is dropped all the same'
+
+# The leg killed outright in its canvas proof, the gate alive: the gate
+# undoes what the leg's ledger lists.
+seed killed
+start_gate killed STUB_HARNESS_STALL=canvas-proof -- "$gate" --close -n 2 -l "$scratch/killed.log"
+k=$gate_pid
+until_true 300 test -s "$scratch/killed.trace/stalled.harness" || fail "the close never reached its canvas proof: $(cat "$scratch/killed.err")"
+leg=$(pgrep -P "$k" -f -- '--leg harness' | head -n 1)
+[ -n "$leg" ] || fail 'the harness leg was not found running'
+kill -KILL "$leg"
+gate_status "$k"
+[ "$gate_rc" = 1 ] || fail "a close whose harness leg was killed exited $gate_rc"
+has_line '^gate_cleanup=0$' "$scratch/killed.log/harness.summary" || fail "the gate did not undo what the killed leg left: $(cat "$scratch/killed.log/harness.summary")"
+same_store killed || fail "a killed harness leg left the store changed: $(cat "$scratch/killed.trace/docker.images")"
+[ -z "$(find "$scratch/killed.log" -maxdepth 1 -name '*.temp' -o -maxdepth 1 -name harness.tools)" ] || fail 'a killed harness leg left its RUNNER_TEMP or tools'
+[ -z "$(ls -A "$scratch/killed.tmp")" ] || fail "the gate left $(ls -A "$scratch/killed.tmp") in TMPDIR"
+echo 'ok: a harness leg killed outright is undone by its gate'
+
+# The leg killed with no gate left: the next gate finishes it.
+seed orphan
+start_leg orphan harness STUB_HARNESS_STALL=canvas-proof
+until_true 120 test -s "$scratch/orphan.trace/stalled.harness" || fail "the leg never reached its canvas proof: $(cat "$scratch/orphan.err")"
+stalled=$(cat "$scratch/orphan.trace/stalled.harness")
+kill -KILL "$gate_pid"
+gate_status "$gate_pid"
+until_true 30 dead "$stalled" || fail 'the killed leg left its proof running'
+! same_store orphan >/dev/null || fail 'the killed leg had changed nothing to leave'
+next_gate orphan
+same_store orphan || fail "the gate after a killed leg did not give the store back: $(cat "$scratch/orphan.trace/docker.images")"
+[ -z "$(find "$scratch/orphan.log" -maxdepth 1 -name '*.temp' -o -maxdepth 1 -name harness.tools)" ] || fail 'the gate after a killed leg left its RUNNER_TEMP'
+echo 'ok: a harness leg killed with its gate is finished by the next gate'
+
+# trivy's archive that does not match its release's checksum is not
+# installed, and no scan runs a trivy the close did not install.
+seed badsum
+start_leg badsum harness STUB_TRIVY_BAD_SUM=1
+gate_status "$gate_pid"
+[ "$gate_rc" = 1 ] || fail "a harness leg whose trivy did not install exited $gate_rc"
+has_line '^trivy_install=1$' "$scratch/badsum.log/harness.summary" || fail 'a trivy that failed its checksum was installed'
+no_line '^installed\|' "$scratch/badsum.trace/trivy.calls" 2>/dev/null || fail 'a trivy that failed its checksum ran'
+has_line 'is not 0\.[0-9.]+, the version the step pins' "$scratch/badsum.log/harness.builder_image_10.log" || fail "a scan ran without the pinned trivy: $(cat "$scratch/badsum.log/harness.builder_image_10.log")"
+same_store badsum || fail "the harness leg left the store changed: $(cat "$scratch/badsum.trace/docker.images")"
+echo 'ok: trivy is installed only as its release checksums it, and a scan needs that one'
 
 # --- a whole gate: a stalled island, build paths, the pg leg, the framing --------
 # Started by a relative path from another directory; the caller's build
