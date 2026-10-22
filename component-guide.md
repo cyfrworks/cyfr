@@ -1329,7 +1329,7 @@ For tincture development loop, see the [Tincture Reference](tincture-guide.md).
 | `duration_ms` | Wall-clock execution time |
 | `policy_applied` | Effective policy used for this execution |
 
-> **`cyfr build compile` auto-registers** — if you build manually with `cargo component build`, run `cyfr register` afterwards. The registry stores a SHA-256 digest and you'll get a `DIGEST_MISMATCH` error if the binary on disk doesn't match.
+> **`cyfr build compile` auto-registers** — if you build manually with `cargo component build`, run `cyfr register` afterwards. The registry stores a SHA-256 digest and you'll get a `corrupt` error if the binary on disk doesn't match.
 
 **Debugging**: `println!`/`eprintln!` reach nothing — a guest inherits neither stdout nor stderr, so what a component wants to say it says through [`emit`](#cyfremitevents--emitjson-event---string), which is bounded, masked and sequenced onto the execution's event stream. The console shows each execution as it runs at `/a/<athanor>/executions`.
 
