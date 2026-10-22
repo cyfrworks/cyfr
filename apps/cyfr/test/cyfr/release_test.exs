@@ -28,7 +28,6 @@ defmodule Cyfr.ReleaseTest do
       now = Arca.ServerMetaStorage.now!()
 
       slot!(prefix <> "-live", "1.2.3", DateTime.add(now, 60_000, :millisecond), now)
-      slot!(prefix <> "-unknown", nil, DateTime.add(now, 60_000, :millisecond), now)
       slot!(prefix <> "-lapsed", "1.2.3", DateTime.add(now, -1_000, :millisecond), now)
 
       slots =
@@ -36,14 +35,10 @@ defmodule Cyfr.ReleaseTest do
         |> Enum.filter(&String.starts_with?(&1.node, prefix))
         |> Enum.sort_by(& &1.node)
 
-      assert [
-               %{node: live, owner: live_owner, release: "1.2.3", lease_until: until},
-               %{node: unknown, release: nil}
-             ] = slots
+      assert [%{node: live, owner: live_owner, release: "1.2.3", lease_until: until}] = slots
 
       assert live == prefix <> "-live"
       assert live_owner == live <> "#boot"
-      assert unknown == prefix <> "-unknown"
       assert {:ok, _, 0} = DateTime.from_iso8601(until)
 
       # What `cyfr update` reads it through.

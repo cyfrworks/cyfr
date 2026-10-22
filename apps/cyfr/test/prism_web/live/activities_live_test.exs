@@ -192,8 +192,11 @@ defmodule PrismWeb.ActivitiesLiveTest do
   # An execution row of another athanor under `request_id`, written as the
   # store holds it: nobody is seated there to start a run.
   defp foreign_execution!(athanor_id, request_id) do
+    id = Prima.UUID7.execution_id()
+
     Arca.Repo.insert!(%Arca.Schemas.Execution{
-      id: Prima.UUID7.execution_id(),
+      id: id,
+      root_execution_id: id,
       reference: "formula:local.foreign-fixture:0.1.0",
       user_id: "user_foreign",
       athanor_id: athanor_id,
