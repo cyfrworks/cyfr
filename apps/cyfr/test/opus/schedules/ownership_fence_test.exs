@@ -1553,9 +1553,12 @@ defmodule Opus.Schedules.OwnershipFenceTest do
   # A live member's started occurrence whose run's execution is still
   # running, its claim two ticks old. Answers it and its execution.
   defp running_live!(ctx, schedule) do
+    root = Prima.UUID7.execution_id()
+
     execution =
       Arca.Repo.insert!(%Arca.Schemas.Execution{
-        id: Prima.UUID7.execution_id(),
+        id: root,
+        root_execution_id: root,
         reference: "reagent:local.test:1.0.0",
         user_id: ctx.user_id,
         athanor_id: ctx.athanor_id,
@@ -1592,8 +1595,11 @@ defmodule Opus.Schedules.OwnershipFenceTest do
           "exec_gone_#{System.unique_integer([:positive])}"
 
         completed_at ->
+          root = Prima.UUID7.execution_id()
+
           Arca.Repo.insert!(%Arca.Schemas.Execution{
-            id: Prima.UUID7.execution_id(),
+            id: root,
+            root_execution_id: root,
             reference: "reagent:local.test:1.0.0",
             user_id: ctx.user_id,
             athanor_id: ctx.athanor_id,
