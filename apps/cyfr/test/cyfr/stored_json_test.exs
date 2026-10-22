@@ -51,6 +51,7 @@ defmodule Cyfr.StoredJsonTest do
       Arca.Repo.insert_all(Arca.Schemas.Execution, [
         %{
           id: exec,
+          root_execution_id: exec,
           athanor_id: ctx.athanor_id,
           user_id: ctx.user_id,
           reference: "reagent:local.stored:0.1.0",
@@ -92,6 +93,7 @@ defmodule Cyfr.StoredJsonTest do
           name: id,
           cron_expression: "0 * * * *",
           reference: "reagent:local.stored:0.1.0",
+          resolved_reference: "reagent:local.stored:0.1.0",
           input: @corrupt,
           metadata: "",
           status: "active",
@@ -174,7 +176,8 @@ defmodule Cyfr.StoredJsonTest do
 
     # A corrupt allowlist is a corrupt security row, not an absent
     # restriction: the retained context no longer stands, from the admitted
-    # address or any other.
+    # address or any other. The allowlist's one reader is its owner's
+    # (`Sanctum.ApiKey.decode_allowlist/1`), whose line it is.
     log =
       capture_log(fn ->
         for ip <- ["127.0.0.1", "203.0.113.7"] do
@@ -183,7 +186,7 @@ defmodule Cyfr.StoredJsonTest do
         end
       end)
 
-    assert_logged(log, "Sanctum.Caller", "ip_allowlist")
+    assert_logged(log, "Sanctum.ApiKey", "ip_allowlist")
   end
 
   test "Sanctum.Vault and Sanctum.VaultReader read a corrupt binding column as empty", %{
