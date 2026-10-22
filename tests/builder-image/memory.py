@@ -16,7 +16,8 @@ that asks for a bound.
 own uids, with a client that speaks the keeper's protocol
 (tests/fixtures/keeper_protocol.json):
 
-- a bound that is zero, not a number or above the maximum is refused, and a
+- a spawn naming no bound, or a bound that is zero, not a number or above
+  the maximum, is refused as a bad request and nothing is spawned, and a
   command runs under the least bound the protocol allows;
 - beside a sibling spawn that holds 64 MiB under its bound and completes,
   three hostile spawns end at theirs, reported `memory_exceeded` with
@@ -26,9 +27,9 @@ own uids, with a client that speaks the keeper's protocol
 - no group's peak, as the kernel accounts it, passed its bound; no process
   of their uids, no home and no group is left; the release and the
   container were not touched;
-- where the service gives cyfr-locus no writable cgroup, every spawn that
-  asks for a bound is refused as `memory_unavailable` while one that asks
-  for none runs, and this suite fails, naming the option the service lacks.
+- where the service gives cyfr-locus no writable cgroup, every spawn,
+  each of which asks for a bound, is refused as `memory_unavailable`, and
+  this suite fails, naming the option the service lacks.
 
 The build cases run the same hostile work through the builder's own build
 path, each beside a sibling build: `javascript` (a build script allocating
@@ -240,7 +241,7 @@ def scenario():
         {"name": "a bound of zero", "argv": ["true"], "memory_bytes": 0},
         {"name": "a bound that is not a number", "argv": ["true"], "memory_bytes": "1G"},
         {"name": "a bound above the maximum", "argv": ["true"], "memory_bytes": MAX_BOUND + 1},
-        {"name": "no bound", "argv": ["true"]},
+        {"name": "a spawn with no bound", "argv": ["true"]},
         {"name": "the least bound", "argv": shell("echo ran"), "memory_bytes": MIN_BOUND},
         {"name": "sibling", "argv": ["node", "-e", sibling], "memory_bytes": BOUND},
         {"name": "process", "argv": shell(DAEMON + f"exec node -e '{NODE_ALLOCATOR}'"), "memory_bytes": BOUND},
@@ -410,12 +411,14 @@ def test_keeper(stack, limit, canary):
             print("  keeper: " + line.split("] ", 1)[-1][:300])
 
     expect(not report["timed_out"], "every spawn of the scenario was answered and released", report)
-    for name in ("a bound of zero", "a bound that is not a number", "a bound above the maximum"):
+    for name in (
+        "a spawn with no bound",
+        "a bound of zero",
+        "a bound that is not a number",
+        "a bound above the maximum",
+    ):
         expect(reply(name, "error") and reply(name, "error")["code"] == "bad_request" and not reply(name, "spawned"),
                f"{name} is refused as a bad request", spawns[name])
-    unbounded = reply("no bound", "exited")
-    expect(unbounded and unbounded["code"] == 0 and unbounded["memory_exceeded"] is False,
-           "a spawn asking for no bound runs", spawns["no bound"])
 
     bounded = ("the least bound", "sibling", "process", "tree", "home")
     refused = [name for name in bounded if reply(name, "error")]
