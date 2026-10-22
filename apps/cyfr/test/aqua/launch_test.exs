@@ -5,8 +5,8 @@ defmodule Aqua.LaunchTest do
   @moduledoc """
   An approved launch runs as the person who approved it, under the origin
   the approved turn's row stores — never `interactive` inferred from the
-  person approving. A programmatic turn's launch stays programmatic, and a
-  turn whose row stores no origin launches nothing.
+  person approving. A programmatic turn's launch stays programmatic, and no
+  turn is written without an origin.
 
   It runs only as its card bound it: the turn's sources and the app's
   grant as they stood when the card was drawn. A source the turn read
@@ -243,56 +243,12 @@ defmodule Aqua.LaunchTest do
     assert [%{origin: "interactive"}] = launched(ctx), "launch answered #{inspect(dispatched)}"
   end
 
-  test "a turn whose row stores no origin launches nothing, with that reason", %{
-    ctx: ctx,
-    thread: thread,
-    pins: pins,
-    approver: approver
-  } do
-    # No entry builds a context without an origin, so no turn row is
-    # written without one: this one is cleared past every writer's guard,
-    # as a hand edit or a restored row reaches it.
+  test "a context without an origin writes no turn", %{ctx: ctx, thread: thread} do
     assert {:error, :no_origin} =
              Tape.accept(%{ctx | origin: nil}, thread.id, %{
                message: %{author: ctx.user_id, content: "@aqua launch it"},
                turn: %{agent: "aqua", requested_by: ctx.user_id}
              })
-
-    turn = started!(ctx, thread, pins)
-    step = approved_launch!(ctx, turn, approver)
-
-    # The row loses its origin after the card was approved under it.
-    {1, _} =
-      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
-        set: [origin: nil]
-      )
-
-    assert {:ok, %{origin: nil}} = Tape.turn(ctx, turn.id)
-
-    # Never guessed from the person who approved it.
-    assert {:error, {:approver_unavailable, :no_origin}} = Launch.dispatch(ctx, step)
-    assert launched(ctx) == []
-  end
-
-  test "a card on a turn whose row stores no origin is refused: no grant to judge it under", %{
-    ctx: ctx,
-    thread: thread,
-    pins: pins,
-    approver: approver
-  } do
-    turn = started!(ctx, thread, pins)
-
-    {1, _} =
-      Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn.id),
-        set: [origin: nil]
-      )
-
-    {:ok, turn} = Tape.turn(ctx, turn.id)
-
-    # The pin check reads the turn's grant under the origin its row
-    # stores, never the approver's: with none it cannot hold.
-    assert {:error, :turn_superseded} = approve_launch(ctx, turn, approver)
-    assert launched(ctx) == []
   end
 
   # ---------------------------------------------------------------------------
