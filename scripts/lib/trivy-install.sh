@@ -26,9 +26,9 @@ case "$(uname -s):$(uname -m)" in
   *) echo "trivy-install: no trivy release for $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac
 
-if [ -x "$dir/trivy" ] && "$dir/trivy" --version 2>/dev/null | grep -qx "Version: $version"; then
-  exit 0
-fi
+have=
+[ ! -x "$dir/trivy" ] || have=$("$dir/trivy" --version 2>/dev/null) || have=
+case $'\n'"$have"$'\n' in *$'\n'"Version: $version"$'\n'*) exit 0 ;; esac
 
 name="trivy_${version}_$platform.tar.gz"
 base="https://github.com/aquasecurity/trivy/releases/download/v$version"

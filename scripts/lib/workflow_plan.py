@@ -3,11 +3,22 @@
 """One job of a GitHub workflow as the commit gate runs it on this host.
 
     python3 -I scripts/lib/workflow_plan.py ROOT WORKFLOW JOB PLAN_DIR TEMP_DIR \
-        [KEY=VALUE]... [--except STEP]... [--only STEP] [--env NAME=VALUE]...
+        [KEY=VALUE]... [--except STEP]... [--only STEP] [--env NAME=VALUE]... \
+        [--image-namespace NS] [--artifacts DIR]
     python3 -I scripts/lib/workflow_plan.py --trivy-version ROOT
+    python3 -I scripts/lib/workflow_plan.py --image-tags
 
 The second form prints the one trivy release every trivy-action step of
-the workflows pins, and fails when they pin more than one.
+the workflows pins, and fails when they pin more than one; the third the
+table of image tags below, a tag a line with the variable beside it.
+
+With --image-namespace NS every image tag of the table a step names (in
+its script, its env, a build's tags or a scan's image) is NS/TAG instead,
+so the job builds and runs images of the gate's own and touches no tag
+the host has; each variable of the table is set to its tag's NS/TAG for
+every step; and a step naming a tag of the table's repositories the
+table does not hold fails the plan. An upload step keeps its files under
+DIR/NAME (--artifacts).
 
 KEY=VALUE picks the job's matrix entry (each key the matrix has, its value
 one the matrix lists; an `include` entry is picked by the keys given).
@@ -28,10 +39,8 @@ KIND is `run` (the step's script), `trivy` (aquasecurity/trivy-action as
 the trivy command line it runs, failing unless the trivy on PATH is the
 release the step pins), `build` (docker/build-push-action as
 `docker build`, under --only), `built` (the same step in a whole job: the
-image the gate built is checked present; for both, PLAN_DIR/SLUG.tags
-lists the step's tags), `artifact` (actions/upload-
-artifact, its files copied under TEMP_DIR's parent's artifacts directory)
-`setup` (checkout, toolchain setup, caches, downloads and `mix
+image the gate built is checked present), `artifact` (actions/upload-
+artifact, its files copied under --artifacts), `setup` (checkout, toolchain setup, caches, downloads and `mix
 deps.get`, which this host's checkout already holds: nothing runs), or `-`
 for a step that never runs here. TEMP_DIR is the job's
 RUNNER_TEMP. A `run` step's script is its `run:` text after a preamble
@@ -56,6 +65,27 @@ import shlex
 import sys
 
 import yaml
+
+# The fixed image tags the jobs the gate runs build and name. Under
+# --image-namespace each is run as NS/TAG; a variable beside a tag is one a
+# harness script reads that tag from by default (tests/compose-proof/run.sh
+# takes COMPOSE_PROOF_IMAGE), set to NS/TAG for every step.
+# tests/commit-gate-test.sh holds the table to the jobs the gate runs: a
+# tag of these repositories one of them names that is not here, or one
+# here that none names, fails it.
+IMAGE_TAGS = {
+    "cyfr-locus:ci": None,
+    "cyfr-locus:smoke": None,
+    "cyfr-locus:runtime": None,
+    "cyfr-locus:backends": None,
+    "cyfr-locus:tincture-proof": None,
+    "cyfr:push": None,
+    "cyfr:compose-proof": "COMPOSE_PROOF_IMAGE",
+}
+# A tag of the table's repositories, wherever a step names one: not part
+# of a longer word, a path or a URL's userinfo.
+IMAGE_REF = re.compile(r"(?<![A-Za-z0-9_./:@-])((?:cyfr|cyfr-locus):[A-Za-z0-9_][A-Za-z0-9_.-]*)(?![A-Za-z0-9_.:@/-])")
+NAMESPACE = None
 
 # A step whose whole script is one of these fetches what this checkout
 # already holds, so it is setup too.
@@ -222,9 +252,22 @@ def evaluate(text, ctx, failed=False):
 INLINE = re.compile(r"\$\{\{(.*?)\}\}", re.S)
 
 
+def rename(text):
+    """TEXT with each image tag of the table as the gate's own (NS/TAG)."""
+    if NAMESPACE is None:
+        return text
+
+    def one(m):
+        if m.group(1) not in IMAGE_TAGS:
+            raise Refused(f"it names the image tag {m.group(1)}, which the gate's table of image tags does not hold")
+        return f"{NAMESPACE}/{m.group(1)}"
+    return IMAGE_REF.sub(one, text)
+
+
 def substitute(text, ctx):
-    """A value with each `${{ expression }}` in it replaced by its text."""
-    return INLINE.sub(lambda m: text_of(evaluate(m.group(1), ctx)), str(text))
+    """A value with each `${{ expression }}` in it replaced by its text, and
+    each image tag of the table by the gate's own."""
+    return rename(INLINE.sub(lambda m: text_of(evaluate(m.group(1), ctx)), str(text)))
 
 
 def runs(cond, ctx):
@@ -290,7 +333,7 @@ def build_script(step, steps, ctx, outputs):
         raise Refused(f"the build sets {sorted(unknown)}, which the plan does not run")
     if str(w.get("context", ".")) != "." or w.get("load") is not True:
         raise Refused("the build is not of the checkout's root loaded into the local image store")
-    tags = str(w.get("tags", "")).split()
+    tags = rename(str(w.get("tags", ""))).split()
     if not tags or "file" not in w:
         raise Refused("the build names no Dockerfile or no tag")
     pre, args = [], []
@@ -338,7 +381,10 @@ def trivy_script(step, ctx):
     pin = w["version"].lstrip("v")
     # The gate installs the pinned trivy ahead on PATH; a scan by any other
     # would not be CI's.
-    lines = [f"trivy --version | grep -qx {shlex.quote('Version: ' + pin)} ||"
+    # Its version is read whole, then matched through a here-string: a pipe
+    # into grep -q could fail on a version that matches.
+    lines = ['have=$(trivy --version) || have=',
+             f"grep -qxF {shlex.quote('Version: ' + pin)} <<<\"$have\" ||"
              f" {{ echo {shlex.quote('the trivy on PATH is not ' + pin + ', the version the step pins')} >&2; exit 1; }}"]
     if kind == "image":
         if "image-ref" not in w:
@@ -390,7 +436,7 @@ def upload_script(step, ctx, artifacts):
     return lines
 
 
-def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_env):
+def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_env, artifacts):
     spec = yaml.safe_load(open(os.path.join(root, ".github", "workflows", wf_name)))
     job = (spec.get("jobs") or {}).get(job_name)
     if job is None:
@@ -402,7 +448,6 @@ def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_en
         raise Refused("the job has no timeout-minutes, which is each step's deadline here")
     deadline = int(job["timeout-minutes"]) * 60
     entry = matrix_entry(job, picks)
-    artifacts = os.path.join(os.path.dirname(temp.rstrip("/")), "artifacts")
     ctx = {"matrix": entry, "runner.temp": temp, "github.workspace": root}
     steps = job.get("steps") or []
     names = [s.get("name") for s in steps]
@@ -434,11 +479,11 @@ def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_en
                 elif action == "aquasecurity/trivy-action":
                     kind, body = "trivy", trivy_script(step, ctx)
                 elif action == "actions/upload-artifact":
+                    if artifacts is None:
+                        raise Refused("it uploads artifacts, and no --artifacts directory keeps them")
                     kind, body = "artifact", upload_script(step, ctx, artifacts)
                 elif action == "docker/build-push-action":
                     lines, tags = build_script(step, steps, ctx, outputs)
-                    with open(os.path.join(plan_dir, slug + ".tags"), "w") as out:
-                        out.write("\n".join(tags) + "\n")
                     if only:
                         kind, body = "build", lines
                     else:
@@ -455,7 +500,7 @@ def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_en
                 if re.search(r"\bGITHUB_(ENV|PATH)\b", text):
                     raise Refused("it writes GITHUB_ENV or GITHUB_PATH, which the plan does not carry")
                 lines = text.split("\n")
-                body = [LOAD_CHECK if l.strip() == LOAD_LINE else l for l in lines]
+                body = [rename(LOAD_CHECK) if l.strip() == LOAD_LINE else l for l in lines]
             shell = step.get("shell", defaults.get("shell"))
             if shell not in (None, "bash"):
                 raise Refused(f"it runs under the shell {shell!r}")
@@ -475,6 +520,9 @@ def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_en
                 f"export GITHUB_OUTPUT=\"$RUNNER_TEMP/.outputs/{out_id}\" GITHUB_STEP_SUMMARY=\"$RUNNER_TEMP/.summary.md\"",
             ] + job_env + env_lines(step.get("env"), ctx, where) + [
                 f"export {shlex.quote(e)}" for e in extra_env
+            ] + [
+                f"export {var}={shlex.quote(rename(tag))}" for tag, var in IMAGE_TAGS.items()
+                if var and NAMESPACE is not None
             ] + [
                 f"cd {shlex.quote(os.path.join(root, wd))}",
             ]
@@ -501,6 +549,11 @@ def trivy_version(root):
 
 
 def main(argv):
+    global NAMESPACE
+    if argv == ["--image-tags"]:
+        for tag, var in IMAGE_TAGS.items():
+            print(f"{tag} {var}" if var else tag)
+        return
     if len(argv) == 2 and argv[0] == "--trivy-version":
         try:
             print(trivy_version(os.path.abspath(argv[1])))
@@ -510,14 +563,20 @@ def main(argv):
     if len(argv) < 5:
         sys.exit(__doc__.split("\n\n")[1])
     root, wf_name, job_name, plan_dir, temp = argv[:5]
-    picks, excepts, only, extra = {}, [], None, []
+    picks, excepts, only, extra, artifacts = {}, [], None, [], None
     rest = argv[5:]
     i = 0
     while i < len(rest):
         a = rest[i]
-        if a in ("--except", "--only", "--env") and i + 1 < len(rest):
+        if a in ("--except", "--only", "--env", "--image-namespace", "--artifacts") and i + 1 < len(rest):
             v = rest[i + 1]
-            if a == "--except":
+            if a == "--image-namespace":
+                if not re.fullmatch(r"[a-z0-9]+(?:[._-][a-z0-9]+)*", v):
+                    sys.exit(f"workflow_plan: {v!r} is no image repository namespace")
+                NAMESPACE = v
+            elif a == "--artifacts":
+                artifacts = os.path.abspath(v)
+            elif a == "--except":
                 excepts.append(v)
             elif a == "--only":
                 only = v
@@ -531,9 +590,10 @@ def main(argv):
             picks[k] = v
             i += 1
         else:
-            sys.exit(f"workflow_plan: {a!r} is neither KEY=VALUE nor --except, --only or --env with a value")
+            sys.exit(f"workflow_plan: {a!r} is neither KEY=VALUE nor an option with its value")
     try:
-        plan(os.path.abspath(root), wf_name, job_name, plan_dir, os.path.abspath(temp), picks, excepts, only, extra)
+        plan(os.path.abspath(root), wf_name, job_name, plan_dir, os.path.abspath(temp), picks, excepts, only, extra,
+             artifacts)
     except Refused as e:
         sys.exit(f"workflow_plan: {e}")
 
