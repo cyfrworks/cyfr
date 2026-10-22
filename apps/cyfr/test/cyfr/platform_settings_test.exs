@@ -117,6 +117,7 @@ defmodule Cyfr.PlatformSettingsTest do
         fence: 1,
         lease_until: DateTime.add(now, 60, :second),
         taken_at: now,
+        release: Prima.Version.current(),
         inserted_at: now,
         updated_at: now
       }

@@ -566,7 +566,6 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       source_kind: "session",
       source_id: "src_#{uniq()}",
       standing: "active",
-      label: "the kitchen tablet",
       inserted_at: now(),
       updated_at: now()
     })

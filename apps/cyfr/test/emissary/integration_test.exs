@@ -145,10 +145,6 @@ defmodule Emissary.IntegrationTest do
       assert log.status == "error"
       assert is_binary(log.error)
 
-      # The row's meaning is the class, on its decision; the JSON-RPC code
-      # is the transport's rendering, and the row carries none.
-      assert log.error_code == nil
-
       assert %{completion: "failed", completion_class: class} =
                Arca.Repo.get(Arca.Schemas.DecisionLog, log.id)
 
