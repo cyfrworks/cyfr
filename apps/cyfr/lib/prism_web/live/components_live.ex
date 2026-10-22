@@ -36,6 +36,7 @@ defmodule PrismWeb.ComponentsLive do
       |> assign(:expanded_ref, nil)
       |> assign(:expanded_loading, false)
       |> assign(:expanded_detail, nil)
+      |> assign(:expanded_detail_refusal, nil)
       |> assign(:expanded_plan, nil)
       # A refused `setup_plan` call's refusal, said in the plan's place.
       |> assign(:expanded_plan_refusal, nil)
@@ -285,6 +286,7 @@ defmodule PrismWeb.ComponentsLive do
          |> assign(:expanded_ref, name_ref)
          |> assign(:expanded_loading, true)
          |> assign(:expanded_detail, nil)
+         |> assign(:expanded_detail_refusal, nil)
          |> assign(:expanded_plan, nil)
          |> assign(:expanded_plan_refusal, nil)
          |> assign(:expanded_versions, group.versions)
@@ -430,14 +432,16 @@ defmodule PrismWeb.ComponentsLive do
   def handle_info({:load_expand, group}, socket) do
     latest_ref = comp_ref(group.latest)
 
-    detail =
+    # A refused inspection (a dependency stored damaged among its reasons)
+    # is shown in the detail's place, and the card offers no grant.
+    {detail, detail_refusal} =
       case call_tool(socket, "component/inspect", %{"reference" => latest_ref}) do
         {:ok, result} ->
-          result
+          {result, nil}
 
-        other ->
-          Logger.warning("[ComponentsLive] component/inspect failed: #{inspect(other)}")
-          nil
+        {:error, reason} ->
+          Logger.warning("[ComponentsLive] component/inspect failed: #{inspect(reason)}")
+          {nil, reason}
       end
 
     plan = setup_plan(socket, latest_ref)
@@ -447,6 +451,7 @@ defmodule PrismWeb.ComponentsLive do
        socket
        |> assign(:expanded_loading, false)
        |> assign(:expanded_detail, detail)
+       |> assign(:expanded_detail_refusal, detail_refusal)
        |> assign_plan(plan)}
     else
       {:noreply, socket}
@@ -604,6 +609,7 @@ defmodule PrismWeb.ComponentsLive do
        |> assign(:expanded_ref, group.name_ref)
        |> assign(:expanded_loading, true)
        |> assign(:expanded_detail, nil)
+       |> assign(:expanded_detail_refusal, nil)
        |> assign(:expanded_plan, nil)
        |> assign(:expanded_plan_refusal, nil)
        |> assign(:expanded_versions, group.versions)
@@ -661,6 +667,7 @@ defmodule PrismWeb.ComponentsLive do
     |> assign(:expanded_ref, nil)
     |> assign(:expanded_loading, false)
     |> assign(:expanded_detail, nil)
+    |> assign(:expanded_detail_refusal, nil)
     |> assign(:expanded_plan, nil)
     |> assign(:expanded_plan_refusal, nil)
     |> assign(:expanded_versions, [])
@@ -1670,7 +1677,17 @@ defmodule PrismWeb.ComponentsLive do
                             </div>
                           </div>
                         </div>
-                        <div :if={!@expanded_detail} class="text-center text-gray-500 py-4 text-sm">
+                        <div
+                          :if={@expanded_detail_refusal}
+                          data-test="detail-refused"
+                          class="text-sm text-red-300 p-4"
+                        >
+                          {error_message(@expanded_detail_refusal)}
+                        </div>
+                        <div
+                          :if={!@expanded_detail && !@expanded_detail_refusal}
+                          class="text-center text-gray-500 py-4 text-sm"
+                        >
                           Loading...
                         </div>
                       </td>
