@@ -126,6 +126,9 @@ defmodule Sanctum.Provisioning do
   # `mint_per_hour_range/0` hands it to the roster's validator, and a
   # stored value outside it refuses every mint.
   @mint_per_hour_range 1..1_000_000
+  # How many times a first sign-in mints past another person's concurrent
+  # mint of the same derived slug before the refusal stands.
+  @personal_mint_attempts 3
 
   @typedoc """
   The claim an attempt holds while it fills an athanor: the claim row as
@@ -1025,14 +1028,37 @@ defmodule Sanctum.Provisioning do
   # identity: the namespace is only a hint for it.
   defp find_or_create_personal(%{id: user_id} = user) do
     case Athanors.get_by_owner(user_id) do
+      {:ok, athanor} -> {:ok, athanor}
+      {:error, :not_found} -> mint_or_adopt(user, @personal_mint_attempts)
+      {:error, _} = err -> err
+    end
+  end
+
+  # Two first sign-ins of one person race to mint: the unique indexes admit
+  # one row, and the one on the slug is checked before the one on the
+  # owner, so the loser is refused by either. Each refusal is answered by
+  # reading the winner's row back. A slug refused with no row of this
+  # person's is another person's concurrent mint of the same derived slug,
+  # which the next attempt's slug check sees; what is still refused after
+  # the attempts is the refusal.
+  defp mint_or_adopt(user, attempts) do
+    case mint_personal(user) do
+      {:error, :slug_taken} -> adopt(user, :slug_taken, attempts)
+      {:error, {:invalid, %{owner_user_id: _taken}} = reason} -> adopt(user, reason, attempts)
+      minted -> minted
+    end
+  end
+
+  defp adopt(%{id: user_id} = user, reason, attempts) do
+    case Athanors.get_by_owner(user_id) do
       {:ok, athanor} ->
         {:ok, athanor}
 
+      {:error, :not_found} when reason == :slug_taken and attempts > 1 ->
+        mint_or_adopt(user, attempts - 1)
+
       {:error, :not_found} ->
-        case mint_personal(user) do
-          {:error, {:invalid, %{owner_user_id: _taken}}} -> Athanors.get_by_owner(user_id)
-          minted -> minted
-        end
+        {:error, reason}
 
       {:error, _} = err ->
         err

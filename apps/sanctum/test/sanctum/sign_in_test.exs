@@ -1128,6 +1128,74 @@ defmodule Sanctum.SignInTest do
                  Enum.count(rows, &(&1.scope == "platform"))
                end)
     end
+
+    # The unique index on the slug is checked before the one on the owner,
+    # so a lost mint is refused as `:slug_taken` when both racers derived
+    # the slug before either row landed. A row of that slug held
+    # uncommitted puts both racers there, each insert waiting on it, then
+    # lets them go: the first lands, the second is refused by the index
+    # and must adopt the first's row.
+    @tag :postgres
+    test "two first sign-ins of one person, past the slug check before either row lands, share the athanor the winner minted" do
+      n = System.unique_integer([:positive])
+      ops = info(n)
+      {:ok, user} = unboxed(fn -> Users.upsert_from_provider(ops) end)
+      on_exit(fn -> purge!(user.id) end)
+      parent = self()
+      {:ok, slug} = unboxed(fn -> Athanors.person_slug(nil, ops.name) end)
+
+      holder =
+        Task.async(fn ->
+          unboxed(fn ->
+            Arca.Repo.transaction(fn ->
+              {:ok, _barrier} =
+                Arca.Athanors.insert(Prima.Actor.system(), %{
+                  kind: "person",
+                  name: "the barrier",
+                  slug: slug,
+                  owner_user_id: user.id,
+                  created_by: user.id
+                })
+
+              send(parent, :held)
+
+              receive do
+                :release -> Arca.Repo.rollback(:released)
+              end
+            end)
+          end)
+        end)
+
+      assert_receive :held, 5_000
+
+      racers =
+        for _ <- 1..2 do
+          Task.async(fn ->
+            unboxed(fn ->
+              %{rows: [[backend]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
+              send(parent, {:backend, backend})
+              SignIn.admitted(ops, :admin)
+            end)
+          end)
+        end
+
+      for _ <- racers do
+        assert_receive {:backend, backend}, 5_000
+
+        Arca.Test.LockWait.await_lock_wait!(backend, [~s(INSERT INTO "athanors")],
+          timeout_ms: 10_000
+        )
+      end
+
+      send(holder.pid, :release)
+      assert {:error, :released} = Task.await(holder, 5_000)
+
+      assert [{:ok, %{personal_athanor_id: id}}, {:ok, %{personal_athanor_id: id}}] =
+               Enum.map(racers, &Task.await(&1, 25_000))
+
+      assert is_binary(id)
+      assert {:ok, %{id: ^id, slug: ^slug}} = unboxed(fn -> Athanors.get_by_owner(user.id) end)
+    end
   end
 
   defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)

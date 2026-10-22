@@ -329,7 +329,6 @@ fn args ->
             id: id,
             name: name,
             kind: "api_key",
-            provenance: "user",
             status: "active",
             sealed_payload: sealed,
             binding_digest: digest

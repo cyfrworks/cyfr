@@ -91,6 +91,8 @@ IMAGE_PROFILE = "/etc/cyfr/keeper.json"
 STEPS = ("refusals", "connect", "relay", "nested", "spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
 POOL = f"{ROLE['pool']}:{POOL_FIRST}-{POOL_LAST}:{ROLE['isolation']}"
 TOKEN = "0123456789abcdef" * 4
+# The bound every spawn names (`memory_bytes`, which the keeper requires): room enough for a shell and curl.
+MEMORY_BYTES = 64 << 20
 BOOT_S = 90
 NO_CAPS = "0000000000000000"
 
@@ -171,7 +173,7 @@ def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=()):
 
 def spawn_line(spawn_id, argv, isolated=True, env=None, control=False, attach=f"{RUN_DIR}/attach.sock"):
     request = {"v": 1, "type": "spawn", "id": spawn_id, "pool": ROLE["pool"], "argv": argv, "env": env or {},
-               "attach": {"path": attach, "token": TOKEN}}
+               "memory_bytes": MEMORY_BYTES, "attach": {"path": attach, "token": TOKEN}}
     if control:
         request["control"] = True
     if isolated:

@@ -149,7 +149,7 @@ fn args ->
       end
 
     ["log", identifier] ->
-      case Sanctum.Directory.resolve(%{identifier: identifier, after: nil, source: "127.0.0.1"}) do
+      case Sanctum.Directory.resolve(%{identifier: identifier, after: -1, source: "127.0.0.1"}) do
         {:ok, page} ->
           kinds =
             for entry <- Map.get(page, :entries, []) do
