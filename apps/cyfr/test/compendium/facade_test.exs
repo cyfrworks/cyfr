@@ -45,6 +45,8 @@ defmodule Compendium.FacadeTest do
 
   defp put_component!(ctx, type, name, version, manifest) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    digest = "sha256:#{name}-#{version}"
+    {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
 
     {:ok, _} =
       Arca.ComponentStorage.put_component(Context.actor(ctx), %{
@@ -54,7 +56,8 @@ defmodule Compendium.FacadeTest do
         component_type: type,
         description: name,
         tags: "[]",
-        digest: "sha256:#{name}-#{version}",
+        digest: digest,
+        release_digest: release_digest,
         size: 1,
         exports: "[]",
         manifest: Jason.encode!(manifest),

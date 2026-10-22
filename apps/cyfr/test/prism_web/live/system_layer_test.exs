@@ -4642,8 +4642,9 @@ defmodule PrismWeb.SystemLayerTest do
       entry = instance_entry(name)
       assert entry.provider_hint == "example.com"
       assert entry.component_policy == "shipped"
+      # Attach-only is what an instance entry is: its view says so and its
+      # row stores no such column.
       assert entry.audience == "everyone"
-      assert entry.attach_only == true
       assert Jason.decode!(entry.field_names) == ["API_KEY"]
       assert Jason.decode!(entry.destination) == @instance_destination
 
