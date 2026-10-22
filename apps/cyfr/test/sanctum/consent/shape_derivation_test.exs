@@ -357,9 +357,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
                ["layout.edit", "layout.get"]
     end
 
-    test "is asked for by no node key but an agent's, whatever its stored manifest names", %{
-      ctx: ctx
-    } do
+    test "is asked for by no node key but an agent's, whatever its stored manifest names" do
       # A manifest claiming to be an agent's, as a row stored before the
       # publish held a manifest's type would keep it.
       stored = %{"type" => "agent", "caps" => %{"tools" => ["layout.edit", "layout.get"]}}
@@ -421,9 +419,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
                ["schedule.list", "schedule.update"]
     end
 
-    test "is asked for by no node key but an agent's, whatever its stored manifest names", %{
-      ctx: ctx
-    } do
+    test "is asked for by no node key but an agent's, whatever its stored manifest names" do
       stored = %{
         "type" => "agent",
         "caps" => %{"tools" => ["schedule.create", "schedule.update", "schedule.list"]}
@@ -541,7 +537,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
                ShapeDerivation.declared_caps(stored, "agent:local.spoof")
     end
 
-    test "is in no component's grant from a pattern, an agent's included", %{ctx: ctx} do
+    test "is in no component's grant from a pattern, an agent's included" do
       for {node, type} <- [{"formula:local.feeder", "formula"}, {"agent:local.feeder", "agent"}],
           tools <- [["*"], ["feed.*"]] do
         manifest = %{"type" => type, "caps" => %{"tools" => tools}}

@@ -9,8 +9,6 @@ defmodule PrismWeb.OperatorDelistLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
-  alias Sanctum.Tenancy.Members
-
   # The platform roster and the establish memo are the identity domain's;
   # the boot switch is the host's.
   @keys [

@@ -142,12 +142,6 @@ defmodule Aqua.LaunchTest do
     step
   end
 
-  # What `approver`'s approval of a launch card answers.
-  defp approve_launch(ctx, turn, approver) do
-    {resolved, _step_id} = launch_card(ctx, turn, approver)
-    resolved
-  end
-
   defp launch_card(ctx, turn, approver) do
     proposal = bound_proposal(ctx, turn, %{"reference" => @application, "input" => %{}})
 

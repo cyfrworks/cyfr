@@ -648,7 +648,7 @@ defmodule Aqua.ScheduleNotesTest do
       schedule = keeping(context)
       keeper = keeper!()
       :ok = :sys.suspend(keeper)
-      {_occurrence, execution_id} = ran!(schedule, 60, "heard")
+      ran!(schedule, 60, "heard")
       :ok = :sys.resume(keeper)
 
       completion =

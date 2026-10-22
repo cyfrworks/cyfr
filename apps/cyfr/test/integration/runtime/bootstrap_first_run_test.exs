@@ -171,7 +171,6 @@ defmodule Locus.Runtime.BootstrapFirstRunTest do
   test "a needs-declaring catalyst is not ready until its vault entry binds", %{ctx: ctx} do
     # The moonmoon69 re-release shape, published as a synthetic catalyst
     # so CI needs no registry pull.
-    wasm = Cyfr.Test.Guests.wasm(:reagent)
 
     manifest = %{
       "name" => "llm",

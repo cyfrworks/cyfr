@@ -167,7 +167,7 @@ defmodule Locus.Runtime.KeeperMemoryTest do
       assert %{"memory_bytes" => 16_777_216} = next_request(keeper)
     end
 
-    test "a malformed bound, or none, stops the adapter before a runner is asked for", ctx do
+    test "a malformed bound, or none, stops the adapter before a runner is asked for" do
       Process.flag(:trap_exit, true)
 
       for bound <- [nil, 0, 16_777_215, 1_099_511_627_777, -1, 1.0e9, "1G", :unbounded] do
