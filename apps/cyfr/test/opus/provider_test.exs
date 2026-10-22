@@ -1503,7 +1503,7 @@ defmodule Opus.ProviderTest do
       ctx: ctx
     } do
       foreign = "ath_unreaped_" <> Integer.to_string(System.unique_integer([:positive]))
-      on_exit(fn -> Prima.Slots.forgive_unreaped(Opus.Slots, foreign) end)
+      on_exit(fn -> Prima.Test.Slots.clear_unreaped(Opus.Slots, foreign) end)
       {:ok, 1} = Prima.Slots.note_unreaped(Opus.Slots, foreign, "exec_foreign_kill")
 
       {:ok, result} = Provider.handle("execution", ctx, %{"action" => "status"})
