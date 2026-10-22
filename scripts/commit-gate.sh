@@ -760,6 +760,7 @@ leg_harness() {
   local status=0
   HARNESS_PREFIX="cyfr-gate-$$-"
   harness_images > "$LOGDIR/harness.images.before" || { echo 'images_read=1' >> "$LOGDIR/harness.summary"; return 1; }
+  harness_hold || { echo 'images_held=1' >> "$LOGDIR/harness.summary"; cleanup_harness; return 1; }
   run_job harness build_locus test.yml locus-image --only 'Build the Locus image once' || status=1
   [ -z "$REFUSED" ] || return 1
   run_job harness build_app test.yml locus-backends-image --only 'Build the app image' || status=1
@@ -794,6 +795,20 @@ harness_images() {
   printf '%s\n' "$list" | sed -e '/^<none>:/d' -e '/^$/d'
 }
 
+# Every image tagged before the leg takes one hold tag of the leg's, so
+# moving its last name to an image the leg built cannot delete it, as an
+# image store that keeps no unnamed image (containerd's) otherwise would,
+# and the name can be given back.
+harness_hold() {
+  local id n=0
+  : > "$LOGDIR/harness.images.holds"
+  for id in $(awk '{ print $2 }' "$LOGDIR/harness.images.before" | LC_ALL=C sort -u); do
+    docker tag "$id" "${HARNESS_PREFIX}hold:$n" || return 1
+    echo "${HARNESS_PREFIX}hold:$n" >> "$LOGDIR/harness.images.holds"
+    n=$((n + 1))
+  done
+}
+
 # The containers, then the networks, then the volumes whose names start
 # with HARNESS_PREFIX, removed, each named on stderr.
 harness_sweep() {
@@ -813,27 +828,37 @@ harness_sweep() {
 
 # Every tag that names an image the leg built (each tag its build steps
 # give, as their plans list them) and did not name it before the leg is
-# taken off, or given back to the image it named then.
+# taken off, or given back to the image it named then; then the hold tags
+# go.
 cleanup_harness() {
-  local ref id old tag s=0
+  local ref id old tag hold s=0
   harness_sweep
   [ -f "$LOGDIR/harness.images.before" ] || return 0
   : > "$LOGDIR/harness.images.built"
   for tag in $(cat "$LOGDIR"/harness.build_*.plan/*.tags 2>/dev/null); do
     docker image inspect --format '{{.Id}}' "$tag" >> "$LOGDIR/harness.images.built" 2>/dev/null || :
   done
-  [ -s "$LOGDIR/harness.images.built" ] || return 0
-  harness_images > "$LOGDIR/harness.images.after" || return 1
-  while read -r ref id; do
-    grep -qxF "$id" "$LOGDIR/harness.images.built" || continue
-    ! grep -qxF "$ref $id" "$LOGDIR/harness.images.before" || continue
-    old=$(awk -v r="$ref" '$1 == r { print $2; exit }' "$LOGDIR/harness.images.before")
-    if [ -n "$old" ]; then
-      docker tag "$old" "$ref" || s=1
+  if [ -s "$LOGDIR/harness.images.built" ]; then
+    if harness_images > "$LOGDIR/harness.images.after"; then
+      while read -r ref id; do
+        case "$ref" in "${HARNESS_PREFIX}hold:"*) continue ;; esac
+        grep -qxF "$id" "$LOGDIR/harness.images.built" || continue
+        ! grep -qxF "$ref $id" "$LOGDIR/harness.images.before" || continue
+        old=$(awk -v r="$ref" '$1 == r { print $2; exit }' "$LOGDIR/harness.images.before")
+        if [ -n "$old" ]; then
+          docker tag "$old" "$ref" || s=1
+        else
+          docker image rm "$ref" >/dev/null || s=1
+        fi
+      done < "$LOGDIR/harness.images.after"
     else
-      docker image rm "$ref" >/dev/null || s=1
+      s=1
     fi
-  done < "$LOGDIR/harness.images.after"
+  fi
+  if [ -f "$LOGDIR/harness.images.holds" ]; then
+    while read -r hold; do docker image rm "$hold" >/dev/null || s=1; done < "$LOGDIR/harness.images.holds"
+    rm -f "$LOGDIR/harness.images.holds"
+  fi
   return "$s"
 }
 

@@ -184,7 +184,9 @@ and where the `browser` job of `.github/workflows/test.yml` runs it. The
 job is four shards, each a runner of its own (its matrix names each
 shard's proofs); a shard runs its proofs in this table's order, its first
 release-backed proof building the release and the rest reusing it
-(`RELEASE_BOOT_SKIP_BUILD=1`), and the markdown proof starts no release. A
+(`RELEASE_BOOT_SKIP_BUILD=1`). The grant, instance-entry, approval and
+file-offer proofs refuse to build one, so no shard opens with them, and the
+markdown proof starts no release. A
 passkey ceremony is Chromium's alone, whose virtual authenticator a proof
 drives, so a proof that needs one runs its passkey steps in Chromium. Three
 browsers run in CI where the engine decides the answer, the frame's rules,
@@ -198,8 +200,8 @@ proof's own README holds how to run it and its steps.
 | markdown | `tests/markdown-proof/` | no release: a page of its own, `markdown.test`, serving the console's markdown hook from `/assets` | Chromium | a; Chromium |
 | tincture | `tests/tincture-proof/` | one home, `cyfr.test` | Chromium, Firefox and WebKit (`TINCTURE_PROOF_BROWSERS`) | a; Chromium |
 | containment (the hostile frame) | `tests/hostile-frame-proof/` | one home, `cyfr.test`, and the attacker's `attacker.test` | Chromium, Firefox and WebKit; the pointer-lock attempt in Chromium alone | a; all three |
-| pairing | `tests/pairing-proof/` | one home, `home.test` | Chromium | b; Chromium |
-| multi-home smoke | `tests/multi-home-smoke/` | two homes, `alpha.test` and `beta.test` | Chromium, Firefox and WebKit; the passkey in Chromium | b; all three |
+| pairing | `tests/pairing-proof/` | one home, `home.test` | Chromium | c; Chromium |
+| multi-home smoke | `tests/multi-home-smoke/` | two homes, `alpha.test` and `beta.test` | Chromium, Firefox and WebKit; the passkey in Chromium | d; all three |
 | identity | `tests/identity-proof/` | the homes `a.test`, `b.test`, `c.test`, `c2.test` and `c3.test`, and the directory `dir.test` | Chromium | b; Chromium |
 | join | `tests/join-proof/` | the homes `a.test`, `a2.test` and `h.test`, and the directories `dir.test` and `dir2.test` | Chromium; the sign-in at the hub, the carry and a second browser profile in Firefox and WebKit as well (`JOIN_PROOF_BROWSERS`) | b; Chromium |
 | grant | `tests/grant-proof/` | one home, `home.test` | Chromium | d; Chromium |

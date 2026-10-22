@@ -135,7 +135,9 @@ chmod +x "$scratch/bin/mix"
 # (STUB_GO_VERSION overrides it), and a `go test -run '^(A|B)$'` with a
 # PASS line for each test named. docker keeps an image store in
 # docker.images (`ref id` lines: a build gives each tag an id of its own, a
-# tag copies one) and containers in docker.containers (`id name`); it
+# tag copies one; as containerd's store, it keeps no image that no ref
+# names, so a tag of a vanished id fails) and containers in
+# docker.containers (`id name`); it
 # answers `version` with a failure under STUB_DOCKER_DOWN.
 cat > "$scratch/bin/go" <<'FAKE'
 #!/usr/bin/env bash
@@ -191,8 +193,7 @@ case "$1" in
       shift
     done ;;
   tag)
-    case "$2" in sha256:*) id=$2 ;; *) id=$(id_of "$2") ;; esac
-    [ -n "$id" ] || exit 1
+    id=$(id_of "$2"); [ -n "$id" ] || exit 1
     grep -v "^$3 " "$images" > "$images.new" || :; mv "$images.new" "$images"
     echo "$3 $id" >> "$images" ;;
   image)
@@ -1005,8 +1006,8 @@ has_line '^==> harness +ok ' "$scratch/close.out" || fail "the harness leg did n
 for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml locus-backends-image: 1 step' \
   'builder_image: test.yml builder-image: 8 steps' 'runtime_image: test.yml locus-runtime-image: 7 steps' \
   'backends_image: test.yml locus-backends-image: 22 steps' 'browser_a: test.yml browser shard=a: 6 steps' \
-  'browser_b: test.yml browser shard=b: 5 steps' 'browser_c: test.yml browser shard=c: 3 steps' \
-  'browser_d: test.yml browser shard=d: 5 steps' 'repo_scan: security.yml repo-scan: 2 steps'; do
+  'browser_b: test.yml browser shard=b: 3 steps' 'browser_c: test.yml browser shard=c: 4 steps' \
+  'browser_d: test.yml browser shard=d: 6 steps' 'repo_scan: security.yml repo-scan: 2 steps'; do
   grep -qxF "    harness.$job passed" "$scratch/close.out" || fail "the close did not report $job passed: $(cat "$scratch/close.out")"
 done
 today=$(date -u +%Y-%m-%d)
@@ -1044,15 +1045,15 @@ tests/browser/run.sh |skip= browsers= join= db= case_image=
 tests/markdown-proof/run.sh |skip=unset browsers= join= db= case_image=
 tests/tincture-proof/run.sh cyfr-locus:tincture-proof|skip=1 browsers=chromium join= db= case_image=
 tests/hostile-frame-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/pairing-proof/run.sh |skip= browsers= join= db= case_image=
-tests/multi-home-smoke/run.sh |skip=1 browsers= join= db= case_image=
-tests/identity-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/identity-proof/run.sh |skip= browsers= join= db= case_image=
 tests/join-proof/run.sh |skip=1 browsers= join=chromium db= case_image=
-tests/approval-proof/run.sh |skip= browsers= join= db= case_image=
+tests/pairing-proof/run.sh |skip= browsers= join= db= case_image=
+tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image=
-tests/grant-proof/run.sh |skip= browsers= join= db= case_image=
+tests/multi-home-smoke/run.sh |skip= browsers= join= db= case_image=
+tests/grant-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/instance-entry-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/instance-entry-proof/run.sh |skip=1 browsers= join= db= case_image=
 tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image=
@@ -1073,6 +1074,12 @@ fs --scanners secret --format table --exit-code 1 .
 fs --scanners misconfig --format table --exit-code 1 --severity CRITICAL,HIGH --ignorefile .trivyignore.yaml .' ] ||
   fail "the close's scans are not the workflows': $(cat "$ct/trivy.calls")"
 [ "$(tr '\n' ' ' < "$ct/trivy.trees")" = 'tracked tracked ' ] || fail "a repository scan read more than the tracked tree: $(cat "$ct/trivy.trees")"
+# No shard opens with a proof that refuses to build the release.
+for proof in grant instance-entry approval file-offer; do
+  grep -qF 'build the release first and run with RELEASE_BOOT_SKIP_BUILD=1' "$root/tests/$proof-proof/run.sh" ||
+    fail "the $proof proof builds its own release now: the shards' check of what opens them is stale"
+  no_line "^tests/$proof-proof/run.sh \|skip= " "$ct/harness.calls" || fail "a shard opens with the $proof proof, which refuses to build the release"
+done
 # Each shard's records, kept as its upload step keeps them.
 for shard in a b c d; do
   [ -n "$(find "$scratch/close.log/artifacts/proof-records-$shard" -name '*.json' 2>/dev/null)" ] ||

@@ -1516,8 +1516,10 @@ jobs:
   # shards, each a runner of its own: a step runs in the shard whose
   # `proofs` name it, in the order below. A shard's first release-backed
   # proof (its `build`) builds the release, and every later proof, and a
-  # proof's second viewport, reuses it (RELEASE_BOOT_SKIP_BUILD); the
-  # markdown proof starts no release. Three
+  # proof's second viewport, reuses it (RELEASE_BOOT_SKIP_BUILD); the grant,
+  # instance-entry, approval and file-offer proofs only reuse one, so each
+  # shard opens with a proof that builds, and the markdown proof starts no
+  # release. Three
   # browsers run where the engine decides the answer (the frame facts, the
   # containment proof, the multi-home smoke and the canvas proof) and
   # Chromium alone elsewhere; a proof that uses a passkey drives Chromium's
@@ -1540,17 +1542,17 @@ jobs:
             proofs: [frame-facts, markdown, tincture, containment]
             build: frame-facts
           - shard: b
-            title: pairing, multi-home smoke, identity, join
-            proofs: [pairing, multi-home-smoke, identity, join]
-            build: pairing
+            title: identity and join proofs
+            proofs: [identity, join]
+            build: identity
           - shard: c
-            title: approval and file-offer proofs
-            proofs: [approval, file-offer]
-            build: approval
+            title: pairing, approval and file-offer proofs
+            proofs: [pairing, approval, file-offer]
+            build: pairing
           - shard: d
-            title: grant, instance-entry and canvas proofs, HSTS
-            proofs: [grant, instance-entry, canvas, hsts]
-            build: grant
+            title: multi-home smoke, grant, instance-entry and canvas proofs, HSTS
+            proofs: [multi-home-smoke, grant, instance-entry, canvas, hsts]
+            build: multi-home-smoke
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Cache deps and the prod build
