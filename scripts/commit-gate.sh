@@ -84,11 +84,11 @@
 #   test.yml static: Test the model catalysts
 #   test.yml static: Every stamped seed guest is built from its source
 #   test.yml static: Every seed guest carries a stamp, and its crate version is its own
-#   test.yml static: Verify partition infrastructure
 #   test.yml static: The release proofs' shared plumbing
 #   test.yml static: The tag pipeline's graph
 #   test.yml static: The containerd image store switch's cases
 #   test.yml static: The tag pipeline's image publication
+#   test.yml harness-tests
 #   test.yml test: Read the Rust fixtures' toolchain pin
 #   test.yml test: Install cargo-component
 #   test.yml s3-minio

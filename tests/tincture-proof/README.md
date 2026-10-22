@@ -1,7 +1,11 @@
 # The tincture proof
 
 `run.sh LOCUS_IMAGE [OPENS]` proves a game tincture end to end on the browser
-harness (`tests/browser/`):
+harness (`tests/browser/`), in each browser `TINCTURE_PROOF_BROWSERS` names
+(`chromium firefox webkit` unless set), with OPENS (10 unless given) opens
+each way. The `browser` job of `.github/workflows/test.yml` runs it in
+Chromium alone, since what each engine allows the game's frame is the
+frame-facts experiment's and the containment proof's to decide:
 
 - **Built from source.** `game/` is a Vite-template tincture — Three.js, Rapier's
   WebAssembly module stepping in an inline (`blob:`) worker at a fixed timestep,
@@ -16,7 +20,7 @@ harness (`tests/browser/`):
   `tests/release-boot/fixture.exs`), since the shell opens a tincture's
   frame only under its owner's grant.
 - **Opened from the shell.** `proof.mjs` signs in, opens the game from the
-  Prism shell in Chromium, Firefox and WebKit, and checks the frame's
+  Prism shell in each browser it runs, and checks the frame's
   `sandbox` (`allow-scripts allow-pointer-lock`), `allow`
   (`autoplay; fullscreen`) and its `/_s/` address; that Rapier stepped and
   the sound decoded, and the scene rendered unless the browser has no

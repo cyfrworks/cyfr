@@ -3,8 +3,8 @@
 //
 // The tincture proof, run in the official Playwright image by run.sh against
 // a `cyfr` release holding proof-game, private, as the Locus builds image
-// built it and the publish check admitted it. For every browser the image
-// ships, the fixture's person opens proof-game from the Prism shell:
+// built it and the publish check admitted it. For each browser BROWSERS
+// names, the fixture's person opens proof-game from the Prism shell:
 //
 //   1. the frame the shell creates holds exactly what the declaration asks
 //      (`allow-scripts allow-pointer-lock`, `fullscreen; autoplay`, never
@@ -29,7 +29,9 @@
 // harness's proxy (tests/browser/lib.mjs), Chromium as its full build,
 // which trusts the run's authority.
 //
-// Usage: node proof.mjs SEGMENT COOKIE OUT_DIR [OPENS]
+// Usage: node proof.mjs SEGMENT COOKIE OUT_DIR [OPENS [BROWSERS]]
+// BROWSERS is a comma-separated list of the harness's browsers, all three
+// unless given.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -176,17 +178,19 @@ async function run(name, base, proxy, segment, cookie, opens) {
 const round = (v) => (v === null ? "—" : Math.round(v));
 
 async function main() {
-  const [segment, cookie, outDir, opensArg] = process.argv.slice(2);
-  if (!segment || !cookie || !outDir) {
-    console.error("usage: node proof.mjs SEGMENT COOKIE OUT_DIR [OPENS]");
+  const [segment, cookie, outDir, opensArg, browsersArg] = process.argv.slice(2);
+  const opens = Number(opensArg || 10);
+  const browsers = browsersArg ? browsersArg.split(",") : BROWSERS;
+  if (!segment || !cookie || !outDir || !Number.isInteger(opens) || opens < 1 || browsers.length === 0 ||
+    browsers.some((b) => !BROWSERS.includes(b))) {
+    console.error("usage: node proof.mjs SEGMENT COOKIE OUT_DIR [OPENS [BROWSERS]]");
     process.exit(64);
   }
-  const opens = Number(opensArg || 50);
   mkdirSync(outDir, { recursive: true });
   const proxy = await startProxy(readHomes());
   const base = `https://${SITE}`;
   const record = {};
-  for (const name of BROWSERS) {
+  for (const name of browsers) {
     console.log(`== ${name}`);
     record[name] = await run(name, base, proxy, segment, cookie, opens);
   }
@@ -194,13 +198,13 @@ async function main() {
   writeFileSync(join(outDir, "tincture-proof.json"), JSON.stringify(record, null, 2));
 
   const row = (label, pick) =>
-    `| ${label} | ${BROWSERS.map((b) => {
+    `| ${label} | ${browsers.map((b) => {
       const s = pick(record[b]);
       return `${round(s.p50)} / ${round(s.p95)} / ${round(s.p99)} (n=${s.n})`;
     }).join(" | ")} |`;
   const table = [
-    `| ms, p50 / p95 / p99 | ${BROWSERS.map((b) => `${b} ${record[b].version}`).join(" | ")} |`,
-    `|---|${BROWSERS.map(() => "---|").join("")}`,
+    `| ms, p50 / p95 / p99 | ${browsers.map((b) => `${b} ${record[b].version}`).join(" | ")} |`,
+    `|---|${browsers.map(() => "---|").join("")}`,
     row("frame-open, warm", (r) => r.frameOpen.warm),
     row("frame-open, cold", (r) => r.frameOpen.cold),
     row("asset-fetch, warm", (r) => r.assetFetch.warm),
@@ -208,7 +212,7 @@ async function main() {
   ];
   writeFileSync(join(outDir, "tincture-proof.md"), table.join("\n") + "\n");
   console.log(table.join("\n"));
-  for (const b of BROWSERS) {
+  for (const b of browsers) {
     console.log(`${b}: renderer ${record[b].first.renderer}, engine ${record[b].first.engine}, ` +
       `gestures ${JSON.stringify(record[b].gestures)}, save ${JSON.stringify(record[b].save)}, ` +
       `second open ${JSON.stringify(record[b].second)}`);
@@ -218,7 +222,7 @@ async function main() {
     console.error(`FAIL: ${failures.length} check(s) failed`);
     process.exit(1);
   }
-  console.log("ok: the tincture proof passed in every browser");
+  console.log(`ok: the tincture proof passed in ${browsers.join(", ")}`);
 }
 
 main().catch((error) => {

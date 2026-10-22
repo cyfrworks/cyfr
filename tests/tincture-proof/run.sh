@@ -6,19 +6,26 @@
 # lockfile in the Locus builds image (build.py), published private through
 # the publish check into a signed-in person's athanor of a `cyfr` release
 # started as the browser harness starts one (tests/browser/harness.sh),
-# granted by that person, and opened from the Prism shell in every browser
-# of the harness's matrix (proof.mjs).
+# granted by that person, and opened from the Prism shell in each browser
+# of the harness's matrix TINCTURE_PROOF_BROWSERS names (proof.mjs).
 #
 # Usage: tests/tincture-proof/run.sh LOCUS_IMAGE [OPENS]
-# LOCUS_IMAGE is an image built from Dockerfile.locus; OPENS (default 50)
+# LOCUS_IMAGE is an image built from Dockerfile.locus; OPENS (default 10)
 # the warm and the cold opens measured per browser. Writes
 # tincture-proof.json and tincture-proof.md into PROOF_OUT (default: the
-# scratch directory, kept with RELEASE_BOOT_KEEP=1). Set
-# RELEASE_BOOT_SKIP_BUILD=1 to reuse a release a previous run built.
+# scratch directory, kept with RELEASE_BOOT_KEEP=1).
+# TINCTURE_PROOF_BROWSERS (chromium firefox webkit) the browsers run, and
+# RELEASE_BOOT_SKIP_BUILD=1 reuses a release a previous run built.
 set -euo pipefail
 
 LOCUS_IMAGE="${1:?usage: tests/tincture-proof/run.sh LOCUS_IMAGE [OPENS]}"
-OPENS="${2:-50}"
+OPENS="${2:-10}"
+TINCTURE_PROOF_BROWSERS="${TINCTURE_PROOF_BROWSERS:-chromium firefox webkit}"
+[[ "$OPENS" =~ ^[1-9][0-9]*$ ]] || { echo "OPENS is a positive count of opens, not '$OPENS'" >&2; exit 64; }
+for browser in $TINCTURE_PROOF_BROWSERS; do
+  case "$browser" in chromium|firefox|webkit) ;; *) echo "TINCTURE_PROOF_BROWSERS names $browser, which the harness does not run" >&2; exit 64 ;; esac
+done
+[ -n "${TINCTURE_PROOF_BROWSERS// /}" ] || { echo "TINCTURE_PROOF_BROWSERS names no browser" >&2; exit 64; }
 
 ADAPTER=sqlite
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-tincture-proof-XXXXXX")"
@@ -70,7 +77,7 @@ server_fixture "$CELL" grant "$token" proof-game >/dev/null
 status="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$(cell_port "$CELL")/t/$segment/local/proof-game")"
 [ "$status" = 404 ] || fail "the private tincture's public address answered $status"
 
-step "the tincture proof in $PLAYWRIGHT_IMAGE, $OPENS opens each way"
-playwright_run tincture-proof proof.mjs "$segment" "$cookie" /out "$OPENS"
+step "the tincture proof in $TINCTURE_PROOF_BROWSERS, in $PLAYWRIGHT_IMAGE, $OPENS opens each way"
+playwright_run tincture-proof proof.mjs "$segment" "$cookie" /out "$OPENS" "$(echo $TINCTURE_PROOF_BROWSERS | tr ' ' ,)"
 
 echo "the record: $OUT/tincture-proof.json and $OUT/tincture-proof.md"

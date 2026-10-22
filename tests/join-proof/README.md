@@ -41,8 +41,13 @@ A's sign-in page, and each fresh confirmation the carry needs at A is
 given on a glass paired at A in Chromium, which reads the pending
 request from A's record and confirms it with the person's passkey. Each
 browser's requests between the homes are held to `cross-site` in its own
-`cross_site` row; every other step is recorded as Chromium only. In-app
-browsers and mail clients that rewrite links are not covered.
+`cross_site` row; every other step is recorded as Chromium only.
+`JOIN_PROOF_BROWSERS` names the browsers a run takes, all three unless set;
+the `browser` job of `.github/workflows/test.yml` sets `chromium`, so there
+Firefox's and WebKit's sign-in at H, carry and second profile do not run,
+and the cross-home isolation each engine enforces is the multi-home smoke's
+to hold in all three. In-app browsers and mail clients that rewrite links
+are not covered.
 
 ## Steps
 
