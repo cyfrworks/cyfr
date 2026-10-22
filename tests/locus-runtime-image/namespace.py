@@ -162,7 +162,7 @@ class IsolatedStack(Stack):
 def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=()):
     """cyfr-locus from the image under the shipped service's options, serving the isolated pool to a shell client."""
     args = ["docker", "run", "--rm", *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
-            "--security-opt", "no-new-privileges:true", "--read-only", "--ipc", "none", "--init",
+            "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
             "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"{RUN_DIR}:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]
     if seccomp:
         args += ["--security-opt", f"seccomp={PROFILE}"]

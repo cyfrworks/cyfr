@@ -1200,6 +1200,10 @@ defmodule Sanctum.SignInTest do
 
   defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)
 
+  # Everything a sign-in on a connection of its own committed: the person's
+  # rows, and the athanor it minted with every row and file of that
+  # athanor's (its provisioning claim among them), since the sandbox rolls
+  # none of it back.
   defp purge!(user_id) do
     import Ecto.Query
 
@@ -1209,10 +1213,17 @@ defmodule Sanctum.SignInTest do
 
       Arca.Repo.delete_all(from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user_id))
 
-      Arca.Repo.delete_all(from(u in Arca.Schemas.User, where: u.id == ^user_id))
+      for athanor_id <-
+            Arca.Repo.all(
+              from(a in Arca.Schemas.Athanor, where: a.owner_user_id == ^user_id, select: a.id)
+            ) do
+        actor = Prima.Actor.in_athanor(athanor_id)
+        :ok = Arca.delete_tree(actor, [])
+        {:ok, _counts} = Arca.TenantTables.delete_all_for(actor)
+      end
 
-      # The person's own athanor a sign-in minted.
       Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.owner_user_id == ^user_id))
+      Arca.Repo.delete_all(from(u in Arca.Schemas.User, where: u.id == ^user_id))
     end)
   end
 
