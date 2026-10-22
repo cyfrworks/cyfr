@@ -121,7 +121,7 @@ defmodule Aqua.Loop.CatalogSourcesTest do
          %{"dependencies" => %{"static" => [%{"ref" => "reagent:acme.loop-dep:1.0.0"}]}}}
       ]
 
-      wasm = File.read!(Path.expand("../../support/test_wasm/math.wasm", __DIR__))
+      wasm = Cyfr.Test.Guests.wasm(:reagent)
 
       for {publisher, name, extra} <- entries do
         manifest =

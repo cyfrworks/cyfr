@@ -37,7 +37,6 @@ defmodule Opus.Providers.FeedTest do
   @reference "catalyst:local.markets"
   @pinned "catalyst:local.markets:1.0.0"
   @profile_id "prof_feed_tool"
-  @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
 
   @price %{
     "type" => "object",
@@ -890,7 +889,7 @@ defmodule Opus.Providers.FeedTest do
   # The component, its `quote` operation's result shape declared.
   defp published!(ctx) do
     {:ok, component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: "markets",
         version: "1.0.0",
         type: "catalyst",

@@ -22,17 +22,7 @@ defmodule Compendium.RegistryTest do
 
   alias Compendium.Registry
 
-  # Valid minimal WASM with export section
-  # magic + version
-  # type section
-  # function section
-  # export section
-  # code section
-  @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-                <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-                <<0x03, 0x02, 0x01, 0x00>> <>
-                <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-                <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+  @valid_wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -210,7 +200,7 @@ defmodule Compendium.RegistryTest do
 
     test "accepts metadata fields", %{ctx: ctx} do
       {:ok, component} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
+        Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "meta-test",
           version: "1.0.0",
           type: "catalyst",
@@ -244,7 +234,7 @@ defmodule Compendium.RegistryTest do
         {:ok, _} =
           Registry.publish_bytes(
             ctx,
-            @valid_wasm,
+            Cyfr.Test.Guests.wasm(meta.type),
             Map.merge(%{name: name, version: version}, meta)
           )
       end
@@ -483,7 +473,7 @@ defmodule Compendium.RegistryTest do
         })
 
       {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
+        Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "dual-type",
           version: "1.0.0",
           type: "catalyst"
@@ -697,7 +687,7 @@ defmodule Compendium.RegistryTest do
 
       Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
         {"cyfr-manifest.json", Jason.encode!(manifest)},
-        {"catalyst.wasm", @valid_wasm}
+        {"catalyst.wasm", Cyfr.Test.Guests.wasm(:catalyst)}
       ])
 
       {:ok, component} = Registry.register_from_arca(ctx, segments)
@@ -774,7 +764,7 @@ defmodule Compendium.RegistryTest do
 
       Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
         {"cyfr-manifest.json", Jason.encode!(manifest)},
-        {"catalyst.wasm", @valid_wasm}
+        {"catalyst.wasm", Cyfr.Test.Guests.wasm(:catalyst)}
       ])
 
       assert {:error, {:namespace_rejected, msg}} =
@@ -977,7 +967,7 @@ defmodule Compendium.RegistryTest do
       ctx_other = %{ctx | athanor_id: "ath_myorg"}
 
       {:ok, component} =
-        Registry.publish_bytes(ctx_other, @valid_wasm, %{
+        Registry.publish_bytes(ctx_other, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "ext-path-test",
           version: "1.0.0",
           type: "catalyst"
@@ -994,10 +984,10 @@ defmodule Compendium.RegistryTest do
       ]
 
       {:ok, content} = Arca.get(Sanctum.Context.actor(ctx_other), storage_path)
-      assert content == @valid_wasm
+      assert content == Cyfr.Test.Guests.wasm(:catalyst)
 
       {:ok, blob} = Registry.get_blob(ctx_other, component.digest)
-      assert blob == @valid_wasm
+      assert blob == Cyfr.Test.Guests.wasm(:catalyst)
     end
 
     test "cleanup removes the athanor's directories", %{ctx: ctx} do

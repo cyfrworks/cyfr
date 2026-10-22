@@ -6,7 +6,6 @@ defmodule Locus.Runtime.TimeoutTest do
 
   alias Opus.{Dispatch, Provider}
 
-  @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
 
   setup tags do
@@ -25,7 +24,7 @@ defmodule Locus.Runtime.TimeoutTest do
 
     # Plant the test WASM in a private seed so bootstrap can mint it.
     Cyfr.Test.SeedBundle.isolate!()
-    wasm_bytes = File.read!(@math_wasm_path)
+    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, _component} =
       Arca.Test.UnitFixtures.ship_bytes!(ctx, wasm_bytes, %{
@@ -51,15 +50,13 @@ defmodule Locus.Runtime.TimeoutTest do
 
   describe "timeout enforcement" do
     test "a dispatched run accepts the timeout_ms option", %{ctx: ctx, ref: ref} do
-      # A run accepts timeout_ms — execution may fail at Component Model
-      # load (math.wasm is a core module) but the timeout option is accepted
-      result = Dispatch.run(ctx, ref, %{"a" => 10, "b" => 20}, timeout_ms: 5000)
+      {:ok, authority} = Opus.authority_for(ctx, :default, ref)
 
-      # The error should be about Component Model, not about timeout
-      case result do
-        {:ok, r} -> assert r.status == :completed
-        {:error, msg} -> refute msg =~ "timeout"
-      end
+      assert {:ok, %{status: :completed}} =
+               Dispatch.run(ctx, ref, %{"a" => 10, "b" => 20},
+                 timeout_ms: 5000,
+                 authority: authority
+               )
     end
 
     test "default timeout applied when not specified", %{ctx: ctx, ref: ref} do

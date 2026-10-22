@@ -61,7 +61,6 @@ defmodule Sanctum.ConsentAfterInstallTest do
 
   @repo_root Path.expand("../../../..", __DIR__)
   @bundle Path.join(@repo_root, "seed/components")
-  @wasm File.read!(Path.join(@repo_root, "apps/cyfr/test/support/test_wasm/math.wasm"))
   @formula "formula:local.uses-remote"
   @remote "catalyst:moonmoon69.claude"
 
@@ -174,7 +173,7 @@ defmodule Sanctum.ConsentAfterInstallTest do
   defp write_formula!(bundle_dir) do
     dir = Path.join([bundle_dir, "formulas", "local", "uses-remote", "1.0.0"])
     File.mkdir_p!(dir)
-    File.write!(Path.join(dir, "formula.wasm"), @wasm)
+    File.write!(Path.join(dir, "formula.wasm"), Cyfr.Test.Guests.wasm(:formula))
 
     manifest = %{
       "name" => "uses-remote",
@@ -211,13 +210,13 @@ defmodule Sanctum.ConsentAfterInstallTest do
       })
 
     {:ok, manifest_json, config_digest, wasm_digest} =
-      Compendium.OCI.Manifest.build(config, @wasm, "catalyst")
+      Compendium.OCI.Manifest.build(config, Cyfr.Test.Guests.wasm(:catalyst), "catalyst")
 
     %{
       "moonmoon69/catalysts/claude" => %{
         manifest: manifest_json,
         manifest_digest: Prima.Digest.sha256(manifest_json),
-        blobs: %{config_digest => config, wasm_digest => @wasm}
+        blobs: %{config_digest => config, wasm_digest => Cyfr.Test.Guests.wasm(:catalyst)}
       }
     }
   end

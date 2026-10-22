@@ -304,7 +304,7 @@ fn args ->
 
       manifest_of = fn key ->
         {:ok, manifest} =
-          Prima.Manifest.decode_strict(Prima.ComponentRow.field(Map.fetch!(rows, key), :manifest))
+          Prima.Manifest.decode_strict(Map.get(Map.fetch!(rows, key), :manifest))
 
         manifest
       end

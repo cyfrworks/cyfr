@@ -18,7 +18,6 @@ defmodule Opus.Schedules.SchedulerTest do
 
   @reference "reagent:local.test"
   @profile_id "prof_test"
-  @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
   @crash_email "planted-email-3f1a@example.test"
   @crash_input "planted-input-9c2e"
 
@@ -63,7 +62,7 @@ defmodule Opus.Schedules.SchedulerTest do
   # The grant admits the runs a schedule starts and the person's own.
   defp consented!(ctx) do
     {:ok, component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "test",
         version: "1.0.0",
         type: "reagent"

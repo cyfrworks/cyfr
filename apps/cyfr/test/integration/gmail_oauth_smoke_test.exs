@@ -23,7 +23,6 @@ defmodule Cyfr.GmailOAuthSmokeTest do
   alias Sanctum.Vault
   alias Sanctum.VaultReader
 
-  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
   @provider "google"
 
   # Where the cases' entries may go. Their tokens are dispensed to the
@@ -52,7 +51,7 @@ defmodule Cyfr.GmailOAuthSmokeTest do
     # The gmail manifest's security-relevant shape: an oauth need plus
     # the egress it is allowed — the re-released bundle's vocabulary.
     {:ok, _} =
-      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: "gmail",
         version: "0.2.0",
         type: "catalyst",

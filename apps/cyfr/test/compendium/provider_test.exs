@@ -8,12 +8,7 @@ defmodule Compendium.ProviderTest do
   alias Compendium.Registry
   alias Sanctum.Context
 
-  # Valid minimal WASM with export section
-  @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-                <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-                <<0x03, 0x02, 0x01, 0x00>> <>
-                <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-                <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+  @valid_wasm Cyfr.Test.Guests.wasm(:reagent)
 
   # The athanor's own AQUA definitions live under its tenant storage —
   # agent files that shadow the throwaway seed's per-file, so these
@@ -481,7 +476,7 @@ defmodule Compendium.ProviderTest do
 
     test "inspect response includes typed component_ref from reference", %{ctx: ctx} do
       {:ok, _component} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
+        Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "typed-ref-test",
           version: "1.0.0",
           type: "catalyst",
@@ -542,7 +537,7 @@ defmodule Compendium.ProviderTest do
 
     test "inspect with latest reference resolves to semantic version", %{ctx: ctx} do
       {:ok, _component} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
+        Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "version-resolve",
           version: "2.3.4",
           type: "catalyst",
@@ -872,18 +867,12 @@ defmodule Compendium.ProviderTest do
   # ============================================================================
 
   describe "component tool - inspect with dependencies" do
-    @dep_test_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-                     <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-                     <<0x03, 0x02, 0x01, 0x00>> <>
-                     <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-                     <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
     defp setup_dep_test_dir(_test_dir, type, name, version, manifest) do
       segments = ["components", "#{type}s", "local", name, version]
 
       Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
         {"cyfr-manifest.json", Jason.encode!(manifest)},
-        {"#{type}.wasm", @dep_test_wasm}
+        {"#{type}.wasm", Cyfr.Test.Guests.wasm(type)}
       ])
     end
 
@@ -1064,18 +1053,12 @@ defmodule Compendium.ProviderTest do
   # ============================================================================
 
   describe "component tool - setup_plan action" do
-    @setup_plan_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-                       <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-                       <<0x03, 0x02, 0x01, 0x00>> <>
-                       <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-                       <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
     defp setup_plan_component(_test_dir, type, name, version, manifest) do
       segments = ["components", "#{type}s", "local", name, version]
 
       Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
         {"cyfr-manifest.json", Jason.encode!(manifest)},
-        {"#{type}.wasm", @setup_plan_wasm}
+        {"#{type}.wasm", Cyfr.Test.Guests.wasm(type)}
       ])
     end
 
@@ -1241,7 +1224,7 @@ defmodule Compendium.ProviderTest do
         })
 
       {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
+        Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "list-test-b",
           version: "1.0.0",
           type: "catalyst",
@@ -1274,7 +1257,7 @@ defmodule Compendium.ProviderTest do
         })
 
       {:ok, _} =
-        Registry.publish_bytes(ctx, @valid_wasm, %{
+        Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "list-type-c",
           version: "1.0.0",
           type: "catalyst",
@@ -1361,7 +1344,7 @@ defmodule Compendium.ProviderTest do
 
       Arca.Test.UnitFixtures.lay_unit!(ctx, segments, [
         {"cyfr-manifest.json", Jason.encode!(manifest)},
-        {"catalyst.wasm", @valid_wasm}
+        {"catalyst.wasm", Cyfr.Test.Guests.wasm(:catalyst)}
       ])
 
       {:ok, _} = Registry.register_from_arca(ctx, segments)
@@ -1769,7 +1752,7 @@ defmodule Compendium.ProviderTest do
 
       Arca.Test.UnitFixtures.lay_unit!(ctx, segments, [
         {"cyfr-manifest.json", Jason.encode!(manifest)},
-        {"catalyst.wasm", @valid_wasm},
+        {"catalyst.wasm", Cyfr.Test.Guests.wasm(:catalyst)},
         {"README.md", readme_content}
       ])
 
@@ -1791,7 +1774,7 @@ defmodule Compendium.ProviderTest do
 
       Arca.Test.UnitFixtures.lay_unit!(ctx, segments, [
         {"cyfr-manifest.json", Jason.encode!(manifest)},
-        {"catalyst.wasm", @valid_wasm},
+        {"catalyst.wasm", Cyfr.Test.Guests.wasm(:catalyst)},
         {"README.md", "# Has README"}
       ])
 
@@ -2200,19 +2183,12 @@ defmodule Compendium.ProviderTest do
   # ============================================================================
 
   describe "component tool - pull with dependency auto-pull" do
-    # Valid minimal WASM with export section (same as module attribute)
-    @auto_pull_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-                      <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-                      <<0x03, 0x02, 0x01, 0x00>> <>
-                      <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-                      <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
     defp setup_component_dir(_test_dir, type, name, version, manifest) do
       segments = ["components", "#{type}s", "local", name, version]
 
       Arca.Test.UnitFixtures.lay_unit!(Sanctum.TestContext.local(), segments, [
         {"cyfr-manifest.json", Jason.encode!(manifest)},
-        {"#{type}.wasm", @auto_pull_wasm}
+        {"#{type}.wasm", Cyfr.Test.Guests.wasm(type)}
       ])
     end
 

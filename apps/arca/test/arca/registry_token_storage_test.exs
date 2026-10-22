@@ -58,15 +58,4 @@ defmodule Arca.RegistryTokenStorageTest do
     assert {:ok, rows} = RegistryTokenStorage.list(@user, @reg)
     assert Enum.map(rows, & &1.namespace_slug) == ["alice", "stripe.com"]
   end
-
-  test "delete removes exactly one slot and is idempotent" do
-    put!(@user, @reg, "alice")
-    put!(@user, @reg, "stripe.com")
-
-    assert :ok = RegistryTokenStorage.delete(@user, @reg, "alice")
-    assert {:error, :not_found} = RegistryTokenStorage.get(@user, @reg, "alice")
-    assert {:ok, _} = RegistryTokenStorage.get(@user, @reg, "stripe.com")
-
-    assert :ok = RegistryTokenStorage.delete(@user, @reg, "alice")
-  end
 end

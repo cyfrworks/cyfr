@@ -39,7 +39,6 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
   @moduletag :capture_log
 
-  @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
   @test_node "reagent:local.test-math"
   @fh_node "formula:local.fh-root"
@@ -87,7 +86,7 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
     ctx = Sanctum.TestContext.local(:api)
 
-    wasm_bytes = File.read!(@math_wasm_path)
+    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, _component} =
       Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{

@@ -6,40 +6,25 @@ defmodule Prima.ComponentRow do
   The component row as both sides read it: the shape the component domain
   writes and the identity domain consents over.
 
-  A row reaches consent either as a stored map with atom keys or as a
-  decoded one with string keys, so `field/2` is the one accessor; the
-  activation graph keys a row by its **name-level ref**
-  (`type:namespace.name`, no version), because code identity lives in the
-  digest and never in the key; and a name's versions are ordered by the
-  one comparator (`Prima.Semver`), `inserted_at` as the tiebreak.
-
-  Nothing here reads state. `Compendium.Activation.node_key/1` and
-  `Compendium.Registry.latest_of/1` are the component domain's spellings
-  and delegate here.
+  A row is the stored map, atom-keyed (`t:t/0`); the activation graph
+  keys a row by its **name-level ref** (`type:namespace.name`, no
+  version), because code identity lives in the digest and never in the
+  key; and a name's versions are ordered by the one comparator
+  (`Prima.Semver`), `inserted_at` as the tiebreak. Nothing here reads
+  state.
   """
 
-  @doc """
-  A row field by name, whether the row carries atom or string keys.
-
-  ## Examples
-
-      iex> Prima.ComponentRow.field(%{name: "widget"}, :name)
-      "widget"
-
-      iex> Prima.ComponentRow.field(%{"name" => "widget"}, :name)
-      "widget"
-
-      iex> Prima.ComponentRow.field(%{}, :name)
-      nil
-
-  """
-  @spec field(map(), atom()) :: term()
-  def field(row, key) when is_map(row) and is_atom(key) do
-    case Map.fetch(row, key) do
-      {:ok, value} -> value
-      :error -> Map.get(row, Atom.to_string(key))
-    end
-  end
+  @typedoc "A component row as storage answers it: atom keys, the fields consent reads."
+  @type t :: %{
+          optional(:component_type) => String.t() | atom(),
+          optional(:publisher) => String.t() | nil,
+          optional(:name) => String.t(),
+          optional(:version) => String.t(),
+          optional(:manifest) => String.t() | map() | nil,
+          optional(:release_digest) => String.t() | nil,
+          optional(:inserted_at) => DateTime.t(),
+          optional(atom()) => term()
+        }
 
   @doc """
   The name-level key a component row occupies in an activation graph:
@@ -51,12 +36,12 @@ defmodule Prima.ComponentRow do
       "catalyst:local.files"
 
   """
-  @spec node_key(map()) :: String.t()
+  @spec node_key(t()) :: String.t()
   def node_key(row) when is_map(row) do
     Prima.ComponentRef.build(
-      to_string(field(row, :component_type)),
-      Prima.ComponentPath.normalize_publisher(field(row, :publisher)),
-      field(row, :name)
+      to_string(Map.get(row, :component_type)),
+      Prima.ComponentPath.normalize_publisher(Map.get(row, :publisher)),
+      Map.get(row, :name)
     )
   end
 
@@ -66,7 +51,7 @@ defmodule Prima.ComponentRow do
   are validated semver; the comparator (`Prima.Semver`) is total
   regardless.
   """
-  @spec latest_of([map()]) :: map() | nil
+  @spec latest_of([t()]) :: t() | nil
   def latest_of(rows) when is_list(rows) do
     rows
     |> Enum.sort(fn a, b ->

@@ -26,7 +26,6 @@ defmodule Opus.Host.ToolFlowTest do
   alias Prima.Source
   alias Prima.Test.AuthorityFixtures, as: Graph
 
-  @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
   @formula "formula:local.tool-flow-formula"
   @target "reagent:local.tool-flow-target"
   @server "leak"
@@ -110,11 +109,14 @@ defmodule Opus.Host.ToolFlowTest do
     end)
 
     Application.put_env(:arca, :base_path, test_path)
-    wasm = File.read!(@math_wasm_path)
 
     for {name, type} <- [{"tool-flow-formula", "formula"}, {"tool-flow-target", "reagent"}] do
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, wasm, %{name: name, version: "1.0.0", type: type})
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(type), %{
+          name: name,
+          version: "1.0.0",
+          type: type
+        })
     end
 
     {:ok, server} =

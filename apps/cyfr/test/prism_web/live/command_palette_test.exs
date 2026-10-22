@@ -6,13 +6,6 @@ defmodule PrismWeb.CommandPaletteTest do
   # a row must carry the reference those results actually name.
   use PrismWeb.ConnCase, async: false
 
-  # Minimal valid WASM with a `run` export — enough to publish a row.
-  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-          <<0x03, 0x02, 0x01, 0x00>> <>
-          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
   setup do
     test_path = Path.join(System.tmp_dir!(), "palette_#{:rand.uniform(1_000_000)}")
     original = Application.get_env(:arca, :base_path)
@@ -39,7 +32,7 @@ defmodule PrismWeb.CommandPaletteTest do
     ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
 
     {:ok, _} =
-      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: "palette-probe",
         version: "0.1.0",
         type: "catalyst",

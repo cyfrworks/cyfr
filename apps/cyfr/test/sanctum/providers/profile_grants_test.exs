@@ -33,7 +33,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
   alias Sanctum.Consent.Plan
   alias Sanctum.Test.ConsentFixtures
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   @limits %{
     "timeout" => "1m",

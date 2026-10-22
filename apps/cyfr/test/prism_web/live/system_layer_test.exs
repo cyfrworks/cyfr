@@ -614,12 +614,7 @@ defmodule PrismWeb.SystemLayerTest do
   # Grants
   # ---------------------------------------------------------------------------
 
-  # Minimal valid WASM with a `run` export: enough to publish a row.
-  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-          <<0x03, 0x02, 0x01, 0x00>> <>
-          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   # A component in the person's athanor whose one credential need no
   # grant has bound yet, and a vault entry that can meet it.
@@ -628,7 +623,7 @@ defmodule PrismWeb.SystemLayerTest do
     name = "layer-needs-key-#{System.unique_integer([:positive])}"
 
     {:ok, _} =
-      Compendium.Registry.publish_bytes(local, @wasm, %{
+      Compendium.Registry.publish_bytes(local, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: name,
         version: "0.1.0",
         type: "catalyst",
@@ -686,7 +681,7 @@ defmodule PrismWeb.SystemLayerTest do
 
   defp publish_asking!(local, name, version, domains) do
     {:ok, _} =
-      Compendium.Registry.publish_bytes(local, @wasm, %{
+      Compendium.Registry.publish_bytes(local, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: name,
         version: version,
         type: "catalyst",
@@ -1117,7 +1112,7 @@ defmodule PrismWeb.SystemLayerTest do
   # A catalyst in the person's athanor with `manifest`, as `ref`.
   defp publish_catalyst!(local, name, manifest) do
     {:ok, _} =
-      Compendium.Registry.publish_bytes(local, @wasm, %{
+      Compendium.Registry.publish_bytes(local, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: name,
         version: "0.1.0",
         type: "catalyst",
@@ -2180,7 +2175,7 @@ defmodule PrismWeb.SystemLayerTest do
     # The same catalyst asking for `caps`, its manifest naming `extra` too.
     defp asking_caps!(local, name, version, caps, extra \\ %{}) do
       {:ok, _} =
-        Compendium.Registry.publish_bytes(local, @wasm, %{
+        Compendium.Registry.publish_bytes(local, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: name,
           version: version,
           type: "catalyst",
@@ -2786,7 +2781,7 @@ defmodule PrismWeb.SystemLayerTest do
       attach = fn header -> %{"in" => "header", "name" => header, "template" => "{value}"} end
 
       {:ok, _} =
-        Compendium.Registry.publish_bytes(local, @wasm, %{
+        Compendium.Registry.publish_bytes(local, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: name,
           version: version,
           type: "catalyst",
@@ -5516,7 +5511,7 @@ defmodule PrismWeb.SystemLayerTest do
 
     test "a webhook waits on its origin grant, granted with webhooks, before its own confirmation",
          %{conn: conn, local: local} do
-      wasm = File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+      wasm = Cyfr.Test.Guests.wasm(:reagent)
 
       {:ok, _} =
         Compendium.Registry.publish_bytes(local, wasm, %{

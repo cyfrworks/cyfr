@@ -77,7 +77,7 @@ defmodule PrismWeb.SecretRevealTest do
     ctx = person(user)
     name = "reveal-hook-#{System.unique_integer([:positive])}"
 
-    wasm = File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+    wasm = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, _} =
       Compendium.Registry.publish_bytes(ctx, wasm, %{

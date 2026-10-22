@@ -115,7 +115,7 @@ defmodule Sanctum.Consent.VersionShapeCacheRaceTest do
     {:ok, row} =
       Arca.Test.UnitFixtures.ship_and_register!(ctx, type, "local", name, version,
         manifest: manifest,
-        wasm: File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+        wasm: Cyfr.Test.Guests.wasm(type)
       )
 
     row

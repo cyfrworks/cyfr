@@ -351,7 +351,7 @@ defmodule Prima.MCP.MessageTest do
     test "each consent signal has its own code in the -335xx band" do
       codes = for tag <- Prima.ConsentSignal.tags(), do: Message.error_code(tag)
 
-      assert codes == [-33_501, -33_502, -33_503, -33_504, -33_505]
+      assert codes == [-33_501, -33_502, -33_503, -33_505]
       assert Message.error_code(:confirmation_required) == -33_505
     end
   end

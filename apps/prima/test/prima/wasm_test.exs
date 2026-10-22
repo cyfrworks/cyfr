@@ -4,13 +4,10 @@
 defmodule Prima.WasmTest do
   use ExUnit.Case, async: true
 
-  import ExUnit.CaptureLog
-
   alias Prima.Wasm
 
-  # Valid minimal WASM binary (magic + version + empty sections)
-  # \0asm followed by version 1
-  @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>
+  # The smallest core module: the magic and version 1, and no section.
+  @core_module <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>
 
   # Valid Component Model binary (magic + component preamble)
   @valid_component <<0x00, 0x61, 0x73, 0x6D, 0x0D, 0x00, 0x01, 0x00>>
@@ -35,37 +32,23 @@ defmodule Prima.WasmTest do
                    __DIR__
                  )
 
-  # Valid WASM with export section
-  # This is a minimal WASM module that exports a function named "run"
-  # magic + version
-  # type section: 1 func type () -> ()
-  # function section: 1 function, type 0
-  # export section: "run" as func 0
-  # code section: empty function body
-  @wasm_with_export <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-                      <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-                      <<0x03, 0x02, 0x01, 0x00>> <>
-                      <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-                      <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+  # A core module exporting a function named "run": the magic and
+  # version 1, a type section of one () -> (), a function section of one
+  # function of type 0, an export section naming it "run", and its empty
+  # body.
+  @core_module_with_export <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
+                             <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
+                             <<0x03, 0x02, 0x01, 0x00>> <>
+                             <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
+                             <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
 
   describe "validate/1" do
-    test "validates minimal WASM binary" do
-      {:ok, result} = Wasm.validate(@valid_wasm)
-
-      assert result.valid == true
-      assert result.size == 8
-      assert String.starts_with?(result.digest, "sha256:")
-      assert result.version == 1
-      assert result.format == :core_module
-    end
-
     test "validates Component Model binary" do
       {:ok, result} = Wasm.validate(@valid_component)
 
       assert result.valid == true
       assert result.size == 8
       assert String.starts_with?(result.digest, "sha256:")
-      assert result.format == :component
       assert result.exports == []
       assert result.exports_complete == true
       assert result.suggested_type == :reagent
@@ -80,24 +63,20 @@ defmodule Prima.WasmTest do
           ] do
         {:ok, result} = Wasm.validate(File.read!(path))
 
-        assert result.format == :component
         assert result.exports == [export]
         assert result.exports_complete == true
         assert result.suggested_type == type
       end
     end
 
-    test "validates WASM with exports" do
-      {:ok, result} = Wasm.validate(@wasm_with_export)
+    test "refuses a core module as one, whatever it exports, in a sentence the refusal answers" do
+      for core <- [@core_module, @core_module_with_export] do
+        assert {:error, {:core_module, message} = reason} = Wasm.validate(core)
+        assert message =~ "core WebAssembly module, not a component"
 
-      assert result.valid == true
-      assert "run" in result.exports
-    end
-
-    test "detects reagent type for simple exports" do
-      {:ok, result} = Wasm.validate(@wasm_with_export)
-
-      assert result.suggested_type == :reagent
+        assert %Prima.Refusal{class: :invalid_argument, message: ^message} =
+                 Prima.Refusal.classify(reason)
+      end
     end
 
     test "rejects non-binary input" do
@@ -123,63 +102,6 @@ defmodule Prima.WasmTest do
     test "rejects oversized binary" do
       result = Wasm.validate(String.duplicate("x", 100))
       assert {:error, :invalid_magic_bytes} = result
-    end
-  end
-
-  describe "suggest_type/1" do
-    test "suggests formula for execute export" do
-      assert :formula = Wasm.suggest_type(["execute", "validate"])
-    end
-
-    test "suggests catalyst for http exports" do
-      assert :catalyst = Wasm.suggest_type(["run", "http_request"])
-      assert :catalyst = Wasm.suggest_type(["http_get"])
-      assert :catalyst = Wasm.suggest_type(["socket_connect"])
-    end
-
-    test "suggests reagent for plain exports" do
-      assert :reagent = Wasm.suggest_type(["run"])
-      assert :reagent = Wasm.suggest_type(["run", "init"])
-      assert :reagent = Wasm.suggest_type([])
-    end
-  end
-
-  describe "extract_exports/1" do
-    test "extracts exports from valid WASM" do
-      {:ok, exports} = Wasm.extract_exports(@wasm_with_export)
-
-      assert is_list(exports)
-      assert "run" in exports
-    end
-
-    test "returns empty list for WASM without exports" do
-      {:ok, exports} = Wasm.extract_exports(@valid_wasm)
-
-      assert exports == []
-    end
-
-    test "handles malformed section headers gracefully" do
-      malformed =
-        <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x07, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF>>
-
-      assert {:error, :incomplete_leb128} = Wasm.extract_exports(malformed)
-    end
-
-    test "handles section with bad export entry gracefully" do
-      malformed =
-        <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x07, 0x05, 0x01, 0xFF, 0xFF, 0xFF, 0xFF>>
-
-      {:error, :export_entry_parse_failed} = Wasm.extract_exports(malformed)
-    end
-
-    test "handles truncated section gracefully" do
-      truncated =
-        <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x07, 0x20>>
-
-      {:error, {:section_truncated, 7, 32, 0}} = Wasm.extract_exports(truncated)
     end
   end
 
@@ -238,27 +160,11 @@ defmodule Prima.WasmTest do
       assert message =~ "could not be fully parsed"
     end
 
-    test "core modules pass untouched — the runtime refuses them anyway" do
-      assert {:ok, %{format: :core_module}} = Wasm.validate(@valid_wasm, "catalyst")
-    end
-  end
-
-  describe "a malformed export section" do
-    # An export section of one entry whose name runs past the section.
-    @truncated_entry @valid_wasm <> <<7, 3, 1, 5, ?a>>
-
-    test "is the returned reason, and nothing is logged" do
-      log =
-        capture_log(fn ->
-          assert {:error, {:wasm_parse_failed, :export_entry_parse_failed}} =
-                   Wasm.validate(@truncated_entry)
-
-          assert {:error, :export_entry_parse_failed} =
-                   Wasm.extract_exports(@truncated_entry)
-        end)
-
-      # Other async modules log while this one runs.
-      refute log =~ "Prima.Wasm"
+    test "a core module is refused as one for every type, before its world is asked" do
+      for type <- ~w(catalyst reagent formula tincture) do
+        assert {:error, {:core_module, _message}} =
+                 Wasm.validate(@core_module_with_export, type)
+      end
     end
   end
 end

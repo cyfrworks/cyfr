@@ -30,7 +30,7 @@ defmodule PrismWeb.VaultLiveTest do
 
   import Prima.Test.Wait
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   # The need the shipped OpenAI catalyst names, as the create form offers it.
   @openai "api_key:openai.com"
@@ -55,7 +55,7 @@ defmodule PrismWeb.VaultLiveTest do
     {:ok, _} =
       Arca.Test.UnitFixtures.ship_and_register!(seed_ctx(), type, "local", name, version,
         manifest: manifest,
-        wasm: @wasm
+        wasm: Cyfr.Test.Guests.wasm(type)
       )
 
     :ok
@@ -166,7 +166,7 @@ defmodule PrismWeb.VaultLiveTest do
         "openai",
         unit.version,
         manifest: unit.manifest,
-        wasm: @wasm
+        wasm: Cyfr.Test.Guests.wasm(:catalyst)
       )
 
     :ok

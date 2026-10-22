@@ -422,9 +422,8 @@ defmodule Compendium.Registry.ClientSyncTest do
       name = "stale#{System.unique_integer([:positive])}"
       repository = "alice/reagents/#{name}"
 
-      # The smallest valid module: a pull that gets as far as storing it
-      # stores it.
-      wasm = <<0, ?a, ?s, ?m, 1, 0, 0, 0>>
+      # The reagent guest: a pull that gets as far as storing it stores it.
+      wasm = Cyfr.Test.Guests.wasm(:reagent)
       config = Jason.encode!(%{"name" => name, "version" => "1.0.0", "type" => "reagent"})
       manifest = manifest_json(config, wasm)
 

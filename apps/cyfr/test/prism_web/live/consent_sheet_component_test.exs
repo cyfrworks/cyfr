@@ -1291,12 +1291,6 @@ defmodule PrismWeb.ConsentSheetComponentTest do
 
   describe "a whole-number limit" do
     # A component that asks for a memory bound: the limit the person lowers.
-    @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-            <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-            <<0x03, 0x02, 0x01, 0x00>> <>
-            <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-            <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
     @ask 8_388_608
 
     setup %{conn: conn} do
@@ -1308,7 +1302,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       name = "sheet-cap-#{System.unique_integer([:positive])}"
 
       {:ok, _} =
-        Compendium.Registry.publish_bytes(local, @wasm, %{
+        Compendium.Registry.publish_bytes(local, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: name,
           version: "0.1.0",
           type: "catalyst",
@@ -1399,7 +1393,7 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       }
 
       {:ok, _} =
-        Compendium.Registry.publish_bytes(local, @wasm, %{
+        Compendium.Registry.publish_bytes(local, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: name,
           version: "0.1.0",
           type: "catalyst",

@@ -135,8 +135,6 @@ defmodule PrismWeb.SettingsLiveTest do
   # ---------------------------------------------------------------------------
 
   describe "the instance-entry cards" do
-    @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
-
     @create %{
       "name" => "shared-model",
       "provider_hint" => "example.com",
@@ -696,7 +694,7 @@ defmodule PrismWeb.SettingsLiveTest do
               },
               "caps" => %{"egress" => %{"domains" => ["api.example.com", "old.example.com"]}}
             },
-            wasm: @wasm
+            wasm: Cyfr.Test.Guests.wasm(:catalyst)
           )
       end
 

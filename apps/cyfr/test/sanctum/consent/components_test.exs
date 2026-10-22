@@ -23,7 +23,7 @@ defmodule Sanctum.Consent.ComponentsTest do
   alias Sanctum.Consent.Components
   alias Sanctum.Consent.ShapeDerivation
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Arca.Cache.init()
@@ -68,7 +68,7 @@ defmodule Sanctum.Consent.ComponentsTest do
           "publisher" => "local",
           "description" => "component facts test"
         },
-        wasm: @wasm
+        wasm: Cyfr.Test.Guests.wasm(type)
       )
 
     component

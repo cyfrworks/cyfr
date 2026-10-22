@@ -3,12 +3,12 @@
 
 defmodule Prima.ConsentSignal do
   @moduledoc """
-  The five consent signals: `{tag, payload}` with a map payload, the shape
+  The four consent signals: `{tag, payload}` with a map payload, the shape
   the deciding owner produces and every surface reads.
 
-  Four are remediation: `setup_required`, `consent_required`,
-  `consent_conflict` and `restart_required` say what to grant, approve or
-  run again. The fifth, `confirmation_required`, is neither a denial nor a
+  Three are remediation: `setup_required`, `consent_required` and
+  `consent_conflict` say what to grant, approve or run again. The fourth,
+  `confirmation_required`, is neither a denial nor a
   remediation: the change stands and waits for the person's fresh
   confirmation. Its payload is the pending confirmation's `id`, `operation`
   and `expires_at`, and a payload without a non-empty string `id` is no
@@ -34,14 +34,13 @@ defmodule Prima.ConsentSignal do
   documents it), and the tincture iframe bridge keeps its own protocol.
   """
 
-  @remediation_tags [:setup_required, :consent_required, :consent_conflict, :restart_required]
+  @remediation_tags [:setup_required, :consent_required, :consent_conflict]
   @tags @remediation_tags ++ [:confirmation_required]
 
   @type tag ::
           :setup_required
           | :consent_required
           | :consent_conflict
-          | :restart_required
           | :confirmation_required
 
   @doc """
@@ -101,9 +100,6 @@ defmodule Prima.ConsentSignal do
 
   def message({:consent_conflict, _payload}),
     do: "Consent conflict: the consent changed while deciding — re-run the grant"
-
-  def message({:restart_required, _payload}),
-    do: "Approved — re-run the command to continue (the in-flight run was stopped)"
 
   def message({:confirmation_required, payload})
       when is_signal(:confirmation_required, payload) do

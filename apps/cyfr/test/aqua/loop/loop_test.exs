@@ -1433,8 +1433,6 @@ defmodule Aqua.LoopTest do
   # Launches
   # ---------------------------------------------------------------------------
 
-  @math_wasm Path.expand("../../support/test_wasm/math.wasm", __DIR__)
-
   # An app of the person's own whose own calls carry one credential need,
   # disclosed to it, granted with a default entry alone.
   defp launchable_app!(ctx) do
@@ -1455,7 +1453,7 @@ defmodule Aqua.LoopTest do
     }
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: name,
         version: "1.0.0",
         type: "reagent",

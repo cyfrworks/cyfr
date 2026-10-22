@@ -1545,7 +1545,7 @@ defmodule Cyfr.DocsDriftTest do
 
   test "the guide's typed-errors table is the consent signals, each with its payload" do
     tags = Enum.map(Prima.ConsentSignal.tags(), &Atom.to_string/1)
-    assert length(tags) == 5
+    assert length(tags) == 4
 
     documented =
       for [error, payload | _] <- guide_table("### Readiness and typed errors") do

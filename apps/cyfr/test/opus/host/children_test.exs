@@ -70,7 +70,6 @@ defmodule Opus.Host.ChildrenTest do
     end
   end
 
-  @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
   @formula "formula:local.children-formula"
   @target "reagent:local.children-target"
 
@@ -94,11 +93,13 @@ defmodule Opus.Host.ChildrenTest do
         else: Application.delete_env(:arca, :base_path)
     end)
 
-    wasm = File.read!(@math_wasm_path)
-
     for {name, type} <- [{"children-formula", "formula"}, {"children-target", "reagent"}] do
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, wasm, %{name: name, version: "1.0.0", type: type})
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(type), %{
+          name: name,
+          version: "1.0.0",
+          type: type
+        })
     end
 
     Cyfr.Test.Sandbox.stop_work_on_exit()

@@ -514,8 +514,19 @@ defmodule Sanctum.TestContext do
   Remove `ctx`'s person's stored registry credential for one
   `(registry, namespace_slug)`, as losing it would.
   """
-  def drop_registry_credential!(%Context{user_id: user_id}, registry, namespace_slug),
-    do: :ok = Arca.RegistryTokenStorage.delete(user_id, registry, namespace_slug)
+  def drop_registry_credential!(%Context{user_id: user_id}, registry, namespace_slug) do
+    require Ecto.Query
+
+    {1, _} =
+      Ecto.Query.from(t in Arca.Schemas.RegistryToken,
+        where:
+          t.user_id == ^user_id and t.registry == ^registry and
+            t.namespace_slug == ^namespace_slug
+      )
+      |> Arca.Repo.delete_all()
+
+    :ok
+  end
 
   @doc """
   The invoke-budget counter of `authority`'s root (or of a bare budget) on

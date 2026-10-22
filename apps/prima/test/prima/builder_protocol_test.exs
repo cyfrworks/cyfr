@@ -264,7 +264,7 @@ defmodule Prima.BuilderProtocolTest do
 
       component = result("component_result")
       assert Map.keys(component.outputs) |> Enum.sort() == ["Cargo.lock", "component.wasm"]
-      assert component.outputs[BuilderProtocol.component_wasm()] == <<0, "asm", 1, 0, 0, 0>>
+      assert component.outputs[BuilderProtocol.component_wasm()] == <<0, "asm", 0x0D, 0, 1, 0>>
 
       h = lines["health"]
 

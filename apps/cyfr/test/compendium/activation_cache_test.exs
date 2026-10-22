@@ -10,8 +10,6 @@ defmodule Compendium.ActivationCacheTest do
   alias Compendium.Registry
   alias Arca.Test.QueryCounter
 
-  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
-
   setup tags do
     test_path = Path.join(System.tmp_dir!(), "activation_cache_#{:rand.uniform(1_000_000)}")
     original_base_path = Application.get_env(:arca, :base_path)
@@ -34,15 +32,16 @@ defmodule Compendium.ActivationCacheTest do
 
   defp publish!(ctx, name, opts \\ []) do
     manifest = Keyword.get(opts, :manifest)
+    type = Keyword.get(opts, :type, "reagent")
 
     {:ok, component} =
       Registry.publish_bytes(
         ctx,
-        @wasm,
+        Cyfr.Test.Guests.wasm(type),
         %{
           name: name,
           version: "1.0.0",
-          type: Keyword.get(opts, :type, "reagent"),
+          type: type,
           manifest: manifest && Jason.encode!(manifest)
         },
         allow_overwrite: true

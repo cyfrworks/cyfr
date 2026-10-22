@@ -724,9 +724,8 @@ defmodule Compendium.OCI.ClientTest do
     Application.put_env(:arca, :base_path, test_dir)
     Application.delete_env(:sanctum, :auth_provider)
 
-    # The smallest valid module: a pull that gets as far as storing it
-    # stores it.
-    wasm = <<0, ?a, ?s, ?m, 1, 0, 0, 0>>
+    # The reagent guest: a pull that gets as far as storing it stores it.
+    wasm = Cyfr.Test.Guests.wasm(:reagent)
     {manifest_json, wasm_digest} = manifest_fixture(wasm)
     pin = Prima.Digest.sha256(manifest_json)
 
@@ -948,10 +947,10 @@ defmodule Compendium.OCI.ClientTest do
   defp config_fixture,
     do: Jason.encode!(%{"name" => "pinned", "version" => "1.0.0", "type" => "reagent"})
 
-  # The smallest valid module, told apart from another by a custom section
-  # named `tag`.
+  # The reagent guest, told apart from another by a custom section named
+  # `tag` after its last section.
   defp wasm_module(tag) do
-    <<0, ?a, ?s, ?m, 1, 0, 0, 0, 0, byte_size(tag) + 1, byte_size(tag)>> <> tag
+    Cyfr.Test.Guests.wasm(:reagent) <> <<0, byte_size(tag) + 1, byte_size(tag)>> <> tag
   end
 
   # The component's config blob and its WASM layer, in the blob cache.

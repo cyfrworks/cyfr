@@ -1122,19 +1122,21 @@ defmodule Opus.HostTest do
           else: Application.delete_env(:arca, :base_path)
       end)
 
-      wasm = File.read!(Path.expand("../support/test_wasm/math.wasm", __DIR__))
-
       # The formulas making the calls, and the reagent the vectors name.
       for {name, type} <- [{"connection-formula", "formula"}, {"vector", "reagent"}] do
         {:ok, _} =
-          Compendium.Registry.publish_bytes(ctx, wasm, %{name: name, version: "0.1.0", type: type})
+          Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(type), %{
+            name: name,
+            version: "0.1.0",
+            type: type
+          })
       end
 
       # A formula calling the one above, released apart from it: the caps
       # its manifest asks for give it its own release digest, so calling
       # the other is never a self-call.
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, wasm, %{
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:formula), %{
           name: "connection-root",
           version: "0.1.0",
           type: "formula",

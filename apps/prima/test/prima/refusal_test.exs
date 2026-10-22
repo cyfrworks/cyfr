@@ -173,6 +173,8 @@ defmodule Prima.RefusalTest do
     {{:corrupt, {:digest, "The artifact"}}, :corrupt},
     {{:corrupt, {:profile, "prof_1"}}, :corrupt},
     {{:corrupt, {:manifest, "c:local.x:1.0.0"}}, :corrupt},
+    {{:dependency_unreadable, "reagent:local.x:1.0.0", :malformed_manifest}, :corrupt},
+    {:projection_unavailable, :unavailable},
     {{:corrupt, :person_identity}, :corrupt},
     {{:corrupt, {:component_graph, "c:local.x:1.0.0"}}, :corrupt},
     {{:corrupt, {:artifact, "sha256:ab12"}}, :corrupt},
@@ -187,6 +189,8 @@ defmodule Prima.RefusalTest do
     {{:timeout, :parent_deadline}, :timeout},
     {{:rate_limited, 5}, :rate_limited},
     {{:attestation_failed, :signed_pulls_required}, :forbidden},
+    {{:core_module, "The binary is a core WebAssembly module, not a component."},
+     :invalid_argument},
     {{:setup_required, :registry_binding}, :setup_required},
     {{:invoke_denied, :depth_cap}, :forbidden},
     {{:invoke_denied, :invoke_budget_exhausted}, :forbidden},
@@ -233,7 +237,6 @@ defmodule Prima.RefusalTest do
     {{:setup_required, %{"node_ref" => "c:local.x:1.0.0"}}, :setup_required},
     {{:consent_required, %{}}, :consent_required},
     {{:consent_conflict, %{}}, :conflict},
-    {{:restart_required, %{}}, :cancelled},
     {{:confirmation_required, %{id: "confirmation-7f3a", operation: "vault/create"}},
      :confirmation_required},
     {{:confirmation_required, %{"id" => "confirmation-7f3a"}}, :confirmation_required},
@@ -438,6 +441,22 @@ defmodule Prima.RefusalTest do
         assert is_binary(message) and message != "", "#{inspect(reason)} has no sentence"
         assert Refusal.reason?(reason) or is_binary(reason)
       end
+    end
+
+    test "an unreadable dependency is damage, and an index behind its files is unavailable" do
+      assert %Refusal{
+               class: :corrupt,
+               message:
+                 "A dependency's stored manifest is damaged, so its dependencies cannot be read."
+             } =
+               Refusal.classify(
+                 {:dependency_unreadable, "reagent:local.x:1.0.0", :malformed_manifest}
+               )
+
+      assert %Refusal{
+               class: :unavailable,
+               message: "The component index is catching up with its files — retry shortly"
+             } = Refusal.classify(:projection_unavailable)
     end
 
     test "every class has a sentence, and the table reaches all sixteen" do

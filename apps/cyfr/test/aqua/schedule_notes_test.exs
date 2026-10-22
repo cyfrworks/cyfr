@@ -808,7 +808,6 @@ defmodule Aqua.ScheduleNotesSchedulerTest do
 
   @reference "reagent:local.test"
   @profile_id "prof_test"
-  @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
 
   setup do
     Arca.Cache.init()
@@ -858,7 +857,7 @@ defmodule Aqua.ScheduleNotesSchedulerTest do
 
   defp granted!(ctx) do
     {:ok, component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "test",
         version: "1.0.0",
         type: "reagent"

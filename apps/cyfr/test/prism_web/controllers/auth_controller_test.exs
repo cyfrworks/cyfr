@@ -272,11 +272,9 @@ defmodule PrismWeb.AuthControllerTest do
 
       bypass = Bypass.open()
       original_url = Application.get_env(:cyfr, :registry_url)
-      original_scheme = Application.get_env(:cyfr, :registry_scheme)
       original_oci = Application.get_env(:cyfr, :oci_registry_url)
 
       Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
-      Application.put_env(:cyfr, :registry_scheme, "http")
       Application.put_env(:cyfr, :oci_registry_url, "registry.test")
 
       on_exit(fn ->
@@ -287,10 +285,6 @@ defmodule PrismWeb.AuthControllerTest do
         if original_url,
           do: Application.put_env(:cyfr, :registry_url, original_url),
           else: Application.delete_env(:cyfr, :registry_url)
-
-        if original_scheme,
-          do: Application.put_env(:cyfr, :registry_scheme, original_scheme),
-          else: Application.delete_env(:cyfr, :registry_scheme)
 
         if original_oci,
           do: Application.put_env(:cyfr, :oci_registry_url, original_oci),

@@ -14,10 +14,9 @@ on:
       - 'mix.lock'
       # The formatting check reads it.
       - '.formatter.exs'
-      # The static analysis reads the first two; the Dialyzer filters' reason
-      # test reads the third.
+      # The static analysis reads the first; the Dialyzer filters' reason
+      # test reads the second.
       - '.credo.exs'
-      - '.credo_baseline.exs'
       - '.dialyzer_ignore.exs'
       # Every workflow: the drift test, the tag pipeline's graph check
       # (tests/ci-release-graph.py) and its publication test
@@ -73,10 +72,9 @@ on:
       - 'mix.lock'
       # The formatting check reads it.
       - '.formatter.exs'
-      # The static analysis reads the first two; the Dialyzer filters' reason
-      # test reads the third.
+      # The static analysis reads the first; the Dialyzer filters' reason
+      # test reads the second.
       - '.credo.exs'
-      - '.credo_baseline.exs'
       - '.dialyzer_ignore.exs'
       # Every workflow: the drift test, the tag pipeline's graph check
       # (tests/ci-release-graph.py) and its publication test
@@ -293,9 +291,7 @@ jobs:
       # an edge fails here, once, outside the partitions.
       - name: Boundary plants
         run: mix test apps/cyfr/test/cyfr/boundaries_test.exs --only boundary_plant
-      # .credo.exs's checks against .credo_baseline.exs: a finding the
-      # baseline does not record fails, and so does a recorded one the tree
-      # no longer has.
+      # .credo.exs's checks: any finding fails.
       - name: Static analysis
         run: mix credo --strict
       - name: Check formatting

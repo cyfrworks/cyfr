@@ -9,7 +9,6 @@ defmodule Locus.Runtime.SecurityTest do
   alias Opus.Provider
   alias Sanctum.Context
 
-  @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
 
   setup tags do
@@ -47,7 +46,7 @@ defmodule Locus.Runtime.SecurityTest do
 
     # Plant the test WASM in a private seed so bootstrap can mint it.
     Cyfr.Test.SeedBundle.isolate!()
-    wasm_bytes = File.read!(@math_wasm_path)
+    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, _component} =
       Arca.Test.UnitFixtures.ship_bytes!(ctx, wasm_bytes, %{
@@ -117,12 +116,8 @@ defmodule Locus.Runtime.SecurityTest do
   # ============================================================================
 
   describe "tenant isolation" do
-    # Note: math.wasm is a core module, not a Component Model binary. Execution
-    # fails at runtime but still creates execution records, which is sufficient
-    # to test user isolation on the MCP access control layer.
-
     test "execution access is tenant-scoped", %{ctx: ctx, ref: ref} do
-      # Execute as user — fails at Component Model load but still writes a record
+      # Execute as user, which writes a record
       _result =
         Provider.handle("execution", ctx, %{
           "action" => "run",
@@ -304,20 +299,12 @@ defmodule Locus.Runtime.SecurityTest do
 
   describe "request/response size limits" do
     test "input size validation accepts normal input", %{ctx: ctx, ref: ref} do
-      # Normal small input passes validation; execution may fail for other reasons
-      # (math.wasm is a core module, not Component Model)
-      result =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => ref,
-          "input" => %{"a" => 5, "b" => 3}
-        })
-
-      # Error (if any) should NOT be about input size — proving validation passed
-      case result do
-        {:ok, r} -> assert r.status == "completed"
-        {:error, msg} -> refute msg =~ "Input size"
-      end
+      assert {:ok, %{status: "completed"}} =
+               Provider.handle("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => ref,
+                 "input" => %{"a" => 5, "b" => 3}
+               })
     end
 
     test "input size validation rejects oversized input", %{ctx: ctx, ref: ref} do

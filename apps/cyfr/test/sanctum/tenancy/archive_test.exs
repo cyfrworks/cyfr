@@ -27,7 +27,6 @@ defmodule Sanctum.Tenancy.ArchiveTest do
   alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   @reference "reagent:local.archive-hang:1.0.0"
-  @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
 
   # How long the execution domain may take to dispatch a run, or to react
   # to an archive, on a loaded host: a dispatch through the scripted worker
@@ -119,7 +118,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     ctx = athanor_id |> member_ctx(user_id) |> Sanctum.TestContext.via(:api)
 
     {:ok, _} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "archive-hang",
         version: "1.0.0",
         type: "reagent"

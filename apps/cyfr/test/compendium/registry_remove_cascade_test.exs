@@ -7,7 +7,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
   import Ecto.Query, only: [from: 2]
 
-  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Arca.Cache.init()
@@ -142,7 +142,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
 
     test "is removed with it", %{ctx: ctx} do
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "cascade-feed",
           version: "1.0.0",
           type: "catalyst"
@@ -158,7 +158,7 @@ defmodule Compendium.RegistryRemoveCascadeTest do
     test "whose removal is refused is logged by its id and reason, and the uninstall completes",
          %{ctx: ctx} do
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: "cascade-fenced",
           version: "1.0.0",
           type: "catalyst"

@@ -9,7 +9,7 @@ defmodule PrismWeb.SchedulesLiveTest do
     conn = log_in_user(conn, user)
     ctx = %{Sanctum.TestContext.local() | athanor_id: seated_athanor().id, user_id: user.user_id}
 
-    wasm = File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+    wasm = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, _} =
       Compendium.Registry.publish_bytes(ctx, wasm, %{

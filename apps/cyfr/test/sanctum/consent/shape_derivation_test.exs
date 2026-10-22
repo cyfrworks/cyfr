@@ -12,7 +12,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
   alias Sanctum.Consent.Loader
   alias Sanctum.Consent.ShapeDerivation
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
 
   setup tags do
     Arca.Cache.init()
@@ -53,7 +53,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
     {:ok, component} =
       Arca.Test.UnitFixtures.ship_and_register!(ctx, type, "local", name, version,
         manifest: manifest,
-        wasm: @wasm
+        wasm: type != "tincture" && Cyfr.Test.Guests.wasm(type)
       )
 
     component
@@ -484,7 +484,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       }
 
       assert {:error, {:manifest_identity_mismatch, _}} =
-               Compendium.Registry.publish_bytes(ctx, @wasm, %{
+               Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:formula), %{
                  name: "spoof",
                  version: "1.0.0",
                  type: "formula",

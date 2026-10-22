@@ -28,11 +28,7 @@ defmodule Sanctum.PermissionVocabularyTest do
   end
 
   test "every permission an action annotation gates is a known permission" do
-    known =
-      Sanctum.Atoms.known_permissions()
-      |> Enum.map(&String.to_atom/1)
-      |> MapSet.new()
-
+    known = MapSet.new(Sanctum.Atoms.known_permissions())
     gated = annotation_permissions()
 
     assert MapSet.size(gated) > 0
@@ -46,7 +42,7 @@ defmodule Sanctum.PermissionVocabularyTest do
     gated = MapSet.union(annotation_permissions(), checked_permissions())
 
     for name <- Sanctum.Atoms.known_permissions() -- ["*"] do
-      assert String.to_atom(name) in gated,
+      assert name in gated,
              "#{name} is granted but gates no action annotation and no permission check"
     end
   end
@@ -59,7 +55,7 @@ defmodule Sanctum.PermissionVocabularyTest do
         perm = Map.get(annotation, :permission),
         not is_nil(perm),
         into: MapSet.new() do
-      perm
+      Atom.to_string(perm)
     end
   end
 
@@ -76,7 +72,7 @@ defmodule Sanctum.PermissionVocabularyTest do
             File.read!(file)
           ),
         into: MapSet.new() do
-      String.to_atom(perm)
+      perm
     end
   end
 end

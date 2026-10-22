@@ -410,20 +410,13 @@ defmodule PrismWeb.AquaPanelLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  # Minimal valid WASM with a `run` export: enough to publish a row.
-  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-          <<0x03, 0x02, 0x01, 0x00>> <>
-          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
   test "a grant the panel's turn needs is asked in the panel's own layer, in the person's own athanor, never the page's",
        %{conn: conn, user: user, mine: mine, room: room, me: me, in_room: in_room, thread: thread} do
     name = "panel-grant-#{System.unique_integer([:positive])}"
 
     for ctx <- [me, in_room] do
       {:ok, _} =
-        Compendium.Registry.publish_bytes(ctx, @wasm, %{
+        Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
           name: name,
           version: "0.1.0",
           type: "catalyst",

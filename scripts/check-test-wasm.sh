@@ -7,9 +7,9 @@
 #
 # Each recipe's build.sh --check builds its fixtures afresh and compares
 # them byte for byte with the checked-in binaries: Locus's math, echo and
-# spin (and CYFR's copy of math), the hostile guests, the runtime image
-# suite's hog, and the Rust fixtures. Every checked-in .wasm outside seed/
-# is one of a recipe's, or the check fails naming it. --wat-only skips
+# spin, the hostile guests, CYFR's guests, the runtime image suite's hog,
+# and the Rust fixtures. Every checked-in .wasm outside seed/ is one of a
+# recipe's, or the check fails naming it. --wat-only skips
 # building the Rust fixtures, for a host without their toolchain, and names
 # them.
 #
@@ -34,16 +34,16 @@ cd "$root" || exit 1
 
 locus=apps/locus/test/support/runtime/test_wasm
 cyfr=apps/cyfr/test/support/test_wasm
-wat="$locus $locus/hostile tests/locus-runtime-image"
+wat="$locus $locus/hostile $cyfr/guests tests/locus-runtime-image"
 rust="$cyfr/chat_fixture $cyfr/step_stub apps/cyfr/test/integration/runtime/support/test_wasm/nested_probe"
 
 differs=()
 refused=()
 
-# Every checked-in binary a recipe builds. Locus's two recipes refuse a
-# binary in their directory that is none of their own.
-built="$cyfr/math.wasm tests/locus-runtime-image/hog.wasm"
-for dir in "$locus" "$locus/hostile"; do
+# Every checked-in binary a recipe builds. Locus's two recipes and CYFR's
+# guests' refuse a binary in their directory that is none of their own.
+built="tests/locus-runtime-image/hog.wasm"
+for dir in "$locus" "$locus/hostile" "$cyfr/guests"; do
   for wasm in "$dir"/*.wasm; do built="$built $wasm"; done
 done
 for dir in $rust; do built="$built $dir/$(basename "$dir").wasm"; done

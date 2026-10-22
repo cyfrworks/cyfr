@@ -44,7 +44,6 @@ defmodule Opus.AttemptSlotWaitTest do
 
   @node "reagent:local.slot-wait"
   @ref "reagent:local.slot-wait:1.0.0"
-  @math_wasm Path.expand("../support/test_wasm/math.wasm", __DIR__)
   @slots Opus.Slots
   @cancelled "Execution cancelled"
   @lapsed "Execution terminated: runner stopped without cleanup"
@@ -144,7 +143,7 @@ defmodule Opus.AttemptSlotWaitTest do
     Cyfr.Test.Sandbox.stop_work_on_exit()
 
     {:ok, component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "slot-wait",
         version: "1.0.0",
         type: "reagent"

@@ -100,13 +100,13 @@
       "target_type": "reagent",
       "outputs": {
         "Cargo.lock": "IyBUaGlzIGZpbGUgaXMgYXV0b21hdGljYWxseSBAZ2VuZXJhdGVkIGJ5IENhcmdvLgp2ZXJzaW9uID0gNAo=",
-        "component.wasm": "AGFzbQEAAAA="
+        "component.wasm": "AGFzbQ0AAQA="
       },
       "diagnostics": [
         "compiling: Compiling reagent (rust)...",
         "output: Finished `release` profile [optimized] target(s) in 4.20s"
       ],
-      "body": "{\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output: Finished `release` profile [optimized] target(s) in 4.20s\"],\"language\":\"rust\",\"outputs\":[{\"base64\":\"IyBUaGlzIGZpbGUgaXMgYXV0b21hdGljYWxseSBAZ2VuZXJhdGVkIGJ5IENhcmdvLgp2ZXJzaW9uID0gNAo=\",\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\"},{\"base64\":\"AGFzbQEAAAA=\",\"digest\":\"sha256:93a44bbb96c751218e4c00d479e4c14358122a389acca16205b1e4d0dc5f9476\",\"path\":\"component.wasm\"}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":1}"
+      "body": "{\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output: Finished `release` profile [optimized] target(s) in 4.20s\"],\"language\":\"rust\",\"outputs\":[{\"base64\":\"IyBUaGlzIGZpbGUgaXMgYXV0b21hdGljYWxseSBAZ2VuZXJhdGVkIGJ5IENhcmdvLgp2ZXJzaW9uID0gNAo=\",\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\"},{\"base64\":\"AGFzbQ0AAQA=\",\"digest\":\"sha256:24eaf3439a60c96764c4f2c92a0a81b52bd4fe5d5b91f090184a0f6486b1bf29\",\"path\":\"component.wasm\"}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":1}"
     },
     "tincture_result": {
       "language": "javascript",
@@ -454,7 +454,7 @@
     },
     {
       "name": "component_with_extra_output",
-      "body": "{\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output: Finished `release` profile [optimized] target(s) in 4.20s\"],\"language\":\"rust\",\"outputs\":[{\"base64\":\"IyBUaGlzIGZpbGUgaXMgYXV0b21hdGljYWxseSBAZ2VuZXJhdGVkIGJ5IENhcmdvLgp2ZXJzaW9uID0gNAo=\",\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\"},{\"base64\":\"AGFzbQEAAAA=\",\"digest\":\"sha256:93a44bbb96c751218e4c00d479e4c14358122a389acca16205b1e4d0dc5f9476\",\"path\":\"component.wasm\"},{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\"}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":1}",
+      "body": "{\"diagnostics\":[\"compiling: Compiling reagent (rust)...\",\"output: Finished `release` profile [optimized] target(s) in 4.20s\"],\"language\":\"rust\",\"outputs\":[{\"base64\":\"IyBUaGlzIGZpbGUgaXMgYXV0b21hdGljYWxseSBAZ2VuZXJhdGVkIGJ5IENhcmdvLgp2ZXJzaW9uID0gNAo=\",\"digest\":\"sha256:18276eb479682b0431f7b5c781d001e854dd19816ce4863ac38f6dfa71b2ece5\",\"path\":\"Cargo.lock\"},{\"base64\":\"AGFzbQ0AAQA=\",\"digest\":\"sha256:24eaf3439a60c96764c4f2c92a0a81b52bd4fe5d5b91f090184a0f6486b1bf29\",\"path\":\"component.wasm\"},{\"base64\":\"Y29uc29sZS5sb2coInZlY3RvciIpOwo=\",\"digest\":\"sha256:8ccc5c58c884830f5dd13ea08c1de3885548832145af86dd5d9cd2ccc260bb78\",\"path\":\"assets/app.js\"}],\"target_type\":\"reagent\",\"type\":\"result\",\"version\":1}",
       "error": "invalid_field"
     },
     {

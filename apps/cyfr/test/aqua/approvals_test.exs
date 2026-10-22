@@ -23,7 +23,6 @@ defmodule Aqua.ApprovalsTest do
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
-  @math_wasm Path.expand("../support/test_wasm/math.wasm", __DIR__)
 
   setup tags do
     Arca.Cache.init()
@@ -903,7 +902,7 @@ defmodule Aqua.ApprovalsTest do
     }
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: name,
         version: "1.0.0",
         type: "reagent",

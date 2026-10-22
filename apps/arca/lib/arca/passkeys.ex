@@ -78,8 +78,10 @@ defmodule Arca.Passkeys do
 
   Refusals: `:conflict` (the credential is already live at this RP ID),
   `:first_method_used`, `:identity_key_epoch_required`,
-  `:stale_key_epoch`, `:unexpected_key_epoch`, `:no_identity`, `:not_owner`, `:cross_tenant`,
-  `{:invalid, errors}`, `:database_error`, or the closure's reason.
+  `:stale_key_epoch`, `:unexpected_key_epoch`, `:not_owner`, `:cross_tenant`,
+  `{:invalid, errors}`, `:database_error`, or the closure's reason. A
+  person with no identity row is damage the caller refuses before it
+  registers anything (`Sanctum.Passkeys`).
   """
   @spec register(Prima.Actor.t(), map(), keyword()) :: {:ok, row()} | {:error, term()}
   def register(%Prima.Actor{} = actor, attrs, opts \\ []) when is_map(attrs) and is_list(opts) do
@@ -350,7 +352,6 @@ defmodule Arca.Passkeys do
       {:marked, _} -> :ok
       {:already, false} -> :ok
       {:already, true} -> {:error, :first_method_used}
-      {:no_identity, _} -> {:error, :no_identity}
     end
   end
 

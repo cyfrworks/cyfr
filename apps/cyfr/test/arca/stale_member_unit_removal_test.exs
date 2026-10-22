@@ -31,7 +31,6 @@ defmodule Arca.StaleMemberUnitRemovalTest do
   alias Arca.StorageUnits
 
   @sentinel "cyfr-manifest.json"
-  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
   @observer :stale_member_unit_removal_observer
 
   @slot_keys [
@@ -205,7 +204,7 @@ defmodule Arca.StaleMemberUnitRemovalTest do
       name = "fence-component-#{System.unique_integer([:positive])}"
 
       assert {:ok, _} =
-               Compendium.Registry.publish_bytes(api, @wasm, %{
+               Compendium.Registry.publish_bytes(api, Cyfr.Test.Guests.wasm(:catalyst), %{
                  name: name,
                  version: "1.0.0",
                  type: "catalyst"

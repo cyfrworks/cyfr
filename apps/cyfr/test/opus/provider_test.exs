@@ -12,7 +12,6 @@ defmodule Opus.ProviderTest do
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
 
-  @math_wasm_path Path.join(__DIR__, "../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
 
   setup tags do
@@ -50,7 +49,7 @@ defmodule Opus.ProviderTest do
 
     # Plant the test WASM in a private seed so bootstrap can mint it.
     Cyfr.Test.SeedBundle.isolate!()
-    wasm_bytes = File.read!(@math_wasm_path)
+    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, _component} =
       Arca.Test.UnitFixtures.ship_bytes!(ctx, wasm_bytes, %{
@@ -147,9 +146,9 @@ defmodule Opus.ProviderTest do
   # ============================================================================
   # Execution Tool - Run Action
   #
-  # math.wasm is a core module, not a component, so its runs fail; each run
-  # still writes its record started and then failed, which is what these
-  # cases inspect.
+  # The reagent guest answers `{"ran":true}` to any input but
+  # `{"trap":true}`, on which it traps; a run either way writes its record
+  # started and then completed or failed, which is what these cases inspect.
   # ============================================================================
 
   describe "the origin a run over the API runs under" do
@@ -186,12 +185,12 @@ defmodule Opus.ProviderTest do
 
   describe "execution tool - run action" do
     test "executes registered component and creates failed record", %{ctx: ctx, ref: ref} do
-      # Execution will fail because math.wasm is a core module, not a Component Model binary
+      # The guest traps on this input, so the run fails as it runs.
       _result =
         Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
-          "input" => %{"a" => 10, "b" => 25}
+          "input" => %{"trap" => true}
         })
 
       # List to get the execution record
@@ -211,7 +210,7 @@ defmodule Opus.ProviderTest do
 
       assert logs_result.component_type == "reagent"
       assert logs_result.status == "failed"
-      assert logs_result.error =~ "Component compilation failed"
+      assert logs_result.error =~ "Component call failed"
     end
 
     test "returns error for missing reference", %{ctx: ctx} do
@@ -915,7 +914,7 @@ defmodule Opus.ProviderTest do
   # run over the API. Answers the root's reference.
   defp lending_root!(ctx) do
     {:ok, component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "lent-root",
         version: "0.1.0",
         type: "reagent"
@@ -1036,7 +1035,7 @@ defmodule Opus.ProviderTest do
   # stored bindings the same two. Answers the root's reference.
   defp bound_twice_root!(ctx) do
     {:ok, component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "twice-root",
         version: "0.1.0",
         type: "reagent"
@@ -1171,9 +1170,6 @@ defmodule Opus.ProviderTest do
 
   # ============================================================================
   # Execution Tool - List Action
-  #
-  # Note: math.wasm is a core module, so executions fail at runtime but
-  # records are still created. Tests verify listing of failed records.
   # ============================================================================
 
   describe "execution tool - list action" do
@@ -1184,12 +1180,12 @@ defmodule Opus.ProviderTest do
     end
 
     test "returns executions after running", %{ctx: ctx, ref: ref} do
-      # Execute something (will fail because math.wasm is a core module)
+      # A run the guest traps on fails.
       _exec_result =
         Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
-          "input" => %{"a" => 1, "b" => 1}
+          "input" => %{"trap" => true}
         })
 
       # Now list should show the failed record
@@ -1202,25 +1198,25 @@ defmodule Opus.ProviderTest do
     end
 
     test "filters by status", %{ctx: ctx, ref: ref} do
-      # Execute to create a failed execution record
-      _result =
+      # One run the guest traps on, which fails, and one it answers, which
+      # completes.
+      for input <- [%{"trap" => true}, %{"a" => 1, "b" => 1}] do
         Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
-          "input" => %{"a" => 1, "b" => 1}
+          "input" => input
         })
+      end
 
-      # Filter by failed
       {:ok, failed_result} =
         Provider.handle("execution", ctx, %{"action" => "list", "status" => "failed"})
 
-      assert failed_result.count >= 1
+      assert [%{status: "failed"}] = failed_result.executions
 
-      # Filter by completed (should be empty since math.wasm always fails)
       {:ok, completed_result} =
         Provider.handle("execution", ctx, %{"action" => "list", "status" => "completed"})
 
-      assert completed_result.count == 0
+      assert [%{status: "completed"}] = completed_result.executions
 
       # Filter by running (should be empty since execution finishes quickly)
       {:ok, running_result} =
@@ -1263,7 +1259,6 @@ defmodule Opus.ProviderTest do
     end
 
     test "respects limit parameter", %{ctx: ctx, ref: ref} do
-      # Run multiple executions (all will fail)
       for i <- 1..3 do
         Provider.handle("execution", ctx, %{
           "action" => "run",
@@ -1279,19 +1274,16 @@ defmodule Opus.ProviderTest do
 
   # ============================================================================
   # Execution Tool - Logs Action
-  #
-  # Note: math.wasm is a core module, so executions fail at runtime but
-  # records are still created. Tests verify log retrieval of failed records.
   # ============================================================================
 
   describe "execution tool - logs action" do
     test "returns logs for execution", %{ctx: ctx, ref: ref} do
-      # Execute (will fail)
+      # A run the guest traps on fails.
       _exec_result =
         Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
-          "input" => %{"a" => 5, "b" => 5}
+          "input" => %{"trap" => true}
         })
 
       # Get execution_id from list
@@ -1340,12 +1332,12 @@ defmodule Opus.ProviderTest do
     end
 
     test "returns error for failed execution", %{ctx: ctx, ref: ref} do
-      # Run an execution (it fails because math.wasm is a core module)
+      # A run the guest traps on fails.
       _exec_result =
         Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
-          "input" => %{"a" => 1, "b" => 1}
+          "input" => %{"trap" => true}
         })
 
       # Get execution_id from list
@@ -1559,10 +1551,10 @@ defmodule Opus.ProviderTest do
     end
 
     test "non-admin user can still run executions", %{restricted_ctx: restricted_ctx, ref: ref} do
-      # The run action is open to all authenticated users. Even though execution
-      # fails (math.wasm is a core module), the error should NOT be "Unauthorized".
-      # Through the dispatcher, where a permission refusal would come from: the
-      # handler alone refuses nothing on permission.
+      # The run action is open to all authenticated users: through the
+      # dispatcher, where a permission refusal would come from (the handler
+      # alone refuses nothing on permission), the call may be refused for
+      # its athanor's state, never as unauthorized.
       result =
         Sanctum.Gate.call_external("execution", restricted_ctx, %{
           "action" => "run",
@@ -1577,7 +1569,6 @@ defmodule Opus.ProviderTest do
                  "run action should not require admin permissions"
 
         {:ok, _} ->
-          # If it somehow succeeds, that's fine too
           :ok
       end
     end
@@ -1613,10 +1604,6 @@ defmodule Opus.ProviderTest do
 
   # ============================================================================
   # Verify Block
-  #
-  # math.wasm is a core module, so its runs fail. The key assertion is that
-  # the error is NOT about signature verification, which shows verification
-  # passed.
   # ============================================================================
 
   describe "execution tool - verify block" do
@@ -1635,42 +1622,34 @@ defmodule Opus.ProviderTest do
     end
 
     test "accepts verify block with identity and issuer", %{ctx: ctx, ref: ref} do
-      # Execution fails because math.wasm is a core module, but the error
-      # should be about Component Model loading, NOT signature verification
-      {:error, msg} =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => ref,
-          "input" => %{"a" => 10, "b" => 5},
-          "verify" => %{
-            "identity" => "test@example.com",
-            "issuer" => "https://github.com/login/oauth"
-          }
-        })
-
-      assert err_msg(msg) =~ "Component compilation failed"
-      refute err_msg(msg) =~ "Signature verification failed"
+      # The run completes, so the verify block refused nothing.
+      assert {:ok, %{status: "completed", result: %{"ran" => true}}} =
+               Provider.handle("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => ref,
+                 "input" => %{"a" => 10, "b" => 5},
+                 "verify" => %{
+                   "identity" => "test@example.com",
+                   "issuer" => "https://github.com/login/oauth"
+                 }
+               })
     end
 
     test "verify block is optional", %{ctx: ctx, ref: ref} do
-      # Without verify block, execution still proceeds (and fails at Component Model load)
-      {:error, msg} =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => ref,
-          "input" => %{"a" => 3, "b" => 7}
-        })
-
-      assert err_msg(msg) =~ "Component compilation failed"
+      assert {:ok, %{status: "completed", result: %{"ran" => true}}} =
+               Provider.handle("execution", ctx, %{
+                 "action" => "run",
+                 "reference" => ref,
+                 "input" => %{"a" => 3, "b" => 7}
+               })
     end
   end
 
   # ============================================================================
   # Component Digest
   #
-  # Note: The component digest is computed from WASM bytes before execution,
-  # so even though math.wasm fails at runtime, the digest is still recorded
-  # in the failed execution record.
+  # The component digest is computed from WASM bytes before execution, so a
+  # run that fails as it runs still records it.
   # ============================================================================
 
   describe "execution tool - component digest" do
@@ -1679,7 +1658,7 @@ defmodule Opus.ProviderTest do
         Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
-          "input" => %{"a" => 1, "b" => 1}
+          "input" => %{"trap" => true}
         })
 
       {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
@@ -1697,7 +1676,7 @@ defmodule Opus.ProviderTest do
     end
 
     test "digest is consistent for same WASM bytes", %{ctx: ctx, ref: ref} do
-      # Run two executions with same WASM (both will fail)
+      # Run two executions with same WASM
       _result1 =
         Provider.handle("execution", ctx, %{
           "action" => "run",
@@ -1767,9 +1746,8 @@ defmodule Opus.ProviderTest do
   # ============================================================================
   # Crash-Resilient Storage
   #
-  # math.wasm is a core module, so its runs fail; each run's record is
-  # written started and then failed, so crash-resilient storage is testable
-  # with failed records.
+  # Each run's record is written started and then failed when the guest
+  # traps, so crash-resilient storage is testable with failed records.
   # ============================================================================
 
   describe "execution tool - crash-resilient storage" do
@@ -1792,12 +1770,12 @@ defmodule Opus.ProviderTest do
       assert db_record.id == execution_id
     end
 
-    test "marks execution as failed after core module execution", %{ctx: ctx, ref: ref} do
+    test "marks execution as failed after a run that traps", %{ctx: ctx, ref: ref} do
       _result =
         Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
-          "input" => %{"a" => 5, "b" => 5}
+          "input" => %{"trap" => true}
         })
 
       # Get execution_id from list
@@ -1840,8 +1818,7 @@ defmodule Opus.ProviderTest do
   # ============================================================================
   # Telemetry Events
   #
-  # math.wasm is a core module, so its runs fail, and a failed run emits
-  # start and exception telemetry events (not stop).
+  # A run that fails emits start and exception telemetry events (not stop).
   # ============================================================================
 
   describe "execution tool - telemetry" do
@@ -1869,16 +1846,16 @@ defmodule Opus.ProviderTest do
       :ok
     end
 
-    test "emits start and exception telemetry events on core module failure", %{
+    test "emits start and exception telemetry events on a run that fails", %{
       ctx: ctx,
       ref: ref
     } do
-      # Execution fails because math.wasm is a core module
+      # The guest traps on this input.
       _result =
         Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
-          "input" => %{"a" => 1, "b" => 2}
+          "input" => %{"trap" => true}
         })
 
       assert_receive {:telemetry, [:cyfr, :opus, :execute, :start], _, start_meta}
@@ -1912,8 +1889,8 @@ defmodule Opus.ProviderTest do
   # ============================================================================
   # Resource Provider
   #
-  # Note: math.wasm is a core module, so executions fail at runtime. Resource
-  # reads return the failed execution record with status "failed" and no output.
+  # The runs here are given the input the guest traps on, so resource reads
+  # return the failed execution record with status "failed" and no output.
   # ============================================================================
 
   # A resource read is the declared `execution.read_resource`, admitted by
@@ -1931,7 +1908,7 @@ defmodule Opus.ProviderTest do
         Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
-          "input" => %{"a" => 7, "b" => 8}
+          "input" => %{"trap" => true}
         })
 
       # Get execution_id from list
@@ -1987,7 +1964,7 @@ defmodule Opus.ProviderTest do
         Provider.handle("execution", ctx, %{
           "action" => "run",
           "reference" => ref,
-          "input" => %{"a" => 3, "b" => 4}
+          "input" => %{"trap" => true}
         })
 
       # Get execution_id from list
@@ -2077,7 +2054,7 @@ defmodule Opus.ProviderTest do
     }
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(person, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(person, Cyfr.Test.Guests.wasm(:reagent), %{
         name: name,
         version: "1.0.0",
         type: "reagent",

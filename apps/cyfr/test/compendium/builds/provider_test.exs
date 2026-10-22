@@ -9,8 +9,7 @@ defmodule Compendium.Builds.ProviderTest do
   alias Compendium.Builds.Provider
   alias Cyfr.Test.ScriptedBuilder
 
-  # Minimal WASM binary (valid magic + version, empty module)
-  @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>
+  @valid_wasm Cyfr.Test.Guests.wasm(:reagent)
 
   # Builds are on, against a builder that would refuse any build it was
   # asked for: every refusal below is made here, before one is.
@@ -99,9 +98,19 @@ defmodule Compendium.Builds.ProviderTest do
 
       assert result.valid == true
       assert String.starts_with?(result.digest, "sha256:")
-      assert result.size == 8
-      assert is_list(result.exports)
-      assert is_binary(result.suggested_type)
+      assert result.size == byte_size(@valid_wasm)
+      assert result.exports == ["cyfr:reagent/compute@0.1.0"]
+      assert result.suggested_type == "reagent"
+    end
+
+    test "answers a core module invalid, by its tag" do
+      core_module = <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>
+
+      assert {:ok, %{valid: false, reason: "core_module"}} =
+               Provider.handle("build", local_ctx(), %{
+                 "action" => "validate",
+                 "wasm_base64" => Base.encode64(core_module)
+               })
     end
 
     test "rejects invalid bytes" do

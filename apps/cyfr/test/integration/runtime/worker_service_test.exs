@@ -395,7 +395,9 @@ defmodule Locus.Runtime.WorkerServiceWireTest do
       Enum.find(Locus.Runtime.Test.Runners.runners(Locus.Runtime.RunnerPool), &(&1.id == runner))
 
     %{os_pid: os_pid} = Locus.Runtime.RunnerProcess.info(handle)
-    {_, 0} = System.cmd("kill", ["-KILL", Integer.to_string(os_pid)])
+    # `kill` reads nothing from the environment, so it inherits none of it.
+    unset_all = Enum.map(System.get_env(), fn {name, _value} -> {name, nil} end)
+    {_, 0} = System.cmd("kill", ["-KILL", Integer.to_string(os_pid)], env: unset_all)
     :ok
   end
 

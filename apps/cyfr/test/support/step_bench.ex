@@ -296,12 +296,15 @@ defmodule Cyfr.Test.StepBench do
 
       found ->
         git = List.to_string(found)
+        # The checkout's own state, never one an inherited GIT_* variable names.
+        opts = [
+          stderr_to_stdout: true,
+          env: [{"GIT_DIR", nil}, {"GIT_WORK_TREE", nil}, {"GIT_INDEX_FILE", nil}]
+        ]
 
-        with {head, 0} <- System.cmd(git, ["rev-parse", "HEAD"], stderr_to_stdout: true),
+        with {head, 0} <- System.cmd(git, ["rev-parse", "HEAD"], opts),
              {changes, 0} <-
-               System.cmd(git, ["status", "--porcelain", "--untracked-files=no"],
-                 stderr_to_stdout: true
-               ) do
+               System.cmd(git, ["status", "--porcelain", "--untracked-files=no"], opts) do
           String.trim(head) <> if(changes == "", do: "", else: " with uncommitted changes")
         else
           _ -> "unknown (not a git checkout)"

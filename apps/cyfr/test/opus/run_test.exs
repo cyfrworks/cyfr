@@ -13,7 +13,6 @@ defmodule Opus.RunTest do
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
 
-  @math_wasm_path Path.join([__DIR__, "../support/test_wasm/math.wasm"])
   @test_ref "reagent:local.test-math:0.1.0"
   @test_node "reagent:local.test-math"
 
@@ -42,7 +41,7 @@ defmodule Opus.RunTest do
     Sanctum.TestContext.ready!(ctx.athanor_id)
 
     # Register the test WASM in Compendium so string references resolve
-    wasm_bytes = File.read!(@math_wasm_path)
+    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, component} =
       Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
@@ -109,11 +108,11 @@ defmodule Opus.RunTest do
   end
 
   describe "run_root/5" do
-    test "run creates execution record (core module fails with clear error)", %{ctx: ctx} do
-      # math.wasm is a core module and must be rejected by Component Model execution.
-      {:error, error_msg} = run_consented(ctx, %{"a" => 5, "b" => 10})
+    test "a run that fails as it runs answers its error and is recorded failed", %{ctx: ctx} do
+      # The guest traps on this input.
+      {:error, error_msg} = run_consented(ctx, %{"trap" => true})
 
-      assert error_msg =~ "Component Model"
+      assert error_msg =~ "Component call failed"
 
       # Failed execution record is still written
       {:ok, records} = Opus.Record.list(ctx)
@@ -151,15 +150,12 @@ defmodule Opus.RunTest do
     end
 
     test "retrieves execution after run", %{ctx: ctx} do
-      {:error, _} = run_consented(ctx, %{"a" => 1, "b" => 2})
+      {:ok, %{metadata: %{execution_id: id}}} = run_consented(ctx, %{"a" => 1, "b" => 2})
 
-      # Execution record is written even on failure; find it via list
-      {:ok, records} = Opus.Record.list(ctx)
-      assert records != []
-      record = hd(records)
-      {:ok, fetched} = Opus.get(ctx, record.id)
-      assert fetched.id == record.id
-      assert fetched.status == :failed
+      {:ok, fetched} = Opus.get(ctx, id)
+      assert fetched.id == id
+      assert fetched.status == :completed
+      assert fetched.output == %{"ran" => true}
     end
   end
 
@@ -169,7 +165,8 @@ defmodule Opus.RunTest do
     end
 
     test "returns :not_cancellable for failed execution", %{ctx: ctx} do
-      {:error, _} = run_consented(ctx, %{"a" => 1, "b" => 1})
+      # The guest traps on this input.
+      {:error, _} = run_consented(ctx, %{"trap" => true})
 
       # Find the failed record via list
       {:ok, records} = Opus.Record.list(ctx)

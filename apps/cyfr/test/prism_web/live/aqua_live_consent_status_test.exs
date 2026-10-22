@@ -63,13 +63,6 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
 
   use PrismWeb.ConnCase, async: false
 
-  # Minimal valid WASM with a `run` export.
-  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-          <<0x03, 0x02, 0x01, 0x00>> <>
-          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
   setup %{conn: conn} do
     test_path = Path.join(System.tmp_dir!(), "aqua_consent_#{:rand.uniform(1_000_000)}")
     original = Application.get_env(:arca, :base_path)
@@ -131,7 +124,7 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
     :ok = soul_names_catalyst!(ctx, ref)
 
     {:ok, _} =
-      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: "status-keyed",
         version: "0.1.0",
         type: "catalyst",

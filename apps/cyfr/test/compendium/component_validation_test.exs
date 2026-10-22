@@ -8,7 +8,13 @@ defmodule Compendium.ComponentValidationTest do
   # not the Arca storage layer — Arca persists already-validated attributes.
   alias Compendium.Registry
 
-  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
+
+  # A core module exporting `sum` and `multiply`: valid WebAssembly, but no
+  # component.
+  @core_module File.read!(
+                 Path.join(__DIR__, "../../../locus/test/support/runtime/test_wasm/math.wasm")
+               )
 
   @valid_attrs %{name: "my-tool", version: "1.0.0", type: "reagent", publisher: "local"}
 
@@ -51,6 +57,21 @@ defmodule Compendium.ComponentValidationTest do
           ] do
         assert {:error, _} = Registry.publish_bytes(ctx, @wasm, %{@valid_attrs | key => value}),
                "#{key} #{inspect(value)} was accepted"
+      end
+    end
+
+    test "refuses a core module as one, for every type, writing nothing", %{ctx: ctx} do
+      for type <- ~w(reagent catalyst formula) do
+        assert {:error, {:core_module, message}} =
+                 Registry.publish_bytes(ctx, @core_module, %{@valid_attrs | type: type})
+
+        assert message =~ "core WebAssembly module, not a component"
+        assert {:error, :not_found} = Registry.get(ctx, "my-tool", "1.0.0", "local", type)
+
+        refute Arca.exists?(
+                 Sanctum.Context.actor(ctx),
+                 Compendium.ComponentPath.version_dir(type, "local", "my-tool", "1.0.0")
+               )
       end
     end
 

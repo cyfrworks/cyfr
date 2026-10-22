@@ -171,7 +171,7 @@ defmodule Locus.Runtime.BootstrapFirstRunTest do
   test "a needs-declaring catalyst is not ready until its vault entry binds", %{ctx: ctx} do
     # The moonmoon69 re-release shape, published as a synthetic catalyst
     # so CI needs no registry pull.
-    wasm = File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+    wasm = Cyfr.Test.Guests.wasm(:reagent)
 
     manifest = %{
       "name" => "llm",
@@ -193,7 +193,7 @@ defmodule Locus.Runtime.BootstrapFirstRunTest do
     Cyfr.Test.SeedBundle.isolate_from!(Application.get_env(:arca, :seed_path))
 
     {:ok, _} =
-      Arca.Test.UnitFixtures.ship_bytes!(ctx, wasm, %{
+      Arca.Test.UnitFixtures.ship_bytes!(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: "llm",
         version: "1.1.0",
         type: "catalyst",

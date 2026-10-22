@@ -17,13 +17,6 @@ defmodule Aqua.ModelsTest do
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
 
-  # Minimal valid WASM with a `run` export: enough to publish a row.
-  @wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-          <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-          <<0x03, 0x02, 0x01, 0x00>> <>
-          <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-          <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     :ok
@@ -201,7 +194,7 @@ defmodule Aqua.ModelsTest do
     ref = "catalyst:local.statusmodel"
 
     {:ok, _} =
-      Compendium.Registry.publish_bytes(ctx, @wasm, %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: "statusmodel",
         version: "0.1.0",
         type: "catalyst",

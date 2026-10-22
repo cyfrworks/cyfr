@@ -8,8 +8,8 @@ defmodule Compendium.ActivationTest do
   alias Compendium.Activation
   alias Compendium.Registry
 
-  @wasm File.read!(Path.join(__DIR__, "../support/test_wasm/math.wasm"))
-  # The same module plus an empty custom section: different bytes, same
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
+  # The reagent guest plus an empty custom section: different bytes, same
   # behaviour — what a rebuild produces.
   @wasm_variant @wasm <> <<0x00, 0x05, 0x04>> <> "cyfr"
 
@@ -33,15 +33,16 @@ defmodule Compendium.ActivationTest do
 
   defp publish!(ctx, name, opts \\ []) do
     manifest = Keyword.get(opts, :manifest)
+    type = Keyword.get(opts, :type, "reagent")
 
     {:ok, component} =
       Registry.publish_bytes(
         ctx,
-        Keyword.get(opts, :bytes, @wasm),
+        Keyword.get_lazy(opts, :bytes, fn -> Cyfr.Test.Guests.wasm(type) end),
         %{
           name: name,
           version: Keyword.get(opts, :version, "1.0.0"),
-          type: Keyword.get(opts, :type, "reagent"),
+          type: type,
           manifest: manifest && Jason.encode!(manifest)
         },
         allow_overwrite: true

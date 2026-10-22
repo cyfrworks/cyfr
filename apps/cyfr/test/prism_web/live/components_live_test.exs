@@ -23,11 +23,7 @@ defmodule PrismWeb.ComponentsLiveTest do
   @ref "reagent:local.shelf-tool"
   @profile "prof_shelf_tool"
 
-  @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-                <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-                <<0x03, 0x02, 0x01, 0x00>> <>
-                <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-                <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
+  @valid_wasm Cyfr.Test.Guests.wasm(:reagent)
 
   @version_dir ["components", "reagents", "local", "shelf-tool", "1.0.0"]
 
@@ -153,7 +149,7 @@ defmodule PrismWeb.ComponentsLiveTest do
     {:ok, _} =
       Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "shelf-model", "1.0.0",
         manifest: manifest.("1.0.0"),
-        wasm: @valid_wasm
+        wasm: Cyfr.Test.Guests.wasm(:catalyst)
       )
 
     Arca.Test.UnitFixtures.seed_component!("catalyst", "local", "shelf-model", "1.1.0",

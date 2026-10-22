@@ -81,7 +81,7 @@ defmodule Compendium.BuildsDisabledTest do
       assert Enum.all?(toolchains, fn {_language, toolchain} -> toolchain.available == false end)
     end
 
-    wasm = <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>
+    wasm = Cyfr.Test.Guests.wasm(:reagent)
 
     assert {:ok, %{valid: true}} =
              Provider.handle("build", ctx, %{

@@ -2149,41 +2149,6 @@ defmodule Arca.TurnStorage do
   # Reads
   # ---------------------------------------------------------------------------
 
-  @doc """
-  The `tool_call` payloads of the steps a turn and its clone turns closed
-  with an `ok` outcome, oldest first: what the turn wrote to, read from
-  the rows.
-  """
-  @spec closed_calls(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}
-  def closed_calls(%Prima.Actor{athanor_id: athanor_id}, turn_id)
-      when is_binary(athanor_id) and athanor_id != "" do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.closed_calls", fn ->
-      turns =
-        from(t in Turn,
-          where:
-            t.athanor_id == ^athanor_id and (t.id == ^turn_id or t.parent_turn_id == ^turn_id),
-          select: t.id
-        )
-
-      payloads =
-        Arca.Repo.all(
-          from(s in TurnStep,
-            join: m in Message,
-            on: m.athanor_id == s.athanor_id and m.id == s.message_id,
-            where: s.athanor_id == ^athanor_id and s.turn_id in subquery(turns),
-            where: s.dispatch_state == "closed" and s.outcome == "ok" and s.kind != "model",
-            order_by: [asc: s.seq],
-            select: m
-          )
-        )
-
-      {:ok, Enum.map(payloads, &Arca.ThreadStorage.payload/1)}
-    end)
-    |> Arca.Data.project()
-  end
-
-  def closed_calls(%Prima.Actor{}, _turn_id), do: {:error, :no_athanor}
-
   @doc "One turn of the athanor."
   @spec get(Prima.Actor.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def get(%Prima.Actor{athanor_id: athanor_id}, turn_id)
@@ -2198,23 +2163,6 @@ defmodule Arca.TurnStorage do
   end
 
   def get(%Prima.Actor{}, _turn_id), do: {:error, :no_athanor}
-
-  @doc "The turn a message opened, if any."
-  @spec turn_of_message(Prima.Actor.t(), String.t()) :: {:ok, map()} | {:error, term()}
-  def turn_of_message(%Prima.Actor{athanor_id: athanor_id}, message_id)
-      when is_binary(athanor_id) and athanor_id != "" do
-    Arca.Repo.Errors.with_db_rescue("Arca.TurnStorage.turn_of_message", fn ->
-      case Arca.Repo.one(
-             from(t in Turn, where: t.athanor_id == ^athanor_id and t.message_id == ^message_id)
-           ) do
-        nil -> {:error, :not_found}
-        turn -> {:ok, turn}
-      end
-    end)
-    |> Arca.Data.project()
-  end
-
-  def turn_of_message(%Prima.Actor{}, _message_id), do: {:error, :no_athanor}
 
   @doc "The steps of a turn in `seq` order."
   @spec steps(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | {:error, term()}

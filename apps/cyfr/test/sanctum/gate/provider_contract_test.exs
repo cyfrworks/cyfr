@@ -231,12 +231,13 @@ defmodule Sanctum.Gate.ProviderContractTest do
   defp def_name_arity({name, _, args}) when is_atom(name), do: {name, length(args || [])}
 
   # The top-level forms of the `defmodule` that defines `module`, nested
-  # definitions included.
+  # definitions included. Names are compared as text, so reading a source
+  # makes no atom.
   defp module_forms({:defmodule, _, [{:__aliases__, _, parts}, [do: body]]}, prefix, module) do
-    name = Module.concat(prefix ++ parts)
+    name = Enum.map_join(prefix ++ parts, ".", &Atom.to_string/1)
     forms = block_forms(body)
 
-    if name == module,
+    if name == inspect(module),
       do: forms,
       else: Enum.find_value(forms, &module_forms(&1, prefix ++ parts, module))
   end

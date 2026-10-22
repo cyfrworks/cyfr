@@ -7,18 +7,6 @@ defmodule Compendium.ResolverTest do
   alias Compendium.Resolver
   alias Compendium.Registry
 
-  # Valid minimal WASM with export section
-  # magic + version
-  # type section
-  # function section
-  # export section
-  # code section
-  @valid_wasm <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>> <>
-                <<0x01, 0x04, 0x01, 0x60, 0x00, 0x00>> <>
-                <<0x03, 0x02, 0x01, 0x00>> <>
-                <<0x07, 0x07, 0x01, 0x03, "run", 0x00, 0x00>> <>
-                <<0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B>>
-
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
@@ -38,7 +26,7 @@ defmodule Compendium.ResolverTest do
   end
 
   defp register_component(ctx, name, version, type \\ "catalyst") do
-    Registry.publish_bytes(ctx, @valid_wasm, %{
+    Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(type), %{
       name: name,
       version: version,
       type: type,

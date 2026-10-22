@@ -17,7 +17,7 @@ defmodule Sanctum.Consent.PlanTest do
   alias Sanctum.Consent.Plan
   alias Sanctum.Test.ConsentFixtures
 
-  @wasm File.read!(Path.join(__DIR__, "../../support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:reagent)
   @dep "reagent:local.plan-dep"
   @source "reagent:local.plan-source"
   # The plan binds no commit digest; decoding its rows as a preview needs one.

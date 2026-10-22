@@ -68,7 +68,6 @@ defmodule Cyfr.AdmissionOriginTest do
   alias Prima.TinctureWire
   alias Sanctum.TinctureAuth
 
-  @math_wasm_path Path.expand("../support/test_wasm/math.wasm", __DIR__)
   # The node an in-chain call's authority is rooted at.
   @node "catalyst:local.origin-probe"
   @formula "formula:local.origin-formula"
@@ -421,11 +420,10 @@ defmodule Cyfr.AdmissionOriginTest do
 
     test "a child a scheduled root admits through the HostAPI carries schedule, never interactive" do
       publisher = Sanctum.TestContext.local()
-      wasm = File.read!(@math_wasm_path)
 
       for {name, type} <- [{"origin-formula", "formula"}, {"origin-target", "reagent"}] do
         {:ok, _} =
-          Compendium.Registry.publish_bytes(publisher, wasm, %{
+          Compendium.Registry.publish_bytes(publisher, Cyfr.Test.Guests.wasm(type), %{
             name: name,
             version: "1.0.0",
             type: type
@@ -710,7 +708,7 @@ defmodule Cyfr.AdmissionOriginTest do
 
   defp runnable_dep!(ctx) do
     {:ok, _dep} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:reagent), %{
         name: "origin-dep",
         version: "0.1.0",
         type: "reagent"

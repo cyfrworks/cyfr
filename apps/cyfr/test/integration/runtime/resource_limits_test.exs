@@ -7,7 +7,6 @@ defmodule Locus.Runtime.ResourceLimitsTest do
   alias Prima.Authority
   alias Prima.Authority.Blob
 
-  @math_wasm_path Path.join(__DIR__, "../../support/test_wasm/math.wasm")
   @test_ref "reagent:local.test-math:0.1.0"
   @test_node "reagent:local.test-math"
 
@@ -20,7 +19,7 @@ defmodule Locus.Runtime.ResourceLimitsTest do
 
     ctx = Sanctum.TestContext.local(:api)
 
-    wasm_bytes = File.read!(@math_wasm_path)
+    wasm_bytes = Cyfr.Test.Guests.wasm(:reagent)
 
     {:ok, _component} =
       Compendium.Registry.publish_bytes(ctx, wasm_bytes, %{
@@ -80,31 +79,34 @@ defmodule Locus.Runtime.ResourceLimitsTest do
   end
 
   describe "execution under the blob's node limits" do
-    test "passes memory limit to runtime (fails for core module)", %{ctx: ctx, ref: ref} do
+    test "a run within the memory limit completes", %{ctx: ctx, ref: ref} do
       auth = authority_with_limits(8 * 1024 * 1024)
       assert Authority.limits(auth).max_memory_bytes == 8 * 1024 * 1024
 
-      {:error, error_msg} =
-        Opus.Dispatch.run(ctx, ref, %{"a" => 10, "b" => 10},
-          type: "reagent",
-          authority: auth
-        )
+      assert {:ok, %{output: %{"ran" => true}}} =
+               Opus.Dispatch.run(ctx, ref, %{"a" => 10, "b" => 10},
+                 type: "reagent",
+                 authority: auth
+               )
 
-      assert error_msg =~ "Component"
       {:ok, records} = Opus.Record.list(ctx)
-      assert Enum.any?(records, &(&1.status == :failed))
+      assert Enum.any?(records, &(&1.status == :completed))
     end
 
-    test "passes both limits to runtime (fails for core module)", %{ctx: ctx, ref: ref} do
-      auth = authority_with_limits(16 * 1024 * 1024)
+    test "the memory limit reaches the runtime: one below the guest's one page refuses the run",
+         %{ctx: ctx, ref: ref} do
+      # The guest declares one 64 KiB page of linear memory.
+      auth = authority_with_limits(32 * 1024)
 
-      {:error, error_msg} =
-        Opus.Dispatch.run(ctx, ref, %{"a" => 3, "b" => 7},
-          type: "reagent",
-          authority: auth
-        )
+      assert {:error, error_msg} =
+               Opus.Dispatch.run(ctx, ref, %{"a" => 3, "b" => 7},
+                 type: "reagent",
+                 authority: auth
+               )
 
-      assert error_msg =~ "Component"
+      assert error_msg =~ "resource_limit"
+      {:ok, records} = Opus.Record.list(ctx)
+      assert Enum.any?(records, &(&1.status == :failed))
     end
   end
 

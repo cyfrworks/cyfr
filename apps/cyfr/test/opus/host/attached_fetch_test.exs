@@ -36,7 +36,6 @@ defmodule Opus.Host.AttachedFetchTest do
   alias Prima.{AttachedRequest, WorkerAuth, WorkerWire}
   alias Sanctum.Consent.{Commit, Plan}
 
-  @math_wasm_path Path.expand("../../support/test_wasm/math.wasm", __DIR__)
   @secret "sk-attached-canary-0123456789"
   @header_rule %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
 
@@ -503,7 +502,7 @@ defmodule Opus.Host.AttachedFetchTest do
     }
 
     {:ok, _component} =
-      Compendium.Registry.publish_bytes(ctx, File.read!(@math_wasm_path), %{
+      Compendium.Registry.publish_bytes(ctx, Cyfr.Test.Guests.wasm(:catalyst), %{
         name: name,
         version: "1.0.0",
         type: "catalyst",

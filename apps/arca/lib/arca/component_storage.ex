@@ -397,7 +397,7 @@ defmodule Arca.ComponentStorage do
     # Stable baseline ordering so row order (and thus limit truncation) is
     # identical on every adapter. Semver-aware "latest" cannot be expressed
     # portably in SQL — callers that need it sort in Elixir
-    # (Compendium.Registry.latest_of/1); this order_by only removes
+    # (Prima.ComponentRow.latest_of/1); this order_by only removes
     # adapter-defined nondeterminism.
     query =
       from(c in Component,

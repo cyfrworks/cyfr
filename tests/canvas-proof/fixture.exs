@@ -16,14 +16,16 @@
 #
 #   source TOKEN NAME
 #       The feed source `catalyst:local.NAME` at 1.0.0, published through
-#       `Compendium.Registry.publish_bytes/4` as an empty core wasm module,
-#       which registration takes and no run can execute (`Locus.Runtime.Engine`
-#       refuses a core module). Its manifest's `results` declares the
-#       shape of each operation's data: `quote`, a symbol's price and its
-#       candles. Beside it, its owner profile, active, whose head consent
-#       admits the `interactive` and `schedule` origins, minted through
-#       Arca's one profile mint as a person's grant leaves one; a feed fires
-#       under `schedule`. Answers the reference and the profile id.
+#       `Compendium.Registry.publish_bytes/4` as the suite's catalyst guest
+#       (apps/cyfr/test/support/test_wasm/guests/), whose answer,
+#       `{"ran":true}`, is no feed envelope, so a fire's result is refused
+#       and a feed's result is only ever one the fixture accepts. Its
+#       manifest's `results` declares the shape of each operation's data:
+#       `quote`, a symbol's price and its candles. Beside it, its owner
+#       profile, active, whose head consent admits the `interactive` and
+#       `schedule` origins, minted through Arca's one profile mint as a
+#       person's grant leaves one; a feed fires under `schedule`. Answers
+#       the reference and the profile id.
 #
 #   write TOKEN CANVAS MODULE STREAMS_JSON
 #       A new version of the canvas CANVAS written with `canvas.write`,
@@ -328,12 +330,14 @@ fn args ->
           "version" => version,
           "publisher" => "local",
           "description" =>
-            "The canvas proof's feed source: it declares its results and runs nothing.",
+            "The canvas proof's feed source: it declares its results and answers none.",
           "results" => %{"quote" => candle_shape}
         })
 
-      # The smallest core module: the magic and the version, and no section.
-      wasm = <<0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00>>
+      wasm =
+        File.read!(
+          Path.expand("../../apps/cyfr/test/support/test_wasm/guests/catalyst.wasm", __DIR__)
+        )
 
       {:ok, _component} =
         Compendium.Registry.publish_bytes(ctx, wasm, %{

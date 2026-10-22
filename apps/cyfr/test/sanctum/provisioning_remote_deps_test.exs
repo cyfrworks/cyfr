@@ -99,7 +99,7 @@ defmodule Sanctum.ProvisioningRemoteDepsTest do
   end
 
   @repo_root Path.expand("../../../..", __DIR__)
-  @wasm File.read!(Path.join(@repo_root, "apps/cyfr/test/support/test_wasm/math.wasm"))
+  @wasm Cyfr.Test.Guests.wasm(:catalyst)
   # The deadline a case exercising the CUT sets for itself. Every other
   # case here pulls for real against the fixture registry, so the setup
   # leaves a budget that cannot expire under suite load: a fill that

@@ -30,7 +30,7 @@ defmodule Sanctum.ProvisioningTest do
     Map.put(claim, :slot, :none)
   end
 
-  @valid_wasm File.read!(Path.join([File.cwd!(), "test/support/test_wasm/math.wasm"]))
+  @valid_wasm Cyfr.Test.Guests.wasm(:catalyst)
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -1316,7 +1316,7 @@ defmodule Sanctum.ProvisioningTest do
             "publisher" => "local",
             "caps" => caps
           },
-          wasm: @valid_wasm
+          wasm: Cyfr.Test.Guests.wasm(:catalyst)
         )
 
       :ok

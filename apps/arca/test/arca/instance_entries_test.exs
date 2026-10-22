@@ -536,7 +536,7 @@ defmodule Arca.InstanceEntriesTest do
                    platform,
                    entry.id,
                    "sha256:i0",
-                   %{oauth_endpoints: "{}", binding_digest: "sha256:i1"},
+                   %{kind: "api_key", binding_digest: "sha256:i1"},
                    "needs_consent"
                  )
 

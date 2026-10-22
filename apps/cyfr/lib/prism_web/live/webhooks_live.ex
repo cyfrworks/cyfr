@@ -153,7 +153,7 @@ defmodule PrismWeb.WebhooksLive do
          |> assign(:form_name, hook[:name] || "")
          |> assign(:form_target_ref, hook[:target_ref] || "")
          |> assign(:form_profile_id, hook[:profile_id] || "")
-         |> assign(:form_signature_header, hook[:signature_header] || @default_signature_header)
+         |> assign(:form_signature_header, hook.signature_header)
          |> assign(:form_timestamp_header, hook[:timestamp_header] || "")
          |> assign(:form_idempotency_key_header, hook[:idempotency_key_header] || "")
          # A row that names neither header already accepts replays, so the
