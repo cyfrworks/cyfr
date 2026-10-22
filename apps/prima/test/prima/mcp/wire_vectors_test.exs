@@ -93,7 +93,7 @@ defmodule Prima.MCP.WireVectorsTest do
 
   test "every code name answers its code, CYFR's table is exactly the vectors', and an unknown name the fallback" do
     %{"jsonrpc" => jsonrpc, "cyfr" => cyfr, "fallback_code" => fallback} = @vectors["error_codes"]
-    assert {map_size(jsonrpc), map_size(cyfr)} == {8, 17}
+    assert {map_size(jsonrpc), map_size(cyfr)} == {8, 16}
 
     for {name, code} <- Map.merge(jsonrpc, cyfr) do
       assert Message.code?(String.to_existing_atom(name)), name
@@ -122,7 +122,7 @@ defmodule Prima.MCP.WireVectorsTest do
   test "every consent error is produced as its whole response" do
     cases =
       "consent_errors"
-      |> cases!(5, ~w(why tag response), ~w(payload data_stripped))
+      |> cases!(4, ~w(why tag response), ~w(payload data_stripped))
       |> Enum.reject(& &1["data_stripped"])
 
     # confirmation_required's error is confirmation.json's alone; every
@@ -148,7 +148,7 @@ defmodule Prima.MCP.WireVectorsTest do
   end
 
   test "every consent error response decodes as the error it carries" do
-    for vector <- cases!("consent_errors", 5, ~w(why tag response), ~w(payload data_stripped)) do
+    for vector <- cases!("consent_errors", 4, ~w(why tag response), ~w(payload data_stripped)) do
       %{"why" => why, "response" => response} = vector
       expected = %Message{type: :error, id: response["id"], error: response["error"]}
 
