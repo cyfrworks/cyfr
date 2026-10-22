@@ -41,7 +41,8 @@ defmodule Aqua.Runner do
   turn recovered after a restart — continues under the origin its row
   stores (`Prima.Origin`), never one guessed from the person it runs
   as: a programmatic turn resumes as `programmatic`. A turn whose row
-  stores no origin is cancelled with that reason and never resumed.
+  stores an origin outside the vocabulary, damage a hand-edited or
+  restored row can carry, is cancelled with that reason and never resumed.
 
   ## Recovery
 
@@ -708,8 +709,7 @@ defmodule Aqua.Runner do
   defp steer?(_state, _ctx, _name), do: false
 
   # Whether a line's admission origin is the one the turn's row records
-  # (its wire spelling). A context with no origin, or a turn that records
-  # none, drives nothing.
+  # (its wire spelling). A context with no origin drives nothing.
   defp same_origin?(%Context{origin: origin}, %{origin: stored}) when is_binary(stored),
     do: Prima.Origin.origin?(origin) and Prima.Origin.to_wire(origin) == stored
 
@@ -841,8 +841,9 @@ defmodule Aqua.Runner do
   end
 
   # A turn continued from its rows runs as its sender under the origin its
-  # row stores. A row that stores none is cancelled with that reason: it
-  # is never resumed under an origin guessed from the sender.
+  # row stores. A row whose stored origin is outside the vocabulary is
+  # cancelled with that reason: it is never resumed under an origin guessed
+  # from the sender.
   defp continue(state, %{turn_id: turn_id} = entry, mode) do
     case Sanctum.Tenancy.continuation(entry.user_id, state.athanor_id, entry.origin) do
       {:ok, actor} ->
@@ -863,7 +864,9 @@ defmodule Aqua.Runner do
   end
 
   # Why a turn cannot continue from its rows.
-  defp unresumable(:no_origin), do: "the turn records no origin to resume under (no_origin)"
+  defp unresumable(:no_origin),
+    do: "the turn's stored origin is outside the vocabulary, nothing to resume under (no_origin)"
+
   defp unresumable(reason), do: "the sender is no longer seated here (#{reason})"
 
   # Viewers hear the turn start before the loop can announce anything of it.

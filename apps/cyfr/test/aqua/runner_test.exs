@@ -9,7 +9,8 @@ defmodule Aqua.RunnerTest do
   member's waits; a stop cuts the turn and drops the queue; a card pauses
   the turn and its decision continues it; a runner that starts finds the
   open turns and does what their rows say, resuming each under the origin
-  its row stores and cancelling one that stores none. A runner's loop dies with it;
+  its row stores and cancelling one whose stored origin is outside the
+  vocabulary. A runner's loop dies with it;
   a runner starts and handles loop events only on a boot that owns the
   control plane, and never takes a turn another process on this boot holds.
   """
@@ -29,6 +30,8 @@ defmodule Aqua.RunnerTest do
   @soul "agent:local.aqua"
   @model "catalyst:local.claude"
   @crash_value "planted-loop-argument-7d4b"
+
+  @unknown_origin "hand-edited"
 
   setup do
     Arca.Cache.init()
@@ -1150,7 +1153,8 @@ defmodule Aqua.RunnerTest do
       assert %{origin: "interactive"} = Arca.Repo.get!(Arca.Schemas.Execution, first_root)
     end
 
-    test "a recovered turn whose row stores no origin is cancelled with its reason, never resumed",
+    test "a recovered turn whose stored origin is outside the vocabulary is cancelled with " <>
+           "its reason, never resumed",
          %{ctx: ctx, thread: thread} do
       script!([reply("never")])
 
@@ -1165,15 +1169,15 @@ defmodule Aqua.RunnerTest do
 
       assert Threads.messages(Sanctum.Context.actor(ctx), thread.id) == before
 
-      # Accepted by a runner that is gone; its row then reached past every
-      # writer's guard, as a hand edit or a restored row reaches it.
+      # Accepted by a runner that is gone; its row then given an origin no
+      # writer stores, as a hand edit or a restored row carries it.
       {:ok, %{turn: accepted}} =
         Tape.accept(ctx, thread.id, %{
           message: %{author: ctx.user_id, content: "@aqua later"},
           turn: %{agent: "aqua", requested_by: ctx.user_id}
         })
 
-      clear_origin!(accepted.id)
+      damage_origin!(accepted.id)
 
       {:ok, _pid} = Runner.ensure(thread.id, ctx.athanor_id)
       assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
@@ -1185,13 +1189,14 @@ defmodule Aqua.RunnerTest do
       assert ScriptedWorker.calls() == []
     end
 
-    test "a card on a turn whose row stores no origin is refused, and the turn ends, never resumed",
+    test "a card on a turn whose stored origin is outside the vocabulary is refused, and the " <>
+           "turn ends, never resumed",
          %{ctx: ctx, thread: thread} do
       script!([call("c1", "notes", %{"action" => "keep", "name" => "n", "content" => "x"})])
 
-      # Paused on its card by a loop no runner holds; its row then reached
-      # past every writer's guard. Continuing it from its row needs the
-      # origin the row stores.
+      # Paused on its card by a loop no runner holds; its row then given an
+      # origin no writer stores. Continuing it from its row needs an origin
+      # the vocabulary holds.
       {:ok, %{turn: turn}} =
         Tape.accept(ctx, thread.id, %{
           message: %{author: ctx.user_id, content: "@aqua keep it"},
@@ -1202,21 +1207,21 @@ defmodule Aqua.RunnerTest do
                Task.await(Task.async(fn -> Aqua.Loop.run(ctx: ctx, turn_id: turn.id) end), 60_000)
 
       turn_id = turn.id
-      clear_origin!(turn_id)
+      damage_origin!(turn_id)
       {:ok, _pid} = Runner.ensure(thread.id, ctx.athanor_id)
       assert %{paused: true} = Runner.state(thread.id, ctx.athanor_id)
       {:ok, paused} = Tape.turn(ctx, turn_id)
-      assert is_nil(paused.origin)
+      assert paused.origin == @unknown_origin
       {:ok, [approval]} = Tape.pending_approvals(ctx, paused)
       calls = ScriptedWorker.calls()
 
       # The pin check reads the turn's grant under the origin its row
-      # stores, never the approver's: with none, the card cannot hold.
+      # stores, never the approver's: with none it names, the card cannot hold.
       assert {:error, :turn_superseded} =
                Approvals.resolve(ctx, approval.id, %{decision: :approved})
 
       # The card settles refused and the turn ends: failed by the refusal, or
-      # cancelled by the runner that met the row with no origin first.
+      # cancelled by the runner that met the damaged origin first.
       assert_receive %ThreadEvent{kind: :turn_finished}, 60_000
       assert {:ok, %{status: status}} = Tape.turn(ctx, turn_id)
       assert status in ["failed", "cancelled"]
@@ -1318,12 +1323,14 @@ defmodule Aqua.RunnerTest do
   end
 
   # A turn row's origin cleared past every writer's guard.
-  defp clear_origin!(turn_id) do
+  # An origin no writer stores: the damage a hand-edited or restored row
+  # can carry, since the column holds any text.
+  defp damage_origin!(turn_id) do
     import Ecto.Query, only: [from: 2]
 
     {1, _} =
       Arca.Repo.update_all(from(t in Arca.Schemas.Turn, where: t.id == ^turn_id),
-        set: [origin: nil]
+        set: [origin: @unknown_origin]
       )
 
     :ok

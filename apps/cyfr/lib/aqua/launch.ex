@@ -15,7 +15,8 @@ defmodule Aqua.Launch do
   not at all: a person no longer seated refuses it. It carries the origin
   stored on the approved turn's row, never one inferred from the person
   approving: a programmatic turn's launch stays `programmatic`, and a
-  turn whose row stores no origin launches nothing
+  turn whose row stores an origin outside the vocabulary, damage a
+  hand-edited or restored row can carry, launches nothing
   (`{:approver_unavailable, :no_origin}`). The loop marks the step
   dispatched before calling here, which is what makes a launch happen
   once.
