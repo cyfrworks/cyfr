@@ -3,7 +3,7 @@
 
 defmodule Prima.ConsentSignalTest do
   @moduledoc """
-  The consent signal's shape: five tags, a map payload, a sentence,
+  The consent signal's shape: four tags, a map payload, a sentence,
   `error.data` and a refusal class for each; `confirmation_required`
   names its confirmation's id or is no signal, and its sentence never
   names that secret. The shared vector's signal
