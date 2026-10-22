@@ -128,12 +128,15 @@ defmodule Compendium.Registry do
          {:ok, component_type} <- get_required(metadata, :type),
          :ok <- validate_name(name),
          :ok <- validate_version(version),
+         :ok <- validate_type(component_type),
          :ok <- reject_tincture_publish_bytes(component_type),
          # Asserts the binary implements its declared type's world — the
          # executor resolves vault material before a missing export would
          # otherwise surface, so the mismatch must refuse here.
          {:ok, validation} <- Validator.validate(wasm_bytes, component_type),
          publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
+         # Before the unit is committed: the publisher is a path segment.
+         :ok <- validate_publisher(publisher),
          :ok <- validate_publish_namespace(publisher, ctx),
          :ok <- validate_publish_origin(publisher, Keyword.get(opts, :origin)),
          manifest_bytes = Map.get(metadata, :manifest) || Map.get(metadata, "manifest"),
@@ -339,6 +342,8 @@ defmodule Compendium.Registry do
          :ok <- validate_name(name),
          :ok <- validate_version(version),
          publisher = ComponentPath.normalize_publisher(Map.get(metadata, :publisher)),
+         # Before the unit is committed: the publisher is a path segment.
+         :ok <- validate_publisher(publisher),
          :ok <- validate_publish_namespace(publisher, ctx),
          # This ingress only ever carries registry-sourced archives (local
          # tinctures register from the filesystem), so the local-namespace
@@ -1487,6 +1492,20 @@ defmodule Compendium.Registry do
     case Prima.ComponentRef.validate_name(name) do
       :ok -> :ok
       {:error, msg} -> {:error, {:invalid_name, msg}}
+    end
+  end
+
+  defp validate_type(component_type) do
+    case Prima.ComponentRef.validate_type(component_type) do
+      :ok -> :ok
+      {:error, msg} -> {:error, {:invalid_type, msg}}
+    end
+  end
+
+  defp validate_publisher(publisher) do
+    case Prima.ComponentRef.validate_publisher(publisher) do
+      :ok -> :ok
+      {:error, msg} -> {:error, {:invalid_publisher, msg}}
     end
   end
 
