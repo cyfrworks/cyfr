@@ -898,7 +898,7 @@ start_leg() {
   leg_id=$leg_ids
   mkdir -p "$scratch/$name.log"
   start_gate "$name" GATE_LEG_LOGDIR="$scratch/$name.log" GATE_LEG_PARTS=2 GATE_LEG_CLOSE=false \
-    CYFR_GATE="$leg_id" CYFR_GATE_LEG="$leg" "$@" -- "$gate" --leg "$leg"
+    COMMIT_GATE="$leg_id" COMMIT_GATE_LEG="$leg" "$@" -- "$gate" --leg "$leg"
 }
 # --- the islands' copy lists ----------------------------------------------------
 # Each island's list is read from its test.yml job: the application, the
@@ -1109,6 +1109,12 @@ for isl in prima arca sanctum; do
   [ "$(cat "$scratch/pass.trace/island.$isl.tree")" = "$want" ] ||
     fail "the $isl island held $(tr '\n' ' ' < "$scratch/pass.trace/island.$isl.tree"), not test.yml's $(echo $want)"
 done
+# The marker every leg's processes carry is no name a cyfr server reads:
+# a server refuses to boot with a CYFR_ variable it does not declare, and
+# the legs boot servers.
+markers=$(sed -n 's/.*contain_start -g 240 env \(.*\) "\$SELF" --leg .*/\1/p' "$gate" | tr ' ' '\n' | sed -n 's/^\([A-Z_]*\)=.*/\1/p')
+[ -n "$markers" ] || fail 'the gate starts its legs with no marker'
+for m in $markers; do case "$m" in CYFR_*) fail "the legs' marker $m is a name a cyfr server refuses" ;; esac; done
 echo 'ok: a whole gate that passes, every suite with a result'
 
 # --- the go, audit and boot legs of the passing gate ----------------------------
@@ -1423,7 +1429,7 @@ trap 'if [ -d "$DIR" ]; then echo present; else echo gone; fi > "$TRACE/orphan.a
 while :; do sleep 0.2; done
 ORPHAN
 TRACE="$scratch/session.trace" DIR="$scratch/session.tmp/cyfr-gate-4200044-harness.builder_image.temp" \
-  CYFR_GATE=4200044 CYFR_GATE_LEG=harness setsid -f bash "$scratch/session-orphan.sh" </dev/null >/dev/null 2>&1
+  COMMIT_GATE=4200044 COMMIT_GATE_LEG=harness setsid -f bash "$scratch/session-orphan.sh" </dev/null >/dev/null 2>&1
 until_true 10 test -s "$scratch/session.trace/orphan.pid" || fail 'the orphan process never started'
 orphan=$(cat "$scratch/session.trace/orphan.pid")
 next_gate session
@@ -1457,7 +1463,7 @@ for g in "$live_gate" "$zombie"; do
   echo "cyfr-gate-$g/cyfr:push sha256:image-$g" >> "$scratch/live.trace/docker.images"
   echo "cyfr_gate_boot_$g" >> "$scratch/live.trace/databases"
 done
-CYFR_GATE="$live_gate" CYFR_GATE_LEG=harness setsid -f bash -c 'echo $$ > "$0"; exec sleep 300' "$scratch/live.trace/marked.pid" </dev/null >/dev/null 2>&1
+COMMIT_GATE="$live_gate" COMMIT_GATE_LEG=harness setsid -f bash -c 'echo $$ > "$0"; exec sleep 300' "$scratch/live.trace/marked.pid" </dev/null >/dev/null 2>&1
 until_true 10 test -s "$scratch/live.trace/marked.pid" || fail 'the marked process never started'
 marked=$(cat "$scratch/live.trace/marked.pid")
 zombie_parent=$(ps -o ppid= -p "$zombie" | tr -d ' ')

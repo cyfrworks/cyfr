@@ -698,8 +698,9 @@ run_job() {
 # STACK_PROJECT_PREFIX), the database cyfr_gate_boot_G and the ones
 # boot.sh names beside it (cyfr_gate_boot_G_...), and the RUNNER_TEMP and
 # tool directories TMPDIR/cyfr-gate-G-LEG.... Every process a leg starts
-# carries CYFR_GATE=G and CYFR_GATE_LEG=LEG in its environment. So what is
-# left is found by name, and nothing needs remembering: gate_clean removes
+# carries COMMIT_GATE=G and COMMIT_GATE_LEG=LEG in its environment, names
+# outside CYFR_, since a cyfr server refuses to boot with a CYFR_ variable
+# it does not declare. So what is left is found by name, and nothing needs remembering: gate_clean removes
 # it after a leg ends, however it ended (the leg, and the gate for a leg
 # that died), at the gate's exit, and at the next gate's start, where,
 # since a gate takes the host alone (scripts/heavy-check.sh), everything
@@ -750,15 +751,15 @@ gate_running() {
   case $s in ''|Z*|X*) return 1 ;; esac
 }
 
-# The sessions of the live processes whose environment carries CYFR_GATE
-# matching regex $1 and CYFR_GATE_LEG matching regex $2, other than session
-# $3, one a line; with `gone` as $4, only those whose gate no longer runs.
+# The sessions of the live processes whose environment carries
+# COMMIT_GATE matching regex $1 and COMMIT_GATE_LEG matching regex $2,
+# other than session $3, one a line; with `gone` as $4, only those whose gate no longer runs.
 # With no /proc to read environments from, none, said on stderr.
 gate_sessions() {
   python3 -I - "$1" "$2" "$3" "${4:-}" <<'PY'
 import os, re, sys
-gate = re.compile(r"CYFR_GATE=(%s)" % sys.argv[1])
-leg = re.compile(r"CYFR_GATE_LEG=(?:%s)" % sys.argv[2])
+gate = re.compile(r"COMMIT_GATE=(%s)" % sys.argv[1])
+leg = re.compile(r"COMMIT_GATE_LEG=(?:%s)" % sys.argv[2])
 own, gone = sys.argv[3], sys.argv[4] == "gone"
 
 def running(pid):
@@ -1101,9 +1102,9 @@ if [ "${1:-}" = --leg ]; then
   case "$CLOSE" in true|false) ;; *) echo 'a leg runs only under the gate' >&2; exit 64 ;; esac
   # The gate's id and this leg's name, which every process of the leg
   # carries in its environment.
-  [ -d "$LOGDIR" ] && [[ "${CYFR_GATE:-}" =~ ^[0-9]+$ ]] && [ "${CYFR_GATE_LEG:-}" = "$leg" ] ||
+  [ -d "$LOGDIR" ] && [[ "${COMMIT_GATE:-}" =~ ^[0-9]+$ ]] && [ "${COMMIT_GATE_LEG:-}" = "$leg" ] ||
     { echo 'a leg runs only under the gate' >&2; exit 64; }
-  GATE_ID=$CYFR_GATE
+  GATE_ID=$COMMIT_GATE
   cd "$ROOT" || exit 1
   unset MIX_BUILD_PATH
   # What a leg that makes something outside its steps made is removed by
@@ -1308,7 +1309,7 @@ export GATE_LEG_PG_PATHS
 # grace, which outlasts a leg's stop of its current step.
 start_leg() {
   local s=0
-  contain_start -g 240 env CYFR_GATE="$GATE_ID" CYFR_GATE_LEG="$1" "$SELF" --leg "$1" </dev/null || s=$?
+  contain_start -g 240 env COMMIT_GATE="$GATE_ID" COMMIT_GATE_LEG="$1" "$SELF" --leg "$1" </dev/null || s=$?
   if [ "$s" -ne 0 ]; then
     echo "==> the $1 leg could not start" >&2
     exit "$s"
