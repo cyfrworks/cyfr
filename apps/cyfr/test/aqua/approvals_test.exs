@@ -980,16 +980,22 @@ defmodule Aqua.ApprovalsTest do
 
     test "refuses a configured default that is not a positive integer" do
       ctx = Sanctum.TestContext.local(:prism)
-      configured = Application.fetch_env!(:cyfr, Approvals)
-      on_exit(fn -> Application.put_env(:cyfr, Approvals, configured) end)
+      configured = Application.get_env(:cyfr, Approvals)
+
+      on_exit(fn ->
+        if is_nil(configured),
+          do: Application.delete_env(:cyfr, Approvals),
+          else: Application.put_env(:cyfr, Approvals, configured)
+      end)
 
       for bad <- [0, -1, "24", nil] do
         Application.put_env(:cyfr, Approvals, expiry_hours: bad)
         assert_raise ArgumentError, ~r/expiry_hours/, fn -> Approvals.ttl_seconds(ctx) end
       end
 
+      # No configured value at all is the code's own default, 24 hours.
       Application.put_env(:cyfr, Approvals, [])
-      assert_raise KeyError, fn -> Approvals.ttl_seconds(ctx) end
+      assert Approvals.ttl_seconds(ctx) == 24 * 3600
     end
   end
 end

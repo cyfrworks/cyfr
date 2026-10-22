@@ -125,8 +125,8 @@ defmodule Aqua.Approvals do
   How long a card stays open, in seconds: the athanor's
   `settings["approvals"]["expiry_hours"]` (a positive integer, read
   defensively — member-writable settings are not trusted to have a
-  shape), else `config :cyfr, Aqua.Approvals, expiry_hours:`, which must
-  be a positive integer: any other configured value raises.
+  shape), else the deployment's `config :cyfr, Aqua.Approvals, expiry_hours:`,
+  24 when unset; a configured value that is not a positive integer raises.
 
   A card expires so that a home back from a long absence asks again
   rather than running a queue of old proposals.
@@ -146,11 +146,11 @@ defmodule Aqua.Approvals do
     (configured || configured_hours()) * 3600
   end
 
-  # The deployment's default, which must be a positive integer: a value
-  # outside that is a configuration error, never read as some other
-  # expiry.
+  # The deployment's default, 24 hours unless configured; a configured
+  # value that is not a positive integer is a configuration error, never
+  # read as some other expiry.
   defp configured_hours do
-    case :cyfr |> Application.fetch_env!(__MODULE__) |> Keyword.fetch!(:expiry_hours) do
+    case :cyfr |> Application.get_env(__MODULE__, []) |> Keyword.get(:expiry_hours, 24) do
       hours when is_integer(hours) and hours > 0 ->
         hours
 

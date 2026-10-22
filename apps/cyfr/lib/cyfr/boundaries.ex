@@ -2506,15 +2506,13 @@ defmodule Cyfr.Boundaries do
     # Values the code owns, read with its own default and set by no
     # deployment: the execution payload store, the shared subtree read's
     # concurrency, the shared cache's budgets, the tincture archive's
-    # decompression ceiling, an external MCP server's in-flight calls and
-    # backends, and a returning sign-in's wait on the cyfr.run probe.
+    # decompression ceiling, and a returning sign-in's wait on the cyfr.run
+    # probe.
     execution_payload_store: :default,
     read_subtree_concurrency: :default,
     cache_max_binary_bytes: :default,
     cache_max_compiled_components: :default,
     tincture_max_decompressed_bytes: :default,
-    external_server_max_in_flight: :default,
-    max_backends_per_server: :default,
     returning_probe_ms: :default,
 
     # Operator-shaped, with nothing to set them from. Each has a sensible
