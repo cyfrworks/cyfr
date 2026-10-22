@@ -990,6 +990,14 @@ DROP DATABASE IF EXISTS \"$boot_db\" WITH (FORCE)" ] || fail "the boot leg's dat
 # No database URL with its password on the gate's output or in its logs.
 ! grep -rqF 'cyfr:cyfr@' "$scratch/pass.out" "$scratch/pass.err" "$scratch/pass.log" || fail "a database URL reached the gate's output or logs: $(grep -rlF 'cyfr:cyfr@' "$scratch/pass.out" "$scratch/pass.err" "$scratch/pass.log")"
 [ -z "$(find "$scratch/pass.log" -maxdepth 1 -name '*.temp')" ] || fail "a job's RUNNER_TEMP was left: $(find "$scratch/pass.log" -maxdepth 1 -name '*.temp')"
+# The go and boot legs start once both suites' partitions have exited:
+# each one's first step log is made no earlier than either suite's log was
+# last written.
+for f in go.codex_test_03.log boot.boot_sqlite.log; do
+  [ "$(stat -c %Y "$scratch/pass.log/static.sqlite_suite.log")" -le "$(stat -c %W "$scratch/pass.log/$f")" ] &&
+    [ "$(stat -c %Y "$scratch/pass.log/postgres.pg_tests.log")" -le "$(stat -c %W "$scratch/pass.log/$f")" ] ||
+    fail "$f started before both suites had ended"
+done
 echo 'ok: the go, audit and boot legs as their workflows run them'
 
 # --- a close: the image builds, the image jobs, the browser shards, the scans ----
@@ -1138,7 +1146,7 @@ echo 'ok: a close stopped in a proof takes its image tags off and its suites'"'"
 printf '. "%s"\ncase "${1:-}:${2:-}" in --leg:boot) export GATE_STEP_DEADLINE=10 ;; esac\n' "$scratch/stub.bash_env" > "$scratch/bootdl.bash_env"
 start_gate bootdl BASH_ENV="$scratch/bootdl.bash_env" STUB_HARNESS_STALL='boot.sh postgres' -- "$gate" -n 2 -l "$scratch/bootdl.log"
 b=$gate_pid
-until_true 120 test -s "$scratch/bootdl.trace/stalled.harness" || fail "the PostgreSQL boot never started: $(cat "$scratch/bootdl.err")"
+until_true 300 test -s "$scratch/bootdl.trace/stalled.harness" || fail "the PostgreSQL boot never started: $(cat "$scratch/bootdl.err")"
 stalled=$(cat "$scratch/bootdl.trace/stalled.harness")
 gate_status "$b"; [ "$gate_rc" = 1 ] || fail "a gate whose boot reached its deadline exited $gate_rc"
 dead "$stalled" || fail 'the stalled boot outlived its deadline'

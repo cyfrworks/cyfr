@@ -57,7 +57,7 @@
 #             the Docker Compose and access-engine Docker tests with their
 #             ran-and-passed assertions, go build) and keeper-ci.yml's
 #             keeper job but its run as root in a container with writable
-#             cgroups
+#             cgroups, once both adapters' suites have exited
 #   audit     license-lint.yml's spdx-headers job (both assertions),
 #             security.yml's go-audit job for each Go module (govulncheck at
 #             the version the job installs, through
@@ -66,7 +66,8 @@
 #             sobelow --config)
 #   boot      test.yml's release-boot job: tests/release-boot/boot.sh on
 #             SQLite, then on PostgreSQL on a database the leg creates
-#             empty on the gate's server and drops once the boot has ended
+#             empty on the gate's server and drops once the boot has ended,
+#             once both adapters' suites have exited
 #   harness   with --close only, after the cluster leg: both images built
 #             from the tree (Dockerfile.locus as test.yml's locus-image job
 #             builds it, Dockerfile as its locus-backends-image job does,
@@ -678,9 +679,12 @@ run_job() {
 
 # CI's Go jobs on Linux: codex-ci.yml's whole test job, and keeper-ci.yml's
 # keeper job but its run as root in a container with writable cgroups,
-# which stays CI's.
+# which stays CI's. The -race suites load every core, so they start once
+# both adapters' suites have exited, whose tests carry timing bounds.
 leg_go() {
   local status=0
+  await_leg go static || return
+  await_leg go postgres || return
   run_job go codex_test codex-ci.yml test || status=1
   [ -z "$REFUSED" ] || return 1
   run_job go keeper keeper-ci.yml keeper --except 'go test as root with writable-cgroups=true (the real kernel)' || status=1
@@ -713,10 +717,13 @@ cleanup_audit() { rm -rf "$LOGDIR/audit.gobin"; }
 # database URL; PostgreSQL on a database this leg creates empty on the
 # gate's server, beside which boot.sh creates and drops its own
 # (`pg_run_database`), and which the leg drops once the boot has ended,
-# however it ended.
+# however it ended. The release builds load every core, so the boots
+# start once both adapters' suites have exited, as the go leg does.
 BOOT_DATABASE=
 leg_boot() {
   local status=0
+  await_leg boot static || return
+  await_leg boot postgres || return
   STEP_DEADLINE=1800 step boot boot_sqlite env -u CYFR_DATABASE_URL tests/release-boot/boot.sh sqlite || status=1
   [ -z "$REFUSED" ] || return 1
   BOOT_DATABASE="cyfr_gate_boot_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
