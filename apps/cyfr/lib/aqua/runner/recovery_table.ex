@@ -140,9 +140,12 @@ defmodule Aqua.Runner.RecoveryTable do
     end
   end
 
-  # A turn row that records no origin has no grant to be judged under: it
-  # is never judged under the caller's.
-  defp unloaded({:unknown_origin, _spelling}), do: "the turn records no origin"
+  # A turn row whose stored origin is outside the vocabulary, damage a
+  # hand-edited or restored row can carry, has no grant to be judged under:
+  # it is never judged under the caller's.
+  defp unloaded({:unknown_origin, _spelling}),
+    do: "the turn's stored origin is outside the vocabulary"
+
   defp unloaded(reason), do: Aqua.Ops.render_refusal(reason)
 
   defp capability_holds(_ctx, %{agent_capability_digest: nil}), do: :ok
