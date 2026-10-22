@@ -1068,8 +1068,15 @@ defmodule Compendium.RegistryTest do
 
   describe "publish_tincture_archive/4 — decompression bomb defense" do
     test "rejects an archive that decompresses beyond the configured limit", %{ctx: ctx} do
-      limit = Application.fetch_env!(:cyfr, :tincture_max_decompressed_bytes)
-      on_exit(fn -> Application.put_env(:cyfr, :tincture_max_decompressed_bytes, limit) end)
+      configured = Application.fetch_env(:cyfr, :tincture_max_decompressed_bytes)
+
+      on_exit(fn ->
+        case configured do
+          {:ok, limit} -> Application.put_env(:cyfr, :tincture_max_decompressed_bytes, limit)
+          :error -> Application.delete_env(:cyfr, :tincture_max_decompressed_bytes)
+        end
+      end)
+
       Application.put_env(:cyfr, :tincture_max_decompressed_bytes, 1024)
 
       # A small gzip that expands to 50 KB — well past the 1 KB cap. It is
