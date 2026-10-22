@@ -125,6 +125,128 @@ exit 0
 FAKE
 chmod +x "$scratch/bin/mix"
 
+# Stand-ins for what the go, audit, boot and harness legs run. Each records
+# its calls in $TRACE: go as `directory|GOBIN|arguments` in go.calls,
+# gofmt and govulncheck as `directory|tool arguments` in tools.calls, trivy
+# as `directory|arguments` in trivy.calls (a filesystem scan also notes in
+# trivy.trees whether it reads a tree of tracked files alone), docker as
+# `arguments` in docker.calls.
+# go answers GOVERSION with the version apps/codex/go.mod names
+# (STUB_GO_VERSION overrides it), and a `go test -run '^(A|B)$'` with a
+# PASS line for each test named. docker keeps an image store in
+# docker.images (`ref id` lines: a build gives each tag an id of its own, a
+# tag copies one) and containers in docker.containers (`id name`); it
+# answers `version` with a failure under STUB_DOCKER_DOWN.
+cat > "$scratch/bin/go" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s|%s|%s\n' "$PWD" "${GOBIN:-}" "$*" >> "$TRACE/go.calls"
+case "$1" in
+  env) [ "${2:-}" != GOVERSION ] || echo "${STUB_GO_VERSION:-go$(sed -n 's/^go //p' "$GATE_ROOT/apps/codex/go.mod")}" ;;
+  test)
+    run= cover= prev=
+    for a in "$@"; do
+      [ "$prev" != -run ] || run=$a
+      case "$a" in -coverprofile=*) cover=${a#-coverprofile=} ;; esac
+      prev=$a
+    done
+    if [ -n "$run" ]; then
+      names=${run#^}; names=${names%\$}; names=${names#(}; names=${names%)}
+      IFS='|' read -r -a tests <<<"$names"
+      for t in "${tests[@]}"; do echo "--- PASS: $t (0.00s)"; done
+    fi
+    [ -z "$cover" ] || echo 'mode: atomic' > "$cover" ;;
+  tool) printf 'total:\t(statements)\t50.0%%\n' ;;
+esac
+exit 0
+FAKE
+for tool in gofmt govulncheck; do
+  printf '#!/usr/bin/env bash\nprintf "%%s|%s %%s\\n" "$PWD" "$*" >> "$TRACE/tools.calls"\n' "$tool" > "$scratch/bin/$tool"
+done
+cat > "$scratch/bin/trivy" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$PWD" "$*" >> "$TRACE/trivy.calls"
+[ "${1:-}" != --version ] || echo 'Version: 0.0.0-stand-in'
+if [ "${1:-}" = fs ]; then
+  if [ -f .trivyignore.yaml ] && [ -f mix.exs ] && [ ! -e _build ] && [ ! -e deps ]; then echo tracked; else echo "untracked: $(ls -A | tr '\n' ' ')"; fi >> "$TRACE/trivy.trees"
+fi
+exit 0
+FAKE
+cat > "$scratch/bin/docker" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$TRACE/docker.calls"
+images="$TRACE/docker.images" containers="$TRACE/docker.containers"
+touch "$images" "$containers"
+id_of() { awk -v r="$1" '$1 == r || $2 == r { print $2; exit }' "$images"; }
+case "$1" in
+  version) [ -z "${STUB_DOCKER_DOWN:-}" ] || exit 1; echo 29.0.0 ;;
+  info) echo 2 ;;
+  compose) echo 'Docker Compose version v2.40.0' ;;
+  build)
+    shift
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --tag ]; then
+        grep -v "^$2 " "$images" > "$images.new" || :; mv "$images.new" "$images"
+        echo "$2 sha256:built-${2//[:\/]/-}" >> "$images"
+      fi
+      shift
+    done ;;
+  tag)
+    case "$2" in sha256:*) id=$2 ;; *) id=$(id_of "$2") ;; esac
+    [ -n "$id" ] || exit 1
+    grep -v "^$3 " "$images" > "$images.new" || :; mv "$images.new" "$images"
+    echo "$3 $id" >> "$images" ;;
+  image)
+    case "$2" in
+      ls) [ -z "${STUB_DOCKER_LS_FAILS:-}" ] || exit 1; cat "$images" ;;
+      inspect)
+        ref=${!#}; id=$(awk -v r="$ref" '$1 == r { print $2; exit }' "$images"); [ -n "$id" ] || exit 1
+        case "$*" in *'{{.Id}}'*) echo "$id" ;; esac ;;
+      rm) grep -v "^$3 " "$images" > "$images.new" || :; mv "$images.new" "$images" ;;
+    esac ;;
+  ps) cat "$containers" ;;
+  rm) grep -v "^${!#} " "$containers" > "$containers.new" || :; mv "$containers.new" "$containers" ;;
+esac
+exit 0
+FAKE
+# python3 runs as itself but for an image suite (an argument naming one of
+# the images), which records `directory|arguments` in harness.calls; the
+# builder's first suite then leaves a container under the suites' project
+# prefix, as a suite stopped midway would.
+REAL_PYTHON3=$(command -v python3) || fail 'no python3 on PATH'
+cat > "$scratch/bin/python3" <<'FAKE'
+#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in
+    cyfr-locus:*|cyfr:*)
+      printf 'python3 %s|prefix=%s\n' "$*" "${STACK_PROJECT_PREFIX:-}" >> "$TRACE/harness.calls"
+      case "$*" in *builder-smoke.py*) [ -z "${STACK_PROJECT_PREFIX:-}" ] || echo "c0ffee ${STACK_PROJECT_PREFIX}leftover-1" >> "$TRACE/docker.containers" ;; esac
+      exit 0 ;;
+  esac
+done
+exec "$REAL_PYTHON3" "$@"
+FAKE
+chmod +x "$scratch/bin/go" "$scratch/bin/gofmt" "$scratch/bin/govulncheck" "$scratch/bin/trivy" "$scratch/bin/docker" "$scratch/bin/python3"
+# The release boot and the close's proofs, which each start releases and
+# browsers, stand in through BASH_ENV, which bash sources before a script
+# runs: each records `script arguments` and what its environment chooses
+# in harness.calls, writes a record where the proof writes one, and exits.
+# A script whose path holds STUB_HARNESS_STALL records its pid in
+# $TRACE/stalled.harness and waits instead.
+cat > "$scratch/stub.bash_env" <<'FAKE'
+case "$0" in
+  *tests/release-boot/boot.sh|*tests/*-proof/run.sh|*tests/*-proof/*-test.sh|*tests/compose-proof/tailscale-standin/proof.sh|*tests/browser/run.sh|*tests/multi-home-smoke/run.sh|*tests/proxy-hsts/run.sh)
+    printf '%s %s|skip=%s browsers=%s join=%s db=%s case_image=%s\n' "${0#"$GATE_ROOT"/}" "$*" \
+      "${RELEASE_BOOT_SKIP_BUILD-unset}" "${TINCTURE_PROOF_BROWSERS:-}" "${JOIN_PROOF_BROWSERS:-}" \
+      "${CYFR_DATABASE_URL##*/}" "${SETUP_PROOF_IMAGE:-}${COMPOSE_PROOF_SKIP_BUILD:+compose}" >> "$TRACE/harness.calls"
+    [ -z "${PROOF_OUT:-}" ] || { mkdir -p "$PROOF_OUT" && echo '{}' > "$PROOF_OUT/stand-in-proof.json"; }
+    [ -z "${BROWSER_OUT:-}" ] || { mkdir -p "$BROWSER_OUT" && echo '{}' > "$BROWSER_OUT/frame-facts.json"; }
+    case "$0 $*" in
+      *"${STUB_HARNESS_STALL:-/nothing/}"*) echo "$$" > "$TRACE/stalled.harness"; sleep 300 & wait ;;
+    esac
+    exit 0 ;;
+esac
+FAKE
+
 # start_gate NAME [VAR=value...] -- GATE ARGS...: starts the gate as every
 # harness test starts a wrapper, as the leader of a session of its
 # own, with SIGINT and SIGHUP at their defaults (an asynchronous command
@@ -141,6 +263,7 @@ start_gate() {
   contain_start -g 60 perl -e '$SIG{INT} = $SIG{HUP} = "DEFAULT"; exec @ARGV or die "exec $ARGV[0]: $!\n"' \
     env -u HEAVY_CHECK_HELD -u CONTAIN_REGISTRY -u CONTAIN_CLOSE_FDS -u CONTAIN_HOLD_FDS \
     TRACE="$scratch/$name.trace" PATH="$scratch/bin:$PATH" REAL_MIX="$REAL_MIX" CYFR_DATABASE_URL='postgres://u:p@host/base' \
+    REAL_PYTHON3="$REAL_PYTHON3" GATE_ROOT="$root" BASH_ENV="$scratch/stub.bash_env" \
     ${vars[@]+"${vars[@]}"} bash "$@" >"$scratch/$name.out" 2>"$scratch/$name.err" </dev/null
   gate_pid=$CONTAIN_PID
 }
@@ -176,7 +299,7 @@ framed() {
 # runs on a tag alone, and its checks are these workflows, which it calls.
 ci_roster() {
   python3 -I - "$1" "$2" <<'PY'
-import glob, os, re, sys, yaml
+import glob, os, re, shlex, sys, yaml
 
 gate_path, wf_dir = sys.argv[1], sys.argv[2]
 gate = open(gate_path).read()
@@ -189,8 +312,25 @@ for l in lines[start + 1:]:
     m = re.fullmatch(r"#   (\S+\.yml) ([a-z0-9_-]+)(?:: (.+))?", l)
     if m:
         roster[(m[1], m[2], m[3])] = 0
-have = set(re.findall(r"\bstep (?:static|postgres|vocab|cluster) ([a-z_]+)", gate))
+have = set(re.findall(r"\bstep (?:static|postgres|vocab|cluster|boot) ([a-z_]+)", gate))
 have |= {"islands:" + a for m in re.findall(r"^\s*run_islands ([a-z ]+)", gate, re.M) for a in m.split()}
+# The CI jobs the gate runs step by step (run_job LEG SLUG WORKFLOW JOB
+# ...): each covers every step of its job, or its --only step alone, less
+# its --except steps.
+gate_jobs = []
+for m in re.finditer(r"^[ \t]*run_job (\S+) (\S+) (\S+\.yml) (\S+)(.*)$", gate, re.M):
+    words = shlex.split(m[5])
+    only = [words[i + 1] for i, w in enumerate(words[:-1]) if w == "--only"]
+    excepts = [words[i + 1] for i, w in enumerate(words[:-1]) if w == "--except"]
+    gate_jobs.append({"wf": m[3], "job": m[4], "only": only[0] if only else None, "excepts": excepts, "seen": False})
+    have.add(m[2])
+def gate_runs(wf, job, k):
+    hit = False
+    for g in gate_jobs:
+        if (g["wf"], g["job"]) == (wf, job):
+            g["seen"] = True
+            hit = hit or (k == g["only"] if g["only"] else k not in g["excepts"])
+    return hit
 
 CI_RUNS = {
     ("dialyzer.yml", "dialyzer", "run: mix compile --warnings-as-errors"): ["compile_sqlite_dev"],
@@ -222,11 +362,13 @@ CI_RUNS = {
     ("test.yml", "locus-independence", "Compile and test Locus from its declared apps alone"): ["islands:locus"],
     ("test.yml", "locus-runtime-image", "The credential canary's own checks"): ["canary_checks"],
     ("test.yml", "release-boot", "Each run names and drops databases of its own"): ["boot_names"],
+    ("test.yml", "release-boot", "Boot the release against a fresh ${{ matrix.db }} database"): ["boot_sqlite", "boot_postgres"],
+    ("test.yml", "locus-image", "The UTC date the upgrade layer refreshes on"): ["build_locus"],
     ("test.yml", "vocabulary-gate", "Retired names stay out and the storage layout is Arca's"): ["fossils"],
 }
 SETUP_ACTIONS = {
     "actions/checkout", "actions/setup-node", "actions/setup-go", "./.github/actions/setup-elixir", "actions/cache",
-    "actions/upload-artifact", "actions/download-artifact",
+    "actions/upload-artifact", "actions/download-artifact", "docker/setup-buildx-action",
 }
 # Each a whole command, as the script spells it with its continuations
 # joined: installs, a container started for a suite, a wait for it, an
@@ -329,6 +471,8 @@ for path in sorted(glob.glob(os.path.join(wf_dir, "*.yml"))):
             if (wf, job, k) in CI_RUNS:
                 runs_seen.add((wf, job, k))
                 where.append("a gate step")
+            if gate_runs(wf, job, k) and "a gate step" not in where:
+                where.append("a gate step")
             left = unlisted(s)
             if not where and report(s):
                 where.append("a report")
@@ -341,6 +485,9 @@ for path in sorted(glob.glob(os.path.join(wf_dir, "*.yml"))):
 for (wf, job, k), n in roster.items():
     if n == 0:
         errors.append(f"the list names {wf} {job}" + (f": {k}" if k else "") + ", which no pull request runs")
+for g in gate_jobs:
+    if not g["seen"]:
+        errors.append(f"the gate runs {g['wf']} {g['job']}, which no pull request runs")
 for entry, names in CI_RUNS.items():
     if entry not in runs_seen:
         errors.append(f"the test's run map names {entry}, which no pull request runs")
@@ -415,11 +562,28 @@ PY
   has_line "^test.yml static: 'A conditioned check' is neither run by the gate nor on its list" "$scratch/roster/if-$name.err" ||
     fail "a check under if: $cond failed without its reason: $(cat "$scratch/roster/if-$name.err")"
 done
-grep -vxF '#   test.yml browser' "$gate" > "$scratch/roster/dropped.sh"
+grep -vxF '#   test.yml seed-guards' "$gate" > "$scratch/roster/dropped.sh"
 ! ci_roster "$scratch/roster/dropped.sh" "$root/.github/workflows" 2>"$scratch/roster/dropped.err" ||
   fail 'a CI job taken off the list passed'
-has_line "^test.yml browser: 'The frame-facts experiment' is neither" "$scratch/roster/dropped.err" ||
+has_line "^test.yml seed-guards: 'Seed ships no build droppings' is neither" "$scratch/roster/dropped.err" ||
   fail "a job taken off the list failed without its reason: $(cat "$scratch/roster/dropped.err")"
+# A step the gate leaves out of a job it runs is on the list: taken off,
+# it fails.
+grep -vxF '#   keeper-ci.yml keeper: go test as root with writable-cgroups=true (the real kernel)' "$gate" > "$scratch/roster/excepted.sh"
+! ci_roster "$scratch/roster/excepted.sh" "$root/.github/workflows" 2>"$scratch/roster/excepted.err" ||
+  fail 'a step the gate leaves out, off the list, passed'
+has_line "^keeper-ci.yml keeper: 'go test as root with writable-cgroups=true \(the real kernel\)' is neither" "$scratch/roster/excepted.err" ||
+  fail "a step the gate leaves out failed without its reason: $(cat "$scratch/roster/excepted.err")"
+# A step of a job the gate runs, put on the list, is both.
+sed 's/^#   test.yml config-seam$/&\n#   test.yml browser: The markdown proof (Chromium)/' "$gate" > "$scratch/roster/both.sh"
+! ci_roster "$scratch/roster/both.sh" "$root/.github/workflows" 2>"$scratch/roster/both.err" || fail 'a step both run and listed passed'
+has_line "^test.yml browser: 'The markdown proof \(Chromium\)' is the list and a gate step" "$scratch/roster/both.err" ||
+  fail "a step both run and listed failed without its reason: $(cat "$scratch/roster/both.err")"
+# A job the gate runs that no workflow has.
+sed 's/^  run_job go codex_test codex-ci.yml test /  run_job go gone codex-ci.yml gone-job || status=1\n&/' "$gate" > "$scratch/roster/gone.sh"
+! ci_roster "$scratch/roster/gone.sh" "$root/.github/workflows" 2>"$scratch/roster/gone.err" || fail 'a gate job no workflow has passed'
+has_line '^the gate runs codex-ci.yml gone-job, which no pull request runs' "$scratch/roster/gone.err" ||
+  fail "a gate job no workflow has failed without its reason: $(cat "$scratch/roster/gone.err")"
 sed 's/^#   test.yml config-seam$/&\n#   test.yml static: A check CI dropped/' "$gate" > "$scratch/roster/stale.sh"
 ! ci_roster "$scratch/roster/stale.sh" "$root/.github/workflows" 2>"$scratch/roster/stale.err" || fail 'a stale list entry passed'
 has_line '^the list names test.yml static: A check CI dropped, which no pull request runs' "$scratch/roster/stale.err" ||
@@ -525,6 +689,41 @@ run_gate cargo-home CARGO_HOME="$scratch/stub-cargo" PATH="$nocargo_path" -- "$g
 no_line 'cargo-component' "$scratch/cargo-home.err" || fail "a gate refused cargo-component in CARGO_HOME's bin: $(cat "$scratch/cargo-home.err")"
 echo 'ok: cargo-component missing'
 
+# --- go, trivy and docker --------------------------------------------------------
+# path_without TOOL: a PATH holding no TOOL: the stand-ins but TOOL, then
+# every directory of PATH that has none.
+path_without() {
+  local tool=$1 d f out="$scratch/no-$1"
+  mkdir -p "$out"
+  for f in "$scratch"/bin/*; do [ "${f##*/}" = "$tool" ] || ln -sf "$f" "$out/"; done
+  IFS=: read -r -a path_dirs <<<"$PATH"
+  for d in "${path_dirs[@]}"; do [ -x "$d/$tool" ] || out="$out:$d"; done
+  echo "$out"
+}
+# No go, no trivy under --close, a go other than go.mod's, a docker with no
+# daemon: each refused with 69, naming it, before the log directory or any
+# leg. Without --close trivy is not asked for: the log directory check,
+# given a file, is what refuses that gate.
+# refused_for NAME REASON VAR [GATE FLAG]
+refused_for() {
+  local name=$1 reason=$2 var=$3
+  shift 3
+  run_gate "$name" "$var" -- "$gate" "$@" -l "$scratch/$name.log"
+  [ "$gate_rc" = 69 ] || fail "a gate refused for $name exited $gate_rc: $(cat "$scratch/$name.err")"
+  framed "$name" "$gate_pid" 69
+  has_line "==> $reason" "$scratch/$name.err" || fail "the $name refusal gave no reason: $(cat "$scratch/$name.err")"
+  [ ! -e "$scratch/$name.log" ] || fail "a gate refused for $name made its log directory"
+  no_mix_ran "$name" || fail "a gate refused for $name went on to the legs"
+}
+refused_for nogo 'go is not on PATH' "PATH=$(path_without go)"
+refused_for notrivy 'trivy is not on PATH' "PATH=$(path_without trivy)" --close
+refused_for goversion "go on PATH is go1.0.0 and apps/codex/go.mod names go1\\.[0-9.]+, which CI.s setup-go installs" STUB_GO_VERSION=go1.0.0
+refused_for nodaemon 'docker reaches no daemon' STUB_DOCKER_DOWN=1
+run_gate notrivy-open PATH="$(path_without trivy)" -- "$gate" -l "$scratch/a-file"
+[ "$gate_rc" = 64 ] && has_line 'the log directory .* is not a directory' "$scratch/notrivy-open.err" ||
+  fail "a gate without --close asked for trivy: $gate_rc $(cat "$scratch/notrivy-open.err")"
+echo 'ok: go, trivy and docker missing, and go not the version go.mod names'
+
 # --- a leg run alone ----------------------------------------------------------------
 # start_leg NAME LEG [VAR=value...]: the leg as the gate starts it, with a
 # fresh log directory and the gate's options in its environment.
@@ -622,7 +821,7 @@ echo 'ok: a leg run alone: an unreadable selection, refused island phases'
 # through its mapping of each leg's status.
 for spec in fd64:64:'CONTAIN_FD_BASE=x' "path69:69:PATH='$scratch/nosetsid'"; do
   name=${spec%%:*}; rest=${spec#*:}; want=${rest%%:*}
-  printf 'case "${1:-}:${2:-}" in --leg:islands) %s ;; esac\n' "${rest#*:}" > "$scratch/$name.bash_env"
+  printf '. "%s"\ncase "${1:-}:${2:-}" in --leg:islands) %s ;; esac\n' "$scratch/stub.bash_env" "${rest#*:}" > "$scratch/$name.bash_env"
   run_gate "whole-$name" BASH_ENV="$scratch/$name.bash_env" -- "$gate" -n 2 -l "$scratch/whole-$name.log"
   [ "$gate_rc" = "$want" ] || fail "a gate whose island phases were refused with $want exited $gate_rc: $(cat "$scratch/whole-$name.err")"
   framed "whole-$name" "$gate_pid" "$want"
@@ -744,6 +943,206 @@ for isl in prima arca sanctum; do
 done
 echo 'ok: a whole gate that passes, every suite with a result'
 
+# --- the go, audit and boot legs of the passing gate ----------------------------
+pt="$scratch/pass.trace" pl=$(cd "$scratch/pass.log" && pwd -P)
+for leg in go audit boot; do
+  has_line "^==> $leg +ok " "$scratch/pass.out" || fail "the $leg leg did not pass: $(cat "$scratch/pass.out")"
+done
+for job in 'go.codex_test: codex-ci.yml test: 6 steps' 'go.keeper: keeper-ci.yml keeper: 5 steps' \
+  'audit.spdx: license-lint.yml spdx-headers: 2 steps' 'audit.govuln_codex: security.yml go-audit tree=apps/codex: 2 steps' \
+  'audit.govuln_keeper: security.yml go-audit tree=apps/locus/keeper: 2 steps' 'audit.elixir_audit: security.yml elixir-audit: 5 steps'; do
+  grep -qxF "    $job passed" "$scratch/pass.out" || fail "the passing gate did not report $job passed: $(cat "$scratch/pass.out")"
+done
+# Each Go step as its workflow runs it, in its module; the keeper's run as
+# root in a container stays CI's.
+for want in "$root/apps/codex||vet ./..." "$root/apps/codex||test ./... -race -coverprofile=$pl/go.codex_test.temp/cover.out" \
+  "$root/apps/codex||test ./cmd/ -race -count=1 -v -run ^(TestEnsureCyfrComposeFieldsAddsNothingWhenAMergeKeyBindsBothTargets|" \
+  "$root/apps/codex||test ./internal/access/ -race -count=1 -v -run ^(TestLockExcludesAHolderInAnotherPIDNamespace|" \
+  "$root/apps/codex||build ./..." "$root/apps/locus/keeper||vet ./..." "$root/apps/locus/keeper||test ./... -race -coverprofile=" \
+  "$root/apps/locus/keeper||test ./internal/stage/ -race -count=1 -v -run ^TestRunnerFilterInstalls\$" \
+  "$root/apps/locus/keeper||build -o $pl/go.keeper.temp/cyfr-locus ." \
+  "$root/apps/codex|$pl/audit.gobin|install golang.org/x/vuln/cmd/govulncheck@v1.9.0" \
+  "$root/apps/locus/keeper|$pl/audit.gobin|install golang.org/x/vuln/cmd/govulncheck@v1.9.0"; do
+  grep -qF -- "$want" "$pt/go.calls" || fail "the go leg did not run $want: $(cat "$pt/go.calls")"
+done
+for want in "$root/apps/codex|gofmt -l ." "$root/apps/locus/keeper|gofmt -l . ../../../tests/fixtures" \
+  "$root/apps/codex|govulncheck ./..." "$root/apps/locus/keeper|govulncheck ./..."; do
+  grep -qxF -- "$want" "$pt/tools.calls" || fail "the gate did not run $want: $(cat "$pt/tools.calls")"
+done
+no_line 'writable-cgroups=true' "$pt/docker.calls" || fail "the gate ran the keeper's suite as root"
+# The Elixir audit's Mix under its own build path, in the environment
+# security.yml gives it.
+for want in "-|-|$root/_build/audit|-|$root|compile" "-|-|$root/_build/audit|-|$root|hex.audit" \
+  "-|-|$root/_build/audit|-|$root|deps.audit" "-|-|$root/_build/audit|-|$root|deps.unlock --check-unused" \
+  "-|-|$root/_build/audit|-|$root/apps/cyfr|sobelow --config"; do
+  grep -qxF -- "$want" "$pt/mix.calls" || fail "the audit leg did not run $want: $(grep _build/audit "$pt/mix.calls")"
+done
+[ "$(grep -c '_build/audit' "$pt/mix.calls")" = 5 ] || fail "the audit build path reached another Mix call: $(grep _build/audit "$pt/mix.calls")"
+# The boots: SQLite with no database URL, PostgreSQL on the database the
+# leg created and dropped, a name of its own.
+grep -qxF 'tests/release-boot/boot.sh sqlite|skip=unset browsers= join= db= case_image=' "$pt/harness.calls" ||
+  fail "the SQLite boot did not run without a database URL: $(cat "$pt/harness.calls")"
+boot_db=$(sed -n 's/^tests\/release-boot\/boot.sh postgres|.* db=\([a-z0-9_]*\) .*/\1/p' "$pt/harness.calls")
+case "$boot_db" in cyfr_gate_boot_[0-9]*_[0-9a-f]*) ;; *) fail "the PostgreSQL boot ran on no database of the gate's own: $(cat "$pt/harness.calls")" ;; esac
+[ "$(grep -F 'DATABASE' "$pt/docker.calls" | sed 's/.* -c //')" = "CREATE DATABASE \"$boot_db\"
+DROP DATABASE IF EXISTS \"$boot_db\" WITH (FORCE)" ] || fail "the boot leg's database was not created and then dropped: $(grep DATABASE "$pt/docker.calls")"
+# No database URL with its password on the gate's output or in its logs.
+! grep -rqF 'cyfr:cyfr@' "$scratch/pass.out" "$scratch/pass.err" "$scratch/pass.log" || fail "a database URL reached the gate's output or logs: $(grep -rlF 'cyfr:cyfr@' "$scratch/pass.out" "$scratch/pass.err" "$scratch/pass.log")"
+[ -z "$(find "$scratch/pass.log" -maxdepth 1 -name '*.temp')" ] || fail "a job's RUNNER_TEMP was left: $(find "$scratch/pass.log" -maxdepth 1 -name '*.temp')"
+echo 'ok: the go, audit and boot legs as their workflows run them'
+
+# --- a close: the image builds, the image jobs, the browser shards, the scans ----
+# The image store holds a tag the close also gives (cyfr-locus:smoke) and
+# two it leaves alone; after the close it holds them as before.
+mkdir -p "$scratch/close.trace"
+printf '%s\n' 'cyfr-locus:smoke sha256:older' 'cyfr:latest sha256:users' 'postgres:18.6 sha256:pg' > "$scratch/close.trace/docker.images"
+cp "$scratch/close.trace/docker.images" "$scratch/close.images.before"
+run_gate close -- "$gate" --close -n 2 -l "$scratch/close.log"
+[ "$gate_rc" = 0 ] || fail "a close whose every step passes exited $gate_rc: $(cat "$scratch/close.err")"
+framed close "$gate_pid" 0
+ct="$scratch/close.trace" cl=$(cd "$scratch/close.log" && pwd -P)
+has_line '^==> harness +ok ' "$scratch/close.out" || fail "the harness leg did not pass: $(cat "$scratch/close.out")"
+for job in 'build_locus: test.yml locus-image: 1 step' 'build_app: test.yml locus-backends-image: 1 step' \
+  'builder_image: test.yml builder-image: 8 steps' 'runtime_image: test.yml locus-runtime-image: 7 steps' \
+  'backends_image: test.yml locus-backends-image: 22 steps' 'browser_a: test.yml browser shard=a: 6 steps' \
+  'browser_b: test.yml browser shard=b: 5 steps' 'browser_c: test.yml browser shard=c: 3 steps' \
+  'browser_d: test.yml browser shard=d: 5 steps' 'repo_scan: security.yml repo-scan: 2 steps'; do
+  grep -qxF "    harness.$job passed" "$scratch/close.out" || fail "the close did not report $job passed: $(cat "$scratch/close.out")"
+done
+today=$(date -u +%Y-%m-%d)
+[ "$(grep '^build ' "$ct/docker.calls")" = "build --file Dockerfile.locus --tag cyfr-locus:ci --build-arg APT_REFRESH=$today .
+build --file Dockerfile --tag cyfr:push --build-arg APT_REFRESH=$today ." ] ||
+  fail "the close did not build both images as test.yml builds them: $(grep '^build ' "$ct/docker.calls")"
+# Every suite, proof and check in the jobs' order, each with its arguments
+# and what its step's environment chooses.
+cat > "$scratch/close.want" <<'WANT'
+python3 scripts/builder-smoke.py cyfr-locus:smoke|prefix=PREFIX
+python3 tests/builder-image/isolation.py cyfr-locus:smoke|prefix=PREFIX
+python3 tests/builder-image/memory.py cyfr-locus:smoke|prefix=PREFIX
+python3 tests/builder-image/headroom.py cyfr-locus:smoke|prefix=PREFIX
+python3 tests/builder-image/lockfile.py cyfr-locus:smoke|prefix=PREFIX
+python3 tests/locus-runtime-image/runners.py cyfr-locus:runtime|prefix=PREFIX
+python3 -I tests/locus-runtime-image/namespace.py cyfr-locus:runtime|prefix=PREFIX
+python3 tests/locus-runtime-image/canary.py cyfr-locus:runtime|prefix=PREFIX
+python3 tests/locus-backends-image/e2e.py cyfr-locus:backends|prefix=PREFIX
+python3 tests/locus-backends-image/isolation.py cyfr-locus:backends|prefix=PREFIX
+python3 tests/locus-backends-image/refusals.py cyfr-locus:backends|prefix=PREFIX
+python3 tests/locus-backends-image/residue.py cyfr-locus:backends|prefix=PREFIX
+python3 tests/locus-backends-image/memory.py cyfr-locus:backends|prefix=PREFIX
+tests/compose-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=
+tests/compose-proof/predicates-test.sh |skip=unset browsers= join= db= case_image=
+tests/compose-proof/tailscale-standin/proof.sh |skip=unset browsers= join= db= case_image=
+tests/compose-proof/run.sh --case bind|skip=unset browsers= join= db= case_image=compose
+tests/compose-proof/run.sh --case modes|skip=unset browsers= join= db= case_image=compose
+tests/compose-proof/run.sh --case interrupt|skip=unset browsers= join= db= case_image=compose
+tests/compose-proof/run.sh --case restore-identity|skip=unset browsers= join= db= case_image=compose
+tests/compose-proof/run.sh --case shutdown|skip=unset browsers= join= db= case_image=compose
+tests/compose-proof/run.sh --case restore|skip=unset browsers= join= db= case_image=compose
+tests/setup-proof/cleanup-test.sh |skip=unset browsers= join= db= case_image=cyfr:compose-proof
+tests/setup-proof/run.sh |skip=unset browsers= join= db= case_image=cyfr:compose-proof
+tests/browser/run.sh |skip= browsers= join= db= case_image=
+tests/markdown-proof/run.sh |skip=unset browsers= join= db= case_image=
+tests/tincture-proof/run.sh cyfr-locus:tincture-proof|skip=1 browsers=chromium join= db= case_image=
+tests/hostile-frame-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/pairing-proof/run.sh |skip= browsers= join= db= case_image=
+tests/multi-home-smoke/run.sh |skip=1 browsers= join= db= case_image=
+tests/identity-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/join-proof/run.sh |skip=1 browsers= join=chromium db= case_image=
+tests/approval-proof/run.sh |skip= browsers= join= db= case_image=
+tests/approval-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/file-offer-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/grant-proof/run.sh |skip= browsers= join= db= case_image=
+tests/instance-entry-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/instance-entry-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/canvas-proof/run.sh |skip=1 browsers= join= db= case_image=
+tests/proxy-hsts/run.sh |skip=unset browsers= join= db= case_image=
+WANT
+prefix=$(sed -n 's/.*|prefix=\(cyfr-gate-[0-9]*-\)$/\1/p' "$ct/harness.calls" | sort -u)
+[ "$(printf '%s\n' "$prefix" | wc -l)" = 1 ] && [ -n "$prefix" ] || fail "the image suites ran under no one project prefix of the gate's: $(grep prefix= "$ct/harness.calls")"
+grep -v '^tests/release-boot/boot.sh ' "$ct/harness.calls" > "$scratch/close.got"
+diff <(sed "s/PREFIX/$prefix/" "$scratch/close.want") "$scratch/close.got" > "$scratch/close.diff" ||
+  fail "the close's suites and proofs are not the jobs' in their order: $(cat "$scratch/close.diff")"
+# The scans: each image's as its job's step runs it, then the repository's
+# secret and misconfiguration scans, each of the tree git tracks.
+[ "$(grep -v -- '|--version$' "$ct/trivy.calls" | sed 's/^[^|]*|//')" = 'image --format table --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --ignorefile .trivyignore.yaml cyfr-locus:smoke
+image --format table --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --ignorefile .trivyignore.yaml cyfr-locus:runtime
+image --format table --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --ignorefile .trivyignore.yaml cyfr:push
+fs --scanners secret --format table --exit-code 1 .
+fs --scanners misconfig --format table --exit-code 1 --severity CRITICAL,HIGH --ignorefile .trivyignore.yaml .' ] ||
+  fail "the close's scans are not the workflows': $(cat "$ct/trivy.calls")"
+[ "$(tr '\n' ' ' < "$ct/trivy.trees")" = 'tracked tracked ' ] || fail "a repository scan read more than the tracked tree: $(cat "$ct/trivy.trees")"
+# Each shard's records, kept as its upload step keeps them.
+for shard in a b c d; do
+  [ -n "$(find "$scratch/close.log/artifacts/proof-records-$shard" -name '*.json' 2>/dev/null)" ] ||
+    fail "shard $shard's records were not kept: $(find "$scratch/close.log/artifacts" 2>/dev/null | tr '\n' ' ')"
+done
+[ -f "$scratch/close.log/artifacts/proof-records-a/proofs/tincture/stand-in-proof.json" ] ||
+  fail "the tincture proof's record is not where its upload keeps it: $(find "$scratch/close.log/artifacts" | tr '\n' ' ')"
+# What the suites left under the prefix is gone, and the image store holds
+# what it held before: every tag the close gave its images taken off, the
+# one it took over given back.
+no_line "^c0ffee " "$ct/docker.containers" || fail "the container a suite left was not removed: $(cat "$ct/docker.containers")"
+has_line '^rm -f c0ffee$' "$ct/docker.calls" || fail 'the leftover container was not removed by its id'
+diff <(sort "$scratch/close.images.before") <(sort "$ct/docker.images") > "$scratch/close.images.diff" ||
+  fail "the close left the image store changed: $(cat "$scratch/close.images.diff")"
+[ -z "$(find "$scratch/close.log" -maxdepth 1 -name '*.temp')" ] || fail "a job's RUNNER_TEMP was left: $(find "$scratch/close.log" -maxdepth 1 -name '*.temp')"
+echo 'ok: a close builds both images, runs the image jobs, the browser shards and the scans as CI does, and leaves no image or container'
+
+# --- a close stopped in a proof; a boot at its deadline ---------------------------
+# TERM while the canvas proof runs: the gate exits 143, the proof is
+# stopped, and the leg still takes the tags it gave off and removes what the
+# suites left under its prefix.
+mkdir -p "$scratch/hterm.trace"
+printf '%s\n' 'cyfr-locus:smoke sha256:older' 'cyfr:latest sha256:users' > "$scratch/hterm.trace/docker.images"
+cp "$scratch/hterm.trace/docker.images" "$scratch/hterm.images.before"
+start_gate hterm STUB_HARNESS_STALL=canvas-proof -- "$gate" --close -n 2 -l "$scratch/hterm.log"
+h=$gate_pid
+until_true 300 test -s "$scratch/hterm.trace/stalled.harness" || fail "the close never reached its canvas proof: $(cat "$scratch/hterm.err")"
+stalled=$(cat "$scratch/hterm.trace/stalled.harness")
+alive "$stalled" || fail 'the stalled proof was not running before the TERM'
+# A container under the suites' prefix, as a suite stopped with the gate
+# would leave.
+prefix=$(sed -n 's/.*|prefix=\(cyfr-gate-[0-9]*-\)$/\1/p' "$scratch/hterm.trace/harness.calls" | head -n 1)
+[ -n "$prefix" ] || fail 'the stopped close ran its image suites under no prefix'
+echo "deadbeef ${prefix}stopped-1" >> "$scratch/hterm.trace/docker.containers"
+kill -TERM "$h"
+gate_status "$h"; [ "$gate_rc" = 143 ] || fail "a close given TERM in a proof exited $gate_rc"
+framed hterm "$h" 143
+dead "$stalled" || fail 'the stalled proof outlived the gate'
+diff <(sort "$scratch/hterm.images.before") <(sort "$scratch/hterm.trace/docker.images") > "$scratch/hterm.images.diff" ||
+  fail "a close stopped in a proof left the image store changed: $(cat "$scratch/hterm.images.diff")"
+no_line "^deadbeef " "$scratch/hterm.trace/docker.containers" || fail 'a close stopped in a proof left the container a suite left'
+[ -z "$(find "$scratch/hterm.log" -maxdepth 1 -name '*.temp')" ] || fail "a close stopped in a proof left its job's RUNNER_TEMP: $(find "$scratch/hterm.log" -maxdepth 1 -name '*.temp')"
+# An image store the leg cannot read before it builds: it builds nothing,
+# so no tag of a user's is ever taken for one it gave.
+start_leg harness-ls harness STUB_DOCKER_LS_FAILS=1
+gate_status "$gate_pid"
+[ "$gate_rc" = 1 ] || fail "a harness leg that could not read the image store exited $gate_rc"
+[ "$(tr '\n' ' ' < "$scratch/harness-ls.log/harness.summary")" = 'images_read=1 ' ] ||
+  fail "an unreadable image store was not recorded alone: $(tr '\n' ' ' < "$scratch/harness-ls.log/harness.summary")"
+no_line '^build ' "$scratch/harness-ls.trace/docker.calls" || fail 'a harness leg built images over an unreadable store'
+echo 'ok: a close stopped in a proof takes its image tags off and its suites'"'"' leftovers away'
+
+# The PostgreSQL boot stalls past a ten-second deadline (given to the boot
+# leg alone, through BASH_ENV): the step is stopped at it, recorded 124,
+# and the leg drops the database it created all the same.
+printf '. "%s"\ncase "${1:-}:${2:-}" in --leg:boot) export GATE_STEP_DEADLINE=10 ;; esac\n' "$scratch/stub.bash_env" > "$scratch/bootdl.bash_env"
+start_gate bootdl BASH_ENV="$scratch/bootdl.bash_env" STUB_HARNESS_STALL='boot.sh postgres' -- "$gate" -n 2 -l "$scratch/bootdl.log"
+b=$gate_pid
+until_true 120 test -s "$scratch/bootdl.trace/stalled.harness" || fail "the PostgreSQL boot never started: $(cat "$scratch/bootdl.err")"
+stalled=$(cat "$scratch/bootdl.trace/stalled.harness")
+gate_status "$b"; [ "$gate_rc" = 1 ] || fail "a gate whose boot reached its deadline exited $gate_rc"
+dead "$stalled" || fail 'the stalled boot outlived its deadline'
+has_line '^boot_postgres=124$' "$scratch/bootdl.log/boot.summary" || fail "the stalled boot was not recorded at its deadline: $(cat "$scratch/bootdl.log/boot.summary")"
+has_line '^boot_database_drop=0$' "$scratch/bootdl.log/boot.summary" || fail "the boot leg did not drop its database after the deadline: $(cat "$scratch/bootdl.log/boot.summary")"
+db=$(sed -n 's/.*CREATE DATABASE "\([a-z0-9_]*\)"$/\1/p' "$scratch/bootdl.trace/docker.calls")
+[ -n "$db" ] && has_line "DROP DATABASE IF EXISTS \"$db\" WITH \(FORCE\)$" "$scratch/bootdl.trace/docker.calls" ||
+  fail "the database the boot leg created was not dropped: $(grep DATABASE "$scratch/bootdl.trace/docker.calls")"
+has_line '^==> boot +FAILED ' "$scratch/bootdl.out" || fail 'the boot leg was not reported failed'
+echo 'ok: a boot at its deadline is stopped and its database dropped'
+
 # --- a whole gate: a stalled island, build paths, the pg leg, the framing --------
 # Started by a relative path from another directory; the caller's build
 # path is the PostgreSQL one. The arca island's tests stall with a
@@ -753,7 +1152,7 @@ echo 'ok: a whole gate that passes, every suite with a result'
 # through BASH_ENV as above: the static leg runs the real fixture recipes
 # and npm checks, which a loaded runner can keep past twenty seconds.
 mkdir -p "$scratch/tmp-a"
-printf 'case "${1:-}:${2:-}" in --leg:islands) export GATE_STEP_DEADLINE=20 ;; esac\n' > "$scratch/a.bash_env"
+printf '. "%s"\ncase "${1:-}:${2:-}" in --leg:islands) export GATE_STEP_DEADLINE=20 ;; esac\n' "$scratch/stub.bash_env" > "$scratch/a.bash_env"
 cd "$root/scripts"
 start_gate a TMPDIR="$scratch/tmp-a" MIX_BUILD_PATH=_build/test_pg BASH_ENV="$scratch/a.bash_env" \
   STUB_STALL=island_arca_test STUB_DELAY=island_sanctum_compile STUB_HOLD=island_sanctum_test \

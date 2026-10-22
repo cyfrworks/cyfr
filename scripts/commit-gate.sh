@@ -53,32 +53,63 @@
 #             that holds only what CI gives them (each read from its
 #             test.yml job), once the SQLite suite's partitions have
 #             exited; locus with --close
+#   go        codex-ci.yml's test job (go vet, gofmt, go test under -race,
+#             the Docker Compose and access-engine Docker tests with their
+#             ran-and-passed assertions, go build) and keeper-ci.yml's
+#             keeper job but its run as root in a container with writable
+#             cgroups
+#   audit     license-lint.yml's spdx-headers job (both assertions),
+#             security.yml's go-audit job for each Go module (govulncheck at
+#             the version the job installs, through
+#             scripts/security-scan.sh) and its elixir-audit job (mix
+#             compile, hex.audit, deps.audit, deps.unlock --check-unused,
+#             sobelow --config)
+#   boot      test.yml's release-boot job: tests/release-boot/boot.sh on
+#             SQLite, then on PostgreSQL on a database the leg creates
+#             empty on the gate's server and drops once the boot has ended
+#   harness   with --close only, after the cluster leg: both images built
+#             from the tree (Dockerfile.locus as test.yml's locus-image job
+#             builds it, Dockerfile as its locus-backends-image job does,
+#             under the tags those builds give them), test.yml's
+#             builder-image, locus-runtime-image and locus-backends-image
+#             jobs (every suite, the Compose proof's six cases, the setup
+#             proof and each image's trivy scan), the browser job's four
+#             shards on this host's pull of the Playwright image, and
+#             security.yml's repo-scan job (trivy's secret and
+#             misconfiguration scans of the tree git tracks or would add)
+# The go, audit and harness legs run CI's jobs as a runner runs them, each
+# step read from its workflow (run_job, scripts/lib/workflow_plan.py), so
+# the gate's copy and CI's cannot drift: every step under its job's
+# timeout-minutes, and once one fails only a step whose `if:` runs after a
+# failure. The trivy-action steps run this host's trivy with the inputs
+# CI gives the action. A close holds the host longer than heavy-check's
+# default: scripts/heavy-check.sh -t 10800 -- scripts/commit-gate.sh
+# --close.
 # Every gate forces the test rebuild on both adapters. Each leg discards
 # the caller's MIX_BUILD_PATH: static builds its MIX_ENV=test steps in
 # _build/test and its MIX_ENV=dev steps in Mix's default, postgres and
 # cluster build in _build/test_pg (postgres its dev compile in
-# _build/dev_pg), and an island builds inside its copy.
+# _build/dev_pg), an island builds inside its copy, the Elixir audit in
+# _build/audit and each release boot under boot.sh's own build path.
 # Every leg runs with ${CARGO_HOME:-$HOME/.cargo}/bin ahead on its PATH,
 # where rustup and `cargo install` put their tools, so the tests tagged
 # :requires_cargo_component, which the test helpers exclude where
 # cargo-component is not on PATH, run as CI's test jobs run them. A gate
 # that finds no cargo-component there or on PATH is refused with 69,
 # naming where it looked, before any leg starts: passing with those tests
-# excluded would hold a commit to less than CI does.
+# excluded would hold a commit to less than CI does. So is a gate without
+# go, a go other than the version both go.mod files name (what CI's
+# setup-go installs), a docker that reaches no daemon, or, with --close,
+# without trivy, each named.
 # Not part of this gate, so a closing record names each with its own
 # result: these checks of the workflows a pull request runs, each a job
 # (every step of it) or one step of a job, by the names the workflows give
 # them (tests/commit-gate-test.sh holds the list to the workflows exactly):
-#   codex-ci.yml test
 #   codex-ci.yml test-windows
 #   codex-ci.yml test-macos
-#   keeper-ci.yml keeper
-#   license-lint.yml spdx-headers
-#   security.yml elixir-audit
-#   security.yml go-audit
+#   keeper-ci.yml keeper: go test as root with writable-cgroups=true (the real kernel)
 #   security.yml security-scan-harness
 #   security.yml installer-verify
-#   security.yml repo-scan
 #   security.yml npm-audit
 #   test.yml static: Read the Rust fixtures' toolchain pin
 #   test.yml static: Test the model catalysts
@@ -92,17 +123,8 @@
 #   test.yml test: Read the Rust fixtures' toolchain pin
 #   test.yml test: Install cargo-component
 #   test.yml s3-minio
-#   test.yml locus-image
-#   test.yml builder-image
-#   test.yml locus-runtime-image: Docker Engine 28 or later on cgroup v2
-#   test.yml locus-runtime-image: Runner kills, memory bound, settlement and cleanup
-#   test.yml locus-runtime-image: Each runner in namespaces of its own
-#   test.yml locus-runtime-image: The credential canary
-#   test.yml locus-runtime-image: Scan the image
-#   test.yml locus-backends-image
-#   test.yml release-boot: Boot the release against a fresh ${{ matrix.db }} database
+#   test.yml locus-image: Save the Locus image
 #   test.yml tailscale-image-guard
-#   test.yml browser
 #   test.yml seed-guards
 #   test.yml config-seam
 # and, outside CI, the step benchmark (mix cyfr.bench.step).
@@ -255,14 +277,23 @@ pg_naming() {
 
 deadline_for() {
   if [ -n "${GATE_STEP_DEADLINE:-}" ]; then echo "$GATE_STEP_DEADLINE"; return; fi
+  # A step of a CI job (run_job) takes the job's own timeout.
+  if [ -n "${STEP_DEADLINE:-}" ]; then echo "$STEP_DEADLINE"; return; fi
   case "$1" in
     fossils|format|credo|opsgen|confguide|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|toolkit_bundle|boot_names|canary_checks|imagesuite_checks|worker_auth_check|backends_check|island_compile|island_test) echo 600 ;;
     compile_*|boundary_plants) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
+    # A database made or dropped in the postgres image, its first pull
+    # included.
+    boot_database|boot_database_drop) echo 300 ;;
     *) echo 1800 ;;
   esac
 }
+
+# The PostgreSQL server the gate's suites and boots reach, with the test
+# credentials CI's services take. Nothing writes it to a log.
+PG_SERVER=postgres://cyfr:cyfr@localhost:5432
 
 # The steps of a leg, for the deadline of a leg that waits on it.
 STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide js_suite eslint wasm_tools test_wasm sdk_bundle toolkit_bundle boot_names canary_checks imagesuite_checks worker_auth_check backends_check dialyzer boundary_plants sqlite_suite'
@@ -584,10 +615,226 @@ leg_islands() {
 # every other leg's pools have exited.
 leg_cluster() {
   export MIX_BUILD_PATH=_build/test_pg
-  step cluster cluster env CYFR_DATABASE_URL=postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test \
-    CYFR_CLUSTER_DATABASE_URL=postgres://cyfr:cyfr@localhost:5432/cyfr_cluster_test \
+  step cluster cluster env CYFR_DATABASE_URL="$PG_SERVER/cyfr_cluster_test" \
+    CYFR_CLUSTER_DATABASE_URL="$PG_SERVER/cyfr_cluster_test" \
     CYFR_SECRET_KEY_BASE="${CYFR_SECRET_KEY_BASE:-JspnK9M8XQE1HFBRZWuzJqK8ZX8ITp5vPQ6MJv2RmFfKpGr2fEhAgSf3UqBT5xTk}" \
     scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors --only cluster apps/cyfr/test/cluster
+}
+
+# One job of a CI workflow, run here as a runner runs it:
+#   run_job LEG SLUG WORKFLOW JOB [KEY=VALUE]... [--except STEP | --only STEP | --env NAME=VALUE]...
+# scripts/lib/workflow_plan.py reads the job from the workflow and plans
+# each step (its header says what a step becomes on this host). Every step
+# that runs is a step of the leg, `SLUG_NN` after its place in the job,
+# under the job's timeout-minutes as its deadline; once one has failed,
+# only a step whose `if:` runs after a failure does, as on a runner. The
+# job's status is `SLUG=status` in the leg's summary and its result line
+# is LEG.SLUG.result; its plan stays in LEG.SLUG.plan, its step summary in
+# LEG.SLUG.summary.md and what an upload step keeps under artifacts/. Its
+# RUNNER_TEMP, LEG.SLUG.temp, goes when the job ends.
+run_job() {
+  local leg=$1 slug=$2 wf=$3 job=$4 dir temp s when secs kind name failed= ran=0 status=0 picks= a prev=
+  shift 4
+  for a in "$@"; do
+    case "$prev:$a" in --*:*) ;; *:[a-z]*=*) picks="$picks $a" ;; esac
+    prev=$a
+  done
+  dir="$LOGDIR/$leg.$slug.plan" temp="$LOGDIR/$leg.$slug.temp"
+  if ! python3 -I "$ROOT/scripts/lib/workflow_plan.py" "$ROOT" "$wf" "$job" "$dir" "$temp" "$@" \
+    >"$LOGDIR/$leg.$slug.log" 2>&1 </dev/null; then
+    echo "==> $leg.$slug: $wf $job$picks could not be planned: $(tail -n 1 "$LOGDIR/$leg.$slug.log")" >&2
+    echo "$wf $job$picks: not planned, $(tail -n 1 "$LOGDIR/$leg.$slug.log")" > "$LOGDIR/$leg.$slug.result"
+    echo "$slug=1" >> "$LOGDIR/$leg.summary"
+    return 1
+  fi
+  mkdir -p "$temp"
+  while IFS=$'\t' read -r s when secs kind name <&3; do
+    case "$kind" in setup|-) continue ;; esac
+    case "$when" in
+      ok) [ -z "$failed" ] || continue ;;
+      failed) [ -n "$failed" ] || continue ;;
+      always) ;;
+      *) continue ;;
+    esac
+    ran=$((ran + 1))
+    if ! STEP_DEADLINE=$secs step "$leg" "${slug}_$s" bash "$dir/$s.sh"; then
+      [ -n "$failed" ] || failed=$name
+      status=1
+      [ -z "$REFUSED" ] || break
+    fi
+  done 3<"$dir/plan"
+  [ ! -f "$temp/.summary.md" ] || cp "$temp/.summary.md" "$LOGDIR/$leg.$slug.summary.md"
+  rm -rf "$temp"
+  local steps="$ran steps"
+  [ "$ran" != 1 ] || steps='1 step'
+  if [ -n "$failed" ]; then
+    echo "$wf $job$picks: FAILED at '$failed' ($steps ran)" > "$LOGDIR/$leg.$slug.result"
+  else
+    echo "$wf $job$picks: $steps passed" > "$LOGDIR/$leg.$slug.result"
+  fi
+  echo "$slug=$status" >> "$LOGDIR/$leg.summary"
+  return "$status"
+}
+
+# CI's Go jobs on Linux: codex-ci.yml's whole test job, and keeper-ci.yml's
+# keeper job but its run as root in a container with writable cgroups,
+# which stays CI's.
+leg_go() {
+  local status=0
+  run_job go codex_test codex-ci.yml test || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job go keeper keeper-ci.yml keeper --except 'go test as root with writable-cgroups=true (the real kernel)' || status=1
+  return "$status"
+}
+
+# The licence lint and the dependency audits as license-lint.yml and
+# security.yml run them. govulncheck is the version security.yml installs,
+# built into the run's own directory ahead on PATH; the Elixir audit's Mix
+# builds under a build path of its own, beside the legs' builds.
+leg_audit() {
+  local status=0 gobin="$LOGDIR/audit.gobin"
+  run_job audit spdx license-lint.yml spdx-headers || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job audit govuln_codex security.yml go-audit tree=apps/codex --env "GOBIN=$gobin" --env "PATH=$gobin:$PATH" || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job audit govuln_keeper security.yml go-audit tree=apps/locus/keeper --env "GOBIN=$gobin" --env "PATH=$gobin:$PATH" || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job audit elixir_audit security.yml elixir-audit --env "MIX_BUILD_PATH=$ROOT/_build/audit" || status=1
+  cleanup_audit
+  return "$status"
+}
+cleanup_audit() { rm -rf "$LOGDIR/audit.gobin"; }
+
+# test.yml's release-boot job: the release built and booted by
+# tests/release-boot/boot.sh on each adapter in turn, since both start
+# their cells on the same default listeners. Each adapter's release builds
+# under boot.sh's own build path (_build/prod_release_boot_<adapter>),
+# apart from the suites' builds and from each other. SQLite boots with no
+# database URL; PostgreSQL on a database this leg creates empty on the
+# gate's server, beside which boot.sh creates and drops its own
+# (`pg_run_database`), and which the leg drops once the boot has ended,
+# however it ended.
+BOOT_DATABASE=
+leg_boot() {
+  local status=0
+  STEP_DEADLINE=1800 step boot boot_sqlite env -u CYFR_DATABASE_URL tests/release-boot/boot.sh sqlite || status=1
+  [ -z "$REFUSED" ] || return 1
+  BOOT_DATABASE="cyfr_gate_boot_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+  if ! pg_admin boot_database "CREATE DATABASE \"$BOOT_DATABASE\""; then
+    BOOT_DATABASE=
+    return 1
+  fi
+  STEP_DEADLINE=1800 step boot boot_postgres env CYFR_DATABASE_URL="$PG_SERVER/$BOOT_DATABASE" \
+    tests/release-boot/boot.sh postgres || status=1
+  cleanup_boot || status=1
+  return "$status"
+}
+
+# One statement on the gate's server, in the postgres image boot.sh's own
+# clients run, as a step of the boot leg.
+pg_admin() {
+  step boot "$1" docker run --rm --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
+    psql -v ON_ERROR_STOP=1 -q "$PG_SERVER/postgres" -c "$2"
+}
+
+# Drops the leg's database, once its boot has stopped.
+cleanup_boot() {
+  [ -n "$BOOT_DATABASE" ] || return 0
+  pg_admin boot_database_drop "DROP DATABASE IF EXISTS \"$BOOT_DATABASE\" WITH (FORCE)" || return 1
+  BOOT_DATABASE=
+}
+
+# With --close, after every other leg: both images built from the tree
+# under the tags test.yml's builds give them, then test.yml's image jobs
+# (each suite, the Compose proof's six cases and the setup proof in the
+# backends job, and each image's scan), the browser job's four shards and
+# security.yml's repository scans, each job as CI runs it. A job whose
+# image did not build fails at its first step that needs it. The image
+# suites name every compose project and container they start from
+# HARNESS_PREFIX (STACK_PROJECT_PREFIX), so what a suite stopped midway
+# left is found by name and removed after its job, and once the leg ends,
+# however it ends, every tag it gave the images it built is taken off
+# again, a tag that named another image before the leg naming it again.
+HARNESS_PREFIX=
+leg_harness() {
+  local status=0
+  HARNESS_PREFIX="cyfr-gate-$$-"
+  harness_images > "$LOGDIR/harness.images.before" || { echo 'images_read=1' >> "$LOGDIR/harness.summary"; return 1; }
+  run_job harness build_locus test.yml locus-image --only 'Build the Locus image once' || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job harness build_app test.yml locus-backends-image --only 'Build the app image' || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job harness builder_image test.yml builder-image --env "STACK_PROJECT_PREFIX=$HARNESS_PREFIX" || status=1
+  harness_sweep
+  [ -z "$REFUSED" ] || return 1
+  run_job harness runtime_image test.yml locus-runtime-image --env "STACK_PROJECT_PREFIX=$HARNESS_PREFIX" || status=1
+  harness_sweep
+  [ -z "$REFUSED" ] || return 1
+  run_job harness backends_image test.yml locus-backends-image --env "STACK_PROJECT_PREFIX=$HARNESS_PREFIX" || status=1
+  harness_sweep
+  [ -z "$REFUSED" ] || return 1
+  run_job harness browser_a test.yml browser shard=a || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job harness browser_b test.yml browser shard=b || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job harness browser_c test.yml browser shard=c || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job harness browser_d test.yml browser shard=d || status=1
+  [ -z "$REFUSED" ] || return 1
+  run_job harness repo_scan security.yml repo-scan || status=1
+  cleanup_harness || status=1
+  return "$status"
+}
+
+# Every tagged image, `repository:tag id` a line; a store that cannot be
+# read fails, so no tag is taken for one the leg gave.
+harness_images() {
+  local list
+  list=$(docker image ls --no-trunc --format '{{.Repository}}:{{.Tag}} {{.ID}}') || return 1
+  printf '%s\n' "$list" | sed -e '/^<none>:/d' -e '/^$/d'
+}
+
+# The containers, then the networks, then the volumes whose names start
+# with HARNESS_PREFIX, removed, each named on stderr.
+harness_sweep() {
+  local id name
+  [ -n "$HARNESS_PREFIX" ] || return 0
+  docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null | while read -r id name; do
+    case "$name" in "$HARNESS_PREFIX"*) echo "==> harness: removing the container $name a suite left" >&2; docker rm -f "$id" >/dev/null 2>&1 ;; esac
+  done
+  docker network ls --format '{{.ID}} {{.Name}}' 2>/dev/null | while read -r id name; do
+    case "$name" in "$HARNESS_PREFIX"*) echo "==> harness: removing the network $name a suite left" >&2; docker network rm "$id" >/dev/null 2>&1 ;; esac
+  done
+  docker volume ls --format '{{.Name}}' 2>/dev/null | while read -r name; do
+    case "$name" in "$HARNESS_PREFIX"*) echo "==> harness: removing the volume $name a suite left" >&2; docker volume rm -f "$name" >/dev/null 2>&1 ;; esac
+  done
+  return 0
+}
+
+# Every tag that names an image the leg built (each tag its build steps
+# give, as their plans list them) and did not name it before the leg is
+# taken off, or given back to the image it named then.
+cleanup_harness() {
+  local ref id old tag s=0
+  harness_sweep
+  [ -f "$LOGDIR/harness.images.before" ] || return 0
+  : > "$LOGDIR/harness.images.built"
+  for tag in $(cat "$LOGDIR"/harness.build_*.plan/*.tags 2>/dev/null); do
+    docker image inspect --format '{{.Id}}' "$tag" >> "$LOGDIR/harness.images.built" 2>/dev/null || :
+  done
+  [ -s "$LOGDIR/harness.images.built" ] || return 0
+  harness_images > "$LOGDIR/harness.images.after" || return 1
+  while read -r ref id; do
+    grep -qxF "$id" "$LOGDIR/harness.images.built" || continue
+    ! grep -qxF "$ref $id" "$LOGDIR/harness.images.before" || continue
+    old=$(awk -v r="$ref" '$1 == r { print $2; exit }' "$LOGDIR/harness.images.before")
+    if [ -n "$old" ]; then
+      docker tag "$old" "$ref" || s=1
+    else
+      docker image rm "$ref" >/dev/null || s=1
+    fi
+  done < "$LOGDIR/harness.images.after"
+  return "$s"
 }
 
 # Whether process $1 exists and has not exited. A leg is the gate's child,
@@ -644,7 +891,7 @@ ROOT=$(dirname "$(dirname "$SELF")")
 # stops its own steps first.
 if [ "${1:-}" = --leg ]; then
   leg=${2:-}
-  case "$leg" in static|postgres|vocab|islands|cluster) ;; *) echo "unknown leg: $leg" >&2; exit 64 ;; esac
+  case "$leg" in static|postgres|vocab|islands|cluster|go|audit|boot|harness) ;; *) echo "unknown leg: $leg" >&2; exit 64 ;; esac
   LOGDIR=${GATE_LEG_LOGDIR:-}; PARTS=${GATE_LEG_PARTS:-}; CLOSE=${GATE_LEG_CLOSE:-}
   PEER_STATIC=${GATE_LEG_PEER_STATIC:-}; PEER_POSTGRES=${GATE_LEG_PEER_POSTGRES:-}
   PG_PATHS=()
@@ -658,10 +905,14 @@ if [ "${1:-}" = --leg ]; then
   unset MIX_BUILD_PATH
   # The gate stops a leg with TERM, through contain_stop_all. A leg starts
   # as an asynchronous child with SIGINT ignored, so it cannot trap INT.
+  # A leg that made something outside its steps (a database, image tags)
+  # undoes it in cleanup_<leg> once its steps have stopped.
   leg_signal() {
     trap '' TERM
     stop_islands
     contain_stop_all 180 >/dev/null || :
+    if declare -F "cleanup_$leg" >/dev/null; then "cleanup_$leg" >/dev/null 2>&1 || :; fi
+    rm -rf "$LOGDIR/$leg".*.temp
     exit 143
   }
   trap leg_signal TERM
@@ -740,6 +991,33 @@ if ! command -v cargo-component >/dev/null 2>&1; then
   echo "==> cargo-component is neither in $CARGO_BIN nor on PATH: the tests tagged :requires_cargo_component would be excluded, and CI runs them (cargo install cargo-component --locked, with rustup's wasm32-wasip2 target)" >&2
   exit 69
 fi
+# The go, audit and boot legs run Go and Docker as CI's jobs do, and the
+# close's scans run trivy: each is refused with 69 here, naming what is
+# missing, as is a go other than the version each Go module's go.mod
+# names, which CI's setup-go installs, and a docker that reaches no daemon.
+need_tool() {
+  command -v "$1" >/dev/null 2>&1 && return 0
+  echo "==> $1 is not on PATH: $2" >&2
+  exit 69
+}
+need_tool go 'the go leg runs the Go suites of codex-ci.yml and keeper-ci.yml with it, and the audit leg builds govulncheck with it'
+need_tool docker "the go leg's Compose tests, the release boots and the close's image jobs run Docker"
+if $CLOSE; then need_tool trivy "the close runs security.yml's repository scans and each image job's scan with it"; fi
+# The binary's own version, read outside any module: inside one that
+# names a newer go, a go held to itself refuses to answer.
+have=$(cd / && GOTOOLCHAIN=local go env GOVERSION 2>/dev/null) || have=
+for mod in apps/codex apps/locus/keeper; do
+  want=$(sed -n 's/^toolchain go//p' "$ROOT/$mod/go.mod")
+  [ -n "$want" ] || want=$(sed -n 's/^go //p' "$ROOT/$mod/go.mod")
+  if [ -z "$want" ] || [ "$have" != "go$want" ]; then
+    echo "==> go on PATH is ${have:-unreadable} and $mod/go.mod names go${want:-nothing}, which CI's setup-go installs: put that version first on PATH" >&2
+    exit 69
+  fi
+done
+if ! docker version --format '{{.Server.Version}}' >/dev/null 2>&1; then
+  echo "==> docker reaches no daemon: the go leg's Compose tests, the release boots and the close's image jobs need one" >&2
+  exit 69
+fi
 
 # A log directory holds this run's logs alone, so the verdict reads
 # nothing an earlier run left.
@@ -813,6 +1091,9 @@ start_leg postgres
 export GATE_LEG_PEER_POSTGRES="$pid_postgres"
 start_leg vocab
 start_leg islands
+start_leg go
+start_leg audit
+start_leg boot
 
 status=0
 # A leg's exit status is 0, 1, or the status contain_start refused one of
@@ -835,10 +1116,12 @@ leg_result() {
   fi
   printf '==> %-9s %-7s %s\n' "$leg" "$r" "$(tr '\n' ' ' < "$LOGDIR/$leg.summary" 2>/dev/null)"
 }
-for leg in static postgres vocab islands; do leg_result "$leg"; done
+for leg in static postgres vocab islands go audit boot; do leg_result "$leg"; done
 if $CLOSE; then
   start_leg cluster
   leg_result cluster
+  start_leg harness
+  leg_result harness
 fi
 for leg in static postgres cluster islands; do
   [ -f "$LOGDIR/$leg.summary" ] || continue
@@ -856,6 +1139,12 @@ for leg in static postgres cluster islands; do
     [ -f "$f" ] || continue
     printf '    %s: %s\n' "$leg.$name" "$(grep -E '^(Result:|==> [0-9]+ partitions)' "$f" | tr '\n' ' ')"
   done < "$LOGDIR/$leg.summary"
+done
+# Each CI job a leg ran, and how it ended.
+for f in "$LOGDIR"/*.result; do
+  [ -f "$f" ] || continue
+  r=${f##*/}
+  printf '    %s: %s\n' "${r%.result}" "$(cat "$f")"
 done
 if [ "$status" -eq 0 ]; then verdict=passed; else verdict=FAILED; fi
 echo "==> gate $verdict in $((SECONDS - start))s, logs in $LOGDIR"

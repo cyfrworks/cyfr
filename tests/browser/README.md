@@ -209,7 +209,10 @@ proof's own README holds how to run it and its steps.
 | canvas | `tests/canvas-proof/` | one home, `cyfr.test`, and the attacker's `attacker.test`; SQLite only, no passkey step | Chromium, Firefox and WebKit, desktop (1280×900) and 720×720 | d; all three, both viewports |
 
 Shard d also runs the shipped Caddyfile's HSTS check
-(`tests/proxy-hsts/`), which starts no release and no browser.
+(`tests/proxy-hsts/`), which starts no release and no browser. The commit
+gate's close (`scripts/commit-gate.sh --close`) runs the four shards one
+after another as the job runs them, each step read from the workflow, on
+this host's pull of the pinned image.
 
 In CI every proof writes its records under
 `$RUNNER_TEMP/proofs/<proof>`, or
