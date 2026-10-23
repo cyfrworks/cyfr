@@ -318,7 +318,7 @@
 0.1	apps/cyfr/test/cyfr/frame_grant_origin_test.exs
 0.0	apps/cyfr/test/cyfr/frame_request_seam_test.exs
 0.1	apps/cyfr/test/cyfr/genserver_catchall_test.exs
-0.1	apps/cyfr/test/cyfr/graceful_stop_test.exs
+10.8	apps/cyfr/test/cyfr/graceful_stop_test.exs
 0.0	apps/cyfr/test/cyfr/guard_table_test.exs
 0.4	apps/cyfr/test/cyfr/id_minting_seam_test.exs
 5.9	apps/cyfr/test/cyfr/ingress_inventory_test.exs

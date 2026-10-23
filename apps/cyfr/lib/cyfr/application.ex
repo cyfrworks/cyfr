@@ -180,9 +180,10 @@ defmodule Cyfr.Application do
   end
 
   # How long a graceful stop waits for the endpoint to stop accepting
-  # before it goes on without it: a suspension is a few supervisor calls,
-  # and a server that cannot answer them in this long never holds the stop.
+  # before it goes on without it: lookup, suspension and refusal
+  # confirmation share this budget, so none can hold the stop indefinitely.
   @suspend_deadline_ms 5_000
+  @listener_address_child {__MODULE__, :listener_address}
 
   @impl true
   def prep_stop(state) do
@@ -279,8 +280,10 @@ defmodule Cyfr.Application do
   Suspend the socket server `server` (`ThousandIsland.suspend/1`): its
   acceptors end and its listening port closes, so a new connection is
   refused at once, while every connection already open stays until the
-  server itself stops. A server that cannot be suspended, or is gone, is
-  logged and answered `:error`; this never raises.
+  server itself stops. Each call confirms the refusal afresh, including
+  after an earlier confirmation failed. A server that cannot be suspended,
+  whose refusal cannot be confirmed, or is gone, is logged and answered
+  `:error`; this never raises.
   """
   @spec suspend_server(Supervisor.supervisor()) :: :ok | :error
   def suspend_server(server) do
@@ -300,21 +303,51 @@ defmodule Cyfr.Application do
 
   defp safely_suspend(server) do
     deadline = System.monotonic_time(:millisecond) + @suspend_deadline_ms
-    listener = ThousandIsland.listener_info(server)
 
-    with :ok <- ThousandIsland.suspend(server) do
+    with {:ok, _address} = listener <- suspension_address(server),
+         :ok <- ThousandIsland.suspend(server) do
       await_listener_refusal(listener, deadline)
     end
   catch
     kind, reason -> {kind, reason}
   end
 
+  # Retain only the address, never a closure result. It must survive a
+  # listener exit or a caller's timeout, and die with the server supervisor.
+  # A resumed listener supplies its current address before another suspend.
+  defp suspension_address(server) do
+    case ThousandIsland.listener_info(server) do
+      {:ok, _address} = listener ->
+        child = %{
+          id: @listener_address_child,
+          start: {Agent, :start_link, [fn -> listener end]},
+          restart: :temporary
+        }
+
+        case Supervisor.start_child(server, child) do
+          {:ok, _pid} ->
+            listener
+
+          {:error, {:already_started, pid}} ->
+            :ok = Agent.update(pid, fn _previous -> listener end)
+            listener
+
+          error ->
+            error
+        end
+
+      :error ->
+        case List.keyfind(Supervisor.which_children(server), @listener_address_child, 0) do
+          {_, pid, _, _} when is_pid(pid) -> Agent.get(pid, & &1)
+          _ -> {:error, :listener_address_unavailable}
+        end
+    end
+  end
+
   # Process exit schedules the ports' cleanup without awaiting it. Even
   # explicit port_close can defer the Unix driver's OS close to stop_select.
   # Only an observed refusal establishes that the member no longer listens.
   # All of a Thousand Island server's listen sockets share this address.
-  defp await_listener_refusal(:error, _deadline), do: :ok
-
   defp await_listener_refusal({:ok, address} = listener, deadline) do
     remaining = deadline - System.monotonic_time(:millisecond)
 
