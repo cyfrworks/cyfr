@@ -119,7 +119,7 @@ const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 90_000,
 function instrumentDevice() {
   const Native = window.WebSocket;
   const device = {
-    log: [], sockets: 0, socket: null, asleep: false, held: [], outcomes: [],
+    log: [], sockets: 0, socket: null, asleep: false, held: [], outcomes: [], standing: null,
     sleep() { this.asleep = true; this.log.push({ at: performance.now(), event: "sleep" }); },
     wake() {
       this.asleep = false;
@@ -128,7 +128,12 @@ function instrumentDevice() {
       for (const deliver of held) deliver();
       window.dispatchEvent(new Event("online"));
     },
-    send(map) { if (this.socket) Native.prototype.send.call(this.socket, JSON.stringify(map)); },
+    send(map) {
+      if (!this.socket) return;
+      const raw = JSON.stringify(map);
+      this.log.push({ at: performance.now(), socket: this.socket.__serial, dir: "out", ...describe(raw), raw });
+      Native.prototype.send.call(this.socket, raw);
+    },
   };
   window.__device = device;
   const outcome = '[data-test="glass-outcome"]';
@@ -151,6 +156,7 @@ function instrumentDevice() {
       const map = JSON.parse(data);
       return {
         type: map.type, id: map.id, operation: map.operation, grant_id: map.grant_id, stream: map.stream,
+        certificate: map.certificate, expires_at: map.expires_at, client_id: map.client_id, athanor: map.athanor,
         error: map.error ? (map.error.class || map.error.message || "error") : undefined,
         ok: map.type === "answer" ? !map.error : undefined,
       };
@@ -167,7 +173,7 @@ function instrumentDevice() {
       device.socket = this;
       device.log.push({ at: performance.now(), socket: this.__serial, event: "socket" });
       super.addEventListener("message", (event) =>
-        device.log.push({ at: performance.now(), socket: this.__serial, dir: "in", ...describe(event.data), raw: event.data }));
+        device.log.push({ at: performance.now(), socket: this.__serial, dir: "in", asleep: device.asleep, ...describe(event.data), raw: event.data }));
       super.addEventListener("close", (event) =>
         device.log.push({ at: performance.now(), socket: this.__serial, event: "close", code: event.code, reason: event.reason }));
     }
@@ -181,16 +187,24 @@ function instrumentDevice() {
       device.log.push({ at: performance.now(), socket: this.__serial, dir: "out", ...described, raw: data });
       return super.send(data);
     }
-    set onmessage(handler) { super.onmessage = this.__gate(handler); }
+    set onmessage(handler) { super.onmessage = this.__gate(handler, true); }
     get onmessage() { return super.onmessage; }
     set onclose(handler) { super.onclose = this.__gate(handler); }
     get onclose() { return super.onclose; }
-    __gate(handler) {
+    __gate(handler, message = false) {
       if (!this.__device || typeof handler !== "function") return handler;
       const socket = this;
       return function (event) {
-        if (device.asleep) device.held.push(() => handler.call(socket, event));
-        else handler.call(socket, event);
+        const deliver = () => {
+          if (message) {
+            const frame = describe(event.data);
+            // Received standing may be held asleep; keep what the glass heard.
+            if (frame.type === "standing") device.standing = frame;
+          }
+          handler.call(socket, event);
+        };
+        if (device.asleep) device.held.push(deliver);
+        else deliver();
       };
     }
   }
@@ -198,8 +212,9 @@ function instrumentDevice() {
 }
 
 // The glass's stored device, read from its own store in the page: its key
-// (usable, never exportable), client id and certificate.
-const storedDevice = (page) => page.evaluate(() => new Promise((resolve, reject) => {
+// (usable, never exportable), client id and certificate. `hold = false`
+// reads without replacing the device connectAsHeld will prove.
+const storedDevice = (page, hold = true) => page.evaluate((remember) => new Promise((resolve, reject) => {
   const open = indexedDB.open("cyfr-glass", 1);
   open.onupgradeneeded = () => open.result.createObjectStore("glass");
   open.onerror = () => reject(open.error);
@@ -207,12 +222,12 @@ const storedDevice = (page) => page.evaluate(() => new Promise((resolve, reject)
     const tx = open.result.transaction("glass", "readonly");
     const read = tx.objectStore("glass").get("device");
     read.onsuccess = () => {
-      window.__heldDevice = read.result || null;
+      if (remember) window.__heldDevice = read.result || null;
       resolve(read.result ? { clientId: read.result.clientId, certificate: read.result.certificate } : null);
     };
     read.onerror = () => reject(read.error);
   };
-}));
+}), hold);
 
 // A connection of its own, from the glass's page, under the device it held
 // last (`storedDevice`): `connect`, the challenge signed with the device
@@ -665,51 +680,100 @@ async function measure(phone) {
 }
 
 async function sleepBeyondExpiry(desk, phone) {
+  // Suspend delivery first: a renewal between an earlier store read and
+  // sleep would leave the proof waiting past a certificate no longer held.
+  const captured = await phone.evaluate(() => {
+    const device = window.__device;
+    device.sleep();
+    return {
+      from: device.log.length - 1, socket: device.sockets, standing: device.standing,
+      time_origin: performance.timeOrigin,
+    };
+  });
   const before = await storedDevice(phone);
   const expires = before.certificate.expires_at;
   const expiresMs = expires < 1e12 ? expires * 1000 : expires;
-  const from = (await deviceLog(phone)).length;
-  const oldSocket = await phone.evaluate(() => window.__device.sockets);
-  const oldGrant = (await deviceLog(phone)).filter((e) => e.dir === "in" && e.type === "grant").at(-1);
-
-  await phone.evaluate(() => window.__device.sleep());
-  // Asleep past the expiry, while the desktop asks for something more.
-  await askForEntry(desk, "pairing-entry-3", "sk-pairing-3-not-shown");
-  await sleep(Math.max(0, expiresMs - Date.now()) + 4_000);
-  const wokeAt = Date.now();
-  await phone.evaluate(() => window.__device.wake());
-  await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
-  const shown = await glassPrompt(phone).catch(() => null);
-
-  const log = (await deviceLog(phone)).slice(from);
-  const onOld = log.filter((e) => e.socket === oldSocket);
-  const closed = onOld.find((e) => e.event === "close");
-  const grantRevoked = onOld.some((e) => e.dir === "in" && e.type === "revoke" && e.grant_id === (oldGrant && oldGrant.grant_id));
-  const dropped = log.filter((e) => e.dir === "dropped").map((e) => e.type);
-  const next = log.filter((e) => e.socket > oldSocket);
-  const sentNext = next.filter((e) => e.dir === "out");
-  const standingAt = next.findIndex((e) => e.dir === "in" && e.type === "standing");
-  const beforeStanding = standingAt < 0 ? next : next.slice(0, standingAt);
-  const intentBeforeStanding = beforeStanding.some((e) => e.dir === "out" && e.type === "intent");
-  const newGrant = next.find((e) => e.dir === "in" && e.type === "grant");
-  const expired = await connectAsHeld(phone);
+  const { from, socket: oldSocket } = captured;
+  const beforeSleep = (await deviceLog(phone)).slice(0, from).filter((e) => e.socket === oldSocket);
+  const oldGrant = beforeSleep.filter((e) => e.dir === "in" && e.type === "grant").at(-1);
+  const relative = ({ at, ...entry }) => ({ ms_past_expiry: Math.round(captured.time_origin + at - expiresMs), ...entry });
   record.sleep = {
-    woke_seconds_past_expiry: Math.round((wokeAt - expiresMs) / 1000),
-    dropped_while_asleep: dropped,
-    old_channel: { grant_revoked: grantRevoked, close: closed ? closed.code : null },
-    first_sent_after_wake: sentNext[0] ? sentNext[0].type : null,
-    intent_before_standing: intentBeforeStanding,
-    stream_granted_anew: !!newGrant && (!oldGrant || newGrant.grant_id !== oldGrant.grant_id),
-    asked_while_asleep_shown: !!(shown && shown.preview.includes("pairing-entry-3")),
-    expired_certificate_connect: expired,
+    expires_at: expires,
+    captured: { certificate: before.certificate, standing: captured.standing, socket: oldSocket },
+    renewals_before_sleep: beforeSleep.filter((e) => ["renew", "certificate", "standing"].includes(e.type)).map(relative),
   };
-  if (shown) await glassButton(phone, shown.ref, "glass-cancel").click().catch(() => null);
-  return row("sleep",
-    grantRevoked && closed && closed.code === 4408 && record.sleep.first_sent_after_wake === "renew" &&
-      !intentBeforeStanding && record.sleep.stream_granted_anew && record.sleep.asked_while_asleep_shown &&
-      expired.code === 4408,
-    "asleep past its certificate's expiry, the glass's stream ends and its channel closes at the expiry; awake, it renews before anything else, and the expired certificate opens nothing",
-    record.sleep);
+
+  try {
+    // Asleep past the expiry, while the desktop asks for something more.
+    await askForEntry(desk, "pairing-entry-3", "sk-pairing-3-not-shown");
+    await sleep(Math.max(0, expiresMs - Date.now()) + 4_000);
+    // Keep the captured certificate for connectAsHeld's expired-key proof.
+    const wakingDevice = await storedDevice(phone, false);
+    const wokeAt = Date.now();
+    const atWake = await phone.evaluate(() => {
+      const device = window.__device;
+      const observed = {
+        at: performance.now(), standing: device.standing,
+        received_standing: device.log.filter((e) => e.dir === "in" && e.type === "standing").at(-1),
+      };
+      device.wake();
+      const { raw: _raw, ...received } = observed.received_standing || {};
+      return { ...observed, received_standing: received };
+    });
+    record.sleep.at_wake = {
+      ...relative(atWake), certificate: wakingDevice && wakingDevice.certificate,
+      received_standing: atWake.received_standing.at === undefined ? null : relative(atWake.received_standing),
+    };
+    await phone.waitForSelector('[data-test="glass-status"][data-state="ready"]', { timeout: 60_000 });
+    const shown = await glassPrompt(phone).catch(() => null);
+
+    const all = await deviceLog(phone);
+    const assertionReadAt = Date.now();
+    const log = all.slice(from);
+    const onOld = log.filter((e) => e.socket === oldSocket);
+    const closed = onOld.find((e) => e.event === "close");
+    const grantRevoked = onOld.some((e) => e.dir === "in" && e.type === "revoke" && e.grant_id === (oldGrant && oldGrant.grant_id));
+    const dropped = log.filter((e) => e.dir === "dropped").map((e) => e.type);
+    const next = log.filter((e) => e.socket > oldSocket);
+    const sentNext = next.filter((e) => e.dir === "out");
+    const standingAt = next.findIndex((e) => e.dir === "in" && e.type === "standing");
+    const beforeStanding = standingAt < 0 ? next : next.slice(0, standingAt);
+    const intentBeforeStanding = beforeStanding.some((e) => e.dir === "out" && e.type === "intent");
+    const newGrant = next.find((e) => e.dir === "in" && e.type === "grant");
+    const expired = await connectAsHeld(phone);
+    record.sleep = {
+      expires_at: expires,
+      woke_seconds_past_expiry: Math.round((wokeAt - expiresMs) / 1000),
+      dropped_while_asleep: dropped,
+      old_channel: { grant_revoked: grantRevoked, close: closed ? closed.code : null },
+      first_sent_after_wake: sentNext[0] ? sentNext[0].type : null,
+      intent_before_standing: intentBeforeStanding,
+      stream_granted_anew: !!newGrant && (!oldGrant || newGrant.grant_id !== oldGrant.grant_id),
+      asked_while_asleep_shown: !!(shown && shown.preview.includes("pairing-entry-3")),
+      expired_certificate_connect: expired,
+      assertion_read_ms_past_expiry: assertionReadAt - expiresMs,
+      captured: record.sleep.captured,
+      at_wake: record.sleep.at_wake,
+      renewals_before_sleep: record.sleep.renewals_before_sleep,
+    };
+    if (shown) await glassButton(phone, shown.ref, "glass-cancel").click().catch(() => null);
+    return row("sleep",
+      grantRevoked && closed && closed.code === 4408 && record.sleep.first_sent_after_wake === "renew" &&
+        !intentBeforeStanding && record.sleep.stream_granted_anew && record.sleep.asked_while_asleep_shown &&
+        expired.code === 4408,
+      "asleep past its certificate's expiry, the glass's stream ends and its channel closes at the expiry; awake, it renews before anything else, and the expired certificate opens nothing",
+      record.sleep);
+  } finally {
+    // Keep the evidence even when ready or the expired-certificate probe
+    // times out, and include a close that arrives after the assertion read.
+    const observed = await phone.evaluate(() => ({
+      at: performance.now(),
+      log: window.__device.log.map(({ raw: _raw, ...entry }) => entry),
+    }));
+    record.sleep.timeline_captured_ms_past_expiry = relative(observed).ms_past_expiry;
+    record.sleep.old_socket_timeline = observed.log
+      .filter((e) => e.socket === oldSocket || e.event === "sleep" || e.event === "wake").map(relative);
+  }
 }
 
 async function revoke(desk, phone) {
