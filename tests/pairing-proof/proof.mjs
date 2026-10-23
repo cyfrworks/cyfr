@@ -691,23 +691,47 @@ async function sleepBeyondExpiry(desk, phone) {
     };
   });
   const before = await storedDevice(phone);
-  const expires = before.certificate.expires_at;
-  const expiresMs = expires < 1e12 ? expires * 1000 : expires;
   const { from, socket: oldSocket } = captured;
   const beforeSleep = (await deviceLog(phone)).slice(0, from).filter((e) => e.socket === oldSocket);
   const oldGrant = beforeSleep.filter((e) => e.dir === "in" && e.type === "grant").at(-1);
-  const relative = ({ at, ...entry }) => ({ ms_past_expiry: Math.round(captured.time_origin + at - expiresMs), ...entry });
+  const renewalsBeforeSleep = beforeSleep.filter((e) => ["renew", "challenge", "proof", "certificate", "standing"].includes(e.type));
+  const previousStanding = beforeSleep.findLast((e) => e.dir === "in" && e.type === "standing");
+  let expiresMs = previousStanding && previousStanding.expires_at;
+  const relative = ({ at, ...entry }) => ({
+    ms_past_expiry: Number.isFinite(expiresMs) ? Math.round(captured.time_origin + at - expiresMs) : null, ...entry,
+  });
   record.sleep = {
-    expires_at: expires,
+    expires_at: expiresMs,
+    stored_certificate_expires_at: before.certificate.expires_at,
     captured: { certificate: before.certificate, standing: captured.standing, socket: oldSocket },
-    renewals_before_sleep: beforeSleep.filter((e) => ["renew", "certificate", "standing"].includes(e.type)).map(relative),
+    renewals_before_sleep: renewalsBeforeSleep.map(relative),
   };
 
   try {
+    // A proof already sent can extend the home's expiry while its reply
+    // is held asleep. Read the native log until that exchange stands or
+    // closes. A held challenge cannot be answered and moves no expiry.
+    const homeStanding = await waitFor(async () => {
+      const onOld = (await deviceLog(phone)).filter((e) => e.socket === oldSocket);
+      const standingAt = onOld.findLastIndex((e) => e.dir === "in" && e.type === "standing");
+      const proofAt = onOld.findLastIndex((e) => e.dir === "out" && e.type === "proof");
+      if (proofAt > standingAt && !onOld.some((e) => e.event === "close")) return null;
+      if (standingAt < 0) throw new Error("the sleeping socket has no recorded home standing");
+      return onOld[standingAt];
+    }, { timeoutMs: 20_000, what: "the sleeping socket's sent proof to stand or close" });
+    const expires = homeStanding.expires_at;
+    if (!Number.isFinite(expires)) throw new Error("the sleeping socket's home standing has no expiry");
+    expiresMs = expires;
+    Object.assign(record.sleep, {
+      expires_at: expires, home_standing: relative(homeStanding),
+      certificate_expiry_note: expires === before.certificate.expires_at
+        ? null : "The stored certificate differs from the home's standing; the wait uses the home's expiry.",
+    });
+    record.sleep.renewals_before_sleep = renewalsBeforeSleep.map(relative);
     // Asleep past the expiry, while the desktop asks for something more.
     await askForEntry(desk, "pairing-entry-3", "sk-pairing-3-not-shown");
     await sleep(Math.max(0, expiresMs - Date.now()) + 4_000);
-    // Keep the captured certificate for connectAsHeld's expired-key proof.
+    // Keep the captured certificate for connectAsHeld's expired-certificate probe.
     const wakingDevice = await storedDevice(phone, false);
     const wokeAt = Date.now();
     const atWake = await phone.evaluate(() => {
@@ -743,6 +767,7 @@ async function sleepBeyondExpiry(desk, phone) {
     const expired = await connectAsHeld(phone);
     record.sleep = {
       expires_at: expires,
+      stored_certificate_expires_at: before.certificate.expires_at,
       woke_seconds_past_expiry: Math.round((wokeAt - expiresMs) / 1000),
       dropped_while_asleep: dropped,
       old_channel: { grant_revoked: grantRevoked, close: closed ? closed.code : null },
@@ -753,6 +778,8 @@ async function sleepBeyondExpiry(desk, phone) {
       expired_certificate_connect: expired,
       assertion_read_ms_past_expiry: assertionReadAt - expiresMs,
       captured: record.sleep.captured,
+      home_standing: record.sleep.home_standing,
+      certificate_expiry_note: record.sleep.certificate_expiry_note,
       at_wake: record.sleep.at_wake,
       renewals_before_sleep: record.sleep.renewals_before_sleep,
     };
@@ -766,13 +793,17 @@ async function sleepBeyondExpiry(desk, phone) {
   } finally {
     // Keep the evidence even when ready or the expired-certificate probe
     // times out, and include a close that arrives after the assertion read.
-    const observed = await phone.evaluate(() => ({
-      at: performance.now(),
-      log: window.__device.log.map(({ raw: _raw, ...entry }) => entry),
-    }));
-    record.sleep.timeline_captured_ms_past_expiry = relative(observed).ms_past_expiry;
-    record.sleep.old_socket_timeline = observed.log
-      .filter((e) => e.socket === oldSocket || e.event === "sleep" || e.event === "wake").map(relative);
+    try {
+      const observed = await phone.evaluate(() => ({
+        at: performance.now(),
+        log: window.__device.log.map(({ raw: _raw, ...entry }) => entry),
+      }));
+      record.sleep.timeline_captured_ms_past_expiry = relative(observed).ms_past_expiry;
+      record.sleep.old_socket_timeline = observed.log
+        .filter((e) => e.socket === oldSocket || e.event === "sleep" || e.event === "wake").map(relative);
+    } catch (error) {
+      record.sleep.timeline_error = error.message || String(error);
+    }
   }
 }
 
