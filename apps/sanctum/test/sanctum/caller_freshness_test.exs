@@ -9,9 +9,8 @@ defmodule Sanctum.CallerFreshnessTest do
   session and refocuses it, and `fresh?/1` bounds how long a validated
   context may be acted on — from the validation, never from its reuse.
 
-  Every revocation here is written straight to the rows, with no
-  announcement and no memo drop: the missed-event case the bound exists
-  for.
+  Direct row changes exercise missed announcements; the leave races use
+  the public transition while a revalidation is already in progress.
 
   A remote person's session stands, at establish and at revalidation, only
   on their identity's fresh head and only while bound to its `key_epoch`:
@@ -112,6 +111,47 @@ defmodule Sanctum.CallerFreshnessTest do
     )
   end
 
+  # The identity read follows the stored-session reload and precedes the
+  # focus check, outside the standing transaction. Hold that observable
+  # boundary while a leave commits; the supervised task stops before the
+  # sandbox is released even when an assertion fails.
+  defp during_refocus(ctx, change) do
+    test = self()
+    ref = make_ref()
+    handler = {__MODULE__, ref}
+    on_exit(fn -> :telemetry.detach(handler) end)
+    :ok = :telemetry.attach(handler, [:arca, :repo, :query], &__MODULE__.hold_identity/4, nil)
+
+    pid =
+      start_supervised!(
+        {Task,
+         fn ->
+           Process.put(:revalidation_hold, {test, ref})
+           send(test, {ref, Caller.revalidate_session(ctx)})
+         end}
+      )
+
+    assert_receive {:identity_read, ^ref}, 5_000
+    change.()
+    send(pid, {:continue, ref})
+    assert_receive {^ref, result}, 5_000
+    result
+  end
+
+  @doc false
+  def hold_identity(_event, _measurements, %{source: "person_identities"}, _config) do
+    if held = Process.delete(:revalidation_hold) do
+      {test, ref} = held
+      send(test, {:identity_read, ref})
+
+      receive do
+        {:continue, ^ref} -> :ok
+      end
+    end
+  end
+
+  def hold_identity(_event, _measurements, _metadata, _config), do: :ok
+
   # The wall clock `fresh?/1` reads is a whole millisecond past `instant`,
   # the unit its bound is counted in.
   defp clock_past!(instant),
@@ -186,6 +226,14 @@ defmodule Sanctum.CallerFreshnessTest do
       assert {:error, :unauthenticated} = Caller.revalidate_session(ctx)
     end
 
+    test "a session with no current focus is rebuilt from its stored athanor" do
+      %{ctx: ctx, athanor: athanor} = person!()
+
+      assert {:ok, fresh} = Caller.revalidate_session(%{ctx | athanor_id: nil})
+      assert fresh.athanor_id == athanor.id
+      assert fresh.session_token_hash == ctx.session_token_hash
+    end
+
     test "an expired session refuses" do
       %{ctx: ctx} = person!()
       expire_session!(ctx.session_token_hash)
@@ -205,6 +253,40 @@ defmodule Sanctum.CallerFreshnessTest do
       drop_seat!(user.id, athanor.id)
 
       assert {:error, :not_member} = Caller.revalidate_session(ctx)
+    end
+
+    test "a leave after the session reload refuses the session it revoked, not only the focus" do
+      %{ctx: ctx, athanor: athanor} = fixture = person!()
+      _other = second_athanor!(fixture)
+
+      assert {:error, :unauthenticated} =
+               during_refocus(ctx, fn ->
+                 assert :ok = Members.remove_member(athanor, user_id: ctx.user_id)
+                 assert {:error, :invalid_session} = Session.load_by_hash(ctx.session_token_hash)
+                 assert {:error, :unauthenticated} = Caller.revalidate_session(ctx)
+               end)
+    end
+
+    test "a leave after the session reload refuses only the focus when its session stands elsewhere" do
+      %{ctx: ctx} = fixture = person!()
+      other = second_athanor!(fixture)
+      {:ok, focused} = Context.focus(ctx, other.id)
+
+      assert {:error, :not_member} =
+               during_refocus(focused, fn ->
+                 assert :ok = Members.remove_member(other, user_id: ctx.user_id)
+                 assert {:ok, _} = Session.load_by_hash(ctx.session_token_hash)
+               end)
+    end
+
+    test "a lost focus with unreadable session standing pauses revalidation" do
+      %{ctx: ctx, athanor: athanor} = person!()
+
+      assert {:error, :unavailable} =
+               during_refocus(ctx, fn ->
+                 assert :ok = Members.remove_member(athanor, user_id: ctx.user_id)
+                 Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
+               end)
     end
 
     test "an archived focus refuses the focus" do
