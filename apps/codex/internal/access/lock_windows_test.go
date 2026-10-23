@@ -126,48 +126,67 @@ func TestWindowsDeadlineTerminatesTheJob(t *testing.T) {
 	}
 }
 
-// A record replaced while another handle reads it: os.ReadFile holds the
-// file without FILE_SHARE_DELETE for the length of a read, during which
-// MoveFileEx refuses to replace it, so a holder writing its record while
-// a refused taker in another process read it (every 5 ms for recordWait)
-// failed to take the lock with "Access is denied". replaceFile tries
-// again within replaceWait, so every replacement lands while a reader
-// keeps reading; the reader here is a goroutine, whose handle restricts
-// the rename exactly as another process's does.
+// A record replaced while another handle reads it: os.Open holds the file
+// without FILE_SHARE_DELETE, during which MoveFileEx refuses to replace
+// it, so a holder writing its record while a refused taker in another
+// process read it (every 5 ms for recordWait) failed to take the lock
+// with "Access is denied". replaceFile tries again within replaceWait:
+// while the reader's handle is open the replacement is neither answered
+// nor refused, it lands once the handle closes, and a handle held past
+// replaceWait is refused with the error the rename gave. The reader here
+// is a handle of this process, which restricts the rename exactly as
+// another process's does.
 func TestReplaceFileWaitsOutAReader(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "holder")
-	if err := os.WriteFile(target, []byte("0"), 0o600); err != nil {
+	tmp := filepath.Join(dir, ".holder.tmp")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stop, stopped := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(stopped)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-				os.ReadFile(target)
-			}
-		}
-	}()
-	defer func() {
-		close(stop)
-		<-stopped
-	}()
-	const replacements = 300
-	for i := range replacements {
-		tmp := filepath.Join(dir, ".holder.tmp")
-		if err := os.WriteFile(tmp, []byte(strconv.Itoa(i)), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := replaceFile(tmp, target); err != nil {
-			t.Fatalf("replacement %d of %d was refused while a reader read the file: %v", i, replacements, err)
-		}
+	if err := os.WriteFile(tmp, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(target)
-	if string(data) != strconv.Itoa(replacements-1) {
-		t.Fatalf("the last replacement did not land: the file holds %q", data)
+	reader, err := os.Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan error, 1)
+	go func() { answered <- replaceFile(tmp, target) }()
+	select {
+	case err := <-answered:
+		t.Fatalf("the replacement answered %v while a reader held the file", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	reader.Close()
+	select {
+	case err := <-answered:
+		if err != nil {
+			t.Fatalf("the replacement was refused after the reader closed: %v", err)
+		}
+	case <-time.After(replaceWait):
+		t.Fatal("the replacement did not land within replaceWait of the reader closing")
+	}
+	if data, _ := os.ReadFile(target); string(data) != "new" {
+		t.Fatalf("the replacement did not land: the file holds %q", data)
+	}
+
+	// A handle held past the window: refused with the rename's error, after
+	// at least replaceWait.
+	if err := os.WriteFile(tmp, []byte("newer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	started := time.Now()
+	err = replaceFile(tmp, target)
+	var linkErr *os.LinkError
+	if !errors.As(err, &linkErr) || time.Since(started) < replaceWait {
+		t.Fatalf("a handle held past replaceWait answered %v after %v", err, time.Since(started))
+	}
+	if data, _ := os.ReadFile(target); string(data) != "new" {
+		t.Fatalf("a refused replacement changed the file to %q", data)
 	}
 }
