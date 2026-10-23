@@ -1297,4 +1297,16 @@ for extra in '--partitions 2' --dry-run '--max-failures 1 --seed 0'; do
 done
 toy_run "$scratch/toy-all-after" -n 1 -- --warnings-as-errors --failed
 [ "$toy_status" = 1 ] && [ "$(toy_record)" = b ] || fail "the whole rerun after partial runs left $(toy_raw_record) with $toy_status"
+# Mix's --profile-require loads the files without running their tests,
+# so a run with it is partial too: with the first application holding no
+# test file, it keeps the :all record and says why, and the rerun after it
+# still runs the broken B. Last: it removes the first application's tests.
+rm "$toy/apps/one/test/a_test.exs" "$toy/apps/one/test/c_test.exs" "$toy/apps/one/test/d_test.exs"
+toy_all
+toy_run "$scratch/toy-all-profile" -n 1 -- --warnings-as-errors --failed --profile-require time
+[ "$(toy_raw_record)" = '{1, :all}' ] || fail "a run with --profile-require settled the :all record as $(toy_raw_record)"
+grep -qxF "==> the failures record stays :all, the whole suite's rerun still owed: this run had Mix's --profile-require" "$scratch/toy-all-profile" ||
+  fail 'a run with --profile-require did not say why the record stays :all'
+toy_run "$scratch/toy-all-profile-after" -n 1 -- --warnings-as-errors --failed
+[ "$toy_status" = 1 ] && [ "$(toy_record)" = b ] || fail "the rerun after --profile-require left $(toy_raw_record) with $toy_status"
 echo 'partition runner tests passed'

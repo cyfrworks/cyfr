@@ -261,7 +261,7 @@ for ((j=0; j<${#args[@]}; j++)); do
       # any other may narrow the run or cut it short (partial, below).
       case "$switch" in
         --failed|--warnings-as-errors|--seed|--trace|--formatter|--slowest|--slowest-modules|\
-        --max-cases|--max-requires|--profile-require|--timeout|--include|--exit-status|--color|--no-color|\
+        --max-cases|--max-requires|--timeout|--include|--exit-status|--color|--no-color|\
         --cover|--export-coverage) ;;
         *) [ -n "$partial" ] || partial="Mix's $switch" ;;
       esac
