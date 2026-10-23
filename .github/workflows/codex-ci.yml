@@ -162,7 +162,7 @@ jobs:
       - name: go test (the Windows lock and job tests ran and passed)
         shell: bash
         env:
-          WINDOWS_TESTS: TestWindowsDeadlineTerminatesTheJob TestWindowsJobKillsDockerChildrenWithTheirHolder TestWindowsLockFileExFailsImmediately
+          WINDOWS_TESTS: TestReplaceFileWaitsOutAReader TestWindowsDeadlineTerminatesTheJob TestWindowsJobKillsDockerChildrenWithTheirHolder TestWindowsLockFileExFailsImmediately
         run: |
           set -euo pipefail
           go test ./internal/access/ -race -count=1 -v -run "^(${WINDOWS_TESTS// /|})\$" 2>&1 | tee "$RUNNER_TEMP/windows-tests.log"
