@@ -299,10 +299,59 @@ defmodule Cyfr.Application do
   end
 
   defp safely_suspend(server) do
-    ThousandIsland.suspend(server)
+    deadline = System.monotonic_time(:millisecond) + @suspend_deadline_ms
+    listener = ThousandIsland.listener_info(server)
+
+    with :ok <- ThousandIsland.suspend(server) do
+      await_listener_refusal(listener, deadline)
+    end
   catch
     kind, reason -> {kind, reason}
   end
+
+  # Process exit schedules the ports' cleanup without awaiting it. Even
+  # explicit port_close can defer the Unix driver's OS close to stop_select.
+  # Only an observed refusal establishes that the member no longer listens.
+  # All of a Thousand Island server's listen sockets share this address.
+  defp await_listener_refusal(:error, _deadline), do: :ok
+
+  defp await_listener_refusal({:ok, address} = listener, deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      {:error, :listener_close_timeout}
+    else
+      {ip, port} = listener_probe_address(address)
+
+      case :gen_tcp.connect(ip, port, [:binary, active: false], min(remaining, 100)) do
+        {:error, :econnrefused} ->
+          :ok
+
+        {:ok, socket} ->
+          :gen_tcp.close(socket)
+          retry_listener_refusal(listener, deadline)
+
+        {:error, reason} when reason in [:econnreset, :timeout] ->
+          retry_listener_refusal(listener, deadline)
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp retry_listener_refusal(listener, deadline) do
+    Process.sleep(1)
+    await_listener_refusal(listener, deadline)
+  end
+
+  defp listener_probe_address({{0, 0, 0, 0}, port}), do: {{127, 0, 0, 1}, port}
+
+  defp listener_probe_address({{0, 0, 0, 0, 0, 0, 0, 0}, port}),
+    do: {{0, 0, 0, 0, 0, 0, 0, 1}, port}
+
+  defp listener_probe_address({:local, path}), do: {{:local, path}, 0}
+  defp listener_probe_address(address), do: address
 
   @doc """
   Refuse the boot when a socket the endpoint mounts (`sockets`, its
