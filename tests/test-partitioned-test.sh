@@ -1262,4 +1262,21 @@ toy_run "$scratch/toy-shard-failed-3" -n 4 --shard 2/2 -- --warnings-as-errors -
 toy_run "$scratch/toy-shard-failed-empty" -n 4 --shard 2/2 -- --warnings-as-errors --failed
 [ "$toy_status" = 0 ] && grep -qx '==> no partition started: the failures record names no test' "$scratch/toy-shard-failed-empty" ||
   fail 'a shard rerun of an empty record did not pass saying so'
+# A record of :all (the whole suite's rerun) is settled by no shard: shard
+# 1's --failed reruns its own files and passes, and shard 2 still owes and
+# reruns its own, B among them, as does every shard until a whole run.
+rm -f "$toy/fix_b"
+toy_raw_record() { (cd "$toy" && PATH=$real_path elixir -e 'IO.inspect("_build/test/test_failures" |> File.read!() |> :erlang.binary_to_term())'); }
+toy_all
+toy_run "$scratch/toy-shard-all-1" -n 4 --shard 1/2 -- --warnings-as-errors --failed
+[ "$toy_status" = 0 ] || fail "shard 1/2's rerun of an :all record failed with $toy_status"
+[ "$(toy_shard_files)" = 'a_test.exs ||c_test.exs e_test.exs |' ] || fail "shard 1/2's rerun of an :all record ran $(toy_shard_files)"
+[ "$(toy_raw_record)" = '{1, :all}' ] || fail "shard 1/2's rerun settled the :all record as $(toy_raw_record)"
+toy_run "$scratch/toy-shard-all-2" -n 4 --shard 2/2 -- --warnings-as-errors --failed
+[ "$toy_status" = 1 ] || fail "shard 2/2 did not rerun its broken B after shard 1 under an :all record: $toy_status"
+[ "$(toy_shard_files)" = '|b_test.exs ||d_test.exs ' ] || fail "shard 2/2's rerun of an :all record ran $(toy_shard_files)"
+[ "$(toy_raw_record)" = '{1, :all}' ] || fail "shard 2/2's rerun settled the :all record as $(toy_raw_record)"
+# A whole run settles it into what failed.
+toy_run "$scratch/toy-shard-all-whole" -n 4 -- --warnings-as-errors --failed
+[ "$toy_status" = 1 ] && [ "$(toy_record)" = b ] || fail "a whole rerun of an :all record left $(toy_raw_record) with $toy_status"
 echo 'partition runner tests passed'

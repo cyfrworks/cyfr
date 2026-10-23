@@ -243,12 +243,12 @@ defmodule Cyfr.TestPartitionEnvTest do
   test "the merge unites the partitions' new failures and removes what passed", %{root: root} do
     canonical = Path.join(root, "_build/test/test_failures")
     run = partition_run(root, "union", 2, [{1, %{@a => "/a"}}, {2, %{@b => "/b"}}])
-    Env.failures_merge!(run, [1, 2], root)
+    Env.failures_merge!(run, [1, 2], true, root)
     assert read_record(canonical) == {1, %{@a => "/a", @b => "/b"}}
 
     # A passed in partition 1; B failed again in partition 2, which held it.
     run = partition_run(root, "removal", 2, [{1, %{@b => "/b"}}, {2, %{@a => "/a", @b => "/b"}}])
-    Env.failures_merge!(run, [1, 2], root)
+    Env.failures_merge!(run, [1, 2], true, root)
     assert read_record(canonical) == {1, %{@b => "/b"}}
   end
 
@@ -258,30 +258,37 @@ defmodule Cyfr.TestPartitionEnvTest do
     canonical = Path.join(canonical, "test_failures")
     File.write!(canonical, record(%{@a => "/a", @b => "/b"}))
     run = partition_run(root, "partial", 3, [{1, :seed}, {2, :missing}, {3, %{@a => "/a"}}])
-    Env.failures_merge!(run, [1, 2, 3], root)
+    Env.failures_merge!(run, [1, 2, 3], true, root)
     # Partition 3 passed B; 1 and 2 say nothing of A or B.
     assert read_record(canonical) == {1, %{@a => "/a"}}
     # A partition the runner did not start is not read at all.
     run = partition_run(root, "unstarted", 2, [{1, %{@a => "/a", @c => "/c"}}, {2, %{}}])
-    Env.failures_merge!(run, [1], root)
+    Env.failures_merge!(run, [1], true, root)
     assert read_record(canonical) == {1, %{@a => "/a", @c => "/c"}}
   end
 
   test "an :all on either side", %{root: root} do
     canonical = Path.join(root, "_build/test/test_failures")
     run = partition_run(root, "partition-all", 2, [{1, :all}, {2, %{@a => "/a"}}])
-    Env.failures_merge!(run, [1, 2], root)
+    Env.failures_merge!(run, [1, 2], true, root)
     assert read_record(canonical) == {1, :all}
 
     # A base of :all: the union of what the partitions recorded.
     run = partition_run(root, "base-all", 2, [{1, %{@b => "/b"}}, {2, %{@c => "/c"}}])
-    Env.failures_merge!(run, [1, 2], root)
+    Env.failures_merge!(run, [1, 2], true, root)
     assert read_record(canonical) == {1, %{@b => "/b", @c => "/c"}}
 
     # ...unless a partition never finished and still holds the seed's :all.
     File.write!(canonical, :erlang.term_to_binary({1, :all}))
     run = partition_run(root, "base-all-partial", 2, [{1, %{@b => "/b"}}, {2, :seed}])
-    Env.failures_merge!(run, [1, 2], root)
+    Env.failures_merge!(run, [1, 2], true, root)
+    assert read_record(canonical) == {1, :all}
+
+    # ...and a run of part of the suite, such as one shard's, leaves it
+    # owed: every partition it started finished, and the record stays :all.
+    File.write!(canonical, :erlang.term_to_binary({1, :all}))
+    run = partition_run(root, "base-all-shard", 4, [{1, %{}}, {3, %{}}])
+    Env.failures_merge!(run, [1, 3], false, root)
     assert read_record(canonical) == {1, :all}
   end
 
@@ -292,9 +299,9 @@ defmodule Cyfr.TestPartitionEnvTest do
     # Two runs seeded from the same record, ending in either order.
     first = partition_run(root, "first", 1, [{1, %{@b => "/b", @c => "/c"}}])
     second = partition_run(root, "second", 1, [{1, %{@a => "/a"}}])
-    Env.failures_merge!(first, [1], root)
+    Env.failures_merge!(first, [1], true, root)
     assert read_record(canonical) == {1, %{@b => "/b", @c => "/c"}}
-    Env.failures_merge!(second, [1], root)
+    Env.failures_merge!(second, [1], true, root)
     assert read_record(canonical) == {1, %{@c => "/c"}}
   end
 
@@ -304,7 +311,7 @@ defmodule Cyfr.TestPartitionEnvTest do
     File.write!(canonical, record(%{@a => "/a"}))
     %{inode: before} = File.stat!(canonical)
     run = partition_run(root, "renamed", 1, [{1, %{@a => "/a", @b => "/b"}}])
-    Env.failures_merge!(run, [1], root)
+    Env.failures_merge!(run, [1], true, root)
     # A new file took the old one's name: a reader never sees a part of it.
     refute File.stat!(canonical).inode == before
     refute File.exists?(canonical <> ".partial")
@@ -314,7 +321,7 @@ defmodule Cyfr.TestPartitionEnvTest do
     old = File.read!(canonical)
     File.mkdir_p!(canonical <> ".partial")
     run = partition_run(root, "unwritable", 1, [{1, %{@c => "/c"}}])
-    assert_raise File.Error, fn -> Env.failures_merge!(run, [1], root) end
+    assert_raise File.Error, fn -> Env.failures_merge!(run, [1], true, root) end
     assert File.read!(canonical) == old
   end
 

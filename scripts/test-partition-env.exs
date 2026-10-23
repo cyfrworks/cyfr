@@ -169,7 +169,7 @@ defmodule Cyfr.TestPartitionEnv do
     :ok
   end
 
-  def failures_merge!(directory, started, checkout) do
+  def failures_merge!(directory, started, whole?, checkout) do
     canonical = canonical_failures(checkout)
 
     seed = File.read(Path.join(directory, "base"))
@@ -196,7 +196,7 @@ defmodule Cyfr.TestPartitionEnv do
         {:error, :enoent} -> %{}
       end
 
-    result = merge_records(current, base, parts)
+    result = merge_records(current, base, parts, whole?)
     File.mkdir_p!(Path.dirname(canonical))
     partial = canonical <> ".partial"
     File.write!(partial, :erlang.term_to_binary({@record_version, result}))
@@ -209,10 +209,14 @@ defmodule Cyfr.TestPartitionEnv do
   # record p. A partition still holding the seed, or holding nothing,
   # leaves its part of the record as it was, so under a seed of `:all` the
   # record stays `:all` until every started partition has written its own.
-  def merge_records(current, base, parts) do
+  # A seed of `:all` owes a rerun of the whole suite, so only a run of the
+  # whole suite (`whole?`: no shard, named path or selection narrowed it)
+  # replaces it: what a partial run, such as one shard's, did not run is
+  # still owed, and the record stays `:all` for the next run of it.
+  def merge_records(current, base, parts, whole?) do
     cond do
       :all in parts -> :all
-      base == :all and :unchanged in parts -> :all
+      base == :all and (:unchanged in parts or not whole?) -> :all
       base == :all -> Enum.reduce(parts, %{}, &union_part/2)
       current == :all -> :all
       true -> Enum.reduce(parts, current, &apply_part(&1, &2, base))
@@ -515,11 +519,11 @@ defmodule Cyfr.TestPartitionEnv do
         ["failures-seed", directory, count] ->
           failures_seed!(directory, String.to_integer(count), File.cwd!())
 
-        ["failures-merge", directory, count | started] ->
+        ["failures-merge", directory, count, whole | started] ->
           count = String.to_integer(count)
           started = Enum.map(started, &String.to_integer/1)
           true = Enum.all?(started, &(&1 in 1..count//1))
-          failures_merge!(directory, started, File.cwd!())
+          failures_merge!(directory, started, whole == "true", File.cwd!())
 
         ["weights", table, required] ->
           weights!(table, required == "true")
