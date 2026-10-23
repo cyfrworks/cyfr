@@ -338,6 +338,15 @@ chmod +x "$scratch/bin/go" "$scratch/bin/gofmt" "$scratch/bin/govulncheck" "$scr
 # its pid in $TRACE/stalled.harness and waits, so a stop that skips its own
 # cleanup leaves them.
 cat > "$scratch/stub.bash_env" <<'FAKE'
+# The precompiled NIF fetch and its test download from GitHub and compile
+# with the real Mix, so they stand in too: the fetch records in
+# nif-fetch.calls its arguments and how many Mix calls came before it.
+case "$0" in
+  *scripts/fetch-precompiled-nifs.sh)
+    printf 'fetch %s|mix_calls_before=%s\n' "$*" "$(cat "$TRACE/mix.calls" 2>/dev/null | wc -l | tr -d ' ')" >> "$TRACE/nif-fetch.calls"
+    exit 0 ;;
+  *tests/fetch-precompiled-nifs-test.sh) exit 0 ;;
+esac
 case "$0" in
   *tests/release-boot/boot.sh|*tests/*-proof/run.sh|*tests/*-proof/*-test.sh|*tests/compose-proof/tailscale-standin/proof.sh|*tests/browser/run.sh|*tests/multi-home-smoke/run.sh|*tests/proxy-hsts/run.sh)
     printf '%s %s|skip=%s browsers=%s join=%s db=%s case_image=%s\n' "${0#"$GATE_ROOT"/}" "$*" \
@@ -463,6 +472,7 @@ CI_RUNS = {
     ("test.yml", "static", "The built toolkit is its source's"): ["toolkit_bundle"],
     ("test.yml", "static", "Every test WASM fixture is its source's build"): ["test_wasm"],
     ("test.yml", "static", "The image suites' shared plumbing"): ["imagesuite_checks"],
+    ("test.yml", "static", "The precompiled NIF fetch is rustler_precompiled's"): ["precompiled_nifs"],
     ("test.yml", "js-unit", "Install the lint and coverage tools"): ["eslint"],
     ("test.yml", "js-unit", "Lint the console's JavaScript and the SDK"): ["eslint"],
     ("test.yml", "js-unit", "The console's JavaScript tests (the SDK, the canvas toolkit, the canvas, the carrier, the system layer and the markdown hook's parse step)"): ["js_suite"],
@@ -492,6 +502,7 @@ SETUP_ACTIONS = {
 SETUP_COMMANDS = [
     r"set -euo pipefail",
     r"mix deps\.get",
+    r"scripts/fetch-precompiled-nifs\.sh",
     r"sudo scripts/ci/containerd-image-store\.sh",
     r"rustup (?:target add|toolchain install) [^;&|<>`$()]*(?:\"\$[A-Z_]+\"[^;&|<>`()]*)*",
     r'if \[ "\$CACHE_HIT" != "true" \]; then',
@@ -651,9 +662,9 @@ cp "$root"/.github/workflows/*.yml "$scratch/roster/named/"
 python3 -I - "$scratch/roster/named/test.yml" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-setup = "      - name: Install dependencies\n        run: mix deps.get\n"
+setup = "      - name: Install dependencies\n        run: |\n          mix deps.get\n          scripts/fetch-precompiled-nifs.sh\n"
 assert setup in s
-named = "      - name: Install dependencies\n        run: |\n          mix deps.get\n          test -f newly-required-ci-asset\n"
+named = "      - name: Install dependencies\n        run: |\n          mix deps.get\n          scripts/fetch-precompiled-nifs.sh\n          test -f newly-required-ci-asset\n"
 open(p, "w").write(s.replace(setup, named, 1))
 PY
 ! ci_roster "$gate" "$scratch/roster/named" 2>"$scratch/roster/named.err" ||
@@ -2211,14 +2222,16 @@ framed a "$a" 1
 has_line '^prima=0$' "$scratch/a.log/islands.summary" || fail 'the prima island did not pass beside the stalled one'
 has_line '^sanctum=0$' "$scratch/a.log/islands.summary" || fail 'the sanctum island did not pass beside the stalled one'
 has_line '^==> islands.arca stopped at its deadline$' "$scratch/a.err" || fail 'the stalled island was not reported'
-for s in compile_sqlite_test compile_sqlite_dev js_suite eslint wasm_tools test_wasm sdk_bundle toolkit_bundle canary_checks imagesuite_checks worker_auth_check backends_check dialyzer boundary_plants sqlite_suite; do
+for s in compile_sqlite_test compile_sqlite_dev js_suite eslint wasm_tools test_wasm sdk_bundle toolkit_bundle canary_checks imagesuite_checks precompiled_nifs worker_auth_check backends_check dialyzer boundary_plants sqlite_suite; do
   has_line "^$s=0$" "$scratch/a.log/static.summary" || fail "the static step $s did not pass: $(tr '\n' ' ' < "$scratch/a.log/static.summary")"
 done
 has_line '^compile_pg_dev=0$' "$scratch/a.log/postgres.summary" || fail "the PostgreSQL dev compile did not pass: $(tr '\n' ' ' < "$scratch/a.log/postgres.summary")"
 has_line '^pg_tests=0$' "$scratch/a.log/postgres.summary" || fail "the PostgreSQL tests did not pass: $(tr '\n' ' ' < "$scratch/a.log/postgres.summary")"
 has_line '^fossils=0$' "$scratch/a.log/vocab.summary" || fail 'the vocabulary leg did not pass'
 has_line '^==> islands +FAILED ' "$scratch/a.out" || fail 'the islands leg was not reported failed'
-has_line '^==> static +ok .*canary_checks=0 imagesuite_checks=0 worker_auth_check=0 backends_check=0 ' "$scratch/a.out" || fail 'the static leg and its Python checks were not reported passed'
+has_line '^==> static +ok .*canary_checks=0 imagesuite_checks=0 precompiled_nifs=0 worker_auth_check=0 backends_check=0 ' "$scratch/a.out" || fail 'the static leg and its Python checks were not reported passed'
+[ "$(cat "$trace/nif-fetch.calls")" = 'fetch |mix_calls_before=0' ] ||
+  fail "the precompiled NIF fetch did not run once, before any Mix call: $(cat "$trace/nif-fetch.calls" 2>&1)"
 has_line '^==> postgres +ok ' "$scratch/a.out" || fail 'the postgres leg was not reported passed'
 has_line '^    postgres\.pg_tests: Result: 1 passed' "$scratch/a.out" || fail 'the final report did not read the PostgreSQL tests'
 [ -z "$(find "$scratch/a.log" -maxdepth 1 -name 'island_*')" ] || fail "the stalled island's copy was left behind"

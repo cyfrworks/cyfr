@@ -57,7 +57,8 @@ release the step pins), `build` (docker/build-push-action as
 `docker build`, under --only), `built` (the same step in a whole job: the
 image the gate built is checked present), `artifact` (actions/upload-
 artifact, its files copied under --artifacts), `setup` (checkout, toolchain setup, caches, downloads and `mix
-deps.get`, which this host's checkout already holds: nothing runs), or `-`
+deps.get` with the precompiled NIF fetch after it, which this host's
+checkout and the gate's own fetch already hold: nothing runs), or `-`
 for a step that never runs here. TEMP_DIR is the job's
 RUNNER_TEMP. A `run` step's script is its `run:` text after a preamble
 that leaves the caller's Mix and database selection out, exports the
@@ -104,8 +105,9 @@ IMAGE_REF = re.compile(r"(?<![A-Za-z0-9_./:@-])((?:cyfr|cyfr-locus):[A-Za-z0-9_]
 NAMESPACE = None
 
 # A step whose whole script is one of these fetches what this checkout
-# already holds, so it is setup too.
-SETUP_RUNS = {"mix deps.get"}
+# already holds, so it is setup too: the gate runs the precompiled NIF
+# fetch itself before any leg.
+SETUP_RUNS = {"mix deps.get\nscripts/fetch-precompiled-nifs.sh"}
 SETUP_ACTIONS = {
     "actions/checkout", "actions/setup-go", "actions/setup-node", "./.github/actions/setup-elixir",
     "actions/cache", "actions/download-artifact", "docker/setup-buildx-action",

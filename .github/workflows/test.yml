@@ -276,7 +276,14 @@ jobs:
             exit 1
           fi
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
+      # The fetch every job runs after mix deps.get names the file and URL
+      # rustler_precompiled's compile names, and refuses a download its
+      # dep's checksum file does not match.
+      - name: The precompiled NIF fetch is rustler_precompiled's
+        run: bash tests/fetch-precompiled-nifs-test.sh
       # The pinned validator every component passes (scripts/wasm-tools.sh),
       # at `_tools/wasm-tools`, where the test configuration names it.
       - name: Install the pinned wasm-tools
@@ -483,7 +490,9 @@ jobs:
           TARGET: ${{ steps.rust-pin.outputs.target }}
         run: rustup toolchain install "$RUSTC_VERSION" --profile minimal --target "$TARGET" --target wasm32-wasip1
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
       # The fixtures' recipe runs the real Mix against the test build.
       - name: Compile
         run: mix compile
@@ -627,7 +636,9 @@ jobs:
           fi
           cargo-component --version
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
       # The pinned validator every component passes (scripts/wasm-tools.sh),
       # at `_tools/wasm-tools`, where the test configuration names it.
       - name: Install the pinned wasm-tools
@@ -787,7 +798,9 @@ jobs:
             pgsty/silo@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46 \
             server /data
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
       # Forced, as the test job's is: the cache keeps _build across
       # commits, and incremental state can keep what the tree no longer has.
       - name: Compile with warnings as errors
@@ -834,7 +847,9 @@ jobs:
           cache-key-prefix: mix-deps
           build-cache: 'false'
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
       # The shared contracts depend on no other application: a checkout
       # holding only the lock, Prima, the fetched deps, the WIT tree
       # (`Prima.WIT` embeds it), the protocol vectors, the shipped
@@ -873,7 +888,9 @@ jobs:
           cache-key-prefix: mix-deps
           build-cache: 'false'
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
       # Persistence holds nothing of the layers above it: a checkout with
       # only the lock, the contracts, Arca, the fetched deps and the one
       # CYFR_DATABASE parse its configuration shares with the umbrella root
@@ -908,7 +925,9 @@ jobs:
           cache-key-prefix: mix-deps
           build-cache: 'false'
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
       # The auth domain holds nothing of the domains and surfaces above it:
       # a checkout with only the lock, the contracts, Arca, Sanctum, the
       # fetched deps and the CYFR_DATABASE parse compiles it with warnings
@@ -943,7 +962,9 @@ jobs:
           cache-key-prefix: mix-deps
           build-cache: 'false'
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
       # Locus releases without the control plane: a checkout holding only
       # the lock, the contracts, Locus, the fetched deps, the WIT tree
       # (`Prima.WIT` embeds it; `Locus.Runtime.Engine` reads the same
@@ -997,7 +1018,9 @@ jobs:
             pgsty/silo@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46 \
             server /data
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
       - name: Compile
         run: mix compile --warnings-as-errors
       - name: Wait for MinIO
@@ -1531,7 +1554,9 @@ jobs:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
       # The runner's own database names, against a docker stub: two runs on
       # one URL name and drop disjoint databases. No database is needed.
       - name: Each run names and drops databases of its own
@@ -1598,7 +1623,9 @@ jobs:
           go-version-file: apps/codex/go.mod
           cache-dependency-path: apps/codex/go.sum
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
       # What each browser allows a sandboxed frame, recorded; it fails only
       # when it could not observe an attempt.
       - name: The frame-facts experiment

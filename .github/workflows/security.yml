@@ -70,7 +70,9 @@ jobs:
           cache-key-prefix: security
 
       - name: Install dependencies
-        run: mix deps.get
+        run: |
+          mix deps.get
+          scripts/fetch-precompiled-nifs.sh
 
       - name: Compile
         run: mix compile
