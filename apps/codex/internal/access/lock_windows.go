@@ -25,6 +25,19 @@ func lockExclusive(f *os.File) (busy bool, err error) {
 	return false, err
 }
 
+// unlockExclusive lets go of the lock lockExclusive took, before its
+// handle closes: a lock a closed handle or an exited process still holds
+// is released by the kernel some time later ("the time it takes for the
+// operating system to unlock these locks depends upon available system
+// resources", LockFileEx's documentation), during which the next taker is
+// refused, so a holder that ends in order unlocks itself. No child holds
+// the handle on Windows (the docker watchdog is Unix's), so nothing else
+// loses the lock here.
+func unlockExclusive(f *os.File) {
+	var ol windows.Overlapped
+	windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &ol)
+}
+
 // replaceFile renames from over to, written through to the disk before
 // it returns: Windows has no directory to sync.
 func replaceFile(from, to string) error {

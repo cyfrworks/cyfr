@@ -41,15 +41,34 @@ func (e *Engine) lockProject(command string) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("access: open the lock: %w", err)
 	}
-	busy, err := lockExclusive(f)
-	if err != nil || busy {
-		f.Close()
-		if busy {
-			return nil, e.busy()
-		}
-		return nil, fmt.Errorf("access: take the lock: %w", err)
-	}
 	host, _ := os.Hostname()
+	// A lock another handle holds while no live holder record names its
+	// holder is tried again, within recordWait: a holder that has taken
+	// the lock and not yet written its record is named once it has, and a
+	// lock a holder that exited or closed still holds is taken once the
+	// kernel lets it go, which Windows does some time after the close
+	// (LockFileEx: "the time it takes for the operating system to unlock
+	// these locks depends upon available system resources").
+	end := time.Now().Add(recordWait)
+	for {
+		busy, err := lockExclusive(f)
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("access: take the lock: %w", err)
+		}
+		if !busy {
+			break
+		}
+		if b := e.liveHolder(host); b != nil {
+			f.Close()
+			return nil, b
+		}
+		if !time.Now().Before(end) {
+			f.Close()
+			return nil, &ErrBusy{Holder: "a process that wrote no holder record", PID: lockOwner(e.path(lockFile))}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	e.mu.Lock()
 	e.lock = f
 	e.holder = holderRecord{Command: command, Host: host, PID: os.Getpid(), Started: time.Now().UTC()}
@@ -77,13 +96,16 @@ func LockFile(path string) (release func(), busy bool, err error) {
 		f.Close()
 		return nil, busy, err
 	}
-	return sync.OnceFunc(func() { f.Close() }), false, nil
+	return sync.OnceFunc(func() {
+		unlockExclusive(f)
+		f.Close()
+	}), false, nil
 }
 
 // unlock ends the lock's operation: the materialized files it made that
-// no unfinished journal names are removed, the holder record goes, and
-// the lock's descriptor is closed. A docker child still holding the
-// descriptor keeps the lock until it exits.
+// no unfinished journal names are removed, the holder record goes, the
+// lock is let go and its descriptor is closed. A docker child still
+// holding the descriptor keeps the lock until it exits (unlockExclusive).
 func (e *Engine) unlock() {
 	e.dropFiles(nil, false)
 	e.mu.Lock()
@@ -93,41 +115,37 @@ func (e *Engine) unlock() {
 	}
 	os.Remove(e.path(holderFile))
 	syncDir(e.path())
+	unlockExclusive(e.lock)
 	e.lock.Close()
 	e.lock = nil
 }
 
-// recordWait bounds how long a refused taker waits for the holder's
-// record: a holder writes it right after it takes the lock, so a taker
-// refused in between, or finding the record a dead holder left, reads it
-// again before naming the holder.
+// recordWait bounds how long a refused taker keeps trying while no live
+// holder record names a holder: a holder writes its record right after it
+// takes the lock, so a taker refused in between reads it again before
+// naming the holder, and a lock a dead holder still holds is tried again
+// until the kernel lets it go.
 const recordWait = 250 * time.Millisecond
 
-// busy is the lock's refusal, from the holder record the holder wrote. A
+// liveHolder is the lock's refusal from the holder record a live holder
+// wrote, and nil while the record is missing, empty or a dead holder's: a
 // record on this host whose holder and watchdog have both died is an
 // earlier holder's, not this one's. A holder that wrote none (a process
-// taking the lock some other way) is named by the kernel's lock table
-// where it has one.
-func (e *Engine) busy() *ErrBusy {
-	host, _ := os.Hostname()
-	end := time.Now().Add(recordWait)
-	for {
-		var h holderRecord
-		ok, err := readJSON(e.path(holderFile), &h)
-		live := err == nil && ok && h.Command != "" &&
-			(h.Host != host || processAlive(h.PID) || h.WatchdogPID > 0 && processAlive(h.WatchdogPID))
-		if live {
-			b := &ErrBusy{Holder: h.String(), PID: h.PID, WatchdogPID: h.WatchdogPID}
-			if h.Until != nil {
-				b.Until = *h.Until
-			}
-			return b
-		}
-		if !time.Now().Before(end) {
-			return &ErrBusy{Holder: "a process that wrote no holder record", PID: lockOwner(e.path(lockFile))}
-		}
-		time.Sleep(5 * time.Millisecond)
+// taking the lock some other way) is named by its caller, once recordWait
+// has passed, from the kernel's lock table where it has one.
+func (e *Engine) liveHolder(host string) *ErrBusy {
+	var h holderRecord
+	ok, err := readJSON(e.path(holderFile), &h)
+	live := err == nil && ok && h.Command != "" &&
+		(h.Host != host || processAlive(h.PID) || h.WatchdogPID > 0 && processAlive(h.WatchdogPID))
+	if !live {
+		return nil
 	}
+	b := &ErrBusy{Holder: h.String(), PID: h.PID, WatchdogPID: h.WatchdogPID}
+	if h.Until != nil {
+		b.Until = *h.Until
+	}
+	return b
 }
 
 // noteWatchdog records, durably, the watchdog now holding the lock's
