@@ -20,8 +20,8 @@
 #   - a cached file that does not match is replaced by one that does.
 # Two controls show the closed port closes: the same compile with an empty
 # cache fails at it, and so does the script with an empty cache. First,
-# every tracked script, workflow and Dockerfile that runs `mix deps.get`
-# runs the fetch as its next command.
+# every invocation of `mix deps.get` in a tracked file runs the fetch as
+# its next command.
 # It downloads from GitHub, and needs the checkout's deps (mix deps.get).
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -47,28 +47,117 @@ compile_wasmex() {
     mix deps.compile rustler_precompiled rustler wasmex
 }
 
-# Each `mix deps.get` a tracked file runs, outside comments, the docs, the
-# gate's own fixtures and the fetch's own messages, is followed by the fetch: on its line after
-# `&&`, or alone on the next line.
-git grep -n -e 'mix deps\.get' -- ':!*.md' ':!deps' ':!tests/commit-gate-test.sh' \
-  ':!scripts/lib/workflow_plan.py' ':!scripts/fetch-precompiled-nifs.sh' ':!tests/fetch-precompiled-nifs-test.sh' \
-  > "$scratch/deps-get.txt" || true
-python3 -I - "$scratch/deps-get.txt" <<'PY'
-import re, sys
+# Each `mix deps.get` a tracked file invokes is followed by the fetch: on
+# its line after `&&`, or alone on the next line. An invocation is the
+# words at a command position (a line's start, or after RUN, run:, &&, ||,
+# ; or |) outside a quoted string and a comment, read a line at a time; the
+# same words in a message, a comment or the docs' prose are not one. The
+# reading is held first to cases that must and must not match.
+python3 -I - "$root" <<'PY'
+import re, subprocess, sys
+
+FETCH = "scripts/fetch-precompiled-nifs.sh"
+WORDS = "mix deps.get"
+
+def outside(text):
+    """Each offset of text that is outside quotes and comments, as a set."""
+    out, quote, i = set(), None, 0
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+        elif c in "\"'`":
+            quote = c
+        elif c == "#":
+            break
+        else:
+            out.add(i)
+        i += 1
+    return out
+
+def invocations(lines):
+    """(line number, followed by the fetch) for each invocation in lines."""
+    found = []
+    for n, text in enumerate(lines):
+        free = outside(text)
+        for m in re.finditer(re.escape(WORDS) + r"(?![\w.-])", text):
+            if m.start() not in free:
+                continue
+            before = text[:m.start()].rstrip()
+            if not (before == "" or before.endswith(("&&", ";", "|", "run:")) or re.search(r"(?:^|\s)RUN$", before)):
+                continue
+            rest = text[m.end():]
+            nxt = lines[n + 1] if n + 1 < len(lines) else ""
+            followed = bool(re.match(r"[^&;|]*&& " + re.escape(FETCH) + r"(?![\w.-])", rest)) or (
+                re.fullmatch(r"[^&;|]*(?:&&)?\s*\\?", rest) is not None
+                and re.fullmatch(r"\s*" + re.escape(FETCH) + r"(?: &&| \\)?\s*", nxt) is not None)
+            found.append((n + 1, followed))
+    return found
+
+# The fetch's own refusals, which name the command in a string, and the
+# other words that are no invocation.
+NOT = [
+    '    refuse.("#{rustler_precompiled} holds no rustler_precompiled: run mix deps.get first")',
+    '    refuse.("no locked dep in #{deps} calls `use RustlerPrecompiled`: run mix deps.get first, or drop this script once no dep needs it")',
+    "      # The fetch every job runs after mix deps.get names the file and URL",
+    "- After `mix deps.get` in a fresh checkout, and after a change to",
+    'SETUP_RUNS = {"mix deps.get\\nscripts/fetch-precompiled-nifs.sh"}',
+    "mix deps.getter",
+    "echo then mix deps.get",
+    # At a command position, and in a string or a comment all the same.
+    """has_line "^test.yml static: 'run: mix deps.get; test -f x' is neither run by the gate" \\""",
+    "step = '      - run: mix deps.get\\n'",
+    "      # run: mix deps.get",
+    "true # && mix deps.get",
+]
+IS = [
+    "mix deps.get",
+    "          mix deps.get",
+    "      - run: mix deps.get",
+    "RUN mix deps.get --only prod && mix deps.compile",
+    'cd "$root" && mix deps.get',
+    "true; mix deps.get",
+    "yes | mix deps.get",
+]
+FOLLOWED = [
+    (["RUN mix deps.get --only prod && scripts/fetch-precompiled-nifs.sh && mix deps.compile"], True),
+    (["          mix deps.get", "          scripts/fetch-precompiled-nifs.sh"], True),
+    (["      mix deps.get --only prod &&", "        scripts/fetch-precompiled-nifs.sh &&"], True),
+    (["RUN mix deps.get --only prod && mix deps.compile"], False),
+    (["          mix deps.get", "          mix compile"], False),
+    (["mix deps.get && mix compile", "scripts/fetch-precompiled-nifs.sh"], False),
+]
+wrong = [f"read as an invocation: {t}" for t in NOT if invocations([t])]
+wrong += [f"not read as an invocation: {t}" for t in IS if len(invocations([t])) != 1]
+wrong += [f"read as {'not ' if want else ''}followed by the fetch: {' / '.join(ls)}"
+          for ls, want in FOLLOWED if invocations(ls) != [(1, want)]]
+if wrong:
+    sys.exit("FAIL: the invocation reading is wrong:\n  " + "\n  ".join(wrong))
+
+root = sys.argv[1]
+paths = subprocess.run(["git", "-C", root, "ls-files", "-z"], check=True, capture_output=True).stdout.split(b"\0")
 bad, seen = [], 0
-for hit in open(sys.argv[1]).read().splitlines():
-    path, line, text = hit.split(":", 2)
-    if text.lstrip().startswith("#"):
+for path in (p.decode() for p in paths if p):
+    try:
+        text = open(f"{root}/{path}", encoding="utf-8").read()
+    except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
         continue
-    seen += 1
-    nxt = open(path).read().split("\n")[int(line)]
-    if not (re.search(r"mix deps\.get[^&;|]*&& scripts/fetch-precompiled-nifs\.sh\b", text)
-            or re.fullmatch(r"\s*scripts/fetch-precompiled-nifs\.sh( &&)?", nxt)):
-        bad.append(f"{path}:{line}: {text.strip()}")
+    if WORDS not in text:
+        continue
+    lines = text.split("\n")
+    for n, followed in invocations(lines):
+        seen += 1
+        if not followed:
+            bad.append(f"{path}:{n}: {lines[n - 1].strip()}")
 if not seen:
-    sys.exit("FAIL: no tracked file runs mix deps.get, so the scan checked nothing")
+    sys.exit("FAIL: no tracked file invokes mix deps.get, so the scan checked nothing")
 if bad:
-    sys.exit("FAIL: mix deps.get without scripts/fetch-precompiled-nifs.sh after it:\n  " + "\n  ".join(bad))
+    sys.exit(f"FAIL: mix deps.get without {FETCH} after it:\n  " + "\n  ".join(bad))
+print(f"every one of {seen} invocations of mix deps.get is followed by the fetch")
 PY
 
 cache="$scratch/cache"
