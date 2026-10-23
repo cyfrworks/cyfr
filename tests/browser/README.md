@@ -31,6 +31,11 @@ output directory: `ask()` (`lib.mjs`) writes `ask-N.json` and waits for
 `answer-N.json`, and the loop that answers it is `harness.sh`'s, which
 removes each ask file once it has answered it.
 
+The transport self-check runs with
+`scripts/heavy-check.sh -- node --test tests/browser/lib-test.mjs`.
+It exercises peer resets with local listeners and is also part of
+`tests/release-boot-test.sh`, the release proofs' shared CI check.
+
 **Redaction.** Every proof redacts with the one redaction `lib.mjs`
 exports (`redact`, `redactFrames`, `recordText`, `pageTokens`, `MARKER`).
 A known secret, a value under a secret-named key or attribute, and a
