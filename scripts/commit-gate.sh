@@ -716,8 +716,10 @@ run_job() {
 # containers, networks, volumes, the gate's image tags, the databases, the
 # directories; then lists each kind again. A listing that fails, a removal
 # that fails and a second listing that still finds something each fail
-# it, naming what is left. Every docker call runs contained under the
-# docker deadline (docker_call).
+# it, naming what is left, and end it there: nothing after it in
+# dependency order is removed (a directory stays while a container that
+# may hold it does). Every docker call runs contained under the docker
+# deadline (docker_call).
 
 # One docker command, contained under the docker deadline, its stdout in
 # DOCKER_OUT and its stderr appended to log $1. Returns docker's status,
@@ -879,6 +881,14 @@ gate_clean() {
         esac ;;
     esac || { echo "==> the $1 $2 could not be removed" >&2; s=1; }
   }
+  # The first failure ends the cleaning: a listing or a removal that fails,
+  # or a second listing that still finds something, leaves everything
+  # after it in dependency order (what may hold or need what is left), all
+  # of it still named for the next sweep.
+  stop_here() {
+    echo "==> the cleaning stops at the failure above: nothing after it in dependency order is removed" >&2
+    return 1
+  }
   # Docker's kinds, for every scope and leg, before the databases and the
   # directories they may hold open.
   for pass in $passes; do
@@ -888,7 +898,7 @@ gate_clean() {
         network) docker_call "$log" network ls --format '{{.Name}}' ;;
         volume) docker_call "$log" volume ls --format '{{.Name}}' ;;
         image) docker_call "$log" image ls --format '{{.Repository}}:{{.Tag}}' ;;
-      esac || { echo "==> the ${kind}s could not be listed" >&2; s=1; continue; }
+      esac || { echo "==> the ${kind}s could not be listed" >&2; stop_here; return 1; }
       while IFS= read -r name; do
         case $kind in
           image) [[ "$name" =~ $image ]] || continue ;;
@@ -900,8 +910,11 @@ gate_clean() {
           s=1
         else
           remove_one "$kind" "$name"
+          [ "$s" -eq 0 ] || { stop_here; return 1; }
         fi
       done <<<"$DOCKER_OUT"
+      # A kind still there holds up the kinds after it.
+      [ "$s" -eq 0 ] || { stop_here; return 1; }
     done
   done
   if [ "$scope" != leg ] || [ "$leg" = boot ]; then
@@ -913,8 +926,8 @@ gate_clean() {
         psql -v ON_ERROR_STOP=1 -qAt "$PG_SERVER/postgres" \
         -c "SELECT datname FROM pg_database WHERE datname ~ '^cyfr_gate_boot_$dbre(_|\$)' ORDER BY 1"; then
         echo "==> the databases could not be listed" >&2
-        s=1
-        break
+        stop_here
+        return 1
       fi
       while IFS= read -r name; do
         [[ "$name" =~ ^cyfr_gate_boot_(${dbre})(_|$) ]] || continue
@@ -924,8 +937,10 @@ gate_clean() {
           s=1
         else
           remove_one database "$name"
+          [ "$s" -eq 0 ] || { stop_here; return 1; }
         fi
       done <<<"$DOCKER_OUT"
+      [ "$s" -eq 0 ] || { stop_here; return 1; }
     done
   fi
   for pass in $passes; do
@@ -943,6 +958,7 @@ gate_clean() {
         s=1
       else
         remove_one directory "$d"
+        [ "$s" -eq 0 ] || { stop_here; return 1; }
       fi
     done
   done

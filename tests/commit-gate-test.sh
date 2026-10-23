@@ -840,7 +840,9 @@ for spec in 'docker build -treview-extra:ci . => gives an image the name review-
   'printf x | xargs docker tag cyfr:push => names docker where the plan does not read it as a command' \
   "bash -c 'docker tag cyfr:push review-extra:x' => holds a docker command the plan does not read" \
   'docker image import - review-extra:i => gives an image the name review-extra:i' \
-  'docker run --rm alpine:3 true => starts a container (docker run) under a name CI gives'; do
+  'docker run --rm alpine:3 true => starts a container (docker run) under a name CI gives' \
+  'value=${UNSET_REVIEW_VAR:-$(docker tag cyfr:push review-extra:x)} => a parameter expansion holds a command' \
+  'n=$(( $(docker tag cyfr:push review-extra:x) + 1 )) => an arithmetic expansion holds a command'; do
   n=$((n + 1))
   plant_step "planted$n" "${spec%% => *}"
   ! python3 -I "$root/scripts/lib/workflow_plan.py" "$scratch/images-planted$n" test.yml builder-image "$scratch/images/q$n" \
@@ -1627,7 +1629,7 @@ echo 'ok: the scripts the close runs name what they make after the run prefix'
 # scripts/ that starts one, but for the roster's, each with its reason.
 container_names() {
   python3 -I - "$@" <<'PY'
-import io, os, re, subprocess, sys, tokenize
+import ast, os, re, subprocess, sys
 root, files = sys.argv[1], sys.argv[2:]
 sys.path.insert(0, os.path.join(root, "scripts", "lib"))
 import workflow_plan as wp
@@ -1640,6 +1642,9 @@ ROSTER = {
     "tests/ci-publish-test.sh": "test.yml static's tag pipeline image publication, which the gate leaves out",
     "tests/tailnet-real/run.sh": "the real tailnet's proof, run by hand",
 }
+# A docker command whose words are its callers': each caller is read as
+# a docker command itself.
+WRAPPERS = {("scripts/commit-gate.sh", "if contain_start -g 30 docker $@")}
 errors = []
 if not files:
     tracked = subprocess.run(["git", "-C", root, "ls-files", "-z", "--", "tests", "scripts"],
@@ -1698,6 +1703,13 @@ def prefixed_in(f):
 for f, lexer in lexed.items():
     prefixed = prefixed_in(f)
     named = lambda text: bool(refs(text) & prefixed)
+    # Every assignment of each array the file assigns, its elements as words.
+    arrays = {}
+    for words, _ in lexer.commands:
+        for w in words:
+            m = wp.ASSIGNMENT.match(w.text)
+            if m and w.elements is not None:
+                arrays.setdefault(re.match(r"[A-Za-z_][A-Za-z0-9_]*", w.text).group(0), []).append(w.elements)
     for words, _ in lexer.commands:
         for i, w in enumerate(words):
             base = os.path.basename(w.text) if w.plain else ""
@@ -1707,45 +1719,38 @@ for f, lexer in lexed.items():
                 rest = words[i + 2:]
             else:
                 continue
-            verbs = [x.text for x in rest[:2]]
-            if not (verbs[:1] in (["run"], ["create"]) or verbs in (["container", "run"], ["container", "create"])):
+            shown = " ".join(x.text.replace(chr(0), "$(…)") for x in words)
+            try:
+                name = wp.container_name(rest, arrays)
+            except wp.Refused as e:
+                if (f, shown) not in WRAPPERS:
+                    errors.append(f"{f}: `{shown[:120]}`: {e}")
                 continue
-            ok = False
-            for k, a in enumerate(rest):
-                if a.plain and a.text == "--name" and k + 1 < len(rest):
-                    ok = named(rest[k + 1].text)
-                elif a.text.startswith("--name="):
-                    ok = named(a.text[7:])
-                elif not a.plain and "--name" in a.text:
-                    ok = named(a.text.split("--name", 1)[1])
-                if ok:
-                    break
-            if not ok:
+            if name is not None and not named(name):
                 errors.append(f"{f}: docker {' '.join(x.text.replace(chr(0), '$(…)') for x in rest[:6])} … starts a container with no --name under PROOF_RUN_PREFIX")
     for line in lexer.bodies:
         if STARTS.search(line) and not ("--name" in line and named(line.split("--name", 1)[1])):
             errors.append(f"{f}: a here-document's `{line.strip()[:80]}` starts a container with no --name under PROOF_RUN_PREFIX")
 
-# Python: each "docker", "run" (or "create") in a call or a list, whose
-# --name is an expression of PROJECT_PREFIX, PROOF_RUN_PREFIX, a stack's
-# project (imagesuite.py names it PROJECT_PREFIX + project) or a name
-# assigned from one.
+# Python: each "docker", "run" (or "create") call or list, read as docker
+# reads its options up to the first word that is not a literal option:
+# its --name is "--name", NAME or *run_name(NAME) (tests/imagesuite.py's,
+# a name only under PROOF_RUN_PREFIX), NAME an expression of
+# PROJECT_PREFIX, PROOF_RUN_PREFIX, a stack's project (imagesuite.py names
+# it PROJECT_PREFIX + project) or a name every assignment of which is one.
 for f in files:
     if not f.endswith(".py"):
         continue
-    toks = [t for t in tokenize.generate_tokens(io.StringIO(texts[f]).readline)
-            if t.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT)]
-    text_of = lambda ts: " ".join(t.string for t in ts)
+    tree = ast.parse(texts[f])
+    pyassigned = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    pyassigned.setdefault(target.id, []).append(ast.unparse(node.value))
     pyprefixed = {"PROJECT_PREFIX", "PROOF_RUN_PREFIX"}
     def pynamed(expr):
         return bool(set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr)) & pyprefixed) or ".project" in expr.replace(" ", "")
-    pyassigned = {}
-    for k in range(len(toks) - 2):
-        if toks[k].type == tokenize.NAME and toks[k + 1].string == "=":
-            end = k + 2
-            while end < len(toks) and toks[end].start[0] == toks[k + 2].start[0]:
-                end += 1
-            pyassigned.setdefault(toks[k].string, []).append(text_of(toks[k + 2:end]))
     changed = True
     while changed:
         changed = False
@@ -1753,32 +1758,31 @@ for f in files:
             if name not in pyprefixed and all(pynamed(v) for v in values):
                 pyprefixed.add(name)
                 changed = True
-    lit = lambda t: t.type == tokenize.STRING and t.string.strip("\"'") or None
-    for k in range(len(toks) - 2):
-        if lit(toks[k]) != "docker" or toks[k + 1].string != ",":
+    const = lambda e: e.value if isinstance(e, ast.Constant) and isinstance(e.value, str) else None
+    for node in ast.walk(tree):
+        elts = node.args if isinstance(node, ast.Call) else node.elts if isinstance(node, ast.List) else None
+        if not elts or const(elts[0]) != "docker":
             continue
-        verbs = [lit(toks[k + 2]), lit(toks[k + 4]) if k + 4 < len(toks) else None]
-        if not (verbs[0] in ("run", "create") or verbs == ["container", "run"] or verbs == ["container", "create"]):
+        verb = [const(e) for e in elts[1:3]] + [None, None]
+        k = 3 if verb[0] == "container" else 2
+        if (verb[1] if verb[0] == "container" else verb[0]) not in ("run", "create"):
             continue
-        depth, j, ok = 0, k, False
-        while j < len(toks):
-            s = toks[j].string
-            if s in "([{" and toks[j].type == tokenize.OP:
-                depth += 1
-            elif s in ")]}" and toks[j].type == tokenize.OP:
-                if depth == 0:
-                    break
-                depth -= 1
-            elif depth == 0 and lit(toks[j]) == "--name" and toks[j + 1].string == ",":
-                e, d = j + 2, 0
-                while e < len(toks) and not (d == 0 and toks[e].string in (",", ")", "]")):
-                    d += {"(": 1, "[": 1, "{": 1, ")": -1, "]": -1, "}": -1}.get(toks[e].string, 0)
-                    e += 1
-                ok = pynamed(text_of(toks[j + 2:e]))
+        name = None
+        while k < len(elts):
+            e, c = elts[k], const(elts[k])
+            if c == "--name" and k + 1 < len(elts):
+                name, k = ast.unparse(elts[k + 1]), k + 2
+            elif c in wp.RUN_VALUES:
+                k += 2
+            elif c in wp.RUN_BOOLS:
+                k += 1
+            elif (isinstance(e, ast.Starred) and isinstance(e.value, ast.Call) and isinstance(e.value.func, ast.Name)
+                  and e.value.func.id == "run_name" and len(e.value.args) == 1):
+                name, k = ast.unparse(e.value.args[0]), k + 1
+            else:
                 break
-            j += 1
-        if not ok:
-            errors.append(f"{f}:{toks[k].start[0]}: docker {verbs[0]} starts a container with no --name under PROOF_RUN_PREFIX")
+        if name is None or not pynamed(name):
+            errors.append(f"{f}:{node.lineno}: docker {verb[0]} starts a container with no --name under PROOF_RUN_PREFIX")
 for e in errors:
     print(e, file=sys.stderr)
 print(f"{len(files)} files read", file=sys.stderr)
@@ -1786,8 +1790,11 @@ sys.exit(1 if errors else 0)
 PY
 }
 container_names "$root" 2>"$scratch/names.err" || fail "a container a script the close runs starts has no name under the run prefix: $(cat "$scratch/names.err")"
-# Planted: a run with no name, one named under no prefix, each in a shell
-# script and a Python suite, fail it, and the named forms beside them pass.
+# Planted: a run with no name, one named under no prefix, one whose only
+# name comes after the global options' verb's image (an argument of the
+# container's command) and one given only a global option before the
+# verb, in a shell script and a Python suite, each fail it, and the named
+# forms beside them pass.
 mkdir -p "$scratch/names/scripts/lib" "$scratch/names/tests"
 cp "$root/scripts/lib/workflow_plan.py" "$scratch/names/scripts/lib/"
 cat > "$scratch/names/tests/planted.sh" <<'PLANT'
@@ -1797,6 +1804,9 @@ docker run --rm alpine:3 true
 x="$(docker run --rm --name "$OTHER-1" alpine:3 true)"
 docker container create --name "$RUN-ok" alpine:3
 step boot db docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-db"} postgres:18.6 true
+docker --debug run --rm alpine:3 true
+docker run --rm alpine:3 echo --name "${PROOF_RUN_PREFIX}late"
+docker -D run -d --name="$RUN-eq" alpine:3
 PLANT
 cat > "$scratch/names/tests/planted.py" <<'PLANT'
 PROJECT_PREFIX = ""
@@ -1804,13 +1814,16 @@ other = "cyfr-planted"
 run("docker", "run", "--rm", "alpine:3", "true")
 run("docker", "run", "--rm", "--name", other, "alpine:3", "true")
 args = ["docker", "run", "--name", f"{PROJECT_PREFIX}planted", "alpine:3"]
+run("docker", "run", "--rm", "alpine:3", "--name", f"{PROJECT_PREFIX}late")
+run("docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}optional"), "alpine:3")
 PLANT
 ! container_names "$scratch/names" tests/planted.sh tests/planted.py 2>"$scratch/names-planted.err" || fail 'containers with no name under the prefix passed the name check'
 for want in 'tests/planted.sh: docker run --rm alpine:3 true' 'tests/planted.sh: docker run --rm --name $OTHER-1' \
-  'tests/planted.py:3: docker run' 'tests/planted.py:4: docker run'; do
+  'tests/planted.sh: docker --debug run --rm alpine:3 true' 'tests/planted.sh: docker run --rm alpine:3 echo --name' \
+  'tests/planted.py:3: docker run' 'tests/planted.py:4: docker run' 'tests/planted.py:6: docker run'; do
   grep -qF -- "$want" "$scratch/names-planted.err" || fail "the name check did not name the unnamed container ($want): $(cat "$scratch/names-planted.err")"
 done
-[ "$(grep -c 'no --name under PROOF_RUN_PREFIX' "$scratch/names-planted.err")" = 4 ] ||
+[ "$(grep -c 'no --name under PROOF_RUN_PREFIX' "$scratch/names-planted.err")" = 7 ] ||
   fail "the name check refused a named container: $(cat "$scratch/names-planted.err")"
 echo 'ok: every container the scripts the close runs start is named under the run prefix'
 
@@ -1866,7 +1879,33 @@ has_line '^h0 cyfr-gate-4200050-harness-locus-builds-1$' "$scratch/bootclean.tra
 [ ! -e "$bootwork" ] || fail "the boot leg's cleanup left its run's directory"
 [ "$(grep -c '^rm present$' "$scratch/bootclean.trace/docker.watch")" = 2 ] && ! grep -q '^rm absent$' "$scratch/bootclean.trace/docker.watch" ||
   fail "the boot leg's holders were not removed before its directory: $(tr '\n' ' ' < "$scratch/bootclean.trace/docker.watch")"
-echo "ok: a leg's cleanup removes its containers before the directories they hold, and leaves another leg's"
+# A removal that fails ends the cleaning there: the holder that could
+# not be removed keeps its run's directory, the failure is named and the
+# cleanup fails.
+host_store bootfail
+for holder in ns reserve; do
+  echo "b$holder cyfr-gate-4200051-boot-cyfr-release-boot-fixture-$holder" >> "$scratch/bootfail.trace/docker.containers"
+done
+bootwork="$scratch/bootfail.tmp/cyfr-gate-4200051-boot-cyfr-release-boot-fixture"
+mkdir -p "$bootwork"
+rc=0
+(
+  export TMPDIR="$scratch/bootfail.tmp" TRACE="$scratch/bootfail.trace" PATH="$scratch/bin:$PATH" GATE_ROOT="$root" \
+    REAL_PYTHON3="$REAL_PYTHON3" STUB_DOCKER_FAIL=rm
+  source "$gate"
+  set +e
+  REFUSED= DOCKER_SCRATCH="$scratch/bootfail.tmp/cyfr-gate-4200051-boot.scratch" GATE_ID=4200051
+  gate_clean leg boot "$scratch/bootfail.log"
+) 2>"$scratch/bootfail.err" </dev/null || rc=$?
+[ "$rc" = 1 ] || fail "a boot cleanup whose holder removal failed exited $rc: $(cat "$scratch/bootfail.err")"
+[ -d "$bootwork" ] || fail "a boot cleanup removed its run's directory after its holder's removal failed"
+has_line ' cyfr-gate-4200051-boot-cyfr-release-boot-fixture-ns$' "$scratch/bootfail.trace/docker.containers" ||
+  fail "the stand-in lost the holder whose removal failed"
+has_line 'could not be removed' "$scratch/bootfail.err" && has_line 'the cleaning stops at the failure above' "$scratch/bootfail.err" ||
+  fail "the failed removal was not named, or the cleaning did not say it stopped: $(cat "$scratch/bootfail.err")"
+[ "$(grep -c '^rm ' "$scratch/bootfail.trace/docker.calls")" = 1 ] ||
+  fail "the cleaning went on after the first failed removal: $(grep '^rm ' "$scratch/bootfail.trace/docker.calls")"
+echo "ok: a leg's cleanup removes its containers before the directories they hold, leaves another leg's, and stops at the first removal that fails"
 
 # A docker call killed midway leaves its output under the gate's own
 # scratch directory, which is named after the gate, so the next gate

@@ -86,7 +86,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_plane import ControlPlane  # noqa: E402
 from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, ROLE, RUN_DIR, SERVICE, SERVICE_UID, SERVICE_USER,  # noqa: E402
                    Stack, expect, run, wait_until)
-from imagesuite import PROJECT_PREFIX  # noqa: E402
+from imagesuite import PROJECT_PREFIX, run_name  # noqa: E402
 
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
 STEPS = ("refusals", "connect", "relay", "nested", "spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
@@ -107,7 +107,7 @@ def prerequisites(image):
         sys.exit(f"FAIL: prerequisite missing: the image {image} is not built")
     if not os.path.isfile(PROFILE):
         sys.exit(f"FAIL: prerequisite missing: {PROFILE}")
-    shipped = run("docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}locus-keeper-profile-{os.getpid()}",
+    shipped = run("docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-keeper-profile-{os.getpid()}"),
                   "--entrypoint", "cat", image, IMAGE_PROFILE, check=False).stdout
     with open(PROFILE) as f:
         expect(json.loads(shipped or "null") == json.load(f), f"the image carries {PROFILE} as {IMAGE_PROFILE}")
@@ -163,7 +163,7 @@ class IsolatedStack(Stack):
 
 def keeper_run(image, client_script, seccomp=True, timeout=120, mounts=()):
     """cyfr-locus from the image under the shipped service's options, serving the isolated pool to a shell client."""
-    args = ["docker", "run", "--rm", "--name", f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}",
+    args = ["docker", "run", "--rm", *run_name(f"{PROJECT_PREFIX}locus-keeper-run-{os.getpid()}-{secrets.token_hex(4)}"),
             *[arg for mount in mounts for arg in ("-v", mount)], "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL",
             "--security-opt", "no-new-privileges:true", "--security-opt", "writable-cgroups=true", "--read-only", "--ipc", "none", "--init",
             "--tmpfs", f"{HOME_ROOT}:mode=1733,exec,size=64m", "--tmpfs", f"{RUN_DIR}:uid={SERVICE_UID},gid={SERVICE_UID},mode=0700,size=4m"]

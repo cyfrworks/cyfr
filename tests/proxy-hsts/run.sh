@@ -146,14 +146,17 @@ fail_with_logs() {
   fail "$*"
 }
 
-# The shipped Caddyfile adapted to JSON with the environment `$2…` (docker
-# `-e` arguments); `$1` names the case. Fails when Caddy refuses the file or
-# warns that it is not formatted as `caddy fmt` formats it.
+# The shipped Caddyfile adapted to JSON with the environment `$2…` (each
+# NAME=VALUE, or a NAME this shell's environment gives); `$1` names the
+# case. Fails when Caddy refuses the file or warns that it is not
+# formatted as `caddy fmt` formats it.
 adapt() {
-  local name="$1"
+  local name="$1" setting
+  local -a env=()
   shift
+  for setting in "$@"; do env+=(-e "$setting"); done
   if ! docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-adapt-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
-    -v "$ROOT/Caddyfile:/etc/caddy/Caddyfile:ro" "$@" "$IMAGE" \
+    -v "$ROOT/Caddyfile:/etc/caddy/Caddyfile:ro" ${env[@]+"${env[@]}"} "$IMAGE" \
     caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile \
     >"$WORK/$name.json" 2>"$WORK/$name.log"; then
     cat "$WORK/$name.log" >&2
@@ -303,13 +306,13 @@ assert_redirect() {
 }
 
 step "loads: the shipped Caddyfile in $IMAGE, CADDY_ACME_EMAIL empty, unset and given"
-adapt email-empty -e "CYFR_HOST=$TLS_HOST" -e CADDY_ACME_EMAIL=
+adapt email-empty "CYFR_HOST=$TLS_HOST" CADDY_ACME_EMAIL=
 ! grep -q '"email"' "$WORK/email-empty.json" || fail "an empty CADDY_ACME_EMAIL registered an email"
 pass "CADDY_ACME_EMAIL empty: the file loads and registers no email"
-adapt email-unset -e "CYFR_HOST=$TLS_HOST"
+adapt email-unset "CYFR_HOST=$TLS_HOST"
 ! grep -q '"email"' "$WORK/email-unset.json" || fail "an unset CADDY_ACME_EMAIL registered an email"
 pass "CADDY_ACME_EMAIL unset: the file loads and registers no email"
-adapt email-given -e "CYFR_HOST=$TLS_HOST" -e "CADDY_ACME_EMAIL=$GIVEN_EMAIL"
+adapt email-given "CYFR_HOST=$TLS_HOST" "CADDY_ACME_EMAIL=$GIVEN_EMAIL"
 grep -q "\"email\":\"$GIVEN_EMAIL\"" "$WORK/email-given.json" ||
   fail "a given CADDY_ACME_EMAIL was not registered"
 pass "CADDY_ACME_EMAIL given: the file loads and registers $GIVEN_EMAIL"
@@ -389,7 +392,7 @@ docker rm -f -v "$IP_PROXY" >/dev/null
 # ::1 cannot be asked the same way (busybox's TLS client resets an IPv6
 # connection there), so its branch is held in the adapted configuration:
 # the HSTS matcher Caddy loaded names it beside 127.0.0.1.
-adapt ip-matcher -e "CYFR_HOST=$TLS_HOST"
+adapt ip-matcher "CYFR_HOST=$TLS_HOST"
 grep -qF '127\\.0\\.0\\.1' "$WORK/ip-matcher.json" ||
   fail "the loaded HSTS matcher does not name 127.0.0.1"
 grep -q '::1' "$WORK/ip-matcher.json" || fail "the loaded HSTS matcher does not name ::1"

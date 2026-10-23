@@ -769,14 +769,16 @@ free_bytes() {
 # A tmpfs of RESERVE_FS_SIZE owned by this user, held by a container of
 # this user's whose root this user may enter: the container's id in
 # RESERVE_HOLDER, which the cleanup removes, and the tmpfs's path from the
-# host in LIMITED. `$1` is where it mounts the tmpfs, the rest the
-# container's own arguments, its image among them.
+# host in LIMITED. `$1` is where it mounts the tmpfs, `$2` the image and
+# the rest its command; the container's further options are the caller's
+# RESERVE_OPTIONS.
+RESERVE_OPTIONS=()
 reserve_holder() {
-  local mount="$1" pid
-  shift
+  local mount="$1" image="$2" pid
+  shift 2
   RESERVE_HOLDER="$(docker run -d ${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-reserve"} --user "$(id -u):$(id -g)" \
     --tmpfs "$mount:size=$RESERVE_FS_SIZE,uid=$(id -u),gid=$(id -g),mode=0700" \
-    "$@")" || fail "no container could hold the reserve case's filesystem"
+    ${RESERVE_OPTIONS[@]+"${RESERVE_OPTIONS[@]}"} "$image" "$@")" || fail "no container could hold the reserve case's filesystem"
   pid="$(docker inspect -f '{{.State.Pid}}' "$RESERVE_HOLDER")"
   [ -n "$pid" ] && [ "$pid" != 0 ] || fail "the reserve case's container is not running"
   LIMITED="/proc/$pid/root$mount"
@@ -938,8 +940,8 @@ step "the storage reserve: a $ADAPTER cell on a size-limited filesystem"
 RESERVE="$WORK/reserve"
 if [ "$ADAPTER" = postgres ]; then
   # The server's data directory and the reserve's directory on one tmpfs.
-  reserve_holder /var/lib/postgresql \
-    -e POSTGRES_PASSWORD=reserve -e POSTGRES_DB=reserve -p 127.0.0.1::5432 "$PG_IMAGE"
+  RESERVE_OPTIONS=(-e POSTGRES_PASSWORD=reserve -e POSTGRES_DB=reserve -p 127.0.0.1::5432)
+  reserve_holder /var/lib/postgresql "$PG_IMAGE"
   RESERVE_PG_PORT="$(docker port "$RESERVE_HOLDER" 5432/tcp | sed -n 's/^127\.0\.0\.1://p' | head -1)"
   [ -n "$RESERVE_PG_PORT" ] || fail "the reserve case's postgres server publishes no port"
   closes=$((SECONDS + 60))
@@ -956,9 +958,9 @@ else
   # The data directory on the tmpfs, in the container the cell runs in.
   cell_new "$RESERVE"
   mkdir -p "$RESERVE/tmp"
-  reserve_holder "$RESERVE/data" --hostname "$(hostname)" --network host \
-    -v /usr:/usr:ro -v /etc/ld.so.cache:/etc/ld.so.cache:ro \
-    -v "$ROOT:$ROOT:ro" -v "$WORK:$WORK" debian:trixie-slim sleep infinity
+  RESERVE_OPTIONS=(--hostname "$(hostname)" --network host -v /usr:/usr:ro -v /etc/ld.so.cache:/etc/ld.so.cache:ro
+    -v "$ROOT:$ROOT:ro" -v "$WORK:$WORK")
+  reserve_holder "$RESERVE/data" debian:trixie-slim sleep infinity
   RESERVE_DIR="$LIMITED"
 fi
 echo "CYFR_STORAGE_RESERVE_BYTES=$RESERVE_BYTES" >>"$RESERVE/.env"

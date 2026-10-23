@@ -33,6 +33,7 @@ from harness import (  # noqa: E402
     HOME_ROOT, POOL_FIRST, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, Stack, build_canary, eventually,
     expect, owner_of, probe, require_docker, run,
 )
+from imagesuite import run_name  # noqa: E402
 
 UID = POOL_FIRST
 TAG = "locus-backends-residue"
@@ -127,7 +128,7 @@ def main():
             (["--read-only", "--ipc", "none", "--tmpfs", "/tmp:mode=1777"], r"mount /tmp .* is writable by pooled uids"),
             (["--read-only"], r"mount /dev/shm .* is writable by pooled uids"),
         ]):
-            result = run("docker", "run", "--name", f"{stack.project}-refusal-{n}", *settings, *flags, image, *command,
+            result = run("docker", "run", *run_name(f"{stack.project}-refusal-{n}"), *settings, *flags, image, *command,
                          check=False)
             expect(result.returncode == 78 and re.search(refusal, result.stderr),
                    f"cyfr-locus refuses to start with {' '.join(flags)}", result.stderr[-2000:])

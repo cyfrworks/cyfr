@@ -32,6 +32,8 @@ from unittest import mock
 sys.dont_write_bytecode = True
 TESTS = os.path.dirname(os.path.abspath(__file__))
 SUITES = ("builder-image", "locus-runtime-image", "locus-backends-image")
+sys.path.insert(0, TESTS)
+import imagesuite  # noqa: E402
 
 # A suite as the harnesses run one: a stack whose compose records its calls
 # instead of calling Docker, a temporary directory, and a body that waits.
@@ -357,6 +359,75 @@ class RuntimeRestart(unittest.TestCase):
         self.assertIn(f"compose never published port {self.module.PORT}", message)
         self.assertIn(f"no port {self.module.PORT}/tcp for container test-1", message)
         self.assertIn("the service's log", message)
+
+
+# A suite's one-off containers as its functions start them, each call to
+# `run` recorded instead of made: the first `docker run` ends the call.
+ONE_OFF = r"""
+import json, os, sys, types
+suite, case = sys.argv[1:]
+sys.path.insert(0, suite)
+calls = []
+class Started(Exception):
+    pass
+def fake(*args, **kwargs):
+    calls.append(list(args))
+    if args[:2] == ("docker", "run"):
+        raise Started
+    return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+if case == "keeper_run":
+    import namespace as m
+    m.run = fake
+    call = lambda: m.keeper_run("image", "true")
+elif case == "prerequisites":
+    import namespace as m
+    m.run = fake
+    m.shutil = types.SimpleNamespace(which=lambda name: "/usr/bin/docker")
+    m.os = types.SimpleNamespace(path=types.SimpleNamespace(isfile=lambda path: True), getpid=os.getpid)
+    call = lambda: m.prerequisites("image")
+elif case == "dial":
+    import runners as m
+    m.run = fake
+    call = lambda: m.dial(types.SimpleNamespace(project="project", container="c", image="image"), 7, "host:1")
+try:
+    call()
+except Started:
+    pass
+print(json.dumps([c for c in calls if c[:2] == ["docker", "run"]]))
+"""
+
+
+class OneOffNames(unittest.TestCase):
+    """A one-off container a suite starts is named only under
+    PROOF_RUN_PREFIX, so CI starts it unnamed, as it did before the gate
+    named its runs."""
+
+    def started(self, suite, case, prefix):
+        env = {k: v for k, v in os.environ.items() if k != "PROOF_RUN_PREFIX"}
+        if prefix:
+            env["PROOF_RUN_PREFIX"] = prefix
+        result = subprocess.run([sys.executable, "-I", "-B", "-c", ONE_OFF, os.path.join(TESTS, suite), case],
+                                capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runs = json.loads(result.stdout)
+        self.assertEqual(len(runs), 1, runs)
+        return runs[0]
+
+    def test_run_name_is_nothing_without_the_prefix(self):
+        with mock.patch.object(imagesuite, "PROJECT_PREFIX", ""):
+            self.assertEqual(imagesuite.run_name("x"), [])
+        with mock.patch.object(imagesuite, "PROJECT_PREFIX", "cyfr-gate-1-harness-"):
+            self.assertEqual(imagesuite.run_name("cyfr-gate-1-harness-x"), ["--name", "cyfr-gate-1-harness-x"])
+
+    def test_each_one_off_container_is_named_only_under_the_prefix(self):
+        for suite, case in (("locus-runtime-image", "keeper_run"), ("locus-runtime-image", "prerequisites"),
+                            ("locus-runtime-image", "dial")):
+            with self.subTest(case=case):
+                self.assertNotIn("--name", self.started(suite, case, None))
+                args = self.started(suite, case, "cyfr-gate-1-harness-")
+                self.assertIn("--name", args)
+                name = args[args.index("--name") + 1]
+                self.assertTrue(name.startswith("cyfr-gate-1-harness-") or name.startswith("project-"), name)
 
 
 class Bytecode(unittest.TestCase):

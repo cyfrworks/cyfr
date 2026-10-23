@@ -31,6 +31,14 @@ import time
 # objects from another's by name.
 PROJECT_PREFIX = os.environ.get("PROOF_RUN_PREFIX", "")
 
+
+def run_name(name):
+    """`--name NAME` for a one-off container a suite starts, under
+    PROOF_RUN_PREFIX (NAME carries PROJECT_PREFIX, or a stack's project),
+    or no argument without it, so the container runs unnamed as CI runs
+    it."""
+    return ["--name", name] if PROJECT_PREFIX else []
+
 # How long `docker compose down` gives each container to stop once the
 # suite was signalled. heavy-check sends TERM at its hold deadline and KILL
 # its grace later (30 s by default); a down that waited out a service's own

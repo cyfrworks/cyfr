@@ -115,6 +115,7 @@ from control_plane import DROP, RESERVED_HEADERS, ZERO_AUTHORITY, ControlPlane  
 from stack import (  # noqa: E402
     KEEPER_CAPS, POOL_FIRST, POOL_LAST, ROOT, SERVICE, SERVICE_UID, Stack, StatusSampler, expect, run, wait_until,
 )
+from imagesuite import run_name  # noqa: E402
 
 FIXTURES = {
     "spin": os.path.join(ROOT, "apps", "locus", "test", "support", "runtime", "test_wasm", "spin.wasm"),
@@ -464,7 +465,7 @@ def dial(stack, pid, target):
     image sharing the service container's processes: the service's own
     seccomp profile denies setns, even to the observer."""
     if pid:
-        ran = run("docker", "run", "--rm", "--name", f"{stack.project}-nsenter-{secrets.token_hex(4)}",
+        ran = run("docker", "run", "--rm", *run_name(f"{stack.project}-nsenter-{secrets.token_hex(4)}"),
                   "--privileged", "--pid", f"container:{stack.container}",
                   "--entrypoint", "nsenter", stack.image, "-t", str(pid), "-n",
                   "curl", "-sv", "--max-time", "3", f"http://{target}/", check=False)

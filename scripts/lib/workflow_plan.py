@@ -290,7 +290,7 @@ class Word:
     an expansion in it is unquoted, so it may split into several words."""
 
     def __init__(self):
-        self.text, self.plain, self.splits = "", True, False
+        self.text, self.plain, self.splits, self.elements = "", True, False, None
 
 
 SEPARATORS = ("&&", "||", ";;&", ";;", ";&", "|&", ";", "|", "&", "(", ")", "\n")
@@ -393,14 +393,28 @@ class Lexer:
                 if not (word.plain and ASSIGNMENT.fullmatch(word.text)):
                     self.fail("a ( inside a word")
                 # An array's assignment: its elements are data of the
-                # assignment's word, up to its `)`.
+                # assignment's word, up to its `)`, each also kept as a
+                # word of its own (`elements`).
                 i += 1
+                word.elements, element = [], None
                 while i < len(s) and s[i] != ")":
                     if s[i] in " \t\n":
                         word.text += " "
+                        if element is not None:
+                            word.elements.append(element)
+                            element = None
                         i += 1
+                    elif s[i] == "#" and element is None:
+                        while i < len(s) and s[i] != "\n":
+                            i += 1
                     else:
-                        i = self.word_part(i, word, quoted=False)
+                        element = element or Word()
+                        j = self.word_part(i, element, quoted=False)
+                        word.text += s[i:j]
+                        i = j
+                if element is not None:
+                    word.elements.append(element)
+                word.plain = word.plain and all(e.plain for e in word.elements)
                 if i >= len(s):
                     self.fail("an unterminated array")
                 i += 1
@@ -472,12 +486,7 @@ class Lexer:
                 self.fail("an unterminated double quote")
             return i + 1
         if s.startswith("$((", i):
-            j, depth = i + 3, 2
-            while j < len(s) and depth:
-                depth += {"(": 1, ")": -1}.get(s[j], 0)
-                j += 1
-            if depth:
-                self.fail("an unterminated arithmetic expansion")
+            j = self.inside(i + 3, "))", "an arithmetic expansion")
             return self.expansion(word, quoted, s[i:j], j)
         if s.startswith("$(", i) or (c in "<>" and s.startswith("(", i + 1) and not quoted):
             j = self.script(i + 2, ")")
@@ -494,15 +503,7 @@ class Lexer:
             self.bodies += inner.bodies
             return self.expansion(word, quoted, "\0", j + 1)
         if s.startswith("${", i):
-            j, depth = i + 2, 1
-            while j < len(s) and depth:
-                if s[j] == "\\":
-                    j += 2
-                    continue
-                depth += {"{": 1, "}": -1}.get(s[j], 0)
-                j += 1
-            if depth:
-                self.fail("an unterminated parameter expansion")
+            j = self.inside(i + 2, "}", "a parameter expansion")
             return self.expansion(word, quoted, s[i:j], j)
         if c == "$" and i + 1 < len(s) and re.match(r"[A-Za-z0-9_@*#?$!-]", s[i + 1]):
             m = re.match(r"\$([A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])", s[i:])
@@ -510,7 +511,61 @@ class Lexer:
         word.text += c
         return i + 1
 
+    def inside(self, j, close, what):
+        """Past the `close` that ends the parameter or arithmetic expansion
+        whose content starts at j. Its content is kept as text, a value;
+        a command it could run (a command substitution, backquotes, a
+        process substitution) or a mention of docker fails the plan, and
+        with `strict` off (the guard's reading) is read as commands of its
+        own instead."""
+        s, depth, start = self.s, 1, j
+        while j < len(s):
+            c = s[j]
+            if c == "\\":
+                j += 2
+                continue
+            if (s.startswith("$(", j) and not s.startswith("$((", j)) or (c in "<>" and s.startswith("(", j + 1)):
+                if self.strict:
+                    self.fail(f"{what} holds a command, which the plan does not read")
+                j = self.script(j + 2, ")")
+                continue
+            if c == "`":
+                if self.strict:
+                    self.fail(f"{what} holds a command, which the plan does not read")
+                k = j + 1
+                while k < len(s) and s[k] != "`":
+                    k += 2 if s[k] == "\\" else 1
+                inner = Lexer(re.sub(r"\\([$`\\])", r"\1", s[j + 1:k]), self.strict)
+                inner.script(0)
+                self.commands += inner.commands
+                self.bodies += inner.bodies
+                j = k + 1
+                continue
+            if c == "'" and close == "}":
+                k = s.find("'", j + 1)
+                j = len(s) if k < 0 else k + 1
+                continue
+            if close == "}":
+                depth += {"{": 1, "}": -1}.get(c, 0)
+            elif c == "(":
+                depth += 1
+            elif s.startswith("))", j) and depth == 1:
+                if self.strict and re.search(r"\bdocker\b", s[start:j]):
+                    self.fail(f"{what} mentions docker")
+                return j + 2
+            elif c == ")":
+                depth -= 1
+            j += 1
+            if depth == 0:
+                if self.strict and re.search(r"\bdocker\b", s[start:j]):
+                    self.fail(f"{what} mentions docker")
+                return j
+        self.fail(f"{what} is not closed")
+
     def expansion(self, word, quoted, text, j):
+        # "$@" and "${a[@]}" are as many words as they hold, quoted or not.
+        if re.fullmatch(r"\$@|\$\{!?(@|[A-Za-z_][A-Za-z0-9_]*\[@\])[^}]*\}", text):
+            word.splits = True
         word.text += text
         word.plain = False
         word.splits = word.splits or not quoted
@@ -564,22 +619,39 @@ READING_VERBS = {"version", "info", "inspect", "image inspect", "images", "image
 DOCKER_GROUPS = {"image", "container", "buildx", "builder", "compose"}
 
 
-def options(words, values, bools, interspersed=True):
+def options(words, values, bools, interspersed=True, arrays=None):
     """WORDS read as docker's flag library reads them, against the options
     that take a value and those that take none: the options given, as
     (option, value) pairs, and the operands; with interspersed off, the
     operands start at the first word that is no option. An option not in
-    either set, or a word that may split into options, fails it."""
+    either set, or a word that may split into options, fails it, but for
+    an array's expansion ("${A[@]}" or ${A[@]+"${A[@]}"}) where `arrays`
+    holds every assignment of A, each a list of words that are options and
+    their values alone, none of them --name."""
     given, operands, i = [], [], 0
     while i < len(words):
         w = words[i]
-        if w.splits:
-            raise Refused(f"a docker command's word {w.text!r} may split into options the plan cannot read")
-        t = w.text
         i += 1
         if operands and not interspersed:
             operands.append(w)
             continue
+        # `${VAR:+--option "VALUE"}` is nothing, or the option and its one
+        # value (VALUE one double-quoted word).
+        m = None if w.plain else re.fullmatch(r'\$\{[A-Za-z_][A-Za-z0-9_]*:\+(--[A-Za-z][A-Za-z0-9-]*) "(.*)"\}', w.text, re.S)
+        if m and m.group(1) in values and not re.search(r'"|\$@|\[@\]', re.sub(r"\$\([^()]*\)", "", m.group(2))):
+            given.append((m.group(1), m.group(2)))
+            continue
+        a = re.fullmatch(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\}|\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\+"\$\{\2\[@\]\}"\}', w.text)
+        a = a and (a.group(1) or a.group(2))
+        if w.splits and a and arrays is not None and a in arrays:
+            for elements in arrays[a]:
+                held, extra = options(elements, values, bools)
+                if extra or any(name == "--name" for name, _ in held):
+                    raise Refused(f"the array {a} holds {'an operand' if extra else '--name'}, which the plan cannot place")
+            continue
+        if w.splits:
+            raise Refused(f"a docker command's word {w.text!r} may split into options the plan cannot read")
+        t = w.text
         if t == "--":
             operands += words[i:]
             break
@@ -620,6 +692,58 @@ def options(words, values, bools, interspersed=True):
         else:
             operands.append(w)
     return given, operands
+
+
+# docker run's and docker create's options (docker 29's `docker run
+# --help`; create takes the same less --detach, --detach-keys and
+# --sig-proxy), those that take a value and those that take none, through
+# which container_name reads a container's --name.
+RUN_VALUES = {
+    "--add-host", "--annotation", "-a", "--attach", "--blkio-weight", "--blkio-weight-device", "--cap-add",
+    "--cap-drop", "--cgroup-parent", "--cgroupns", "--cidfile", "--cpu-period", "--cpu-quota", "--cpu-rt-period",
+    "--cpu-rt-runtime", "-c", "--cpu-shares", "--cpus", "--cpuset-cpus", "--cpuset-mems", "--detach-keys",
+    "--device", "--device-cgroup-rule", "--device-read-bps", "--device-read-iops", "--device-write-bps",
+    "--device-write-iops", "--dns", "--dns-option", "--dns-search", "--domainname", "--entrypoint", "-e", "--env",
+    "--env-file", "--expose", "--gpus", "--group-add", "--health-cmd", "--health-interval", "--health-retries",
+    "--health-start-interval", "--health-start-period", "--health-timeout", "-h", "--hostname", "--ip", "--ip6",
+    "--ipc", "--isolation", "-l", "--label", "--label-file", "--link", "--link-local-ip", "--log-driver",
+    "--log-opt", "--mac-address", "-m", "--memory", "--memory-reservation", "--memory-swap",
+    "--memory-swappiness", "--mount", "--name", "--network", "--network-alias", "--oom-score-adj", "--pid",
+    "--pids-limit", "--platform", "-p", "--publish", "--pull", "--restart", "--runtime", "--security-opt",
+    "--shm-size", "--stop-signal", "--stop-timeout", "--storage-opt", "--sysctl", "--tmpfs", "--ulimit", "-u",
+    "--user", "--userns", "--uts", "-v", "--volume", "--volume-driver", "--volumes-from", "-w", "--workdir",
+}
+RUN_BOOLS = {"-d", "--detach", "--help", "--init", "-i", "--interactive", "--no-healthcheck", "--oom-kill-disable",
+             "--privileged", "-P", "--publish-all", "-q", "--quiet", "--read-only", "--rm", "--sig-proxy", "-t",
+             "--tty", "--use-api-socket"}
+
+
+def container_name(words, arrays=None):
+    """For the words after `docker`: None when they start no container
+    (no run or create, in either spelling); else the text of the --name
+    the run or create itself is given, the last one as docker takes it, or
+    "" when it is given none. Its options are read as docker reads them,
+    the global options before the verb among them, up to the image; a word
+    there that may split into options (an array's expansion aside, read
+    through `arrays` as options() reads one), an option the tables above do
+    not hold or an expansion naming the verb fails it."""
+    _, rest = options(words, DOCKER_VALUES, DOCKER_BOOLS, interspersed=False)
+    if not rest:
+        return None
+    if not rest[0].plain:
+        raise Refused(f"its docker verb {rest[0].text!r} is an expansion the plan cannot read")
+    verb, rest = rest[0].text, rest[1:]
+    if verb == "container":
+        if not rest or not rest[0].plain:
+            raise Refused("its docker container command is not one the plan reads")
+        verb, rest = rest[0].text, rest[1:]
+    if verb not in ("run", "create"):
+        return None
+    given, operands = options(rest, RUN_VALUES, RUN_BOOLS, interspersed=False, arrays=arrays)
+    if not operands:
+        raise Refused(f"its docker {verb} names no image")
+    names = [value for name, value in given if name == "--name"]
+    return names[-1] if names else ""
 
 
 def docker_names(words):
