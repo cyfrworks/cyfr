@@ -84,6 +84,99 @@ export function homeOf(homes, host = SITE) {
   return home;
 }
 
+// Keep a listener for the socket's whole lifetime, including the idle
+// interval after a response and the interval after HTTP hands off an
+// upgrade. Only operations still using it are failed by a peer's reset.
+const sockets = new WeakMap();
+function watchSocket(socket, errors, peer, fail = null) {
+  let state = sockets.get(socket);
+  if (!state) {
+    state = { active: new Set(), errors, peer };
+    sockets.set(socket, state);
+    // Observe the active owners before HTTP propagates the error and
+    // settles their requests.
+    socket.prependListener("error", (error) => {
+      const entry = { at: Date.now(), peer: state.peer, code: error.code ?? null, message: error.message, active: state.active.size > 0 };
+      state.errors.push(entry);
+      console.error(`browser harness: ${entry.peer}: ${error.message} (${entry.active ? "request failed" : "idle connection"})`);
+      for (const reject of [...state.active]) reject(error);
+      socket.destroy();
+    });
+  }
+  // An agent may reuse a readiness-check socket for a forwarded request.
+  // Its current owner receives the record, including a later idle reset.
+  state.errors = errors;
+  state.peer = peer;
+  if (fail) state.active.add(fail);
+  return () => state.active.delete(fail);
+}
+
+function watchServer(server, errors, peer) {
+  server.on("connection", (socket) => watchSocket(socket, errors, peer));
+  server.on("secureConnection", (socket) => watchSocket(socket, errors, `${peer} TLS`));
+  server.on("request", (req, res) => {
+    const stop = watchSocket(req.socket, errors, peer, (error) => res.destroy(error));
+    req.on("error", (error) => res.destroy(error));
+    res.on("error", () => req.destroy());
+    res.once("finish", stop);
+    res.once("close", stop);
+  });
+}
+
+// Both forwarding paths own the incoming streams, the outgoing request
+// and its response. A partial response fails the request too; an error
+// listener on ClientRequest alone does not cover IncomingMessage.
+function relay(req, res, account, errors, options, peer, answered = () => {}) {
+  let done = false;
+  let outbound;
+  const release = [watchSocket(req.socket, errors, "browser", fail)];
+  function finish() {
+    done = true;
+    for (const stop of release) stop();
+  }
+  function fail(error) {
+    if (done) return;
+    account.error = error.message;
+    finish();
+    outbound?.destroy();
+    if (res.destroyed) return;
+    if (res.headersSent) res.destroy(error);
+    else {
+      account.status = 502;
+      res.writeHead(502, { "content-type": "text/plain" });
+      res.end(`proxy: ${peer}: ${error.message}`);
+    }
+  }
+  req.on("error", fail);
+  res.on("error", fail);
+  res.once("finish", finish);
+  res.once("close", () => {
+    if (!done) outbound?.destroy();
+    finish();
+  });
+  outbound = forward(options, (upstream) => {
+    upstream.on("error", fail);
+    upstream.once("close", () => {
+      if (!upstream.complete) fail(new Error("the upstream response closed before completing"));
+    });
+    if (done) {
+      upstream.resume();
+      return;
+    }
+    answered(upstream);
+    account.status = upstream.statusCode;
+    res.writeHead(upstream.statusCode, upstream.rawHeaders);
+    upstream.pipe(res);
+  });
+  outbound.on("socket", (socket) => {
+    const stop = watchSocket(socket, errors, peer, fail);
+    if (done) stop();
+    else release.push(stop);
+  });
+  outbound.on("error", fail);
+  req.pipe(outbound);
+}
+
 // The harness's proxy. `answer(req, url)` may answer a request for a home
 // itself by returning [status, headers, body]; anything else goes to its
 // home. With `bodies`, each request's body (its first 256 KiB, as text) is
@@ -97,7 +190,9 @@ export function homeOf(homes, host = SITE) {
 // that does not. With `receiver` (`startReceiver`), every request for
 // `attacker.test` over plain HTTP goes to it, and with `attacker` too
 // (`readHomes`), every one over HTTPS. `proxy.refusals` lists each TLS
-// handshake a browser broke off, with the name it asked for.
+// handshake a browser broke off, with the name it asked for. `proxy.errors`
+// records socket errors, including whether a request or WebSocket was
+// active; a failed forwarded request also carries `error` in `proxy.seen`.
 export async function startProxy({
   receiver = null, answer = () => null, bodies = false, homes = [], unsigned = [], attacker = null,
 } = {}) {
@@ -151,8 +246,12 @@ export async function startProxy({
       req.resume();
       return;
     }
-    toReceiver(receiver, req, res, url, account);
+    toReceiver(receiver, req, res, url, account, proxy.errors);
   });
+  proxy.seen = [];
+  proxy.refusals = [];
+  proxy.errors = [];
+  watchServer(proxy, proxy.errors, "proxy");
   // A browser tunnels HTTPS and a WebSocket through an HTTP proxy with
   // CONNECT: a routed name's tunnel goes to the TLS front, and no other is
   // opened.
@@ -164,13 +263,10 @@ export async function startProxy({
       return;
     }
     proxy.seen.push({ at: Date.now(), method: "CONNECT", url: req.url, host, origin: null, referer: null, conditional: false });
-    socket.on("error", () => socket.destroy());
     socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
     if (head && head.length) socket.unshift(head);
     front.emit("connection", socket);
   });
-  proxy.seen = [];
-  proxy.refusals = [];
   proxy.cut = (host = "*") => {
     cuts.add(host);
     for (const pair of tunnels) {
@@ -260,7 +356,7 @@ function startFront(proxy, routes, { answer, bodies, isCut, hold }) {
       return;
     }
     if (route.receiver) {
-      toReceiver(route.receiver, req, res, url, account);
+      toReceiver(route.receiver, req, res, url, account, proxy.errors);
       return;
     }
     if (url.pathname.startsWith(`${HARNESS}/`)) {
@@ -277,45 +373,31 @@ function startFront(proxy, routes, { answer, bodies, isCut, hold }) {
       reply(...answered);
       return;
     }
-    const outbound = forward(
+    relay(req, res, account, proxy.errors,
       {
         host: "127.0.0.1", port: route.port, method: req.method, path: url.pathname + url.search,
         headers: { ...own(req.headers), ...forwarded(req) },
       },
-      (upstream) => {
+      `the cell ${route.name} on ${host} (127.0.0.1:${route.port})`, (upstream) => {
         account.setCookies = cookiePairs(upstream.headers["set-cookie"]);
         account.answered = {
           policy: upstream.headers["content-security-policy"] ?? null,
           frameOptions: upstream.headers["x-frame-options"] ?? null,
         };
-        account.status = upstream.statusCode;
-        res.writeHead(upstream.statusCode, upstream.rawHeaders);
-        upstream.on("close", () => {
-          if (!upstream.complete) res.destroy();
-        });
-        upstream.pipe(res);
       });
-    outbound.on("error", (error) => {
-      if (res.headersSent) {
-        res.destroy();
-        return;
-      }
-      account.status = 502;
-      res.writeHead(502, { "content-type": "text/plain" });
-      res.end(`proxy: the cell ${route.name} does not answer on ${host} (127.0.0.1:${route.port}): ${error.message}`);
-    });
-    req.pipe(outbound);
   });
+  watchServer(front, proxy.errors, "front");
   // A home's LiveView socket, inside its TLS tunnel.
   front.on("upgrade", (req, socket, head) => {
     const host = hostOf(req);
     const url = new URL(req.url, `https://${host}`);
     const route = routed(req);
-    proxy.seen.push({
+    const account = {
       at: Date.now(), method: "UPGRADE", url: url.href, host, home: route ? route.name : null,
       origin: req.headers.origin ?? null, referer: null, cookie: !!req.headers.cookie,
       cookies: cookiePairs(req.headers.cookie), conditional: false, setCookies: [],
-    });
+    };
+    proxy.seen.push(account);
     if (!route || route.receiver || isCut(host)) {
       socket.destroy();
       return;
@@ -331,11 +413,24 @@ function startFront(proxy, routes, { answer, bodies, isCut, hold }) {
       socket.pipe(upstream).pipe(socket);
     });
     hold(socket, upstream, host);
-    upstream.on("error", () => socket.destroy());
-    socket.on("error", () => upstream.destroy());
+    const stopUpstream = watchSocket(upstream, proxy.errors, `the ${host} WebSocket`, (error) => {
+      account.error = error.message;
+      socket.destroy();
+    });
+    const stopSocket = watchSocket(socket, proxy.errors, "browser WebSocket", (error) => {
+      account.error = error.message;
+      upstream.destroy();
+    });
+    const finished = () => {
+      stopUpstream();
+      stopSocket();
+    };
+    upstream.once("close", finished);
+    socket.once("close", finished);
   });
   // A browser that refuses the certificate breaks the handshake off.
   front.on("tlsClientError", (error, socket) => {
+    watchSocket(socket, proxy.errors, "front TLS handshake");
     proxy.refusals.push({ at: Date.now(), host: socket.servername || null, error: error.code || error.message });
   });
   return front;
@@ -343,24 +438,10 @@ function startFront(proxy, routes, { answer, bodies, isCut, hold }) {
 
 // A request for the attacker's name handed to `receiver` exactly as the
 // browser sent it, its answer back the same.
-function toReceiver(receiver, req, res, url, account) {
-  const outbound = forward(
+function toReceiver(receiver, req, res, url, account, errors) {
+  relay(req, res, account, errors,
     { host: "127.0.0.1", port: receiver.address().port, method: req.method, path: url.pathname + url.search, headers: req.headers },
-    (reply) => {
-      account.status = reply.statusCode;
-      res.writeHead(reply.statusCode, reply.rawHeaders);
-      reply.pipe(res);
-    });
-  outbound.on("error", (error) => {
-    if (res.headersSent) {
-      res.destroy();
-      return;
-    }
-    account.status = 502;
-    res.writeHead(502, { "content-type": "text/plain" });
-    res.end(`proxy: ${error.message}`);
-  });
-  req.pipe(outbound);
+    "the receiver");
 }
 
 // Whether `home`'s cell answers its readiness check as its hostname on its
@@ -381,6 +462,16 @@ async function answers(home) {
 // browser makes.
 export function askHome(home, path, headers = {}, { timeoutMs = 30_000 } = {}) {
   return new Promise((resolve, reject) => {
+    const errors = [];
+    let stop = () => {};
+    let done = false;
+    const finish = (error, answer) => {
+      if (done) return;
+      done = true;
+      stop();
+      if (error) reject(error);
+      else resolve(answer);
+    };
     const req = forward({
       host: "127.0.0.1", port: home.port, method: "GET", path,
       headers: {
@@ -392,10 +483,15 @@ export function askHome(home, path, headers = {}, { timeoutMs = 30_000 } = {}) {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (chunk) => { body += chunk; });
-      res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body }));
+      res.on("error", (error) => finish(error));
+      res.on("end", () => finish(null, { status: res.statusCode, headers: res.headers, body }));
+    });
+    req.on("socket", (socket) => {
+      stop = watchSocket(socket, errors, `askHome ${home.host}`, (error) => finish(error));
+      if (done) stop();
     });
     req.on("timeout", () => req.destroy(new Error(`no answer within ${timeoutMs} ms`)));
-    req.on("error", reject);
+    req.on("error", (error) => finish(error));
     req.end();
   });
 }
@@ -583,6 +679,8 @@ export function startReceiver() {
     });
   });
   receiver.log = [];
+  receiver.errors = [];
+  watchServer(receiver, receiver.errors, "receiver");
   return new Promise((resolve) => receiver.listen(0, "127.0.0.1", () => resolve(receiver)));
 }
 

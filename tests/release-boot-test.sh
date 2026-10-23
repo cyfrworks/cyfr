@@ -14,7 +14,8 @@
 # (tests/identity-proof/front.sh) against a stranger answering on its
 # address, with `docker` a stand-in; and the proofs' redaction
 # (tests/browser/lib.mjs `redact`) against a case of every pattern it
-# hides, run by node.
+# hides, run by node; and the browser harness's socket lifetimes against
+# peer resets (tests/browser/lib-test.mjs), without launching a browser.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 scratch=$(mktemp -d /tmp/cyfr-release-boot-test.XXXXXX)
@@ -582,5 +583,8 @@ console.log(`ok: ${cases.length} cases, each value hidden`);
 JS
 node "$scratch/redact-check.mjs" "$root/tests/browser/lib.mjs" || fail "the redaction leaves a value it hides"
 pass "the redaction hides every case's values, keeps JSON JSON and keeps what is not a secret"
+
+node --test "$root/tests/browser/lib-test.mjs" || fail "the browser harness did not handle a peer reset"
+pass "the browser harness records idle resets and fails active transfers without ending the process"
 
 echo "release-boot-test: all checks passed"
