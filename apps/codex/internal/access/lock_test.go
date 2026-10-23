@@ -318,3 +318,59 @@ func TestBusyNamesTheHolderWhoseRecordIsLate(t *testing.T) {
 		})
 	}
 }
+
+// A lock another handle still holds while no live holder record names a
+// holder (one a holder that exited or closed holding it has not had
+// released by the kernel yet, as Windows releases such a lock some time
+// after the close) is taken by the next taker once it frees within
+// recordWait, and refused naming no holder record once recordWait has
+// passed with it still held.
+func TestTakerRetriesALockADeadHolderStillHolds(t *testing.T) {
+	h := newHome(t)
+	h.unlock()
+	lockPath := filepath.Join(h.dir, stateDir, lockFile)
+	recordPath := filepath.Join(h.dir, stateDir, holderFile)
+	dead := exec.Command(exeOrSkip(t), "-test.run=^$")
+	dead.Env = childEnv()
+	if err := dead.Run(); err != nil {
+		t.Fatal(err)
+	}
+	host, _ := os.Hostname()
+	stale, _ := json.Marshal(holderRecord{Command: "old", Host: host, PID: dead.Process.Pid, Started: time.Now().UTC()})
+	other, err := Open(h.dir, h.fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, recordPath, stale)
+	first, busy, err := LockFile(lockPath)
+	if err != nil || busy {
+		t.Fatalf("holding the lock from another handle answered busy=%v, %v", busy, err)
+	}
+	freed := make(chan struct{})
+	go func() {
+		defer close(freed)
+		time.Sleep(20 * time.Millisecond)
+		first()
+	}()
+	started := time.Now()
+	unlock, err := other.Lock("next")
+	<-freed
+	if err != nil {
+		t.Fatalf("the next taker was refused with %v after %v, though the lock freed within recordWait", err, time.Since(started))
+	}
+	unlock()
+
+	writeFile(t, recordPath, stale)
+	second, busy, err := LockFile(lockPath)
+	if err != nil || busy {
+		t.Fatalf("holding the lock again answered busy=%v, %v", busy, err)
+	}
+	defer second()
+	started = time.Now()
+	_, err = other.Lock("next")
+	var refused *ErrBusy
+	if !errors.As(err, &refused) || refused.Holder != "a process that wrote no holder record" || time.Since(started) < recordWait {
+		t.Fatalf("the next taker answered %v after %v with the lock still held", err, time.Since(started))
+	}
+}

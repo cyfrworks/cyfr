@@ -28,6 +28,12 @@ func lockExclusive(f *os.File) (busy bool, err error) {
 	return false, err
 }
 
+// unlockExclusive is nothing on Unix: closing the descriptor releases
+// this process's share of the lock at once, and an explicit LOCK_UN would
+// release the open file description's lock under a docker watchdog that
+// inherited the descriptor and must keep it until it exits.
+func unlockExclusive(*os.File) {}
+
 // replaceFile renames from over to.
 func replaceFile(from, to string) error { return os.Rename(from, to) }
 
