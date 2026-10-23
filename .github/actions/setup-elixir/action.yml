@@ -2,17 +2,19 @@
 # Copyright 2026 CYFR Works Inc.
 
 # Set up Erlang and Elixir and restore and save the Mix caches. The caller
-# checks the repository out first. Each caller passes a cache-key-prefix of
-# its own: a prefix shared with another job, or one that is a prefix of
-# another's, lets one job restore a cache the other built.
+# checks the repository out first. Each caller that caches passes a
+# cache-key-prefix of its own: a prefix shared with another job, or one that
+# is a prefix of another's, lets one job restore a cache the other built. A
+# job that runs no Mix project of the checkout caches nothing.
 name: Set up Elixir
-description: Set up Erlang and Elixir at the pinned versions and cache deps, and _build unless build-cache is false
+description: Set up Erlang and Elixir at the pinned versions and cache deps, and _build when build-cache is true
 inputs:
   cache-key-prefix:
-    description: The caller's own cache key segment, distinct from every other job's
-    required: true
+    description: The caller's own cache key segment, distinct from every other job's; none when build-cache is none
+    required: false
+    default: ''
   build-cache:
-    description: "'true' caches _build with deps; 'false' caches deps alone"
+    description: "'true' caches _build with deps; 'false' caches deps alone; 'none' caches nothing"
     required: false
     default: 'true'
 runs:
@@ -24,13 +26,18 @@ runs:
         PREFIX: ${{ inputs.cache-key-prefix }}
         BUILD_CACHE: ${{ inputs.build-cache }}
       run: |
-        if [ -z "$PREFIX" ]; then
-          echo "::error::setup-elixir needs a cache-key-prefix"
-          exit 1
-        fi
         case "$BUILD_CACHE" in
-          true|false) ;;
-          *) echo "::error::setup-elixir build-cache must be 'true' or 'false', got '$BUILD_CACHE'"; exit 1 ;;
+          true|false)
+            if [ -z "$PREFIX" ]; then
+              echo "::error::setup-elixir needs a cache-key-prefix"
+              exit 1
+            fi ;;
+          none)
+            if [ -n "$PREFIX" ]; then
+              echo "::error::setup-elixir caches nothing under build-cache none, so it takes no cache-key-prefix"
+              exit 1
+            fi ;;
+          *) echo "::error::setup-elixir build-cache must be 'true', 'false' or 'none', got '$BUILD_CACHE'"; exit 1 ;;
         esac
     - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
       id: beam
