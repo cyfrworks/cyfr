@@ -1203,9 +1203,9 @@ toy_run "$scratch/toy-17" -n 2 -- --warnings-as-errors
   fail 'a misnamed file passed under --warnings-as-errors'
 rm "$toy/apps/one/test/oops_tests.exs"
 # A record of :all (a suite that failed to load) reruns the whole suite:
-# with more than one partition every file is assigned and --failed is
-# dropped, since Mix would read the record per application in one VM; one
-# partition passes --failed to Mix as given.
+# --failed is dropped, since Mix would read the record per application in
+# one VM and run the first application's files alone, and with more than
+# one partition every file is assigned.
 toy_all() { (cd "$toy" && PATH=$real_path elixir -e 'File.write!("_build/test/test_failures", :erlang.term_to_binary({1, :all}))'); }
 toy_all
 toy_run "$scratch/toy-all" -n 2 -- --warnings-as-errors --failed
@@ -1214,7 +1214,8 @@ toy_run "$scratch/toy-all" -n 2 -- --warnings-as-errors --failed
 if grep -q -- '--failed' "$toy_trace"; then fail "an :all record kept --failed: $(cat "$toy_trace")"; fi
 toy_all
 toy_run "$scratch/toy-all-1" -n 1 -- --warnings-as-errors --failed
-[ "$(cat "$toy_trace")" = '1 --no-compile --warnings-as-errors --failed' ] || fail "one partition was given $(cat "$toy_trace")"
+[ "$(cat "$toy_trace")" = '1 --no-compile --warnings-as-errors' ] || fail "one partition was given $(cat "$toy_trace")"
+[ "$toy_status" = 0 ] && [ "$(toy_record)" = - ] || fail "one partition's rerun of an :all record left $(toy_record) with $toy_status"
 # --- shards: one split, its partitions run once between the shards ---------
 # With the table, four partitions are A; B; C and E; D. Shard 1 of 2 runs
 # partitions 1 and 3, shard 2 runs 2 and 4, each with the arguments the
@@ -1272,6 +1273,8 @@ toy_run "$scratch/toy-shard-all-1" -n 4 --shard 1/2 -- --warnings-as-errors --fa
 [ "$toy_status" = 0 ] || fail "shard 1/2's rerun of an :all record failed with $toy_status"
 [ "$(toy_shard_files)" = 'a_test.exs ||c_test.exs e_test.exs |' ] || fail "shard 1/2's rerun of an :all record ran $(toy_shard_files)"
 [ "$(toy_raw_record)" = '{1, :all}' ] || fail "shard 1/2's rerun settled the :all record as $(toy_raw_record)"
+grep -qxF "==> the failures record stays :all, the whole suite's rerun still owed: this run had shard 1/2" "$scratch/toy-shard-all-1" ||
+  fail "shard 1/2's rerun did not say why the record stays :all"
 toy_run "$scratch/toy-shard-all-2" -n 4 --shard 2/2 -- --warnings-as-errors --failed
 [ "$toy_status" = 1 ] || fail "shard 2/2 did not rerun its broken B after shard 1 under an :all record: $toy_status"
 [ "$(toy_shard_files)" = '|b_test.exs ||d_test.exs ' ] || fail "shard 2/2's rerun of an :all record ran $(toy_shard_files)"
@@ -1279,4 +1282,19 @@ toy_run "$scratch/toy-shard-all-2" -n 4 --shard 2/2 -- --warnings-as-errors --fa
 # A whole run settles it into what failed.
 toy_run "$scratch/toy-shard-all-whole" -n 4 -- --warnings-as-errors --failed
 [ "$toy_status" = 1 ] && [ "$(toy_record)" = b ] || fail "a whole rerun of an :all record left $(toy_raw_record) with $toy_status"
+# Any other run of an :all record leaves it owed and says why: Mix's own
+# --partitions, a --dry-run and a run --max-failures cuts short each leave
+# files unrun, on one partition or several. A whole rerun still runs B.
+for extra in '--partitions 2' --dry-run '--max-failures 1 --seed 0'; do
+  for n in 1 2; do
+    toy_all
+    # shellcheck disable=SC2086
+    toy_run "$scratch/toy-all-partial" -n "$n" -- --warnings-as-errors --failed $extra
+    [ "$(toy_raw_record)" = '{1, :all}' ] || fail "a -n $n run with $extra settled the :all record as $(toy_raw_record)"
+    grep -qxF "==> the failures record stays :all, the whole suite's rerun still owed: this run had Mix's ${extra%% *}" "$scratch/toy-all-partial" ||
+      fail "a -n $n run with $extra did not say why the record stays :all"
+  done
+done
+toy_run "$scratch/toy-all-after" -n 1 -- --warnings-as-errors --failed
+[ "$toy_status" = 1 ] && [ "$(toy_record)" = b ] || fail "the whole rerun after partial runs left $(toy_raw_record) with $toy_status"
 echo 'partition runner tests passed'
