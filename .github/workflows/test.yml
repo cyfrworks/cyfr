@@ -385,17 +385,48 @@ jobs:
         run: bash tests/ci-publish-test.sh
 
   # The harness's own tests, each against stand-ins for what the harness
-  # runs: the containment library, the partition runner and its
-  # environment helper, the host queue and the commit gate. They run
-  # stand-in gates and queues with real deadlines, so they take a job of
-  # their own beside the others. The commit gate's stand-in runs the real
-  # JavaScript suite, Python checks, test WASM fixtures and the fixtures'
-  # Mix recipe, so the job has the build, the pinned Rust toolchain and
-  # cargo-component those need.
-  harness-tests:
-    name: Harness self-tests (containment, partitions, host queue, commit gate)
+  # runs. They run stand-in gates and queues with real deadlines, so they
+  # take jobs of their own beside the others, split three ways by how long
+  # each script takes, each job with only the setup its scripts need.
+  #
+  # The containment library and the host queue need Bash, flock, perl and
+  # Python, which the runner ships.
+  harness-tests-host:
+    name: Harness self-tests (containment, host queue)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The containment library and the host queue
+        run: |
+          bash tests/contain-test.sh
+          bash tests/heavy-check-test.sh
+
+  # The partition runner against a stand-in Mix and a toy umbrella of its
+  # own, and its environment helper's unit tests: Erlang and Elixir, and
+  # nothing of the checkout's build.
+  harness-tests-partitions:
+    name: Harness self-tests (partitions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Elixir
+        uses: ./.github/actions/setup-elixir
+        with:
+          build-cache: 'none'
+      - name: The partition runner and its environment helper
+        run: |
+          bash tests/test-partitioned-test.sh
+          elixir tests/test-partition-env-test.exs
+
+  # The commit gate's stand-in runs the real JavaScript suite, Python
+  # checks, test WASM fixtures and the fixtures' Mix recipe, so the job has
+  # the build, the pinned Rust toolchain and cargo-component those need.
+  harness-tests-gate:
+    name: Harness self-tests (commit gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       CYFR_DATABASE: sqlite
     steps:
@@ -456,13 +487,8 @@ jobs:
       # The fixtures' recipe runs the real Mix against the test build.
       - name: Compile
         run: mix compile
-      - name: Verify partition infrastructure
-        run: |
-          bash tests/contain-test.sh
-          bash tests/test-partitioned-test.sh
-          elixir tests/test-partition-env-test.exs
-          bash tests/heavy-check-test.sh
-          bash tests/commit-gate-test.sh
+      - name: The commit gate
+        run: bash tests/commit-gate-test.sh
 
   # The console's JavaScript and the SDK's source: eslint's recommended
   # rules (apps/cyfr/assets/eslint.config.mjs) and the unit tests under c8,
