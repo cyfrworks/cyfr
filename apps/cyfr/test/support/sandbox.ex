@@ -119,7 +119,8 @@ defmodule Cyfr.Test.Sandbox do
   @doc """
   Start this test's sandbox owner (shared unless the test is async), let
   the supervisors reach it, and stop the test's background work and then
-  the owner when the test ends. Answers the owner pid.
+  the owner when the test ends. Tags follow `Arca.Test.Sandbox.start_owner!/1`,
+  including `:ownership_timeout`. Answers the owner pid.
   """
   @spec setup!(map()) :: pid()
   def setup!(tags \\ %{}) do

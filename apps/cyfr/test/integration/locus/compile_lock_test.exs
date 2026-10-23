@@ -18,7 +18,10 @@ defmodule Cyfr.Integration.Locus.CompileLockTest do
   alias Cyfr.Test.LocusService
 
   @moduletag :requires_cargo_component
-  @moduletag timeout: 900_000
+  # Each real build starts with a fresh Cargo home: a cold registry download
+  # can outlast the repo's ownership timeout while this test holds its connection.
+  @timeout_ms 900_000
+  @moduletag timeout: @timeout_ms, ownership_timeout: @timeout_ms
 
   @reference "reagent:local.locker:0.1.0"
   @src ComponentPath.version_dir("reagent", "local", "locker", "0.1.0") ++ ["src"]
