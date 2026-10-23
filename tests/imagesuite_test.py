@@ -9,8 +9,10 @@ registered and fails the run, the runtime suite's namespace prerequisite
 refuses the hosts it names and passes the others, the runtime stack waits
 out a restart Docker reports running before the container is started again
 and a port compose publishes late, and fails within its bound where either
-never comes, and no entry script writes bytecode for anything under tests/,
-whatever cache is already there.
+never comes, a guard's failure is read from its inspect record whether the
+guard has exited or is between one exit and its next start, and no entry
+script writes bytecode for anything under tests/, whatever cache is already
+there.
 
 Usage: python3 -I tests/imagesuite_test.py
 """
@@ -461,6 +463,35 @@ class Bytecode(unittest.TestCase):
         # Each suite's entry scripts ran, so a glob that matched nothing
         # does not pass the case.
         self.assertEqual(ran, set(SUITES))
+
+
+class GuardFailed(unittest.TestCase):
+    """A guard's failure read from its `docker inspect` record (`imagesuite.guard_failed`)."""
+
+    def record(self, status, exit_code, restarts, health=None):
+        # RestartCount is the record's own field, beside State.
+        state = {"Status": status, "Running": status in ("running", "restarting"), "Restarting": status == "restarting",
+                 "ExitCode": exit_code}
+        if health:
+            state["Health"] = {"Status": health}
+        return {"State": state, "RestartCount": restarts}
+
+    def test_a_guard_that_exited_with_an_error_failed(self):
+        self.assertTrue(imagesuite.guard_failed(self.record("exited", 1, 0)))
+
+    def test_a_guard_between_one_exit_and_its_next_start_failed_by_its_restart_count(self):
+        # Inspected mid-restart, Docker reports it running and restarting
+        # with ExitCode 0: only RestartCount says it failed, and the count
+        # is not under State (reading it there raises KeyError).
+        self.assertTrue(imagesuite.guard_failed(self.record("restarting", 0, 1)))
+        self.assertTrue(imagesuite.guard_failed(self.record("running", 0, 2, health="starting")))
+
+    def test_a_healthy_guard_has_not_failed(self):
+        self.assertFalse(imagesuite.guard_failed(self.record("running", 0, 0, health="healthy")))
+        self.assertFalse(imagesuite.guard_failed(self.record("running", 0, 1, health="healthy")))
+
+    def test_a_guard_still_starting_for_the_first_time_has_not_failed(self):
+        self.assertFalse(imagesuite.guard_failed(self.record("running", 0, 0, health="starting")))
 
 
 if __name__ == "__main__":
