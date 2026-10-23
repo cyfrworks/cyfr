@@ -310,8 +310,11 @@ defmodule Cyfr.TestPartitionEnv do
   # Runs under `mix run --no-start --no-compile`: every application's test
   # files as `mix test` would load them, from its own configuration. A
   # named file, with or without a line, is one unit; a named directory is
-  # its test files; no name is the whole suite.
-  def assign!(directory, count, checkout, table, required?, failed?, names) do
+  # its test files; no name is the whole suite. Under --failed the record
+  # narrows the units before the split, or, for a sharded run
+  # (`whole_split?`), each partition of the whole selection's split, so a
+  # shard reruns only failures among the files it runs.
+  def assign!(directory, count, checkout, table, required?, failed?, whole_split?, names) do
     weights = weights!(table, required?)
     apps = test_apps()
 
@@ -334,29 +337,42 @@ defmodule Cyfr.TestPartitionEnv do
 
     if units == [], do: System.halt(2)
 
-    units =
+    # The files the failures record names, or nil when every unit runs.
+    recorded =
       if failed? do
         case Path.join(directory, "base") |> File.read() |> elem(1) |> decode_record() do
           :all ->
             File.write!(Path.join(out, "record-all"), "")
-            units
+            nil
 
           failures ->
-            files =
-              MapSet.new(Map.values(failures || %{}), &Path.relative_to(&1, checkout))
-
-            Enum.filter(units, fn {_, file} -> MapSet.member?(files, file) end)
+            MapSet.new(Map.values(failures || %{}), &Path.relative_to(&1, checkout))
         end
-      else
-        units
       end
 
-    if units == [], do: System.halt(3)
     default = median(weights)
+    file_of = Map.new(units)
+    recorded? = fn unit -> MapSet.member?(recorded, Map.fetch!(file_of, unit)) end
 
-    units
-    |> Enum.map(fn {unit, file} -> {unit, Map.get(weights, file, default)} end)
-    |> split(count)
+    weighed = fn units ->
+      Enum.map(units, fn {unit, file} -> {unit, Map.get(weights, file, default)} end)
+    end
+
+    partitions =
+      cond do
+        recorded == nil ->
+          units |> weighed.() |> split(count)
+
+        whole_split? ->
+          units |> weighed.() |> split(count) |> Enum.map(&Enum.filter(&1, recorded?))
+
+        true ->
+          units |> Enum.filter(fn {unit, _} -> recorded?.(unit) end) |> weighed.() |> split(count)
+      end
+
+    if Enum.all?(partitions, &(&1 == [])), do: System.halt(3)
+
+    partitions
     |> Enum.with_index(1)
     |> Enum.each(fn {assigned, partition} ->
       File.write!(Path.join(out, "p#{partition}"), Enum.map(assigned, &[&1, 0]))
@@ -508,7 +524,7 @@ defmodule Cyfr.TestPartitionEnv do
         ["weights", table, required] ->
           weights!(table, required == "true")
 
-        ["assign", directory, count, table, required, failed, "--" | names] ->
+        ["assign", directory, count, table, required, failed, whole_split, "--" | names] ->
           assign!(
             directory,
             String.to_integer(count),
@@ -516,6 +532,7 @@ defmodule Cyfr.TestPartitionEnv do
             table,
             required == "true",
             failed == "true",
+            whole_split == "true",
             names
           )
 

@@ -84,12 +84,12 @@ if [ "$1" = run ] && [ "${2:-}" = --no-start ] && [ "${3:-}" = -e ] && [ -n "${C
 fi
 # The runner's assignment, as tests/test-partitioned-test.sh stands in for
 # it: `mix run --no-start --no-compile HELPER assign DIR COUNT TABLE
-# REQUIRED FAILED -- NAMES...` writes DIR/assign/p1..pCOUNT, each the
-# partition's units, NUL-terminated, dealing the named paths round robin,
-# or one unit to every partition when none is named.
+# REQUIRED FAILED WHOLE_SPLIT -- NAMES...` writes DIR/assign/p1..pCOUNT,
+# each the partition's units, NUL-terminated, dealing the named paths round
+# robin, or one unit to every partition when none is named.
 if [ "$1" = run ] && [ "${5:-}" = assign ]; then
   dir=$6 count=$7
-  shift 11
+  shift 12
   if [ "$#" -eq 0 ]; then for ((p=1; p<=count; p++)); do set -- "$@" "stub_${p}_test.exs"; done; fi
   mkdir -p "$dir/assign"
   for ((p=1; p<=count; p++)); do : > "$dir/assign/p$p"; done
@@ -705,6 +705,55 @@ sed 's/^#   test.yml config-seam$/&\n#   test.yml static: A check CI dropped/' "
 has_line '^the list names test.yml static: A check CI dropped, which no pull request runs' "$scratch/roster/stale.err" ||
   fail "a stale list entry failed without its reason: $(cat "$scratch/roster/stale.err")"
 echo 'ok: what the gate leaves out'
+
+# --- CI's suite shards ------------------------------------------------------------
+# ci_shards WORKFLOW: the gate's whole-suite steps stand for test.yml's
+# Run tests (the run map above) only while its shards are the whole split:
+# the test job's matrix is both adapters by shards 1 to N, and the step
+# runs shard matrix.shard of that N.
+ci_shards() {
+  python3 -I - "$1" <<'PY'
+import re, sys, yaml
+job = yaml.safe_load(open(sys.argv[1]))["jobs"]["test"]
+matrix = job["strategy"]["matrix"]
+run = next(s["run"] for s in job["steps"] if s.get("name") == "Run tests")
+counts = re.findall(r'--shard "\$\{\{ matrix\.shard \}\}/([1-9][0-9]*)"', run)
+errors = []
+if len(counts) != 1:
+    errors.append("Run tests names no one shard of N")
+elif matrix.get("shard") != list(range(1, int(counts[0]) + 1)):
+    errors.append(f"the shards are {matrix.get('shard')}, not 1 to {counts[0]}")
+if matrix.get("db") != ["sqlite", "postgres"]:
+    errors.append(f"the adapters are {matrix.get('db')}, not sqlite and postgres")
+if sorted(matrix) != ["db", "shard"]:
+    errors.append(f"the matrix has {sorted(matrix)}, not db and shard alone")
+for e in errors:
+    print(e, file=sys.stderr)
+sys.exit(1 if errors else 0)
+PY
+}
+ci_shards "$root/.github/workflows/test.yml" || fail "test.yml's shards are not the whole split on both adapters"
+# Planted: a shard dropped from the matrix, and a step that runs another
+# count of shards, each fail it with the reason.
+mkdir -p "$scratch/shards"
+plant_shards() {
+  python3 -I - "$root/.github/workflows/test.yml" "$scratch/shards/$1.yml" "$2" "$3" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:]
+s = open(src).read()
+assert s.count(old) == 1, old
+open(dst, "w").write(s.replace(old, new))
+PY
+}
+plant_shards dropped '        shard: [1, 2, 3, 4]' '        shard: [1, 2, 3]'
+! ci_shards "$scratch/shards/dropped.yml" 2>"$scratch/shards/dropped.err" || fail 'a matrix without its last shard passed'
+has_line '^the shards are \[1, 2, 3\], not 1 to 4$' "$scratch/shards/dropped.err" ||
+  fail "a dropped shard failed without its reason: $(cat "$scratch/shards/dropped.err")"
+plant_shards count '--shard "${{ matrix.shard }}/4"' '--shard "${{ matrix.shard }}/5"'
+! ci_shards "$scratch/shards/count.yml" 2>"$scratch/shards/count.err" || fail 'a step running another count of shards passed'
+has_line '^the shards are \[1, 2, 3, 4\], not 1 to 5$' "$scratch/shards/count.err" ||
+  fail "another count of shards failed without its reason: $(cat "$scratch/shards/count.err")"
+echo "ok: CI's shards are the whole split on both adapters"
 
 # --- the image tags the close runs under the gate's names ------------------------
 # image_table GATE ROOT TABLE: every job the gate runs under

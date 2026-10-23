@@ -521,16 +521,20 @@ jobs:
         run: test/run.sh
 
   test:
-    name: Elixir Tests (${{ matrix.db }})
+    name: Elixir Tests (${{ matrix.db }}, shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 95
+    timeout-minutes: 45
     # Both adapters must stay green. SQLite is the shipped default; Postgres is
     # bring-your-own. The data layer is Ecto-schema-backed so column values cast
-    # to the same Elixir types on both, and both legs are blocking.
+    # to the same Elixir types on both, and both legs are blocking. Each
+    # adapter's suite runs on four runners, one shard each; the four shards
+    # are the whole split (tests/commit-gate-test.sh holds the matrix to the
+    # count Run tests names).
     strategy:
       fail-fast: false
       matrix:
         db: [sqlite, postgres]
+        shard: [1, 2, 3, 4]
     services:
       # Test-only ephemeral database — these credentials (and CYFR_SECRET_KEY_BASE
       # below) are non-secret CI fixtures for the Postgres container, never used
@@ -648,14 +652,16 @@ jobs:
       # what it called back then: the test files would be type-checked
       # against signatures the tree no longer has. The runner's output is
       # kept in a file as well as the log: a failed run names the directory
-      # it kept in its own last lines, which the next step reads.
+      # it kept in its own last lines, which the next step reads. The suite
+      # is split into sixteen partitions by weight, and each shard runs its
+      # four of them on the runner's four cores.
       - name: Run tests
         id: run-tests
         env:
           MIX_BUILD_PATH: _build/test
         run: |
           set -o pipefail
-          scripts/test-partitioned.sh -a "${{ matrix.db }}" -- --warnings-as-errors 2>&1 |
+          scripts/test-partitioned.sh -n 16 --shard "${{ matrix.shard }}/4" -a "${{ matrix.db }}" -- --warnings-as-errors 2>&1 |
             tee "$RUNNER_TEMP/run-tests.out"
       # A failed run keeps its directory: each partition's log and scratch
       # root, the compile and assignment logs, the failures record. That
@@ -726,7 +732,7 @@ jobs:
         if: failure() && steps.run-tests.outcome == 'failure' && steps.kept.outputs.dir != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: test-run-${{ matrix.db }}-attempt-${{ github.run_attempt }}
+          name: test-run-${{ matrix.db }}-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: ${{ steps.kept.outputs.dir }}
           if-no-files-found: error
           retention-days: 14

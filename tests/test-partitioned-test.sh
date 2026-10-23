@@ -60,12 +60,12 @@ printf '%s\t%s\n' "$1" "${ERL_FLAGS:-}" >> "$TRACE/erl-flags"
 printf '%s\t%s\n' "$1" "${MIX_BUILD_PATH-unset}" >> "$TRACE/build-paths"
 [ "${MIX_OS_CONCURRENCY_LOCK:-}" = 0 ] || printf '%s\n' "$1 ${!#}" >> "$TRACE/mix-calls-with-build-lock"
 # The assignment: `mix run --no-start --no-compile HELPER assign DIR COUNT
-# TABLE REQUIRED FAILED -- NAMES...` writes DIR/assign/p1..pCOUNT, each the
-# partition's units, NUL-terminated. This one deals the named paths round
-# robin, or one unit to every partition when none is named.
+# TABLE REQUIRED FAILED WHOLE_SPLIT -- NAMES...` writes DIR/assign/p1..pCOUNT,
+# each the partition's units, NUL-terminated. This one deals the named paths
+# round robin, or one unit to every partition when none is named.
 if [ "$1" = run ] && [ "${5:-}" = assign ]; then
   dir=$6 count=$7
-  shift 11
+  shift 12
   if [ "$#" -eq 0 ]; then for ((p=1; p<=count; p++)); do set -- "$@" "stub_${p}_test.exs"; done; fi
   mkdir -p "$dir/assign"
   for ((p=1; p<=count; p++)); do : > "$dir/assign/p$p"; done
@@ -283,6 +283,30 @@ refuses -n 1 -a sqlite -- --include cluster
 CYFR_DATABASE_URL=bad refuses -n 1 -a postgres
 CYFR_TEST_CORES=0 refuses -n 1
 CYFR_TEST_CORES=many refuses -n 1
+# A shard that is not I/N of whole numbers from 1, I at most N and N at
+# most 32, is refused with 64 before Mix runs.
+mix_calls() { grep -c '' "$TRACE/mix-calls" 2>/dev/null || :; }
+before=$(mix_calls)
+[ "$(status_of "${clean[@]}" bash "$runner" -n 4 --shard)" = 64 ] || fail 'a --shard without a value was not refused with 64'
+for shard in '' 0/4 5/4 1/0 4 1/ /4 a/b 01/4 1/04 1/33 1/4/2 ' 1/4' -1/4 1.0/4; do
+  [ "$(status_of "${clean[@]}" bash "$runner" -n 4 --shard "$shard")" = 64 ] || fail "--shard '$shard' was not refused with 64"
+done
+[ "$(mix_calls)" = "$before" ] || fail 'Mix ran for a refused shard'
+# A shard that holds none of the partitions says so and passes, running
+# nothing, inside the terminal lines.
+"${clean[@]}" bash "$runner" -n 2 --shard 3/4 >"$scratch/shard-none" 2>&1 || fail 'a shard holding no partition failed'
+grep -qx '==> shard 3/4 holds none of the 2 partitions: nothing to run' "$scratch/shard-none" || fail 'a shard holding no partition did not say so'
+[ "$(head -n 1 "$scratch/shard-none")" = "_START=$(sed -n 's/^_EXIT=\([0-9]*\) 0$/\1/p' "$scratch/shard-none")" ] ||
+  fail "a shard holding no partition was not framed by its terminal lines: $(tr '\n' ' ' < "$scratch/shard-none")"
+[ "$(mix_calls)" = "$before" ] || fail 'Mix ran for a shard holding no partition'
+# A shard sizes its partitions to the cores it has: two of eight here.
+rm -f "$TRACE"/cyfr-t.*-p*
+CYFR_TEST_CORES=8 "${clean[@]}" bash "$runner" -n 8 --shard 2/4 >"$scratch/shard-share" 2>&1 || fail 'a sharded run on a share of the cores failed'
+grep -qx '==> compiling once (sqlite, shard 2/4: partitions 2 6 of 8, 4 schedulers each)' "$scratch/shard-share" ||
+  fail "a shard did not size its own partitions: $(grep '^==> compiling' "$scratch/shard-share")"
+[ "$(find "$TRACE" -name 'cyfr-t.*-p*' -type f | sed 's/.*-p//' | sort -n | tr '\n' ' ')" = '2 6 ' ] ||
+  fail "shard 2/4 of 8 ran partitions $(find "$TRACE" -name 'cyfr-t.*-p*' -type f | sed 's/.*-p//' | sort -n | tr '\n' ' ')"
+rm -f "$TRACE"/cyfr-t.*-p*
 
 # A caller's share of the cores sizes the partitions in place of the machine's.
 CYFR_TEST_CORES=6 "${clean[@]}" bash "$runner" -n 2 >"$scratch/share" 2>&1 || fail 'a run on a share of the cores failed'
@@ -1191,4 +1215,51 @@ if grep -q -- '--failed' "$toy_trace"; then fail "an :all record kept --failed: 
 toy_all
 toy_run "$scratch/toy-all-1" -n 1 -- --warnings-as-errors --failed
 [ "$(cat "$toy_trace")" = '1 --no-compile --warnings-as-errors --failed' ] || fail "one partition was given $(cat "$toy_trace")"
+# --- shards: one split, its partitions run once between the shards ---------
+# With the table, four partitions are A; B; C and E; D. Shard 1 of 2 runs
+# partitions 1 and 3, shard 2 runs 2 and 4, each with the arguments the
+# unsharded run gives it, and accounts for no other.
+export CYFR_TEST_WEIGHTS="$weights"
+rm -f "$toy/fix_a" "$toy/fix_b"
+toy_run "$scratch/toy-whole" -n 4 -- --warnings-as-errors
+[ "$toy_status" = 1 ] || fail 'the unsharded run with two failing tests passed'
+whole=$(sort "$toy_trace")
+toy_shard_files() { printf '%s|%s|%s|%s' "$(toy_files 1)" "$(toy_files 2)" "$(toy_files 3)" "$(toy_files 4)"; }
+[ "$(toy_shard_files)" = 'a_test.exs |b_test.exs |c_test.exs e_test.exs |d_test.exs ' ] || fail "four partitions were $(toy_shard_files)"
+toy_run "$scratch/toy-shard-1" -n 4 --shard 1/2 -- --warnings-as-errors
+[ "$toy_status" = 1 ] || fail 'shard 1/2 passed with A failing'
+[ "$(toy_shard_files)" = 'a_test.exs ||c_test.exs e_test.exs |' ] || fail "shard 1/2 ran $(toy_shard_files)"
+shards=$(cat "$toy_trace")
+toy_run "$scratch/toy-shard-2" -n 4 --shard 2/2 -- --warnings-as-errors
+[ "$toy_status" = 1 ] || fail 'shard 2/2 passed with B failing'
+[ "$(toy_shard_files)" = '|b_test.exs ||d_test.exs ' ] || fail "shard 2/2 ran $(toy_shard_files)"
+[ "$(printf '%s\n%s\n' "$shards" "$(cat "$toy_trace")" | sort)" = "$whole" ] ||
+  fail 'the shards did not run the unsharded partitions, each once'
+grep -qx '==> 4 partitions, shard 2/2'"'"'s 2, sqlite, [0-9]*s wall, exit 1' "$scratch/toy-shard-2" ||
+  fail "shard 2/2's summary: $(grep '^==> 4 partitions' "$scratch/toy-shard-2")"
+if grep -qxE '==> partition (1|3)/4' "$scratch/toy-shard-2"; then fail "shard 2/2 accounted for shard 1's partitions"; fi
+[ "$(toy_record)" = 'a b' ] || fail "the record after both shards is $(toy_record)"
+# --failed in a shard reruns the recorded failures among its own files and
+# leaves the other shard's in the record. B alone recorded stays shard 2's:
+# narrowed before the split it would fall to partition 1, shard 1's.
+touch "$toy/fix_a"
+toy_run "$scratch/toy-shard-failed-1" -n 4 --shard 1/2 -- --warnings-as-errors --failed
+[ "$toy_status" = 0 ] || fail 'the shard 1/2 rerun after fixing A failed'
+[ "$(toy_shard_files)" = 'a_test.exs |||' ] || fail "the shard 1/2 rerun ran $(toy_shard_files)"
+[ "$(toy_record)" = b ] || fail "the record after shard 1's rerun is $(toy_record)"
+toy_run "$scratch/toy-shard-failed-none" -n 4 --shard 1/2 -- --warnings-as-errors --failed
+[ "$toy_status" = 0 ] || fail 'a shard with no recorded failure of its own failed'
+[ ! -s "$toy_trace" ] || fail "a shard with no recorded failure of its own ran $(cat "$toy_trace")"
+grep -qx '==> shard 1/2: no test file falls to its partitions, so nothing ran' "$scratch/toy-shard-failed-none" ||
+  fail 'a shard with nothing to rerun did not say so'
+toy_run "$scratch/toy-shard-failed-2" -n 4 --shard 2/2 -- --warnings-as-errors --failed
+[ "$toy_status" = 1 ] || fail 'the shard 2/2 rerun with B failing passed'
+[ "$(toy_shard_files)" = '|b_test.exs ||' ] || fail "the shard 2/2 rerun ran $(toy_shard_files)"
+touch "$toy/fix_b"
+toy_run "$scratch/toy-shard-failed-3" -n 4 --shard 2/2 -- --warnings-as-errors --failed
+[ "$toy_status" = 0 ] || fail 'the shard 2/2 rerun after fixing B failed'
+[ "$(toy_record)" = - ] || fail "the record after both shards' reruns is $(toy_record)"
+toy_run "$scratch/toy-shard-failed-empty" -n 4 --shard 2/2 -- --warnings-as-errors --failed
+[ "$toy_status" = 0 ] && grep -qx '==> no partition started: the failures record names no test' "$scratch/toy-shard-failed-empty" ||
+  fail 'a shard rerun of an empty record did not pass saying so'
 echo 'partition runner tests passed'

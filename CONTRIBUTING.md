@@ -66,7 +66,10 @@ missing or wrong header fails CI.
 - Run the tests for what you touched as operating-system partitions:
   `scripts/test-partitioned.sh <test paths>` on SQLite, and
   `scripts/test-partitioned.sh -a postgres <test paths>` on PostgreSQL.
-  CI runs the whole suite on both. After a run,
+  CI runs the whole suite on both, each across four runners: `--shard I/N`
+  runs only shard I's partitions of the whole split, so a shard is CI's
+  split of the suite between machines, not the local one, which runs it
+  whole. After a run,
   `scripts/test-partitioned.sh -- --failed` with the same `-a` reruns
   exactly the failures every partition recorded: each adapter keeps its
   record under its own build path. `mix test --failed` reads SQLite's;
