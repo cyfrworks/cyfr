@@ -125,3 +125,49 @@ func TestWindowsDeadlineTerminatesTheJob(t *testing.T) {
 		t.Error("the call's child outlived its deadline")
 	}
 }
+
+// A record replaced while another handle reads it: os.ReadFile holds the
+// file without FILE_SHARE_DELETE for the length of a read, during which
+// MoveFileEx refuses to replace it, so a holder writing its record while
+// a refused taker in another process read it (every 5 ms for recordWait)
+// failed to take the lock with "Access is denied". replaceFile tries
+// again within replaceWait, so every replacement lands while a reader
+// keeps reading; the reader here is a goroutine, whose handle restricts
+// the rename exactly as another process's does.
+func TestReplaceFileWaitsOutAReader(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "holder")
+	if err := os.WriteFile(target, []byte("0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				os.ReadFile(target)
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-stopped
+	}()
+	const replacements = 300
+	for i := range replacements {
+		tmp := filepath.Join(dir, ".holder.tmp")
+		if err := os.WriteFile(tmp, []byte(strconv.Itoa(i)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := replaceFile(tmp, target); err != nil {
+			t.Fatalf("replacement %d of %d was refused while a reader read the file: %v", i, replacements, err)
+		}
+	}
+	data, _ := os.ReadFile(target)
+	if string(data) != strconv.Itoa(replacements-1) {
+		t.Fatalf("the last replacement did not land: the file holds %q", data)
+	}
+}
