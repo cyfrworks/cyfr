@@ -165,7 +165,6 @@ defmodule Prima.ComponentFeaturesTest do
     System.put_env("CYFR_VALIDATOR_ENV_PROBE", "must-not-leak")
     on_exit(fn -> System.delete_env("CYFR_VALIDATOR_ENV_PROBE") end)
     bytes = File.read!(@catalyst)
-    before = Path.wildcard(Path.join(System.tmp_dir!(), "*"))
 
     assert ComponentFeatures.check(bytes) == :ok
 
@@ -173,7 +172,9 @@ defmodule Prima.ComponentFeaturesTest do
     env = File.read!(Path.join(dir, "env"))
     refute env =~ "CYFR_VALIDATOR_ENV_PROBE"
     refute env =~ "HOME="
-    assert Path.wildcard(Path.join(System.tmp_dir!(), "*")) -- before == []
+    # In the stand-in's owned directory, the check wrote only its receipt
+    # files beside the validator executable.
+    assert Enum.sort(File.ls!(dir)) == ["env", "received", "wasm-tools"]
   end
 
   # Whether the process `pid` names still runs: gone, or a zombie its
