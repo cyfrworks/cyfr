@@ -22,8 +22,8 @@
 # split is the whole selection's, made before the failures record narrows
 # it, so each shard reruns the recorded failures among its own files. A
 # record of :all (a suite that failed to load) is the whole suite's
-# outstanding rerun, and a run of less than the whole suite, a shard's,
-# named paths' or a selection's, leaves it :all for the runs still owed.
+# outstanding rerun: only a run of every file to its end settles it, and
+# any other run, a shard's among them, leaves it :all and says why.
 #
 # --cover measures line coverage and reports it, never gating on it. Each
 # partition runs `mix test --cover --export-coverage <run>-p<i>`, so Mix
@@ -229,10 +229,10 @@ whole_split=false
 # grammar: `mix help test`); after a bare `--` every argument is a path.
 args=("$@")
 path_index=()
+partial=
 failed=false
 stale=false
 selects=false
-excludes=false
 warnings_as_errors=false
 mix_cover=false
 value_switches=' --export-coverage --max-cases --max-failures --max-requires --include --exclude --seed --name-pattern -n --only --timeout --formatter --slowest --slowest-modules --partitions --profile-require --exit-status --repeat-until-failure '
@@ -254,22 +254,32 @@ for ((j=0; j<${#args[@]}; j++)); do
         --failed) failed=true ;;
         --stale) stale=true ;;
         --only|--name-pattern|-n) selects=true ;;
-        --exclude) excludes=true ;;
         --warnings-as-errors) warnings_as_errors=true ;;
         --cover|--export-coverage) mix_cover=true ;;
+      esac
+      # The Mix switches that leave every file of the suite run to its end;
+      # any other may narrow the run or cut it short (partial, below).
+      case "$switch" in
+        --failed|--warnings-as-errors|--seed|--trace|--formatter|--slowest|--slowest-modules|\
+        --max-cases|--max-requires|--profile-require|--timeout|--include|--exit-status|--color|--no-color|\
+        --cover|--export-coverage) ;;
+        *) [ -n "$partial" ] || partial="Mix's $switch" ;;
       esac
       continue
     fi
   fi
   path_index[${#path_index[@]}]=$j
 done
-# Whether the run is the whole suite: only such a run settles a failures
-# record of :all, the whole suite's outstanding rerun
-# (scripts/test-partition-env.exs, merge_records).
-whole_run=true
-if [ "$shard_count" != 1 ] || [ "${#path_index[@]}" -gt 0 ] || [ "$selects" = true ] ||
-   [ "$excludes" = true ] || [ "$stale" = true ]; then
-  whole_run=false
+# A failures record of :all is the whole suite's outstanding rerun, and only
+# a run in which every file of the suite ran to its end settles it
+# (scripts/test-partition-env.exs, merge_records). This is that run's one
+# definition: partial names why a run is not one, and is empty for one that
+# is. A partition that stops before its end leaves its record as seeded,
+# which the merge reads as unfinished on its own.
+if [ "$shard_count" != 1 ]; then
+  partial="shard $shard_index/$shard_count"
+elif [ "${#path_index[@]}" -gt 0 ]; then
+  partial='named test paths'
 fi
 if [ "$COVER" = true ] && [ "$mix_cover" = true ]; then
   echo "--cover names each partition's export itself: pass Mix neither --cover nor --export-coverage with it" >&2; exit 64
@@ -403,7 +413,7 @@ seed_failures() {
 }
 merge_records() {
   mkdir -p "${record_lock%/*}" || exit 1
-  exec flock -w 60 "$record_lock" elixir "$helper" failures-merge "$out_dir" "$PARTITIONS" "$whole_run" "$@"
+  exec flock -w 60 "$record_lock" elixir "$helper" failures-merge "$out_dir" "$PARTITIONS" "$partial" "$@"
 }
 # The pinned validator the dev and test configurations name
 # (`_tools/wasm-tools`), which the suite's applications check as they start.
@@ -461,7 +471,7 @@ contained() {
   local grace=$1 status=0
   shift
   contain_start -g "$grace" "$BASH" -c "set -uo pipefail
-$(declare -p out_dir checkout helper script_dir ADAPTER PARTITIONS cluster failed whole_split whole_run \
+$(declare -p out_dir checkout helper script_dir ADAPTER PARTITIONS cluster failed whole_split partial \
   partition_flags compile_flags weights_table weights_required record_lock)
 $(declare -f load_partition_env valid_receipt "$1")
 $1 \"\$@\"" "$1" "${@:2}" || status=$?
@@ -754,6 +764,14 @@ if ! contained_wait 1800 30 'the compile' compile_build; then
   exit 1
 fi
 
+# A failures record of :all reruns the whole suite (the seed marks it): Mix
+# would read it per application in one VM and run only the first
+# application's files, so --failed goes, on one partition or several.
+record_all=false
+if [ "$failed" = true ] && [ -e "$out_dir/base-all" ]; then
+  record_all=true
+  echo '==> the failures record is :all: --failed reruns every file of the selection'
+fi
 # Each partition's Mix arguments: all of them with one partition; with
 # more, every argument but the paths, then the partition's own files.
 selection=run
@@ -784,10 +802,6 @@ if [ "$PARTITIONS" -gt 1 ]; then
       sed 's/^/    /' "$out_dir/assign/outside"
       exit 1 ;;
   esac
-  # A failures record of :all reruns the whole suite: Mix would read it per
-  # application in one VM and run only the first application's files.
-  record_all=false
-  [ ! -e "$out_dir/assign/record-all" ] || record_all=true
   rest=()
   for ((j=0; j<${#args[@]}; j++)); do
     case " ${path_index[*]-} " in *" $j "*) continue ;; esac
@@ -868,7 +882,11 @@ for ((i=1; i<=PARTITIONS; i++)); do
     part_args=(${rest[@]+"${rest[@]}"})
     while IFS= read -r -d '' unit; do part_args[${#part_args[@]}]=$unit; done <"$out_dir/assign/p$i"
   else
-    part_args=(${args[@]+"${args[@]}"})
+    part_args=()
+    for argument in ${args[@]+"${args[@]}"}; do
+      if [ "$record_all" = true ] && [ "$argument" = --failed ]; then continue; fi
+      part_args[${#part_args[@]}]=$argument
+    done
   fi
   # Ahead of the rest: after a bare `--` Mix reads every argument as a path.
   if [ "$COVER" = true ]; then

@@ -159,6 +159,10 @@ defmodule Cyfr.TestPartitionEnv do
       end
 
     File.write!(Path.join(directory, "base"), binary)
+    # A record of :all reruns the whole suite: the runner then drops
+    # --failed, which Mix, reading the record per application in one VM,
+    # would apply to the first application's files alone.
+    if decode_record(binary) == :all, do: File.write!(Path.join(directory, "base-all"), "")
 
     for partition <- 1..count//1 do
       root = Path.join(directory, "p#{partition}")
@@ -169,7 +173,9 @@ defmodule Cyfr.TestPartitionEnv do
     :ok
   end
 
-  def failures_merge!(directory, started, whole?, checkout) do
+  # `reason` is why the run was not every file of the suite to its end, or
+  # nil when it was: the runner's one definition (scripts/test-partitioned.sh).
+  def failures_merge!(directory, started, reason, checkout) do
     canonical = canonical_failures(checkout)
 
     seed = File.read(Path.join(directory, "base"))
@@ -196,7 +202,14 @@ defmodule Cyfr.TestPartitionEnv do
         {:error, :enoent} -> %{}
       end
 
-    result = merge_records(current, base, parts, whole?)
+    result = merge_records(current, base, parts, reason == nil)
+
+    if base == :all and reason != nil do
+      IO.puts(
+        "==> the failures record stays :all, the whole suite's rerun still owed: this run had #{reason}"
+      )
+    end
+
     File.mkdir_p!(Path.dirname(canonical))
     partial = canonical <> ".partial"
     File.write!(partial, :erlang.term_to_binary({@record_version, result}))
@@ -209,10 +222,9 @@ defmodule Cyfr.TestPartitionEnv do
   # record p. A partition still holding the seed, or holding nothing,
   # leaves its part of the record as it was, so under a seed of `:all` the
   # record stays `:all` until every started partition has written its own.
-  # A seed of `:all` owes a rerun of the whole suite, so only a run of the
-  # whole suite (`whole?`: no shard, named path or selection narrowed it)
-  # replaces it: what a partial run, such as one shard's, did not run is
-  # still owed, and the record stays `:all` for the next run of it.
+  # A seed of `:all` owes a rerun of the whole suite, so only a run of every
+  # file of it to its end (`whole?`) replaces it: what any other run, such
+  # as one shard's, did not run is still owed, and the record stays `:all`.
   def merge_records(current, base, parts, whole?) do
     cond do
       :all in parts -> :all
@@ -346,7 +358,6 @@ defmodule Cyfr.TestPartitionEnv do
       if failed? do
         case Path.join(directory, "base") |> File.read() |> elem(1) |> decode_record() do
           :all ->
-            File.write!(Path.join(out, "record-all"), "")
             nil
 
           failures ->
@@ -519,11 +530,17 @@ defmodule Cyfr.TestPartitionEnv do
         ["failures-seed", directory, count] ->
           failures_seed!(directory, String.to_integer(count), File.cwd!())
 
-        ["failures-merge", directory, count, whole | started] ->
+        ["failures-merge", directory, count, reason | started] ->
           count = String.to_integer(count)
           started = Enum.map(started, &String.to_integer/1)
           true = Enum.all?(started, &(&1 in 1..count//1))
-          failures_merge!(directory, started, whole == "true", File.cwd!())
+
+          failures_merge!(
+            directory,
+            started,
+            if(reason == "", do: nil, else: reason),
+            File.cwd!()
+          )
 
         ["weights", table, required] ->
           weights!(table, required == "true")
