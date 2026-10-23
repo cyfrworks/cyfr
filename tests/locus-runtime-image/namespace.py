@@ -233,7 +233,7 @@ class Attach:
     MOUNT = "/run/cyfr-attach"
 
     def __init__(self):
-        self.dir = tempfile.mkdtemp(prefix="cyfr-attach-")
+        self.dir = tempfile.mkdtemp(prefix=os.environ.get("PROOF_RUN_PREFIX", "") + "cyfr-attach-")
         os.chmod(self.dir, 0o755)
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(os.path.join(self.dir, "a.sock"))

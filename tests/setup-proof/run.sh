@@ -38,13 +38,13 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 for name in $(compgen -e); do
   case "$name" in COMPOSE_*) unset "$name" ;; esac
 done
-RUN="cyfr-setup-proof-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+RUN="${PROOF_RUN_PREFIX:-}cyfr-setup-proof-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 WORK="${TMPDIR:-/tmp}/$RUN"
 mkdir -m 700 "$WORK"
 OUT="${SETUP_PROOF_OUT:-$WORK/out}"
 mkdir -p "$OUT"
 IMAGE="${SETUP_PROOF_IMAGE:-cyfr:setup-proof}"
-STANDIN_IMAGE="cyfr-tailscale-standin:$RUN"
+STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:$RUN"
 CYFR="$WORK/bin/cyfr"
 # The run's projects, each a directory under WORK named as its compose
 # project, and the `cyfr setup` of the case under way.

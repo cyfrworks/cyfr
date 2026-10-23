@@ -191,10 +191,10 @@ IMAGE="${COMPOSE_PROOF_IMAGE:-cyfr:compose-proof}"
 for name in $(compgen -e); do
   case "$name" in COMPOSE_PROOF_*) ;; COMPOSE_*) unset "$name" ;; esac
 done
-RUN="cyfr-compose-proof-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+RUN="${PROOF_RUN_PREFIX:-}cyfr-compose-proof-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 WORK="${TMPDIR:-/tmp}/$RUN"
 mkdir -m 700 "$WORK"
-STANDIN_IMAGE="cyfr-tailscale-standin:$RUN"
+STANDIN_IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:$RUN"
 # The shutdown case's MCP upstream, a container of the run's own.
 UPSTREAM=""
 CYFR="$WORK/bin/cyfr"

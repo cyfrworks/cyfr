@@ -14,7 +14,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-markdown-XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-markdown-XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 OUT="${MARKDOWN_OUT:-$WORK/out}"
 # shellcheck source=../browser/harness.sh

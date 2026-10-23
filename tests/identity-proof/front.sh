@@ -57,7 +57,7 @@ identity_front_start() {
   port="$(cell_proxy_port "$cell")"
   [ -n "${IDENTITY_FRONTS[$host]:-}" ] || fail "no directory $host is declared: identity_directory comes first"
   [ -f "$BROWSER_AUTHORITY/$host.pem" ] || fail "no certificate for $host: make $cell a home first"
-  name="cyfr-identity-front-$$-${host//./-}"
+  name="${PROOF_RUN_PREFIX:-}cyfr-identity-front-$$-${host//./-}"
   control="$(identity_front_control "$host")"
   token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$token" =~ ^[0-9a-f]{32}$ ]] || fail "no token for the front of $host"

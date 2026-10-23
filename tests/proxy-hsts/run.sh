@@ -112,9 +112,9 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker pull --quiet "$IMAGE" >/dev/null || missing "the image $IMAGE (absent here, and the pull failed)"
 fi
 
-RUN="cyfr-proxy-hsts-$$"
+RUN="${PROOF_RUN_PREFIX:-}cyfr-proxy-hsts-$$"
 NET="$RUN"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-proxy-hsts-XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-proxy-hsts-XXXXXX")"
 CONTAINERS=()
 
 # The containers' anonymous volumes (the image's /data and /config) go with

@@ -45,7 +45,7 @@ case "$FAULT" in
 esac
 
 ADAPTER=sqlite
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-multi-home-smoke-XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-multi-home-smoke-XXXXXX")"
 # shellcheck source=../release-boot/release.sh
 source "$(cd "$(dirname "$0")" && pwd)/../release-boot/release.sh"
 # shellcheck source=../browser/harness.sh

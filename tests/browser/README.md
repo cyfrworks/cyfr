@@ -177,6 +177,17 @@ breaks a run on purpose: `unsigned` has the stranger sign `beta.test`, so
 every browser refuses beta and the smoke fails; `silent` stops beta's
 server before the browsers start, so the run fails naming the cell.
 
+## Run names
+
+A proof names what it makes after its own run: a compose project and the
+containers, networks and volumes under it, an image, a container, a
+directory under `TMPDIR`. Each puts `PROOF_RUN_PREFIX` before those names,
+as do the image suites (`tests/imagesuite.py`) and the release boot
+(`tests/release-boot/`). It is empty unless set, so CI and a run by hand
+name as before; the commit gate sets it to `cyfr-gate-<pid>-<leg>-`, so
+what a proof it killed leaves is the gate's to find and remove by name
+(`scripts/commit-gate.sh`).
+
 ## The proofs
 
 Every proof the harness serves, with its shape, the browsers it can run

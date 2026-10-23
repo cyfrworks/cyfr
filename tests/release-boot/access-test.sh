@@ -15,7 +15,7 @@
 # needed.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
-scratch=$(mktemp -d "${TMPDIR:-/tmp}/cyfr-access-test.XXXXXX")
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-access-test.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 

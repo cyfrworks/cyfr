@@ -214,7 +214,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RUN="cyfr-tailnet-real-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-tailnet-real-XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-tailnet-real-XXXXXX")"
 STANDIN="cyfr-tailscale-standin:$RUN"
 UPSTREAM_PORT=4123
 LOAD_REQUESTS=200

@@ -128,7 +128,7 @@ def cargo_toml(stack):
 
 
 def main(image):
-    empty = tempfile.mkdtemp(prefix="locus-builds-smoke-")
+    empty = tempfile.mkdtemp(prefix=os.environ.get("PROOF_RUN_PREFIX", "") + "locus-builds-smoke-")
     stack = Stack("locus-builds-smoke", image, empty)
     try:
         stack.up()

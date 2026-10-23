@@ -41,8 +41,8 @@ python3 tests/locus-runtime-image/memory.py cyfr-locus:test --measure
 ```
 
 On the verification host each runs alone, through `scripts/heavy-check.sh`.
-`STACK_PROJECT_PREFIX` prefixes every compose project and container a run
-makes. A TERM or INT ends a suite with its compose project and its
+`PROOF_RUN_PREFIX` prefixes every compose project, container and
+temporary directory a run makes (`tests/browser/README.md`, Run names). A TERM or INT ends a suite with its compose project and its
 temporary directories removed.
 They need Docker Engine 28 or later with Compose on a cgroup v2 host that
 allows unprivileged user namespaces (`docker-compose.yml`'s `locus-runtime` service

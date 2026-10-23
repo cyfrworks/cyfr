@@ -49,7 +49,7 @@ esac
 }
 
 ADAPTER=sqlite
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-file-offer-proof-XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-file-offer-proof-XXXXXX")"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=../release-boot/release.sh
 source "$HERE/../release-boot/release.sh"

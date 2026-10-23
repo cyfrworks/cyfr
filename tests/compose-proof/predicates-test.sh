@@ -26,7 +26,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=tests/compose-proof/predicates.sh
 source "$ROOT/tests/compose-proof/predicates.sh"
-scratch="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-compose-predicates.XXXXXX")" || exit 1
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-compose-predicates.XXXXXX")" || exit 1
 trap 'rm -rf "$scratch"' EXIT
 
 failures=0

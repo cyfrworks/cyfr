@@ -116,7 +116,7 @@ release_source() {
     set -o pipefail
     cd "$ROOT" || exit 1
     diff="$(git diff HEAD --binary --no-ext-diff --no-textconv --no-color | sha256sum)" || exit 1
-    untracked="$(mktemp "${TMPDIR:-/tmp}/cyfr-release-source-XXXXXX")" || exit 1
+    untracked="$(mktemp "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-release-source-XXXXXX")" || exit 1
     trap 'rm -f "$untracked"' EXIT
     git ls-files -z --others --exclude-standard >"$untracked" || exit 1
     {

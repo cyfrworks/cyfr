@@ -366,7 +366,12 @@ playwright_run() {
       -e PLAYWRIGHT_FIREFOX_POLICIES_JSON=/authority/firefox-policies.json
     )
   fi
-  docker run --rm --network host --shm-size=1g \
+  # Named after the run under PROOF_RUN_PREFIX, so one a killed proof
+  # leaves is found by that name.
+  local -a named=()
+  [ -z "${PROOF_RUN_PREFIX:-}" ] ||
+    named=(--name "${PROOF_RUN_PREFIX}cyfr-playwright-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')")
+  docker run --rm ${named[@]+"${named[@]}"} --network host --shm-size=1g \
     -u "$(id -u):$(id -g)" -e HOME=/tmp \
     -v "$ROOT/tests:/tests:ro" -v "$ROOT/apps/cyfr/assets:/assets:ro" -v "$OUT:/out" \
     -v "$modules/node_modules:/node_modules:ro" \

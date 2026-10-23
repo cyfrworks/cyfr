@@ -42,7 +42,7 @@ case "$("$wasm_tools" --version 2>/dev/null)" in
     ;;
 esac
 
-work="$(mktemp -d)"
+work="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-runtime-build-XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT

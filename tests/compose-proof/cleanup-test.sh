@@ -14,7 +14,7 @@
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-scratch=$(mktemp -d "${TMPDIR:-/tmp}/cyfr-compose-cleanup-test.XXXXXX") || {
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-compose-cleanup-test.XXXXXX") || {
   echo "FAIL: cannot create a temporary directory"
   exit 1
 }

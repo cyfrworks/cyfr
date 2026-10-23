@@ -253,7 +253,7 @@ case "$ADAPTER" in
     ;;
 esac
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-release-boot-XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-release-boot-XXXXXX")"
 # shellcheck source=release.sh
 source "$(cd "$(dirname "$0")" && pwd)/release.sh"
 cd "$ROOT"
@@ -490,7 +490,7 @@ mkdir -p "$NS/home" "$NS/tmp"
 cp "$ACCESS/.env" "$NS/.env"
 cp -R "$CELL/data" "$NS/data"
 cp -R "$ROOT/seed" "$NS/seed"
-NS_HOLDER="$(docker run -d --network none --cap-add NET_ADMIN --user 0 --hostname "$(hostname)" \
+NS_HOLDER="$(docker run -d ${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-ns"} --network none --cap-add NET_ADMIN --user 0 --hostname "$(hostname)" \
   -v /usr:/usr:ro -v /etc/ld.so.cache:/etc/ld.so.cache:ro -v "$ROOT:$ROOT:ro" -v "$WORK:$WORK" \
   debian:trixie-slim sleep infinity)" || fail "no container could hold the namespace"
 docker exec "$NS_HOLDER" sh -c "ip link add cyfrdummy0 type dummy && ip addr add $NS_ADDRESS/24 dev cyfrdummy0 &&
@@ -771,7 +771,7 @@ free_bytes() {
 reserve_holder() {
   local mount="$1" pid
   shift
-  RESERVE_HOLDER="$(docker run -d --user "$(id -u):$(id -g)" \
+  RESERVE_HOLDER="$(docker run -d ${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-reserve"} --user "$(id -u):$(id -g)" \
     --tmpfs "$mount:size=$RESERVE_FS_SIZE,uid=$(id -u),gid=$(id -g),mode=0700" \
     "$@")" || fail "no container could hold the reserve case's filesystem"
   pid="$(docker inspect -f '{{.State.Pid}}' "$RESERVE_HOLDER")"

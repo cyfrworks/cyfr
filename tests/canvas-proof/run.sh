@@ -53,7 +53,7 @@ case "$HOST_CLASS" in
 esac
 
 ADAPTER=sqlite
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-canvas-proof-XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-canvas-proof-XXXXXX")"
 # shellcheck source=../release-boot/release.sh
 source "$(cd "$(dirname "$0")" && pwd)/../release-boot/release.sh"
 # shellcheck source=../browser/harness.sh

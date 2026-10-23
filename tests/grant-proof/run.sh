@@ -41,7 +41,7 @@ set -euo pipefail
 }
 
 ADAPTER=sqlite
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-grant-proof-XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-grant-proof-XXXXXX")"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=../release-boot/release.sh
 source "$HERE/../release-boot/release.sh"

@@ -29,7 +29,7 @@ import time
 # Prefixed to every compose project and container of a run, and so to its
 # project directory and network, for a host that tells one run's Docker
 # objects from another's by name.
-PROJECT_PREFIX = os.environ.get("STACK_PROJECT_PREFIX", "")
+PROJECT_PREFIX = os.environ.get("PROOF_RUN_PREFIX", "")
 
 # How long `docker compose down` gives each container to stop once the
 # suite was signalled. heavy-check sends TERM at its hold deadline and KILL
@@ -93,7 +93,7 @@ def signalled():
 
 def temporary_directory(prefix, mode=None):
     """A new temporary directory, removed at exit if the suite has not removed it by then."""
-    path = tempfile.mkdtemp(prefix=prefix)
+    path = tempfile.mkdtemp(prefix=PROJECT_PREFIX + prefix)
     _directories.append(path)
     if mode is not None:
         os.chmod(path, mode)
@@ -122,7 +122,7 @@ def bridge_gateway():
 class Stack:
     """A compose project of the suite's own: its name, its project directory and its teardown.
 
-    The project is named from `STACK_PROJECT_PREFIX` and `project`; its
+    The project is named from `PROOF_RUN_PREFIX` and `project`; its
     directory is a new temporary directory holding an empty `.env`, which
     the stack's definition names. A subclass gives `compose` and `logs`.
     """

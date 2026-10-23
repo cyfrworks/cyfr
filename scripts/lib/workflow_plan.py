@@ -16,8 +16,12 @@ With --image-namespace NS every image tag of the table a step names (in
 its script, its env, a build's tags or a scan's image) is NS/TAG instead,
 so the job builds and runs images of the gate's own and touches no tag
 the host has; each variable of the table is set to its tag's NS/TAG for
-every step; and a step naming a tag of the table's repositories the
-table does not hold fails the plan. An upload step keeps its files under
+every step; and a step that gives an image a name the table does not
+hold (a build's tags, a `docker tag` target, a `docker save` or `docker
+commit`, whatever the repository), or names a tag of the table's
+repositories the table does not hold, fails the plan. An image a step
+only runs or pulls (postgres, the Playwright image) is named as CI names
+it. An upload step keeps its files under
 DIR/NAME (--artifacts).
 
 KEY=VALUE picks the job's matrix entry (each key the matrix has, its value
@@ -264,6 +268,63 @@ def rename(text):
     return IMAGE_REF.sub(one, text)
 
 
+def given_names(script):
+    """The image names a step's script gives an image: a `docker tag`'s
+    target, a `docker build`'s tags, what a `docker save` writes and a
+    `docker commit` names; a `docker load` other than the one the plan
+    replaces gives names the plan cannot read, so it fails. An image a
+    script only runs, pulls or inspects is a reference, and its name is not
+    the plan's to give."""
+    names = []
+    for line in re.sub(r"\\\n", " ", script).split("\n"):
+        if line.strip() == LOAD_LINE:
+            continue
+        try:
+            words = shlex.split(line, comments=True)
+        except ValueError:
+            words = line.split()
+        for i, w in enumerate(words):
+            if w != "docker":
+                continue
+            rest = []
+            for t in words[i + 1:]:
+                if t in ("|", "||", "&&", ";", "&", ")") or t.startswith(("|", ";", "&")):
+                    break
+                rest.append(t)
+            if not rest:
+                continue
+            verb, args = rest[0], rest[1:]
+            if verb in ("image", "buildx", "container") and args:
+                verb, args = verb + " " + args[0], args[1:]
+            if verb in ("tag", "image tag"):
+                names += args[1:2]
+            elif verb in ("build", "buildx build", "image build"):
+                names += [args[k + 1] for k, a in enumerate(args[:-1]) if a in ("-t", "--tag")]
+                names += [a.split("=", 1)[1] for a in args if a.startswith("--tag=")]
+            elif verb in ("save", "image save"):
+                skip = False
+                for a in args:
+                    if skip:
+                        skip = False
+                    elif a in ("-o", "--output"):
+                        skip = True
+                    elif not a.startswith("-"):
+                        names.append(a)
+            elif verb in ("commit", "container commit"):
+                names += args[1:2]
+            elif verb in ("load", "image load"):
+                raise Refused("it loads images whose names the plan cannot read")
+    return names
+
+
+def check_given(names):
+    """Every image name a step gives is one of the table's, whatever its
+    repository, so the plan can give it as the gate's own instead."""
+    for name in names:
+        if name not in IMAGE_TAGS:
+            raise Refused(f"it gives an image the name {name}, which the gate's table of image tags does not hold")
+
+
 def substitute(text, ctx):
     """A value with each `${{ expression }}` in it replaced by its text, and
     each image tag of the table by the gate's own."""
@@ -333,7 +394,10 @@ def build_script(step, steps, ctx, outputs):
         raise Refused(f"the build sets {sorted(unknown)}, which the plan does not run")
     if str(w.get("context", ".")) != "." or w.get("load") is not True:
         raise Refused("the build is not of the checkout's root loaded into the local image store")
-    tags = rename(str(w.get("tags", ""))).split()
+    tags = str(w.get("tags", "")).split()
+    if NAMESPACE is not None:
+        check_given(tags)
+    tags = [rename(t) for t in tags]
     if not tags or "file" not in w:
         raise Refused("the build names no Dockerfile or no tag")
     pre, args = [], []
@@ -496,6 +560,8 @@ def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_en
                 kind = "setup"
             else:
                 kind = "run"
+                if NAMESPACE is not None:
+                    check_given(given_names(INLINE.sub(lambda m: text_of(evaluate(m.group(1), ctx)), str(step["run"]))))
                 text = substitute(step["run"], ctx)
                 if re.search(r"\bGITHUB_(ENV|PATH)\b", text):
                     raise Refused("it writes GITHUB_ENV or GITHUB_PATH, which the plan does not carry")

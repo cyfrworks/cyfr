@@ -62,7 +62,7 @@ image() {
   # keep the host user's private modes. Run as that same non-root uid.
   uid="$(id -u)"
   [ "$uid" != 0 ] || fail "build the stand-in as a non-root host user, whose private bind mounts it reads"
-  context="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-tailscale-standin-XXXXXX")"
+  context="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin-XXXXXX")"
   trap 'rm -rf "$context"' RETURN
   binary "$context/standin"
   cp "$here/Dockerfile" "$context/Dockerfile"

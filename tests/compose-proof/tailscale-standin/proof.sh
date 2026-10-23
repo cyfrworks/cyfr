@@ -45,9 +45,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-RUN="cyfr-standin-proof-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
-IMAGE="cyfr-tailscale-standin:$RUN"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-standin-proof-XXXXXX")"
+RUN="${PROOF_RUN_PREFIX:-}cyfr-standin-proof-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+IMAGE="${PROOF_RUN_PREFIX:-}cyfr-tailscale-standin:$RUN"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-standin-proof-XXXXXX")"
 # The port the echo answers as cyfr on, as the engine's configuration
 # names cyfr's proxy listener port.
 UPSTREAM_PORT=4123

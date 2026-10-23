@@ -13,7 +13,7 @@ set -uo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 guard="$root/tests/tailnet-real/guard.sh"
-scratch="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-guard-test.XXXXXX")" || {
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-guard-test.XXXXXX")" || {
   echo "FAIL: cannot create a temporary directory"
   exit 1
 }
