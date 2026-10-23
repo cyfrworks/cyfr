@@ -102,7 +102,11 @@ COPY mix.exs mix.lock ./
 COPY apps/prima/mix.exs apps/prima/mix.exs
 COPY apps/locus/mix.exs apps/locus/mix.exs
 
-RUN mix deps.get --only prod && mix deps.compile
+# The deps' precompiled NIFs are fetched into rustler_precompiled's cache
+# before the deps compile, which cannot download them itself
+# (scripts/fetch-precompiled-nifs.sh says why).
+COPY scripts/fetch-precompiled-nifs.sh scripts/fetch-precompiled-nifs.sh
+RUN mix deps.get --only prod && scripts/fetch-precompiled-nifs.sh && mix deps.compile
 
 COPY config/ config/
 COPY apps/prima/ apps/prima/

@@ -86,6 +86,7 @@ release_build() {
       cd "$ROOT" || exit 1
       export MIX_ENV=prod MIX_BUILD_PATH="$BUILD_PATH" CYFR_DATABASE="$ADAPTER"
       mix deps.get --only prod &&
+        scripts/fetch-precompiled-nifs.sh &&
         mix compile &&
         mix assets.deploy &&
         mix release cyfr --overwrite

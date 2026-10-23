@@ -20,7 +20,9 @@
 #             fixtures' build script pins), CI's built-SDK and
 #             built-toolkit checks (their scripts read from test.yml), the
 #             release-boot names test, the canary's own checks, the image
-#             suites' shared plumbing (tests/imagesuite_test.py) and the
+#             suites' shared plumbing (tests/imagesuite_test.py), the
+#             precompiled NIF fetch against rustler_precompiled
+#             (tests/fetch-precompiled-nifs-test.sh) and the
 #             two Python self-checks (worker_auth.py and the backends
 #             harness.py; none needs a database or an image), dialyzer,
 #             the Boundary plants, then the full SQLite suite in N
@@ -291,7 +293,7 @@ deadline_for() {
   # A step of a CI job (run_job) takes the job's own timeout.
   if [ -n "${STEP_DEADLINE:-}" ]; then echo "$STEP_DEADLINE"; return; fi
   case "$1" in
-    fossils|format|credo|opsgen|confguide|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|toolkit_bundle|boot_names|canary_checks|imagesuite_checks|worker_auth_check|backends_check|island_compile|island_test) echo 600 ;;
+    fossils|format|credo|opsgen|confguide|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|toolkit_bundle|boot_names|canary_checks|imagesuite_checks|precompiled_nifs|worker_auth_check|backends_check|island_compile|island_test) echo 600 ;;
     compile_*|boundary_plants) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
@@ -311,7 +313,7 @@ deadline_for() {
 PG_SERVER=postgres://cyfr:cyfr@localhost:5432
 
 # The steps of a leg, for the deadline of a leg that waits on it.
-STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide js_suite eslint wasm_tools test_wasm sdk_bundle toolkit_bundle boot_names canary_checks imagesuite_checks worker_auth_check backends_check dialyzer boundary_plants sqlite_suite'
+STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide js_suite eslint wasm_tools test_wasm sdk_bundle toolkit_bundle boot_names canary_checks imagesuite_checks precompiled_nifs worker_auth_check backends_check dialyzer boundary_plants sqlite_suite'
 steps_of() {
   case "$1" in
     static) echo "$STATIC_STEPS" ;;
@@ -397,6 +399,7 @@ leg_static() {
   step static boot_names bash tests/release-boot/names-test.sh || return
   step static canary_checks python3 -I tests/locus-runtime-image/canary_test.py || return
   step static imagesuite_checks python3 -I tests/imagesuite_test.py || return
+  step static precompiled_nifs bash tests/fetch-precompiled-nifs-test.sh || return
   # The image suites' own protocol code against the vectors, with no image.
   step static worker_auth_check python3 -I tests/locus-runtime-image/worker_auth.py --self-check || return
   step static backends_check python3 -I tests/locus-backends-image/harness.py --self-check || return
@@ -1378,6 +1381,23 @@ else
 fi
 if [ "$s" -ne 0 ]; then
   echo "==> the pinned wasm-tools could not be installed (scripts/wasm-tools.sh): $s" >&2
+  [ "$s" -eq 124 ] && exit 124
+  exit 1
+fi
+# The deps' precompiled NIFs in rustler_precompiled's cache, before any leg
+# compiles the deps into a build of its own: the compile cannot download
+# them itself (scripts/fetch-precompiled-nifs.sh says why). CI's jobs run
+# the same fetch after mix deps.get, which the gate's plan takes as setup.
+s=0
+if contain_start -g 30 scripts/fetch-precompiled-nifs.sh >/dev/null </dev/null; then
+  contain_wait "$CONTAIN_PID" 600 30 || s=$?
+else
+  s=$?
+  echo '==> the precompiled NIF fetch could not start' >&2
+  exit "$s"
+fi
+if [ "$s" -ne 0 ]; then
+  echo "==> the deps' precompiled NIFs could not be fetched (scripts/fetch-precompiled-nifs.sh): $s" >&2
   [ "$s" -eq 124 ] && exit 124
   exit 1
 fi

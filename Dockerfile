@@ -32,7 +32,11 @@ RUN scripts/wasm-tools.sh install /opt/wasm-tools
 COPY mix.exs mix.lock ./
 COPY --parents apps/*/mix.exs ./
 
-RUN mix deps.get --only prod && mix deps.compile
+# The deps' precompiled NIFs are fetched into rustler_precompiled's cache
+# before the deps compile, which cannot download them itself
+# (scripts/fetch-precompiled-nifs.sh says why).
+COPY scripts/fetch-precompiled-nifs.sh scripts/fetch-precompiled-nifs.sh
+RUN mix deps.get --only prod && scripts/fetch-precompiled-nifs.sh && mix deps.compile
 
 # Copy all config files (extra release runtime configs are optional)
 COPY config/ config/

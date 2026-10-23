@@ -19,8 +19,10 @@ apps/cyfr/priv/static/**/*.gz
 apps/cyfr/priv/static/**/*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].*
 .github/
 scripts/
-# The pinned wasm-tools installer, which both images run
+# The pinned wasm-tools installer and the precompiled NIF fetch, which both
+# images run
 !scripts/wasm-tools.sh
+!scripts/fetch-precompiled-nifs.sh
 _tools/
 Dockerfile*
 docker-compose*.yml
