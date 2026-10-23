@@ -165,14 +165,14 @@ defmodule Cyfr.GracefulStopTest do
   end
 
   describe "a suspended server" do
-    setup do
+    setup context do
       server =
         start_supervised!(
           Supervisor.child_spec(
             {Bandit,
              plug: {HoldPlug, self()},
              scheme: :http,
-             ip: @loopback,
+             ip: Map.get(context, :listen_ip, @loopback),
              port: 0,
              startup_log: false,
              thousand_island_options: [shutdown_timeout: 5_000]},
@@ -209,12 +209,77 @@ defmodule Cyfr.GracefulStopTest do
       assert Task.await(stopping, 15_000) == :ok
     end
 
+    test "a server already suspended stays suspended", %{server: server, port: port} do
+      assert App.suspend_server(server) == :ok
+      assert App.suspend_server(server) == :ok
+      assert {:error, :econnrefused} = connect(port)
+    end
+
+    @tag listen_ip: {0, 0, 0, 0}
+    test "a wildcard listener is checked through loopback", %{server: server, port: port} do
+      assert App.suspend_server(server) == :ok
+      assert {:error, :econnrefused} = connect(port)
+    end
+
     test "a server that is gone is logged and answered :error, never raised", %{server: server} do
       :ok = ThousandIsland.stop(server)
 
       log = capture_log(fn -> assert App.suspend_server(server) == :error end)
       assert log =~ "could not stop accepting"
     end
+  end
+
+  @tag timeout: 30_000
+  test "repeated suspensions refuse immediately with every listen socket under load" do
+    server =
+      start_supervised!(
+        {Bandit,
+         plug: {HoldPlug, self()},
+         scheme: :http,
+         ip: @loopback,
+         port: 0,
+         startup_log: false,
+         thousand_island_options: [
+           num_acceptors: 16,
+           num_listen_sockets: 16,
+           transport_options: [reuseport: true]
+         ]}
+      )
+
+    # More listening ports and busy schedulers expose a process exit
+    # overtaking the ports' exit signals. Each resume binds fresh port 0.
+    loaders =
+      for id <- 1..System.schedulers_online() do
+        child_id = {:scheduler_load, id}
+        start_supervised!({Task, &scheduler_load/0}, id: child_id)
+        child_id
+      end
+
+    try do
+      for iteration <- 1..200 do
+        port = port(server)
+        assert App.suspend_server(server) == :ok
+
+        case connect(port) do
+          {:ok, socket} ->
+            :gen_tcp.close(socket)
+            flunk("suspension #{iteration} left a listening socket open")
+
+          result ->
+            assert result == {:error, :econnrefused},
+                   "suspension #{iteration}: #{inspect(result)}"
+        end
+
+        assert ThousandIsland.resume(server) == :ok
+      end
+    after
+      for child_id <- loaders, do: stop_supervised(child_id)
+    end
+  end
+
+  defp scheduler_load do
+    :crypto.hash(:sha256, <<0::8192>>)
+    scheduler_load()
   end
 
   describe "an endpoint's servers" do
