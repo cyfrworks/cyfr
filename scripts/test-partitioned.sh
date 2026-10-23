@@ -20,7 +20,10 @@
 # with 64. A shard that holds no partition, or none that a test file falls
 # to, says so and passes without running a test. Under `-- --failed` the
 # split is the whole selection's, made before the failures record narrows
-# it, so each shard reruns the recorded failures among its own files.
+# it, so each shard reruns the recorded failures among its own files. A
+# record of :all (a suite that failed to load) is the whole suite's
+# outstanding rerun, and a run of less than the whole suite, a shard's,
+# named paths' or a selection's, leaves it :all for the runs still owed.
 #
 # --cover measures line coverage and reports it, never gating on it. Each
 # partition runs `mix test --cover --export-coverage <run>-p<i>`, so Mix
@@ -229,6 +232,7 @@ path_index=()
 failed=false
 stale=false
 selects=false
+excludes=false
 warnings_as_errors=false
 mix_cover=false
 value_switches=' --export-coverage --max-cases --max-failures --max-requires --include --exclude --seed --name-pattern -n --only --timeout --formatter --slowest --slowest-modules --partitions --profile-require --exit-status --repeat-until-failure '
@@ -250,6 +254,7 @@ for ((j=0; j<${#args[@]}; j++)); do
         --failed) failed=true ;;
         --stale) stale=true ;;
         --only|--name-pattern|-n) selects=true ;;
+        --exclude) excludes=true ;;
         --warnings-as-errors) warnings_as_errors=true ;;
         --cover|--export-coverage) mix_cover=true ;;
       esac
@@ -258,6 +263,14 @@ for ((j=0; j<${#args[@]}; j++)); do
   fi
   path_index[${#path_index[@]}]=$j
 done
+# Whether the run is the whole suite: only such a run settles a failures
+# record of :all, the whole suite's outstanding rerun
+# (scripts/test-partition-env.exs, merge_records).
+whole_run=true
+if [ "$shard_count" != 1 ] || [ "${#path_index[@]}" -gt 0 ] || [ "$selects" = true ] ||
+   [ "$excludes" = true ] || [ "$stale" = true ]; then
+  whole_run=false
+fi
 if [ "$COVER" = true ] && [ "$mix_cover" = true ]; then
   echo "--cover names each partition's export itself: pass Mix neither --cover nor --export-coverage with it" >&2; exit 64
 fi
@@ -390,7 +403,7 @@ seed_failures() {
 }
 merge_records() {
   mkdir -p "${record_lock%/*}" || exit 1
-  exec flock -w 60 "$record_lock" elixir "$helper" failures-merge "$out_dir" "$PARTITIONS" "$@"
+  exec flock -w 60 "$record_lock" elixir "$helper" failures-merge "$out_dir" "$PARTITIONS" "$whole_run" "$@"
 }
 # The pinned validator the dev and test configurations name
 # (`_tools/wasm-tools`), which the suite's applications check as they start.
@@ -448,7 +461,7 @@ contained() {
   local grace=$1 status=0
   shift
   contain_start -g "$grace" "$BASH" -c "set -uo pipefail
-$(declare -p out_dir checkout helper script_dir ADAPTER PARTITIONS cluster failed whole_split \
+$(declare -p out_dir checkout helper script_dir ADAPTER PARTITIONS cluster failed whole_split whole_run \
   partition_flags compile_flags weights_table weights_required record_lock)
 $(declare -f load_partition_env valid_receipt "$1")
 $1 \"\$@\"" "$1" "${@:2}" || status=$?
