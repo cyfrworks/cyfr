@@ -47,11 +47,12 @@ compile_wasmex() {
     mix deps.compile rustler_precompiled rustler wasmex
 }
 
-# Each `mix deps.get` a tracked file runs, outside comments, the docs and
-# the gate's own fixtures, is followed by the fetch: on its line after
+# Each `mix deps.get` a tracked file runs, outside comments, the docs, the
+# gate's own fixtures and the fetch's own messages, is followed by the fetch: on its line after
 # `&&`, or alone on the next line.
 git grep -n -e 'mix deps\.get' -- ':!*.md' ':!deps' ':!tests/commit-gate-test.sh' \
-  ':!scripts/lib/workflow_plan.py' ':!tests/fetch-precompiled-nifs-test.sh' > "$scratch/deps-get.txt" || true
+  ':!scripts/lib/workflow_plan.py' ':!scripts/fetch-precompiled-nifs.sh' ':!tests/fetch-precompiled-nifs-test.sh' \
+  > "$scratch/deps-get.txt" || true
 python3 -I - "$scratch/deps-get.txt" <<'PY'
 import re, sys
 bad, seen = [], 0
