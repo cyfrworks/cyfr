@@ -1626,7 +1626,10 @@ echo 'ok: the scripts the close runs name what they make after the run prefix'
 # every assignment of which reads it (in Python PROJECT_PREFIX, which
 # tests/imagesuite.py reads from it, or a stack's project, named from
 # that). With no FILE, every tracked shell and Python file under tests/ and
-# scripts/ that starts one, but for the roster's, each with its reason.
+# scripts/, whatever it holds, but for the roster's, each with its reason.
+# Shell is read through scripts/lib/workflow_plan.py's parser, so this
+# check holds our own scripts to the contract and shares that parser's
+# limit (its header): it is no defence against a hostile author.
 container_names() {
   python3 -I - "$@" <<'PY'
 import ast, os, re, subprocess, sys
@@ -1651,11 +1654,12 @@ if not files:
                              capture_output=True, text=True, check=True).stdout.split("\0")
     files = [f for f in tracked if f.endswith((".sh", ".py")) and os.path.isfile(os.path.join(root, f))]
     texts = {f: open(os.path.join(root, f), errors="replace").read() for f in files}
-    starting = {f for f, t in texts.items() if STARTS.search(t) or re.search(r"[\"']docker[\"'],\s*[\"'](?:container[\"'],\s*[\"'])?(?:run|create)[\"']", t)}
+    # Every file is read, whatever it holds; the roster's are left out, each
+    # still one that starts a container.
     for f, why in ROSTER.items():
-        if f not in starting:
+        if f not in texts or not (STARTS.search(texts[f]) or re.search(r"[\"']docker[\"'],\s*[\"'](?:container[\"'],\s*[\"'])?(?:run|create)[\"']", texts[f])):
             errors.append(f"the roster leaves out {f} ({why}), which starts no container")
-    files = sorted(starting - set(ROSTER))
+    files = sorted(set(files) - set(ROSTER))
 else:
     texts = {f: open(os.path.join(root, f)).read() for f in files}
 
@@ -1825,6 +1829,20 @@ for want in 'tests/planted.sh: docker run --rm alpine:3 true' 'tests/planted.sh:
 done
 [ "$(grep -c 'no --name under PROOF_RUN_PREFIX' "$scratch/names-planted.err")" = 7 ] ||
   fail "the name check refused a named container: $(cat "$scratch/names-planted.err")"
+# The whole-tree run reads every tracked shell and Python file, whatever
+# it holds: a file whose one container start is `docker --debug run` is
+# found and refused.
+mkdir -p "$scratch/names-tree/scripts/lib" "$scratch/names-tree/tests"
+cp "$root/scripts/lib/workflow_plan.py" "$scratch/names-tree/scripts/lib/"
+for f in tests/commit-gate-test.sh tests/compose-proof/cleanup-test.sh tests/ci-publish-test.sh tests/tailnet-real/run.sh; do
+  mkdir -p "$scratch/names-tree/$(dirname "$f")"
+  cp "$root/$f" "$scratch/names-tree/$f"
+done
+echo 'docker --debug run --rm alpine:3 true' > "$scratch/names-tree/tests/global-only.sh"
+git -C "$scratch/names-tree" init -q && git -C "$scratch/names-tree" add scripts tests || fail 'the whole-tree fixture could not be tracked'
+! container_names "$scratch/names-tree" 2>"$scratch/names-tree.err" || fail 'the whole-tree run passed a file whose one container start is unnamed'
+grep -qF 'tests/global-only.sh: docker --debug run --rm alpine:3 true' "$scratch/names-tree.err" ||
+  fail "the whole-tree run did not find the unnamed container: $(cat "$scratch/names-tree.err")"
 echo 'ok: every container the scripts the close runs start is named under the run prefix'
 
 # A container a run names under the prefix outlives its caller as docker's

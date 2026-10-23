@@ -29,6 +29,13 @@ loads images other than the line the plan replaces, and one that starts
 a container under a name CI gives (`docker run`, `docker create`) fail
 it. An upload step keeps its files under DIR/NAME (--artifacts).
 
+This reading guards our own workflows against a step that would touch a
+host's names by accident; it is no defence against a hostile author.
+Quoting can hide a command from it: a word bash assembles from quoted
+pieces (`doc""ker`) inside an expansion's default, where the plan reads
+the quotes as written and bash does not, runs as docker unread. A hostile
+step is a hostile commit, reviewed as code.
+
 KEY=VALUE picks the job's matrix entry (each key the matrix has, its value
 one the matrix lists; an `include` entry is picked by the keys given).
 `--except STEP` leaves a step out by name and `--only STEP` keeps one step
