@@ -7,10 +7,11 @@ tests/locus-backends-image/harness.py each run one service of the Locus
 image under docker compose. They share the command runner (`run`), the
 teardown on a signal (`stop_on_signals`), the temporary directories
 removed at exit (`temporary_directory`), the default bridge's gateway
-(`bridge_gateway`), and the part of a compose stack that does not depend
-on the service (`Stack`: its project name, its project directory and
-`down`). What differs between them (compose files, services, the seccomp
-copy, their logs) stays in each harness's own subclass.
+(`bridge_gateway`), the reading of a guard's failure from its inspect
+record (`guard_failed`), and the part of a compose stack that does not
+depend on the service (`Stack`: its project name, its project directory
+and `down`). What differs between them (compose files, services, the
+seccomp copy, their logs) stays in each harness's own subclass.
 
 Importing this module calls no Docker and binds nothing: the gate's static
 step imports the runtime harness on every commit.
@@ -125,6 +126,19 @@ def bridge_gateway():
     if not gateway:
         sys.exit("FAIL: docker network inspect bridge names no gateway")
     return gateway
+
+
+def guard_failed(inspected):
+    """Whether `docker inspect`'s record of an egress guard says it never turned healthy and failed.
+
+    Its health is not healthy, and its process exited 1 or Docker has
+    restarted it. RestartCount is the record's own field beside State,
+    not State's: a guard inspected between one exit and the next start
+    reports State running and restarting with ExitCode 0, and only the
+    count says it failed.
+    """
+    state = inspected["State"]
+    return state.get("Health", {}).get("Status") != "healthy" and (state.get("ExitCode") == 1 or inspected["RestartCount"] >= 1)
 
 
 class Stack:

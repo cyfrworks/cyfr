@@ -262,11 +262,12 @@ def test_guard_failure(image):
         guard = stack.compose("ps", "--all", "--quiet", GUARD).stdout.strip()
         island = stack.compose("ps", "--all", "--quiet", SERVICE).stdout.strip()
         expect(guard and island, "compose created the guard and the service", [guard, island])
-        state = stack.inspect(guard)["State"]
+        inspected = stack.inspect(guard)
         logs = run("docker", "logs", guard, check=False)
         text = logs.stdout + logs.stderr
-        expect(state.get("Health", {}).get("Status") != "healthy" and (state["ExitCode"] == 1 or state["RestartCount"] >= 1),
-               "the guard never turned healthy: it ended with an error, and restarts", state)
+        expect(imagesuite.guard_failed(inspected),
+               "the guard never turned healthy: it ended with an error, and restarts",
+               {"state": inspected["State"], "restarts": inspected["RestartCount"]})
         expect("[cyfr-guard] error: ip6tables" in text and "ready:" not in text,
                "the guard named the ip6tables rule that failed and wrote no ready file", text[-2000:])
         state = stack.inspect(island)["State"]
