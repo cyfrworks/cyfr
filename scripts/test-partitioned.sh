@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-# Run isolated OS partitions: scripts/test-partitioned.sh [-n N] [-a sqlite|postgres] [--cover] [paths and Mix arguments]
+# Run isolated OS partitions: scripts/test-partitioned.sh [-n N] [-a sqlite|postgres] [--shard I/N] [--cover] [paths and Mix arguments]
 #
 # One partition hands its Mix arguments to `mix test` unchanged. More than
 # one gives each partition an explicit list of the test files the named
@@ -10,6 +10,17 @@
 # total of weights from scripts/test-partition-weights.tsv (CYFR_TEST_WEIGHTS
 # names another table; a file the table lacks weighs its median). A
 # partition left with no file is not started.
+#
+# --shard I/N runs only shard I of N of that split: partition p belongs to
+# shard ((p - 1) mod N) + 1, so N runs of one tree, one per shard, run
+# every partition exactly once between them, and each run sizes its own
+# partitions to its own machine's cores. It is how CI splits the suite
+# across runners; a run here takes the suite whole. I and N are whole
+# numbers from 1, I at most N and N at most 32; anything else is refused
+# with 64. A shard that holds no partition, or none that a test file falls
+# to, says so and passes without running a test. Under `-- --failed` the
+# split is the whole selection's, made before the failures record narrows
+# it, so each shard reruns the recorded failures among its own files.
 #
 # --cover measures line coverage and reports it, never gating on it. Each
 # partition runs `mix test --cover --export-coverage <run>-p<i>`, so Mix
@@ -38,12 +49,13 @@ set -uo pipefail
 PARTITIONS=4
 ADAPTER=sqlite
 COVER=false
-usage() { echo "usage: $0 [-n N] [-a sqlite|postgres] [--cover] [--] [test paths and Mix arguments]"; }
+SHARD=
+usage() { echo "usage: $0 [-n N] [-a sqlite|postgres] [--shard I/N] [--cover] [--] [test paths and Mix arguments]"; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -n|-a)
+    -n|-a|--shard)
       [ "$#" -ge 2 ] && [ -n "$2" ] || { usage >&2; exit 64; }
-      case "$1" in -n) PARTITIONS=$2 ;; *) ADAPTER=$2 ;; esac
+      case "$1" in -n) PARTITIONS=$2 ;; -a) ADAPTER=$2 ;; *) SHARD=$2 ;; esac
       shift 2 ;;
     --cover) COVER=true; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -53,6 +65,16 @@ while [ "$#" -gt 0 ]; do
 done
 case "$PARTITIONS" in ''|*[!0-9]*|0*) echo 'partitions must be a positive decimal integer' >&2; exit 64 ;; esac
 case "$ADAPTER" in sqlite|postgres) ;; *) echo 'adapter must be sqlite or postgres' >&2; exit 64 ;; esac
+shard_index=1
+shard_count=1
+if [ -n "$SHARD" ]; then
+  if ! [[ $SHARD =~ ^([1-9][0-9]?)/([1-9][0-9]?)$ ]] ||
+     [ "${BASH_REMATCH[1]}" -gt "${BASH_REMATCH[2]}" ] || [ "${BASH_REMATCH[2]}" -gt 32 ]; then
+    echo 'the shard is I/N: whole numbers from 1, I at most N, N at most 32' >&2; exit 64
+  fi
+  shard_index=${BASH_REMATCH[1]}
+  shard_count=${BASH_REMATCH[2]}
+fi
 
 held=${HEAVY_CHECK_HELD:-}
 [ -n "$held" ] || echo "_START=$$"
@@ -190,6 +212,14 @@ fi
 if [ "$held" = scoped ] && [ "$PARTITIONS" -gt 1 ]; then
   echo 'a scoped check runs one partition: -n 1' >&2; exit 64
 fi
+# The partitions this run's shard holds: every one without --shard.
+in_shard() { [ $((($1 - 1) % shard_count + 1)) = "$shard_index" ]; }
+shard_partitions=()
+for ((i=1; i<=PARTITIONS; i++)); do
+  if in_shard "$i"; then shard_partitions[${#shard_partitions[@]}]=$i; fi
+done
+whole_split=false
+[ "$shard_count" = 1 ] || whole_split=true
 
 # The Mix arguments: which are test paths, and the options the runner
 # reads. A switch Mix gives a value takes the next argument (Mix's own
@@ -258,6 +288,11 @@ if [ "$PARTITIONS" -gt 1 ]; then
     weights_table="$script_dir/test-partition-weights.tsv"
   fi
 fi
+if [ "${#shard_partitions[@]}" = 0 ]; then
+  echo "==> shard $shard_index/$shard_count holds none of the $PARTITIONS partitions: nothing to run"
+  completed=true
+  exit 0
+fi
 
 if [ -z "${MIX_BUILD_PATH:-}" ] && [ "$ADAPTER" = postgres ]; then export MIX_BUILD_PATH=_build/test_pg; fi
 # The canonical failures record's lock (config/test.exs names the record).
@@ -271,7 +306,7 @@ export CYFR_DATABASE="$ADAPTER" MIX_ENV=test CYFR_TEST_PARTITION_ENV_LIBRARY=0
 # take in a fresh lock directory, on the port the first one had, reads its
 # own port back as the holder's and waits for itself to let go.
 export MIX_OS_CONCURRENCY_LOCK=0
-per=$(( cores / PARTITIONS )); [ "$per" -lt 2 ] && per=2
+per=$(( cores / ${#shard_partitions[@]} )); [ "$per" -lt 2 ] && per=2
 compile_cores=$cores; [ "$compile_cores" -le 1024 ] || compile_cores=1024
 # Dirty I/O schedulers are threads that block inside the SQLite driver while
 # a writer waits out a busy quantum; scaling them down with the partition
@@ -370,7 +405,7 @@ assign_files() {
   exec >"$out_dir/assign.log" 2>&1
   load_partition_env 1 || exit 1
   exec mix run --no-start --no-compile "$helper" assign "$out_dir" "$PARTITIONS" \
-    "$weights_table" "$weights_required" "$failed" -- "$@"
+    "$weights_table" "$weights_required" "$failed" "$whole_split" -- "$@"
 }
 create_partition() {
   exec >>"$out_dir/p$1.log" 2>&1
@@ -413,7 +448,7 @@ contained() {
   local grace=$1 status=0
   shift
   contain_start -g "$grace" "$BASH" -c "set -uo pipefail
-$(declare -p out_dir checkout helper script_dir ADAPTER PARTITIONS cluster failed \
+$(declare -p out_dir checkout helper script_dir ADAPTER PARTITIONS cluster failed whole_split \
   partition_flags compile_flags weights_table weights_required record_lock)
 $(declare -f load_partition_env valid_receipt "$1")
 $1 \"\$@\"" "$1" "${@:2}" || status=$?
@@ -695,7 +730,11 @@ report_warning_evidence() {
 contained_wait 300 30 'the wasm-tools install' install_tools ||
   { echo "the pinned wasm-tools could not be installed (scripts/wasm-tools.sh)" >&2; exit 1; }
 
-echo "==> compiling once ($ADAPTER, $PARTITIONS partitions, $per schedulers each)"
+if [ "$shard_count" = 1 ]; then
+  echo "==> compiling once ($ADAPTER, $PARTITIONS partitions, $per schedulers each)"
+else
+  echo "==> compiling once ($ADAPTER, shard $shard_index/$shard_count: partitions ${shard_partitions[*]} of $PARTITIONS, $per schedulers each)"
+fi
 if ! contained_wait 1800 30 'the compile' compile_build; then
   echo "compile failed; see $out_dir/compile.log" >&2
   report_warning_evidence "$out_dir/compile.log"
@@ -779,7 +818,9 @@ report_coverage() {
 skipped=0
 for ((i=1; i<=PARTITIONS; i++)); do
   started[$i]=false
-  if [ "$selection" = empty ]; then
+  if ! in_shard "$i"; then
+    continue
+  elif [ "$selection" = empty ]; then
     skipped=$((skipped + 1))
   elif [ "$PARTITIONS" -gt 1 ] && [ ! -s "$out_dir/assign/p$i" ]; then
     skipped=$((skipped + 1))
@@ -849,6 +890,7 @@ ran_test=false
 any_started=false
 if [ "$selection" = empty ]; then echo '==> no partition started: the failures record names no test'; fi
 for ((i=1; i<=PARTITIONS; i++)); do
+  in_shard "$i" || continue
   printf '==> partition %s/%s\n' "$i" "$PARTITIONS"
   if [ "${started[$i]}" != true ]; then
     echo '    not started: no test file falls to it'
@@ -895,10 +937,17 @@ fi
 if [ "$COVER" = true ] && [ "$any_started" = true ]; then
   report_coverage
 fi
+label="$PARTITIONS partitions"
+if [ "$shard_count" != 1 ]; then
+  label="$label, shard $shard_index/$shard_count's ${#shard_partitions[@]}"
+  if [ "$selection" != empty ] && [ "$any_started" = false ]; then
+    echo "==> shard $shard_index/$shard_count: no test file falls to its partitions, so nothing ran"
+  fi
+fi
 if [ "$skipped" -gt 0 ]; then
-  echo "==> $PARTITIONS partitions ($skipped not started: no test file falls to them), $ADAPTER, $((SECONDS - start))s wall, exit $status"
+  echo "==> $label ($skipped not started: no test file falls to them), $ADAPTER, $((SECONDS - start))s wall, exit $status"
 else
-  echo "==> $PARTITIONS partitions, $ADAPTER, $((SECONDS - start))s wall, exit $status"
+  echo "==> $label, $ADAPTER, $((SECONDS - start))s wall, exit $status"
 fi
 # Only a passing main path may report 0.
 [ "$status" != 0 ] || completed=true
