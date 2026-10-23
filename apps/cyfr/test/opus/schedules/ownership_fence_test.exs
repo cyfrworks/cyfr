@@ -396,12 +396,9 @@ defmodule Opus.Schedules.OwnershipFenceTest do
       # only after the late renew has put the standing back under the
       # same generation.
       :ok = :sys.suspend(scheduler)
-      # Read the lower bound before releasing the run: recovery uses the
-      # scheduler's clock when it handles the end, not this monitor's
-      # observation of DOWN.
-      released = System.monotonic_time(:millisecond)
       send(worker, :continue)
       assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 10_000
+      exited = System.monotonic_time(:millisecond)
       Arca.ControlPlane.record({:held, 60_000})
       assert {:ok, slot.generation} == Arca.ControlPlane.generation()
       :ok = :sys.resume(scheduler)
@@ -410,7 +407,7 @@ defmodule Opus.Schedules.OwnershipFenceTest do
       # two ticks after it. The run's answer was written nowhere.
       state = :sys.get_state(scheduler)
       assert is_reference(state.recovery_ref)
-      assert state.recovery_due >= due_after(released)
+      assert state.recovery_due >= due_after(exited)
       assert [%{state: "started"}] = occurrences(actor, schedule.id)
       assert {:ok, %{run_count: 0, error_count: 0}} = CronSchedule.get_for_daemon(schedule.id)
     end
@@ -602,16 +599,16 @@ defmodule Opus.Schedules.OwnershipFenceTest do
       # the scheduler sees the exit: the not-still-ours branch.
       Arca.ControlPlane.record({:held, 0})
       :ok = :sys.suspend(scheduler)
-      released = System.monotonic_time(:millisecond)
       send(worker, :continue)
       assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 10_000
+      exited = System.monotonic_time(:millisecond)
       refute Arca.ControlPlane.held?()
       :ok = :sys.resume(scheduler)
 
       state = :sys.get_state(scheduler)
       assert [%{state: "started"}] = occurrences(actor, schedule.id)
       assert is_reference(state.recovery_ref)
-      assert state.recovery_due >= due_after(released)
+      assert state.recovery_due >= due_after(exited)
     end
   end
 
@@ -726,8 +723,10 @@ defmodule Opus.Schedules.OwnershipFenceTest do
       second = Process.whereis(Scheduler)
       no_pass!(second)
 
-      # The run answers after the cached standing ran out, and the late
-      # renew lands before the scheduler sees its end.
+      # The run answers after the cached standing ran out. The replacement
+      # scheduler is not suspended, so it can timestamp recovery before the
+      # test observes DOWN on its separate monitor. Read the lower bound
+      # before releasing the run so it precedes either observation.
       Arca.ControlPlane.record({:held, 0})
       released = System.monotonic_time(:millisecond)
       send(worker, :continue)
@@ -818,9 +817,9 @@ defmodule Opus.Schedules.OwnershipFenceTest do
       # lands before the scheduler sees its end.
       Arca.ControlPlane.record({:held, 0})
       :ok = :sys.suspend(scheduler)
-      released = System.monotonic_time(:millisecond)
       send(worker_a, :continue)
       assert_receive {:DOWN, ^ref_a, :process, ^task_a, reason}, 10_000
+      exited = System.monotonic_time(:millisecond)
       renewed!(slot)
       :ok = :sys.resume(scheduler)
       state = :sys.get_state(scheduler)
@@ -833,7 +832,7 @@ defmodule Opus.Schedules.OwnershipFenceTest do
 
       assert state.tasks == %{}
       assert is_reference(state.recovery_ref)
-      assert state.recovery_due >= due_after(released)
+      assert state.recovery_due >= due_after(exited)
     end
 
     test "a run this process does not hold, ending left to recovery, asks for the two-tick pass",
