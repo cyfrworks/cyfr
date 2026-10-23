@@ -755,7 +755,9 @@ defmodule Sanctum.Caller do
   focuses it again on the athanor the caller had in focus
   (`Sanctum.Context.focus/2`). The result carries the caller's request
   correlation and plane, never more permission than the caller held, and
-  a new `validated_at`.
+  a new `validated_at`. A focus refusal rereads session standing, so a
+  leave that ended the session during the rebuild is answered as a
+  retired session rather than only a lost focus.
 
   Refusals, each distinct:
 
@@ -894,7 +896,7 @@ defmodule Sanctum.Caller do
          {:ok, rebuilt} <- reload(hash),
          :ok <- same_person(rebuilt, ctx),
          :ok <- identity_current(rebuilt.user_id, hash),
-         {:ok, focused} <- refocus(rebuilt, ctx.athanor_id) do
+         {:ok, focused} <- refocus(rebuilt, ctx) do
       {:ok, carried(focused, ctx)}
     end
   end
@@ -1168,13 +1170,22 @@ defmodule Sanctum.Caller do
 
   # The caller's focus, authorized again as any focus is; a refusal is the
   # caller's focus lost, never a move to the session's default athanor.
-  defp refocus(rebuilt, nil), do: {:ok, rebuilt}
+  defp refocus(rebuilt, %Context{athanor_id: nil}), do: {:ok, rebuilt}
 
-  defp refocus(rebuilt, athanor_id) do
-    case Context.focus(rebuilt, athanor_id) do
-      {:ok, focused} -> {:ok, focused}
-      {:error, :unavailable} -> {:error, :unavailable}
-      {:error, _refused} -> {:error, :not_member}
+  defp refocus(rebuilt, %Context{} = held) do
+    case Context.focus(rebuilt, held.athanor_id) do
+      {:ok, focused} ->
+        {:ok, focused}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
+
+      {:error, _refused} ->
+        # A leave can retire the seat and its bound session after the
+        # reload. That ended session takes precedence over a lost focus;
+        # rereading standing can only refine the refusal, never admit it.
+        with :ok <- stored_standing(held, held.session_token_hash),
+             do: {:error, :not_member}
     end
   end
 

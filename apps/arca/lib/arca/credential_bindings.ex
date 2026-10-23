@@ -35,14 +35,15 @@ defmodule Arca.CredentialBindings do
   alias Arca.SecurityTransitions.Issuance
 
   @typedoc """
-  The rows a credential names: the person, the athanor it works in, the
+  The rows a credential names: the person, the athanor it works in (nil
+  for a session with no current focus), the
   membership its focus rests on (nil for a key, whose focus is itself)
   and the source credential, `{:session, token_hash}`, `{:api_key, id}`
   or a paired device's `{:device, client_id, expires_at}`.
   """
   @type binding :: %{
           required(:user_id) => String.t(),
-          required(:athanor_id) => String.t(),
+          required(:athanor_id) => String.t() | nil,
           required(:membership_id) => String.t() | nil,
           required(:source) =>
             {:session, binary()} | {:api_key, String.t()} | {:device, String.t(), DateTime.t()}
