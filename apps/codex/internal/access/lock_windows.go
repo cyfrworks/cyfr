@@ -8,6 +8,7 @@ package access
 import (
 	"errors"
 	"os"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -38,8 +39,19 @@ func unlockExclusive(f *os.File) {
 	windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &ol)
 }
 
+// replaceWait bounds how long replaceFile keeps trying while a reader
+// holds the file it replaces: a reader of a record (readJSON) holds it
+// for the length of one read, and a refused taker reads the holder
+// record every 5 ms for recordWait.
+const replaceWait = 250 * time.Millisecond
+
 // replaceFile renames from over to, written through to the disk before
-// it returns: Windows has no directory to sync.
+// it returns: Windows has no directory to sync. A file another process
+// has open for reading cannot be replaced while that handle is open
+// (os.ReadFile opens without FILE_SHARE_DELETE), and MoveFileEx refuses
+// with ERROR_ACCESS_DENIED or ERROR_SHARING_VIOLATION; a reader holds a
+// record only for one read, so the rename is tried again every
+// millisecond within replaceWait before that refusal is answered.
 func replaceFile(from, to string) error {
 	f, err := windows.UTF16PtrFromString(from)
 	if err != nil {
@@ -49,10 +61,18 @@ func replaceFile(from, to string) error {
 	if err != nil {
 		return err
 	}
-	if err := windows.MoveFileEx(f, t, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH); err != nil {
-		return &os.LinkError{Op: "rename", Old: from, New: to, Err: err}
+	end := time.Now().Add(replaceWait)
+	for {
+		err := windows.MoveFileEx(f, t, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+		if err == nil {
+			return nil
+		}
+		held := errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_SHARING_VIOLATION)
+		if !held || !time.Now().Before(end) {
+			return &os.LinkError{Op: "rename", Old: from, New: to, Err: err}
+		}
+		time.Sleep(time.Millisecond)
 	}
-	return nil
 }
 
 // syncDir is nothing on Windows: replaceFile writes the rename through,
