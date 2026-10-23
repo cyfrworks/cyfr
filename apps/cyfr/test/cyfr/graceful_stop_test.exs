@@ -215,6 +215,67 @@ defmodule Cyfr.GracefulStopTest do
       assert {:error, :econnrefused} = connect(port)
     end
 
+    @tag timeout: 30_000
+    test "a failed closure confirmation is retried after the listener exits",
+         %{server: server, port: port} do
+      {:ok, open} = connect(port)
+      :ok = :gen_tcp.send(open, "GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+      assert_receive {:held, handler}, 5_000
+
+      listener = ThousandIsland.Server.listener_pid(server)
+      {listening, _span} = ThousandIsland.Listener.acceptor_info(listener, 1)
+      on_exit(fn -> :gen_tcp.close(listening) end)
+      owner = self()
+
+      # Keep the original socket alive past the listener's exit, as a
+      # delayed kernel close would. Each suspension runs in a fresh caller.
+      :sys.replace_state(listener, fn state ->
+        :ok = :gen_tcp.controlling_process(listening, owner)
+        state
+      end)
+
+      acceptor = {:kept_listener, make_ref()}
+      acceptor_pid = start_supervised!({Task, fn -> accept_probes(listening) end}, id: acceptor)
+      monitor = Process.monitor(acceptor_pid)
+
+      suspend = fn ->
+        Task.async(fn -> App.suspend_server(server) end) |> Task.await(10_000)
+      end
+
+      try do
+        log = capture_log(fn -> assert suspend.() == :error end)
+        assert log =~ "listener_close_timeout"
+        assert ThousandIsland.listener_info(server) == :error
+
+        # Losing the listener does not end a request already open.
+        send(handler, :release)
+        assert read_until_closed(open) =~ "finished"
+
+        {:ok, still_open} = connect(port)
+        :ok = :gen_tcp.close(still_open)
+
+        log = capture_log(fn -> assert suspend.() == :error end)
+        assert log =~ "listener_close_timeout"
+
+        :ok = :gen_tcp.close(listening)
+        assert_receive {:DOWN, ^monitor, :process, ^acceptor_pid, :normal}, 5_000
+
+        assert suspend.() == :ok
+        assert {:error, :econnrefused} = connect(port)
+      after
+        :gen_tcp.close(open)
+        :gen_tcp.close(listening)
+        stop_supervised(acceptor)
+      end
+    end
+
+    test "an absent listener without a retained address cannot confirm refusal", %{server: server} do
+      assert ThousandIsland.suspend(server) == :ok
+
+      log = capture_log(fn -> assert App.suspend_server(server) == :error end)
+      assert log =~ "listener_address_unavailable"
+    end
+
     @tag listen_ip: {0, 0, 0, 0}
     test "a wildcard listener is checked through loopback", %{server: server, port: port} do
       assert App.suspend_server(server) == :ok
@@ -226,6 +287,21 @@ defmodule Cyfr.GracefulStopTest do
 
       log = capture_log(fn -> assert App.suspend_server(server) == :error end)
       assert log =~ "could not stop accepting"
+    end
+  end
+
+  # Keep accepting until the listening socket closes. A probe's connection
+  # stays open until its caller closes it, so a successful connect is not
+  # raced by this helper resetting the connection.
+  defp accept_probes(listening) do
+    case :gen_tcp.accept(listening) do
+      {:ok, socket} ->
+        :gen_tcp.recv(socket, 0, 1_000)
+        :gen_tcp.close(socket)
+        accept_probes(listening)
+
+      {:error, :closed} ->
+        :ok
     end
   end
 
