@@ -426,7 +426,7 @@ def main():
         # service's listener.
         lost = f"{stack.project}-lost"
         run("docker", "rm", "--force", lost, check=False)
-        stack.alone(lost, publish=True)
+        stack.alone("lost", publish=True)
         try:
             base = "http://" + run("docker", "port", lost, str(PORT)).stdout.strip().splitlines()[0]
             wait_healthy(base)
@@ -445,7 +445,7 @@ def main():
         finally:
             run("docker", "rm", "--force", lost, check=False)
 
-        stack.alone(lost)
+        stack.alone("lost")
         try:
             eventually(lambda: keeper_and_release(stack, lost)[1], "the third service's release to start", timeout_s=60)
             lost_keeper, _ = keeper_and_release(stack, lost)

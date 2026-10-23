@@ -144,6 +144,11 @@ chmod +x "$scratch/bin/mix"
 # `volume-ls`, `db-ls`, `tag:SRC:TARGET`, `create-lost`), answers each
 # removal STUB_DOCKER_STICKY names (`rm`, `image-rm`, ...) without removing
 # anything, and takes ten seconds over each verb STUB_DOCKER_SLOW names.
+# A run whose last argument holds STUB_DOCKER_HOLD lists its container,
+# under the name its --name gives or as unnamed_PID, until a removal takes
+# it (as `docker rm -f` stops a running one) or two minutes pass, so a
+# container outlives the caller of the run; under STUB_DOCKER_WATCH each
+# call notes in docker.watch whether that path is there as it starts.
 cat > "$scratch/bin/go" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s|%s|%s\n' "$PWD" "${GOBIN:-}" "$*" >> "$TRACE/go.calls"
@@ -190,6 +195,9 @@ FAKE
 cat > "$scratch/bin/docker" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$TRACE/docker.calls"
+if [ -n "${STUB_DOCKER_WATCH:-}" ]; then
+  if [ -e "$STUB_DOCKER_WATCH" ]; then echo "$1 present"; else echo "$1 absent"; fi >> "$TRACE/docker.watch"
+fi
 images="$TRACE/docker.images" containers="$TRACE/docker.containers" databases="$TRACE/databases"
 networks="$TRACE/docker.networks" volumes="$TRACE/docker.volumes"
 touch "$images" "$containers" "$databases" "$networks" "$volumes"
@@ -241,6 +249,17 @@ case "$1" in
       rm) ! fails volume-rm || exit 1; take "$volumes" 1 "${!#}" volume-rm ;;
     esac ;;
   run)
+    if [ -n "${STUB_DOCKER_HOLD:-}" ] && [[ "${!#}" == *"$STUB_DOCKER_HOLD"* ]]; then
+      cname="unnamed_$$" prev=
+      for a in "$@"; do [ "$prev" != --name ] || cname=$a; prev=$a; done
+      echo "c$$ $cname" >> "$containers"
+      echo "$cname" > "$TRACE/held.container"
+      n=0
+      while awk -v c="$cname" '$2 == c { f = 1 } END { exit !f }' "$containers" && [ "$n" -lt 1200 ]; do
+        sleep 0.1; n=$((n + 1))
+      done
+      exit 137
+    fi
     # psql in the postgres image: a SELECT lists the databases; a CREATE
     # adds one, refused when it exists; a DROP IF EXISTS takes it. Under
     # create-lost the CREATE completes and its client fails all the same.
@@ -794,17 +813,59 @@ PY
 ! python3 -I "$root/scripts/lib/workflow_plan.py" "$scratch/images-build" test.yml locus-image "$scratch/images/p2" "$scratch/images/t2" \
   --only 'Build the Locus image once' --image-namespace cyfr-gate-1 2>"$scratch/images-p2.err" || fail 'the planner built under review-extra:ci'
 grep -qF 'gives an image the name review-extra:ci' "$scratch/images-p2.err" || fail "the planner refused review-extra:ci without its reason: $(cat "$scratch/images-p2.err")"
-plant_dir pull
-python3 -I - "$scratch/images-pull/.github/workflows/test.yml" <<'PY'
+# plant_step NAME COMMAND: ROOT's workflows in images-NAME, with COMMAND
+# after the builder job's isolation suite.
+plant_step() {
+  plant_dir "$1"
+  python3 -I - "$scratch/images-$1/.github/workflows/test.yml" "$2" <<'PY'
 import sys
-p = sys.argv[1]; s = open(p).read()
+p, command = sys.argv[1:]
+s = open(p).read()
 old = "        run: python3 tests/builder-image/isolation.py cyfr-locus:smoke\n"
 assert s.count(old) == 1
-open(p, "w").write(s.replace(old, "        run: |\n          python3 tests/builder-image/isolation.py cyfr-locus:smoke\n          docker run --rm alpine:3 true\n"))
+open(p, "w").write(s.replace(old, "        run: |\n          python3 tests/builder-image/isolation.py cyfr-locus:smoke\n          " + command + "\n"))
 PY
+}
+# The planner reads a docker command as docker does, its global options
+# before the verb and every form of a name-giving option among them, and
+# refuses one it cannot read that far, a container a step would start
+# under a name CI gives, and docker hidden from it as an argument or in a
+# string a shell runs.
+n=0
+for spec in 'docker build -treview-extra:ci . => gives an image the name review-extra:ci' \
+  'docker --debug tag cyfr:push review-extra:x => gives an image the name review-extra:x' \
+  'docker -Dl debug --context=default build -qt review-extra:q --tag=review-extra:z . => gives an image the name review-extra:q' \
+  'docker --unknown tag cyfr:push cyfr:push => option --unknown is not one the plan reads' \
+  'docker build $TAGS . => may split into options the plan cannot read' \
+  'printf x | xargs docker tag cyfr:push => names docker where the plan does not read it as a command' \
+  "bash -c 'docker tag cyfr:push review-extra:x' => holds a docker command the plan does not read" \
+  'docker image import - review-extra:i => gives an image the name review-extra:i' \
+  'docker run --rm alpine:3 true => starts a container (docker run) under a name CI gives'; do
+  n=$((n + 1))
+  plant_step "planted$n" "${spec%% => *}"
+  ! python3 -I "$root/scripts/lib/workflow_plan.py" "$scratch/images-planted$n" test.yml builder-image "$scratch/images/q$n" \
+    "$scratch/images/u$n" --image-namespace cyfr-gate-1 2>"$scratch/images-q$n.err" || fail "the planner ran a step that runs ${spec%% => *}"
+  grep -qF -- "${spec#* => }" "$scratch/images-q$n.err" || fail "the planner refused ${spec%% => *} without its reason: $(cat "$scratch/images-q$n.err")"
+done
+# A step that only pulls or inspects an image names it as CI does.
+plant_step pull 'docker pull alpine:3 && docker image inspect alpine:3 >/dev/null'
 python3 -I "$root/scripts/lib/workflow_plan.py" "$scratch/images-pull" test.yml builder-image "$scratch/images/p3" "$scratch/images/t3" \
-  --image-namespace cyfr-gate-1 || fail 'the planner refused a step that only runs a pulled image'
-grep -qxF 'docker run --rm alpine:3 true' "$scratch/images/p3"/*.sh || fail 'the planner renamed an image the step only pulls'
+  --image-namespace cyfr-gate-1 || fail 'the planner refused a step that only pulls an image'
+grep -qxF '          docker pull alpine:3 && docker image inspect alpine:3 >/dev/null' "$scratch/images-pull/.github/workflows/test.yml" &&
+  grep -qxF 'docker pull alpine:3 && docker image inspect alpine:3 >/dev/null' "$scratch/images/p3"/*.sh || fail 'the planner renamed an image the step only pulls'
+# Without --image-namespace a step that gives any name is refused.
+plant_dir nons
+python3 -I - "$scratch/images-nons/.github/workflows/codex-ci.yml" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "          docker compose version\n"
+assert s.count(old) >= 1
+open(p, "w").write(s.replace(old, old + "          docker tag cyfr:push cyfr:push\n", 1))
+PY
+! python3 -I "$root/scripts/lib/workflow_plan.py" "$scratch/images-nons" codex-ci.yml test "$scratch/images/p4" "$scratch/images/t4" \
+  2>"$scratch/images-p4.err" || fail 'the planner gave an image a name with no namespace'
+grep -qF 'with no --image-namespace the plan has no name of the gate' "$scratch/images-p4.err" ||
+  fail "the planner refused a name with no namespace without its reason: $(cat "$scratch/images-p4.err")"
 echo "ok: the close's jobs give images only the names the table renames"
 
 # --- scoped refusal ----------------------------------------------------------
@@ -1013,7 +1074,7 @@ echo 'ok: the islands copy what test.yml copies'
 start_leg pgread postgres GIT_DIR=/nonexistent
 gate_status "$gate_pid"
 [ "$gate_rc" = 1 ] || fail "a postgres leg whose selection could not be read exited $gate_rc"
-[ "$(tr '\n' ' ' < "$scratch/pgread.log/postgres.summary")" = 'compile_pg_test=0 compile_pg_dev=0 pg_selection_read=1 ' ] ||
+[ "$(tr '\n' ' ' < "$scratch/pgread.log/postgres.summary")" = 'compile_pg_test=0 compile_pg_dev=0 pg_selection_read=1 cleanup=0 ' ] ||
   fail "an unreadable selection was not recorded: $(tr '\n' ' ' < "$scratch/pgread.log/postgres.summary")"
 [ -e "$scratch/pgread.log/postgres.done" ] || fail 'the postgres leg left no marker after an unreadable selection'
 [ "$(awk -F'|' '{ print $1 ":" $6 }' "$scratch/pgread.trace/mix.calls" | tr '\n' ' ')" = 'test:compile --force --warnings-as-errors dev:compile --force --warnings-as-errors ' ] ||
@@ -1545,7 +1606,7 @@ for spec in 'tests/compose-proof/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-compose-p
   'tests/proxy-hsts/run.sh:RUN="${PROOF_RUN_PREFIX:-}cyfr-proxy-hsts-' \
   'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-ns"}' \
   'tests/release-boot/boot.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-reserve"}' \
-  'tests/browser/harness.sh:named=(--name "${PROOF_RUN_PREFIX}cyfr-playwright-' \
+  'tests/browser/harness.sh:${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-playwright-$$-' \
   'tests/imagesuite.py:PROJECT_PREFIX = os.environ.get("PROOF_RUN_PREFIX", "")' \
   'tests/imagesuite.py:tempfile.mkdtemp(prefix=PROJECT_PREFIX + prefix)'; do
   f=${spec%%:*} want=${spec#*:}
@@ -1554,6 +1615,258 @@ done
 unprefixed=$(cd "$root" && git grep -n 'mktemp[^"]*"${TMPDIR:-/tmp}/cyfr-' -- tests scripts || :)
 [ -z "$unprefixed" ] || fail "a directory a script makes under TMPDIR is named without the run prefix: $unprefixed"
 echo 'ok: the scripts the close runs name what they make after the run prefix'
+
+# container_names ROOT [FILE...]: every container the scripts the close
+# runs start (each `docker run` or `docker create`, a shell's or a Python
+# suite's, the gate's own docker_call among them) carries --name under
+# PROOF_RUN_PREFIX, so a caller killed while its container runs leaves it
+# to the sweep by that name: the name reads the prefix, or a variable
+# every assignment of which reads it (in Python PROJECT_PREFIX, which
+# tests/imagesuite.py reads from it, or a stack's project, named from
+# that). With no FILE, every tracked shell and Python file under tests/ and
+# scripts/ that starts one, but for the roster's, each with its reason.
+container_names() {
+  python3 -I - "$@" <<'PY'
+import io, os, re, subprocess, sys, tokenize
+root, files = sys.argv[1], sys.argv[2:]
+sys.path.insert(0, os.path.join(root, "scripts", "lib"))
+import workflow_plan as wp
+
+STARTS = re.compile(r"\bdocker\s+(?:container\s+)?(?:run|create)\b")
+# What the close does not run, or runs against a stand-in for docker.
+ROSTER = {
+    "tests/commit-gate-test.sh": "the gate's own test, against a stand-in for docker",
+    "tests/compose-proof/cleanup-test.sh": "the Compose proof's teardown test, against a stand-in docker function",
+    "tests/ci-publish-test.sh": "test.yml static's tag pipeline image publication, which the gate leaves out",
+    "tests/tailnet-real/run.sh": "the real tailnet's proof, run by hand",
+}
+errors = []
+if not files:
+    tracked = subprocess.run(["git", "-C", root, "ls-files", "-z", "--", "tests", "scripts"],
+                             capture_output=True, text=True, check=True).stdout.split("\0")
+    files = [f for f in tracked if f.endswith((".sh", ".py")) and os.path.isfile(os.path.join(root, f))]
+    texts = {f: open(os.path.join(root, f), errors="replace").read() for f in files}
+    starting = {f for f, t in texts.items() if STARTS.search(t) or re.search(r"[\"']docker[\"'],\s*[\"'](?:container[\"'],\s*[\"'])?(?:run|create)[\"']", t)}
+    for f, why in ROSTER.items():
+        if f not in starting:
+            errors.append(f"the roster leaves out {f} ({why}), which starts no container")
+    files = sorted(starting - set(ROSTER))
+else:
+    texts = {f: open(os.path.join(root, f)).read() for f in files}
+
+# Shell: each file lexed as bash reads it; a variable is prefixed when
+# every assignment of it in the file that names something reads
+# PROOF_RUN_PREFIX or a prefixed variable, or, for one the file does not
+# assign, every such assignment in the other files (which source one
+# another).
+lexed = {}
+for f in files:
+    if f.endswith(".sh"):
+        lexer = wp.Lexer(texts[f], strict=False)
+        try:
+            lexer.script(0)
+        except wp.Refused as e:
+            errors.append(f"{f}: {e}")
+            continue
+        lexed[f] = lexer
+def refs(text):
+    return set(re.findall(r"\$\{?#?!?([A-Za-z_][A-Za-z0-9_]*)", text))
+assigned = {}
+for f, lexer in lexed.items():
+    for words, _ in lexer.commands:
+        for w in words:
+            m = wp.ASSIGNMENT.match(w.text)
+            if m and w.text[m.end():]:
+                name = re.match(r"[A-Za-z_][A-Za-z0-9_]*", w.text).group(0)
+                assigned.setdefault(f, {}).setdefault(name, []).append(refs(w.text[m.end():]))
+def prefixed_in(f):
+    own = assigned.get(f, {})
+    merged = {}
+    for other, names in assigned.items():
+        for name, values in names.items():
+            merged.setdefault(name, []).extend(values)
+    scope = {**merged, **own}
+    prefixed = {"PROOF_RUN_PREFIX"}
+    changed = True
+    while changed:
+        changed = False
+        for name, values in scope.items():
+            if name not in prefixed and all(v & prefixed for v in values):
+                prefixed.add(name)
+                changed = True
+    return prefixed
+for f, lexer in lexed.items():
+    prefixed = prefixed_in(f)
+    named = lambda text: bool(refs(text) & prefixed)
+    for words, _ in lexer.commands:
+        for i, w in enumerate(words):
+            base = os.path.basename(w.text) if w.plain else ""
+            if base == "docker":
+                rest = words[i + 1:]
+            elif base == "docker_call":
+                rest = words[i + 2:]
+            else:
+                continue
+            verbs = [x.text for x in rest[:2]]
+            if not (verbs[:1] in (["run"], ["create"]) or verbs in (["container", "run"], ["container", "create"])):
+                continue
+            ok = False
+            for k, a in enumerate(rest):
+                if a.plain and a.text == "--name" and k + 1 < len(rest):
+                    ok = named(rest[k + 1].text)
+                elif a.text.startswith("--name="):
+                    ok = named(a.text[7:])
+                elif not a.plain and "--name" in a.text:
+                    ok = named(a.text.split("--name", 1)[1])
+                if ok:
+                    break
+            if not ok:
+                errors.append(f"{f}: docker {' '.join(x.text.replace(chr(0), '$(…)') for x in rest[:6])} … starts a container with no --name under PROOF_RUN_PREFIX")
+    for line in lexer.bodies:
+        if STARTS.search(line) and not ("--name" in line and named(line.split("--name", 1)[1])):
+            errors.append(f"{f}: a here-document's `{line.strip()[:80]}` starts a container with no --name under PROOF_RUN_PREFIX")
+
+# Python: each "docker", "run" (or "create") in a call or a list, whose
+# --name is an expression of PROJECT_PREFIX, PROOF_RUN_PREFIX, a stack's
+# project (imagesuite.py names it PROJECT_PREFIX + project) or a name
+# assigned from one.
+for f in files:
+    if not f.endswith(".py"):
+        continue
+    toks = [t for t in tokenize.generate_tokens(io.StringIO(texts[f]).readline)
+            if t.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT)]
+    text_of = lambda ts: " ".join(t.string for t in ts)
+    pyprefixed = {"PROJECT_PREFIX", "PROOF_RUN_PREFIX"}
+    def pynamed(expr):
+        return bool(set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr)) & pyprefixed) or ".project" in expr.replace(" ", "")
+    pyassigned = {}
+    for k in range(len(toks) - 2):
+        if toks[k].type == tokenize.NAME and toks[k + 1].string == "=":
+            end = k + 2
+            while end < len(toks) and toks[end].start[0] == toks[k + 2].start[0]:
+                end += 1
+            pyassigned.setdefault(toks[k].string, []).append(text_of(toks[k + 2:end]))
+    changed = True
+    while changed:
+        changed = False
+        for name, values in pyassigned.items():
+            if name not in pyprefixed and all(pynamed(v) for v in values):
+                pyprefixed.add(name)
+                changed = True
+    lit = lambda t: t.type == tokenize.STRING and t.string.strip("\"'") or None
+    for k in range(len(toks) - 2):
+        if lit(toks[k]) != "docker" or toks[k + 1].string != ",":
+            continue
+        verbs = [lit(toks[k + 2]), lit(toks[k + 4]) if k + 4 < len(toks) else None]
+        if not (verbs[0] in ("run", "create") or verbs == ["container", "run"] or verbs == ["container", "create"]):
+            continue
+        depth, j, ok = 0, k, False
+        while j < len(toks):
+            s = toks[j].string
+            if s in "([{" and toks[j].type == tokenize.OP:
+                depth += 1
+            elif s in ")]}" and toks[j].type == tokenize.OP:
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0 and lit(toks[j]) == "--name" and toks[j + 1].string == ",":
+                e, d = j + 2, 0
+                while e < len(toks) and not (d == 0 and toks[e].string in (",", ")", "]")):
+                    d += {"(": 1, "[": 1, "{": 1, ")": -1, "]": -1, "}": -1}.get(toks[e].string, 0)
+                    e += 1
+                ok = pynamed(text_of(toks[j + 2:e]))
+                break
+            j += 1
+        if not ok:
+            errors.append(f"{f}:{toks[k].start[0]}: docker {verbs[0]} starts a container with no --name under PROOF_RUN_PREFIX")
+for e in errors:
+    print(e, file=sys.stderr)
+print(f"{len(files)} files read", file=sys.stderr)
+sys.exit(1 if errors else 0)
+PY
+}
+container_names "$root" 2>"$scratch/names.err" || fail "a container a script the close runs starts has no name under the run prefix: $(cat "$scratch/names.err")"
+# Planted: a run with no name, one named under no prefix, each in a shell
+# script and a Python suite, fail it, and the named forms beside them pass.
+mkdir -p "$scratch/names/scripts/lib" "$scratch/names/tests"
+cp "$root/scripts/lib/workflow_plan.py" "$scratch/names/scripts/lib/"
+cat > "$scratch/names/tests/planted.sh" <<'PLANT'
+RUN="${PROOF_RUN_PREFIX:-}cyfr-planted-$$"
+OTHER=cyfr-planted
+docker run --rm alpine:3 true
+x="$(docker run --rm --name "$OTHER-1" alpine:3 true)"
+docker container create --name "$RUN-ok" alpine:3
+step boot db docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-db"} postgres:18.6 true
+PLANT
+cat > "$scratch/names/tests/planted.py" <<'PLANT'
+PROJECT_PREFIX = ""
+other = "cyfr-planted"
+run("docker", "run", "--rm", "alpine:3", "true")
+run("docker", "run", "--rm", "--name", other, "alpine:3", "true")
+args = ["docker", "run", "--name", f"{PROJECT_PREFIX}planted", "alpine:3"]
+PLANT
+! container_names "$scratch/names" tests/planted.sh tests/planted.py 2>"$scratch/names-planted.err" || fail 'containers with no name under the prefix passed the name check'
+for want in 'tests/planted.sh: docker run --rm alpine:3 true' 'tests/planted.sh: docker run --rm --name $OTHER-1' \
+  'tests/planted.py:3: docker run' 'tests/planted.py:4: docker run'; do
+  grep -qF -- "$want" "$scratch/names-planted.err" || fail "the name check did not name the unnamed container ($want): $(cat "$scratch/names-planted.err")"
+done
+[ "$(grep -c 'no --name under PROOF_RUN_PREFIX' "$scratch/names-planted.err")" = 4 ] ||
+  fail "the name check refused a named container: $(cat "$scratch/names-planted.err")"
+echo 'ok: every container the scripts the close runs start is named under the run prefix'
+
+# A container a run names under the prefix outlives its caller as docker's
+# do, and the sweep finds it by that name: the release boot's PostgreSQL
+# client, its caller killed during a long query, is stopped and removed by
+# the next gate's.
+host_store pgkill
+mkdir -p "$scratch/pgkill.tmp"
+cat > "$scratch/pgkill.sh" <<'CLIENT'
+source "$GATE_ROOT/tests/release-boot/boot.sh"
+echo "$$" > "$TRACE/caller.pid"
+pg psql -X -q "postgres://u:p@host/postgres" -c 'SELECT pg_sleep(90)'
+CLIENT
+TMPDIR="$scratch/pgkill.tmp" TRACE="$scratch/pgkill.trace" GATE_ROOT="$root" PATH="$scratch/bin:$PATH" STUB_DOCKER_HOLD=pg_sleep \
+  COMMIT_GATE=4200049 COMMIT_GATE_LEG=boot PROOF_RUN_PREFIX=cyfr-gate-4200049-boot- setsid -f bash "$scratch/pgkill.sh" </dev/null >/dev/null 2>&1
+until_true 10 test -s "$scratch/pgkill.trace/held.container" || fail 'the client never started its container'
+held=$(cat "$scratch/pgkill.trace/held.container")
+[[ "$held" == cyfr-gate-4200049-boot-cyfr-release-boot-* ]] || fail "the release boot's client container is not named under the leg's prefix: $held"
+kill -KILL "$(cat "$scratch/pgkill.trace/caller.pid")"
+has_line " $held$" "$scratch/pgkill.trace/docker.containers" || fail "the client's container went with its caller"
+next_gate pgkill
+[ "$gate_rc" = 64 ] || fail "the gate after a killed client exited $gate_rc: $(cat "$scratch/pgkill-next.err")"
+no_line " $held$" "$scratch/pgkill.trace/docker.containers" || fail "the sweep left the killed client's container $held"
+has_line "^rm -f $held$" "$scratch/pgkill.trace/docker.calls" || fail "the client's container was not removed by its name"
+gate_free pgkill
+host_kept pgkill
+echo "ok: a container whose caller was killed is stopped and removed by the name the run gave it"
+
+# Every leg's cleanup takes every kind it made, docker's before the
+# directories they may hold: the boot leg's removes the release boot's
+# holders, named under the leg's prefix, while the run's directory is
+# still there, then the directory, and leaves another leg's container.
+host_store bootclean
+for holder in ns reserve; do
+  echo "b$holder cyfr-gate-4200050-boot-cyfr-release-boot-fixture-$holder" >> "$scratch/bootclean.trace/docker.containers"
+done
+echo "h0 cyfr-gate-4200050-harness-locus-builds-1" >> "$scratch/bootclean.trace/docker.containers"
+bootwork="$scratch/bootclean.tmp/cyfr-gate-4200050-boot-cyfr-release-boot-fixture"
+mkdir -p "$bootwork"
+rc=0
+(
+  export TMPDIR="$scratch/bootclean.tmp" TRACE="$scratch/bootclean.trace" PATH="$scratch/bin:$PATH" GATE_ROOT="$root" \
+    REAL_PYTHON3="$REAL_PYTHON3" STUB_DOCKER_WATCH="$bootwork"
+  source "$gate"
+  set +e
+  REFUSED= DOCKER_SCRATCH="$scratch/bootclean.tmp/cyfr-gate-4200050-boot.scratch" GATE_ID=4200050
+  gate_clean leg boot "$scratch/bootclean.log"
+) 2>"$scratch/bootclean.err" </dev/null || rc=$?
+[ "$rc" = 0 ] || fail "the boot leg's cleanup exited $rc: $(cat "$scratch/bootclean.err")"
+no_line ' cyfr-gate-4200050-boot-' "$scratch/bootclean.trace/docker.containers" || fail "the boot leg's cleanup left its holders: $(cat "$scratch/bootclean.trace/docker.containers")"
+has_line '^h0 cyfr-gate-4200050-harness-locus-builds-1$' "$scratch/bootclean.trace/docker.containers" || fail "the boot leg's cleanup removed another leg's container"
+[ ! -e "$bootwork" ] || fail "the boot leg's cleanup left its run's directory"
+[ "$(grep -c '^rm present$' "$scratch/bootclean.trace/docker.watch")" = 2 ] && ! grep -q '^rm absent$' "$scratch/bootclean.trace/docker.watch" ||
+  fail "the boot leg's holders were not removed before its directory: $(tr '\n' ' ' < "$scratch/bootclean.trace/docker.watch")"
+echo "ok: a leg's cleanup removes its containers before the directories they hold, and leaves another leg's"
 
 # A docker call killed midway leaves its output under the gate's own
 # scratch directory, which is named after the gate, so the next gate

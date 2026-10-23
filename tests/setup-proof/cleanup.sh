@@ -72,7 +72,8 @@ cleanup() {
   fi
   # The entrypoint gave data/ to the image's user; it is taken back first.
   if [ ${#PROJECTS[@]} -gt 0 ]; then
-    cleanup_retry docker run --rm --volume "$WORK:/work" --entrypoint chown "$IMAGE" -R "$(id -u):$(id -g)" /work || {
+    cleanup_retry docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-chown-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --volume "$WORK:/work" \
+      --entrypoint chown "$IMAGE" -R "$(id -u):$(id -g)" /work || {
       failed=1
       taken=""
     }

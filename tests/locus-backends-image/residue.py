@@ -122,12 +122,13 @@ def main():
                     "--entrypoint", "cyfr-locus"]
         command = ["serve", "--pool", f"{ROLE['pool']}:{UID}-{UID}", "--home-root", HOME_ROOT, "--client-user",
                    RELEASE_USER, "--", RELEASE_BIN, "start"]
-        for flags, refusal in [
+        for n, (flags, refusal) in enumerate([
             (["--ipc", "none"], r"the root filesystem is writable"),
             (["--read-only", "--ipc", "none", "--tmpfs", "/tmp:mode=1777"], r"mount /tmp .* is writable by pooled uids"),
             (["--read-only"], r"mount /dev/shm .* is writable by pooled uids"),
-        ]:
-            result = run("docker", "run", *settings, *flags, image, *command, check=False)
+        ]):
+            result = run("docker", "run", "--name", f"{stack.project}-refusal-{n}", *settings, *flags, image, *command,
+                         check=False)
             expect(result.returncode == 78 and re.search(refusal, result.stderr),
                    f"cyfr-locus refuses to start with {' '.join(flags)}", result.stderr[-2000:])
     finally:

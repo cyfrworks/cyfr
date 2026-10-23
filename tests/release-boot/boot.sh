@@ -112,9 +112,12 @@ CREATED_DATABASES=()
 # hex digits.
 RUN_ID="$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 
-# A PostgreSQL client command in the postgres image, on this host's network.
+# A PostgreSQL client command in the postgres image, on this host's network,
+# its container named after the run under PROOF_RUN_PREFIX, so one whose
+# caller was killed is found by that name.
 pg() {
-  docker run --rm --network host -e PGOPTIONS=--client-min-messages=warning "$PG_IMAGE" "$@"
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-pg-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
+    --network host -e PGOPTIONS=--client-min-messages=warning "$PG_IMAGE" "$@"
 }
 
 # CYFR_DATABASE_URL with its database renamed to `$1`.
@@ -656,8 +659,8 @@ else
   pg_fresh_database "$RESTORE_DB"
   pg pg_dump --format=custom --no-owner "$ORIGIN_URL" >"$WORK/cell.dump" ||
     fail "the cell's database did not dump"
-  docker run --rm -i --network host "$PG_IMAGE" \
-    pg_restore --no-owner --exit-on-error -d "$(pg_url "$RESTORE_DB")" <"$WORK/cell.dump" ||
+  docker run --rm -i ${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-release-boot-$RUN_ID-restore"} \
+    --network host "$PG_IMAGE" pg_restore --no-owner --exit-on-error -d "$(pg_url "$RESTORE_DB")" <"$WORK/cell.dump" ||
     fail "the dump did not restore into $RESTORE_DB"
   sed -i "s|^CYFR_DATABASE_URL=.*|CYFR_DATABASE_URL=$(pg_url "$RESTORE_DB")|" "$COPY/.env"
   # The origin's database goes, so a copy that still reached it could not pass.

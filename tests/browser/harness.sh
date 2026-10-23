@@ -325,7 +325,8 @@ browser_node_modules() {
         trap 'rm -rf "$staging"' EXIT
         cp "$BROWSER_HOME/package.json" "$BROWSER_HOME/package-lock.json" "$staging/" || exit 1
         printf '\n=== %s\n' "installing Playwright's library from tests/browser/package-lock.json (${key:0:12}), once for this lockfile" >&2
-        docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e npm_config_update_notifier=false \
+        docker run --rm ${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-playwright-install-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
+          -u "$(id -u):$(id -g)" -e HOME=/tmp -e npm_config_update_notifier=false \
           -v "$staging:/install" -w /install "$PLAYWRIGHT_IMAGE" \
           npm ci --ignore-scripts --no-audit --no-fund --loglevel=error >&2 || exit 1
         [ -d "$staging/node_modules/playwright-core" ] || exit 1
@@ -368,10 +369,8 @@ playwright_run() {
   fi
   # Named after the run under PROOF_RUN_PREFIX, so one a killed proof
   # leaves is found by that name.
-  local -a named=()
-  [ -z "${PROOF_RUN_PREFIX:-}" ] ||
-    named=(--name "${PROOF_RUN_PREFIX}cyfr-playwright-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')")
-  docker run --rm ${named[@]+"${named[@]}"} --network host --shm-size=1g \
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "${PROOF_RUN_PREFIX}cyfr-playwright-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
+    --network host --shm-size=1g \
     -u "$(id -u):$(id -g)" -e HOME=/tmp \
     -v "$ROOT/tests:/tests:ro" -v "$ROOT/apps/cyfr/assets:/assets:ro" -v "$OUT:/out" \
     -v "$modules/node_modules:/node_modules:ro" \

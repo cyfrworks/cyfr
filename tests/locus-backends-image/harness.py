@@ -710,8 +710,8 @@ class Stack(imagesuite.Stack):
         return run("docker", "run", "--rm", "--name", f"{self.project}-beside-{os.getpid()}", "--network", f"{self.project}_{network}",
                    "--entrypoint", command[0], self.image, *command[1:], check=False, timeout=60)
 
-    def alone(self, name, publish=False):
-        """A second instance of the shipped service, started as `name` in a network namespace of its own on the island's network.
+    def alone(self, suffix, publish=False):
+        """A second instance of the shipped service, started as the project's `suffix` (PROJECT-SUFFIX) in a network namespace of its own on the island's network.
 
         `compose run` would put it in the guard's namespace, beside the
         running service's listener; `docker run` gives it the running
@@ -723,7 +723,7 @@ class Stack(imagesuite.Stack):
         """
         info = self.inspect(self.container)
         host, config = info["HostConfig"], info["Config"]
-        args = ["docker", "run", "--detach", "--name", name, "--network", f"{self.project}_{NETWORK}"]
+        args = ["docker", "run", "--detach", "--name", f"{self.project}-{suffix}", "--network", f"{self.project}_{NETWORK}"]
         if host.get("Init"):
             args.append("--init")
         if publish:

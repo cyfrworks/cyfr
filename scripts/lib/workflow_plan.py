@@ -17,12 +17,17 @@ its script, its env, a build's tags or a scan's image) is NS/TAG instead,
 so the job builds and runs images of the gate's own and touches no tag
 the host has; each variable of the table is set to its tag's NS/TAG for
 every step; and a step that gives an image a name the table does not
-hold (a build's tags, a `docker tag` target, a `docker save` or `docker
-commit`, whatever the repository), or names a tag of the table's
-repositories the table does not hold, fails the plan. An image a step
-only runs or pulls (postgres, the Playwright image) is named as CI names
-it. An upload step keeps its files under
-DIR/NAME (--artifacts).
+hold (a build's tags, a `docker tag` target, a `docker save`, `docker
+commit` or `docker import`, whatever the repository), or names a tag of
+the table's repositories the table does not hold, fails the plan. An
+image a step only runs or pulls (postgres, the Playwright image) is named
+as CI names it. Without --image-namespace a step that gives an image any
+name fails it. Whatever the namespace, a step's docker commands are read
+as docker reads them (its global options, then every option form of a
+verb that gives a name), and one the plan cannot read that far, one that
+loads images other than the line the plan replaces, and one that starts
+a container under a name CI gives (`docker run`, `docker create`) fail
+it. An upload step keeps its files under DIR/NAME (--artifacts).
 
 KEY=VALUE picks the job's matrix entry (each key the matrix has, its value
 one the matrix lists; an `include` entry is picked by the keys given).
@@ -268,53 +273,463 @@ def rename(text):
     return IMAGE_REF.sub(one, text)
 
 
-def given_names(script):
-    """The image names a step's script gives an image: a `docker tag`'s
-    target, a `docker build`'s tags, what a `docker save` writes and a
-    `docker commit` names; a `docker load` other than the one the plan
-    replaces gives names the plan cannot read, so it fails. An image a
-    script only runs, pulls or inspects is a reference, and its name is not
-    the plan's to give."""
-    names = []
-    for line in re.sub(r"\\\n", " ", script).split("\n"):
-        if line.strip() == LOAD_LINE:
-            continue
-        try:
-            words = shlex.split(line, comments=True)
-        except ValueError:
-            words = line.split()
-        for i, w in enumerate(words):
-            if w != "docker":
+# --- docker commands in a step's script ---------------------------------------
+# A step's script is read as bash reads it, far enough to find each docker
+# command and its words: quotes, escapes, line continuations, comments,
+# operators and redirections, here-documents, and the commands inside
+# command substitutions, backquotes and process substitutions, each read as
+# a command of its own. Then each docker command is read as the docker CLI
+# reads it: its global options, its verb and, for a verb that gives an
+# image a name, every option form of that verb. A docker command the plan
+# cannot read that far fails it.
+
+
+class Word:
+    """A shell word: its text with quotes removed and each command
+    substitution as NUL, whether it expands nothing (`plain`), and whether
+    an expansion in it is unquoted, so it may split into several words."""
+
+    def __init__(self):
+        self.text, self.plain, self.splits = "", True, False
+
+
+SEPARATORS = ("&&", "||", ";;&", ";;", ";&", "|&", ";", "|", "&", "(", ")", "\n")
+REDIRECTS = ("<<<", "<<-", "<<", "&>>", "&>", ">>", ">&", "<&", "<>", ">|", ">", "<")
+RESERVED = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for", "in", "case", "esac",
+            "select", "function", "time", "!", "{", "}", "coproc"}
+ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
+
+
+class Lexer:
+    """With `strict` off, a here-document's body is kept in `bodies` rather
+    than refused for mentioning docker (tests/commit-gate-test.sh reads the
+    scripts the close runs so)."""
+
+    def __init__(self, s, strict=True):
+        self.s, self.commands, self.heredocs, self.strict, self.bodies = s, [], [], strict, []
+
+    def fail(self, why):
+        raise Refused(f"its script is not one the plan reads: {why}")
+
+    def script(self, i, stop=None):
+        """Reads commands from i up to the `)` that closes a command or
+        process substitution (`stop`), a subshell's own aside, or to the
+        end; returns the index past it."""
+        s, words, word, redirect, depth = self.s, [], None, False, 0
+
+        def end_word():
+            nonlocal word, redirect
+            if word is not None:
+                if redirect:
+                    redirect = False
+                else:
+                    words.append(word)
+            word = None
+
+        def end_command(ended):
+            end_word()
+            self.commands.append((list(words), ended))
+            words.clear()
+
+        while i < len(s):
+            c = s[i]
+            if stop is not None and c == stop and not (c == ")" and depth):
+                end_command(stop)
+                return i + 1
+            if c == "\\" and s.startswith("\\\n", i):
+                i += 2
                 continue
-            rest = []
-            for t in words[i + 1:]:
-                if t in ("|", "||", "&&", ";", "&", ")") or t.startswith(("|", ";", "&")):
+            if c in " \t":
+                end_word()
+                i += 1
+                continue
+            if c == "#" and word is None:
+                while i < len(s) and s[i] != "\n":
+                    i += 1
+                continue
+            if c == "\n":
+                end_command("\n")
+                i = self.read_heredocs(i + 1)
+                continue
+            if any(w.plain and w.text == "[[" for w in words) and not any(
+                    w.plain and w.text == "]]" for w in words + ([word] if word else [])):
+                # Within [[ ]], operators are words of the expression, or
+                # part of one (a pattern's or a regex's parentheses).
+                op = next((o for o in SEPARATORS + REDIRECTS if o != "\n" and s.startswith(o, i)), None)
+                if op:
+                    if word is None:
+                        word = Word()
+                    word.text += op
+                    i += len(op)
+                    continue
+            op = next((o for o in REDIRECTS if s.startswith(o, i)), None)
+            if op and not (op in ("<", ">") and s.startswith("(", i + 1)):
+                # A word of digits directly before it names a descriptor.
+                if word is not None and word.plain and word.text.isdigit():
+                    word = None
+                end_word()
+                i += len(op)
+                if op in ("<<", "<<-"):
+                    while i < len(s) and s[i] in " \t":
+                        i += 1
+                    start = i
+                    while i < len(s) and s[i] not in " \t\n;&|<>()":
+                        i += 1
+                    delim = re.sub(r"[\"'\\]", "", s[start:i])
+                    if not delim:
+                        self.fail("a here-document names no delimiter")
+                    self.heredocs.append((delim, op == "<<-"))
+                else:
+                    redirect = True
+                continue
+            op = next((o for o in SEPARATORS if s.startswith(o, i)), None)
+            if op == "(" and word is not None:
+                if s.startswith("()", i) and word.plain:
+                    # A function's definition: its name is no command.
+                    word = None
+                    end_command("()")
+                    i += 2
+                    continue
+                if not (word.plain and ASSIGNMENT.fullmatch(word.text)):
+                    self.fail("a ( inside a word")
+                # An array's assignment: its elements are data of the
+                # assignment's word, up to its `)`.
+                i += 1
+                while i < len(s) and s[i] != ")":
+                    if s[i] in " \t\n":
+                        word.text += " "
+                        i += 1
+                    else:
+                        i = self.word_part(i, word, quoted=False)
+                if i >= len(s):
+                    self.fail("an unterminated array")
+                i += 1
+                continue
+            if op:
+                if op == "(":
+                    depth += 1
+                elif op == ")" and depth:
+                    depth -= 1
+                end_command(op)
+                i += len(op)
+                continue
+            if word is None:
+                word = Word()
+            i = self.word_part(i, word, quoted=False)
+        if stop is not None:
+            self.fail("an unterminated command substitution")
+        end_command(None)
+        return i
+
+    def read_heredocs(self, i):
+        s = self.s
+        for delim, tabs in self.heredocs:
+            while True:
+                if i >= len(s):
+                    self.fail(f"the here-document {delim} is not closed")
+                j = s.find("\n", i)
+                j = len(s) if j < 0 else j
+                line = s[i:j]
+                i = j + 1
+                if (line.lstrip("\t") if tabs else line) == delim:
                     break
-                rest.append(t)
-            if not rest:
+                self.bodies.append(line)
+                if self.strict and re.search(r"\bdocker\b", line):
+                    self.fail("a here-document mentions docker")
+        self.heredocs = []
+        return i
+
+    def word_part(self, i, word, quoted):
+        """One piece of a word from i; returns the index past it."""
+        s, c = self.s, self.s[i]
+        if c == "\\":
+            if i + 1 >= len(s):
+                self.fail("a trailing backslash")
+            if not quoted or s[i + 1] in '$`"\\\n':
+                word.text += s[i + 1]
+            else:
+                word.text += s[i:i + 2]
+            return i + 2
+        if c == "'" and not quoted:
+            j = s.find("'", i + 1)
+            if j < 0:
+                self.fail("an unterminated single quote")
+            word.text += s[i + 1:j]
+            return j + 1
+        if s.startswith("$'", i) and not quoted:
+            j = i + 2
+            while j < len(s) and s[j] != "'":
+                j += 2 if s[j] == "\\" else 1
+            if j >= len(s):
+                self.fail("an unterminated $' quote")
+            word.text += s[i + 2:j]
+            return j + 1
+        if c == '"' and not quoted:
+            i += 1
+            while i < len(s) and s[i] != '"':
+                i = self.word_part(i, word, quoted=True)
+            if i >= len(s):
+                self.fail("an unterminated double quote")
+            return i + 1
+        if s.startswith("$((", i):
+            j, depth = i + 3, 2
+            while j < len(s) and depth:
+                depth += {"(": 1, ")": -1}.get(s[j], 0)
+                j += 1
+            if depth:
+                self.fail("an unterminated arithmetic expansion")
+            return self.expansion(word, quoted, s[i:j], j)
+        if s.startswith("$(", i) or (c in "<>" and s.startswith("(", i + 1) and not quoted):
+            j = self.script(i + 2, ")")
+            return self.expansion(word, quoted, "\0", j)
+        if c == "`":
+            j = i + 1
+            while j < len(s) and s[j] != "`":
+                j += 2 if s[j] == "\\" else 1
+            if j >= len(s):
+                self.fail("an unterminated backquote")
+            inner = Lexer(re.sub(r"\\([$`\\])", r"\1", s[i + 1:j]), self.strict)
+            inner.script(0)
+            self.commands += inner.commands
+            self.bodies += inner.bodies
+            return self.expansion(word, quoted, "\0", j + 1)
+        if s.startswith("${", i):
+            j, depth = i + 2, 1
+            while j < len(s) and depth:
+                if s[j] == "\\":
+                    j += 2
+                    continue
+                depth += {"{": 1, "}": -1}.get(s[j], 0)
+                j += 1
+            if depth:
+                self.fail("an unterminated parameter expansion")
+            return self.expansion(word, quoted, s[i:j], j)
+        if c == "$" and i + 1 < len(s) and re.match(r"[A-Za-z0-9_@*#?$!-]", s[i + 1]):
+            m = re.match(r"\$([A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])", s[i:])
+            return self.expansion(word, quoted, m.group(0), i + len(m.group(0)))
+        word.text += c
+        return i + 1
+
+    def expansion(self, word, quoted, text, j):
+        word.text += text
+        word.plain = False
+        word.splits = word.splits or not quoted
+        return j
+
+
+def shell_commands(script):
+    """Each simple command of a bash script, a list of Words (empty
+    between two separators), with the separator that ended it (an operator,
+    a newline, `()` after a function's name, or a substitution's closing
+    character), the commands in its substitutions among them, each before
+    the command it is in."""
+    lexer = Lexer(script)
+    lexer.script(0)
+    if lexer.heredocs:
+        lexer.read_heredocs(len(script))
+    return lexer.commands
+
+
+# Docker's global options, which come before its verb: those that take a
+# value, and those that take none.
+DOCKER_VALUES = {"--config", "-c", "--context", "-H", "--host", "-l", "--log-level", "--tlscacert", "--tlscert",
+                 "--tlskey"}
+DOCKER_BOOLS = {"-D", "--debug", "--tls", "--tlsverify", "-v", "--version", "-h", "--help"}
+# Each verb that gives an image a name: the options it takes a value for,
+# those it takes none for, and which of its operands are names it gives
+# (`all`, or the index of one). A build's --output and --push give names
+# the plan cannot hold to the table, so a build refuses them.
+NAMING = {
+    "build": ({"--add-host", "--allow", "--annotation", "--attest", "--build-arg", "--build-context", "--builder",
+               "--cache-from", "--cache-to", "--call", "--cgroup-parent", "-f", "--file", "--iidfile", "--label",
+               "--metadata-file", "--network", "--no-cache-filter", "--platform", "--progress", "--provenance",
+               "--sbom", "--secret", "--shm-size", "--ssh", "-t", "--tag", "--target", "--ulimit", "--cpu-period",
+               "--cpu-quota", "-c", "--cpu-shares", "--cpuset-cpus", "--cpuset-mems", "--isolation", "-m",
+               "--memory", "--memory-swap", "--security-opt", "-o", "--output"},
+              {"--check", "--load", "--no-cache", "--pull", "--push", "-q", "--quiet", "-D", "--debug", "--compress",
+               "--disable-content-trust", "--force-rm", "--rm", "--squash", "-h", "--help"},
+              None),
+    "tag": (set(), {"-h", "--help"}, 1),
+    "save": ({"-o", "--output", "--platform"}, {"-h", "--help"}, "all"),
+    "commit": ({"-a", "--author", "-c", "--change", "-m", "--message"}, {"-p", "--pause", "-h", "--help"}, 1),
+    "import": ({"-c", "--change", "-m", "--message", "--platform"}, {"-h", "--help"}, 1),
+}
+NAMING_VERBS = {"build": "build", "image build": "build", "buildx build": "build", "builder build": "build",
+                "tag": "tag", "image tag": "tag", "save": "save", "image save": "save", "commit": "commit",
+                "container commit": "commit", "import": "import", "image import": "import"}
+# Verbs that give no image a name and start no container.
+READING_VERBS = {"version", "info", "inspect", "image inspect", "images", "image ls", "image list", "ps",
+                 "container ls", "container list", "logs", "container logs", "pull", "image pull",
+                 "compose version"}
+DOCKER_GROUPS = {"image", "container", "buildx", "builder", "compose"}
+
+
+def options(words, values, bools, interspersed=True):
+    """WORDS read as docker's flag library reads them, against the options
+    that take a value and those that take none: the options given, as
+    (option, value) pairs, and the operands; with interspersed off, the
+    operands start at the first word that is no option. An option not in
+    either set, or a word that may split into options, fails it."""
+    given, operands, i = [], [], 0
+    while i < len(words):
+        w = words[i]
+        if w.splits:
+            raise Refused(f"a docker command's word {w.text!r} may split into options the plan cannot read")
+        t = w.text
+        i += 1
+        if operands and not interspersed:
+            operands.append(w)
+            continue
+        if t == "--":
+            operands += words[i:]
+            break
+        if t.startswith("--"):
+            name, eq, value = t.partition("=")
+            if name in values:
+                if not eq:
+                    if i >= len(words):
+                        raise Refused(f"docker's {name} has no value")
+                    value, i = words[i].text, i + 1
+                given.append((name, value))
+            elif name in bools:
+                if eq and value not in ("true", "false"):
+                    raise Refused(f"docker's {name}={value} is not true or false")
+                given.append((name, value if eq else "true"))
+            else:
+                raise Refused(f"docker's option {name} is not one the plan reads")
+        elif t.startswith("-") and t != "-":
+            j = 1
+            while j < len(t):
+                name = "-" + t[j]
+                j += 1
+                if name in bools:
+                    if t.startswith("=", j):
+                        raise Refused(f"docker's {name}{t[j:]} is not one the plan reads")
+                    given.append((name, "true"))
+                elif name in values:
+                    value = t[j:]
+                    value = value[1:] if value.startswith("=") else value
+                    if not value:
+                        if i >= len(words):
+                            raise Refused(f"docker's {name} has no value")
+                        value, i = words[i].text, i + 1
+                    given.append((name, value))
+                    break
+                else:
+                    raise Refused(f"docker's option {name} (in {t}) is not one the plan reads")
+        else:
+            operands.append(w)
+    return given, operands
+
+
+def docker_names(words):
+    """The image names one docker command (its words after `docker`) gives,
+    or a failure when it gives names the plan cannot read, loads images,
+    starts a container, or is a command the plan does not read."""
+    _, rest = options(words, DOCKER_VALUES, DOCKER_BOOLS, interspersed=False)
+    if not rest:
+        return []
+    verb, rest = rest[0], rest[1:]
+    if not verb.plain:
+        raise Refused(f"its docker verb {verb.text!r} is an expansion the plan cannot read")
+    verb = verb.text
+    if verb in DOCKER_GROUPS:
+        if not rest or not rest[0].plain or rest[0].text.startswith("-"):
+            raise Refused(f"its docker {verb} command is not one the plan reads")
+        verb, rest = f"{verb} {rest[0].text}", rest[1:]
+    if verb in ("load", "image load"):
+        raise Refused("it loads images whose names the plan cannot read")
+    if verb in ("run", "create", "container run", "container create"):
+        raise Refused(f"it starts a container (docker {verb}) under a name CI gives, which the gate cannot "
+                      "own: a step starts containers through a script that names them under PROOF_RUN_PREFIX")
+    if verb in READING_VERBS:
+        return []
+    if verb not in NAMING_VERBS:
+        raise Refused(f"it runs docker {verb}, which the plan does not read")
+    kind = NAMING_VERBS[verb]
+    values, bools, named = NAMING[kind]
+    given, operands = options(rest, values, bools)
+    if kind == "build":
+        if any(name in ("-o", "--output", "--push") for name, _ in given):
+            raise Refused("its build gives names through --output or --push, which the plan does not read")
+        return [value for name, value in given if name in ("-t", "--tag")]
+    if kind == "tag" and len(operands) != 2:
+        raise Refused(f"its docker tag has {len(operands)} operands, not a source and a target")
+    if kind in ("commit", "import") and len(operands) not in (1, 2):
+        raise Refused(f"its docker {verb} has {len(operands)} operands")
+    if named == "all":
+        if not operands:
+            raise Refused(f"its docker {verb} names no image")
+        return [w.text.replace("\0", "$(…)") for w in operands]
+    return [w.text.replace("\0", "$(…)") for w in operands[named:named + 1]]
+
+
+def given_names(script):
+    """The image names a step's script gives an image: a build's tags, a
+    `docker tag`'s target, what a `docker save` writes, a `docker commit`'s
+    or `docker import`'s name, however the command spells its options. An
+    image a script only runs, pulls or inspects is a reference, and its
+    name is not the plan's to give. The one `docker load` the plan replaces
+    is left out; a docker command it cannot read fails it: docker named
+    where it is no command (an argument of xargs, env, sudo or command, a
+    string a shell or eval runs), a load, a run, a verb or option it does
+    not read, or a word that may split into options."""
+    script = "\n".join("" if line.strip() == LOAD_LINE else line for line in script.split("\n"))
+    names, cases = [], []
+    for words, ended in shell_commands(script):
+        first = words[0].text if words and words[0].plain else None
+        # A case statement's subject and patterns are no commands: after
+        # `case WORD in`, and after each `;;`, `;&` or `;;&` of its body,
+        # the words up to a `)` are a pattern (its alternatives split at
+        # `|`), until its `esac`.
+        if first == "esac" and cases:
+            cases.pop()
+            continue
+        if cases and cases[-1] == "pattern" and words:
+            if ended == "|":
                 continue
-            verb, args = rest[0], rest[1:]
-            if verb in ("image", "buildx", "container") and args:
-                verb, args = verb + " " + args[0], args[1:]
-            if verb in ("tag", "image tag"):
-                names += args[1:2]
-            elif verb in ("build", "buildx build", "image build"):
-                names += [args[k + 1] for k, a in enumerate(args[:-1]) if a in ("-t", "--tag")]
-                names += [a.split("=", 1)[1] for a in args if a.startswith("--tag=")]
-            elif verb in ("save", "image save"):
-                skip = False
-                for a in args:
-                    if skip:
-                        skip = False
-                    elif a in ("-o", "--output"):
-                        skip = True
-                    elif not a.startswith("-"):
-                        names.append(a)
-            elif verb in ("commit", "container commit"):
-                names += args[1:2]
-            elif verb in ("load", "image load"):
-                raise Refused("it loads images whose names the plan cannot read")
+            if ended == ")":
+                cases[-1] = "body"
+                continue
+            if first != "(":
+                raise Refused("its case statement has a pattern the plan does not read")
+        if first == "case":
+            if len(words) < 3 or not words[2].plain or words[2].text != "in":
+                raise Refused("its case statement is not one the plan reads")
+            cases.append("body" if ended == ")" and len(words) > 3 else "pattern")
+            continue
+        if cases and ended in (";;", ";&", ";;&"):
+            cases[-1] = "pattern"
+        names += command_names(words)
+    if cases:
+        raise Refused("its case statement has no esac")
     return names
+
+
+def command_names(words):
+    """The image names one simple command gives, as given_names reads it."""
+    k = 0
+    while k < len(words) and ((words[k].plain and words[k].text in RESERVED) or ASSIGNMENT.match(words[k].text)):
+        k += 1
+    for n, w in enumerate(words):
+        if n == k:
+            continue
+        if w.plain and os.path.basename(w.text) == "docker":
+            raise Refused("it names docker where the plan does not read it as a command")
+        if re.search(r"(^|[\s;&|(])docker\s+\S", w.text.replace("\0", " ")):
+            raise Refused(f"its word {w.text!r} holds a docker command the plan does not read")
+    if k >= len(words):
+        return []
+    command = words[k]
+    # A conditional expression and a loop's variable and list name no
+    # command.
+    if command.plain and command.text in ("[[", "for", "select"):
+        return []
+    if not command.plain:
+        raise Refused(f"it runs {command.text!r}, a command an expansion names, which may be docker")
+    if os.path.basename(command.text) == "docker":
+        return docker_names(words[k + 1:])
+    return []
 
 
 def check_given(names):
@@ -560,8 +975,12 @@ def plan(root, wf_name, job_name, plan_dir, temp, picks, excepts, only, extra_en
                 kind = "setup"
             else:
                 kind = "run"
+                given = given_names(INLINE.sub(lambda m: text_of(evaluate(m.group(1), ctx)), str(step["run"])))
                 if NAMESPACE is not None:
-                    check_given(given_names(INLINE.sub(lambda m: text_of(evaluate(m.group(1), ctx)), str(step["run"]))))
+                    check_given(given)
+                elif given:
+                    raise Refused(f"it gives an image the name {given[0]}, and with no --image-namespace the plan "
+                                  "has no name of the gate's to give it")
                 text = substitute(step["run"], ctx)
                 if re.search(r"\bGITHUB_(ENV|PATH)\b", text):
                     raise Refused("it writes GITHUB_ENV or GITHUB_PATH, which the plan does not carry")

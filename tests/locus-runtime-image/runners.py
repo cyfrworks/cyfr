@@ -464,7 +464,8 @@ def dial(stack, pid, target):
     image sharing the service container's processes: the service's own
     seccomp profile denies setns, even to the observer."""
     if pid:
-        ran = run("docker", "run", "--rm", "--privileged", "--pid", f"container:{stack.container}",
+        ran = run("docker", "run", "--rm", "--name", f"{stack.project}-nsenter-{secrets.token_hex(4)}",
+                  "--privileged", "--pid", f"container:{stack.container}",
                   "--entrypoint", "nsenter", stack.image, "-t", str(pid), "-n",
                   "curl", "-sv", "--max-time", "3", f"http://{target}/", check=False)
     else:

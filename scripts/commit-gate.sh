@@ -695,25 +695,29 @@ run_job() {
 # repository namespace cyfr-gate-G/ (each image tag of the jobs the
 # harness leg runs, renamed by scripts/lib/workflow_plan.py); what the
 # scripts a leg runs name after their own run (a compose project with its
-# containers, networks and volumes, an image, a container, a directory
-# under TMPDIR), which each puts PROOF_RUN_PREFIX before and every leg sets
-# to cyfr-gate-G-LEG-; the database cyfr_gate_boot_G and the ones boot.sh
+# containers, networks and volumes, an image, a directory under TMPDIR,
+# and every container a `docker run` or `docker create` starts, however
+# briefly, since one whose caller is killed runs on), which each puts
+# PROOF_RUN_PREFIX before and every leg sets to cyfr-gate-G-LEG-, the
+# gate's own PostgreSQL clients named the same way (cyfr-gate-G-gate- in
+# the gate itself); the database cyfr_gate_boot_G and the ones boot.sh
 # names beside it (cyfr_gate_boot_G_...); and the RUNNER_TEMP, tool and
 # docker_call scratch directories TMPDIR/cyfr-gate-G-LEG.... Every process
 # a leg starts carries COMMIT_GATE=G and COMMIT_GATE_LEG=LEG in its
 # environment, names outside CYFR_, since a cyfr server refuses to boot
 # with a CYFR_ variable it does not declare. So what is left is found by
-# name, and nothing needs remembering: gate_clean removes
-# it after a leg ends, however it ended (the leg, and the gate for a leg
-# that died), at the gate's exit, and at the next gate's start, where,
-# since a gate takes the host alone (scripts/heavy-check.sh), everything
-# named cyfr-gate-<digits> whose gate's pid no longer runs is an orphan of
-# a gate that is gone. It first stops the sessions of the processes
-# carrying the marker and confirms none is left, then removes in dependency order: containers, networks, volumes,
-# the gate's image tags, the databases, the directories; then lists each
-# kind again. A listing that fails, a removal that fails and a second
-# listing that still finds something each fail it, naming what is left.
-# Every docker call runs contained under the docker deadline (docker_call).
+# name, and nothing needs remembering: gate_clean removes it after every
+# leg ends, however it ended (the leg, and the gate for a leg that died),
+# at the gate's exit, and at the next gate's start, where, since a gate
+# takes the host alone (scripts/heavy-check.sh), everything named
+# cyfr-gate-<digits> whose gate's pid no longer runs is an orphan of a
+# gate that is gone. It first stops the sessions of the processes carrying
+# the marker and confirms none is left, then removes in dependency order:
+# containers, networks, volumes, the gate's image tags, the databases, the
+# directories; then lists each kind again. A listing that fails, a removal
+# that fails and a second listing that still finds something each fail
+# it, naming what is left. Every docker call runs contained under the
+# docker deadline (docker_call).
 
 # One docker command, contained under the docker deadline, its stdout in
 # DOCKER_OUT and its stderr appended to log $1. Returns docker's status,
@@ -805,15 +809,17 @@ PY
 }
 
 # gate_clean SCOPE [LEG] LOG: what SCOPE covers removed, as the section
-# above says: `leg LEG` this gate's for that leg, `gate` all of this
-# gate's, `orphans` every gate's that no longer runs (run before this gate
-# makes anything): a process, or anything named after a gate, whose gate's
-# pid still runs is left alone. Where the sessions cannot be read from
+# above says: `leg LEG` this gate's for that leg (every kind: what is
+# named cyfr-gate-G-LEG-, the namespace's images for the harness leg, the
+# databases for the boot leg, the directories), `gate` all of this gate's,
+# `orphans` every gate's that no longer runs (run before this gate makes
+# anything): a process, or anything named after a gate, whose gate's pid
+# still runs is left alone. Where the sessions cannot be read from
 # process environments (no /proc), nothing can be confirmed stopped, so
 # nothing is removed: what would have been is named, and it fails, unless
 # there is nothing to remove.
 gate_clean() {
-  local scope=$1 leg= log id legre own sids sid s=0 kind pass passes name rest d dbre gone= unread= found=0
+  local scope=$1 leg= log id legre own sids sid s=0 kind pass passes name rest d dbre gone= unread= found=0 named image
   if [ "$scope" = leg ]; then leg=$2; log=$3; else log=$2; fi
   case "$scope" in
     leg) id=$GATE_ID; legre=$leg ;;
@@ -822,6 +828,15 @@ gate_clean() {
     *) echo "gate_clean: no scope $scope" >&2; return 64 ;;
   esac
   [ "$scope" != orphans ] || gone=gone
+  # What a leg names after its run is cyfr-gate-G-LEG-...; the harness leg
+  # also builds and tags the namespace's images, cyfr-gate-G/....
+  named="^cyfr-gate-($id)-"
+  image="^cyfr-gate-($id)(/[^:]+|-[^/:]+):.+\$"
+  if [ "$scope" = leg ]; then
+    named="^cyfr-gate-($id)-$leg-"
+    image="^cyfr-gate-($id)-$leg-[^/:]+:.+\$"
+    [ "$leg" != harness ] || image="^cyfr-gate-($id)(/[^:]+|-$leg-[^/:]+):.+\$"
+  fi
   own=$(ps -o sid= -p "$$" | tr -d ' ')
   # The sessions first, each stopped with everything it started, and none
   # left before anything they might use is removed.
@@ -851,7 +866,8 @@ gate_clean() {
       directory) echo "==> removing the directory $2" >&2; rm -rf "$2" ;;
       database)
         echo "==> dropping the database $2" >&2
-        docker_call "$log" run --rm --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
+        docker_call "$log" run --rm --name "${PROOF_RUN_PREFIX:-cyfr-gate-$$-gate-}psql-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" \
+          --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
           psql -v ON_ERROR_STOP=1 -q "$PG_SERVER/postgres" -c "DROP DATABASE IF EXISTS \"$2\" WITH (FORCE)" ;;
       *)
         echo "==> removing the $1 $2" >&2
@@ -863,36 +879,37 @@ gate_clean() {
         esac ;;
     esac || { echo "==> the $1 $2 could not be removed" >&2; s=1; }
   }
-  if [ "$scope" != leg ] || [ "$leg" = harness ]; then
-    for pass in $passes; do
-      for kind in container network volume image; do
+  # Docker's kinds, for every scope and leg, before the databases and the
+  # directories they may hold open.
+  for pass in $passes; do
+    for kind in container network volume image; do
+      case $kind in
+        container) docker_call "$log" ps -a --format '{{.Names}}' ;;
+        network) docker_call "$log" network ls --format '{{.Name}}' ;;
+        volume) docker_call "$log" volume ls --format '{{.Name}}' ;;
+        image) docker_call "$log" image ls --format '{{.Repository}}:{{.Tag}}' ;;
+      esac || { echo "==> the ${kind}s could not be listed" >&2; s=1; continue; }
+      while IFS= read -r name; do
         case $kind in
-          container) docker_call "$log" ps -a --format '{{.Names}}' ;;
-          network) docker_call "$log" network ls --format '{{.Name}}' ;;
-          volume) docker_call "$log" volume ls --format '{{.Name}}' ;;
-          image) docker_call "$log" image ls --format '{{.Repository}}:{{.Tag}}' ;;
-        esac || { echo "==> the ${kind}s could not be listed" >&2; s=1; continue; }
-        while IFS= read -r name; do
-          case $kind in
-            image) [[ "$name" =~ ^cyfr-gate-($id)(/[^:]+|-[^/:]+):.+$ ]] || continue ;;
-            *) [[ "$name" =~ ^cyfr-gate-($id)- ]] || continue ;;
-          esac
-          [ -z "$gone" ] || ! gate_running "${BASH_REMATCH[1]}" || continue
-          if [ "$pass" = verify ]; then
-            echo "==> the $kind $name is still there" >&2
-            s=1
-          else
-            remove_one "$kind" "$name"
-          fi
-        done <<<"$DOCKER_OUT"
-      done
+          image) [[ "$name" =~ $image ]] || continue ;;
+          *) [[ "$name" =~ $named ]] || continue ;;
+        esac
+        [ -z "$gone" ] || ! gate_running "${BASH_REMATCH[1]}" || continue
+        if [ "$pass" = verify ]; then
+          echo "==> the $kind $name is still there" >&2
+          s=1
+        else
+          remove_one "$kind" "$name"
+        fi
+      done <<<"$DOCKER_OUT"
     done
-  fi
+  done
   if [ "$scope" != leg ] || [ "$leg" = boot ]; then
     [ "$id" != '[0-9]+' ] || dbre='[0-9]+'
     dbre=${dbre:-$id}
     for pass in $passes; do
-      if ! docker_call "$log" run --rm --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
+      if ! docker_call "$log" run --rm --name "${PROOF_RUN_PREFIX:-cyfr-gate-$$-gate-}psql-$$-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" \
+        --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
         psql -v ON_ERROR_STOP=1 -qAt "$PG_SERVER/postgres" \
         -c "SELECT datname FROM pg_database WHERE datname ~ '^cyfr_gate_boot_$dbre(_|\$)' ORDER BY 1"; then
         echo "==> the databases could not be listed" >&2
@@ -988,11 +1005,13 @@ leg_boot() {
   await_leg boot postgres || return
   STEP_DEADLINE=1800 step boot boot_sqlite env -u CYFR_DATABASE_URL tests/release-boot/boot.sh sqlite || status=1
   [ -z "$REFUSED" ] || return 1
-  step boot boot_database docker run --rm --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
+  step boot boot_database docker run --rm --name "${PROOF_RUN_PREFIX}database-create" --network host \
+    -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
     psql -v ON_ERROR_STOP=1 -q "$PG_SERVER/postgres" -c "CREATE DATABASE \"$db\"" || return 1
   STEP_DEADLINE=1800 step boot boot_postgres env CYFR_DATABASE_URL="$PG_SERVER/$db" \
     tests/release-boot/boot.sh postgres || status=1
-  step boot boot_database_drop docker run --rm --network host -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
+  step boot boot_database_drop docker run --rm --name "${PROOF_RUN_PREFIX}database-drop" --network host \
+    -e PGOPTIONS=--client-min-messages=warning postgres:18.6 \
     psql -v ON_ERROR_STOP=1 -q "$PG_SERVER/postgres" -c "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" || status=1
   return "$status"
 }
@@ -1045,9 +1064,9 @@ leg_harness() {
   return "$status"
 }
 
-# What an image job's suites left under the gate's prefix, removed before
-# the next job: the containers, networks and volumes, with the images kept
-# for the jobs after it.
+# What an image job's suites left under the harness leg's prefix, removed
+# before the next job: the containers, networks and volumes, with the
+# images kept for the jobs after it.
 harness_sweep() {
   local log="$LOGDIR/harness.docker.log" kind name pass s=0
   for pass in remove verify; do
@@ -1058,7 +1077,7 @@ harness_sweep() {
         volume) docker_call "$log" volume ls --format '{{.Name}}' ;;
       esac || { echo "==> the ${kind}s could not be listed" >&2; s=1; continue; }
       while IFS= read -r name; do
-        [[ "$name" =~ ^cyfr-gate-$GATE_ID- ]] || continue
+        [[ "$name" =~ ^cyfr-gate-$GATE_ID-harness- ]] || continue
         if [ "$pass" = verify ]; then
           echo "==> the $kind $name is still there" >&2
           s=1
@@ -1151,12 +1170,11 @@ if [ "${1:-}" = --leg ]; then
   export PROOF_RUN_PREFIX="cyfr-gate-$GATE_ID-$leg-"
   cd "$ROOT" || exit 1
   unset MIX_BUILD_PATH
-  # What a leg that makes something outside its steps made is removed by
-  # name once its steps have stopped, however the leg ends; the gate does
-  # it again for a leg that did not end cleanly.
+  # What the leg made outside its steps is removed by name once its steps
+  # have stopped, however the leg ends; the gate does it again for a leg
+  # that did not end cleanly.
   leg_cleanup() {
     local c=0
-    case "$leg" in go|audit|boot|harness) ;; *) return 0 ;; esac
     gate_clean leg "$leg" "$LOGDIR/$leg.cleanup.log" || c=1
     rm -rf "$DOCKER_SCRATCH"
     echo "cleanup=$c" >> "$LOGDIR/$leg.summary"

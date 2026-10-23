@@ -333,10 +333,11 @@ cli_run_root() {
     *) fail "the host's docker is at $endpoint, not a socket a container can mount" ;;
   esac
   printf '$ cyfr %s (as root)\n' "$*" >"$log"
-  docker run --rm -v "${endpoint#unix://}:/var/run/docker.sock" -v "$WORK:$WORK" -w "$WORK" \
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-cli-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
+    -v "${endpoint#unix://}:/var/run/docker.sock" -v "$WORK:$WORK" -w "$WORK" \
     -e HOME="$WORK/home" -e LANG=C.UTF-8 -e TERM=dumb --entrypoint "$CYFR" "$ROOT_CLI_IMAGE" "$@" \
     </dev/null >>"$log" 2>&1 || status=$?
-  docker run --rm --user 0 -v "$WORK:$WORK" --entrypoint sh "$IMAGE" -c \
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-chown-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --user 0 -v "$WORK:$WORK" --entrypoint sh "$IMAGE" -c \
     'find "$1" -mindepth 1 -maxdepth 1 ! -name data -exec chown -R "$2" {} +' sh "$WORK" "$(id -u):$(id -g)" ||
     fail "what the restore left in the project could not be given back to the person"
   return "$status"
@@ -553,7 +554,7 @@ from_network() {
   local network="$1"
   shift
   [ "$network" = bridge ] || network="${RUN}_${network}"
-  docker run --rm --network "$network" --entrypoint sh "$IMAGE" -c '
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-address-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --network "$network" --entrypoint sh "$IMAGE" -c '
     echo "IP=$(hostname -i | cut -d" " -f1)"
     out="$(curl -sS -o /tmp/body -D /tmp/head -w "%{http_code}" --max-time 5 "$@" 2>&1)"; code=$?
     cat /tmp/head 2>/dev/null; echo; cat /tmp/body 2>/dev/null; echo
@@ -578,7 +579,8 @@ standin_ca() {
 # the stand-in's authority, to the tailscale service's port 443. Prints
 # `IP=<its address>`, then fetch's JSON line.
 tailnet_fetch() {
-  docker run --rm --network "${RUN}_proof-tailnet" -v "$WORK/standin-ca.pem:/ca.pem:ro" "$STANDIN_IMAGE" \
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-fetch-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
+    --network "${RUN}_proof-tailnet" -v "$WORK/standin-ca.pem:/ca.pem:ro" "$STANDIN_IMAGE" \
     sh -c 'echo "IP=$(hostname -i | cut -d" " -f1)"; exec standin fetch --ca /ca.pem --connect tailscale:443 "$@"' sh "$@" || true
 }
 fetched() { printf '%s\n' "$1" | sed -n '/^{/p' | tail -1; }
@@ -837,7 +839,7 @@ expect_serve_closed() {
   port="$(jget "$status" Self PeerAPIURL 0)"
   port="${port##*:}"
   [[ "$port" =~ ^[0-9]+$ ]] || fail "the node's status names no PeerAPI URL: $status"
-  control="$(fetched "$(docker run --rm --network "${RUN}_proof-tailnet" "$STANDIN_IMAGE" \
+  control="$(fetched "$(docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-peerapi-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --network "${RUN}_proof-tailnet" "$STANDIN_IMAGE" \
     standin fetch --connect "tailscale:$port" "http://$name/" || true)")"
   [[ "$(jget "$control" status)" =~ ^[0-9]{3}$ ]] || fail "the node's PeerAPI did not answer through the tailnet: ${control:-nothing}"
   target="$(fetched "$(tailnet_fetch "https://$name/api/health")")"
@@ -1705,9 +1707,11 @@ interrupt_case() {
   # The console's HTTPS switch, in the tailnet the stand-in keeps on the
   # machine's volume.
   local enrolled first_id
-  enrolled="$(jget "$(docker run --rm -v "${RUN}_tailscale_state:/var/lib/tailscale" "$STANDIN_IMAGE" standin state)" id)"
+  enrolled="$(jget "$(docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-state-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
+    -v "${RUN}_tailscale_state:/var/lib/tailscale" "$STANDIN_IMAGE" standin state)" id)"
   [ -n "$enrolled" ] && [ "$enrolled" != null ] || fail "the stand-in's state names no machine"
-  docker run --rm -v "${RUN}_tailscale_state:/var/lib/tailscale" "$STANDIN_IMAGE" standin tailnet --https on
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-https-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
+    -v "${RUN}_tailscale_state:/var/lib/tailscale" "$STANDIN_IMAGE" standin tailnet --https on
   as_printed tailnet_https_off "$WORK/https-off.log" 1
   expect_head tailnet cyfr.proof.ts.net
   [ "$(env_value CYFR_TAILNET_NODE_ID)" = "$enrolled" ] ||
@@ -1745,7 +1749,7 @@ snapshot_take() {
   dir="$WORK/backups/$stamp"
   mkdir -p "$WORK/backups"
   mkdir -m 700 "$dir"
-  docker run --rm --user 0 --entrypoint sh -v "$WORK:/work" "$IMAGE" -c '
+  docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-files-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --user 0 --entrypoint sh -v "$WORK:/work" "$IMAGE" -c '
     set -e
     d="/work/backups/$1"
     cp /work/data/cyfr.db "$d/database"

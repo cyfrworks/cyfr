@@ -152,7 +152,8 @@ fail_with_logs() {
 adapt() {
   local name="$1"
   shift
-  if ! docker run --rm -v "$ROOT/Caddyfile:/etc/caddy/Caddyfile:ro" "$@" "$IMAGE" \
+  if ! docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-adapt-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} \
+    -v "$ROOT/Caddyfile:/etc/caddy/Caddyfile:ro" "$@" "$IMAGE" \
     caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile \
     >"$WORK/$name.json" 2>"$WORK/$name.log"; then
     cat "$WORK/$name.log" >&2
@@ -163,28 +164,29 @@ adapt() {
   fi
 }
 
-# A stub upstream, `$1`, answering as cyfr:`$2` on the run's network;
+# A stub upstream, the run's `$1`, answering as cyfr:`$2` on its network;
 # returns once it answers on that port, so a proxy started after it that
 # answers anything but 200 does so for a reason of its own.
 start_stub() {
-  CONTAINERS+=("$1")
-  docker run -d --name "$1" --network "$NET" --network-alias cyfr "$IMAGE" \
+  local stub="$RUN-$1"
+  CONTAINERS+=("$stub")
+  docker run -d --name "$stub" --network "$NET" --network-alias cyfr "$IMAGE" \
     caddy respond --listen ":$2" \
     --header "X-Upstream: stub" --header "Strict-Transport-Security: $STUB_HSTS" ok >/dev/null
   local deadline=$((SECONDS + READY_TIMEOUT))
-  until docker exec "$1" wget -q -O /dev/null "http://127.0.0.1:$2/" 2>/dev/null; do
-    [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = true ] ||
-      fail "the stub upstream $1 exited before it answered"
-    [ "$SECONDS" -lt "$deadline" ] || fail "the stub upstream $1 did not answer within ${READY_TIMEOUT}s"
+  until docker exec "$stub" wget -q -O /dev/null "http://127.0.0.1:$2/" 2>/dev/null; do
+    [ "$(docker inspect -f '{{.State.Running}}' "$stub" 2>/dev/null)" = true ] ||
+      fail "the stub upstream $stub exited before it answered"
+    [ "$SECONDS" -lt "$deadline" ] || fail "the stub upstream $stub did not answer within ${READY_TIMEOUT}s"
     sleep 0.2
   done
 }
 
-# The shipped Caddyfile in proxy `$1` for host `$2`, proxying to cyfr:`$3`,
-# with CADDY_ACME_EMAIL `$4`; returns once it answers over TLS verified
-# against its local CA root, whatever the status.
+# The shipped Caddyfile in the run's proxy `$1` for host `$2`, proxying to
+# cyfr:`$3`, with CADDY_ACME_EMAIL `$4`; returns once it answers over TLS
+# verified against its local CA root, whatever the status.
 start_proxy() {
-  PROXY="$1" HOST="$2"
+  PROXY="$RUN-$1" HOST="$2"
   CONTAINERS+=("$PROXY")
   docker run -d --name "$PROXY" --network "$NET" \
     -p 127.0.0.1::80 -p 127.0.0.1::443 \
@@ -315,8 +317,8 @@ pass "CADDY_ACME_EMAIL given: the file loads and registers $GIVEN_EMAIL"
 docker network create "$NET" >/dev/null
 
 step "the TLS host $TLS_HOST, proxying to a stub answering as cyfr:$TLS_PORT"
-start_stub "$RUN-stub-tls" "$TLS_PORT"
-start_proxy "$RUN-caddy-tls" "$TLS_HOST" "$TLS_PORT" "$TLS_EMAIL"
+start_stub stub-tls "$TLS_PORT"
+start_proxy caddy-tls "$TLS_HOST" "$TLS_PORT" "$TLS_EMAIL"
 pass "TLS for $TLS_HOST verified against Caddy's local CA root, no ACME"
 
 step "proxied: a response from the upstream over HTTPS"
@@ -339,8 +341,8 @@ assert_hsts gone "Caddy's 502"
 docker rm -f -v "$RUN-caddy-tls" >/dev/null
 
 step "loopback: CYFR_HOST=$LOOPBACK_HOST, CADDY_ACME_EMAIL empty, a stub answering as cyfr:$LOOPBACK_PORT"
-start_stub "$RUN-stub-loopback" "$LOOPBACK_PORT"
-start_proxy "$RUN-caddy-loopback" "$LOOPBACK_HOST" "$LOOPBACK_PORT" ""
+start_stub stub-loopback "$LOOPBACK_PORT"
+start_proxy caddy-loopback "$LOOPBACK_HOST" "$LOOPBACK_PORT" ""
 pass "the file loads with CADDY_ACME_EMAIL empty, and TLS for $LOOPBACK_HOST is verified against Caddy's local CA root"
 status="$(https_get loopback '/probe?q=1')" || true
 assert_no_hsts loopback "$status" "$LOOPBACK_HOST over TLS"
@@ -349,7 +351,7 @@ assert_redirect
 docker rm -f -v "$RUN-caddy-loopback" >/dev/null
 
 step "deep: CYFR_HOST=$DEEP_HOST, the same stub"
-start_proxy "$RUN-caddy-deep" "$DEEP_HOST" "$LOOPBACK_PORT" ""
+start_proxy caddy-deep "$DEEP_HOST" "$LOOPBACK_PORT" ""
 pass "TLS for $DEEP_HOST verified against Caddy's local CA root"
 status="$(https_get deep '/probe?q=1')" || true
 assert_no_hsts deep "$status" "$DEEP_HOST over TLS"

@@ -226,7 +226,7 @@ served() {
   [ -n "$ts" ] || { echo '{"error":"no tailscale container runs"}'; return; }
   docker exec "$ts" standin ca >"$WORK/$CASE_PROJECT.ca.pem" || { echo '{"error":"the stand-in has no authority"}'; return; }
   while [ "$SECONDS" -lt "$closes" ]; do
-    answer="$(docker run --rm --network "${CASE_PROJECT}_proof-tailnet" -v "$WORK/$CASE_PROJECT.ca.pem:/ca.pem:ro" "$STANDIN_IMAGE" \
+    answer="$(docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-fetch-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --network "${CASE_PROJECT}_proof-tailnet" -v "$WORK/$CASE_PROJECT.ca.pem:/ca.pem:ro" "$STANDIN_IMAGE" \
       standin fetch --ca /ca.pem --connect tailscale:443 "https://$name/api/health" 2>/dev/null | sed -n '/^{/p' | tail -1 || true)"
     if [ -n "$answer" ] && [ "$(jget "$answer" status)" = 200 ]; then
       break

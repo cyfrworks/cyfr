@@ -75,7 +75,8 @@ cleanup() {
     # The entrypoint gave the data and template directories to the image's
     # user; they are taken back before the scratch directory goes.
     cleanup_step "taking $WORK back from the image's user" \
-      docker run --rm --volume "$WORK:/work" --entrypoint chown "$IMAGE" -R "$(id -u):$(id -g)" /work || failed=1
+      docker run --rm ${PROOF_RUN_PREFIX:+--name "$RUN-chown-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"} --volume "$WORK:/work" \
+      --entrypoint chown "$IMAGE" -R "$(id -u):$(id -g)" /work || failed=1
     cleanup_step "removing $WORK" rm -rf "$WORK" || failed=1
   fi
   if [ -n "$failed" ] && [ "$code" -eq 0 ]; then
