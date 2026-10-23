@@ -22,13 +22,18 @@ defmodule Arca.Test.Sandbox do
   Check a connection out for this test and register its release.
 
   `tags` is the test's own — `:async` decides whether the checkout is
-  shared with every process or lent to this one.
+  shared with every process or lent to this one. `:ownership_timeout`, when
+  present, overrides the repo's timeout for this checkout alone.
   """
   @spec start_owner!(map()) :: pid()
   def start_owner!(tags \\ %{}) do
     shared? = not Map.get(tags, :async, false)
     if shared?, do: await_writers()
-    owner = Ecto.Adapters.SQL.Sandbox.start_owner!(Arca.Repo, shared: shared?)
+
+    opts =
+      tags |> Map.take([:ownership_timeout]) |> Map.to_list() |> Keyword.put(:shared, shared?)
+
+    owner = Ecto.Adapters.SQL.Sandbox.start_owner!(Arca.Repo, opts)
     ExUnit.Callbacks.on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(owner) end)
     unless shared?, do: Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, self())
     owner

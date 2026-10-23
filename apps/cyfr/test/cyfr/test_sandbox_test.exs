@@ -92,6 +92,22 @@ defmodule Cyfr.Test.SandboxTest do
     assert Locus.Runtime.RunnerPool.Runners in repository_dynamic_supervisors()
   end
 
+  @tag ownership_timeout: 1_000
+  test "the ownership timeout tag reaches this test's checkout", tags do
+    ExUnit.CaptureLog.capture_log(fn ->
+      owner = Sandbox.setup!(tags)
+      assert Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, self()) != :not_found
+
+      # Observe the checkout's expiry without issuing a query after it has
+      # been reclaimed, which would itself log an ownership error.
+      Prima.Test.Wait.wait_until(
+        fn -> Ecto.Adapters.SQL.Sandbox.allow(Arca.Repo, owner, self()) == :not_found end,
+        5_000,
+        "the checkout's tagged ownership timeout"
+      )
+    end)
+  end
+
   describe "a sync test's work" do
     setup do
       collector = spawn(fn -> collect(%{}) end)
