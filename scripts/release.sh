@@ -6,20 +6,23 @@ set -euo pipefail
 VERSION=""
 PUSH=""
 COMMIT_MSG=""
+GATE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --push) PUSH="--push"; shift ;;
     --message) COMMIT_MSG="$2"; shift 2 ;;
+    --gate) GATE="--gate"; shift ;;
     -*) echo "Unknown flag: $1"; exit 1 ;;
     *) VERSION="$1"; shift ;;
   esac
 done
 
 if [ -z "$VERSION" ]; then
-  echo "Usage: $0 <version> [--push] [--message <msg>]"
+  echo "Usage: $0 <version> [--push] [--message <msg>] [--gate]"
   echo "Example: $0 0.9.0 --push"
   echo "         $0 0.9.0-rc.1 --push"
+  echo "         $0 0.9.0 --push --gate   # proves HEAD green here, offline, instead of by its run on GitHub"
   exit 1
 fi
 
@@ -89,23 +92,60 @@ if [ -n "$(git status --porcelain -- "${MIXFILES[@]}")" ]; then
   exit 1
 fi
 
-# A release tag must never point at a red commit: before touching versions,
-# the close gate runs every check a commit passes and the full suite on
-# both database adapters, the cluster suite and every island, queued on
-# the verification host as any exclusive check is (scripts/heavy-check.sh,
-# scripts/commit-gate.sh). Its PostgreSQL legs use the database
-# config/test.exs names for each partition on the host's fixture server,
-# localhost:5432, so the release names none. Its logs stay in a fresh
-# directory named before it starts and again when it ends. Skip it with
-# SKIP_TESTS=1 only when the same tree passed the close gate moments ago.
-if [ "${SKIP_TESTS:-}" != "1" ]; then
+# A release tag must never point at a red commit. The proof is HEAD's run
+# on GitHub, as every change's check is its pull request's run there
+# (CONTRIBUTING.md): every check run GitHub holds for HEAD has completed
+# and none failed, read through `gh`, which refuses a HEAD that is not
+# pushed, still running or unchecked, since the tag's own workflow builds
+# nothing from a commit it has not seen pass. --gate proves it here
+# instead, for a release cut offline or a HEAD GitHub has not run: the
+# close gate, every check a commit passes and the full suite on both
+# database adapters, the cluster suite and every island, queued on the
+# verification host as any exclusive check is (scripts/heavy-check.sh,
+# scripts/commit-gate.sh) and holding the host for over an hour. Its
+# PostgreSQL legs use the database config/test.exs names for each
+# partition on the host's fixture server, localhost:5432, so the release
+# names none, and its logs stay in a fresh directory named before it
+# starts and again when it ends. RELEASE_UNPROVEN=1 skips the proof, for a
+# disposable repository that has no run on GitHub
+# (tests/ci-release-graph.py); no release is cut under it.
+HEAD_SHA="$(git rev-parse HEAD)"
+if [ "${RELEASE_UNPROVEN:-}" = "1" ]; then
+  echo "Warning: RELEASE_UNPROVEN=1: HEAD $HEAD_SHA is tagged without a proof that it is green."
+elif [ -n "$GATE" ]; then
   GATE_LOGS="$(mktemp -d "${TMPDIR:-/tmp}/release-gate.XXXXXX")"
-  echo "Running the close gate (set SKIP_TESTS=1 to skip); its logs go to $GATE_LOGS"
+  echo "Running the close gate on HEAD $HEAD_SHA; its logs go to $GATE_LOGS"
   if ! scripts/heavy-check.sh -t 7200 -- scripts/commit-gate.sh -l "$GATE_LOGS" --close; then
     echo "Error: the close gate failed; its logs are in $GATE_LOGS"
     exit 1
   fi
   echo "The close gate passed; its logs are in $GATE_LOGS"
+else
+  echo "Reading HEAD's check runs on GitHub ($HEAD_SHA)..."
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "Error: gh is not installed, and the proof that HEAD is green is its run on GitHub, read through gh."
+    echo "Install gh and sign in, or prove HEAD here with --gate."
+    exit 1
+  fi
+  if ! RUNS="$(gh api "repos/{owner}/{repo}/commits/$HEAD_SHA/check-runs?per_page=100" --paginate \
+      -q '.check_runs[] | "\(.status) \(.conclusion // "-") \(.name)"' 2>&1)"; then
+    echo "Error: HEAD's check runs could not be read: $RUNS"
+    echo "Push HEAD and let its run finish, sign gh in, or prove HEAD here with --gate."
+    exit 1
+  fi
+  if [ -z "$RUNS" ]; then
+    echo "Error: GitHub holds no check run for HEAD $HEAD_SHA: it is unchecked."
+    echo "Push HEAD and let its run finish, or prove HEAD here with --gate."
+    exit 1
+  fi
+  NOT_GREEN="$(grep -v -E '^completed (success|skipped|neutral) ' <<< "$RUNS" || true)"
+  if [ -n "$NOT_GREEN" ]; then
+    echo "Error: HEAD $HEAD_SHA is not proved green on GitHub; a release tag never points at a red, running or unchecked commit:"
+    sed 's/^/  /' <<< "$NOT_GREEN"
+    echo "Wait for green, fix what is red, or prove HEAD here with --gate."
+    exit 1
+  fi
+  echo "HEAD is green on GitHub: $(wc -l <<< "$RUNS") check runs completed, none failed."
 fi
 
 # Portable in-place sed (macOS requires -i '', Linux requires -i)

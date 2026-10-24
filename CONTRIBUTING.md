@@ -61,11 +61,15 @@ missing or wrong header fails CI.
   outside the checkout, where `rust-toolchain.toml` does not choose the
   toolchain. `scripts/commit-gate.sh` looks for it in
   `${CARGO_HOME:-~/.cargo}/bin` and on `PATH`, and refuses to run without it.
-- Before a commit, run `scripts/heavy-check.sh -- scripts/commit-gate.sh`,
-  and before a push its close, which holds the host longer:
-  `scripts/heavy-check.sh -t 10800 -- scripts/commit-gate.sh --close`. The
-  gate's header lists what each runs and which of CI's checks stay CI's
-  alone. Besides `cargo-component` it needs `go` at the version both
+- Before a commit, run `scripts/heavy-check.sh -- scripts/commit-gate.sh`.
+  A change's check is its pull request's run on GitHub, which runs every
+  check in parallel, and a release tag is cut on a commit that run proved
+  green: `scripts/release.sh` reads HEAD's check runs through `gh` before it
+  tags, and runs the gate's close here only with `--gate`. The close,
+  `scripts/heavy-check.sh -t 10800 -- scripts/commit-gate.sh --close`, holds
+  the host for over an hour and is a tool for working offline or for
+  reproducing a failing CI job here, not a requirement. The gate's header
+  lists what each runs and which of CI's checks stay CI's alone. Besides `cargo-component` it needs `go` at the version both
   `go.mod` files name and a running Docker daemon, and it refuses to run
   without them; it installs `govulncheck` and the close's `trivy` itself,
   at the versions CI pins.

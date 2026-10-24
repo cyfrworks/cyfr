@@ -1334,7 +1334,8 @@ def declare(path, version):
 
 def helper_env(repo):
     """What the helper runs under: no configuration of the host's git, an
-    identity of its own, the close gate skipped and the range locale."""
+    identity of its own, the proof of a green HEAD skipped (a disposable
+    repository has no run on GitHub) and the range locale."""
     return {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": repo,
@@ -1344,7 +1345,7 @@ def helper_env(repo):
         "GIT_AUTHOR_EMAIL": "graph@example.invalid",
         "GIT_COMMITTER_NAME": "graph",
         "GIT_COMMITTER_EMAIL": "graph@example.invalid",
-        "SKIP_TESTS": "1",
+        "RELEASE_UNPROVEN": "1",
         "LC_ALL": range_locale(),
     }
 
