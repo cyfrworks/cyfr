@@ -211,10 +211,19 @@ else
   fi
 
   # The bump commit holds the version lines and nothing else, so the
-  # tagged tree is the proved one plus them: never `git add -A`, which
-  # would sweep whatever else the tree holds into the release.
-  git add -- "${MIXFILES[@]}"
-  git commit -m "$COMMIT_MSG"
+  # tagged tree is the proved one plus them: the commit takes the mix.exs
+  # files from the working tree and disregards whatever else is staged
+  # (`git commit --only -- <paths>`), where `git add -A` or a plain
+  # `git commit` would have swept other changes, unstaged or staged, into
+  # the release. The commit is then held to those files before the tag.
+  git commit --only -m "$COMMIT_MSG" -- "${MIXFILES[@]}"
+  if [ "$(git diff-tree --no-commit-id --name-only -r HEAD | LC_ALL=C sort)" != "$(printf '%s\n' "${MIXFILES[@]}" | LC_ALL=C sort)" ]; then
+    echo "Error: the bump commit changed more than the mix.exs files:"
+    git diff-tree --no-commit-id --name-only -r HEAD | sed 's/^/  /'
+    git reset --soft HEAD~1
+    echo "The commit was undone, its changes left staged; nothing was tagged."
+    exit 1
+  fi
   git tag -a "$VERSION" -m "Release $VERSION"
 
   echo ""
