@@ -1284,7 +1284,7 @@ var downCmd = &cobra.Command{
 	Use:     "down",
 	Short:   "Stop the CYFR stack",
 	GroupID: "server",
-	Long:    "Stop the CYFR stack and remove its containers: every service of the project, the proxy of a tailnet or public home and locus-builds included, whatever .env selects now, checked stopped before it reports. It takes the stack's lock first, so it never runs inside another cyfr command's start or change, and finishes a change an interrupted command left.",
+	Long:    "Stop the CYFR stack and remove its containers: every service of the project, the proxy of a tailnet or public home and locus-builds included, whatever .env selects now, checked stopped before it reports. It takes the stack's lock first, so it never runs inside another cyfr command's start or change, and finishes a change an interrupted command left. The stack is the working directory's, started from its compose file and named after the directory, so a directory that holds no compose file is refused: nothing of a home started elsewhere is stopped from here.",
 	Example: "  cyfr down",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -1296,8 +1296,19 @@ var downCmd = &cobra.Command{
 }
 
 // runDown is `cyfr down` in the working directory: every service of the
-// project stopped, removed and checked stopped, under the lock.
+// project stopped, removed and checked stopped, under the lock. The
+// engine starts the stack from the directory's compose file and names it
+// after the directory, and finds nothing of a home started in another,
+// so a directory that holds no compose file (access.HasComposeFile) is
+// refused before the lock with nothing stopped, rather than a stop of
+// nothing reported as "stopped". A home `cyfr init` wrote and a source
+// checkout `cyfr up` started without it both hold one; a directory that
+// holds two, which a start refuses to choose between, is stopped, since
+// the stop reaches the project's containers by their label.
 func runDown(ctx context.Context, out io.Writer) error {
+	if !access.HasComposeFile(".") {
+		return fmt.Errorf("There is no stack in this directory, so nothing was stopped: it holds no compose file (%s). Run 'cyfr down' in the home's directory, the one that holds its docker-compose.yml", strings.Join(access.ComposeMainFiles, ", "))
+	}
 	e, unlock, _, err := openLocked(ctx, "down", out)
 	if err != nil {
 		return err
