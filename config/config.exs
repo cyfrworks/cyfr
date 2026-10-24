@@ -229,7 +229,7 @@ config :esbuild,
   ]
 
 # Prism tailwind configuration. A version bump adds the CLI's sha256 pins
-# for it to scripts/fetch-precompiled-nifs.sh, which lays the CLI down and
+# for it to scripts/fetch-prebuilt-binaries.sh, which lays the CLI down and
 # refuses a version it holds no pin for.
 config :tailwind,
   version: "4.3.3",

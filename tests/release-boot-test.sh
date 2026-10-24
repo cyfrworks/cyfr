@@ -151,10 +151,10 @@ printf 'two\n' >"$tree/b.txt"
 mkdir -p "$tree/apps/cyfr/priv/static" "$tree/apps/cyfr/assets"
 printf 'User-agent: *\n' >"$tree/apps/cyfr/priv/static/robots.txt"
 printf 'vendored\n' | gzip -n >"$tree/apps/cyfr/assets/vendor.js.gz"
-# The precompiled NIF fetch the build runs after mix deps.get, standing in.
+# The prebuilt binary fetch the build runs after mix deps.get, standing in.
 mkdir -p "$tree/scripts"
-printf '#!/bin/sh\nexit 0\n' >"$tree/scripts/fetch-precompiled-nifs.sh"
-chmod +x "$tree/scripts/fetch-precompiled-nifs.sh"
+printf '#!/bin/sh\nexit 0\n' >"$tree/scripts/fetch-prebuilt-binaries.sh"
+chmod +x "$tree/scripts/fetch-prebuilt-binaries.sh"
 git -C "$tree" add -A
 git -C "$tree" commit -qm base
 

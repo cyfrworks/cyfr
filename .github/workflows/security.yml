@@ -72,7 +72,7 @@ jobs:
       - name: Install dependencies
         run: |
           mix deps.get
-          scripts/fetch-precompiled-nifs.sh
+          scripts/fetch-prebuilt-binaries.sh
 
       - name: Compile
         run: mix compile
