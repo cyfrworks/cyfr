@@ -162,6 +162,34 @@ func TestDownRefusesADirectoryWithNoComposeFile(t *testing.T) {
 	}
 }
 
+// A directory that holds two main compose files, or two override files,
+// is one a start refuses to choose between, and one `cyfr down` stops
+// all the same: the stop reaches the project's containers by their label
+// whichever file compose would load, so a stack that ran before a second
+// file was laid beside its own is not left running by its own command.
+func TestDownStopsAStackWhoseComposeFilesAreAmbiguous(t *testing.T) {
+	for _, extra := range []string{"compose.yaml", "docker-compose.override.yml"} {
+		t.Run(extra, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			if extra == "docker-compose.override.yml" {
+				if err := os.WriteFile("compose.override.yml", []byte("services: {}\n"), 0640); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(extra, []byte("services: {}\n"), 0640); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			if err := runDown(context.Background(), &out); err != nil || !strings.Contains(out.String(), "CYFR server stopped.") {
+				t.Fatalf("cyfr down beside %s answered %v:\n%s", extra, err, out.String())
+			}
+			if log := s.log(); !slices.Contains(log, "ENGINE stop down all=true") {
+				t.Errorf("cyfr down beside %s ran no stop:\n%s", extra, strings.Join(log, "\n"))
+			}
+		})
+	}
+}
+
 // A source checkout is a home without cyfr.yaml: README's "Prefer a source
 // checkout?" starts it with `cyfr up` and no `cyfr init`, from the
 // checkout's own docker-compose.yml and a .env copied from .env.example.

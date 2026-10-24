@@ -35,9 +35,25 @@ func projectName(dir string) string {
 // file is named, each list in its order of preference: one main file and
 // at most one override file read after it.
 var (
-	composeMainFiles     = []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"}
+	ComposeMainFiles     = []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"}
 	composeOverrideFiles = []string{"compose.override.yml", "compose.override.yaml", "docker-compose.override.yml", "docker-compose.override.yaml"}
 )
+
+// HasComposeFile reports whether dir holds a main compose file by any of
+// ComposeMainFiles, whatever else it holds. A stack is its directory's,
+// started from that file and named after the directory, so `cyfr down`
+// stops from a directory that holds one and refuses one that holds none.
+// Which file compose loads when two are present is DefaultFiles'
+// refusal, a start's: a stop reaches every container of the project by
+// its label whichever file it is, and verifies the stop the same way.
+func HasComposeFile(dir string) bool {
+	for _, name := range ComposeMainFiles {
+		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
 
 // DefaultFiles is the file set docker compose loads by default from the
 // project directory dir, each name relative to it: its one main file,
@@ -67,10 +83,10 @@ func defaultFileSet(dir string) ([]string, error) {
 		}
 		return found
 	}
-	mains, overrides := present(composeMainFiles), present(composeOverrideFiles)
+	mains, overrides := present(ComposeMainFiles), present(composeOverrideFiles)
 	switch {
 	case len(mains) == 0:
-		return nil, fmt.Errorf("access: %s holds no compose file (%s), so the stack cannot be started from it", dir, strings.Join(composeMainFiles, ", "))
+		return nil, fmt.Errorf("access: %s holds no compose file (%s), so the stack cannot be started from it", dir, strings.Join(ComposeMainFiles, ", "))
 	case len(mains) > 1:
 		return nil, fmt.Errorf("access: the project holds %s, of which docker compose loads one; keep one", strings.Join(mains, " and "))
 	case len(overrides) > 1:

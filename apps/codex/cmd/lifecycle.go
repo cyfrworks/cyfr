@@ -1299,14 +1299,15 @@ var downCmd = &cobra.Command{
 // project stopped, removed and checked stopped, under the lock. The
 // engine starts the stack from the directory's compose file and names it
 // after the directory, and finds nothing of a home started in another,
-// so a directory that holds no compose file, by the engine's own
-// reading of the directory (access.DefaultFiles), is refused before the
-// lock with nothing stopped, rather than a stop of nothing reported as
-// "stopped". A home `cyfr init` wrote and a source checkout `cyfr up`
-// started without it both hold one.
+// so a directory that holds no compose file (access.HasComposeFile) is
+// refused before the lock with nothing stopped, rather than a stop of
+// nothing reported as "stopped". A home `cyfr init` wrote and a source
+// checkout `cyfr up` started without it both hold one; a directory that
+// holds two, which a start refuses to choose between, is stopped, since
+// the stop reaches the project's containers by their label.
 func runDown(ctx context.Context, out io.Writer) error {
-	if _, _, err := access.DefaultFiles("."); err != nil {
-		return fmt.Errorf("There is no stack in this directory, so nothing was stopped: %s. Run 'cyfr down' in the home's directory, the one that holds its docker-compose.yml", strings.TrimPrefix(err.Error(), "access: "))
+	if !access.HasComposeFile(".") {
+		return fmt.Errorf("There is no stack in this directory, so nothing was stopped: it holds no compose file (%s). Run 'cyfr down' in the home's directory, the one that holds its docker-compose.yml", strings.Join(access.ComposeMainFiles, ", "))
 	}
 	e, unlock, _, err := openLocked(ctx, "down", out)
 	if err != nil {
