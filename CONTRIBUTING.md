@@ -49,8 +49,10 @@ missing or wrong header fails CI.
   installs it when it is missing).
 - After `mix deps.get` in a fresh checkout, and after a change to
   `mix.lock`, run `scripts/fetch-precompiled-nifs.sh` before the first
-  compile: the deps' precompiled NIFs (wasmex's) do not download through
-  the compile itself, and the script's header says why.
+  compile, and `scripts/fetch-precompiled-nifs.sh --tailwind` before the
+  first `mix assets.deploy` or dev server: neither the deps' precompiled
+  NIFs (wasmex's) nor the tailwind CLI download through the deps' own
+  downloads, and the script's header says why.
 - The tests tagged `:requires_cargo_component` build real components, and
   the test helpers exclude them where `cargo-component` is not on `PATH`.
   CI runs them on both adapters, so install it

@@ -41,6 +41,11 @@ RUN mix deps.get --only prod && scripts/fetch-precompiled-nifs.sh && mix deps.co
 # Copy all config files (extra release runtime configs are optional)
 COPY config/ config/
 
+# The tailwind CLI `mix assets.deploy` runs, laid down where `mix tailwind`
+# looks, which cannot download it itself (scripts/fetch-precompiled-nifs.sh
+# says why).
+RUN scripts/fetch-precompiled-nifs.sh --tailwind
+
 # Copy application source
 COPY apps/ apps/
 

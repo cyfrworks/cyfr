@@ -88,6 +88,7 @@ release_build() {
       mix deps.get --only prod &&
         scripts/fetch-precompiled-nifs.sh &&
         mix compile &&
+        scripts/fetch-precompiled-nifs.sh --tailwind &&
         mix assets.deploy &&
         mix release cyfr --overwrite
     ) || fail "the $ADAPTER release did not build"
