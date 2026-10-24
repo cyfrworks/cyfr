@@ -7,7 +7,7 @@ defmodule Prima.MixProject do
   def project do
     [
       app: :prima,
-      version: "0.6.0-alpha.1",
+      version: "0.6.0-alpha.2",
       build_path: "../../_build",
       config_path: "config/config.exs",
       deps_path: "../../deps",
