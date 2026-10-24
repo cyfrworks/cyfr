@@ -63,9 +63,11 @@ missing or wrong header fails CI.
   `${CARGO_HOME:-~/.cargo}/bin` and on `PATH`, and refuses to run without it.
 - Before a commit, run `scripts/heavy-check.sh -- scripts/commit-gate.sh`.
   A change's check is its pull request's run on GitHub, which runs every
-  check in parallel, and a release tag is cut on a commit that run proved
+  check in parallel, and a release tag is cut on a tree that run proved
   green: `scripts/release.sh` reads HEAD's check runs through `gh` before it
-  tags, and runs the gate's close here only with `--gate`. The close,
+  tags HEAD, or HEAD plus a bump commit holding the version lines alone,
+  which the tag's own workflow checks again before it publishes; it runs
+  the gate's close here only with `--gate`. The close,
   `scripts/heavy-check.sh -t 10800 -- scripts/commit-gate.sh --close`, holds
   the host for over an hour and is a tool for working offline or for
   reproducing a failing CI job here, not a requirement. The gate's header

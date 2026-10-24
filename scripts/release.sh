@@ -92,15 +92,20 @@ if [ -n "$(git status --porcelain -- "${MIXFILES[@]}")" ]; then
   exit 1
 fi
 
-# A release tag must never point at a red commit. The proof is HEAD's run
-# on GitHub, as every change's check is its pull request's run there
-# (CONTRIBUTING.md): every check run GitHub holds for HEAD has completed
-# and none failed, read through `gh`, which refuses a HEAD that is not
-# pushed, still running or unchecked, since the tag's own workflow builds
-# nothing from a commit it has not seen pass. --gate proves it here
-# instead, for a release cut offline or a HEAD GitHub has not run: the
-# close gate, every check a commit passes and the full suite on both
-# database adapters, the cluster suite and every island, queued on the
+# A release tag never points at a tree that is not proved green. The tag
+# names HEAD, or HEAD plus the bump below, whose only change is the
+# version line of each mix.exs; the proof is of HEAD's tree, and the tag's
+# own workflow runs every gating workflow on the tagged commit before it
+# publishes anything (release.yml), so a bump that broke a check would
+# publish nothing. The proof is HEAD's run on GitHub, as every change's
+# check is its pull request's run there (CONTRIBUTING.md): the latest run
+# of every check GitHub ran for HEAD has completed and none failed, read
+# through `gh`, which refuses a HEAD that is not pushed, still running or
+# unchecked. A workflow whose path filter kept it from running for HEAD
+# is not among them, and runs at the tag. --gate proves HEAD here instead,
+# for a release cut offline or a HEAD GitHub has not run: the close gate,
+# every check a commit passes and the full suite on both database
+# adapters, the cluster suite and every island, queued on the
 # verification host as any exclusive check is (scripts/heavy-check.sh,
 # scripts/commit-gate.sh) and holding the host for over an hour. Its
 # PostgreSQL legs use the database config/test.exs names for each
@@ -145,7 +150,7 @@ else
     echo "Wait for green, fix what is red, or prove HEAD here with --gate."
     exit 1
   fi
-  echo "HEAD is green on GitHub: $(wc -l <<< "$RUNS") check runs completed, none failed."
+  echo "HEAD's tree is proved green on GitHub: $(wc -l <<< "$RUNS") check runs completed, none failed."
 fi
 
 # Portable in-place sed (macOS requires -i '', Linux requires -i)
@@ -205,12 +210,15 @@ else
     fi
   fi
 
-  git add -A
+  # The bump commit holds the version lines and nothing else, so the
+  # tagged tree is the proved one plus them: never `git add -A`, which
+  # would sweep whatever else the tree holds into the release.
+  git add -- "${MIXFILES[@]}"
   git commit -m "$COMMIT_MSG"
   git tag -a "$VERSION" -m "Release $VERSION"
 
   echo ""
-  echo "Done! Version $VERSION committed and tagged."
+  echo "Done! Version $VERSION committed and tagged at $(git rev-parse --short HEAD): the proved tree $(git rev-parse --short "$HEAD_SHA") plus the version lines; the tag's workflow checks it again before it publishes."
 fi
 
 if [ "$PUSH" = "--push" ]; then
