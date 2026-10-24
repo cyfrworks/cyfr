@@ -2,51 +2,71 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Lays down, with curl, what two of the deps download from GitHub releases
-# for this machine, where each looks before it downloads, so a build from
+# Lays down, with curl, what the deps download from GitHub releases for
+# this machine, where each looks before it downloads, so a build from
 # freshly fetched deps never reaches their own downloads:
 #
-#   scripts/fetch-precompiled-nifs.sh              every precompiled NIF the
-#                                                  locked deps compile against
-#                                                  (wasmex's), into
-#                                                  rustler_precompiled's cache
-#   scripts/fetch-precompiled-nifs.sh --tailwind   the tailwind CLI each
-#                                                  tailwind profile runs, at
-#                                                  the path `mix tailwind`
-#                                                  runs it from
-#   ... --print                                    print, one a line, what
-#                                                  either would lay down and
-#                                                  where; fetch nothing
+#   scripts/fetch-prebuilt-binaries.sh              every precompiled NIF the
+#                                                   locked deps compile
+#                                                   against: wasmex's, into
+#                                                   rustler_precompiled's
+#                                                   cache, and exqlite's and
+#                                                   lazy_html's, into
+#                                                   elixir_make's
+#   scripts/fetch-prebuilt-binaries.sh --tailwind   the tailwind CLI each
+#                                                   tailwind profile runs, at
+#                                                   the path `mix tailwind`
+#                                                   runs it from
+#   ... --print                                     print, one a line, what
+#                                                   either would lay down and
+#                                                   where; fetch nothing
 #
 # A build that starts from fresh deps runs the first after `mix deps.get`
 # and before the deps compile (both images' builder stages, CI's jobs, the
 # commit gate, a fresh checkout), and the second once config/ is there and
-# before `mix assets.deploy` (the app image's builder stage, the release
-# proofs' build) or the dev server's first tailwind watcher.
+# before `mix assets.deploy` or `mix tailwind` (the app image's builder
+# stage, the release proofs' build) or the dev server's first tailwind
+# watcher. tests/fetch-prebuilt-binaries-test.sh holds every tracked
+# invocation of those commands to the fetch before it.
 #
-# Why: rustler_precompiled (for the NIFs) and the tailwind package (for its
-# CLI) download with Erlang's :httpc, which refuses a response whose
-# headers pass 10,240 bytes (inets' HTTP_MAX_HEADER_SIZE, a constant no
-# option sets), answering {:header_too_long, {:max, 10240}}. GitHub answers
-# a release-asset URL with a redirect whose headers pass it (its
-# content-security-policy alone is about 9 KB), so both downloads fail:
-# a dep whose NIF is not cached does not compile, and `mix tailwind`, which
-# `mix assets.deploy` runs, stops. curl takes those headers. This script
-# stays until both download with a client that accepts them.
+# Why: four downloads go through Erlang's :httpc: rustler_precompiled's
+# (wasmex's NIF), elixir_make's (exqlite's and lazy_html's NIFs) and the
+# tailwind package's (its CLI). :httpc refuses a response whose headers
+# pass 10,240 bytes (inets' HTTP_MAX_HEADER_SIZE, a constant no option
+# sets), answering {:header_too_long, {:max, 10240}}. GitHub answers a
+# release-asset URL with a redirect whose headers pass it (its
+# content-security-policy alone is about 9 KB), so every one of those
+# downloads fails: wasmex does not compile, exqlite and lazy_html quietly
+# build from source instead of the artefact their release ships, and
+# `mix tailwind`, which `mix assets.deploy` runs, stops. curl takes those
+# headers. This script stays until each downloads with a client that
+# accepts them.
 #
-# Nothing here restates their rules. For the NIFs the script loads the
-# rustler_precompiled the deps hold and asks it for the file name, URL and
-# cache path (RustlerPrecompiled.build_metadata/1 and nifs_from_metadata/1,
-# the functions its compile-time download uses), from the options each
-# module passes to `use RustlerPrecompiled`, evaluated in its dep's own Mix
-# project and directory, where Mix compiles the dep. A download is checked
-# with rustler_precompiled's own integrity check against the dep's checksum
-# file. The cache is rustler_precompiled's: RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH
-# when set, else its user cache directory (MIX_XDG respected); a relative
-# RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH names a directory under each dep's
-# own directory, which is how the dep's compile reads it, so the file goes
-# there. A module whose options or RUSTLER_PRECOMPILED_FORCE_BUILD_ALL
-# force a build from source needs no file and is skipped.
+# Nothing here restates their rules. Every derivation runs in the dep's own
+# Mix project and directory, where Mix compiles the dep, so a relative
+# cache override (RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH, ELIXIR_MAKE_CACHE_DIR)
+# names a directory under that dep, as the dep's compile reads it.
+#
+# For wasmex the script loads the rustler_precompiled the deps hold and asks
+# it for the file name, URL and cache path (RustlerPrecompiled.build_metadata/1
+# and nifs_from_metadata/1, the functions its compile-time download uses),
+# from the options each module passes to `use RustlerPrecompiled`. A
+# download is checked with rustler_precompiled's own integrity check
+# against the dep's checksum file. The cache is
+# RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH when set, else its user cache
+# directory (MIX_XDG respected). A module whose options or
+# RUSTLER_PRECOMPILED_FORCE_BUILD_ALL force a build from source needs no
+# file and is skipped.
+#
+# For every locked dep whose project names a make_precompiler (exqlite,
+# lazy_html) the script loads the elixir_make and cc_precompiler the deps
+# hold and asks elixir_make for the URL and cache path
+# (ElixirMake.Artefact.current_target_url/3 and archive_path/3, the
+# functions its compile uses); a download is checked with elixir_make's
+# own verify_and_decompress/2 against the dep's checksum.exs. The cache is
+# ELIXIR_MAKE_CACHE_DIR when set, else its user cache directory. A dep that
+# names no precompiler here (EXQLITE_USE_SYSTEM) or forces a build from
+# source (make_force_build, a pre-release) needs no file and is skipped.
 #
 # For tailwind the script loads the tailwind package the deps hold, the
 # checkout's Mix project (MIX_ENV, MIX_BUILD_PATH) and its configuration,
@@ -249,6 +269,7 @@ nifs = fn ->
     refuse.("no locked dep in #{deps} calls `use RustlerPrecompiled`: run mix deps.get first, or drop this part of the script once no dep needs it")
   end
 
+
   for {app, dir, file, module, before, opts} <- users do
     # In the dep's own Mix project and directory, as its compile runs: the
     # options are evaluated with Mix.Project.config/0 the dep's, and a
@@ -305,6 +326,77 @@ nifs = fn ->
             &RustlerPrecompiled.check_integrity_from_map(checksums, &1, module))
       end
     end
+  end
+
+  lock
+end
+
+# Every locked dep whose project names a make_precompiler, in its own
+# project and directory, as elixir_make's compile reads it.
+make_nifs = fn lock ->
+  users =
+    for app <- lock |> Map.keys() |> Enum.sort(),
+        dir = Path.join(deps, to_string(app)),
+        mixfile = Path.join(dir, "mix.exs"),
+        File.regular?(mixfile),
+        String.contains?(File.read!(mixfile), "make_precompiler"),
+        do: {app, dir}
+
+  if users != [] do
+    load_dep.("elixir_make")
+    if File.dir?(Path.join(deps, "cc_precompiler")), do: load_dep.("cc_precompiler")
+  end
+
+  for {app, dir} <- users do
+    Mix.Project.in_project(app, dir, fn _ ->
+      config = Mix.Project.config()
+      version = config[:version]
+
+      force_build =
+        "dev" in Version.parse!(version).pre or Keyword.get(config, :make_force_build, false) == true
+
+      case config[:make_precompiler] do
+        nil ->
+          IO.puts(:stderr, "#{app} names no make_precompiler here: no NIF to fetch")
+
+        _ when force_build ->
+          IO.puts(:stderr, "#{app} is built from source here (make_force_build): no NIF to fetch")
+
+        {_, precompiler} ->
+          Code.ensure_loaded?(precompiler) ||
+            refuse.("#{app}'s make_precompiler #{inspect(precompiler)} is in no dep this script loads")
+
+          nif_version = "#{:erlang.system_info(:nif_version)}"
+
+          {target, nif_version, url} =
+            case ElixirMake.Artefact.current_target_url(config, precompiler, nif_version) do
+              {:ok, target, nif_version, url} -> {target, nif_version, url}
+              {:error, reason} -> refuse.("#{app}: elixir_make names no artefact for this machine: #{inspect(reason)}")
+            end
+
+          path = ElixirMake.Artefact.archive_path(config, target, nif_version)
+          name = Path.basename(path)
+
+          case mode do
+            "print" ->
+              IO.puts(Enum.join([inspect(app), name, url, path], "\t"))
+
+            "fetch" ->
+              # elixir_make's own check, against the dep's checksum.exs (it
+              # reads the file from the dep's directory), extracting into a
+              # directory of the caller's.
+              priv = Path.join([work, "priv", to_string(app)])
+
+              verify = fn file ->
+                File.rm_rf!(priv)
+                File.mkdir_p!(priv)
+                ElixirMake.Artefact.verify_and_decompress(file, priv)
+              end
+
+              lay_down.(url, path, name, nil, "#{app}'s checksum.exs", verify)
+          end
+      end
+    end)
   end
 end
 
@@ -367,12 +459,12 @@ try do
   Mix.start()
 
   case what do
-    "nifs" -> nifs.()
+    "nifs" -> make_nifs.(nifs.())
     "tailwind" -> tailwind.()
   end
 catch
   {:refuse, message} ->
-    IO.puts(:stderr, "fetch-precompiled-nifs: #{message}")
+    IO.puts(:stderr, "fetch-prebuilt-binaries: #{message}")
     System.halt(1)
 end
 EXS
@@ -380,7 +472,7 @@ EXS
 
 # The deps' compiled modules and the downloads, removed however the run
 # ends.
-work=$(mktemp -d "${TMPDIR:-/tmp}/fetch-precompiled-nifs.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/fetch-prebuilt-binaries.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT

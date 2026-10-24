@@ -15,7 +15,7 @@ on:
       - 'apps/*/mix.exs'
       - '.github/actions/**'
       - '.github/workflows/dialyzer.yml'
-      - 'scripts/fetch-precompiled-nifs.sh'
+      - 'scripts/fetch-prebuilt-binaries.sh'
   pull_request:
     paths:
       - 'apps/**/lib/**'
@@ -26,7 +26,7 @@ on:
       - 'apps/*/mix.exs'
       - '.github/actions/**'
       - '.github/workflows/dialyzer.yml'
-      - 'scripts/fetch-precompiled-nifs.sh'
+      - 'scripts/fetch-prebuilt-binaries.sh'
   workflow_call:
 permissions:
   contents: read
@@ -53,7 +53,7 @@ jobs:
           cache-key-prefix: dialyzer
       - run: |
           mix deps.get
-          scripts/fetch-precompiled-nifs.sh
+          scripts/fetch-prebuilt-binaries.sh
       - run: mix compile --warnings-as-errors
       - name: Build PLT
         run: mix dialyzer --plt

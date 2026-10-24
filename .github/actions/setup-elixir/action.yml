@@ -7,10 +7,10 @@
 # is a prefix of another's, lets one job restore a cache the other built. A
 # job that runs no Mix project of the checkout caches nothing.
 #
-# A caller that compiles runs scripts/fetch-precompiled-nifs.sh right after
+# A caller that compiles runs scripts/fetch-prebuilt-binaries.sh right after
 # `mix deps.get`, in the same step: the deps' precompiled NIFs are fetched
-# into rustler_precompiled's cache there, because its own download fails
-# (the script's header says why). The fetch needs the fetched deps, so it
+# into the caches their compiles read there, because their own downloads
+# fail (the script's header says why). The fetch needs the fetched deps, so it
 # cannot run here, before them.
 name: Set up Elixir
 description: Set up Erlang and Elixir at the pinned versions and cache deps, and _build when build-cache is true

@@ -32,19 +32,20 @@ RUN scripts/wasm-tools.sh install /opt/wasm-tools
 COPY mix.exs mix.lock ./
 COPY --parents apps/*/mix.exs ./
 
-# The deps' precompiled NIFs are fetched into rustler_precompiled's cache
-# before the deps compile, which cannot download them itself
-# (scripts/fetch-precompiled-nifs.sh says why).
-COPY scripts/fetch-precompiled-nifs.sh scripts/fetch-precompiled-nifs.sh
-RUN mix deps.get --only prod && scripts/fetch-precompiled-nifs.sh && mix deps.compile
+# The deps' precompiled NIFs are fetched into the caches their compiles
+# read (rustler_precompiled's and elixir_make's) before the deps compile,
+# which cannot download them itself
+# (scripts/fetch-prebuilt-binaries.sh says why).
+COPY scripts/fetch-prebuilt-binaries.sh scripts/fetch-prebuilt-binaries.sh
+RUN mix deps.get --only prod && scripts/fetch-prebuilt-binaries.sh && mix deps.compile
 
 # Copy all config files (extra release runtime configs are optional)
 COPY config/ config/
 
 # The tailwind CLI `mix assets.deploy` runs, laid down where `mix tailwind`
-# looks, which cannot download it itself (scripts/fetch-precompiled-nifs.sh
+# looks, which cannot download it itself (scripts/fetch-prebuilt-binaries.sh
 # says why).
-RUN scripts/fetch-precompiled-nifs.sh --tailwind
+RUN scripts/fetch-prebuilt-binaries.sh --tailwind
 
 # Copy application source
 COPY apps/ apps/

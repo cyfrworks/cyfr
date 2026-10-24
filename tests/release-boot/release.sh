@@ -86,9 +86,9 @@ release_build() {
       cd "$ROOT" || exit 1
       export MIX_ENV=prod MIX_BUILD_PATH="$BUILD_PATH" CYFR_DATABASE="$ADAPTER"
       mix deps.get --only prod &&
-        scripts/fetch-precompiled-nifs.sh &&
+        scripts/fetch-prebuilt-binaries.sh &&
         mix compile &&
-        scripts/fetch-precompiled-nifs.sh --tailwind &&
+        scripts/fetch-prebuilt-binaries.sh --tailwind &&
         mix assets.deploy &&
         mix release cyfr --overwrite
     ) || fail "the $ADAPTER release did not build"
