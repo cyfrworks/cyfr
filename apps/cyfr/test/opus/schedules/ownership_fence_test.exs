@@ -1329,7 +1329,7 @@ defmodule Opus.Schedules.OwnershipFenceTest do
         user_id: ctx.user_id,
         athanor_id: ctx.athanor_id,
         name: "fence-#{System.unique_integer([:positive])}",
-        cron_expression: "0 * * * *",
+        cron_expression: Cyfr.Test.Cron.hourly_away(),
         reference: "reagent:local.test:1.0.0",
         resolved_reference: "reagent:local.test:1.0.0",
         profile_id: @profile_id,

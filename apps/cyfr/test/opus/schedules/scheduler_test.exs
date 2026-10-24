@@ -7,6 +7,7 @@ defmodule Opus.Schedules.SchedulerTest do
   import ExUnit.CaptureLog
   import Ecto.Query, only: [from: 2]
   import Prima.Test.Wait
+  import Cyfr.Test.Cron, only: [hourly_away: 0, daily_away: 0]
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
   alias Arca.Schemas.CronSchedule, as: ScheduleRow
@@ -122,7 +123,7 @@ defmodule Opus.Schedules.SchedulerTest do
             user_id: ctx.user_id,
             athanor_id: ctx.athanor_id,
             name: "sched-#{System.unique_integer([:positive])}",
-            cron_expression: "0 * * * *",
+            cron_expression: hourly_away(),
             reference: "reagent:local.test:1.0.0",
             resolved_reference: "reagent:local.test:1.0.0",
             profile_id: @profile_id,
@@ -212,7 +213,7 @@ defmodule Opus.Schedules.SchedulerTest do
     test "a scheduled #{event} after ownership is #{loss} leaves the occurrence and counters unchanged",
          %{ctx: ctx} do
       script!([{:probe, self()}, %{"ran" => true}])
-      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
       scheduler = scheduler!()
       assert_receive {:scripted_probe, worker, execution_id}, 10_000
       _ = :sys.get_state(scheduler)
@@ -266,7 +267,7 @@ defmodule Opus.Schedules.SchedulerTest do
     test "a claimed occurrence starts no execution and is not failed after ownership is #{loss}",
          %{ctx: ctx} do
       script!([%{"ran" => true}])
-      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
       :ok = :sys.suspend(Opus.Schedules.TaskSupervisor)
       on_exit(fn -> :sys.resume(Opus.Schedules.TaskSupervisor) end)
       scheduler = scheduler!()
@@ -298,7 +299,7 @@ defmodule Opus.Schedules.SchedulerTest do
     test "is published once per completed occurrence, naming its athanor, after both writes",
          %{ctx: ctx} do
       script!([%{"ran" => true}])
-      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
       scheduler!()
 
       assert_receive %ScheduleCompleted{} = completion, 15_000
@@ -315,7 +316,7 @@ defmodule Opus.Schedules.SchedulerTest do
 
     test "is not published when recovery closed the occurrence first", %{ctx: ctx} do
       script!([{:probe, self()}, %{"ran" => true}])
-      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
       scheduler = scheduler!()
       assert_receive {:scripted_probe, worker, _execution_id}, 10_000
       _ = :sys.get_state(scheduler)
@@ -348,7 +349,7 @@ defmodule Opus.Schedules.SchedulerTest do
       ctx: ctx
     } do
       script!([%{"ran" => true}])
-      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
 
       # The run's telemetry fires in its own task, after the close and the
       # run record committed and before the publish's recheck: the slot is
@@ -384,7 +385,7 @@ defmodule Opus.Schedules.SchedulerTest do
     ctx: ctx
   } do
     script!([{:probe, self()}, %{"ran" => true}])
-    schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
+    schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
     scheduler!()
 
     assert_receive {:scripted_probe, runner, running_id}, 10_000
@@ -434,7 +435,7 @@ defmodule Opus.Schedules.SchedulerTest do
     test "a fire is one admitted decision with its row, its run's execution and one completion",
          %{ctx: ctx} do
       script!([%{"ran" => true}])
-      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
       scheduler!()
 
       wait_until(fn -> match?([%{completion: "succeeded"}], fire_decisions()) end)
@@ -475,7 +476,7 @@ defmodule Opus.Schedules.SchedulerTest do
       script!([%{"ran" => true}])
       # Its cadence's next time is half an hour away: only the fires this
       # case makes run it.
-      schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
       pid = scheduler!()
 
       wait_until(fn ->
@@ -508,7 +509,7 @@ defmodule Opus.Schedules.SchedulerTest do
         due!(
           create_schedule(ctx, %{
             profile_id: "prof_unconsented",
-            cron_expression: offset_hourly()
+            cron_expression: hourly_away()
           })
         )
 
@@ -529,7 +530,7 @@ defmodule Opus.Schedules.SchedulerTest do
     # The row is written while this boot may write it; it then loses the
     # control plane before its scheduler starts.
     script!([%{"ran" => true}])
-    schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
+    schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
     Arca.ControlPlane.record(:lost)
     on_exit(fn -> Arca.ControlPlane.record(:unclaimed) end)
     pid = scheduler!()
@@ -555,7 +556,7 @@ defmodule Opus.Schedules.SchedulerTest do
       due!(
         create_schedule(ctx, %{
           profile_id: "prof_unconsented",
-          cron_expression: offset_hourly()
+          cron_expression: hourly_away()
         })
       )
 
@@ -760,14 +761,14 @@ defmodule Opus.Schedules.SchedulerTest do
     once =
       due!(
         create_schedule(ctx, %{
-          cron_expression: offset_hourly(),
+          cron_expression: hourly_away(),
           missed_runs: "catch_up",
           catch_up_limit: 1
         }),
         7_200
       )
 
-    skipped = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}), 7_200)
+    skipped = due!(create_schedule(ctx, %{cron_expression: hourly_away()}), 7_200)
     scheduler = scheduler!()
 
     # The first tick's run, and the cursor it moves, under the suite's load:
@@ -796,20 +797,10 @@ defmodule Opus.Schedules.SchedulerTest do
   end
 
   describe "missed runs" do
-    # An hourly expression at the minute half an hour from now: its last
-    # missed time is about half an hour ago and its next about half an
-    # hour ahead, whenever the case runs. A case that dues a schedule and
-    # then asserts on its exact occurrences names it too: no tick of the
-    # expression comes due while the case runs.
-    defp offset_hourly do
-      minute = DateTime.add(DateTime.utc_now(), 1_800, :second).minute
-      "#{minute} * * * *"
-    end
-
     # A schedule of `attrs` whose cursor is `missed` of its expression's
     # times behind: the oldest of them.
     defp missed!(ctx, missed, attrs) do
-      schedule = create_schedule(ctx, Map.merge(%{cron_expression: offset_hourly()}, attrs))
+      schedule = create_schedule(ctx, Map.merge(%{cron_expression: hourly_away()}, attrs))
       {:ok, parsed} = Cron.parse(schedule.cron_expression)
       {:ok, last} = Cron.next_run(parsed, DateTime.add(DateTime.utc_now(), -3_600, :second))
       cursor = DateTime.add(last, -(missed - 1) * 3_600, :second)
@@ -905,10 +896,10 @@ defmodule Opus.Schedules.SchedulerTest do
 
       late =
         for seconds <- lateness,
-            do: due!(create_schedule(ctx, %{cron_expression: offset_hourly()}), seconds)
+            do: due!(create_schedule(ctx, %{cron_expression: hourly_away()}), seconds)
 
       # Past the bound it is a missed time, and skip skips it.
-      missed = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}), 40)
+      missed = due!(create_schedule(ctx, %{cron_expression: hourly_away()}), 40)
       scheduler = scheduler!()
 
       wait_until(fn ->
@@ -955,16 +946,22 @@ defmodule Opus.Schedules.SchedulerTest do
     test "a walk across both daylight-saving changes fires each UTC time once, and a cursor set back to a fired time fires nothing again",
          %{ctx: ctx} do
       # Expressions are UTC: the weeks around the American (8 March) and
-      # European (29 March) changes are 24 hours apart day by day.
+      # European (29 March) changes are 24 hours apart day by day. The time
+      # of day is twelve hours from now: once the walk has fired its 24 and
+      # the episode has closed on the first time the bound does not call
+      # missed, that time is still hours ahead, so the claims below hold
+      # rather than fire today's time.
+      {expression, time_of_day} = daily_away()
+
       schedule =
         create_schedule(ctx, %{
-          cron_expression: "30 1 * * *",
+          cron_expression: expression,
           concurrency: "allow",
           missed_runs: "catch_up",
           catch_up_limit: Scheduler.max_catch_up()
         })
 
-      first = ~U[2026-03-06 01:30:00.000000Z]
+      first = DateTime.new!(~D[2026-03-06], time_of_day)
 
       {1, _} =
         Arca.Repo.update_all(from(s in ScheduleRow, where: s.id == ^schedule.id),
@@ -1088,7 +1085,7 @@ defmodule Opus.Schedules.SchedulerTest do
 
   test "a runner that dies leaves a started occurrence uncertain", %{ctx: ctx} do
     script!([:hang])
-    schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
+    schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
     pid = scheduler!()
 
     wait_until(fn -> map_size(:sys.get_state(pid).tasks) == 1 end)
@@ -1112,7 +1109,7 @@ defmodule Opus.Schedules.SchedulerTest do
     ctx: ctx
   } do
     script!([:hang])
-    schedule = due!(create_schedule(ctx, %{cron_expression: offset_hourly()}))
+    schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
     pid = scheduler!()
 
     wait_until(fn -> map_size(:sys.get_state(pid).tasks) == 1 end)
@@ -1283,7 +1280,7 @@ defmodule Opus.Schedules.SchedulerTest do
       schedule =
         due!(
           create_schedule(ctx, %{
-            cron_expression: offset_hourly(),
+            cron_expression: hourly_away(),
             reference: reference,
             resolved_reference: reference,
             profile_id: profile_id,
