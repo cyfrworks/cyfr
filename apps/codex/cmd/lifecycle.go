@@ -1284,7 +1284,7 @@ var downCmd = &cobra.Command{
 	Use:     "down",
 	Short:   "Stop the CYFR stack",
 	GroupID: "server",
-	Long:    "Stop the CYFR stack and remove its containers: every service of the project, the proxy of a tailnet or public home and locus-builds included, whatever .env selects now, checked stopped before it reports. It takes the stack's lock first, so it never runs inside another cyfr command's start or change, and finishes a change an interrupted command left.",
+	Long:    "Stop the CYFR stack and remove its containers: every service of the project, the proxy of a tailnet or public home and locus-builds included, whatever .env selects now, checked stopped before it reports. It takes the stack's lock first, so it never runs inside another cyfr command's start or change, and finishes a change an interrupted command left. The stack is the working directory's, named after it, so a directory that holds no home (no cyfr.yaml) is refused: nothing of a home started elsewhere is stopped from here.",
 	Example: "  cyfr down",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -1295,9 +1295,25 @@ var downCmd = &cobra.Command{
 	},
 }
 
+// homeHere reports whether the working directory holds a home: cyfr.yaml,
+// which `cyfr init` writes there and nothing else does, the one mark
+// `cyfr update` and `cyfr down` read. The engine names the stack after
+// the directory and finds nothing of a home started in another, so a
+// command that acts on the home's stack checks the mark before it takes
+// the lock, rather than report a stop of nothing.
+func homeHere() bool {
+	_, err := os.Stat("cyfr.yaml")
+	return err == nil
+}
+
 // runDown is `cyfr down` in the working directory: every service of the
-// project stopped, removed and checked stopped, under the lock.
+// project stopped, removed and checked stopped, under the lock. A
+// directory that holds no home is refused before the lock, with nothing
+// stopped.
 func runDown(ctx context.Context, out io.Writer) error {
+	if !homeHere() {
+		return errors.New("There is no home in this directory (no cyfr.yaml), so nothing was stopped; run 'cyfr down' in the home's directory, the one 'cyfr init' wrote")
+	}
 	e, unlock, _, err := openLocked(ctx, "down", out)
 	if err != nil {
 		return err

@@ -141,6 +141,27 @@ func TestUpStartsThroughTheEngine(t *testing.T) {
 	}
 }
 
+// `cyfr down` in a directory that holds no home (no cyfr.yaml) refuses,
+// saying so and that nothing was stopped, and takes no lock and runs no
+// stop: the engine names the stack after the directory, so a home's stack
+// started elsewhere is not the one it would stop, and a stop of nothing
+// reported as "stopped" is what an operator who ran it in the wrong
+// directory would believe.
+func TestDownRefusesADirectoryThatHoldsNoHome(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	if err := os.Remove("cyfr.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err := runDown(context.Background(), &out)
+	if err == nil || !strings.Contains(err.Error(), "There is no home in this directory (no cyfr.yaml), so nothing was stopped") {
+		t.Fatalf("cyfr down in a directory with no home answered %v:\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "stopped") || len(s.log()) != 0 {
+		t.Errorf("cyfr down in a directory with no home reported a stop or ran the engine:\n%s\n%s", out.String(), strings.Join(s.log(), "\n"))
+	}
+}
+
 // `cyfr down` stops every service of the project through the engine, under
 // the lock; a stop it cannot verify is access_uncertain's sentence and a
 // failure, never "stopped".
