@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# scripts/fetch-precompiled-nifs.sh against rustler_precompiled itself,
+# scripts/fetch-precompiled-nifs.sh against rustler_precompiled and tailwind
+# themselves,
 # each run on a cache and a build of the test's own:
 #   - into an empty cache it fetches this machine's wasmex NIF, and a
 #     compile of wasmex, every rustler_precompiled download sent to a
@@ -17,9 +18,17 @@
 #     refused;
 #   - a download that does not match the dep's checksum file is refused,
 #     and nothing is cached;
-#   - a cached file that does not match is replaced by one that does.
-# Two controls show the closed port closes: the same compile with an empty
-# cache fails at it, and so does the script with an empty cache. First,
+#   - a relative RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH lays the file under
+#     the dep's directory, where the dep's compile finds it;
+#   - a cached file that does not match is replaced by one that does;
+#   - the tailwind pins hold the configured version and this machine's
+#     target, the CLI laid down is the pinned one, executable, where
+#     `mix tailwind prism` runs it from, its download closed; a second run
+#     keeps it; a pin that does not match, and a version without one, are
+#     refused with nothing laid down.
+# Three controls show the closed port closes: the same compile with an
+# empty cache fails at it, so does the script with an empty cache, and so
+# does `mix tailwind prism` with nothing laid down. First,
 # every invocation of `mix deps.get` in a tracked file runs the fetch as
 # its next command.
 # It downloads from GitHub, and needs the checkout's deps (mix deps.get).
@@ -198,7 +207,7 @@ grep -q 'econnrefused' "$scratch/control.log" ||
 before=$(sha256sum "$path")
 offline RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH="$cache" "$fetch" > "$scratch/second.out" ||
   fail "a second run with the file cached failed"
-grep -qxF "$file is cached at $path" "$scratch/second.out" ||
+grep -qxF "$file is in place at $path" "$scratch/second.out" ||
   fail "a second run did not keep the cached file: $(cat "$scratch/second.out")"
 [ "$(sha256sum "$path")" = "$before" ] || fail "a second run changed the cached file"
 # Control: with nothing cached, the script fails at the closed port.
@@ -248,6 +257,25 @@ MIX_DEPS_PATH="$scratch/deps-nested" "$fetch" --print > /dev/null 2> "$scratch/n
 grep -qF "$native calls \`use RustlerPrecompiled\` outside a top-level module's own statements" "$scratch/nested.err" ||
   fail "a nested use RustlerPrecompiled was refused without its reason: $(cat "$scratch/nested.err")"
 
+# A relative RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH, given from another
+# directory: the fetch lays the file under the dep's own directory, where
+# the dep's compile resolves the override, and the compile, its download
+# closed, finds it there. The deps are a copy of the test's, so nothing is
+# written into the checkout's.
+mkdir "$scratch/deps-rel" "$scratch/elsewhere"
+cp -R deps/rustler_precompiled deps/rustler deps/jason deps/wasmex "$scratch/deps-rel/"
+rel=relative-cache
+(cd "$scratch/elsewhere" && MIX_DEPS_PATH="$scratch/deps-rel" RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH="$rel" "$fetch" --print) \
+  > "$scratch/rel-print.out" || fail "--print with a relative cache failed"
+[ "$(cut -f4 "$scratch/rel-print.out")" = "$scratch/deps-rel/wasmex/$rel/$file" ] ||
+  fail "a relative cache does not resolve under the dep's directory: $(cat "$scratch/rel-print.out")"
+(cd "$scratch/elsewhere" && MIX_DEPS_PATH="$scratch/deps-rel" RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH="$rel" "$fetch") \
+  > /dev/null || fail "the fetch into a relative cache failed"
+[ -f "$scratch/deps-rel/wasmex/$rel/$file" ] || fail "the fetch into a relative cache left no file under the dep"
+[ ! -e "$scratch/elsewhere/$rel" ] || fail "the fetch into a relative cache wrote under the caller's directory"
+MIX_DEPS_PATH="$scratch/deps-rel" compile_wasmex "$scratch/build-rel" "$rel" > "$scratch/rel-compile.log" 2>&1 ||
+  fail "wasmex did not compile from the relative cache the fetch filled: $(tail -n 20 "$scratch/rel-compile.log")"
+
 # A cached file that does not match is fetched again, and the match kept.
 echo 'not a NIF' > "$path"
 RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH="$cache" "$fetch" > "$scratch/repair.out" 2> "$scratch/repair.err" ||
@@ -258,6 +286,63 @@ grep -qxF "$path does not match wasmex's checksum file; fetching it again" "$scr
 [ -z "$(ls -A "$cache" | grep -vxF -e "$file" -e "metadata-Elixir.$module.exs")" ] ||
   fail "the replacement left more in the cache: $(ls -A "$cache")"
 
+# --- tailwind ------------------------------------------------------------------
+# The pins hold the configured version and this machine's target; the CLI
+# laid down where `mix tailwind` looks, in a build of the test's own, is the
+# one pinned and executable; the real `mix tailwind prism`, its download
+# closed, runs from it and writes its CSS (to the test's directory). Control:
+# the same run with nothing laid down fails at the closed port.
+tw="$scratch/tw/test"
+MIX_BUILD_PATH="$tw" "$fetch" --tailwind --print > "$scratch/tw-print.out" 2> "$scratch/tw-print.err" ||
+  fail "the pins do not hold the configured tailwind version and target: $(cat "$scratch/tw-print.err")"
+[ "$(wc -l < "$scratch/tw-print.out")" -eq 1 ] || fail "the configuration runs more than one tailwind: $(cat "$scratch/tw-print.out")"
+IFS=$'\t' read -r _ tw_version tw_target tw_url tw_bin < "$scratch/tw-print.out"
+[ "$tw_bin" = "$scratch/tw/tailwind-$tw_target-$tw_version" ] || fail "the tailwind path $tw_bin is not beside the test's build"
+MIX_BUILD_PATH="$tw" "$fetch" --tailwind > "$scratch/tw-first.out" || fail "the tailwind fetch failed"
+grep -qxF "tailwind-$tw_target-$tw_version fetched from $tw_url to $tw_bin" "$scratch/tw-first.out" ||
+  fail "the tailwind fetch did not report the download: $(cat "$scratch/tw-first.out")"
+[ -x "$tw_bin" ] || fail "the laid-down tailwind is not executable"
+pin=$(awk -v v="$tw_version" -v t="$tw_target" '$1 == v && $2 == t { print $3 }' "$fetch")
+[ -n "$pin" ] && [ "$(sha256sum "$tw_bin" | cut -d' ' -f1)" = "$pin" ] || fail "the laid-down tailwind is not the pinned one"
+offline MIX_BUILD_PATH="$tw" "$fetch" --tailwind > "$scratch/tw-second.out" || fail "a second tailwind run failed"
+grep -qxF "tailwind-$tw_target-$tw_version is in place at $tw_bin" "$scratch/tw-second.out" ||
+  fail "a second tailwind run did not keep the binary: $(cat "$scratch/tw-second.out")"
+tailwind_prism() {
+  MIX_BUILD_PATH="$1" mix deps.compile tailwind > /dev/null 2>&1 || return
+  offline MIX_BUILD_PATH="$1" mix do loadpaths --no-deps-check + tailwind prism --output="$2"
+}
+tailwind_prism "$tw" "$scratch/tw.css" > "$scratch/tw-run.log" 2>&1 ||
+  fail "mix tailwind prism did not run from the laid-down CLI: $(tail -n 20 "$scratch/tw-run.log")"
+[ -s "$scratch/tw.css" ] || fail "mix tailwind prism wrote no CSS"
+! tailwind_prism "$scratch/tw-empty/test" "$scratch/tw-empty.css" > "$scratch/tw-control.log" 2>&1 ||
+  fail "mix tailwind prism ran with nothing laid down and its download closed: the run above proves nothing"
+grep -q 'failed_connect' "$scratch/tw-control.log" ||
+  fail "the tailwind control failed, but not at the closed port: $(tail -n 20 "$scratch/tw-control.log")"
+
+# A pin that does not match, and a version the pins do not hold, each in a
+# copy of the script beside the checkout's project: refused, nothing laid
+# down.
+for case in mismatch unknown; do
+  copy="$scratch/root-$case"
+  mkdir -p "$copy/scripts"
+  for f in mix.exs config deps apps; do ln -s "$root/$f" "$copy/$f"; done
+  case "$case" in
+    mismatch) sed "s/^$tw_version $tw_target $pin\$/$tw_version $tw_target $(printf '%064d' 0)/" "$fetch" ;;
+    unknown) sed "s/^$tw_version /0.0.0 /" "$fetch" ;;
+  esac > "$copy/scripts/fetch-precompiled-nifs.sh"
+  chmod +x "$copy/scripts/fetch-precompiled-nifs.sh"
+  ! cmp -s "$fetch" "$copy/scripts/fetch-precompiled-nifs.sh" || fail "the $case copy of the script changed nothing"
+  status=0
+  MIX_BUILD_PATH="$scratch/tw-$case/test" "$copy/scripts/fetch-precompiled-nifs.sh" --tailwind \
+    > /dev/null 2> "$scratch/tw-$case.err" || status=$?
+  [ "$status" -eq 1 ] || fail "the tailwind $case exited $status, not 1"
+  [ ! -e "$scratch/tw-$case/tailwind-$tw_target-$tw_version" ] || fail "the tailwind $case laid a binary down"
+done
+grep -qF "$tw_url does not match the sha256 pinned for tailwind $tw_version on $tw_target" "$scratch/tw-mismatch.err" ||
+  fail "a tailwind download that does not match its pin was refused without its reason: $(cat "$scratch/tw-mismatch.err")"
+grep -qF "no sha256 is pinned for tailwind $tw_version on $tw_target" "$scratch/tw-unknown.err" ||
+  fail "a tailwind version without a pin was refused without its reason: $(cat "$scratch/tw-unknown.err")"
+
 [ -z "$(ls -A "$TMPDIR" | grep '^fetch-precompiled-nifs\.')" ] || fail "a run left its scratch behind: $(ls -A "$TMPDIR")"
 
-echo "fetch-precompiled-nifs: $file fetched, verified and found by the compile as rustler_precompiled names it; a mismatch refused"
+echo "fetch-precompiled-nifs: $file and tailwind $tw_version fetched, verified and found where their own downloads look; mismatches refused"

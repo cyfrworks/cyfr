@@ -2,61 +2,99 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Puts every precompiled NIF this checkout's deps download for this machine
-# into the cache rustler_precompiled reads before it downloads, so a build
-# from freshly fetched deps compiles without rustler_precompiled's own
-# download. Every build that starts from fresh deps runs it after
-# `mix deps.get` and before the deps compile: both images' builder stages,
-# CI's jobs, the commit gate and a fresh checkout.
+# Lays down, with curl, what two of the deps download from GitHub releases
+# for this machine, where each looks before it downloads, so a build from
+# freshly fetched deps never reaches their own downloads:
 #
-#   scripts/fetch-precompiled-nifs.sh           fetch what is not cached yet
-#   scripts/fetch-precompiled-nifs.sh --print   print, a NIF a line, its
-#                                               module, file name, URL and
-#                                               cache path; fetch nothing
+#   scripts/fetch-precompiled-nifs.sh              every precompiled NIF the
+#                                                  locked deps compile against
+#                                                  (wasmex's), into
+#                                                  rustler_precompiled's cache
+#   scripts/fetch-precompiled-nifs.sh --tailwind   the tailwind CLI each
+#                                                  tailwind profile runs, at
+#                                                  the path `mix tailwind`
+#                                                  runs it from
+#   ... --print                                    print, one a line, what
+#                                                  either would lay down and
+#                                                  where; fetch nothing
 #
-# Why: rustler_precompiled downloads with Erlang's :httpc, which refuses a
-# response whose headers pass 10,240 bytes (inets' HTTP_MAX_HEADER_SIZE, a
-# constant no option sets), answering {:header_too_long, {:max, 10240}}.
-# GitHub answers a release-asset URL with a redirect whose headers pass it
-# (its content-security-policy alone is about 9 KB), so every download
-# from a GitHub release fails, and a dep whose NIF is not cached does not
-# compile. curl takes those headers. This script stays until
-# rustler_precompiled downloads with a client that accepts them.
+# A build that starts from fresh deps runs the first after `mix deps.get`
+# and before the deps compile (both images' builder stages, CI's jobs, the
+# commit gate, a fresh checkout), and the second once config/ is there and
+# before `mix assets.deploy` (the app image's builder stage, the release
+# proofs' build) or the dev server's first tailwind watcher.
 #
-# Nothing here restates rustler_precompiled's rules: the script loads the
+# Why: rustler_precompiled (for the NIFs) and the tailwind package (for its
+# CLI) download with Erlang's :httpc, which refuses a response whose
+# headers pass 10,240 bytes (inets' HTTP_MAX_HEADER_SIZE, a constant no
+# option sets), answering {:header_too_long, {:max, 10240}}. GitHub answers
+# a release-asset URL with a redirect whose headers pass it (its
+# content-security-policy alone is about 9 KB), so both downloads fail:
+# a dep whose NIF is not cached does not compile, and `mix tailwind`, which
+# `mix assets.deploy` runs, stops. curl takes those headers. This script
+# stays until both download with a client that accepts them.
+#
+# Nothing here restates their rules. For the NIFs the script loads the
 # rustler_precompiled the deps hold and asks it for the file name, URL and
 # cache path (RustlerPrecompiled.build_metadata/1 and nifs_from_metadata/1,
 # the functions its compile-time download uses), from the options each
-# module passes to `use RustlerPrecompiled`, evaluated in its dep's own
-# Mix project. A download is checked with rustler_precompiled's own
-# integrity check against the dep's checksum file, and refused, with
-# nothing cached, when it does not match; the compile checks the cached
-# file again. A cached file that matches is kept, so a second run fetches
-# nothing; one that does not is replaced only by a download that matches.
-# The cache is rustler_precompiled's: RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH
-# when set, else its user cache directory (MIX_XDG respected). A module
-# whose options or RUSTLER_PRECOMPILED_FORCE_BUILD_ALL force a build from
-# source needs no file and is skipped. The deps are MIX_DEPS_PATH's, as
-# Mix reads it, else the checkout's deps/.
+# module passes to `use RustlerPrecompiled`, evaluated in its dep's own Mix
+# project and directory, where Mix compiles the dep. A download is checked
+# with rustler_precompiled's own integrity check against the dep's checksum
+# file. The cache is rustler_precompiled's: RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH
+# when set, else its user cache directory (MIX_XDG respected); a relative
+# RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH names a directory under each dep's
+# own directory, which is how the dep's compile reads it, so the file goes
+# there. A module whose options or RUSTLER_PRECOMPILED_FORCE_BUILD_ALL
+# force a build from source needs no file and is skipped.
+#
+# For tailwind the script loads the tailwind package the deps hold, the
+# checkout's Mix project (MIX_ENV, MIX_BUILD_PATH) and its configuration,
+# and asks Tailwind for each profile's version, target and binary path
+# (configured_version/1, configured_target/1, bin_path/1; `mix tailwind`
+# downloads only when that file is missing), and default_base_url/0 for
+# the URL. tailwind's own download checks nothing, so the sha256 of each
+# release asset is pinned below, by version and target: GitHub's recorded
+# digest of the asset, which the release's sha256sums.txt agrees with. A
+# version or target the pins do not hold is refused, so a tailwind version
+# bump in config/config.exs adds its pins here.
+#
+# Every file is laid down only when it matches: a download that does not is
+# refused and nothing is laid down; a file in place that matches is kept, so
+# a second run fetches nothing, and one that does not is replaced only by a
+# download that matches. The deps are MIX_DEPS_PATH's, as Mix reads it, else
+# the checkout's deps/.
 set -euo pipefail
 
-usage() { echo "usage: $0 [--print]" >&2; exit 64; }
+# VERSION TARGET SHA256, one tailwind CLI release asset a line.
+TAILWIND_PINS='
+4.3.3 linux-x64 dc61b3ac6b8c9ca874c0cc4c57b2409791a64c5540404ca5f5367360babc313a
+4.3.3 linux-x64-musl a04d34ceacc8f52cbe8920ad846cdeb61d3d0021dba32db0d1f77c9d9fad7a6c
+4.3.3 linux-arm64 55fd0b241214eff3de1e8ee4f22796662f2d2e7a49bcfca7477cfd0bac398195
+4.3.3 linux-arm64-musl 71ea4be79c9de9827545682df3e040053fb535d37c71ed2cfdedf9385a0868e0
+4.3.3 macos-arm64 cdf646702987a743464dff4d9c60fd4480d1c1e73dd819a9a67f1078815dce9d
+4.3.3 macos-x64 7922e0953f2110c05976e3bf58f14e643d90427575e766b7d433f5f80cbee7e1
+'
 
-mode=fetch
-case "$#:${1:-}" in
-  0:) ;;
-  1:--print) mode=print ;;
-  *) usage ;;
-esac
+usage() { echo "usage: $0 [--tailwind] [--print]" >&2; exit 64; }
+
+what=nifs mode=fetch
+for arg in "$@"; do
+  case "$arg" in
+    --tailwind) what=tailwind ;;
+    --print) mode=print ;;
+    *) usage ;;
+  esac
+done
+[ "$#" -le 2 ] || usage
 root=$(cd "$(dirname "$0")/.." && pwd -P)
 if [ "$mode" = fetch ] && ! command -v curl >/dev/null 2>&1; then
-  echo "$0: curl is not on PATH, and it fetches the NIFs" >&2
+  echo "$0: curl is not on PATH, and it fetches what this script lays down" >&2
   exit 69
 fi
 
 program=$(cat <<'EXS'
-[root, mode, work] = System.argv()
-ebin = Path.join(work, "ebin")
+[root, what, mode, work, pins] = System.argv()
 Logger.configure(level: :warning)
 
 refuse = fn message -> throw({:refuse, message}) end
@@ -67,21 +105,80 @@ deps =
     path -> Path.expand(path)
   end
 
-run = fn ->
-  rustler_precompiled = Path.join(deps, "rustler_precompiled")
+# A dep's own modules, compiled as Mix compiles a dep, into a directory of
+# the caller's.
+load_dep = fn name ->
+  dir = Path.join(deps, name)
 
-  unless File.dir?(Path.join(rustler_precompiled, "lib")) do
-    refuse.("#{rustler_precompiled} holds no rustler_precompiled: run mix deps.get first")
+  unless File.dir?(Path.join(dir, "lib")) do
+    refuse.("#{dir} holds no #{name}: run mix deps.get first")
   end
 
-  # Compiled as Mix compiles a dep, into a directory of the caller's.
+  ebin = Path.join([work, "ebin", name])
+
   {:ok, _, _} =
-    rustler_precompiled
+    dir
     |> Path.join("lib/**/*.ex")
     |> Path.wildcard()
     |> Kernel.ParallelCompiler.compile_to_path(ebin, return_diagnostics: true)
 
   Code.prepend_path(ebin)
+end
+
+sha256 = fn path ->
+  path
+  |> File.stream!(1_048_576)
+  |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
+  |> :crypto.hash_final()
+  |> Base.encode16(case: :lower)
+end
+
+# Lays url down at path, unless a file there already passes verify, with
+# the download in the caller's directory under name (the NIFs' integrity
+# check looks a checksum up by the file's name) and renamed into place
+# whole once verify passes; what = the name a message gives the file.
+lay_down = fn url, path, name, mode_bits, what, verify ->
+  cond do
+    File.regular?(path) and verify.(path) == :ok ->
+      IO.puts("#{name} is in place at #{path}")
+
+    true ->
+      if File.exists?(path) do
+        IO.puts(:stderr, "#{path} does not match #{what}; fetching it again")
+      end
+
+      part = Path.join([work, "download", name])
+      File.mkdir_p!(Path.dirname(part))
+
+      {out, status} =
+        System.cmd(
+          "curl",
+          ~w(--fail --silent --show-error --location --proto =https --proto-redir =https --retry 3 --output) ++
+            [part, url],
+          stderr_to_stdout: true
+        )
+
+      if status != 0 do
+        refuse.("curl could not fetch #{url} (exit #{status}): #{String.trim(out)}")
+      end
+
+      case verify.(part) do
+        :ok ->
+          incoming = "#{path}.part-#{System.pid()}"
+          File.mkdir_p!(Path.dirname(path))
+          File.cp!(part, incoming)
+          if mode_bits, do: File.chmod!(incoming, mode_bits)
+          File.rename!(incoming, path)
+          IO.puts("#{name} fetched from #{url} to #{path}")
+
+        {:error, reason} ->
+          refuse.("#{url} does not match #{what} (#{reason}); nothing is laid down")
+      end
+  end
+end
+
+nifs = fn ->
+  load_dep.("rustler_precompiled")
 
   # Read as Mix reads it, quoted keys and all.
   lockfile = Path.join(root, "mix.lock")
@@ -91,8 +188,6 @@ run = fn ->
     |> File.read!()
     |> Code.string_to_quoted!(file: lockfile, emit_warnings: false)
     |> Code.eval_quoted([], file: lockfile)
-
-  Mix.start()
 
   rp_use? = &match?({:use, _, [{:__aliases__, _, [:RustlerPrecompiled]} | _]}, &1)
 
@@ -151,36 +246,40 @@ run = fn ->
   end
 
   if users == [] do
-    refuse.("no locked dep in #{deps} calls `use RustlerPrecompiled`: run mix deps.get first, or drop this script once no dep needs it")
+    refuse.("no locked dep in #{deps} calls `use RustlerPrecompiled`: run mix deps.get first, or drop this part of the script once no dep needs it")
   end
 
   for {app, dir, file, module, before, opts} <- users do
-    # Evaluated as the module's compile evaluates them: in its dep's Mix
-    # project, so Mix.Project.config/0 is the dep's.
-    {opts, _} =
+    # In the dep's own Mix project and directory, as its compile runs: the
+    # options are evaluated with Mix.Project.config/0 the dep's, and a
+    # relative cache override resolves against the dep's directory.
+    {config, meta, path} =
       Mix.Project.in_project(app, dir, fn _ ->
-        Code.eval_quoted({:__block__, [], before ++ [opts]}, [], file: file)
+        {opts, _} = Code.eval_quoted({:__block__, [], before ++ [opts]}, [], file: file)
+
+        # What `use RustlerPrecompiled` adds before it builds its config.
+        opts =
+          if System.get_env("RUSTLER_PRECOMPILED_FORCE_BUILD_ALL") in ["1", "true"] do
+            Keyword.put(opts, :force_build, true)
+          else
+            Keyword.put_new(opts, :force_build, false)
+          end
+
+        config = RustlerPrecompiled.Config.new(Keyword.put_new(opts, :module, module))
+
+        if config.force_build? do
+          {config, nil, nil}
+        else
+          case RustlerPrecompiled.build_metadata(config) do
+            {:ok, meta} -> {config, meta, Path.expand(meta.cached_tar_gz)}
+            {:error, reason} -> refuse.("#{inspect(module)}: #{reason}")
+          end
+        end
       end)
-
-    # What `use RustlerPrecompiled` adds before it builds its config.
-    opts =
-      if System.get_env("RUSTLER_PRECOMPILED_FORCE_BUILD_ALL") in ["1", "true"] do
-        Keyword.put(opts, :force_build, true)
-      else
-        Keyword.put_new(opts, :force_build, false)
-      end
-
-    config = RustlerPrecompiled.Config.new(Keyword.put_new(opts, :module, module))
 
     if config.force_build? do
       IO.puts(:stderr, "#{inspect(module)} is built from source here (force_build): no NIF to fetch")
     else
-      meta =
-        case RustlerPrecompiled.build_metadata(config) do
-          {:ok, meta} -> meta
-          {:error, reason} -> refuse.("#{inspect(module)}: #{reason}")
-        end
-
       {:ok, nifs} = RustlerPrecompiled.nifs_from_metadata(meta)
 
       {url, headers} =
@@ -193,8 +292,6 @@ run = fn ->
         refuse.("#{inspect(module)}: #{url} takes request headers, which this script does not send")
       end
 
-      path = meta.cached_tar_gz
-
       case mode do
         "print" ->
           IO.puts(Enum.join([inspect(module), meta.file_name, url, path], "\t"))
@@ -204,55 +301,75 @@ run = fn ->
           File.regular?(checksum_file) || refuse.("#{checksum_file} is missing")
           {checksums, _} = Code.eval_file(checksum_file)
 
-          verify = &RustlerPrecompiled.check_integrity_from_map(checksums, &1, module)
-
-          cond do
-            File.regular?(path) and verify.(path) == :ok ->
-              IO.puts("#{meta.file_name} is cached at #{path}")
-
-            true ->
-              if File.exists?(path) do
-                IO.puts(:stderr, "#{path} does not match #{app}'s checksum file; fetching it again")
-              end
-
-              # The download keeps the file's own name, which the integrity
-              # check looks its checksum up by, in the caller's directory, and
-              # reaches the cache only once it matches, renamed into place
-              # whole.
-              part = Path.join([work, "download", meta.file_name])
-              File.mkdir_p!(Path.dirname(part))
-
-              {out, status} =
-                System.cmd(
-                  "curl",
-                  ~w(--fail --silent --show-error --location --proto =https --proto-redir =https --retry 3 --output) ++
-                    [part, url],
-                  stderr_to_stdout: true
-                )
-
-              if status != 0 do
-                refuse.("curl could not fetch #{url} (exit #{status}): #{String.trim(out)}")
-              end
-
-              case verify.(part) do
-                :ok ->
-                  incoming = "#{path}.part-#{System.pid()}"
-                  File.mkdir_p!(Path.dirname(path))
-                  File.cp!(part, incoming)
-                  File.rename!(incoming, path)
-                  IO.puts("#{meta.file_name} fetched from #{url} to #{path}")
-
-                {:error, reason} ->
-                  refuse.("#{url} does not match #{app}'s checksum file (#{reason}); nothing is cached")
-              end
-          end
+          lay_down.(url, path, meta.file_name, nil, "#{app}'s checksum file",
+            &RustlerPrecompiled.check_integrity_from_map(checksums, &1, module))
       end
     end
   end
 end
 
+tailwind = fn ->
+  load_dep.("tailwind")
+
+  pins =
+    for line <- String.split(pins, "\n", trim: true),
+        [version, target, sum] = String.split(line),
+        into: %{},
+        do: {{version, target}, sum}
+
+  # The checkout's project and configuration, as Mix loads them before it
+  # runs `mix tailwind`.
+  env = String.to_atom(System.get_env("MIX_ENV") || "dev")
+  Mix.env(env)
+
+  Mix.Project.in_project(:cyfr_umbrella, root, fn _ ->
+    root
+    |> Path.join(Mix.Project.config()[:config_path] || "config/config.exs")
+    |> Config.Reader.read!(env: env, target: Mix.target())
+    |> Application.put_all_env(persistent: true)
+
+    if Tailwind.profiles() == [] do
+      refuse.("the configuration names no tailwind profile: nothing runs tailwind, so drop this part of the script")
+    end
+
+    for {profile, _} <- Tailwind.profiles(),
+        version = Tailwind.configured_version(profile),
+        target = Tailwind.configured_target(profile),
+        uniq: true do
+      {version, target, Tailwind.bin_path(version)}
+    end
+  end)
+  |> Enum.each(fn {version, target, path} ->
+    url =
+      Tailwind.default_base_url()
+      |> String.replace("$version", version)
+      |> String.replace("$target", target)
+
+    sum =
+      Map.get(pins, {version, target}) ||
+        refuse.("no sha256 is pinned for tailwind #{version} on #{target}: add it to TAILWIND_PINS in this script")
+
+    case mode do
+      "print" ->
+        IO.puts(Enum.join(["tailwind", version, target, url, path], "\t"))
+
+      "fetch" ->
+        verify = fn file ->
+          if sha256.(file) == sum, do: :ok, else: {:error, "its sha256 is not the one pinned for #{version} on #{target}"}
+        end
+
+        lay_down.(url, path, Path.basename(path), 0o755, "the sha256 pinned for tailwind #{version} on #{target}", verify)
+    end
+  end)
+end
+
 try do
-  run.()
+  Mix.start()
+
+  case what do
+    "nifs" -> nifs.()
+    "tailwind" -> tailwind.()
+  end
 catch
   {:refuse, message} ->
     IO.puts(:stderr, "fetch-precompiled-nifs: #{message}")
@@ -261,11 +378,11 @@ end
 EXS
 )
 
-# rustler_precompiled's compiled modules and the downloads, removed however
-# the run ends.
+# The deps' compiled modules and the downloads, removed however the run
+# ends.
 work=$(mktemp -d "${TMPDIR:-/tmp}/fetch-precompiled-nifs.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-elixir -e "$program" -- "$root" "$mode" "$work"
+elixir -e "$program" -- "$root" "$what" "$mode" "$work" "$TAILWIND_PINS"
