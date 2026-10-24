@@ -1425,8 +1425,9 @@ def helper_failure(script):
     bumped, committed and tagged; each refused one is refused with nothing
     changed; a HEAD that declares the version already is tagged without a
     commit, with another file left uncommitted too; a version edited into
-    the mix.exs files and not committed is refused, nothing tagged. The
-    first failure, or None."""
+    the mix.exs files and not committed is refused, nothing tagged; a bump
+    made over another change already staged commits the mix.exs files
+    alone and leaves that change staged. The first failure, or None."""
     lines = script.splitlines()
     if not any("=~ $RELEASE" in line and "LC_ALL=C" in line for line in lines):
         return "release.sh does not match the version under LC_ALL=C"
@@ -1459,6 +1460,24 @@ def helper_failure(script):
                 f"release.sh on a HEAD declaring 0.6.0-alpha.1 (another file uncommitted: {dirty}) exits {status}, "
                 f"tagging {tagged!r} rather than HEAD without a commit: {output.strip()[-300:]}"
             )
+    # A bump over a staged unrelated change, let through at the prompt (the
+    # terminal then answers the commit message's prompt too): the tagged
+    # commit is the version lines alone, and the change stays staged.
+    repo = helper_repo(script, HELPER_BASE)
+    with open(os.path.join(repo, "unrelated.txt"), "w") as f:
+        f.write("staged, not the release's\n")
+    helper_git(repo, "add", "unrelated.txt")
+    status, output = run_helper(repo, "0.1.0", "y\n0.1.0\n")
+    changed = sorted(helper_git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines())
+    expected = sorted(os.path.relpath(path, repo) for path in helper_mixfiles(repo))
+    if status != 0 or helper_git(repo, "tag", "-l") != "0.1.0" or changed != expected:
+        return (
+            f"release.sh bumped 0.1.0 over a staged unrelated file with exit {status}, tags "
+            f"{helper_git(repo, 'tag', '-l')!r} and a commit changing {changed!r}, not the mix.exs files alone: "
+            f"{output.strip()[-300:]}"
+        )
+    if helper_git(repo, "status", "--porcelain") != "A  unrelated.txt":
+        return f"release.sh did not leave the unrelated staged file staged: {helper_git(repo, 'status', '--porcelain')!r}"
     for edited in (helper_mixfiles, lambda repo: helper_mixfiles(repo)[-2:-1]):
         repo = helper_repo(script, "0.6.0-alpha.1")
         for path in edited(repo):
