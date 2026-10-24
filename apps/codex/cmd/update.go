@@ -230,7 +230,7 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 		self, _ := selfExecutable()
 		return fmt.Errorf("The cyfr at %s is %s, not release %s that cyfr update installed; the home was not touched. Run 'cyfr update' again", self, version.Version, o.continueAs)
 	}
-	if !homeHere() {
+	if _, err := os.Stat("cyfr.yaml"); err != nil {
 		fmt.Fprintln(out, "There is no home in this directory (no cyfr.yaml), so the update ends with the program; run 'cyfr update' in a home's directory to update that home.")
 		return nil
 	}

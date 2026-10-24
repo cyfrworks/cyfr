@@ -141,24 +141,47 @@ func TestUpStartsThroughTheEngine(t *testing.T) {
 	}
 }
 
-// `cyfr down` in a directory that holds no home (no cyfr.yaml) refuses,
-// saying so and that nothing was stopped, and takes no lock and runs no
-// stop: the engine names the stack after the directory, so a home's stack
-// started elsewhere is not the one it would stop, and a stop of nothing
-// reported as "stopped" is what an operator who ran it in the wrong
-// directory would believe.
-func TestDownRefusesADirectoryThatHoldsNoHome(t *testing.T) {
+// `cyfr down` in a directory that holds no compose file refuses, with the
+// engine's own reading of the directory, that nothing was stopped and
+// where to run it, and takes no lock and runs no stop: the engine names
+// the stack after the directory, so a home's stack started elsewhere is
+// not the one it would stop, and a stop of nothing reported as "stopped"
+// is what an operator who ran it in the wrong directory would believe.
+func TestDownRefusesADirectoryWithNoComposeFile(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
-	if err := os.Remove("cyfr.yaml"); err != nil {
+	if err := os.Remove("docker-compose.yml"); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
 	err := runDown(context.Background(), &out)
-	if err == nil || !strings.Contains(err.Error(), "There is no home in this directory (no cyfr.yaml), so nothing was stopped") {
-		t.Fatalf("cyfr down in a directory with no home answered %v:\n%s", err, out.String())
+	if err == nil || !strings.Contains(err.Error(), "There is no stack in this directory, so nothing was stopped: ") || !strings.Contains(err.Error(), "holds no compose file") || !strings.Contains(err.Error(), "Run 'cyfr down' in the home's directory") {
+		t.Fatalf("cyfr down in a directory with no compose file answered %v:\n%s", err, out.String())
 	}
 	if strings.Contains(out.String(), "stopped") || len(s.log()) != 0 {
-		t.Errorf("cyfr down in a directory with no home reported a stop or ran the engine:\n%s\n%s", out.String(), strings.Join(s.log(), "\n"))
+		t.Errorf("cyfr down in a directory with no compose file reported a stop or ran the engine:\n%s\n%s", out.String(), strings.Join(s.log(), "\n"))
+	}
+}
+
+// A source checkout is a home without cyfr.yaml: README's "Prefer a source
+// checkout?" starts it with `cyfr up` and no `cyfr init`, from the
+// checkout's own docker-compose.yml and a .env copied from .env.example.
+// `cyfr down` stops what that `cyfr up` started, as in any home.
+func TestDownStopsTheSourceCheckoutUpStarted(t *testing.T) {
+	s := newUpdateScenario(t, shippedCompose(t), nil)
+	if err := os.Remove("cyfr.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	s.engine.startReceipt = okReceipt("start")
+	var out bytes.Buffer
+	if err := runUp(context.Background(), &out); err != nil {
+		t.Fatalf("cyfr up in a source checkout answered %v:\n%s", err, out.String())
+	}
+	out.Reset()
+	if err := runDown(context.Background(), &out); err != nil || !strings.Contains(out.String(), "CYFR server stopped.") {
+		t.Fatalf("cyfr down in the source checkout cyfr up started answered %v:\n%s", err, out.String())
+	}
+	if log := s.log(); !slices.Contains(log, "ENGINE stop down all=true") {
+		t.Errorf("cyfr down in the source checkout ran no stop:\n%s", strings.Join(log, "\n"))
 	}
 }
 
