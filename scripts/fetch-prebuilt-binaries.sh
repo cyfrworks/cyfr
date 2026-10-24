@@ -160,6 +160,9 @@ end
 lay_down = fn url, path, name, mode_bits, what, verify ->
   cond do
     File.regular?(path) and verify.(path) == :ok ->
+      # A file that matches keeps its content, and takes the mode it is
+      # laid down with: an executable copied in at 0644 runs as it should.
+      if mode_bits, do: File.chmod!(path, mode_bits)
       IO.puts("#{name} is in place at #{path}")
 
     true ->

@@ -30,7 +30,7 @@
 #   - the tailwind pins hold the configured version and this machine's
 #     target, the CLI laid down is the pinned one, executable, where
 #     `mix tailwind prism` runs it from, its download closed; a second run
-#     keeps it; a pin that does not match, and a version without one, are
+#     keeps it, made executable if it was not; a pin that does not match, and a version without one, are
 #     refused with nothing laid down.
 # Four controls show the closed downloads close: the wasmex compile with an
 # empty cache fails at the closed port, the exqlite compile with an empty
@@ -422,6 +422,13 @@ pin=$(awk -v v="$tw_version" -v t="$tw_target" '$1 == v && $2 == t { print $3 }'
 offline MIX_BUILD_PATH="$tw" "$fetch" --tailwind > "$scratch/tw-second.out" || fail "a second tailwind run failed"
 grep -qxF "tailwind-$tw_target-$tw_version is in place at $tw_bin" "$scratch/tw-second.out" ||
   fail "a second tailwind run did not keep the binary: $(cat "$scratch/tw-second.out")"
+# The pinned CLI in place but not executable: kept, and made executable.
+chmod 0644 "$tw_bin"
+offline MIX_BUILD_PATH="$tw" "$fetch" --tailwind > "$scratch/tw-mode.out" || fail "a tailwind run with the CLI at 0644 failed"
+grep -qxF "tailwind-$tw_target-$tw_version is in place at $tw_bin" "$scratch/tw-mode.out" ||
+  fail "a tailwind run with the pinned CLI at 0644 did not keep it: $(cat "$scratch/tw-mode.out")"
+[ -x "$tw_bin" ] || fail "a tailwind run left the pinned CLI in place at 0644, which mix tailwind cannot run"
+[ "$(sha256sum "$tw_bin" | cut -d' ' -f1)" = "$pin" ] || fail "a tailwind run changed the pinned CLI it kept"
 tailwind_prism() {
   MIX_BUILD_PATH="$1" mix deps.compile tailwind > /dev/null 2>&1 || return
   offline MIX_BUILD_PATH="$1" mix do loadpaths --no-deps-check + tailwind prism --output="$2"
