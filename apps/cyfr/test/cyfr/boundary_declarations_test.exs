@@ -102,7 +102,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "`Cyfr.Boundaries`' security row"},
       {~w(CarryActions CliSignIns DeviceCertificates DeviceCertifications DirectoryHeads
           IdentityAttempts IdentityLog PairingInvitations Passkeys PendingConfirmations
-          PersonIdentities PersonSeals RequestRateWindows),
+          PersonIdentities RequestRateWindows),
        "the identity, device, passkey, confirmation, carry, command-line sign-in and " <>
          "pre-authentication rate rows Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
@@ -139,7 +139,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           Cipher.Rotation CliSignIn ClientIp Consent.Loader Consent.Proof
           Consent.RegistrationBinding Consent.ShapeDerivation Consent.ShapeDiff Context
           Door Door.Store Egress ExecutionStanding Namespace Network Notify
-          Policy.Enforcement PolicyLog Provisioning Seal Session SignIn Tenancy Tenancy.Athanors
+          Policy.Enforcement PolicyLog Provisioning Session SignIn Tenancy Tenancy.Athanors
           Tenancy.Members Tenancy.Users TinctureAuth ToolServerDigest Unauthorized
           UnauthorizedError Vault Vault.OAuthGrant VaultReader),
        "the identity, authority, consent and vault entries the layers above call " <>

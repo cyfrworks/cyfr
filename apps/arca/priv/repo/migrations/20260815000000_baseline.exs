@@ -24,7 +24,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
   and `settings_pins` are not athanor-scoped: the first three are the
   server's own facts and the rest the cell's, and a cell has no athanor.
-  A person's identity, keys, identity attempts, carries, passkeys, seal and
+  A person's identity, keys, identity attempts, carries, passkeys and
   post-restore period, the directory's log, the cached heads of other
   people's logs, the installation claim and the pre-authentication rate
   windows are not an athanor's either (`people/0`), and neither is a
@@ -521,7 +521,7 @@ defmodule Arca.Repo.Migrations.Baseline do
   # ==========================================================================
 
   # None of these rows is an athanor's: a person's identity, keys,
-  # passkeys, seal and post-restore period outlive every athanor they sit
+  # passkeys and post-restore period outlive every athanor they sit
   # in, a directory orders identifiers, and the installation claim and the
   # pre-authentication rate windows are the node's. Arca stores bytes and hashes here and
   # verifies no signature.
@@ -795,23 +795,6 @@ defmodule Arca.Repo.Migrations.Baseline do
              where: "state != 'revoked'",
              name: :passkeys_live_credential_index
            )
-
-    # A person's seal at this home: the words (and optional glyph) the
-    # system layer shows first in every prompt, so the person can tell it
-    # from a page's imitation. Set once at first use and changed only under
-    # a fresh confirmation. Never a `users` column, which every projection
-    # of a person would carry; the seal leaves the store only for the
-    # person's own system layer. The person owns it: it goes with their
-    # `users` row and never with an athanor.
-    create table(:person_seals, primary_key: false) do
-      add :user_id, references(:users, type: :string, on_delete: :delete_all),
-        primary_key: true,
-        null: false
-
-      add :text, :text, null: false
-      add :glyph, :string
-      add :set_at, :utc_datetime_usec, null: false
-    end
 
     restore_open = %{
       name: "restore_people_open_until_closed",

@@ -946,7 +946,6 @@
 0.2	apps/sanctum/test/sanctum/redaction_roster_test.exs
 0.1	apps/sanctum/test/sanctum/registry_credentials_test.exs
 1.3	apps/sanctum/test/sanctum/remote_certification_test.exs
-0.3	apps/sanctum/test/sanctum/seal_test.exs
 1.3	apps/sanctum/test/sanctum/sign_in_test.exs
 0.0	apps/sanctum/test/sanctum/slug_test.exs
 0.0	apps/sanctum/test/sanctum/strict_authorize_tenant_test.exs

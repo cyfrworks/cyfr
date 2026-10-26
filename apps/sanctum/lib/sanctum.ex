@@ -102,7 +102,6 @@ defmodule Sanctum do
       RequestLog,
       Resources,
       RunningTasks,
-      Seal,
       Session,
       SignIn,
       Tenancy,

@@ -109,7 +109,7 @@ The order describes dependencies, not a request's path. Only Host's composition 
 ### Prism: the screen
 
 - The system layer, the frame manager, the shell and the console (§7), and browser sign-in.
-- It dispatches through the gate and reads domain facades for its trusted reads. Beside the gate, the console writes only a person's own presentation preferences, which carry no authority, the system layer writes the person's seal (`Sanctum.Seal`), and the sign-in pages are entries that admit for themselves.
+- It dispatches through the gate and reads domain facades for its trusted reads. Beside the gate, the console writes only a person's own presentation preferences, which carry no authority, and the sign-in pages are entries that admit for themselves.
 
 ### Codex: the command line
 
@@ -295,7 +295,7 @@ A person signs in at another home through the CYFR door (`Sanctum.Auth.CyfrDoor`
 
 ### 9.3 Devices and fresh confirmation
 
-Who a person is, which devices they connected and whether a change needs a fresh confirmation are three separate facts, and no client holds a rank. Everyday work needs only the session; changes to keys, devices, doors, passkeys, recovery material, the seal and credentials that outlive the session need a fresh confirmation at the deciding home (`Sanctum.Pairing`). *Not built yet:* the display and pointer-input contracts, athanor policies that add changes, and, against a copied home certifying devices, a survivor's countersignature verified at a relying home and a directory-published device anchor.
+Who a person is, which devices they connected and whether a change needs a fresh confirmation are three separate facts, and no client holds a rank. Everyday work needs only the session; changes to keys, devices, doors, passkeys, recovery material and credentials that outlive the session need a fresh confirmation at the deciding home (`Sanctum.Pairing`). *Not built yet:* the display and pointer-input contracts, athanor policies that add changes, and, against a copied home certifying devices, a survivor's countersignature verified at a relying home and a directory-published device anchor.
 
 ### 9.4 Communication
 

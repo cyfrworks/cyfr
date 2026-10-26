@@ -28,10 +28,6 @@ defmodule Sanctum.EstablishBoundaryTest do
     # `Sanctum.Recovery` against a signed kit proof and admitting the four
     # `*.reenable` operations and their previews alone.
     "apps/sanctum/lib/sanctum/caller.ex" => 4,
-    # `Sanctum.Seal.interactive/1` matches an already established context
-    # (a function head naming `authenticated: true`); it builds none. The
-    # roster names it because the line reads like a build.
-    "apps/sanctum/lib/sanctum/seal.ex" => 1,
     # `Session.load/1`, the session recipe `establish/2` calls.
     "apps/sanctum/lib/sanctum/session.ex" => 1,
     # `ApiKey.context_from_metadata/1`, the key recipe `establish/2` calls.
