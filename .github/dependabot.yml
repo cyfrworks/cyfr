@@ -25,6 +25,12 @@ updates:
     groups:
       docker-compose:
         update-types: [minor, patch]
+    # The tailscale image is pinned, tag and digest, to the reference a
+    # real-tailnet run verified (tests/tailnet-real/guard.sh), so a bump
+    # without that run cannot pass: Tailscale is bumped with the run, not
+    # here.
+    ignore:
+      - dependency-name: tailscale/tailscale
 
   - package-ecosystem: github-actions
     directories:
