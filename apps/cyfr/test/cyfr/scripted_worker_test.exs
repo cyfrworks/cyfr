@@ -229,8 +229,17 @@ defmodule Cyfr.Test.ScriptedWorkerTest do
     wait_until(fn -> Sanctum.TestContext.invoke_budget(auth).in_flight == 0 end)
     wait_until(fn -> Prima.Slots.status(Opus.Slots).child_active == 0 end)
 
-    assert {:ok, []} =
-             Arca.BudgetReservations.charges(Prima.Actor.in_athanor(athanor_id), auth.budget.id)
+    # The lapse gives the slot back one write before the charge row
+    # (Opus.Attempt), so the charge is waited on too, not read the moment
+    # the slot is free.
+    wait_until(
+      fn ->
+        Arca.BudgetReservations.charges(Prima.Actor.in_athanor(athanor_id), auth.budget.id) ==
+          {:ok, []}
+      end,
+      2_000,
+      "the lapsed attempt's charge to be given back"
+    )
   end
 
   test "an exhausted script fails the child and releases everything", fx do
