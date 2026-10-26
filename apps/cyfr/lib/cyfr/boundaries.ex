@@ -337,7 +337,7 @@ defmodule Cyfr.Boundaries do
     Arca.VaultStorage Arca.SessionStorage Arca.ApiKeyStorage Arca.RegistryTokenStorage
     Arca.ProviderCredentialStorage Arca.WebhookStorage Arca.FrameCredentials
     Arca.PairedClients Arca.Users Arca.Members Arca.Athanors Arca.Doors
-    Arca.PersonIdentities Arca.PersonSeals Arca.IdentityAttempts Arca.IdentityLog
+    Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog
     Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
     Arca.CliSignIns
@@ -506,16 +506,14 @@ defmodule Cyfr.Boundaries do
         Sanctum.Context Sanctum.Decisions Sanctum.DeviceCerts Sanctum.Directory Sanctum.Egress
         Sanctum.ExecutionStanding Sanctum.Gate
         Sanctum.Network Sanctum.Proxy Sanctum.Recovery Sanctum.Refusals Sanctum.Resources
-        Sanctum.RunningTasks Sanctum.Seal Sanctum.TinctureAccess
+        Sanctum.RunningTasks Sanctum.TinctureAccess
         Sanctum.TinctureAuth Sanctum.ToolServerDigest Sanctum.Unauthorized
         Sanctum.UnauthorizedError Sanctum.Vault Sanctum.Vault.OAuthGrant Sanctum.VaultReader
         Sanctum.Visibility Sanctum.Webhook
       ),
       reason:
         "the auth fabric's own front door, where a wide roster is the front door doing " <>
-          "its job. `Sanctum.Seal` is the device channel's read of the person's seal for " <>
-          "the prompts a paired glass draws, answered by the channel and never by an " <>
-          "operation. The MCP transport carries tenancy, reads a server's vault edge, and " <>
+          "its job. The MCP transport carries tenancy, reads a server's vault edge, and " <>
           "uses Sanctum.Network/Egress for external servers and the backends service. " <>
           "`Sanctum.Vault` is the check of a server definition against the entries it " <>
           "names, metadata only, which the external provider makes before storing one " <>
@@ -583,7 +581,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Catalog Sanctum.CliSignIn Sanctum.ClientIp Sanctum.Consent Sanctum.Context
         Sanctum.Decisions
         Sanctum.Door Sanctum.Gate Sanctum.Pairing Sanctum.Passkeys Sanctum.PolicyLog
-        Sanctum.Recovery Sanctum.Refusals Sanctum.RequestLog Sanctum.Seal Sanctum.Session
+        Sanctum.Recovery Sanctum.Refusals Sanctum.RequestLog Sanctum.Session
         Sanctum.SignIn
         Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
       ),
@@ -605,10 +603,6 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Recovery` is the system layer's read of the person's checklist after " <>
           "a declared restore (`checklist/1`), what it lists for them to re-enable, " <>
           "re-consent and rotate; each re-enable it offers is an operation, decided there. " <>
-          "`Sanctum.Seal` is the system layer's read of the person's seal, which it draws " <>
-          "first in every prompt, and the first choice and the confirmed change it makes " <>
-          "from its seal prompt; the settings page reads only whether one is set. No " <>
-          "operation reads it, so no frame, key or data route reaches it. " <>
           "`Sanctum.Passkeys` is the sign-in page's passkey door: the challenge it holds " <>
           "and the answer it verifies into a session, as the device flow's poll is " <>
           "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` door's: " <>
@@ -2015,14 +2009,6 @@ defmodule Cyfr.Boundaries do
     "Sanctum.RequestLog" => [list: 2],
     "Sanctum.Resources" => [list_resource_templates: 0, list_resources: 0, resolve: 1, table: 0],
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
-    "Sanctum.Seal" => [
-      change: 2,
-      choose: 2,
-      for_system_layer: 1,
-      generate: 0,
-      glyphs: 0,
-      words: 0
-    ],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1],
     "Sanctum.SignIn" => [
       admitted: 2,

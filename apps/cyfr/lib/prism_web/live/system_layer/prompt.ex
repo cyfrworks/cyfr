@@ -75,12 +75,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
       asked for it. A client that asked but cannot read the list carries
       the ref, operation and expiry alone, the rest `nil`. The secret the
       asking request was answered never enters a prompt;
-    * `:seal` — nothing: the person's seal (`Sanctum.Seal`), chosen from
-      the words and glyphs the prompt offers. With no action it is the
-      first choice, which the layer offers while none is set; under
-      `:seal_change` it replaces the seal under a fresh confirmation, the
-      settings page's control. The seal itself is never a subject: every
-      prompt draws it from the layer's own read;
     * `:enrollment`, `:kit` and `:holder` — recovery material, each under
       the action `:recovery_material` (`PrismWeb.SystemLayer.Recovery`
       builds them): enrollment names the `directory_url` this home pins,
@@ -94,16 +88,8 @@ defmodule PrismWeb.SystemLayer.Prompt do
   """
 
   @recovery_kinds [:enrollment, :kit, :holder]
-  @kinds [
-           :grant,
-           :unlock,
-           :sign_in,
-           :credential_entry,
-           :safe_mode,
-           :pairing,
-           :confirmation,
-           :seal
-         ] ++ @recovery_kinds
+  @kinds [:grant, :unlock, :sign_in, :credential_entry, :safe_mode, :pairing, :confirmation] ++
+           @recovery_kinds
   @keys [:id, :kind, :action, :subject]
   @max_id_bytes 128
 
@@ -128,7 +114,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
           | :safe_mode
           | :pairing
           | :confirmation
-          | :seal
           | :enrollment
           | :kit
           | :holder
@@ -216,7 +201,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
   end
 
   defp action(:pairing, :device_pairing), do: :ok
-  defp action(:seal, action) when action in [nil, :seal_change], do: :ok
   defp action(kind, :recovery_material) when kind in @recovery_kinds, do: :ok
 
   defp action(_kind, _action), do: {:error, :invalid_prompt}
@@ -291,7 +275,6 @@ defmodule PrismWeb.SystemLayer.Prompt do
   end
 
   defp subject(:pairing, subject) when map_size(subject) == 0, do: {:ok, %{}}
-  defp subject(:seal, subject) when map_size(subject) == 0, do: {:ok, %{}}
 
   # The directory the form names is this home's pinned one, an https
   # directory URL; a kit is named by its attempt's id; neither carries a

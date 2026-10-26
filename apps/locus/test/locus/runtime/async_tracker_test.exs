@@ -27,8 +27,9 @@ defmodule Locus.Runtime.AsyncTrackerTest do
 
   describe "a crashed task's log line" do
     test "names the failed call by arity, never its arguments" do
-      {:ok, tracker} = AsyncTracker.start_link(max_tasks: 10)
-      on_exit(fn -> if Process.alive?(tracker), do: GenServer.stop(tracker) end)
+      # Under the test supervisor, not linked to the test process: a tracker
+      # stopped from on_exit races the exit signal its link already sent.
+      tracker = start_supervised!({AsyncTracker, max_tasks: 10})
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->

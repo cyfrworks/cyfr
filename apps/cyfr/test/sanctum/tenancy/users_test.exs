@@ -201,54 +201,35 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert {:error, :revoked} = Sanctum.ApiKey.validate(key, [])
   end
 
-  test "a seal and a post-restore period are the person's: a denial and an athanor's purge leave them, the users row takes them" do
+  test "a post-restore period is the person's: a denial and an athanor's purge leave it, the users row takes it" do
     u = person(42)
     {:ok, group} = Athanors.create_group("github|https://github.com|owner42", "G42")
     {:ok, :added} = Members.add(group, [user_id: u.id], "owner42")
-    now = DateTime.utc_now()
 
-    # Written straight to the tables: their stores come with the seal and
-    # the declared restore.
-    {1, _} =
-      Arca.Repo.insert_all("person_seals", [
-        %{user_id: u.id, text: "amber heron", set_at: now}
-      ])
-
+    # Written straight to the table: its store comes with the declared
+    # restore.
     {1, _} =
       Arca.Repo.insert_all("restore_people", [
         %{restore_id: "rst_#{System.unique_integer([:positive])}", user_id: u.id}
       ])
 
-    assert person_rows(u.id) == %{seals: 1, restore_periods: 1}
+    assert restore_periods(u.id) == 1
 
     assert {:ok, _} = Users.deny(u)
-    assert person_rows(u.id) == %{seals: 1, restore_periods: 1}
+    assert restore_periods(u.id) == 1
 
     {:ok, archived} = Athanors.archive(group)
     assert {:ok, counts} = Athanors.destroy(archived)
-    refute Map.has_key?(counts, "person_seals")
     refute Map.has_key?(counts, "restore_people")
-    assert person_rows(u.id) == %{seals: 1, restore_periods: 1}
+    assert restore_periods(u.id) == 1
 
-    # Their owner is the person's row: deleting it takes both.
+    # Its owner is the person's row: deleting it takes the period.
     assert {1, _} = Arca.Repo.delete_all(from(p in "users", where: p.id == ^u.id))
-    assert person_rows(u.id) == %{seals: 0, restore_periods: 0}
+    assert restore_periods(u.id) == 0
   end
 
-  defp person_rows(user_id) do
-    %{
-      seals:
-        Arca.Repo.aggregate(
-          from(s in "person_seals", where: s.user_id == ^user_id),
-          :count
-        ),
-      restore_periods:
-        Arca.Repo.aggregate(
-          from(r in "restore_people", where: r.user_id == ^user_id),
-          :count
-        )
-    }
-  end
+  defp restore_periods(user_id),
+    do: Arca.Repo.aggregate(from(r in "restore_people", where: r.user_id == ^user_id), :count)
 
   test "deny withdraws the group seats the address was still holding" do
     u = person(41)
