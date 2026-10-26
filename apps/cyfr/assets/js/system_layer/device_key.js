@@ -30,8 +30,7 @@
  * expired while the device slept is replaced and validated before any
  * work. A ready connection renews at half the certificate's life, opens
  * the `confirmation.changes` stream, reads `confirmation.pending` again on
- * each of its facts, and the person's seal (`seal.read`) after each list,
- * and opens the stream again when a grant ends. A
+ * each of its facts, and opens the stream again when a grant ends. A
  * close `4408` reconnects through the renewal; a close `4403`, or a
  * `revoke` naming no grant, means the pairing ended: the stored key and
  * certificate are erased.
@@ -580,16 +579,6 @@ export function promptModel(entry, {webauthn = true} = {}) {
   }
 }
 
-/**
- * The text a glass prompt begins with: the person's seal as the channel's
- * `seal.read` answered it, its words and glyph, or the line that none is
- * chosen yet, never a default.
- */
-export function sealText(seal) {
-  if (!seal || typeof seal.text !== "string" || seal.text === "") return "No seal chosen yet."
-  return typeof seal.glyph === "string" && seal.glyph !== "" ? `${seal.text} ${seal.glyph}` : seal.text
-}
-
 /** The client that asked, as the home named it. */
 export function askerName(asker) {
   const named = asker && asker.name ? ` named ${asker.name}` : ""
@@ -660,8 +649,6 @@ export class Glass {
     this.requests = new Map()
     this.grants = new Map()
     this.pending = []
-    // The person's seal, read again with each pending list (`readSeal`).
-    this.seal = null
     this.outcome = {}
     this.renewTimer = null
     this.retryTimer = null
@@ -843,33 +830,17 @@ export class Glass {
     })
   }
 
-  // The seal the channel answers this device (`seal.read`): its words and
-  // glyph, or null for none, a malformed answer or a read that failed, so
-  // the prompts say none is chosen rather than show anything else.
-  async readSeal() {
-    try {
-      const {seal} = await this.request("seal.read", {})
-      if (!seal || typeof seal.text !== "string" || seal.text === "") return null
-      return {text: seal.text, glyph: typeof seal.glyph === "string" ? seal.glyph : null}
-    } catch (_error) {
-      return null
-    }
-  }
-
   stopListenRetry() {
     if (this.listenTimer) this.clearTimer(this.listenTimer)
     this.listenTimer = null
   }
 
   // The person's open confirmations, read again: the glass shows the
-  // home's record, never a fact's word, each prompt beginning with the
-  // person's seal, read again with it.
+  // home's record, never a fact's word.
   async refresh() {
     try {
       const {confirmations} = await this.request("confirmation.pending", {})
-      const seal = await this.readSeal()
       this.pending = confirmations || []
-      this.seal = seal
       this.onChange(this)
     } catch (_error) {
       // A refused read leaves what was shown; the next fact reads again.
@@ -1020,7 +991,6 @@ export class Glass {
     this.retryTimer = null
     this.device = null
     this.pending = []
-    this.seal = null
   }
 
   // The pairing ended: this device's record is erased, only while the

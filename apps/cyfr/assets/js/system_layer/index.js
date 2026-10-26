@@ -15,7 +15,6 @@ import {
   openingPlan,
   openStore,
   promptModel,
-  sealText,
   prove,
   publicKeyB64
 } from "./device_key.js"
@@ -120,9 +119,7 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  * device channel connected (`Glass`), renewing the certificate before it
  * expires and, after the device wakes, before anything else is sent. It
  * draws its own confirmation prompts from `confirmation.pending`, read
- * again on each fact of `confirmation.changes`, each beginning with the
- * person's seal the channel answers (`seal.read`, read again with the
- * list) or the line that none is chosen yet, and proves them by their
+ * again on each fact of `confirmation.changes`, and proves them by their
  * ref with a passkey or an emailed code through device intents. A fresh
  * sign-in needs a signed-in browser, so the glass only says so.
  *
@@ -152,7 +149,7 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  * Its controls carry `data-test` names: `glass-status` (with
  * `data-state`), `glass-error`, `glass-replace-ask`, `glass-replace`,
  * `glass-keep`, `glass-certify`, `glass-home`, `glass-home-submit`,
- * `glass-prompt` (with `data-ref`), `glass-seal` (with `data-seal`), `glass-preview`,
+ * `glass-prompt` (with `data-ref`), `glass-preview`,
  * `glass-asker`, `glass-passkey`, `glass-email`, `glass-code-form`,
  * `glass-code`, `glass-code-submit`, `glass-reauth`, `glass-reauth-note`, `glass-cancel`
  * and `glass-outcome` (with `data-ok`).
@@ -968,10 +965,7 @@ export default {
     for (const entry of (glass && glass.status === "ready" && glass.pending) || []) {
       const model = promptModel(entry, {webauthn})
       const outcome = glass.outcome[model.ref]
-      // The person's seal first, so it is read and spoken before anything
-      // else the prompt says.
       const children = [
-        element(doc, "p", {"data-test": "glass-seal", "data-seal": glass.seal ? "set" : "none", class: "text-sm font-semibold"}, sealText(glass.seal)),
         element(doc, "h2", {class: "text-lg font-semibold"}, `Confirm ${model.operation}`),
         element(
           doc,

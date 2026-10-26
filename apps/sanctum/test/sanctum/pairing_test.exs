@@ -280,7 +280,6 @@ defmodule Sanctum.PairingTest do
     :remote_sign_in,
     :key_rotation,
     :sign_in_methods,
-    :seal_change,
     :restore_reenable,
     :restore_close
   ]
