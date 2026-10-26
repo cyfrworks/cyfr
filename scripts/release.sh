@@ -153,6 +153,23 @@ else
   echo "HEAD's tree is proved green on GitHub: $(wc -l <<< "$RUNS") check runs completed, none failed."
 fi
 
+# The dependency audits compare mix.lock with advisory feeds that change
+# independently of the tree, so the proof's audit, run when HEAD's run
+# began, can be stale by the time the tag is cut: an advisory published in
+# between fails the tag's own run, which then publishes nothing, and the
+# tag names a version that never shipped. The audits run here again, the
+# same ones security.yml's elixir-audit job runs
+# (scripts/dependency-audit.sh), right before the tag. RELEASE_UNPROVEN=1
+# skips them with the proof.
+if [ "${RELEASE_UNPROVEN:-}" != "1" ]; then
+  echo "Running the dependency audits against the advisories published since HEAD's run..."
+  if ! scripts/dependency-audit.sh; then
+    echo "Error: the dependency audits failed (above); the tag's own run would fail the same way and publish nothing."
+    echo "Update the dependency, prove the change by its pull request, and cut the release from that."
+    exit 1
+  fi
+fi
+
 # Portable in-place sed (macOS requires -i '', Linux requires -i)
 sedi() {
   if [[ "$OSTYPE" == darwin* ]]; then

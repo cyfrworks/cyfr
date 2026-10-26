@@ -1307,7 +1307,7 @@ for leg in go audit boot; do
 done
 for job in 'go.codex_test: codex-ci.yml test: 6 steps' 'go.keeper: keeper-ci.yml keeper: 5 steps' \
   'audit.spdx: license-lint.yml spdx-headers: 2 steps' 'audit.govuln_codex: security.yml go-audit tree=apps/codex: 2 steps' \
-  'audit.govuln_keeper: security.yml go-audit tree=apps/locus/keeper: 2 steps' 'audit.elixir_audit: security.yml elixir-audit: 5 steps' \
+  'audit.govuln_keeper: security.yml go-audit tree=apps/locus/keeper: 2 steps' 'audit.elixir_audit: security.yml elixir-audit: 4 steps' \
   'audit.npm_audit: security.yml npm-audit: 1 step'; do
   grep -qxF "    $job passed" "$scratch/pass.out" || fail "the passing gate did not report $job passed: $(cat "$scratch/pass.out")"
 done
