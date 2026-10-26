@@ -7,12 +7,11 @@
 // page. Each step is one row of the record; the proof fails when a row does
 // not hold, and stops at the first row a later one rests on.
 //
-//   prism_grant  the person's seal chosen from the system layer's first-use
-//                offer, and then the first text of the grant prompt's
-//                accessible description in Chromium's tree, with keyboard
-//                focus inside the prompt; the grant made in Prism's system
-//                layer, one host narrowed away and interactive the one
-//                origin admitted: the head holds exactly that
+//   prism_grant  the first text of the grant prompt's accessible
+//                description in Chromium's tree, with keyboard focus inside
+//                the prompt; the grant made in Prism's system layer, one
+//                host narrowed away and interactive the one origin
+//                admitted: the head holds exactly that
 //   cli_digest   the same decisions previewed from the command line answer
 //                the commit digest the head was committed under
 //   background   a version asking to keep running when hidden: the person's
@@ -53,6 +52,9 @@ const REF = `tincture:local.${NAME}`;
 const KEPT = "alpha.grant.test";
 const DROPPED = "beta.grant.test";
 const PICKED = "data/probe/notes/";
+// The first words of the grant prompt's own description
+// (`PrismWeb.SystemLayer`), which its dialog is described by.
+const GRANT_DESCRIBED = "Approve what this app may use and reach";
 const { homes } = readHomes(homesFile);
 const base = homes[0].origin;
 const components = `${base}/a/${encodeURIComponent(segment)}/components`;
@@ -120,25 +122,6 @@ async function described(page) {
   }
 }
 
-// The seal, chosen from the layer's first-use offer on the Components page:
-// the pair drawn for the prompt and the first glyph of the set. What the
-// seal prompt's own description began with before it was chosen is kept.
-async function chooseSeal(page) {
-  await page.goto(components);
-  await page.waitForSelector(".phx-connected", { timeout: 30_000 });
-  await page.locator('[data-test="seal-offer-open"]').click({ timeout: 30_000 });
-  await page.waitForSelector(`${layer}[open] [data-kind="seal"]`, { timeout: 30_000 });
-  const before = await described(page);
-  const text = await page.locator(`${layer} select[name="text"]`).inputValue();
-  await page.locator(`${layer} select[name="glyph"]`).selectOption({ index: 1 });
-  const glyph = await page.locator(`${layer} select[name="glyph"]`).inputValue();
-  await page.locator(`${layer} [data-test="seal-submit"]`).click();
-  await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, {
-    timeout: 30_000,
-  });
-  return { seal: `${text} ${glyph}`, before };
-}
-
 async function confirm(page) {
   await page.locator(`${layer} [data-test="prompt-confirm"]`).click();
   await page.waitForFunction(() => !document.getElementById("system-layer-dialog")?.open, null, {
@@ -161,19 +144,12 @@ async function main() {
       ws.on("framesent", (f) => frames.push({ dir: "out", data: String(f.payload).slice(0, 600) }));
       ws.on("framereceived", (f) => frames.push({ dir: "in", data: String(f.payload).slice(0, 600) }));
     });
-    const chosen = await chooseSeal(page);
     await openGrant(page);
     const spoken = await described(page);
     const first = await sheet(page);
-    // The record keeps what held, never the seal's words.
-    record.seal = {
-      none_before: chosen.before.description.startsWith("No seal chosen yet."),
-      role: spoken.role,
-      focused: spoken.focused,
-      begins_with_seal: spoken.description.startsWith(`${chosen.seal} `),
-    };
-    const sealSpoken = record.seal.none_before && spoken.role === "dialog" && spoken.focused &&
-      record.seal.begins_with_seal;
+    // The prompt is a focused dialog described first by its own sentence.
+    const promptSpoken = spoken.role === "dialog" && spoken.focused &&
+      spoken.description.startsWith(GRANT_DESCRIBED);
 
     // A host's checkbox, unticked: the browser sends the host it names,
     // and the home narrows the grant to the host left ticked.
@@ -207,7 +183,7 @@ async function main() {
       writeFileSync(join(outDir, "prism-grant-frames.json"),
         JSON.stringify(redactFrames(frames.slice(-40), known), null, 1));
       row("prism_grant", false, "the sheet never showed the narrowed preview",
-        { first, narrowed, host_narrowed: hostNarrowed, host_sent: hostEvent, seal: record.seal });
+        { first, narrowed, host_narrowed: hostNarrowed, host_sent: hostEvent, spoken });
       return;
     }
     await confirm(page);
@@ -215,7 +191,7 @@ async function main() {
     record.prism_grant = {
       first, narrowed, head,
       host_checkbox: { unticked_in_browser: hostUnticked, narrowed_by_home: hostNarrowed, sent: hostEvent },
-      seal: record.seal,
+      spoken,
     };
 
     const egress = narrowed.rows.find((r) => r.kind === "egress");
@@ -226,15 +202,15 @@ async function main() {
       shown.rows.some((r) => r.kind === "exits" && r.text.includes(host) && r.text.includes(cls));
     const exitsShown = exitShown(first, KEPT, "files_by_grant") && exitShown(first, DROPPED, "filed");
     if (!row("prism_grant",
-      sealSpoken && first.origins.length === 1 && first.origins[0] === "interactive" &&
+      promptSpoken && first.origins.length === 1 && first.origins[0] === "interactive" &&
         hostUnticked && hostSent && egress && /narrowed by you/.test(egress.text) &&
         storage && storage.text.includes(PICKED) && /narrowed by you/.test(storage.text) && exitsShown &&
         head.revision === 1 && JSON.stringify(head.admitted_origins) === JSON.stringify(["interactive"]) &&
         JSON.stringify(head.domains) === JSON.stringify([KEPT]) &&
         JSON.stringify(head.paths) === JSON.stringify([PICKED]) &&
         JSON.stringify(head.flows) === JSON.stringify([`files_by_grant to ${KEPT}`]),
-      "the prompt spoken first with the seal chosen, every exit shown with its flows; granted in Prism, a host unticked and the folder narrowed through the picker, interactive alone, the dropped host's flow gone with it",
-      { seal: record.seal, origins: first.origins, admits: narrowed.admits, paths: head.paths, domains: head.domains,
+      "the prompt a focused dialog described by its own sentence, every exit shown with its flows; granted in Prism, a host unticked and the folder narrowed through the picker, interactive alone, the dropped host's flow gone with it",
+      { spoken, origins: first.origins, admits: narrowed.admits, paths: head.paths, domains: head.domains,
         flows: head.flows, exits_shown: exitsShown, host_checkbox: record.prism_grant.host_checkbox })) return;
 
     // -----------------------------------------------------------------------

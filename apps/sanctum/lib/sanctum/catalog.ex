@@ -756,10 +756,10 @@ defmodule Sanctum.Catalog do
 
   @doc """
   The admission under the storage reserve of a write the table declares
-  no operation for: a proxied `server:tool` call (`Sanctum.Dispatch`) and
-  the person's seal (`Sanctum.Seal`). None is a read or takes authority
-  away, so while the reserve is depleted each is refused as every other
-  such operation is, before anything is written.
+  no operation for: a proxied `server:tool` call (`Sanctum.Dispatch`). It
+  is not a read and takes no authority away, so while the reserve is
+  depleted it is refused as every other such operation is, before
+  anything is written.
   """
   @spec undeclared_write_admission() :: :ok | {:error, Prima.Refusal.t()}
   def undeclared_write_admission do
