@@ -410,9 +410,6 @@ defmodule Arca.UnscopedQuerySeamTest do
     "Arca.Schemas.PersonIdentity" =>
       "a person's identity and keys, keyed by their user_id and identifier; a person's " <>
         "identity is not an athanor's to delete",
-    "Arca.Schemas.PersonSeal" =>
-      "a person's seal at this home, keyed by their user_id and gone with their users " <>
-        "row; a person's seal is never an athanor's",
     "Arca.Schemas.RestorePerson" =>
       "a person's recovery from a declared restore, keyed by the restore and their " <>
         "user_id and gone with their users row; a recovery is the person's, never an athanor's",
