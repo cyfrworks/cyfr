@@ -129,9 +129,10 @@ defmodule Compendium.Tincture.Rules do
     %{name: "react", build: "vite", entry: "dist/index.html"}
   ]
 
-  # The templates a canvas is written on, each its entry and its build
-  # tool: its declaration names one of these pairs.
-  @canvas_templates for t <- @templates, t.name in ~w(vanilla react), do: {t.entry, t.build}
+  # The templates a canvas is written on, and each one's entry and build
+  # tool: a canvas's declaration names one of these pairs.
+  @canvas_template_names ~w(vanilla react)
+  @canvas_templates for t <- @templates, t.name in @canvas_template_names, do: t
 
   @lockfile "package-lock.json"
 
@@ -440,6 +441,13 @@ defmodule Compendium.Tincture.Rules do
   @doc "The templates a tincture starts from: vanilla, Vite and React."
   @spec templates() :: [template()]
   def templates, do: @templates
+
+  @doc """
+  The templates a canvas is written on, of `templates/0`: vanilla and
+  React. A canvas's declaration names one's entry and build tool.
+  """
+  @spec canvas_templates() :: [template()]
+  def canvas_templates, do: @canvas_templates
 
   @doc "The lockfile a build tincture ships beside its `package.json`."
   @spec lockfile() :: String.t()
@@ -795,16 +803,16 @@ defmodule Compendium.Tincture.Rules do
 
   defp canvas_template?(entry, build) do
     Enum.any?(@canvas_templates, fn
-      {^entry, nil} -> is_nil(build)
-      {^entry, tool} -> match?(%{"tool" => ^tool}, build)
+      %{entry: ^entry, build: nil} -> is_nil(build)
+      %{entry: ^entry, build: tool} -> match?(%{"tool" => ^tool}, build)
       _another -> false
     end)
   end
 
-  defp canvas_template_sentence({entry, nil}),
+  defp canvas_template_sentence(%{entry: entry, build: nil}),
     do: "tincture.entry #{entry} with no tincture.build"
 
-  defp canvas_template_sentence({entry, tool}),
+  defp canvas_template_sentence(%{entry: entry, build: tool}),
     do: "tincture.entry #{entry} with tincture.build.tool #{tool}"
 
   defp section(manifest, key) when is_map(manifest) do

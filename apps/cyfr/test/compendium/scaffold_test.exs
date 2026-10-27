@@ -350,6 +350,39 @@ defmodule Compendium.ScaffoldTest do
       assert pkg["scripts"]["build"] =~ "tsc"
     end
 
+    # `tsc -b` only type-checks, so it writes nothing beside the sources:
+    # no `src/*.js` for Vite to bundle in place of the `.tsx` it came from
+    # (`./App` resolves to `.js` first), and its build info under
+    # `node_modules/`, which no version holds.
+    test "the TypeScript configuration type-checks and emits nothing beside the sources", %{
+      ctx: ctx
+    } do
+      assert {:ok, _} = Scaffold.create(ctx, "ts-dash", "tincture", "0.1.0", template: "react")
+      tsconfig = read_json(ctx, tincture_base(ctx, "ts-dash"), "tsconfig.json")
+
+      assert %{"noEmit" => true, "tsBuildInfoFile" => "./node_modules/.tmp/" <> _} =
+               tsconfig["compilerOptions"]
+
+      assert tsconfig["include"] == ["src"]
+
+      assert read_json(ctx, tincture_base(ctx, "ts-dash"), "package.json")["scripts"]["build"] ==
+               "tsc -b && vite build"
+    end
+
+    test "the template's own files are the ones every React scaffold ships", %{ctx: ctx} do
+      assert {:ok, _} = Scaffold.create(ctx, "own-dash", "tincture", "0.1.0", template: "react")
+      own = Scaffold.react_template_files("own-dash")
+
+      assert Enum.sort(Map.keys(own)) ==
+               ~w(package-lock.json package.json tsconfig.json vite.config.ts)
+
+      for {path, content} <- own do
+        assert Arca.Test.UnitFixtures.unit_file!(ctx, tincture_base(ctx, "own-dash"), path) ==
+                 content,
+               path
+      end
+    end
+
     test "vite config uses relative base path", %{ctx: ctx} do
       assert {:ok, _} =
                Scaffold.create(ctx, "vite-dash", "tincture", "0.1.0", template: "react")

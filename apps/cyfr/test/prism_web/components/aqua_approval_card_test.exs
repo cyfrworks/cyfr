@@ -190,4 +190,47 @@ defmodule PrismWeb.AquaApprovalCardTest do
 
     assert html =~ "also after news.example"
   end
+
+  # A canvas write's card names the streams the version reads, from the
+  # proposal the approval binds, each feed by its name; another call's
+  # card says nothing of streams.
+  test "a canvas write's card names the streams the version reads" do
+    streams_of = fn html ->
+      case Regex.run(~r/data-test="approval-canvas-streams"[^>]*>(.*?)<\/div>/s, html,
+             capture: :all_but_first
+           ) do
+        [named] -> named
+        nil -> nil
+      end
+    end
+
+    write = fn streams ->
+      card(%{
+        "action_kind" => "write",
+        "proposal" => %{
+          "tool" => "canvas",
+          "action" => "write",
+          "args" => %{
+            "name" => "markets",
+            "template" => "vanilla",
+            "files" => %{"index.html" => "<html></html>"},
+            "streams" => streams
+          }
+        }
+      })
+    end
+
+    named =
+      streams_of.(
+        write.([
+          %{"name" => "runs.changes"},
+          %{"name" => "feed.results", "subject" => "btc"}
+        ])
+      )
+
+    assert named =~ "this page will read:"
+    assert named =~ "runs.changes, feed.results (btc)"
+    assert streams_of.(write.([])) =~ "this page reads no stream"
+    assert streams_of.(card(%{"action_kind" => "write"})) == nil
+  end
 end

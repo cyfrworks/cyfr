@@ -19,6 +19,8 @@ defmodule Compendium.Providers.CanvasTest do
   alias Compendium.Providers.Canvas
   alias Sanctum.Context
 
+  @files %{"index.html" => "<html><head></head><body>markets</body></html>"}
+
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     Arca.Cache.init()
@@ -49,6 +51,13 @@ defmodule Compendium.Providers.CanvasTest do
 
   defp call(ctx, action, args \\ %{}),
     do: Canvas.handle("canvas", ctx, Map.put(args, "action", action))
+
+  defp write_args(overrides \\ %{}) do
+    Map.merge(
+      %{"name" => "markets", "template" => "vanilla", "files" => @files, "streams" => []},
+      overrides
+    )
+  end
 
   defp operations do
     [tool] = Canvas.tools()
@@ -91,7 +100,7 @@ defmodule Compendium.Providers.CanvasTest do
 
       assert args.("catalog") == %{}
       assert Map.keys(args.("versions")) == ["canvas"]
-      assert Enum.sort(Map.keys(args.("write"))) == ~w(module name streams)
+      assert Enum.sort(Map.keys(args.("write"))) == ~w(files name streams template)
       assert Enum.sort(Map.keys(args.("activate"))) == ~w(canvas frame outcome version)
       assert Map.keys(args.("restore")) == ["canvas"]
 
@@ -100,8 +109,18 @@ defmodule Compendium.Providers.CanvasTest do
       end
 
       assert args.("write")["streams"].type == :json
-      assert args.("write")["module"].type == :string
+      assert args.("write")["template"].enum == ~w(vanilla react)
+
+      # An object from each file's path to its text, every text bulk
+      # content: a log records each file by its size and digest.
+      assert {:map, %Prima.Arg{type: :string, bulk: true}} = args.("write")["files"].type
+
       assert args.("activate")["outcome"].enum == ~w(ready not_ready died)
+
+      # No word of the module a canvas no longer has, in any description.
+      for {_action, op} <- operations(), arg <- op.args do
+        refute arg.description =~ ~r/module|toolkit|tree/, "#{op.action}.#{arg.name}"
+      end
     end
 
     test "the provider is rostered after the layout's, so the gate serves it, and activation " <>
@@ -128,37 +147,37 @@ defmodule Compendium.Providers.CanvasTest do
       assert Map.keys(catalog) == [:streams]
       assert call(ctx, "catalog") == Compendium.Canvas.catalog(ctx)
 
-      {:ok, {_provider, feeds}} = Sanctum.Catalog.lookup_stream("feed.results")
-      {:ok, {_provider, runs}} = Sanctum.Catalog.lookup_stream("runs.changes")
-      {:ok, {_provider, schedule_runs}} = Sanctum.Catalog.lookup_stream("schedule_runs.changes")
-      {:ok, {_provider, schedules}} = Sanctum.Catalog.lookup_stream("schedules.changes")
+      shape = fn name ->
+        {:ok, {_provider, stream}} = Sanctum.Catalog.lookup_stream(name)
+        stream.shape
+      end
 
       assert streams == [
                %{
                  name: "feed.results",
                  subject: ~S"\A[a-z0-9][a-z0-9-]{0,47}\z",
-                 shape: feeds.shape,
+                 shape: shape.("feed.results"),
                  filter: "feed",
                  refresh: true
                },
                %{
                  name: "runs.changes",
                  subject: nil,
-                 shape: runs.shape,
+                 shape: shape.("runs.changes"),
                  filter: nil,
                  refresh: true
                },
                %{
                  name: "schedule_runs.changes",
                  subject: nil,
-                 shape: schedule_runs.shape,
+                 shape: shape.("schedule_runs.changes"),
                  filter: nil,
                  refresh: true
                },
                %{
                  name: "schedules.changes",
                  subject: nil,
-                 shape: schedules.shape,
+                 shape: shape.("schedules.changes"),
                  filter: nil,
                  refresh: true
                }
@@ -168,7 +187,7 @@ defmodule Compendium.Providers.CanvasTest do
     test "write, versions and restore answer through the tool", %{ctx: ctx} do
       assert {:ok,
               %{canvas: "markets", version: "0.1.0", reference: "tincture:local.markets:0.1.0"}} =
-               call(ctx, "write", %{"name" => "markets", "module" => "// m", "streams" => []})
+               call(ctx, "write", write_args())
 
       assert {:ok, %{canvas: "markets", document: %{allocated: "0.1.0"}, revision: 1}} =
                call(ctx, "versions", %{"canvas" => "markets"})
@@ -189,10 +208,12 @@ defmodule Compendium.Providers.CanvasTest do
 
       # A shape, a size or a grammar.
       for args <- [
-            %{"name" => "Markets", "module" => "// m", "streams" => []},
-            %{"name" => "markets", "module" => String.duplicate("a", 262_145), "streams" => []},
-            %{"name" => "markets", "module" => "// m", "streams" => [%{"name" => "x"}]},
-            %{"name" => "markets", "module" => "// m", "streams" => "runs.changes"}
+            write_args(%{"name" => "Markets"}),
+            write_args(%{"template" => "vite"}),
+            write_args(%{"files" => %{"app.js" => "// no page"}}),
+            write_args(%{"files" => Map.put(@files, "big.js", String.duplicate("a", 524_288))}),
+            write_args(%{"streams" => [%{"name" => "x"}]}),
+            write_args(%{"streams" => "runs.changes"})
           ] do
         assert class.(call(ctx, "write", args)) == :invalid_argument
       end
@@ -239,12 +260,15 @@ defmodule Compendium.Providers.CanvasTest do
                Prima.Refusal.classify(absent)
 
       assert {:error, {:invalid_argument, sentence} = unreadable} =
-               Sanctum.Gate.call_external("canvas", ctx, %{
-                 "action" => "write",
-                 "name" => "markets",
-                 "module" => "// m",
-                 "streams" => [%{"name" => "mcp_servers.changes"}]
-               })
+               Sanctum.Gate.call_external(
+                 "canvas",
+                 ctx,
+                 Map.put(
+                   write_args(%{"streams" => [%{"name" => "mcp_servers.changes"}]}),
+                   "action",
+                   "write"
+                 )
+               )
 
       assert %Prima.Refusal{class: :invalid_argument, message: ^sentence} =
                Prima.Refusal.classify(unreadable)

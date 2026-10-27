@@ -120,6 +120,7 @@ defmodule Compendium.FacadeTest do
     tincture_canvas_connection_allowlist: 0,
     tincture_canvas_page_csp: 1,
     tincture_canvas_sandbox_tokens: 0,
+    tincture_canvas_templates: 0,
     tincture_check_canvas_files: 2,
     tincture_check_canvas_streams: 2,
     tincture_check_streams: 2,

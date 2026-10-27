@@ -1455,6 +1455,38 @@ defmodule Cyfr.DocsDriftTest do
     assert_action_table("### Canvases (`canvas` tool)", "canvas")
   end
 
+  # The table of what a canvas reads has a row for each stream a canvas may
+  # read, every one that declares a shape, and no other, and each row names
+  # every field of its stream's shape.
+  test "the guide's canvas stream table is the streams a canvas may read" do
+    guide = File.read!(@integration_guide)
+
+    [table] =
+      Regex.run(~r/^\| Stream \| Subject \| Each event \|\n\|[-|]+\|\n((?:\|.*\n)+)/m, guide,
+        capture: :all_but_first
+      ) || flunk("integration-guide.md has no canvas stream table")
+
+    rows =
+      for line <- String.split(table, "\n", trim: true) do
+        [name, _subject, event] = line |> String.trim("|") |> String.split("|")
+        {hd(backquoted(name)), backquoted(event)}
+      end
+
+    readable =
+      for %Prima.Provider.Stream{shape: shape, name: name} <- Sanctum.Catalog.streams(),
+          not is_nil(shape),
+          into: %{},
+          do: {name, Map.keys(shape["fields"] || %{})}
+
+    assert Enum.sort(Enum.map(rows, &elem(&1, 0))) == Enum.sort(Map.keys(readable)),
+           "integration-guide.md's canvas streams are not the streams a canvas may read, " <>
+             inspect(Enum.sort(Map.keys(readable)))
+
+    for {name, named} <- rows, field <- readable[name] do
+      assert field in named, "integration-guide.md's #{name} row does not name #{field}"
+    end
+  end
+
   # component-guide's CLI-to-MCP table names, for each command, the tool
   # and the actions a formula calls in its place: every pair is one the
   # catalog serves, and every argument the key-args column backquotes as a

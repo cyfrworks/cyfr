@@ -991,8 +991,10 @@ func (args CanvasVersionsArgs) MarshalJSON() ([]byte, error) {
 type CanvasWriteArgs struct {
 	// write: the canvas's name, a component name; a new name is a new canvas
 	Name string `json:"name"`
-	// write: the canvas's module, its JavaScript (at most 262144 bytes)
-	Module string `json:"module"`
+	// write: the page's template: vanilla (index.html and its own files) or react (built with Vite from index.html, src/ and public/)
+	Template string `json:"template"`
+	// write: the page's files, each relative path to its UTF-8 text, index.html among them (at most 64 files and 524288 bytes together); a react page's files are index.html and files under src/ and public/, which may also be .ts, .tsx, .jsx, .json, .css sources
+	Files map[string]string `json:"files"`
 	// write: the streams the canvas reads, [{name, subject}], from catalog's streams; a feed's results name the feed as the subject
 	Streams any `json:"streams"`
 }

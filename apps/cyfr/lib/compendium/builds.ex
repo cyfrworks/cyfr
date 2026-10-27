@@ -25,6 +25,15 @@ defmodule Compendium.Builds do
   per athanor, and refuses one past a cap as `capacity`, which is answered
   here as a refusal to retry, never queued.
 
+  ## A staged build
+
+  `build_staged/3` builds a tincture from sources held in memory and
+  answers the verified files without storing anything: the caller commits
+  them with the sources in one unit (`Compendium.Canvas`, which builds a
+  canvas version before allocating it, so no version's bytes are ever
+  replaced). It writes no build row and registers nothing. A server with
+  no builds service refuses it `unavailable`, before any request.
+
   ## A build's life
 
   `compile/3` runs a build on the caller's process and answers its result.
@@ -107,6 +116,49 @@ defmodule Compendium.Builds do
     with {:ok, build} <- admit(ctx, reference, opts), do: run_recorded(build)
   end
 
+  @doc """
+  Build a tincture from `sources` (relative path to bytes, the build's
+  whole input: its package manifest and lockfile, its configuration and
+  its sources, no `dist/`) on the builds service, and answer the verified
+  result's files (relative to the tincture's `dist/`) with their file-set
+  digest and size. Nothing is stored and no build row is written.
+
+  A server with no builds service is refused `unavailable` with the
+  builds sentence before any request; sources whose `package.json` ships
+  without its lockfile are refused before any request too
+  (`Compendium.TinctureValidator.check_lockfile/1`). Every other way the
+  build ends is answered as `compile/3` answers it: the builder's refusal
+  (a failed build, its own timeout, capacity), `timeout` past the deadline,
+  a disconnect, or an answer that does not verify. A caller cancelled or
+  killed while the builder works takes the request with it
+  (`Compendium.Builds.Client`).
+
+  `opts`: `:reference`, the component the build is for, in the build's
+  telemetry; `:on_progress` and `:budget_ms` as `t:option/0` says.
+  """
+  @spec build_staged(Context.t(), %{String.t() => binary()}, [option() | {:reference, String.t()}]) ::
+          {:ok, %{files: %{String.t() => binary()}, digest: String.t(), size: non_neg_integer()}}
+          | {:error, term()}
+  def build_staged(%Context{} = ctx, sources, opts \\ []) when is_map(sources) do
+    with :ok <- staged_enabled(),
+         :ok <- Compendium.TinctureValidator.check_lockfile(Map.keys(sources)) do
+      build = %{
+        ctx: ctx,
+        reference: Keyword.get(opts, :reference),
+        build_id: Prima.UUID7.generate_id("build"),
+        resolve?: false,
+        on_progress: Keyword.get(opts, :on_progress, fn _progress -> :ok end),
+        budget_ms: Keyword.get(opts, :budget_ms, @budget_ms)
+      }
+
+      instrumented(build, fn build ->
+        with {:ok, built} <- build(build, %{type: "tincture", sources: sources}) do
+          {:ok, %{files: built.output_files, digest: built.digest, size: built.size}}
+        end
+      end)
+    end
+  end
+
   @doc "A started build's row, as `build.status` answers it."
   @spec status(Context.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def status(%Context{} = ctx, build_id) when is_binary(build_id) do
@@ -158,17 +210,24 @@ defmodule Compendium.Builds do
     end
   end
 
+  @disabled "builds are disabled on this server: no builds service is configured " <>
+              "(CYFR_LOCUS_BUILDS_URL and CYFR_LOCUS_BUILDS_KEY)"
+
   # Refused in the one place every surface reaches — wire, console and
   # in-chain — and before anything else, so a server without a builds
   # service writes no row and makes no request.
   defp enabled do
-    if Cyfr.RuntimeConfig.builds_enabled?() do
-      :ok
-    else
-      {:error,
-       "builds are disabled on this server: no builds service is configured " <>
-         "(CYFR_LOCUS_BUILDS_URL and CYFR_LOCUS_BUILDS_KEY)"}
-    end
+    if Cyfr.RuntimeConfig.builds_enabled?(), do: :ok, else: {:error, @disabled}
+  end
+
+  # A staged build is a step of another operation, which answers the
+  # missing service as the outage it is, in the same sentence.
+  defp staged_enabled do
+    if Cyfr.RuntimeConfig.builds_enabled?(),
+      do: :ok,
+      else:
+        {:error,
+         %Prima.Refusal{class: :unavailable, reason: :builds_disabled, message: @disabled}}
   end
 
   # A caller may mint the id — a console subscribes to the progress topic
@@ -286,7 +345,11 @@ defmodule Compendium.Builds do
   # One build
   # ---------------------------------------------------------------------------
 
-  defp run(%{ctx: ctx, build_id: build_id, reference: reference} = build) do
+  defp run(build), do: instrumented(build, &build_and_publish/1)
+
+  # A build's start, progress and stop telemetry around `fun`, which is
+  # handed the build with its telemetry metadata.
+  defp instrumented(%{ctx: ctx, build_id: build_id, reference: reference} = build, fun) do
     meta = %{
       build_id: build_id,
       reference: reference,
@@ -304,7 +367,7 @@ defmodule Compendium.Builds do
 
     started = System.monotonic_time()
 
-    outcome = build_and_publish(build)
+    outcome = fun.(build)
 
     duration_ms =
       System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond)

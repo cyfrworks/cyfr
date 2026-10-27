@@ -143,7 +143,6 @@ outside it is refused.
 |---|---|
 | `frame` | `background`, `capabilities`, `placement` |
 | `frame.placement` | one of `float`, `canvas` |
-| `canvas` | `module`, `toolkit` |
 | `streams[]` | `name`, `subject` |
 | `actions[]` | an operation name, `tool.action` |
 <!-- /tincture:declaration -->

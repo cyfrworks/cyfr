@@ -110,6 +110,10 @@ defmodule Compendium do
   @spec tincture_templates() :: [Rules.template()]
   defdelegate tincture_templates(), to: Rules, as: :templates
 
+  @doc "The templates a canvas is written on (`Compendium.Tincture.Rules.canvas_templates/0`)."
+  @spec tincture_canvas_templates() :: [Rules.template()]
+  defdelegate tincture_canvas_templates(), to: Rules, as: :canvas_templates
+
   @doc "Whether a tincture is built and so ships its lockfile (`Compendium.Tincture.Rules.lockfile_required?/1`)."
   @spec tincture_lockfile_required?(term()) :: boolean()
   defdelegate tincture_lockfile_required?(manifest), to: Rules, as: :lockfile_required?

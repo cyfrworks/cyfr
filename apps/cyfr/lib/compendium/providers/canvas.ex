@@ -12,9 +12,11 @@ defmodule Compendium.Providers.Canvas do
     * `versions` answers a canvas's versions document (which version a
       glass opens, which one is kept, which validation last failed) and
       its revision.
-    * `write` writes a new canvas version whole, its module and the
-      streams it reads, after allocating its version number, and
-      registers it. It never edits a version and activates nothing.
+    * `write` writes a new canvas version whole, its page's files on the
+      vanilla or the React template and the streams it reads, built first
+      when it is React, after allocating its version number, and
+      registers it. It never edits a version, opens no stream and
+      activates nothing.
     * `activate` reports a glass's trial of a version under its frame's
       validation credential, which it spends; only `ready` activates, and
       only under the canvas's current grant. Prism calls it, from outside
@@ -75,12 +77,21 @@ defmodule Compendium.Providers.Canvas do
               description:
                 "write: the canvas's name, a component name; a new name is a new canvas"
             ),
-            Arg.new("module", :string,
+            Arg.new("template", :string,
               required: true,
-              bulk: true,
+              enum: Compendium.Canvas.templates(),
               description:
-                "write: the canvas's module, its JavaScript " <>
-                  "(at most #{Compendium.Canvas.module_max_bytes()} bytes)"
+                "write: the page's template: vanilla (index.html and its own files) or " <>
+                  "react (built with Vite from index.html, src/ and public/)"
+            ),
+            Arg.new("files", {:map, Arg.new(nil, :string, bulk: true)},
+              required: true,
+              description:
+                "write: the page's files, each relative path to its UTF-8 text, " <>
+                  "index.html among them (at most #{Compendium.Canvas.max_files()} files and " <>
+                  "#{Compendium.Canvas.max_bytes()} bytes together); a react page's files are " <>
+                  "index.html and files under src/ and public/, which may also be " <>
+                  Enum.join(Compendium.Canvas.build_source_extensions(), ", ") <> " sources"
             ),
             Arg.new("streams", :json,
               required: true,
