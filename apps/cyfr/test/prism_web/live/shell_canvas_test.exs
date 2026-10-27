@@ -1451,6 +1451,10 @@ defmodule PrismWeb.ShellCanvasTest do
       wait_until(fn -> held_by.(again.pid) != [] end, 5_000)
       assert [_one] = held_by.(again.pid)
       Task.shutdown(again, :brutal_kill)
+
+      # The view stops while the test still owns the sandbox, so nothing it
+      # arms on showing the canvas reaches the database after the test ends.
+      GenServer.stop(view.pid, :normal)
     end
 
     test "a canvas shown again keeps its row's deadline and its handshake's bearer",
