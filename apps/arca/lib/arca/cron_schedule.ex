@@ -212,7 +212,8 @@ defmodule Arca.CronSchedule do
 
   @doc """
   Lists the athanor's live rows, newest first. `kind:` lists one kind and
-  nil (the default) both; `limit:` bounds the answer (50).
+  nil (the default) both; `limit:` bounds the answer (50), and `:infinity`
+  answers every live row.
   """
   @spec list(Prima.Actor.t(), keyword()) ::
           {:ok, [map()]} | {:error, :database_error}
@@ -220,14 +221,9 @@ defmodule Arca.CronSchedule do
 
   def list(%Prima.Actor{} = actor, opts) do
     Errors.with_db_rescue("CronSchedule.list", fn ->
-      limit = Keyword.get(opts, :limit, 50)
-
       rows =
-        from(s in Row,
-          where: s.status != "deleted",
-          order_by: [desc: s.created_at],
-          limit: ^limit
-        )
+        from(s in Row, where: s.status != "deleted", order_by: [desc: s.created_at])
+        |> limited(Keyword.get(opts, :limit, 50))
         |> where_tenant_unless_platform(actor)
         |> of_kind(Keyword.get(opts, :kind))
         |> Arca.Repo.all()
@@ -529,6 +525,9 @@ defmodule Arca.CronSchedule do
       schedule -> {:ok, schedule}
     end
   end
+
+  defp limited(query, :infinity), do: query
+  defp limited(query, limit) when is_integer(limit) and limit >= 0, do: limit(query, ^limit)
 
   defp of_kind(query, nil), do: query
   defp of_kind(query, kind) when kind in @kinds, do: where(query, [s], s.kind == ^kind)
