@@ -2107,28 +2107,50 @@ jobs:
           assert_spelling apps/codex/cmd/lifecycle.go '"data"'
           assert_spelling apps/codex/cmd/lifecycle.go '"aqua"'
           assert_spelling scripts/scaffold-tarball.sh '-C seed aqua'
-          # "home" is no word a person reads: the installation is CYFR and the
-          # assistant is Aqua. The prose surfaces (README.md, the six guides,
-          # the setup pages and the access vector's words and refusals, which
-          # `cyfr` prints) carry it only where it means something else. Each
-          # exception, exact:
-          # - "Add to Home Screen": the phone's own wording for installing Prism.
-          # - $HOME and ${HOME}: the environment variable.
-          # - "home directory": the operating system's, a person's files.
-          # - `home`, backquoted: the shipped canvas's identifier
-          #   (tests/fixtures/layout.json), quoted as the code spells it; bare
-          #   prose "home" still fails.
-          # "Homebrew", UserHomeDir and home_dir are not the word: the letters
-          # around it make them other words.
+          # The prose surfaces (README.md, the six guides, the setup pages and
+          # the access vector's words and refusal templates, which `cyfr`
+          # prints) name the installation CYFR and the assistant Aqua, and
+          # carry none of the concept words home, hub, cell, node, door or
+          # glass where a person reads them: a cluster's servers, a machine, a
+          # sign-in method and a device say so. A refusal template is read
+          # with its `{slot}` placeholders taken out, since a slot is a
+          # payload key. Each word's exceptions, exact:
+          # - home: "Add to Home Screen", the phone's own wording for
+          #   installing Prism; $HOME and ${HOME}, the environment variable;
+          #   "home directory", the operating system's; `home`, backquoted,
+          #   the shipped canvas's identifier (tests/fixtures/layout.json).
+          # - node: `--new-node`, the flag, in Tailscale's word; "node ID",
+          #   Tailscale's name for the value CYFR_TAILNET_NODE_ID holds;
+          #   "Erlang node name", the BEAM's identifier a cluster's server runs
+          #   under; `node`, backquoted, the consent preview's wire field;
+          #   "Node.js", another product's name.
+          # - door: `door.*` and `door.<operation>`, backquoted, the
+          #   operations' namespace.
+          # "Homebrew", UserHomeDir, home_dir, CYFR_TAILNET_NODE_ID,
+          # CYFR_CLUSTER_NODES, CYFR_CLUSTER_NODE_BASENAME and CYFR_CELL_COOKIE
+          # are not the words: the letters around each make it another word.
           python3 -I - <<'PY' || fail=1
           import json, re, subprocess, sys
-          word = re.compile(r"(?<![A-Za-z0-9_])home(?:s|'s)?(?![A-Za-z0-9_])", re.I)
-          stays = re.compile(r"Add to Home Screen|\$\{?HOME\b\}?|\b[Hh]ome director(?:y|ies)\b|`home`")
+          def word(spelled):
+              return re.compile(r"(?<![A-Za-z0-9_])(?:" + spelled + r")(?![A-Za-z0-9_])", re.I)
+          words = {
+              "home": (word(r"homes?|home's"),
+                       re.compile(r"Add to Home Screen|\$\{?HOME\b\}?|\b[Hh]ome director(?:y|ies)\b|`home`")),
+              "hub": (word(r"hubs?|hub's"), None),
+              "cell": (word(r"cells?|cell's"), None),
+              "node": (word(r"nodes?|node's"),
+                       re.compile(r"--new-node|\bnode ID\b|\bErlang node names?\b|`node`|\bNode\.js\b")),
+              "door": (word(r"doors?|door's"), re.compile(r"`door\.(?:\*|[a-z_]+)`")),
+              "glass": (word(r"glass(?:es)?|glass's"), None),
+          }
           def found(where, text):
-              hits = [line for line in text.split("\n") if word.search(stays.sub("", line))]
-              for line in hits:
-                  print(f"::error::{where} says home: {line.strip()}")
-              return bool(hits)
+              bad = False
+              for line in text.split("\n"):
+                  for name, (pattern, stays) in words.items():
+                      if pattern.search(stays.sub("", line) if stays else line):
+                          print(f"::error::{where} says {name}: {line.strip()}")
+                          bad = True
+              return bad
           files = ["README.md", "devices-guide.md", "identity-guide.md", "configuration-guide.md",
                    "integration-guide.md", "component-guide.md", "tincture-guide.md"]
           files += subprocess.run(["git", "ls-files", "apps/codex/internal/setup/assets"],
@@ -2140,19 +2162,14 @@ jobs:
                   continue
               for n, line in enumerate(data.decode().split("\n"), 1):
                   bad |= found(f"{path}:{n}", line)
-          def strings(value):
-              if isinstance(value, str):
-                  yield value
-              elif isinstance(value, dict):
-                  for v in value.values():
-                      yield from strings(v)
-              elif isinstance(value, list):
-                  for v in value:
-                      yield from strings(v)
           vector = json.load(open("tests/fixtures/access_modes.json"))
-          for section in ("words", "refusals"):
-              for text in strings(vector[section]):
-                  bad |= found(f"tests/fixtures/access_modes.json {section}", text)
+          for words_row in vector["words"]:
+              for sentence in words_row["sentences"]:
+                  bad |= found("tests/fixtures/access_modes.json words", sentence)
+          for refusal in vector["refusals"]:
+              for variant in refusal["variants"]:
+                  template = re.sub(r"\{[a-z_]+\}", "", variant["template"])
+                  bad |= found(f"tests/fixtures/access_modes.json refusals {refusal['code']}", template)
           sys.exit(1 if bad else 0)
           PY
           exit $fail

@@ -72,9 +72,9 @@ func (e *Engine) health(ctx context.Context, h Head, cs []Container) []string {
 		if ts.BackendState != "Running" {
 			lines = append(lines, "Tailscale: not connected ("+ts.BackendState+")")
 		} else if ts.name() == h.Host && ts.id() == h.NodeID {
-			lines = append(lines, "Tailscale: connected as "+ts.name()+" (node "+ts.id()+"), the machine .env names")
+			lines = append(lines, "Tailscale: connected as "+ts.name()+" (node ID "+ts.id()+"), the machine .env names")
 		} else {
-			lines = append(lines, "Tailscale: connected as "+ts.name()+" (node "+ts.id()+"), but .env names "+h.Host+" (node "+h.NodeID+")")
+			lines = append(lines, "Tailscale: connected as "+ts.name()+" (node ID "+ts.id()+"), but .env names "+h.Host+" (node ID "+h.NodeID+")")
 		}
 		if ts.https() {
 			lines = append(lines, "HTTPS certificates: on")

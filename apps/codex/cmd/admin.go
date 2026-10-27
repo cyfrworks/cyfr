@@ -29,20 +29,20 @@ func init() {
 
 var adminCmd = &cobra.Command{
 	Use:     "admin",
-	Short:   "The door: who may sign in to this server (platform admins)",
+	Short:   "The sign-in allowlist: who may sign in to this server (platform admins)",
 	GroupID: "admin",
-	Long: "The server allowlist is the door. Entries name an email, an IdP subject, " +
-		"a person identifier (per_…, how a person signing in through the CYFR door " +
+	Long: "The server allowlist says who may sign in. Entries name an email, an IdP subject, " +
+		"a person identifier (per_…, how a person signing in with their CYFR identity " +
 		"is named), or `*` for anyone the configured provider authenticates or the " +
-		"CYFR door presents. A deny is sticky and ejects the person; requests are " +
-		"invites members made for addresses or identifiers the door does not know, " +
+		"CYFR sign-in presents. A deny is sticky and ejects the person; requests are " +
+		"invites members made for addresses or identifiers the allowlist does not know, " +
 		"and sign-ins it refused. Platform admins (CYFR_PLATFORM_ADMIN_EMAILS) " +
 		"are always let in and are the only ones who may edit the list.",
 }
 
 var adminListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "Show the door",
+	Short: "Show the allowlist",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		result, err := newClient().CallTool(cmd.Context(), ops.Door, ops.DoorListArgs{})
 		if err != nil {
@@ -54,7 +54,7 @@ var adminListCmd = &cobra.Command{
 		}
 		entries, _ := result["entries"].([]any)
 		if len(entries) == 0 {
-			fmt.Println("The door is empty — only the platform admins can sign in.")
+			fmt.Println("The allowlist is empty — only the platform admins can sign in.")
 			return nil
 		}
 		for _, raw := range entries {
@@ -71,7 +71,7 @@ var adminListCmd = &cobra.Command{
 
 var adminRequestsCmd = &cobra.Command{
 	Use:   "requests",
-	Short: "Pending invites for addresses or person identifiers (per_…) the door does not know, and refused sign-ins",
+	Short: "Pending invites for addresses or person identifiers (per_…) the allowlist does not know, and refused sign-ins",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		result, err := newClient().CallTool(cmd.Context(), ops.Door, ops.DoorRequestsArgs{})
 		if err != nil {
