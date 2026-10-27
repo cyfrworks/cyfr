@@ -408,7 +408,7 @@ defmodule Cyfr.RuntimeConfigTest do
       assert {:error, message} =
                RuntimeConfig.resolve_cluster_topology(env(%{"CYFR_CLUSTER_NODES" => " , ,"}))
 
-      assert message =~ "names no node"
+      assert message =~ "names no server"
     end
   end
 
