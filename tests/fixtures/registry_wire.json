@@ -244,6 +244,26 @@
       "status": 403
     },
     {
+      "code": "NOT_APPELLANT_OF_RECORD",
+      "refusal": "not_appellant",
+      "status": 403
+    },
+    {
+      "code": "ACTION_NOT_FOUND",
+      "refusal": "action_not_found",
+      "status": 404
+    },
+    {
+      "code": "APPEAL_TOO_EARLY",
+      "refusal": "appeal_too_early",
+      "status": 403
+    },
+    {
+      "code": "NAMESPACE_UNOWNED",
+      "refusal": "namespace_unowned",
+      "status": 403
+    },
+    {
       "code": "SLUG_TAKEN",
       "refusal": "handle_taken",
       "status": 409
@@ -370,6 +390,31 @@
       "bytes": "{\"errors\":[{\"code\":\"IDENTITY_BANNED\",\"message\":\"refused\"}]}\n",
       "name": "the banned envelope",
       "refusal": "banned"
+    },
+    {
+      "bytes": "{\"appeal_allowed_after\":\"2026-11-27T00:00:00Z\",\"errors\":[{\"code\":\"IDENTITY_BANNED\",\"message\":\"refused\"}]}\n",
+      "name": "the banned envelope with appeal_allowed_after",
+      "refusal": "banned"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"NOT_APPELLANT_OF_RECORD\",\"message\":\"refused\"}]}\n",
+      "name": "the not_appellant envelope",
+      "refusal": "not_appellant"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"ACTION_NOT_FOUND\",\"message\":\"refused\"}]}\n",
+      "name": "the action_not_found envelope",
+      "refusal": "action_not_found"
+    },
+    {
+      "bytes": "{\"appeal_allowed_after\":\"2026-11-27T00:00:00Z\",\"errors\":[{\"code\":\"APPEAL_TOO_EARLY\",\"message\":\"refused\"}]}\n",
+      "name": "the appeal_too_early envelope",
+      "refusal": "appeal_too_early"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"NAMESPACE_UNOWNED\",\"message\":\"refused\"}]}\n",
+      "name": "the namespace_unowned envelope",
+      "refusal": "namespace_unowned"
     },
     {
       "bytes": "{\"errors\":[{\"code\":\"SLUG_TAKEN\",\"message\":\"refused\"}]}\n",

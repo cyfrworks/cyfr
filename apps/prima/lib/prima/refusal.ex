@@ -474,6 +474,18 @@ defmodule Prima.Refusal do
 
   defp row(:banned), do: {:forbidden, "The registry has banned this identity."}
 
+  defp row(:not_appellant), do: {:forbidden, "This action is not yours to appeal."}
+
+  defp row(:action_not_found), do: {:not_found, "The registry has no such action to appeal."}
+
+  defp row(:appeal_too_early),
+    do: {:forbidden, "This ban's cool-off has not passed; appeal once it has."}
+
+  defp row(:namespace_unowned),
+    do:
+      {:forbidden,
+       "That namespace has no owner at the registry, so its operator handles this appeal by hand."}
+
   defp row(:wrong_directory),
     do:
       {:forbidden,
