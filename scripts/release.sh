@@ -163,6 +163,14 @@ fi
 # skips them with the proof.
 if [ "${RELEASE_UNPROVEN:-}" != "1" ]; then
   echo "Running the dependency audits against the advisories published since HEAD's run..."
+  # The locked dependencies first, as security.yml's job fetches them before
+  # it audits: `mix deps.audit` loads the project, which refuses a deps/ that
+  # lags mix.lock, and this checkout may not have fetched since the lock
+  # changed. Fetching changes nothing in the tree; the lock is HEAD's.
+  if ! mix deps.get; then
+    echo "Error: the locked dependencies could not be fetched (above), so the audits cannot run."
+    exit 1
+  fi
   if ! scripts/dependency-audit.sh; then
     echo "Error: the dependency audits failed (above); the tag's own run would fail the same way and publish nothing."
     echo "Update the dependency, prove the change by its pull request, and cut the release from that."
