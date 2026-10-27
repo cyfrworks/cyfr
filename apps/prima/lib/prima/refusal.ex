@@ -264,8 +264,7 @@ defmodule Prima.Refusal do
        "The approval link expired before the machine was approved. How CYFR is " <>
          "reached was not changed. Run `cyfr access tailnet` for a new link."},
     tailnet_join_cancelled:
-      {:cancelled,
-       "Joining your tailnet was cancelled. How CYFR is reached was not changed."},
+      {:cancelled, "Joining your tailnet was cancelled. How CYFR is reached was not changed."},
     tailnet_join_ended:
       {:unauthenticated,
        "Tailscale did not accept this machine's join: the auth key may be wrong, already " <>
@@ -806,9 +805,7 @@ defmodule Prima.Refusal do
   # A sensitive change's refusals that are no denial: the proof the change
   # needs cannot be given here, or not yet.
   defp row(:remote_identity_unavailable),
-    do:
-      {:unavailable,
-       "This needs the CYFR that holds the person's identity: do it there."}
+    do: {:unavailable, "This needs the CYFR that holds the person's identity: do it there."}
 
   defp row(:email_unavailable),
     do: {:unavailable, "No one-time code can be emailed to you here; confirm another way."}
@@ -1194,8 +1191,7 @@ defmodule Prima.Refusal do
 
   defp row({:access_unchanged, %{address: address}}) when is_binary(address),
     do:
-      {:invalid_argument,
-       "CYFR is already reached that way, at #{address}. Nothing was changed."}
+      {:invalid_argument, "CYFR is already reached that way, at #{address}. Nothing was changed."}
 
   defp row({:access_invalid, %{input: input, kind: kind, rule: rule}})
        when is_binary(input) and is_map_key(@access_input_kinds, kind) and is_binary(rule),
