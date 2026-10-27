@@ -34,8 +34,13 @@ defmodule Prima.LocusBackendsTest do
   defp tag(error) when is_tuple(error), do: elem(error, 0)
   defp tag(error) when is_atom(error), do: error
 
-  defp atom_keys(map),
-    do: Map.new(map, fn {key, value} -> {String.to_existing_atom(key), value} end)
+  # The field names are atoms of `Prima.LocusBackends`, which exist only
+  # once that module is loaded: an island's VM loads it on first use, so a
+  # test that reads the vectors before calling it must load it first.
+  defp atom_keys(map) do
+    Code.ensure_loaded!(LocusBackends)
+    Map.new(map, fn {key, value} -> {String.to_existing_atom(key), value} end)
+  end
 
   defp owner, do: atom_keys(@vectors["owner"])
 
