@@ -67,15 +67,19 @@ defmodule PrismWeb.ShellLive do
 
   ## Safe mode
 
-  A live canvas that has not sent `ready` within ten seconds of its
-  frame's open, or that was refused at its open, is safe mode `not_ready`; one
-  that reports a failure, or whose frame dies while the glass shows it, is
-  `crashed`, and so is a hidden canvas that reported a failure, once it is
-  shown (a hidden canvas whose frame dies is discarded, and opens anew
-  once shown); a validation that leaves no working
-  version is `not_validated`; and the person's own ask — the shell's `Safe
-  mode` button or Ctrl+Alt+S on the shell's page, never a frame's message —
-  is `requested`. Safe mode discards every frame with its credential and
+  A canvas the glass shows that has not sent `ready` within ten seconds of
+  being shown — its frame's open, for one that opens shown — or that was
+  refused at its open, is safe mode `not_ready`; one that reports a
+  failure, or whose frame dies while the glass shows it, is `crashed`, and
+  so is a hidden canvas that reported a failure, once it is shown (a
+  hidden canvas whose frame dies is discarded, and opens anew once
+  shown); a validation that leaves no working version is
+  `not_validated`; and the person's own ask — the shell's `Safe mode`
+  button or Ctrl+Alt+S on the shell's page, never a frame's message — is
+  `requested`. A hidden canvas runs no ready deadline, since it reads and
+  acts on nothing: one not ready yet has the whole ten seconds from the
+  moment it is shown, and one ready before it was hidden stays ready.
+  Safe mode discards every frame with its credential and
   the system layer shows its prompt (`Prism.SafeMode`) over the visible
   canvas; no picker is drawn and nothing launches. The way out the person
   chooses ends it: the canvas again, the kept version once the system
@@ -166,9 +170,11 @@ defmodule PrismWeb.ShellLive do
   alias Prism.SafeMode
   alias Sanctum.TinctureAuth
 
-  # How long a live canvas has, from its frame's open, to send `ready`
-  # before the shell enters safe mode: a page that never loads, and so
-  # never handshakes, falls to safe mode as one that loads and dies.
+  # How long a canvas has, from the moment the glass shows it, to send
+  # `ready` before the shell enters safe mode (`ready_deadlines/2`): from
+  # its frame's open, for one that opens shown, so a page that never
+  # loads, and so never handshakes, falls to safe mode as one that loads
+  # and dies.
   @canvas_ready_ms 10_000
 
   # The stream a canvas reads a feed's results on (`Opus.Providers.Feed`).
@@ -576,8 +582,9 @@ defmodule PrismWeb.ShellLive do
   # transition that moved it, each frame newly refused for want of a
   # grant is offered the grant prompt — a canvas or validation frame
   # excepted, whose canvas asks for its grant once, itself
-  # (`ask_canvas_grant/3`) — and a canvas that failed while hidden enters
-  # safe mode the moment it is shown.
+  # (`ask_canvas_grant/3`) — a canvas's ready deadline runs only while it
+  # is shown (`ready_deadlines/2`), and a canvas that failed while hidden
+  # enters safe mode the moment it is shown.
   defp frames(socket, fun), do: put_frames(socket, fun.(socket.assigns.frames))
 
   defp put_frames(socket, later) do
@@ -591,6 +598,7 @@ defmodule PrismWeb.ShellLive do
       |> Enum.reduce(socket, &push_event(&2, "frame_bearer", &1))
       |> assign(frames: later, covered: Frames.active(later) != nil)
       |> arm_renewals(before, later)
+      |> ready_deadlines(later)
 
     socket =
       Enum.reduce(
@@ -853,12 +861,39 @@ defmodule PrismWeb.ShellLive do
 
   defp handshaken(socket, _frame), do: socket
 
-  # A live canvas's ready deadline, one timer per frame at a time: armed
-  # at its open and again when it fires on a hidden canvas. Each timer is
-  # held until it fires, so the timers in flight are the ones held.
+  # A canvas's ready deadline runs only while the glass shows it, since a
+  # hidden canvas reads and acts on nothing and so owes no `ready`. A shown
+  # canvas that is not ready and holds no deadline is given the whole
+  # period from now: from its open, when it opens shown, or from the
+  # moment it is shown again. The deadline of a canvas no longer shown —
+  # hidden, refused or gone — is cancelled, so one hidden before it was
+  # ready is given the whole period again once shown, and one ready
+  # before it was hidden stays ready and is given none. One deadline per
+  # frame at a time, held with the token its message carries, so the
+  # message of a cancelled timer already sent changes nothing.
+  defp ready_deadlines(socket, frames) do
+    %{canvas_deadlines: held, canvas_ready: ready} = socket.assigns
+    shown = shown_canvases(frames)
+
+    {kept, cancelled} = Map.split_with(held, fn {id, _} -> MapSet.member?(shown, id) end)
+    Enum.each(cancelled, fn {_id, {timer, _token}} -> Process.cancel_timer(timer) end)
+
+    shown
+    |> Enum.reject(&(Map.has_key?(kept, &1) or MapSet.member?(ready, &1)))
+    |> Enum.reduce(assign(socket, :canvas_deadlines, kept), &arm_ready_deadline(&2, &1))
+  end
+
   defp arm_ready_deadline(socket, frame_id) do
-    timer = Process.send_after(self(), {:canvas_deadline, frame_id}, @canvas_ready_ms)
-    update(socket, :canvas_deadlines, &Map.put(&1, frame_id, timer))
+    token = make_ref()
+    timer = Process.send_after(self(), {:canvas_deadline, frame_id, token}, @canvas_ready_ms)
+    update(socket, :canvas_deadlines, &Map.put(&1, frame_id, {timer, token}))
+  end
+
+  # The ids of the canvas frames the glass shows: live and visible.
+  defp shown_canvases(frames) do
+    for %{key: {:canvas, _}, state: :live, visible: true, id: id} <- Frames.list(frames),
+        into: MapSet.new(),
+        do: id
   end
 
   # A renewal is armed for each frame the view renews whose deadline is new
@@ -1238,13 +1273,11 @@ defmodule PrismWeb.ShellLive do
         %{state: :refused} ->
           enter_safe_mode(socket, :not_ready)
 
-        %{id: frame_id} ->
-          socket |> arm_ready_deadline(frame_id) |> assign(:showing, :canvas)
-
-        # Opened frozen behind a full frame, and dropped when its suspension
-        # could not be recorded: no frame is held, and the canvas is drawn
-        # empty.
-        nil ->
+        # Opened: shown, with its ready deadline armed (`ready_deadlines/2`),
+        # or frozen behind a full frame, with none until it is shown. Or
+        # opened frozen and dropped when its suspension could not be
+        # recorded: no frame is held, and the canvas is drawn empty.
+        _opened_or_dropped ->
           assign(socket, :showing, :canvas)
       end
     end
@@ -1384,14 +1417,19 @@ defmodule PrismWeb.ShellLive do
   # ---- safe mode -------------------------------------------------------------
 
   # Safe mode: every frame is discarded with its credential, a validation
-  # in progress included, every grant prompt the shell raised is withdrawn,
-  # and the system layer offers the ways out.
+  # in progress included, with every canvas's ready deadline, every grant
+  # prompt the shell raised is withdrawn, and the system layer offers the
+  # ways out.
   defp enter_safe_mode(%{assigns: %{safe_mode: %{}}} = socket, _reason), do: socket
 
   defp enter_safe_mode(socket, reason) do
     ctx = socket.assigns.context
     entry = visible_entry(socket.assigns)
     {prompt_id, socket} = next_prompt_id(socket, "safe-mode")
+
+    Enum.each(socket.assigns.canvas_deadlines, fn {_id, {timer, _token}} ->
+      Process.cancel_timer(timer)
+    end)
 
     subject =
       SafeMode.enter(reason, %{
@@ -1410,6 +1448,7 @@ defmodule PrismWeb.ShellLive do
     |> assign(:safe_mode, %{id: prompt_id, reason: reason, canvas: subject.canvas})
     |> assign(:canvas_ready, MapSet.new())
     |> assign(:canvas_died, MapSet.new())
+    |> assign(:canvas_deadlines, %{})
     |> assign(:credential_prompts, %{})
     |> assign(:grant_prompts, %{})
     |> assign(:grant_decisions, %{})
@@ -1951,29 +1990,23 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # A live canvas's frame opened this long ago. Without its `ready` the
-  # shell enters safe mode. A deadline that fires on a canvas hidden
-  # meanwhile that has not reported `ready` starts the timer again, so
-  # once shown the canvas has what is left of that new period.
-  def handle_info({:canvas_deadline, frame_id}, socket) do
-    socket = update(socket, :canvas_deadlines, &Map.delete(&1, frame_id))
-    %{frames: frames, canvas_ready: ready, safe_mode: safe_mode} = socket.assigns
+  # A shown canvas's ready deadline, armed under `token` the whole period
+  # ago (`ready_deadlines/2`): without its `ready` the shell enters safe
+  # mode. One cancelled or superseded since, or whose frame is no longer
+  # shown, changes nothing.
+  def handle_info({:canvas_deadline, frame_id, token}, socket) do
+    %{canvas_deadlines: held, canvas_ready: ready, frames: frames} = socket.assigns
 
-    case Enum.find(Frames.list(frames), &match?(%{key: {:canvas, _}, id: ^frame_id}, &1)) do
-      _held when not is_nil(safe_mode) ->
-        {:noreply, socket}
+    case held do
+      %{^frame_id => {_timer, ^token}} ->
+        socket = assign(socket, :canvas_deadlines, Map.delete(held, frame_id))
 
-      %{state: :frozen} ->
-        if MapSet.member?(ready, frame_id),
-          do: {:noreply, socket},
-          else: {:noreply, arm_ready_deadline(socket, frame_id)}
+        if MapSet.member?(shown_canvases(frames), frame_id) and
+             not MapSet.member?(ready, frame_id),
+           do: {:noreply, enter_safe_mode(socket, :not_ready)},
+           else: {:noreply, socket}
 
-      %{state: :live} ->
-        if MapSet.member?(ready, frame_id),
-          do: {:noreply, socket},
-          else: {:noreply, enter_safe_mode(socket, :not_ready)}
-
-      _refused_another_or_none ->
+      _cancelled_or_superseded ->
         {:noreply, socket}
     end
   end

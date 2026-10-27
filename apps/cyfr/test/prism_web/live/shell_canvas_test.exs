@@ -18,8 +18,9 @@ defmodule PrismWeb.ShellCanvasTest do
   freezes the canvas left and its apps, and shows the next, with no wrap.
   A canvas's `open` places a listed tincture where its arrangement puts
   it, and its `press` reaches `feed.press` only from the visible live
-  canvas whose version reads that feed. A canvas that never sends ready,
-  one refused at open, and the person's own ask enter safe mode, which
+  canvas whose version reads that feed. A canvas shown and not ready
+  within the whole period from its showing, one refused at open, and the
+  person's own ask enter safe mode, which
   discards every frame with its credential; its kept version restores and
   opens only that canvas.
 
@@ -555,6 +556,55 @@ defmodule PrismWeb.ShellCanvasTest do
   # The hidden `home` canvas shown again as `hidden_canvas!/5` hid it.
   defp show_again!(view, :switch), do: render_hook(view, "switch_canvas", %{"canvas" => "home"})
   defp show_again!(view, :full_frame), do: render_click(view, "close_active_tincture", %{})
+
+  # A shell whose `home` canvas opened hidden: a full frame its own open
+  # put over it is shown when the layout gives `home` another tincture,
+  # whose frame opens frozen under that full frame. Closing the full frame
+  # shows it.
+  defp opened_hidden!(conn, ctx, user, athanor) do
+    tincture!(ctx, "app-dash")
+    full = %{"desk" => posture([app("tincture:local.app-dash", "full")])}
+    two_canvases!(ctx, user, athanor, full)
+    view = shell!(conn)
+    first = canvas(view)
+    canvas_verb!(view, first.id, :open, %{"ref" => "tincture:local.app-dash"})
+    assert %{state: :frozen} = canvas(view)
+
+    layout!(user, athanor, [
+      entry("home", "tincture:local.notes-canvas", full),
+      entry("work", "tincture:local.markets")
+    ])
+
+    settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
+    assert %{state: :frozen, visible: false} = opened = canvas(view)
+    refute opened.id == first.id
+    assert row(opened.id).state == "suspended"
+    view
+  end
+
+  # The period a shown canvas has to send ready: ten seconds, as
+  # `PrismWeb.ShellLive` documents it.
+  @ready_ms 10_000
+
+  # When the timer of a ready deadline the shell holds fires, in
+  # monotonic milliseconds.
+  defp fires_at(timer) do
+    left = Process.read_timer(timer)
+    assert is_integer(left)
+    System.monotonic_time(:millisecond) + left
+  end
+
+  # Time passes beyond every ready deadline the shell holds: each is
+  # delivered as its timer delivers it, its timer cancelled first so it
+  # arrives once.
+  defp deadlines_pass!(view) do
+    for {frame_id, {timer, token}} <- assigns(view).canvas_deadlines do
+      Process.cancel_timer(timer)
+      send(view.pid, {:canvas_deadline, frame_id, token})
+    end
+
+    _ = render(view)
+  end
 
   # ===========================================================================
 
@@ -2525,21 +2575,20 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # Ready at nine seconds: before the deadline message.
       canvas_verb!(view, id, :ready)
-      send(view.pid, {:canvas_deadline, id})
-      _ = render(view)
+      deadlines_pass!(view)
       assert assigns(view).safe_mode == nil
       assert %{id: ^id, state: :live} = canvas(view)
 
       # A canvas opened again that never says it is ready.
       render_click(view, "safe_mode", %{})
+      assert assigns(view).canvas_deadlines == %{}
       view |> element(~s(#system-layer-dialog button[phx-value-offer="retry"])) |> render_click()
       settle!(view, fn -> canvas(view) != nil end)
       again = canvas(view).id
       refute again == id
       handshake!(view, again)
 
-      send(view.pid, {:canvas_deadline, again})
-      _ = render(view)
+      deadlines_pass!(view)
       assert %{reason: :not_ready} = assigns(view).safe_mode
       assert opened(view) == []
       assert row(again).state == "revoked"
@@ -2559,7 +2608,7 @@ defmodule PrismWeb.ShellCanvasTest do
       # took its credential.
       assert %{id: id, state: :live} = canvas(view)
       assert row(id).state == "active"
-      assert %{^id => timer} = assigns(view).canvas_deadlines
+      assert %{^id => {timer, _token}} = assigns(view).canvas_deadlines
       assert is_integer(Process.read_timer(timer))
       refute MapSet.member?(assigns(view).canvas_ready, id)
 
@@ -2581,7 +2630,7 @@ defmodule PrismWeb.ShellCanvasTest do
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
       id = canvas(view).id
-      assert %{^id => timer} = deadlines = assigns(view).canvas_deadlines
+      assert %{^id => {timer, _token}} = deadlines = assigns(view).canvas_deadlines
       assert map_size(deadlines) == 1
 
       handshake!(view, id)
@@ -2591,17 +2640,81 @@ defmodule PrismWeb.ShellCanvasTest do
       assert is_integer(Process.read_timer(timer))
     end
 
-    test "a stale deadline, for a canvas no longer held, changes nothing", %{
-      conn: conn,
-      ctx: ctx,
-      user: user,
-      athanor: athanor
-    } do
-      two_canvases!(ctx, user, athanor)
-      view = shell!(conn)
-      send(view.pid, {:canvas_deadline, "frm_not_this_canvas"})
+    test "a canvas opened hidden runs no deadline; shown, it has the whole period from its showing, and is safe mode not_ready once that passes",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      view = opened_hidden!(conn, ctx, user, athanor)
+      %{id: id} = canvas(view)
+
+      # Opened hidden: the shell runs no ready deadline for it.
+      refute Map.has_key?(assigns(view).canvas_deadlines, id)
+
+      # Shown, however near the end of a period counted from its open that
+      # is: the whole period runs from its showing.
+      shown_at = System.monotonic_time(:millisecond)
+      render_click(view, "close_active_tincture", %{})
+      assert %{id: ^id, state: :live, visible: true} = canvas(view)
+      assert %{^id => {timer, token}} = assigns(view).canvas_deadlines
+      assert map_size(assigns(view).canvas_deadlines) == 1
+
+      # Its deadline, the only one held, falls due no sooner than the whole
+      # period from its showing, within the clocks' millisecond rounding.
+      assert fires_at(timer) >= shown_at + @ready_ms - 2
+
+      # Before then nothing sends it to safe mode: a deadline that is not
+      # the one held changes nothing.
+      send(view.pid, {:canvas_deadline, id, make_ref()})
       _ = render(view)
       assert assigns(view).safe_mode == nil
+      assert %{^id => {^timer, ^token}} = assigns(view).canvas_deadlines
+
+      # The whole period passes, and it is still not ready.
+      deadlines_pass!(view)
+      assert %{reason: :not_ready} = assigns(view).safe_mode
+      assert opened(view) == []
+      assert row(id).state == "revoked"
+    end
+
+    test "a canvas never shown never goes to safe mode not_ready",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      view = opened_hidden!(conn, ctx, user, athanor)
+      %{id: id} = canvas(view)
+      refute Map.has_key?(assigns(view).canvas_deadlines, id)
+
+      # Time passes: every deadline the shell holds falls due.
+      deadlines_pass!(view)
+      assert assigns(view).safe_mode == nil
+
+      # Away to `work` and back, which shows the full frame over `home`
+      # again: the canvas is never shown, and no deadline is ever its.
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert %{state: :live, visible: true} = canvas(view, "work")
+      assert %{state: :frozen, visible: false} = canvas(view)
+      refute Map.has_key?(assigns(view).canvas_deadlines, id)
+
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert %{id: ^id, state: :frozen, visible: false} = canvas(view)
+      assert assigns(view).canvas_deadlines == %{}
+
+      deadlines_pass!(view)
+      assert assigns(view).safe_mode == nil
+      assert %{id: ^id, state: :frozen} = canvas(view)
+    end
+
+    test "a stale deadline, for a canvas no longer held or a timer cancelled since, changes nothing",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      id = canvas(view).id
+      assert %{^id => held} = assigns(view).canvas_deadlines
+
+      send(view.pid, {:canvas_deadline, "frm_not_this_canvas", make_ref()})
+      # The shown canvas's frame, under a token other than the one held: a
+      # timer cancelled after it fired.
+      send(view.pid, {:canvas_deadline, id, make_ref()})
+      _ = render(view)
+
+      assert assigns(view).safe_mode == nil
+      assert %{^id => ^held} = assigns(view).canvas_deadlines
     end
 
     for stage <- ["load", "runtime"] do
@@ -2680,17 +2793,46 @@ defmodule PrismWeb.ShellCanvasTest do
         assert dropped(view) == before
         assert MapSet.member?(assigns(view).canvas_ready, home.id)
 
-        # Its deadline fires while it is hidden: ready, nothing is armed again.
-        send(view.pid, {:canvas_deadline, home.id})
-        _ = render(view)
+        # Hidden, it runs no deadline; shown again, ready, it is given none.
         refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
-
         show_again!(view, hidden_by)
         assert %{id: id, state: :live, visible: true} = canvas(view)
         assert id == home.id
-        send(view.pid, {:canvas_deadline, home.id})
-        _ = render(view)
+        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+
+        deadlines_pass!(view)
         assert assigns(view).safe_mode == nil
+      end
+
+      @tag hidden_by: hidden_by
+      test "a canvas hidden by #{hidden_by} before it is ready runs no deadline while hidden, and shown again has the whole period from its showing",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
+        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
+        home = canvas(view)
+        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+
+        # Time passes while it is hidden: whatever the shell holds falls due,
+        # and none of it is this canvas's. The canvas shown meanwhile, if
+        # any, is ready.
+        for %{key: {:canvas, _}, state: :live, id: shown} <- opened(view),
+            do: canvas_verb!(view, shown, :ready)
+
+        deadlines_pass!(view)
+        assert assigns(view).safe_mode == nil
+        assert %{state: :frozen} = canvas(view)
+
+        shown_at = System.monotonic_time(:millisecond)
+        show_again!(view, hidden_by)
+        assert %{id: id, state: :live, visible: true} = canvas(view)
+        assert id == home.id
+        assert %{^id => {timer, _token}} = assigns(view).canvas_deadlines
+
+        # Its deadline falls due no sooner than the whole period from its
+        # showing, within the clocks' millisecond rounding.
+        assert fires_at(timer) >= shown_at + @ready_ms - 2
+
+        deadlines_pass!(view)
+        assert %{reason: :not_ready} = assigns(view).safe_mode
       end
 
       @tag hidden_by: hidden_by
