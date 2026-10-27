@@ -22,15 +22,18 @@ defmodule Sanctum.Directory do
 
   The directory a node serves is its origin (`Sanctum.origin/0`) and
   nothing else. Its routes are mounted at the root, `/directory/v1`, never
-  under a path a proxy adds, and its origin is already in the one spelling
-  `Prima.Identity.Encoding` gives a directory URL (in a tailnet or public
-  home `CYFR_PUBLIC_URL` is exactly `https://<CYFR_HOST>`, a lowercase
-  host), so the two compare byte for byte. A genesis naming anything
+  under a path a proxy adds. The origin as configured need not be in the
+  one spelling a genesis names its directory in (a local home on port 80
+  is `http://localhost:80`, named `http://localhost`), so it is compared
+  in that spelling (`Prima.Identity.Encoding.canonical_home/1`), byte for
+  byte with the decoded genesis's directory. A genesis naming anything
   else, such as another host, this host on another port or scheme, or
   this host under a path, is refused `:wrong_directory` once it decodes,
-  before its signature is checked and before anything is stored. A
-  recovery must name its genesis's directory and a rotation names none,
-  so every log this node registers names it.
+  before its signature is checked and before anything is stored. An
+  origin that is not a home however it is spelled, such as one with a
+  path, names no directory, and every genesis is refused
+  `:wrong_directory`. A recovery must name its genesis's directory and a
+  rotation names none, so every log this node registers names it.
 
   ## Order of work
 
@@ -474,7 +477,10 @@ defmodule Sanctum.Directory do
   defp position(_after_seq), do: {:error, {:invalid, {:invalid_field, "after"}}}
 
   defp served_here(%Entry{directory: directory}) do
-    if directory == Sanctum.origin(), do: :ok, else: {:error, :wrong_directory}
+    case Encoding.canonical_home(Sanctum.origin()) do
+      {:ok, ^directory} -> :ok
+      _ -> {:error, :wrong_directory}
+    end
   end
 
   defp names(%RecoverRequest{identifier: identifier}, identifier), do: :ok

@@ -13,8 +13,9 @@ defmodule Sanctum.DirectoryTest do
   recovery keeping its reserve when rotations have spent theirs.
   """
 
-  # The directory setting, this node's public URL, this member's rate
-  # counters and the directory's one usage row are process-wide.
+  # The directory setting, this node's public URL and fallback origin,
+  # this member's rate counters and the directory's one usage row are
+  # process-wide.
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
@@ -39,17 +40,30 @@ defmodule Sanctum.DirectoryTest do
 
   # This node's public URL, and so the directory it serves
   # (`Sanctum.origin/0`), restored when the test ends.
-  defp serve_at(url) do
-    previous = Application.fetch_env(:sanctum, :public_url)
+  defp serve_at(url), do: put_sanctum_env(:public_url, url)
+
+  # A local home declares no public URL: its origin is the fallback the
+  # runtime builds from its port (`Cyfr.RuntimeConfig`).
+  defp serve_locally_at(origin) do
+    put_sanctum_env(:public_url, nil)
+    put_sanctum_env(:fallback_origin, origin)
+  end
+
+  # A `:sanctum` setting for the rest of the test, nil unsetting it, its
+  # restore registered before it changes.
+  defp put_sanctum_env(key, value) do
+    previous = Application.fetch_env(:sanctum, key)
 
     on_exit(fn ->
       case previous do
-        {:ok, value} -> Application.put_env(:sanctum, :public_url, value)
-        :error -> Application.delete_env(:sanctum, :public_url)
+        {:ok, value} -> Application.put_env(:sanctum, key, value)
+        :error -> Application.delete_env(:sanctum, key)
       end
     end)
 
-    Application.put_env(:sanctum, :public_url, url)
+    if is_nil(value),
+      do: Application.delete_env(:sanctum, key),
+      else: Application.put_env(:sanctum, key, value)
   end
 
   # ---- fixtures ----------------------------------------------------------------
@@ -147,6 +161,23 @@ defmodule Sanctum.DirectoryTest do
      Arca.Repo.get(ServerMeta, "directory_usage")}
   end
 
+  # A genesis naming each of `directories` is refused `:wrong_directory`,
+  # and nothing is stored.
+  defp refuses(directories) do
+    before = stored()
+
+    for directory <- directories do
+      stranger = person(directory: directory)
+
+      assert {^directory, {:error, :wrong_directory}} =
+               {directory,
+                Directory.register(%{genesis: Entry.encode(stranger.genesis), source: source()})}
+
+      assert stored() == before
+      assert {:error, :not_found} = page(stranger.identifier)
+    end
+  end
+
   defp windows(bucket, key) do
     Arca.Repo.all(
       from(w in RequestRateWindow,
@@ -234,25 +265,15 @@ defmodule Sanctum.DirectoryTest do
 
     test "refuses a genesis naming any directory but the one this node serves, storing nothing" do
       register!(person())
-      before = stored()
 
       # Another host; this host on another port or scheme; this host under
       # a path. The directory served is this node's origin and nothing else.
-      for directory <- [
-            "https://elsewhere.example",
-            "https://dir.example:8443",
-            "http://dir.example",
-            "https://dir.example/directory"
-          ] do
-        stranger = person(directory: directory)
-
-        assert {^directory, {:error, :wrong_directory}} =
-                 {directory,
-                  Directory.register(%{genesis: Entry.encode(stranger.genesis), source: source()})}
-
-        assert stored() == before
-        assert {:error, :not_found} = page(stranger.identifier)
-      end
+      refuses([
+        "https://elsewhere.example",
+        "https://dir.example:8443",
+        "http://dir.example",
+        "https://dir.example/directory"
+      ])
 
       # The served directory is read from the node's origin as it stands.
       serve_at("https://elsewhere.example")
@@ -260,6 +281,51 @@ defmodule Sanctum.DirectoryTest do
 
       assert {:error, :wrong_directory} =
                Directory.register(%{genesis: Entry.encode(person().genesis), source: source()})
+    end
+
+    test "a local home on port 80, whose origin is http://localhost:80, registers a genesis " <>
+           "naming http://localhost" do
+      serve_locally_at("http://localhost:80")
+      assert Sanctum.origin() == "http://localhost:80"
+
+      # A genesis cannot name the origin as configured: its directory is
+      # in the one spelling, which drops the scheme's default port.
+      refute Prima.Identity.Encoding.directory_url?("http://localhost:80")
+
+      register!(person(directory: "http://localhost"))
+    end
+
+    test "serves its origin with the scheme's default port dropped, and still refuses another " <>
+           "scheme, host, port or path, storing nothing" do
+      for {serve, origin, served, others} <- [
+            {&serve_locally_at/1, "http://localhost:80", "http://localhost",
+             [
+               "https://localhost",
+               "http://elsewhere.example",
+               "http://localhost:4000",
+               "http://localhost/directory"
+             ]},
+            {&serve_at/1, "https://dir.example:443", "https://dir.example",
+             [
+               "http://dir.example",
+               "https://elsewhere.example",
+               "https://dir.example:8443",
+               "https://dir.example/directory"
+             ]}
+          ] do
+        serve.(origin)
+        genesis = Entry.encode(person(directory: served).genesis)
+
+        assert {^origin, {:ok, %{seq: 0}}} =
+                 {origin, Directory.register(%{genesis: genesis, source: source()})}
+
+        refuses(others)
+      end
+    end
+
+    test "serves no directory when its origin is not a home, refusing every genesis" do
+      serve_at("https://dir.example/cyfr")
+      refuses(["https://dir.example/cyfr", "https://dir.example"])
     end
 
     test "refuses a new genesis at the identity quota, retryably, and still answers an old one" do
