@@ -1450,11 +1450,18 @@ defmodule PrismWeb.ShellCanvasTest do
       again = open_stream.()
       wait_until(fn -> held_by.(again.pid) != [] end, 5_000)
       assert [_one] = held_by.(again.pid)
-      Task.shutdown(again, :brutal_kill)
 
-      # The view stops while the test still owns the sandbox, so nothing it
-      # arms on showing the canvas reaches the database after the test ends.
+      # The stream reads the store after its subscription is in place and at
+      # each revalidation, on the test's one shared connection, and a stream
+      # killed inside a read takes that connection with it. So the view
+      # stops first, while the test still owns the sandbox, and its end
+      # revokes the canvas's credential, which closes the stream with a
+      # refusal; the stream is awaited to that end, never killed.
       GenServer.stop(view.pid, :normal)
+      assert {:ok, closed} = Task.yield(again, 10_000) || Task.shutdown(again)
+
+      assert [%{event: "refusal"}] =
+               closed.resp_body |> Prima.Test.EventStream.decode() |> Enum.take(-1)
     end
 
     test "a canvas shown again keeps its row's deadline and its handshake's bearer",
