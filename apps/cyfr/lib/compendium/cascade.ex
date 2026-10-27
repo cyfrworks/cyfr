@@ -108,7 +108,7 @@ defmodule Compendium.Cascade do
 
     case Arca.CronSchedule.soft_delete(actor, schedule.id) do
       {:ok, removed} ->
-        announce_removed(actor, removed, schedule.status)
+        announce_removed(actor, removed)
 
       # Removed by another delete since the sweep listed it: that delete
       # removed it and announced it.
@@ -126,12 +126,13 @@ defmodule Compendium.Cascade do
   # A schedule's removal is announced as the schedule tool's delete
   # announces one (`Opus.Schedules.Changes`, which this layer cannot
   # reach): by the delete whose write removed the live row, after its
-  # commit, with the row as it was, under the schedule's lock and only
-  # while this member holds its slot. A feed's row is not a schedule's.
-  defp announce_removed(actor, %{kind: "schedule"} = removed, status_before) do
+  # commit, with the row as that delete's locked read found it, under the
+  # schedule's lock and only while this member holds its slot. A feed's
+  # row is not a schedule's.
+  defp announce_removed(actor, %{kind: "schedule"} = removed) do
     Schedules.serialized(removed.id, fn ->
       payload =
-        Schedules.new(actor, :removed, Schedules.row_fields(%{removed | status: status_before}))
+        Schedules.new(actor, :removed, Schedules.row_fields(removed))
 
       with {:ok, _held} <- Arca.CronSchedule.get_held(actor, removed.id),
            :ok <- Cyfr.Bus.broadcast(actor, Cyfr.Bus.schedules(actor), payload) do
@@ -145,7 +146,7 @@ defmodule Compendium.Cascade do
     end)
   end
 
-  defp announce_removed(_actor, _feed, _status_before), do: :ok
+  defp announce_removed(_actor, _feed), do: :ok
 
   # The reason's name alone: a validation's map would carry its messages.
   defp refusal_word({:validation, _errors}), do: "validation"

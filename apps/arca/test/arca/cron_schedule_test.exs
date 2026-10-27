@@ -485,8 +485,10 @@ defmodule Arca.CronScheduleTest do
     test "is not updated or deleted again: each answers :not_found and writes nothing",
          %{actor: actor} do
       {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "gone"}))
-      assert {:ok, %{status: "deleted"}} = CronSchedule.soft_delete(actor, schedule.id)
+      # The delete answers the row as it found it, live.
+      assert {:ok, %{status: "active"}} = CronSchedule.soft_delete(actor, schedule.id)
       before = CronSchedule.get_for_daemon(schedule.id)
+      assert {:ok, %{status: "deleted"}} = before
 
       assert {:error, :not_found} = CronSchedule.soft_delete(actor, schedule.id)
 
@@ -584,7 +586,8 @@ defmodule Arca.CronScheduleTest do
 
         assert {:ok, %{error_count: 1}} = CronSchedule.record_error(actor, id, "boom")
         assert {:ok, %{status: "paused"}} = CronSchedule.update(actor, id, %{status: "paused"})
-        assert {:ok, %{status: "deleted"}} = CronSchedule.soft_delete(actor, id)
+        assert {:ok, %{status: "paused"}} = CronSchedule.soft_delete(actor, id)
+        assert {:ok, %{status: "deleted"}} = CronSchedule.get_for_daemon(id)
       end
     end
   end

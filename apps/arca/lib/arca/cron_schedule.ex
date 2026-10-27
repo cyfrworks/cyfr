@@ -334,10 +334,11 @@ defmodule Arca.CronSchedule do
   end
 
   @doc """
-  Soft-deletes a live row with tenant-scoped lookup. A row already
-  deleted is `:not_found`, decided in the write's own locked read, so of
-  two deletes that race exactly one answers the removed row. Every row,
-  whatever its kind, is written only under the member's live slot
+  Soft-deletes a live row with tenant-scoped lookup, and answers the row
+  as the delete's own locked read found it, the moment before it was
+  deleted. A row already deleted is `:not_found`, decided in that read,
+  so of two deletes that race exactly one answers the removed row. Every
+  row, whatever its kind, is written only under the member's live slot
   (`:not_owner` otherwise).
   """
   @spec soft_delete(Prima.Actor.t(), String.t()) ::
@@ -352,6 +353,10 @@ defmodule Arca.CronSchedule do
         |> Row.delete_changeset(DateTime.utc_now())
         |> Arca.Repo.update()
         |> mapped_validation()
+        |> case do
+          {:ok, _deleted} -> {:ok, schedule}
+          refused -> refused
+        end
       end)
     end)
     |> Arca.Data.project()

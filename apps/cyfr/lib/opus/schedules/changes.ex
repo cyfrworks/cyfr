@@ -11,7 +11,7 @@ defmodule Opus.Schedules.Changes do
   error recorded, an occurrence's start and its run's end) and reads the
   row again rather than trusting what the write answered, which was read
   before its commit. A row of kind `feed`, a deleted row and a row that
-  no longer reads announce nothing. `removed/3` follows the one delete
+  no longer reads announce nothing. `removed/2` follows the one delete
   whose write removed the live row (`Arca.CronSchedule.soft_delete/2`
   answers any other `:not_found`), with the row as it was. Both run under
   the schedule's lock (`Cyfr.Bus.Schedules.serialized/2`), so once
@@ -50,15 +50,15 @@ defmodule Opus.Schedules.Changes do
 
   @doc """
   The schedule a committed delete removed, announced as `removed` with the
-  row as it was: `row`, the row the delete answered, with the status it
-  held before (`status_before`).
+  row as it was: `row`, the row the delete's own locked read found
+  (`Arca.CronSchedule.soft_delete/2`), never an earlier read.
   """
-  @spec removed(Prima.Actor.t(), map(), String.t()) :: :ok
-  def removed(%Prima.Actor{} = actor, %{id: id, kind: "schedule"} = row, status_before) do
+  @spec removed(Prima.Actor.t(), map()) :: :ok
+  def removed(%Prima.Actor{} = actor, %{id: id, kind: "schedule"} = row) do
     Schedules.serialized(id, fn ->
       case Arca.CronSchedule.get_held(actor, id) do
         {:ok, _held} ->
-          broadcast(actor, payload(actor, :removed, %{row | status: status_before}))
+          broadcast(actor, payload(actor, :removed, row))
 
         {:error, reason} ->
           Logger.warning(
@@ -68,7 +68,7 @@ defmodule Opus.Schedules.Changes do
     end)
   end
 
-  def removed(%Prima.Actor{}, %{kind: _feed}, _status_before), do: :ok
+  def removed(%Prima.Actor{}, %{kind: _feed}), do: :ok
 
   @doc "The payload a stored schedule row reads as (`Cyfr.Bus.Schedules.row_fields/1`)."
   @spec payload(Prima.Actor.t(), Schedules.kind(), map()) :: Schedules.t()

@@ -330,6 +330,40 @@ defmodule Opus.Schedules.StreamsTest do
       assert {:ok, %{status: "deleted"}} = Arca.CronSchedule.get(actor, row.id)
       refute_receive %Schedules{}, 500
     end
+
+    for via <- [:tool, :cascade] do
+      test "a removal by the #{via} carries the status the row held when its delete locked it",
+           %{ctx: ctx, actor: actor} do
+        row = stored!(actor, "raced-status-#{unquote(via)}", "reagent:local.review:1.0.0")
+
+        {deleting, worker} =
+          held_after_first_read(fn ->
+            case unquote(via) do
+              :tool ->
+                call(ctx, %{"action" => "delete", "schedule_id" => row.id})
+
+              :cascade ->
+                Compendium.Cascade.name_removed(ctx, %{
+                  name: "review",
+                  component_type: "reagent",
+                  publisher: "local"
+                })
+            end
+          end)
+
+        # Paused after the delete's first read and before its write.
+        assert {:ok, %{status: "paused"}} =
+                 call(ctx, %{"action" => "pause", "schedule_id" => row.id})
+
+        assert_receive %Schedules{kind: :changed, status: "paused"}
+
+        send(worker, :continue)
+        Task.await(deleting, 10_000)
+        assert {:ok, %{status: "deleted"}} = Arca.CronSchedule.get(actor, row.id)
+        assert_receive %Schedules{kind: :removed} = removed, 1_000
+        assert removed.status == "paused"
+      end
+    end
   end
 
   describe "a member that lost its slot" do

@@ -453,7 +453,7 @@ defmodule Opus.Schedules.Provider do
         case Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), schedule.id) do
           {:ok, deleted} ->
             Opus.Schedules.Scheduler.remove(schedule.id)
-            Changes.removed(Sanctum.Context.actor(ctx), deleted, schedule.status)
+            Changes.removed(Sanctum.Context.actor(ctx), deleted)
             {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
 
           {:error, reason} ->
