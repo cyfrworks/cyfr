@@ -406,10 +406,10 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress Sanctum.Gate
-        Sanctum.Network Sanctum.Namespace Sanctum.Provisioning Sanctum.Refusals
-        Sanctum.RegistryCredentials Sanctum.SignIn Sanctum.TinctureAuth Sanctum.VaultReader
-        Sanctum.VirtualTools Sanctum.Webhook
+        Sanctum Sanctum.Caller Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
+        Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Person Sanctum.Provisioning
+        Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn Sanctum.TinctureAuth
+        Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
       ),
       reason:
         "`Sanctum.Provisioning` is the first-need hook and the half of filling an " <>
@@ -418,7 +418,11 @@ defmodule Cyfr.Boundaries do
           "the component work and calls down into it. OCI and registry transports " <>
           "use Sanctum.Network and Sanctum.Egress for validated outbound requests. " <>
           "A person's push tokens are sealed and read by `Sanctum.RegistryCredentials`, " <>
-          "which also decides the fresh confirmation issuing another one needs; " <>
+          "which also decides the fresh confirmation issuing another one needs; every " <>
+          "request a person makes at the registry is signed by their live key " <>
+          "(`Sanctum.Person.sign_registry_request/3`), and what its answer writes is " <>
+          "written only while the caller still stands " <>
+          "(`Sanctum.Caller.revalidate_session/1`); " <>
           "removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
           "(`Sanctum.Webhook.disable_for_component/2`). " <>
@@ -958,8 +962,7 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "everything consent reads about a component comes through the " <>
-          "`Sanctum.Consent.Components` port, and the sign-in probe is the component " <>
-          "domain's: `Compendium.SignInSync` holds it and calls down. " <>
+          "`Sanctum.Consent.Components` port, and no sign-in speaks to the registry. " <>
           "A foundation's build does not see the host's boundaries: its pruned code path " <>
           "makes a call an undefined-module warning that names no boundary, and a bare name " <>
           "compiles."
@@ -976,7 +979,7 @@ defmodule Cyfr.Boundaries do
       into: "CyfrWeb",
       depth: 3,
       allow: ~w(
-        CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage CyfrWeb.PendingProbe
+        CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
         CyfrWeb.Plugs.BrowserCSP CyfrWeb.Plugs.CallIdentity CyfrWeb.Plugs.ConfiguredUeberauth
         CyfrWeb.Plugs.FrameRequest
@@ -1503,15 +1506,6 @@ defmodule Cyfr.Boundaries do
           "constant that reads no row, so the page and the files API refuse at one size."
     },
     %{
-      from: "PrismWeb.LegalAcceptController",
-      into: "Arca.Cache",
-      functions: [:get],
-      reason:
-        "the legal texts a version names are kept for a while once read; a read " <>
-          "answers them or a miss, and drops an expired entry as it finds it, which is " <>
-          "the cache's own housekeeping."
-    },
-    %{
       from: "PrismWeb.LoginLive",
       into: "Arca.ControlPlane",
       functions: [:held?],
@@ -1695,14 +1689,6 @@ defmodule Cyfr.Boundaries do
           "completes it, so a ticket cannot be replayed: server-local memory, never a row."
     },
     %{
-      from: "PrismWeb.LegalAcceptController",
-      into: "Arca.Cache",
-      functions: [:put],
-      reason:
-        "the legal texts a version names are kept once read, for a bounded time: " <>
-          "server-local memory, never a row."
-    },
-    %{
       from: "PrismWeb.LoginLive",
       into: "Arca.Cache",
       functions: [:put],
@@ -1838,6 +1824,8 @@ defmodule Cyfr.Boundaries do
       build_tincture_context: 2,
       origin: 0,
       reconcile_platform_admins: 2,
+      registry_base_url: 1,
+      registry_host: 0,
       system_context: 0
     ],
     "Sanctum.Annotations" => [
@@ -1858,7 +1846,7 @@ defmodule Cyfr.Boundaries do
       redirect_url: 1,
       signing_home: 1
     ],
-    "Sanctum.Auth.DeviceFlow" => [configured_providers: 0, impl: 0, provider?: 1, providers: 0],
+    "Sanctum.Auth.DeviceFlow" => [configured_providers: 0, impl: 0, provider?: 1],
     "Sanctum.Auth.EmailVerification" => [verify_with_claim: 3],
     "Sanctum.Auth.Identity" => [reserved_issuer?: 1],
     "Sanctum.Auth.OIDC" => [issuer: 0, reauth_callback: 1, reauth_decide: 3],
@@ -1871,7 +1859,6 @@ defmodule Cyfr.Boundaries do
       establish_context: 1,
       establish_kit: 2,
       fresh?: 1,
-      peek: 1,
       revalidate_session: 1
     ],
     "Sanctum.Carry" => [sweep: 1],
@@ -2000,8 +1987,10 @@ defmodule Cyfr.Boundaries do
       restore_challenge: 1
     ],
     "Sanctum.Refusals" => [classify: 1, classify: 2, code_override: 1, known?: 1, render: 1],
+    "Sanctum.Person" => [home: 0, sign_registry_request: 3],
     "Sanctum.RegistryCredentials" => [
       confirm_issuance: 4,
+      delete_push_token: 4,
       get: 3,
       list: 2,
       put_push_token: 6
@@ -2014,8 +2003,7 @@ defmodule Cyfr.Boundaries do
       admitted: 2,
       link_ticket: 2,
       record_claim: 2,
-      record_namespace: 2,
-      suggested_slug: 2
+      record_namespace: 2
     ],
     "Sanctum.Tenancy" => [
       channel_active?: 2,
@@ -2223,19 +2211,6 @@ defmodule Cyfr.Boundaries do
           "token, verified under the person's head read fresh from the directory their " <>
           "genesis names, and redeemed once through its login receipt " <>
           "(`Sanctum.Auth.CyfrDoor`)"
-    },
-    browser_claim_gate: %{
-      admits: :flow_state,
-      why:
-        "the publisher-namespace claim page and its throttled submit, gated by the " <>
-          "pending sign-in probe the session holds — expired, the page says so and " <>
-          "sends the caller back to sign in"
-    },
-    browser_public_legal: %{
-      admits: :flow_state,
-      why:
-        "renders the bundled policies and relays an acceptance, under the same " <>
-          "pending sign-in the claim gate reads"
     },
     public_health: %{
       admits: :nothing,
@@ -2499,7 +2474,6 @@ defmodule Cyfr.Boundaries do
     cache_max_binary_bytes: :default,
     cache_max_compiled_components: :default,
     tincture_max_decompressed_bytes: :default,
-    returning_probe_ms: :default,
 
     # Operator-shaped, with nothing to set them from. Each has a sensible
     # in-code default, so this is a gap in reach, not a broken deployment.
@@ -2894,12 +2868,6 @@ defmodule Cyfr.Boundaries do
       origin: :none
     },
     %{
-      module: Module.concat(["PrismWeb", "AuthController"]),
-      site: :post_legal_accept,
-      plane: :external,
-      origin: :none
-    },
-    %{
       module: Module.concat(["PrismWeb", "PasskeyController"]),
       site: :complete,
       plane: :external,
@@ -2917,21 +2885,9 @@ defmodule Cyfr.Boundaries do
       plane: :external,
       origin: :none
     },
-    %{
-      module: Module.concat(["PrismWeb", "LegalAcceptController"]),
-      site: :show,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Module.concat(["PrismWeb", "LegalAcceptController"]),
-      site: :submit,
-      plane: :external,
-      origin: :none
-    },
     # The pre-session throttle on the routes whose pipeline mints a call
     # identity: restore, the OAuth callback, a device's certificate
-    # renewal, and the browser's sign-in and policy acceptance.
+    # renewal, and the browser's sign-in.
     %{module: CyfrWeb.Plugs.AuthRateLimit, site: :call, plane: :external, origin: :none},
     # The scheduler's fire: its own admission is the occurrence claimed
     # under a held generation, and a run admission refusal is that fire's

@@ -123,10 +123,9 @@ defmodule Sanctum.Auth.CyfrDoor do
   """
   @type held :: %{required(String.t()) => String.t() | non_neg_integer()}
 
-  @typedoc "An admitted, or resumed, sign-in: the session's token and the outcome to render."
+  @typedoc "An admitted, or resumed, sign-in: the session's token and where it returns."
   @type admitted :: %{
           session_token: String.t(),
-          outcome: {:proceed, map()},
           resumed: boolean(),
           action_id: String.t(),
           return_url: String.t()
@@ -413,7 +412,6 @@ defmodule Sanctum.Auth.CyfrDoor do
   defp answer(token, held, resumed?) do
     %{
       session_token: token,
-      outcome: {:proceed, %{unsynced: [], probe: :skipped}},
       resumed: resumed?,
       action_id: held["action_id"],
       return_url: held["return_url"]

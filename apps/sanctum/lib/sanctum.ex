@@ -184,14 +184,67 @@ defmodule Sanctum do
 
   @doc """
   The directory this deployment enrolls its local people at
-  (`:sanctum, :directory_url`, from `CYFR_DIRECTORY_URL`), or `nil` when
-  it names none: local operation and local pairing need none, and
-  enrollment needs one. There is no hosted default, and no operation takes
-  a directory URL. `Sanctum.Supervisor` refuses the boot on a value
+  (`:sanctum, :directory_url`, from `CYFR_DIRECTORY_URL`, `https://cyfr.run`
+  when unset), or `nil` when it names none: local operation and local
+  pairing need none, and enrollment needs one. No operation takes a
+  directory URL. `Sanctum.Supervisor` refuses the boot on a value
   `enrollment_directory?/1` refuses.
   """
   @spec directory_url() :: String.t() | nil
   def directory_url, do: Application.get_env(:sanctum, :directory_url)
+
+  @doc """
+  The registry this deployment speaks to (`:sanctum, :registry_url`, from
+  the one parse of `CYFR_REGISTRY_URL` that sets Compendium's too): a host
+  with an optional port, or `"none"` for no registry.
+  """
+  @spec registry_url() :: String.t()
+  def registry_url, do: Application.get_env(:sanctum, :registry_url, "none")
+
+  @doc """
+  The registry's canonical host, the name a signed registry request binds
+  (`Prima.RegistryRequest`): `registry_url/0` lowercased without its port.
+  `{:error, :no_registry}` when this deployment names no registry, or a
+  value with no host.
+  """
+  @spec registry_host() :: {:ok, String.t()} | {:error, :no_registry}
+  def registry_host do
+    with url when url != "none" <- registry_url(),
+         %URI{host: host} when is_binary(host) and host != "" <- URI.parse("//" <> url),
+         host = String.downcase(host),
+         true <- Prima.Identity.Encoding.host?(host) do
+      {:ok, host}
+    else
+      _none -> {:error, :no_registry}
+    end
+  end
+
+  @doc """
+  The base URL of a registry host (a name or address with an optional
+  port): `http://` for a loopback host, `localhost`, `127.0.0.0/8` or
+  `::1`, a registry on this machine, and `https://` for every other.
+  """
+  @spec registry_base_url(String.t()) :: String.t()
+  def registry_base_url(host) when is_binary(host) do
+    if loopback?(host), do: "http://" <> host, else: "https://" <> host
+  end
+
+  defp loopback?(host) do
+    case URI.parse("//" <> host) do
+      %URI{host: "localhost"} ->
+        true
+
+      %URI{host: name} when is_binary(name) ->
+        case :inet.parse_address(String.to_charlist(name)) do
+          {:ok, {127, _, _, _}} -> true
+          {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
 
   @doc """
   Whether `value` is a directory this deployment may pin for enrollment:

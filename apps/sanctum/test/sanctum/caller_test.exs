@@ -183,20 +183,6 @@ defmodule Sanctum.CallerTest do
     end
   end
 
-  describe "peek/1" do
-    test "answers the identity fields without establishing" do
-      user = known!(new_user())
-      session = session_for(user, namespace: nil)
-
-      assert {:ok, %{user_id: user_id, provider: "github", namespace: nil}} =
-               Caller.peek(session.token)
-
-      assert user_id == user.user_id
-      assert {:error, :unauthenticated} = Caller.peek(nil)
-      assert {:error, :unauthenticated} = Caller.peek("cyfr_sess_bogus")
-    end
-  end
-
   describe "the establish memo" do
     setup do
       original = Application.get_env(:sanctum, :caller_memo_ttl_ms)

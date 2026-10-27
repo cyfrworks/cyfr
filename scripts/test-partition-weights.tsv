@@ -281,7 +281,6 @@
 0.2	apps/cyfr/test/compendium/resolver_test.exs
 1.0	apps/cyfr/test/compendium/scaffold_test.exs
 0.0	apps/cyfr/test/compendium/semver_test.exs
-0.6	apps/cyfr/test/compendium/sign_in_sync_test.exs
 0.0	apps/cyfr/test/compendium/source_test.exs
 5.8	apps/cyfr/test/compendium/tincture/policy_writers_test.exs
 0.0	apps/cyfr/test/compendium/tincture/rules_test.exs
@@ -376,7 +375,6 @@
 0.0	apps/cyfr/test/cyfr_web/endpoint_session_options_test.exs
 0.0	apps/cyfr/test/cyfr_web/endpoint_socket_test.exs
 0.0	apps/cyfr/test/cyfr_web/metrics_plug_test.exs
-0.1	apps/cyfr/test/cyfr_web/pending_probe_test.exs
 0.0	apps/cyfr/test/cyfr_web/plugs/auth_rate_limit_test.exs
 0.8	apps/cyfr/test/cyfr_web/plugs/authenticate_test.exs
 0.7	apps/cyfr/test/cyfr_web/plugs/browser_csp_test.exs
@@ -557,9 +555,7 @@
 0.0	apps/cyfr/test/prism_web/athanors_test.exs
 0.0	apps/cyfr/test/prism_web/components/aqua_approval_card_test.exs
 1.6	apps/cyfr/test/prism_web/controllers/auth_controller_test.exs
-0.5	apps/cyfr/test/prism_web/controllers/claim_namespace_controller_test.exs
 0.3	apps/cyfr/test/prism_web/controllers/download_outsider_test.exs
-0.6	apps/cyfr/test/prism_web/controllers/legal_accept_controller_test.exs
 0.1	apps/cyfr/test/prism_web/display_helpers_test.exs
 1.2	apps/cyfr/test/prism_web/focus_intent_test.exs
 1.9	apps/cyfr/test/prism_web/live/activities_live_test.exs

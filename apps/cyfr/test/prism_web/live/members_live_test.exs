@@ -183,7 +183,7 @@ defmodule PrismWeb.MembersLiveTest do
     alice = test_user()
     bob = test_user()
     conn = log_in_user(conn, alice)
-    claim_namespace!(bob)
+    record_namespace!(bob)
     {:ok, pair} = Athanors.create_pair(alice.user_id, bob.user_id)
 
     {view, html} = mount_athanor(conn, "/members", pair)

@@ -406,23 +406,83 @@ defmodule Prima.Refusal do
   defp row({:unavailable, what}) when is_binary(what),
     do: {:unavailable, "#{what} is unavailable — retry shortly"}
 
-  # A stored registry credential that no longer opens: the person signs in
-  # again, which is the only thing that replaces it.
+  # A stored registry credential that no longer opens: minting the
+  # person's tokens again replaces it.
   defp row({:corrupt, :registry_credential}),
-    do: {:corrupt, "The stored registry credential is damaged; sign in to the registry again."}
+    do:
+      {:corrupt,
+       "The stored registry credential is damaged; run `cyfr registry sync` to replace it."}
 
-  # The registry's own refusals of a policy acceptance, as the component
-  # domain rosters them: the version it now requires the person to accept,
-  # and an identity it refuses. A refusal carrying the HTTP answer keeps
-  # that answer's class; this row is the reason's own.
-  defp row({:registry, :policy_version_mismatch, version}) when is_binary(version),
-    do: {:conflict, "The registry requires acceptance of policy version #{version}"}
+  # A registry operation the person signs (`Prima.RegistryRequest`), refused
+  # before it is sent: the person has no identifier to sign under, their
+  # keys are held by another CYFR, or this deployment names no registry.
+  defp row(:not_enrolled),
+    do: {:setup_required, "This needs your identity: enroll it in Settings, then try again."}
 
-  defp row({:registry, :policy_version_mismatch, nil}),
-    do: {:conflict, "The registry requires acceptance of a newer policy version"}
+  defp row(:remote),
+    do: {:forbidden, "Your keys are held by your own CYFR; do this there."}
 
-  defp row({:registry, :unauthorized}),
-    do: {:unauthenticated, "The registry refused this identity; sign in to the registry again"}
+  defp row(:no_registry),
+    do: {:setup_required, "No registry is configured on this server (CYFR_REGISTRY_URL=none)."}
+
+  defp row(:registry_unavailable),
+    do: {:unavailable, "The registry could not be reached just now; try again shortly."}
+
+  # A push for a namespace this server holds no usable token for, or whose
+  # token the registry no longer accepts: the stale token is removed, and a
+  # sync mints the person's tokens again.
+  defp row(:registry_token_missing),
+    do:
+      {:unauthenticated,
+       "There is no valid push token for this namespace; run `cyfr registry sync`, then " <>
+         "push again."}
+
+  # The registry's own refusals of a signed request that CYFR passes on
+  # (`Prima.RegistryRequest.refusals/0` names each one's code); the last
+  # two are the directory's too, as a recovery meets them.
+  defp row(:malformed_answer),
+    do: {:unavailable, "The registry's answer could not be read; try again shortly."}
+
+  defp row(:handle_taken), do: {:conflict, "That handle is already taken; pick another."}
+
+  defp row(:has_other_handle),
+    do: {:conflict, "Your identity already holds another handle at the registry."}
+
+  defp row(:handle_invalid), do: {:invalid_argument, "The registry does not accept that handle."}
+  defp row(:handle_reserved), do: {:invalid_argument, "That handle is reserved; pick another."}
+
+  defp row(:no_handle),
+    do: {:setup_required, "Claim a handle at the registry first: run `cyfr registry claim`."}
+
+  defp row(:namespace_reserved),
+    do: {:forbidden, "That namespace is reserved at the registry."}
+
+  defp row(:claim_not_pending),
+    do: {:conflict, "No pending claim of yours names that namespace; claim it first."}
+
+  defp row(:dns_unverified),
+    do: {:conflict, "The registry did not find the DNS record the claim asked for yet."}
+
+  defp row(:dns_timeout),
+    do: {:unavailable, "The registry's DNS lookup timed out; try again shortly."}
+
+  defp row({:policy_required, version}) when is_binary(version),
+    do: {:conflict, "Accept the registry's policy version #{version} first."}
+
+  defp row({:policy_required, nil}),
+    do: {:conflict, "Accept the registry's current policy first."}
+
+  defp row(:banned), do: {:forbidden, "The registry has banned this identity."}
+
+  defp row(:wrong_directory),
+    do:
+      {:forbidden,
+       "The registry accepts only identities its own directory orders; this one names another."}
+
+  defp row(:unknown_identity), do: {:not_found, "The directory does not know this identity."}
+
+  defp row(:directory_unavailable),
+    do: {:unavailable, "The identity's directory could not be read just now; try again shortly."}
 
   # Stored bytes that no longer match the digest their row recorded: an
   # integrity refusal, not an outage — a retry will not help, and the

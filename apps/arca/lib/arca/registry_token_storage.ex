@@ -75,4 +75,29 @@ defmodule Arca.RegistryTokenStorage do
     end)
     |> Arca.Data.project()
   end
+
+  @doc """
+  Delete the row of `(user_id, registry, namespace_slug)` only while it
+  still holds `credential_ciphertext`: a token stored since the caller
+  read the row is kept. Answers `:ok` whether or not a row went.
+  """
+  @spec delete_if_unchanged(String.t(), String.t(), String.t(), binary()) ::
+          :ok | {:error, :database_error}
+  def delete_if_unchanged(user_id, registry, namespace_slug, credential_ciphertext)
+      when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) and
+             is_binary(credential_ciphertext) do
+    Arca.Repo.Errors.with_db_rescue("RegistryTokenStorage.delete_if_unchanged", fn ->
+      query =
+        from(t in RegistryToken,
+          where:
+            t.user_id == ^user_id and t.registry == ^registry and
+              t.namespace_slug == ^namespace_slug and
+              t.credential_ciphertext == ^credential_ciphertext
+        )
+
+      {_count, _} = Arca.Repo.delete_all(query)
+      :ok
+    end)
+    |> Arca.Data.project()
+  end
 end

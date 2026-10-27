@@ -288,7 +288,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 
 ### 9.1 Identity
 
-An enrolled person is an identifier, the hash of the genesis of a log their own keys extend, ordered by one directory (`Sanctum.Directory`); a person who never enrolls keeps their keys, home and local devices without one. A live key at their home signs for them, an operational key rotates it, and recovery keys in a printed kit replace both (`Sanctum.Recovery`). A home reads a remote person's head fresh within a bound (`Sanctum.IdentityFreshness`); doors are sign-in methods at a relying home; restore is an entry path, not an operation. *Not built yet:* memberships and attribution by identifier, delegated work, the email door, and the mail transport it and an emailed confirmation code need.
+An enrolled person is an identifier, the hash of the genesis of a log their own keys extend, ordered by one directory (`Sanctum.Directory`), cyfr.run's by default; a person who never enrolls keeps their keys, home and local devices without one. A handle at the registry names an identifier and is claimed by a request the person's live key signs; a home resolves a handle to that identifier and reads its keys from the directory (`Sanctum.Handle`). A live key at their home signs for them, an operational key rotates it, and recovery keys in a printed kit replace both (`Sanctum.Recovery`). A home reads a remote person's head fresh within a bound (`Sanctum.IdentityFreshness`); doors are sign-in methods at a relying home; restore is an entry path, not an operation. *Not built yet:* memberships and attribution by identifier, delegated work, the email door, and the mail transport it and an emailed confirmation code need.
 
 ### 9.2 Joining a home that is not your own
 

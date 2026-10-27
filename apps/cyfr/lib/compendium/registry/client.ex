@@ -9,10 +9,11 @@ defmodule Compendium.Registry.Client do
   tokens) and `Compendium.Registry.CredentialStore` (persists those tokens).
   This module talks the wire protocol; the other two own local state.
 
-  Handles search, discover, component metadata, identity probe, namespace
-  claim/verify, tokens, and members endpoints (`/v1/*`). Push and pull use
-  OCI protocol through the gateway (`registry.cyfr.run/v2/`) via
-  `Compendium.OCI.Client`.
+  Handles search, discover, component metadata, namespace, tokens and
+  members endpoints (`/v1/*`), and every operation a person signs
+  (`signed/3`, `Prima.RegistryRequest`): no identity provider's token is
+  ever sent. Push and pull use OCI protocol through the gateway
+  (`registry.cyfr.run/v2/`) via `Compendium.OCI.Client`.
 
   Works against both the apex cyfr.run and a self-hosted cyfr.run — the
   REST host is sourced from `:cyfr, :registry_url` and is build-agnostic.
@@ -130,121 +131,113 @@ defmodule Compendium.Registry.Client do
     end
   end
 
-  @doc """
-  Call `POST /v1/identity/probe`.
+  # Each operation a person signs, and the route the registry takes it at.
+  @routes %{
+    "handle.claim" => "/v1/namespaces/personal/claim",
+    "tokens.mint" => "/v1/tokens/mint",
+    "address.set" => "/v1/handles/address",
+    "policy.accept" => "/v1/legal/accept",
+    "appeal.file" => "/v1/appeals",
+    "publisher.claim" => "/v1/namespaces/publisher/claim",
+    "publisher.verify" => "/v1/namespaces/publisher/verify"
+  }
 
-  Exchanges an IdP access_token for a fresh set of push tokens — one for the
-  user's personal namespace (if claimed) and one per publisher membership.
-  Called automatically by `Sanctum.Auth.DeviceFlow.poll_for_session/3` and
-  `PrismWeb.AuthController.callback/2` after `Session.create/1`.
+  # The operations whose answer carries a push token: their log line is
+  # redacted.
+  @token_answers ["tokens.mint", "publisher.verify"]
 
-  The `access_token` is passed in the request body, NOT in the Authorization
-  header — probe is a bootstrap call for users who don't have a push token yet.
+  @typedoc """
+  Why a signed operation did not complete: the signer's refusals
+  (`Sanctum.Person.sign_registry_request/3`), the registry's
+  (`Prima.RegistryRequest.refusals/0`, `policy_required` carrying the
+  version the registry requires), `:registry_unavailable` for no usable
+  answer, and `:malformed_answer` for an answer that cannot be read.
   """
-  @spec probe_identity(atom() | String.t(), String.t(), String.t() | nil) ::
-          {:ok, map()} | {:error, Errors.t() | :invalid_access_token}
-  def probe_identity(provider, access_token, label \\ nil) do
-    label = label || CredentialStore.device_label()
+  @type signed_refusal ::
+          Prima.RegistryRequest.refusal()
+          | {:policy_required, String.t() | nil}
+          | :no_registry
+          | :not_enrolled
+          | :remote
+          | :not_found
+          | :unavailable
+          | :registry_unavailable
+          | :malformed_answer
+          | {:invalid_argument, String.t()}
 
-    body =
-      Jason.encode!(%{
-        provider: to_string(provider),
-        access_token: access_token,
-        label: label
-      })
+  @doc """
+  Sign `operation` with `body` as the person `user_id`
+  (`Sanctum.Person.sign_registry_request/3`) and send it to the route
+  the registry takes it at. Answers the registry's decoded answer, or a
+  refusal (`t:signed_refusal/0`). A request the registry refuses as
+  `stale_key_epoch`, the person's keys having rotated between the signing
+  and the registry's read, is signed again under the new head and sent
+  once more. Nothing is written here: what the answer means is the
+  caller's.
 
-    headers = json_headers()
-    url = url("/v1/identity/probe")
+  The request runs in the calling process, so it stops with it; a
+  registry that cannot be reached, or answers 5xx, is
+  `:registry_unavailable` and a `POST` is never replayed after the
+  registry may have acted on it (`Compendium.Registry.Transport`).
+  """
+  @spec signed(String.t(), String.t(), map()) :: {:ok, map()} | {:error, signed_refusal()}
+  def signed(user_id, operation, body)
+      when is_binary(user_id) and is_map_key(@routes, operation) and is_map(body) do
+    result =
+      case send_signed(user_id, operation, body) do
+        {:error, :stale_key_epoch} -> send_signed(user_id, operation, body)
+        result -> result
+      end
 
-    case Transport.request(:post, url, headers, body) do
-      {:ok, 200, _h, resp_body} ->
-        parse_json_body(resp_body, "probe_identity")
+    log_signed(operation, result)
+    result
+  end
 
-      {:ok, 401, _h, _resp_body} ->
-        {:error, :invalid_access_token}
-
-      {:ok, status, _h, resp_body} ->
-        {:error, Errors.from_api_response(status, resp_body, "probe_identity")}
-
-      {:error, %Errors{} = err} ->
-        {:error, err}
+  defp send_signed(user_id, operation, body) do
+    with {:ok, bytes} <- Sanctum.Person.sign_registry_request(user_id, operation, body) do
+      :post
+      |> Transport.request(url(Map.fetch!(@routes, operation)), json_headers(), bytes)
+      |> signed_answer()
     end
-    |> tap(&log_token_returning_result("probe_identity", &1))
   end
 
-  @doc """
-  Call `POST /v1/namespaces/personal/claim`.
-
-  Claims a personal namespace (1:1 with the user's provider identity) and
-  returns a fresh push token for it. The `access_token` is passed in the body
-  to prove provider identity at claim time.
-
-  Errors: `:slug_taken` (409), `:already_claimed` (409), `:invalid_label` (400).
-  """
-  @spec claim_personal_namespace(
-          String.t(),
-          atom() | String.t(),
-          String.t(),
-          String.t() | nil
-        ) :: {:ok, map()} | {:error, Errors.t() | :invalid_access_token}
-  def claim_personal_namespace(username, provider, access_token, label \\ nil) do
-    label = label || CredentialStore.device_label()
-
-    body =
-      Jason.encode!(%{
-        username: username,
-        provider: to_string(provider),
-        access_token: access_token,
-        label: label
-      })
-
-    headers = json_headers()
-    url = url("/v1/namespaces/personal/claim")
-
-    Transport.request(:post, url, headers, body)
-    |> interpret_access_token_response("claim_personal_namespace")
-    |> tap(&log_token_returning_result("claim_personal_namespace", &1))
+  defp signed_answer({:ok, status, _headers, body}) when status in 200..299 do
+    case Jason.decode(body) do
+      {:ok, %{} = answer} -> {:ok, answer}
+      _unreadable -> {:error, :malformed_answer}
+    end
   end
 
-  @doc """
-  Call `POST /v1/namespaces/publisher/claim`.
-
-  Initiates DNS-verified publisher claim. Requires a valid bearer for the
-  caller's personal namespace. Returns a TXT challenge to install in DNS.
-  """
-  @spec claim_publisher_namespace(String.t(), String.t()) ::
-          {:ok, map()} | {:error, Errors.t()}
-  def claim_publisher_namespace(slug, bearer_token) do
-    body =
-      Jason.encode!(%{slug: slug})
-
-    headers = json_headers() ++ bearer(bearer_token)
-
-    url = url("/v1/namespaces/publisher/claim")
-
-    Transport.request(:post, url, headers, body)
-    |> interpret_response("claim_publisher_namespace")
+  defp signed_answer({:ok, status, _headers, body}) do
+    case Prima.RegistryRequest.refusal(body) do
+      {:ok, :policy_required} -> {:error, {:policy_required, required_version(body)}}
+      {:ok, refusal} -> {:error, refusal}
+      {:error, :malformed_answer} when status >= 500 -> {:error, :registry_unavailable}
+      {:error, :malformed_answer} -> {:error, :malformed_answer}
+    end
   end
 
-  @doc """
-  Call `POST /v1/namespaces/publisher/verify`.
+  defp signed_answer({:error, %Errors{reason: :registry_unconfigured}}),
+    do: {:error, :no_registry}
 
-  Verifies the DNS TXT challenge. On success, the caller becomes the sole
-  admin of the namespace and receives the first push token for it.
-  """
-  @spec verify_publisher_namespace(String.t(), String.t()) ::
-          {:ok, map()} | {:error, Errors.t()}
-  def verify_publisher_namespace(slug, bearer_token) do
-    body = Jason.encode!(%{slug: slug})
+  defp signed_answer({:error, %Errors{}}), do: {:error, :registry_unavailable}
 
-    headers = json_headers() ++ bearer(bearer_token)
-
-    url = url("/v1/namespaces/publisher/verify")
-
-    Transport.request(:post, url, headers, body)
-    |> interpret_response("verify_publisher_namespace")
-    |> tap(&log_token_returning_result("verify_publisher_namespace", &1))
+  # The version a `POLICY_ACCEPTANCE_REQUIRED` envelope carries beside its
+  # errors, when it is text.
+  defp required_version(body) do
+    case Jason.decode(body) do
+      {:ok, %{"required_version" => version}} when is_binary(version) -> version
+      _none -> nil
+    end
   end
+
+  defp log_signed(operation, {:ok, answer}) when operation in @token_answers,
+    do: log_token_returning_result(operation, {:ok, answer})
+
+  defp log_signed(_operation, {:ok, _answer}), do: :ok
+
+  defp log_signed(operation, {:error, reason}),
+    do: Logger.warning("[Compendium.Registry.Client] #{operation} refused — #{inspect(reason)}")
 
   @doc """
   Call `GET /v1/namespaces/{slug}`. Public endpoint, no auth required.
@@ -497,81 +490,6 @@ defmodule Compendium.Registry.Client do
     Transport.request(:get, url, [], "") |> interpret_response("get_legal_version")
   end
 
-  @doc """
-  Call `POST /v1/legal/accept`. Records an explicit clickwrap acceptance
-  for the authenticated identity at the current `policy_version`. Token
-  verification mirrors namespace claim — the OAuth `access_token` (or
-  `id_token` for OIDC) is in the body and verified server-side via
-  provider userinfo.
-
-  Idempotent: a second call under the same (provider, subject, version)
-  returns 200 with the same row's id; first call returns 201.
-
-  Errors that callers should surface:
-    * `:policy_version_mismatch` (412) — server's current `policy_version`
-      differs from the one we posted; client re-fetches `get_legal_version`
-      and re-prompts the user.
-    * `:unauthorized` (403 IDENTITY_BANNED) — surface ban response.
-    * `:invalid_access_token` (401) — IdP token expired; route to OAuth.
-  """
-  @spec accept_policies(
-          atom() | String.t(),
-          String.t() | nil,
-          String.t() | nil,
-          String.t()
-        ) :: {:ok, map()} | {:error, Errors.t() | :invalid_access_token}
-  def accept_policies(provider, access_token, id_token, policy_version) do
-    body =
-      Jason.encode!(%{
-        provider: to_string(provider),
-        access_token: access_token,
-        id_token: id_token,
-        policy_version: policy_version
-      })
-
-    headers = json_headers()
-    url = url("/v1/legal/accept")
-
-    Transport.request(:post, url, headers, body)
-    |> interpret_access_token_response("accept_policies")
-  end
-
-  @doc """
-  Call `POST /v1/appeals`. Closed-platform appeal flow: cyfr client
-  drives the OAuth round-trip (DeviceFlow) itself and posts the
-  resulting access_token here. cyfr.run verifies via provider userinfo
-  and binds to the action's rightful appellant.
-
-  Like the other endpoints that carry an IdP token in the body, a 401 here
-  means that token is spent, not that the appeal was refused — it surfaces as
-  `{:error, :invalid_access_token}` so the caller re-authenticates.
-  """
-  @spec create_appeal(
-          String.t(),
-          String.t() | nil,
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t()
-        ) :: {:ok, map()} | {:error, Errors.t() | :invalid_access_token}
-  def create_appeal(provider, access_token, id_token, action_type, action_ref, argument) do
-    body =
-      Jason.encode!(%{
-        provider: provider,
-        access_token: access_token,
-        id_token: id_token,
-        action_type: action_type,
-        action_ref: action_ref,
-        argument: argument
-      })
-
-    headers = json_headers()
-    url = url("/v1/appeals")
-
-    Transport.request(:post, url, headers, body)
-    |> interpret_access_token_response("create_appeal")
-  end
-
   # -- Transport --
 
   defp seg(value), do: Transport.path_segment(value)
@@ -598,25 +516,6 @@ defmodule Compendium.Registry.Client do
   end
 
   defp interpret_response({:error, %Errors{} = err}, _op), do: {:error, err}
-
-  # Access-token endpoints (`/v1/identity/probe`, `/v1/namespaces/personal/claim`)
-  # accept the IdP access_token in the request body, NOT a push_token bearer.
-  # A 401 from these specifically means "IdP access_token expired or revoked"
-  # and must route the user back through OAuth — a push_token re-probe would
-  # not help. Surface as a structured tag so callers can redirect to
-  # `/auth/reauthenticate`.
-  defp interpret_access_token_response({:ok, status, _h, body}, op) when status in 200..299 do
-    parse_json_body(body, op)
-  end
-
-  defp interpret_access_token_response({:ok, 401, _h, _body}, _op),
-    do: {:error, :invalid_access_token}
-
-  defp interpret_access_token_response({:ok, status, _h, body}, op) do
-    {:error, Errors.from_api_response(status, body, op)}
-  end
-
-  defp interpret_access_token_response({:error, %Errors{} = err}, _op), do: {:error, err}
 
   defp parse_json_body("", _op), do: {:ok, %{}}
 
@@ -649,8 +548,7 @@ defmodule Compendium.Registry.Client do
     do: Compendium.RegistryHost.base_url(Compendium.RegistryHost.canonical_rest_host())
 
   # Resolves a push token from CredentialStore and emits `Bearer` for REST API
-  # calls. For non-namespace-scoped endpoints (e.g. `/v1/identity/probe`,
-  # `/v1/search`), picks the first usable token of `list_for_user/2` — the
+  # calls. For non-namespace-scoped endpoints (e.g. `/v1/search`), picks the first usable token of `list_for_user/2` — the
   # user's personal-namespace token when present, falling back to the first
   # publisher membership token. A store that cannot be read, or a listing
   # holding a damaged row, refuses the request before it leaves: sending it

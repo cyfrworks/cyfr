@@ -49,7 +49,7 @@ value is literal throughout, an open `$(` included.
 | `CYFR_DATA_PATH` | The one runtime storage root: every athanor's tree, the caches and the SQLite database (default `data`, under the working directory: `/app/data` in the image). |
 | `CYFR_DB_POOL_SIZE` | The database connection pool's size (default 20). |
 | `CYFR_DB_SSL` | TLS to the PostgreSQL server (default off). |
-| `CYFR_DIRECTORY_URL` | The identity directory this deployment enrolls its local people at, an `https` URL chosen explicitly: there is no hosted default, and choosing one is a choice about how long an identity lasts. Unset, local work and local pairing still work and enrollment is refused; a malformed value, or one longer than the 1,024 bytes an enrollment's confirmation preview can name, refuses the boot. |
+| `CYFR_DIRECTORY_URL` | The identity directory this deployment enrolls its local people at, an `https` URL (default `https://cyfr.run`, the directory cyfr.run hosts, whose registry accepts only identities it orders). Choosing another is a choice about how long an identity lasts. A malformed value, or one longer than the 1,024 bytes an enrollment's confirmation preview can name, refuses the boot. |
 | `CYFR_GITHUB_CLIENT_ID` | The GitHub OAuth app's client ID for the device flow; `.env.example` ships a public one, which your own app's replaces. |
 | `CYFR_GOOGLE_CLIENT_ID` | The Google OAuth client ID for the device flow, used with `CYFR_GOOGLE_CLIENT_SECRET`; `.env.example` ships a public one. |
 | `CYFR_GOOGLE_CLIENT_SECRET` | The Google OAuth client secret, set in `.env` alone and never in a tracked file. |
@@ -82,7 +82,7 @@ value is literal throughout, an open `$(` included.
 | `CYFR_PROXY_PORT` | The proxy listener's port (default 4001), which nothing publishes. |
 | `CYFR_PUBLIC_URL` | CYFR's address with tailnet or public access, exactly `https://<CYFR_HOST>`, which `cyfr access` writes with the mode; CYFR with local access has no such setting, and its address is `http://localhost:<CYFR_PORT>`. Webhook URLs are absolute when it is set and bare paths when it is not. |
 | `CYFR_ACCESS` | How CYFR is reached: `local` (this computer alone, at `http://localhost:<CYFR_PORT>`), `tailnet` (your devices on Tailscale, through Tailscale Serve) or `public` (anyone on the internet, through Caddy). `cyfr init` and `cyfr access <mode>` write it with every setting it implies, the boot refuses a setting that contradicts it and names the command that fixes it, and a release refuses to start without it; a development or test boot without it is `local`. |
-| `CYFR_REGISTRY_URL` | The component registry host (default `cyfr.run`); `none` is an appliance without a registry, whose pulls and publishes refuse. |
+| `CYFR_REGISTRY_URL` | The component registry host (default `cyfr.run`), which a person's registry requests are signed for and handles resolve at; `none` is an appliance without a registry, whose pulls, publishes and registry requests refuse. |
 | `CYFR_REQUIRE_SIGNED_PULLS` | Refuse a component pull whose OCI signature cannot be verified (default off: the component is stored as unverified). |
 | `CYFR_RESTORE_TOKEN` | The installation's restore capability, exactly 64 lowercase hexadecimal characters (`openssl rand -hex 32`), set in `.env` alone. Set, an empty installation's first person is reserved for a restore from a printed kit and ordinary first sign-in is refused; unset, restore is disabled. A malformed value refuses the boot, which never prints it. |
 | `CYFR_S3_ACCESS_KEY_ID` | The object store's access key ID, with `CYFR_STORAGE=s3`. |

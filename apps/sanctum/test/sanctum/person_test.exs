@@ -813,4 +813,139 @@ defmodule Sanctum.PersonTest do
                )
     end
   end
+
+  describe "sign_registry_request/3" do
+    alias Prima.RegistryRequest
+    alias Sanctum.Test.RegistryStub
+
+    setup do
+      previous = Application.fetch_env(:sanctum, :registry_url)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:sanctum, :registry_url, value)
+          :error -> Application.delete_env(:sanctum, :registry_url)
+        end
+      end)
+
+      Application.put_env(:sanctum, :registry_url, "Cyfr.RUN:443")
+      :ok
+    end
+
+    defp registry(state), do: %{host: "cyfr.run", directory: state.directory}
+
+    test "signs the request under the person's head, for the registry this deployment names",
+         %{user: user} do
+      state = RegistryStub.enroll!(user.id)
+      before = System.os_time(:millisecond)
+
+      assert {:ok, bytes} =
+               Person.sign_registry_request(user.id, "handle.claim", %{"handle" => "alice"})
+
+      assert {:ok, request} =
+               RegistryRequest.verify(bytes, state, registry(state), System.os_time(:millisecond))
+
+      assert %RegistryRequest{
+               registry: "cyfr.run",
+               operation: "handle.claim",
+               body: %{"handle" => "alice"}
+             } = request
+
+      assert request.identifier == state.identifier
+      assert request.key_epoch == state.key_epoch
+      assert byte_size(request.nonce) == RegistryRequest.nonce_bytes()
+
+      assert request.expires_at >= before + RegistryRequest.lifetime_ms() and
+               request.expires_at <= System.os_time(:millisecond) + RegistryRequest.lifetime_ms()
+
+      # Each request has its own nonce, so a repeat is never a replay.
+      {:ok, again} = Person.sign_registry_request(user.id, "handle.claim", %{"handle" => "alice"})
+      {:ok, second} = RegistryRequest.verify(again, state, registry(state), before)
+      refute second.nonce == request.nonce
+    end
+
+    test "withdraws an address with an empty body, never a null", %{user: user} do
+      state = RegistryStub.enroll!(user.id)
+      assert {:ok, bytes} = Person.sign_registry_request(user.id, "address.set", %{})
+      refute bytes =~ "null"
+
+      assert {:ok, %RegistryRequest{body: body}} =
+               RegistryRequest.verify(bytes, state, registry(state), System.os_time(:millisecond))
+
+      assert body == %{}
+    end
+
+    test "a person without an identifier is not enrolled, a pending enrollment included",
+         %{user: user} do
+      assert {:error, :not_enrolled} =
+               Person.sign_registry_request(user.id, "tokens.mint", %{"label" => "laptop"})
+
+      open_enrollment!(user.id)
+
+      assert {:error, :not_enrolled} =
+               Person.sign_registry_request(user.id, "tokens.mint", %{"label" => "laptop"})
+    end
+
+    test "a remote person's keys are at their own home", %{user: user} do
+      Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id == ^user.id))
+
+      {:ok, _row} =
+        Arca.PersonIdentities.create(Prima.Actor.system(), %{
+          user_id: user.id,
+          provenance: "remote",
+          identifier: "per_" <> String.duplicate("a", 64),
+          directory_url: @directory
+        })
+
+      assert {:error, :remote} =
+               Person.sign_registry_request(user.id, "tokens.mint", %{"label" => "laptop"})
+    end
+
+    test "no registry refuses before the person is read", %{user: user} do
+      Application.put_env(:sanctum, :registry_url, "none")
+
+      assert {:error, :no_registry} =
+               Person.sign_registry_request("usr_nobody", "tokens.mint", %{"label" => "x"})
+
+      RegistryStub.enroll!(user.id)
+
+      assert {:error, :no_registry} =
+               Person.sign_registry_request(user.id, "tokens.mint", %{"label" => "x"})
+    end
+
+    test "an operation or a body the protocol refuses is the caller's argument error",
+         %{user: user} do
+      RegistryStub.enroll!(user.id)
+
+      assert {:error, {:invalid_argument, _}} =
+               Person.sign_registry_request(user.id, "handle.release", %{})
+
+      assert {:error, {:invalid_argument, _}} =
+               Person.sign_registry_request(user.id, "handle.claim", %{"handle" => "Not A Slug"})
+
+      assert {:error, {:invalid_argument, _}} =
+               Person.sign_registry_request(user.id, "address.set", %{"address" => nil})
+
+      # An argument at its 4,000-byte bound signs.
+      argument = String.duplicate("a", 4000)
+
+      assert {:ok, _} =
+               Person.sign_registry_request(user.id, "appeal.file", %{
+                 "action_type" => "ban",
+                 "action_ref" => "x",
+                 "argument" => argument
+               })
+    end
+
+    test "a sealed live key that does not open signs nothing", %{user: user} do
+      RegistryStub.enroll!(user.id)
+      row = row(user.id)
+      swap_sealed!(row, live_key_sealed: row.operational_key_sealed)
+
+      capture_log(fn ->
+        assert {:error, :unavailable} =
+                 Person.sign_registry_request(user.id, "tokens.mint", %{"label" => "x"})
+      end)
+    end
+  end
 end

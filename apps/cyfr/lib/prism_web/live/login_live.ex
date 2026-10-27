@@ -556,11 +556,7 @@ defmodule PrismWeb.LoginLive do
 
     Arca.Cache.put(
       {:login_passkey_ticket, ticket},
-      %{
-        session_token: result.session_token,
-        outcome: result.outcome,
-        browser_binding: browser_binding
-      },
+      %{session_token: result.session_token, browser_binding: browser_binding},
       @ticket_ttl_ms
     )
 
@@ -572,8 +568,6 @@ defmodule PrismWeb.LoginLive do
 
     payload = %{
       session_token: result.session_token,
-      access_token: Map.get(result, :access_token),
-      outcome: result.outcome,
       # Whose browser this sign-in belongs to. Without it the ticket is a
       # bearer credential for a whole session: whoever opens the URL within
       # its lifetime is signed in as the person who completed the flow, so

@@ -617,7 +617,7 @@ defmodule Compendium.ProviderTest do
                })
 
       assert err_msg(reason) ==
-               "The stored registry credential is damaged; sign in to the registry again."
+               "The stored registry credential is damaged; run `cyfr registry sync` to replace it."
     end
 
     @tag :capture_log
@@ -726,7 +726,76 @@ defmodule Compendium.ProviderTest do
       # A local publish requires a claimed personal namespace; the error must explain that requirement.
       refute err_msg(msg) =~ "No push token for namespace 'local'"
       assert err_msg(msg) =~ "personal namespace"
-      assert err_msg(msg) =~ "cyfr login"
+      assert err_msg(msg) =~ "cyfr registry claim"
+    end
+
+    # The OCI gateway on loopback, answering every request 401: the registry
+    # no longer accepts the namespace's token.
+    defp gateway_refusing_tokens do
+      %{port: port} = Sanctum.Test.RegistryStub.serve!(fn _request -> {401, ""} end)
+      original = Application.get_env(:cyfr, :oci_registry_url)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :oci_registry_url, original),
+          else: Application.delete_env(:cyfr, :oci_registry_url)
+      end)
+
+      Application.put_env(:cyfr, :oci_registry_url, "127.0.0.1:#{port}")
+    end
+
+    defp claimed_pusher(ctx) do
+      {ctx, user} = Sanctum.TestContext.person!(ctx, %{email: "pusher@example.com"})
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "testns")
+
+      {:ok, _} =
+        Registry.publish_bytes(ctx, @valid_wasm, %{
+          name: "pushed-tool",
+          version: "1.0.0",
+          type: "reagent",
+          description: "A reagent to push"
+        })
+
+      ctx
+    end
+
+    test "a push with no token for its namespace sends nothing and names the sync", %{ctx: ctx} do
+      ctx = claimed_pusher(ctx)
+      gateway_refusing_tokens()
+
+      assert {:error, reason} =
+               Provider.handle("component", ctx, %{
+                 "action" => "push",
+                 "reference" => "r:local.pushed-tool:1.0.0"
+               })
+
+      assert err_msg(reason) =~ "cyfr registry sync"
+      refute_received {:registry_request, _}
+    end
+
+    @tag :capture_log
+    test "a push whose token the registry refuses removes it and names the sync", %{ctx: ctx} do
+      ctx = claimed_pusher(ctx)
+      gateway_refusing_tokens()
+      registry = Compendium.RegistryHost.canonical_host()
+
+      :ok =
+        Registry.CredentialStore.put_push_token(
+          ctx,
+          registry,
+          "testns",
+          "cyfr_pt_revoked",
+          "personal"
+        )
+
+      assert {:error, reason} =
+               Provider.handle("component", ctx, %{
+                 "action" => "push",
+                 "reference" => "r:local.pushed-tool:1.0.0"
+               })
+
+      assert err_msg(reason) =~ "cyfr registry sync"
+      assert {:error, :not_found} = Registry.CredentialStore.get(ctx, registry, "testns")
     end
 
     test "push of a local component resolves the caller's claimed personal namespace",
@@ -2416,8 +2485,8 @@ defmodule Compendium.ProviderTest do
     end
   end
 
-  # Registry errors must be readable and policy-acceptance refusals must carry structured data.
-  describe "registry MCP — error formatting + structured probe 412 (Bypass)" do
+  # Registry errors must be readable.
+  describe "registry MCP — error formatting (Bypass)" do
     setup do
       bypass = Bypass.open()
       original_url = Application.get_env(:cyfr, :registry_url)
@@ -2450,52 +2519,6 @@ defmodule Compendium.ProviderTest do
       # produced by Errors.to_string/1.
       assert err_msg(msg) =~ "503"
       assert err_msg(msg) =~ "registry_unavailable"
-    end
-
-    test "registry.probe returns structured needs_policy_acceptance map on 412",
-         %{bypass: bypass, ctx: ctx} do
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_header("content-type", "application/json")
-        |> Plug.Conn.resp(
-          412,
-          Jason.encode!(%{
-            "errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED", "message" => "accept v3"}],
-            "required_version" => "v3"
-          })
-        )
-      end)
-
-      assert {:ok, body} =
-               Provider.handle("registry", ctx, %{
-                 "action" => "probe",
-                 "provider" => "github",
-                 "access_token" => "gho_x"
-               })
-
-      assert body["needs_policy_acceptance"] == true
-      assert body["required_policy_version"] == "v3"
-      assert body["needs_personal_namespace"] == false
-    end
-
-    test "registry.probe still surfaces non-policy 4xx errors as a readable refusal",
-         %{bypass: bypass, ctx: ctx} do
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_header("content-type", "application/json")
-        |> Plug.Conn.resp(403, ~s({"errors":[{"code":"IDENTITY_BANNED"}]}))
-      end)
-
-      assert {:error, msg} =
-               Provider.handle("registry", ctx, %{
-                 "action" => "probe",
-                 "provider" => "github",
-                 "access_token" => "gho_x"
-               })
-
-      assert %Prima.Refusal{class: :forbidden} = msg
-      refute err_msg(msg) =~ "%Compendium.OCI.Errors{"
-      assert err_msg(msg) =~ "403"
     end
   end
 

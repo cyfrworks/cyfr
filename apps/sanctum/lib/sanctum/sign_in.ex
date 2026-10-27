@@ -36,17 +36,14 @@ defmodule Sanctum.SignIn do
   assertion (`{:error, :stale_identity}`) — refuses the sign-in before
   any session is created.
 
-  `t:report/0`: how cyfr.run answered the courtesy after the door, a
-  budgeted probe for the person's publisher namespace and push tokens,
-  which the browser callback runs (`Compendium.SignInSync.complete/4`)
-  and the CLI device flow reports `:skipped`. Whatever the registry
-  answers, the person proceeds. A namespace is a publishing credential,
-  claimed when the person first publishes (`/claim-namespace`), never a
-  gate on signing in.
+  No sign-in speaks to the registry. A namespace is a publishing
+  credential: the person claims a handle with a request their live key
+  signs (`registry.claim_personal`), never at the door.
 
-  `record_namespace/2`: the namespace lands on the `users` row the moment a
-  probe or a claim yields it — before, and regardless of, the push tokens.
-  That row is what every request reads (`Sanctum.Namespace`).
+  `record_claim/2` and `record_namespace/2`: the namespace lands on the
+  `users` row the moment the registry's answer to a claim or a token mint
+  names it, before, and regardless of, the push tokens. That row is what
+  every request reads (`Sanctum.Namespace`).
 
   The sign-in paths (the browser callback, the device flow and the `cyfr`
   door) call `admitted/2` between the door's verdict
@@ -97,32 +94,12 @@ defmodule Sanctum.SignIn do
   alias Sanctum.Auth.Identity
   alias Sanctum.Consent.Authz
   alias Sanctum.Context
-  alias Sanctum.Slug
   alias Sanctum.Tenancy.{Members, Users}
 
   @linkable Prima.SignInProviders.all()
   @link_ticket_ms 600_000
   @link_refused "This sign-in link is not yours, has expired or was already used; sign in " <>
                   "with that sign-in method again"
-
-  @typedoc """
-  What a sign-in reports. The person always proceeds; `unsynced` names
-  namespaces whose push tokens could not be cached (a later probe re-mints
-  them) and `probe` says how the registry answered:
-
-  - `:ok` — answered; a namespace it named is recorded.
-  - `:skipped` — no IdP token to ask with, or no registry configured.
-  - `:failed` — no usable answer (down, 5xx, past the budget).
-  - `:invalid_token` — the IdP refused the token; the next sign-in asks again.
-  - `:legal_required` — cyfr.run wants its policy accepted before it says
-    more; publishing will ask.
-  - `:namespace_conflict` — the registry names a slug another identity on
-    this server holds; nothing was recorded, and someone must reconcile it.
-  """
-  @type probe ::
-          :ok | :skipped | :failed | :invalid_token | :legal_required | :namespace_conflict
-  @type report :: %{unsynced: [String.t()], probe: probe()}
-  @type outcome :: {:proceed, Sanctum.Tenancy.Users.user(), report()}
 
   @doc """
   Record the admitted sign-in. `user_info` carries `id`, `provider`,
@@ -233,31 +210,40 @@ defmodule Sanctum.SignIn do
   end
 
   @doc """
-  Record a personal namespace a registry just answered for the caller,
-  only while the caller stands: their standing is read again first
+  Record the registry's answer to the caller's handle claim
+  (`%{"handle" => slug, "identifier" => identifier}`), only while the
+  caller stands: their standing is read again first
   (`Sanctum.Caller.revalidate_session/1`), so a session, key or device
-  revoked while the registry answered records nothing, then the slug is
-  recorded (`record_namespace/2`). Answers the context as it was read
-  again, for the writes that follow under it. A store that cannot
-  answer, or a remote person whose identity could not be confirmed
-  fresh, is `:unavailable` or `:identity_stale` and the session stands;
-  any other standing refusal is `:unauthenticated`.
+  revoked while the registry answered records nothing; the answer must
+  name the identifier the caller signed the claim under
+  (`:malformed_answer` otherwise: it answered for someone else); then the
+  slug is recorded (`record_namespace/2`). Answers the context as it was
+  read again, for the writes that follow under it. A store that cannot
+  answer, or a remote person whose identity could not be confirmed fresh,
+  is `:unavailable` or `:identity_stale` and the session stands; any
+  other standing refusal is `:unauthenticated`.
   """
-  @spec record_claim(Context.t(), String.t()) ::
+  @spec record_claim(Context.t(), map()) ::
           {:ok, Context.t()}
           | {:error,
              :unauthenticated
              | :unavailable
              | :identity_stale
+             | :malformed_answer
              | :not_found
              | :invalid_slug
              | :namespace_owned_by_another_identity
              | term()}
-  def record_claim(%Context{user_id: user_id} = ctx, slug)
-      when is_binary(user_id) and is_binary(slug) do
+  def record_claim(%Context{user_id: user_id} = ctx, %{
+        "handle" => slug,
+        "identifier" => identifier
+      })
+      when is_binary(user_id) and is_binary(slug) and is_binary(identifier) do
     case Sanctum.Caller.revalidate_session(ctx) do
       {:ok, fresh} ->
-        with {:ok, _user} <- record_namespace(user_id, slug), do: {:ok, fresh}
+        with :ok <- claimed_by(user_id, identifier),
+             {:ok, _user} <- record_namespace(user_id, slug),
+             do: {:ok, fresh}
 
       {:error, reason} when reason in [:unavailable, :identity_stale] ->
         {:error, reason}
@@ -267,9 +253,21 @@ defmodule Sanctum.SignIn do
     end
   end
 
+  def record_claim(%Context{}, _answer), do: {:error, :malformed_answer}
+
+  # The answer names the identifier the person's own identity row holds.
+  defp claimed_by(user_id, identifier) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{identifier: ^identifier}} -> :ok
+      {:ok, _another} -> {:error, :malformed_answer}
+      {:error, :not_found} -> {:error, :malformed_answer}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
   @doc """
-  Record the person's cyfr.run namespace: the durable copy on `users.namespace`
-  that every request reads. Their own athanor was minted at admission; this
+  Record the person's cyfr.run namespace, as a registry answer names it:
+  the durable copy on `users.namespace` that every request reads. Their own athanor was minted at admission; this
   only reruns the provisioning hook so a namespace-holding person's groups
   retry. Refuses a slug another identity on this server already holds; a
   row that already carries a *different* slug keeps it (logged — the
@@ -323,16 +321,6 @@ defmodule Sanctum.SignIn do
           end
       end
     end
-  end
-
-  @doc """
-  The slug to suggest when a person claims a publisher namespace: their
-  screen name, else the address's local part, else a provider-flavoured
-  placeholder.
-  """
-  @spec suggested_slug(Sanctum.Tenancy.Users.user(), String.t() | atom()) :: String.t() | nil
-  def suggested_slug(%{display_name: name, email: email}, provider) do
-    Slug.from_name(name) || Slug.from_email(email) || Slug.from_name("user-#{provider}")
   end
 
   # ---------------------------------------------------------------------------

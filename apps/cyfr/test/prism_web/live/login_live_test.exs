@@ -161,12 +161,7 @@ defmodule PrismWeb.LoginLiveTest do
       Application.put_env(
         :sanctum,
         :device_flow_poll_result,
-        {:ok,
-         %{
-           status: "complete",
-           session_token: session.token,
-           outcome: {:proceed, %{unsynced: [], probe: :ok}}
-         }}
+        {:ok, %{status: "complete", session_token: session.token}}
       )
 
       # One browser start to finish. The ticket is bound to the session that

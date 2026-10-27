@@ -269,7 +269,7 @@ cyfr push c:local.my-api:1.0.0
 
 The development loop is: **edit source → `cyfr build compile <ref>` → `cyfr run <ref>`**. Each compile saves the `.wasm` binary, auto-registers the component, cleans build artifacts, and pulls any missing dependencies. A Rust build is locked to the component's `Cargo.lock` after its first build; compile with `--resolve` after changing a dependency.
 
-`cyfr push` pushes a local component to the registry under your **claimed personal namespace** — `c:local.my-api` is pushed as `c:<your-namespace>.my-api`. Run `cyfr login` first to authenticate and claim your namespace; pushing without one returns a "claim a personal namespace" error.
+`cyfr push` pushes a local component to the registry under your **personal namespace**, the handle you claimed at cyfr.run — `c:local.my-api` is pushed as `c:<your-handle>.my-api`. With an enrolled identity ([identity-guide.md](identity-guide.md)), `cyfr registry claim <handle>` claims the handle and `cyfr registry sync` mints and stores your push tokens under a fresh confirmation; each is a request your live key signs, and sign-in never speaks to the registry. A push whose namespace has no stored token, or whose token the registry revoked, refuses and says to run `cyfr registry sync`. A deployment with `CYFR_REGISTRY_URL=none` refuses every registry request before it is sent.
 
 ### Tinctures
 
@@ -530,7 +530,7 @@ Builds are on after `cyfr init`: it writes both settings into `.env`, and `cyfr 
 
 - **The seed `local.http` catalyst asks for wildcard egress** (`domains: ["*"]`, http+https; private IPs stay denied) and first-run provisioning consents the bundle automatically — on a server whose allowlist is `*`, that is a consented HTTP relay per signed-in stranger. The minted grant is pinned byte-for-byte by `apps/cyfr/test/sanctum/consent/bootstrap_golden_test.exs`, so widening or narrowing it is always a reviewed diff; narrow the seed manifest before opening sign-in to everyone if that posture is too generous for your deployment.
 - **The audit trail carries identity fields, email included.** The allowlist's refusal telemetry carries the attempted email (that is the audit content — who was turned away), and `Prima.Sanitizer` deliberately does not redact identity fields on the audit plane. Every entry is logged, and is also emitted once as the `[:cyfr, :audit, :recorded]` telemetry event carrying the sanitized `Arca.Audit.Event`: attach your own handler there to write the trail to a SIEM or an object store, and only to one that may hold PII.
-- **A first sign-in proceeds whatever the registry answers; filling the athanor needs it.** Sign-in asks cyfr.run once, under a short budget, for the person's publishing namespace and push tokens, and proceeds whatever that probe answers. The person and their own athanor are minted at sign-in, and the athanor is then filled in the background, pulling the bundle's published dependencies, the AQUA formula's provider catalysts among them, from the registry. On an air-gapped or registry-unreachable install the athanor is created but left unprovisioned — retried on the next sign-in, with the cause in the server log and the `[:cyfr, :sanctum, :provisioning, :failed]` telemetry event. AQUA stays unavailable until a retry succeeds. A cyfr.run namespace is needed only to publish (`cyfr push`, above), never to sign in.
+- **Sign-in never asks the registry; filling the athanor needs it.** The person and their own athanor are minted at sign-in, and the athanor is then filled in the background, pulling the bundle's published dependencies, the AQUA formula's provider catalysts among them, from the registry. On an air-gapped or registry-unreachable install the athanor is created but left unprovisioned — retried on the next sign-in, with the cause in the server log and the `[:cyfr, :sanctum, :provisioning, :failed]` telemetry event. AQUA stays unavailable until a retry succeeds. A cyfr.run handle and push tokens are needed only to publish (`cyfr push`, above), never to sign in.
 - **A webhook's replay store is part of its delivery.** A webhook configured with an idempotency key header runs a delivery only once its claim is recorded; when the store cannot answer the claim, the delivery answers 503 `unavailable` with `Retry-After: 5` and runs nothing, and the `[:cyfr, :emissary, :webhook, :dedup_unavailable]` telemetry event is the alarm for the outage. The sender's retry runs it once the store answers.
 
 ### Reaching Prism on the server
@@ -634,11 +634,10 @@ private addresses it cannot reach at all — its manifest declares no
 `egress.private_ips`, which is the only private-address grant `cyfr` reads
 when it pins a running component's outbound address, so a LAN device is
 reachable from a chain as an MCP server on `CYFR_PRIVATE_EGRESS_TARGETS`,
-which is the server's own, and not as a URL to fetch). Sign-in proceeds
-whatever cyfr.run's short probe for a publishing namespace answers: the
-athanor is filled in the background (see [Operator
+which is the server's own, and not as a URL to fetch). Sign-in never asks
+cyfr.run: the athanor is filled in the background (see [Operator
 notes](#operator-notes-for-shared-servers-and-open-sign-in)), and a cyfr.run
-namespace is needed only to publish. A person admitted with their CYFR
+handle is needed only to publish. A person admitted with their CYFR
 identity is minted no keys and no athanor: theirs stay at their own CYFR, and
 here they hold what their memberships give them. An installation set up
 for a restore (`CYFR_RESTORE_TOKEN`) reserves its first person for the
@@ -711,9 +710,10 @@ athanor stay:
   their other athanors there, and their own CYFR, are untouched.
 
 CYFR enrolls its own people at the directory `CYFR_DIRECTORY_URL` names,
-with no hosted default. Any operator, a household or a team included, may
-serve one (`CYFR_DIRECTORY_SERVE`), but the only writer on the CYFR it
-recovers loses that recovery with that CYFR. Who runs the directory decides
+`https://cyfr.run` by default. Any operator, a household or a team
+included, may serve another (`CYFR_DIRECTORY_SERVE=writer`) and name it
+there, but the only writer on the CYFR it recovers loses that recovery
+with that CYFR. Who runs the directory decides
 how long the identities it orders last: [identity-guide.md](identity-guide.md)
 says what each loss costs.
 
@@ -1078,8 +1078,10 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `file offer/offers/accept/decline/withdraw` (MCP) | Offer a snapshot of a file to someone you share an athanor with, list the offers, and accept, decline or withdraw them |
 | `file list/read/write/delete` (MCP) | The athanor's files as the Files page shows them — `data/` open, `components/` and `aqua/` shaped, `notes/` and `threads/` read-only |
 | `cyfr registry whoami` | Show registry identity (push tokens, claimed namespaces) |
+| `cyfr registry claim <handle>` | Claim your handle, your personal namespace, at cyfr.run, by a request your live key signs; needs an enrolled identity |
+| `cyfr registry sync` | Mint and store your push tokens (your personal namespace and each publisher membership); needs a fresh confirmation given in Prism |
 | `cyfr registry get-namespace <slug>` | Inspect a cyfr.run namespace |
-| `cyfr registry publisher claim/verify <domain>` | Claim + DNS-verify a publisher namespace `[i]` |
+| `cyfr registry publisher claim/verify <domain>` | Claim + DNS-verify a publisher namespace by signed requests; verifying stores the founding member's push token under a fresh confirmation `[i]` |
 | `cyfr registry tokens list/issue/revoke <ns>` | Manage push tokens for a namespace; issuing one needs a fresh confirmation given in Prism `[i]` |
 | `cyfr registry members list/add/update/remove <ns>` | Manage members of a publisher namespace `[i]` |
 | `cyfr registry discover <registry>` | Inspect OCI registry capabilities (distribution discovery) |

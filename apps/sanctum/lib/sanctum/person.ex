@@ -4,8 +4,8 @@
 defmodule Sanctum.Person do
   @moduledoc """
   A person's online keys at their home: the live key, which signs device
-  certificates, person assertions for doors and the envelopes of their
-  sign-in carries, and the operational key, which signs their log's
+  certificates, person assertions for doors, the envelopes of their
+  sign-in carries and their registry requests, and the operational key, which signs their log's
   genesis and the rotations that replace the live key and nothing else.
 
   ## Where the keys are
@@ -44,6 +44,8 @@ defmodule Sanctum.Person do
       a remote person, whose keys live at another home.
     * `:not_enrolled` — the request needs an identifier and the person has
       none yet; `:already_enrolled`, a genesis for a person who has one.
+    * `:remote` — a registry request for a person whose keys another home
+      holds; `:no_registry`, one on a deployment that names no registry.
     * `:stale_key_epoch` — an envelope or an assertion naming a head the
       person's row no longer holds.
     * `:wrong_audience` — a local-subject certificate for another home.
@@ -330,6 +332,80 @@ defmodule Sanctum.Person do
 
   defp unenrolled(%{identifier: nil}), do: :ok
   defp unenrolled(_row), do: {:error, :already_enrolled}
+
+  @doc """
+  A registry request (`Prima.RegistryRequest`) for `operation` with `body`,
+  signed by the person's live key under the head their identity row holds:
+  the registry this deployment names (`Sanctum.registry_host/0`), their
+  identifier, the head's `key_epoch`, 16 random bytes of nonce and
+  `expires_at` `Prima.RegistryRequest.lifetime_ms/0` ahead. Answers the
+  bytes to send, and writes nothing.
+
+  Refusals: `:no_registry`, before the person is read; `:not_enrolled` (no
+  identifier yet); `:remote` (their keys are at another home);
+  `:not_found`; `:unavailable` (the store or the live key cannot answer);
+  and `{:invalid_argument, _}` for an operation or body the protocol
+  refuses.
+  """
+  @spec sign_registry_request(String.t(), String.t(), map()) ::
+          {:ok, binary()}
+          | {:error,
+             :no_registry
+             | :not_enrolled
+             | :remote
+             | :not_found
+             | :unavailable
+             | {:invalid_argument, String.t()}}
+  def sign_registry_request(user_id, operation, body)
+      when is_binary(user_id) and is_binary(operation) and is_map(body) do
+    with {:ok, registry} <- Sanctum.registry_host(),
+         {:ok, row} <- registry_signer(user_id),
+         {:ok, request} <-
+           Prima.RegistryRequest.new(
+             registry: registry,
+             operation: operation,
+             identifier: row.identifier,
+             key_epoch: row.head_hash,
+             nonce: :crypto.strong_rand_bytes(Prima.RegistryRequest.nonce_bytes()),
+             expires_at: System.os_time(:millisecond) + Prima.RegistryRequest.lifetime_ms(),
+             body: body
+           )
+           |> request_shaped() do
+      row
+      |> with_key(:live, &Prima.RegistryRequest.sign(request, &1))
+      |> request_shaped()
+    end
+  end
+
+  defp registry_signer(user_id) do
+    case identity(Prima.Actor.system(), user_id) do
+      {:ok, %{provenance: "local", live_key_sealed: sealed} = row} when is_binary(sealed) ->
+        enrolled(row)
+
+      {:ok, %{provenance: "local"}} ->
+        {:error, :not_found}
+
+      {:ok, _remote} ->
+        {:error, :remote}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  # The protocol's refusals of an operation or a body, as the caller's
+  # argument error: a body too large to sign is the signer's own refusal.
+  defp request_shaped({:ok, request}), do: {:ok, request}
+  defp request_shaped({:error, :unavailable}), do: {:error, :unavailable}
+
+  defp request_shaped({:error, :unknown_operation}),
+    do: {:error, {:invalid_argument, "The registry knows no such operation"}}
+
+  defp request_shaped({:error, :request_malformed}),
+    do: {:error, {:invalid_argument, "The registry request's arguments are not valid"}}
 
   @doc """
   A person assertion for the CYFR door (`Prima.PersonAssertion`): the live

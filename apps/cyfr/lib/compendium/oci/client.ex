@@ -183,8 +183,39 @@ defmodule Compendium.OCI.Client do
     with :ok <- Compendium.RegistryHost.validate_host(registry),
          {:ok, cref} <- Prima.ComponentRef.parse(component_ref_str),
          {:ok, publisher} <- resolve_push_publisher(cref, registry, ctx),
-         push_cref = %{cref | namespace: publisher},
-         {:ok, component} <- get_local_component(ctx, cref),
+         {:ok, token} <- push_token(ctx, registry, publisher) do
+      ctx
+      |> upload(cref, publisher, component_ref_str, registry)
+      |> refused_token(ctx, registry, publisher, token)
+    end
+    |> pushed(component_ref_str, registry)
+  end
+
+  # A push needs the push token its namespace publishes with: none stored
+  # is refused before anything is sent.
+  defp push_token(ctx, registry, publisher) do
+    case Compendium.OCI.Auth.fetch_credential(registry, publisher, ctx) do
+      {:ok, %{token: token}} -> {:ok, token}
+      :anonymous -> {:error, :registry_token_missing}
+      {:error, :unavailable} -> {:error, {:unavailable, "Registry credentials"}}
+      {:error, corrupt} -> {:error, corrupt}
+    end
+  end
+
+  # A token the registry no longer accepts (a ban or a recovery retired
+  # it) is removed, unless a sync stored another meanwhile, and the push is
+  # refused as missing its token.
+  defp refused_token({:error, %Errors{status: 401}}, ctx, registry, publisher, token) do
+    _ = Sanctum.RegistryCredentials.delete_push_token(ctx, registry, publisher, token)
+    {:error, :registry_token_missing}
+  end
+
+  defp refused_token(result, _ctx, _registry, _publisher, _token), do: result
+
+  defp upload(ctx, cref, publisher, component_ref_str, registry) do
+    push_cref = %{cref | namespace: publisher}
+
+    with {:ok, component} <- get_local_component(ctx, cref),
          {:ok, content_bytes} <- get_component_content(ctx, component),
          {:ok, config_json} <- get_full_config(ctx, publisher, cref),
          {:ok, oci_ref} <- Reference.from_component_ref(push_cref, registry),
@@ -218,34 +249,40 @@ defmodule Compendium.OCI.Client do
          manifest_digest: manifest_digest,
          registry: registry
        }}
-    else
-      {:error, %Errors{} = err} ->
-        Logger.error(
-          "[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{Errors.to_log_string(err)}"
-        )
-
-        hint = Errors.actionable_hint(err)
-        msg = Errors.to_string(err)
-        {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
-
-      {:error, reason} when is_binary(reason) ->
-        Logger.error(
-          "[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{reason}"
-        )
-
-        {:error, reason}
-
-      {:error, reason} ->
-        Logger.error(
-          "[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{inspect(reason)}"
-        )
-
-        # A refusal of the table (a damaged stored credential) answers as
-        # itself; anything else is this operation's failure, in words.
-        if Prima.Refusal.reason?(reason),
-          do: {:error, reason},
-          else: {:error, "OCI operation failed: #{failure_text(reason)}"}
     end
+  end
+
+  defp pushed({:ok, _pushed} = ok, _component_ref_str, _registry), do: ok
+
+  defp pushed({:error, %Errors{} = err}, component_ref_str, registry) do
+    Logger.error(
+      "[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{Errors.to_log_string(err)}"
+    )
+
+    hint = Errors.actionable_hint(err)
+    msg = Errors.to_string(err)
+    {:error, if(hint != "", do: "#{msg}. #{hint}", else: msg)}
+  end
+
+  defp pushed({:error, reason}, component_ref_str, registry) when is_binary(reason) do
+    Logger.error(
+      "[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{reason}"
+    )
+
+    {:error, reason}
+  end
+
+  defp pushed({:error, reason}, component_ref_str, registry) do
+    Logger.error(
+      "[Compendium.OCI.Client] Push failed for #{component_ref_str} to #{registry}: #{inspect(reason)}"
+    )
+
+    # A refusal of the table (a damaged stored credential, a missing push
+    # token) answers as itself; anything else is this operation's failure,
+    # in words.
+    if Prima.Refusal.reason?(reason),
+      do: {:error, reason},
+      else: {:error, "OCI operation failed: #{failure_text(reason)}"}
   end
 
   # ============================================================================
@@ -886,8 +923,8 @@ defmodule Compendium.OCI.Client do
 
         :not_claimed ->
           {:error,
-           "You haven't claimed a personal namespace yet. Run `cyfr login` to " <>
-             "authenticate and claim one before publishing to #{registry}."}
+           "You haven't claimed a personal namespace yet. Claim your handle with " <>
+             "`cyfr registry claim <handle>` before publishing to #{registry}."}
 
         {:error, _reason} ->
           {:error,

@@ -78,10 +78,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       # A different device code has its own budget.
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.poll_for_session("github", "another_code", nil)
-
-      # The appeal-path poll shares the same budget vocabulary.
-      assert {:ok, %{status: "pending", slow_down: true}} =
-               DeviceFlow.poll_for_access_token("github", code, nil)
     end
   end
 
@@ -152,16 +148,16 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     # change here is a cross-language wire change and must be deliberate.
     @user %{id: "u1", email: "u@example.com", name: "U"}
 
-    test "a signed-in result is its status, user and session token" do
+    test "a signed-in result is its status, user and session token, and nothing else" do
       assert DeviceFlow.wire(%{
                status: "complete",
                user: @user,
                session_token: "tok",
-               outcome: {:proceed, %{unsynced: [], probe: :skipped}}
+               extra: :dropped
              }) == %{status: "complete", user: @user, session_token: "tok"}
     end
 
-    test "outcome-less statuses pass through untouched" do
+    test "every other status passes through untouched" do
       for passthrough <- [
             %{status: "pending"},
             %{status: "pending", slow_down: true},

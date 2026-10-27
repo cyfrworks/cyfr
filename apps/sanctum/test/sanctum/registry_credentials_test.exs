@@ -192,4 +192,50 @@ defmodule Sanctum.RegistryCredentialsTest do
     assert {:error, :forbidden} =
              RegistryCredentials.put_push_token(nobody, @registry, "alice", "a", "personal")
   end
+
+  describe "delete_push_token/4" do
+    test "removes the token the registry refused", %{alice: alice, bob: bob} do
+      :ok = RegistryCredentials.put_push_token(alice, @registry, "alice", "refused", "personal")
+      :ok = RegistryCredentials.put_push_token(bob, @registry, "alice", "refused", "personal")
+
+      assert :ok = RegistryCredentials.delete_push_token(alice, @registry, "alice", "refused")
+      assert {:error, :not_found} = RegistryCredentials.get(alice, @registry, "alice")
+
+      # Only the caller's own.
+      assert {:ok, %{token: "refused"}} = RegistryCredentials.get(bob, @registry, "alice")
+
+      # Nothing stored is nothing to remove.
+      assert :ok = RegistryCredentials.delete_push_token(alice, @registry, "alice", "refused")
+    end
+
+    test "keeps a token a sync stored since the refused one was sent", %{alice: alice} do
+      :ok = RegistryCredentials.put_push_token(alice, @registry, "alice", "fresh", "personal")
+
+      assert :ok = RegistryCredentials.delete_push_token(alice, @registry, "alice", "refused")
+      assert {:ok, %{token: "fresh"}} = RegistryCredentials.get(alice, @registry, "alice")
+    end
+
+    test "removes a row that no longer opens, which nothing can use", %{alice: alice} do
+      plant!(alice, "alice", ~s({"type":"push_token","token":"x"}), "another")
+      assert {:error, :corrupt} = RegistryCredentials.get(alice, @registry, "alice")
+
+      assert :ok = RegistryCredentials.delete_push_token(alice, @registry, "alice", "refused")
+      assert {:error, :not_found} = RegistryCredentials.get(alice, @registry, "alice")
+    end
+
+    test "a store that cannot answer, and no person, are refused", %{alice: alice} do
+      assert {:error, :forbidden} =
+               RegistryCredentials.delete_push_token(
+                 %{alice | user_id: nil},
+                 @registry,
+                 "alice",
+                 "x"
+               )
+
+      outage!()
+
+      assert {:error, :unavailable} =
+               RegistryCredentials.delete_push_token(alice, @registry, "alice", "x")
+    end
+  end
 end

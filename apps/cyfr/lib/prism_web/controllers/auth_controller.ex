@@ -18,7 +18,6 @@ defmodule PrismWeb.AuthController do
   - `GET /auth/:provider/callback` - Handles the OIDC callback (redirects; the
     session token lives in the cookie, never in a body)
   - `GET /auth/device/complete/:ticket` - Sets the cookie after device flow
-  - `GET /auth/post-legal-accept` - Re-probes after policy acceptance
   - `POST /auth/logout` - Browser sign-out (cookie session, forgery-guarded)
   - `POST /auth/link/oidcc` - Begins linking an OpenID Connect door to the
     person signed in
@@ -178,7 +177,7 @@ defmodule PrismWeb.AuthController do
   Finishes GitHub/Google device-flow sign-in: the LiveView minted a
   one-time ticket after `DeviceFlow.poll_for_session/3` created the
   Sanctum session; this sets the cookie and routes the same way the
-  OIDC callback does (home, claim, or legal-accept).
+  OIDC callback does.
   """
   def device_complete(conn, %{"ticket" => ticket})
       when is_binary(ticket) and byte_size(ticket) > 0 and byte_size(ticket) <= 64 do
@@ -222,10 +221,10 @@ defmodule PrismWeb.AuthController do
     held = get_session(conn, @cyfr_challenge)
 
     case Sanctum.Auth.CyfrDoor.callback(fragment, held) do
-      {:ok, %{session_token: token, outcome: outcome}} ->
+      {:ok, %{session_token: token}} ->
         conn
         |> delete_session(@cyfr_challenge)
-        |> SignInResponse.respond(outcome,
+        |> SignInResponse.respond(:proceed,
           session: {:token, token},
           to: carry_return(held, :admitted)
         )
@@ -316,13 +315,8 @@ defmodule PrismWeb.AuthController do
 
   defp same_browser?(_conn, _payload), do: false
 
-  defp apply_device_ticket(conn, %{session_token: token, outcome: outcome} = payload)
-       when is_binary(token) do
-    # Render the sign-in outcome and any warnings, including device flow.
-    SignInResponse.respond(conn, outcome,
-      session: {:token, token},
-      access_token: payload[:access_token]
-    )
+  defp apply_device_ticket(conn, %{session_token: token}) when is_binary(token) do
+    SignInResponse.respond(conn, :proceed, session: {:token, token})
   end
 
   defp apply_device_ticket(conn, _payload) do
@@ -332,16 +326,14 @@ defmodule PrismWeb.AuthController do
   @doc """
   Handles the OIDC callback from the issuer — the browser sign-in.
 
-  Door → what sign-in records → the registry courtesy
-  (`Sanctum.SignIn.complete/3`) → a session and a redirect. Every outcome
-  is a redirect or a page; the session token travels in the cookie and
-  nowhere else.
+  Door → what sign-in records (`Sanctum.SignIn.admitted/2`) → a session
+  and a redirect. Every outcome is a redirect or a page; the session token
+  travels in the cookie and nowhere else, and the provider's token goes
+  nowhere: no sign-in speaks to the registry.
 
-  - admitted → session, cookie, `/` (the IdP token rides in the probe
-    cookie for ten minutes when a publisher namespace is still theirs to
-    claim)
+  - admitted → session, cookie, `/`
   - a membership read failed while minting → no session, a page saying so
-  - refused at the door → 403 page, no session, no cyfr.run call
+  - refused at the door → 403 page, no session
 
   A callback that finds a link intent in the cookie session links a door
   instead and signs no one in (the module doc).
@@ -482,23 +474,14 @@ defmodule PrismWeb.AuthController do
   end
 
   defp sign_in(conn, auth) do
-    access_token = extract_access_token(auth)
-    provider = auth.provider
-
     with {:ok, ctx} <- authenticate_with_provider(auth),
          {:ok, ctx, user} <- admit(ctx, auth) do
-      {:proceed, user, report} =
-        Compendium.complete_sign_in(ctx, user, provider, access_token)
-
       # The athanor may have been minted a moment ago: resolve again so the
       # session names it. A failed read here answers 503 with no session —
       # not a session whose tenant gate 403s every request.
       case Sanctum.Tenancy.resolve_status(%{ctx | namespace: user.namespace}, force: true) do
         {:ok, ctx} ->
-          SignInResponse.respond(conn, {:proceed, report},
-            session: {:mint, ctx},
-            access_token: if(is_nil(user.namespace), do: access_token)
-          )
+          SignInResponse.respond(conn, :proceed, session: {:mint, ctx})
 
         {:error, :unavailable} ->
           SignInResponse.respond(conn, {:unavailable, :membership_read},
@@ -508,8 +491,8 @@ defmodule PrismWeb.AuthController do
       end
     else
       {:error, {:door, _reason}} ->
-        # Refused at the door: no session, no cookie, no cyfr.run call. One
-        # message whichever branch refused.
+        # Refused at the door: no session, no cookie. One message whichever
+        # branch refused.
         page(
           conn,
           403,
@@ -541,77 +524,6 @@ defmodule PrismWeb.AuthController do
   end
 
   @doc """
-  Post-legal-accept landing handler. The person just submitted /legal/accept
-  and the probe re-runs with the still-valid IdP access_token (stashed in
-  `_cyfr_pending_probe`): the same courtesy as the callback, from a session
-  that already exists.
-
-  Closes the loop:
-    probe → policy required → /legal/accept → /auth/post-legal-accept → probe → ok
-  """
-  def post_legal_accept(conn, _params) do
-    case CyfrWeb.PendingProbe.pop(conn) do
-      {:ok, conn, access_token} ->
-        do_post_legal_accept(conn, access_token)
-
-      {_missing, conn} ->
-        # Cookie expired (10 min TTL) or never set. Force fresh OAuth.
-        Logger.info(
-          "[PrismWeb.AuthController] post_legal_accept: missing probe cookie; " <>
-            "redirecting to login"
-        )
-
-        conn
-        |> CallIdentity.refused(404, "The sign-in this acceptance belongs to expired.")
-        |> redirect(to: "/login")
-    end
-  end
-
-  # The probe writes on the person's row, so it runs only for a session that
-  # stands now: established, then revalidated against the stored session
-  # and the person's standing — never a look at who the cookie names.
-  defp do_post_legal_accept(conn, access_token) do
-    session_token = get_session(conn, CyfrWeb.SignInResponse.session_key())
-
-    with {:ok, ctx} <- Sanctum.Caller.establish(session_token, refresh: false),
-         {:ok, ctx} <- Sanctum.Caller.revalidate_session(ctx),
-         {:ok, user} <- Sanctum.Tenancy.Users.get(ctx.user_id) do
-      provider = ctx.provider || "github"
-
-      {:proceed, user, report} =
-        Compendium.complete_sign_in(ctx, user, provider, access_token)
-
-      # The token stays for the claim that may follow the acceptance.
-      SignInResponse.respond(conn, {:proceed, report},
-        session: :existing,
-        access_token: if(is_nil(user.namespace), do: access_token)
-      )
-    else
-      # A store that cannot answer, or a remote person whose identity could
-      # not be confirmed fresh: the session stands, and nothing was probed.
-      {:error, reason} when reason in [:unavailable, :identity_stale] ->
-        page(
-          conn,
-          503,
-          "Try again shortly",
-          "<p>We could not confirm your session just now.</p>" <>
-            "<p><a href=\"/login\">Sign in again</a></p>"
-        )
-
-      _ ->
-        conn
-        |> CallIdentity.refused(401, "This browser's session no longer stands.")
-        |> redirect(to: "/login")
-    end
-  end
-
-  # Pulls the IdP access_token from the Ueberauth struct. Both GitHub and
-  # Google strategies populate `auth.credentials.token`. A configured OIDC
-  # provider (ueberauth_oidcc) also populates it. Nil when absent.
-  defp extract_access_token(%{credentials: %{token: token}}) when is_binary(token), do: token
-  defp extract_access_token(_), do: nil
-
-  @doc """
   The browser's sign-out (`POST /auth/logout`): retires the Sanctum
   session the cookie names, drops the cookie session, and lands on the
   sign-in page.
@@ -634,11 +546,11 @@ defmodule PrismWeb.AuthController do
   # Private Helpers
   # ============================================================================
 
-  # Sign-in establishes a person's sign-in, or completes one (the policy
-  # acceptance's re-probe), rather than acting under a context the gate
-  # admitted, so it decides for itself: every refusal this controller answers, a page with an error
-  # status or a flash back to the sign-in page, is the request's refused
-  # decision, recorded once under its sentence with no person or athanor
+  # Sign-in establishes a person's sign-in rather than acting under a
+  # context the gate admitted, so it decides for itself: every refusal this
+  # controller answers, a page with an error status or a flash back to the
+  # sign-in page, is the request's refused decision, recorded once under
+  # its sentence with no person or athanor
   # (`CyfrWeb.Plugs.CallIdentity.refused/3`).
   defp page(conn, status, title, inner) do
     conn
@@ -653,11 +565,10 @@ defmodule PrismWeb.AuthController do
     |> redirect(to: "/login")
   end
 
-  # The door, then what sign-in records — before any session exists and
-  # before cyfr.run hears of the identity. It runs here, at the one place the
-  # web flow mints a session, so no auth provider (built-in or a deployment's
-  # own) can step around it. What the provider proved about the email decides
-  # how the door reads it.
+  # The door, then what sign-in records — before any session exists. It
+  # runs here, at the one place the web flow mints a session, so no auth
+  # provider (built-in or a deployment's own) can step around it. What the
+  # provider proved about the email decides how the door reads it.
   defp admit(%Sanctum.Context{} = ctx, auth) do
     email = ctx.email
     extra = Map.get(auth, :extra) || %{}

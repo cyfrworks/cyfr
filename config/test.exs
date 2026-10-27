@@ -79,6 +79,7 @@ config :cyfr, :registry_health_probe, false
 # is what a pull resolves against. A test that needs the public host name
 # sets it locally and asserts through `Compendium.RegistryHost.canonical_host/0`.
 config :cyfr, :registry_url, "127.0.0.1:19"
+config :sanctum, :registry_url, "127.0.0.1:19"
 config :cyfr, :oci_registry_url, "127.0.0.1:19"
 
 # The runner supplies one private root per checkout/run/partition. Direct

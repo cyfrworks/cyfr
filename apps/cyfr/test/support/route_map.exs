@@ -413,10 +413,8 @@
           ":put_secure_browser_headers",
           "CyfrWeb.Plugs.BrowserCSP"
         ],
-        "claim_submit_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "device_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "glass" => ["CyfrWeb.Plugs.BrowserCSP"],
-        "legal_accept_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_callback_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "oauth_start_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
         "passkey_complete_throttle" => ["CyfrWeb.Plugs.AuthRateLimit"],
@@ -722,15 +720,6 @@
         },
         %{
           verb: "GET",
-          path: "/auth/post-legal-accept",
-          plug: "PrismWeb.AuthController",
-          plug_opts: ":post_legal_accept",
-          auth: "browser_oauth_flow",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "auth_browser"]
-        },
-        %{
-          verb: "GET",
           path: "/carry",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",
@@ -749,48 +738,12 @@
         },
         %{
           verb: "GET",
-          path: "/claim-namespace",
-          plug: "PrismWeb.ClaimNamespaceController",
-          plug_opts: ":show",
-          auth: "browser_claim_gate",
-          live_view: nil,
-          pipe_through: ["browser"]
-        },
-        %{
-          verb: "POST",
-          path: "/claim-namespace/submit",
-          plug: "PrismWeb.ClaimNamespaceController",
-          plug_opts: ":submit",
-          auth: "browser_claim_gate",
-          live_view: nil,
-          pipe_through: ["browser", "claim_submit_throttle"]
-        },
-        %{
-          verb: "GET",
           path: "/cli",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":index",
           auth: "browser_authenticated",
           live_view: "PrismWeb.CliLive",
           pipe_through: ["browser"]
-        },
-        %{
-          verb: "GET",
-          path: "/legal/accept",
-          plug: "PrismWeb.LegalAcceptController",
-          plug_opts: ":show",
-          auth: "browser_public_legal",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "browser", "legal_accept_throttle"]
-        },
-        %{
-          verb: "POST",
-          path: "/legal/accept/submit",
-          plug: "PrismWeb.LegalAcceptController",
-          plug_opts: ":submit",
-          auth: "browser_public_legal",
-          live_view: nil,
-          pipe_through: ["sign_in_identity", "browser", "legal_accept_throttle"]
         },
         %{
           verb: "GET",

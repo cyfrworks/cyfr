@@ -853,8 +853,8 @@ defmodule Sanctum.Passkeys do
   the allowlist closes this door too. A remote person's head is read
   fresh first, and their passkey must be of its current `recovery_epoch`:
   one a recovery replaced is retired by that read and signs no one in.
-  Mints a session with provider `passkey` and answers its token and the
-  sign-in outcome, as the device flow does; a remote person's session
+  Mints a session with provider `passkey` and answers its token, as the
+  device flow does; a remote person's session
   records the `key_epoch` of the head their passkey was verified against,
   and is minted only while that head is still current.
 
@@ -864,7 +864,7 @@ defmodule Sanctum.Passkeys do
   verifies against the new head), `:unavailable`.
   """
   @spec sign_in(sign_in_challenge() | map(), map()) ::
-          {:ok, %{session_token: String.t(), outcome: term()}} | {:error, term()}
+          {:ok, %{session_token: String.t()}} | {:error, term()}
   def sign_in(%{challenge: challenge, expires_at: expires_at}, assertion)
       when is_binary(challenge) and is_map(assertion) do
     with true <- expires_at > now_ms() or {:error, :expired},
@@ -976,8 +976,7 @@ defmodule Sanctum.Passkeys do
     with {:ok, ctx} <-
            Sanctum.Tenancy.resolve_status(%{ctx | namespace: user[:namespace]}, force: true),
          {:ok, session} <- Sanctum.Session.create(ctx, key_epoch: head && head.key_epoch) do
-      {:ok,
-       %{session_token: session.token, outcome: {:proceed, %{unsynced: [], probe: :skipped}}}}
+      {:ok, %{session_token: session.token}}
     else
       {:error, :identity_stale} -> {:error, :identity_stale}
       {:error, :stale_key_epoch} -> {:error, :identity_stale}

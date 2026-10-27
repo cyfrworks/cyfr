@@ -12,8 +12,9 @@ defmodule Compendium.OCI.Auth do
 
   1. Client resolves the per-namespace push token from `CredentialStore`.
   2. Client emits `Authorization: Bearer <cyfr_pt_...>` on every request.
-  3. On 401, caller surfaces `:token_revoked` (or similar) and prompts the
-     user to re-probe — no automatic refresh.
+  3. On 401 to a push, the stored token is removed and the push refuses
+     `registry_token_missing`, naming `cyfr registry sync`; there is no
+     automatic refresh.
 
   `Authorization: Basic base64(anyuser:token)` is also accepted server-side
   for Docker/OCI client compatibility; cyfr itself always uses Bearer.

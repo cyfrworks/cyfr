@@ -48,7 +48,7 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 |------|--------|----------|------------------------|
 | **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
 | **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can list the metadata of stored OAuth client credentials. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. |
+| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, claiming a handle, minting push tokens, changing a registry namespace, its tokens or members, publishing an address, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead; each registry request among them is signed by the person's live key. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
@@ -134,7 +134,7 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 | `execute` | Run components, manage schedules, compile builds |
 | `vault_read` | `oauth.list`: the names of the OAuth providers the athanor has client credentials for, who stored them and when; never the secret |
 | `component_read` | Get component blobs, discover components |
-| `component_manage` | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim and verify publishers, manage registry tokens and members; change Aqua souls, roles, guides and scrolls and their skills |
+| `component_manage` | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim a handle, claim and verify publishers, mint and manage registry push tokens and members, publish an address; change Aqua souls, roles, guides and scrolls and their skills |
 | `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
 | `storage_write` | Set retention policies; write, edit and delete component source; write, delete, offer, accept, decline and withdraw files |
 | `admin` | API key management, retention cleanup, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
@@ -436,9 +436,11 @@ params); and any other refusal the code of its class in the table above.
 
 A second tier sits between public and fully authenticated: actions
 annotated `auth: :signed_in` serve a caller holding a live session that
-has not yet claimed a namespace, which is how the first-login flow
-(`registry.probe`, `registry.claim_personal`) completes. Those are not
-public — they need the session — but they do not need a claimed identity.
+has not yet claimed a namespace: `registry.claim_personal` and the
+registry's policy reads and acceptance (`registry.legal_version`,
+`registry.legal_page`, `registry.legal_accept`), so a person can claim a
+handle before anything else. Those are not public — they need the
+session — but they do not need a claimed identity.
 
 Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `decision.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `component.read_resource`, `resource.read`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
@@ -948,7 +950,7 @@ Beside `list`, `read`, `write` and `delete`, the `file` tool sends a person a co
 |--------|----------|--------------|
 | `offer` | `paths` (one to ten files under `data/`), `to` (a person id, `usr_…`) | Copy the files and offer them to a person you share an athanor with — never yourself. The copy counts against your storage until the offer ends. Answers the `offer_id` and its `expires_at` (after `file_offer_days`, a retention setting, 7 by default) |
 | `offers` | — | `inbox` (offers sent to you, with `sender` and `folder`, the folder `accept` lands them in when you name none), `outbox` (offers you sent from this athanor, with `recipient`), each file with its `status`, `filename`, `size` and `expires_at`; and `receipts`, the files you accepted here that have not landed yet (`status` `received`) or never will (`failed`) |
-| `accept` | `offer_id`, optional `folder` (under `data/`) | Take the copy into your focused athanor, where you must hold a seat. It needs twice the files' size free until they land. Answers the `folder` they land in: `<folder>/<offer_id>/`, under `data/inbox/<sender>/` by default (the sender's namespace, or their person id), with `-2` and onward when that folder already holds files — nothing of yours is overwritten |
+| `accept` | `offer_id`, optional `folder` (under `data/`) | Take the copy into your focused athanor, where you must hold a seat. It needs twice the files' size free until they land. Answers the `folder` they land in: `<folder>/<offer_id>/`, under `data/inbox/<sender>/` by default (the sender's personal namespace, which is their handle, or their person id), with `-2` and onward when that folder already holds files — nothing of yours is overwritten |
 | `decline` | `offer_id` | Refuse an offer sent to you |
 | `withdraw` | `offer_id` | Take back an offer you sent, while it is not yet accepted. An accepted copy is the recipient's |
 

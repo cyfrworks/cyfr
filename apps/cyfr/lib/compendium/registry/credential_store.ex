@@ -54,9 +54,9 @@ defmodule Compendium.Registry.CredentialStore do
   Store a push token for the caller under this device's label,
   best-effort.
 
-  Shared by the OAuth callback, the claim flow and the CLI's re-probe —
-  all cache the same push-token shape after the identity probe. A failed
-  write degrades to `{:error, reason}` rather than crashing the caller,
+  Shared by the operations that mint push tokens (`registry.sync`,
+  `registry.verify_publisher`), which cache the same push-token shape. A
+  failed write degrades to `{:error, reason}` rather than crashing the caller,
   which then decides whether to re-auth. A non-binary slug, or a token
   that is not a non-empty string, yields `:skipped`.
   """
@@ -91,7 +91,7 @@ defmodule Compendium.Registry.CredentialStore do
   Every credential the caller holds for a registry, one per namespace,
   personal first then publisher-alphabetical. Used by:
   - `Compendium.Registry.Client` to pick a bearer for non-namespace-scoped
-    calls (e.g. `/v1/identity/probe`).
+    calls (e.g. `/v1/components`).
   - Registry `whoami` to present personal + membership identity.
   """
   @spec list_for_user(Context.t(), String.t()) ::

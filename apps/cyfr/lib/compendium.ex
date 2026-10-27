@@ -16,9 +16,8 @@ defmodule Compendium do
   resolution, activation and blobs for the execution domain; the
   component facts the assistant reads — its model catalysts, its agents,
   skills and agent sources and the athanor's own formulas — with the path
-  grammars of those trees; and the registry's sign-in probe and legal
-  pages. Every fact is read under the caller's context and names nothing
-  it did not read; running a catalyst is not here.
+  grammars of those trees. Every fact is read under the caller's context
+  and names nothing it did not read; running a catalyst is not here.
   """
 
   use Boundary,
@@ -46,7 +45,6 @@ defmodule Compendium do
     Tincture
   }
 
-  alias Compendium.Registry.Client
   alias Compendium.Tincture.Rules
   alias Sanctum.Context
 
@@ -562,69 +560,4 @@ defmodule Compendium do
   @doc "Whether an agent name is the soul's (`Compendium.AquaPath.soul?/1`)."
   @spec soul_agent_file?(term()) :: boolean()
   defdelegate soul_agent_file?(name), to: AquaPath, as: :soul?
-
-  # ---------------------------------------------------------------------------
-  # The registry: sign-in and its legal pages
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Probe the registry with the person's IdP `access_token` and absorb what
-  it says; always `{:proceed, user, report}` (`Compendium.SignInSync.complete/4`).
-  """
-  @spec complete_sign_in(
-          Context.t(),
-          %{required(:id) => String.t(), optional(atom()) => term()},
-          String.t() | atom(),
-          String.t() | nil
-        ) :: Sanctum.SignIn.outcome()
-  defdelegate complete_sign_in(ctx, user, provider, access_token),
-    to: Compendium.SignInSync,
-    as: :complete
-
-  @doc """
-  The registry's current policy version and policies
-  (`Compendium.Registry.Client.get_legal_version/0`); a failure is the
-  registry's refusal, as `Compendium.Providers.Shared.refusal/1` renders it.
-  """
-  @spec registry_legal_version() :: {:ok, map()} | {:error, Prima.Refusal.t()}
-  def registry_legal_version, do: registry_answer(Client.get_legal_version())
-
-  @doc """
-  One registry policy page (`Compendium.Registry.Client.get_legal_page/1`);
-  a failure is the registry's refusal.
-  """
-  @spec registry_legal_page(String.t()) :: {:ok, map()} | {:error, Prima.Refusal.t()}
-  def registry_legal_page(name), do: registry_answer(Client.get_legal_page(name))
-
-  @doc """
-  Record the person's acceptance of a policy version
-  (`Compendium.Registry.Client.accept_policies/4`). A refusal is the
-  registry's: a stale version is the reason
-  `{:registry, :policy_version_mismatch, required_version}`, a refused
-  identity `{:registry, :unauthorized}`, a spent IdP token
-  `:invalid_access_token`.
-  """
-  @spec accept_registry_policies(
-          atom() | String.t(),
-          String.t() | nil,
-          String.t() | nil,
-          String.t()
-        ) :: {:ok, map()} | {:error, Prima.Refusal.t()}
-  def accept_registry_policies(provider, access_token, id_token, policy_version) do
-    registry_answer(Client.accept_policies(provider, access_token, id_token, policy_version))
-  end
-
-  @doc "The policy version a registry refusal requires, or nil."
-  @spec registry_required_version(Prima.Refusal.t()) :: String.t() | nil
-  def registry_required_version(%Prima.Refusal{
-        reason: {:registry, :policy_version_mismatch, version}
-      }),
-      do: version
-
-  def registry_required_version(%Prima.Refusal{}), do: nil
-
-  defp registry_answer({:ok, _body} = ok), do: ok
-
-  defp registry_answer({:error, reason}),
-    do: {:error, Compendium.Providers.Shared.refusal(reason)}
 end
