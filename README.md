@@ -103,7 +103,7 @@ cyfr profile grant c:local.claude
 cyfr -h
 ```
 
-`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `keeper.seccomp.json` (the `locus-runtime` service's seccomp profile), `.env.example` and the services' own env examples, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([configuration-guide.md](configuration-guide.md), [integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md), [identity-guide.md](identity-guide.md), [devices-guide.md](devices-guide.md)). It writes `.env` from `.env.example`, asking first how the home is reached (your devices via Tailscale, a public domain via Caddy, or this computer only) and then the operator's sign-in email (the first platform admin), and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the runtime root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `locus-runtime` (the runtime that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `locus-backends` (the backends service that runs stdio MCP servers), and the proxy of a home reached from other devices: `tailscale` (Tailscale Serve, for a tailnet home) or `caddy` (TLS and the reverse proxy at `:80`/`:443`, for a public home); `cyfr up` brings up the first four, and the proxy the home's access mode selects. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
+`cyfr init` downloads your project files and pulls the server images: `docker-compose.yml`, `Caddyfile`, `keeper.seccomp.json` (the `locus-runtime` service's seccomp profile), `.env.example` and the services' own env examples, `cyfr.yaml`, WIT interface definitions, the `aqua/` soul, roles and scrolls, and the included guides ([configuration-guide.md](configuration-guide.md), [integration-guide.md](integration-guide.md), [component-guide.md](component-guide.md), [tincture-guide.md](tincture-guide.md), [identity-guide.md](identity-guide.md), [devices-guide.md](devices-guide.md)). It writes `.env` from `.env.example`, asking first how CYFR is reached (your devices via Tailscale, a public domain via Caddy, or this computer only) and then the operator's sign-in email (the first platform admin), and mints the stack's keys into it: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the runtime root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it, and `CYFR_LOCUS_BUILDS_KEY` beside `CYFR_LOCUS_BUILDS_URL`, so builds are on. Pass `--no-interactive` to take the defaults. It does not install Docker itself. The scaffolded `docker-compose.yml` is the full self-hosted stack — `cyfr` (the one endpoint on `:4000`: Prism, API, MCP, tinctures), `locus-runtime` (the runtime that runs components), `locus-builds` (the builds service behind `cyfr build compile`), `locus-backends` (the backends service that runs stdio MCP servers), and the proxy that lets other devices reach CYFR: `tailscale` (Tailscale Serve, for tailnet access) or `caddy` (TLS and the reverse proxy at `:80`/`:443`, for public access); `cyfr up` brings up the first four, and the proxy CYFR's access mode selects. See [Deploy to a Server](#deploy-to-a-server) for the same stack on a VPS.
 
 ## Prism — the web face
 
@@ -118,7 +118,7 @@ Around the chat:
 - **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has a door (an auth provider); operators and private boxes start in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
-Tinctures can stay private inside Prism, or be made public and shared at the home's address, `<address>/t/<athanor>/<publisher>/<name>`: `http://localhost:4000` for a local home, which only its own computer reaches; `https://<machine>.<tailnet>.ts.net` for a tailnet home, which your tailnet's devices reach through Tailscale Serve; and `https://<your domain>` for a public home, through Caddy under a certificate it obtains over ACME. See [Deploy to a Server](#deploy-to-a-server). A canvas is never public: it is your own data page, so no public profile is staged for one and the public route serves none.
+Tinctures can stay private inside Prism, or be made public and shared at CYFR's address, `<address>/t/<athanor>/<publisher>/<name>`: `http://localhost:4000` with local access, which only its own computer reaches; `https://<machine>.<tailnet>.ts.net` with tailnet access, which your tailnet's devices reach through Tailscale Serve; and `https://<your domain>` with public access, through Caddy under a certificate it obtains over ACME. See [Deploy to a Server](#deploy-to-a-server). A canvas is never public: it is your own data page, so no public profile is staged for one and the public route serves none.
 
 ## Project Layout
 
@@ -130,13 +130,13 @@ your-project/
 ├── integration-guide.md   # How to use CYFR as your app backend
 ├── component-guide.md      # Full guide to building components
 ├── tincture-guide.md       # Guide to building tinctures
-├── identity-guide.md       # Your identifier, keys and printed kit, restore, and joining another home
+├── identity-guide.md       # Your identifier, keys and printed kit, restore, and joining another CYFR
 ├── devices-guide.md        # Pairing devices and confirming sensitive changes
-├── docker-compose.yml      # Self-hosted stack: cyfr, locus-runtime, locus-builds, locus-backends (+ tailscale for a tailnet home, caddy for a public one)
-├── Caddyfile               # A public home's reverse proxy: everything → cyfr's proxy listener
+├── docker-compose.yml      # Self-hosted stack: cyfr, locus-runtime, locus-builds, locus-backends (+ tailscale for tailnet access, caddy for public access)
+├── Caddyfile               # The reverse proxy of public access: everything → cyfr's proxy listener
 ├── keeper.seccomp.json     # The seccomp profile the locus-runtime service runs under (see "Execution workers")
 ├── cyfr.yaml
-├── .cyfr/                  # How the home is reached, as `cyfr` keeps it: the stack's lock, the change in flight and recent outcomes (git-ignored; no snapshot holds it)
+├── .cyfr/                  # How CYFR is reached, as `cyfr` keeps it: the stack's lock, the change in flight and recent outcomes (git-ignored; no snapshot holds it)
 ├── .env                    # The stack's keys and config, written by `cyfr init` (do not commit)
 ├── .env.example            # The starting .env: init's keys and the deployment choices
 ├── .env.locus.example      # The Locus services' own settings, one file for every role (copy to .env.locus)
@@ -375,15 +375,15 @@ CYFR is self-hosted as a small `docker compose` stack:
 | `locus-builds-guard` *(profile: `locus-builds`)* | the builds island's egress guard: the same `cyfr-locus` image running `cyfr-guard`, holding `NET_ADMIN` alone, in a network namespace of its own that `locus-builds` runs in, so a build reaches public hosts and the private hosts `CYFR_PRIVATE_EGRESS_TARGETS` names and nothing else; the builder starts only once the guard is healthy, with every rule installed |
 | `locus-backends` | the backends service: runs the stdio/`npx` MCP servers (filesystem, github, …) an athanor adds, each backend under a uid and a memory bound of its own, and serves their tools to cyfr, on its own `locus-backends` network that only cyfr joins, holding one backends key and no state. The same `cyfr-locus` image with the backend pool; see [Stdio / npx MCP servers](#stdio--npx-mcp-servers-filesystem-github-) |
 | `locus-backends-guard` | the backends island's egress guard: the same `cyfr-locus` image running `cyfr-guard`, holding `NET_ADMIN` alone, in a network namespace of its own that `locus-backends` runs in, so a backend reaches public hosts and the private hosts `CYFR_PRIVATE_EGRESS_TARGETS` names and nothing else; the service starts only once the guard is healthy, with every rule installed |
-| `caddy` *(profile: `public`)* | TLS terminator and reverse proxy of a public home, forwarding to cyfr's proxy listener. Started only when `CYFR_ACCESS=public` in `.env` |
-| `tailscale` *(profile: `tailnet`)* | Tailscale Serve of a tailnet home: HTTPS at the machine's tailnet name, forwarding to cyfr's proxy listener; its loopback SOCKS5 proxy lets this device's own browser reach that address. Started only when `CYFR_ACCESS=tailnet` in `.env` |
+| `caddy` *(profile: `public`)* | TLS terminator and reverse proxy of public access, forwarding to cyfr's proxy listener. Started only when `CYFR_ACCESS=public` in `.env` |
+| `tailscale` *(profile: `tailnet`)* | Tailscale Serve for tailnet access: HTTPS at the machine's tailnet name, forwarding to cyfr's proxy listener; its loopback SOCKS5 proxy lets this device's own browser reach that address. Started only when `CYFR_ACCESS=tailnet` in `.env` |
 
-Three ways a home is reached, `CYFR_ACCESS` in `.env`:
+Three ways CYFR is reached, `CYFR_ACCESS` in `.env`:
 - **local**: this computer only. Prism at `http://localhost:4000/`.
 - **tailnet**: your devices on Tailscale; also runs tailscale (`--profile tailnet`). Prism at `https://<machine>.<tailnet>.ts.net/`.
 - **public**: a domain, for anyone who signs in; also runs caddy (`--profile public`). Prism at `https://<your domain>/`.
 
-`cyfr init` asks which one you want and writes it into `.env` with every setting it implies: the address, and the tailnet machine or the certificate email. [`cyfr access <mode>`](#how-the-home-is-reached) changes it later, and `cyfr access status` shows it. `cyfr up` selects the proxy's profile from `CYFR_ACCESS`, and the `locus-builds` profile when `CYFR_LOCUS_BUILDS_URL` names the builds service, which it does after `cyfr init`. Whatever the mode, cyfr serves on its loopback listener, `:4000` on this machine's loopback alone; a tailnet or public home adds the proxy listener its proxy forwards to, which no port publishes.
+`cyfr init` asks which one you want and writes it into `.env` with every setting it implies: the address, and the tailnet machine or the certificate email. [`cyfr access <mode>`](#how-cyfr-is-reached) changes it later, and `cyfr access status` shows it. `cyfr up` selects the proxy's profile from `CYFR_ACCESS`, and the `locus-builds` profile when `CYFR_LOCUS_BUILDS_URL` names the builds service, which it does after `cyfr init`. Whatever the mode, cyfr serves on its loopback listener, `:4000` on this machine's loopback alone; tailnet or public access adds the proxy listener its proxy forwards to, which no port publishes.
 
 There is **no censorship-circumvention layer** here — Tailscale and Caddy give you TLS, not unblockability; if your network actively blocks endpoints, put this stack behind a separate obfuscated transport.
 
@@ -391,12 +391,12 @@ There is **no censorship-circumvention layer** here — Tailscale and Caddy give
 
 - A Linux VPS (or any Docker host) with Docker + the Compose plugin: **Docker Engine 28 or later on a cgroup v2 host** (cgroup v2 is the default of current distributions and of Docker Desktop). `locus-runtime`, `locus-builds` and `locus-backends` hold every runner, build and backend to a memory bound of its own, a cgroup `cyfr-locus` makes for it, which needs the containers' `security_opt: writable-cgroups=true` (in the shipped `docker-compose.yml`; it adds no capability). Without it — an older engine, a cgroup v1 host, or the option removed — nothing runs unbounded and nothing runs: `locus-runtime` starts no runner and logs, naming `writable-cgroups=true`, that it cannot bound one, so no component runs; every build is refused as `unavailable`, naming the option; and every backend's spawn is refused as `memory_unavailable`, which its status reports.
 - A host that allows unprivileged user namespaces, and `locus-runtime` under the shipped seccomp profile: every runner gets a user and network namespace of its own (see [Execution workers](#execution-workers)).
-- For a public home: a domain pointing at the VPS. For a tailnet home: a Tailscale account. For a local one: nothing extra.
-- Firewall: **public** opens `80/tcp`, `443/tcp` (+ `443/udp` for HTTP/3). Every home publishes `4000/tcp` on `127.0.0.1` only (`CYFR_PORT` changes it). A **tailnet** home also publishes SOCKS5 `1055/tcp` on `127.0.0.1` only, for the device's own browser; it opens no port to other machines. This is a general proxy on this machine's loopback for the device's own browser; a program on this machine can reach through it whatever the sidecar can reach.
+- For public access: a domain pointing at the VPS. For tailnet access: a Tailscale account. For local access: nothing extra.
+- Firewall: **public** opens `80/tcp`, `443/tcp` (+ `443/udp` for HTTP/3). In every mode CYFR publishes `4000/tcp` on `127.0.0.1` only (`CYFR_PORT` changes it). With **tailnet** access, CYFR also publishes SOCKS5 `1055/tcp` on `127.0.0.1` only, for the device's own browser; it opens no port to other machines. This is a general proxy on this machine's loopback for the device's own browser; a program on this machine can reach through it whatever the sidecar can reach.
 
 ### Setup
 
-Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (asks how the home is reached, then your email, and mints the stack's keys), and brings the stack up:
+Use the `cyfr` CLI — it downloads `docker-compose.yml` + `Caddyfile`, writes `.env` (asks how CYFR is reached, then your email, and mints the stack's keys), and brings the stack up:
 
 ```bash
 # Install the CLI (the installer/cask install the CLI only, not Docker):
@@ -404,8 +404,8 @@ curl -fsSL https://raw.githubusercontent.com/cyfrworks/cyfr/main/scripts/install
 #   …or:  brew tap cyfrworks/cyfr && brew install --cask cyfr
 
 mkdir my-cyfr && cd my-cyfr
-cyfr init        # downloads compose + Caddyfile, asks how the home is reached, writes .env and its keys
-cyfr up          # starts cyfr + locus-runtime + locus-builds + locus-backends (and the proxy of a tailnet or public home)
+cyfr init        # downloads compose + Caddyfile, asks how CYFR is reached, writes .env and its keys
+cyfr up          # starts cyfr + locus-runtime + locus-builds + locus-backends (and the proxy of tailnet or public access)
 ```
 
 `cyfr init` mints every key the stack needs into `.env`: `CYFR_SECRET_KEY_BASE`, `CYFR_LOCUS_BACKENDS_KEY`, the [execution worker](#execution-workers)'s root `CYFR_LOCUS_RUNTIME_ROOT` with the `LOCUS_RUNTIME_KEY` derived from it for the worker's service id (`wrk_locus` unless `.env` names another `LOCUS_RUNTIME_SERVICE_ID`), and the [builds](#builds) key beside `CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100`. It also assigns [`CYFR_CORS_ALLOWED_ORIGINS`](#cors-allowlist) the empty allowlist, which admits no cross-origin caller and which the shipped stack's same-origin clients never notice. Run in a project whose `.env` already exists, it adds only the keys `.env` lacks and never rewrites one: with no root and no service key it mints both, with a root alone it derives the service key from it, a builds URL gets a minted key and a builds key gets the URL. A service key with no root beside it, or one the root beside it does not derive, is refused with a sentence naming the fix, and nothing is written.
@@ -418,7 +418,7 @@ cp .env.example .env
 # edit .env:
 #   CYFR_SECRET_KEY_BASE — `openssl rand -base64 48` (at least 64 bytes; a blank or shorter value refuses the boot)
 #   CYFR_ACCESS, CYFR_HOST — local and localhost, as .env.example has them;
-#                          `cyfr access tailnet|public` writes another home's settings
+#                          `cyfr access tailnet|public` writes another mode's settings
 #   CYFR_PLATFORM_ADMIN_EMAILS — your email (platform admin; required to access the instance)
 #   CYFR_LOCUS_BACKENDS_KEY — `openssl rand -hex 32`
 #   CYFR_LOCUS_RUNTIME_ROOT      — `openssl rand -hex 32`
@@ -427,21 +427,21 @@ cp .env.example .env
 #   CYFR_LOCUS_BUILDS_URL — http://locus-builds:4100 (see "Builds")
 #   CYFR_LOCUS_BUILDS_KEY — `openssl rand -hex 32`
 
-# with the CLI, as for any home:
+# with the CLI, as for any CYFR:
 cyfr up
-# …or, for a local home without it, outside the supported path (see "How the home is reached"):
+# …or, for local access without it, outside the supported path (see "How CYFR is reached"):
 docker compose --profile locus-builds up -d
 ```
 </details>
 
-Then open the address `cyfr up` prints (`http://localhost:4000/` for a local home), sign in, and you're in your athanor's chat. "Add to Home Screen" installs it as a PWA (works on phones too). In a tailnet or public home the proxy forwards everything to cyfr's proxy listener — Prism, `/api`, `/mcp`, `/auth` and `/t` on the same origin. The `cyfr` endpoint (`:4000`) is always published on `127.0.0.1` so the `cyfr` CLI and a local browser work from the host.
+Then open the address `cyfr up` prints (`http://localhost:4000/` with local access), sign in, and you're in your athanor's chat. "Add to Home Screen" installs it as a PWA (works on phones too). With tailnet or public access the proxy forwards everything to cyfr's proxy listener — Prism, `/api`, `/mcp`, `/auth` and `/t` on the same origin. The `cyfr` endpoint (`:4000`) is always published on `127.0.0.1` so the `cyfr` CLI and a local browser work from the host.
 
-**Setting up on a device.** On a machine with a screen of its own and no keyboard, such as a small touch-screen device, `cyfr setup` does what `cyfr init` and `cyfr up` do, from pages on that screen. It serves them on `127.0.0.1` before anything of the stack runs, prints their address, writes it to `.cyfr/setup.url` and, on a machine with a display, opens them in the default browser; `--no-open` leaves that to the device's launcher. Nothing off the machine reaches them. The pages ask how the home is reached (your phone and laptop via Tailscale, only this device, or a public domain) and your email, which makes you the administrator, then write `.env`, join and start the home with `cyfr init`'s and `cyfr up`'s own steps. A tailnet home's join shows its approval link as a QR code to scan with your phone and as text with a Copy button, and under it the machine's name, `cyfr` unless you change it there. A join that fails, or a start that fails, says why and offers to try again or to start the home on this device only. Once the home is up the pages show its address, with a Copy button, and open it, apart from a `ts.net` address: that opens on your other devices on the tailnet, and on the device itself in a browser that uses the home's SOCKS5 proxy on `127.0.0.1:1055` (below). `cyfr setup` then stops. In a project that already has a `.env` it refuses, and `cyfr access` changes how that home is reached.
+**Setting up on a device.** On a machine with a screen of its own and no keyboard, such as a small touch-screen device, `cyfr setup` does what `cyfr init` and `cyfr up` do, from pages on that screen. It serves them on `127.0.0.1` before anything of the stack runs, prints their address, writes it to `.cyfr/setup.url` and, on a machine with a display, opens them in the default browser; `--no-open` leaves that to the device's launcher. Nothing off the machine reaches them. The pages ask how CYFR is reached (your phone and laptop via Tailscale, only this device, or a public domain) and your email, which makes you the administrator, then write `.env`, join and start CYFR with `cyfr init`'s and `cyfr up`'s own steps. With tailnet access, the join shows its approval link as a QR code to scan with your phone and as text with a Copy button, and under it the machine's name, `cyfr` unless you change it there. A join that fails, or a start that fails, says why and offers to try again or to start CYFR on this device only. Once CYFR is up the pages show its address, with a Copy button, and open it, apart from a `ts.net` address: that opens on your other devices on the tailnet, and on the device itself in a browser that uses CYFR's SOCKS5 proxy on `127.0.0.1:1055` (below). `cyfr setup` then stops. In a project that already has a `.env` it refuses, and `cyfr access` changes how that CYFR is reached.
 
-**Upgrading.** `cyfr update` is the one command for it: it brings the `cyfr` program to the newest release, then the home in the current directory to the program's release, and two releases never run side by side on one database.
+**Upgrading.** `cyfr update` is the one command for it: it brings the `cyfr` program to the newest release, then the CYFR in the current directory to the program's release, and two releases never run side by side on one database.
 
-- **The program.** When a release newer than this `cyfr` is published, `cyfr update` installs it, through `brew` for a Homebrew cask install; any other install downloads the release's archive for this platform, verifies it against the release's `checksums.txt` signed by the release workflow for that tag, and only then replaces its own file. It then goes on as the new program, so the one command finishes the job. Pre-releases (`0.6.0-alpha.1`, `1.0.0-rc.2`) are never chosen this way: `cyfr update --version <version>` installs exactly the release it names, a pre-release or an older release included, and the install script does the same with `CYFR_VERSION=<version>`. A Homebrew install takes only its tap's release, the newest that is not a pre-release. Outside a home's directory `cyfr update` stops after the program.
-- **The home.** In a home's directory it then fetches the release's `release.json` and its signature and verifies them: signed keyless by the release workflow of that version's tag, naming that version. Without network access to the release, or with a manifest that does not verify, it refuses and changes nothing, as it refuses a `docker-compose.yml` that lacks a service of the bundled stack (`cyfr init --force` regenerates the file and keeps `.env`). It then shows the release the home is on, each image line that changes and where the release notes are, and asks before changing anything (`--yes` makes the change without asking; with no terminal and no `--yes` it shows the change and makes none). A home already on the program's release is left alone, with no stop and no snapshot. A home on a newer release than the program, by its compose file's tags or by the release its running cyfr reports, is refused before anything stops, since older code never starts over a database a newer release migrated: restore a snapshot of the older release instead. Once confirmed, in order, it:
+- **The program.** When a release newer than this `cyfr` is published, `cyfr update` installs it, through `brew` for a Homebrew cask install; any other install downloads the release's archive for this platform, verifies it against the release's `checksums.txt` signed by the release workflow for that tag, and only then replaces its own file. It then goes on as the new program, so the one command finishes the job. Pre-releases (`0.6.0-alpha.1`, `1.0.0-rc.2`) are never chosen this way: `cyfr update --version <version>` installs exactly the release it names, a pre-release or an older release included, and the install script does the same with `CYFR_VERSION=<version>`. A Homebrew install takes only its tap's release, the newest that is not a pre-release. In a directory that holds no CYFR, `cyfr update` stops after the program.
+- **CYFR.** In CYFR's directory it then fetches the release's `release.json` and its signature and verifies them: signed keyless by the release workflow of that version's tag, naming that version. Without network access to the release, or with a manifest that does not verify, it refuses and changes nothing, as it refuses a `docker-compose.yml` that lacks a service of the bundled stack (`cyfr init --force` regenerates the file and keeps `.env`). It then shows the release CYFR is on, each image line that changes and where the release notes are, and asks before changing anything (`--yes` makes the change without asking; with no terminal and no `--yes` it shows the change and makes none). A CYFR already on the program's release is left alone, with no stop and no snapshot. A CYFR on a newer release than the program, by its compose file's tags or by the release its running cyfr reports, is refused before anything stops, since older code never starts over a database a newer release migrated: restore a snapshot of the older release instead. Once confirmed, in order, it:
 
 1. pulls every image the manifest names by its digest, and fetches and verifies the release's managed scaffold files without writing them, while the stack still runs; a failed pull changes nothing. It names the storage root it will snapshot as compose resolves it. On PostgreSQL it first reads the server's major through a client image the CLI pins by digest, one for each of PostgreSQL 14 to 18, and pulls the pin of that major for the dump; a server of another major refuses the update before anything changes;
 2. refuses while a member of the [cell](#several-members-on-one-database-a-cell) on another release than this one runs outside this stack;
@@ -449,32 +449,32 @@ Then open the address `cyfr up` prints (`http://localhost:4000/` for a local hom
 4. copies the cell into `backups/<timestamp>/`: the database (the SQLite file, or a `pg_dump` in the PostgreSQL server's own major version), the storage root, every managed scaffold file the release replaces as it stood (part `scaffold`, the keeper's seccomp profile among them), the keyring, `.env` and `docker-compose.yml` as it stood (part `compose`), with `snapshot.json` written last, so a backup without it is incomplete. `backups/` ignores itself for git, since a snapshot holds the keyring; An object store (`CYFR_STORAGE=s3`) is outside the snapshot: it relies on the bucket's own versioning;
 5. writes the managed scaffold files, putting them back from the snapshot and starting the old stack again if that or the next step fails, rewrites the `image:` lines naming `ghcr.io/cyfrworks/cyfr`, `ghcr.io/cyfrworks/cyfr-locus`, the bundled caddy and the bundled tailscale to the release's version and digest (caddy and tailscale keep their tags), leaving and reporting any other image, then starts the stack and waits for readiness. A release that fails to migrate or start leaves the stack stopped, since old code never starts over migrated bytes, and the update prints the backup's path and `cyfr restore <backup>`.
 
-A member whose release differs from a live member's is refused at boot, naming both releases. `cyfr init` run again in the project adds a key a newer stack needs that `.env` lacks, and changes nothing else. From a source checkout without the CLI: `docker compose --profile locus-builds pull && docker compose --profile locus-builds up -d` (add `--profile public` or `--profile tailnet` for a public or tailnet home, and drop the builds profile if builds are off), which is outside the supported path (below). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server. A database built from an earlier version of the schema is not carried forward: the server refuses to boot on it and names the database to recreate.
+A member whose release differs from a live member's is refused at boot, naming both releases. `cyfr init` run again in the project adds a key a newer stack needs that `.env` lacks, and changes nothing else. From a source checkout without the CLI: `docker compose --profile locus-builds pull && docker compose --profile locus-builds up -d` (add `--profile public` or `--profile tailnet` for public or tailnet access, and drop the builds profile if builds are off), which is outside the supported path (below). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server. A database built from an earlier version of the schema is not carried forward: the server refuses to boot on it and names the database to recreate.
 
-### How the home is reached
+### How CYFR is reached
 
-`cyfr access <mode>` changes how the home in the current directory is reached: `cyfr access local`, `cyfr access tailnet`, or `cyfr access public --domain <your domain>` (and `--acme-email <email>` for the certificate authority's account, if you want one). It shows the change before making it: who can reach the home, its address, the certificate email and the ports opened on this machine, each before → after, and what stops working when the address changes. Once you confirm, or pass `--yes`, it stops the stack and checks it stopped, rewrites `.env`, and starts what was running in the new mode. When that start fails, it stops what the new mode started, writes the previous mode back and starts it, and reports what it reached: the home running as before (on this machine only, when its tailnet machine is not ready to serve it), the home left stopped when the previous mode does not start either, or, when a stop cannot be checked or a write fails, a change to finish with `cyfr access --resume`. `cyfr access status` shows how the home is reached, what runs, the proxy's health and the last change's outcome, and changes nothing.
+`cyfr access <mode>` changes how the CYFR in the current directory is reached: `cyfr access local`, `cyfr access tailnet`, or `cyfr access public --domain <your domain>` (and `--acme-email <email>` for the certificate authority's account, if you want one). It shows the change before making it: who can reach CYFR, its address, the certificate email and the ports opened on this machine, each before → after, and what stops working when the address changes. Once you confirm, or pass `--yes`, it stops the stack and checks it stopped, rewrites `.env`, and starts what was running in the new mode. When that start fails, it stops what the new mode started, writes the previous mode back and starts it, and reports what it reached: CYFR running as before (on this machine only, when its tailnet machine is not ready to serve it), CYFR left stopped when the previous mode does not start either, or, when a stop cannot be checked or a write fails, a change to finish with `cyfr access --resume`. `cyfr access status` shows how CYFR is reached, what runs, the proxy's health and the last change's outcome, and changes nothing.
 
 A change holds the stack's lock and keeps its progress in `.cyfr/` in the project directory. When one is interrupted, by a closed terminal or a restart, run `cyfr access --resume`: it finishes the interrupted change under the lock and reports what happened. The next `cyfr up`, `cyfr update`, `cyfr restore` or `cyfr access` does the same before anything else.
 
-A start that leaves the home answering on this machine only, because its tailnet machine is not the one `.env` names, has not joined, or has HTTPS certificates off, exits with status 3 and says what to do; Tailscale Serve stays closed until `cyfr access tailnet` serves the home on the tailnet again.
+A start that leaves CYFR answering on this machine only, because its tailnet machine is not the one `.env` names, has not joined, or has HTTPS certificates off, exits with status 3 and says what to do; Tailscale Serve stays closed until `cyfr access tailnet` serves CYFR on the tailnet again.
 
-**Choose the address once.** Passkeys and paired devices belong to the home's address, so a new address, from another tailnet name, another domain or another mode, means registering passkeys and pairing devices again: [devices-guide.md](devices-guide.md#when-the-homes-address-changes) lists what stops working, as `cyfr access` prints it before it changes the address.
+**Choose the address once.** Passkeys and paired devices belong to CYFR's address, so a new address, from another tailnet name, another domain or another mode, means registering passkeys and pairing devices again: [devices-guide.md](devices-guide.md#when-cyfrs-address-changes) lists what stops working, as `cyfr access` prints it before it changes the address.
 
-**A tailnet home.** These steps are yours, once:
+**Tailnet access.** These steps are yours, once:
 
-1. Create a Tailscale account, and install the Tailscale app, signed in, on the phones and computers that will reach the home.
-2. In the Tailscale admin console's DNS page, turn on MagicDNS and HTTPS certificates. Without HTTPS certificates the machine joins, but the home is not served on the tailnet, and `cyfr access tailnet` says what to turn on.
+1. Create a Tailscale account, and install the Tailscale app, signed in, on the phones and computers that will reach CYFR.
+2. In the Tailscale admin console's DNS page, turn on MagicDNS and HTTPS certificates. Without HTTPS certificates the machine joins, but CYFR is not served on the tailnet, and `cyfr access tailnet` says what to turn on.
 
-`cyfr init`'s first answer, or `cyfr access tailnet`, then joins this machine to your tailnet: open the link it prints and approve the machine (on a machine with a display `cyfr init` and `cyfr access tailnet` open it in the default browser, unless `--no-open` is given), or join it with an auth key, read from the file `--tailscale-auth-key-file` names and never written to `.env` or a log. The home is then at `https://<machine>.<tailnet>.ts.net/`, through the `tailscale` service, with no port opened to other machines. Its SOCKS5 proxy on `127.0.0.1:1055` lets this device's own browser reach the same address through the sidecar. That connection enters through Serve's proxy ingress and carries no loopback-ingress authority.
+`cyfr init`'s first answer, or `cyfr access tailnet`, then joins this machine to your tailnet: open the link it prints and approve the machine (on a machine with a display `cyfr init` and `cyfr access tailnet` open it in the default browser, unless `--no-open` is given), or join it with an auth key, read from the file `--tailscale-auth-key-file` names and never written to `.env` or a log. CYFR is then at `https://<machine>.<tailnet>.ts.net/`, through the `tailscale` service, with no port opened to other machines. Its SOCKS5 proxy on `127.0.0.1:1055` lets this device's own browser reach the same address through the sidecar. That connection enters through Serve's proxy ingress and carries no loopback-ingress authority.
 
 - **Certificate names are public.** Every HTTPS certificate's name, the machine's full tailnet name included, is published in public certificate logs. Use a randomized tailnet name and a neutral machine name: `cyfr`, unless `--hostname` gives another.
-- **The name is the address.** Renaming the machine means registering passkeys and pairing devices again (above). `cyfr access tailnet --new-node` replaces this machine's tailnet identity, so the home can take another name; remove the old machine on the admin console's Machines page.
-- **Tailscale's hosted service** hands out the tailnet's keys. Tailnet Lock limits that trust, and CYFR's own sign-in applies either way: CYFR reads no Tailscale identity header, so everyone who reaches the home still signs in.
+- **The name is the address.** Renaming the machine means registering passkeys and pairing devices again (above). `cyfr access tailnet --new-node` replaces this machine's tailnet identity, so CYFR can take another name; remove the old machine on the admin console's Machines page.
+- **Tailscale's hosted service** hands out the tailnet's keys. Tailnet Lock limits that trust, and CYFR's own sign-in applies either way: CYFR reads no Tailscale identity header, so everyone who reaches CYFR still signs in.
 
-**A public home.** `cyfr access public --domain <your domain>` serves the home at `https://<your domain>/` through the `caddy` service, which obtains its certificate over ACME. The domain must point at this machine, and ports 80 and 443 must be open (see [Prerequisites](#prerequisites)).
+**Public access.** `cyfr access public --domain <your domain>` serves CYFR at `https://<your domain>/` through the `caddy` service, which obtains its certificate over ACME. The domain must point at this machine, and ports 80 and 443 must be open (see [Prerequisites](#prerequisites)).
 
-**The supported path.** `cyfr up`, `cyfr access`, `cyfr update` and `cyfr restore` run Docker Compose themselves, with checks of their own. They hold the stack's lock. They clear every `COMPOSE_*` variable from their environment, select the files and profiles from the home's settings, and refuse a `.env` that sets a `COMPOSE_*` variable, since Compose would read it to choose the stack's files, project or services behind cyfr's back. They refuse a compose file that sets an access setting in the `cyfr` service's `environment:` or drops its `env_file: .env`. They open Tailscale Serve only once the tailnet machine is the one `.env` names. And they make a change of mode one journaled change, which the next of them recovers if it is interrupted. Running `docker compose` directly is outside that path and skips all of these. The server's own boot check stays either way: a release refuses to start on access settings in `.env` that contradict each other, with the sentence that names the fix.
+**The supported path.** `cyfr up`, `cyfr access`, `cyfr update` and `cyfr restore` run Docker Compose themselves, with checks of their own. They hold the stack's lock. They clear every `COMPOSE_*` variable from their environment, select the files and profiles from CYFR's settings, and refuse a `.env` that sets a `COMPOSE_*` variable, since Compose would read it to choose the stack's files, project or services behind cyfr's back. They refuse a compose file that sets an access setting in the `cyfr` service's `environment:` or drops its `env_file: .env`. They open Tailscale Serve only once the tailnet machine is the one `.env` names. And they make a change of mode one journaled change, which the next of them recovers if it is interrupted. Running `docker compose` directly is outside that path and skips all of these. The server's own boot check stays either way: a release refuses to start on access settings in `.env` that contradict each other, with the sentence that names the fix.
 
 ### Stdio / npx MCP servers (filesystem, github, …)
 
@@ -495,7 +495,7 @@ How it holds together:
 - **One key.** `CYFR_LOCUS_BACKENDS_KEY` (32 random bytes as 64 hex digits) is in `.env`; `cyfr init` generates it and compose gives it to `cyfr` and, as `LOCUS_BACKENDS_KEY`, to `locus-backends`. The service refuses to start without it, and cyfr refuses stdio servers without it (and `CYFR_LOCUS_BACKENDS_URL`, which compose sets). It is the only setting the service needs; its limits, timeouts and per-backend memory bound live in `.env.locus` (copy `.env.locus.example`).
 - **Nothing on disk.** The backends service persists nothing. CYFR sends a server's definition when the server is first used — its env resolved from the vault and sealed to that server and that service lifetime — and again for every running server when the service restarts. When CYFR restarts, the service releases what the previous boot ran, and each server starts again on its next use. Backends run only while CYFR keeps renewing their lease (30 s; `CYFR_LOCUS_BACKENDS_LEASE_MS` sets it); a server whose backends are slow to start never delays another server's renewal.
 - **Idle backends stop.** A backend with no tool call for 15 minutes (`CYFR_LOCUS_BACKENDS_IDLE_MS` sets it) is stopped and its pool slot freed; its tools stay listed, and the next call starts it again — for an `npx -y` package, downloading it again.
-- **Isolation.** Each backend runs under a pooled uid of its own (`locus-backend01`…`32`) with a private home, an environment built only from its server's env, and no capability. One athanor's backends hold at most a quarter of the pool, and so do the backends of every server one person created, across all their athanors. A server's requests reach only its own backends, and every result is masked with that server's credentials. Each backend is held to a memory bound of its own (`LOCUS_BACKENDS_MEMORY_BYTES`, 512 MiB), ended there alone and restarted. Backends share the network and CPU, and every process on the service, every other athanor's backends included, can read each backend's command line, though never its environment. A credential the program reads from its env stays there; a command that expands a vault-bound env name places the value on its command line, and CYFR saves such a definition and warns about it (see the [integration guide](integration-guide.md#stdio-mcp-servers)).
+- **Isolation.** Each backend runs under a pooled uid of its own (`locus-backend01`…`32`) with a private home directory, an environment built only from its server's env, and no capability. One athanor's backends hold at most a quarter of the pool, and so do the backends of every server one person created, across all their athanors. A server's requests reach only its own backends, and every result is masked with that server's credentials. Each backend is held to a memory bound of its own (`LOCUS_BACKENDS_MEMORY_BYTES`, 512 MiB), ended there alone and restarted. Backends share the network and CPU, and every process on the service, every other athanor's backends included, can read each backend's command line, though never its environment. A credential the program reads from its env stays there; a command that expands a vault-bound env name places the value on its command line, and CYFR saves such a definition and warns about it (see the [integration guide](integration-guide.md#stdio-mcp-servers)).
 - **Changes take effect at once.** Updating, disabling, deleting or restarting a server, or rotating, revoking or renaming a vault entry its env names, stops its backends before anything else can reach them; the next use starts them again with the new definition. `mcp_servers.get` shows each backend's status, restarts and a masked stderr tail; **Restart** on the expanded row starts a stdio server's backends afresh.
 - Stdio servers are not available when `CYFR_CLUSTER` is on.
 
@@ -505,10 +505,10 @@ Components run on a worker service, not in `cyfr`: the `locus-runtime` container
 
 - **Two keys.** `CYFR_LOCUS_RUNTIME_ROOT` (32 random bytes as 64 hex digits) is the root, in `.env` and read by `cyfr` alone. `LOCUS_RUNTIME_KEY` is the key derived from it for the worker's service id, `LOCUS_RUNTIME_SERVICE_ID` (`wrk_locus` by default; another id is named in `CYFR_LOCUS_RUNTIME_WORKERS` too), and compose hands the id and the key to `locus-runtime` alone, from `.env`. `cyfr init` mints the root and derives the key; by hand, the root is `openssl rand -hex 32`, and `CYFR_LOCUS_RUNTIME_ROOT=… mix cyfr.locus.runtime_key wrk_locus` prints the key from a source checkout, or `printf 'cyfr-locus/v1/runtime\nwrk_locus' | openssl dgst -sha256 -mac HMAC -macopt hexkey:$CYFR_LOCUS_RUNTIME_ROOT` is the same HMAC without one. The runtime never sees the root, the keyring or the database; it refuses to start with any of them in its environment, or with the builds or backends key beside its own. Changing the root ends every run in flight and needs every service key derived again: remove `LOCUS_RUNTIME_KEY` beside the new root and `cyfr init` derives it.
 - **Who is where.** `CYFR_LOCUS_RUNTIME_WORKERS` lists the worker services `cyfr` dispatches to as `<service_id>=<url>` entries, tried in order; compose sets `wrk_locus=http://locus-runtime:4200`. `cyfr`'s host API listens at `CYFR_HOST_API_BIND:CYFR_HOST_API_PORT` (default `127.0.0.1:4300`; compose binds `cyfr`'s own address on the `locus-runtime` network, so it answers on that network alone, and serves only calls signed with a runtime worker's key) and `LOCUS_RUNTIME_HOST_API_URL` tells the worker where that is. An attempt's host calls go to the member that admitted it: the assignment carries that member's address, `CYFR_HOST_API_URL`, and the worker posts them there. With one member the address is the worker's own `LOCUS_RUNTIME_HOST_API_URL` and nothing more is set. `cyfr` asks each worker for its status every `CYFR_LOCUS_RUNTIME_WATCH_POLL_MS` and, after `CYFR_LOCUS_RUNTIME_WATCH_MISSES` misses in a row or when a worker comes back as a new boot, closes the runs that boot held as lapsed. The runtime's own settings are in `.env.locus` (copy `.env.locus.example`), one file for every Locus role.
-- **Runners.** Inside `locus-runtime`, `cyfr-locus` — the keeper binary every Locus role runs under — starts the service as the `locus` user with no capability and runs every subtree in a runner: a VM of its own under a pooled uid (`locus-runner01`…`08`) with a private home on a tmpfs, holding no key, reached by the service alone over a control channel. The service runs only under `cyfr-locus`, which hands it the keeper channel: started any other way, a plain `mix` boot included, it refuses to boot, naming `cyfr-locus`, and no setting chooses another launcher. The service keeps `LOCUS_RUNTIME_POOL_SIZE` runners spawned ahead; a runner that completes cleanly is kept idle for its athanor for `LOCUS_RUNTIME_IDLE_TTL_MS`; one that was killed, lost a host answer or exited with attempts open is tainted, never assigned again, and retired — every process of its uid killed and its home scrubbed before the uid is reused — with `LOCUS_RUNTIME_RELEASE_GRACE_MS` to report what it held; a guest that ignores its deadline is halted by the runner's watchdog `LOCUS_RUNTIME_WATCHDOG_GRACE_MS` past it. `tests/locus-runtime-image/` runs each of these against the shipped image.
+- **Runners.** Inside `locus-runtime`, `cyfr-locus` — the keeper binary every Locus role runs under — starts the service as the `locus` user with no capability and runs every subtree in a runner: a VM of its own under a pooled uid (`locus-runner01`…`08`) with a private home directory on a tmpfs, holding no key, reached by the service alone over a control channel. The service runs only under `cyfr-locus`, which hands it the keeper channel: started any other way, a plain `mix` boot included, it refuses to boot, naming `cyfr-locus`, and no setting chooses another launcher. The service keeps `LOCUS_RUNTIME_POOL_SIZE` runners spawned ahead; a runner that completes cleanly is kept idle for its athanor for `LOCUS_RUNTIME_IDLE_TTL_MS`; one that was killed, lost a host answer or exited with attempts open is tainted, never assigned again, and retired — every process of its uid killed and its home directory scrubbed before the uid is reused — with `LOCUS_RUNTIME_RELEASE_GRACE_MS` to report what it held; a guest that ignores its deadline is halted by the runner's watchdog `LOCUS_RUNTIME_WATCHDOG_GRACE_MS` past it. `tests/locus-runtime-image/` runs each of these against the shipped image.
 - **No network in a runner.** `cyfr-locus` clones every runner into a user namespace that maps only its own uid and gid, holding no capability, and a network namespace of its own whose loopback is down and which has no route: a runner reaches neither `cyfr`, nor the service's listener, nor the container's loopback, nor anything outside. What a run needs from outside leaves through the runner's relay, a socket to the service: its host calls, which the service verifies against the run's attempt and posts to `cyfr`'s host API, and its guests' outbound requests, for which the service takes the request from the run's rate and connects to the address `cyfr` pinned. The `locus-runtime` network is the service's alone.
 - **The seccomp profile and the host.** Docker's default seccomp profile denies the clone that makes those namespaces, so the `locus-runtime` service runs under `keeper.seccomp.json` (Docker's default with that clone allowed and `unshare` and `setns` denied; the image carries it as `/etc/cyfr/keeper.json`). The shipped `docker-compose.yml` names it as `security_opt: seccomp=./keeper.seccomp.json`, which compose reads from the project directory: `cyfr init` and `cyfr update` write it there, and a source checkout copies `apps/locus/keeper/seccomp/keeper.json` there. The host must allow unprivileged user namespaces: `user.max_user_namespaces` above 0, and where AppArmor restricts them (`kernel.apparmor_restrict_unprivileged_userns=1`, as on Ubuntu 24.04 and later) the container keeps Docker's default AppArmor profile, under which the clone is allowed; an unconfined container, a privileged one included, gets a namespace without the ids its runner needs. Without the profile or the host's allowance `cyfr-locus` refuses to start, naming both settings, the service never starts and the container restart-loops.
-- **Memory.** Every runner is held to `LOCUS_RUNTIME_MEMORY_BYTES` (384 MiB by default; 16 MiB to 1 TiB): its VM, every guest's linear memory, its home and the kernel memory charged to it, together. A runner that reaches it is ended whole by the kernel, the runs it held are reported, and it is never reused; a sibling is untouched. The container's limit, `LOCUS_RUNTIME_MEMORY_LIMIT` in `.env` (4G), holds all eight runner uids at their bound and the service beside them — raise it with the bound. The bound needs the [Docker requirement](#prerequisites) above.
+- **Memory.** Every runner is held to `LOCUS_RUNTIME_MEMORY_BYTES` (384 MiB by default; 16 MiB to 1 TiB): its VM, every guest's linear memory, its home directory and the kernel memory charged to it, together. A runner that reaches it is ended whole by the kernel, the runs it held are reported, and it is never reused; a sibling is untouched. The container's limit, `LOCUS_RUNTIME_MEMORY_LIMIT` in `.env` (4G), holds all eight runner uids at their bound and the service beside them — raise it with the bound. The bound needs the [Docker requirement](#prerequisites) above.
 - **One versioned wire.** Every request, host call, answer and exit report carries the wire's version, `"v": 1`, as its first member, and every `x-cyfr-auth` header begins with its version token, `v1`. A listener refuses a header at another version as `unknown_version` before it reads the body, and a body without `v` or at another version as `unknown_version` before it reads the operation, so a worker and a `cyfr` at different versions of the wire refuse each other's work rather than misread it.
 - **`cyfr` pins every outbound address.** The engine resolves no name. Before a run's outbound request its runner asks `cyfr` for the address (`egress_pin`), and `cyfr` resolves the host and decides the address under the run's admitted consent: a metadata address is refused before any policy, a private one only under the consent's `egress.private_ips`, and `CYFR_PRIVATE_EGRESS_TARGETS`, the server's own private targets, never applies to a run. The service connects to exactly the pinned address for the runner, keeping the host for TLS and the `Host` header, and streams the answer back through the relay. A redirect's next hop is pinned from the request it came from, and a hop to another scheme or host is refused (`redirect_credentials`), so a request's credentials never follow it to another origin.
 - **Nothing on disk.** The worker keeps no state. A run's identity, budget, credentials and output live in `cyfr`; the worker holds only what it was assigned, sealed for its key, and reports a runner that exits. A worker restart ends its runs, which `cyfr` closes as lapsed.
@@ -521,8 +521,8 @@ Builds are on after `cyfr init`: it writes both settings into `.env`, and `cyfr 
 
 - **One key.** `CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100` and `CYFR_LOCUS_BUILDS_KEY` (32 random bytes as 64 hex digits; `cyfr init` mints it, and by hand it is `openssl rand -hex 32`) in `.env`, both or neither: `cyfr` refuses to boot with one and not the other, or with a malformed value. Compose hands the same key to the builder as `LOCUS_BUILDS_KEY`; the builder refuses to start without it, and with any of `cyfr`'s own secrets in its environment. With the URL set, `cyfr up` starts the service too (`docker compose --profile locus-builds up -d` without the CLI).
 - **Turning builds off.** Set both empty in `.env` — `CYFR_LOCUS_BUILDS_URL=` and `CYFR_LOCUS_BUILDS_KEY=` — then `cyfr down` and `cyfr up`: `locus-builds` does not start, and `cyfr` refuses every build. `cyfr init` leaves a URL set empty with no key alone; with the two lines removed or commented out instead, `cyfr init` leaves builds off too.
-- **Isolation.** Inside `locus-builds`, `cyfr-locus` runs every build under a pooled uid of its own (`locus-build01`…`16`) with a private home on a tmpfs, and every process a build leaves behind is killed with its uid before the uid is reused. Only `cyfr` reaches the builder, over their own network; the network is not internal, because cargo and npm fetch from crates.io and the npm registry.
-- **Memory.** Every build is held to `LOCUS_BUILDS_MEMORY_BYTES` (1 GiB by default): its processes, its home and the kernel memory charged to it, together. A build that reaches it is ended and answered as having reached its bound; a sibling build is untouched. The container's limit, `LOCUS_BUILDS_MEMORY_LIMIT` in `.env` (4G), holds `LOCUS_BUILDS_MAX_CONCURRENT` builds at their bound and the service beside them. The builder's other settings are in `.env.locus` (copy `.env.locus.example`). The bound needs the [Docker requirement](#prerequisites) above.
+- **Isolation.** Inside `locus-builds`, `cyfr-locus` runs every build under a pooled uid of its own (`locus-build01`…`16`) with a private home directory on a tmpfs, and every process a build leaves behind is killed with its uid before the uid is reused. Only `cyfr` reaches the builder, over their own network; the network is not internal, because cargo and npm fetch from crates.io and the npm registry.
+- **Memory.** Every build is held to `LOCUS_BUILDS_MEMORY_BYTES` (1 GiB by default): its processes, its home directory and the kernel memory charged to it, together. A build that reaches it is ended and answered as having reached its bound; a sibling build is untouched. The container's limit, `LOCUS_BUILDS_MEMORY_LIMIT` in `.env` (4G), holds `LOCUS_BUILDS_MAX_CONCURRENT` builds at their bound and the service beside them. The builder's other settings are in `.env.locus` (copy `.env.locus.example`). The bound needs the [Docker requirement](#prerequisites) above.
 
 **`OOMKilled` is not the container's.** Docker marks the `locus-runtime` or `locus-builds` container `OOMKilled` whenever a runner or a build is ended at its own bound, though neither the container nor its release was touched: the kernel reports the kill in the container's cgroup tree. Read it as a runner or a build that passed its bound — the service's log says which — not as the container running out of memory; alert on the container restarting instead.
 
@@ -535,7 +535,7 @@ Builds are on after `cyfr init`: it writes both settings into `.env`, and `cyfr 
 
 ### Reaching Prism on the server
 
-Prism is served by the same endpoint as everything else, at the home's address: `https://<machine>.<tailnet>.ts.net/` from any device on your tailnet, or `https://<your domain>/` for a public home. A local home answers on the server's loopback alone; forward it over SSH:
+Prism is served by the same endpoint as everything else, at CYFR's address: `https://<machine>.<tailnet>.ts.net/` from any device on your tailnet, or `https://<your domain>/` with public access. With local access, CYFR answers on the server's loopback alone; forward it over SSH:
 
 ```bash
 ssh -L 4000:localhost:4000 <user>@<server>
@@ -543,8 +543,8 @@ ssh -L 4000:localhost:4000 <user>@<server>
 
 Then open `http://localhost:4000` locally — with the port, which is what the
 browser origin check trusts (a bare `http://localhost` is port 80, and a page
-served there is not this server). The same tunnel reaches a tailnet or public
-home's loopback listener, but that home's passkeys work only at its address.
+served there is not this server). With tailnet or public access the same
+tunnel reaches CYFR's loopback listener, but its passkeys work only at its address.
 
 ## Production Configuration
 
@@ -620,7 +620,7 @@ you may come in.
 
 A person signs in at a server through one of its doors: GitHub, Google or
 your OIDC provider, a passkey they registered at this server, or, for a
-person whose keys another home holds, the CYFR door (**Sign in with your
+person whose keys another CYFR holds, the CYFR door (**Sign in with your
 CYFR** on the sign-in page; [identity-guide.md](identity-guide.md)). The
 server allowlist decides who may come in by any of them, by email, IdP
 subject or person identifier, `per_…` (`cyfr admin allow
@@ -639,7 +639,7 @@ whatever cyfr.run's short probe for a publishing namespace answers: the
 athanor is filled in the background (see [Operator
 notes](#operator-notes-for-shared-and-open-door-servers)), and a cyfr.run
 namespace is needed only to publish. A person admitted through the CYFR
-door is minted no keys and no athanor: theirs stay at their own home, and
+door is minted no keys and no athanor: theirs stay at their own CYFR, and
 here they hold what their memberships give them. An installation set up
 for a restore (`CYFR_RESTORE_TOKEN`) reserves its first person for the
 restore: no door signs anyone in before it ([Backup and
@@ -684,36 +684,36 @@ it through `cyfr admin` on a running server.
 
 ### A hub for a household or a team
 
-A **hub** is a server that is the always-on home of shared athanors: a
-household's, a team's, or two people's. Someone with no home of their own
+A **hub** is an always-on server that holds shared athanors: a
+household's, a team's, or two people's. Someone with no CYFR of their own
 signs in through one of the hub's doors, as on any server; someone with a
-home of their own joins from it, and keeps their keys and their own
+CYFR of their own joins from it, and keeps their keys and their own
 athanor there:
 
 - **Letting them in.** The hub's platform admin allows their person
-  identifier, `per_…`, which their own home's **Settings → Your identity**
+  identifier, `per_…`, which their own CYFR's **Settings → Your identity**
   shows (`cyfr admin allow per_…`), and a member adds them to a group by
   the same identifier (**Members**, or `cyfr member add per_…`). An
   identifier the hub has not seen yet leaves an invitation that activates
   at their first sign-in.
 - **Signing in.** On the hub's sign-in page they choose **Sign in with your
-  CYFR** and name their own home's address; they confirm there, and both
-  homes show the same short code. The hub reads their identity at the
+  CYFR** and name their own CYFR's address; they confirm there, and the hub
+  and their own CYFR show the same short code. The hub reads their identity at the
   directory it names, which need not be the hub's own, and mints them no
   keys and no athanor.
 - **Confirming at the hub.** A sign-in through the CYFR door is not a fresh
   proof. Their first passkey at the hub, which the hub's sensitive changes
   need, is authorized by its platform admin under the admin's own fresh
   confirmation; after that they confirm for themselves. A phone they pair
-  with the hub is certified at their own home ([devices-guide.md](devices-guide.md)).
+  with the hub is certified at their own CYFR ([devices-guide.md](devices-guide.md)).
 - **Leaving.** Leaving one athanor, or being removed from it, ends that
   membership, the sessions bound to it and the devices paired for it;
-  their other athanors at the hub, and their own home, are untouched.
+  their other athanors at the hub, and their own CYFR, are untouched.
 
-A home enrolls its own people at the directory `CYFR_DIRECTORY_URL` names,
+CYFR enrolls its own people at the directory `CYFR_DIRECTORY_URL` names,
 with no hosted default. Any operator, a household or a team included, may
-serve one (`CYFR_DIRECTORY_SERVE`), but the only writer on the home it
-recovers loses that recovery with the home. Who runs the directory decides
+serve one (`CYFR_DIRECTORY_SERVE`), but the only writer on the CYFR it
+recovers loses that recovery with that CYFR. Who runs the directory decides
 how long the identities it orders last: [identity-guide.md](identity-guide.md)
 says what each loss costs.
 
@@ -886,7 +886,7 @@ All four required vars must be set or the server refuses to start.
 ### Proxy trust and rate limits
 
 - `CYFR_TRUSTED_PROXY_HOPS` (default `1`, 0 to 16) — how many reverse-proxy
-  hops sit in front of cyfr's proxy listener, in a tailnet or public home,
+  hops sit in front of cyfr's proxy listener, with tailnet or public access,
   when `CYFR_TRUSTED_PROXY_CIDRS` is unset. The shipped stack sets the CIDRs
   to its two proxies' addresses on the edge network (Caddy and Tailscale)
   instead. Stack a CDN or another proxy in front and you must
@@ -958,26 +958,26 @@ outside the snapshot: objects written since it stay in the bucket.
 
 A snapshot holds neither this machine's tailnet identity (the
 `tailscale_state` volume) nor `.cyfr/`, so a restore leaves the machine on
-the tailnet as it is. When the restored `.env` is a tailnet home's and
+the tailnet as it is. When the restored `.env` is for tailnet access and
 names another machine than this one, or this machine has joined no
-tailnet, as on a new server, the home starts answering on this machine
+tailnet, as on a new server, CYFR starts answering on this machine
 only and `cyfr restore` exits with status 3, saying so. `cyfr access tailnet` then joins the machine, or offers
-to move the home to the machine's current tailnet name. A new name is a new
+to move CYFR to the machine's current tailnet name. A new name is a new
 address: passkeys are registered and devices paired again there
-([devices-guide.md](devices-guide.md#when-the-homes-address-changes)).
+([devices-guide.md](devices-guide.md#when-cyfrs-address-changes)).
 
-A restore that is not declared keeps the backup's authority, and the home
+A restore that is not declared keeps the backup's authority, and CYFR
 cannot tell it was restored: sessions, keys and grants the backup holds
 still work, and a revocation made after the backup was taken is not seen.
 Declare every restore.
 
 A backup restores the server. A person's identity has its own recovery,
-for a home lost with no backup to put back: someone who enrolled (their
-own home's **Settings → Your identity**) restores their identifier and new
+for a CYFR lost with no backup to put back: someone who enrolled (their
+own CYFR's **Settings → Your identity**) restores their identifier and new
 keys onto a fresh installation from their printed kit, never their data.
 The operator sets a one-time `CYFR_RESTORE_TOKEN` there and hands it to
 them, and they open `https://<installation>/restore`; until it completes,
-no door signs anyone in. Their memberships at other homes stand, and they
+no door signs anyone in. Their memberships at any other CYFR stand, and they
 pair their devices again. [identity-guide.md](identity-guide.md) has the
 steps and what each loss costs.
 
@@ -989,12 +989,12 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr init` | Scaffold a CYFR project — downloads `docker-compose.yml` + `Caddyfile`, asks how the home is reached (tailnet, public or local; `--access`, `--domain`, `--acme-email`, `--tailscale-auth-key-file`, `--hostname`), writes `.env` with the stack's keys minted into it, joins the tailnet for a tailnet home, opening the approval link in the default browser on a machine with a display (`--no-open` does not), creates dirs and pulls the images (`--no-pull`); in an existing project it adds only the keys `.env` lacks (`--force` re-fetches the deploy files; never replaces `.env`) |
-| `cyfr setup` | Set up a new home from pages on this machine's own screen, `cyfr init`'s face for a device with a touch screen: serves them on `127.0.0.1` before the stack runs (`--port`, a free port when not given), prints their address, writes it to `.cyfr/setup.url` and opens them in the default browser on a machine with a display (`--no-open` does not); the pages ask how the home is reached and the administrator's email, run `cyfr init`'s steps and `cyfr up`'s start (`--no-pull`), show a tailnet join's link as a QR code, and stop once the home is up; refuses a project whose `.env` exists, and a second `cyfr setup` while one serves the project's pages |
-| `cyfr access <mode>` | Change how the home is reached, `local`, `tailnet` or `public`: asks first about a tailnet join the change needs, shows who can reach it, its address, the certificate email and the ports opened, before → after (and the tailnet machine, the port on this computer and the builds service when they change), then stops the stack, rewrites `.env` and starts what ran (`--domain`, `--acme-email`, `--tailscale-auth-key-file`, `--hostname`, `--new-node`, `--yes`; a join's approval link opens in the default browser on a machine with a display, `--no-open` not; `--tailscale-auth-key-file` and `--hostname` apply to a new join, so a machine already on the tailnet refuses them without `--new-node`); on a tailnet home whose Serve is closed (HTTPS off, say) `cyfr access tailnet` serves it on the tailnet again; `cyfr access --resume` finishes a change an interruption left |
-| `cyfr access status` | Show how the home is reached, what runs and the last change, without the lock and changing nothing |
+| `cyfr init` | Scaffold a CYFR project — downloads `docker-compose.yml` + `Caddyfile`, asks how CYFR is reached (tailnet, public or local; `--access`, `--domain`, `--acme-email`, `--tailscale-auth-key-file`, `--hostname`), writes `.env` with the stack's keys minted into it, joins the tailnet for tailnet access, opening the approval link in the default browser on a machine with a display (`--no-open` does not), creates dirs and pulls the images (`--no-pull`); in an existing project it adds only the keys `.env` lacks (`--force` re-fetches the deploy files; never replaces `.env`) |
+| `cyfr setup` | Set up a new CYFR from pages on this machine's own screen, `cyfr init`'s face for a device with a touch screen: serves them on `127.0.0.1` before the stack runs (`--port`, a free port when not given), prints their address, writes it to `.cyfr/setup.url` and opens them in the default browser on a machine with a display (`--no-open` does not); the pages ask how CYFR is reached and the administrator's email, run `cyfr init`'s steps and `cyfr up`'s start (`--no-pull`), show a tailnet join's link as a QR code, and stop once CYFR is up; refuses a project whose `.env` exists, and a second `cyfr setup` while one serves the project's pages |
+| `cyfr access <mode>` | Change how CYFR is reached, `local`, `tailnet` or `public`: asks first about a tailnet join the change needs, shows who can reach it, its address, the certificate email and the ports opened, before → after (and the tailnet machine, the port on this computer and the builds service when they change), then stops the stack, rewrites `.env` and starts what ran (`--domain`, `--acme-email`, `--tailscale-auth-key-file`, `--hostname`, `--new-node`, `--yes`; a join's approval link opens in the default browser on a machine with a display, `--no-open` not; `--tailscale-auth-key-file` and `--hostname` apply to a new join, so a machine already on the tailnet refuses them without `--new-node`); when CYFR has tailnet access and its Serve is closed (HTTPS off, say), `cyfr access tailnet` serves it on the tailnet again; `cyfr access --resume` finishes a change an interruption left |
+| `cyfr access status` | Show how CYFR is reached, what runs and the last change, without the lock and changing nothing |
 | `cyfr up` / `cyfr down` | Start / stop the stack under its lock: cyfr, locus-runtime and locus-backends, plus locus-builds when `CYFR_LOCUS_BUILDS_URL` in `.env` names it (as `cyfr init` writes it) and the proxy `CYFR_ACCESS` selects (tailscale for tailnet, caddy for public); `up` refuses a `.env` that contradicts its access settings with the server's own sentence; `down` refuses a directory that holds no compose file, since the stack it stops is the directory's own |
-| `cyfr update` | Update this program to the newest release (through brew for a Homebrew install), then the home in this directory to it: shows what changes and asks (`--yes`), verifies the release's signed manifest, pulls every image by digest, stops the stack, snapshots it into `backups/`, rewrites `docker-compose.yml`'s managed image lines (cyfr, cyfr-locus, the bundled caddy and tailscale) to the release's digests and starts it (see **Upgrading**); `--version <version>` installs exactly that release, a pre-release or an older one included; leaves `.env`, `Caddyfile` and every other image line alone, a home already on the release untouched, refuses a home on a newer release and a `docker-compose.yml` that lacks a service of the bundled stack |
+| `cyfr update` | Update this program to the newest release (through brew for a Homebrew install), then the CYFR in this directory to it: shows what changes and asks (`--yes`), verifies the release's signed manifest, pulls every image by digest, stops the stack, snapshots it into `backups/`, rewrites `docker-compose.yml`'s managed image lines (cyfr, cyfr-locus, the bundled caddy and tailscale) to the release's digests and starts it (see **Upgrading**); `--version <version>` installs exactly that release, a pre-release or an older one included; leaves `.env`, `Caddyfile` and every other image line alone, a CYFR already on the release untouched, refuses a CYFR on a newer release and a `docker-compose.yml` that lacks a service of the bundled stack |
 | `cyfr restore <snapshot>` | Put a snapshot from `backups/` back with the whole cell stopped (refused while any member of the cell runs), declare the restore and start the stack (`--no-start` leaves it stopped); see **Backup and restore** |
 
 > `cyfr --version` and `cyfr status` print a one-line hint when a newer release is available. The check only runs in an interactive terminal and is cached for a day; set `CYFR_NO_UPDATE_CHECK=1` (e.g. in your shell profile) to turn it off.
@@ -1111,7 +1111,7 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | Prima | pure contracts and the rostered runtime primitives | `apps/prima` | in every release | — | — | — | — | `[Prima…]` |
 | Arca | persistence: rows, blobs, cache, leases, retention kinds, the records and file doors | `apps/arca` | the `cyfr` release | — | — | — | `arca` | `[Arca…]` |
 | Sanctum | decisions and the gate: identity, tenancy, authority, consent, vault, caps, the operation table, admission and dispatch, the request log and decision record | `apps/sanctum` | the `cyfr` release | — | — | — | `sanctum` | `[Sanctum…]` |
-| Cyfr | the host: boot, ownership, bus, telemetry, configuration and settings, the endpoint and every other admission path, wiring | `apps/cyfr/lib/cyfr`, `apps/cyfr/lib/cyfr_web` | the `cyfr` release, image `cyfr` | `cyfr`, with `caddy` in front of a public home and `tailscale` in front of a tailnet home, with a loopback SOCKS5 proxy for this device's browser | `CYFR_` | — | — | `[Cyfr…]` |
+| Cyfr | the host: boot, ownership, bus, telemetry, configuration and settings, the endpoint and every other admission path, wiring | `apps/cyfr/lib/cyfr`, `apps/cyfr/lib/cyfr_web` | the `cyfr` release, image `cyfr` | `cyfr`, with `caddy` in front for public access and `tailscale` in front for tailnet access, with a loopback SOCKS5 proxy for this device's browser | `CYFR_` | — | — | `[Cyfr…]` |
 | Compendium | components: kinds, manifests, registry, activation, provenance, builds over Locus, the tincture rules | `apps/cyfr/lib/compendium` | the `cyfr` release | — | — | — | `compendium` | `[Compendium…]` |
 | Aqua | the assistant: threads, rooms, turns, approvals, notes, attachments, memory, its providers | `apps/cyfr/lib/aqua` | the `cyfr` release | — | — | — | `aqua` | `[Aqua…]` |
 | Opus | execution: admission, attempts, HostAPI, WorkerAPI, guest egress, schedules | `apps/cyfr/lib/opus` | the `cyfr` release | — | `CYFR_OPUS_`, `CYFR_HOST_API_` | — | `opus` | `[Opus…]` |
@@ -1124,34 +1124,32 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | port | one of four behaviours a lower part declares and a higher one implements, installed at boot | — | — | — | — | — | — | — |
 | plane | the kind of caller an operation is admitted for: an external caller, or a call inside a running chain | — | — | — | — | — | — | — |
 | actor | the tenant and identity carrier | — | — | — | — | — | — | — |
-| athanor | the tenancy unit, a person's own or a group's, with no organization or project above it | — | — | — | — | — | — | — |
+| athanor | the tenancy unit, a person's own or a group's, with no organization or project above it; the one CYFR that holds it decides everything about it | — | — | — | — | — | — | — |
 | lease | a control-plane member's database-held claim to its slot | — | — | — | — | — | — | — |
 | fence | the lease row's renewal token, which each renewal and takeover of the row names and raises; never a publication's identity ([`ARCHITECTURE.md` §6.3](ARCHITECTURE.md#63-publication)) | — | — | — | — | — | — | — |
 | attempt | one try at running an execution on a worker service | — | — | — | — | — | — | — |
 | backend | one stdio process of an external MCP server, run by the Locus backends service | — | — | — | — | — | — | — |
 | cell | several control-plane members sharing one database | — | — | — | — | — | — | — |
-| home | the node that decides everything about an athanor; every athanor has exactly one home, and a single server is the home of every athanor it holds | — | — | — | — | — | — | — |
-| hub | a home that keeps shared athanors (a household's, a team's, two people's) always on, which people join from their own homes | — | — | — | — | — | — | — |
-| glass | the client: a browser or an application showing a home's Prism, holding device keys it never exports and no store, vault or person key | — | — | — | — | — | — | — |
-| door | a way a person signs in at a home: GitHub, Google, an OIDC provider, a passkey, or the CYFR door for a person whose keys another home holds; the server allowlist decides who may come in by each | — | — | — | — | — | — | — |
-| person identifier | `per_…`, the hash of the first entry of a person's identity log: it names them at every home and grants no membership anywhere | — | — | — | — | — | — | — |
-| directory | the CYFR node that orders an identifier's identity log and serves its current public keys, holding no private key and no home address | — | — | — | — | — | — | — |
-| live key | the key a person's home holds for them to sign their sign-ins at other homes and their devices' certificates | — | — | — | — | — | — | — |
-| operational key | the key a person's home holds for them to rotate the live key, and nothing else | — | — | — | — | — | — | — |
-| recovery key | a key held away from the home that replaces the live and operational keys without their cooperation | — | — | — | — | — | — | — |
+| hub | a CYFR that keeps shared athanors (a household's, a team's, two people's) always on, which people join from their own CYFR | — | — | — | — | — | — | — |
+| glass | the client: a browser or an application showing CYFR's Prism, holding device keys it never exports and no store, vault or person key | — | — | — | — | — | — | — |
+| door | a way a person signs in at CYFR: GitHub, Google, an OIDC provider, a passkey, or the CYFR door for a person whose keys another CYFR holds; the server allowlist decides who may come in by each | — | — | — | — | — | — | — |
+| person identifier | `per_…`, the hash of the first entry of a person's identity log: it names them at every CYFR and grants no membership anywhere | — | — | — | — | — | — | — |
+| directory | the CYFR node that orders an identifier's identity log and serves its current public keys, holding no private key and no address of a person's CYFR | — | — | — | — | — | — | — |
+| live key | the key a person's CYFR holds for them to sign their sign-ins at any other CYFR and their devices' certificates | — | — | — | — | — | — | — |
+| operational key | the key a person's CYFR holds for them to rotate the live key, and nothing else | — | — | — | — | — | — | — |
+| recovery key | a key held away from the person's CYFR that replaces the live and operational keys without their cooperation | — | — | — | — | — | — | — |
 | recovery kit | three printed lines, the identifier, the directory and a recovery secret, from which a person restores their identity | — | — | — | — | — | — | — |
-| `key_epoch` | the identity log entry that introduced a person's current live key; when it changes, other homes retire what they bound to the old one | — | — | — | — | — | — | — |
-| `recovery_epoch` | the first entry of a person's identity log, or the latest recovery that replaced their live key; a passkey another home registered for them is bound to it | — | — | — | — | — | — | — |
+| `key_epoch` | the identity log entry that introduced a person's current live key; when it changes, every other CYFR retires what it bound to the old one | — | — | — | — | — | — | — |
+| `recovery_epoch` | the first entry of a person's identity log, or the latest recovery that replaced their live key; a passkey another CYFR registered for them is bound to it | — | — | — | — | — | — | — |
 | restore | bringing a person's identity onto a fresh installation from their recovery kit, under that installation's single-use restore token; it restores no data | — | — | — | — | — | — | — |
-| carry | a sign-in at another home, begun at the person's own home and carried between the two by their browser | — | — | — | — | — | — | — |
+| carry | a sign-in at another CYFR, begun at the person's own CYFR and carried between the two by their browser | — | — | — | — | — | — | — |
 | pending action | the durable record of one carry: its destination, challenge and return address, resumed by an exact retry | — | — | — | — | — | — | — |
-| relying home | a home that is not the person's own, which admits them on the identity their own home vouches for and at which they register passkeys of their own | — | — | — | — | — | — | — |
-| passkey | a credential registered at one home, under that home's host, that signs the person in there and gives their fresh confirmations there | — | — | — | — | — | — | — |
+| passkey | a credential registered at one CYFR, under that CYFR's host, that signs the person in there and gives their fresh confirmations there | — | — | — | — | — | — | — |
 | device key | the key pair a glass makes and never exports, which its device certificates name | — | — | — | — | — | — | — |
-| device certificate | a short-lived statement, signed with the person's live key at their home, naming a device key, its client, the home and the athanor | — | — | — | — | — | — | — |
-| paired client | a glass paired with a home for one athanor, revocable on its own and renewed only while it stands | — | — | — | — | — | — | — |
+| device certificate | a short-lived statement, signed with the person's live key at their CYFR, naming a device key, its client, the CYFR and the athanor | — | — | — | — | — | — | — |
+| paired client | a glass paired with CYFR for one athanor, revocable on its own and renewed only while it stands | — | — | — | — | — | — | — |
 | fresh confirmation | a proof that the person approved one pending confirmation: a passkey or a fresh sign-in; each sensitive change needs one | — | — | — | — | — | — | — |
-| pending confirmation | one sensitive change waiting for its fresh confirmation, with the preview the home stores and shows on every device of the person's | — | — | — | — | — | — | — |
+| pending confirmation | one sensitive change waiting for its fresh confirmation, with the preview CYFR stores and shows on every device of the person's | — | — | — | — | — | — | — |
 | origin | how a run started, `interactive`, `programmatic`, `schedule` or `webhook`, set by the path that admitted it; a grant names the origins it admits | — | — | — | — | — | — | — |
 
 Every setting of the control plane is a `CYFR_` variable; a part named with a prefix of its own beneath it owns those settings. A setting an island's release reads carries the island's own prefix, and the control plane's copy of an island's key carries `CYFR_` before it: `CYFR_LOCUS_BACKENDS_KEY` in `.env` is `LOCUS_BACKENDS_KEY` in the `locus-backends` service. `HostAPI` and `WorkerAPI` are protocol names, and `CYFR_HOST_API_` serves the first.
@@ -1164,8 +1162,8 @@ Every setting of the control plane is a `CYFR_` variable; a part named with a pr
 | [Integration Guide](integration-guide.md) | How to use CYFR as your application backend |
 | [Component Guide](component-guide.md) | Practical guide to building catalysts, reagents, and formulas |
 | [Tincture Guide](tincture-guide.md) | Practical guide to building tinctures |
-| [Identity Guide](identity-guide.md) | A person's identifier, keys and printed kit, restoring them on a fresh installation, and joining a home that is not your own |
-| [Devices Guide](devices-guide.md) | Pairing a device with a home, how it stays connected, and confirming a sensitive change from any of your devices |
+| [Identity Guide](identity-guide.md) | A person's identifier, keys and printed kit, restoring them on a fresh installation, and joining a CYFR that is not your own |
+| [Devices Guide](devices-guide.md) | Pairing a device with CYFR, how it stays connected, and confirming a sensitive change from any of your devices |
 | [Architecture](ARCHITECTURE.md) | What each part of CYFR owns, how the parts talk to each other, and why |
 
 ## Verifying Releases
