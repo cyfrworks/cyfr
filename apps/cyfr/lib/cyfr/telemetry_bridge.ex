@@ -43,6 +43,7 @@ defmodule Cyfr.TelemetryBridge do
     Components,
     Confirmation,
     Execution,
+    FeedRun,
     FileOffer,
     FrameCredential,
     InstanceEntryChanged,
@@ -192,14 +193,17 @@ defmodule Cyfr.TelemetryBridge do
     [tenant(meta, &Bus.builds/1, &Build.new(&1, kind, fields))]
   end
 
+  # A fire is a schedule's or a feed's by the row's own kind, which the
+  # scheduler reads from the row it fired; an event naming neither is
+  # dropped rather than guessed.
   defp messages([:cyfr, :schedules, :fired], _measurements, meta),
-    do: [tenant(meta, &Bus.schedule_runs/1, &ScheduleRun.new(&1, :fired, schedule_run(meta)))]
+    do: [fired(meta, :fired)]
 
-  # A schedule that could not run, or ran and failed: the one silent loss
-  # the tray must show.
+  # A run that could not start, or ran and failed: the one silent loss the
+  # tray must show, a feed's as much as a schedule's.
   defp messages([:cyfr, :schedules, :failed], _measurements, meta) do
     [
-      tenant(meta, &Bus.schedule_runs/1, &ScheduleRun.new(&1, :failed, schedule_run(meta))),
+      fired(meta, :failed),
       tenant(meta, &Bus.notify/1, fn actor ->
         Notify.new(
           actor,
@@ -368,11 +372,26 @@ defmodule Cyfr.TelemetryBridge do
   defp told(kind, _sender, recipient) when kind in [:failed, :landed], do: [recipient]
   defp told(_kind, sender, recipient), do: Enum.uniq([recipient, sender])
 
-  defp schedule_run(meta) do
-    meta
-    |> Map.take([:schedule_id, :occurrence_id, :execution_id, :reference, :reason])
-    |> classified([:reason])
+  defp fired(%{kind: "schedule"} = meta, kind) do
+    fields =
+      meta
+      |> Map.take([:schedule_id, :occurrence_id, :execution_id, :scheduled_for, :reason])
+      |> classified([:reason])
+
+    tenant(meta, &Bus.schedule_runs/1, &ScheduleRun.new(&1, kind, fields))
   end
+
+  defp fired(%{kind: "feed"} = meta, kind) do
+    fields =
+      meta
+      |> Map.take([:occurrence_id, :execution_id, :reason])
+      |> Map.put(:binding, meta[:schedule_id])
+      |> classified([:reason])
+
+    tenant(meta, &Bus.feed_runs/1, &FeedRun.new(&1, kind, fields))
+  end
+
+  defp fired(_meta, _kind), do: :dropped
 
   defp notify_payload(meta) do
     case meta[:payload] || %{} do

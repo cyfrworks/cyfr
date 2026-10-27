@@ -701,8 +701,9 @@ defmodule Compendium.CanvasTest do
       assert streams == Enum.sort_by(shaped, & &1.name)
       assert catalog.toolkit == Compendium.tincture_toolkit_majors()
 
-      # A canvas reads exactly a feed's results, by the feed's name, and
-      # the athanor's runs; every other stream declares no shape.
+      # A canvas reads exactly a feed's results, by the feed's name, the
+      # athanor's runs, its schedules and its schedules' runs; every other
+      # stream declares no shape.
       assert [
                %{
                  name: "feed.results",
@@ -717,8 +718,28 @@ defmodule Compendium.CanvasTest do
                  shape: %{"type" => "object", "fields" => run_fields},
                  filter: nil,
                  refresh: true
+               },
+               %{
+                 name: "schedule_runs.changes",
+                 subject: nil,
+                 shape: %{"type" => "object", "fields" => schedule_run_fields},
+                 filter: nil,
+                 refresh: true
+               },
+               %{
+                 name: "schedules.changes",
+                 subject: nil,
+                 shape: %{"type" => "object", "fields" => schedule_fields},
+                 filter: nil,
+                 refresh: true
                }
              ] = streams
+
+      assert Enum.sort(Map.keys(schedule_fields)) ==
+               ~w(cron_expression error_count kind last_run_at name next_run_at reference run_count schedule_id status)
+
+      assert Enum.sort(Map.keys(schedule_run_fields)) ==
+               ~w(execution_id kind occurrence_id reason schedule_id scheduled_for)
 
       assert Enum.sort(Map.keys(feed_fields)) ==
                ~w(actions at binding feed label result revision)

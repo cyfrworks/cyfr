@@ -171,7 +171,8 @@ defmodule Opus.Schedules.Scheduler do
   require Arca.Repo.Errors
 
   alias Arca.{CronSchedule, ScheduleOccurrences}
-  alias Cyfr.Bus.{FeedPublished, ScheduleCompleted, Schedules}
+  alias Cyfr.Bus.{FeedPublished, ScheduleCompleted}
+  alias Opus.Schedules.Changes
   alias Opus.Schedules.Cron
 
   @db_errors Arca.Repo.Errors.db_errors()
@@ -382,7 +383,7 @@ defmodule Opus.Schedules.Scheduler do
               do: left_open_unless_ended(state, runner_died(schedule_id, task, reason)),
               else: state
 
-          unless task.feed?, do: broadcast_update(task.ctx, schedule_id)
+          unless task.feed?, do: Changes.changed(Sanctum.Context.actor(task.ctx), schedule_id)
 
           # A run left to recovery asks for the pass that reaches it.
           state = if left_to_recovery?(reason), do: left_open(state), else: state
@@ -757,7 +758,7 @@ defmodule Opus.Schedules.Scheduler do
         if ended != nil and not refused?(ended) do
           ctx = context_of(schedule)
           record_error(ctx, schedule.id, "Athanor or creator no longer active — run skipped")
-          emit_schedule_failed(schedule.id, ctx, "athanor_or_creator_inactive")
+          emit_schedule_failed(schedule, ctx, "athanor_or_creator_inactive", occurrence)
         end
 
         left_open_unless_ended(state, ended)
@@ -832,7 +833,7 @@ defmodule Opus.Schedules.Scheduler do
           )
 
           record_error(ctx, schedule_id, "Athanor or creator no longer active — run skipped")
-          emit_schedule_failed(schedule_id, ctx, "athanor_or_creator_inactive")
+          emit_schedule_failed(schedule, ctx, "athanor_or_creator_inactive")
           schedule_timer(schedule_id, state)
         end
 
@@ -868,7 +869,7 @@ defmodule Opus.Schedules.Scheduler do
             "pinned reference, skipping execution"
         )
 
-        emit_schedule_failed(schedule.id, ctx, :damaged_reference)
+        emit_schedule_failed(schedule, ctx, :damaged_reference)
         record_error(ctx, schedule.id, "Damaged schedule: no pinned reference")
         schedule_timer(schedule.id, state)
 
@@ -877,7 +878,7 @@ defmodule Opus.Schedules.Scheduler do
           "[Opus.Schedules.Scheduler] schedule #{schedule.id} has invalid JSON input, skipping execution"
         )
 
-        emit_schedule_failed(schedule.id, ctx, :invalid_input)
+        emit_schedule_failed(schedule, ctx, :invalid_input)
         record_error(ctx, schedule.id, "Invalid JSON input")
         schedule_timer(schedule.id, state)
 
@@ -887,7 +888,9 @@ defmodule Opus.Schedules.Scheduler do
             run_occurrence(schedule, occurrence, ctx, exec_reference, input, state)
 
           :held ->
-            # Not due, or another node advanced the cursor first.
+            # Not due, or another node advanced the cursor first; a cursor
+            # naming a time already fired moved past it.
+            announce(schedule, ctx)
             schedule_timer(schedule.id, state)
 
           :skipped ->
@@ -897,6 +900,7 @@ defmodule Opus.Schedules.Scheduler do
               "[Opus.Schedules.Scheduler] schedule #{schedule.id} missed #{DateTime.to_iso8601(schedule.next_run_at)} — skipped"
             )
 
+            announce(schedule, ctx)
             schedule_timer(schedule.id, state)
 
           :overlapping ->
@@ -994,7 +998,7 @@ defmodule Opus.Schedules.Scheduler do
            :ok
          end) do
       {:ok, ref} ->
-        if not feed?(schedule) and still_ours?(generation), do: broadcast_update(ctx, schedule.id)
+        if still_ours?(generation), do: announce(schedule, ctx)
 
         task = %{
           ref: ref,
@@ -1022,7 +1026,7 @@ defmodule Opus.Schedules.Scheduler do
           ended = finish(occurrence, execution_id, "failed")
 
           unless refused?(ended) do
-            emit_schedule_failed(schedule.id, ctx, {:spawn_failed, reason})
+            emit_schedule_failed(schedule, ctx, {:spawn_failed, reason}, occurrence)
             record_error(ctx, schedule.id, Sanctum.Refusals.render(:unavailable))
           end
 
@@ -1095,7 +1099,7 @@ defmodule Opus.Schedules.Scheduler do
         "[Opus.Schedules.Scheduler] feed #{schedule.id} seq not claimed (#{inspect(reason)}) — not run"
       )
 
-      emit_schedule_failed(schedule.id, ctx, reason)
+      emit_schedule_failed(schedule, ctx, reason, occurrence)
       record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
     end
 
@@ -1138,7 +1142,9 @@ defmodule Opus.Schedules.Scheduler do
       %{
         request_id: request_id,
         schedule_id: schedule.id,
+        kind: schedule.kind,
         occurrence_id: occurrence.id,
+        scheduled_for: occurrence.scheduled_for,
         reference: exec_reference,
         execution_id: execution_id,
         athanor_id: ctx.athanor_id,
@@ -1262,7 +1268,7 @@ defmodule Opus.Schedules.Scheduler do
               "[Opus.Schedules.Scheduler] schedule #{schedule.id} failed: #{inspect(reason)}"
             )
 
-            emit_schedule_failed(schedule.id, ctx, reason, execution_id)
+            emit_schedule_failed(schedule, ctx, reason, occurrence, execution_id)
             record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
           end
 
@@ -1321,7 +1327,7 @@ defmodule Opus.Schedules.Scheduler do
               Sanctum.Refusals.render(reason)
           )
 
-          emit_schedule_failed(schedule.id, ctx, reason, fired.execution_id)
+          emit_schedule_failed(schedule, ctx, reason, occurrence, fired.execution_id)
           record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
         end
 
@@ -1335,7 +1341,7 @@ defmodule Opus.Schedules.Scheduler do
             "[Opus.Schedules.Scheduler] feed #{schedule.id} seq #{feed.seq} failed: #{inspect(reason)}"
           )
 
-          emit_schedule_failed(schedule.id, ctx, reason, fired.execution_id)
+          emit_schedule_failed(schedule, ctx, reason, occurrence, fired.execution_id)
           record_error(ctx, schedule.id, Sanctum.Refusals.render(reason))
         end
 
@@ -1588,6 +1594,7 @@ defmodule Opus.Schedules.Scheduler do
   defp record_run(ctx, schedule_id, execution_id) do
     case CronSchedule.record_run(Sanctum.Context.actor(ctx), schedule_id, execution_id) do
       {:ok, row} ->
+        announce(row, ctx)
         {:ok, row}
 
       {:error, reason} ->
@@ -1654,8 +1661,8 @@ defmodule Opus.Schedules.Scheduler do
 
   defp record_error(ctx, schedule_id, message) do
     case CronSchedule.record_error(Sanctum.Context.actor(ctx), schedule_id, message) do
-      {:ok, _} ->
-        :ok
+      {:ok, row} ->
+        announce(row, ctx)
 
       {:error, err} ->
         Logger.warning(
@@ -1672,9 +1679,14 @@ defmodule Opus.Schedules.Scheduler do
 
   # A schedule that could not run, or ran and failed: one event the tray
   # bridges into the athanor's badges (`Cyfr.TelemetryBridge`).
-  defp emit_schedule_failed(schedule_id, ctx, reason, execution_id \\ nil) do
+  # The row's kind says whose run it was, a schedule's or a feed's; a
+  # failure before any occurrence was claimed names none.
+  defp emit_schedule_failed(schedule, ctx, reason, occurrence \\ nil, execution_id \\ nil) do
     :telemetry.execute([:cyfr, :schedules, :failed], %{count: 1}, %{
-      schedule_id: schedule_id,
+      schedule_id: schedule.id,
+      kind: schedule.kind,
+      occurrence_id: occurrence && occurrence.id,
+      scheduled_for: occurrence && occurrence.scheduled_for,
       athanor_id: ctx.athanor_id,
       user_id: ctx.user_id,
       execution_id: execution_id,
@@ -1817,19 +1829,8 @@ defmodule Opus.Schedules.Scheduler do
   defp feed?(%{kind: "feed"}), do: true
   defp feed?(_schedule), do: false
 
-  # An occurrence started or its run ended: the schedules view re-reads.
-  defp broadcast_update(ctx, schedule_id) do
-    actor = Sanctum.Context.actor(ctx)
-    changed = Schedules.new(actor, :changed, schedule_id: schedule_id)
-
-    case Cyfr.Bus.broadcast(actor, Cyfr.Bus.schedules(actor), changed) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning(
-          "[Opus.Schedules.Scheduler] schedule update not announced: #{inspect(reason)}"
-        )
-    end
-  end
+  # A write moved what a schedule's row shows: the row is announced as it
+  # reads now (`Opus.Schedules.Changes`). A feed's row announces nothing.
+  defp announce(%{kind: "feed"}, _ctx), do: :ok
+  defp announce(%{id: id}, ctx), do: Changes.changed(Sanctum.Context.actor(ctx), id)
 end

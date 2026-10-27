@@ -884,6 +884,29 @@ defmodule Compendium.Tincture.RulesTest do
       assert Rules.check_streams(mixed, table) == shaped_refusal("runs.changes")
     end
 
+    test "the schedules' two streams, as the catalog declares them, are a canvas's alone " <>
+           "and take no subject" do
+      table = Sanctum.Catalog.streams()
+
+      for name <- ["schedules.changes", "schedule_runs.changes"] do
+        assert Rules.check_streams(streams_of([%{"name" => name}]), table) == :ok, name
+
+        for frame <- [%{"placement" => "float"}, %{}] do
+          assert Rules.check_streams(declared(frame, [%{"name" => name}]), table) ==
+                   shaped_refusal(name)
+        end
+
+        for subject <- ["sch_1", "*"] do
+          assert {:error, {:invalid_tincture, _}} =
+                   Rules.check_streams(
+                     streams_of([%{"name" => name, "subject" => subject}]),
+                     table
+                   ),
+                 "#{name} took the subject #{subject}"
+        end
+      end
+    end
+
     test "is a canvas's to declare, and a stream without one stays any tincture's" do
       table = canvas_table()
 
@@ -964,6 +987,8 @@ defmodule Compendium.Tincture.RulesTest do
             "confirmation.changes",
             "feed.results",
             "runs.changes",
+            "schedules.changes",
+            "schedule_runs.changes",
             "threads_seen.changes"
           ] do
         assert Rules.read_classes({:stream, name}) == [:outside], name

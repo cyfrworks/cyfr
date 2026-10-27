@@ -29,6 +29,7 @@ defmodule Cyfr do
       Bus.Execution,
       Bus.ExecutionEvent,
       Bus.FeedPublished,
+      Bus.FeedRun,
       Bus.FileOffer,
       Bus.FrameCredential,
       Bus.InstanceEntryChanged,

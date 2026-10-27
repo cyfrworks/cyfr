@@ -22,6 +22,7 @@ defmodule Cyfr.BusPayloadTest do
     Execution,
     ExecutionEvent,
     FeedPublished,
+    FeedRun,
     FileOffer,
     FrameCredential,
     InstanceEntryChanged,
@@ -55,13 +56,29 @@ defmodule Cyfr.BusPayloadTest do
       Request.new(@actor, :logged, request_id: "r", method: "tools/call", status: :success),
       Components.new(@actor, :installed, name: "c", version: "1.0.0", publisher: "local"),
       Build.new(@actor, :stopped, build_id: "b", status: :error, error: :timeout),
-      ScheduleRun.new(@actor, :failed, schedule_id: "s", reason: "no slot"),
+      ScheduleRun.new(@actor, :failed,
+        schedule_id: "s",
+        occurrence_id: "o",
+        scheduled_for: ~U[2026-10-27 09:00:00Z],
+        reason: "no slot"
+      ),
+      FeedRun.new(@actor, :fired, binding: "feed_1", occurrence_id: "o", execution_id: "e"),
       Tinctures.new(@actor, :invoke_stopped, tincture_ref: "tincture:local.t", status: :ok),
       PolicyDecision.new(@actor, :changed, event_type: "rate_limit", decision: "denied"),
       Webhooks.new(@actor, :changed),
       ApiKeys.new(@actor, :changed),
       McpServers.new(@actor, :changed),
-      Schedules.new(@actor, :changed, schedule_id: "s"),
+      Schedules.new(@actor, :removed,
+        schedule_id: "s",
+        name: "nightly",
+        reference: "reagent:local.x",
+        cron_expression: "0 3 * * *",
+        status: "paused",
+        next_run_at: ~U[2026-10-28 03:00:00Z],
+        last_run_at: nil,
+        run_count: 2,
+        error_count: 1
+      ),
       VaultEntryChanged.new(@actor, :rename, entry_id: "v", name: "new", old_name: "old"),
       Progress.new(@actor, {:pull, "p"}, request_id: "r", phase: :pulling, data: %{"n" => 1}),
       ExecutionEvent.new(@actor, :delta, %{
@@ -258,9 +275,13 @@ defmodule Cyfr.BusPayloadTest do
               Execution.new(@actor, :failed, error: secret),
               Build.new(@actor, :stopped, error: secret),
               ScheduleRun.new(@actor, :failed, reason: secret),
+              FeedRun.new(@actor, :failed, reason: secret),
               Tinctures.new(@actor, :invoke_stopped, error: secret)
             ] do
-          field = if match?(%ScheduleRun{}, payload), do: :reason, else: :error
+          field =
+            if is_struct(payload, ScheduleRun) or is_struct(payload, FeedRun),
+              do: :reason,
+              else: :error
 
           assert Map.fetch!(payload, field) ==
                    %{class: :internal, message: "The outcome could not be confirmed."}
@@ -407,6 +428,59 @@ defmodule Cyfr.BusPayloadTest do
                 ["stream:feed.results", "PrismWeb.SchedulesLive"]}
 
       assert "stream:runs.changes" in Enum.find(Bus.topics(), &(&1.key == :executions)).consumers
+    end
+  end
+
+  describe "a schedule's payloads" do
+    test "a schedule row is its id and the nine columns a canvas reads, and nothing private" do
+      fields = Schedules.new(@actor, :changed) |> Map.from_struct() |> Map.keys() |> Enum.sort()
+
+      assert fields ==
+               Enum.sort(
+                 ~w(athanor_id kind schedule_id name reference cron_expression status next_run_at last_run_at run_count error_count)a
+               )
+
+      assert Schedules.kinds() == [:changed, :removed]
+
+      for private <- [:input, :metadata, :profile_id, :resolved_reference, :user_id, :feed_spec] do
+        assert_raise ArgumentError, fn -> Schedules.new(@actor, :changed, [{private, "x"}]) end
+      end
+
+      row = Enum.find(Bus.topics(), &(&1.key == :schedules))
+
+      assert {row.scope, row.template, row.struct, row.producers, row.consumers} ==
+               {:tenant, "tenant:<athanor_id>:bus:schedules", Schedules,
+                ["Opus.Schedules.Changes", "Compendium.Cascade"],
+                ["PrismWeb.SchedulesLive", "stream:schedules.changes"]}
+    end
+
+    test "a schedule's run names its occurrence and due time; a feed's run rides its own topic" do
+      fields = ScheduleRun.new(@actor, :fired) |> Map.from_struct() |> Map.keys() |> Enum.sort()
+
+      assert fields ==
+               Enum.sort(
+                 ~w(athanor_id kind schedule_id occurrence_id execution_id scheduled_for reason)a
+               )
+
+      assert ScheduleRun.kinds() == [:fired, :failed]
+
+      for private <- [:reference, :request_id, :user_id, :input, :output] do
+        assert_raise ArgumentError, fn -> ScheduleRun.new(@actor, :fired, [{private, "x"}]) end
+      end
+
+      runs = Enum.find(Bus.topics(), &(&1.key == :schedule_runs))
+
+      assert {runs.producers, runs.consumers} ==
+               {["Cyfr.TelemetryBridge"],
+                ["PrismWeb.ActivitiesLive", "PrismWeb.TopbarLive", "stream:schedule_runs.changes"]}
+
+      feeds = Enum.find(Bus.topics(), &(&1.key == :feed_runs))
+
+      assert {feeds.scope, feeds.template, feeds.struct, feeds.producers, feeds.consumers} ==
+               {:tenant, "tenant:<athanor_id>:bus:feed_runs", FeedRun, ["Cyfr.TelemetryBridge"],
+                ["PrismWeb.ActivitiesLive", "PrismWeb.TopbarLive"]}
+
+      refute Enum.any?(feeds.consumers, &String.starts_with?(&1, "stream:"))
     end
   end
 

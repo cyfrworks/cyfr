@@ -14,6 +14,7 @@ defmodule Compendium.Cascade do
   require Logger
 
   alias Compendium.ComponentPath
+  alias Cyfr.Bus.Schedules
   alias Sanctum.Context
 
   @doc """
@@ -103,9 +104,11 @@ defmodule Compendium.Cascade do
   # behind, so it is said by the row's id and the reason, never its
   # content, and the uninstall goes on.
   defp remove_registration(ctx, schedule) do
-    case Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), schedule.id) do
-      {:ok, _removed} ->
-        :ok
+    actor = Sanctum.Context.actor(ctx)
+
+    case Arca.CronSchedule.soft_delete(actor, schedule.id) do
+      {:ok, removed} ->
+        announce_removed(actor, removed, schedule.status)
 
       {:error, reason} ->
         Logger.warning(
@@ -114,6 +117,29 @@ defmodule Compendium.Cascade do
         )
     end
   end
+
+  # A schedule's removal is announced as the schedule tool's delete
+  # announces one (`Opus.Schedules.Changes`, which this layer cannot
+  # reach): once, after the commit, with the row as it was, under the
+  # schedule's lock. A feed's row is not a schedule's.
+  defp announce_removed(actor, %{kind: "schedule"} = removed, status_before) do
+    Schedules.serialized(removed.id, fn ->
+      payload =
+        Schedules.new(actor, :removed, Schedules.row_fields(%{removed | status: status_before}))
+
+      case Cyfr.Bus.broadcast(actor, Cyfr.Bus.schedules(actor), payload) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Compendium.Cascade] removal of #{removed.id} not announced: #{inspect(reason)}"
+          )
+      end
+    end)
+  end
+
+  defp announce_removed(_actor, _feed, _status_before), do: :ok
 
   # The reason's name alone: a validation's map would carry its messages.
   defp refusal_word({:validation, _errors}), do: "validation"
