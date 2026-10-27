@@ -427,7 +427,7 @@ defmodule PrismWeb.ActivitiesLive do
 
       <!-- Filters -->
       <div class="flex items-center gap-3 flex-wrap">
-        <form phx-change="filter" class="flex gap-3">
+        <form id="activities-filter" phx-change="filter" class="flex gap-3">
           <select
             name="source"
             class="bg-gray-800 text-gray-300 text-sm rounded-md border-gray-700 px-3 py-1.5"

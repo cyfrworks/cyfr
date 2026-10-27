@@ -194,6 +194,7 @@ defmodule PrismWeb.AquaLive.NotesComponent do
         </div>
         <form
           :if={@about_editing?}
+          id="aqua-about-form"
           phx-change="about_change"
           phx-target={@myself}
           phx-submit="about_save"

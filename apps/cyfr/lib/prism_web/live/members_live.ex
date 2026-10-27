@@ -345,6 +345,7 @@ defmodule PrismWeb.MembersLive do
 
           <form
             :if={@athanor && @athanor.kind == "group" && not frozen?(@athanor)}
+            id="member-add-form"
             phx-submit="add"
             phx-change="form_changed"
             class="mt-4 flex gap-2 items-end"
@@ -365,6 +366,7 @@ defmodule PrismWeb.MembersLive do
                 The pair stands, nothing is copied. --%>
           <form
             :if={@athanor && frozen?(@athanor)}
+            id="member-add-third-form"
             phx-submit="add_third"
             phx-change="form_changed"
             class="mt-4 flex gap-2 items-end"
@@ -404,7 +406,12 @@ defmodule PrismWeb.MembersLive do
             </div>
           </div>
 
-          <form phx-submit="create_group" phx-change="form_changed" class="mt-4 flex gap-2 items-end">
+          <form
+            id="group-create-form"
+            phx-submit="create_group"
+            phx-change="form_changed"
+            class="mt-4 flex gap-2 items-end"
+          >
             <div class="flex-1">
               <.input name="name" value={@new_group_name} required placeholder="New group…" />
             </div>
