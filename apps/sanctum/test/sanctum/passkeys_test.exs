@@ -1797,7 +1797,7 @@ defmodule Sanctum.PasskeysTest do
       assert held.public_key["userVerification"] == "required"
       assert held.public_key["rpId"] == Passkeys.rp_id()
 
-      assert {:ok, %{session_token: token, outcome: {:proceed, _report}}} =
+      assert {:ok, %{session_token: token}} =
                Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
 
       assert {:ok, %{user_id: user_id, provider: "passkey"}} = Sanctum.Session.get(token)

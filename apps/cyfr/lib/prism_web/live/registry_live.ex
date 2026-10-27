@@ -15,15 +15,23 @@ defmodule PrismWeb.RegistryLive do
   For each owned namespace we call `component.discover` (which hits
   `/v1/components?namespace=<slug>` on cyfr.run) and merge results into a
   single flat list, keyed by `{namespace, type, name, version}`.
+
+  The person's registry acts here are each a request their identity signs
+  (`registry.sync`, `registry.legal_accept`, `registry.appeal`); no
+  identity provider is asked. A sync mints push tokens, so it is asked
+  through the system layer (`PrismWeb.SystemLayer.call/5`): a session
+  alone is answered `confirmation_required`, which the layer shows, and
+  the page repeats the sync once it is confirmed.
   """
 
   use PrismWeb, :live_view
 
-  alias Phoenix.LiveView.JS
-  alias Sanctum.Auth.DeviceFlow
-  require Logger
+  @behaviour PrismWeb.SystemLayer.Hook
+  on_mount PrismWeb.SystemLayer.Hook
 
-  @appeal_poll_interval_ms 5_000
+  alias Phoenix.LiveView.JS
+  alias PrismWeb.SystemLayer
+  require Logger
 
   @impl true
   def mount(_params, _session, socket) do
@@ -47,24 +55,20 @@ defmodule PrismWeb.RegistryLive do
      |> assign(:error, nil)
      |> assign(:deprecate_pending, nil)
      |> assign(:yank_pending, nil)
-     # The appeal flow is an anonymous device flow on a socket that passes
-     # no rate-limit plug, exactly like sign-in; `connect_info` is readable
-     # only at mount, so the address it budgets against is captured here.
-     |> assign(:client_ip, PrismWeb.AuthHelpers.socket_client_ip(socket))
+     |> assign(:policy, nil)
      |> assign_appeal_idle()}
   end
 
   defp assign_appeal_idle(socket) do
     socket
     |> assign(:appeal_pending, nil)
-    |> assign(:appeal_state, :idle)
     |> assign(:appeal_argument, "")
-    |> assign(:appeal_provider, nil)
-    |> assign(:appeal_user_code, nil)
-    |> assign(:appeal_verification_uri, nil)
-    |> assign(:appeal_device_code, nil)
     |> assign(:appeal_error, nil)
   end
+
+  # A sync this page asked for was confirmed: asked again, once.
+  @impl PrismWeb.SystemLayer.Hook
+  def system_layer_repeat(:sync, _tool, _args, socket), do: {:noreply, sync(socket)}
 
   @impl true
   def handle_event("open-deprecate", %{"reference" => reference}, socket) do
@@ -84,71 +88,64 @@ defmodule PrismWeb.RegistryLive do
   end
 
   # ---- Appeal flow ----
-  # Closed-platform posture: appeals are filed in-client. The user clicks
-  # "Appeal this takedown" on a `taken_down` row → modal opens → they pick
-  # the identity provider that originally claimed the namespace → fresh
-  # DeviceFlow OAuth → cyfr.run verifies the access_token at /v1/appeals
-  # and binds it to the action's rightful subject.
+  # An appeal of a takedown is a request the person's identity signs
+  # (`registry.appeal`); the registry binds it to the action's rightful
+  # appellant by that identity.
   def handle_event("open-appeal", %{"id" => id}, socket) do
-    {:noreply,
-     socket
-     |> assign_appeal_idle()
-     |> assign(:appeal_pending, id)
-     |> assign(:appeal_state, :form)}
+    {:noreply, socket |> assign_appeal_idle() |> assign(:appeal_pending, id)}
   end
 
   def handle_event("close-appeal", _params, socket) do
     {:noreply, assign_appeal_idle(socket)}
   end
 
-  def handle_event("start-appeal", params, socket) do
+  def handle_event("submit-appeal", params, socket) do
     argument = params |> Map.get("argument", "") |> String.trim()
-    provider = params |> Map.get("provider", "") |> String.downcase()
     component_id = socket.assigns.appeal_pending
 
     cond do
-      # A second click while a device flow is already out to the provider
-      # would mint a second code and orphan the first — ignore it.
-      socket.assigns.appeal_state == :waiting ->
-        {:noreply, socket}
-
-      component_id in [nil, ""] ->
-        {:noreply, put_flash(socket, :error, "No takedown selected.")}
-
       argument == "" ->
         {:noreply, assign(socket, :appeal_error, "Argument is required.")}
 
-      String.length(argument) > 4_000 ->
-        {:noreply, assign(socket, :appeal_error, "Argument exceeds 4000 characters.")}
-
-      not Sanctum.Auth.DeviceFlow.provider?(provider) ->
-        {:noreply, assign(socket, :appeal_error, "Pick a supported provider.")}
+      byte_size(argument) > 4000 ->
+        {:noreply, assign(socket, :appeal_error, "Argument exceeds 4000 bytes.")}
 
       true ->
-        provider_atom = String.to_existing_atom(provider)
+        args = %{
+          "action_type" => "takedown",
+          "action_ref" => component_id,
+          "argument" => argument
+        }
 
-        case DeviceFlow.impl().init_device_flow(provider_atom, socket.assigns.client_ip) do
-          {:ok, info} ->
-            if connected?(socket), do: schedule_appeal_poll(info.interval)
-
+        case call_tool(socket, "registry/appeal", args) do
+          {:ok, _answer} ->
             {:noreply,
              socket
-             |> assign(:appeal_state, :waiting)
+             |> put_flash(:info, "Appeal filed for #{component_id}. Moderators will review.")
+             |> assign_appeal_idle()}
+
+          {:error, err} ->
+            {:noreply,
+             socket
              |> assign(:appeal_argument, argument)
-             |> assign(:appeal_provider, provider_atom)
-             |> assign(:appeal_user_code, info.user_code)
-             |> assign(:appeal_verification_uri, info.verification_uri)
-             |> assign(:appeal_device_code, info.device_code)
-             |> assign(:appeal_error, nil)}
-
-          {:error, reason} ->
-            Logger.warning("[RegistryLive] appeal device-flow init failed: #{inspect(reason)}")
-
-            {:noreply,
-             socket
-             |> assign(:appeal_state, :form)
-             |> assign(:appeal_error, "Couldn't start provider login: #{error_message(reason)}")}
+             |> assign(:appeal_error, "Submit failed: #{error_message(err)}")}
         end
+    end
+  end
+
+  # ---- Push tokens and the registry's policies ----
+  def handle_event("sync", _params, socket), do: {:noreply, sync(socket)}
+
+  def handle_event("accept-policy", %{"version" => version}, socket) when is_binary(version) do
+    case call_tool(socket, "registry/legal_accept", %{"policy_version" => version}) do
+      {:ok, _answer} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Accepted the registry's policies (version #{version}).")
+         |> load_policy()}
+
+      {:error, err} ->
+        {:noreply, put_flash(socket, :error, "Accepting failed: #{error_message(err)}")}
     end
   end
 
@@ -219,48 +216,6 @@ defmodule PrismWeb.RegistryLive do
     {:noreply, load_registry(socket)}
   end
 
-  def handle_info(:appeal_poll, socket) do
-    case socket.assigns.appeal_state do
-      :waiting ->
-        case DeviceFlow.impl().poll_for_access_token(
-               socket.assigns.appeal_provider,
-               socket.assigns.appeal_device_code,
-               socket.assigns.client_ip
-             ) do
-          {:ok, %{status: "complete", access_token: access_token, provider: provider}} ->
-            submit_appeal(socket, provider, access_token)
-
-          {:ok, %{status: "pending"}} ->
-            schedule_appeal_poll(nil)
-            {:noreply, socket}
-
-          {:ok, %{status: "expired"}} ->
-            {:noreply,
-             socket
-             |> assign(:appeal_state, :form)
-             |> assign(:appeal_error, "Code expired. Please try again.")}
-
-          {:ok, %{status: "denied"}} ->
-            {:noreply,
-             socket
-             |> assign(:appeal_state, :form)
-             |> assign(:appeal_error, "Authorization was denied.")}
-
-          {:error, reason} ->
-            Logger.warning("[RegistryLive] appeal poll error: #{inspect(reason)}")
-
-            # Return to :form after polling errors so the user can retry.
-            {:noreply,
-             socket
-             |> assign(:appeal_state, :form)
-             |> assign(:appeal_error, error_message(reason))}
-        end
-
-      _ ->
-        {:noreply, socket}
-    end
-  end
-
   def handle_info(%Cyfr.Bus.Components{}, socket) do
     {:noreply, load_registry(socket)}
   end
@@ -270,46 +225,42 @@ defmodule PrismWeb.RegistryLive do
     {:noreply, socket}
   end
 
-  defp submit_appeal(socket, provider_atom, access_token) do
-    provider = to_string(provider_atom)
-    component_id = socket.assigns.appeal_pending
-    argument = socket.assigns.appeal_argument
+  defp sync(socket) do
+    case SystemLayer.call(socket, :sync, "registry/sync", %{}) do
+      {:ok, _synced, socket} ->
+        socket |> put_flash(:info, "Your push tokens are synced.") |> load_registry()
 
-    args = %{
-      "provider" => provider,
-      "access_token" => access_token,
-      "action_type" => "takedown",
-      "action_ref" => component_id,
-      "argument" => argument
-    }
+      {:asked, socket} ->
+        put_flash(socket, :info, "Confirm the sync to mint your push tokens.")
 
-    case call_tool(socket, "registry/appeal", args) do
-      {:ok, _body} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Appeal filed for #{component_id}. Moderators will review.")
-         |> assign_appeal_idle()}
-
-      {:error, err} ->
-        Logger.warning("[RegistryLive] appeal submit failed: #{inspect(err)}")
-
-        {:noreply,
-         socket
-         |> assign(:appeal_state, :form)
-         |> assign(:appeal_error, "Submit failed: #{error_message(err)}")}
+      {:error, reason, socket} ->
+        put_flash(socket, :error, "Sync failed: #{error_message(reason)}")
     end
-  end
-
-  defp schedule_appeal_poll(interval) do
-    ms = if interval, do: interval * 1_000, else: @appeal_poll_interval_ms
-    Process.send_after(self(), :appeal_poll, ms)
   end
 
   # ============================================================================
   # Data loading
   # ============================================================================
 
+  # The registry's current policy version and its policies, for the
+  # acceptance the registry may ask for before a claim or a mint.
+  defp load_policy(socket) do
+    case call_tool(socket, "registry/legal_version", %{}) do
+      {:ok, %{"policy_version" => version} = answer} when is_binary(version) ->
+        assign(socket, :policy, %{version: version, policies: policy_titles(answer)})
+
+      _unavailable ->
+        assign(socket, :policy, nil)
+    end
+  end
+
+  defp policy_titles(%{"policies" => policies}) when is_list(policies),
+    do: for(%{"title" => title} <- policies, is_binary(title), do: title)
+
+  defp policy_titles(_answer), do: []
+
   defp load_registry(socket) do
+    socket = load_policy(socket)
     namespaces = owned_namespaces(socket)
 
     case fetch_components(socket, namespaces) do
@@ -407,14 +358,45 @@ defmodule PrismWeb.RegistryLive do
             Components you've published to cyfr.run. Deprecate keeps them installable with a warning; yank removes them from search and unpinned resolution.
           </p>
         </div>
-        <button
-          phx-click="reload"
-          phx-disable-with="Loading…"
-          class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 disabled:opacity-50"
-        >
-          Refresh
-        </button>
+        <div class="flex gap-2">
+          <button
+            phx-click="sync"
+            phx-disable-with="Syncing…"
+            class="px-3 py-1.5 text-xs rounded bg-blue-900 text-blue-100 border border-blue-700 hover:bg-blue-800 disabled:opacity-50"
+          >
+            Sync push tokens
+          </button>
+          <button
+            phx-click="reload"
+            phx-disable-with="Loading…"
+            class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 disabled:opacity-50"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
+
+      <.card :if={@policy}>
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h3 class="text-sm font-semibold text-white">Registry policies</h3>
+            <p class="text-xs text-gray-400 mt-1">
+              cyfr.run's policies, version <span class="font-mono">{@policy.version}</span>: {Enum.join(
+                @policy.policies,
+                ", "
+              )}. The registry asks you to accept its current version before a claim or a token sync.
+            </p>
+          </div>
+          <button
+            phx-click="accept-policy"
+            phx-value-version={@policy.version}
+            phx-disable-with="Accepting…"
+            class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 disabled:opacity-50 whitespace-nowrap"
+          >
+            Accept version {@policy.version}
+          </button>
+        </div>
+      </.card>
 
       <div :if={@loading} class="flex flex-col items-center justify-center py-16 gap-3">
         <.spinner class="h-6 w-6 text-gray-400" />
@@ -568,9 +550,7 @@ defmodule PrismWeb.RegistryLive do
               <span class="font-mono text-gray-300">{@appeal_pending}</span>
             </p>
             <p class="text-xs text-gray-500 mt-2">
-              Filing an appeal re-authenticates you against your identity
-              provider so we can confirm you're the namespace's claimant.
-              Moderators review every appeal manually.
+              Your identity signs the appeal; moderators review every appeal manually.
             </p>
           </div>
 
@@ -581,72 +561,19 @@ defmodule PrismWeb.RegistryLive do
             {@appeal_error}
           </div>
 
-          <div :if={@appeal_state == :form}>
-            <form phx-submit="start-appeal" class="space-y-3">
-              <div>
-                <label class="text-xs text-gray-500 uppercase">Provider</label>
-                <div class="flex gap-3 mt-1">
-                  <label class="flex items-center gap-2 text-sm text-gray-300">
-                    <input type="radio" name="provider" value="github" checked /> GitHub
-                  </label>
-                  <label class="flex items-center gap-2 text-sm text-gray-300">
-                    <input type="radio" name="provider" value="google" /> Google
-                  </label>
-                </div>
-                <p class="text-xs text-gray-500 mt-1">
-                  Pick the provider that originally claimed this namespace.
-                </p>
-              </div>
-              <div>
-                <label class="text-xs text-gray-500 uppercase">Argument</label>
-                <textarea
-                  name="argument"
-                  required
-                  rows="5"
-                  maxlength="4000"
-                  placeholder="Why should this takedown be reversed? (max 4000 chars)"
-                  class="w-full mt-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
-                >{@appeal_argument}</textarea>
-              </div>
-              <div class="flex justify-end gap-2">
-                <button
-                  type="button"
-                  phx-click="close-appeal"
-                  class="px-3 py-1.5 text-xs rounded bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  phx-disable-with="Starting…"
-                  class="px-3 py-1.5 text-xs rounded bg-blue-900 text-blue-100 border border-blue-700 hover:bg-blue-800 disabled:opacity-50"
-                >
-                  Continue with provider
-                </button>
-              </div>
-            </form>
-          </div>
-
-          <div :if={@appeal_state == :waiting} class="space-y-3">
-            <p class="text-sm text-gray-300">
-              Open
-              <a
-                href={@appeal_verification_uri}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-blue-400 hover:text-blue-300"
-              >
-                {@appeal_verification_uri}
-              </a>
-              and enter:
-            </p>
-            <div class="rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 text-center">
-              <span class="font-mono text-2xl tracking-widest text-white">{@appeal_user_code}</span>
+          <form phx-submit="submit-appeal" class="space-y-3">
+            <div>
+              <label class="text-xs text-gray-500 uppercase">Argument</label>
+              <textarea
+                name="argument"
+                required
+                rows="5"
+                maxlength="4000"
+                placeholder="Why should this takedown be reversed? (max 4000 characters)"
+                class="w-full mt-1 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white focus:border-blue-600 focus:ring-1 focus:ring-blue-600"
+              >{@appeal_argument}</textarea>
             </div>
-            <p class="text-xs text-gray-500 flex items-center gap-2">
-              <.spinner class="h-3 w-3" /> Waiting for authorization…
-            </p>
-            <div class="flex justify-end">
+            <div class="flex justify-end gap-2">
               <button
                 type="button"
                 phx-click="close-appeal"
@@ -654,8 +581,15 @@ defmodule PrismWeb.RegistryLive do
               >
                 Cancel
               </button>
+              <button
+                type="submit"
+                phx-disable-with="Filing…"
+                class="px-3 py-1.5 text-xs rounded bg-blue-900 text-blue-100 border border-blue-700 hover:bg-blue-800 disabled:opacity-50"
+              >
+                File appeal
+              </button>
             </div>
-          </div>
+          </form>
         </div>
       </.modal>
 
@@ -709,6 +643,8 @@ defmodule PrismWeb.RegistryLive do
           </form>
         </div>
       </.modal>
+
+      <.live_component module={SystemLayer} id={SystemLayer.layer_id()} context={@context} />
     </div>
     """
   end

@@ -9,11 +9,8 @@ defmodule PrismWeb.AuthControllerTest do
   - request/2: Unknown provider handling
   - callback/2: Success and failure cases
   - device_complete/2: The device-flow ticket
-  - post_legal_accept/2: The probe after policy acceptance
   """
   use CyfrWeb.ConnCase
-
-  import Ecto.Query, only: [from: 2]
 
   describe "request/2" do
     test "returns 404 for unknown provider", %{conn: conn} do
@@ -37,9 +34,9 @@ defmodule PrismWeb.AuthControllerTest do
       # The door: these callbacks sign in whoever the provider authenticates.
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
 
-      # Point the cyfr.run REST client at an unreachable address so the
-      # post-session probe fails fast with a transient error rather than
-      # reaching the public cyfr.run.
+      # No sign-in speaks to the registry; it points at an address nothing
+      # answers on all the same, so a request made by mistake reaches no
+      # public registry.
       original_registry = Application.get_env(:cyfr, :registry_url)
       Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
 
@@ -255,14 +252,16 @@ defmodule PrismWeb.AuthControllerTest do
       assert refused.resp_body =~ "Sign in again"
       assert refused.resp_body =~ ~s(href="/login")
       refute Plug.Conn.get_session(refused, :sanctum_session_token)
-      # No fault logged for it: the unreachable registry's probe, which
-      # runs before the session, logs its own.
+      # No fault logged for it.
       refute log =~ "CyfrWeb.SignInResponse"
       assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identity(key)
     end
   end
 
-  describe "callback/2 — probe integration (Bypass)" do
+  # The registry is a Bypass server holding no expectation, so any request a
+  # sign-in made to it would fail the test: no sign-in speaks to the
+  # registry, and the provider's token goes nowhere.
+  describe "callback/2 — no sign-in speaks to the registry (Bypass)" do
     alias Compendium.Registry.CredentialStore
 
     setup do
@@ -274,7 +273,9 @@ defmodule PrismWeb.AuthControllerTest do
       original_url = Application.get_env(:cyfr, :registry_url)
       original_oci = Application.get_env(:cyfr, :oci_registry_url)
 
+      original_sanctum = Application.get_env(:sanctum, :registry_url)
       Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
+      Application.put_env(:sanctum, :registry_url, "127.0.0.1:#{bypass.port}")
       Application.put_env(:cyfr, :oci_registry_url, "registry.test")
 
       on_exit(fn ->
@@ -286,18 +287,14 @@ defmodule PrismWeb.AuthControllerTest do
           do: Application.put_env(:cyfr, :registry_url, original_url),
           else: Application.delete_env(:cyfr, :registry_url)
 
+        Application.put_env(:sanctum, :registry_url, original_sanctum)
+
         if original_oci,
           do: Application.put_env(:cyfr, :oci_registry_url, original_oci),
           else: Application.delete_env(:cyfr, :oci_registry_url)
       end)
 
       {:ok, bypass: bypass}
-    end
-
-    defp json_resp(conn, status, body) do
-      conn
-      |> Plug.Conn.put_resp_header("content-type", "application/json")
-      |> Plug.Conn.resp(status, Jason.encode!(body))
     end
 
     defp verified_oidcc_auth(uid, opts \\ []) do
@@ -319,14 +316,7 @@ defmodule PrismWeb.AuthControllerTest do
       }
     end
 
-    # SQL-sandbox rollback between tests races with Bypass/Finch worker
-    # processes that outlive the test process, so writes to CredentialStore
-    # can leak across tests. Each test uses a unique uid so writes don't
-    # collide.
-
     defp callback(conn, auth) do
-      # The pending-probe cookie is encrypted: the conn needs a key base, as
-      # the endpoint gives it in production.
       %{conn | secret_key_base: String.duplicate("a", 64)}
       |> Plug.Test.init_test_session(%{})
       |> Phoenix.ConnTest.fetch_flash()
@@ -336,56 +326,56 @@ defmodule PrismWeb.AuthControllerTest do
 
     defp session_of(conn), do: Plug.Conn.get_session(conn, :sanctum_session_token)
 
-    test "happy path: namespace recorded, tokens stored, redirect to the chat",
-         %{conn: conn, bypass: bypass} do
-      n = System.unique_integer([:positive])
-      uid = "auth_cb_happy_#{n}"
+    test "a first sign-in lands on the person's own athanor, asks the registry nothing and keeps no token",
+         %{conn: conn} do
+      uid = "auth_cb_first_#{System.unique_integer([:positive])}"
       user_id = "oidcc|https://idp.test|#{uid}"
 
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
-        json_resp(c, 200, %{
-          "personal_namespace" => %{"slug" => "alice#{n}", "token" => "cyfr_pt_personal"},
-          "memberships" => []
-        })
-      end)
-
-      conn = callback(conn, verified_oidcc_auth(uid))
+      conn = callback(conn, verified_oidcc_auth(uid, token: "gho_never_sent"))
 
       assert redirected_to(conn) == "/"
       assert is_binary(session_of(conn))
-      assert {:ok, %{namespace: ns}} = Sanctum.Tenancy.Users.get(person_id(user_id))
-      assert ns == "alice#{n}"
+      refute Enum.any?(Map.keys(conn.resp_cookies), &(&1 =~ "probe"))
+      refute inspect(conn.resp_cookies) =~ "gho_never_sent"
 
-      assert {:ok, %{token: "cyfr_pt_personal", role: "personal"}} =
-               CredentialStore.get(person_context(user_id), "registry.test", ns)
+      assert {:ok, %{personal_athanor_id: pid, namespace: nil}} =
+               Sanctum.Tenancy.Users.get(person_id(user_id))
 
-      # The session is a working one: the person is authenticated at once...
-      assert {:ok, %{authenticated: true, namespace: ^ns} = loaded} =
+      assert {:ok, %{authenticated: true, namespace: nil, athanor_id: ^pid}} =
                Sanctum.Session.load(session_of(conn))
 
-      # ...and it names their own athanor, minted at admission. Its address
-      # is the namespace only when the namespace was known first.
-      assert {:ok, %{id: personal_id, kind: "person"}} =
-               Sanctum.Tenancy.Athanors.get_by_owner(person_id(user_id))
+      assert {:ok, []} =
+               CredentialStore.list_for_user(person_context(user_id), "registry.test")
+    end
 
-      assert loaded.athanor_id == personal_id
+    test "a returning person's namespace is the one their row holds", %{conn: conn} do
+      n = System.unique_integer([:positive])
+      back = "auth_cb_back_#{n}"
+
+      {:ok, user} =
+        Sanctum.Tenancy.Users.upsert_from_provider(%{
+          id: "oidcc|https://idp.test|#{back}",
+          provider: "oidcc",
+          email: "alice@example.com",
+          verified: true
+        })
+
+      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "back#{n}")
+      conn = callback(conn, verified_oidcc_auth(back))
+
+      assert redirected_to(conn) == "/"
+      assert {:ok, %{namespace: ns}} = Sanctum.Session.load(session_of(conn))
+      assert ns == "back#{n}"
     end
 
     test "signing in does not carry the pre-login session across",
-         %{conn: conn, bypass: bypass} do
+         %{conn: conn} do
       # The anonymous session's `_csrf_token` is what binds a device-flow
       # ticket to a browser, so anything an attacker could plant on this
       # origin before sign-in must not survive it. Nothing set before the
       # exchange is still readable after.
       n = System.unique_integer([:positive])
       uid = "auth_cb_renew_#{n}"
-
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
-        json_resp(c, 200, %{
-          "personal_namespace" => %{"slug" => "renew#{n}", "token" => "cyfr_pt_personal"},
-          "memberships" => []
-        })
-      end)
 
       conn =
         conn
@@ -419,20 +409,13 @@ defmodule PrismWeb.AuthControllerTest do
     end
 
     test "an operator's first sign-in lands in their own athanor",
-         %{conn: conn, bypass: bypass} do
+         %{conn: conn} do
       n = System.unique_integer([:positive])
       uid = "auth_cb_ops_#{n}"
       email = "ops#{n}@example.com"
       prev = Application.get_env(:sanctum, :platform_admin_emails, [])
       Application.put_env(:sanctum, :platform_admin_emails, [email])
       on_exit(fn -> Application.put_env(:sanctum, :platform_admin_emails, prev) end)
-
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
-        json_resp(c, 200, %{
-          "personal_namespace" => %{"slug" => "ops#{n}", "token" => "cyfr_pt_personal"},
-          "memberships" => []
-        })
-      end)
 
       conn = callback(conn, verified_oidcc_auth(uid, email: email))
 
@@ -447,154 +430,11 @@ defmodule PrismWeb.AuthControllerTest do
                Sanctum.Session.load(session_of(conn))
     end
 
-    test "no personal namespace: signed in on their own athanor, IdP token kept for the claim",
-         %{conn: conn, bypass: bypass} do
-      uid = "auth_cb_unclaimed_#{System.unique_integer([:positive])}"
-      user_id = "oidcc|https://idp.test|#{uid}"
-
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
-        json_resp(c, 200, %{"personal_namespace" => nil, "memberships" => []})
-      end)
-
-      conn = callback(conn, verified_oidcc_auth(uid))
-
-      assert redirected_to(conn) == "/"
-      assert is_binary(session_of(conn))
-      assert Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
-
-      assert {:ok, %{personal_athanor_id: pid}} = Sanctum.Tenancy.Users.get(person_id(user_id))
-      assert is_binary(pid)
-
-      assert {:ok, %{authenticated: true, namespace: nil, athanor_id: ^pid}} =
-               Sanctum.Session.load(session_of(conn))
-
-      assert {:error, :not_found} =
-               CredentialStore.get(person_context(user_id), "registry.test", "alice")
-    end
-
-    test "412: signed in, the policy owed at publish, IdP token kept", %{
-      conn: conn,
-      bypass: bypass
-    } do
-      uid = "auth_cb_412_#{System.unique_integer([:positive])}"
-
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
-        json_resp(c, 412, %{"errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED"}]})
-      end)
-
-      conn = callback(conn, verified_oidcc_auth(uid))
-      assert redirected_to(conn) == "/"
-      assert is_binary(session_of(conn))
-      assert Map.has_key?(conn.resp_cookies, "_cyfr_pending_probe")
-      assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "updated its policy"
-    end
-
-    test "probe 401: signed in, the refusal flashed, nothing cached", %{
-      conn: conn,
-      bypass: bypass
-    } do
-      uid = "auth_cb_401_#{System.unique_integer([:positive])}"
-      user_id = "oidcc|https://idp.test|#{uid}"
-
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
-        json_resp(c, 401, %{"error" => "invalid_access_token"})
-      end)
-
-      conn = callback(conn, verified_oidcc_auth(uid, token: "expired_token"))
-
-      assert redirected_to(conn) == "/"
-      assert is_binary(session_of(conn))
-      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "refused the sign-in token"
-
-      assert {:error, :not_found} =
-               CredentialStore.get(person_context(user_id), "registry.test", "alice")
-    end
-
-    test "probe 5xx: a first-time person and a returning one both sign in",
-         %{conn: conn, bypass: bypass} do
-      Bypass.expect(bypass, "POST", "/v1/identity/probe", fn c ->
-        json_resp(c, 500, %{"error" => "internal"})
-      end)
-
-      uid = "auth_cb_5xx_#{System.unique_integer([:positive])}"
-      conn1 = callback(conn, verified_oidcc_auth(uid))
-      assert redirected_to(conn1) == "/"
-      assert is_binary(session_of(conn1))
-      assert Phoenix.Flash.get(conn1.assigns.flash, :error) =~ "couldn't be reached"
-
-      n = System.unique_integer([:positive])
-      back = "auth_cb_5xx_back_#{n}"
-
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: "oidcc|https://idp.test|#{back}",
-          provider: "oidcc",
-          email: "alice@example.com",
-          verified: true
-        })
-
-      {:ok, _} = Sanctum.Tenancy.Users.set_namespace(user, "back#{n}")
-      conn2 = callback(build_conn(), verified_oidcc_auth(back))
-      assert redirected_to(conn2) == "/"
-      assert is_binary(session_of(conn2))
-      assert Phoenix.Flash.get(conn2.assigns.flash, :error) =~ "couldn't be reached"
-    end
-
-    test "the namespace is the identity: a push token that cannot be stored still signs the person in",
-         %{conn: conn, bypass: bypass} do
-      n = System.unique_integer([:positive])
-      uid = "auth_cb_putfail_#{n}"
-      user_id = "oidcc|https://idp.test|#{uid}"
-
-      # The person exists before the keyring goes: a first sign-in seals
-      # the person's own keys, and one that cannot is refused.
-      {:ok, _person} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: user_id,
-          provider: "oidcc",
-          email: "alice@example.com",
-          verified: true
-        })
-
-      # Force at-rest encryption to fail by clearing the resolved keyring:
-      # the push-token seal (`Sanctum.Cipher.encrypt`) raises without it.
-      original_keyring = Application.get_env(:sanctum, :crypto_keyring)
-      Application.delete_env(:sanctum, :crypto_keyring)
-
-      on_exit(fn ->
-        if original_keyring,
-          do: Application.put_env(:sanctum, :crypto_keyring, original_keyring),
-          else: Application.delete_env(:sanctum, :crypto_keyring)
-      end)
-
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn c ->
-        json_resp(c, 200, %{
-          "personal_namespace" => %{"slug" => "alice#{n}", "token" => "cyfr_pt_personal"},
-          "memberships" => []
-        })
-      end)
-
-      conn = callback(conn, verified_oidcc_auth(uid))
-
-      assert redirected_to(conn) == "/"
-      assert {:ok, %{namespace: ns}} = Sanctum.Tenancy.Users.get(person_id(user_id))
-      assert ns == "alice#{n}"
-
-      assert {:error, :not_found} =
-               CredentialStore.get(person_context(user_id), "registry.test", ns)
-
-      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "didn't fully sync"
-    end
-
     test "no browser outcome is a JSON document, and no body carries a session token",
-         %{conn: conn, bypass: bypass} do
-      Bypass.expect(bypass, "POST", "/v1/identity/probe", fn c ->
-        json_resp(c, 500, %{"error" => "internal"})
-      end)
-
+         %{conn: conn} do
       uid = "auth_cb_nojson_#{System.unique_integer([:positive])}"
 
-      # The registry down, and the IdP giving no token: a redirect each time.
+      # With the provider's token and without one: a redirect each time.
       for auth <- [verified_oidcc_auth(uid), verified_oidcc_auth(uid, token: nil)] do
         conn = callback(conn, auth)
         assert conn.status == 302
@@ -604,7 +444,7 @@ defmodule PrismWeb.AuthControllerTest do
     end
   end
 
-  describe "device_complete/2 — the ticket carries the outcome" do
+  describe "device_complete/2 — the ticket carries the session" do
     defp mint_session do
       ctx =
         Sanctum.Context.build(
@@ -635,34 +475,12 @@ defmodule PrismWeb.AuthControllerTest do
       ticket
     end
 
-    test "a proceed ticket flashes the report's warnings", %{conn: conn} do
-      # The device path once decoded the ticket's :next flag and dropped
-      # the report entirely — unsynced-token warnings the Ueberauth
-      # callback flashed were silently lost on device sign-in.
-      session = mint_session()
-
-      ticket =
-        mint_ticket(%{
-          session_token: session.token,
-          access_token: nil,
-          outcome: {:proceed, %{unsynced: ["ns1"], probe: :ok}}
-        })
-
-      conn = get(browser_conn(conn), "/auth/device/complete/#{ticket}")
-
-      assert redirected_to(conn) == "/"
-      assert Plug.Conn.get_session(conn, :sanctum_session_token) == session.token
-      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "didn't fully sync"
-    end
-
     test "of two requests presenting one ticket, one signs in", %{conn: conn} do
       session = mint_session()
 
       ticket =
         mint_ticket(%{
-          session_token: session.token,
-          access_token: nil,
-          outcome: {:proceed, %{unsynced: [], probe: :ok}}
+          session_token: session.token
         })
 
       signed_in =
@@ -688,9 +506,7 @@ defmodule PrismWeb.AuthControllerTest do
 
       ticket =
         mint_ticket(%{
-          session_token: session.token,
-          access_token: nil,
-          outcome: {:proceed, %{unsynced: [], probe: :ok}}
+          session_token: session.token
         })
 
       other_browser =
@@ -712,9 +528,7 @@ defmodule PrismWeb.AuthControllerTest do
       Arca.Cache.put(
         {:login_device_ticket, ticket},
         %{
-          session_token: session.token,
-          access_token: nil,
-          outcome: {:proceed, %{unsynced: [], probe: :ok}}
+          session_token: session.token
         },
         60_000
       )
@@ -730,9 +544,7 @@ defmodule PrismWeb.AuthControllerTest do
 
       ticket =
         mint_ticket(%{
-          session_token: session.token,
-          access_token: nil,
-          outcome: {:proceed, %{unsynced: [], probe: :ok}}
+          session_token: session.token
         })
 
       wrong = Plug.Test.init_test_session(conn, %{"_csrf_token" => "a-different-browser"})
@@ -894,130 +706,6 @@ defmodule PrismWeb.AuthControllerTest do
 
       assert {:error, :not_found} =
                Sanctum.Tenancy.Users.get_by_identity("oidcc|https://idp.test|#{uid}")
-    end
-  end
-
-  describe "post_legal_accept/2 — the probe runs only for a session that stands" do
-    setup do
-      # cyfr.run unreachable, so a probe that does run answers at once.
-      prev = Application.get_env(:cyfr, :registry_url)
-      Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
-
-      on_exit(fn ->
-        if prev,
-          do: Application.put_env(:cyfr, :registry_url, prev),
-          else: Application.delete_env(:cyfr, :registry_url)
-      end)
-
-      person = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
-      {:ok, session} = Sanctum.Session.create(person)
-      {:ok, session: session}
-    end
-
-    defp probe_cookie do
-      secret = CyfrWeb.Endpoint.config(:secret_key_base)
-
-      %{value: value} =
-        build_conn()
-        |> Map.put(:secret_key_base, secret)
-        |> put_resp_cookie("_cyfr_pending_probe", "gho_probe", encrypt: true, max_age: 600)
-        |> Map.fetch!(:resp_cookies)
-        |> Map.fetch!("_cyfr_pending_probe")
-
-      value
-    end
-
-    defp post_legal_accept(token) do
-      build_conn()
-      |> Plug.Test.init_test_session(%{sanctum_session_token: token})
-      |> Plug.Test.put_req_cookie("_cyfr_pending_probe", probe_cookie())
-      |> get("/auth/post-legal-accept")
-    end
-
-    test "a standing session completes the sign-in", %{session: session} do
-      refute redirected_to(post_legal_accept(session.token)) == "/login"
-    end
-
-    test "a session revoked with nobody told is sent to sign in, not probed", %{session: session} do
-      hash = Sanctum.Session.token_hash(session.token)
-
-      Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
-
-      assert redirected_to(post_legal_accept(session.token)) == "/login"
-    end
-
-    test "a store that cannot answer says try again, and signs nobody in", %{session: session} do
-      Arca.Repo.query!("ALTER TABLE sessions RENAME TO sessions_unavailable")
-      conn = post_legal_accept(session.token)
-      assert conn.status == 503
-      assert conn.resp_body =~ "Try again shortly"
-    end
-
-    test "a remote person whose identity could not be confirmed fresh is told to try again, " <>
-           "their session standing",
-         %{session: session} do
-      stale_remote!(session.user_id)
-
-      {conn, log} = ExUnit.CaptureLog.with_log(fn -> post_legal_accept(session.token) end)
-
-      assert log =~ "freshness bound"
-      assert conn.status == 503
-      assert conn.resp_body =~ "Try again shortly"
-
-      hash = Sanctum.Session.token_hash(session.token)
-      assert Arca.Repo.exists?(from(s in Arca.Schemas.Session, where: s.token_hash == ^hash))
-    end
-
-    # `person_id` made a person whose keys are at another home: their
-    # identity row `remote`, their head cached but past its bound, and their
-    # directory a loopback port nothing listens on, so it cannot be
-    # refreshed.
-    defp stale_remote!(person_id) do
-      directory = "https://localhost:1"
-
-      Arca.Repo.delete_all(from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^person_id))
-
-      {live, _} = :crypto.generate_key(:eddsa, :ed25519)
-      {operational_pub, operational} = :crypto.generate_key(:eddsa, :ed25519)
-      {recovery, _} = :crypto.generate_key(:eddsa, :ed25519)
-
-      {:ok, genesis} =
-        Prima.Identity.Entry.genesis(
-          live_key: live,
-          operational_key: operational_pub,
-          recovery_keys: [recovery],
-          directory: directory
-        )
-
-      genesis = Prima.Identity.sign(genesis, operational)
-      identifier = Prima.Identity.identifier(genesis)
-      head = Prima.Identity.hash(genesis)
-
-      {:ok, _} =
-        Arca.PersonIdentities.create(Prima.Actor.system(), %{
-          user_id: person_id,
-          provenance: "remote",
-          identifier: identifier,
-          directory_url: directory
-        })
-
-      {:ok, _} =
-        Arca.DirectoryHeads.put(Prima.Actor.system(), %{
-          identifier: identifier,
-          genesis: Prima.Identity.canonical(genesis),
-          directory_url: directory,
-          head_hash: head,
-          key_epoch: head,
-          recovery_epoch: head,
-          state: ~s({"head":"#{head}"})
-        })
-
-      Arca.Repo.update_all(
-        from(h in Arca.Schemas.DirectoryHead, where: h.identifier == ^identifier),
-        set: [verified_at: DateTime.add(DateTime.utc_now(), -400, :second)]
-      )
-
-      :ok
     end
   end
 

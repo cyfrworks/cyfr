@@ -1219,42 +1219,6 @@ defmodule Sanctum.Caller do
   defp now, do: DateTime.utc_now()
 
   @doc """
-  A light look at who a session belongs to — the identity fields and the
-  publisher namespace, if any — with none of the establish work. For
-  surfaces that need only the person (the claim and legal flows), not a
-  working Context.
-  """
-  @spec peek(String.t() | nil) ::
-          {:ok,
-           %{
-             user_id: String.t() | nil,
-             provider: String.t() | nil,
-             email: String.t() | nil,
-             namespace: String.t() | nil
-           }}
-          | {:error, :unauthenticated | :unavailable}
-  def peek(token) when token in [nil, ""], do: {:error, :unauthenticated}
-
-  def peek(token) when is_binary(token) do
-    case Session.load(token) do
-      {:ok, %Context{} = ctx} ->
-        {:ok,
-         %{
-           user_id: ctx.user_id,
-           provider: ctx.provider,
-           email: ctx.email,
-           namespace: ctx.namespace
-         }}
-
-      {:error, reason} when reason in [:namespace_unavailable, :database_error] ->
-        {:error, :unavailable}
-
-      {:error, _reason} ->
-        {:error, :unauthenticated}
-    end
-  end
-
-  @doc """
   Drop every established-context memo for a session row key, on this
   member and on every other.
 

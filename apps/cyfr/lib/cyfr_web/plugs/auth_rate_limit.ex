@@ -13,7 +13,7 @@ defmodule CyfrWeb.Plugs.AuthRateLimit do
   call site via `init/1` opts:
 
       plug CyfrWeb.Plugs.AuthRateLimit,
-        bucket: :claim_submit,
+        bucket: :passkey_complete,
         max_requests: 10,
         window_ms: 60_000
 

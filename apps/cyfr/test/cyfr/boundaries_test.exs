@@ -1831,9 +1831,9 @@ defmodule Cyfr.BoundariesTest do
          defmodule Planted do
            alias Compendium.Registry.Client
 
-           def sign_in(ctx, user), do: Compendium.complete_sign_in(ctx, user, :github, "t")
-           def probe(ctx, user), do: Compendium.SignInSync.complete(ctx, user, :github, "t")
-           def accept(v), do: Client.accept_policies(:github, "t", nil, v)
+           def layout(ctx, ref), do: Compendium.layout(ctx, ref)
+           def sync(ctx), do: Compendium.Providers.Registry.handle(ctx, %{"action" => "sync"})
+           def accept(id, v), do: Client.signed(id, "policy.accept", %{"policy_version" => v})
 
            def required({:error, %Compendium.OCI.Errors{} = err}),
              do: Compendium.OCI.Errors.required_version(err)
@@ -1845,14 +1845,14 @@ defmodule Cyfr.BoundariesTest do
         assert row.allow == ["Compendium"]
 
         assert Boundaries.surface_violations(row, planted) ==
-                 ["Compendium.OCI", "Compendium.Registry", "Compendium.SignInSync"]
+                 ["Compendium.OCI", "Compendium.Providers", "Compendium.Registry"]
       end
 
       host = find.("cyfr_web")
       assert host.allow == []
 
       assert Boundaries.surface_violations(host, planted) ==
-               ["Compendium", "Compendium.OCI", "Compendium.Registry", "Compendium.SignInSync"]
+               ["Compendium", "Compendium.OCI", "Compendium.Providers", "Compendium.Registry"]
     end
 
     test "the console names the assistant's root, nothing more" do

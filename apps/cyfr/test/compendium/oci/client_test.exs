@@ -398,10 +398,10 @@ defmodule Compendium.OCI.ClientTest do
       # pull asks for a blob only once the manifest path has proven the
       # caller's entitlement, so each refusal comes before any cached blob.
       assert {:error, tag_refusal} = Client.pull(b, "#{registry}/#{@repo}:1.0.0")
-      assert tag_refusal =~ "cyfr login"
+      assert tag_refusal =~ "cyfr registry sync"
 
       assert {:error, pin_refusal} = Client.pull(b, "#{registry}/#{@repo}@#{ctx.pin}")
-      assert pin_refusal =~ "cyfr login"
+      assert pin_refusal =~ "cyfr registry sync"
 
       # Every refusal was the registry's answer to B's own credential.
       assert [_ | _] = seen = requests(ctx.agent)
@@ -428,7 +428,7 @@ defmodule Compendium.OCI.ClientTest do
       :ok = Cache.forget_entitlement(key(a, ref), ctx.registry, @repo)
 
       assert {:error, refusal} = Client.pull(a, pinned)
-      assert refusal =~ "cyfr login"
+      assert refusal =~ "cyfr registry sync"
       assert [{"HEAD", _, "Bearer tok_a"}] = requests(ctx.agent)
       refute Cache.entitled?(key(a, ref), ctx.registry, @repo)
     end
@@ -492,7 +492,7 @@ defmodule Compendium.OCI.ClientTest do
       _readme = with_readme(ctx.agent, 401)
 
       assert {:error, message} = Client.pull(a, "#{registry}/#{@repo}:1.0.0")
-      assert message =~ "cyfr login"
+      assert message =~ "cyfr registry sync"
     end
   end
 
@@ -558,7 +558,7 @@ defmodule Compendium.OCI.ClientTest do
 
       assert message =~ Sanctum.Refusals.render({:limit_reached, :athanor_storage_bytes, 1})
       assert message =~ "No credentials configured for"
-      assert message =~ "cyfr login"
+      assert message =~ "cyfr registry sync"
     end
   end
 

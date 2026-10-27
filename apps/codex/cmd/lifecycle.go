@@ -1188,9 +1188,10 @@ Exit status 3: cyfr started, but on this machine only, because the tailnet machi
 
 // runUp is `cyfr up` in the working directory.
 func runUp(ctx context.Context, out io.Writer) error {
-	// Registry auth is per-user: `cyfr login` (device flow) after
-	// `cyfr context add`, and cyfr.run mints push tokens via the identity
-	// probe. There are no static registry credentials to configure.
+	// Registry auth is per-user: the server signs each registry request
+	// with the person's identity key, and `cyfr registry sync` mints and
+	// stores their push tokens. There are no static registry credentials to
+	// configure.
 	if err := refuseUndeclaredRestore(); err != nil {
 		return err
 	}

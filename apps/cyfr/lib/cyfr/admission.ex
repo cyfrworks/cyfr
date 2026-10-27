@@ -98,7 +98,6 @@ defmodule Cyfr.Admission do
     "PrismWeb.AuthController",
     "PrismWeb.PasskeyController",
     "PrismWeb.ReauthController",
-    "PrismWeb.LegalAcceptController",
     "CyfrWeb.Plugs.AuthRateLimit",
     "CyfrWeb.Plugs.Authenticate",
     "CyfrWeb.Plugs.ControlPlaneOwnership",

@@ -17,25 +17,29 @@ defmodule Compendium.RegistryPortTest do
 
     previous = {
       Application.get_env(:cyfr, :registry_url),
-      Application.get_env(:cyfr, :oci_registry_url)
+      Application.get_env(:cyfr, :oci_registry_url),
+      Application.get_env(:sanctum, :registry_url)
     }
 
-    Application.put_env(:cyfr, :registry_url, "none")
-    Application.put_env(:cyfr, :oci_registry_url, "none")
-
     on_exit(fn ->
-      {rest, oci} = previous
+      {rest, oci, sanctum} = previous
       # An unset key is restored by deleting it, never by writing nil: the
       # accessors default only on absence.
-      restore = fn key, value ->
+      restore = fn app, key, value ->
         if is_nil(value),
-          do: Application.delete_env(:cyfr, key),
-          else: Application.put_env(:cyfr, key, value)
+          do: Application.delete_env(app, key),
+          else: Application.put_env(app, key, value)
       end
 
-      restore.(:registry_url, rest)
-      restore.(:oci_registry_url, oci)
+      restore.(:cyfr, :registry_url, rest)
+      restore.(:cyfr, :oci_registry_url, oci)
+      restore.(:sanctum, :registry_url, sanctum)
     end)
+
+    # The one parse of `CYFR_REGISTRY_URL=none` sets both applications' copies.
+    Application.put_env(:cyfr, :registry_url, "none")
+    Application.put_env(:cyfr, :oci_registry_url, "none")
+    Application.put_env(:sanctum, :registry_url, "none")
 
     :ok
   end
@@ -59,8 +63,12 @@ defmodule Compendium.RegistryPortTest do
 
     assert {:error, %Errors{reason: :registry_unconfigured}} =
              Compendium.Registry.Client.search(ctx, %{"q" => "anything"})
+  end
 
-    assert {:error, %Errors{reason: :registry_unconfigured}} =
-             Compendium.Registry.Client.probe_identity("github", "token")
+  test "a signed registry request and a handle resolution refuse no_registry before any I/O" do
+    assert {:error, :no_registry} =
+             Compendium.Registry.Client.signed("usr_none", "tokens.mint", %{"label" => "laptop"})
+
+    assert {:error, :no_registry} = Sanctum.Handle.resolve("alice")
   end
 end

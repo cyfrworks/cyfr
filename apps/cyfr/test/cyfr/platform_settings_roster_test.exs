@@ -1101,12 +1101,12 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end)
     end
 
-    test "the directory URL and the restore token are read into Sanctum, nil when unset" do
+    test "the directory URL and the restore token are read into Sanctum; the directory is cyfr.run's when unset" do
       unset = %{"CYFR_DIRECTORY_URL" => nil, "CYFR_RESTORE_TOKEN" => nil}
 
       with_env(unset, fn ->
         config = read_prod_config!()
-        assert config[:sanctum][:directory_url] == nil
+        assert config[:sanctum][:directory_url] == "https://cyfr.run"
         assert config[:sanctum][:restore_token] == nil
       end)
 
@@ -1126,6 +1126,20 @@ defmodule Cyfr.PlatformSettingsRosterTest do
           assert config[:cyfr][:deployment_pinned] == []
         end
       )
+    end
+
+    test "one parse of the registry URL sets both applications' copies" do
+      with_env(%{"CYFR_REGISTRY_URL" => nil}, fn ->
+        config = read_prod_config!()
+        assert config[:cyfr][:registry_url] == "cyfr.run"
+        assert config[:sanctum][:registry_url] == "cyfr.run"
+      end)
+
+      with_env(%{"CYFR_REGISTRY_URL" => "none"}, fn ->
+        config = read_prod_config!()
+        assert config[:cyfr][:registry_url] == "none"
+        assert config[:sanctum][:registry_url] == "none"
+      end)
     end
 
     test "a directory URL as long as a preview can name is read, and one byte more is refused" do

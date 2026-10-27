@@ -589,23 +589,26 @@ if config_env() != :test do
   # `"registry.#{registry_url}"`. Self-hosted deployments may override both
   # independently for co-host or split topologies.
   #
-  # cyfr.run issues per-user push tokens automatically via
-  # `/v1/identity/probe` after login, so there is no static
-  # username/password to configure at deploy time.
-  # `none` means no registry: an appliance that runs only what it ships.
-  # Sign-in never needs one (`Sanctum.SignIn`); pulls and publishing refuse
-  # with a typed error (`Compendium.RegistryHost`).
+  # A person's push tokens are minted by a request their identity signs
+  # (`registry.sync`), so there is no static username/password to
+  # configure at deploy time. `none` means no registry: an appliance that
+  # runs only what it ships. Sign-in never needs one (`Sanctum.SignIn`);
+  # pulls, publishing and a person's registry requests refuse with a typed
+  # error (`Compendium.RegistryHost`, `Sanctum.registry_host/0`). One parse
+  # sets both applications' copies.
   registry_url_config = env_str.("CYFR_REGISTRY_URL", "cyfr.run")
   config :cyfr, :registry_url, registry_url_config
+  config :sanctum, :registry_url, registry_url_config
 
   # The directory this deployment enrolls its local people at: an https
-  # directory URL, with no default, so an unset one leaves local operation
-  # and local pairing working and enrollment refused. Nothing reads a
-  # directory from a request. An enrollment's confirmation preview names
-  # the directory, so it is no longer than a preview's text.
+  # directory URL, `https://cyfr.run` (the directory cyfr.run hosts) when
+  # unset. Nothing reads a directory from a request. An enrollment's
+  # confirmation preview names the directory, so it is no longer than a
+  # preview's text.
   {:ok, directory_url} = Prima.EnvValue.text(getenv, "CYFR_DIRECTORY_URL")
+  directory_url = directory_url || "https://cyfr.run"
 
-  unless is_nil(directory_url) or Sanctum.enrollment_directory?(directory_url) do
+  unless Sanctum.enrollment_directory?(directory_url) do
     raise "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be an https directory URL: an origin " <>
             "and an optional path, with no user, query or fragment, at most " <>
             "#{Prima.Confirmation.Preview.max_text()} bytes long."

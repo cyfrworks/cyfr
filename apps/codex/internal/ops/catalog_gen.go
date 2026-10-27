@@ -248,8 +248,9 @@ const (
 	RegistryMembersList             = "members_list"
 	RegistryMembersRemove           = "members_remove"
 	RegistryMembersUpdate           = "members_update"
-	RegistryProbe                   = "probe"
+	RegistryPublishAddress          = "publish_address"
 	RegistryReport                  = "report"
+	RegistrySync                    = "sync"
 	RegistryTokensIssue             = "tokens_issue"
 	RegistryTokensList              = "tokens_list"
 	RegistryTokensRevoke            = "tokens_revoke"
@@ -353,7 +354,7 @@ var Actions = map[string][]string{
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
-	"registry":            {"appeal", "claim_personal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "probe", "report", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"registry":            {"appeal", "claim_personal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "publish_address", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
@@ -4271,17 +4272,11 @@ func (args RecordPayloadArgs) MarshalJSON() ([]byte, error) {
 
 // RegistryAppealArgs carries arguments for registry.appeal.
 type RegistryAppealArgs struct {
-	// Identity provider
-	Provider string `json:"provider"`
-	// IdP access token (for probe / claim_personal). Used once to prove provider identity.
-	AccessToken Field[string] `json:"access_token,omitzero"`
-	// OIDC id_token (for legal_accept / appeal when provider=oidcc)
-	IdToken Field[string] `json:"id_token,omitzero"`
 	// Appeal action_type (for appeal action)
 	ActionType string `json:"action_type"`
-	// Appeal action_ref — component UUID or '<provider>|<subject>' (for appeal action)
+	// Appeal action_ref — the component's id, or your identifier for a ban (for appeal action)
 	ActionRef string `json:"action_ref"`
-	// Appeal argument, ≤4000 chars (for appeal action)
+	// Appeal argument, ≤4000 bytes (for appeal action)
 	Argument string `json:"argument"`
 }
 
@@ -4296,14 +4291,8 @@ func (args RegistryAppealArgs) MarshalJSON() ([]byte, error) {
 
 // RegistryClaimPersonalArgs carries arguments for registry.claim_personal.
 type RegistryClaimPersonalArgs struct {
-	// Desired personal-namespace slug (for claim_personal)
-	Username string `json:"username"`
-	// The sign-in provider the claimant's identity is proven through (for claim_personal: any sign-in provider, an OpenID Connect one included)
-	Provider string `json:"provider"`
-	// IdP access token (for probe / claim_personal). Used once to prove provider identity.
-	AccessToken string `json:"access_token"`
-	// Human-readable label for the issued push token
-	Label Field[string] `json:"label,omitzero"`
+	// The handle to claim at the registry, your personal namespace
+	Handle string `json:"handle"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4347,12 +4336,6 @@ func (args RegistryGetNamespaceArgs) MarshalJSON() ([]byte, error) {
 
 // RegistryLegalAcceptArgs carries arguments for registry.legal_accept.
 type RegistryLegalAcceptArgs struct {
-	// Identity provider
-	Provider string `json:"provider"`
-	// IdP access token (for probe / claim_personal). Used once to prove provider identity.
-	AccessToken Field[string] `json:"access_token,omitzero"`
-	// OIDC id_token (for legal_accept / appeal when provider=oidcc)
-	IdToken Field[string] `json:"id_token,omitzero"`
 	// Policy version string (for legal_accept; obtained via legal_version)
 	PolicyVersion string `json:"policy_version"`
 }
@@ -4481,23 +4464,19 @@ func (args RegistryMembersUpdateArgs) MarshalJSON() ([]byte, error) {
 	}{Action: RegistryMembersUpdate, fields: fields(args)})
 }
 
-// RegistryProbeArgs carries arguments for registry.probe.
-type RegistryProbeArgs struct {
-	// OAuth provider (for probe / claim_personal)
-	Provider string `json:"provider"`
-	// IdP access token (for probe / claim_personal). Used once to prove provider identity.
-	AccessToken string `json:"access_token"`
-	// Human-readable label for the issued push token
-	Label Field[string] `json:"label,omitzero"`
+// RegistryPublishAddressArgs carries arguments for registry.publish_address.
+type RegistryPublishAddressArgs struct {
+	// Whether the registry publishes this CYFR's address with your handle (true) or withdraws it (false)
+	Published bool `json:"published"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
-func (args RegistryProbeArgs) MarshalJSON() ([]byte, error) {
-	type fields RegistryProbeArgs
+func (args RegistryPublishAddressArgs) MarshalJSON() ([]byte, error) {
+	type fields RegistryPublishAddressArgs
 	return json.Marshal(struct {
 		Action string `json:"action"`
 		fields
-	}{Action: RegistryProbe, fields: fields(args)})
+	}{Action: RegistryPublishAddress, fields: fields(args)})
 }
 
 // RegistryReportArgs carries arguments for registry.report.
@@ -4519,6 +4498,19 @@ func (args RegistryReportArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: RegistryReport, fields: fields(args)})
+}
+
+// RegistrySyncArgs carries arguments for registry.sync.
+type RegistrySyncArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args RegistrySyncArgs) MarshalJSON() ([]byte, error) {
+	type fields RegistrySyncArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: RegistrySync, fields: fields(args)})
 }
 
 // RegistryTokensIssueArgs carries arguments for registry.tokens_issue.

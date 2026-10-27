@@ -30,7 +30,7 @@ defmodule PrismWeb.ToolSeamTest do
   # The console's tree, and the page helpers it shares with the sign-in
   # controllers: they transcribe a console flow's outcome and stay under
   # its rules.
-  @page_helpers ~w(minimal_page sign_in_response pending_probe safe_redirect)
+  @page_helpers ~w(minimal_page sign_in_response safe_redirect)
 
   defp console_files do
     Prima.Test.SourceTree.files!(Path.join(root(), "apps/cyfr/lib/prism_web/**/*.ex")) ++

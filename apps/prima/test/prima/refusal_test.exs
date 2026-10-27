@@ -183,9 +183,27 @@ defmodule Prima.RefusalTest do
     {:invalid_component_type, :invalid_argument},
     {{:corrupt, {:settings, :retention}}, :corrupt},
     {{:corrupt, :registry_credential}, :corrupt},
-    {{:registry, :policy_version_mismatch, "2026-09"}, :conflict},
-    {{:registry, :policy_version_mismatch, nil}, :conflict},
-    {{:registry, :unauthorized}, :unauthenticated},
+    {:not_enrolled, :setup_required},
+    {:remote, :forbidden},
+    {:no_registry, :setup_required},
+    {:registry_unavailable, :unavailable},
+    {:registry_token_missing, :unauthenticated},
+    {:malformed_answer, :unavailable},
+    {:handle_taken, :conflict},
+    {:has_other_handle, :conflict},
+    {:handle_invalid, :invalid_argument},
+    {:handle_reserved, :invalid_argument},
+    {:no_handle, :setup_required},
+    {:namespace_reserved, :forbidden},
+    {:claim_not_pending, :conflict},
+    {:dns_unverified, :conflict},
+    {:dns_timeout, :unavailable},
+    {{:policy_required, "2026-09"}, :conflict},
+    {{:policy_required, nil}, :conflict},
+    {:banned, :forbidden},
+    {:wrong_directory, :forbidden},
+    {:unknown_identity, :not_found},
+    {:directory_unavailable, :unavailable},
     {{:timeout, :parent_deadline}, :timeout},
     {{:rate_limited, 5}, :rate_limited},
     {{:attestation_failed, :signed_pulls_required}, :forbidden},
@@ -609,15 +627,35 @@ defmodule Prima.RefusalTest do
 
     test "the corrupt registry credential says what to do" do
       assert Refusal.classify({:corrupt, :registry_credential}).message ==
-               "The stored registry credential is damaged; sign in to the registry again."
+               "The stored registry credential is damaged; run `cyfr registry sync` to replace it."
     end
 
-    test "a policy-version refusal names the version the registry requires" do
-      assert Refusal.message({:registry, :policy_version_mismatch, "2026-09"}) ==
-               "The registry requires acceptance of policy version 2026-09"
+    test "a policy refusal names the version the registry requires" do
+      assert Refusal.message({:policy_required, "2026-09"}) ==
+               "Accept the registry's policy version 2026-09 first."
 
-      assert Refusal.message({:registry, :policy_version_mismatch, nil}) ==
-               "The registry requires acceptance of a newer policy version"
+      assert Refusal.message({:policy_required, nil}) ==
+               "Accept the registry's current policy first."
+    end
+
+    test "a push with no usable token names the sync that mints one" do
+      assert Refusal.message(:registry_token_missing) =~ "`cyfr registry sync`"
+    end
+
+    test "every registry refusal CYFR passes on is a reason of the table" do
+      passed_on = ~w(handle_taken has_other_handle handle_invalid handle_reserved no_handle
+                     namespace_reserved claim_not_pending dns_unverified dns_timeout banned
+                     wrong_directory unknown_identity directory_unavailable rate_limited)a
+
+      names = Enum.map(Prima.RegistryRequest.refusals(), &elem(&1, 0))
+
+      for reason <- passed_on do
+        assert reason in names, "#{reason} is no refusal of the registry protocol"
+        assert Refusal.reason?(reason), "#{reason} has no row"
+      end
+
+      assert :policy_required in names
+      assert Refusal.reason?({:policy_required, "v"})
     end
 
     test "each damaged store reads as what it is, not as a digest mismatch" do

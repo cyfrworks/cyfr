@@ -112,40 +112,6 @@ defmodule Compendium.Registry.ClientSyncTest do
                Client.get_component(ctx, "reagent", "cyfr", "data-processor", "1.0.0")
     end
 
-    test "probe_identity/3 sends the provider as a string, given a string or an atom", %{
-      bypass: bypass
-    } do
-      parent = self()
-
-      Bypass.expect(bypass, "POST", "/v1/identity/probe", fn conn ->
-        {body, conn} = read_json(conn)
-        send(parent, {:provider, body["provider"]})
-        json_resp(conn, 200, %{"personal_namespace" => nil, "memberships" => [], "tokens" => []})
-      end)
-
-      assert {:ok, _} = Client.probe_identity("github", "tok")
-      assert {:ok, _} = Client.probe_identity(:google, "tok")
-
-      assert_received {:provider, "github"}
-      assert_received {:provider, "google"}
-    end
-
-    test "probe_identity/3 sends an explicit label override", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn conn ->
-        {body, conn} = read_json(conn)
-
-        assert body == %{
-                 "provider" => "github",
-                 "access_token" => "fake-access-token",
-                 "label" => "my-laptop"
-               }
-
-        json_resp(conn, 200, %{"personal_namespace" => nil, "memberships" => [], "tokens" => []})
-      end)
-
-      assert {:ok, _} = Client.probe_identity(:github, "fake-access-token", "my-laptop")
-    end
-
     test "issue_additional_token/3 with a nil label sends device_label()", %{bypass: bypass} do
       label = CredentialStore.device_label()
 
@@ -535,34 +501,6 @@ defmodule Compendium.Registry.ClientSyncTest do
     })
   end
 
-  describe "token redaction" do
-    # The log_token_returning_result pipeline runs on every call to a
-    # token-returning endpoint. We can't observe the redaction on the error
-    # path (Prima.Sanitizer.sanitize/1 only runs on {:ok, body}), but we
-    # CAN confirm that a probe call with a fake access_token never leaks the
-    # raw token value into Logger output — the access_token goes into the
-    # request body, and :filter_parameters + the sanitizer cover the
-    # response side.
-    #
-    # This test intentionally uses a connection-refused host so no real
-    # response bytes are generated, only the error-side Logger line which
-    # should reference %Errors{} structure — never the access_token.
-    test "connection-refused log does not leak the request-side access_token" do
-      fake_token = "gho_supersecret_test_only_token_XYZ"
-
-      log =
-        capture_log(fn ->
-          {:error, %Errors{}} = Client.probe_identity(:github, fake_token)
-        end)
-
-      # The failure line is written, and it does not carry the token.
-      assert log =~ "probe_identity failed"
-
-      refute log =~ fake_token,
-             "access_token leaked into Logger output — check Client.redact/1"
-    end
-  end
-
   describe "happy-path wire tests (Bypass)" do
     # Confirms method + path + Authorization-header plumbing for every
     # Registry.Client endpoint, and the 200-response decode path that a
@@ -610,96 +548,6 @@ defmodule Compendium.Registry.ClientSyncTest do
 
       assert %Prima.Refusal{class: :corrupt} =
                Prima.Refusal.classify({:corrupt, :registry_credential})
-    end
-
-    test "probe_identity/3 — POST /v1/identity/probe with access_token in body", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        body = Jason.decode!(raw)
-
-        assert body["provider"] == "github"
-        assert body["access_token"] == "gho_access"
-        assert is_binary(body["label"])
-        # Access-token endpoints MUST NOT carry a push-token bearer.
-        assert auth_header(conn) == nil
-
-        resp = %{
-          "personal_namespace" => %{"slug" => "alice"},
-          "memberships" => [],
-          "tokens" => [
-            %{
-              "namespace" => "alice",
-              "token" => "cyfr_pt_probe_xyz",
-              "issued_at" => "2026-04-21T00:00:00Z",
-              "label" => "laptop"
-            }
-          ]
-        }
-
-        json_resp(conn, 200, resp)
-      end)
-
-      assert {:ok, %{"personal_namespace" => %{"slug" => "alice"}, "tokens" => [_]}} =
-               Client.probe_identity("github", "gho_access", "laptop")
-    end
-
-    test "claim_personal_namespace/4 — POST /v1/namespaces/personal/claim", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        body = Jason.decode!(raw)
-        assert body["username"] == "alice"
-        assert body["provider"] == "github"
-        assert body["access_token"] == "gho_access"
-
-        json_resp(conn, 200, %{
-          "namespace" => %{"slug" => "alice", "kind" => "personal"},
-          "token" => "cyfr_pt_claim_xyz",
-          "label" => "laptop"
-        })
-      end)
-
-      assert {:ok, %{"namespace" => %{"slug" => "alice"}, "token" => "cyfr_pt_claim_xyz"}} =
-               Client.claim_personal_namespace("alice", "github", "gho_access", "laptop")
-    end
-
-    test "claim_publisher_namespace/2 — POST /v1/namespaces/publisher/claim with Bearer", %{
-      bypass: bypass
-    } do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/publisher/claim", fn conn ->
-        assert auth_header(conn) == "Bearer cyfr_pt_personal_abc"
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        assert %{"slug" => "stripe.com"} = Jason.decode!(raw)
-
-        json_resp(conn, 200, %{
-          "slug" => "stripe.com",
-          "challenge" => %{
-            "record_name" => "_cyfr-verify.stripe.com",
-            "record_value" => "cyfr-verify=abc123"
-          }
-        })
-      end)
-
-      assert {:ok, %{"slug" => "stripe.com", "challenge" => _}} =
-               Client.claim_publisher_namespace("stripe.com", "cyfr_pt_personal_abc")
-    end
-
-    test "verify_publisher_namespace/2 — POST /v1/namespaces/publisher/verify with Bearer", %{
-      bypass: bypass
-    } do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/publisher/verify", fn conn ->
-        assert auth_header(conn) == "Bearer cyfr_pt_personal_abc"
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        assert %{"slug" => "stripe.com"} = Jason.decode!(raw)
-
-        json_resp(conn, 200, %{
-          "namespace" => %{"slug" => "stripe.com", "domain_verified" => true},
-          "token" => "cyfr_pt_verify_xyz",
-          "label" => "laptop"
-        })
-      end)
-
-      assert {:ok, %{"token" => "cyfr_pt_verify_xyz"}} =
-               Client.verify_publisher_namespace("stripe.com", "cyfr_pt_personal_abc")
     end
 
     test "get_namespace/1 — GET /v1/namespaces/{slug} without auth", %{bypass: bypass} do
@@ -868,50 +716,6 @@ defmodule Compendium.Registry.ClientSyncTest do
       assert {:ok, %{"policy_version" => "2026-08-01"}} = Client.get_legal_version()
     end
 
-    test "accept_policies/4 — POST /v1/legal/accept with access_token in body", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/legal/accept", fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        body = Jason.decode!(raw)
-
-        assert body["provider"] == "github"
-        assert body["access_token"] == "gho_access"
-        assert body["policy_version"] == "2026-08-01"
-        # An access-token endpoint never carries a push-token bearer.
-        assert auth_header(conn) == nil
-
-        json_resp(conn, 201, %{"id" => "acc_1", "policy_version" => "2026-08-01"})
-      end)
-
-      assert {:ok, %{"id" => "acc_1"}} =
-               Client.accept_policies("github", "gho_access", nil, "2026-08-01")
-    end
-
-    test "create_appeal/6 — POST /v1/appeals with access_token in body", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/appeals", fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        body = Jason.decode!(raw)
-
-        assert body["provider"] == "github"
-        assert body["access_token"] == "gho_access"
-        assert body["action_type"] == "yank"
-        assert body["action_ref"] == "c:alice.foo:1.0.0"
-        assert body["argument"] == "this was a mistake"
-        assert auth_header(conn) == nil
-
-        json_resp(conn, 201, %{"id" => "app_1", "status" => "open"})
-      end)
-
-      assert {:ok, %{"id" => "app_1", "status" => "open"}} =
-               Client.create_appeal(
-                 "github",
-                 "gho_access",
-                 nil,
-                 "yank",
-                 "c:alice.foo:1.0.0",
-                 "this was a mistake"
-               )
-    end
-
     test "a slug carrying path separators stays one segment", %{bypass: bypass} do
       parent = self()
 
@@ -950,58 +754,21 @@ defmodule Compendium.Registry.ClientSyncTest do
       end
     end
 
-    test "probe_identity — token in response is redacted in logs", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/identity/probe", fn conn ->
-        json_resp(conn, 200, %{
-          "personal_namespace" => %{"slug" => "alice"},
-          "memberships" => [],
-          "tokens" => [
-            %{
-              "namespace" => "alice",
-              "token" => @raw_token,
-              "issued_at" => "2026-04-21T00:00:00Z",
-              "label" => "l"
-            }
-          ]
-        })
-      end)
+    test "a signed mint's tokens are redacted" do
+      user = Sanctum.Test.RegistryStub.person!()
+      Sanctum.Test.RegistryStub.enroll!(user.id)
 
-      log = with_info_log(fn -> {:ok, _} = Client.probe_identity("github", "gho_x") end)
-
-      assert log =~ "[REDACTED]", "token-redacting wrapper did not run on happy path"
-      refute log =~ @raw_token, "raw token leaked into Logger output"
-    end
-
-    test "claim_personal_namespace — top-level token is redacted", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/personal/claim", fn conn ->
-        json_resp(conn, 200, %{
-          "namespace" => %{"slug" => "alice"},
-          "token" => @raw_token,
-          "label" => "l"
-        })
+      Sanctum.Test.RegistryStub.start!(fn _ ->
+        {200,
+         Jason.encode!(%{
+           "personal_namespace" => %{"slug" => "alice", "token" => @raw_token},
+           "memberships" => []
+         })}
       end)
 
       log =
         with_info_log(fn ->
-          {:ok, _} = Client.claim_personal_namespace("alice", "github", "gho_x")
-        end)
-
-      assert log =~ "[REDACTED]"
-      refute log =~ @raw_token
-    end
-
-    test "verify_publisher_namespace — token is redacted", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/namespaces/publisher/verify", fn conn ->
-        json_resp(conn, 200, %{
-          "namespace" => %{"slug" => "stripe.com"},
-          "token" => @raw_token,
-          "label" => "l"
-        })
-      end)
-
-      log =
-        with_info_log(fn ->
-          {:ok, _} = Client.verify_publisher_namespace("stripe.com", "bearer")
+          {:ok, _} = Client.signed(user.id, "tokens.mint", %{"label" => "l"})
         end)
 
       assert log =~ "[REDACTED]"

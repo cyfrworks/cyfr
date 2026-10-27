@@ -196,14 +196,12 @@ func pollDeviceAuth(ctx context.Context, client *mcp.Client, provider, deviceCod
 		case "denied":
 			return nil, errors.New("Authorization denied.")
 
-		case "registry_unavailable", "error":
-			// A first sign-in needs cyfr.run once, to find or claim the
-			// namespace that is this person's identity everywhere; the
-			// server set nothing up and issued no session. Say so and
-			// stop — the device code is one-shot.
+		case "error":
+			// The server issued no session and says why; the device code
+			// is one-shot, so stop.
 			msg, _ := pollResult["message"].(string)
 			if msg == "" {
-				msg = "cyfr.run could not be reached. Run `cyfr login` again in a moment."
+				msg = "The sign-in did not complete. Run `cyfr login` again in a moment."
 			}
 			return nil, errors.New(msg)
 

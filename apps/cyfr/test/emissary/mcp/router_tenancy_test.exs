@@ -114,7 +114,7 @@ defmodule Emissary.MCP.RouterTenancyTest do
                 {"aqua", "list"},
                 {"aqua", "get"},
                 {"aqua", "create"},
-                {"registry", "probe"},
+                {"registry", "sync"},
                 {"registry", "claim_personal"}
               ] do
             assert refused?(Router.dispatch(ctx, tool_call_msg(tool, action))),
@@ -137,7 +137,7 @@ defmodule Emissary.MCP.RouterTenancyTest do
               authenticated: false
             )
 
-          for action <- ~w(probe claim_personal legal_page legal_version legal_accept) do
+          for action <- ~w(claim_personal legal_page legal_version legal_accept) do
             refute auth_refused?(Router.dispatch(ctx, tool_call_msg("registry", action))),
                    "registry.#{action} refused a signed-in person ahead of the claim"
           end

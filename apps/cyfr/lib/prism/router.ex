@@ -73,26 +73,6 @@ defmodule Prism.Router do
           window_ms: 60_000
       end
 
-      # Submit path on the claim page: defends against username enumeration
-      # (cyfr.run's 409 distinguishes SLUG_TAKEN / ALREADY_CLAIMED) and
-      # claim-spam DOS.
-      pipeline :claim_submit_throttle do
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :claim_submit,
-          max_requests: 10,
-          window_ms: 60_000
-      end
-
-      # The legal pages proxy cyfr.run (a cold GET fetches every policy body;
-      # the submit relays the acceptance) — a modest per-IP budget keeps one
-      # client from turning this server into an amplifier against cyfr.run.
-      pipeline :legal_accept_throttle do
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :legal_accept,
-          max_requests: 12,
-          window_ms: 60_000
-      end
-
       # A chat attachment's bytes, for the member reading the thread on another
       # device. Its own pipeline: no `:accepts` (a browser asks for an image or
       # a PDF, not html), the session cookie for who, the URL's athanor for
@@ -130,9 +110,6 @@ defmodule Prism.Router do
         # POST, never GET: signing someone out must not be one <img src> away
         # — the browser pipeline's CSRF token guards the state change.
         post "/logout", AuthController, :browser_logout, metadata: %{auth: :browser_public_auth}
-
-        get "/post-legal-accept", AuthController, :post_legal_accept,
-          metadata: %{auth: :browser_oauth_flow}
 
         scope "/" do
           pipe_through :device_complete_throttle
@@ -197,33 +174,6 @@ defmodule Prism.Router do
           get "/:provider/callback", AuthController, :callback,
             metadata: %{auth: :browser_oauth_callback}
         end
-      end
-
-      # The publisher-namespace claim (web flow): a person who wants to publish
-      # to cyfr.run claims their namespace here, whenever they choose. Signing
-      # in never depends on it.
-      scope "/claim-namespace", PrismWeb do
-        pipe_through :browser
-
-        get "/", ClaimNamespaceController, :show, metadata: %{auth: :browser_claim_gate}
-
-        # Submit is the only write endpoint; throttle it, not the form render.
-        scope "/" do
-          pipe_through :claim_submit_throttle
-
-          post "/submit", ClaimNamespaceController, :submit,
-            metadata: %{auth: :browser_claim_gate}
-        end
-      end
-
-      # Policy acceptance: renders bundled policies and posts acceptance to
-      # cyfr.run /v1/legal/accept. Used after a 412 POLICY_ACCEPTANCE_REQUIRED
-      # response or during post-login setup.
-      scope "/legal/accept", PrismWeb do
-        pipe_through [:sign_in_identity, :browser, :legal_accept_throttle]
-
-        get "/", LegalAcceptController, :show, metadata: %{auth: :browser_public_legal}
-        post "/submit", LegalAcceptController, :submit, metadata: %{auth: :browser_public_legal}
       end
 
       # ==========================================================================

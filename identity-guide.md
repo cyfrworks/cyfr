@@ -17,9 +17,11 @@ Both are sealed at your CYFR, each under its own purpose, apart from every athan
 
 Your CYFR's settings page shows your identifier, the directory, and the head of your log (its `key_epoch`: the hash of the entry at the log's head, which every rotation and every recovery moves).
 
+A **handle** is a name at the registry, cyfr.run, that names your identifier; it is also your personal namespace for publishing components. You claim it with `cyfr registry claim <handle>`, a request your live key signs, so claiming one needs an enrolled identity; no sign-in method or provider token is sent to the registry. Asked for a handle, the registry answers its identifier, its directory and, only if you publish it, your CYFR's address; publishing is off by default (`registry.publish_address`). The answer carries no keys: they are read at your directory, so a handle reassigned to someone else carries none of your keys with it.
+
 ### Choosing the directory
 
-The deployment names the directory its people enroll at, explicitly, in `CYFR_DIRECTORY_URL`: an `https` URL with no hosted default. No operation, page or person chooses another one. Unset, everything else works, local pairing included, and enrolling says which setting the operator owes.
+The deployment names the directory its people enroll at in `CYFR_DIRECTORY_URL`, an `https` URL that defaults to `https://cyfr.run`, the directory CYFR hosts. An operator may name another; no operation, page or person chooses one.
 
 Choosing a directory is choosing how long an identity lasts:
 
@@ -28,7 +30,7 @@ Choosing a directory is choosing how long an identity lasts:
 
 The directory holds your public keys, your recovery policy and your log. It holds no private key, no address of your CYFR, no thread, no contact list and no list of the addresses your devices saved. It is trusted to keep one consistent order and to answer honestly; signatures stop it forging anything, but a dishonest directory could withhold an update or keep answering an old head as current, and nothing detects that.
 
-Any CYFR can serve one (`CYFR_DIRECTORY_SERVE=writer`, or `mirror` for a read-only copy of a store it shares). Putting the only writer on the CYFR it recovers loses that recovery when that CYFR is lost. An operator serving a public directory owns its storage quota and its retention: each identifier's log is kept for good and only grows (`CYFR_DIRECTORY_MAX_IDENTITIES`, `CYFR_DIRECTORY_LOG_BYTES` and the recovery reserve bound it), and its requests are bounded per source and per installation. CYFR runs no hosted directory: a directory a deployment names is one its operator, or someone they trust, runs.
+Any CYFR can serve one (`CYFR_DIRECTORY_SERVE=writer`, or `mirror` for a read-only copy of a store it shares). Putting the only writer on the CYFR it recovers loses that recovery when that CYFR is lost. An operator serving a public directory owns its storage quota and its retention: each identifier's log is kept for good and only grows (`CYFR_DIRECTORY_MAX_IDENTITIES`, `CYFR_DIRECTORY_LOG_BYTES` and the recovery reserve bound it), and its requests are bounded per source and per installation. The default, `https://cyfr.run`, is the one CYFR runs; a deployment that names another relies on its operator, or someone they trust, to run it.
 
 The directory's URL is public, and a CYFR that relies on your identity reads it from that identity. A directory hosted on your own CYFR tells every CYFR you sign in at where your own CYFR is.
 
