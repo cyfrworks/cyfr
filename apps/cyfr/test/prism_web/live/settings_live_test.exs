@@ -1861,7 +1861,7 @@ defmodule PrismWeb.SettingsLiveTest do
       {view, _html} = mount_athanor(conn, "/settings")
 
       assert has_element?(view, ~s([data-test="identity"][data-provenance="remote"]))
-      assert has_element?(view, ~s([data-test="identity-remote"]), "held at another home")
+      assert has_element?(view, ~s([data-test="identity-remote"]), "held at another CYFR")
       assert has_element?(view, ~s([data-test="identity-identifier"]), identifier)
 
       for control <-

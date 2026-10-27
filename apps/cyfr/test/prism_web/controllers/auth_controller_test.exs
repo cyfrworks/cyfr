@@ -1176,7 +1176,7 @@ defmodule PrismWeb.AuthControllerTest do
 
       body = html_response(refused, 403)
       assert body =~ "Not allowed on this server"
-      assert body =~ "Back to your home"
+      assert body =~ "Back to Aqua"
       assert body =~ ~s(href="#{carry_return(held, :refused)}")
       refute get_session(refused, :sanctum_session_token)
     end
@@ -1192,7 +1192,7 @@ defmodule PrismWeb.AuthControllerTest do
 
       refused = callback(conn, held, fragment)
       body = html_response(refused, 401)
-      assert body =~ "Begin it again from your home"
+      assert body =~ "Begin it again from your CYFR"
       assert body =~ ~s(href="#{carry_return(held, :refused)}")
       refute get_session(refused, :sanctum_session_token)
 
@@ -1204,7 +1204,7 @@ defmodule PrismWeb.AuthControllerTest do
           "fragment" => DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
         })
 
-      refute html_response(unheld, 401) =~ "Back to your home"
+      refute html_response(unheld, 401) =~ "Back to Aqua"
       refute get_session(unheld, :sanctum_session_token)
     end
 
@@ -1220,7 +1220,7 @@ defmodule PrismWeb.AuthControllerTest do
         )
 
       conflicted = callback(build_conn(), held, another)
-      refute html_response(conflicted, 401) =~ "Back to your home"
+      refute html_response(conflicted, 401) =~ "Back to Aqua"
     end
 
     test "a directory that cannot be read answers try again, signs nobody in, and reports nothing home",
@@ -1232,7 +1232,7 @@ defmodule PrismWeb.AuthControllerTest do
       paused = callback(conn, held, fragment)
       body = html_response(paused, 503)
       assert body =~ "Try again shortly"
-      refute body =~ "Back to your home"
+      refute body =~ "Back to Aqua"
       refute get_session(paused, :sanctum_session_token)
     end
   end

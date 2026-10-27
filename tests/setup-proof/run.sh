@@ -290,7 +290,7 @@ step "refusal: cyfr setup again where .env exists"
 port="$(free_port)"
 setup_start "$LOCAL" --port "$port"
 setup_wait 30
-want='.env says this home is reached as local, and cyfr setup leaves how an existing home is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it'
+want='.env says CYFR is reached as local, and cyfr setup leaves how an existing CYFR is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it'
 [ "$SETUP_STATUS" = 1 ] || fail "cyfr setup over an existing .env exited $SETUP_STATUS"
 grep -qxF "Error: $want" "$WORK/$LOCAL.setup.log" || fail "cyfr setup over an existing .env said: $(cat "$WORK/$LOCAL.setup.log")"
 [ "$(wc -l <"$WORK/$LOCAL.setup.log")" = 1 ] || fail "cyfr setup over an existing .env said more: $(cat "$WORK/$LOCAL.setup.log")"

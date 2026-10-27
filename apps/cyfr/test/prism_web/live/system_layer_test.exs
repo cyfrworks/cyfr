@@ -5634,7 +5634,7 @@ defmodule PrismWeb.SystemLayerTest do
            "Your canvas stopped working."},
         pairing:
           {%{id: "k-pairing", kind: :pairing, action: :device_pairing, subject: %{}},
-           "Pair a phone or another browser with this home"},
+           "Pair a phone or another browser with this CYFR"},
         confirmation: {confirmation, "A client of yours asked for a change"},
         enrollment:
           {%{

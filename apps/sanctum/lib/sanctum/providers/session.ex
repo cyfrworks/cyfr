@@ -508,7 +508,7 @@ defmodule Sanctum.Providers.Session do
       cli_refused(
         :not_found,
         :cli_sign_in_unknown,
-        "This link or session is not one this home knows: run cyfr login again for a new link"
+        "This link or session is not one this CYFR knows: run cyfr login again for a new link"
       )
 
   defp cli_refusal(:expired),
@@ -540,7 +540,7 @@ defmodule Sanctum.Providers.Session do
       cli_refused(
         :forbidden,
         :session_required,
-        "Approve a command line from a browser signed in to this home"
+        "Approve a command line from a browser signed in to this CYFR"
       )
 
   # A session minted as a sign-in's is: a session a restore minted, which

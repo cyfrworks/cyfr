@@ -99,16 +99,16 @@ func TestKillAtEveryPhaseRecovers(t *testing.T) {
 
 // envEdited is access_env_edited's sentence, word for word.
 func envEdited(then, env string) string {
-	lead := "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, "
+	lead := "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, "
 	switch then {
 	case "started":
-		return lead + "left .env as edited, and started the home as it says: " + env + ". If that is not how this home should be reached, run `cyfr access <mode>`."
+		return lead + "left .env as edited, and started CYFR as it says: " + env + ". If that is not how CYFR should be reached, run `cyfr access <mode>`."
 	case "not_running":
 		return lead + "and left .env as edited, which says: " + env + ". The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again."
 	case "failed":
-		return lead + "and left .env as edited, but the home did not start as it says (" + env + "), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access <mode>` to choose again."
+		return lead + "and left .env as edited, but CYFR did not start as it says (" + env + "), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access <mode>` to choose again."
 	}
-	return lead + "and left .env as edited; nothing was started, because .env no longer says one coherent way this home is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again."
+	return lead + "and left .env as edited; nothing was started, because .env no longer says one coherent way CYFR is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again."
 }
 
 // .env edited during a switch to a head that is neither of the

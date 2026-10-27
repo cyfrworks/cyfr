@@ -133,7 +133,7 @@ func TestKeptFilesAreNeverUsedToStart(t *testing.T) {
 // overrideSets is compose_override_refused's sentence for a head key a
 // compose file assigns, word for word.
 func overrideSets(file, service, key string) string {
-	return "`" + file + "` sets `" + key + "` in the `" + service + "` service's environment, where it would override how .env says this home is reached. Nothing started. Remove `" + key + "` from `" + file + "`; .env alone holds it, and `cyfr access` writes it."
+	return "`" + file + "` sets `" + key + "` in the `" + service + "` service's environment, where it would override how .env says CYFR is reached. Nothing started. Remove `" + key + "` from `" + file + "`; .env alone holds it, and `cyfr access` writes it."
 }
 
 // overrideNames is compose_override_refused's sentence for a name
@@ -248,7 +248,7 @@ func TestCheckStackReadsTheSourcesProvenance(t *testing.T) {
 	if !asRefusal(err, &r) || r.Code != "compose_override_refused" || !mapsEqual(r.Payload, map[string]string{"file": "docker-compose.yml", "service": "cyfr"}) {
 		t.Fatalf("a cyfr service without .env in its env_file answered %v", err)
 	}
-	if want := "`docker-compose.yml` does not give the `cyfr` service .env through its env_file, so it would not read how this home is reached. Nothing started. Add `env_file: .env` to the `cyfr` service in `docker-compose.yml`, as the shipped docker-compose.yml has it."; r.Message() != want {
+	if want := "`docker-compose.yml` does not give the `cyfr` service .env through its env_file, so it would not read how CYFR is reached. Nothing started. Add `env_file: .env` to the `cyfr` service in `docker-compose.yml`, as the shipped docker-compose.yml has it."; r.Message() != want {
 		t.Errorf("the sentence reads %q", r.Message())
 	}
 }

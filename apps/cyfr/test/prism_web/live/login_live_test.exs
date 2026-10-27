@@ -360,12 +360,12 @@ defmodule PrismWeb.LoginLiveTest do
       {:ok, view, _} = live(conn, ~p"/login")
 
       html = view |> element("#cyfr-sign-in") |> render_submit(%{"home" => "not a home"})
-      assert html =~ "not a home&#39;s address"
+      assert html =~ "not a CYFR&#39;s address"
 
       html =
         view |> element("#cyfr-sign-in") |> render_submit(%{"home" => Sanctum.Person.home()})
 
-      assert html =~ "this home&#39;s address"
+      assert html =~ "this CYFR&#39;s address"
     end
 
     test "a carry brought back is checked, its challenge carried through this browser's session, and the assertion posted signs the person in",
@@ -434,7 +434,7 @@ defmodule PrismWeb.LoginLiveTest do
           "expected_source" => "https://other.example"
         })
 
-      assert html =~ "another home than the one you named"
+      assert html =~ "a CYFR other than the one you named"
       refute has_element?(view, "#cyfr-code")
       assert DirectoryServer.requests() == []
 
@@ -539,7 +539,7 @@ defmodule PrismWeb.LoginLiveTest do
           "expected_source" => "https://a.example"
         })
 
-      assert html =~ "Begin it again from your home"
+      assert html =~ "Begin it again from your CYFR"
 
       %{fragment: elsewhere} =
         DirectoryServer.carry_fragment(identity, "https://elsewhere.example")
@@ -550,17 +550,17 @@ defmodule PrismWeb.LoginLiveTest do
           "expected_source" => "https://a.example"
         })
 
-      assert html =~ "begun for another home"
+      assert html =~ "begun for another CYFR"
 
       html = render_hook(view, "cyfr_oversized", %{})
-      assert html =~ "larger than this home accepts"
+      assert html =~ "larger than this CYFR accepts"
 
       html =
         render_hook(view, "cyfr_assertion", %{
           "fragment" => String.duplicate("A", Prima.Carry.max_fragment_bytes() + 1)
         })
 
-      assert html =~ "larger than this home accepts"
+      assert html =~ "larger than this CYFR accepts"
       refute has_element?(view, "#cyfr-callback")
     end
   end

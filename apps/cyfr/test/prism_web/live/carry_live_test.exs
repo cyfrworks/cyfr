@@ -127,7 +127,7 @@ defmodule PrismWeb.CarryLiveTest do
     %{conn: conn, user: user} = enrolled!(conn)
     {:ok, view, html} = live(conn, ~p"/carry")
     assert html =~ ~s(data-carry="source")
-    assert html =~ "learns this home&#39;s address"
+    assert html =~ "learns this CYFR&#39;s address"
 
     html = render_hook(view, "carry_destination", %{"destination" => @hub})
     assert html =~ ~s(value="#{@hub}")
@@ -135,7 +135,7 @@ defmodule PrismWeb.CarryLiveTest do
 
     # A destination that is no home's origin fills nothing.
     html = render_hook(view, "carry_destination", %{"destination" => "javascript:alert(1)"})
-    assert html =~ "names no home"
+    assert html =~ "has no CYFR address"
     assert actions(user) == []
 
     begun = begin!(view)
@@ -194,7 +194,7 @@ defmodule PrismWeb.CarryLiveTest do
     # record, whose preview names the hub and the code it shows.
     assert [%{ref: ref, operation: "person.assert", preview: preview}] = open_confirmations(ctx)
     assert preview =~ Prima.PersonAssertion.comparison_code(challenge)
-    assert preview =~ "learns this home"
+    assert preview =~ "learns this CYFR"
     wait_until(fn -> render(view) =~ ~s(data-ref="#{ref}") end, 2_000, "the page's own prompt")
     refute render(view) =~ "cnf_"
     assert [%{assertion: nil}] = actions(user)
@@ -375,7 +375,7 @@ defmodule PrismWeb.CarryLiveTest do
       })
 
     html = render_hook(view, "carry_challenge", %{"fragment" => fragment, "own" => true})
-    assert html =~ "came back for another home"
+    assert html =~ "came back for another CYFR"
     refute_push_event(view, "carry:go", %{})
     Cyfr.Test.Sandbox.end_views()
   end

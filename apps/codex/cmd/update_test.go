@@ -1473,7 +1473,7 @@ func TestUpdateHoldsOneLock(t *testing.T) {
 	calls := len(s.log())
 	var out bytes.Buffer
 	err := homeStep(context.Background(), &out, &out)
-	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds this home (`update`)") || !strings.Contains(err.Error(), "Nothing was changed") {
+	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds CYFR's lock (`update`)") || !strings.Contains(err.Error(), "Nothing was changed") {
 		t.Errorf("the second update answered %v", err)
 	}
 	if got := s.log(); len(got) != calls {
@@ -2548,7 +2548,7 @@ func TestUpRefusesWhileAnUpdateHoldsTheLock(t *testing.T) {
 	calls := len(s.log())
 	err := upCmd.RunE(upCmd, nil)
 	s.answer("eval.release", "")
-	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds this home (`update`)") || !strings.Contains(err.Error(), "Nothing was changed") {
+	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds CYFR's lock (`update`)") || !strings.Contains(err.Error(), "Nothing was changed") {
 		t.Errorf("cyfr up answered %v, want the refusal naming the lock's holder", err)
 	}
 	if got := s.log(); len(got) != calls {
@@ -2595,9 +2595,9 @@ func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
 		answer   string
 		says     string
 	}{
-		"no":          {true, "no\n", "The home was not updated: the update was not confirmed. Nothing was changed"},
-		"no answer":   {true, "", "The home was not updated: the update was not confirmed. Nothing was changed"},
-		"no terminal": {false, "yes\n", "The update above was shown, not made: cyfr update changes a home only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make it"},
+		"no":          {true, "no\n", "CYFR was not updated: the update was not confirmed. Nothing was changed"},
+		"no answer":   {true, "", "CYFR was not updated: the update was not confirmed. Nothing was changed"},
+		"no terminal": {false, "yes\n", "The update above was shown, not made: cyfr update changes CYFR only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make it"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newUpdateScenario(t, []byte(compose), nil)
@@ -2608,7 +2608,7 @@ func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
 				t.Fatalf("the update answered %v, want %q:\n%s", err, c.says, out.String())
 			}
 			for _, line := range []string{
-				"This home is on release 0.8.0; this cyfr is release 0.9.0.\n",
+				"This CYFR is on release 0.8.0; this cyfr is release 0.9.0.\n",
 				"Updating it stops the stack, snapshots it into backups/, switches these images to release 0.9.0 and starts it:\n",
 				"  cyfr: ghcr.io/cyfrworks/cyfr:0.8.0@sha256:" + strings.Repeat("c", 12) + "… → ghcr.io/cyfrworks/cyfr:0.9.0@sha256:" + strings.Repeat("a", 12) + "…\n",
 				"  locus-runtime: ghcr.io/cyfrworks/cyfr-locus:latest → ghcr.io/cyfrworks/cyfr-locus:0.9.0@sha256:" + strings.Repeat("b", 12) + "…\n",
@@ -2618,7 +2618,7 @@ func TestUpdateShowsTheChangeAndAsks(t *testing.T) {
 					t.Errorf("the offer lacks %q:\n%s", line, out.String())
 				}
 			}
-			if asked := strings.Contains(out.String(), "Update this home? (yes/no) [no]: "); asked != c.terminal {
+			if asked := strings.Contains(out.String(), "Update this CYFR? (yes/no) [no]: "); asked != c.terminal {
 				t.Errorf("asked = %v on a terminal = %v:\n%s", asked, c.terminal, out.String())
 			}
 			s.nothingRan()
@@ -2646,7 +2646,7 @@ func TestUpdateLeavesAHomeOnItsReleaseAndRefusesANewerOne(t *testing.T) {
 	askWith(t, true, strings.NewReader("yes\n"))
 	s := newUpdateScenario(t, switched(shippedCompose(t)), nil)
 	out, err := s.run(context.Background())
-	if err != nil || !strings.Contains(out, "This home is on release 0.9.0 already, so there is nothing to update; 'cyfr up' starts it if it is stopped.") || strings.Contains(out, "Update this home?") {
+	if err != nil || !strings.Contains(out, "This CYFR is on release 0.9.0 already, so there is nothing to update; 'cyfr up' starts it if it is stopped.") || strings.Contains(out, "Update this CYFR?") {
 		t.Fatalf("a home on its release answered %v:\n%s", err, out)
 	}
 	s.nothingRan()
@@ -2654,7 +2654,7 @@ func TestUpdateLeavesAHomeOnItsReleaseAndRefusesANewerOne(t *testing.T) {
 	newer := strings.ReplaceAll(string(switched(shippedCompose(t))), "ghcr.io/cyfrworks/cyfr:"+testVersion+"@", "ghcr.io/cyfrworks/cyfr:1.0.0-rc.1@")
 	s = newUpdateScenario(t, []byte(newer), nil)
 	out, err = s.run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "This home is on release 1.0.0-rc.1, newer than this cyfr's 0.9.0, and cyfr update never moves a home to an older release") || !strings.Contains(err.Error(), "restore a snapshot taken on it with 'cyfr restore backups/<timestamp>'") {
+	if err == nil || !strings.Contains(err.Error(), "This CYFR is on release 1.0.0-rc.1, newer than this cyfr's 0.9.0, and cyfr update never moves a CYFR to an older release") || !strings.Contains(err.Error(), "restore a snapshot taken on it with 'cyfr restore backups/<timestamp>'") {
 		t.Fatalf("a home on a newer release answered %v:\n%s", err, out)
 	}
 	s.nothingRan()
@@ -2662,7 +2662,7 @@ func TestUpdateLeavesAHomeOnItsReleaseAndRefusesANewerOne(t *testing.T) {
 	// A pre-release of this release is older than it: the home moves on.
 	older := strings.ReplaceAll(string(switched(shippedCompose(t))), "ghcr.io/cyfrworks/cyfr:"+testVersion+"@", "ghcr.io/cyfrworks/cyfr:0.9.0-rc.1@")
 	s = newUpdateScenario(t, []byte(older), nil)
-	if out, err := s.run(context.Background()); err != nil || !strings.Contains(out, "This home is on release 0.9.0-rc.1; this cyfr is release 0.9.0.") || !strings.Contains(out, "Updated to release 0.9.0.") {
+	if out, err := s.run(context.Background()); err != nil || !strings.Contains(out, "This CYFR is on release 0.9.0-rc.1; this cyfr is release 0.9.0.") || !strings.Contains(out, "Updated to release 0.9.0.") {
 		t.Fatalf("a home on this release's pre-release answered %v:\n%s", err, out)
 	}
 }
@@ -2704,7 +2704,7 @@ func TestUpdateGoesOnToTheHome(t *testing.T) {
 	if err := runUpdate(context.Background(), &out, &out, updateOptions{yes: true}); err != nil {
 		t.Fatalf("cyfr update --yes: %v\n%s", err, out.String())
 	}
-	if text := out.String(); !strings.Contains(text, "cyfr 0.9.0 is the newest release.\n") || !strings.Contains(text, "Updated to release 0.9.0.") || strings.Contains(text, "Update this home?") {
+	if text := out.String(); !strings.Contains(text, "cyfr 0.9.0 is the newest release.\n") || !strings.Contains(text, "Updated to release 0.9.0.") || strings.Contains(text, "Update this CYFR?") {
 		t.Errorf("cyfr update --yes in a home said:\n%s", text)
 	}
 	if n := strings.Count(strings.Join(s.log(), "\n"), " up -d"); n != 1 {
@@ -2732,7 +2732,7 @@ func TestUpdateRefusesAHomeOnANewerReleaseWhateverItsTags(t *testing.T) {
 			s := newUpdateScenario(t, []byte(compose), nil)
 			s.answer("rpc.out", roster)
 			out, err := s.run(context.Background())
-			for _, part := range []string{"release 1.0.0, newer than this cyfr's 0.9.0, and cyfr update never moves a home to an older release", "Nothing was changed"} {
+			for _, part := range []string{"release 1.0.0, newer than this cyfr's 0.9.0, and cyfr update never moves a CYFR to an older release", "Nothing was changed"} {
 				if err == nil || !strings.Contains(err.Error(), part) {
 					t.Fatalf("a home on 1.0.0 answered %v, want %q:\n%s", err, part, out)
 				}
@@ -2752,7 +2752,7 @@ func TestUpdateRefusesAHomeOnANewerReleaseWhateverItsTags(t *testing.T) {
 		s.answer("ps.out", "locus-runtime\nlocus-backends\n")
 		s.answer("eval.out", "CYFR_LIVE_SLOTS="+`{"release":"1.0.0","slots":[]}`+"\n")
 		out, err := s.run(context.Background())
-		if err == nil || !strings.Contains(err.Error(), "This home is on release 1.0.0, newer than this cyfr's 0.9.0") || !strings.Contains(err.Error(), "The old stack was started again") {
+		if err == nil || !strings.Contains(err.Error(), "This CYFR is on release 1.0.0, newer than this cyfr's 0.9.0") || !strings.Contains(err.Error(), "The old stack was started again") {
 			t.Fatalf("a stopped home on 1.0.0 answered %v:\n%s", err, out)
 		}
 		s.noBackups()
@@ -2794,7 +2794,7 @@ func TestUpdateQuestionEndsOnAnInterrupt(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the question did not end on the interrupt")
 	}
-	if !strings.Contains(out.String(), "Update this home? (yes/no) [no]: ") {
+	if !strings.Contains(out.String(), "Update this CYFR? (yes/no) [no]: ") {
 		t.Errorf("the update did not ask:\n%s", out.String())
 	}
 	s.nothingRan()

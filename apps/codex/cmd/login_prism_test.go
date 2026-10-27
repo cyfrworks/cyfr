@@ -335,7 +335,7 @@ func TestLogin_AnUnreachableHomeIsSaid(t *testing.T) {
 	withContexts(t, "home", map[string]*config.Context{"home": {URL: home.URL}})
 
 	out, err := runLogin(t, t.Context(), "login")
-	if !exitsOne(err) || !strings.Contains(err.Error(), "Could not reach the home") {
+	if !exitsOne(err) || !strings.Contains(err.Error(), "Could not reach CYFR") {
 		t.Fatalf("want the unreachable home said, got %v\n%s", err, out)
 	}
 

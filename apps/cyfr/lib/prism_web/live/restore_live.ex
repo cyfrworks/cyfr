@@ -67,10 +67,10 @@ defmodule PrismWeb.RestoreLive do
       </p>
       <ul class="list-disc space-y-1 pl-5 text-sm text-gray-300">
         <li>
-          A restore brings back your identity alone: never your private data, and never the homes your devices saved. Add those addresses again from surviving devices or invitations.
+          A restore brings back your identity alone: never your private data, and never the CYFR addresses your devices saved. Add those addresses again from surviving devices or invitations.
         </li>
         <li>
-          Your other homes see the new keys within their freshness bound, and end what they bound to the old ones. Pair your devices here again.
+          Every other CYFR you use sees the new keys within its freshness bound, and ends what it bound to the old ones. Pair your devices here again.
         </li>
       </ul>
 
@@ -138,7 +138,7 @@ defmodule PrismWeb.RestoreLive do
           data-test="restore-continue"
           class="inline-block rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white"
         >
-          Continue to your home
+          Continue to Aqua
         </a>
 
         <section
@@ -149,7 +149,7 @@ defmodule PrismWeb.RestoreLive do
         >
           <h2 id="restore-kit-title" class="text-lg font-semibold">Recover after a restore</h2>
           <p class="text-sm text-gray-300">
-            When this home was restored from a backup, every passkey, device, API key and webhook it held was suspended and every session ended. Prove your kit here to re-enable what is yours. Your recovery secret signs in this browser and is never sent.
+            When this CYFR was restored from a backup, every passkey, device, API key and webhook it held was suspended and every session ended. Prove your kit here to re-enable what is yours. Your recovery secret signs in this browser and is never sent.
           </p>
           <form
             id="restore-kit-form"

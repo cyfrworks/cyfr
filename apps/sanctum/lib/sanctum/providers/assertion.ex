@@ -35,16 +35,16 @@ defmodule Sanctum.Providers.Assertion do
       Operation.new(
         "person",
         "assert",
-        "Sign an assertion for another home's door",
+        "Sign an assertion for another CYFR's door",
         [
           Arg.new("audience", :string,
             required: true,
             description:
-              "The other home, as its origin: the assertion's audience, or the home a certificate is presented to"
+              "The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to"
           ),
           Arg.new("challenge", :string,
             required: true,
-            description: "assert: the challenge that home issued for this sign-in"
+            description: "assert: the challenge that CYFR issued for this sign-in"
           ),
           Arg.new("action_id", :string,
             required: true,
@@ -111,22 +111,22 @@ defmodule Sanctum.Providers.Assertion do
   # consent signal, the confirmation's refusals and the sentences the
   # signer already wrote pass as they are.
   defp refusal(:not_enrolled),
-    do: {:conflict, "Signing in at another home needs an enrolled identity; enroll first."}
+    do: {:conflict, "Signing in at another CYFR needs an enrolled identity; enroll first."}
 
   defp refusal(:not_found),
-    do: {:conflict, "Your keys are held at another home; sign in from there."}
+    do: {:conflict, "Your keys are held at another CYFR; sign in from there."}
 
   defp refusal(:stale_key_epoch),
     do:
       {:conflict,
-       "Your identity's keys changed since this sign-in began; begin it again from your home."}
+       "Your identity's keys changed since this sign-in began; begin it again from your CYFR."}
 
   defp refusal(reason), do: reason
 
   defp challenge(value) do
     case Encoding.unb64(value, Prima.PersonAssertion.challenge_bytes()) do
       {:ok, bytes} -> {:ok, bytes}
-      :error -> {:error, {:invalid_argument, "The challenge is that home's 32 bytes, base64url"}}
+      :error -> {:error, {:invalid_argument, "The challenge is that CYFR's 32 bytes, base64url"}}
     end
   end
 

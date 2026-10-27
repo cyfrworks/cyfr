@@ -31,7 +31,7 @@ func Describe(h Head) Words {
 // shown.
 func (w Words) Sentences() []string {
 	return []string{
-		"Who can reach this home: " + w.Who,
+		"Who can reach CYFR: " + w.Who,
 		"Address: " + w.Address,
 		"Certificate email: " + w.CertificateEmail,
 		"Ports opened on this machine: " + w.Ports,
@@ -70,11 +70,11 @@ func (r *Refusal) Sentence() string {
 		if p["process_value"] != "" {
 			there = "`" + p["process_value"] + "`"
 		}
-		return "`" + p["key"] + "` is `" + p["file_value"] + "` in .env and " + there + " in this process's environment; a home is reached one way. Remove one of them."
+		return "`" + p["key"] + "` is `" + p["file_value"] + "` in .env and " + there + " in this process's environment; CYFR is reached one way. Remove one of them."
 	case "access_assertion_from_file":
 		return "CYFR_LOCAL_INGRESS_ASSERTED is the compose file's assertion and cannot come from .env. Remove it from .env."
 	case "access_missing":
-		return "CYFR_ACCESS is not set in .env, so this home does not know how it is reached. Nothing started. Run `cyfr init` for a new home, or `cyfr access local|tailnet|public` for this one."
+		return "CYFR_ACCESS is not set in .env, so CYFR does not know how it is reached. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access local|tailnet|public` for this one."
 	case "access_unknown_mode":
 		return "CYFR_ACCESS is `" + p["value"] + "`; it must be `local`, `tailnet` or `public`. Run `cyfr access <mode>` to set it with the address it implies."
 	case "access_local_mismatch":
@@ -95,9 +95,9 @@ func (r *Refusal) Sentence() string {
 		}
 		return "CYFR_PUBLIC_URL must be exactly " + p["expected"] + " when CYFR_ACCESS is `" + p["mode"] + "`; " + now + ". Run `cyfr access " + p["mode"] + "` to rewrite both."
 	case "access_key_outside_mode":
-		return "`" + p["key"] + "` is set, but only a `" + p["needs"] + "` home uses it (CYFR_ACCESS is `" + p["mode"] + "`). Remove it, or run `cyfr access " + p["needs"] + "`."
+		return "`" + p["key"] + "` is set, but only `" + p["needs"] + "` access uses it (CYFR_ACCESS is `" + p["mode"] + "`). Remove it, or run `cyfr access " + p["needs"] + "`."
 	case "access_bind_not_loopback":
-		return "CYFR_BIND_ADDRESS `" + p["address"] + "` is not a loopback address, so other machines could reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from other devices uses CYFR_ACCESS=tailnet or public."
+		return "CYFR_BIND_ADDRESS `" + p["address"] + "` is not a loopback address, so other machines could reach CYFR's loopback listener. Bind 127.0.0.1 or ::1; to reach CYFR from other devices, use CYFR_ACCESS=tailnet or public."
 	case "access_setting_invalid":
 		if _, ok := p["bind"]; ok {
 			return "`CYFR_PROXY_PORT` is `" + p["value"] + "` on `" + p["address"] + "`, and the loopback listener takes CYFR_PORT `" + p["port"] + "` on `" + p["bind"] + "`: the proxy listener's port must differ from the loopback listener's on the same address. Nothing started. Set CYFR_PROXY_PORT to another port."

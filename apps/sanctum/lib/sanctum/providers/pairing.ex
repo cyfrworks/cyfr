@@ -104,7 +104,7 @@ defmodule Sanctum.Providers.Pairing do
             ),
             Arg.new("certificate", :json,
               description:
-                "complete: for a person whose identity is at another home, the device certificate their home issued for this client, device key, home and athanor; absent for a person whose keys are here"
+                "complete: for a person whose identity is at another CYFR, the device certificate their own CYFR issued for this client, device key, CYFR and athanor; absent for a person whose keys are here"
             )
           ],
           auth: :anonymous,
@@ -305,7 +305,7 @@ defmodule Sanctum.Providers.Pairing do
         {:ok, decoded}
 
       {:error, _malformed} ->
-        {:error, {:invalid_argument, "The certificate is not a device certificate a home signs"}}
+        {:error, {:invalid_argument, "The certificate is not a device certificate a CYFR signs"}}
     end
   end
 
@@ -377,14 +377,14 @@ defmodule Sanctum.Providers.Pairing do
     do: refused(:unauthenticated, :proof_refused, "The device's proof of its key was refused")
 
   defp refusal(:wrong_audience),
-    do: refused(:invalid_argument, :wrong_audience, "This pairing code is for another home")
+    do: refused(:invalid_argument, :wrong_audience, "This pairing code is for another CYFR")
 
   defp refusal(:remote_identity_unavailable),
     do:
       refused(
         :forbidden,
         :remote_identity_unavailable,
-        "A device of a person whose identity is at another home renews its certificate " <>
+        "A device of a person whose identity is at another CYFR renews its certificate " <>
           "there, not here"
       )
 
@@ -393,8 +393,8 @@ defmodule Sanctum.Providers.Pairing do
       refused(
         :invalid_argument,
         :certificate_required,
-        "This pairing is for a person whose identity is at another home: bring the certificate " <>
-          "their home issued for this device"
+        "This pairing is for a person whose identity is at another CYFR: bring the certificate " <>
+          "their own CYFR issued for this device"
       )
 
   defp refusal(:certificate_unexpected),
@@ -402,7 +402,7 @@ defmodule Sanctum.Providers.Pairing do
       refused(
         :invalid_argument,
         :certificate_unexpected,
-        "This home certifies this person's devices itself; complete the pairing without a certificate"
+        "This CYFR certifies this person's devices itself; complete the pairing without a certificate"
       )
 
   defp refusal(:certificate_refused),
@@ -410,7 +410,7 @@ defmodule Sanctum.Providers.Pairing do
       refused(
         :unauthenticated,
         :certificate_refused,
-        "The certificate is not their home's for this device, this home and this athanor " <>
+        "The certificate was not issued by their own CYFR for this device, this CYFR and this athanor " <>
           "under their current key; certify the device there again"
       )
 

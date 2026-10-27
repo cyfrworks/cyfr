@@ -149,7 +149,7 @@ func TestAccessQuestionsEndOnAnInterrupt(t *testing.T) {
 		{"the change", access.ModePublic, accessOptions{domain: "cyfr.example.com"}, nil, "Interrupted; nothing was written.", 0},
 		{"the join", access.ModeTailnet, accessOptions{hostname: "home"}, nil, "Interrupted; nothing was written.", 0},
 		{"the change after the join", access.ModeTailnet, accessOptions{}, []string{"yes"},
-			"Interrupted. This machine joined your tailnet as `cyfr.tail1234.ts.net`, and how this home is reached was not changed.", 1},
+			"Interrupted. This machine joined your tailnet as `cyfr.tail1234.ts.net`, and how CYFR is reached was not changed.", 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newAccessProject(t)
@@ -221,7 +221,7 @@ func TestInitSaysAnAnsweredModeWasNotAppliedWithoutATemplate(t *testing.T) {
 	askInput = strings.NewReader("1\n\n\n")
 	var out bytes.Buffer
 	err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
-	if err == nil || err.Error() != "the home was not set up to be reached as answered (tailnet): there is no .env.example to write .env from" {
+	if err == nil || err.Error() != "CYFR was not set up to be reached as answered (tailnet): there is no .env.example to write .env from" {
 		t.Fatalf("init answered %v\n%s", err, out.String())
 	}
 	if fileExists(".env") || len(s.joins) != 0 || len(s.switches) != 0 {

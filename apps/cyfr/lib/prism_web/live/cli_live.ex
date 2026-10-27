@@ -63,7 +63,7 @@ defmodule PrismWeb.CliLive do
          notice(
            socket,
            :error,
-           "This home cannot read the sign-in right now; open the link again."
+           "This CYFR cannot read the sign-in right now; open the link again."
          )}
     end
   end
@@ -151,7 +151,7 @@ defmodule PrismWeb.CliLive do
     |> assign(sign_in: :none, secret: nil)
     |> notice(
       :error,
-      "This link is not one this home knows, or it expired: run cyfr login again for a new one."
+      "This link is not one this CYFR knows, or it expired: run cyfr login again for a new one."
     )
   end
 

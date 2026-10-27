@@ -133,7 +133,7 @@ defmodule PrismWeb.SystemLayer.Recovery do
   @spec description(Prompt.t()) :: String.t()
   def description(%{kind: :enrollment}),
     do:
-      "Enrolling gives you an identifier other homes know you by, and prints the kit that " <>
+      "Enrolling gives you an identifier any CYFR knows you by, and prints the kit that " <>
         "recovers it. Read what it commits you to first."
 
   def description(%{kind: :kit}),
@@ -248,10 +248,10 @@ defmodule PrismWeb.SystemLayer.Recovery do
     ~H"""
     <ul class="list-disc space-y-1 pl-5 text-sm text-gray-200" data-test="recovery-statements">
       <li data-test="recovery-directory">
-        Your identity is registered at the directory <span class="font-mono break-all">{@prompt.subject.directory_url}</span>, which this home pins. No other directory can be chosen here.
+        Your identity is registered at the directory <span class="font-mono break-all">{@prompt.subject.directory_url}</span>, which this CYFR pins. No other directory can be chosen here.
       </li>
       <li>
-        While that directory cannot be reached, rotating your key, recovering and other homes' checks of your identity wait. If it is gone for good, they end: an identity never moves to another directory.
+        While that directory cannot be reached, key rotation, recovery and identity checks by any other CYFR wait. If it is gone for good, they end: an identity never moves to another directory.
       </li>
       <li>
         Your printed kit recovers your identity. Anyone who holds a copy can replace your keys, so keep it apart from your devices and add a second kit before you rely on one.
@@ -260,7 +260,7 @@ defmodule PrismWeb.SystemLayer.Recovery do
         If every kit is lost, nothing can add one: your identity keeps working here with no way to recover it.
       </li>
       <li>
-        A recovery restores your identity alone, never your private data or the homes your devices saved: you add those addresses again from surviving devices or invitations.
+        A recovery restores your identity alone, never your private data or the CYFR addresses your devices saved: you add those addresses again from surviving devices or invitations.
       </li>
       <li>
         A printed kit is the one recovery holder here; no device holds recovery material.
@@ -276,7 +276,7 @@ defmodule PrismWeb.SystemLayer.Recovery do
         Each kit alone can replace your keys. A copied kit is someone else's way in, so keep every one apart from your devices.
       </li>
       <li>
-        Adding a kit changes your identity's head: every other home ends the sessions and device certificates it bound to your current keys once it sees the change.
+        Adding a kit changes your identity's head: every other CYFR ends the sessions and device certificates it bound to your current keys once it sees the change.
       </li>
     </ul>
     """

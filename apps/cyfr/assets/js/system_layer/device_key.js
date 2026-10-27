@@ -387,7 +387,7 @@ export async function renewElsewhere({certificate, privateKey, deviceKey, client
   try {
     proof = await prove(challenge, privateKey, {purpose: "renew", home: certificate.issuer, deviceKey, clientId}, subtle)
   } catch (error) {
-    throw Object.assign(new Error("The home that certified this device answered a challenge this device did not ask for."), {
+    throw Object.assign(new Error("The CYFR that certified this device answered a challenge this device did not ask for."), {
       ended: false,
       refused: Boolean(error.refused)
     })
@@ -411,7 +411,7 @@ async function askIssuer(fetchFn, url, body) {
       body: JSON.stringify(body)
     })
   } catch (_error) {
-    throw Object.assign(new Error("The home that certified this device could not be reached."), {ended: false})
+    throw Object.assign(new Error("The CYFR that certified this device could not be reached."), {ended: false})
   }
 
   let answer
@@ -422,7 +422,7 @@ async function askIssuer(fetchFn, url, body) {
   }
   if (response.ok && answer && typeof answer === "object") return answer
   const ended = [401, 403, 404, 409].includes(response.status)
-  const message = answer && typeof answer.message === "string" ? answer.message : `The home that certified this device answered ${response.status}.`
+  const message = answer && typeof answer.message === "string" ? answer.message : `The CYFR that certified this device answered ${response.status}.`
   throw Object.assign(new Error(message), {ended, status: response.status})
 }
 
@@ -590,7 +590,7 @@ export function askerName(asker) {
     case "frame":
       return `an app${named}`
     case "unbound":
-      return "this home"
+      return "this CYFR"
     case "session":
       return `a browser signed in${asker.name ? ` with ${asker.name}` : ""}`
     case "command_line":
@@ -942,7 +942,7 @@ export class Glass {
       subtle: this.subtle
     })
     if (!certifies(certificate, {deviceKey: device.publicKey, clientId: device.clientId, home: this.home, issuer: held.issuer, athanor: held.athanor})) {
-      throw Object.assign(new Error("The home that certified this device answered another device's certificate."), {ended: false})
+      throw Object.assign(new Error("The CYFR that certified this device answered another device's certificate."), {ended: false})
     }
     return certificate
   }
@@ -1076,7 +1076,7 @@ export class Glass {
   async reauthenticate(ref) {
     try {
       const {url} = await this.request("confirmation.reauth", {ref, method: "oidc"})
-      this.outcome = {...this.outcome, [ref]: {ok: true, text: "Sign in in the tab that opened, then approve the change there in a browser signed in to this home."}}
+      this.outcome = {...this.outcome, [ref]: {ok: true, text: "Sign in in the tab that opened, then approve the change there in a browser signed in to this CYFR."}}
       this.onChange(this)
       return typeof url === "string" ? url : null
     } catch (error) {

@@ -90,8 +90,8 @@ func TestInitNoInteractiveRules(t *testing.T) {
 		{name: "--access public alone", o: initOptions{mode: access.ModePublic}, mode: access.ModeLocal, notice: "--access public needs --domain"},
 		{name: "--access public with a domain", o: initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com", acmeEmail: "ops@example.com"}}, mode: access.ModePublic},
 		{name: "a domain without --access", o: initOptions{accessOptions: accessOptions{domain: "cyfr.example.com"}}, refusal: "only beside --access"},
-		{name: "a domain for a local home", o: initOptions{mode: access.ModeLocal, accessOptions: accessOptions{domain: "cyfr.example.com"}}, refusal: "`--domain` is for a public home, and this command chooses `local`"},
-		{name: "an email for a tailnet home", o: initOptions{mode: access.ModeTailnet, accessOptions: accessOptions{acmeEmail: "ops@example.com", keyFile: keyFile}}, refusal: "`--acme-email` is for a public home, and this command chooses `tailnet`"},
+		{name: "a domain for a local home", o: initOptions{mode: access.ModeLocal, accessOptions: accessOptions{domain: "cyfr.example.com"}}, refusal: "`--domain` is for public access, and this command chooses `local`"},
+		{name: "an email for a tailnet home", o: initOptions{mode: access.ModeTailnet, accessOptions: accessOptions{acmeEmail: "ops@example.com", keyFile: keyFile}}, refusal: "`--acme-email` is for public access, and this command chooses `tailnet`"},
 		{name: "a machine name for a public home", o: initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com", hostname: "home"}}, refusal: "`--hostname` is for joining a tailnet, and this command chooses `public`"},
 		{name: "a domain that is not one", o: initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "localhost"}}, refusal: "`localhost` is not a valid domain"},
 		{name: "a mode that is none", o: initOptions{mode: "tls"}, refusal: `--access takes local, tailnet or public; "tls" is none of them`},
@@ -327,7 +327,7 @@ func TestInitRefusesAnExistingEnvWithoutAccessAndWritesNothing(t *testing.T) {
 	}{
 		{"no CYFR_ACCESS", "CYFR_SECRET_KEY_BASE=kept\nCYFR_HOST=localhost\n", initOptions{}, access.Refuse("access_missing", nil).Message()},
 		{"CYFR_ACCESS blank", "CYFR_ACCESS=\nCYFR_LOCUS_RUNTIME_ROOT=\n", initOptions{mode: access.ModeLocal}, access.Refuse("access_missing", nil).Message()},
-		{"another mode", "CYFR_ACCESS=local\n", initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com"}}, ".env says this home is reached as local"},
+		{"another mode", "CYFR_ACCESS=local\n", initOptions{mode: access.ModePublic, accessOptions: accessOptions{domain: "cyfr.example.com"}}, ".env says CYFR is reached as local"},
 		// The last assignment is the one compose reads.
 		{"CYFR_ACCESS blanked by a later line", "CYFR_ACCESS=local\nCYFR_ACCESS=\n", initOptions{}, access.Refuse("access_missing", nil).Message()},
 	} {
@@ -368,7 +368,7 @@ func TestInitTakesTheEndOfInputAsNoAnswer(t *testing.T) {
 	if len(s.joins) != 0 || len(s.switches) != 0 || accessOf(t) != access.ModeLocal {
 		t.Fatalf("the end of the input joined %d times, switched %d times and left the home %s, want local and nothing joined\n%s", len(s.joins), len(s.switches), accessOf(t), out.String())
 	}
-	if want := "No answer was read, so this home is reached from this computer only; `cyfr access tailnet` or `cyfr access public --domain <your domain>` changes that."; !strings.Contains(out.String(), want) {
+	if want := "No answer was read, so CYFR is reached from this computer only; `cyfr access tailnet` or `cyfr access public --domain <your domain>` changes that."; !strings.Contains(out.String(), want) {
 		t.Errorf("init does not say why the home is local:\n%s", out.String())
 	}
 
@@ -438,7 +438,7 @@ func TestInitAsksTheAccessQuestionFirst(t *testing.T) {
 		t.Fatalf("init: %v\n%s", err, out.String())
 	}
 	text := out.String()
-	question, again, email := strings.Index(text, "How will you reach this home?"), strings.Index(text, "Answer 1, 2 or 3."), strings.Index(text, "Your platform-admin email")
+	question, again, email := strings.Index(text, "How will you reach CYFR?"), strings.Index(text, "Answer 1, 2 or 3."), strings.Index(text, "Your platform-admin email")
 	if question < 0 || again < question || email < again {
 		t.Errorf("the access question does not come first, asked again on a wrong answer, before the email:\n%s", text)
 	}

@@ -140,7 +140,7 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 		path = p
 	}
 	if ctx.Err() != nil {
-		return false, fmt.Errorf("cyfr update was interrupted once cyfr %s was installed, before the home step; run 'cyfr update' again to update the home", target)
+		return false, fmt.Errorf("cyfr update was interrupted once cyfr %s was installed, before CYFR in this directory was updated; run 'cyfr update' again to update it", target)
 	}
 
 	args := []string{path, "update", "--continue-as", target}
@@ -153,7 +153,7 @@ func updateProgram(ctx context.Context, out io.Writer, o updateOptions) (bool, e
 	status, err := handOver(path, args)
 	switch {
 	case err != nil:
-		return false, fmt.Errorf("cyfr %s is installed at %s, but it could not be started (%v); the home was not touched. Run 'cyfr update' again", target, path, err)
+		return false, fmt.Errorf("cyfr %s is installed at %s, but it could not be started (%v); your CYFR was not touched. Run 'cyfr update' again", target, path, err)
 	case status != 0:
 		return false, handedOver{status}
 	}
@@ -177,12 +177,12 @@ func replaceSelf(ctx context.Context, out io.Writer, target string) (string, err
 	cancel()
 	switch {
 	case errors.Is(err, release.ErrUnverified):
-		return "", fmt.Errorf("Release %s did not verify (%v); %s is unchanged and the home was not touched", target, err, self)
+		return "", fmt.Errorf("Release %s did not verify (%v); %s is unchanged and your CYFR was not touched", target, err, self)
 	case err != nil:
-		return "", fmt.Errorf("cyfr update could not download release %s (%v); %s is unchanged and the home was not touched. Download it from %s/tag/%s", target, err, self, releasesPage, target)
+		return "", fmt.Errorf("cyfr update could not download release %s (%v); %s is unchanged and your CYFR was not touched. Download it from %s/tag/%s", target, err, self, releasesPage, target)
 	}
 	if err := replaceExecutable(self, binary); err != nil {
-		return "", fmt.Errorf("Release %s verified but could not be installed at %s (%v); the program there is unchanged and the home was not touched. Run 'sudo cyfr update' if its directory is not yours to write", target, self, err)
+		return "", fmt.Errorf("Release %s verified but could not be installed at %s (%v); the program there is unchanged and your CYFR was not touched. Run 'sudo cyfr update' if its directory is not yours to write", target, self, err)
 	}
 	fmt.Fprintf(out, "cyfr %s is installed at %s.\n", target, self)
 	return self, nil
@@ -208,19 +208,19 @@ func updateCask(ctx context.Context, out io.Writer, target string, exact bool) (
 		c := exec.Command("brew", args...)
 		c.Stdout, c.Stderr = out, os.Stderr
 		if err := c.Run(); err != nil {
-			return "", fmt.Errorf("brew %s failed (%v); the home was not touched", strings.Join(args, " "), err)
+			return "", fmt.Errorf("brew %s failed (%v); your CYFR was not touched", strings.Join(args, " "), err)
 		}
 	}
 	// Homebrew can exit successfully without changing the installed version.
 	switch installed := installedCaskVersion(); {
 	case installed == "":
-		return "", errors.New("brew upgraded the cyfr cask, but its version could not be read (brew list --cask --versions cyfr); the home was not touched. Run 'cyfr update' again")
+		return "", errors.New("brew upgraded the cyfr cask, but its version could not be read (brew list --cask --versions cyfr); your CYFR was not touched. Run 'cyfr update' again")
 	case installed != target:
-		return "", fmt.Errorf("brew exited cleanly but the cyfr cask is still %s, not %s; the home was not touched. Try 'brew update-reset' and 'cyfr update' again, or reinstall with 'brew uninstall --cask cyfr && brew install --cask cyfr'", installed, target)
+		return "", fmt.Errorf("brew exited cleanly but the cyfr cask is still %s, not %s; your CYFR was not touched. Try 'brew update-reset' and 'cyfr update' again, or reinstall with 'brew uninstall --cask cyfr && brew install --cask cyfr'", installed, target)
 	}
 	path, err := caskBinary()
 	if err != nil {
-		return "", fmt.Errorf("brew installed cyfr %s, but cyfr update could not find it (%v); the home was not touched. Run 'cyfr update' again", target, err)
+		return "", fmt.Errorf("brew installed cyfr %s, but cyfr update could not find it (%v); your CYFR was not touched. Run 'cyfr update' again", target, err)
 	}
 	fmt.Fprintf(out, "cyfr %s is installed by Homebrew at %s.\n", target, path)
 	return path, nil

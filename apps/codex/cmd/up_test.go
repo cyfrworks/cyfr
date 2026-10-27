@@ -154,7 +154,7 @@ func TestDownRefusesADirectoryWithNoComposeFile(t *testing.T) {
 	}
 	var out bytes.Buffer
 	err := runDown(context.Background(), &out)
-	if err == nil || !strings.Contains(err.Error(), "There is no stack in this directory, so nothing was stopped: ") || !strings.Contains(err.Error(), "holds no compose file") || !strings.Contains(err.Error(), "Run 'cyfr down' in the home's directory") {
+	if err == nil || !strings.Contains(err.Error(), "There is no stack in this directory, so nothing was stopped: ") || !strings.Contains(err.Error(), "holds no compose file") || !strings.Contains(err.Error(), "Run 'cyfr down' in CYFR's directory") {
 		t.Fatalf("cyfr down in a directory with no compose file answered %v:\n%s", err, out.String())
 	}
 	if strings.Contains(out.String(), "stopped") || len(s.log()) != 0 {
@@ -472,7 +472,7 @@ func TestStartedOnThisMachineOnlyExitsThree(t *testing.T) {
 		}
 		stdout, stderr, status := runAsCyfr(t, "started-local", dir, "access", "tailnet", "--yes")
 		check(t, "access tailnet", stdout, stderr, status)
-		if !strings.Contains(stdout, "This changes how this home is reached:") {
+		if !strings.Contains(stdout, "This changes how CYFR is reached:") {
 			t.Errorf("cyfr access tailnet showed no change before making it:\n%s", stdout)
 		}
 		// Recovery's start is a start path too: a switch it finished on
@@ -793,7 +793,7 @@ func TestAccessTailnetServesAClosedHomeAgainThroughTheRealEngine(t *testing.T) {
 	if err := runAccess(ctx, access.ModeTailnet, accessOptions{}, true, "", &out); err != nil {
 		t.Fatalf("cyfr access tailnet answered %v\n%s", err, out.String())
 	}
-	for _, want := range []string{"Tailscale Serve is closed, so this home answers on this machine only.", "Done. This home is reached as:\n", "  Serve: open\n"} {
+	for _, want := range []string{"Tailscale Serve is closed, so CYFR answers on this machine only.", "Done. CYFR is reached as:\n", "  Serve: open\n"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the reopen lacks %q:\n%s", want, out.String())
 		}

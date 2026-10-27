@@ -184,7 +184,7 @@ func TestUpdateInstallsOnlyANewerRelease(t *testing.T) {
 				if len(s.fetched) != 0 {
 					t.Errorf("cyfr update fetched %v", s.fetched)
 				}
-				if !strings.Contains(out, "There is no home in this directory") {
+				if !strings.Contains(out, "There is no CYFR in this directory") {
 					t.Errorf("cyfr update did not go on to say there is no home:\n%s", out)
 				}
 				s.unchanged()
@@ -193,7 +193,7 @@ func TestUpdateInstallsOnlyANewerRelease(t *testing.T) {
 			if !strings.Contains(out, "cyfr "+c.latest+" is installed at "+resolvedPath(t, s.self)+".") {
 				t.Errorf("cyfr update did not say where it installed:\n%s", out)
 			}
-			if strings.Contains(out, "There is no home") {
+			if strings.Contains(out, "There is no CYFR") {
 				t.Errorf("the old program went on past the handover:\n%s", out)
 			}
 			s.installed(c.latest)
@@ -252,7 +252,7 @@ func TestUpdateRefusesBeforeAnyRequest(t *testing.T) {
 
 	s := newProgramScenario(t, "0.9.0", "")
 	s.latestErr = errors.New("dial tcp: lookup api.github.com: no such host")
-	if out, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "could not look up the newest release") || strings.Contains(out, "no home") {
+	if out, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "could not look up the newest release") || strings.Contains(out, "no CYFR") {
 		t.Errorf("a failed lookup answered %v:\n%s", err, out)
 	}
 	s.unchanged()
@@ -260,7 +260,7 @@ func TestUpdateRefusesBeforeAnyRequest(t *testing.T) {
 	s = newProgramScenario(t, "0.6.0-alpha.1", "")
 	s.latestErr = release.ErrNoRelease
 	out, err := s.run(updateOptions{})
-	if err != nil || !strings.Contains(out, "No release of CYFR is published yet apart from pre-releases, so this cyfr (0.6.0-alpha.1) stays; name one with 'cyfr update --version <version>'") || !strings.Contains(out, "There is no home in this directory") {
+	if err != nil || !strings.Contains(out, "No release of CYFR is published yet apart from pre-releases, so this cyfr (0.6.0-alpha.1) stays; name one with 'cyfr update --version <version>'") || !strings.Contains(out, "There is no CYFR in this directory") {
 		t.Errorf("no published release answered %v:\n%s", err, out)
 	}
 	s.unchanged()
@@ -280,7 +280,7 @@ func TestUpdateRefusesWhatDoesNotVerify(t *testing.T) {
 			s := newProgramScenario(t, "0.9.0", "0.9.1")
 			s.answer = func() ([]byte, error) { return nil, c.err }
 			out, err := s.run(updateOptions{})
-			if err == nil || !strings.Contains(err.Error(), c.says) || !strings.Contains(err.Error(), "; "+resolvedPath(t, s.self)+" is unchanged and the home was not touched") {
+			if err == nil || !strings.Contains(err.Error(), c.says) || !strings.Contains(err.Error(), "; "+resolvedPath(t, s.self)+" is unchanged and your CYFR was not touched") {
 				t.Fatalf("cyfr update answered %v:\n%s", err, out)
 			}
 			s.unchanged()
@@ -311,7 +311,7 @@ func TestUpdateHandsOverToTheInstalledProgram(t *testing.T) {
 	s := newProgramScenario(t, "0.9.0", "0.9.1")
 	s.handErr = errors.New("exec format error")
 	_, err := s.run(updateOptions{})
-	if err == nil || !strings.Contains(err.Error(), "cyfr 0.9.1 is installed at "+resolvedPath(t, s.self)+", but it could not be started (exec format error); the home was not touched") {
+	if err == nil || !strings.Contains(err.Error(), "cyfr 0.9.1 is installed at "+resolvedPath(t, s.self)+", but it could not be started (exec format error); your CYFR was not touched") {
 		t.Errorf("a failed handover answered %v", err)
 	}
 	if got := read(t, s.self); got != "new cyfr 0.9.1" {
@@ -332,7 +332,7 @@ func TestUpdateHandsOverToTheInstalledProgram(t *testing.T) {
 		return []byte("new cyfr"), nil
 	}
 	_, err = s.runContext(ctx, updateOptions{})
-	if err == nil || !strings.Contains(err.Error(), "interrupted once cyfr 0.9.1 was installed, before the home step") || len(s.handed) != 0 {
+	if err == nil || !strings.Contains(err.Error(), "interrupted once cyfr 0.9.1 was installed, before CYFR in this directory was updated") || len(s.handed) != 0 {
 		t.Errorf("an interrupt during the install answered %v, handovers %v", err, s.handed)
 	}
 }
@@ -342,14 +342,14 @@ func TestUpdateHandsOverToTheInstalledProgram(t *testing.T) {
 func TestContinueAsChecksTheRelease(t *testing.T) {
 	s := newProgramScenario(t, "0.9.1", "1.0.0")
 	out, err := s.run(updateOptions{continueAs: "0.9.1"})
-	if err != nil || s.lookups != 0 || !strings.Contains(out, "There is no home in this directory") || strings.Contains(out, "newest release") {
+	if err != nil || s.lookups != 0 || !strings.Contains(out, "There is no CYFR in this directory") || strings.Contains(out, "newest release") {
 		t.Errorf("the handed-over program answered %v after %d lookups:\n%s", err, s.lookups, out)
 	}
 	s.unchanged()
 
 	s = newProgramScenario(t, "0.9.0", "1.0.0")
 	out, err = s.run(updateOptions{continueAs: "0.9.1"})
-	if err == nil || !strings.Contains(err.Error(), "The cyfr at "+s.self+" is 0.9.0, not release 0.9.1 that cyfr update installed; the home was not touched") || s.lookups != 0 {
+	if err == nil || !strings.Contains(err.Error(), "The cyfr at "+s.self+" is 0.9.0, not release 0.9.1 that cyfr update installed; your CYFR was not touched") || s.lookups != 0 {
 		t.Errorf("a program of another release answered %v:\n%s", err, out)
 	}
 	s.unchanged()
@@ -416,7 +416,7 @@ func TestUpdateThroughHomebrew(t *testing.T) {
 	s = newProgramScenario(t, "0.9.0", "0.10.0")
 	fakeBrew(t, "0.9.0", "0.9.0")
 	caskInstalled = restore
-	if _, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "the cyfr cask is still 0.9.0, not 0.10.0; the home was not touched") || len(s.handed) != 0 {
+	if _, err := s.run(updateOptions{}); err == nil || !strings.Contains(err.Error(), "the cyfr cask is still 0.9.0, not 0.10.0; your CYFR was not touched") || len(s.handed) != 0 {
 		t.Errorf("brew left on the old release answered %v, handovers %v", err, s.handed)
 	}
 

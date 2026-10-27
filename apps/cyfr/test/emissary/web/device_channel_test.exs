@@ -796,7 +796,7 @@ defmodule Emissary.Web.DeviceChannelTest do
 
         assert String.to_integer(seconds) in 1..60
         decision = assert_one_decision(closed, "rate_limited", :none)
-        assert decision.reason =~ "from this address or across this home"
+        assert decision.reason =~ "from this address or across this CYFR"
         assert_closed(closed)
       end
 

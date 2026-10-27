@@ -539,7 +539,7 @@ defmodule Sanctum.Webhook do
       resource: row.name,
       details: %{
         "effect" =>
-          "Re-enables the webhook #{row.name}, suspended when this home was restored " <>
+          "Re-enables the webhook #{row.name}, suspended when this CYFR was restored " <>
             "from a backup, so deliveries signed with its secret run again"
       }
     }
