@@ -193,7 +193,7 @@ func TestUpdateInstallsOnlyANewerRelease(t *testing.T) {
 			if !strings.Contains(out, "cyfr "+c.latest+" is installed at "+resolvedPath(t, s.self)+".") {
 				t.Errorf("cyfr update did not say where it installed:\n%s", out)
 			}
-			if strings.Contains(out, "There is no home") {
+			if strings.Contains(out, "There is no CYFR") {
 				t.Errorf("the old program went on past the handover:\n%s", out)
 			}
 			s.installed(c.latest)
