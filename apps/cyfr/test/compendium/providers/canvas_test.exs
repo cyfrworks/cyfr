@@ -101,7 +101,7 @@ defmodule Compendium.Providers.CanvasTest do
 
       assert args.("write")["streams"].type == :json
       assert args.("write")["module"].type == :string
-      assert args.("activate")["outcome"].enum == ~w(tree no_tree died)
+      assert args.("activate")["outcome"].enum == ~w(ready not_ready died)
     end
 
     test "the provider is rostered after the layout's, so the gate serves it, and activation " <>
@@ -123,8 +123,9 @@ defmodule Compendium.Providers.CanvasTest do
   end
 
   describe "the actions" do
-    test "catalog answers the toolkit majors and the readable streams", %{ctx: ctx} do
-      assert {:ok, %{toolkit: [1], streams: streams}} = call(ctx, "catalog")
+    test "catalog answers the readable streams and nothing else", %{ctx: ctx} do
+      assert {:ok, %{streams: streams} = catalog} = call(ctx, "catalog")
+      assert Map.keys(catalog) == [:streams]
       assert call(ctx, "catalog") == Compendium.Canvas.catalog(ctx)
 
       {:ok, {_provider, feeds}} = Sanctum.Catalog.lookup_stream("feed.results")
@@ -203,7 +204,7 @@ defmodule Compendium.Providers.CanvasTest do
                  "canvas" => "markets",
                  "version" => "1.0.0",
                  "frame" => "frm_never_trialled",
-                 "outcome" => "tree"
+                 "outcome" => "ready"
                })
              ) == :not_found
 

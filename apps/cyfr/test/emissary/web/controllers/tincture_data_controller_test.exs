@@ -213,7 +213,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       "publisher" => "local",
       "tincture" => %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "entry" => "index.html",
         "streams" => streams
       }
     })
@@ -1432,7 +1432,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
   # A request on the canvas data path of the open `frame_id` names.
   defp canvas_stream(frame_id, stream, subject, opts \\ []) do
     body = TinctureWire.request(:stream_open, %{stream: stream, subject: subject})
-    data(:stream_open, body, Keyword.put(opts, :path, Prima.CanvasWire.stream_path(frame_id)))
+    data(:stream_open, body, Keyword.put(opts, :path, Prima.TinctureWire.stream_path(frame_id)))
   end
 
   # The hidden trial the shell opens a canvas version in: its credential,
@@ -1592,7 +1592,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
 
     test "takes no public page's request", %{mine: mine} do
       public = %{athanor: "test", publisher: "local", name: "home-canvas"}
-      path = Prima.CanvasWire.stream_path(mine.frame_id)
+      path = Prima.TinctureWire.stream_path(mine.frame_id)
 
       body =
         TinctureWire.request(:stream_open, %{
@@ -1693,7 +1693,7 @@ defmodule Emissary.Web.TinctureDataControllerTest do
       ]
 
       for {route, body} <- requests do
-        path = Prima.CanvasWire.data_path(mine.frame_id) <> route
+        path = Prima.TinctureWire.data_path(mine.frame_id) <> route
         conn = data(:action, body, bearer: mine.bearer, path: path)
         assert conn.status == 404, path
         refute Map.has_key?(conn.private, :phoenix_action)

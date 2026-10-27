@@ -23,10 +23,10 @@ defmodule Compendium.Canvas do
       `conflict`, and no version's files are ever replaced; a failure after
       the allocation leaves a version number unused.
     * `activate/2` spends the validation credential of the frame a
-      candidate version was trialled in, whatever the trial's outcome. A
-      tree activates the version once its tincture's grant is current
+      candidate version was trialled in, whatever the trial's outcome.
+      `ready` activates the version once its tincture's grant is current
       (`Compendium.tincture_grant_revision/2`), keeping the version it
-      replaces. A tree changes nothing for the version already working,
+      replaces. `ready` changes nothing for the version already working,
       and for a version older than the working one it publishes nothing
       and answers `conflict`. Any other outcome records the failure and
       nothing else.
@@ -56,7 +56,7 @@ defmodule Compendium.Canvas do
   @module_file "canvas.js"
   @module_max_bytes 262_144
   @first_version "0.1.0"
-  @outcomes ~w(tree no_tree died)
+  @outcomes ~w(ready not_ready died)
   @placement "canvas"
 
   @typedoc "A canvas-readable stream as the catalog lists it."
@@ -68,8 +68,8 @@ defmodule Compendium.Canvas do
           refresh: boolean()
         }
 
-  @typedoc "The catalog: the toolkit majors and every canvas-readable stream, by name."
-  @type catalog :: %{toolkit: [pos_integer()], streams: [catalog_stream()]}
+  @typedoc "The catalog: every canvas-readable stream, by name."
+  @type catalog :: %{streams: [catalog_stream()]}
 
   @typedoc "A canvas's versions document and the revision it was read at."
   @type versions :: %{
@@ -82,7 +82,10 @@ defmodule Compendium.Canvas do
   @spec module_max_bytes() :: pos_integer()
   def module_max_bytes, do: @module_max_bytes
 
-  @doc "The outcomes a validation reports to `activate/2`: a tree, no tree, or a dead candidate."
+  @doc """
+  The outcomes a validation reports to `activate/2`: the page was ready,
+  it was not ready by the deadline, or it died.
+  """
   @spec outcomes() :: [String.t()]
   def outcomes, do: @outcomes
 
@@ -92,8 +95,7 @@ defmodule Compendium.Canvas do
   and `"streams"` (a list of `{name, subject}` objects, the streams it
   reads).
 
-  The manifest (`frame.placement` `canvas`, `canvas`
-  `{"module": "#{@module_file}", "toolkit": 1}` and the streams) is held
+  The manifest (`frame.placement` `canvas` and the streams) is held
   to the manifest's grammar, the tincture rules and the streams a canvas
   may read before anything is allocated, so a refused write allocates
   nothing. A name some installed version of which is not a canvas is a
@@ -138,15 +140,15 @@ defmodule Compendium.Canvas do
   version is spent first, for every outcome, and nothing is activated
   without it: `forbidden` (`not_validated`) for a frame holding none,
   `not_owner` on a member that lost its slot, `forbidden`
-  (`not_primary`) from a frame's own context. For a tree the version's
+  (`not_primary`) from a frame's own context. For `ready` the version's
   tincture grant is then checked as a frame's opening checks it, though
   validation already ran under it: `consent_required` while it waits
   for the person. Then the document is published at the revision read,
   `working` the version and `kept` the one it replaces, the failure
   cleared; or, for any other outcome, `failed` the version, the outcome
-  and now, and nothing else. A tree for the version already working
+  and now, and nothing else. `ready` for the version already working
   publishes nothing and answers the document as it stands, so the kept
-  version stays the way back. A tree for a version older than the
+  version stays the way back. `ready` for a version older than the
   working one, in version order, publishes nothing and answers
   `conflict`: a newer version of the canvas is working, and `working` and
   `kept` stay as they were.
@@ -168,7 +170,7 @@ defmodule Compendium.Canvas do
        %{
          canvas: name,
          version: version,
-         activated: outcome == "tree",
+         activated: outcome == "ready",
          revision: published,
          document: document
        }}
@@ -196,7 +198,7 @@ defmodule Compendium.Canvas do
          {:ok, kept} <- kept(stored, name),
          {:ok, installed} <- installed(ctx, name),
          :ok <- still_installed(installed, name, kept),
-         :ok <- granted(ctx, name, kept, "tree"),
+         :ok <- granted(ctx, name, kept, "ready"),
          restored = %{stored | working: kept, kept: stored.working},
          {:ok, published} <- publish(ctx, name, restored, revision) do
       {:ok, %{canvas: name, revision: published, document: restored}}
@@ -220,9 +222,8 @@ defmodule Compendium.Canvas do
 
   @doc """
   What a canvas may read, derived from the operation table and never
-  written by hand: the toolkit majors (`Compendium.tincture_toolkit_majors/0`)
-  and every stream whose declaration carries a shape (`Sanctum.Catalog.streams/0`),
-  sorted by name, each with its subject grammar (the source of its anchored
+  written by hand: every stream whose declaration carries a shape
+  (`Sanctum.Catalog.streams/0`), sorted by name, each with its subject grammar (the source of its anchored
   expression, or nil for none), its shape, its filter and whether it
   refreshes. Shapes and names, never a value.
   """
@@ -240,8 +241,7 @@ defmodule Compendium.Canvas do
         }
       end
 
-    {:ok,
-     %{toolkit: Compendium.tincture_toolkit_majors(), streams: Enum.sort_by(streams, & &1.name)}}
+    {:ok, %{streams: Enum.sort_by(streams, & &1.name)}}
   end
 
   # ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ defmodule Compendium.Canvas do
   # The frame id is named, never echoed: a caller that put a bearer here
   # must not find it in the refusal.
   defp frame(frame) do
-    if Prima.CanvasWire.frame_id?(frame),
+    if Prima.TinctureWire.frame_id?(frame),
       do: {:ok, frame},
       else:
         {:error, {:invalid_argument, "frame is the id of the frame the version was trialled in"}}
@@ -314,10 +314,6 @@ defmodule Compendium.Canvas do
       "version" => version,
       "tincture" => %{
         "frame" => %{"placement" => @placement},
-        "canvas" => %{
-          "module" => @module_file,
-          "toolkit" => hd(Compendium.tincture_toolkit_majors())
-        },
         "streams" => streams
       }
     }
@@ -488,10 +484,10 @@ defmodule Compendium.Canvas do
     end
   end
 
-  # Only a tree activates, and a version activates only under the grant
+  # Only `ready` activates, and a version activates only under the grant
   # its tincture holds now, held to that version: one that reads more than
   # the grant names waits for the person as one with no grant does.
-  defp granted(ctx, name, version, "tree") do
+  defp granted(ctx, name, version, "ready") do
     case Compendium.tincture_grant_revision(ctx, reference(name, version)) do
       {:ok, _revision} -> :ok
       {:error, :ungranted} -> {:error, :consent_required}
@@ -502,11 +498,11 @@ defmodule Compendium.Canvas do
 
   defp granted(_ctx, _name, _version, _outcome), do: :ok
 
-  # A tree for the version already working changes nothing: publishing it
+  # `ready` for the version already working changes nothing: publishing it
   # would make the working version its own kept one and lose the way back.
-  # A tree for a version older than the working one, in version order, is
+  # `ready` for a version older than the working one, in version order, is
   # a late report, and never moves the canvas back past what is working.
-  defp trial(ctx, name, %{working: working} = stored, revision, version, "tree")
+  defp trial(ctx, name, %{working: working} = stored, revision, version, "ready")
        when is_binary(working) do
     case Compendium.Semver.compare(version, working) do
       :eq ->
@@ -519,7 +515,7 @@ defmodule Compendium.Canvas do
             "so #{version} is not activated"}}
 
       :gt ->
-        published_trial(ctx, name, stored, revision, version, "tree")
+        published_trial(ctx, name, stored, revision, version, "ready")
     end
   end
 
@@ -534,7 +530,7 @@ defmodule Compendium.Canvas do
     end
   end
 
-  defp after_trial(stored, version, "tree"),
+  defp after_trial(stored, version, "ready"),
     do: %{stored | working: version, kept: stored.working, failed: nil}
 
   defp after_trial(stored, version, outcome) do

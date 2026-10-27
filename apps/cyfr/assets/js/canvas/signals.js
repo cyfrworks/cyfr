@@ -99,15 +99,12 @@ export function switchChord(event) {
   return null
 }
 
-// What the canvas tells a canvas frame's bridge to post over its port, as
-// a DOM event on the frame's element whose detail is `{verb, args}`: one
-// of the verbs the shell sends a canvas (`posture`, `covered`,
-// `installed`), which the bridge holds to `Prima.CanvasWire` as it posts.
-export const CANVAS_MESSAGE_EVENT = "cyfr:canvas-message"
-
-// The verbs the glass and the shell send a canvas beside its boot and its
-// state.
-export const CANVAS_VERBS = Object.freeze(["posture", "covered", "installed"])
+// What the canvas hook tells a canvas frame's bridge to post over its port,
+// as a DOM event on the frame's element whose detail is `{verb, args}`: its
+// `posture`, what `covered` it, or the `installed` tinctures. The bridge
+// posts it as the wire's message to a canvas (`sdk/wire.js`), and posts
+// nothing the wire refuses.
+export const TO_CANVAS_EVENT = "cyfr:to-canvas"
 
 // A `canvas_installed` payload read back (pushed by `PrismWeb.ShellLive`):
 // `{frame, tinctures}` for a frame id and a list, `null` for anything

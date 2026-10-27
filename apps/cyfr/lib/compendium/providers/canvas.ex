@@ -6,9 +6,9 @@ defmodule Compendium.Providers.Canvas do
   The `canvas` tool: a person's canvases, each a tincture whose placement
   is `canvas`, read and written through `Compendium.Canvas`.
 
-    * `catalog` answers what a canvas may read: the toolkit majors and
-      every canvas-readable stream with its subject grammar, shape, filter
-      and whether it refreshes. Shapes, never values.
+    * `catalog` answers what a canvas may read: every canvas-readable
+      stream with its subject grammar, shape, filter and whether it
+      refreshes. Shapes, never values.
     * `versions` answers a canvas's versions document (which version a
       glass opens, which one is kept, which validation last failed) and
       its revision.
@@ -16,7 +16,7 @@ defmodule Compendium.Providers.Canvas do
       streams it reads, after allocating its version number, and
       registers it. It never edits a version and activates nothing.
     * `activate` reports a glass's trial of a version under its frame's
-      validation credential, which it spends; only a tree activates, and
+      validation credential, which it spends; only `ready` activates, and
       only under the canvas's current grant. Prism calls it, from outside
       any chain.
     * `restore` makes the kept version the working one again, while it
@@ -79,7 +79,7 @@ defmodule Compendium.Providers.Canvas do
               required: true,
               bulk: true,
               description:
-                "write: the canvas's module, the JavaScript the toolkit runs " <>
+                "write: the canvas's module, its JavaScript " <>
                   "(at most #{Compendium.Canvas.module_max_bytes()} bytes)"
             ),
             Arg.new("streams", :json,
@@ -114,7 +114,7 @@ defmodule Compendium.Providers.Canvas do
             Arg.new("outcome", :string,
               required: true,
               enum: Compendium.Canvas.outcomes(),
-              description: "activate: what the trial answered; only a tree activates"
+              description: "activate: what the trial answered; only ready activates"
             )
           ],
           kind: :write,

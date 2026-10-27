@@ -1777,7 +1777,6 @@ defmodule Cyfr.DocsDriftTest do
       "|---|---|",
       "| `frame` | #{list.(keys.(%Prima.Manifest.Tincture.Frame{}))} |",
       "| `frame.placement` | one of #{list.(Compendium.Tincture.Rules.placements())} |",
-      "| `canvas` | #{list.(keys.(%Prima.Manifest.Tincture.Canvas{}))} |",
       "| `streams[]` | #{list.(keys.(%Prima.Manifest.Tincture.Stream{name: ""}))} |",
       "| `actions[]` | an operation name, `tool.action` |"
     ]
@@ -1798,8 +1797,9 @@ defmodule Cyfr.DocsDriftTest do
         "| `cyfr.#{name}(#{args})` | `POST #{Prima.TinctureWire.route(kind)}` |"
       end
 
+    # Every frame's verbs; a canvas's own are the guide's canvas section's.
     verbs =
-      for verb <- Prima.TinctureWire.verbs(),
+      for verb <- Prima.TinctureWire.verbs() -- Prima.TinctureWire.canvas_verbs(),
           do:
             "| `cyfr.#{verb}(#{Map.get(@sdk_verb_args, verb, "")})` | the shell's port, `#{verb}` |"
 
@@ -1844,45 +1844,14 @@ defmodule Cyfr.DocsDriftTest do
       |> List.flatten()
       |> Enum.sort()
 
+    # `failed` is the SDK's own report of a page that fails before it is
+    # ready, never a call; `on` hears what the shell sends a canvas.
     wire =
       Enum.map(Prima.TinctureWire.kinds(), &elem(Map.fetch!(@sdk_requests, &1), 0)) ++
-        Enum.map(Prima.TinctureWire.verbs(), &Atom.to_string/1)
+        Enum.map(Prima.TinctureWire.verbs() -- [:failed], &Atom.to_string/1) ++ ["on"]
 
     assert methods == Enum.sort(wire),
            "the SDK's calls #{inspect(methods)} are not the wire's #{inspect(Enum.sort(wire))}"
-  end
-
-  # The elements a canvas's tree may name are the toolkit's `ELEMENTS`
-  # (`elements.js`), which its own tests hold to the grammar (`tree.js`).
-  # The guide lists them, one per line and in that order, in a block the
-  # Artisan role does not carry.
-  test "the tincture guide's canvas elements are the toolkit's" do
-    source = File.read!(Path.join(@repo_root, "apps/cyfr/assets/js/toolkit/elements.js"))
-
-    [_, list] =
-      Regex.run(~r/^export const ELEMENTS = Object\.freeze\(\[(.*?)\]\)/ms, source) ||
-        flunk("elements.js declares no `export const ELEMENTS = Object.freeze([…])`")
-
-    elements = ~r/"([^"]+)"/ |> Regex.scan(list, capture: :all_but_first) |> List.flatten()
-
-    assert elements != [], "elements.js's ELEMENTS names no element"
-
-    # Every entry is a double-quoted name: anything else in the list would
-    # be an element this reading drops, and the guide would pass without it.
-    assert Regex.replace(~r/"[^"]+"|,|\s/, list, "") == "",
-           "elements.js's ELEMENTS holds something other than double-quoted names"
-
-    expected = Enum.map_join(elements, "\n", &"- `#{&1}`")
-    guide = File.read!(Path.join(@repo_root, "tincture-guide.md"))
-
-    assert tincture_block(guide, "canvas-elements") == expected,
-           """
-           tincture-guide.md's canvas-elements list is not the toolkit's ELEMENTS (or it has no block). It reads:
-
-           <!-- tincture:canvas-elements -->
-           #{expected}
-           <!-- /tincture:canvas-elements -->
-           """
   end
 
   # A layout is published only through the layout tool: `layout.edit`
@@ -2035,32 +2004,6 @@ defmodule Cyfr.DocsDriftTest do
     assert paragraph =~ "A person has one layout in each athanor.",
            "tincture-guide.md's layout paragraph does not say a person has one layout in each " <>
              "athanor"
-  end
-
-  # The toolkit's module worker fails the canvas on an error the module
-  # throws or a rejection nothing handles, and the shell takes that failure
-  # as safe mode `crashed`. The guide's toolkit section says so, so a canvas
-  # author catches a refused stream rather than losing the canvas to it.
-  test "the tincture guide says an uncaught error in a canvas module fails the canvas" do
-    worker = File.read!(Path.join(@repo_root, "apps/cyfr/assets/js/toolkit/worker.js"))
-
-    for event <- ["error", "unhandledrejection"] do
-      assert worker =~ ~s{listen("#{event}", () => fail("runtime"))},
-             "the toolkit's module worker does not fail the canvas on #{event}; say what it " <>
-               "does in tincture-guide.md's toolkit section"
-    end
-
-    [_, after_heading] =
-      String.split(tincture_guide(), "### The toolkit and the tree\n", parts: 2)
-
-    [section | _] = String.split(after_heading, "\n### ", parts: 2)
-
-    assert section =~
-             "An error the module does not catch fails the canvas: a throw out of its code, " <>
-               "or a rejection nothing handles, such as a refused `canvas.stream` without a " <>
-               "`catch`, puts the shell into safe mode (`crashed`).",
-           "tincture-guide.md's toolkit section does not say an uncaught error in the module " <>
-             "fails the canvas into safe mode"
   end
 
   defp tincture_guide, do: File.read!(Path.join(@repo_root, "tincture-guide.md"))

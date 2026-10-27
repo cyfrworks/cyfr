@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import {afterEach, describe, test} from "node:test"
 
 import {CyfrError, createClient} from "../../js/sdk/client.js"
-import {CREDENTIAL, HANDSHAKE, credentialClosed} from "../../js/sdk/wire.js"
+import {CREDENTIAL, HANDSHAKE, credentialClosed, toFrameMessage} from "../../js/sdk/wire.js"
 import {credentialOf, eventually, fixture, frameWindow, nextMessage, stubServer} from "./support.mjs"
 
 const FRAME = "frm_01a09fee2e4f"
@@ -24,7 +24,7 @@ async function frameClient({answer, framed = true, pathname, handshakeTimeoutMs,
   const server = await stubServer(answer || fixtureAnswer)
   cleanups.push(server.close)
   const win = frameWindow({framed, pathname})
-  const {api, onWindowMessage} = createClient({win, fetchFn, base: server.base, handshakeTimeoutMs})
+  const {api, onWindowMessage, onPageError} = createClient({win, fetchFn, base: server.base, handshakeTimeoutMs})
 
   const handshake = ({source = win.parent, frame = FRAME, credential = CREDENTIAL_VALUE} = {}) => {
     const channel = new MessageChannel()
@@ -34,7 +34,7 @@ async function frameClient({answer, framed = true, pathname, handshakeTimeoutMs,
     return channel.port1
   }
 
-  return {api, onWindowMessage, handshake, server, win}
+  return {api, onWindowMessage, onPageError, handshake, server, win}
 }
 
 const route = (url) => Object.entries(fixture.routes).find(([, path]) => path === url)?.[0]
@@ -272,12 +272,13 @@ describe("the shell replaces the credential over the port", () => {
 })
 
 describe("shell verbs go over the port", () => {
+  // A canvas's own verbs, `press` and `failed`, are its page's alone (below).
   test("each verb is the wire's message for this frame", async () => {
     const {api, handshake} = await frameClient()
     const shell = handshake()
     await eventually(() => api.frame === FRAME)
 
-    for (const {verb, message} of fixture.shell) {
+    for (const {verb, message} of fixture.shell.filter(({verb}) => verb !== "press" && verb !== "failed")) {
       const received = nextMessage(shell)
       if (verb === "open") api.open(message.args.ref)
       else if (verb === "title") api.title(message.args.title)
@@ -285,6 +286,23 @@ describe("shell verbs go over the port", () => {
       else api[verb]()
       assert.deepEqual(await received, message, verb)
     }
+  })
+
+  test("a page that is no canvas sends no press and no failure", async () => {
+    const {api, handshake, onPageError} = await frameClient()
+    const shell = handshake()
+    const received = []
+    shell.onmessage = (event) => received.push(event.data)
+    const press = fixture.shell.find((vector) => vector.verb === "press").message.args
+
+    onPageError({message: "the page's own bug"})
+    api.press(press.binding, press.action)
+    // The positive control: a verb after them arrives, alone.
+    api.ready()
+
+    await eventually(() => received.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(received, [{v: 1, verb: "ready", frame: FRAME, args: {}}])
   })
 
   test("there is no verb that raises the frame", async () => {
@@ -444,5 +462,349 @@ describe("a public tincture's top-level page names itself", () => {
     assert.equal(api.public, null)
     await assert.rejects(api.action("execution.list", {}), {code: "no_frame"})
     assert.equal(server.requests.length, 0)
+  })
+})
+
+// ---- a canvas's page ----------------------------------------------------------
+
+// The fixture's canvas open: its frame, credential and canvas block, as the
+// shell's handshake reply carries them, and the route its streams take.
+const [{frame: CANVAS, reply: OPEN}] = fixture.canvas.handshake.valid
+const [{stream_path: STREAM_PATH}] = fixture.canvas.paths.valid.filter(({frame}) => frame === CANVAS)
+const DECLARED = OPEN.canvas.streams[0]
+const PRESS = fixture.shell.find((vector) => vector.verb === "press").message.args
+
+// A canvas page's SDK. `open()` plays the bridge for a canvas: the
+// handshake from the parent window, then over the port the canvas message,
+// the credential and anything in `told`; `heard` is every message the page
+// posts the shell.
+async function canvasClient({block = OPEN.canvas} = {}) {
+  const answer = (request) => (request.url === STREAM_PATH ? {stream: streamEvents} : fixtureAnswer(request))
+  const client = await frameClient({answer})
+  const heard = []
+
+  const open = (told = []) => {
+    const channel = new MessageChannel()
+    cleanups.push(() => channel.port1.close())
+    channel.port1.onmessage = (event) => heard.push(event.data)
+    client.onWindowMessage({source: client.win.parent, data: {v: 1, type: HANDSHAKE, frame: CANVAS}, ports: [channel.port2]})
+    channel.port1.postMessage(toFrameMessage("canvas", CANVAS, block))
+    channel.port1.postMessage({v: 1, type: CREDENTIAL, frame: CANVAS, credential: OPEN.credential})
+    for (const [verb, args] of told) channel.port1.postMessage(toFrameMessage(verb, CANVAS, args))
+    return channel.port1
+  }
+
+  return {...client, open, heard}
+}
+
+// Everything posted on the port before this has been read once it resolves:
+// a port delivers in order, and the SDK's own verbs answer in order too.
+async function settled({api, heard}) {
+  const count = heard.length
+  api.ready()
+  await eventually(() => heard.length > count)
+}
+
+// What the page heard of what the shell told it, after the port drained.
+const tick = () => new Promise((resolve) => setTimeout(resolve, 20))
+
+describe("a canvas's streams go to its open's data path", () => {
+  test("a declared stream posts the stream body to the stream route, under the canvas's credential", async () => {
+    const {api, open, server} = await canvasClient()
+    open()
+
+    const events = []
+    const handle = await api.stream(DECLARED.name, DECLARED.subject, (event) => events.push(event))
+    await handle.closed
+
+    assert.deepEqual(events, EVENTS)
+    assert.equal(server.requests.length, 1)
+    const [request] = server.requests
+    assert.equal(request.method, "POST")
+    assert.equal(request.url, STREAM_PATH)
+    assert.equal(request.headers.authorization, `Bearer ${OPEN.credential}`)
+    assert.deepEqual(request.body, {v: 1, stream: DECLARED.name, subject: DECLARED.subject})
+  })
+
+  test("a stream asked for before the handshake goes there once the canvas is open", async () => {
+    const {api, open, server} = await canvasClient()
+    const opened = api.stream(DECLARED.name, DECLARED.subject, () => {})
+    await tick()
+    assert.equal(server.requests.length, 0)
+
+    open()
+    await (await opened).closed
+    assert.deepEqual(
+      server.requests.map((request) => request.url),
+      [STREAM_PATH]
+    )
+  })
+
+  test("a pair the canvas does not declare is refused before anything is sent", async () => {
+    const {api, open, server} = await canvasClient()
+    open()
+
+    for (const [name, subject] of [
+      ["executions.deltas", null],
+      [DECLARED.name, "doge"],
+      [DECLARED.name, null]
+    ]) {
+      await assert.rejects(api.stream(name, subject, () => {}), (error) => {
+        assert.ok(error instanceof CyfrError)
+        assert.equal(error.code, "forbidden")
+        assert.equal(error.stage, "admission")
+        return true
+      })
+    }
+    assert.equal(server.requests.length, 0)
+  })
+
+  test("a canvas that declares nothing opens no stream", async () => {
+    const {api, open, server} = await canvasClient({block: {...OPEN.canvas, streams: []}})
+    open()
+    await assert.rejects(api.stream(DECLARED.name, DECLARED.subject, () => {}), {code: "forbidden"})
+    assert.equal(server.requests.length, 0)
+  })
+
+  test("a second canvas message, or one for another frame, changes nothing", async () => {
+    const {api, open, server} = await canvasClient()
+    const shell = open()
+    shell.postMessage(toFrameMessage("canvas", CANVAS, {...OPEN.canvas, streams: [{name: "executions.deltas", subject: null}]}))
+    shell.postMessage(
+      toFrameMessage("canvas", "frm_00aa11bb22", {
+        mode: "live",
+        data_path: "/_f/v1/o/frm_00aa11bb22/",
+        streams: [{name: "executions.deltas", subject: null}]
+      })
+    )
+    await tick()
+
+    await assert.rejects(api.stream("executions.deltas", null, () => {}), {code: "forbidden"})
+    await (await api.stream(DECLARED.name, DECLARED.subject, () => {})).closed
+    assert.deepEqual(
+      server.requests.map((request) => request.url),
+      [STREAM_PATH]
+    )
+  })
+})
+
+describe("a canvas asks the shell", () => {
+  test("press is the wire's press for this frame", async () => {
+    const {api, open, heard} = await canvasClient()
+    open()
+    await eventually(() => api.frame === CANVAS)
+
+    api.press(PRESS.binding, PRESS.action)
+    api.open("t:local.weather-lookup")
+    api.ready()
+
+    await eventually(() => heard.length === 3)
+    assert.deepEqual(heard, [
+      {v: 1, verb: "press", frame: CANVAS, args: PRESS},
+      {v: 1, verb: "open", frame: CANVAS, args: {ref: "t:local.weather-lookup"}},
+      {v: 1, verb: "ready", frame: CANVAS, args: {}}
+    ])
+  })
+})
+
+describe("a canvas hears what the shell tells it", () => {
+  const [installed] = fixture.canvas.to_frame.valid.filter(({message}) => message.verb === "installed")
+  const [covered] = fixture.canvas.to_frame.valid.filter(
+    ({message}) => message.verb === "covered" && message.args.rects.length > 0
+  )
+
+  test("each of installed, posture, covered and state, as its value", async () => {
+    const {api, open} = await canvasClient()
+    const seen = []
+    for (const event of ["installed", "posture", "covered", "state"]) {
+      api.on(event, (value) => seen.push([event, value]))
+    }
+
+    open([
+      ["installed", installed.message.args],
+      ["posture", {posture: "hand"}],
+      ["covered", covered.message.args],
+      ["state", {state: "frozen"}]
+    ])
+
+    await eventually(() => seen.length === 4)
+    assert.deepEqual(seen, [
+      ["installed", installed.message.args.tinctures],
+      ["posture", "hand"],
+      ["covered", covered.message.args.rects],
+      ["state", "frozen"]
+    ])
+  })
+
+  test("a handler that comes late is handed the latest value first, then each after", async () => {
+    const client = await canvasClient()
+    const shell = client.open([
+      ["posture", {posture: "desk"}],
+      ["posture", {posture: "hand"}]
+    ])
+    await settled(client)
+    await tick()
+
+    const {api} = client
+    const late = []
+    api.on("posture", (value) => late.push(value))
+    await tick()
+    assert.deepEqual(late, ["hand"])
+
+    shell.postMessage(toFrameMessage("posture", CANVAS, {posture: "desk"}))
+    await eventually(() => late.length === 2)
+    assert.deepEqual(late, ["hand", "desk"])
+
+    // Nothing told yet: a handler hears nothing until something comes.
+    const none = []
+    api.on("installed", (value) => none.push(value))
+    await tick()
+    assert.deepEqual(none, [])
+  })
+
+  test("the function on returns stops its handler alone", async () => {
+    const {api, open} = await canvasClient()
+    const shell = open()
+    const kept = []
+    const stopped = []
+    api.on("state", (value) => kept.push(value))
+    const stop = api.on("state", (value) => stopped.push(value))
+
+    shell.postMessage(toFrameMessage("state", CANVAS, {state: "frozen"}))
+    await eventually(() => kept.length === 1 && stopped.length === 1)
+    stop()
+    shell.postMessage(toFrameMessage("state", CANVAS, {state: "live"}))
+    await eventually(() => kept.length === 2)
+    await tick()
+
+    assert.deepEqual(kept, ["frozen", "live"])
+    assert.deepEqual(stopped, ["frozen"])
+  })
+
+  test("what the wire refuses, another frame's, and anything told a page that is no canvas reach no handler", async () => {
+    const {api, open} = await canvasClient()
+    const shell = open()
+    const seen = []
+    api.on("posture", (value) => seen.push(value))
+
+    shell.postMessage({v: 1, verb: "posture", frame: CANVAS, args: {posture: "lap"}})
+    shell.postMessage({v: 1, verb: "posture", frame: "frm_00aa11bb22", args: {posture: "hand"}})
+    shell.postMessage(toFrameMessage("posture", CANVAS, {posture: "hand"}))
+    await eventually(() => seen.length === 1)
+    await tick()
+    assert.deepEqual(seen, ["hand"])
+
+    const plain = await frameClient()
+    const port = plain.handshake()
+    const unheard = []
+    plain.api.on("posture", (value) => unheard.push(value))
+    port.postMessage(toFrameMessage("posture", FRAME, {posture: "hand"}))
+    await tick()
+    assert.deepEqual(unheard, [])
+  })
+
+  test("on takes the four events and a function", async () => {
+    const {api} = await canvasClient()
+    assert.throws(() => api.on("canvas", () => {}), TypeError)
+    assert.throws(() => api.on("tree", () => {}), TypeError)
+    assert.throws(() => api.on("posture"), TypeError)
+  })
+})
+
+describe("a canvas reports its own failure, once", () => {
+  const failed = (stage) => ({v: 1, verb: "failed", frame: CANVAS, args: {stage}})
+  const uncaught = (message = "TypeError: x is undefined") => ({message})
+  const rejected = () => ({reason: new Error("no")})
+
+  test("an uncaught error before ready() is a failure to load", async () => {
+    const {open, heard, onPageError, api} = await canvasClient()
+    open()
+    await eventually(() => api.frame === CANVAS)
+
+    onPageError(uncaught())
+    onPageError(uncaught())
+    await eventually(() => heard.length === 1)
+    await tick()
+    assert.deepEqual(heard, [failed("load")])
+  })
+
+  test("an unhandled rejection before ready() is a failure to load", async () => {
+    const {open, heard, onPageError, api} = await canvasClient()
+    open()
+    await eventually(() => api.frame === CANVAS)
+
+    onPageError(rejected())
+    await eventually(() => heard.length === 1)
+    assert.deepEqual(heard, [failed("load")])
+  })
+
+  test("one while the page loads, before its handshake, is reported once the canvas is open, and its ready() never", async () => {
+    const {open, heard, onPageError, api} = await canvasClient()
+    onPageError(uncaught())
+    api.ready()
+    api.open("t:local.weather-lookup")
+
+    open()
+    await eventually(() => heard.length === 2)
+    await tick()
+    assert.deepEqual(heard, [failed("load"), {v: 1, verb: "open", frame: CANVAS, args: {ref: "t:local.weather-lookup"}}])
+  })
+
+  test("an uncaught error after ready() is a failure at runtime", async () => {
+    const {open, heard, onPageError, api} = await canvasClient()
+    open()
+    api.ready()
+    await eventually(() => heard.length === 1)
+
+    onPageError(uncaught())
+    onPageError(rejected())
+    await eventually(() => heard.length === 2)
+    await tick()
+    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}, failed("runtime")])
+  })
+
+  test("an unhandled rejection after ready() is a failure at runtime", async () => {
+    const {open, heard, onPageError, api} = await canvasClient()
+    open()
+    api.ready()
+    onPageError(rejected())
+    await eventually(() => heard.length === 2)
+    assert.deepEqual(heard.at(-1), failed("runtime"))
+  })
+
+  test("ready() then an error, both before the handshake, arrive in that order", async () => {
+    const {open, heard, onPageError, api} = await canvasClient()
+    api.ready()
+    onPageError(uncaught())
+    open()
+    await eventually(() => heard.length === 2)
+    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}, failed("runtime")])
+  })
+
+  test("the browser's ResizeObserver loop reports are no failure; any other error after them still is", async () => {
+    const {open, heard, onPageError, api} = await canvasClient()
+    open()
+    api.ready()
+    await eventually(() => heard.length === 1)
+
+    onPageError(uncaught("ResizeObserver loop completed with undelivered notifications."))
+    onPageError(uncaught("ResizeObserver loop limit exceeded"))
+    await tick()
+    assert.equal(heard.length, 1)
+
+    // Only those two: a message that merely names ResizeObserver is a failure.
+    onPageError(uncaught("ResizeObserver is not defined"))
+    await eventually(() => heard.length === 2)
+    assert.deepEqual(heard.at(-1), failed("runtime"))
+  })
+
+  test("before ready() too, a ResizeObserver loop report is no failure, and the canvas still becomes ready", async () => {
+    const {open, heard, onPageError, api} = await canvasClient()
+    open()
+    onPageError(uncaught("ResizeObserver loop completed with undelivered notifications."))
+    api.ready()
+    await eventually(() => heard.length === 1)
+    await tick()
+    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}])
   })
 })

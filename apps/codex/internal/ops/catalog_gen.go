@@ -931,7 +931,7 @@ type CanvasActivateArgs struct {
 	Version string `json:"version"`
 	// activate: the id of the frame the version was trialled in
 	Frame string `json:"frame"`
-	// activate: what the trial answered; only a tree activates
+	// activate: what the trial answered; only ready activates
 	Outcome string `json:"outcome"`
 }
 
@@ -991,7 +991,7 @@ func (args CanvasVersionsArgs) MarshalJSON() ([]byte, error) {
 type CanvasWriteArgs struct {
 	// write: the canvas's name, a component name; a new name is a new canvas
 	Name string `json:"name"`
-	// write: the canvas's module, the JavaScript the toolkit runs (at most 262144 bytes)
+	// write: the canvas's module, its JavaScript (at most 262144 bytes)
 	Module string `json:"module"`
 	// write: the streams the canvas reads, [{name, subject}], from catalog's streams; a feed's results name the feed as the subject
 	Streams any `json:"streams"`

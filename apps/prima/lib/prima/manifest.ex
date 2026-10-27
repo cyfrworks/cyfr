@@ -11,8 +11,8 @@ defmodule Prima.Manifest do
   representations (nil, JSON string, map) into a map. `validate/2` holds a
   decoded manifest to the schema; the `needs`, `caps` and `provides`
   blocks are `Prima.Manifest.Needs`, `Prima.Manifest.Caps` and
-  `Prima.Manifest.Provides`, the tincture's frame, canvas, streams
-  and actions `Prima.Manifest.Tincture`, and the operations'
+  `Prima.Manifest.Provides`, the tincture's frame, streams and
+  actions `Prima.Manifest.Tincture`, and the operations'
   result shapes `Prima.Manifest.Results`. Which storage paths a
   guest may name is the storage boundary's fact, so the validator takes
   that predicate as an argument (`Arca.Storage.valid_guest_path?/1` at
@@ -333,7 +333,7 @@ defmodule Prima.Manifest do
 
   defp validate_tincture_block(_), do: :ok
 
-  # The frame, canvas, streams and actions blocks are held to their shapes
+  # The frame, streams and actions blocks are held to their shapes
   # here, at every write; the rules over the names they use are the
   # component domain's publish check.
   defp declaration(manifest) do

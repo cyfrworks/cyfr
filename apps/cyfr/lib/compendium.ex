@@ -115,7 +115,7 @@ defmodule Compendium do
   defdelegate tincture_lockfile_required?(manifest), to: Rules, as: :lockfile_required?
 
   @doc """
-  A manifest's frame, canvas, streams and system actions, held to the rules
+  A manifest's frame, streams and system actions, held to the rules
   (`Compendium.Tincture.Rules.validate_declaration/1`).
   """
   @spec tincture_declaration(term()) ::
@@ -171,29 +171,26 @@ defmodule Compendium do
     as: :check_canvas_streams
 
   @doc """
-  Whether a canvas version's files hold its module and no page of its own
+  Whether a canvas version's files hold its page, its entry
   (`Compendium.Tincture.Rules.check_canvas_files/2`).
   """
-  @spec tincture_check_canvas_files(Prima.Manifest.Tincture.t(), [String.t()]) ::
-          :ok | {:error, Rules.refusal()}
-  defdelegate tincture_check_canvas_files(declaration, paths),
+  @spec tincture_check_canvas_files(term(), [String.t()]) :: :ok | {:error, Rules.refusal()}
+  defdelegate tincture_check_canvas_files(manifest, paths),
     to: Rules,
     as: :check_canvas_files
 
-  @doc """
-  The module a canvas's manifest names, which is its entry
-  (`Compendium.Tincture.Rules.canvas_module/1`).
-  """
-  @spec tincture_canvas_module(term()) :: {:ok, String.t()} | {:error, Rules.refusal()}
-  defdelegate tincture_canvas_module(manifest), to: Rules, as: :canvas_module
-
-  @doc "The toolkit majors a canvas may name (`Compendium.Tincture.Rules.toolkit_majors/0`)."
-  @spec tincture_toolkit_majors() :: [pos_integer()]
-  defdelegate tincture_toolkit_majors(), to: Rules, as: :toolkit_majors
-
-  @doc "A canvas's one Content Security Policy (`Compendium.Tincture.Rules.canvas_page_csp/1`)."
+  @doc "A canvas page's one Content Security Policy (`Compendium.Tincture.Rules.canvas_page_csp/1`)."
   @spec tincture_canvas_page_csp(Rules.canvas_csp_opts()) :: String.t()
   defdelegate tincture_canvas_page_csp(opts), to: Rules, as: :canvas_page_csp
+
+  @doc """
+  A canvas page's `Connection-Allowlist` header value
+  (`Compendium.Tincture.Rules.canvas_connection_allowlist/0`).
+  """
+  @spec tincture_canvas_connection_allowlist() :: String.t()
+  defdelegate tincture_canvas_connection_allowlist(),
+    to: Rules,
+    as: :canvas_connection_allowlist
 
   @doc "A canvas frame's `sandbox` tokens (`Compendium.Tincture.Rules.canvas_sandbox_tokens/0`)."
   @spec tincture_canvas_sandbox_tokens() :: [String.t()]

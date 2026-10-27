@@ -19,7 +19,7 @@ defmodule Sanctum.TinctureAuth do
   source's rows at every fetch (`mint_asset_credential/2`,
   `verify_asset_credential/2`). The window is the platform setting
   `asset_credential_window_s`, capped by the source's remaining life. A
-  canvas's host page is served under the same credential, for the frame
+  canvas's page is served under the same credential, for the frame
   its path names, read under that credential's authority and held to its
   version (`page_frame/2`).
 
@@ -810,7 +810,7 @@ defmodule Sanctum.TinctureAuth do
   end
 
   @doc """
-  The frame `frame_id` a canvas's host page names, read under the
+  The frame `frame_id` a canvas's page names, read under the
   authority of the page's asset credential (`verify_asset_credential/2`):
   the row of that frame id in the authority's athanor, of the authority's
   person. It answers the tincture version the frame opened and its digest

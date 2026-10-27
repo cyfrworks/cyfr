@@ -21,7 +21,7 @@ defmodule PrismWeb.ShellLive do
   keyed `{:canvas, id}`, and holds the `column` apps and the floating
   tinctures the layout places over it. A canvas whose newest installed
   version is not its working version, its kept version or its recorded
-  failure is validated first (`Prism.CanvasValidation`): only a tree
+  failure is validated first (`Prism.CanvasValidation`): only `ready`
   activates it. When a validation ends, the shell compares again: a newer
   version written meanwhile that needs validating is validated in its
   turn, each such version once, and otherwise the working version opens.
@@ -45,17 +45,21 @@ defmodule PrismWeb.ShellLive do
   once opened stays held until the shell ends, the layout drops it or safe
   mode clears every frame, and showing it again thaws it.
 
-  A canvas frame speaks `Prima.CanvasWire` over the port its bridge hands
-  it, as `canvas_verb`. Its handshake hands it `boot`, the bearer inside
-  it; `installed` (every listed tincture that is not a canvas, by name) is
-  pushed to each held canvas frame after its handshake and whenever the
-  listing changes, and `posture`, `covered` and `state` come from the glass.
-  From the live, visible canvas, `ready` keeps it out of safe mode, `open`
-  opens a listed tincture where the canvas's arrangement puts it (or `full`
-  in the hand, the next `column` on the desk), and `press` presses a feed's
-  action through `feed.press` once the served version's declaration reads
-  that feed; `tree` is dropped. From a validation frame only `tree` and
-  `failed` act. Anything else is dropped and counted.
+  A canvas frame is a page like any tincture's: its messages over the
+  port its bridge hands it are the shell verbs of `Prima.TinctureWire`,
+  as `frame_verb`. Its handshake hands it its bearer and its `canvas`
+  block (`Prima.TinctureWire.canvas_handshake/4`); `installed` (every
+  listed tincture that is not a canvas, by name) is pushed to each held
+  canvas frame after its handshake and whenever the listing changes, and
+  `posture`, `covered` and `state` come from the glass. From the live,
+  visible canvas, `ready` keeps it out of safe mode, `failed` at either
+  stage is safe mode `crashed`, `open` opens a listed tincture where the
+  canvas's arrangement puts it (or `full` in the hand, the next `column`
+  on the desk), and `press` presses a feed's action through `feed.press`
+  once the served version's declaration reads that feed. From a
+  validation frame only `ready` and `failed` act. A canvas's other verbs,
+  any verb from a canvas the glass does not show, and `press` and
+  `failed` from a frame that is not a canvas's are dropped and counted.
 
   ## Safe mode
 
@@ -131,8 +135,7 @@ defmodule PrismWeb.ShellLive do
   (`Prism.Frames.renew/4`), and a frame that is not a canvas's is resumed
   under a new bearer when it is shown again: the view pushes each new
   bearer as `frame_bearer`, which the canvas hook relays to that frame's
-  bridge alone, a canvas's bridge sending it over the canvas wire as
-  `credential`, and keeps none. A frozen frame is not renewed, so a canvas
+  bridge alone, and keeps none. A frozen frame is not renewed, so a canvas
   hidden past its deadline is refused when it is shown again.
 
   While a full frame is shown it covers everything under it, so the
@@ -161,9 +164,6 @@ defmodule PrismWeb.ShellLive do
   # before the shell enters safe mode: a page that never loads, and so
   # never handshakes, falls to safe mode as one that loads and dies.
   @canvas_ready_ms 10_000
-
-  # The most tinctures `installed` names (`Prima.CanvasWire`).
-  @max_installed 512
 
   # The stream a canvas reads a feed's results on (`Opus.Providers.Feed`).
   @feed_stream "feed.results"
@@ -410,7 +410,7 @@ defmodule PrismWeb.ShellLive do
 
   # The bridge asks for the frame's credential once, on the frame's first
   # load, and posts it over the port it hands the frame — a canvas frame's
-  # inside its `boot`. The bearer leaves this process once: a second ask —
+  # beside its `canvas` block. The bearer leaves this process once: a second ask —
   # a reload, a navigation inside the frame, another script on the page —
   # is answered with nothing.
   def handle_event("frame_handshake", %{"frame" => frame_id}, socket) do
@@ -428,38 +428,22 @@ defmodule PrismWeb.ShellLive do
     do: {:reply, %{error: "no_credential"}, socket}
 
   # A shell verb the frame posted over its port. The bridge names the frame
-  # whose port it came from, and the message must name the same one. A
-  # canvas frame speaks the canvas wire, never this one.
+  # whose port it came from, and the message must name the same one, which
+  # this view holds live. A canvas or validation frame's verb is a
+  # canvas's; any other frame's is a tincture's.
   def handle_event("frame_verb", %{"frame" => frame_id, "message" => message}, socket)
       when is_binary(frame_id) do
     with {:ok, %{frame: ^frame_id} = decoded} <- Prima.TinctureWire.decode_shell_message(message),
-         {:ok, %{key: key} = frame} <- Frames.attribute(socket.assigns.frames, frame_id),
-         false <- Frames.canvas_key?(key) do
-      {:noreply, shell_verb(socket, frame, decoded)}
+         {:ok, %{key: key} = frame} <- Frames.attribute(socket.assigns.frames, frame_id) do
+      if Frames.canvas_key?(key),
+        do: {:noreply, canvas_verb(socket, frame, decoded)},
+        else: {:noreply, shell_verb(socket, frame, decoded)}
     else
       _ -> {:noreply, drop_message(socket)}
     end
   end
 
   def handle_event("frame_verb", _params, socket), do: {:noreply, drop_message(socket)}
-
-  # A canvas wire verb a canvas or validation frame posted over its port,
-  # read as `Prima.CanvasWire` reads it: a verb of the toolkit's direction,
-  # naming the frame whose port it came from, which this view holds live
-  # under a canvas or validation key.
-  def handle_event("canvas_verb", %{"frame" => frame_id, "message" => message}, socket)
-      when is_binary(frame_id) do
-    with {:ok, %{frame: ^frame_id, verb: verb} = decoded} <- Prima.CanvasWire.decode(message),
-         true <- verb in Prima.CanvasWire.to_prism_verbs(),
-         {:ok, %{key: key} = frame} <- Frames.attribute(socket.assigns.frames, frame_id),
-         true <- Frames.canvas_key?(key) do
-      {:noreply, canvas_verb(socket, frame, decoded)}
-    else
-      _ -> {:noreply, drop_message(socket)}
-    end
-  end
-
-  def handle_event("canvas_verb", _params, socket), do: {:noreply, drop_message(socket)}
 
   # A canvas frame loaded a second time: its port is closed and it is
   # spent. A validation frame's death is the validation's outcome `died`;
@@ -622,15 +606,22 @@ defmodule PrismWeb.ShellLive do
   # Shell verbs
   # ============================================================================
 
-  defp shell_verb(socket, %{key: key}, %{verb: :close}),
+  # A press and a failure are a canvas's alone (`Prima.TinctureWire.canvas_verbs/0`).
+  defp shell_verb(socket, frame, %{verb: verb} = decoded) do
+    if verb in Prima.TinctureWire.canvas_verbs(),
+      do: drop_message(socket),
+      else: tincture_verb(socket, frame, decoded)
+  end
+
+  defp tincture_verb(socket, %{key: key}, %{verb: :close}),
     do: frames(socket, &Frames.discard(socket.assigns.context, &1, key))
 
-  defp shell_verb(socket, _frame, %{verb: :ready}), do: socket
+  defp tincture_verb(socket, _frame, %{verb: :ready}), do: socket
 
   # A secret is typed into the shell's own prompt, never into a frame, and
   # only for a frame the person can see whose version declares the vault
   # write the prompt makes. One prompt per frame at a time.
-  defp shell_verb(socket, %{id: id, visible: true} = frame, %{
+  defp tincture_verb(socket, %{id: id, visible: true} = frame, %{
          verb: :credential,
          args: %{"name" => name}
        }) do
@@ -651,9 +642,9 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  defp shell_verb(socket, _frame, %{verb: :credential}), do: drop_message(socket)
+  defp tincture_verb(socket, _frame, %{verb: :credential}), do: drop_message(socket)
 
-  defp shell_verb(socket, %{tincture_id: tincture_id}, %{
+  defp tincture_verb(socket, %{tincture_id: tincture_id}, %{
          verb: :title,
          args: %{"title" => title}
        }) do
@@ -668,7 +659,7 @@ defmodule PrismWeb.ShellLive do
 
   # `open` names a tincture this shell lists, versionless or at the
   # version it lists; anything else opens nothing.
-  defp shell_verb(socket, _frame, %{verb: :open, args: %{"ref" => ref}}) do
+  defp tincture_verb(socket, _frame, %{verb: :open, args: %{"ref" => ref}}) do
     case listed(socket, ref) do
       %{id: id} -> launch_tincture(socket, id)
       nil -> drop_message(socket)
@@ -700,17 +691,17 @@ defmodule PrismWeb.ShellLive do
   # Canvas verbs
   # ============================================================================
 
-  # From a validation frame, only its tree and its failure act.
-  defp canvas_verb(socket, %{key: {:validation, canvas_id}}, %{verb: :tree}),
-    do: validation_ended(socket, canvas_id, :tree)
+  # From a validation frame, only its `ready` and its failure act.
+  defp canvas_verb(socket, %{key: {:validation, canvas_id}}, %{verb: :ready}),
+    do: validation_ended(socket, canvas_id, :ready)
 
   defp canvas_verb(socket, %{key: {:validation, canvas_id}}, %{verb: :failed}),
     do: validation_ended(socket, canvas_id, :failed)
 
   defp canvas_verb(socket, %{key: {:validation, _}}, _verb), do: drop_message(socket)
 
-  # From a live canvas a tree is dropped; `ready`, a failure, `open` and
-  # `press` act only from the canvas the glass shows.
+  # From a live canvas `ready`, a failure at either stage, `open` and
+  # `press` act, and only from the canvas the glass shows.
   defp canvas_verb(socket, %{key: {:canvas, canvas_id}} = frame, decoded) do
     if canvas_id == Frames.visible_canvas(socket.assigns.frames),
       do: live_canvas_verb(socket, frame, decoded),
@@ -731,7 +722,7 @@ defmodule PrismWeb.ShellLive do
   defp live_canvas_verb(socket, frame, %{verb: :press, args: args}),
     do: press(socket, frame, args)
 
-  defp live_canvas_verb(socket, _frame, _tree), do: drop_message(socket)
+  defp live_canvas_verb(socket, _frame, _another_verb), do: drop_message(socket)
 
   # A listed tincture opens where the canvas's arrangement puts it for the
   # posture: an app's mode, or a floating entry's position for a tincture
@@ -805,7 +796,7 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  defp reads_feed?(%{boot: %{"streams" => streams}}, feed),
+  defp reads_feed?(%{canvas: %{"streams" => streams}}, feed),
     do: %{"name" => @feed_stream, "subject" => feed} in streams
 
   defp reads_feed?(_frame, _feed), do: false
@@ -894,12 +885,16 @@ defmodule PrismWeb.ShellLive do
   end
 
   # What `installed` carries: every listed tincture that is not a canvas,
-  # as a versionless reference and its name, sorted by name.
+  # as a versionless reference and its name, sorted by name, within the
+  # bounds the canvas's reader holds it to (`Prima.TinctureWire`).
   defp installed(socket) do
+    max_name = Prima.TinctureWire.max_installed_name()
+
     socket.assigns.tinctures
     |> Enum.map(&%{ref: Frames.ref_of(&1), name: &1.name})
+    |> Enum.filter(&(String.length(&1.name) in 1..max_name))
     |> Enum.sort_by(& &1.name)
-    |> Enum.take(@max_installed)
+    |> Enum.take(Prima.TinctureWire.max_installed())
   end
 
   # `installed`, to each frame named.

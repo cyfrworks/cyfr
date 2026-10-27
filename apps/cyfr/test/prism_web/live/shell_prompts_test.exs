@@ -136,10 +136,10 @@ defmodule PrismWeb.ShellPromptsTest do
       name,
       %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "entry" => "index.html",
         "streams" => []
       },
-      [{"canvas.js", "export default (canvas) => canvas.render({type: \"spacer\"})"}]
+      [{"index.html", "<html><head></head><body>canvas</body></html>"}]
     )
   end
 
@@ -255,10 +255,9 @@ defmodule PrismWeb.ShellPromptsTest do
         canvas = Frames.get(frames(view), {:canvas, canvas_id})
         ref = "tincture:local.#{name}"
 
-        render_hook(view, "canvas_verb", %{
+        render_hook(view, "frame_verb", %{
           "frame" => canvas.id,
-          "message" =>
-            Prima.CanvasWire.encode(%{verb: :open, frame: canvas.id, args: %{"ref" => ref}})
+          "message" => Prima.TinctureWire.shell_message(:open, canvas.id, %{"ref" => ref})
         })
     end
   end

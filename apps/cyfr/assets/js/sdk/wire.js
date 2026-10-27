@@ -7,9 +7,12 @@
 // verbs to the shell over its MessagePort. `tests/fixtures/tincture_wire.json`
 // pins both sides; the SDK's tests read it.
 //
-// Beside it, the two messages the shell sends the frame to hand it its port
-// and its credential. They pass only between the shell's bridge and the SDK,
-// so they are defined here, once.
+// Beside it, the messages the shell sends the frame over the port: its port
+// and its credential, and to a canvas its open (`canvas`) and what the
+// shell tells it (`posture`, `covered`, `installed`, `state`). They pass
+// only between the shell's bridge and the SDK, so they are defined here,
+// once; the canvas's are pinned by the fixture's `canvas` section, whose
+// `handshake` rows are the server's reply the bridge reads them from.
 
 export const VERSION = 1
 
@@ -21,7 +24,10 @@ export const ROUTES = Object.freeze({
   stream_open: "/_f/v1/stream"
 })
 
-export const VERBS = Object.freeze(["open", "close", "title", "ready", "credential"])
+export const VERBS = Object.freeze(["open", "close", "title", "ready", "credential", "press", "failed"])
+
+// Where a frame that posts `failed` failed: before its `ready`, or after.
+export const STAGES = Object.freeze(["load", "runtime"])
 
 // Shell to frame, over `window.postMessage` with the port transferred: the
 // frame id, and nothing else.
@@ -53,11 +59,31 @@ export function decodeCredentialClosed(data, frame) {
 const FRAME_ID = /^[A-Za-z0-9_-]{8,64}$/
 const TINCTURE_REF = /^(t|tincture):\S+$/
 const MAX_TITLE = 120
+// `Prima.Feed.binding_id?/1`.
+const BINDING_ID = /^feed_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+// `Prima.Feed.name?/1`: a feed's name, and an action's.
+const ACTION_NAME = /^[a-z0-9][a-z0-9-]{0,47}$/
+// `Prima.Manifest.Tincture.stream_name?/1`.
+const STREAM_NAME = /^[a-z][a-z0-9_]{0,62}(\.[a-z][a-z0-9_]{0,62})+$/
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
 const isObject = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value)
 
 const only = (object, keys) => Object.keys(object).every((key) => keys.includes(key))
+
+// Exactly `keys`, each present once.
+const sameKeys = (object, keys) => {
+  const present = Object.keys(object).sort()
+  const wanted = [...keys].sort()
+  return present.length === wanted.length && present.every((key, i) => key === wanted[i])
+}
+
+// A string with no lone surrogate: what a string of valid UTF-8 is on the
+// server's side.
+const isText = (value) => typeof value === "string" && !LONE_SURROGATE.test(value)
+
+const isTinctureRef = (ref) => typeof ref === "string" && TINCTURE_REF.test(ref)
 
 export function isFrameId(id) {
   return typeof id === "string" && FRAME_ID.test(id)
@@ -265,9 +291,7 @@ function argsError(verb, args) {
   const keys = Object.keys(args)
   switch (verb) {
     case "open":
-      return keys.length === 1 && typeof args.ref === "string" && TINCTURE_REF.test(args.ref)
-        ? null
-        : "open names a tincture reference"
+      return keys.length === 1 && isTinctureRef(args.ref) ? null : "open names a tincture reference"
     case "title":
       return keys.length === 1 &&
         typeof args.title === "string" &&
@@ -279,7 +303,165 @@ function argsError(verb, args) {
       return keys.length === 1 && typeof args.name === "string" && args.name !== ""
         ? null
         : "credential names a vault entry"
+    case "press":
+      return sameKeys(args, ["binding", "action"]) &&
+        typeof args.binding === "string" &&
+        BINDING_ID.test(args.binding) &&
+        typeof args.action === "string" &&
+        ACTION_NAME.test(args.action)
+        ? null
+        : "press names a binding id and an action"
+    case "failed":
+      return sameKeys(args, ["stage"]) && STAGES.includes(args.stage) ? null : "failed names a stage"
     default:
       return keys.length === 0 ? null : verb + " takes no arguments"
   }
+}
+
+// ---- a canvas ----------------------------------------------------------------
+
+// The one data route under a canvas open's data path, and the path's
+// prefix: a canvas's credential reaches only `<data path>stream`.
+const DATA_PREFIX = "/_f/v1/o/"
+const STREAM_ROUTE = "stream"
+
+// A canvas open's data path, the one its page's policy names in
+// `connect-src`: `/_f/v1/o/<frame>/`.
+export function dataPath(frame) {
+  if (!isFrameId(frame)) throw new TypeError("a frame id is 8 to 64 URL-safe characters")
+  return DATA_PREFIX + frame + "/"
+}
+
+// The route a canvas's streams are opened on, under its data path.
+export function streamPath(frame) {
+  return dataPath(frame) + STREAM_ROUTE
+}
+
+// A canvas open is `live` (the person's canvas) or `validation` (a new
+// version trialled in a hidden frame).
+export const MODES = Object.freeze(["live", "validation"])
+
+// Shell to a canvas, over its port: its open, then what the shell tells it.
+export const TO_FRAME_VERBS = Object.freeze(["canvas", "posture", "covered", "installed", "state"])
+
+// What the shell tells a canvas, which its page hears through `cyfr.on`.
+export const CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state"])
+
+const POSTURES = ["desk", "hand"]
+const SHELL_STATES = ["live", "frozen"]
+const MAX_STREAMS = 64
+export const MAX_RECTS = 64
+const RECT_KEYS = ["x", "y", "width", "height"]
+const MAX_TINCTURES = 512
+const MAX_NAME = 128
+
+// The key one declared stream is held under: its name and its subject.
+export const pairKey = ({name, subject}) => JSON.stringify([name, subject])
+
+const bounded = (list, max, each) => Array.isArray(list) && list.length <= max && list.every(each)
+
+const isStream = (stream) =>
+  isObject(stream) &&
+  sameKeys(stream, ["name", "subject"]) &&
+  typeof stream.name === "string" &&
+  STREAM_NAME.test(stream.name) &&
+  (stream.subject === null || isText(stream.subject))
+
+// The streams a canvas version declares: at most 64 distinct pairs of a
+// stream name and a subject, a string or null.
+const isStreams = (streams) =>
+  bounded(streams, MAX_STREAMS, isStream) && new Set(streams.map(pairKey)).size === streams.length
+
+const isRect = (rect) =>
+  isObject(rect) &&
+  sameKeys(rect, RECT_KEYS) &&
+  RECT_KEYS.every((key) => typeof rect[key] === "number" && Number.isFinite(rect[key]) && rect[key] >= 0)
+
+const codePoints = (value) => Array.from(value).length
+
+const isInstalled = (tincture) =>
+  isObject(tincture) &&
+  sameKeys(tincture, ["ref", "name"]) &&
+  isTinctureRef(tincture.ref) &&
+  isText(tincture.name) &&
+  codePoints(tincture.name) >= 1 &&
+  codePoints(tincture.name) <= MAX_NAME
+
+// A canvas block, as the handshake reply carries it and the `canvas`
+// message's args are: the open's mode, its frame's data path and the
+// version's declared streams.
+function canvasError(block, frame) {
+  if (!isObject(block) || !sameKeys(block, ["mode", "data_path", "streams"])) {
+    return "a canvas is exactly mode, data_path and streams"
+  }
+  if (!MODES.includes(block.mode)) return "a canvas's mode is live or validation"
+  if (block.data_path !== dataPath(frame)) return "a canvas's data path is its frame's"
+  if (!isStreams(block.streams)) {
+    return `a canvas names at most ${MAX_STREAMS} distinct streams of name and subject`
+  }
+  return null
+}
+
+function toFrameArgsError(verb, args, frame) {
+  switch (verb) {
+    case "canvas":
+      return canvasError(args, frame)
+    case "posture":
+      return sameKeys(args, ["posture"]) && POSTURES.includes(args.posture) ? null : "posture is desk or hand"
+    case "covered":
+      return sameKeys(args, ["rects"]) && bounded(args.rects, MAX_RECTS, isRect)
+        ? null
+        : `covered names at most ${MAX_RECTS} rects of x, y, width and height`
+    case "installed":
+      return sameKeys(args, ["tinctures"]) && bounded(args.tinctures, MAX_TINCTURES, isInstalled)
+        ? null
+        : `installed names at most ${MAX_TINCTURES} tinctures of ref and name`
+    case "state":
+      return sameKeys(args, ["state"]) && SHELL_STATES.includes(args.state) ? null : "state is live or frozen"
+    default:
+      return "unknown verb"
+  }
+}
+
+// A message the shell posts a canvas read back: `{ok: true, message}` for
+// exactly `{v, verb, frame, args}` the wire takes, `{ok: false, error}` for
+// anything else.
+export function decodeToFrame(message) {
+  if (!isObject(message)) return {ok: false, error: "the message must be an object"}
+  if (!sameKeys(message, ["v", "verb", "frame", "args"])) {
+    return {ok: false, error: "the message is v, verb, frame and args"}
+  }
+  if (message.v !== VERSION) return {ok: false, error: "the message carries no wire version 1"}
+  if (!TO_FRAME_VERBS.includes(message.verb)) return {ok: false, error: "unknown verb"}
+  if (!isFrameId(message.frame)) return {ok: false, error: "frame must be a frame id"}
+  if (!isObject(message.args)) return {ok: false, error: "args must be an object"}
+
+  const error = toFrameArgsError(message.verb, message.args, message.frame)
+  if (error) return {ok: false, error}
+  return {ok: true, message: {v: VERSION, verb: message.verb, frame: message.frame, args: message.args}}
+}
+
+// The message the bridge posts a canvas for `verb`; one the wire refuses
+// throws, with a sentence that names no value it carries.
+export function toFrameMessage(verb, frame, args) {
+  const message = {v: VERSION, verb, frame, args}
+  const decoded = decodeToFrame(message)
+  if (!decoded.ok) throw new TypeError("not a message to a canvas: " + decoded.error)
+  return message
+}
+
+// The shell's reply to a canvas frame's handshake read back, for the frame
+// `frame`: `{ok: true, credential, canvas}` for exactly a credential and a
+// canvas block, `{ok: false, error}` for anything else.
+export function decodeCanvasHandshake(reply, frame) {
+  if (!isFrameId(frame)) return {ok: false, error: "frame must be a frame id"}
+  if (!isObject(reply) || !sameKeys(reply, ["credential", "canvas"])) {
+    return {ok: false, error: "a canvas's handshake is exactly credential and canvas"}
+  }
+  if (typeof reply.credential !== "string" || reply.credential === "") {
+    return {ok: false, error: "a canvas's handshake carries the frame credential"}
+  }
+  const error = canvasError(reply.canvas, frame)
+  if (error) return {ok: false, error}
+  return {ok: true, credential: reply.credential, canvas: reply.canvas}
 }

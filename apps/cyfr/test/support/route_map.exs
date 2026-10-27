@@ -100,6 +100,15 @@
           pipe_through: ["tincture_asset"]
         },
         %{
+          verb: "GET",
+          path: "/_c/v1/sdk/:file",
+          plug: "Emissary.Web.CanvasController",
+          plug_opts: ":sdk",
+          auth: "tincture_handler_auth",
+          live_view: nil,
+          pipe_through: ["tincture_asset"]
+        },
+        %{
           verb: "OPTIONS",
           path: "/_f/v1/action",
           plug: "Emissary.Web.TinctureDataController",

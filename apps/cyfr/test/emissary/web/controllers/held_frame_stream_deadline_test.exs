@@ -143,7 +143,7 @@ defmodule Emissary.Web.HeldFrameStreamDeadlineTest do
     |> put_req_header("content-type", "application/json")
     |> put_req_header("origin", "null")
     |> put_req_header("authorization", TinctureWire.bearer(bearer))
-    |> post(Prima.CanvasWire.stream_path(frame_id) <> query, Jason.encode!(body))
+    |> post(Prima.TinctureWire.stream_path(frame_id) <> query, Jason.encode!(body))
   end
 
   defp open_stream(source, frame_id, bearer) do
@@ -188,7 +188,7 @@ defmodule Emissary.Web.HeldFrameStreamDeadlineTest do
       "publisher" => "local",
       "tincture" => %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "entry" => "index.html",
         "streams" => [%{"name" => "mcp_servers.changes"}]
       }
     }

@@ -31,11 +31,5 @@ export default [
         }
       ]
     }
-  },
-  {
-    // CONTROL matches the C0 and C1 control characters on purpose: a value
-    // holding one is refused.
-    files: ["js/toolkit/wire.js"],
-    rules: {"no-control-regex": "off"}
   }
 ]

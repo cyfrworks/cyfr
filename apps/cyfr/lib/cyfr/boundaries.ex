@@ -2167,8 +2167,9 @@ defmodule Cyfr.Boundaries do
       admits: :credential,
       why:
         "resolved in the tincture controllers: a public tincture's address admits " <>
-          "anyone to its files; a private tincture version's files (`/_s/`) and a " <>
-          "canvas's host page (`/_c/v1/`) admit the asset credential in their path, " <>
+          "anyone to its files, and the SDK a canvas page loads (`/_c/v1/sdk/`) " <>
+          "anyone to it; a private tincture version's files (`/_s/`) and a " <>
+          "canvas's page (`/_c/v1/`) admit the asset credential in their path, " <>
           "verified on every request (`Sanctum.TinctureAuth.verify_asset_credential/2`) " <>
           "and redacted from the request path by " <>
           "`CyfrWeb.Plugs.ScrubTinctureCredentials`; the page also holds the path's " <>
@@ -2770,7 +2771,7 @@ defmodule Cyfr.Boundaries do
     # public tincture, a credential that no longer stands, an undeclared
     # operation or stream, a canvas off its own path or a frame on another's,
     # and the per-frame limits. A frame's call is an interactive admission.
-    # A canvas's host page is no entry: its pipeline mints no call identity,
+    # A canvas's page is no entry: its pipeline mints no call identity,
     # as the served files' does not.
     %{
       module: Emissary.Web.TinctureDataController,

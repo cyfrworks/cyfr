@@ -129,7 +129,7 @@ defmodule Emissary.Web.PulledTinctureTest do
     canvas =
       manifest("pulled-swap", %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "entry" => "index.html",
         "connect" => ["api.example.com"]
       })
 
@@ -140,7 +140,7 @@ defmodule Emissary.Web.PulledTinctureTest do
         archive([
           {"cyfr-manifest.json", float},
           {"index.html", @page},
-          {"canvas.js", "export default () => {}"}
+          {"app.js", "export default () => {}"}
         ]),
         canvas
       )

@@ -12,14 +12,16 @@ defmodule Arca.CanvasVersions do
   component name (`Prima.ComponentRef.validate_name/1`). It reads
 
       %{version: 1, allocated: v | nil, working: v | nil, kept: v | nil,
-        failed: %{version: v, outcome: "no_tree" | "died", at: iso8601} | nil}
+        failed: %{version: v, outcome: "not_ready" | "died", at: iso8601} | nil}
 
     * `allocated` — the newest version a write allocated;
     * `working` — the version a glass opens;
     * `kept` — the version the last activation replaced;
-    * `failed` — the last validation that answered no tree, or whose
-      candidate died: its version, its outcome and when, in UTC to the
-      second (`2026-10-09T12:00:00Z`).
+    * `failed` — the last validation whose candidate was not ready by its
+      deadline (`not_ready`) or died (`died`): its version, its outcome
+      and when, in UTC to the second (`2026-10-09T12:00:00Z`). A
+      validation that ended ready is no failure and is never recorded
+      here.
 
   Every version is a `MAJOR.MINOR.PATCH` string (`version?/1`).
 
@@ -45,7 +47,7 @@ defmodule Arca.CanvasVersions do
 
   @prefix "canvases/"
   @attempt "canvases"
-  @outcomes ~w(no_tree died)
+  @outcomes ~w(not_ready died)
   @fields ~w(version allocated working kept failed)
   @failure_fields ~w(at outcome version)
 

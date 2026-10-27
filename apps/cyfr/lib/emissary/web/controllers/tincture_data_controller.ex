@@ -79,7 +79,7 @@ defmodule Emissary.Web.TinctureDataController do
   ## A canvas
 
   A canvas (a tincture whose placement is `canvas`) reads its streams on
-  its own open's data path alone (`Prima.CanvasWire.stream_path/1`), and
+  its own open's data path alone (`Prima.TinctureWire.stream_path/1`), and
   no route there invokes or acts. On that path the bearer is established
   first and refused `forbidden` (`frame_path_mismatch`) unless it is the
   credential of the frame the path names, before its version or grant is

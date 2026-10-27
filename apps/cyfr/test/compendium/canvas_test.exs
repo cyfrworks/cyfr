@@ -9,10 +9,11 @@ defmodule Compendium.CanvasTest do
   version whole and registers it, never replacing one; two writes from
   one read get distinct versions or one conflict. An activation spends
   the trial's validation credential first, whatever the outcome, re-checks
-  the tincture's grant for a tree, and publishes the versions document at
+  the tincture's grant for `ready`, and publishes the versions document at
   the revision it read: two activations over one revision publish one, a
-  member that lost its slot activates nothing, and a tree for the version
-  already working changes nothing. A restore makes the kept version the
+  member that lost its slot activates nothing, and `ready` for the version
+  already working changes nothing; only `ready` activates, and a failure
+  is recorded as `not_ready` or `died`. A restore makes the kept version the
   working one under today's grant. The catalog is what a canvas may read,
   derived from the stream table.
 
@@ -92,7 +93,6 @@ defmodule Compendium.CanvasTest do
                "version" => "0.1.0",
                "tincture" => %{
                  "frame" => %{"placement" => "canvas"},
-                 "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
                  "streams" => []
                }
              }
@@ -254,7 +254,7 @@ defmodule Compendium.CanvasTest do
       # Every outcome spends it: a failed trial records its failure once.
       v2 = write!(ctx)
 
-      for outcome <- ["no_tree", "died"] do
+      for outcome <- ["not_ready", "died"] do
         failed = trial!(ctx, v2)
 
         assert {:ok, %{activated: false, document: %{failed: failure} = document}} =
@@ -286,7 +286,7 @@ defmodule Compendium.CanvasTest do
       assert %FrameCredential{state: "active"} = Arca.Repo.get(FrameCredential, other.id)
     end
 
-    test "a tree for the version already working publishes nothing, and kept keeps its value",
+    test "ready for the version already working publishes nothing, and kept keeps its value",
          %{ctx: ctx} do
       v1 = write!(ctx)
       {:ok, _} = activate(ctx, v1, trial!(ctx, v1).frame)
@@ -305,7 +305,7 @@ defmodule Compendium.CanvasTest do
       assert %FrameCredential{state: "revoked"} = Arca.Repo.get(FrameCredential, again.id)
     end
 
-    test "a tree for a version older than the working one answers conflict and changes nothing",
+    test "ready for a version older than the working one answers conflict and changes nothing",
          %{ctx: ctx} do
       # Versions whose string order is not their version order.
       {:ok, 1} =
@@ -340,9 +340,9 @@ defmodule Compendium.CanvasTest do
       failed = trial!(ctx, older)
 
       assert {:ok, %{activated: false, document: %{working: ^newer, kept: nil, failed: failure}}} =
-               activate(ctx, older, failed.frame, "no_tree")
+               activate(ctx, older, failed.frame, "not_ready")
 
-      assert %{version: ^older, outcome: "no_tree"} = failure
+      assert %{version: ^older, outcome: "not_ready"} = failure
     end
 
     test "two activations over one revision publish one", %{ctx: ctx} do
@@ -420,7 +420,7 @@ defmodule Compendium.CanvasTest do
 
       # A failed trial records its failure whatever the grant.
       failed = trial!(ctx, v1, 1)
-      assert {:ok, %{activated: false}} = activate(ctx, v1, failed.frame, "no_tree")
+      assert {:ok, %{activated: false}} = activate(ctx, v1, failed.frame, "not_ready")
 
       owner_profile!(ctx, :active)
       assert {:ok, %{activated: true}} = activate(ctx, v1, trial!(ctx, v1).frame)
@@ -436,7 +436,7 @@ defmodule Compendium.CanvasTest do
       activate = Enum.find(tool.operations, &(&1.action == "activate"))
       assert Enum.map(activate.args, & &1.name) == ~w(canvas version frame outcome)
 
-      args = %{"canvas" => @name, "version" => v1, "frame" => trial.frame, "outcome" => "tree"}
+      args = %{"canvas" => @name, "version" => v1, "frame" => trial.frame, "outcome" => "ready"}
       gate = Sanctum.TestContext.via(ctx, :prism)
 
       assert {:ok, _} =
@@ -490,7 +490,7 @@ defmodule Compendium.CanvasTest do
       v1 = write!(ctx)
       trial = trial!(ctx, v1)
       gate = Sanctum.TestContext.via(ctx, :prism)
-      args = %{"action" => "activate", "canvas" => @name, "version" => v1, "outcome" => "tree"}
+      args = %{"action" => "activate", "canvas" => @name, "version" => v1, "outcome" => "ready"}
 
       # Each is refused as no frame id, after admission: the row is written.
       for frame <- [trial.bearer, "trial " <> trial.bearer <> " ended"] do
@@ -536,7 +536,7 @@ defmodule Compendium.CanvasTest do
 
       for {args, sentence} <- [
             {%{"version" => "1.0"}, "a canvas version is MAJOR.MINOR.PATCH"},
-            {%{"outcome" => "maybe"}, "the outcome is one of tree, no_tree, died"},
+            {%{"outcome" => "maybe"}, "the outcome is one of ready, not_ready, died"},
             {%{"canvas" => "Markets"}, "a canvas's name"}
           ] do
         assert {:error, {:invalid_argument, said}} =
@@ -547,7 +547,7 @@ defmodule Compendium.CanvasTest do
                        "canvas" => @name,
                        "version" => v1,
                        "frame" => trial.frame,
-                       "outcome" => "tree"
+                       "outcome" => "ready"
                      },
                      args
                    )
@@ -661,7 +661,7 @@ defmodule Compendium.CanvasTest do
          %{ctx: ctx} do
       install!(ctx, "weather", "1.0.0", %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1}
+        "entry" => "index.html"
       })
 
       assert {:ok, %{canvas: "weather", document: document, revision: 0}} =
@@ -683,7 +683,7 @@ defmodule Compendium.CanvasTest do
   end
 
   describe "catalog" do
-    test "is the toolkit majors and every stream that declares a shape, by name, and no value",
+    test "is every stream that declares a shape, by name, and no value",
          %{ctx: ctx} do
       shaped =
         for %Prima.Provider.Stream{shape: shape} = stream <- Sanctum.Catalog.streams(),
@@ -697,9 +697,9 @@ defmodule Compendium.CanvasTest do
           }
         end
 
-      assert {:ok, %{toolkit: [1], streams: streams} = catalog} = Canvas.catalog(ctx)
+      assert {:ok, %{streams: streams} = catalog} = Canvas.catalog(ctx)
+      assert Map.keys(catalog) == [:streams]
       assert streams == Enum.sort_by(shaped, & &1.name)
-      assert catalog.toolkit == Compendium.tincture_toolkit_majors()
 
       # A canvas reads exactly a feed's results, by the feed's name, the
       # athanor's runs, its schedules and its schedules' runs; every other
@@ -766,10 +766,26 @@ defmodule Compendium.CanvasTest do
     )
   end
 
-  # A version written and granted as the person would grant it, at
-  # revision 1 (`owner_profile!/2`).
+  # A canvas version as a write leaves it, granted as the person would
+  # grant it, at revision 1 (`owner_profile!/2`): the next patch allocated
+  # in its versions document, then its page installed and registered.
   defp write!(ctx) do
-    {:ok, %{version: version}} = Canvas.write(ctx, write_args())
+    {document, revision} =
+      case CanvasVersions.get(actor(ctx), @name) do
+        {:ok, %{document: document, revision: revision}} -> {document, revision}
+        {:error, :not_found} -> {CanvasVersions.empty(), 0}
+      end
+
+    version =
+      case document.allocated && Version.parse!(document.allocated) do
+        nil -> "0.1.0"
+        %Version{} = v -> "#{v.major}.#{v.minor}.#{v.patch + 1}"
+      end
+
+    {:ok, _} =
+      CanvasVersions.publish(actor(ctx), @name, %{document | allocated: version}, revision)
+
+    install!(ctx, @name, version, canvas_manifest(version)["tincture"])
     owner_profile!(ctx, :active)
     version
   end
@@ -781,7 +797,7 @@ defmodule Compendium.CanvasTest do
       "version" => version,
       "tincture" => %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "entry" => "index.html",
         "streams" => []
       }
     }
@@ -792,7 +808,7 @@ defmodule Compendium.CanvasTest do
   defp install!(ctx, name, version, tincture) do
     files =
       if get_in(tincture, ["frame", "placement"]) == "canvas",
-        do: [{"canvas.js", "// installed"}],
+        do: [{"index.html", "<html><head></head><body>installed</body></html>"}],
         else: [{"index.html", "<html></html>"}]
 
     Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, version,
@@ -817,7 +833,7 @@ defmodule Compendium.CanvasTest do
     %{document: document, revision: revision}
   end
 
-  defp activate(ctx, version, frame, outcome \\ "tree") do
+  defp activate(ctx, version, frame, outcome \\ "ready") do
     Canvas.activate(ctx, %{
       "canvas" => @name,
       "version" => version,

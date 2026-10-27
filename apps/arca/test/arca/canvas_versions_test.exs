@@ -188,7 +188,7 @@ defmodule Arca.CanvasVersionsTest do
         allocated: "1.2.3",
         working: "1.2.2",
         kept: "1.2.1",
-        failed: %{version: "1.2.3", outcome: "no_tree", at: "2026-10-09T08:30:00Z"}
+        failed: %{version: "1.2.3", outcome: "not_ready", at: "2026-10-09T08:30:00Z"}
       })
 
     {:ok, bytes} = CanvasVersions.encode(full)
@@ -203,7 +203,7 @@ defmodule Arca.CanvasVersionsTest do
           document(%{working: "01.2.3"}),
           document(%{kept: "1.2.3-beta"}),
           document(%{allocated: 7}),
-          document(%{failed: %{version: "1.0.0", outcome: "tree", at: "2026-10-09T08:30:00Z"}}),
+          document(%{failed: %{version: "1.0.0", outcome: "ready", at: "2026-10-09T08:30:00Z"}}),
           document(%{failed: %{version: "1.0.0", outcome: "died", at: "2026-10-09T08:30:00.5Z"}}),
           document(%{failed: %{version: "1.0.0", outcome: "died", at: "2026-10-09 08:30:00"}}),
           document(%{failed: %{version: "1.0.0", outcome: "died", at: "2026-13-09T08:30:00Z"}}),
@@ -226,6 +226,32 @@ defmodule Arca.CanvasVersionsTest do
           7
         ] do
       assert {:error, :invalid_document} = CanvasVersions.decode(bytes), inspect(bytes)
+    end
+  end
+
+  test "a failure's outcome is held to not_ready and died, written and read" do
+    at = "2026-10-09T08:30:00Z"
+
+    for outcome <- ["not_ready", "died"] do
+      failed = document(%{failed: %{version: "1.0.0", outcome: outcome, at: at}})
+      assert {:ok, bytes} = CanvasVersions.encode(failed)
+      assert {:ok, ^failed} = CanvasVersions.decode(bytes)
+    end
+
+    # `ready` is never a failure, and no other word is one.
+    for outcome <- [:died, "Died"] do
+      failed = document(%{failed: %{version: "1.0.0", outcome: outcome, at: at}})
+      assert {:error, :invalid_document} = CanvasVersions.encode(failed), inspect(outcome)
+    end
+
+    for outcome <- ["ready", "crashed", "", nil] do
+      failed = document(%{failed: %{version: "1.0.0", outcome: outcome, at: at}})
+      assert {:error, :invalid_document} = CanvasVersions.encode(failed), inspect(outcome)
+
+      bytes =
+        ~s({"failed":{"at":"#{at}","outcome":#{Jason.encode!(outcome)},"version":"1.0.0"},"version":1})
+
+      assert {:error, :invalid_document} = CanvasVersions.decode(bytes), inspect(outcome)
     end
   end
 
