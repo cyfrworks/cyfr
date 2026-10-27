@@ -722,6 +722,79 @@ describe("a canvas frame's bridge", () => {
     }
   })
 
+  test("ready and failed reach the view shown or hidden, and are dropped only while the socket is down", async () => {
+    const bridge = connect()
+    const port = bridge.load()
+    const reports = [
+      {v: 1, verb: "ready", frame: CANVAS, args: {}},
+      {v: 1, verb: "failed", frame: CANVAS, args: {stage: "runtime"}}
+    ]
+
+    try {
+      activation("inactive")
+      for (const standing of ["live", "hidden", "disconnected"]) {
+        for (const message of reports) {
+          stand(bridge.el, standing)
+          const before = forwarded(bridge.events).length
+          await send(bridge, port, message)
+          assert.equal(
+            forwarded(bridge.events).length - before,
+            standing === "disconnected" ? 0 : 1,
+            `${message.verb}, ${standing}`
+          )
+        }
+      }
+      assert.deepEqual(forwarded(bridge.events), [...reports, ...reports])
+      assert.equal(bridge.hook.dropped, reports.length)
+    } finally {
+      bridge.close()
+      port.close()
+    }
+  })
+
+  // A canvas page's SDK behind the bridge, the page reporting while the
+  // canvas is hidden: its report reaches the view then, not lost until
+  // the canvas is shown again.
+  for (const verb of ["ready", "failed"]) {
+    test(`a hidden canvas page's ${verb} reaches the view while it is hidden`, async () => {
+      const bridge = connect()
+      const win = frameWindow()
+      const {api, onWindowMessage, onPageError} = createClient({win, fetchFn: fetch, base: "http://127.0.0.1/"})
+      const states = []
+      api.on("state", (state) => states.push(state))
+
+      bridge.el.contentWindow = {
+        postMessage: (data, _origin, transfer) => onWindowMessage({source: win.parent, data, ports: transfer})
+      }
+      const {handlers} = mountCanvas(canvasElement({frames: [bridge.el]}))
+      bridge.el.dispatchEvent(new Event("load"))
+      const reported = () => forwarded(bridge.events).filter((message) => message.verb === verb)
+
+      try {
+        await eventually(() => states.length === 1)
+        if (verb === "failed") {
+          api.ready()
+          await eventually(() => forwarded(bridge.events).length === 1)
+        }
+
+        handlers.frame_state({frame: CANVAS, state: "frozen"})
+        bridge.el.wrapper.dataset.canvasShown = "false"
+        await eventually(() => states.length === 2)
+
+        if (verb === "failed") onPageError({type: "error", message: "Uncaught Error: drawing failed"})
+        else api.ready()
+        await eventually(() => reported().length === 1)
+
+        assert.deepEqual(states, ["live", "frozen"])
+        assert.deepEqual(reported(), [{v: 1, verb, frame: CANVAS, args: verb === "failed" ? {stage: "runtime"} : {}}])
+        assert.equal(bridge.hook.dropped, 0)
+      } finally {
+        bridge.close()
+        bridge.hook._port?.close()
+      }
+    })
+  }
+
   test("a validation frame's open and press are dropped, pressed or not; its ready and failed reach the view", async () => {
     const bridge = connect({reply: VALIDATION})
     const port = bridge.load()

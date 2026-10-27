@@ -58,7 +58,8 @@ const TOLD = Object.freeze(["posture", "covered", "installed", "state"])
  * after as it comes: the canvas hook's (`cyfr:to-canvas`), and each change
  * of its shell state. A value the wire refuses is never posted. From a
  * canvas only `ready`, `failed`, `open` and `press` reach the view, and
- * from a validation frame only `ready` and `failed`. A canvas's `open` or
+ * from a validation frame only `ready` and `failed`. A canvas's `ready`
+ * and `failed` are forwarded whatever its shown state. Its `open` or
  * `press` is forwarded only within moments of the person's own input,
  * never from a script on its own: while the shell document holds transient
  * user activation (which only the person's input gives it, never a
@@ -77,8 +78,11 @@ const TOLD = Object.freeze(["posture", "covered", "installed", "state"])
  * shell renders the frame's state in `data-frame-state` and signals each
  * change through the canvas (`cyfr:frame-state`, `assets/js/canvas/`); a
  * frozen frame, or any frame while the socket is down, is made inert and
- * every verb it posts is dropped and counted. Its port stays open, so the
- * frame acts again once it is live and the socket is back.
+ * every verb it posts is dropped and counted, except a frozen canvas's
+ * `ready` and `failed`: those report how its page loaded and runs, not an
+ * act, and reach the view whether the canvas is shown or hidden while the
+ * socket is up. Its port stays open, so the frame acts again once it is
+ * live and the socket is back.
  *
  * When the shell rotates a frame's credential, renewing it while the frame
  * runs or resuming it once shown again, the canvas signals
@@ -208,12 +212,7 @@ const IframeBridge = {
   _receive(data) {
     const decoded = decodeShellMessage(data)
 
-    if (
-      !decoded.ok ||
-      decoded.message.frame !== this._frameId ||
-      !acting(this._standing) ||
-      !this._forwards(decoded.message.verb)
-    ) {
+    if (!decoded.ok || decoded.message.frame !== this._frameId || !this._forwards(decoded.message.verb)) {
       this._drop()
       return
     }
@@ -221,13 +220,17 @@ const IframeBridge = {
     this.pushEvent("frame_verb", {frame: this._frameId, message: decoded.message})
   },
 
-  // Whether a verb this frame posted reaches the view: every verb of a
-  // tincture's frame; of a canvas's, those its mode sends, and an `open` or
-  // a `press` only within moments of the person's input, on the shown canvas.
+  // Whether a verb this frame posted reaches the view, which it can only
+  // while the socket is up: every verb of a live tincture's frame; of a
+  // canvas's, those its mode sends, `ready` and `failed` whether it is
+  // shown or hidden, and an `open` or a `press` only within moments of the
+  // person's input, on the shown, live canvas.
   _forwards(verb) {
-    if (!this._canvas) return true
+    if (!this._standing.connected) return false
+    if (!this._canvas) return acting(this._standing)
     if (!(FROM_CANVAS[this._mode] || []).includes(verb)) return false
-    return !PERSON_VERBS.includes(verb) || (this._shown() && this._personActed())
+    if (!PERSON_VERBS.includes(verb)) return true
+    return acting(this._standing) && this._shown() && this._personActed()
   },
 
   // The frame is drawn for the person: its wrapper shown, and neither it

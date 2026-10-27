@@ -781,6 +781,36 @@ describe("a canvas reports its own failure, once", () => {
     assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}, failed("runtime")])
   })
 
+  test("a canvas the shell holds frozen still posts its ready and its failure, which no showing replays", async () => {
+    for (const report of ["ready", "failed"]) {
+      const {open, heard, onPageError, api} = await canvasClient()
+      const states = []
+      api.on("state", (state) => states.push(state))
+      const shell = open([["state", {state: "live"}]])
+      if (report === "failed") {
+        api.ready()
+        await eventually(() => heard.length === 1)
+      }
+
+      shell.postMessage(toFrameMessage("state", CANVAS, {state: "frozen"}))
+      await eventually(() => states.at(-1) === "frozen")
+
+      if (report === "failed") onPageError(uncaught())
+      else api.ready()
+      const expected = report === "failed" ? failed("runtime") : {v: 1, verb: "ready", frame: CANVAS, args: {}}
+      await eventually(() => heard.at(-1)?.verb === report)
+      assert.deepEqual(heard.at(-1), expected)
+
+      // Shown again, the page posts nothing more: the report it made while
+      // hidden is the only one.
+      const count = heard.length
+      shell.postMessage(toFrameMessage("state", CANVAS, {state: "live"}))
+      await eventually(() => states.at(-1) === "live")
+      await tick()
+      assert.equal(heard.length, count, report)
+    }
+  })
+
   test("the browser's ResizeObserver loop reports are no failure; any other error after them still is", async () => {
     const {open, heard, onPageError, api} = await canvasClient()
     open()

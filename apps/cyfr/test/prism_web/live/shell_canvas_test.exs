@@ -530,6 +530,32 @@ defmodule PrismWeb.ShellCanvasTest do
     digest
   end
 
+  # A shell whose `home` canvas runs 1.0.1, 1.0.0 kept, and is hidden by
+  # `hidden_by`: a switch to `work`, or a full frame its own open put over
+  # it, which freezes it while it stays the visible canvas.
+  defp hidden_canvas!(conn, ctx, user, athanor, hidden_by) do
+    tincture!(ctx, "app-dash")
+    full = %{"desk" => posture([app("tincture:local.app-dash", "full")])}
+    two_canvases!(ctx, user, athanor, if(hidden_by == :full_frame, do: full, else: %{}))
+    canvas!(ctx, "markets", "1.0.1")
+    versions!(ctx, "markets", %{working: "1.0.1", kept: "1.0.0"})
+
+    view = shell!(conn)
+    assert %{reference: %{version: "1.0.1"}, state: :live} = home = canvas(view)
+
+    case hidden_by do
+      :switch -> render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      :full_frame -> canvas_verb!(view, home.id, :open, %{"ref" => "tincture:local.app-dash"})
+    end
+
+    assert %{state: :frozen, visible: false} = canvas(view)
+    view
+  end
+
+  # The hidden `home` canvas shown again as `hidden_canvas!/5` hid it.
+  defp show_again!(view, :switch), do: render_hook(view, "switch_canvas", %{"canvas" => "home"})
+  defp show_again!(view, :full_frame), do: render_click(view, "close_active_tincture", %{})
+
   # ===========================================================================
 
   describe "the canvas" do
@@ -2636,6 +2662,63 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{state: :live, visible: true} = again = canvas(view)
       refute again.id == home.id
       assert row(again.id).state == "active"
+    end
+
+    # A canvas hidden by a switch, or frozen under a full frame over it,
+    # and shown again by the switch back or the full frame's close.
+    for hidden_by <- [:switch, :full_frame] do
+      @tag hidden_by: hidden_by
+      test "a canvas hidden by #{hidden_by} that reports ready is ready: no deadline, hidden or shown again, is safe mode",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
+        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
+        home = canvas(view)
+        assert %{state: :frozen, visible: false} = home
+        before = dropped(view)
+
+        canvas_verb!(view, home.id, :ready)
+
+        assert dropped(view) == before
+        assert MapSet.member?(assigns(view).canvas_ready, home.id)
+
+        # Its deadline fires while it is hidden: ready, nothing is armed again.
+        send(view.pid, {:canvas_deadline, home.id})
+        _ = render(view)
+        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+
+        show_again!(view, hidden_by)
+        assert %{id: id, state: :live, visible: true} = canvas(view)
+        assert id == home.id
+        send(view.pid, {:canvas_deadline, home.id})
+        _ = render(view)
+        assert assigns(view).safe_mode == nil
+      end
+
+      @tag hidden_by: hidden_by
+      test "a canvas hidden by #{hidden_by} that reports a failure is died: nothing while hidden, safe mode crashed once shown",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
+        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
+        home = canvas(view)
+        before = dropped(view)
+
+        canvas_verb!(view, home.id, :failed, %{"stage" => "runtime"})
+
+        # Hidden, it acts on nothing and is held as it was.
+        assert dropped(view) == before
+        assert assigns(view).safe_mode == nil
+        assert MapSet.member?(assigns(view).canvas_died, home.id)
+        assert %{id: id, state: :frozen} = canvas(view)
+        assert id == home.id
+
+        # Shown again, it is safe mode crashed, as a failure while shown is,
+        # its kept version offered.
+        show_again!(view, hidden_by)
+        assert %{reason: :crashed} = assigns(view).safe_mode
+        assert opened(view) == []
+        assert row(home.id).state == "revoked"
+        html = render(view)
+        assert html =~ "Your canvas stopped working."
+        assert html =~ ~s(phx-value-offer="kept")
+      end
     end
 
     test "a canvas refused at open is safe mode", %{
