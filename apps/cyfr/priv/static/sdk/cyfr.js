@@ -246,6 +246,7 @@
   var isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
   var unreadable = () => new CyfrError("The endpoint's answer could not be read.", "invalid_answer");
   var unreachable = () => new CyfrError("The endpoint could not be reached.", "unavailable");
+  var unanswered = (status, rejection) => status >= 500 ? new CyfrError(rejection.code === "invalid_answer" ? unreachable().message : rejection.message, "unavailable") : rejection;
   function createClient({ win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS }) {
     const framed = win.parent !== win && win.parent !== null && win.parent !== void 0;
     const standalone = framed ? null : publicIdentity(win.location && win.location.pathname);
@@ -399,12 +400,15 @@
       const response = await postRequest("stream_open", fields, controller.signal);
       const type = (response.headers.get("content-type") || "").split(";")[0].trim();
       if (type !== STREAM_CONTENT_TYPE) {
+        let rejection = unreadable();
         try {
           await answer("stream_open", response);
+        } catch (error) {
+          rejection = error;
         } finally {
           controller.abort();
         }
-        throw unreadable();
+        throw unanswered(response.status, rejection);
       }
       const parser = sseParser((event) => {
         try {
@@ -482,7 +486,11 @@
        * @param {string|null} subject - a literal subject, or null for a stream that takes none
        * @param {function} onEvent - called with {id, event, data} per event
        * @returns {Promise<{close: function, closed: Promise}>} once the stream is open;
-       *   a refusal rejects with a CyfrError
+       *   a refusal rejects with a CyfrError of its class. An open the endpoint
+       *   gave no answer on (it could not be reached, the connection broke or
+       *   timed out, or it answered a server error) rejects `unavailable`, and
+       *   may succeed if opened again later; opened again after any other
+       *   refusal, it meets the same refusal until something changes.
        */
       stream(name, subject, onEvent) {
         if (typeof name !== "string" || name === "") return invalid("stream must be a stream name");

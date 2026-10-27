@@ -196,6 +196,43 @@ defmodule Prima.TinctureWireTest do
              TinctureWire.decode_answer(kind(name), put_in(body, ["error", "reason"], "x"))
   end
 
+  test "each stream rejection's refusal body is a Prima.Refusal's projection, which reads back as itself" do
+    %{"cases" => cases} = vectors()["stream_rejections"]
+    classes = Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
+    bodies = for %{"answer" => %{"body" => body}} <- cases, do: body
+    assert bodies != []
+
+    for %{"error" => %{"class" => class, "message" => message, "stage" => stage}} = body <- bodies do
+      assert class in classes, class
+
+      refusal = %Prima.Refusal{
+        class: String.to_existing_atom(class),
+        reason: :vector,
+        message: message,
+        stage: String.to_existing_atom(stage)
+      }
+
+      assert TinctureWire.refusal(refusal) == body
+
+      assert TinctureWire.decode_answer(:stream_open, body) ==
+               {:refused, %{class: class, message: message, stage: stage}}
+    end
+
+    # Every case says how the SDK rejects it, with a stage only for a
+    # refusal it rejects as itself.
+    for %{"answer" => answer, "rejects" => rejects} <- cases do
+      assert Map.keys(rejects) -- ["stage"] == ["class", "message"], inspect(answer)
+
+      case answer do
+        %{"body" => %{"error" => error}} when is_map_key(rejects, "stage") ->
+          assert rejects == error
+
+        _no_refusal_of_its_own ->
+          refute Map.has_key?(rejects, "stage")
+      end
+    end
+  end
+
   test "every shell verb has a message, and each decodes to its verb and frame" do
     shell = vectors()["shell"]
 

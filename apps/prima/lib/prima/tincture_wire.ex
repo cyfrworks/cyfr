@@ -35,7 +35,10 @@ defmodule Prima.TinctureWire do
   `action` is `{"v", "ok": true, "result"}`, and for a refusal
   `{"v", "ok": false, "error": {"class", "message", "stage"}}`: the
   projection of a `Prima.Refusal` a frame may read, never its reason
-  term. A refused `stream_open` is answered the same way.
+  term. A refused `stream_open` is answered the same way. Each refusal
+  is answered at the HTTP status its class answers with; a server error
+  (5xx), like no answer at all, is no answer on a `stream_open`, which the
+  SDK rejects as `unavailable` so the page may open it again later.
 
   An admitted `stream_open` is answered as `text/event-stream`
   (`stream_content_type/0`), one event per delivery under the grant
@@ -98,7 +101,8 @@ defmodule Prima.TinctureWire do
   1 to `max_installed_name/0` code points.
 
   `tests/fixtures/tincture_wire.json` holds one example of each request,
-  one public request, one refusal, one event stream, every shell verb's
+  one public request, one refusal, one event stream, how the SDK rejects
+  a `stream_open` for each answer that opens no stream, every shell verb's
   message and the messages refused, and a canvas's handshake replies, the
   shell's messages to a canvas and its paths; this module's test and the
   SDK's and the bridge's JavaScript tests read it.

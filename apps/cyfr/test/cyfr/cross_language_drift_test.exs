@@ -545,11 +545,14 @@ defmodule Cyfr.CrossLanguageDriftTest do
     ],
     "tincture_wire.json" => [
       {"apps/cyfr/assets/test/canvas/hook.test.mjs", ~w(shell shell_invalid canvas.handshake)},
+      {"apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs", ~w(stream_rejections)},
+      {"apps/cyfr/assets/test/sdk/client.test.mjs", ~w(stream_rejections)},
       {"apps/cyfr/assets/test/sdk/support.mjs", ~w()},
       {"apps/cyfr/assets/test/sdk/wire.test.mjs",
        ~w(version bearer_header routes requests answers refusal shell shell_invalid canvas)},
+      {"apps/cyfr/test/cyfr_web/controllers/api_error_test.exs", ~w(stream_rejections)},
       {"apps/prima/test/prima/tincture_wire_test.exs",
-       ~w(version bearer_header routes requests public_request answers refusal stream shell shell_invalid canvas)}
+       ~w(version bearer_header routes requests public_request answers refusal stream stream_rejections shell shell_invalid canvas)}
     ],
     "worker_api.json" => [
       {"apps/cyfr/test/opus/worker_client_test.exs", ~w(requests status)},

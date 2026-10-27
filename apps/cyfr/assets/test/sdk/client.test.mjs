@@ -414,6 +414,36 @@ describe("a stream is delivered as the response's event stream", () => {
     assert.deepEqual(events, [])
   })
 
+  // tests/fixtures/tincture_wire.json's stream_rejections: each answer an
+  // open can get that opens no stream, and how the SDK rejects it.
+  test("an open the endpoint gave no answer on rejects unavailable with no stage; any other, as its refusal", async () => {
+    const {cases} = fixture.stream_rejections
+    assert.ok(cases.some(({answer}) => answer === null))
+    assert.ok(cases.some(({answer}) => answer !== null && answer.status >= 500 && "body" in answer))
+    assert.ok(cases.some(({rejects}) => rejects.stage === "admission"))
+
+    const reads = []
+    for (const {answer} of cases) {
+      const client = await frameClient({
+        answer: () => ({status: answer?.status, body: answer?.body ?? answer?.text}),
+        fetchFn: answer === null ? () => Promise.reject(new TypeError("Failed to fetch")) : fetch
+      })
+      client.handshake()
+      const events = []
+
+      await assert.rejects(client.api.stream("executions.deltas", null, (event) => events.push(event)), (error) => {
+        assert.ok(error instanceof CyfrError)
+        const read = {class: error.code, message: error.message}
+        if ("stage" in error) read.stage = error.stage
+        reads.push(read)
+        return true
+      })
+      assert.deepEqual(events, [])
+    }
+
+    assert.deepEqual(reads, cases.map(({rejects}) => rejects))
+  })
+
   test("a JSON answer that is not a refusal is no stream", async () => {
     const grant = fixture.answers.find((vector) => vector.kind === "stream_open").body
     const {api} = await opened(() => ({body: grant}))

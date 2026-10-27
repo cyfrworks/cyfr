@@ -55,6 +55,17 @@ const isPlainObject = (value) =>
 const unreadable = () => new CyfrError("The endpoint's answer could not be read.", "invalid_answer")
 const unreachable = () => new CyfrError("The endpoint could not be reached.", "unavailable")
 
+// A stream open the endpoint gave no answer on: it answered a server
+// error (5xx), whatever its body said, so the open may succeed later. It
+// rejects as an unreachable endpoint does, `unavailable` with no stage,
+// keeping the endpoint's own sentence when it sent a refusal. A read
+// replays safely; an invoke or an action is not read this way, since a
+// server error's class says what became of its run.
+const unanswered = (status, rejection) =>
+  status >= 500
+    ? new CyfrError(rejection.code === "invalid_answer" ? unreachable().message : rejection.message, "unavailable")
+    : rejection
+
 // The SDK of one page. `win` is its window (its `parent` and `location`),
 // `fetchFn` its fetch and `base` the URL the endpoint's routes resolve
 // against (the document's).
@@ -294,13 +305,16 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
 
     if (type !== STREAM_CONTENT_TYPE) {
       // A refusal is thrown as itself; a JSON answer that is not one is not
-      // a stream.
+      // a stream; and a server error is no answer on the open.
+      let rejection = unreadable()
       try {
         await answer("stream_open", response)
+      } catch (error) {
+        rejection = error
       } finally {
         controller.abort()
       }
-      throw unreadable()
+      throw unanswered(response.status, rejection)
     }
 
     const parser = sseParser((event) => {
@@ -388,7 +402,11 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
      * @param {string|null} subject - a literal subject, or null for a stream that takes none
      * @param {function} onEvent - called with {id, event, data} per event
      * @returns {Promise<{close: function, closed: Promise}>} once the stream is open;
-     *   a refusal rejects with a CyfrError
+     *   a refusal rejects with a CyfrError of its class. An open the endpoint
+     *   gave no answer on (it could not be reached, the connection broke or
+     *   timed out, or it answered a server error) rejects `unavailable`, and
+     *   may succeed if opened again later; opened again after any other
+     *   refusal, it meets the same refusal until something changes.
      */
     stream(name, subject, onEvent) {
       if (typeof name !== "string" || name === "") return invalid("stream must be a stream name")

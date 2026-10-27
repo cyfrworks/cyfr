@@ -10,6 +10,10 @@ import assert from "node:assert/strict"
 import {readFileSync, readdirSync} from "node:fs"
 import {describe, mock, test} from "node:test"
 
+import {createClient} from "../../js/sdk/client.js"
+import {CREDENTIAL, HANDSHAKE} from "../../js/sdk/wire.js"
+import {fixture} from "../sdk/support.mjs"
+
 import {
   EMPTY,
   MAX_RUNS,
@@ -85,6 +89,30 @@ function started() {
   return {...shell, stop, state: () => states.at(-1) ?? EMPTY}
 }
 
+// What the SDK rejects a stream open with for `answer`, one of
+// tests/fixtures/tincture_wire.json's stream_rejections: its own
+// rejection, as the page meets it.
+async function rejection(answer) {
+  const win = {location: {pathname: "/"}, parent: {}}
+  const fetchFn = async () => {
+    if (answer === null) throw new TypeError("Failed to fetch")
+    const body = answer.text ?? JSON.stringify(answer.body)
+    return new Response(body, {status: answer.status, headers: {"content-type": "application/json"}})
+  }
+  const {api, onWindowMessage} = createClient({win, fetchFn, base: "https://cyfr.test/"})
+  const channel = new MessageChannel()
+  onWindowMessage({source: win.parent, data: {v: 1, type: HANDSHAKE, frame: "frm_shipped_canvas"}, ports: [channel.port2]})
+  channel.port1.postMessage({v: 1, type: CREDENTIAL, frame: "frm_shipped_canvas", credential: "frm.v2.shipped"})
+  try {
+    await api.stream("runs.changes", null, () => {})
+  } catch (error) {
+    return error
+  } finally {
+    channel.port1.close()
+  }
+  assert.fail(`the SDK opened a stream on ${JSON.stringify(answer)}`)
+}
+
 const run = (execution_id, kind, extra = {}) => ({kind, execution_id, reference: `catalyst:local.${execution_id}:1.0.0`, ...extra})
 
 describe("ready()", () => {
@@ -134,6 +162,97 @@ describe("ready()", () => {
     await settle()
     assert.equal(page.calls.ready, 0)
     assert.ok(page.opens.every((open) => open.closedByPage), "a stream opened after the stop stayed open")
+  })
+})
+
+describe("a stream's first open", () => {
+  test("one the endpoint could not be reached for is opened again on the retry pauses, and the page is ready meanwhile", async (t) => {
+    const unreachable = await rejection(null)
+    t.mock.timers.enable({apis: ["setTimeout"]})
+    const page = started()
+    await settle()
+
+    for (const open of page.opens) open.refuse(unreachable)
+    await settle()
+    assert.equal(page.calls.ready, 1)
+    assert.deepEqual(page.state().refusals, {})
+    assert.equal(page.opens.length, STREAMS.length)
+
+    // Opened again after the first pause, and after the next one when that
+    // open fails too.
+    t.mock.timers.tick(RETRY_MS[0] - 1)
+    await settle()
+    assert.equal(page.opens.length, STREAMS.length, "opened again before its pause")
+    t.mock.timers.tick(1)
+    await settle()
+    assert.equal(page.opens.length, 2 * STREAMS.length, "no retry was scheduled after the first open's network failure")
+
+    for (const open of page.opens.slice(STREAMS.length)) open.refuse(unreachable)
+    await settle()
+    t.mock.timers.tick(RETRY_MS[1])
+    await settle()
+    assert.equal(page.opens.length, 3 * STREAMS.length)
+
+    // The server is back: each stream opens and delivers.
+    for (const open of page.opens.slice(2 * STREAMS.length)) open.accept()
+    page.latest("runs.changes").send(run("a", "failed", {refresh: true}))
+    await settle()
+    assert.deepEqual(failedFirst(page.state()).map((r) => r.execution_id), ["a"])
+    assert.deepEqual(page.state().refusals, {})
+    assert.equal(page.calls.ready, 1)
+    page.stop()
+  })
+
+  test("each SDK rejection the wire vectors list is tried again when unanswered and final when refused", async (t) => {
+    const cases = []
+    for (const vector of fixture.stream_rejections.cases) cases.push({...vector, error: await rejection(vector.answer)})
+    assert.ok(cases.some(({rejects}) => rejects.class === "unavailable"))
+    assert.ok(cases.some(({rejects}) => rejects.class !== "unavailable"))
+
+    t.mock.timers.enable({apis: ["setTimeout"]})
+    for (const {answer, rejects, error} of cases) {
+      const label = JSON.stringify(answer)
+      assert.equal(error.code, rejects.class, label)
+      const page = started()
+      await settle()
+      for (const open of page.opens) open.refuse(error)
+      await settle()
+      assert.equal(page.calls.ready, 1, label)
+
+      if (rejects.class === "unavailable") {
+        assert.deepEqual(page.state().refusals, {}, label)
+        t.mock.timers.tick(RETRY_MS[0])
+        await settle()
+        assert.equal(page.opens.length, 2 * STREAMS.length, label)
+      } else {
+        assert.deepEqual(page.state().refusals, Object.fromEntries(STREAMS.map((name) => [name, rejects.message])), label)
+        t.mock.timers.tick(RETRY_MS.at(-1))
+        await settle()
+        assert.equal(page.opens.length, STREAMS.length, `${label} was opened again`)
+      }
+      page.stop()
+    }
+  })
+
+  test("a refusal met on a retry of an unanswered first open is final and shown", async (t) => {
+    const unreachable = await rejection(null)
+    const refusal = await rejection(fixture.stream_rejections.cases.find(({rejects}) => rejects.class === "forbidden").answer)
+    t.mock.timers.enable({apis: ["setTimeout"]})
+    const page = started()
+    await settle()
+
+    for (const open of page.opens) open.refuse(unreachable)
+    await settle()
+    t.mock.timers.tick(RETRY_MS[0])
+    await settle()
+    for (const open of page.opens.slice(STREAMS.length)) open.refuse(refusal)
+    await settle()
+
+    assert.deepEqual(page.state().refusals, Object.fromEntries(STREAMS.map((name) => [name, refusal.message])))
+    t.mock.timers.tick(RETRY_MS.at(-1))
+    await settle()
+    assert.equal(page.opens.length, 2 * STREAMS.length)
+    page.stop()
   })
 })
 

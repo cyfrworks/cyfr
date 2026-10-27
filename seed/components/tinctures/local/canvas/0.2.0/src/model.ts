@@ -43,6 +43,12 @@ export const MAX_SCHEDULE_RUNS = 10;
 // Pauses before opening an ended stream again, growing while opens fail.
 export const RETRY_MS = [2_000, 5_000, 15_000, 60_000];
 
+// The class cyfr.stream() rejects an open with when the endpoint gave no
+// answer on it: it could not be reached, the connection broke or timed
+// out, or it answered a server error. Opening it again later may succeed;
+// any other rejection is a refusal, which opening it again meets again.
+const UNANSWERED = "unavailable";
+
 export const EMPTY: State = {
   apps: [],
   runs: [],
@@ -52,8 +58,9 @@ export const EMPTY: State = {
 };
 
 // Opens the canvas's streams and hands `onChange` each new state. Calls
-// `ready()` once, when every stream has opened or been refused. Answers the
-// function that stops it all.
+// `ready()` once, when every stream's first open has its answer: opened,
+// refused, or unanswered and to be tried again. Answers the function that
+// stops it all.
 export function start(sdk: Sdk, onChange: (state: State) => void): () => void {
   let state = EMPTY;
   let stopped = false;
@@ -70,12 +77,9 @@ export function start(sdk: Sdk, onChange: (state: State) => void): () => void {
       sdk,
       name,
       (item, open) => change(fold(state, name, item, open)),
-      (open) => change(opened(state, name, open))
+      (open) => change(opened(state, name, open)),
+      (error) => change(refused(state, name, error))
     )
-  );
-
-  followers.forEach((follower, i) =>
-    follower.first.catch((error: unknown) => change(refused(state, STREAMS[i], error)))
   );
 
   Promise.allSettled(followers.map((follower) => follower.first)).then(() => {
@@ -200,21 +204,31 @@ function isApp(app: unknown): app is InstalledApp {
   return typeof ref === "string" && typeof name === "string";
 }
 
+// Whether a rejected open got no answer, and so may open later.
+function unanswered(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as Item).code === UNANSWERED;
+}
+
 // Keeps one declared stream open. Every stream ends in time (its grant has
 // a deadline, and a connection can break), so a stream that ends is opened
 // again after a pause, and starts again with its refresh, the current
-// state. `first` settles with the first open: it resolves once the stream
-// is open and rejects with the refusal, after which nothing is retried.
-// Each item comes with the number of the open that delivered it, and
-// `onOpen` hears each open's number once that open succeeds.
+// state. Until the stream has opened once, an open the endpoint refused is
+// final: `onRefused` hears the refusal and nothing is retried; an open it
+// gave no answer on is tried again on the same pauses. Once it has opened,
+// every failed reopen is tried again. `first` resolves when the first open
+// has its answer. Each item comes with the number of the open that
+// delivered it, and `onOpen` hears each open's number once that open
+// succeeds.
 function follow(
   sdk: Sdk,
   name: string,
   onItem: (item: Item, open: number) => void,
-  onOpen: (open: number) => void
+  onOpen: (open: number) => void,
+  onRefused: (error: unknown) => void
 ): { first: Promise<void>; stop(): void } {
   let stopped = false;
   let opens = 0;
+  let everOpened = false;
   let current: { close(): void } | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -227,6 +241,7 @@ function follow(
       stream.close();
       return;
     }
+    everOpened = true;
     current = stream;
     onOpen(n);
     stream.closed
@@ -237,15 +252,23 @@ function follow(
       });
   }
 
+  // An open that failed at `attempt`: a refusal before the stream ever
+  // opened ends it; anything else is tried again after the pause.
+  function failed(error: unknown, attempt: number) {
+    if (stopped) return;
+    if (!everOpened && !unanswered(error)) onRefused(error);
+    else retry(attempt);
+  }
+
   function retry(attempt: number) {
     if (stopped) return;
     timer = setTimeout(() => {
-      open().catch(() => retry(Math.min(attempt + 1, RETRY_MS.length - 1)));
+      open().catch((error: unknown) => failed(error, Math.min(attempt + 1, RETRY_MS.length - 1)));
     }, RETRY_MS[attempt]);
   }
 
   return {
-    first: open(),
+    first: open().catch((error: unknown) => failed(error, 0)),
     stop() {
       stopped = true;
       clearTimeout(timer);

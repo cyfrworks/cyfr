@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; one request a public tincture's page posts with no bearer, naming the tincture as public; the answer each is given, the stream grant as the SDK's reader decodes it among them; one refusal, the projection of a Prima.Refusal a frame may read; the text/event-stream body an admitted stream_open is answered with, and the events it reads back as, ending with the refusal event of a stream the endpoint closed; a message of each shell verb the frame posts over its MessagePort (`shell`, `press` and `failed` among them, which the shell takes from a canvas alone), and the messages the wire refuses, each for the reason `why` gives (`shell_invalid`); and a canvas's part of the wire (`canvas`): the stages a failure names, the shell's handshake replies, the shell's messages to a canvas and a canvas open's paths, its own comment saying who builds and reads each. Prima's test (apps/prima/test/prima/tincture_wire_test.exs) reads every section; the SDK's JavaScript tests (apps/cyfr/assets/test/sdk/, through its support.mjs, wire.test.mjs among them) and the console bridge's (apps/cyfr/assets/test/canvas/hook.test.mjs) read the sections their side holds: every body decodes and encodes back to itself, every answer reads back, the stream reads back as its events, every message decodes and every refused one is refused, every valid handshake reply is the one Prism builds and no refused one is, and every path is the one built.",
+  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; one request a public tincture's page posts with no bearer, naming the tincture as public; the answer each is given, the stream grant as the SDK's reader decodes it among them; one refusal, the projection of a Prima.Refusal a frame may read; the text/event-stream body an admitted stream_open is answered with, and the events it reads back as, ending with the refusal event of a stream the endpoint closed; how the SDK rejects a stream_open that opens no stream, for each answer it can get (`stream_rejections`: no answer or a server error is unavailable, anything else its refusal); a message of each shell verb the frame posts over its MessagePort (`shell`, `press` and `failed` among them, which the shell takes from a canvas alone), and the messages the wire refuses, each for the reason `why` gives (`shell_invalid`); and a canvas's part of the wire (`canvas`): the stages a failure names, the shell's handshake replies, the shell's messages to a canvas and a canvas open's paths, its own comment saying who builds and reads each. Prima's test (apps/prima/test/prima/tincture_wire_test.exs) reads every section; the console's API error test (apps/cyfr/test/cyfr_web/controllers/api_error_test.exs) reads `stream_rejections`' statuses; the SDK's JavaScript tests (apps/cyfr/assets/test/sdk/, through its support.mjs, wire.test.mjs among them) the console bridge's (apps/cyfr/assets/test/canvas/hook.test.mjs) and the shipped canvas's (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) read the sections their side holds: every body decodes and encodes back to itself, every answer reads back, the stream reads back as its events, every message decodes and every refused one is refused, every valid handshake reply is the one Prism builds and no refused one is, and every path is the one built.",
   "version": 1,
   "bearer_header": "authorization",
   "routes": {
@@ -149,6 +149,149 @@
           "class": "rate_limited",
           "message": "The stream fell too far behind and was closed — open it again",
           "stage": "execution"
+        }
+      }
+    ]
+  },
+  "stream_rejections": {
+    "comment": "How the SDK rejects a stream_open that opens no stream, for each answer the endpoint, or what stands before it, can give. An open that got no answer on it — no answer at all (`answer` null: the endpoint could not be reached, or the connection broke or timed out) or a server error (a 5xx status), whatever its body — rejects as `unavailable` with no stage, keeping the endpoint's sentence when it sent a refusal, so the page may open it again later; any other answer rejects as the refusal it carries, its class, sentence and stage, or as `invalid_answer` when it carries none. A page opening it again meets that refusal again until something changes. Each `body` is a refusal as Prima.TinctureWire.refusal/1 writes it (Prima's test) at the status CyfrWeb.ApiError answers its class with (apps/cyfr/test/cyfr_web/controllers/api_error_test.exs); a `text` is a body that is not JSON. The SDK's client test answers each and holds the rejection to `rejects`, and the shipped canvas's test (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) holds the page to opening again on each `unavailable` and showing every other refusal.",
+    "cases": [
+      {
+        "answer": null,
+        "rejects": {
+          "class": "unavailable",
+          "message": "The endpoint could not be reached."
+        }
+      },
+      {
+        "answer": {
+          "status": 503,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "unavailable",
+              "message": "The store could not answer — retry shortly",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "unavailable",
+          "message": "The store could not answer — retry shortly"
+        }
+      },
+      {
+        "answer": {
+          "status": 504,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "timeout",
+              "message": "The call timed out",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "unavailable",
+          "message": "The call timed out"
+        }
+      },
+      {
+        "answer": {
+          "status": 500,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "internal",
+              "message": "Internal error",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "unavailable",
+          "message": "Internal error"
+        }
+      },
+      {
+        "answer": {
+          "status": 502,
+          "text": "<html><body><h1>502 Bad Gateway</h1></body></html>"
+        },
+        "rejects": {
+          "class": "unavailable",
+          "message": "The endpoint could not be reached."
+        }
+      },
+      {
+        "answer": {
+          "status": 403,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "forbidden",
+              "message": "This frame is suspended — it opens nothing until it is shown again",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "forbidden",
+          "message": "This frame is suspended — it opens nothing until it is shown again",
+          "stage": "admission"
+        }
+      },
+      {
+        "answer": {
+          "status": 403,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "consent_required",
+              "message": "The tincture is not consented to run here",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "consent_required",
+          "message": "The tincture is not consented to run here",
+          "stage": "admission"
+        }
+      },
+      {
+        "answer": {
+          "status": 429,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "rate_limited",
+              "message": "Too many open streams — close one and retry",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "rate_limited",
+          "message": "Too many open streams — close one and retry",
+          "stage": "admission"
+        }
+      },
+      {
+        "answer": {
+          "status": 200,
+          "text": "<html><body>not a stream</body></html>"
+        },
+        "rejects": {
+          "class": "invalid_answer",
+          "message": "The endpoint's answer could not be read."
         }
       }
     ]
