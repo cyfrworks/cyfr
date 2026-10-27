@@ -442,7 +442,7 @@ defmodule Sanctum.ApiKey do
       resource: row.name,
       details: %{
         "effect" =>
-          "Re-enables the API key #{row.name}, suspended when this home was restored " <>
+          "Re-enables the API key #{row.name}, suspended when this CYFR was restored " <>
             "from a backup, so its secret authenticates again"
       }
     }

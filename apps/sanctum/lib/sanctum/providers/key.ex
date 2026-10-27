@@ -105,7 +105,7 @@ defmodule Sanctum.Providers.Key do
             Arg.new("key_id", :string,
               required: true,
               description:
-                "The id of your key that restoring this home from a backup suspended (key.list shows it)"
+                "The id of your key that restoring this CYFR from a backup suspended (key.list shows it)"
             )
           ],
           kind: :write,
@@ -309,7 +309,7 @@ defmodule Sanctum.Providers.Key do
       class: :conflict,
       reason: :suspended,
       message:
-        "This key was suspended when this home was restored from a backup: " <>
+        "This key was suspended when this CYFR was restored from a backup: " <>
           "re-enable it first, then rotate it"
     }
 

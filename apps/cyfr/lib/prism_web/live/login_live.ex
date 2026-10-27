@@ -94,11 +94,11 @@ defmodule PrismWeb.LoginLive do
   @cyfr_window_ms 60_000
   @cyfr_rate_limited "Too many sign-ins from here. Try again in a minute."
   @not_owner "This server is not accepting sign-ins right now. Try again in a moment."
-  @wrong_source "That sign-in came from another home than the one you named, so nobody was " <>
-                  "signed in. Name your home below and begin again."
+  @wrong_source "That sign-in came from a CYFR other than the one you named, so nobody was " <>
+                  "signed in. Enter your CYFR's address below and begin again."
   @unsolicited "A sign-in arrived that this page did not ask for, so nobody was signed in. " <>
-                 "To sign in with your CYFR, name your home below."
-  @oversized "That sign-in is larger than this home accepts."
+                 "To sign in with your CYFR, enter its address below."
+  @oversized "That sign-in is larger than this CYFR accepts."
 
   @impl true
   def mount(params, session, socket) do
@@ -165,12 +165,12 @@ defmodule PrismWeb.LoginLive do
          assign(
            socket,
            :error,
-           "That is this home's address; name the home that holds your keys."
+           "That is this CYFR's address; name the CYFR that holds your keys."
          )}
 
       {:error, :invalid_home} ->
         {:noreply,
-         assign(socket, :error, "That is not a home's address, like https://home.example.")}
+         assign(socket, :error, "That is not a CYFR's address, like https://cyfr.example.")}
     end
   end
 
@@ -216,7 +216,7 @@ defmodule PrismWeb.LoginLive do
         else
           {:noreply,
            assign(socket,
-             error: "That sign-in expired. Begin it again from your home.",
+             error: "That sign-in expired. Begin it again from your CYFR.",
              cyfr_pending: nil
            )}
         end
@@ -236,7 +236,7 @@ defmodule PrismWeb.LoginLive do
     if byte_size(fragment) <= Prima.Carry.max_fragment_bytes() do
       {:noreply, assign(socket, cyfr_fragment: fragment, cyfr_trigger: true, error: nil)}
     else
-      {:noreply, assign(socket, :error, "That sign-in is larger than this home accepts.")}
+      {:noreply, assign(socket, :error, "That sign-in is larger than this CYFR accepts.")}
     end
   end
 
@@ -452,10 +452,10 @@ defmodule PrismWeb.LoginLive do
     do: "Your identity could not be confirmed with its directory just now. Try again shortly."
 
   defp cyfr_refused(:wrong_destination),
-    do: "That sign-in was begun for another home. Begin it again for this one."
+    do: "That sign-in was begun for another CYFR. Begin it again for this one."
 
   defp cyfr_refused(_refused),
-    do: "That sign-in could not be checked here. Begin it again from your home."
+    do: "That sign-in could not be checked here. Begin it again from your CYFR."
 
   defp challenge_carry(socket, fragment, expected) do
     if Prima.RateLimiter.check(
@@ -690,14 +690,14 @@ defmodule PrismWeb.LoginLive do
             class="rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 space-y-3"
           >
             <p class="text-sm text-gray-300">
-              Your home, <span class="font-mono text-white">{@cyfr_pending.home}</span>,
+              Your CYFR, <span class="font-mono text-white">{@cyfr_pending.home}</span>,
               will show this code when it asks you to confirm signing in here:
             </p>
             <p class="text-center font-mono text-2xl tracking-widest text-white" data-test="code">
               {@cyfr_pending.code}
             </p>
             <p class="text-sm text-gray-300">
-              Continue, and confirm there only if your home shows the same code.
+              Continue, and confirm there only if your CYFR shows the same code.
             </p>
             <div class="flex gap-2 justify-end">
               <button
@@ -778,7 +778,7 @@ defmodule PrismWeb.LoginLive do
             class="flex flex-col gap-2 pt-2 border-t border-gray-800"
           >
             <label for="cyfr-home" class="text-sm text-gray-300">
-              Sign in with your CYFR: the address of the home that holds your keys
+              Sign in with your CYFR: the address of the CYFR that holds your keys
             </label>
             <div class="flex gap-2">
               <input
@@ -787,7 +787,7 @@ defmodule PrismWeb.LoginLive do
                 type="text"
                 inputmode="url"
                 autocomplete="url"
-                placeholder="https://your-home.example"
+                placeholder="https://your-cyfr.example"
                 class="flex-1 min-w-0 rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-white"
               />
               <button
@@ -798,7 +798,7 @@ defmodule PrismWeb.LoginLive do
               </button>
             </div>
             <p class="text-xs text-gray-500">
-              Your home learns this home's address, and this home learns yours.
+              Your CYFR learns this CYFR's address, and this CYFR learns yours.
             </p>
           </form>
 

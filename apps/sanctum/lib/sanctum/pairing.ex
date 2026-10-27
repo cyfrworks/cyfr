@@ -1004,7 +1004,7 @@ defmodule Sanctum.Pairing do
       resource: client.id,
       details: %{
         "effect" =>
-          "This device, suspended when this home was restored from a backup, stands for you again"
+          "This device, suspended when this CYFR was restored from a backup, stands for you again"
       }
     }
   end
@@ -1362,7 +1362,7 @@ defmodule Sanctum.Pairing do
       class: :forbidden,
       reason: :restore_source_required,
       message:
-        "This home was restored from a backup: until you re-enable a passkey or a device, " <>
+        "This CYFR was restored from a backup: until you re-enable a passkey or a device, " <>
           "confirm with a fresh sign-in, an emailed code or your recovery kit"
     }
   end

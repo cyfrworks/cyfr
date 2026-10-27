@@ -257,7 +257,7 @@ defmodule PrismWeb.AuthController do
           conn,
           401,
           "Sign-in failed",
-          "<p>That sign-in could not be completed here. Begin it again from your home.</p>" <>
+          "<p>That sign-in could not be completed here. Begin it again from your CYFR.</p>" <>
             refused_return(reason, held) <> "<p><a href=\"/login\">Back to sign-in</a></p>"
         )
     end
@@ -292,7 +292,7 @@ defmodule PrismWeb.AuthController do
   defp back_home(held) do
     case carry_return(held, :refused) do
       nil -> ""
-      url -> "<p><a href=\"#{CyfrWeb.MinimalPage.h(url)}\">Back to your home</a></p>"
+      url -> "<p><a href=\"#{CyfrWeb.MinimalPage.h(url)}\">Back to Aqua</a></p>"
     end
   end
 

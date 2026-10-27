@@ -721,7 +721,7 @@ defmodule Emissary.Web.DeviceChannel do
   defp undeliverable(id, grant, state) do
     error = %{
       "class" => "unavailable",
-      "message" => "This home could not deliver the stream now; open it again shortly"
+      "message" => "This CYFR could not deliver the stream now; open it again shortly"
     }
 
     frames = [
@@ -977,7 +977,7 @@ defmodule Emissary.Web.DeviceChannel do
   defp sentence(:proof_expired), do: "The proof arrived after its challenge expired"
   defp sentence(:proof_refused), do: "The device's proof of its key was refused"
   defp sentence(:second_connect), do: "This connection has already presented its certificate"
-  defp sentence(:unchallengeable), do: "This home cannot challenge the device's certificate"
+  defp sentence(:unchallengeable), do: "This CYFR cannot challenge the device's certificate"
   defp sentence(:not_accepted), do: "This connection does not take that message"
 
   defp sentence(reason) when reason in [:expired, :certificate_expired],
@@ -987,15 +987,15 @@ defmodule Emissary.Web.DeviceChannel do
     do: "The device's certificate is not signed by its person's current key; renew it"
 
   defp sentence(:not_yet_valid), do: "The device's certificate is not valid yet"
-  defp sentence(:wrong_audience), do: "The device's certificate is for another home"
-  defp sentence(:unknown_subject), do: "The device's certificate names no person of this home"
+  defp sentence(:wrong_audience), do: "The device's certificate is for another CYFR"
+  defp sentence(:unknown_subject), do: "The device's certificate names no person of this CYFR"
 
   defp sentence(:client_mismatch),
     do: "The device's certificate names another client than this connection's"
 
   defp sentence(:remote_identity_unavailable),
     do:
-      "This device's certificate is issued by its person's own home; renew it there, " <>
+      "This device's certificate is issued by its person's own CYFR; renew it there, " <>
         "not here"
 
   defp sentence(:identity_stale),
@@ -1006,11 +1006,11 @@ defmodule Emissary.Web.DeviceChannel do
   defp sentence(:not_standing),
     do: "The person behind this device no longer stands in this athanor"
 
-  defp sentence(:unavailable), do: "This home could not check the device now; retry shortly"
+  defp sentence(:unavailable), do: "This CYFR could not check the device now; retry shortly"
 
   defp sentence({:rate_limited, retry_after_ms}),
     do:
-      "Too many device verifications from this address or across this home; " <>
+      "Too many device verifications from this address or across this CYFR; " <>
         "retry in #{retry_after_s(retry_after_ms)} s"
 
   defp sentence({:device_rate_limited, retry_after_ms}),

@@ -264,13 +264,13 @@ defmodule Sanctum.Recovery do
   end
 
   defp effect_at(directory) do
-    "Registers your identity at the directory #{directory}, which this home pins, and " <>
+    "Registers your identity at the directory #{directory}, which this CYFR pins, and " <>
       "prints its recovery kit. Anyone holding a kit can replace your keys. While that " <>
-      "directory cannot be reached, rotating your key, recovering and other homes' checks " <>
-      "of your identity wait; if it is gone for good, they end, and no identity moves to " <>
+      "directory cannot be reached, key rotation, recovery and identity checks by any other CYFR " <>
+      "wait; if it is gone for good, they end, and no identity moves to " <>
       "another directory. If every kit is lost, nothing can add one: your identity keeps " <>
       "working here with no way to recover it. A recovery restores your identity alone, " <>
-      "never your private data or the homes your devices saved: you add those addresses " <>
+      "never your private data or the CYFR addresses your devices saved: you add those addresses " <>
       "again from surviving devices or invitations."
   end
 
@@ -755,7 +755,7 @@ defmodule Sanctum.Recovery do
         "recovery_keys" => keys,
         "effect" =>
           "Adds another printed kit. Each kit alone can replace your keys, and every other " <>
-            "home ends what it bound to your current keys once it sees the change."
+            "CYFR ends what it bound to your current keys once it sees the change."
       }
     }
   end

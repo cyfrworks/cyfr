@@ -257,7 +257,7 @@ defmodule Sanctum.Providers.Member do
       class: :forbidden,
       reason: :recovering_from_restore,
       message:
-        "This home was restored from a backup, and a member of this group has not yet " <>
+        "This CYFR was restored from a backup, and a member of this group has not yet " <>
           "recovered their sign-in: no one is added until every member has"
     }
   end

@@ -40,7 +40,7 @@ defmodule PrismWeb.RestoreLiveTest do
 
     # The page holds nothing of a restore, and says what one brings back.
     assert html =~ "never your private data"
-    assert html =~ "never the homes your devices saved"
+    assert html =~ "never the CYFR addresses your devices saved"
     assert has_element?(view, ~s([data-test="restore-reproof"][hidden]))
     assert has_element?(view, ~s([data-test="restore-continue"][hidden]))
   end

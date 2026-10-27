@@ -265,7 +265,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
       assert has_element?(view, ~s([data-test="recovery-directory"]), directory.url)
       assert html =~ "cannot be reached"
       assert html =~ "If every kit is lost, nothing can add one"
-      assert html =~ "never your private data or the homes your devices saved"
+      assert html =~ "never your private data or the CYFR addresses your devices saved"
       assert html =~ "no device holds recovery material"
 
       # The form is the browser's: no input it could submit by itself, and
@@ -664,7 +664,7 @@ defmodule PrismWeb.SystemLayerRecoveryTest do
     test "lists what the restore suspended and asks for again, with nothing secret and no prompt",
          %{view: view, athanor: athanor, ids: ids} do
       assert has_element?(view, ~s([data-test="restore-checklist"][data-recovering="true"]))
-      assert render(view) =~ "This home was restored from a backup"
+      assert render(view) =~ "This CYFR was restored from a backup"
       assert has_element?(view, ~s([data-test="restore-checklist-recovering"]))
 
       for {operation, id} <- [

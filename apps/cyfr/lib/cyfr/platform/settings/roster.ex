@@ -128,7 +128,7 @@ defmodule Cyfr.Platform.Settings.Roster do
   # gives it, in name order.
   @deployment [
     {"CADDY_ACME_EMAIL",
-     "The address Let's Encrypt registers a public home's Caddy certificate under, optional, which `cyfr access public --acme-email` writes and compose hands Caddy; any other mode refuses it."},
+     "The optional email address Let's Encrypt registers CYFR's Caddy certificate under with public access, which `cyfr access public --acme-email` writes and compose hands Caddy; any other mode refuses it."},
     {"CYFR_AUTH_PROVIDER",
      "The sign-in provider: unset for the built-in GitHub and Google device flows, `oidc` for the external issuer the three `CYFR_OIDC_*` variables name; `oidc` with any of them missing refuses the boot."},
     {"CYFR_AUTO_MIGRATE",
@@ -154,7 +154,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_COSIGN_KEY",
      "Key-based OCI signature verification: the path of a file holding the cosign public key, readable by the server; a value that names no readable file (a KMS URI among them) refuses verification as `unreadable_key`."},
     {"CYFR_CRYPTO_KEYRING",
-     "The keyring sealing secrets at rest (vault entries, webhook secrets, registry tokens, and each person's online keys and pending recovery material), as JSON `{\"primary\":\"label\",\"keys\":{\"label\":\"<base64, at least 32 bytes>\"}}`; unset, one key derived from `CYFR_SECRET_KEY_BASE`. To rotate, keep the old labels listed and re-seal with `Cyfr.Release.rotate_cipher_keys/1`. Losing it loses every person's online keys at this home: an enrolled person restores from a printed kit on an empty installation, and an unenrolled person's keys are gone."},
+     "The keyring sealing secrets at rest (vault entries, webhook secrets, registry tokens, and each person's online keys and pending recovery material), as JSON `{\"primary\":\"label\",\"keys\":{\"label\":\"<base64, at least 32 bytes>\"}}`; unset, one key derived from `CYFR_SECRET_KEY_BASE`. To rotate, keep the old labels listed and re-seal with `Cyfr.Release.rotate_cipher_keys/1`. Losing it loses every person's online keys at this CYFR: an enrolled person restores from a printed kit on an empty installation, and an unenrolled person's keys are gone."},
     {"CYFR_CRYPTO_KEYRING_FINGERPRINT_ACCEPT",
      "The primary-key fingerprint the boot's refusal reports, set for one boot to accept a deliberate key change; re-seal, then unset it. It recovers nothing sealed with a key that is gone."},
     {"CYFR_DATABASE",
@@ -177,7 +177,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_HEADLESS",
      "A Codex-only node (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_AUTH_PROVIDER=oidc`."},
     {"CYFR_HOST",
-     "The home's hostname, which `cyfr access` writes with the mode: `localhost` in a local home, the tailnet machine's name (`<machine>.<tailnet>.ts.net`) in a tailnet home, and the domain Caddy's certificate names in a public one. The boot refuses a host the mode does not allow."},
+     "CYFR's hostname, which `cyfr access` writes with the mode: `localhost` with local access, the tailnet machine's name (`<machine>.<tailnet>.ts.net`) with tailnet access, and the domain Caddy's certificate names with public access. The boot refuses a host the mode does not allow."},
     {"CYFR_HOST_API_BIND",
      "The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1` for a bare member; compose binds the member's own address on the locus-runtime network, so the host API is reachable from that network alone)."},
     {"CYFR_HOST_API_PORT", "The host API's port (default 4300)."},
@@ -197,7 +197,7 @@ defmodule Cyfr.Platform.Settings.Roster do
      "The builds service's base URL. `http://locus-builds:4100`, which `cyfr init` writes, names the compose service, which `cyfr up` then starts; a URL naming another host starts no local builder. With it and `CYFR_LOCUS_BUILDS_KEY` both empty builds are off and every build is refused; one without the other refuses the boot."},
     {"CYFR_LOG_FORMAT", "`json` for structured logs; unset, plain text."},
     {"CYFR_MCP_ALLOWED_ORIGINS",
-     "Extra origins, comma-separated, the MCP endpoint's Origin check accepts beside the home's own: `https://<CYFR_HOST>` in a tailnet or public home, and the localhost origins on `CYFR_PORT`."},
+     "Extra origins, comma-separated, the MCP endpoint's Origin check accepts beside CYFR's own: `https://<CYFR_HOST>` with tailnet or public access, and the localhost origins on `CYFR_PORT`."},
     {"CYFR_METRICS_TOKEN",
      "The bearer token a `/metrics` scrape must present; unset, an enabled endpoint is unauthenticated, so bind it privately or allowlist it at the proxy."},
     {"CYFR_OCI_REGISTRY_URL",
@@ -217,18 +217,18 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_PLATFORM_ADMIN_EMAILS",
      "The server's operators, comma-separated emails: each is always let in and holds the platform-admin capability, reconciled at every boot. Unset, no one can sign in."},
     {"CYFR_PORT",
-     "The loopback listener's port (default 4000), which the stack publishes on this machine's loopback alone; a local home's address is `http://localhost:<CYFR_PORT>`."},
+     "The loopback listener's port (default 4000), which the stack publishes on this machine's loopback alone; CYFR's address with local access is `http://localhost:<CYFR_PORT>`."},
     {"CYFR_PRIVATE_EGRESS_TARGETS",
      "The private hosts, addresses or CIDRs the server's own outbound calls may reach (MCP servers, OAuth token endpoints, registry pulls), comma-separated; the stack names `locus-backends`. Link-local addresses are always refused, and a run's egress never uses this list. The stack's builds and backends reach public hosts and the hosts named here, and nothing else: each island's egress guard (the `locus-builds-guard` and `locus-backends-guard` services) refuses every link-local and metadata address, the control plane, every other private address, and one spawn's reach into another's listener on the island's shared loopback."},
     {"CYFR_PROMETHEUS_METRICS",
      "Prometheus metrics at `/metrics` on the API port (default off)."},
     {"CYFR_PROXY_BIND_ADDRESS",
-     "The address the endpoint's proxy listener binds in a tailnet or public home (default `127.0.0.1`): the listener Tailscale Serve or Caddy forwards to, and the only one whose forwarded headers are trusted. The stack binds cyfr's fixed address on its `edge` network; a local home has no proxy listener."},
+     "The address the endpoint's proxy listener binds with tailnet or public access (default `127.0.0.1`): the listener Tailscale Serve or Caddy forwards to, and the only one whose forwarded headers are trusted. The stack binds cyfr's fixed address on its `edge` network; CYFR with local access has no proxy listener."},
     {"CYFR_PROXY_PORT", "The proxy listener's port (default 4001), which nothing publishes."},
     {"CYFR_PUBLIC_URL",
-     "The home's address in a tailnet or public home, exactly `https://<CYFR_HOST>`, which `cyfr access` writes with the mode; a local home has none, and its address is `http://localhost:<CYFR_PORT>`. Webhook URLs are absolute when it is set and bare paths when it is not."},
+     "CYFR's address with tailnet or public access, exactly `https://<CYFR_HOST>`, which `cyfr access` writes with the mode; CYFR with local access has no such setting, and its address is `http://localhost:<CYFR_PORT>`. Webhook URLs are absolute when it is set and bare paths when it is not."},
     {"CYFR_ACCESS",
-     "How the home is reached: `local` (this computer alone, at `http://localhost:<CYFR_PORT>`), `tailnet` (your devices on Tailscale, through Tailscale Serve) or `public` (anyone on the internet, through Caddy). `cyfr init` and `cyfr access <mode>` write it with every setting it implies, the boot refuses a setting that contradicts it and names the command that fixes it, and a release refuses to start without it; a development or test boot without it is `local`."},
+     "How CYFR is reached: `local` (this computer alone, at `http://localhost:<CYFR_PORT>`), `tailnet` (your devices on Tailscale, through Tailscale Serve) or `public` (anyone on the internet, through Caddy). `cyfr init` and `cyfr access <mode>` write it with every setting it implies, the boot refuses a setting that contradicts it and names the command that fixes it, and a release refuses to start without it; a development or test boot without it is `local`."},
     {"CYFR_REGISTRY_URL",
      "The component registry host (default `cyfr.run`); `none` is an appliance without a registry, whose pulls and publishes refuse."},
     {"CYFR_REQUIRE_SIGNED_PULLS",
@@ -255,11 +255,11 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_STORAGE",
      "`s3` for S3-compatible object storage, which needs the bucket, region and both keys; unset, the local filesystem under `CYFR_DATA_PATH`."},
     {"CYFR_STORAGE_RESERVE_BYTES",
-     "The storage reserve, in bytes (default 67108864, 64 MiB; 1 to 1 TiB, and 0 refuses the boot): the file the home preallocates in `CYFR_STORAGE_RESERVE_PATH`, and the free space below which, on that filesystem or a local storage root, it latches `depleted` and frees the file, admitting only reads and changes that take authority away until the file is allocated again with that much free beside it."},
+     "The storage reserve, in bytes (default 67108864, 64 MiB; 1 to 1 TiB, and 0 refuses the boot): the file CYFR preallocates in `CYFR_STORAGE_RESERVE_PATH`, and the free space below which, on that filesystem or a local storage root, it latches `depleted` and frees the file, admitting only reads and changes that take authority away until the file is allocated again with that much free beside it."},
     {"CYFR_STORAGE_RESERVE_PATH",
      "The directory holding the storage reserve's file, whose filesystem the reserve guards; it must exist, be writable and report its free space, or the boot refuses. Under SQLite it defaults to the database's directory. Under PostgreSQL it has no default: unset, no file is kept, and a database volume the reserve does not share is outside it, as an S3 store is."},
     {"CYFR_TAILNET_NODE_ID",
-     "The tailnet machine's stable node ID, 1 to 128 letters, digits, `.`, `_` and `-`, which `cyfr access tailnet` reads from Tailscale and writes, and against which every start checks the running machine before Tailscale Serve opens. A tailnet home requires it, and any other mode refuses it."},
+     "The tailnet machine's stable node ID, 1 to 128 letters, digits, `.`, `_` and `-`, which `cyfr access tailnet` reads from Tailscale and writes, and against which every start checks the running machine before Tailscale Serve opens. CYFR with tailnet access requires it, and any other mode refuses it."},
     {"CYFR_TRUSTED_PROXY_CIDRS",
      "The proxies whose forwarded headers the proxy listener trusts, comma-separated addresses or CIDRs, which take precedence over `CYFR_TRUSTED_PROXY_HOPS`; the stack names Caddy's and Tailscale's addresses on its `edge` network. The loopback listener trusts none, and an entry that is neither refuses the boot."},
     {"CYFR_TRUSTED_PROXY_HOPS",
@@ -267,7 +267,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_WASM_TOOLS",
      "The absolute path of the pinned `wasm-tools` every component is validated with before it is stored or compiled (default `/usr/local/bin/wasm-tools`, where the image installs it; `scripts/wasm-tools.sh` installs the pinned release). A path that names no executable refuses the boot."},
     {"OTEL_EXPORTER_OTLP_ENDPOINT",
-     "The OTLP endpoint traces go to (default `http://localhost:4318`). Not under the prefix; listed so every name the boot reads has one home."}
+     "The OTLP endpoint traces go to (default `http://localhost:4318`). Not under the prefix; listed so every name the boot reads is documented in one place."}
   ]
 
   # The `${…}` names docker-compose.yml interpolates that no release reads:
@@ -389,11 +389,11 @@ defmodule Cyfr.Platform.Settings.Roster do
     "directory_recovery_reserve_bytes" =>
       "Bytes of `directory_log_bytes` kept for recovery entries and their recorded outcomes, which rotations cannot use; below `directory_log_bytes`.",
     "identity_freshness_seconds" =>
-      "How long this home trusts a remote person's verified identity head before reading their directory again, in seconds: how long a retired key can still act here.",
+      "How long this CYFR trusts a remote person's verified identity head before reading their directory again, in seconds: how long a retired key can still act here.",
     "device_cert_seconds" =>
-      "How long a device certificate this home issues lives, in seconds; a paired device renews at half of it.",
+      "How long a device certificate this CYFR issues lives, in seconds; a paired device renews at half of it.",
     "clock_skew_seconds" =>
-      "How far a certificate's not-before or a signed message's time may sit from this home's clock, in seconds; it never extends a certificate's expiry.",
+      "How far a certificate's not-before or a signed message's time may sit from this CYFR's clock, in seconds; it never extends a certificate's expiry.",
     "confirmation_seconds" =>
       "How long a pending confirmation of a sensitive change stays open, in seconds.",
     "reauth_seconds" =>

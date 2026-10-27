@@ -140,7 +140,7 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
       >
         <summary class="cursor-pointer">
           <h2 id={"#{@id}-title"} class="inline text-base font-semibold">
-            This home was restored from a backup
+            This CYFR was restored from a backup
           </h2>
         </summary>
 

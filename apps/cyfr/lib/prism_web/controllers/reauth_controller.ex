@@ -141,7 +141,7 @@ defmodule PrismWeb.ReauthController do
         {"Change", held.operation},
         {"On", preview["resource"]},
         {"Athanor", preview["athanor"]},
-        {"Home", preview["home"]}
+        {"CYFR", preview["home"]}
       ] ++ details(preview["details"])
 
     rows =

@@ -188,8 +188,8 @@ defmodule Sanctum.RemoteCertification do
         "athanor" => athanor,
         "client_id" => client,
         "effect" =>
-          "Lets a device act for you at that home. It renews its certificate here by proving " <>
-            "its key until your keys change, and stops when that home revokes it."
+          "Lets a device act for you at that CYFR. It renews its certificate here by proving " <>
+            "its key until your keys change, and stops when that CYFR revokes it."
       }
     }
   end
@@ -198,15 +198,15 @@ defmodule Sanctum.RemoteCertification do
        when is_binary(audience) and is_binary(athanor) and is_binary(client_id) do
     cond do
       not Encoding.home?(audience) ->
-        {:error, {:invalid_argument, "The audience is a home's origin, like https://hub.example"}}
+        {:error, {:invalid_argument, "The audience is a CYFR's origin, like https://hub.example"}}
 
       audience == Person.home() ->
         {:error,
          {:invalid_argument,
-          "certify is for another home; a device for this home pairs here through pairing"}}
+          "certify is for another CYFR; a device for this CYFR pairs here through pairing"}}
 
       not (Encoding.id?(athanor) and Encoding.id?(client_id)) ->
-        {:error, {:invalid_argument, "The athanor and the client_id are that home's ids"}}
+        {:error, {:invalid_argument, "The athanor and the client_id are that CYFR's ids"}}
 
       true ->
         with {:ok, device_key} <- device_key(args["device_key"]) do
@@ -349,7 +349,7 @@ defmodule Sanctum.RemoteCertification do
         {:error, :not_found}
 
       {:error, _malformed} ->
-        {:error, {:invalid_argument, "The certificate is not a device certificate a home signs"}}
+        {:error, {:invalid_argument, "The certificate is not a device certificate a CYFR signs"}}
     end
   end
 
@@ -450,7 +450,7 @@ defmodule Sanctum.RemoteCertification do
         {:ok, %{challenge: Challenge.encode(challenge)}}
 
       {:error, _malformed} ->
-        {:error, {:invalid_argument, "The certificate is not a device certificate a home signs"}}
+        {:error, {:invalid_argument, "The certificate is not a device certificate a CYFR signs"}}
     end
   end
 

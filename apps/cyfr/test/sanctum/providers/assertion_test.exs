@@ -214,6 +214,6 @@ defmodule Sanctum.Providers.AssertionTest do
       )
 
     assert {:error, {:conflict, message}} = call(person.ctx, args)
-    assert message =~ "another home"
+    assert message =~ "another CYFR"
   end
 end

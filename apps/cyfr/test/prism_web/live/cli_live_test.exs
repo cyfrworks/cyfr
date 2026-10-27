@@ -116,7 +116,7 @@ defmodule PrismWeb.CliLiveTest do
       "code" => Prima.Identity.Encoding.b64(:crypto.strong_rand_bytes(16))
     })
 
-    assert has_element?(view, ~s([data-test="cli-notice"]), "not one this home knows")
+    assert has_element?(view, ~s([data-test="cli-notice"]), "not one this CYFR knows")
     refute has_element?(view, ~s([data-test="cli-approve"]))
 
     {:ok, view, _html} = live(conn, ~p"/cli")

@@ -314,10 +314,10 @@ defmodule Sanctum.Carry do
     cond do
       not Encoding.home?(destination) ->
         {:error,
-         {:invalid_argument, "The destination is a home's origin, like https://hub.example"}}
+         {:invalid_argument, "The destination is a CYFR's origin, like https://hub.example"}}
 
       destination == home ->
-        {:error, {:invalid_argument, "A sign-in carry goes to another home than this one"}}
+        {:error, {:invalid_argument, "A sign-in carry goes to a CYFR other than this one"}}
 
       true ->
         {:ok, destination}

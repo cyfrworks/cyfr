@@ -2304,7 +2304,7 @@ func (args KeyListArgs) MarshalJSON() ([]byte, error) {
 
 // KeyReenableArgs carries arguments for key.reenable.
 type KeyReenableArgs struct {
-	// The id of your key that restoring this home from a backup suspended (key.list shows it)
+	// The id of your key that restoring this CYFR from a backup suspended (key.list shows it)
 	KeyId string `json:"key_id"`
 }
 
@@ -2992,7 +2992,7 @@ type PairingCompleteArgs struct {
 	KeyDigest string `json:"key_digest"`
 	// complete: the device key's signature over the pair challenge; absent, the answer is the challenge to sign
 	Proof Field[PairingCompleteArgsProof] `json:"proof,omitzero"`
-	// complete: for a person whose identity is at another home, the device certificate their home issued for this client, device key, home and athanor; absent for a person whose keys are here
+	// complete: for a person whose identity is at another CYFR, the device certificate their own CYFR issued for this client, device key, CYFR and athanor; absent for a person whose keys are here
 	Certificate Field[any] `json:"certificate,omitzero"`
 }
 
@@ -3192,9 +3192,9 @@ func (args PasskeyRevokeArgs) MarshalJSON() ([]byte, error) {
 
 // PersonAssertArgs carries arguments for person.assert.
 type PersonAssertArgs struct {
-	// The other home, as its origin: the assertion's audience, or the home a certificate is presented to
+	// The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to
 	Audience string `json:"audience"`
-	// assert: the challenge that home issued for this sign-in
+	// assert: the challenge that CYFR issued for this sign-in
 	Challenge string `json:"challenge"`
 	// The pending sign-in carry, by its action id
 	ActionId string `json:"action_id"`
@@ -3213,7 +3213,7 @@ func (args PersonAssertArgs) MarshalJSON() ([]byte, error) {
 
 // PersonCarryBeginArgs carries arguments for person.carry_begin.
 type PersonCarryBeginArgs struct {
-	// carry_begin: the home to sign in at, as its origin
+	// carry_begin: the CYFR to sign in at, as its origin
 	Destination string `json:"destination"`
 }
 
@@ -3275,11 +3275,11 @@ func (args PersonCarryListArgs) MarshalJSON() ([]byte, error) {
 type PersonCertifyArgs struct {
 	// certify: the device's public key, unpadded base64url
 	DeviceKey string `json:"device_key"`
-	// The other home, as its origin: the assertion's audience, or the home a certificate is presented to
+	// The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to
 	Audience string `json:"audience"`
-	// certify: the athanor at that home the device joins
+	// certify: the athanor at that CYFR the device joins
 	Athanor string `json:"athanor"`
-	// certify: the paired-client id that home reserved for the device (pcl_…)
+	// certify: the paired-client id that CYFR reserved for the device (pcl_…)
 	ClientId string `json:"client_id"`
 }
 
@@ -3421,7 +3421,7 @@ func (args PersonLinkDoorArgs) MarshalJSON() ([]byte, error) {
 
 // PersonRenewCertificateArgs carries arguments for person.renew_certificate.
 type PersonRenewCertificateArgs struct {
-	// renew_certificate: a certificate this home issued for the device, which only locates its certification
+	// renew_certificate: a certificate this CYFR issued for the device, which only locates its certification
 	Certificate any `json:"certificate"`
 	// renew_certificate: the device key's signature over the renew challenge; absent, the answer is the challenge to sign
 	Proof Field[any] `json:"proof,omitzero"`
@@ -5940,7 +5940,7 @@ func (args WebhookListArgs) MarshalJSON() ([]byte, error) {
 
 // WebhookReenableArgs carries arguments for webhook.reenable.
 type WebhookReenableArgs struct {
-	// The id of your webhook that restoring this home from a backup suspended (webhook.list shows it)
+	// The id of your webhook that restoring this CYFR from a backup suspended (webhook.list shows it)
 	WebhookId string `json:"webhook_id"`
 }
 

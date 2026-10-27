@@ -1193,7 +1193,7 @@ defmodule PrismWeb.SettingsLive do
 
   defp no_directory_sentence,
     do:
-      "This home names no identity directory, so nobody enrolls here yet: its operator sets " <>
+      "This CYFR names no identity directory, so nobody enrolls here yet: its operator sets " <>
         "CYFR_DIRECTORY_URL. Everything else, local pairing included, works without it."
 
   defp rotate(socket, request_id) do
@@ -1351,7 +1351,7 @@ defmodule PrismWeb.SettingsLive do
          |> load_passkeys()
          |> put_flash(
            :info,
-           "This home's platform administrator authorizes this passkey before it counts here."
+           "This CYFR's platform administrator authorizes this passkey before it counts here."
          )}
 
       {:ok, _other, socket} ->
@@ -1778,7 +1778,7 @@ defmodule PrismWeb.SettingsLive do
           </dl>
 
           <p :if={@remote} class="text-sm" data-test="identity-remote">
-            Your keys are held at another home, so your identity is enrolled, rotated and recovered there.
+            Your keys are held at another CYFR, so your identity is enrolled, rotated and recovered there.
           </p>
 
           <div :if={not @remote} class="space-y-3">
@@ -1795,7 +1795,7 @@ defmodule PrismWeb.SettingsLive do
               class="space-y-2"
             >
               <p class="text-sm text-gray-300">
-                You hold keys at this home but no identifier yet. Enrolling registers one at this home's directory and prints the kit that recovers it.
+                You hold keys at this CYFR but no identifier yet. Enrolling registers one at this CYFR's directory and prints the kit that recovers it.
               </p>
               <.button phx-click="enroll" data-test="identity-enroll">Enroll</.button>
             </div>
@@ -1891,7 +1891,7 @@ defmodule PrismWeb.SettingsLive do
       <section data-test="doors" class="space-y-3">
         <h3 class="text-sm font-medium text-gray-400">Sign-in doors</h3>
         <p class="text-xs text-gray-500">
-          The ways you sign in at this home. Linking or unlinking one needs a fresh confirmation, and a door is linked only by signing in with it, never by a matching email.
+          The ways you sign in at this CYFR. Linking or unlinking one needs a fresh confirmation, and a door is linked only by signing in with it, never by a matching email.
         </p>
 
         <p :if={@doors == []} class="text-sm text-gray-400">No door is linked.</p>
@@ -1970,9 +1970,9 @@ defmodule PrismWeb.SettingsLive do
     ~H"""
     <.card>
       <section data-test="passkeys" class="space-y-3">
-        <h3 class="text-sm font-medium text-gray-400">Passkeys at this home</h3>
+        <h3 class="text-sm font-medium text-gray-400">Passkeys at this CYFR</h3>
         <p class="text-xs text-gray-500">
-          A passkey proves it is you, here only: each home registers its own. Registering or revoking one needs a fresh confirmation, except a first one right after you signed in or restored.
+          A passkey proves it is you, here only: each CYFR registers its own. Registering or revoking one needs a fresh confirmation, except a first one right after you signed in or restored.
         </p>
 
         <p :if={@error} role="alert" class="text-sm">{@error}</p>
@@ -2010,7 +2010,7 @@ defmodule PrismWeb.SettingsLive do
   end
 
   defp passkey_state(%{state: "active", registered_at: at}), do: "registered #{at}"
-  defp passkey_state(%{state: "pending"}), do: "awaiting this home's administrator"
+  defp passkey_state(%{state: "pending"}), do: "awaiting this CYFR's administrator"
   defp passkey_state(%{state: state}), do: state
 
   attr :entries, :list, required: true

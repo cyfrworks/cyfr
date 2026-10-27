@@ -421,10 +421,10 @@ defmodule Sanctum.Person do
   defp other_home(audience) do
     cond do
       not Prima.Identity.Encoding.home?(audience) ->
-        {:error, {:invalid_argument, "The audience is a home's origin, like https://hub.example"}}
+        {:error, {:invalid_argument, "The audience is a CYFR's origin, like https://hub.example"}}
 
       audience == home() ->
-        {:error, {:invalid_argument, "An assertion is for another home than this one"}}
+        {:error, {:invalid_argument, "An assertion is for a CYFR other than this one"}}
 
       true ->
         :ok
@@ -434,7 +434,7 @@ defmodule Sanctum.Person do
   defp challenge_bytes(challenge) do
     if byte_size(challenge) == Prima.PersonAssertion.challenge_bytes(),
       do: :ok,
-      else: {:error, {:invalid_argument, "The challenge is the 32 bytes that home issued"}}
+      else: {:error, {:invalid_argument, "The challenge is the 32 bytes that CYFR issued"}}
   end
 
   # The person's own source action, naming the audience as its destination,
@@ -445,7 +445,7 @@ defmodule Sanctum.Person do
         cond do
           action.phase not in ["pending", "delivered"] ->
             {:error,
-             {:conflict, "This sign-in is no longer pending; begin a new one from your home"}}
+             {:conflict, "This sign-in is no longer pending; begin a new one from your CYFR"}}
 
           epoch != row.head_hash ->
             {:error,
@@ -458,11 +458,11 @@ defmodule Sanctum.Person do
 
       {:ok, _another} ->
         {:error,
-         {:invalid_argument, "No pending sign-in of yours names that home; begin one first"}}
+         {:invalid_argument, "No pending sign-in of yours names that CYFR; begin one first"}}
 
       {:error, reason} when reason in [:not_found, :cross_tenant] ->
         {:error,
-         {:invalid_argument, "No pending sign-in of yours names that home; begin one first"}}
+         {:invalid_argument, "No pending sign-in of yours names that CYFR; begin one first"}}
 
       {:error, _unanswered} ->
         {:error, :unavailable}
@@ -547,7 +547,7 @@ defmodule Sanctum.Person do
       resource: action.destination_home,
       details: %{
         "effect" =>
-          "Signs you in at #{action.destination_home}, which learns this home's address. " <>
+          "Signs you in at #{action.destination_home}, which learns this CYFR's address. " <>
             "#{action.destination_home} shows the code #{code}; confirm only if it matches."
       }
     }
@@ -564,14 +564,14 @@ defmodule Sanctum.Person do
       {:error, :challenge_attached} ->
         {:error,
          {:conflict,
-          "This sign-in already carries another challenge from that home; begin a new one"}}
+          "This sign-in already carries another challenge from that CYFR; begin a new one"}}
 
       {:error, reason} when reason in [:expired, :not_open] ->
-        {:error, {:conflict, "This sign-in is no longer pending; begin a new one from your home"}}
+        {:error, {:conflict, "This sign-in is no longer pending; begin a new one from your CYFR"}}
 
       {:error, reason} when reason in [:not_found, :cross_tenant] ->
         {:error,
-         {:invalid_argument, "No pending sign-in of yours names that home; begin one first"}}
+         {:invalid_argument, "No pending sign-in of yours names that CYFR; begin one first"}}
 
       {:error, _unanswered} ->
         {:error, :unavailable}
@@ -598,7 +598,7 @@ defmodule Sanctum.Person do
         {:error, {:conflict, "This sign-in already holds another assertion; begin a new one"}}
 
       {:error, reason} when reason in [:expired, :not_open] ->
-        {:error, {:conflict, "This sign-in is no longer pending; begin a new one from your home"}}
+        {:error, {:conflict, "This sign-in is no longer pending; begin a new one from your CYFR"}}
 
       {:error, {:conflict, _sentence} = conflict} ->
         {:error, conflict}

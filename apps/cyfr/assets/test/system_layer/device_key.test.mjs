@@ -1402,7 +1402,7 @@ function issuerFetch({refuse = null, unreachable = false, replacement} = {}) {
     calls.push({url, init, body})
     if (unreachable) throw new TypeError("failed to fetch")
     if (refuse) {
-      return {ok: false, status: refuse, json: async () => ({code: "conflict", message: "Your keys changed since this device was certified; certify it again at your home."})}
+      return {ok: false, status: refuse, json: async () => ({code: "conflict", message: "Your keys changed since this device was certified; certify it again at your CYFR."})}
     }
     if (!body.proof) {
       return {ok: true, status: 200, json: async () => ({challenge: {...certs.challenges.renew, home: ISSUER, device_key: body.certificate.device_key}})}
