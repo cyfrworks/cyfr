@@ -35,12 +35,12 @@ defmodule Sanctum.Providers.Door do
 
     Operation.tool(
       [
-        Operation.new("door", "list", "List door", [],
+        Operation.new("door", "list", "List sign-in allowlist entries", [],
           scope: :platform,
           kind: :read,
           planes: [:external]
         ),
-        Operation.new("door", "requests", "Requests door", [],
+        Operation.new("door", "requests", "List sign-in requests", [],
           scope: :platform,
           kind: :read,
           planes: [:external]
@@ -48,7 +48,7 @@ defmodule Sanctum.Providers.Door do
         Operation.new(
           "door",
           "allow",
-          "Allow door",
+          "Allow sign-in",
           [
             Arg.new("value", :string,
               required: true,
@@ -67,7 +67,7 @@ defmodule Sanctum.Providers.Door do
         Operation.new(
           "door",
           "deny",
-          "Deny door",
+          "Deny sign-in",
           [
             Arg.new("value", :string,
               required: true,
@@ -87,7 +87,7 @@ defmodule Sanctum.Providers.Door do
         Operation.new(
           "door",
           "remove",
-          "Remove door",
+          "Remove a sign-in allowlist entry",
           [Arg.new("id", :string, required: true, description: "Entry id (remove, resolve)")],
           scope: :platform,
           kind: :write,
@@ -96,7 +96,7 @@ defmodule Sanctum.Providers.Door do
         Operation.new(
           "door",
           "resolve",
-          "Resolve door",
+          "Resolve a sign-in request",
           [
             Arg.new("id", :string, required: true, description: "Entry id (remove, resolve)"),
             Arg.new("decision", :string,
@@ -111,7 +111,7 @@ defmodule Sanctum.Providers.Door do
         )
       ],
       description:
-        "Who may sign in to this server — platform admins only. Entries name an email, an IdP subject (user id), or `*` for anyone the configured provider authenticates. A deny is sticky and ejects the person; requests are invites members made for addresses the door does not know.",
+        "Who may sign in to this server — platform admins only. Entries name an email, an IdP subject (user id), or `*` for anyone the configured provider authenticates. A deny is sticky and ejects the person; requests are invites members made for addresses the sign-in allowlist does not know.",
       title: "Server Allowlist"
     )
   end
@@ -141,7 +141,7 @@ defmodule Sanctum.Providers.Door do
 
         {:error, reason} ->
           Logger.error("[Sanctum.Providers.Door] door.allow failed: #{inspect(reason)}")
-          {:error, {:unavailable, "The door"}}
+          {:error, {:unavailable, "The sign-in allowlist"}}
       end
     end
   end
@@ -171,7 +171,7 @@ defmodule Sanctum.Providers.Door do
             # The entry is written (the door is shut) but a person's sessions,
             # keys or rows may survive — say so rather than report a clean eject.
             {:error,
-             "Denied at the door, but ejecting #{length(denied) - ejected} of #{length(denied)} " <>
+             "Sign-in denied, but ejecting #{length(denied) - ejected} of #{length(denied)} " <>
                "known accounts failed — retry deny to finish"}
           end
 
@@ -185,7 +185,7 @@ defmodule Sanctum.Providers.Door do
 
         {:error, reason} ->
           Logger.error("[Sanctum.Providers.Door] door.deny failed: #{inspect(reason)}")
-          {:error, {:unavailable, "The door"}}
+          {:error, {:unavailable, "The sign-in allowlist"}}
       end
     end
   end
@@ -222,7 +222,7 @@ defmodule Sanctum.Providers.Door do
 
       {:error, reason} ->
         Logger.error("[Sanctum.Providers.Door] door.remove failed: #{inspect(reason)}")
-        {:error, {:unavailable, "The door"}}
+        {:error, {:unavailable, "The sign-in allowlist"}}
     end
   end
 
@@ -245,7 +245,7 @@ defmodule Sanctum.Providers.Door do
         {:error, {:invalid_argument, "That entry is not a pending request"}}
 
       {:error, _} ->
-        {:error, {:unavailable, "The door"}}
+        {:error, {:unavailable, "The sign-in allowlist"}}
     end
   end
 

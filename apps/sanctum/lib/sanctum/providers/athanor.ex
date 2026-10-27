@@ -386,7 +386,7 @@ defmodule Sanctum.Providers.Athanor do
         {:error, :personal_athanor} ->
           {:error,
            {:invalid_argument,
-            "A person's own athanor is not destroyed here — deny them at the door instead"}}
+            "A person's own athanor is not destroyed here — deny their sign-in instead"}}
 
         {:error, reason} ->
           Logger.error("[Sanctum.Providers.Athanor] athanor.destroy failed: #{inspect(reason)}")
@@ -541,7 +541,7 @@ defmodule Sanctum.Providers.Athanor do
       {:ok, %{status: "denied"}} ->
         {:error,
          {:invalid_argument,
-          "That person is denied at the door — allow them first; that reopens their athanor"}}
+          "That person is denied sign-in — allow them first; that reopens their athanor"}}
 
       _ ->
         :ok

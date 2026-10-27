@@ -146,7 +146,7 @@ defmodule PrismWeb.SystemLayer.RestoreChecklist do
 
         <div class="mt-3 space-y-3">
           <p :if={@recovering} data-test="restore-checklist-recovering">
-            Every session ended, and what the backup carried is suspended until you re-enable it. Re-enabling a passkey or a device needs a door's fresh sign-in or an emailed code, never the passkey or device itself; once one is re-enabled, your recovery is over and it confirms as before.
+            Every session ended, and what the backup carried is suspended until you re-enable it. Re-enabling a passkey or a device needs a fresh sign-in through a linked method or an emailed code, never the passkey or device itself; once one is re-enabled, your recovery is over and it confirms as before.
           </p>
           <p :if={not @recovering} data-test="restore-checklist-recovered">
             Your recovery is over. What the restore suspended or asks for again is still listed below.

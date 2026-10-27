@@ -2012,7 +2012,7 @@ defmodule Cyfr.DocsDriftTest do
              "tincture-guide.md's layout paragraph says it asks the person first"
 
     for writer <- [
-          "The CLI, the API and a glass paired with the person call it for the person",
+          "The CLI, the API and a device paired with the person call it for the person",
           "the assistant, whose shipped policy asks the person first",
           "No tincture declares `layout.edit`"
         ] do

@@ -359,7 +359,7 @@ defmodule Locus.Config do
   defp some_key(builds, backends, runtime) do
     if builds[:request_key] == nil and backends[:backends_key] == nil and runtime == nil do
       {:error,
-       "LOCUS_RUNTIME_KEY, LOCUS_BUILDS_KEY and LOCUS_BACKENDS_KEY are all unset; a node " <>
+       "LOCUS_RUNTIME_KEY, LOCUS_BUILDS_KEY and LOCUS_BACKENDS_KEY are all unset; a server " <>
          "serves the runtime with the first, builds with the second and backends with the " <>
          "third (64 hexadecimal digits each: the key `mix cyfr.locus.runtime_key` derives " <>
          "from CYFR_LOCUS_RUNTIME_ROOT, and the same key as CYFR_LOCUS_BUILDS_KEY or " <>

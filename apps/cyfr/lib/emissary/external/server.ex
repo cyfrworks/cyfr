@@ -843,10 +843,10 @@ defmodule Emissary.External.Server do
   defp backends_reason(:capacity), do: "the backends service has no free backend slots"
 
   defp backends_reason(:claimed_elsewhere),
-    do: "another member of the cell holds this server's backends"
+    do: "another server of the cluster holds this server's backends"
 
   defp backends_reason(:claim_unavailable),
-    do: "which member holds this server's backends could not be read"
+    do: "which server holds this server's backends could not be read"
 
   defp backends_reason({:pool_share, limit}),
     do: "this athanor already runs its share of the backends service (#{limit} backends)"

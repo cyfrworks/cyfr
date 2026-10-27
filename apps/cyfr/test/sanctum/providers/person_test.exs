@@ -540,7 +540,7 @@ defmodule Sanctum.Providers.PersonTest do
       assert %Prima.Refusal{class: :invalid_argument, message: message} =
                refusal(call(person.ctx, args))
 
-      assert message =~ "sign in with that door again"
+      assert message =~ "sign in with that sign-in method again"
 
       assert %Prima.Refusal{class: :invalid_argument} =
                refusal(call(person.ctx, %{args | "provider" => "email"}))
@@ -554,7 +554,7 @@ defmodule Sanctum.Providers.PersonTest do
                refusal(call(person.ctx, %{"action" => "unlink_door", "door" => door.key}))
 
       assert message =~ "hold no passkey"
-      assert message =~ "link another door"
+      assert message =~ "link another sign-in method"
     end
   end
 

@@ -67,7 +67,7 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
     before the database opens, or decides how the server is reached, or is a
     security posture a stolen operator session must not change: it changes
     with a restart. A **platform setting** is stored in the database, the
-    same on every member, and a platform admin changes it on Prism's
+    same on every server, and a platform admin changes it on Prism's
     Settings page, with `cyfr settings`, or through the `settings` tool.
 
     `.env.example` is the starting `.env`: the keys and addresses `cyfr init`
@@ -92,16 +92,16 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
 
     ## Platform settings
 
-    A setting's value is its variable's, when this member's environment sets
+    A setting's value is its variable's, when this server's environment sets
     it; else the stored value; else its default. A variable set in the
     environment **pins** the setting: the Settings page shows the pin and
-    refuses to change it, and a member whose pin disagrees with a live
-    member's refuses to boot, so a pinned value changes by stopping every
-    member that holds the old pin before the first starts with the new one.
+    refuses to change it, and a server whose pin disagrees with a live
+    server's refuses to boot, so a pinned value changes by stopping every
+    server that holds the old pin before the first starts with the new one.
 
     A **live** setting's change reaches new and refreshed work on every
-    member within #{cache_s} seconds, not work already in flight. A
-    **restart** setting applies at each member's next start and is listed as
+    server within #{cache_s} seconds, not work already in flight. A
+    **restart** setting applies at each server's next start and is listed as
     pending until then.
 
     When the store cannot answer, the stale policy decides: **refuse**
@@ -140,14 +140,14 @@ defmodule Mix.Tasks.Cyfr.Gen.ConfigurationGuide do
 
     The settings functions are public, so an operator without the console
     reaches them through the release. `bin/cyfr rpc` changes the **running
-    node**: the value is written, announced, and reaches every member as a
+    server**: the value is written, announced, and reaches every server as a
     change on the Settings page does.
 
         bin/cyfr rpc 'IO.inspect(Cyfr.Platform.Settings.list())'
         bin/cyfr rpc 'IO.inspect(Cyfr.Platform.Settings.set(Sanctum.system_context(), "log_level", "debug"))'
         bin/cyfr rpc 'IO.inspect(Cyfr.Platform.Settings.reset(Sanctum.system_context(), "log_level"))'
 
-    `bin/cyfr eval` changes the **next boot**: with no node running, it
+    `bin/cyfr eval` changes the **next boot**: with no server running, it
     starts the store's application, writes the value, and announces
     nothing; the next boot reads the store.
 

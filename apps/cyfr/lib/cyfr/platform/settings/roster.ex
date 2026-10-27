@@ -132,19 +132,19 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_AUTH_PROVIDER",
      "The sign-in provider: unset for the built-in GitHub and Google device flows, `oidc` for the external issuer the three `CYFR_OIDC_*` variables name; `oidc` with any of them missing refuses the boot."},
     {"CYFR_AUTO_MIGRATE",
-     "Whether the server migrates the schema on boot (default `on`); `off` when several members share one PostgreSQL database or an operator runs `bin/cyfr eval \"Cyfr.Release.migrate()\"` by hand."},
+     "Whether the server migrates the schema on boot (default `on`); `off` when several servers share one PostgreSQL database or an operator runs `bin/cyfr eval \"Cyfr.Release.migrate()\"` by hand."},
     {"CYFR_BIND_ADDRESS",
      "The address the endpoint's loopback listener binds, in every mode (default `127.0.0.1`): `127.0.0.1` or `::1`, since the boot refuses any other address without the compose file's `CYFR_LOCAL_INGRESS_ASSERTED`. The stack binds cyfr's fixed address on its `default` network, which no other container joins and Docker publishes on the host's loopback port alone."},
     {"CYFR_CELL_COOKIE",
-     "A cell's cookie: at least 32 characters (`openssl rand -hex 32`), the same on every member and the cookie each member's BEAM runs under (`RELEASE_COOKIE` or `-setcookie`)."},
+     "A cluster's cookie: at least 32 characters (`openssl rand -hex 32`), the same on every server and the cookie each server's BEAM runs under (`RELEASE_COOKIE` or `-setcookie`)."},
     {"CYFR_CLUSTER",
-     "Several members on one database as one cell (default off). A member boots only with PostgreSQL, S3 storage, TLS distribution, `CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_LOCUS_RUNTIME_ROOT` and its own `CYFR_HOST_API_URL`; each missing one is a named refusal."},
+     "Several servers on one database as one cluster (default off). A server boots only with PostgreSQL, S3 storage, TLS distribution, `CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_LOCUS_RUNTIME_ROOT` and its own `CYFR_HOST_API_URL`; each missing one is a named refusal."},
     {"CYFR_CLUSTER_DNS_QUERY",
-     "A cell's discovery by DNS: the headless service whose addresses are the members, each named `<CYFR_CLUSTER_NODE_BASENAME>@<address>`."},
+     "A cluster's discovery by DNS: the headless service whose addresses are the servers, each named `<CYFR_CLUSTER_NODE_BASENAME>@<address>`."},
     {"CYFR_CLUSTER_NODE_BASENAME",
-     "The node basename of the members `CYFR_CLUSTER_DNS_QUERY` finds."},
+     "The Erlang name prefix of the servers `CYFR_CLUSTER_DNS_QUERY` finds, before `@<address>`."},
     {"CYFR_CLUSTER_NODES",
-     "A cell's members by name, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`)."},
+     "A cluster's servers by name, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`)."},
     {"CYFR_CORS_ALLOWED_ORIGINS",
      "The browser CORS allowlist, comma-separated origins. Empty or unset (`cyfr init` writes it empty), it admits no cross-origin caller, which the shipped stack never needs. A release with sign-in configured refuses to boot on a wildcard."},
     {"CYFR_COSIGN_IDENTITY",
@@ -175,14 +175,14 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_GOOGLE_CLIENT_SECRET",
      "The Google OAuth client secret, set in `.env` alone and never in a tracked file."},
     {"CYFR_HEADLESS",
-     "A Codex-only node (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_AUTH_PROVIDER=oidc`."},
+     "CYFR with Codex access only (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_AUTH_PROVIDER=oidc`."},
     {"CYFR_HOST",
      "CYFR's hostname, which `cyfr access` writes with the mode: `localhost` with local access, the tailnet machine's name (`<machine>.<tailnet>.ts.net`) with tailnet access, and the domain Caddy's certificate names with public access. The boot refuses a host the mode does not allow."},
     {"CYFR_HOST_API_BIND",
-     "The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1` for a bare member; compose binds the member's own address on the locus-runtime network, so the host API is reachable from that network alone)."},
+     "The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1` for a bare server; compose binds the server's own address on the locus-runtime network, so the host API is reachable from that network alone)."},
     {"CYFR_HOST_API_PORT", "The host API's port (default 4300)."},
     {"CYFR_HOST_API_URL",
-     "The address a worker service reaches this member's host API at, carried by every assignment the member issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cell refuses to boot without it."},
+     "The address a worker service reaches this server's host API at, carried by every assignment the server issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cluster refuses to boot without it."},
     {"CYFR_LIVE_SALT",
      "The LiveView socket's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation."},
     {"CYFR_LOCAL_INGRESS_ASSERTED",
@@ -209,7 +209,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     {"CYFR_OIDC_ISSUER",
      "The OIDC issuer's URL (Okta, Auth0, Keycloak, Azure AD and the like), with `CYFR_AUTH_PROVIDER=oidc`."},
     {"CYFR_LOCUS_RUNTIME_ROOT",
-     "The worker root, 32 random bytes as 64 hexadecimal digits, read by cyfr alone; every worker service's key derives from it. `cyfr init` mints it, every member of a cell holds the same one, and without it no component runs."},
+     "The worker root, 32 random bytes as 64 hexadecimal digits, read by cyfr alone; every worker service's key derives from it. `cyfr init` mints it, every server of a cluster holds the same one, and without it no component runs."},
     {"CYFR_LOCUS_RUNTIME_WORKERS",
      "The worker services runs are dispatched to, comma-separated `<service_id>=<url>` entries tried in order; compose sets `wrk_locus=http://locus-runtime:4200`, and outside compose the default is a worker on this machine."},
     {"CYFR_OTEL_ENABLED",
@@ -327,13 +327,13 @@ defmodule Cyfr.Platform.Settings.Roster do
     "max_external_servers_per_athanor" =>
       "External MCP servers one athanor may register; unset, 1,000, and 0 removes the ceiling.",
     "mint_per_hour" =>
-      "Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no bound; 0 is refused, so `CYFR_MINT_PER_HOUR=0` stops the boot rather than turning the bound off. A stored value outside 1 to 1,000,000 refuses every stranger's mint as unavailable, while operators still mint their own, until the setting is reset.",
+      "Personal athanors minted per hour: how fast strangers can arrive while sign-in is open to strangers. Unset, no bound; 0 is refused, so `CYFR_MINT_PER_HOUR=0` stops the boot rather than turning the bound off. A stored value outside 1 to 1,000,000 refuses every stranger's mint as unavailable, while operators still mint their own, until the setting is reset.",
     "athanor_storage_bytes" =>
       "Bytes one athanor may hold, its whole tree including its copies of the shipped bundle. Unset, no ceiling, and 0 is the same; an administrator who wants one sets it.",
     "opus_max_concurrent" =>
-      "Concurrent WASM executions on each member, at least 32 so the chain children's reserve holds a chain of the full depth.",
+      "Concurrent WASM executions on each server, at least 32 so the chain children's reserve holds a chain of the full depth.",
     "opus_max_concurrent_per_tenant" =>
-      "Concurrent WASM executions one athanor may hold on each member.",
+      "Concurrent WASM executions one athanor may hold on each server.",
     "mcp_rate_limit_max" =>
       "Requests and stream opens per client address per window on the MCP endpoint; streams already open are unaffected.",
     "mcp_rate_limit_window_ms" => "The MCP rate limit's window, in milliseconds.",
@@ -381,11 +381,11 @@ defmodule Cyfr.Platform.Settings.Roster do
     "frame_invocation_max" => "The invocations one tincture frame may make per window.",
     "frame_invocation_window_ms" => "The frame invocation limit's window, in milliseconds.",
     "directory_serve" =>
-      "Whether this node serves an identity directory: `off`, `writer` (the one writer of the identifiers it orders) or `mirror` (their history, accepting no write).",
+      "Whether this CYFR serves an identity directory: `off`, `writer` (the one writer of the identifiers it orders) or `mirror` (their history, accepting no write).",
     "directory_max_identities" =>
-      "Identifiers a directory this node serves registers; at capacity a new genesis is refused, while existing registrations and recovery stay available.",
+      "Identifiers a directory this CYFR serves registers; at capacity a new genesis is refused, while existing registrations and recovery stay available.",
     "directory_log_bytes" =>
-      "Bytes a directory this node serves keeps across its logs; existing history is never deleted to meet a lowered quota.",
+      "Bytes a directory this CYFR serves keeps across its logs; existing history is never deleted to meet a lowered quota.",
     "directory_recovery_reserve_bytes" =>
       "Bytes of `directory_log_bytes` kept for recovery entries and their recorded outcomes, which rotations cannot use; below `directory_log_bytes`.",
     "identity_freshness_seconds" =>
@@ -397,7 +397,7 @@ defmodule Cyfr.Platform.Settings.Roster do
     "confirmation_seconds" =>
       "How long a pending confirmation of a sensitive change stays open, in seconds.",
     "reauth_seconds" =>
-      "How recent a local person's door sign-in must be to register their first passkey with no fresh method, in seconds.",
+      "How recently a local person must have signed in through a linked method to register their first passkey with no fresh method, in seconds.",
     "instance_entry_person_daily" =>
       "Requests one person may make each day through an instance entry whose own per-person cap is unset; 0 admits no use.",
     "instance_entry_total_daily" =>

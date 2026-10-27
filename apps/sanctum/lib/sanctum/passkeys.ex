@@ -1049,7 +1049,7 @@ defmodule Sanctum.Passkeys do
            {:ok, []} <- other_active(ctx, user_id, passkey.id) do
         {:error,
          {:conflict,
-          "This passkey is your only way to sign in here; link a door or register another " <>
+          "This passkey is your only way to sign in here; link a sign-in method or register another " <>
             "passkey before you revoke it"}}
       else
         {:ok, [_ | _]} -> :ok

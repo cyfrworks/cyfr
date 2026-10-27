@@ -105,7 +105,7 @@ defmodule Compendium.Providers.Canvas do
             ),
             Arg.new("version", :string,
               required: true,
-              description: "activate: the version the glass trialled"
+              description: "activate: the version the device trialled"
             ),
             Arg.new("frame", :string,
               required: true,

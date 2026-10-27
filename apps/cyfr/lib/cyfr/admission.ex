@@ -177,8 +177,8 @@ defmodule Cyfr.Admission do
       sockets: [{"/device", "Emissary.Web.DeviceChannel"}],
       entries: ["Emissary.Web.DeviceChannel", "Sanctum.Gate"],
       reason:
-        "a paired glass's socket, on either of the endpoint's listeners: it admits nothing " <>
-          "until the glass proves its device key, then dispatches each discrete intent " <>
+        "a paired device's socket, on either of the endpoint's listeners: it admits nothing " <>
+          "until the device proves its device key, then dispatches each discrete intent " <>
           "through the gate's external head"
     },
     %{

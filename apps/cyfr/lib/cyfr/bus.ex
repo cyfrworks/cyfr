@@ -419,7 +419,7 @@ defmodule Cyfr.Bus do
       producers: ["Cyfr.Platform.Settings"],
       consumers: ["Cyfr.Platform.Settings", "PrismWeb.SettingsLive"],
       reason:
-        "the platform settings are the cell's, not an athanor's: a committed write, " <>
+        "the platform settings are the cluster's, not an athanor's: a committed write, " <>
           "which every member's cache drops, and the revision each member has observed"
     },
     %{

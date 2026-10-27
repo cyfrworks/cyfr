@@ -1881,7 +1881,7 @@ defmodule PrismWeb.SettingsLiveTest do
       html = render(view)
 
       assert html =~ "hold no passkey"
-      assert html =~ "link another door"
+      assert html =~ "link another sign-in method"
       assert {:ok, [_door]} = Arca.Users.identities(Prima.Actor.system(), person.user_id)
     end
 
@@ -1948,8 +1948,8 @@ defmodule PrismWeb.SettingsLiveTest do
       # Loaded again, the spent ticket the session still holds says nothing.
       {view, html} = mount_athanor(linked, "/settings")
       render(view)
-      refute html =~ "Door:"
-      refute render(view) =~ "Door:"
+      refute html =~ "Sign-in method:"
+      refute render(view) =~ "Sign-in method:"
       refute has_element?(view, ~s(#system-layer [data-test="confirmation"]))
     end
   end

@@ -571,7 +571,7 @@ defmodule PrismWeb.SettingsLive do
          |> put_flash(:info, ok_message)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Door: #{error_message(reason)}")}
+        {:noreply, put_flash(socket, :error, "Sign-in method: #{error_message(reason)}")}
     end
   end
 
@@ -1284,7 +1284,9 @@ defmodule PrismWeb.SettingsLive do
 
       {:error, reason} ->
         {:noreply,
-         socket |> assign(:link_flow, nil) |> put_flash(:error, "Door: #{error_message(reason)}")}
+         socket
+         |> assign(:link_flow, nil)
+         |> put_flash(:error, "Sign-in method: #{error_message(reason)}")}
     end
   end
 
@@ -1299,7 +1301,8 @@ defmodule PrismWeb.SettingsLive do
          |> put_flash(:info, "Linked #{door.provider} sign-in #{door.subject}.")}
 
       {:ok, %{linked: false}, socket} ->
-        {:noreply, put_flash(socket, :info, "That sign-in is already one of your doors.")}
+        {:noreply,
+         put_flash(socket, :info, "That sign-in is already one of your sign-in methods.")}
 
       {:asked, socket} ->
         {:noreply, socket}
@@ -1309,7 +1312,7 @@ defmodule PrismWeb.SettingsLive do
         # presented, or one past its ten minutes: nothing to say.
         if Keyword.get(opts, :from_session, false) and match?({:invalid_argument, _}, reason),
           do: {:noreply, socket},
-          else: {:noreply, put_flash(socket, :error, "Door: #{error_message(reason)}")}
+          else: {:noreply, put_flash(socket, :error, "Sign-in method: #{error_message(reason)}")}
     end
   end
 
@@ -1325,7 +1328,7 @@ defmodule PrismWeb.SettingsLive do
         {:noreply, socket}
 
       {:error, reason, socket} ->
-        {:noreply, put_flash(socket, :error, "Door: #{error_message(reason)}")}
+        {:noreply, put_flash(socket, :error, "Sign-in method: #{error_message(reason)}")}
     end
   end
 
@@ -1524,7 +1527,7 @@ defmodule PrismWeb.SettingsLive do
 
         <%!-- The door: who may sign in (platform admins) --%>
         <.card :if={@context.platform_admin}>
-          <h3 class="text-sm font-medium text-gray-400 mb-1">Server allowlist — the door</h3>
+          <h3 class="text-sm font-medium text-gray-400 mb-1">Server allowlist</h3>
           <p class="text-xs text-gray-500 mb-4">
             Who may sign in here. An email, an IdP subject, or <code>*</code>
             for anyone the provider authenticates. A deny is sticky and ejects the person.
@@ -1610,10 +1613,10 @@ defmodule PrismWeb.SettingsLive do
           <h3 class="text-sm font-medium text-gray-400 mb-1">Platform settings</h3>
           <p class="text-xs text-gray-500 mb-1">
             A live change reaches new and refreshed work, not work already in flight, on
-            every member within {bound_seconds(@settings_ttl_ms)}. A restart setting is
-            applied at each member's next start and is pending until then. The stream
+            every server within {bound_seconds(@settings_ttl_ms)}. A restart setting is
+            applied at each server's next start and is pending until then. The stream
             limits (subscriptions and execution events) and the rate limits are counted
-            per member: each member admits up to the limit on its own.
+            per server: each server admits up to the limit on its own.
           </p>
           <p class="text-xs text-gray-500 mb-4" id="settings-revision">
             Store revision {@settings_revision || "-"} · observed:
@@ -1889,12 +1892,12 @@ defmodule PrismWeb.SettingsLive do
     ~H"""
     <.card>
       <section data-test="doors" class="space-y-3">
-        <h3 class="text-sm font-medium text-gray-400">Sign-in doors</h3>
+        <h3 class="text-sm font-medium text-gray-400">Sign-in methods</h3>
         <p class="text-xs text-gray-500">
-          The ways you sign in at this CYFR. Linking or unlinking one needs a fresh confirmation, and a door is linked only by signing in with it, never by a matching email.
+          The ways you sign in at this CYFR. Linking or unlinking one needs a fresh confirmation, and a sign-in method is linked only by signing in with it, never by a matching email.
         </p>
 
-        <p :if={@doors == []} class="text-sm text-gray-400">No door is linked.</p>
+        <p :if={@doors == []} class="text-sm text-gray-400">No sign-in method is linked.</p>
         <ul :if={@doors != []} class="divide-y divide-gray-800 text-sm">
           <li
             :for={door <- @doors}

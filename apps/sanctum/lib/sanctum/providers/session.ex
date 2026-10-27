@@ -551,7 +551,7 @@ defmodule Sanctum.Providers.Session do
       cli_refused(
         :forbidden,
         :reserved_provider,
-        "A session from a restore approves no command line: sign in with a door of yours, then approve"
+        "A session from a restore approves no command line: sign in with a sign-in method of yours, then approve"
       )
 
   defp cli_refusal(reason) when reason in [:stale_key_epoch, :identity_key_epoch_required],

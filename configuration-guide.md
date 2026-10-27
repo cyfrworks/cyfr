@@ -7,7 +7,7 @@ variable** is read from the environment (`.env` in the compose stack)
 before the database opens, or decides how the server is reached, or is a
 security posture a stolen operator session must not change: it changes
 with a restart. A **platform setting** is stored in the database, the
-same on every member, and a platform admin changes it on Prism's
+same on every server, and a platform admin changes it on Prism's
 Settings page, with `cyfr settings`, or through the `settings` tool.
 
 `.env.example` is the starting `.env`: the keys and addresses `cyfr init`
@@ -30,13 +30,13 @@ value is literal throughout, an open `$(` included.
 |---|---|
 | `CADDY_ACME_EMAIL` | The optional email address Let's Encrypt registers CYFR's Caddy certificate under with public access, which `cyfr access public --acme-email` writes and compose hands Caddy; any other mode refuses it. |
 | `CYFR_AUTH_PROVIDER` | The sign-in provider: unset for the built-in GitHub and Google device flows, `oidc` for the external issuer the three `CYFR_OIDC_*` variables name; `oidc` with any of them missing refuses the boot. |
-| `CYFR_AUTO_MIGRATE` | Whether the server migrates the schema on boot (default `on`); `off` when several members share one PostgreSQL database or an operator runs `bin/cyfr eval "Cyfr.Release.migrate()"` by hand. |
+| `CYFR_AUTO_MIGRATE` | Whether the server migrates the schema on boot (default `on`); `off` when several servers share one PostgreSQL database or an operator runs `bin/cyfr eval "Cyfr.Release.migrate()"` by hand. |
 | `CYFR_BIND_ADDRESS` | The address the endpoint's loopback listener binds, in every mode (default `127.0.0.1`): `127.0.0.1` or `::1`, since the boot refuses any other address without the compose file's `CYFR_LOCAL_INGRESS_ASSERTED`. The stack binds cyfr's fixed address on its `default` network, which no other container joins and Docker publishes on the host's loopback port alone. |
-| `CYFR_CELL_COOKIE` | A cell's cookie: at least 32 characters (`openssl rand -hex 32`), the same on every member and the cookie each member's BEAM runs under (`RELEASE_COOKIE` or `-setcookie`). |
-| `CYFR_CLUSTER` | Several members on one database as one cell (default off). A member boots only with PostgreSQL, S3 storage, TLS distribution, `CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_LOCUS_RUNTIME_ROOT` and its own `CYFR_HOST_API_URL`; each missing one is a named refusal. |
-| `CYFR_CLUSTER_DNS_QUERY` | A cell's discovery by DNS: the headless service whose addresses are the members, each named `<CYFR_CLUSTER_NODE_BASENAME>@<address>`. |
-| `CYFR_CLUSTER_NODE_BASENAME` | The node basename of the members `CYFR_CLUSTER_DNS_QUERY` finds. |
-| `CYFR_CLUSTER_NODES` | A cell's members by name, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`). |
+| `CYFR_CELL_COOKIE` | A cluster's cookie: at least 32 characters (`openssl rand -hex 32`), the same on every server and the cookie each server's BEAM runs under (`RELEASE_COOKIE` or `-setcookie`). |
+| `CYFR_CLUSTER` | Several servers on one database as one cluster (default off). A server boots only with PostgreSQL, S3 storage, TLS distribution, `CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_LOCUS_RUNTIME_ROOT` and its own `CYFR_HOST_API_URL`; each missing one is a named refusal. |
+| `CYFR_CLUSTER_DNS_QUERY` | A cluster's discovery by DNS: the headless service whose addresses are the servers, each named `<CYFR_CLUSTER_NODE_BASENAME>@<address>`. |
+| `CYFR_CLUSTER_NODE_BASENAME` | The Erlang name prefix of the servers `CYFR_CLUSTER_DNS_QUERY` finds, before `@<address>`. |
+| `CYFR_CLUSTER_NODES` | A cluster's servers by name, comma-separated (`cyfr@10.0.0.1,cyfr@10.0.0.2`). |
 | `CYFR_CORS_ALLOWED_ORIGINS` | The browser CORS allowlist, comma-separated origins. Empty or unset (`cyfr init` writes it empty), it admits no cross-origin caller, which the shipped stack never needs. A release with sign-in configured refuses to boot on a wildcard. |
 | `CYFR_COSIGN_IDENTITY` | Keyless OCI signature verification: the regular expression the signing certificate's identity must match, with `CYFR_COSIGN_ISSUER`; a missing keyless constraint refuses verification. |
 | `CYFR_COSIGN_ISSUER` | Keyless OCI signature verification: the regular expression the signing certificate's issuer must match, with `CYFR_COSIGN_IDENTITY`. |
@@ -53,11 +53,11 @@ value is literal throughout, an open `$(` included.
 | `CYFR_GITHUB_CLIENT_ID` | The GitHub OAuth app's client ID for the device flow; `.env.example` ships a public one, which your own app's replaces. |
 | `CYFR_GOOGLE_CLIENT_ID` | The Google OAuth client ID for the device flow, used with `CYFR_GOOGLE_CLIENT_SECRET`; `.env.example` ships a public one. |
 | `CYFR_GOOGLE_CLIENT_SECRET` | The Google OAuth client secret, set in `.env` alone and never in a tracked file. |
-| `CYFR_HEADLESS` | A Codex-only node (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_AUTH_PROVIDER=oidc`. |
+| `CYFR_HEADLESS` | CYFR with Codex access only (default off): `/mcp`, `/api` and public tinctures are served and every browser page answers 404. It does not combine with `CYFR_AUTH_PROVIDER=oidc`. |
 | `CYFR_HOST` | CYFR's hostname, which `cyfr access` writes with the mode: `localhost` with local access, the tailnet machine's name (`<machine>.<tailnet>.ts.net`) with tailnet access, and the domain Caddy's certificate names with public access. The boot refuses a host the mode does not allow. |
-| `CYFR_HOST_API_BIND` | The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1` for a bare member; compose binds the member's own address on the locus-runtime network, so the host API is reachable from that network alone). |
+| `CYFR_HOST_API_BIND` | The address the host API binds for the workers' host calls and exit reports (default `127.0.0.1` for a bare server; compose binds the server's own address on the locus-runtime network, so the host API is reachable from that network alone). |
 | `CYFR_HOST_API_PORT` | The host API's port (default 4300). |
-| `CYFR_HOST_API_URL` | The address a worker service reaches this member's host API at, carried by every assignment the member issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cell refuses to boot without it. |
+| `CYFR_HOST_API_URL` | The address a worker service reaches this server's host API at, carried by every assignment the server issues; unset, a worker uses its own `LOCUS_RUNTIME_HOST_API_URL`, and a cluster refuses to boot without it. |
 | `CYFR_LIVE_SALT` | The LiveView socket's signing salt; unset, derived from `CYFR_SECRET_KEY_BASE`. Set it only to keep sessions across a key-base rotation. |
 | `CYFR_LOCAL_INGRESS_ASSERTED` | The compose file's assertion that the loopback listener's own address on the stack's `default` network is reached from this machine's loopback alone, which lets `CYFR_BIND_ADDRESS` name it: `true`, its one value, set by `docker-compose.yml` in the cyfr service's environment. It counts only from the process environment, `.env` may not set it, and a bare release must not set it. |
 | `CYFR_LOCUS_BACKENDS_KEY` | The backends service's key, 32 random bytes as 64 hexadecimal digits (`openssl rand -hex 32`), which `cyfr init` mints and compose hands the service as `LOCUS_BACKENDS_KEY`; without it, or without `CYFR_LOCUS_BACKENDS_URL`, stdio MCP servers are refused. |
@@ -71,7 +71,7 @@ value is literal throughout, an open `$(` included.
 | `CYFR_OIDC_CLIENT_ID` | The client ID at the OIDC issuer, with `CYFR_AUTH_PROVIDER=oidc`. The issuer lists two redirect URIs for it: `<origin>/auth/oidcc/callback` for sign-in and `<origin>/auth/oidcc/reauth` for the fresh sign-in that confirms a sensitive change, which counts only when the issuer sends `auth_time` in its ID token. |
 | `CYFR_OIDC_CLIENT_SECRET` | The client secret at the OIDC issuer, with `CYFR_AUTH_PROVIDER=oidc`. |
 | `CYFR_OIDC_ISSUER` | The OIDC issuer's URL (Okta, Auth0, Keycloak, Azure AD and the like), with `CYFR_AUTH_PROVIDER=oidc`. |
-| `CYFR_LOCUS_RUNTIME_ROOT` | The worker root, 32 random bytes as 64 hexadecimal digits, read by cyfr alone; every worker service's key derives from it. `cyfr init` mints it, every member of a cell holds the same one, and without it no component runs. |
+| `CYFR_LOCUS_RUNTIME_ROOT` | The worker root, 32 random bytes as 64 hexadecimal digits, read by cyfr alone; every worker service's key derives from it. `cyfr init` mints it, every server of a cluster holds the same one, and without it no component runs. |
 | `CYFR_LOCUS_RUNTIME_WORKERS` | The worker services runs are dispatched to, comma-separated `<service_id>=<url>` entries tried in order; compose sets `wrk_locus=http://locus-runtime:4200`, and outside compose the default is a worker on this machine. |
 | `CYFR_OTEL_ENABLED` | OpenTelemetry traces over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (default off). Each span is scrubbed of tincture credentials before export, and the boot refuses an `OTEL_TRACES_EXPORTER` that would replace the scrubbing exporter. |
 | `CYFR_PLATFORM_ADMIN_EMAILS` | The server's operators, comma-separated emails: each is always let in and holds the platform-admin capability, reconciled at every boot. Unset, no one can sign in. |
@@ -107,16 +107,16 @@ value is literal throughout, an open `$(` included.
 
 ## Platform settings
 
-A setting's value is its variable's, when this member's environment sets
+A setting's value is its variable's, when this server's environment sets
 it; else the stored value; else its default. A variable set in the
 environment **pins** the setting: the Settings page shows the pin and
-refuses to change it, and a member whose pin disagrees with a live
-member's refuses to boot, so a pinned value changes by stopping every
-member that holds the old pin before the first starts with the new one.
+refuses to change it, and a server whose pin disagrees with a live
+server's refuses to boot, so a pinned value changes by stopping every
+server that holds the old pin before the first starts with the new one.
 
 A **live** setting's change reaches new and refreshed work on every
-member within 30 seconds, not work already in flight. A
-**restart** setting applies at each member's next start and is listed as
+server within 30 seconds, not work already in flight. A
+**restart** setting applies at each server's next start and is listed as
 pending until then.
 
 When the store cannot answer, the stale policy decides: **refuse**
@@ -138,14 +138,14 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_MAX_FEEDS_PER_ATHANOR` | `max_feeds_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | Live feeds one athanor may hold, a deleted one or a schedule not; unset, 1,000, and 0 removes the ceiling. |
 | `CYFR_MAX_EXTERNAL_SERVERS_PER_ATHANOR` | `max_external_servers_per_athanor` | `integer` | `1000` | `tenancy` | live | refuse | External MCP servers one athanor may register; unset, 1,000, and 0 removes the ceiling. |
 | `CYFR_ATHANOR_STORAGE_BYTES` | `athanor_storage_bytes` | `integer` | none | `tenancy` | live | refuse | Bytes one athanor may hold, its whole tree including its copies of the shipped bundle. Unset, no ceiling, and 0 is the same; an administrator who wants one sets it. |
-| `CYFR_OPUS_MAX_CONCURRENT` | `opus_max_concurrent` | `integer` | `128` | `execution` | restart | serve | Concurrent WASM executions on each member, at least 32 so the chain children's reserve holds a chain of the full depth. |
-| `CYFR_OPUS_MAX_CONCURRENT_PER_TENANT` | `opus_max_concurrent_per_tenant` | `integer` | `16` | `execution` | restart | serve | Concurrent WASM executions one athanor may hold on each member. |
+| `CYFR_OPUS_MAX_CONCURRENT` | `opus_max_concurrent` | `integer` | `128` | `execution` | restart | serve | Concurrent WASM executions on each server, at least 32 so the chain children's reserve holds a chain of the full depth. |
+| `CYFR_OPUS_MAX_CONCURRENT_PER_TENANT` | `opus_max_concurrent_per_tenant` | `integer` | `16` | `execution` | restart | serve | Concurrent WASM executions one athanor may hold on each server. |
 | `CYFR_MCP_RATE_LIMIT_MAX` | `mcp_rate_limit_max` | `integer` | `120` | `rate_limits` | live | serve | Requests and stream opens per client address per window on the MCP endpoint; streams already open are unaffected. |
 | `CYFR_MCP_RATE_LIMIT_WINDOW_MS` | `mcp_rate_limit_window_ms` | `integer` | `60000` | `rate_limits` | live | serve | The MCP rate limit's window, in milliseconds. |
 | `CYFR_API_RATE_LIMIT_MAX` | `api_rate_limit_max` | `integer` | the MCP pair's | `rate_limits` | live | serve | Requests per client address per window on the API bucket (execution-event stream reconnects); unset, the MCP pair's value, counted separately. |
 | `CYFR_API_RATE_LIMIT_WINDOW_MS` | `api_rate_limit_window_ms` | `integer` | the MCP pair's | `rate_limits` | live | serve | The API bucket's window, in milliseconds; unset, the MCP pair's. |
 | `CYFR_WEBHOOK_PER_IP_RATE_LIMIT_MAX` | `webhook_per_ip_rate_limit_max` | `integer` | `6000` | `rate_limits` | live | serve | Inbound webhook deliveries per client address per minute across every slug, checked before and so capping each webhook's own limit. |
-| `CYFR_MINT_PER_HOUR` | `mint_per_hour` | `integer` | none | `rate_limits` | live | refuse | Personal athanors minted per hour: how fast strangers can arrive through an open door. Unset, no bound; 0 is refused, so `CYFR_MINT_PER_HOUR=0` stops the boot rather than turning the bound off. A stored value outside 1 to 1,000,000 refuses every stranger's mint as unavailable, while operators still mint their own, until the setting is reset. |
+| `CYFR_MINT_PER_HOUR` | `mint_per_hour` | `integer` | none | `rate_limits` | live | refuse | Personal athanors minted per hour: how fast strangers can arrive while sign-in is open to strangers. Unset, no bound; 0 is refused, so `CYFR_MINT_PER_HOUR=0` stops the boot rather than turning the bound off. A stored value outside 1 to 1,000,000 refuses every stranger's mint as unavailable, while operators still mint their own, until the setting is reset. |
 | `CYFR_MCP_SUBSCRIPTION_MAX_CONCURRENT` | `mcp_subscription_max_concurrent` | `integer` | `8` | `streams` | live | serve | Concurrent MCP subscription streams per caller (athanor and credential). |
 | `CYFR_MCP_SUBSCRIPTION_MAX_MS` | `mcp_subscription_max_ms` | `integer` | `1800000` | `streams` | live | serve | How long one MCP subscription stream lives before the client reconnects, in milliseconds. |
 | `CYFR_OPUS_EVENTS_MAX_CONCURRENT` | `opus_events_max_concurrent` | `integer` | `8` | `streams` | live | serve | Concurrent execution-event streams per caller (athanor and credential). |
@@ -166,15 +166,15 @@ refused, naming the variable or key and the form it must take.
 | `CYFR_FRAME_CREDENTIAL_DEADLINE_S` | `frame_credential_deadline_s` | `duration_s` | `3600` | `tinctures` | live | serve | How long one frame credential lives before it is refused, in seconds; the shell renews a running frame's before then. |
 | `CYFR_FRAME_INVOCATION_MAX` | `frame_invocation_max` | `integer` | `120` | `tinctures` | live | serve | The invocations one tincture frame may make per window. |
 | `CYFR_FRAME_INVOCATION_WINDOW_MS` | `frame_invocation_window_ms` | `integer` | `60000` | `tinctures` | live | serve | The frame invocation limit's window, in milliseconds. |
-| `CYFR_DIRECTORY_SERVE` | `directory_serve` | `atom` | `off` | `directory` | live | refuse | Whether this node serves an identity directory: `off`, `writer` (the one writer of the identifiers it orders) or `mirror` (their history, accepting no write). |
-| `CYFR_DIRECTORY_MAX_IDENTITIES` | `directory_max_identities` | `integer` | `100000` | `directory` | live | refuse | Identifiers a directory this node serves registers; at capacity a new genesis is refused, while existing registrations and recovery stay available. |
-| `CYFR_DIRECTORY_LOG_BYTES` | `directory_log_bytes` | `integer` | `1073741824` | `directory` | live | refuse | Bytes a directory this node serves keeps across its logs; existing history is never deleted to meet a lowered quota. |
+| `CYFR_DIRECTORY_SERVE` | `directory_serve` | `atom` | `off` | `directory` | live | refuse | Whether this CYFR serves an identity directory: `off`, `writer` (the one writer of the identifiers it orders) or `mirror` (their history, accepting no write). |
+| `CYFR_DIRECTORY_MAX_IDENTITIES` | `directory_max_identities` | `integer` | `100000` | `directory` | live | refuse | Identifiers a directory this CYFR serves registers; at capacity a new genesis is refused, while existing registrations and recovery stay available. |
+| `CYFR_DIRECTORY_LOG_BYTES` | `directory_log_bytes` | `integer` | `1073741824` | `directory` | live | refuse | Bytes a directory this CYFR serves keeps across its logs; existing history is never deleted to meet a lowered quota. |
 | `CYFR_DIRECTORY_RECOVERY_RESERVE_BYTES` | `directory_recovery_reserve_bytes` | `integer` | `10485760` | `directory` | live | refuse | Bytes of `directory_log_bytes` kept for recovery entries and their recorded outcomes, which rotations cannot use; below `directory_log_bytes`. |
 | `CYFR_IDENTITY_FRESHNESS_SECONDS` | `identity_freshness_seconds` | `duration_s` | `300` | `identity` | live | refuse | How long this CYFR trusts a remote person's verified identity head before reading their directory again, in seconds: how long a retired key can still act here. |
 | `CYFR_DEVICE_CERT_SECONDS` | `device_cert_seconds` | `duration_s` | `3600` | `devices` | live | refuse | How long a device certificate this CYFR issues lives, in seconds; a paired device renews at half of it. |
 | `CYFR_CLOCK_SKEW_SECONDS` | `clock_skew_seconds` | `duration_s` | `60` | `devices` | live | refuse | How far a certificate's not-before or a signed message's time may sit from this CYFR's clock, in seconds; it never extends a certificate's expiry. |
 | `CYFR_CONFIRMATION_SECONDS` | `confirmation_seconds` | `duration_s` | `300` | `confirmation` | live | refuse | How long a pending confirmation of a sensitive change stays open, in seconds. |
-| `CYFR_REAUTH_SECONDS` | `reauth_seconds` | `duration_s` | `300` | `confirmation` | live | refuse | How recent a local person's door sign-in must be to register their first passkey with no fresh method, in seconds. |
+| `CYFR_REAUTH_SECONDS` | `reauth_seconds` | `duration_s` | `300` | `confirmation` | live | refuse | How recently a local person must have signed in through a linked method to register their first passkey with no fresh method, in seconds. |
 | `CYFR_INSTANCE_ENTRY_PERSON_DAILY` | `instance_entry_person_daily` | `integer` | `1000` | `instance_entries` | live | refuse | Requests one person may make each day through an instance entry whose own per-person cap is unset; 0 admits no use. |
 | `CYFR_INSTANCE_ENTRY_TOTAL_DAILY` | `instance_entry_total_daily` | `integer` | `2000` | `instance_entries` | live | refuse | Requests everyone together may make each day through an instance entry whose own total cap is unset; 0 admits no use. |
 
@@ -217,14 +217,14 @@ assigns one.
 
 The settings functions are public, so an operator without the console
 reaches them through the release. `bin/cyfr rpc` changes the **running
-node**: the value is written, announced, and reaches every member as a
+server**: the value is written, announced, and reaches every server as a
 change on the Settings page does.
 
     bin/cyfr rpc 'IO.inspect(Cyfr.Platform.Settings.list())'
     bin/cyfr rpc 'IO.inspect(Cyfr.Platform.Settings.set(Sanctum.system_context(), "log_level", "debug"))'
     bin/cyfr rpc 'IO.inspect(Cyfr.Platform.Settings.reset(Sanctum.system_context(), "log_level"))'
 
-`bin/cyfr eval` changes the **next boot**: with no node running, it
+`bin/cyfr eval` changes the **next boot**: with no server running, it
 starts the store's application, writes the value, and announces
 nothing; the next boot reads the store.
 

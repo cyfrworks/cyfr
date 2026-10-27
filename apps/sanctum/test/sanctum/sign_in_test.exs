@@ -959,11 +959,13 @@ defmodule Sanctum.SignInTest do
 
       assert {:error, {:conflict, message}} = SignIn.unlink_door(person.ctx, github.key)
       assert message =~ "hold no passkey"
-      assert message =~ "link another door"
+      assert message =~ "link another sign-in method"
 
       other = seated!()
       {:ok, [theirs]} = Arca.Users.identities(Prima.Actor.system(), other.user.id)
-      assert {:error, {:not_found, "door", _}} = SignIn.unlink_door(person.ctx, theirs.key)
+
+      assert {:error, {:not_found, "sign-in method", _}} =
+               SignIn.unlink_door(person.ctx, theirs.key)
 
       # With a second door linked, the first goes under its own proof.
       n = System.unique_integer([:positive])
@@ -1005,7 +1007,7 @@ defmodule Sanctum.SignInTest do
       {:ok, _} = Sanctum.Door.Store.allow("user_id", github.key, "ops")
       assert {:error, {:conflict, message}} = SignIn.unlink_door(person.ctx, github.key)
       assert message =~ "ask the operator"
-      assert message =~ "link another door"
+      assert message =~ "link another sign-in method"
       assert {:ok, _person} = Users.get_by_identity(github.key)
 
       admits? = fn ->

@@ -526,12 +526,12 @@ defmodule Cyfr.RuntimeConfig do
       nodes && (query || basename) ->
         {:error,
          "CYFR_CLUSTER_NODES and CYFR_CLUSTER_DNS_QUERY name two ways to find the same " <>
-           "cell; set one."}
+           "cluster; set one."}
 
       nodes ->
         case node_names(nodes) do
           [] ->
-            {:error, "CYFR_CLUSTER_NODES is set but names no node."}
+            {:error, "CYFR_CLUSTER_NODES is set but names no server."}
 
           hosts ->
             {:ok, [cyfr: [strategy: Cluster.Strategy.Epmd, config: [hosts: hosts]]]}
@@ -548,13 +548,13 @@ defmodule Cyfr.RuntimeConfig do
 
       query ->
         {:error,
-         "CYFR_CLUSTER_DNS_QUERY is set without CYFR_CLUSTER_NODE_BASENAME; a member's " <>
-           "node name is <basename>@<address> and discovery cannot guess the basename."}
+         "CYFR_CLUSTER_DNS_QUERY is set without CYFR_CLUSTER_NODE_BASENAME; a server's " <>
+           "Erlang name is <basename>@<address> and discovery cannot guess the basename."}
 
       basename ->
         {:error,
          "CYFR_CLUSTER_NODE_BASENAME is set without CYFR_CLUSTER_DNS_QUERY; there is no " <>
-           "service to resolve the members from."}
+           "service to resolve the servers from."}
 
       true ->
         {:ok, []}
@@ -590,7 +590,7 @@ defmodule Cyfr.RuntimeConfig do
 
       short ->
         {:error,
-         "CYFR_CELL_COOKIE is #{byte_size(short)} characters; a cell cookie is at least " <>
+         "CYFR_CELL_COOKIE is #{byte_size(short)} characters; a cluster cookie is at least " <>
            "32. Generate one with `openssl rand -hex 32`."}
     end
   end
@@ -633,7 +633,7 @@ defmodule Cyfr.RuntimeConfig do
       :error ->
         {:error,
          "CYFR_HOST_API_URL=#{inspect(text)} is not an http or https URL with a host and " <>
-           "no path (the address a worker service reaches this member's host API at, such " <>
+           "no path (the address a worker service reaches this server's host API at, such " <>
            "as http://cyfr:4300)."}
     end
   end

@@ -126,7 +126,7 @@ defmodule Cyfr.Release do
               Enum.map(rows, &live_slot/1)
 
             {:error, reason} ->
-              raise "the cell's slots could not be read: #{Prima.LoggerContext.shape(reason)}"
+              raise "the cluster's slots could not be read: #{Prima.LoggerContext.shape(reason)}"
           end
         end)
 

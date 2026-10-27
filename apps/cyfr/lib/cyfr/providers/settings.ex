@@ -72,8 +72,8 @@ defmodule Cyfr.Providers.Settings do
         ],
         description:
           "The server's platform settings — platform admins only. A live change reaches new " <>
-            "and refreshed work on every member within the settings cache's bound, not work " <>
-            "in flight; a restart setting applies at each member's next start. A setting " <>
+            "and refreshed work on every server within the settings cache's bound, not work " <>
+            "in flight; a restart setting applies at each server's next start. A setting " <>
             "the deployment's environment pins is read-only here.",
         title: "Platform Settings"
       )

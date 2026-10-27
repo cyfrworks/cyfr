@@ -320,7 +320,7 @@ defmodule Sanctum.Consent.Loader do
             {:error,
              {:invalid_blob,
               {:invalid_resource, ref, key, :storage,
-               "path #{inspect(path)} is not spelled as the storage door reaches it"}}}
+               "path #{inspect(path)} is not spelled as the storage API reaches it"}}}
         end
       end)
     end)
