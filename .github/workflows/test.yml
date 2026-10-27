@@ -2110,44 +2110,42 @@ jobs:
           # The prose surfaces (README.md, the six guides, the setup pages and
           # the access vector's words and refusal templates, which `cyfr`
           # prints) name the installation CYFR and the assistant Aqua, and
-          # carry none of the concept words home, hub, cell, node, door or
-          # glass where a person reads them: a cluster's servers, a machine, a
-          # sign-in method and a device say so. A refusal template is read
-          # with its `{slot}` placeholders taken out, since a slot is a
-          # payload key. Each word's exceptions, exact:
-          # - home: "Add to Home Screen", the phone's own wording for
-          #   installing Prism; $HOME and ${HOME}, the environment variable;
-          #   "home directory", the operating system's; `home`, backquoted,
-          #   the shipped canvas's identifier (tests/fixtures/layout.json).
-          # - node: `--new-node`, the flag, in Tailscale's word; "node ID",
-          #   Tailscale's name for the value CYFR_TAILNET_NODE_ID holds;
-          #   "Erlang node name", the BEAM's identifier a cluster's server runs
-          #   under; `node`, backquoted, the consent preview's wire field;
-          #   "Node.js", another product's name.
-          # - door: `door.*` and `door.<operation>`, backquoted, the
-          #   operations' namespace.
-          # "Homebrew", UserHomeDir, home_dir, CYFR_TAILNET_NODE_ID,
-          # CYFR_CLUSTER_NODES, CYFR_CLUSTER_NODE_BASENAME and CYFR_CELL_COOKIE
-          # are not the words: the letters around each make it another word.
+          # carry none of the concept words home, hub, cell, door or glass
+          # where a person reads them: a cluster, a sign-in method and a
+          # device say so. "node" and "member" are not gated: each is also
+          # ordinary English and technical vocabulary (Node.js, a tree's or a
+          # graph's nodes, Tailscale's and Erlang's nodes, a person who is a
+          # member), so their installation and cluster senses are the
+          # reviewer's to check. A `code span` is not prose: an identifier,
+          # event name, wire field or command is spelled as the code spells
+          # it (`door.*`, the canvas id `home`), so the check skips code
+          # spans; a refusal template is read with its `{slot}` placeholders
+          # taken out, since a slot is a payload key. The other exceptions,
+          # exact, all of the word home:
+          # - "Add to Home Screen": the phone's own wording for installing Prism.
+          # - $HOME and ${HOME}: the environment variable.
+          # - "home directory": the operating system's, a person's files.
+          # "Homebrew", UserHomeDir, home_dir and CYFR_CELL_COOKIE are not the
+          # words: the letters around each make it another word.
           python3 -I - <<'PY' || fail=1
           import json, re, subprocess, sys
           def word(spelled):
               return re.compile(r"(?<![A-Za-z0-9_])(?:" + spelled + r")(?![A-Za-z0-9_])", re.I)
+          code = re.compile(r"`[^`\n]*`")
           words = {
               "home": (word(r"homes?|home's"),
-                       re.compile(r"Add to Home Screen|\$\{?HOME\b\}?|\b[Hh]ome director(?:y|ies)\b|`home`")),
+                       re.compile(r"Add to Home Screen|\$\{?HOME\b\}?|\b[Hh]ome director(?:y|ies)\b")),
               "hub": (word(r"hubs?|hub's"), None),
               "cell": (word(r"cells?|cell's"), None),
-              "node": (word(r"nodes?|node's"),
-                       re.compile(r"--new-node|\bnode ID\b|\bErlang node names?\b|`node`|\bNode\.js\b")),
-              "door": (word(r"doors?|door's"), re.compile(r"`door\.(?:\*|[a-z_]+)`")),
+              "door": (word(r"doors?|door's"), None),
               "glass": (word(r"glass(?:es)?|glass's"), None),
           }
           def found(where, text):
               bad = False
               for line in text.split("\n"):
+                  prose = code.sub("", line)
                   for name, (pattern, stays) in words.items():
-                      if pattern.search(stays.sub("", line) if stays else line):
+                      if pattern.search(stays.sub("", prose) if stays else prose):
                           print(f"::error::{where} says {name}: {line.strip()}")
                           bad = True
               return bad
