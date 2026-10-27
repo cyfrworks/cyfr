@@ -573,10 +573,11 @@ defmodule PrismWeb.ShellLive do
 
   # Every change to the frames goes through here, so each frame whose
   # state moved between live and frozen is signalled after the credential
-  # transition that moved it, and each frame newly refused for want of a
+  # transition that moved it, each frame newly refused for want of a
   # grant is offered the grant prompt — a canvas or validation frame
   # excepted, whose canvas asks for its grant once, itself
-  # (`ask_canvas_grant/3`).
+  # (`ask_canvas_grant/3`) — and a canvas that failed while hidden enters
+  # safe mode the moment it is shown.
   defp frames(socket, fun), do: put_frames(socket, fun.(socket.assigns.frames))
 
   defp put_frames(socket, later) do
