@@ -102,6 +102,10 @@ defmodule Prima.RegistryRequest do
     bad_signature: {"BAD_SIGNATURE", 401},
     replayed: {"REPLAYED", 409},
     banned: {"IDENTITY_BANNED", 403},
+    not_appellant: {"NOT_APPELLANT_OF_RECORD", 403},
+    action_not_found: {"ACTION_NOT_FOUND", 404},
+    appeal_too_early: {"APPEAL_TOO_EARLY", 403},
+    namespace_unowned: {"NAMESPACE_UNOWNED", 403},
     handle_taken: {"SLUG_TAKEN", 409},
     has_other_handle: {"ALREADY_CLAIMED", 409},
     handle_invalid: {"INVALID_USERNAME", 400},
@@ -131,6 +135,10 @@ defmodule Prima.RegistryRequest do
           | :directory_unavailable
           | :replayed
           | :banned
+          | :not_appellant
+          | :action_not_found
+          | :appeal_too_early
+          | :namespace_unowned
           | :handle_taken
           | :has_other_handle
           | :handle_invalid

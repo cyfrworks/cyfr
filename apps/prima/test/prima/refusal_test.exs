@@ -201,6 +201,10 @@ defmodule Prima.RefusalTest do
     {{:policy_required, "2026-09"}, :conflict},
     {{:policy_required, nil}, :conflict},
     {:banned, :forbidden},
+    {:not_appellant, :forbidden},
+    {:action_not_found, :not_found},
+    {:appeal_too_early, :forbidden},
+    {:namespace_unowned, :forbidden},
     {:wrong_directory, :forbidden},
     {:unknown_identity, :not_found},
     {:directory_unavailable, :unavailable},
@@ -645,6 +649,7 @@ defmodule Prima.RefusalTest do
     test "every registry refusal CYFR passes on is a reason of the table" do
       passed_on = ~w(handle_taken has_other_handle handle_invalid handle_reserved no_handle
                      namespace_reserved claim_not_pending dns_unverified dns_timeout banned
+                     not_appellant action_not_found appeal_too_early namespace_unowned
                      wrong_directory unknown_identity directory_unavailable rate_limited)a
 
       names = Enum.map(Prima.RegistryRequest.refusals(), &elem(&1, 0))
