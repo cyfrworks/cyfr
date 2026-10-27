@@ -25,9 +25,9 @@ defmodule PrismWeb.PasskeyController do
   def complete(conn, %{"ticket" => ticket})
       when is_binary(ticket) and byte_size(ticket) > 0 and byte_size(ticket) <= 64 do
     case Arca.Cache.take({:login_passkey_ticket, ticket}) do
-      {:ok, %{session_token: token, outcome: outcome} = payload} when is_binary(token) ->
+      {:ok, %{session_token: token} = payload} when is_binary(token) ->
         if same_browser?(conn, payload) do
-          SignInResponse.respond(conn, outcome, session: {:token, token})
+          SignInResponse.respond(conn, :proceed, session: {:token, token})
         else
           Logger.warning(
             "[PasskeyController] passkey ticket presented by a different browser than the " <>

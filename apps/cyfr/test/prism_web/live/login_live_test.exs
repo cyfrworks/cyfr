@@ -185,6 +185,48 @@ defmodule PrismWeb.LoginLiveTest do
       assert get_session(landed, :sanctum_session_token) == session.token
     end
 
+    test "a passkey sign-in on the page leaves the person signed in, on their own athanor",
+         %{conn: conn} do
+      key = "github|https://github.com|login_passkey_#{System.unique_integer([:positive])}"
+
+      {:ok, user} =
+        Sanctum.SignIn.admitted(
+          %{id: key, provider: "github", email: "passkey@example.com", verified: true},
+          :allowed
+        )
+
+      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "test")
+      authenticator = Sanctum.TestContext.passkey!(user.id)
+
+      # One browser start to finish: the ticket the page mints is bound to
+      # the session that ran the ceremony.
+      browser = get(conn, ~p"/login")
+      {:ok, view, _} = live(browser, ~p"/login")
+
+      render_hook(view, "passkey_start", %{})
+      assert_reply(view, %{public_key: %{"challenge" => challenge}})
+
+      render_hook(view, "passkey_assertion", %{
+        "credential" =>
+          Sanctum.TestContext.Authenticator.assertion(
+            authenticator,
+            Base.url_decode64!(challenge, padding: false)
+          )
+      })
+
+      {path, _flash} = assert_redirect(view)
+      assert String.starts_with?(path, "/auth/passkey/complete/")
+
+      landed = get(browser, path)
+      assert redirected_to(landed) == "/"
+      token = get_session(landed, :sanctum_session_token)
+      assert is_binary(token)
+
+      assert {:ok, %{user_id: user_id, athanor_id: athanor_id}} = Sanctum.Session.load(token)
+      assert user_id == user.id
+      assert {:ok, %{personal_athanor_id: ^athanor_id}} = Sanctum.Tenancy.Users.get(user.id)
+    end
+
     test "a boot that lost the control plane stops a waiting sign-in at its next poll, asking no provider",
          %{conn: conn} do
       {:ok, view, _} = live(conn, ~p"/login")
