@@ -154,7 +154,7 @@ defmodule Sanctum.Providers.Profile do
            ),
            Arg.new("subset", {:map, subset_node_arg()},
              description:
-               "Per consent-graph node, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none"
+               "Per consent-graph component, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none"
            )
          ]},
         required: true,
@@ -874,9 +874,14 @@ defmodule Sanctum.Providers.Profile do
   # ask and the ceiling.
   defp decode_subset(raw) do
     case Map.fetch(raw, "subset") do
-      :error -> {:ok, nil}
-      {:ok, subset} when is_map(subset) -> {:ok, subset}
-      {:ok, _other} -> {:error, {:invalid_argument, "subset must be a map of node references"}}
+      :error ->
+        {:ok, nil}
+
+      {:ok, subset} when is_map(subset) ->
+        {:ok, subset}
+
+      {:ok, _other} ->
+        {:error, {:invalid_argument, "subset must be a map of component references"}}
     end
   end
 

@@ -454,7 +454,7 @@ defmodule Cyfr.Boundaries do
         "the glue and application namespace: boot wiring, the operation table, " <>
           "admission, the invoke budget, the vault edge a run is attached with, and " <>
           "the policy record of every admission. `Sanctum` bare is the domain's own " <>
-          "front door — `system_context/0` mints the context the server's own work " <>
+          "entry point — `system_context/0` mints the context the server's own work " <>
           "runs under, `auth_configured?/0` says whether this " <>
           "deployment has sign-in, and `build_tincture_context/2` is a tincture " <>
           "invocation's. A call on the root is a reach like any other and is rostered " <>
@@ -462,7 +462,7 @@ defmodule Cyfr.Boundaries do
           "here for `drop_memo/1` alone: the identity domain announces that an " <>
           "established-caller memo is no longer good and never broadcasts, so the " <>
           "host's own watch (`Cyfr.StandingWatch`) is what carries the drop to " <>
-          "every member and calls back down to make it. `Sanctum.ExecutionStanding` " <>
+          "every server and calls back down to make it. `Sanctum.ExecutionStanding` " <>
           "decides whether an admitted execution's grant still stands: admission, " <>
           "every host effect, the in-chain gate and the sweep ask it. " <>
           "`Sanctum.Catalog` is the composition root's load of the operation table and its " <>
@@ -512,7 +512,7 @@ defmodule Cyfr.Boundaries do
         Sanctum.Visibility Sanctum.Webhook
       ),
       reason:
-        "the auth fabric's own front door, where a wide roster is the front door doing " <>
+        "the auth fabric's own entry point, where a wide roster is the entry point doing " <>
           "its job. The MCP transport carries tenancy, reads a server's vault edge, and " <>
           "uses Sanctum.Network/Egress for external servers and the backends service. " <>
           "`Sanctum.Vault` is the check of a server definition against the entries it " <>
@@ -587,11 +587,11 @@ defmodule Cyfr.Boundaries do
       ),
       reason:
         "the console, its browser sign-in (`PrismWeb.AuthController`, which asks the " <>
-          "door before the sign-in response mints a session), its context guard " <>
+          "sign-in method before the sign-in response mints a session), its context guard " <>
           "(`CyfrWeb.ContextGuard`, which names " <>
           "`Sanctum.Caller` and `Sanctum.Context` alone) and the web tier's shared " <>
           "ingress plugs (`CyfrWeb.Plugs.*`), which are the auth fabric's own " <>
-          "ingress — a wide roster is the front door doing its job. " <>
+          "ingress — a wide roster is the entry point doing its job. " <>
           "`Sanctum.Consent` is the shell's read of whether a tincture has an active " <>
           "public profile (`Sanctum.Consent.profiles/2`). " <>
           "`Sanctum.Pairing` is the system layer's reading of the action table and of " <>
@@ -603,13 +603,13 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Recovery` is the system layer's read of the person's checklist after " <>
           "a declared restore (`checklist/1`), what it lists for them to re-enable, " <>
           "re-consent and rotate; each re-enable it offers is an operation, decided there. " <>
-          "`Sanctum.Passkeys` is the sign-in page's passkey door: the challenge it holds " <>
+          "`Sanctum.Passkeys` is the sign-in page's passkey sign-in method: the challenge it holds " <>
           "and the answer it verifies into a session, as the device flow's poll is " <>
-          "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` door's: " <>
+          "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` sign-in method's: " <>
           "the CYFR that holds the person's identity, where the sign-in page sends them (`signing_home/1`), the " <>
           "challenge it mints for the carry they bring back (`challenge/1`), where the " <>
           "callback's hop returns them (`redirect_url/1`), the assertion the callback " <>
-          "admits into a session, behind the door (`callback/2`), and the carry's " <>
+          "admits into a session, through the sign-in method (`callback/2`), and the carry's " <>
           "lifetime the sign-in and `/carry` pages hand their script " <>
           "(`carry_lifetime_ms/0`); " <>
           "`Sanctum.Auth.OIDC.reauth_callback/1` and " <>
@@ -900,7 +900,7 @@ defmodule Cyfr.Boundaries do
       into: "Opus",
       allow: [],
       reason:
-        "the host names nothing of execution: the member slot, the bus and the web " <>
+        "the host names nothing of execution: the server slot, the bus and the web " <>
           "tier's glue sit below it. The composition root (`Cyfr.Application`) starts " <>
           "execution's trees, and is excepted. " <>
           "The composition router and the endpoint this row reads are boundaries whose deps " <>
@@ -993,7 +993,7 @@ defmodule Cyfr.Boundaries do
           "names the endpoint and the router beside `CyfrWeb.static_paths/0`, because " <>
           "that is the triple `use Phoenix.VerifiedRoutes` takes, and `Prism.Router` " <>
           "declares its pipelines from the shared browser definition and plugs, the " <>
-          "glass's page's wider `connect-src` among them (`CyfrWeb.Plugs.BrowserCSP`). " <>
+          "device page's wider `connect-src` among them (`CyfrWeb.Plugs.BrowserCSP`). " <>
           "Boundary's exports are global, and `CyfrWeb` exports more of the shared tier than " <>
           "this roster to every surface that lists it, so no declaration can say it."
     },
@@ -1165,7 +1165,7 @@ defmodule Cyfr.Boundaries do
           "sessions, API keys, tincture frame credentials, paired clients, their " <>
           "pairing invitations and device certificates, registry push tokens, " <>
           "provider credentials, webhooks, " <>
-          "the identities, memberships, athanors and doors that decide standing, a " <>
+          "the identities, memberships, athanors and sign-in permissions that decide standing, a " <>
           "person's identity row, keys, attempts and carries, the directory's logs " <>
           "and cached heads, passkeys, pending confirmations, the installation claim, " <>
           "the pre-authentication rate windows, the instance's own entries and " <>
@@ -1187,7 +1187,7 @@ defmodule Cyfr.Boundaries do
       reason:
         "the declared restore runs at release time with no person's context: the " <>
           "release task (`Cyfr.Release.mark_restore/0`) writes its marker before the " <>
-          "cell starts, and the composition root (`Cyfr.Application`) consumes it under " <>
+          "cluster starts, and the composition root (`Cyfr.Application`) consumes it under " <>
           "its slot before the gate opens, each through the transitions that own it " <>
           "(`Arca.SecurityTransitions.mark_restore/1`, `restore/1`). Every other security " <>
           "store stays Sanctum's to read from these files too. " <>
@@ -1375,9 +1375,9 @@ defmodule Cyfr.Boundaries do
       into: "Arca.ControlPlane",
       functions: [:held?],
       reason:
-        "a member that does not hold its control-plane slot answers no request: the " <>
-          "plug asks whether this member holds the slot right now, which reads the " <>
-          "member's own lease state and no row."
+        "a server that does not hold its control-plane slot answers no request: the " <>
+          "plug asks whether this server holds the slot right now, which reads the " <>
+          "server's own lease state and no row."
     },
     %{
       from: "CyfrWeb.Plugs.MCPRateLimit",
@@ -1499,8 +1499,8 @@ defmodule Cyfr.Boundaries do
       into: "Arca.Files",
       functions: [:max_write],
       reason:
-        "the upload control's size bound is the files door's own write bound, a " <>
-          "constant that reads no row, so the page and the door refuse at one size."
+        "the upload control's size bound is the files API's own write bound, a " <>
+          "constant that reads no row, so the page and the files API refuse at one size."
     },
     %{
       from: "PrismWeb.LegalAcceptController",
@@ -1516,8 +1516,8 @@ defmodule Cyfr.Boundaries do
       into: "Arca.ControlPlane",
       functions: [:held?],
       reason:
-        "a member that does not hold its control-plane slot signs nobody in: the page " <>
-          "asks whether this member holds the slot right now before it starts a flow."
+        "a server that does not hold its control-plane slot signs nobody in: the page " <>
+          "asks whether this server holds the slot right now before it starts a flow."
     },
     %{
       from: "PrismWeb.ModelCatalog",
@@ -1587,15 +1587,15 @@ defmodule Cyfr.Boundaries do
       functions: [:get, :table_name],
       reason:
         "the readiness probe answers from its last checks within the cache window, " <>
-          "and checks that the cache's table exists: node-local memory, never a row."
+          "and checks that the cache's table exists: server-local memory, never a row."
     },
     %{
       from: "Emissary.Web.HealthController",
       into: "Arca.ControlPlane",
       functions: [:held?],
       reason:
-        "a member that lost its control-plane slot is not ready: the probe asks " <>
-          "whether this member holds the slot, which reads its own lease state and no row."
+        "a server that lost its control-plane slot is not ready: the probe asks " <>
+          "whether this server holds the slot, which reads its own lease state and no row."
     },
     %{
       from: "Emissary.Web.HealthController",
@@ -1639,7 +1639,7 @@ defmodule Cyfr.Boundaries do
       functions: [:put],
       reason:
         "the readiness probe keeps its checks for the cache window, so several " <>
-          "monitors' probes cost one check: node-local memory, never a row."
+          "monitors' probes cost one check: server-local memory, never a row."
     },
     %{
       from: "Emissary.Web.HealthController",
@@ -1676,7 +1676,7 @@ defmodule Cyfr.Boundaries do
       functions: [:put],
       reason:
         "the tray keeps the badges it computed per browser session, under a hash of " <>
-          "its token, for a bounded time: node-local memory, never a row."
+          "its token, for a bounded time: server-local memory, never a row."
     },
     %{
       from: "PrismWeb.AquaPanelLive",
@@ -1684,7 +1684,7 @@ defmodule Cyfr.Boundaries do
       functions: [:put],
       reason:
         "the panel keeps its open state and thread per browser session, under a hash " <>
-          "of its token, for a bounded time: node-local memory, never a row."
+          "of its token, for a bounded time: server-local memory, never a row."
     },
     %{
       from: "PrismWeb.AuthController",
@@ -1692,7 +1692,7 @@ defmodule Cyfr.Boundaries do
       functions: [:take],
       reason:
         "a sign-in ticket the login page left is taken once by the callback that " <>
-          "completes it, so a ticket cannot be replayed: node-local memory, never a row."
+          "completes it, so a ticket cannot be replayed: server-local memory, never a row."
     },
     %{
       from: "PrismWeb.LegalAcceptController",
@@ -1700,7 +1700,7 @@ defmodule Cyfr.Boundaries do
       functions: [:put],
       reason:
         "the legal texts a version names are kept once read, for a bounded time: " <>
-          "node-local memory, never a row."
+          "server-local memory, never a row."
     },
     %{
       from: "PrismWeb.LoginLive",
@@ -1708,7 +1708,7 @@ defmodule Cyfr.Boundaries do
       functions: [:put],
       reason:
         "the login page leaves a single-use ticket, bound to the browser, for the " <>
-          "callback that completes the sign-in, for a bounded time: node-local memory, " <>
+          "callback that completes the sign-in, for a bounded time: server-local memory, " <>
           "never a row."
     },
     %{
@@ -1717,7 +1717,7 @@ defmodule Cyfr.Boundaries do
       functions: [:invalidate, :put],
       reason:
         "a run's model catalogue is kept per athanor for a bounded time and dropped " <>
-          "when a key is bound or removed: node-local memory, never a row."
+          "when a key is bound or removed: server-local memory, never a row."
     },
     %{
       from: "PrismWeb.PasskeyController",
@@ -1725,7 +1725,7 @@ defmodule Cyfr.Boundaries do
       functions: [:take],
       reason:
         "a passkey sign-in ticket is taken once by the request that completes it, so " <>
-          "a ticket cannot be replayed: node-local memory, never a row."
+          "a ticket cannot be replayed: server-local memory, never a row."
     },
     %{
       from: "PrismWeb.ShellLive",
@@ -1734,7 +1734,7 @@ defmodule Cyfr.Boundaries do
       reason:
         "the shell marks its tincture scan running per athanor for a bounded time, so " <>
           "two refreshes start one scan, and clears the mark when the scan ends: " <>
-          "node-local memory, never a row."
+          "server-local memory, never a row."
     }
   ]
 
@@ -2218,7 +2218,7 @@ defmodule Cyfr.Boundaries do
     browser_cyfr_callback: %{
       admits: :flow_state,
       why:
-        "the `cyfr` door's callback: a person assertion over the challenge this CYFR keeps " <>
+        "the `cyfr` sign-in method's callback: a person assertion over the challenge this CYFR keeps " <>
           "in the browser's own session cookie, posted with the browser pipeline's CSRF " <>
           "token, verified under the person's head read fresh from the directory their " <>
           "genesis names, and redeemed once through its login receipt " <>
@@ -2288,7 +2288,7 @@ defmodule Cyfr.Boundaries do
     restore_kit_proof: %{
       admits: :credential,
       why:
-        "a person recovering from a declared restore, with no door or method left: a " <>
+        "a person recovering from a declared restore, with no sign-in method left: a " <>
           "challenge this CYFR holds for their identifier while their recovery is open, " <>
           "bounded per address and per person; a kit proof over it, signed by a recovery " <>
           "key of their identity read fresh from its directory and redeemed once; and the " <>
@@ -2302,7 +2302,7 @@ defmodule Cyfr.Boundaries do
       why:
         "the browser's own cookie session, established and revalidated in the controller, " <>
           "with the browser pipeline's CSRF token on the POST; no athanor, since what it " <>
-          "starts (linking a door) is the person's own"
+          "starts (linking a sign-in method) is the person's own"
     }
   }
 
@@ -3063,7 +3063,7 @@ defmodule Cyfr.Boundaries do
         "a failure, a cancel, a lease lapse and the sweep's cancellation of an " <>
           "archived athanor's work end an admitted execution without asking whether " <>
           "its grant still stands: the attempt must carry the grant's stored stamp " <>
-          "and be the current one, and the member must hold its slot, but retiring " <>
+          "and be the current one, and the server must hold its slot, but retiring " <>
           "work its athanor no longer admits is exactly when these run. None of them " <>
           "can report success, and none can write over a successor's attempt. A " <>
           "completion, new output, a renewal, a resume and a recovery each need the " <>
@@ -3116,12 +3116,12 @@ defmodule Cyfr.Boundaries do
     },
     %{
       responsibility:
-        "apply each active athanor's retention policy on the cell's cadence, with no caller",
+        "apply each active athanor's retention policy on the cluster's cadence, with no caller",
       modules: ~w(Cyfr.RetentionScheduler),
       check: "Arca.Retention.cleanup_athanor/2",
       reason:
         "retention deletes what each athanor's own settings say it no longer keeps, and " <>
-          "nobody asks for it: the scheduler, holding the cell's retention claim and its " <>
+          "nobody asks for it: the scheduler, holding the cluster's retention claim and its " <>
           "slot, walks the athanors the identity domain names active, asks again before " <>
           "each, and hands the storage layer one actor per athanor — the server's, narrowed " <>
           "to that athanor, reading and writing storage and nothing else. The storage " <>
@@ -3137,7 +3137,7 @@ defmodule Cyfr.Boundaries do
       reason:
         "a decision refused before any caller or tenant was established is appended " <>
           "with no athanor, so no athanor's retention reaches it and no tenant reads it: " <>
-          "the scheduler's `decisions_global` step, holding the cell's retention claim " <>
+          "the scheduler's `decisions_global` step, holding the cluster's retention claim " <>
           "and its slot, deletes those rows once they are older than " <>
           "CYFR_DECISION_RETENTION_DAYS, through Sanctum's decision record, the rows' one " <>
           "reader. The storage layer takes only the platform's own " <>

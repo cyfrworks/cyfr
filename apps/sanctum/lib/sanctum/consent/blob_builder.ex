@@ -314,7 +314,7 @@ defmodule Sanctum.Consent.BlobBuilder do
       node ->
         {:error,
          {:invalid_argument,
-          "The narrowing names #{node}, which is not a node of this grant's consent graph"}}
+          "The narrowing names #{node}, which is not a component of this grant's consent graph"}}
     end
   end
 

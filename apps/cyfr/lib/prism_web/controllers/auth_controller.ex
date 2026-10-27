@@ -121,7 +121,7 @@ defmodule PrismWeb.AuthController do
         |> redirect(to: "/auth/oidcc")
 
       {:error, _no_session} ->
-        to_login(conn, 401, "Sign in, then link the door again.")
+        to_login(conn, 401, "Sign in, then link the sign-in method again.")
     end
   end
 
@@ -405,14 +405,14 @@ defmodule PrismWeb.AuthController do
           conn,
           503,
           "Temporarily unavailable",
-          "<p>The door could not be linked just now. Try again shortly.</p>"
+          "<p>The sign-in method could not be linked just now. Try again shortly.</p>"
         )
 
       {:error, _refused} ->
         page(
           conn,
           401,
-          "The door was not linked",
+          "The sign-in method was not linked",
           "<p>That sign-in could not be linked to you here. Sign in again and link it " <>
             "from your settings.</p>"
         )

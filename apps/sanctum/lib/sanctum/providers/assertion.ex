@@ -35,7 +35,7 @@ defmodule Sanctum.Providers.Assertion do
       Operation.new(
         "person",
         "assert",
-        "Sign an assertion for another CYFR's door",
+        "Sign an assertion for another CYFR's sign-in method",
         [
           Arg.new("audience", :string,
             required: true,

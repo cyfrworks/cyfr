@@ -161,7 +161,7 @@ defmodule Cyfr.Platform.Settings do
     else
       {:error, :unavailable} ->
         raise "[Cyfr] FATAL: the platform settings' pins could not be read, so this " <>
-                "member cannot tell whether its environment agrees with the cell's."
+                "server cannot tell whether its environment agrees with the cluster's."
 
       _nothing_to_refuse ->
         :ok
@@ -193,14 +193,14 @@ defmodule Cyfr.Platform.Settings do
       Enum.map_join(found, "\n", fn {key, value, member, theirs} ->
         variable = variable(key)
 
-        "  * #{variable} pins #{key} to #{inspect(value)} on this member " <>
-          "(#{node_name()}) and to #{inspect(theirs)} on the live member #{member}."
+        "  * #{variable} pins #{key} to #{inspect(value)} on this server " <>
+          "(#{node_name()}) and to #{inspect(theirs)} on the live server #{member}."
       end)
 
-    "[Cyfr] FATAL: this member's environment disagrees with a live member's on a " <>
+    "[Cyfr] FATAL: this server's environment disagrees with a live server's on a " <>
       "pinned setting.\n\n" <>
       lines <>
-      "\n\nA pinned value changes cell-wide by stopping every member that holds the " <>
+      "\n\nA pinned value changes cluster-wide by stopping every server that holds the " <>
       "old pin before starting the first one with the new."
   end
 
@@ -854,7 +854,7 @@ defmodule Cyfr.Platform.Settings do
     else
       _unavailable ->
         raise "[Cyfr] FATAL: the platform settings could not be read to settle this " <>
-                "member's pinned values."
+                "server's pinned values."
     end
   end
 
@@ -870,7 +870,7 @@ defmodule Cyfr.Platform.Settings do
   # write is left, so a boot with nothing to write still refuses a store
   # out of bound.
   defp settle(_state, [{key, _value} | _pending], 0) do
-    raise "[Cyfr] FATAL: the platform settings kept moving while this member wrote " <>
+    raise "[Cyfr] FATAL: the platform settings kept moving while this server wrote " <>
             "its pinned #{key}."
   end
 
@@ -883,7 +883,7 @@ defmodule Cyfr.Platform.Settings do
 
       {:error, _unavailable} ->
         raise "[Cyfr] FATAL: the platform settings could not be read to settle this " <>
-                "member's pinned values."
+                "server's pinned values."
     end
   end
 
@@ -918,7 +918,7 @@ defmodule Cyfr.Platform.Settings do
 
       {:error, _unavailable} ->
         raise "[Cyfr] FATAL: the platform settings could not be written to settle " <>
-                "this member's pinned #{key}."
+                "this server's pinned #{key}."
     end
   end
 
@@ -939,7 +939,7 @@ defmodule Cyfr.Platform.Settings do
     Enum.find(pending, fn write ->
       Roster.out_of_bound(bound_values(after_write(rows, write))) -- broken == []
     end) ||
-      raise "[Cyfr] FATAL: this member's pinned values cannot be written one at a time " <>
+      raise "[Cyfr] FATAL: this server's pinned values cannot be written one at a time " <>
               "within the bounds between settings."
   end
 

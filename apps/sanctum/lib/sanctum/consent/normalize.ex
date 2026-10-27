@@ -398,19 +398,22 @@ defmodule Sanctum.Consent.Normalize do
         end)
 
       _other ->
-        {:error, {tag, key, "must be a map from consent-graph node to its narrowing"}}
+        {:error, {tag, key, "must be a map from consent-graph component to its narrowing"}}
     end
   end
 
   defp subset_node_ref(node, key, tag) when is_binary(node) do
     case component_ref(%{node: node}, :node, tag) do
-      {:ok, node} -> {:ok, node}
-      {:error, _} -> {:error, {tag, key, "names a node that is not a name-level component ref"}}
+      {:ok, node} ->
+        {:ok, node}
+
+      {:error, _} ->
+        {:error, {tag, key, "names a component that is not a name-level component ref"}}
     end
   end
 
   defp subset_node_ref(_node, key, tag),
-    do: {:error, {tag, key, "names a node that is not a name-level component ref"}}
+    do: {:error, {tag, key, "names a component that is not a name-level component ref"}}
 
   defp subset_record(node, record, tag) when is_map(record) and not is_struct(record) do
     record

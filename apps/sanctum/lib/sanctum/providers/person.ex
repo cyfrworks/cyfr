@@ -93,7 +93,7 @@ defmodule Sanctum.Providers.Person do
     Operation.tool(
       operations() ++ Assertion.operations(),
       description:
-        "A person's identity at their own CYFR: read its status, enroll and print the recovery kit, abandon an unfinished enrollment, add another kit, rotate the live key, link or unlink a sign-in door, certify a device for another CYFR and renew that certificate, and begin, list, cancel or complete a sign-in carry to another CYFR.",
+        "A person's identity at their own CYFR: read its status, enroll and print the recovery kit, abandon an unfinished enrollment, add another kit, rotate the live key, link or unlink a sign-in method, certify a device for another CYFR and renew that certificate, and begin, list, cancel or complete a sign-in carry to another CYFR.",
       title: "Person"
     )
   end
@@ -148,16 +148,16 @@ defmodule Sanctum.Providers.Person do
       Operation.new(
         "person",
         "link_door",
-        "Link a sign-in door",
+        "Link a sign-in method",
         [
           Arg.new("provider", :string,
             required: true,
-            description: "link_door: the door to link, as its provider name"
+            description: "link_door: the sign-in method to link, as its provider name"
           ),
           Arg.new("ticket", :string,
             required: true,
             description:
-              "link_door: the single-use ticket a completed sign-in with that door answered, proving control of its subject"
+              "link_door: the single-use ticket a completed sign-in with that sign-in method answered, proving control of its subject"
           )
         ],
         kind: :write,
@@ -167,11 +167,12 @@ defmodule Sanctum.Providers.Person do
       Operation.new(
         "person",
         "unlink_door",
-        "Unlink a sign-in door",
+        "Unlink a sign-in method",
         [
           Arg.new("door", :string,
             required: true,
-            description: "unlink_door: the linked door's identity key (provider|issuer|subject)"
+            description:
+              "unlink_door: the linked sign-in method's identity key (provider|issuer|subject)"
           )
         ],
         reduces_authority: true,
@@ -371,13 +372,15 @@ defmodule Sanctum.Providers.Person do
       do: answer(SignIn.link_door(ctx, provider, t))
 
   def handle(%Context{}, %{"action" => "link_door"}),
-    do: {:error, {:invalid_argument, "link_door needs the door's provider and its ticket"}}
+    do:
+      {:error,
+       {:invalid_argument, "link_door needs the sign-in method's provider and its ticket"}}
 
   def handle(%Context{} = ctx, %{"action" => "unlink_door", "door" => door}) when is_binary(door),
     do: answer(SignIn.unlink_door(ctx, door))
 
   def handle(%Context{}, %{"action" => "unlink_door"}),
-    do: {:error, {:invalid_argument, "unlink_door needs the door's identity key"}}
+    do: {:error, {:invalid_argument, "unlink_door needs the sign-in method's identity key"}}
 
   def handle(%Context{} = ctx, %{"action" => "carry_begin", "destination" => destination})
       when is_binary(destination),

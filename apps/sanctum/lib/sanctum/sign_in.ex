@@ -103,7 +103,7 @@ defmodule Sanctum.SignIn do
   @linkable Prima.SignInProviders.all()
   @link_ticket_ms 600_000
   @link_refused "This sign-in link is not yours, has expired or was already used; sign in " <>
-                  "with that door again"
+                  "with that sign-in method again"
 
   @typedoc """
   What a sign-in reports. The person always proceeds; `unsynced` names
@@ -508,7 +508,8 @@ defmodule Sanctum.SignIn do
     with {:ok, _person} <- signed_in_person(ctx),
          {:ok, identities} <- own_identities(user_id),
          %{} = identity <-
-           Enum.find(identities, &(&1.key == key)) || {:error, {:not_found, "door", key}},
+           Enum.find(identities, &(&1.key == key)) ||
+             {:error, {:not_found, "sign-in method", key}},
          :ok <- keeps_a_door(ctx, length(identities) - 1) do
       door = Map.take(identity, [:key, :provider, :issuer, :subject])
 
@@ -531,7 +532,7 @@ defmodule Sanctum.SignIn do
             {:ok, %{unlinked: door}}
 
           {:error, :not_found} ->
-            {:error, {:not_found, "door", key}}
+            {:error, {:not_found, "sign-in method", key}}
 
           {:error, :not_active} ->
             {:error, :not_standing}
@@ -547,7 +548,7 @@ defmodule Sanctum.SignIn do
   end
 
   def unlink_door(%Context{}, _key),
-    do: {:error, {:invalid_argument, "The door to unlink is named by its identity key"}}
+    do: {:error, {:invalid_argument, "The sign-in method to unlink is named by its identity key"}}
 
   # The last door goes only while the person keeps a way in without it: an
   # active passkey here, and a door that admits them as a person with no
@@ -568,8 +569,8 @@ defmodule Sanctum.SignIn do
           else:
             {:error,
              {:conflict,
-              "This is your last door here and you hold no passkey to sign in with; " <>
-                "register a passkey or link another door before you unlink it"}}
+              "This is your last sign-in method here and you hold no passkey to sign in with; " <>
+                "register a passkey or link another sign-in method before you unlink it"}}
 
       {:error, _unanswered} ->
         {:error, :unavailable}
@@ -589,7 +590,7 @@ defmodule Sanctum.SignIn do
           {:error, _refused} ->
             {:error,
              {:conflict,
-              "This server admits you only through this door; link another door first, or " <>
+              "This server admits you only through this sign-in method; link another sign-in method first, or " <>
                 "ask the operator to allow your account, before you unlink it"}}
         end
 
@@ -645,7 +646,7 @@ defmodule Sanctum.SignIn do
     do:
       {:error,
        {:invalid_argument,
-        "Only a GitHub, Google or OpenID Connect sign-in is linked as a door; an email address " <>
+        "Only a GitHub, Google or OpenID Connect sign-in is linked as a sign-in method; an email address " <>
           "or a passkey is not"}}
 
   defp linkable_key(key, provider) do

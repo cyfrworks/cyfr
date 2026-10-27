@@ -130,9 +130,9 @@ defmodule Locus.Application do
         |> Enum.reject(&is_nil/1)
 
       raise ArgumentError,
-            "[Locus] FATAL: a node holding LOCUS_RUNTIME_KEY serves the runtime alone, and " <>
+            "[Locus] FATAL: a server holding LOCUS_RUNTIME_KEY serves the runtime alone, and " <>
               "this one also holds #{Enum.join(held, " and ")}: the runtime's runners have " <>
-              "no network, so it shares no node, key or network with a role that has open " <>
+              "no network, so it shares no server, key or network with a role that has open " <>
               "egress. Give each role a container of its own (docker-compose.yml's " <>
               "#{services()})."
     end
@@ -171,7 +171,7 @@ defmodule Locus.Application do
     if direct_launcher do
       served(roles, [build_slots()])
     else
-      raise "[Locus] FATAL: a Locus node runs every build and every backend only through " <>
+      raise "[Locus] FATAL: a Locus server runs every build and every backend only through " <>
               "cyfr-locus, which starts it with its channel on fd 3 (KEEPER_CHANNEL); fd 3 " <>
               "is not that channel. Start the release through `cyfr-locus serve " <>
               pools(roles) <> " -- /app/bin/locus start` (the image's entrypoint)."

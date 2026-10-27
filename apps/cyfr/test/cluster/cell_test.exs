@@ -247,8 +247,8 @@ defmodule Cyfr.Cluster.CellTest do
       assert {:error, {%RuntimeError{message: message}, _stack}} =
                Cell.call(:b, GenServer, :start, [Cyfr.Cell, opts])
 
-      assert message =~ "this member runs release 0.0.0-other"
-      assert message =~ "a live member of this cell runs release #{release}"
+      assert message =~ "this server runs release 0.0.0-other"
+      assert message =~ "a live server of this cluster runs release #{release}"
 
       # Read from outside both members: no row for the refused claimant,
       # and both members still holding rows stamped with their release.

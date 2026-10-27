@@ -493,7 +493,7 @@ defmodule Aqua.Providers.Thread do
         )
       ],
       description:
-        "Move a turn between members: suspend sets it down with every row it has written kept, its runtime capacity released and the thread's claim given up, so any member may pick it up; recover takes a suspended or abandoned turn and carries it on, under a new fence, with the consent head and the capability identity read again. Suspending is not stopping — a stopped turn ends, a suspended one waits. A turn a live member is running is refused rather than taken, and a turn recovered too many times ends uncertain.",
+        "Move a turn between servers: suspend sets it down with every row it has written kept, its runtime capacity released and the thread's claim given up, so any server may pick it up; recover takes a suspended or abandoned turn and carries it on, under a new fence, with the consent head and the capability identity read again. Suspending is not stopping — a stopped turn ends, a suspended one waits. A turn a live server is running is refused rather than taken, and a turn recovered too many times ends uncertain.",
       title: "Turns"
     )
   end
@@ -537,7 +537,7 @@ defmodule Aqua.Providers.Thread do
   # running is a conflict, not a refusal; a turn that is not the caller's
   # athanor's is absent, which `translate/2` already answers.
   defp turn_refusal(:held_elsewhere, _id),
-    do: {:conflict, "That turn is running on another member. Try again once it is down."}
+    do: {:conflict, "That turn is running on another server. Try again once it is down."}
 
   defp turn_refusal(:not_running, _id),
     do: {:conflict, "No turn is running in this thread."}
