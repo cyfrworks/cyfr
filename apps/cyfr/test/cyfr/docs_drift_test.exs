@@ -1526,10 +1526,10 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # A feed's press is an external operation and nothing narrower: the shell
-  # sends a canvas's control to it, and the CLI and the API reach it as any
+  # sends a canvas's press to it, and the CLI and the API reach it as any
   # external operation, never from a chain. So the tincture guide says that
-  # from a canvas only the person's press runs it, and the integration
-  # guide's press row says who reaches it.
+  # from a canvas only a press the shell forwards on the person's own input
+  # runs it, and the integration guide's press row says who reaches it.
   test "a feed's press is an external operation" do
     %Prima.Operation{planes: planes} = Map.fetch!(operations("feed"), "press")
 
@@ -1543,14 +1543,66 @@ defmodule Cyfr.DocsDriftTest do
           do: row
 
     assert File.read!(Path.join(@repo_root, "tincture-guide.md")) =~
-             "From a canvas, a feed's action runs only on the person's press of a control",
-           "tincture-guide.md does not say that from a canvas only the person's press runs " <>
-             "a feed's action"
+             "From a canvas, a feed's action runs only on a press the shell forwards within " <>
+               "moments of the person's own input, never from a script on its own",
+           "tincture-guide.md does not say that from a canvas only a press forwarded on the " <>
+             "person's own input runs a feed's action"
 
     assert [row] = press, "integration-guide.md's feed table has no single `press` row"
 
     assert List.last(row) =~ "the CLI and the API reach it",
            "integration-guide.md's `press` row does not say the CLI and the API reach it"
+  end
+
+  # The bridge forwards a canvas's `open` or `press` while the shell holds
+  # the person's activation and the canvas's frame is focused: neither
+  # names the input as the canvas's, so a click elsewhere in the shell or
+  # in a sibling frame can precede it. What the canvas skill, the guides
+  # and the SDK's `open` and `press` say of it is that much and no more;
+  # and no text of the canvas's rules says a canvas runs only while shown,
+  # since a hidden canvas's script runs on and only its reads and acts stop.
+  test "a canvas's open and press are said to pass only within moments of the person's own input" do
+    said = "within moments of the person's own input, never from a script on its own"
+
+    claims = [
+      "click or key in the page",
+      "click handler",
+      "click or key press of theirs",
+      "person's click or key",
+      "person's press of a",
+      "person's presses of",
+      "person's own press",
+      "runs only while"
+    ]
+
+    for file <- [
+          "seed/aqua/skills/canvas/SKILL.md",
+          "tincture-guide.md",
+          "integration-guide.md",
+          "apps/cyfr/assets/js/sdk/client.js"
+        ] do
+      # Read as prose: line breaks, and a comment's leading `*`, are spaces.
+      text =
+        Path.join(@repo_root, file)
+        |> File.read!()
+        |> String.replace(~r/[ \t]*\n[ \t]*(\*[ \t]+)?/, " ")
+
+      assert text =~ said, "#{file} does not say a canvas's open and press pass only #{said}"
+
+      for claim <- claims,
+          do:
+            refute(text =~ claim, "#{file} says a canvas's open or press comes from \"#{claim}\"")
+    end
+
+    rules =
+      Path.join(@repo_root, "apps/cyfr/lib/compendium/tincture/rules.ex")
+      |> File.read!()
+      |> String.replace(~r/[ \t]*\n[ \t]*(#[ \t]+)?/, " ")
+
+    refute rules =~ ~r/runs only while/, "the canvas's rules say a canvas runs only while shown"
+
+    assert rules =~ "an `@import`, which `style-src` bounds",
+           "the canvas page policy's documentation does not say style-src bounds @import"
   end
 
   # ==========================================================================

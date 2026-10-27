@@ -368,10 +368,12 @@ defmodule Compendium.Tincture.Rules do
 
   Scripts load only from the version's own files and the SDK's one path,
   and no inline script runs. Styles may be inline, since CSS reaches the
-  network only through `img-src` and `font-src`, which name `F` alone. The
-  page connects to its open's data path and its own files and nothing
-  else, a `<base>` it writes names only its own files, and the policy
-  carries the canvas sandbox (`canvas_sandbox_tokens/0`).
+  network only through an `@import`, which `style-src` bounds, and images
+  and fonts, which `img-src` and `font-src` bound, and each of the three
+  names `F` alone of the network. The page connects to its open's data
+  path and its own files and nothing else, a `<base>` it writes names
+  only its own files, and the policy carries the canvas sandbox
+  (`canvas_sandbox_tokens/0`).
 
   `endpoint` and `shell` are origins (`scheme://host[:port]`),
   `asset_credential` an asset credential, `frame_id` a frame id and
@@ -478,10 +480,10 @@ defmodule Compendium.Tincture.Rules do
   vanilla or the react template (`templates/0`): `tincture.entry`
   `index.html` with no `tincture.build`, or `dist/index.html` with
   `tincture.build.tool` `vite`, whose version ships its lockfile
-  (`lockfile_required?/1`). It reaches nothing of its own and runs only
-  while shown: no `tincture.connect` origin, no `caps.egress`, no
-  component dependency, static or dynamic, no frame capability, no
-  background and no system action. Each refusal says which.
+  (`lockfile_required?/1`). It reaches nothing of its own, and hidden it
+  reads and acts on nothing: no `tincture.connect` origin, no
+  `caps.egress`, no component dependency, static or dynamic, no frame
+  capability, no background and no system action. Each refusal says which.
 
   A manifest that declares none of the blocks answers the empty
   declaration. Which streams exist, and that only a canvas names one that
@@ -763,7 +765,7 @@ defmodule Compendium.Tincture.Rules do
     do: refuse("tincture.frame.placement is one of #{Enum.join(@placements, ", ")}")
 
   # A canvas is its version's own page, written on a canvas template. It
-  # reaches nothing of its own and runs only while it is shown.
+  # reaches nothing of its own, and hidden it reads and acts on nothing.
   defp canvas(%Tincture{frame: %{placement: "canvas"}} = declaration, manifest) do
     tincture = section(manifest, "tincture")
     dependencies = section(manifest, "dependencies")
@@ -789,7 +791,7 @@ defmodule Compendium.Tincture.Rules do
         canvas_refuse("a canvas declares no frame capability")
 
       declaration.frame.background ->
-        canvas_refuse("a canvas does not run in the background; it runs only while shown")
+        canvas_refuse("a canvas declares no background: hidden, it reads and acts on nothing")
 
       declaration.actions != [] ->
         canvas_refuse("a canvas declares no system action")

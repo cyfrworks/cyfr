@@ -419,7 +419,8 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
 
     /**
      * Ask the shell to open a tincture: a tincture reference, e.g. "t:local.weather".
-     * From a canvas the shell acts on it only inside the person's own press.
+     * From a canvas the shell acts on it only within moments of the person's
+     * own input, never from a script on its own.
      */
     open(ref) {
       verb("open", {ref})
@@ -427,8 +428,9 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
 
     /**
      * On a canvas, press a feed's action: the binding id a `feed.results`
-     * event carries, and the action's name. The shell acts on it only inside
-     * the person's own press, and only for a feed the canvas declares.
+     * event carries, and the action's name. The shell acts on it only within
+     * moments of the person's own input, never from a script on its own, and
+     * only for a feed the canvas declares.
      */
     press(binding, action) {
       verb("press", {binding, action})

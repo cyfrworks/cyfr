@@ -751,7 +751,7 @@ defmodule Compendium.Tincture.RulesTest do
     test "a canvas declaring background is refused" do
       canvas_refused(
         canvas(%{"frame" => %{"placement" => "canvas", "background" => true}}),
-        "a canvas does not run in the background; it runs only while shown"
+        "a canvas declares no background: hidden, it reads and acts on nothing"
       )
 
       assert {:ok, %Tincture{frame: %{background: false}}} =

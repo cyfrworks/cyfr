@@ -92,8 +92,8 @@ working, which is kept, and which validation last failed.
 - `cyfr.open(ref)` opens an installed app, and `cyfr.press(binding,
   action)` presses an action of a feed the page declares, `binding`
   from that feed's latest `feed.results` event. The browser forwards
-  either only from the person's own click or key in the page, so call
-  them from a click handler.
+  either only within moments of the person's own input, never from a
+  script on its own.
 - `cyfr.ready()` tells the browser the page has drawn. Call it once,
   after the streams are open or refused: a version that has not called
   it ten seconds after it opens is not shown, and an error it does not
