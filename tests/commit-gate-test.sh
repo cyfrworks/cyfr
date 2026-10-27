@@ -341,11 +341,18 @@ cat > "$scratch/stub.bash_env" <<'FAKE'
 # The prebuilt binary fetch and its test download from GitHub and compile
 # with the real Mix, so they stand in too: the fetch records in
 # prebuilt-fetch.calls its arguments and how many Mix calls came before it.
+# The shipped canvas's check builds with Node 24, the builder's major, and
+# packages from the npm registry, which a runner of these tests does not
+# promise, so it stands in as well and records its arguments in
+# seed-canvas.calls.
 case "$0" in
   *scripts/fetch-prebuilt-binaries.sh)
     printf 'fetch %s|mix_calls_before=%s\n' "$*" "$(cat "$TRACE/mix.calls" 2>/dev/null | wc -l | tr -d ' ')" >> "$TRACE/prebuilt-fetch.calls"
     exit 0 ;;
   *tests/fetch-prebuilt-binaries-test.sh) exit 0 ;;
+  *scripts/check-seed-canvas.sh)
+    printf 'check %s\n' "$*" >> "$TRACE/seed-canvas.calls"
+    exit 0 ;;
 esac
 case "$0" in
   *tests/release-boot/boot.sh|*tests/*-proof/run.sh|*tests/*-proof/*-test.sh|*tests/compose-proof/tailscale-standin/proof.sh|*tests/browser/run.sh|*tests/multi-home-smoke/run.sh|*tests/proxy-hsts/run.sh)
@@ -469,13 +476,13 @@ CI_RUNS = {
     ("test.yml", "static", "The CLI catalog is the operation table's"): ["opsgen"],
     ("test.yml", "static", "The configuration guide is the roster's"): ["confguide"],
     ("test.yml", "static", "The built SDK is its source's"): ["sdk_bundle"],
-    ("test.yml", "static", "The built toolkit is its source's"): ["toolkit_bundle"],
     ("test.yml", "static", "Every test WASM fixture is its source's build"): ["test_wasm"],
     ("test.yml", "static", "The image suites' shared plumbing"): ["imagesuite_checks"],
     ("test.yml", "static", "The prebuilt binary fetch lays down what the deps' own downloads name"): ["prebuilt_binaries"],
     ("test.yml", "js-unit", "Install the lint and coverage tools"): ["eslint"],
     ("test.yml", "js-unit", "Lint the console's JavaScript and the SDK"): ["eslint"],
-    ("test.yml", "js-unit", "The console's JavaScript tests (the SDK, the canvas toolkit, the canvas, the carrier, the system layer and the markdown hook's parse step)"): ["js_suite"],
+    ("test.yml", "js-unit", "The console's JavaScript tests (the SDK, the canvas, the shipped canvas, the carrier, the system layer and the markdown hook's parse step)"): ["js_suite"],
+    ("test.yml", "js-unit", "The shipped canvas is its sources' build"): ["seed_canvas"],
     ("test.yml", "test", "Install the pinned wasm-tools"): ["wasm_tools"],
     ("test.yml", "test", "Compile with warnings as errors"): ["compile_sqlite_test", "compile_pg_test"],
     ("test.yml", "test", "Compile the dev target with warnings as errors"): ["compile_sqlite_dev", "compile_pg_dev"],
@@ -2222,7 +2229,7 @@ framed a "$a" 1
 has_line '^prima=0$' "$scratch/a.log/islands.summary" || fail 'the prima island did not pass beside the stalled one'
 has_line '^sanctum=0$' "$scratch/a.log/islands.summary" || fail 'the sanctum island did not pass beside the stalled one'
 has_line '^==> islands.arca stopped at its deadline$' "$scratch/a.err" || fail 'the stalled island was not reported'
-for s in compile_sqlite_test compile_sqlite_dev js_suite eslint wasm_tools test_wasm sdk_bundle toolkit_bundle canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check dialyzer boundary_plants sqlite_suite; do
+for s in compile_sqlite_test compile_sqlite_dev js_suite eslint wasm_tools test_wasm sdk_bundle seed_canvas canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check dialyzer boundary_plants sqlite_suite; do
   has_line "^$s=0$" "$scratch/a.log/static.summary" || fail "the static step $s did not pass: $(tr '\n' ' ' < "$scratch/a.log/static.summary")"
 done
 has_line '^compile_pg_dev=0$' "$scratch/a.log/postgres.summary" || fail "the PostgreSQL dev compile did not pass: $(tr '\n' ' ' < "$scratch/a.log/postgres.summary")"
@@ -2232,6 +2239,8 @@ has_line '^==> islands +FAILED ' "$scratch/a.out" || fail 'the islands leg was n
 has_line '^==> static +ok .*canary_checks=0 imagesuite_checks=0 prebuilt_binaries=0 worker_auth_check=0 backends_check=0 ' "$scratch/a.out" || fail 'the static leg and its Python checks were not reported passed'
 [ "$(cat "$trace/prebuilt-fetch.calls")" = 'fetch |mix_calls_before=0' ] ||
   fail "the prebuilt binary fetch did not run once, before any Mix call: $(cat "$trace/prebuilt-fetch.calls" 2>&1)"
+[ "$(cat "$trace/seed-canvas.calls")" = 'check ' ] ||
+  fail "the shipped canvas's check did not run once, with no argument: $(cat "$trace/seed-canvas.calls" 2>&1)"
 has_line '^==> postgres +ok ' "$scratch/a.out" || fail 'the postgres leg was not reported passed'
 has_line '^    postgres\.pg_tests: Result: 1 passed' "$scratch/a.out" || fail 'the final report did not read the PostgreSQL tests'
 [ -z "$(find "$scratch/a.log" -maxdepth 1 -name 'island_*')" ] || fail "the stalled island's copy was left behind"

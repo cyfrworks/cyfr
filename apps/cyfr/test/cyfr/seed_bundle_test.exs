@@ -73,10 +73,15 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert files.rel == "catalysts/local/files/#{files.version}"
   end
 
-  test "the shipped canvas is the default layout's, and the rules and the publish check accept it" do
+  test "the shipped canvas is 0.2.0 on the react template, the default layout's, and the publish check accepts it" do
     canvas = SeedBundle.local_unit!("tinctures", "canvas")
     assert canvas.type == "tincture"
     assert canvas.ref == "tincture:local.canvas"
+    assert canvas.version == "0.2.0"
+
+    # The seed ships this one version of the canvas.
+    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), canvas.rel)
+    assert File.ls!(Path.dirname(dir)) == [canvas.version]
 
     # The default layout's one canvas, with nothing placed over it.
     assert [%{id: "home", tincture: ref, postures: postures}] = Prima.Layout.default().canvases
@@ -88,40 +93,60 @@ defmodule Cyfr.Test.SeedBundleTest do
     assert declaration.frame.placement == "canvas"
     assert declaration.frame.background == false
     assert declaration.frame.capabilities == []
-    assert {:ok, "canvas.js"} = Compendium.tincture_canvas_module(canvas.manifest)
 
-    # It reads the athanor's runs, names no feed, and declares nothing
-    # else: no action, no connect origin and no page of its own.
+    # The react template's page: the build's entry, built by Vite from the
+    # lockfile it ships.
+    react = Enum.find(Compendium.tincture_templates(), &(&1.name == "react"))
+    assert canvas.manifest["tincture"]["entry"] == react.entry
+    assert canvas.manifest["tincture"]["build"] == %{"tool" => react.build}
+    assert Compendium.tincture_entry(canvas.manifest) == {:ok, "dist/index.html"}
+    assert Compendium.tincture_lockfile_required?(canvas.manifest)
+
+    # It reads the athanor's runs, schedules and schedule runs, names no
+    # feed, and declares nothing else: no action and no connect origin.
     assert declaration.actions == []
-    assert [%{name: "runs.changes", subject: nil}] = declaration.streams
+
+    assert Enum.map(declaration.streams, &{&1.name, &1.subject}) == [
+             {"runs.changes", nil},
+             {"schedules.changes", nil},
+             {"schedule_runs.changes", nil}
+           ]
+
     assert Compendium.tincture_check_streams(declaration, Sanctum.Catalog.streams()) == :ok
     assert Compendium.tincture_check_canvas_streams(declaration, Sanctum.Catalog.streams()) == :ok
 
-    for key <- ~w(entry actions connect),
+    for key <- ~w(actions connect),
         do: refute(Map.has_key?(canvas.manifest["tincture"], key), key)
 
     refute Map.has_key?(canvas.manifest, "caps")
     refute Map.has_key?(canvas.manifest, "dependencies")
 
-    dir = Path.join(Path.expand("../../../../seed/components", __DIR__), canvas.rel)
+    # The check a registry runs before it installs a tincture: the entry,
+    # the declaration and its streams, the served types and the lockfile.
+    assert {:ok, %{size: _}} = Compendium.TinctureValidator.validate(dir)
 
+    # Its sources with the lockfile beside its package manifest, and the
+    # build's page, its assets and the notices of the packages it bundles:
+    # no build debris.
     files =
       for path <- Prima.Test.SourceTree.files!(Path.join(dir, "**/*")),
           File.regular?(path),
-          do: {Path.relative_to(path, dir), File.stat!(path).size}
+          do: Path.relative_to(path, dir)
 
-    assert Enum.sort(Enum.map(files, &elem(&1, 0))) == ["canvas.js", "cyfr-manifest.json"]
-    assert {:ok, _size} = Compendium.Tincture.check_version(canvas.manifest, files)
+    {built, sources} = Enum.split_with(files, &String.starts_with?(&1, "dist/"))
 
-    # The module draws only through the toolkit: it reaches no page, no
-    # request and no markup of its own.
-    module = File.read!(Path.join(dir, "canvas.js"))
+    assert Enum.sort(sources) ==
+             ~w(cyfr-manifest.json index.html package-lock.json package.json src/App.tsx
+                src/cyfr.d.ts src/index.css src/main.tsx src/model.ts tsconfig.json vite.config.ts)
 
-    for reach <-
-          ~w(document window fetch XMLHttpRequest WebSocket EventSource importScripts innerHTML),
-        do: refute(module =~ reach, reach)
+    assert {[_js], [_css]} =
+             built
+             |> Enum.filter(&(&1 =~ ~r{\Adist/assets/index-[A-Za-z0-9_-]+\.(js|css)\z}))
+             |> Enum.split_with(&String.ends_with?(&1, ".js"))
 
-    refute module =~ ~r/https?:\/\//
+    assert length(built) == 4
+    assert "dist/index.html" in built
+    assert "dist/third-party-notices.json" in built
   end
 
   test "the shipped vault declares only what a frame can complete, and passes the publish check" do
