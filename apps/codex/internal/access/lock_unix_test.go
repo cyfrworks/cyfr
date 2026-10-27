@@ -106,7 +106,7 @@ func TestDockerChildKeepsTheLockAfterItsHolderDies(t *testing.T) {
 	if !alive(busy.WatchdogPID) || busy.WatchdogPID == dockerPID || busy.Until.Before(time.Now().Add(50*time.Minute)) {
 		t.Errorf("the record names watchdog %d until %s", busy.WatchdogPID, busy.Until)
 	}
-	want := "Another cyfr command holds this home (`" + busy.Holder + "`), or a docker command it started is still running (watchdog pid `" + strconv.Itoa(busy.WatchdogPID) + "`, which ends by `" + busy.Until.UTC().Format(time.RFC3339) + "` at the latest). Nothing was changed. Wait until it has finished, then run this command again; if the holder was interrupted, run `cyfr access --resume` after that time."
+	want := "Another cyfr command holds CYFR's lock (`" + busy.Holder + "`), or a docker command it started is still running (watchdog pid `" + strconv.Itoa(busy.WatchdogPID) + "`, which ends by `" + busy.Until.UTC().Format(time.RFC3339) + "` at the latest). Nothing was changed. Wait until it has finished, then run this command again; if the holder was interrupted, run `cyfr access --resume` after that time."
 	if msg := busy.Refusal().Message(); msg != want || !strings.HasPrefix(busy.Holder, "cyfr holder on ") {
 		t.Errorf("the refusal reads %q", msg)
 	}
@@ -327,7 +327,7 @@ func TestLockExcludesAHolderInAnotherPIDNamespace(t *testing.T) {
 	}
 	// The container wrote no holder record; the kernel's lock table names
 	// its flock.
-	want := "Another cyfr command holds this home (`a process that wrote no holder record`, pid `" + strconv.Itoa(busy.PID) + "`). Nothing was changed. Wait until it has finished, then run this command again."
+	want := "Another cyfr command holds CYFR's lock (`a process that wrote no holder record`, pid `" + strconv.Itoa(busy.PID) + "`). Nothing was changed. Wait until it has finished, then run this command again."
 	if busy.PID <= 0 || busy.Refusal().Message() != want {
 		t.Errorf("the refusal reads %q (pid %d)", busy.Refusal().Message(), busy.PID)
 	}

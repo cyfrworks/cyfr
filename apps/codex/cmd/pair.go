@@ -32,7 +32,7 @@ var pairCmd = &cobra.Command{
 	Use:     "pair <code>",
 	Short:   "Pair a new device",
 	GroupID: "security",
-	Long: `Pair a new device. Open this home's /pair page on that device first: it makes
+	Long: `Pair a new device. Open this CYFR's /pair page on that device first: it makes
 its own key and shows that key's code. Give the code here, with or without its
 spaces, and this prints a pairing link for that device alone. Open the link on
 the device, in the same browser, before it expires, and it pairs as you in the
@@ -71,7 +71,7 @@ func keyDigestFromCode(code string) (string, error) {
 	}, code)
 	bytes, err := base64.RawURLEncoding.Strict().DecodeString(digest)
 	if err != nil || len(bytes) != 32 || base64.RawURLEncoding.EncodeToString(bytes) != digest {
-		return "", errors.New("That is not the code a new device shows. Open this home's /pair page on the device and give the code it shows.")
+		return "", errors.New("That is not the code a new device shows. Open this CYFR's /pair page on the device and give the code it shows.")
 	}
 	return digest, nil
 }

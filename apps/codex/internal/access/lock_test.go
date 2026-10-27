@@ -39,7 +39,7 @@ func TestLockExcludesAnotherTaker(t *testing.T) {
 	if busy.PID != os.Getpid() || busy.WatchdogPID != 0 || rec.Host != host {
 		t.Errorf("the refusal names %+v from %+v", busy, rec)
 	}
-	want := "Another cyfr command holds this home (`cyfr test on " + host + ", since " + rec.Started.UTC().Format(time.RFC3339) + "`, pid `" + strconv.Itoa(os.Getpid()) + "`). Nothing was changed. Wait until it has finished, then run this command again."
+	want := "Another cyfr command holds CYFR's lock (`cyfr test on " + host + ", since " + rec.Started.UTC().Format(time.RFC3339) + "`, pid `" + strconv.Itoa(os.Getpid()) + "`). Nothing was changed. Wait until it has finished, then run this command again."
 	if r := busy.Refusal(); r.Code != "access_busy" || r.Message() != want {
 		t.Errorf("the refusal reads %q", r.Message())
 	}
@@ -250,7 +250,7 @@ func TestLockTakersInSeparateProcesses(t *testing.T) {
 		winner := holders[0]
 		var rec holderRecord
 		readJSON(filepath.Join(h.dir, stateDir, holderFile), &rec)
-		want := "Another cyfr command holds this home (`cyfr taker-" + winner.Name + " on " + host + ", since " + rec.Started.UTC().Format(time.RFC3339) + "`, pid `" + strconv.Itoa(winner.PID) + "`). Nothing was changed. Wait until it has finished, then run this command again."
+		want := "Another cyfr command holds CYFR's lock (`cyfr taker-" + winner.Name + " on " + host + ", since " + rec.Started.UTC().Format(time.RFC3339) + "`, pid `" + strconv.Itoa(winner.PID) + "`). Nothing was changed. Wait until it has finished, then run this command again."
 		for _, r := range results {
 			if r.Held {
 				continue

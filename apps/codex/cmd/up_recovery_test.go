@@ -214,7 +214,7 @@ func recoveredUp(t *testing.T, docker *stateDocker, id, out string) {
 	if stop < 0 || len(ups) < 2 || stop > ups[0] || readsBefore < 2 {
 		t.Errorf("cyfr up did not recover first (stop at %d, %d reads after it, starts at %v):\n%s", stop, readsBefore, ups, strings.Join(calls, "\n"))
 	}
-	recovered, started := strings.Index(out, "Recovered: The change of how this home is reached (request "+id+") is done."), strings.Index(out, "CYFR server started.")
+	recovered, started := strings.Index(out, "Recovered: The change of how CYFR is reached (request "+id+") is done."), strings.Index(out, "CYFR server started.")
 	if recovered < 0 || started < recovered {
 		t.Errorf("cyfr up did not report the recovered change before its own start:\n%s", out)
 	}

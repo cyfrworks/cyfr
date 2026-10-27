@@ -383,7 +383,7 @@ func sessionEndOf(who map[string]any) (time.Time, bool, error) {
 	}
 	end, err := time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("the home answered an unreadable session end %q", raw)
+		return time.Time{}, false, fmt.Errorf("CYFR answered an unreadable session end %q", raw)
 	}
 	return end, true, nil
 }

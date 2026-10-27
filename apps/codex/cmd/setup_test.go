@@ -338,16 +338,16 @@ func TestSetupReportsAStartOnThisMachineOnly(t *testing.T) {
 // domain that is not one, and anything but one email.
 func TestSetupRefusesAnswersBeforeWriting(t *testing.T) {
 	s, sess, _ := newSetupRun(t)
-	emailRule := "Type the one email you sign in with, such as you@example.com: it makes you this home's administrator"
+	emailRule := "Type the one email you sign in with, such as you@example.com: it makes you this CYFR's administrator"
 	for _, c := range []struct {
 		a    setup.Answers
 		want string
 	}{
 		{setup.Answers{Mode: "tls", Email: "me@example.com"}, `"tls" is none of them`},
 		{setup.Answers{Mode: access.ModePublic, Domain: "localhost", Email: "me@example.com"}, "`localhost` is not a valid domain"},
-		{setup.Answers{Mode: access.ModePublic, Email: "me@example.com"}, "Type the domain this home is reached at"},
+		{setup.Answers{Mode: access.ModePublic, Email: "me@example.com"}, "Type the domain CYFR is reached at"},
 		{setup.Answers{Mode: access.ModePublic, Domain: "cyfr.example.com", ACMEEmail: "nope", Email: "me@example.com"}, "`nope` is not a valid email address"},
-		{setup.Answers{Mode: access.ModeLocal, Domain: "cyfr.example.com", Email: "me@example.com"}, "for a public home alone"},
+		{setup.Answers{Mode: access.ModeLocal, Domain: "cyfr.example.com", Email: "me@example.com"}, "for public access alone"},
 		{setup.Answers{Mode: access.ModeLocal}, emailRule},
 		{setup.Answers{Mode: access.ModeLocal, Email: "me@example.com, you@example.com"}, emailRule},
 		{setup.Answers{Mode: access.ModeLocal, Email: "Me <me@example.com>"}, emailRule},
@@ -374,7 +374,7 @@ func TestSetupRefusesAnswersBeforeWriting(t *testing.T) {
 // once .env exists.
 func TestSetupRefusesAnExistingHome(t *testing.T) {
 	for _, c := range []struct{ env, want string }{
-		{"CYFR_ACCESS=tailnet\n", ".env says this home is reached as tailnet, and cyfr setup leaves how an existing home is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it"},
+		{"CYFR_ACCESS=tailnet\n", ".env says CYFR is reached as tailnet, and cyfr setup leaves how an existing CYFR is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it"},
 		{"CYFR_SECRET_KEY_BASE=kept\n", access.Refuse("access_missing", nil).Message()},
 	} {
 		newInitProject(t)
@@ -396,7 +396,7 @@ func TestSetupRefusesAnExistingHome(t *testing.T) {
 	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Start(setup.Answers{Mode: access.ModeLocal, Email: "me@example.com"}); err == nil || !strings.Contains(err.Error(), "cyfr setup leaves how an existing home is reached alone") {
+	if err := sess.Start(setup.Answers{Mode: access.ModeLocal, Email: "me@example.com"}); err == nil || !strings.Contains(err.Error(), "cyfr setup leaves how an existing CYFR is reached alone") {
 		t.Errorf("a start once .env exists answered %v", err)
 	}
 	if st := sess.State(); st.Phase != setup.PhaseAnswering {
@@ -558,7 +558,7 @@ func TestSetupInterrupted(t *testing.T) {
 		done := runSetupInBackground(ctx, io.Discard)
 		openPages(t)
 		cancel()
-		if err := awaitEnd(t, done); err == nil || err.Error() != "cyfr setup was interrupted before the start; nothing of the home was written" {
+		if err := awaitEnd(t, done); err == nil || err.Error() != "cyfr setup was interrupted before the start; nothing of the new CYFR was written" {
 			t.Errorf("cyfr setup answered %v", err)
 		}
 		nothingWritten(t, ".cyfr", ".env.example")
@@ -777,11 +777,11 @@ func TestSetupOpensItsPagesOnADisplay(t *testing.T) {
 		opened          bool
 		want            string
 	}{
-		{"a display", true, false, nil, true, "Opened it in your browser. It stops once the home is up.\n"},
-		{"--no-open", true, true, nil, false, "Open it in a browser on this machine. It stops once the home is up.\n"},
-		{"no display", false, false, nil, false, "Open it in a browser on this machine. It stops once the home is up.\n"},
+		{"a display", true, false, nil, true, "Opened it in your browser. It stops once CYFR is up.\n"},
+		{"--no-open", true, true, nil, false, "Open it in a browser on this machine. It stops once CYFR is up.\n"},
+		{"no display", false, false, nil, false, "Open it in a browser on this machine. It stops once CYFR is up.\n"},
 		{"a launcher that fails", true, false, errors.New("no xdg-open to open it with"), false,
-			"Could not open a browser here (no xdg-open to open it with); open the address above.\nOpen it in a browser on this machine. It stops once the home is up.\n"},
+			"Could not open a browser here (no xdg-open to open it with); open the address above.\nOpen it in a browser on this machine. It stops once CYFR is up.\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			newInitProject(t)

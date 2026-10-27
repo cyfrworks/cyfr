@@ -24,18 +24,18 @@ func init() {
 
 var openCmd = &cobra.Command{
 	Use:     "open",
-	Short:   "Open the home in your browser",
+	Short:   "Open Aqua in your browser",
 	GroupID: "identity",
-	Long: `Open the home's address in your default browser: the --url, the
+	Long: `Open Aqua in your default browser, at CYFR's address: the --url, the
 --context's address, or the current context's. The loopback address cyfr
 init saves for this machine (http://127.0.0.1:<port>) opens as
-http://localhost:<port>, the address a home on this computer serves itself
+http://localhost:<port>, the address CYFR on this computer serves itself
 under, where a passkey works.
 
 It opens the address and nothing more. No session travels from the command
 line to the browser: sign in there as you always do.`,
 	Example: `  cyfr open
-  cyfr open --context home`,
+  cyfr open --context work`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
@@ -46,7 +46,7 @@ line to the browser: sign in there as you always do.`,
 
 		parsed, err := url.Parse(address)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return fmt.Errorf("%q is not a web address to open: give the home's https:// or http:// address", address)
+			return fmt.Errorf("%q is not a web address to open: give CYFR's https:// or http:// address", address)
 		}
 		address = browserAddress(parsed)
 

@@ -47,7 +47,7 @@ func TestAccessShowsTheChangeAndSwitchesOnceConfirmed(t *testing.T) {
 	}
 	text := out.String()
 	for _, line := range []string{
-		"  Who can reach this home: only this computer → anyone on the internet, who still has to sign in\n",
+		"  Who can reach CYFR: only this computer → anyone on the internet, who still has to sign in\n",
 		"  Address: http://localhost:4000 → https://cyfr.example.com\n",
 		"  Certificate email: none → ops@example.com\n",
 		"  Ports opened on this machine: none → 80 and 443\n",
@@ -207,7 +207,7 @@ func TestAccessRefusalsAreTheirSentences(t *testing.T) {
 		{"a rolled-back switch", func(s *fakeStack) { s.switchReceipt = &rolled }, access.ModePublic, accessOptions{domain: "cyfr.example.com"}, access.Refuse(rolled.Code, rolled.Payload).Message()},
 		{"no change", nil, access.ModeLocal, accessOptions{}, access.Refuse("access_unchanged", map[string]string{"address": "http://localhost:4000"}).Message()},
 		{"an option of another mode", nil, access.ModeLocal, accessOptions{domain: "cyfr.example.com"}, access.Refuse("access_option_outside_mode", map[string]string{"option": "--domain", "mode": "local"}).Message()},
-		{"the lock held", func(s *fakeStack) { s.holder = "update" }, access.ModePublic, accessOptions{domain: "cyfr.example.com"}, "Another cyfr command holds this home (`update`)"},
+		{"the lock held", func(s *fakeStack) { s.holder = "update" }, access.ModePublic, accessOptions{domain: "cyfr.example.com"}, "Another cyfr command holds CYFR's lock (`update`)"},
 		{"COMPOSE_* in .env", func(*fakeStack) {
 			f, _ := os.OpenFile(".env", os.O_APPEND|os.O_WRONLY, 0)
 			f.WriteString("COMPOSE_PROFILES=public,tailnet\n")
@@ -258,12 +258,12 @@ func TestAccessStatusTakesNoLock(t *testing.T) {
 		t.Fatalf("cyfr access status: %v", err)
 	}
 	for _, line := range []string{
-		"  Who can reach this home: only this computer\n",
+		"  Who can reach CYFR: only this computer\n",
 		"  Address: http://localhost:4000\n",
 		"  cyfr (p-cyfr-1): running\n",
 		"  cyfr: healthy\n",
-		"Unfinished: The change of how this home is reached (request " + strings.Repeat("b", 32) + ") is unfinished (stopped). Run `cyfr access --resume` to finish it.\n",
-		"Last change, 2026-10-19T08:00:00Z: The change of how this home is reached (request " + strings.Repeat("a", 32) + ") is done.\n",
+		"Unfinished: The change of how CYFR is reached (request " + strings.Repeat("b", 32) + ") is unfinished (stopped). Run `cyfr access --resume` to finish it.\n",
+		"Last change, 2026-10-19T08:00:00Z: The change of how CYFR is reached (request " + strings.Repeat("a", 32) + ") is done.\n",
 	} {
 		if !strings.Contains(out.String(), line) {
 			t.Errorf("the status lacks %q:\n%s", line, out.String())
@@ -299,7 +299,7 @@ func TestAccessResumeReportsRecovery(t *testing.T) {
 	if err == nil || err.Error() != want {
 		t.Errorf("a resume that leaves a change unfinished answered %v, want %q", err, want)
 	}
-	if !strings.Contains(out.String(), "Recovered: The change of how this home is reached (request "+strings.Repeat("c", 32)+") is not applied.") {
+	if !strings.Contains(out.String(), "Recovered: The change of how CYFR is reached (request "+strings.Repeat("c", 32)+") is not applied.") {
 		t.Errorf("the resume does not report what recovery finished:\n%s", out.String())
 	}
 
@@ -373,7 +373,7 @@ func TestAccessConfirmsTheJoinBeforeItStarts(t *testing.T) {
 		askTerminal = func() bool { return true }
 		askInput = answers("yes", "no")
 		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{}, false, "", &bytes.Buffer{})
-		want := "The change was not confirmed. This machine joined your tailnet as `cyfr.tail1234.ts.net`, and how this home is reached was not changed"
+		want := "The change was not confirmed. This machine joined your tailnet as `cyfr.tail1234.ts.net`, and how CYFR is reached was not changed"
 		if err == nil || err.Error() != want || len(s.joins) != 1 || len(s.switches) != 0 {
 			t.Fatalf("a declined change after a join answered %v (joins %d, switches %d), want %q", err, len(s.joins), len(s.switches), want)
 		}
@@ -402,7 +402,7 @@ func TestAccessConfirmsTheJoinBeforeItStarts(t *testing.T) {
 		askInput = answers("yes", "no")
 		var out bytes.Buffer
 		err := runAccess(context.Background(), access.ModeTailnet, accessOptions{newNode: true}, false, "", &out)
-		want := "The change was not confirmed. This machine's tailnet identity `old.tail1234.ts.net` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `cyfr.tail1234.ts.net`, and how this home is reached was not changed"
+		want := "The change was not confirmed. This machine's tailnet identity `old.tail1234.ts.net` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `cyfr.tail1234.ts.net`, and how CYFR is reached was not changed"
 		if err == nil || err.Error() != want || len(s.joins) != 1 || len(s.switches) != 0 {
 			t.Fatalf("a declined change after a new node answered %v (joins %d, switches %d), want %q\n%s", err, len(s.joins), len(s.switches), want, out.String())
 		}
@@ -423,7 +423,7 @@ func TestAccessSaysAnIdentityWasRemovedOnlyForTheMachineTheJoinReplaced(t *testi
 		}
 	}
 	unknown := "This joins this machine to your tailnet as `cyfr`, after removing its current tailnet identity, if it has one; certificate names are public.\n"
-	joinedOnly := "The change was not confirmed. This machine joined your tailnet as `cyfr.tail1234.ts.net`, and how this home is reached was not changed"
+	joinedOnly := "The change was not confirmed. This machine joined your tailnet as `cyfr.tail1234.ts.net`, and how CYFR is reached was not changed"
 	for name, c := range map[string]struct {
 		prepare        func(t *testing.T, s *fakeStack)
 		question, want string
@@ -438,7 +438,7 @@ func TestAccessSaysAnIdentityWasRemovedOnlyForTheMachineTheJoinReplaced(t *testi
 				s.joined[""] = access.Join{Name: "old.tail1234.ts.net", NodeID: "nOLDNODECNTRL"}
 			},
 			question: "This joins this machine to your tailnet as `cyfr`, after removing its current tailnet identity, `old.tail1234.ts.net`, which the Tailscale admin console still lists until you remove it there; certificate names are public.\n",
-			want:     "The change was not confirmed. This machine's tailnet identity `old.tail1234.ts.net` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `cyfr.tail1234.ts.net`, and how this home is reached was not changed",
+			want:     "The change was not confirmed. This machine's tailnet identity `old.tail1234.ts.net` was removed, and the Tailscale admin console still lists it until you remove it there; the machine joined your tailnet as `cyfr.tail1234.ts.net`, and how CYFR is reached was not changed",
 		},
 		// A restore leaves the machine's state and its last join as they
 		// were, so .env can name machine A while the engine knows B: the
@@ -686,10 +686,10 @@ func TestAccessTailnetServesAClosedHomeAgain(t *testing.T) {
 		t.Fatalf("cyfr access tailnet answered %v\n%s", err, out.String())
 	}
 	for _, want := range []string{
-		"Tailscale Serve is closed, so this home answers on this machine only. This checks the machine again and serves the home on your tailnet at https://cyfr.tail1234.ts.net:\n",
+		"Tailscale Serve is closed, so CYFR answers on this machine only. This checks the machine again and serves CYFR on your tailnet at https://cyfr.tail1234.ts.net:\n",
 		"  Address: https://cyfr.tail1234.ts.net\n",
 		"Make this change? (yes/no)",
-		"Done. This home is reached as:\n",
+		"Done. CYFR is reached as:\n",
 		"Tailscale now:\n  Serve: open\n",
 	} {
 		if !strings.Contains(out.String(), want) {

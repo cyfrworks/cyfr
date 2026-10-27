@@ -22,7 +22,7 @@ var addressChanges = []string{
 	"Passkeys made at the old address stop working. Each person registers one at the new address, which an administrator authorizes as today.",
 	"Pair every device again.",
 	"Update the redirect address in OAuth apps you registered (vault credentials, an OIDC issuer), the URL your webhook senders call, CLI contexts and MCP clients.",
-	"Other homes and devices that saved the old address need the new one.",
+	"Every other CYFR and device that saved the old address needs the new one.",
 }
 
 // envState is .env as an operation reads it: the head it holds, or the

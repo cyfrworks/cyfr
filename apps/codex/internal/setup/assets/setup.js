@@ -10,16 +10,16 @@
   const token = location.hash.slice(1);
   const answers = { mode: "", domain: "", acme_email: "", email: "" };
   const stepNames = {
-    files: () => "Getting the home's files",
+    files: () => "Getting CYFR's files",
     settings: () => "Writing its settings",
     access: (mode) => (mode === "public" ? "Setting up its public address" : "Joining your tailnet"),
-    images: () => "Downloading the home",
+    images: () => "Downloading CYFR",
   };
-  // The start step names the mode it starts the home in.
+  // The start step names the mode it starts CYFR in.
   const startNames = {
-    local: "Starting the home on this device only",
-    tailnet: "Starting the home on your tailnet",
-    public: "Starting the home at its public address",
+    local: "Starting CYFR on this device only",
+    tailnet: "Starting CYFR on your tailnet",
+    public: "Starting CYFR at its public address",
   };
   let screen = "welcome";
   let phase = "answering";
@@ -119,7 +119,7 @@
     list.replaceChildren(
       ...steps.map((step, i) => {
         const li = document.createElement("li");
-        li.textContent = step === "start" ? startNames[state.starting] || "Starting the home" : (stepNames[step] || (() => step))(state.mode);
+        li.textContent = step === "start" ? startNames[state.starting] || "Starting CYFR" : (stepNames[step] || (() => step))(state.mode);
         li.className = i < current ? "done" : i === current ? "current" : "";
         return li;
       }),

@@ -20,11 +20,11 @@
   <section data-screen="welcome" hidden>
     <img class="logo" src="/logo.png" alt="The CYFR capybara">
     <h1>Welcome to CYFR</h1>
-    <button type="button" class="primary" data-go="how">Set up your home</button>
+    <button type="button" class="primary" data-go="how">Set up CYFR</button>
   </section>
 
   <section data-screen="how" hidden>
-    <h1>How will you reach this home?</h1>
+    <h1>How will you reach CYFR?</h1>
     <button type="button" class="choice" data-mode="tailnet">
       <span class="label">My phone and laptop, via Tailscale</span>
       <span class="badge">Recommended</span>
@@ -40,7 +40,7 @@
 
   <section data-screen="public" hidden>
     <h1>A public domain</h1>
-    <label for="domain">The domain this home is reached at; its DNS names this machine</label>
+    <label for="domain">The domain CYFR is reached at; its DNS names this machine</label>
     <input id="domain" type="text" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="cyfr.example.com">
     <label for="acme-email">Email for the certificate authority's notices (optional)</label>
     <input id="acme-email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false">
@@ -51,7 +51,7 @@
 
   <section data-screen="email" hidden>
     <h1>Your email</h1>
-    <label for="email">The email you sign in with. It makes you this home's administrator.</label>
+    <label for="email">The email you sign in with. It makes you this CYFR's administrator.</label>
     <input id="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" required placeholder="you@example.com">
     <p class="sentence" role="alert" data-error="email"></p>
     <button type="button" class="primary" data-action="start">Start</button>
@@ -59,7 +59,7 @@
   </section>
 
   <section data-screen="progress" hidden>
-    <h1>Setting up your home</h1>
+    <h1>Setting up CYFR</h1>
     <ol class="steps" data-steps></ol>
     <p class="joined" data-joined hidden></p>
     <div class="approval" data-approval hidden>
@@ -69,7 +69,7 @@
         <p class="link" data-link></p>
         <button type="button" class="copy" data-copy="[data-link]">Copy link</button>
       </div>
-      <label for="name">This machine's name on your tailnet, part of the home's address; certificate names are public</label>
+      <label for="name">This machine's name on your tailnet, part of CYFR's address; certificate names are public</label>
       <div class="row">
         <input id="name" type="text" autocomplete="off" autocapitalize="none" spellcheck="false">
         <button type="button" data-action="rename">Use this name</button>
@@ -89,14 +89,14 @@
 
   <section data-screen="done" hidden>
     <img class="logo small" src="/logo.png" alt="">
-    <h1>Your home is ready</h1>
+    <h1>CYFR is ready</h1>
     <div class="copyrow">
       <p class="address" data-address></p>
       <button type="button" class="copy" data-copy="[data-address]">Copy address</button>
     </div>
     <p class="sentence" data-sentence></p>
-    <p data-tailnet hidden>This address opens on your phone and laptop on your tailnet, and on this device in a browser that uses this home's proxy at 127.0.0.1:1055.</p>
-    <button type="button" class="primary" data-action="open">Open your home</button>
+    <p data-tailnet hidden>This address opens on your phone and laptop on your tailnet, and on this device in a browser that uses CYFR's proxy at 127.0.0.1:1055.</p>
+    <button type="button" class="primary" data-action="open">Open Aqua</button>
   </section>
 
   <section data-screen="failed" hidden>

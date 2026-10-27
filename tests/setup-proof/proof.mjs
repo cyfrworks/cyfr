@@ -63,7 +63,7 @@ try {
   const heading = (name) => page.getByRole("heading", { name, exact: true });
 
   await page.goto(address);
-  await button("Set up your home").waitFor();
+  await button("Set up CYFR").waitFor();
   const logo = await page.waitForFunction(() => {
     const img = document.querySelector('[data-screen="welcome"] img.logo');
     return img && img.complete && img.naturalWidth > 0 ? img.naturalWidth : 0;
@@ -76,13 +76,13 @@ try {
     const desktop = await browser.newContext({ viewport: { width: 1280, height: 1600 } });
     const tall = await desktop.newPage();
     await tall.goto(address);
-    await tall.getByRole("button", { name: "Set up your home", exact: true }).waitFor();
+    await tall.getByRole("button", { name: "Set up CYFR", exact: true }).waitFor();
     const top = await tall.evaluate(() => document.querySelector('[data-screen="welcome"]').getBoundingClientRect().top);
     await desktop.close();
     check("a 1280×1600 window holds the welcome below a third of its height", top > 1600 / 3, { top });
   }
-  await button("Set up your home").tap();
-  await heading("How will you reach this home?").waitFor();
+  await button("Set up CYFR").tap();
+  await heading("How will you reach CYFR?").waitFor();
   {
     const first = await page.locator("button.choice").first().innerText();
     check("Tailscale is the recommended choice, first", first.includes("My phone and laptop, via Tailscale") && first.includes("Recommended"), { first });
@@ -97,14 +97,14 @@ try {
   await button("Start").tap();
   await page.getByText("Type the one email you sign in with").waitFor();
   check("a start without an email is refused on the page", await heading("Your email").isVisible());
-  await page.getByLabel("The email you sign in with. It makes you this home's administrator.").fill("operator@example.com");
+  await page.getByLabel("The email you sign in with. It makes you this CYFR's administrator.").fill("operator@example.com");
   await screen("email");
   await button("Start").tap();
-  await heading("Setting up your home").waitFor();
+  await heading("Setting up CYFR").waitFor();
   await screen("progress");
 
   if (kind === "local") {
-    await heading("Your home is ready").waitFor({ timeout: 600_000 });
+    await heading("CYFR is ready").waitFor({ timeout: 600_000 });
     const shown = await page.locator('[data-screen="done"] [data-address]').innerText();
     check("the Done page names the home at localhost", shown === `http://localhost:${homePort}`, { shown });
     check("the Done page says nothing more for a home on this device", !(await page.locator('[data-screen="done"] [data-tailnet]').isVisible()));
@@ -141,10 +141,10 @@ try {
     check("the stand-in approved the machine", approved.name === "proofhome.proof.ts.net", { approved });
     await page.getByText(`This machine is on your tailnet as ${approved.name}.`).waitFor({ timeout: 120_000 });
     await screen("joined");
-    await heading("Your home is ready").waitFor({ timeout: 600_000 });
+    await heading("CYFR is ready").waitFor({ timeout: 600_000 });
     const shown = await page.locator('[data-screen="done"] [data-address]').innerText();
     check("the Done page names the home's ts.net address", shown === `https://${approved.name}`, { shown });
-    check("the Done page says where that address opens", await page.getByText("This address opens on your phone and laptop on your tailnet, and on this device in a browser that uses this home's proxy at 127.0.0.1:1055.").isVisible());
+    check("the Done page says where that address opens", await page.getByText("This address opens on your phone and laptop on your tailnet, and on this device in a browser that uses CYFR's proxy at 127.0.0.1:1055.").isVisible());
     await screen("done");
     check("Copy address puts the home's address on the clipboard", (await copied("Copy address")) === shown);
     await page.waitForTimeout(4_000);

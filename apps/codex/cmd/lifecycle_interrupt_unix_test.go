@@ -48,7 +48,7 @@ func TestUpInterruptHoldsTheLockUntilComposeEnds(t *testing.T) {
 	if holder := s.engine.held(); holder != "up" {
 		t.Fatalf("cyfr up released its lock before compose ended (held by %q)", holder)
 	}
-	if err := homeStep(context.Background(), io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "Another cyfr command holds this home (`up`)") {
+	if err := homeStep(context.Background(), io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "Another cyfr command holds CYFR's lock (`up`)") {
 		t.Fatalf("an update was admitted inside the interrupted start: %v", err)
 	}
 	s.answer("up.release", "")

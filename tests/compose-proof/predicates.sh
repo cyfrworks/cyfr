@@ -140,7 +140,7 @@ def sentences(head):
     email = f"Certificate email: {head['acme_email']}" if head.get("acme_email") else email
     return [who, f"Address: {address}", email, ports]
 old, new = json.loads(old_text), json.loads(new_text)
-block = ["This changes how this home is reached:"]
+block = ["This changes how CYFR is reached:"]
 for before, after in zip(sentences(old), sentences(new)):
     label, _, was = before.partition(": ")
     _, _, now = after.partition(": ")

@@ -168,8 +168,8 @@ for i, s in enumerate(re.findall(r"\"(?:[^\"\\\\]|\\\\.)*\"", m.group(1)), 1):
     print(f"  {i}. {json.loads(s)}")' "$ROOT/apps/codex/internal/access/switch.go")"
 cat >"$scratch/preview" <<LOG
 \$ cyfr access tailnet
-This changes how this home is reached:
-  Who can reach this home: your devices on Tailscale, and people you share this machine with → your devices on Tailscale, and people you share this machine with
+This changes how CYFR is reached:
+  Who can reach CYFR: your devices on Tailscale, and people you share this machine with → your devices on Tailscale, and people you share this machine with
   Address: https://cyfr.proof.ts.net → https://cyfr-1.proof.ts.net
   Certificate email: none → none
   Ports opened on this machine: none → none
@@ -190,7 +190,7 @@ mutate_preview 's|  Ports opened on this machine: none → none|  Ports opened o
 mutate_preview '/  Tailnet machine:/d' no-machine "the tailnet machine's change not shown"
 mutate_preview 's|(nB)|(nC)|' other-node "another new node id shown"
 mutate_preview 's|cyfr.proof.ts.net (nA)|cyfr.proof.ts.net (nB)|' same-node "the old node shown as the new one"
-mutate_preview 's|Who can reach this home: your devices|Who can reach this home: anyone|' who "another old audience shown"
+mutate_preview 's|Who can reach CYFR: your devices|Who can reach CYFR: anyone|' who "another old audience shown"
 mutate_preview '/^  2\. /d' step "an address-change step dropped"
 mutate_preview '/^Your CYFR identity/a\  5. An extra step.' extra "a line added to the preview"
 # shellcheck disable=SC2016

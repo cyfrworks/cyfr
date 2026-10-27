@@ -39,7 +39,7 @@ func (c *Context) Credential() string {
 func DefaultConfigDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("get home dir: %w", err)
+		return "", fmt.Errorf("get home directory: %w", err)
 	}
 	return filepath.Join(home, ".cyfr"), nil
 }
