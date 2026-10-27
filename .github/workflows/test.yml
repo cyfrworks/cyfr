@@ -930,7 +930,8 @@ jobs:
           scripts/fetch-prebuilt-binaries.sh
       # The auth domain holds nothing of the domains and surfaces above it:
       # a checkout with only the lock, the contracts, Arca, Sanctum, the
-      # fetched deps and the CYFR_DATABASE parse compiles it with warnings
+      # fetched deps, the protocol vectors its registry tests answer from
+      # and the CYFR_DATABASE parse compiles it with warnings
       # as errors and runs its suite. Zero Ecto of its own — every row it
       # reads it reads through an Arca facade. What each island may declare
       # in the umbrella is a row of `Cyfr.Boundaries`, asserted against
@@ -939,10 +940,11 @@ jobs:
         run: |
           set -euo pipefail
           island="$RUNNER_TEMP/sanctum-island"
-          mkdir -p "$island/apps" "$island/config"
+          mkdir -p "$island/apps" "$island/config" "$island/tests"
           cp mix.lock "$island/"
           cp -R apps/prima apps/arca apps/sanctum "$island/apps/"
           cp -R deps wit "$island/"
+          cp -R tests/fixtures "$island/tests/"
           cp config/database_choice.exs "$island/config/"
           cd "$island/apps/sanctum"
           mix compile --warnings-as-errors
