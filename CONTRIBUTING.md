@@ -67,7 +67,11 @@ missing or wrong header fails CI.
   green: `scripts/release.sh` reads HEAD's check runs through `gh` before it
   tags HEAD, or HEAD plus a bump commit holding the version lines alone,
   which the tag's own workflow checks again before it publishes; it runs
-  the gate's close here only with `--gate`. The close,
+  the gate's close here only with `--gate`. Right before it tags it runs
+  the dependency audits again (`scripts/dependency-audit.sh`, the same
+  ones CI runs), because the advisory feeds they read change
+  independently of the tree, and a tag whose own run fails them publishes
+  nothing. The close,
   `scripts/heavy-check.sh -t 10800 -- scripts/commit-gate.sh --close`, holds
   the host for over an hour and is a tool for working offline or for
   reproducing a failing CI job here, not a requirement. The gate's header
