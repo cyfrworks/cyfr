@@ -481,6 +481,23 @@ defmodule Arca.CronScheduleTest do
     end
   end
 
+  describe "a deleted row" do
+    test "is not updated or deleted again: each answers :not_found and writes nothing",
+         %{actor: actor} do
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "gone"}))
+      assert {:ok, %{status: "deleted"}} = CronSchedule.soft_delete(actor, schedule.id)
+      before = CronSchedule.get_for_daemon(schedule.id)
+
+      assert {:error, :not_found} = CronSchedule.soft_delete(actor, schedule.id)
+
+      for attrs <- [%{status: "paused"}, %{status: "active"}, %{name: "back"}] do
+        assert {:error, :not_found} = CronSchedule.update(actor, schedule.id, attrs)
+      end
+
+      assert CronSchedule.get_for_daemon(schedule.id) == before
+    end
+  end
+
   describe "another athanor's actor" do
     test "naming a feed id reads, claims, accepts and removes nothing", %{
       actor: actor,
@@ -520,6 +537,17 @@ defmodule Arca.CronScheduleTest do
                CronSchedule.list_feeds(actor)
 
       assert id == feed.id
+    end
+
+    test "reads no row through get_held/2, while a member holding its slot does",
+         %{actor: actor, slot: slot} do
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "held"}))
+      assert {:ok, %{id: id}} = CronSchedule.get_held(actor, schedule.id)
+      assert id == schedule.id
+
+      take_over!(slot)
+      assert Arca.ControlPlane.held?()
+      assert {:error, :not_owner} = CronSchedule.get_held(actor, schedule.id)
     end
 
     test "creates no schedule", %{actor: actor, slot: slot} do

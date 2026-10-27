@@ -110,6 +110,11 @@ defmodule Compendium.Cascade do
       {:ok, removed} ->
         announce_removed(actor, removed, schedule.status)
 
+      # Removed by another delete since the sweep listed it: that delete
+      # removed it and announced it.
+      {:error, :not_found} ->
+        :ok
+
       {:error, reason} ->
         Logger.warning(
           "[Compendium.Cascade] registration #{schedule.id} was not removed: " <>
@@ -120,17 +125,18 @@ defmodule Compendium.Cascade do
 
   # A schedule's removal is announced as the schedule tool's delete
   # announces one (`Opus.Schedules.Changes`, which this layer cannot
-  # reach): once, after the commit, with the row as it was, under the
-  # schedule's lock. A feed's row is not a schedule's.
+  # reach): by the delete whose write removed the live row, after its
+  # commit, with the row as it was, under the schedule's lock and only
+  # while this member holds its slot. A feed's row is not a schedule's.
   defp announce_removed(actor, %{kind: "schedule"} = removed, status_before) do
     Schedules.serialized(removed.id, fn ->
       payload =
         Schedules.new(actor, :removed, Schedules.row_fields(%{removed | status: status_before}))
 
-      case Cyfr.Bus.broadcast(actor, Cyfr.Bus.schedules(actor), payload) do
-        :ok ->
-          :ok
-
+      with {:ok, _held} <- Arca.CronSchedule.get_held(actor, removed.id),
+           :ok <- Cyfr.Bus.broadcast(actor, Cyfr.Bus.schedules(actor), payload) do
+        :ok
+      else
         {:error, reason} ->
           Logger.warning(
             "[Compendium.Cascade] removal of #{removed.id} not announced: #{inspect(reason)}"

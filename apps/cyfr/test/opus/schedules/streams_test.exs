@@ -16,6 +16,7 @@ defmodule Opus.Schedules.StreamsTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import Prima.Test.Wait
 
   alias Cyfr.Bus.{FeedRun, ScheduleRun, Schedules}
   alias Opus.Schedules.{Changes, Provider}
@@ -274,6 +275,63 @@ defmodule Opus.Schedules.StreamsTest do
     end
   end
 
+  describe "writes that race a delete" do
+    test "of two deletes that both found the live row, one removes and announces it, the other is not found",
+         %{ctx: ctx, actor: actor} do
+      row = stored!(actor, "raced-delete")
+      delete = %{"action" => "delete", "schedule_id" => row.id}
+      {late, worker} = held_after_first_read(fn -> call(ctx, delete) end)
+
+      assert {:ok, %{deleted: true}} = call(ctx, delete)
+      assert_receive %Schedules{kind: :removed, schedule_id: id}
+      assert id == row.id
+
+      send(worker, :continue)
+      assert {:error, "Schedule not found: " <> _} = Task.await(late, 10_000)
+      refute_receive %Schedules{}, 500
+    end
+
+    test "a pause that found the live row before a delete changes nothing and announces nothing after removed",
+         %{ctx: ctx, actor: actor} do
+      row = stored!(actor, "raced-pause")
+
+      {late, worker} =
+        held_after_first_read(fn ->
+          call(ctx, %{"action" => "pause", "schedule_id" => row.id})
+        end)
+
+      assert {:ok, %{deleted: true}} = call(ctx, %{"action" => "delete", "schedule_id" => row.id})
+      assert_receive %Schedules{kind: :removed}
+
+      send(worker, :continue)
+      assert {:error, "Schedule not found: " <> _} = Task.await(late, 10_000)
+      assert {:ok, %{status: "deleted"}} = Arca.CronSchedule.get(actor, row.id)
+      refute_receive %Schedules{}, 500
+    end
+
+    test "a cascade that listed the live row before a delete announces no second removal",
+         %{ctx: ctx, actor: actor} do
+      row = stored!(actor, "raced-cascade", "reagent:local.review:1.0.0")
+
+      {late, worker} =
+        held_after_first_read(fn ->
+          Compendium.Cascade.name_removed(ctx, %{
+            name: "review",
+            component_type: "reagent",
+            publisher: "local"
+          })
+        end)
+
+      assert {:ok, %{deleted: true}} = call(ctx, %{"action" => "delete", "schedule_id" => row.id})
+      assert_receive %Schedules{kind: :removed}
+
+      send(worker, :continue)
+      assert :ok = Task.await(late, 10_000)
+      assert {:ok, %{status: "deleted"}} = Arca.CronSchedule.get(actor, row.id)
+      refute_receive %Schedules{}, 500
+    end
+  end
+
   describe "a member that lost its slot" do
     setup do
       keys = [
@@ -327,11 +385,92 @@ defmodule Opus.Schedules.StreamsTest do
       assert {:error, :not_owner} = call(ctx, create_args("fenced-again"))
       refute_receive %Schedules{}, 200
     end
+
+    test "a write that committed before the slot was taken over is not announced after it",
+         %{ctx: ctx, actor: actor, slot: slot} do
+      row = stored!(actor, "fenced-announcement")
+      parent = self()
+
+      # The schedule's publication lock is held, so the pause commits and
+      # then waits on it to announce.
+      holder =
+        Task.async(fn ->
+          Schedules.serialized(row.id, fn ->
+            send(parent, :publication_locked)
+
+            receive do
+              :release -> :ok
+            after
+              10_000 -> raise "the publication lock was never released"
+            end
+          end)
+        end)
+
+      assert_receive :publication_locked
+      paused = Task.async(fn -> call(ctx, %{"action" => "pause", "schedule_id" => row.id}) end)
+
+      wait_until(
+        fn -> match?({:ok, %{status: "paused"}}, Arca.CronSchedule.get(actor, row.id)) end,
+        5_000,
+        "the pause to commit"
+      )
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+          set: [owner: slot.node <> "#boot_b", generation: slot.generation + 1]
+        )
+
+      # The cached standing still says this member holds its slot.
+      assert Arca.ControlPlane.held?()
+
+      send(holder.pid, :release)
+      Task.await(holder, 10_000)
+      assert {:ok, %{status: "paused"}} = Task.await(paused, 10_000)
+      refute_receive %Schedules{}, 500
+    end
   end
 
   # ---------------------------------------------------------------------------
 
   defp call(ctx, args), do: Provider.handle("schedule", ctx, args)
+
+  # `fun` run in a task held right after its first read of a schedule row,
+  # with the process to release it (`:continue`).
+  defp held_after_first_read(fun) do
+    parent = self()
+    handler = {__MODULE__, make_ref()}
+    on_exit(fn -> :telemetry.detach(handler) end)
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, meta, _config ->
+          if Process.get(:hold_first_schedule_read) && String.starts_with?(meta.query, "SELECT") &&
+               String.contains?(meta.query, "cron_schedules") do
+            Process.delete(:hold_first_schedule_read)
+            send(parent, {:schedule_read, self()})
+
+            receive do
+              :continue -> :ok
+            after
+              10_000 -> raise "the held read was never released"
+            end
+          end
+        end,
+        nil
+      )
+
+    task =
+      Task.async(fn ->
+        Process.put(:hold_first_schedule_read, true)
+        fun.()
+      end)
+
+    assert_receive {:schedule_read, worker}, 5_000
+    {task, worker}
+  end
 
   defp create_args(name) do
     %{
@@ -370,15 +509,15 @@ defmodule Opus.Schedules.StreamsTest do
     data
   end
 
-  defp stored!(actor, name) do
+  defp stored!(actor, name, reference \\ "reagent:local.test:1.0.0") do
     {:ok, row} =
       Arca.CronSchedule.create(actor, %{
         user_id: actor.user_id,
         athanor_id: actor.athanor_id,
         name: name,
         cron_expression: "0 * * * *",
-        reference: "reagent:local.test:1.0.0",
-        resolved_reference: "reagent:local.test:1.0.0",
+        reference: reference,
+        resolved_reference: reference,
         input: Jason.encode!(%{"secret" => @private_input}),
         next_run_at: DateTime.add(DateTime.utc_now(), 3_600, :second),
         profile_id: "prof-cron",

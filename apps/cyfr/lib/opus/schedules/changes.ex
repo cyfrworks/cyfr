@@ -11,10 +11,14 @@ defmodule Opus.Schedules.Changes do
   error recorded, an occurrence's start and its run's end) and reads the
   row again rather than trusting what the write answered, which was read
   before its commit. A row of kind `feed`, a deleted row and a row that
-  no longer reads announce nothing. `removed/3` follows a delete, once,
-  with the row as it was. Both run under the schedule's lock
-  (`Cyfr.Bus.Schedules.serialized/2`), so once `removed` has left, a later
-  `changed` reads the deleted row and announces nothing.
+  no longer reads announce nothing. `removed/3` follows the one delete
+  whose write removed the live row (`Arca.CronSchedule.soft_delete/2`
+  answers any other `:not_found`), with the row as it was. Both run under
+  the schedule's lock (`Cyfr.Bus.Schedules.serialized/2`), so once
+  `removed` has left, a later `changed` reads the deleted row and
+  announces nothing. Under the lock the row is read only while this
+  member holds its slot (`Arca.CronSchedule.get_held/2`): a member that
+  lost it announces nothing, whatever it wrote before.
   """
 
   require Logger
@@ -25,11 +29,14 @@ defmodule Opus.Schedules.Changes do
   @spec changed(Prima.Actor.t(), String.t()) :: :ok
   def changed(%Prima.Actor{} = actor, schedule_id) when is_binary(schedule_id) do
     Schedules.serialized(schedule_id, fn ->
-      case Arca.CronSchedule.get(actor, schedule_id) do
+      case Arca.CronSchedule.get_held(actor, schedule_id) do
         {:ok, %{kind: "schedule", status: status} = row} when status != "deleted" ->
           broadcast(actor, payload(actor, :changed, row))
 
         {:ok, _feed_or_deleted} ->
+          :ok
+
+        {:error, :not_owner} ->
           :ok
 
         {:error, reason} ->
@@ -49,7 +56,15 @@ defmodule Opus.Schedules.Changes do
   @spec removed(Prima.Actor.t(), map(), String.t()) :: :ok
   def removed(%Prima.Actor{} = actor, %{id: id, kind: "schedule"} = row, status_before) do
     Schedules.serialized(id, fn ->
-      broadcast(actor, payload(actor, :removed, %{row | status: status_before}))
+      case Arca.CronSchedule.get_held(actor, id) do
+        {:ok, _held} ->
+          broadcast(actor, payload(actor, :removed, %{row | status: status_before}))
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Opus.Schedules.Changes] removal of #{id} not announced: #{inspect(reason)}"
+          )
+      end
     end)
   end
 
