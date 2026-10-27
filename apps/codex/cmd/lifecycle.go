@@ -394,7 +394,7 @@ func refuseUndeclaredRestore() error {
 
 func init() {
 	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml even if they already exist (never replaces .env or .env.example)")
-	initCmd.Flags().String("access", "", "How a new home is reached: local, tailnet or public (asked on a terminal; local otherwise)")
+	initCmd.Flags().String("access", "", "How the new CYFR is reached: local, tailnet or public (asked on a terminal; local otherwise)")
 	addAccessFlags(initCmd)
 	initCmd.Flags().Bool("no-pull", false, "Do not pull the stack's images")
 	rootCmd.AddCommand(initCmd)
@@ -406,15 +406,15 @@ var initCmd = &cobra.Command{
 	Use:     "init",
 	Short:   "Scaffold a CYFR project, choose how it is reached and mint the stack's keys into .env",
 	GroupID: "server",
-	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus-runtime (the runtime that runs components), locus-builds (the builds service), locus-backends (stdio MCP servers) and the proxy of the way the home is reached, tailscale for a tailnet home and caddy for a public one.
+	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus-runtime (the runtime that runs components), locus-builds (the builds service), locus-backends (stdio MCP servers) and the proxy of the way CYFR is reached, tailscale for tailnet access and caddy for public access.
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
-How the home is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as the home's administrator. .env is written for this computer only, with every key; then a tailnet home joins your tailnet (the link it prints approves the machine, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves the home reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: the home is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional). Given no email, no one is authorized to use the home yet, and init says so: CYFR_PLATFORM_ADMIN_EMAILS in .env names its administrators.
+How CYFR is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as CYFR's administrator. .env is written for this computer only, with every key; then, for tailnet access, the machine joins your tailnet (the link it prints approves the machine, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves CYFR reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: access is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional). Given no email, no one is authorized to use CYFR yet, and init says so: CYFR_PLATFORM_ADMIN_EMAILS in .env names its administrators.
 
 .env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
-Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how the home is reached, which 'cyfr access' changes; a .env that does not say how its home is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml.`,
+Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml.`,
 	Example: `  cyfr init
   cyfr init --no-interactive --access public --domain cyfr.example.com
   cyfr init --force
@@ -671,7 +671,7 @@ database_path: ./data/cyfr.db
 	case !envCreated && !envExisted && choice.mode != access.ModeLocal:
 		// The answers were asked for a release's .env.example that its
 		// download did not lay down.
-		accessErr = fmt.Errorf("the home was not set up to be reached as answered (%s): there is no .env.example to write .env from", choice.mode)
+		accessErr = fmt.Errorf("CYFR was not set up to be reached as answered (%s): there is no .env.example to write .env from", choice.mode)
 	}
 
 	// Warm-pull the images docker-compose.yml starts with the head's
@@ -717,7 +717,7 @@ database_path: ./data/cyfr.db
 	fmt.Fprintln(out, "CYFR project initialized.")
 	if releaseBuild {
 		if composeExists {
-			fmt.Fprintln(out, "  docker-compose.yml ready (cyfr, locus-runtime, locus-builds, locus-backends; tailscale for a tailnet home, caddy for a public one)")
+			fmt.Fprintln(out, "  docker-compose.yml ready (cyfr, locus-runtime, locus-builds, locus-backends; tailscale for tailnet access, caddy for public access)")
 		}
 		if caddyfileExists {
 			fmt.Fprintln(out, "  Caddyfile ready")
@@ -749,7 +749,7 @@ database_path: ./data/cyfr.db
 	}
 	fmt.Fprintln(out, "  data/, aqua/ created")
 	if envCreated {
-		fmt.Fprintln(out, "  This home is reached as:")
+		fmt.Fprintln(out, "  CYFR is reached as:")
 		for _, line := range access.Describe(head).Sentences() {
 			fmt.Fprintln(out, "    "+line)
 		}
@@ -776,7 +776,7 @@ database_path: ./data/cyfr.db
 	if envCreated {
 		fmt.Fprintln(out, "  Prism:           "+hyperlink(out, access.Describe(head).Address+"/"))
 	} else {
-		fmt.Fprintln(out, "  `cyfr access status` shows how this home is reached.")
+		fmt.Fprintln(out, "  `cyfr access status` shows how CYFR is reached.")
 	}
 	return accessErr
 }
@@ -784,7 +784,7 @@ database_path: ./data/cyfr.db
 // leftLocal is what a new home whose mode was not applied is told: it is
 // reached from this computer only, and `cyfr access <mode>` changes that.
 func leftLocal(mode string) string {
-	return fmt.Sprintf("This home is set up to be reached from this computer only; `cyfr access %s` changes that", mode)
+	return fmt.Sprintf("CYFR is set up to be reached from this computer only; `cyfr access %s` changes that", mode)
 }
 
 // refuseExistingAccess refuses an existing .env init does not complete: one
@@ -825,7 +825,7 @@ func existingAccess(path string) (string, error) {
 // existingHomeRefusal refuses to change how an existing home, reached as
 // current, is reached, for command, which sets up a new one.
 func existingHomeRefusal(command, current string) error {
-	return fmt.Errorf(".env says this home is reached as %s, and %s leaves how an existing home is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it", current, command)
+	return fmt.Errorf(".env says CYFR is reached as %s, and %s leaves how an existing CYFR is reached alone. Nothing was changed. Run `cyfr access <mode>` to change it", current, command)
 }
 
 // checkInitAccess refuses access flags that make no home before anything is
@@ -835,7 +835,7 @@ func checkInitAccess(o initOptions) error {
 	switch o.mode {
 	case "":
 		if o.domain != "" || o.acmeEmail != "" || o.keyFile != "" || o.hostname != "" {
-			return errors.New("--domain, --acme-email, --tailscale-auth-key-file and --hostname say how a new home is reached only beside --access: --access public with a domain and an email, --access tailnet with a key file and a name. Nothing was changed")
+			return errors.New("--domain, --acme-email, --tailscale-auth-key-file and --hostname say how a new CYFR is reached only beside --access: --access public with a domain and an email, --access tailnet with a key file and a name. Nothing was changed")
 		}
 		return nil
 	case access.ModeLocal, access.ModeTailnet, access.ModePublic:
@@ -872,10 +872,10 @@ func chooseAccess(ctx context.Context, o initOptions, interactive bool, r *bufio
 	if !interactive {
 		switch {
 		case c.mode == access.ModeTailnet && c.keyFile == "":
-			fmt.Fprintln(out, "--access tailnet joins a tailnet with no one to approve the machine only with --tailscale-auth-key-file, so this home is reached from this computer only; `cyfr access tailnet` joins it later.")
+			fmt.Fprintln(out, "--access tailnet joins a tailnet with no one to approve the machine only with --tailscale-auth-key-file, so CYFR is reached from this computer only; `cyfr access tailnet` joins it later.")
 			c.mode = access.ModeLocal
 		case c.mode == access.ModePublic && c.domain == "":
-			fmt.Fprintln(out, "--access public needs --domain, so this home is reached from this computer only; `cyfr access public --domain <your domain>` changes that.")
+			fmt.Fprintln(out, "--access public needs --domain, so CYFR is reached from this computer only; `cyfr access public --domain <your domain>` changes that.")
 			c.mode = access.ModeLocal
 		case c.mode == "":
 			c.mode = access.ModeLocal
@@ -883,7 +883,7 @@ func chooseAccess(ctx context.Context, o initOptions, interactive bool, r *bufio
 		return c, nil
 	}
 	if c.mode == "" {
-		fmt.Fprintln(out, "How will you reach this home?")
+		fmt.Fprintln(out, "How will you reach CYFR?")
 		fmt.Fprintln(out, "  1. My devices, via Tailscale (recommended)")
 		fmt.Fprintln(out, "  2. A public domain, via Caddy")
 		fmt.Fprintln(out, "  3. This computer only")
@@ -903,7 +903,7 @@ func chooseAccess(ctx context.Context, o initOptions, interactive bool, r *bufio
 				// The end of the input is no answer, least of all
 				// consent to join a tailnet: the home is local, as
 				// --no-interactive leaves it.
-				fmt.Fprintln(out, "No answer was read, so this home is reached from this computer only; `cyfr access tailnet` or `cyfr access public --domain <your domain>` changes that.")
+				fmt.Fprintln(out, "No answer was read, so CYFR is reached from this computer only; `cyfr access tailnet` or `cyfr access public --domain <your domain>` changes that.")
 				c.mode = access.ModeLocal
 			default:
 				fmt.Fprintln(out, "Answer 1, 2 or 3.")
@@ -913,7 +913,7 @@ func chooseAccess(ctx context.Context, o initOptions, interactive bool, r *bufio
 	switch c.mode {
 	case access.ModeTailnet:
 		if c.hostname == "" {
-			fmt.Fprintln(out, "This machine's name on your tailnet is part of the home's address, and certificate names are public: anyone can read it in the certificate logs.")
+			fmt.Fprintln(out, "This machine's name on your tailnet is part of CYFR's address, and certificate names are public: anyone can read it in the certificate logs.")
 			hostname, err := ask(ctx, r, out, "Machine name", "cyfr")
 			if err != nil {
 				return c, err
@@ -922,7 +922,7 @@ func chooseAccess(ctx context.Context, o initOptions, interactive bool, r *bufio
 		}
 	case access.ModePublic:
 		for c.domain == "" {
-			answer, more, err := askLine(ctx, r, out, "The domain this home is reached at (its DNS names this machine)", "")
+			answer, more, err := askLine(ctx, r, out, "The domain CYFR is reached at (its DNS names this machine)", "")
 			if err != nil {
 				return c, err
 			}
@@ -932,7 +932,7 @@ func chooseAccess(ctx context.Context, o initOptions, interactive bool, r *bufio
 				c.domain = answer
 			}
 			if c.domain == "" && !more {
-				fmt.Fprintln(out, "No domain was given, so this home is reached from this computer only; `cyfr access public --domain <your domain>` changes that.")
+				fmt.Fprintln(out, "No domain was given, so CYFR is reached from this computer only; `cyfr access public --domain <your domain>` changes that.")
 				c.mode = access.ModeLocal
 				return c, nil
 			}
@@ -1043,7 +1043,7 @@ const projectGitignore = `# CYFR project — all runtime state (every athanor's 
 /data/
 # Snapshots cyfr update takes: each holds the keyring and the database.
 /backups/
-# How the home is reached, as cyfr keeps it: the stack's lock, the change
+# How CYFR is reached, as cyfr keeps it: the stack's lock, the change
 # in flight, its receipts and the tailnet's serve configuration.
 /.cyfr/
 .env
@@ -1167,13 +1167,13 @@ func readAnswer(r *bufio.Reader, def string) (string, bool) {
 
 var upCmd = &cobra.Command{
 	Use:     "up",
-	Short:   "Start the CYFR stack (cyfr, locus-runtime, locus-builds, locus-backends; the proxy of a tailnet or public home)",
+	Short:   "Start the CYFR stack (cyfr, locus-runtime, locus-builds, locus-backends; the proxy of tailnet or public access)",
 	GroupID: "server",
-	Long: `Start the CYFR stack with Docker Compose in detached mode, as .env says the home is reached. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
+	Long: `Start the CYFR stack with Docker Compose in detached mode, as .env says CYFR is reached. Requires a docker-compose.yml in the current directory (run 'cyfr init' first).
 
-The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way the home is reached: tailscale for a tailnet home (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for a public one (TLS on :80/:443).
+The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way CYFR is reached: tailscale for tailnet access (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for public access (TLS on :80/:443).
 
-cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how the home is reached, with the sentence the server would refuse it with, before anything starts. A tailnet home is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1.
+cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1.
 
 Exit status 3: cyfr started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do.`,
 	Example: `  cyfr up`,
@@ -1284,7 +1284,7 @@ var downCmd = &cobra.Command{
 	Use:     "down",
 	Short:   "Stop the CYFR stack",
 	GroupID: "server",
-	Long:    "Stop the CYFR stack and remove its containers: every service of the project, the proxy of a tailnet or public home and locus-builds included, whatever .env selects now, checked stopped before it reports. It takes the stack's lock first, so it never runs inside another cyfr command's start or change, and finishes a change an interrupted command left. The stack is the working directory's, started from its compose file and named after the directory, so a directory that holds no compose file is refused: nothing of a home started elsewhere is stopped from here.",
+	Long:    "Stop the CYFR stack and remove its containers: every service of the project, the proxy of tailnet or public access and locus-builds included, whatever .env selects now, checked stopped before it reports. It takes the stack's lock first, so it never runs inside another cyfr command's start or change, and finishes a change an interrupted command left. The stack is the working directory's, started from its compose file and named after the directory, so a directory that holds no compose file is refused: nothing of a CYFR started elsewhere is stopped from here.",
 	Example: "  cyfr down",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -1307,7 +1307,7 @@ var downCmd = &cobra.Command{
 // the stop reaches the project's containers by their label.
 func runDown(ctx context.Context, out io.Writer) error {
 	if !access.HasComposeFile(".") {
-		return fmt.Errorf("There is no stack in this directory, so nothing was stopped: it holds no compose file (%s). Run 'cyfr down' in the home's directory, the one that holds its docker-compose.yml", strings.Join(access.ComposeMainFiles, ", "))
+		return fmt.Errorf("There is no stack in this directory, so nothing was stopped: it holds no compose file (%s). Run 'cyfr down' in CYFR's directory, the one that holds its docker-compose.yml", strings.Join(access.ComposeMainFiles, ", "))
 	}
 	e, unlock, _, err := openLocked(ctx, "down", out)
 	if err != nil {

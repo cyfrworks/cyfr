@@ -294,7 +294,7 @@ func TestTailnetPreviewTakesTheMachineTheHomeHas(t *testing.T) {
 
 // rolledBackLocal is the sentence of a rollback whose old tailnet head
 // answers on this machine only, its machine another than .env's.
-const rolledBackLocalSentence = "This home could not start as anyone on the internet, who still has to sign in, at https://home.example.com (cyfr's health check failed). What it started was stopped and checked stopped, and the home was put back as before, your devices on Tailscale, and people you share this machine with, at https://cyfr.tail1234.ts.net, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access tailnet`, which offers to move the home to the machine's tailnet name."
+const rolledBackLocalSentence = "CYFR could not start as anyone on the internet, who still has to sign in, at https://home.example.com (cyfr's health check failed). What it started was stopped and checked stopped, and CYFR was put back as before, your devices on Tailscale, and people you share this machine with, at https://cyfr.tail1234.ts.net, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access tailnet`, which offers to move CYFR to the machine's tailnet name."
 
 // A switch that fails and rolls back to a head that answers on this
 // machine only is still a rollback: Outcome rolled_back, the change, its

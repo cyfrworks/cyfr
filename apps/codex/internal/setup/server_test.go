@@ -319,7 +319,7 @@ func TestListenBindsLoopbackAlone(t *testing.T) {
 	}
 	page, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	if res.StatusCode != http.StatusOK || !strings.Contains(string(page), "How will you reach this home?") {
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(page), "How will you reach CYFR?") {
 		t.Errorf("the page answered %d", res.StatusCode)
 	}
 }

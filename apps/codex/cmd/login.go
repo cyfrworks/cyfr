@@ -35,10 +35,10 @@ var loginCmd = &cobra.Command{
 	Use:     "login",
 	Short:   "Sign in by approving this command line in Prism",
 	GroupID: "identity",
-	Long: `Sign this command line in to the home by approving it in Prism.
+	Long: `Sign this command line in to CYFR by approving it in Prism.
 
 cyfr login prints a link and a code, and waits. Open the link in a browser
-signed in to the home, on this machine or another device: Prism asks you to
+signed in to CYFR, on this machine or another device: Prism asks you to
 approve the command line on this machine and shows the code. Check that it
 matches the one printed here, approve, and confirm with your passkey or a
 fresh sign-in. The command line then holds a session of its own, listed
@@ -55,7 +55,7 @@ context for it first (cyfr context add <name> <url>). A context changed to
 another address while the command waits keeps nothing: the sign-in is
 withdrawn.`,
 	Example: `  cyfr login
-  cyfr login --context home
+  cyfr login --context work
   cyfr login --provider google`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		target, err := sessionContext("save the session under")
@@ -130,7 +130,7 @@ withdrawn.`,
 				// other's address.
 				client.SessionID = sessionID
 				if _, lerr := client.CallTool(cmd.Context(), ops.Session, ops.SessionLogoutArgs{}); lerr != nil {
-					return fmt.Errorf("Signed in, but nothing was saved (%w), and the home could not end "+
+					return fmt.Errorf("Signed in, but nothing was saved (%w), and CYFR could not end "+
 						"the session (%v): it may still be active, so revoke the command line under "+
 						"Devices in Prism", err, lerr)
 				}

@@ -30,15 +30,15 @@ func init() {
 
 var setupCmd = &cobra.Command{
 	Use:     "setup",
-	Short:   "Set up a new home from pages on this machine's screen: how it is reached, your email, then the start",
+	Short:   "Set up CYFR from pages on this machine's screen: how it is reached, your email, then the start",
 	GroupID: "server",
-	Long: `Set up a new home in the current directory from pages shown on this machine's own screen, the face of 'cyfr init' for a device with a touch screen and no keyboard. It serves the pages on 127.0.0.1, at a port of its own, before anything of the stack runs, prints their address and writes it to .cyfr/setup.url while it serves them, then, on a machine with a display, opens them in the default browser as 'cyfr open' does. --no-open leaves that to a device's launcher, which reads the address from .cyfr/setup.url; a Linux machine with neither DISPLAY nor WAYLAND_DISPLAY set has no display. Nothing off this machine reaches them: the address carries a token of this run, and every request must come from the pages themselves.
+	Long: `Set up a new CYFR in the current directory from pages shown on this machine's own screen, the face of 'cyfr init' for a device with a touch screen and no keyboard. It serves the pages on 127.0.0.1, at a port of its own, before anything of the stack runs, prints their address and writes it to .cyfr/setup.url while it serves them, then, on a machine with a display, opens them in the default browser as 'cyfr open' does. --no-open leaves that to a device's launcher, which reads the address from .cyfr/setup.url; a Linux machine with neither DISPLAY nor WAYLAND_DISPLAY set has no display. Nothing off this machine reaches them: the address carries a token of this run, and every request must come from the pages themselves.
 
-The pages ask how the home is reached (your phone and laptop via Tailscale, the recommended choice; only this device; or, under Advanced, a public domain with an optional certificate email) and the email of the home's administrator, then start: they run what 'cyfr init' runs, the same steps in the same order, then what 'cyfr up' runs. A tailnet home's join shows its approval link as a QR code and as text with a Copy button, under it the machine's name (cyfr unless changed there), and waits for the approval; a join that fails, expires or is cancelled leaves the home reached from this device only, and the pages offer to try the join again or to start the home on this device only. A start that fails shows why, and offers to try again or, for a home reached from other devices, to start it on this device only. Each refusal is the command line's own sentence.
+The pages ask how CYFR is reached (your phone and laptop via Tailscale, the recommended choice; only this device; or, under Advanced, a public domain with an optional certificate email) and the email of CYFR's administrator, then start: they run what 'cyfr init' runs, the same steps in the same order, then what 'cyfr up' runs. For tailnet access, the join shows its approval link as a QR code and as text with a Copy button, under it the machine's name (cyfr unless changed there), and waits for the approval; a join that fails, expires or is cancelled leaves CYFR reached from this device only, and the pages offer to try the join again or to start CYFR on this device only. A start that fails shows why, and offers to try again or, for CYFR reached from other devices, to start it on this device only. Each refusal is the command line's own sentence.
 
-Once the home is up, the pages show its address, with a Copy button, and move the browser there, apart from a tailnet address, which a browser on this device reaches only through the home's SOCKS5 proxy on 127.0.0.1:1055; the program stops serving the pages once they have read that, or a minute after. Run in a project whose .env exists, it refuses as 'cyfr init' refuses to change how an existing home is reached, serving nothing; 'cyfr access <mode>' changes that. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
+Once CYFR is up, the pages show its address, with a Copy button, and move the browser there, apart from a tailnet address, which a browser on this device reaches only through CYFR's SOCKS5 proxy on 127.0.0.1:1055; the program stops serving the pages once they have read that, or a minute after. Run in a project whose .env exists, it refuses as 'cyfr init' refuses to change how an existing CYFR is reached, serving nothing; 'cyfr access <mode>' changes that. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
 
-Exit status 3: the home started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. Exit status 1: the home was not set up and started, the message saying why.`,
+Exit status 3: CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. Exit status 1: CYFR was not set up and started, the message saying why.`,
 	Example: `  cyfr setup
   cyfr setup --port 4040
   cyfr setup --no-open`,
@@ -130,9 +130,9 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "Setup is at %s\n", hyperlink(out, address))
 	if openOnDisplay(address, o.noOpen, out) {
-		fmt.Fprintln(out, "Opened it in your browser. It stops once the home is up.")
+		fmt.Fprintln(out, "Opened it in your browser. It stops once CYFR is up.")
 	} else {
-		fmt.Fprintln(out, "Open it in a browser on this machine. It stops once the home is up.")
+		fmt.Fprintln(out, "Open it in a browser on this machine. It stops once CYFR is up.")
 	}
 
 	select {
@@ -145,7 +145,7 @@ func runSetup(ctx context.Context, o setupOptions, out io.Writer) error {
 		return s.result()
 	case <-ctx.Done():
 		if !s.begun() {
-			return errors.New("cyfr setup was interrupted before the start; nothing of the home was written")
+			return errors.New("cyfr setup was interrupted before the start; nothing of the new CYFR was written")
 		}
 		// The run sees ctx too: a waiting join is cancelled, a problem's
 		// wait ends, and a start runs to its end under its lock.
@@ -179,7 +179,7 @@ func refuseExistingHome(path string) error {
 func checkAdminEmail(email string) error {
 	addr, err := mail.ParseAddress(email)
 	if email == "" || err != nil || addr.Name != "" || addr.Address != email {
-		return errors.New("Type the one email you sign in with, such as you@example.com: it makes you this home's administrator")
+		return errors.New("Type the one email you sign in with, such as you@example.com: it makes you this CYFR's administrator")
 	}
 	return nil
 }
@@ -254,16 +254,16 @@ func (s *setupSession) Check(a setup.Answers) error {
 	switch a.Mode {
 	case access.ModeLocal, access.ModeTailnet:
 		if a.Domain != "" || a.ACMEEmail != "" {
-			return errors.New("A domain and a certificate email are for a public home alone")
+			return errors.New("A domain and a certificate email are for public access alone")
 		}
 		return nil
 	case access.ModePublic:
 		if a.Domain == "" {
-			return errors.New("Type the domain this home is reached at; its DNS must name this machine")
+			return errors.New("Type the domain CYFR is reached at; its DNS must name this machine")
 		}
 		return checkTarget(access.Target{Mode: a.Mode, Domain: a.Domain, ACMEEmail: a.ACMEEmail})
 	}
-	return fmt.Errorf("A home is reached as local, tailnet or public; %q is none of them", a.Mode)
+	return fmt.Errorf("Access is local, tailnet or public; %q is none of them", a.Mode)
 }
 
 // Start begins the run with a, refusing what it would refuse before
@@ -403,7 +403,7 @@ func (s *setupSession) run(a setup.Answers) {
 		return
 	}
 	if s.ctx.Err() != nil {
-		s.fail(errors.New(".env is written, and the home was not started: `cyfr up` starts it"))
+		s.fail(errors.New(".env is written, and CYFR was not started: `cyfr up` starts it"))
 		return
 	}
 	s.start()

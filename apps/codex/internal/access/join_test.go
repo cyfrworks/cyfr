@@ -485,7 +485,7 @@ func TestJoinStopsTheTailscaleServiceFirst(t *testing.T) {
 	}
 }
 
-const joinEnded = "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How this home is reached was not changed. Check the key if you gave one, then run `cyfr access tailnet` again."
+const joinEnded = "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How CYFR is reached was not changed. Check the key if you gave one, then run `cyfr access tailnet` again."
 
 // A join container that ends before its deadline without joining, as one
 // does when Tailscale refuses its key, answers tailnet_join_ended; one
@@ -506,7 +506,7 @@ func TestJoinEndsOrExpires(t *testing.T) {
 				h.fake.mu.Unlock()
 			}
 		}},
-		{"deadline", "tailnet_join_expired", "The approval link expired before the machine was approved. How this home is reached was not changed. Run `cyfr access tailnet` for a new link.", func(h *testHome, n int) {
+		{"deadline", "tailnet_join_expired", "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access tailnet` for a new link.", func(h *testHome, n int) {
 			if n == 3 {
 				h.clock.advance(JoinDeadline)
 			}

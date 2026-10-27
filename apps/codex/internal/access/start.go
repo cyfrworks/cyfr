@@ -110,7 +110,7 @@ func (e *Engine) removeUnselected(ctx context.Context, c config, h Head) string 
 		return ""
 	}
 	if s := e.stopAndVerify(ctx, unselected); !s.ok {
-		return "an access service this home does not select is still running (" + observedText(s.observed) + "): " + s.why
+		return "an access service the current mode does not select is still running (" + observedText(s.observed) + "): " + s.why
 	}
 	return ""
 }

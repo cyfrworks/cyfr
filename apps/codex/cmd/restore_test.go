@@ -842,7 +842,7 @@ func TestRestoreSharesTheStacksLock(t *testing.T) {
 	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
 	r.engine.holder = "update"
 	err := runRestore(context.Background(), r.dir, true, &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds this home (`update`)") {
+	if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds CYFR's lock (`update`)") {
 		t.Errorf("a restore beside a held lock answered %v", err)
 	}
 	if log := r.log(); log != nil {

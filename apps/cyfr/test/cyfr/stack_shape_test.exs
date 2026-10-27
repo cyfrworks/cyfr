@@ -1928,7 +1928,7 @@ defmodule Cyfr.StackShapeTest do
   # published binding cannot silently drift away from the operator's guide.
   defp readme_ports(readme) do
     pattern =
-      ~r/^- Firewall: \*\*public\*\* opens (.*?)\. Every home publishes `(\d+)\/tcp` on `([^`]+)` only .*?A \*\*tailnet\*\* home also publishes SOCKS5 `(\d+)\/tcp` on `([^`]+)` only/m
+      ~r/^- Firewall: \*\*public\*\* opens (.*?)\. In every mode CYFR publishes `(\d+)\/tcp` on `([^`]+)` only .*?With \*\*tailnet\*\* access, CYFR also publishes SOCKS5 `(\d+)\/tcp` on `([^`]+)` only/m
 
     case Regex.run(pattern, readme) do
       [_, public, port, address, kiosk_port, kiosk_address] ->
@@ -1976,7 +1976,7 @@ defmodule Cyfr.StackShapeTest do
           {"SOCKS5 `1055/tcp`", "SOCKS5 `1056/tcp`"},
           {"on `127.0.0.1` only", "on `0.0.0.0` only"},
           {" (+ `443/udp` for HTTP/3)", ""},
-          {"Every home publishes `4000/tcp`", "Every home publishes `4002/tcp`"}
+          {"CYFR publishes `4000/tcp`", "CYFR publishes `4002/tcp`"}
         ] do
       planted = String.replace(readme, before, after_text)
       refute planted == readme

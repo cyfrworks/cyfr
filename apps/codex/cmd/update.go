@@ -36,7 +36,7 @@ import (
 
 func init() {
 	updateCmd.Flags().String("version", "", "Install exactly this release, a pre-release or an older release included, instead of the newest one")
-	updateCmd.Flags().Bool("yes", false, "Update the home without asking to confirm it")
+	updateCmd.Flags().Bool("yes", false, "Update CYFR without asking to confirm it")
 	// The release the program step installed, which the new program it
 	// hands over to checks it is (updateProgram).
 	updateCmd.Flags().String("continue-as", "", "")
@@ -46,12 +46,12 @@ func init() {
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "Update this cyfr to the newest release, then the home in this directory to it",
-	Long: `Update this program to the newest release, then the home in the current directory to the program's release, in one command.
+	Short: "Update this cyfr to the newest release, then the CYFR in this directory to it",
+	Long: `Update this program to the newest release, then the CYFR in the current directory to the program's release, in one command.
 
 The program: when a release newer than this one is published, pre-releases aside, cyfr update installs it: a Homebrew cask install through brew, any other install by downloading the release's archive for this platform, verifying it against the release's checksums.txt signed by the release workflow for that tag, and only then replacing this program's file. It then goes on as the new program. --version names the exact release to install instead, a pre-release or an older release included; a Homebrew install takes only its tap's release. A development build is not replaced. Outside a home directory (no cyfr.yaml) the update stops here.
 
-The home: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none). A home whose docker-compose.yml names this release already is left alone, with no stop and no snapshot, and a home on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
+The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none). A CYFR whose docker-compose.yml names this release already is left alone, with no stop and no snapshot, and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, or no network access to it, refuses.
 2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale is managed; any other image is an override, left as written and reported.
@@ -228,10 +228,10 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 		}
 	case o.continueAs != version.Version:
 		self, _ := selfExecutable()
-		return fmt.Errorf("The cyfr at %s is %s, not release %s that cyfr update installed; the home was not touched. Run 'cyfr update' again", self, version.Version, o.continueAs)
+		return fmt.Errorf("The cyfr at %s is %s, not release %s that cyfr update installed; your CYFR was not touched. Run 'cyfr update' again", self, version.Version, o.continueAs)
 	}
 	if _, err := os.Stat("cyfr.yaml"); err != nil {
-		fmt.Fprintln(out, "There is no home in this directory (no cyfr.yaml), so the update ends with the program; run 'cyfr update' in a home's directory to update that home.")
+		fmt.Fprintln(out, "There is no CYFR in this directory (no cyfr.yaml), so the update ends with the program; run 'cyfr update' in a CYFR's directory to update it.")
 		return nil
 	}
 	return runHomeUpdate(ctx, out, errOut, o.yes)
@@ -451,7 +451,7 @@ func (u *updater) fetchManifest() error {
 func (u *updater) offer(yes bool) (bool, error) {
 	plan := u.compose
 	if plan.onRelease() {
-		fmt.Fprintf(u.out, "This home is on release %s already, so there is nothing to update; 'cyfr up' starts it if it is stopped.\n", u.version)
+		fmt.Fprintf(u.out, "This CYFR is on release %s already, so there is nothing to update; 'cyfr up' starts it if it is stopped.\n", u.version)
 		return true, nil
 	}
 	from := plan.homeRelease()
@@ -460,9 +460,9 @@ func (u *updater) offer(yes bool) (bool, error) {
 	}
 
 	if from != "" {
-		fmt.Fprintf(u.out, "\nThis home is on release %s; this cyfr is release %s.\n", from, u.version)
+		fmt.Fprintf(u.out, "\nThis CYFR is on release %s; this cyfr is release %s.\n", from, u.version)
 	} else {
-		fmt.Fprintf(u.out, "\nThis home's docker-compose.yml names no release (%s); this cyfr is release %s.\n", plan.cyfrImage(), u.version)
+		fmt.Fprintf(u.out, "\nThis CYFR's docker-compose.yml names no release (%s); this cyfr is release %s.\n", plan.cyfrImage(), u.version)
 	}
 	fmt.Fprintf(u.out, "Updating it stops the stack, snapshots it into backups/, switches these images to release %s and starts it:\n", u.version)
 	for _, line := range plan.managed {
@@ -476,21 +476,21 @@ func (u *updater) offer(yes bool) (bool, error) {
 			fmt.Fprintf(u.out, "  %s: %s\n", line.service, line.value)
 		}
 	}
-	fmt.Fprintf(u.out, "On that start the release migrates the database, or refuses one it cannot carry forward; only the snapshot takes the home back. Read the release notes first: %s/tag/%s\n", releasesPage, u.version)
+	fmt.Fprintf(u.out, "On that start the release migrates the database, or refuses one it cannot carry forward; only the snapshot takes CYFR back. Read the release notes first: %s/tag/%s\n", releasesPage, u.version)
 	if yes {
 		return false, nil
 	}
 	if !askTerminal() {
-		return true, errors.New("The update above was shown, not made: cyfr update changes a home only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make it")
+		return true, errors.New("The update above was shown, not made: cyfr update changes CYFR only once it is confirmed, and there is no terminal to confirm it on. Nothing was changed. Run it again with --yes to make it")
 	}
 	// The question ends with an interrupt as the steps before the stop do,
 	// and exits as an interrupted question does.
-	a, err := ask(u.ctx, bufio.NewReader(askInput), u.out, "Update this home? (yes/no)", "no")
+	a, err := ask(u.ctx, bufio.NewReader(askInput), u.out, "Update this CYFR? (yes/no)", "no")
 	if err != nil {
 		return true, interruption{errUpdateInterrupted}
 	}
 	if a = strings.ToLower(a); a != "yes" && a != "y" {
-		return true, errors.New("The home was not updated: the update was not confirmed. Nothing was changed")
+		return true, errors.New("CYFR was not updated: the update was not confirmed. Nothing was changed")
 	}
 	return false, nil
 }
@@ -505,7 +505,7 @@ func (u *updater) refuseNewer(home, how string) error {
 	if !release.IsNewer(home, u.version) {
 		return nil
 	}
-	return fmt.Errorf("This home %s release %s, newer than this cyfr's %s, and cyfr update never moves a home to an older release: the older code would start over a database %s may have migrated. To keep %s, run 'cyfr update' with a cyfr of %s or later; to go back to %s, restore a snapshot taken on it with 'cyfr restore backups/<timestamp>'", how, home, u.version, home, home, home, u.version)
+	return fmt.Errorf("This CYFR %s release %s, newer than this cyfr's %s, and cyfr update never moves a CYFR to an older release: the older code would start over a database %s may have migrated. To keep %s, run 'cyfr update' with a cyfr of %s or later; to go back to %s, restore a snapshot taken on it with 'cyfr restore backups/<timestamp>'", how, home, u.version, home, home, home, u.version)
 }
 
 // shortDigest shortens an image reference's sha256 digest to its first 12

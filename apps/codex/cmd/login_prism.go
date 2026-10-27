@@ -40,7 +40,7 @@ func loginInPrism(ctx context.Context, client *mcp.Client, target storedContext,
 	begun, err := client.CallTool(ctx, ops.Session, ops.SessionCliBeginArgs{Machine: machine})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return interrupted("Stopped before the home answered.")
+			return interrupted("Stopped before CYFR answered.")
 		}
 		return fmt.Errorf("Failed to start login: %w", err)
 	}
@@ -49,7 +49,7 @@ func loginInPrism(ctx context.Context, client *mcp.Client, target storedContext,
 	link, _ := begun["approve_url"].(string)
 	code, _ := begun["user_code"].(string)
 	if token == "" || link == "" {
-		return errors.New("The home answered no approval link. Upgrade the home, " +
+		return errors.New("CYFR answered no approval link. Upgrade CYFR, " +
 			"or sign in with cyfr login --provider github.")
 	}
 	interval := seconds(begun["interval"], 2)
@@ -100,7 +100,7 @@ func loginInPrism(ctx context.Context, client *mcp.Client, target storedContext,
 		// cannot keep, or would keep under another home's address, is
 		// withdrawn rather than left signed in, unheld.
 		if werr := withdraw(client, token); werr != nil {
-			return fmt.Errorf("Approved, but the session could not be saved here (%w), and the home "+
+			return fmt.Errorf("Approved, but the session could not be saved here (%w), and CYFR "+
 				"could not be told to end it (%v): it may still be active, so revoke the command line "+
 				"under Devices in Prism", err, werr)
 		}
@@ -138,7 +138,7 @@ func pollCliSignIn(ctx context.Context, client *mcp.Client, token string, interv
 	for {
 		if !time.Now().Before(deadline) {
 			if unreachable != nil {
-				return "", fmt.Errorf("Could not reach the home to learn whether the command line "+
+				return "", fmt.Errorf("Could not reach CYFR to learn whether the command line "+
 					"was approved (%v), and the link has expired. Run cyfr login again.", unreachable)
 			}
 			return "", errLinkExpired
@@ -183,7 +183,7 @@ func withdraw(client *mcp.Client, token string) error {
 
 // unwithdrawn says, on stderr, that the home did not hear a withdrawal.
 func unwithdrawn(err error) {
-	fmt.Fprintf(os.Stderr, "The home could not be told the command line stopped waiting (%v). "+
+	fmt.Fprintf(os.Stderr, "CYFR could not be told the command line stopped waiting (%v). "+
 		"If the link is approved before it expires, revoke the command line under Devices in Prism.\n", err)
 }
 
@@ -249,7 +249,7 @@ func sessionContext(verb string) (storedContext, error) {
 	}
 	if flagURL != "" && !sameAddress(flagURL, stored.URL) {
 		return storedContext{}, fmt.Errorf("--url %s is not the address of the context %q (%s), "+
-			"and that context's session belongs to its own home. Add a context for it "+
+			"and that context's session belongs to its own CYFR. Add a context for it "+
 			"(cyfr context add <name> %s), then use --context <name>.",
 			flagURL, name, stored.URL, flagURL)
 	}

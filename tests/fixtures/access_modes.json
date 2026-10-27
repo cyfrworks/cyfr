@@ -845,7 +845,7 @@
         "class": "setup_required",
         "code": "access_missing",
         "payload": {},
-        "sentence": "CYFR_ACCESS is not set in .env, so this home does not know how it is reached. Nothing started. Run `cyfr init` for a new home, or `cyfr access local|tailnet|public` for this one."
+        "sentence": "CYFR_ACCESS is not set in .env, so CYFR does not know how it is reached. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access local|tailnet|public` for this one."
       }
     },
     {
@@ -863,7 +863,7 @@
         "class": "setup_required",
         "code": "access_missing",
         "payload": {},
-        "sentence": "CYFR_ACCESS is not set in .env, so this home does not know how it is reached. Nothing started. Run `cyfr init` for a new home, or `cyfr access local|tailnet|public` for this one."
+        "sentence": "CYFR_ACCESS is not set in .env, so CYFR does not know how it is reached. Nothing started. Run `cyfr init` for a new CYFR, or `cyfr access local|tailnet|public` for this one."
       }
     },
     {
@@ -973,7 +973,7 @@
           "mode": "local",
           "needs": "public"
         },
-        "sentence": "`CADDY_ACME_EMAIL` is set, but only a `public` home uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access public`."
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only `public` access uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access public`."
       }
     },
     {
@@ -997,7 +997,7 @@
           "mode": "local",
           "needs": "tailnet"
         },
-        "sentence": "`CYFR_TAILNET_NODE_ID` is set, but only a `tailnet` home uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access tailnet`."
+        "sentence": "`CYFR_TAILNET_NODE_ID` is set, but only `tailnet` access uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access tailnet`."
       }
     },
     {
@@ -1393,7 +1393,7 @@
           "mode": "tailnet",
           "needs": "public"
         },
-        "sentence": "`CADDY_ACME_EMAIL` is set, but only a `public` home uses it (CYFR_ACCESS is `tailnet`). Remove it, or run `cyfr access public`."
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only `public` access uses it (CYFR_ACCESS is `tailnet`). Remove it, or run `cyfr access public`."
       }
     },
     {
@@ -1598,7 +1598,7 @@
           "mode": "public",
           "needs": "tailnet"
         },
-        "sentence": "`CYFR_TAILNET_NODE_ID` is set, but only a `tailnet` home uses it (CYFR_ACCESS is `public`). Remove it, or run `cyfr access tailnet`."
+        "sentence": "`CYFR_TAILNET_NODE_ID` is set, but only `tailnet` access uses it (CYFR_ACCESS is `public`). Remove it, or run `cyfr access tailnet`."
       }
     },
     {
@@ -1622,7 +1622,7 @@
           "key": "CYFR_PORT",
           "process_value": "4100"
         },
-        "sentence": "`CYFR_PORT` is `4000` in .env and `4100` in this process's environment; a home is reached one way. Remove one of them."
+        "sentence": "`CYFR_PORT` is `4000` in .env and `4100` in this process's environment; CYFR is reached one way. Remove one of them."
       }
     },
     {
@@ -1648,7 +1648,7 @@
           "key": "CYFR_HOST",
           "process_value": "cyfr.example.com"
         },
-        "sentence": "`CYFR_HOST` is `localhost` in .env and `cyfr.example.com` in this process's environment; a home is reached one way. Remove one of them."
+        "sentence": "`CYFR_HOST` is `localhost` in .env and `cyfr.example.com` in this process's environment; CYFR is reached one way. Remove one of them."
       }
     },
     {
@@ -1672,7 +1672,7 @@
           "key": "CYFR_PORT",
           "process_value": ""
         },
-        "sentence": "`CYFR_PORT` is `4000` in .env and blank in this process's environment; a home is reached one way. Remove one of them."
+        "sentence": "`CYFR_PORT` is `4000` in .env and blank in this process's environment; CYFR is reached one way. Remove one of them."
       }
     },
     {
@@ -1886,7 +1886,7 @@
         "payload": {
           "address": "172.16.230.2"
         },
-        "sentence": "CYFR_BIND_ADDRESS `172.16.230.2` is not a loopback address, so other machines could reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from other devices uses CYFR_ACCESS=tailnet or public."
+        "sentence": "CYFR_BIND_ADDRESS `172.16.230.2` is not a loopback address, so other machines could reach CYFR's loopback listener. Bind 127.0.0.1 or ::1; to reach CYFR from other devices, use CYFR_ACCESS=tailnet or public."
       }
     },
     {
@@ -1908,7 +1908,7 @@
         "payload": {
           "address": "0.0.0.0"
         },
-        "sentence": "CYFR_BIND_ADDRESS `0.0.0.0` is not a loopback address, so other machines could reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from other devices uses CYFR_ACCESS=tailnet or public."
+        "sentence": "CYFR_BIND_ADDRESS `0.0.0.0` is not a loopback address, so other machines could reach CYFR's loopback listener. Bind 127.0.0.1 or ::1; to reach CYFR from other devices, use CYFR_ACCESS=tailnet or public."
       }
     },
     {
@@ -2018,7 +2018,7 @@
         "payload": {
           "address": "::ffff:127.0.0.1"
         },
-        "sentence": "CYFR_BIND_ADDRESS `::ffff:127.0.0.1` is not a loopback address, so other machines could reach this home's loopback listener. Bind 127.0.0.1 or ::1; a home reached from other devices uses CYFR_ACCESS=tailnet or public."
+        "sentence": "CYFR_BIND_ADDRESS `::ffff:127.0.0.1` is not a loopback address, so other machines could reach CYFR's loopback listener. Bind 127.0.0.1 or ::1; to reach CYFR from other devices, use CYFR_ACCESS=tailnet or public."
       }
     },
     {
@@ -2319,7 +2319,7 @@
           "key": "CYFR_HOST",
           "process_value": "b.example.com"
         },
-        "sentence": "`CYFR_HOST` is `a.example.com` in .env and `b.example.com` in this process's environment; a home is reached one way. Remove one of them."
+        "sentence": "`CYFR_HOST` is `a.example.com` in .env and `b.example.com` in this process's environment; CYFR is reached one way. Remove one of them."
       }
     },
     {
@@ -2464,7 +2464,7 @@
           "mode": "local",
           "needs": "public"
         },
-        "sentence": "`CADDY_ACME_EMAIL` is set, but only a `public` home uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access public`."
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only `public` access uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access public`."
       }
     },
     {
@@ -2490,7 +2490,7 @@
           "mode": "local",
           "needs": "public"
         },
-        "sentence": "`CADDY_ACME_EMAIL` is set, but only a `public` home uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access public`."
+        "sentence": "`CADDY_ACME_EMAIL` is set, but only `public` access uses it (CYFR_ACCESS is `local`). Remove it, or run `cyfr access public`."
       }
     },
     {
@@ -3201,7 +3201,7 @@
         ]
       },
       "sentences": [
-        "Who can reach this home: only this computer",
+        "Who can reach CYFR: only this computer",
         "Address: http://localhost:4000",
         "Certificate email: none",
         "Ports opened on this machine: none"
@@ -3215,7 +3215,7 @@
         "profiles": []
       },
       "sentences": [
-        "Who can reach this home: only this computer",
+        "Who can reach CYFR: only this computer",
         "Address: http://localhost:8080",
         "Certificate email: none",
         "Ports opened on this machine: none"
@@ -3235,7 +3235,7 @@
         ]
       },
       "sentences": [
-        "Who can reach this home: your devices on Tailscale, and people you share this machine with",
+        "Who can reach CYFR: your devices on Tailscale, and people you share this machine with",
         "Address: https://cyfr.tail1a2b3c.ts.net",
         "Certificate email: none",
         "Ports opened on this machine: none"
@@ -3255,7 +3255,7 @@
         ]
       },
       "sentences": [
-        "Who can reach this home: anyone on the internet, who still has to sign in",
+        "Who can reach CYFR: anyone on the internet, who still has to sign in",
         "Address: https://cyfr.example.com",
         "Certificate email: ops@example.com",
         "Ports opened on this machine: 80 and 443"
@@ -3272,7 +3272,7 @@
         ]
       },
       "sentences": [
-        "Who can reach this home: anyone on the internet, who still has to sign in",
+        "Who can reach CYFR: anyone on the internet, who still has to sign in",
         "Address: https://cyfr.example.com",
         "Certificate email: none",
         "Ports opened on this machine: 80 and 443"
@@ -3291,14 +3291,14 @@
             "pid",
             "until"
           ],
-          "template": "Another cyfr command holds this home (`{holder}`), or a docker command it started is still running (watchdog pid `{pid}`, which ends by `{until}` at the latest). Nothing was changed. Wait until it has finished, then run this command again; if the holder was interrupted, run `cyfr access --resume` after that time.",
+          "template": "Another cyfr command holds CYFR's lock (`{holder}`), or a docker command it started is still running (watchdog pid `{pid}`, which ends by `{until}` at the latest). Nothing was changed. Wait until it has finished, then run this command again; if the holder was interrupted, run `cyfr access --resume` after that time.",
           "example": {
             "payload": {
               "holder": "x-holder",
               "pid": "x-pid",
               "until": "x-until"
             },
-            "sentence": "Another cyfr command holds this home (`x-holder`), or a docker command it started is still running (watchdog pid `x-pid`, which ends by `x-until` at the latest). Nothing was changed. Wait until it has finished, then run this command again; if the holder was interrupted, run `cyfr access --resume` after that time."
+            "sentence": "Another cyfr command holds CYFR's lock (`x-holder`), or a docker command it started is still running (watchdog pid `x-pid`, which ends by `x-until` at the latest). Nothing was changed. Wait until it has finished, then run this command again; if the holder was interrupted, run `cyfr access --resume` after that time."
           }
         },
         {
@@ -3307,13 +3307,13 @@
             "holder",
             "pid"
           ],
-          "template": "Another cyfr command holds this home (`{holder}`, pid `{pid}`). Nothing was changed. Wait until it has finished, then run this command again.",
+          "template": "Another cyfr command holds CYFR's lock (`{holder}`, pid `{pid}`). Nothing was changed. Wait until it has finished, then run this command again.",
           "example": {
             "payload": {
               "holder": "x-holder",
               "pid": "x-pid"
             },
-            "sentence": "Another cyfr command holds this home (`x-holder`, pid `x-pid`). Nothing was changed. Wait until it has finished, then run this command again."
+            "sentence": "Another cyfr command holds CYFR's lock (`x-holder`, pid `x-pid`). Nothing was changed. Wait until it has finished, then run this command again."
           }
         },
         {
@@ -3321,12 +3321,12 @@
           "slots": [
             "holder"
           ],
-          "template": "Another cyfr command holds this home (`{holder}`). Nothing was changed. Wait until it has finished, then run this command again.",
+          "template": "Another cyfr command holds CYFR's lock (`{holder}`). Nothing was changed. Wait until it has finished, then run this command again.",
           "example": {
             "payload": {
               "holder": "x-holder"
             },
-            "sentence": "Another cyfr command holds this home (`x-holder`). Nothing was changed. Wait until it has finished, then run this command again."
+            "sentence": "Another cyfr command holds CYFR's lock (`x-holder`). Nothing was changed. Wait until it has finished, then run this command again."
           }
         },
         {
@@ -3355,12 +3355,12 @@
           "slots": [
             "words"
           ],
-          "template": "How this home is reached changed after the change was shown to you (it is now: {words}). Nothing was changed. Run the command again to review the change.",
+          "template": "How CYFR is reached changed after the change was shown to you (it is now: {words}). Nothing was changed. Run the command again to review the change.",
           "example": {
             "payload": {
               "words": "x-words"
             },
-            "sentence": "How this home is reached changed after the change was shown to you (it is now: x-words). Nothing was changed. Run the command again to review the change."
+            "sentence": "How CYFR is reached changed after the change was shown to you (it is now: x-words). Nothing was changed. Run the command again to review the change."
           }
         }
       ]
@@ -3374,12 +3374,12 @@
           "slots": [
             "address"
           ],
-          "template": "This home is already reached that way, at {address}. Nothing was changed.",
+          "template": "CYFR is already reached that way, at {address}. Nothing was changed.",
           "example": {
             "payload": {
               "address": "x-address"
             },
-            "sentence": "This home is already reached that way, at x-address. Nothing was changed."
+            "sentence": "CYFR is already reached that way, at x-address. Nothing was changed."
           }
         }
       ]
@@ -3454,13 +3454,13 @@
             "option": "--domain"
           },
           "slots": [],
-          "template": "`--domain` is for a public home, and this command chooses `local`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it.",
+          "template": "`--domain` is for public access, and this command chooses `local`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it.",
           "example": {
             "payload": {
               "mode": "local",
               "option": "--domain"
             },
-            "sentence": "`--domain` is for a public home, and this command chooses `local`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it."
+            "sentence": "`--domain` is for public access, and this command chooses `local`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it."
           }
         },
         {
@@ -3469,13 +3469,13 @@
             "option": "--domain"
           },
           "slots": [],
-          "template": "`--domain` is for a public home, and this command chooses `tailnet`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it.",
+          "template": "`--domain` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it.",
           "example": {
             "payload": {
               "mode": "tailnet",
               "option": "--domain"
             },
-            "sentence": "`--domain` is for a public home, and this command chooses `tailnet`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it."
+            "sentence": "`--domain` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--domain`, or run `cyfr access public` with it."
           }
         },
         {
@@ -3484,13 +3484,13 @@
             "option": "--acme-email"
           },
           "slots": [],
-          "template": "`--acme-email` is for a public home, and this command chooses `local`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it.",
+          "template": "`--acme-email` is for public access, and this command chooses `local`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it.",
           "example": {
             "payload": {
               "mode": "local",
               "option": "--acme-email"
             },
-            "sentence": "`--acme-email` is for a public home, and this command chooses `local`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it."
+            "sentence": "`--acme-email` is for public access, and this command chooses `local`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it."
           }
         },
         {
@@ -3499,13 +3499,13 @@
             "option": "--acme-email"
           },
           "slots": [],
-          "template": "`--acme-email` is for a public home, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it.",
+          "template": "`--acme-email` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it.",
           "example": {
             "payload": {
               "mode": "tailnet",
               "option": "--acme-email"
             },
-            "sentence": "`--acme-email` is for a public home, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it."
+            "sentence": "`--acme-email` is for public access, and this command chooses `tailnet`. Nothing was changed. Run it again without `--acme-email`, or run `cyfr access public` with it."
           }
         }
       ]
@@ -3549,12 +3549,12 @@
           "slots": [
             "name"
           ],
-          "template": "This machine joined your tailnet as `{name}`, but your tailnet has HTTPS certificates turned off, and this home needs them. How this home is reached was not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet` again, which uses this machine as it is. If you do not want it in your tailnet, remove `{name}` on the Machines page of the admin console.",
+          "template": "This machine joined your tailnet as `{name}`, but your tailnet has HTTPS certificates turned off, and CYFR needs them. How CYFR is reached was not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet` again, which uses this machine as it is. If you do not want it in your tailnet, remove `{name}` on the Machines page of the admin console.",
           "example": {
             "payload": {
               "name": "x-name"
             },
-            "sentence": "This machine joined your tailnet as `x-name`, but your tailnet has HTTPS certificates turned off, and this home needs them. How this home is reached was not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet` again, which uses this machine as it is. If you do not want it in your tailnet, remove `x-name` on the Machines page of the admin console."
+            "sentence": "This machine joined your tailnet as `x-name`, but your tailnet has HTTPS certificates turned off, and CYFR needs them. How CYFR is reached was not changed. Turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet` again, which uses this machine as it is. If you do not want it in your tailnet, remove `x-name` on the Machines page of the admin console."
           }
         }
       ]
@@ -3568,12 +3568,12 @@
           "slots": [
             "name"
           ],
-          "template": "This home is already on your tailnet as `{name}`. Nothing was changed. To give it another name, run `cyfr access local`, then `cyfr access tailnet --new-node`, and remove `{name}` on the Machines page of the Tailscale admin console.",
+          "template": "CYFR is already on your tailnet as `{name}`. Nothing was changed. To give it another name, run `cyfr access local`, then `cyfr access tailnet --new-node`, and remove `{name}` on the Machines page of the Tailscale admin console.",
           "example": {
             "payload": {
               "name": "x-name"
             },
-            "sentence": "This home is already on your tailnet as `x-name`. Nothing was changed. To give it another name, run `cyfr access local`, then `cyfr access tailnet --new-node`, and remove `x-name` on the Machines page of the Tailscale admin console."
+            "sentence": "CYFR is already on your tailnet as `x-name`. Nothing was changed. To give it another name, run `cyfr access local`, then `cyfr access tailnet --new-node`, and remove `x-name` on the Machines page of the Tailscale admin console."
           }
         }
       ]
@@ -3609,13 +3609,13 @@
             "node",
             "env"
           ],
-          "template": "This machine's tailnet identity is `{node}`, but .env says this home is `{env}`, so it is not being served on your tailnet: it answers on this machine only, and nothing else was changed. Run `cyfr access tailnet`, which offers to move the home to https://{node} after you confirm.",
+          "template": "This machine's tailnet identity is `{node}`, but .env says CYFR is `{env}`, so it is not being served on your tailnet: it answers on this machine only, and nothing else was changed. Run `cyfr access tailnet`, which offers to move CYFR to https://{node} after you confirm.",
           "example": {
             "payload": {
               "env": "x-env",
               "node": "x-node"
             },
-            "sentence": "This machine's tailnet identity is `x-node`, but .env says this home is `x-env`, so it is not being served on your tailnet: it answers on this machine only, and nothing else was changed. Run `cyfr access tailnet`, which offers to move the home to https://x-node after you confirm."
+            "sentence": "This machine's tailnet identity is `x-node`, but .env says CYFR is `x-env`, so it is not being served on your tailnet: it answers on this machine only, and nothing else was changed. Run `cyfr access tailnet`, which offers to move CYFR to https://x-node after you confirm."
           }
         }
       ]
@@ -3629,12 +3629,12 @@
           "slots": [
             "value"
           ],
-          "template": "Tailscale reported a machine identity this home cannot store (`{value}`). How this home is reached was not changed. Report this with your Tailscale version.",
+          "template": "Tailscale reported a machine identity CYFR cannot store (`{value}`). How CYFR is reached was not changed. Report this with your Tailscale version.",
           "example": {
             "payload": {
               "value": "x-value"
             },
-            "sentence": "Tailscale reported a machine identity this home cannot store (`x-value`). How this home is reached was not changed. Report this with your Tailscale version."
+            "sentence": "Tailscale reported a machine identity CYFR cannot store (`x-value`). How CYFR is reached was not changed. Report this with your Tailscale version."
           }
         }
       ]
@@ -3646,10 +3646,10 @@
         {
           "fixed": {},
           "slots": [],
-          "template": "The approval link expired before the machine was approved. How this home is reached was not changed. Run `cyfr access tailnet` for a new link.",
+          "template": "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access tailnet` for a new link.",
           "example": {
             "payload": {},
-            "sentence": "The approval link expired before the machine was approved. How this home is reached was not changed. Run `cyfr access tailnet` for a new link."
+            "sentence": "The approval link expired before the machine was approved. How CYFR is reached was not changed. Run `cyfr access tailnet` for a new link."
           }
         }
       ]
@@ -3661,10 +3661,10 @@
         {
           "fixed": {},
           "slots": [],
-          "template": "Joining your tailnet was cancelled. How this home is reached was not changed.",
+          "template": "Joining your tailnet was cancelled. How CYFR is reached was not changed.",
           "example": {
             "payload": {},
-            "sentence": "Joining your tailnet was cancelled. How this home is reached was not changed."
+            "sentence": "Joining your tailnet was cancelled. How CYFR is reached was not changed."
           }
         }
       ]
@@ -3676,10 +3676,10 @@
         {
           "fixed": {},
           "slots": [],
-          "template": "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How this home is reached was not changed. Check the key if you gave one, then run `cyfr access tailnet` again.",
+          "template": "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How CYFR is reached was not changed. Check the key if you gave one, then run `cyfr access tailnet` again.",
           "example": {
             "payload": {},
-            "sentence": "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How this home is reached was not changed. Check the key if you gave one, then run `cyfr access tailnet` again."
+            "sentence": "Tailscale did not accept this machine's join: the auth key may be wrong, already used or expired, or the join ended before the machine was approved. How CYFR is reached was not changed. Check the key if you gave one, then run `cyfr access tailnet` again."
           }
         }
       ]
@@ -3729,14 +3729,14 @@
             "old",
             "reason"
           ],
-          "template": "This home could not start as {new} ({reason}). What it started was stopped and checked stopped, and the home was put back: it is reached as before, {old}, and running. Fix what the reason names, then run the command again.",
+          "template": "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back: it is reached as before, {old}, and running. Fix what the reason names, then run the command again.",
           "example": {
             "payload": {
               "new": "x-new",
               "old": "x-old",
               "reason": "x-reason"
             },
-            "sentence": "This home could not start as x-new (x-reason). What it started was stopped and checked stopped, and the home was put back: it is reached as before, x-old, and running. Fix what the reason names, then run the command again."
+            "sentence": "CYFR could not start as x-new (x-reason). What it started was stopped and checked stopped, and CYFR was put back: it is reached as before, x-old, and running. Fix what the reason names, then run the command again."
           }
         },
         {
@@ -3748,7 +3748,7 @@
             "old",
             "reason"
           ],
-          "template": "This home could not start as {new} ({reason}). What it started was stopped and checked stopped, and the home was put back as before, {old}, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access tailnet`, which offers to move the home to the machine's tailnet name.",
+          "template": "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access tailnet`, which offers to move CYFR to the machine's tailnet name.",
           "example": {
             "payload": {
               "local": "tailnet_node_mismatch",
@@ -3756,7 +3756,7 @@
               "old": "x-old",
               "reason": "x-reason"
             },
-            "sentence": "This home could not start as x-new (x-reason). What it started was stopped and checked stopped, and the home was put back as before, x-old, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access tailnet`, which offers to move the home to the machine's tailnet name."
+            "sentence": "CYFR could not start as x-new (x-reason). What it started was stopped and checked stopped, and CYFR was put back as before, x-old, but it answers on this machine only, because this machine's tailnet identity is not the one .env names. Fix what the reason names, then run the command again; run `cyfr access tailnet`, which offers to move CYFR to the machine's tailnet name."
           }
         },
         {
@@ -3768,7 +3768,7 @@
             "old",
             "reason"
           ],
-          "template": "This home could not start as {new} ({reason}). What it started was stopped and checked stopped, and the home was put back as before, {old}, but it answers on this machine only, because this machine has not joined your tailnet. Fix what the reason names, then run the command again; run `cyfr access tailnet` and approve the machine with the link it prints.",
+          "template": "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because this machine has not joined your tailnet. Fix what the reason names, then run the command again; run `cyfr access tailnet` and approve the machine with the link it prints.",
           "example": {
             "payload": {
               "local": "tailnet_not_joined",
@@ -3776,7 +3776,7 @@
               "old": "x-old",
               "reason": "x-reason"
             },
-            "sentence": "This home could not start as x-new (x-reason). What it started was stopped and checked stopped, and the home was put back as before, x-old, but it answers on this machine only, because this machine has not joined your tailnet. Fix what the reason names, then run the command again; run `cyfr access tailnet` and approve the machine with the link it prints."
+            "sentence": "CYFR could not start as x-new (x-reason). What it started was stopped and checked stopped, and CYFR was put back as before, x-old, but it answers on this machine only, because this machine has not joined your tailnet. Fix what the reason names, then run the command again; run `cyfr access tailnet` and approve the machine with the link it prints."
           }
         },
         {
@@ -3788,7 +3788,7 @@
             "old",
             "reason"
           ],
-          "template": "This home could not start as {new} ({reason}). What it started was stopped and checked stopped, and the home was put back as before, {old}, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet`.",
+          "template": "CYFR could not start as {new} ({reason}). What it started was stopped and checked stopped, and CYFR was put back as before, {old}, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet`.",
           "example": {
             "payload": {
               "local": "tailnet_https_off",
@@ -3796,7 +3796,7 @@
               "old": "x-old",
               "reason": "x-reason"
             },
-            "sentence": "This home could not start as x-new (x-reason). What it started was stopped and checked stopped, and the home was put back as before, x-old, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet`."
+            "sentence": "CYFR could not start as x-new (x-reason). What it started was stopped and checked stopped, and CYFR was put back as before, x-old, but it answers on this machine only, because your tailnet has HTTPS certificates turned off. Fix what the reason names, then run the command again; turn on HTTPS on the DNS page of the Tailscale admin console, then run `cyfr access tailnet`."
           }
         }
       ]
@@ -3811,13 +3811,13 @@
             "new",
             "env"
           ],
-          "template": "This home could not start as {new}, nor as before; everything was stopped and checked stopped. .env says: {env}. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again.",
+          "template": "CYFR could not start as {new}, nor as before; everything was stopped and checked stopped. .env says: {env}. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again.",
           "example": {
             "payload": {
               "env": "x-env",
               "new": "x-new"
             },
-            "sentence": "This home could not start as x-new, nor as before; everything was stopped and checked stopped. .env says: x-env. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again."
+            "sentence": "CYFR could not start as x-new, nor as before; everything was stopped and checked stopped. .env says: x-env. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again."
           }
         }
       ]
@@ -3833,13 +3833,13 @@
           "slots": [
             "env"
           ],
-          "template": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started the home as it says: {env}. If that is not how this home should be reached, run `cyfr access <mode>`.",
+          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started CYFR as it says: {env}. If that is not how CYFR should be reached, run `cyfr access <mode>`.",
           "example": {
             "payload": {
               "env": "x-env",
               "then": "started"
             },
-            "sentence": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started the home as it says: x-env. If that is not how this home should be reached, run `cyfr access <mode>`."
+            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, left .env as edited, and started CYFR as it says: x-env. If that is not how CYFR should be reached, run `cyfr access <mode>`."
           }
         },
         {
@@ -3849,13 +3849,13 @@
           "slots": [
             "env"
           ],
-          "template": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: {env}. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again.",
+          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: {env}. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again.",
           "example": {
             "payload": {
               "env": "x-env",
               "then": "not_running"
             },
-            "sentence": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: x-env. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again."
+            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, which says: x-env. The stack was not running, so nothing was started. Run `cyfr up` to start it as .env says, or `cyfr access <mode>` to choose again."
           }
         },
         {
@@ -3865,13 +3865,13 @@
           "slots": [
             "env"
           ],
-          "template": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but the home did not start as it says ({env}), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access <mode>` to choose again.",
+          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but CYFR did not start as it says ({env}), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access <mode>` to choose again.",
           "example": {
             "payload": {
               "env": "x-env",
               "then": "failed"
             },
-            "sentence": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but the home did not start as it says (x-env), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access <mode>` to choose again."
+            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited, but CYFR did not start as it says (x-env), and everything is stopped. Fix .env, then run `cyfr up`, or run `cyfr access <mode>` to choose again."
           }
         },
         {
@@ -3879,12 +3879,12 @@
             "then": "incoherent"
           },
           "slots": [],
-          "template": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way this home is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again.",
+          "template": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way CYFR is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again.",
           "example": {
             "payload": {
               "then": "incoherent"
             },
-            "sentence": "A change of how this home is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way this home is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again."
+            "sentence": "A change of how CYFR is reached was interrupted, and .env was edited before the change finished. CYFR stopped the stack, checked it stopped, and left .env as edited; nothing was started, because .env no longer says one coherent way CYFR is reached. Run `cyfr up` to see what is wrong with it, or `cyfr access <mode>` to choose again."
           }
         }
       ]
@@ -3898,12 +3898,12 @@
           "slots": [
             "observed"
           ],
-          "template": "This home could not be brought to a known state: {observed} were still running after the stop. It may be partly reachable. Nothing more was done. On the machine, run `cyfr access --resume`, which stops what is running, checks, and starts the home as .env says; if it reports the same, run `cyfr down`, check `docker ps`, then `cyfr up`.",
+          "template": "CYFR could not be brought to a known state: {observed} were still running after the stop. It may be partly reachable. Nothing more was done. On the machine, run `cyfr access --resume`, which stops what is running, checks, and starts CYFR as .env says; if it reports the same, run `cyfr down`, check `docker ps`, then `cyfr up`.",
           "example": {
             "payload": {
               "observed": "x-observed"
             },
-            "sentence": "This home could not be brought to a known state: x-observed were still running after the stop. It may be partly reachable. Nothing more was done. On the machine, run `cyfr access --resume`, which stops what is running, checks, and starts the home as .env says; if it reports the same, run `cyfr down`, check `docker ps`, then `cyfr up`."
+            "sentence": "CYFR could not be brought to a known state: x-observed were still running after the stop. It may be partly reachable. Nothing more was done. On the machine, run `cyfr access --resume`, which stops what is running, checks, and starts CYFR as .env says; if it reports the same, run `cyfr down`, check `docker ps`, then `cyfr up`."
           }
         }
       ]
@@ -3970,14 +3970,14 @@
             "service",
             "key"
           ],
-          "template": "`{file}` sets `{key}` in the `{service}` service's environment, where it would override how .env says this home is reached. Nothing started. Remove `{key}` from `{file}`; .env alone holds it, and `cyfr access` writes it.",
+          "template": "`{file}` sets `{key}` in the `{service}` service's environment, where it would override how .env says CYFR is reached. Nothing started. Remove `{key}` from `{file}`; .env alone holds it, and `cyfr access` writes it.",
           "example": {
             "payload": {
               "file": "x-file",
               "key": "COMPOSE_PROFILES",
               "service": "x-service"
             },
-            "sentence": "`x-file` sets `COMPOSE_PROFILES` in the `x-service` service's environment, where it would override how .env says this home is reached. Nothing started. Remove `COMPOSE_PROFILES` from `x-file`; .env alone holds it, and `cyfr access` writes it."
+            "sentence": "`x-file` sets `COMPOSE_PROFILES` in the `x-service` service's environment, where it would override how .env says CYFR is reached. Nothing started. Remove `COMPOSE_PROFILES` from `x-file`; .env alone holds it, and `cyfr access` writes it."
           }
         },
         {
@@ -4006,13 +4006,13 @@
             "file",
             "service"
           ],
-          "template": "`{file}` does not give the `{service}` service .env through its env_file, so it would not read how this home is reached. Nothing started. Add `env_file: .env` to the `{service}` service in `{file}`, as the shipped docker-compose.yml has it.",
+          "template": "`{file}` does not give the `{service}` service .env through its env_file, so it would not read how CYFR is reached. Nothing started. Add `env_file: .env` to the `{service}` service in `{file}`, as the shipped docker-compose.yml has it.",
           "example": {
             "payload": {
               "file": "x-file",
               "service": "x-service"
             },
-            "sentence": "`x-file` does not give the `x-service` service .env through its env_file, so it would not read how this home is reached. Nothing started. Add `env_file: .env` to the `x-service` service in `x-file`, as the shipped docker-compose.yml has it."
+            "sentence": "`x-file` does not give the `x-service` service .env through its env_file, so it would not read how CYFR is reached. Nothing started. Add `env_file: .env` to the `x-service` service in `x-file`, as the shipped docker-compose.yml has it."
           }
         }
       ]

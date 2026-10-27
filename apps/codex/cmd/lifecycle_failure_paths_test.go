@@ -59,7 +59,7 @@ func TestUpAndUpdateCannotOverlapTheirDockerOperations(t *testing.T) {
 	for !strings.Contains(strings.Join(s.log(), "\n"), "exec pg_dump") {
 		select {
 		case err := <-updateResult:
-			if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds this home (`up`)") {
+			if err == nil || !strings.Contains(err.Error(), "Another cyfr command holds CYFR's lock (`up`)") {
 				t.Fatalf("the competing update did not refuse the start's lock: %v", err)
 			}
 			if s.hasCall(profiles + "stop") {
