@@ -142,7 +142,17 @@ defmodule Prima.RegistryRequestTest do
     for {name, %{"request" => map, "signer" => signer}} <- v["requests"] do
       assert map["sig"] == raw_signature(map, private(v, signer)), name
       assert {:ok, request} = new(map)
-      assert RegistryRequest.sign(request, private(v, signer)) == Encoding.jcs!(map), name
+      bytes = Encoding.jcs!(map)
+
+      # A request whose escaped bytes pass the size bound the signer refuses,
+      # as the registry does.
+      if byte_size(bytes) > RegistryRequest.max_bytes() do
+        assert RegistryRequest.sign(request, private(v, signer)) == {:error, :request_malformed},
+               name
+      else
+        assert RegistryRequest.sign(request, private(v, signer)) == {:ok, bytes}, name
+      end
+
       assert RegistryRequest.encode(%{request | sig: unb64(map["sig"])}) == map, name
     end
 
@@ -225,12 +235,10 @@ defmodule Prima.RegistryRequestTest do
 
     # Every refusal whose only fault is in its operation or body: with a
     # valid request's operation and body in their place it is no longer
-    # malformed. The signer builds nothing from those fields. A nil in a
-    # body is no such fault: the signer drops it, as the next test shows.
+    # malformed. The signer builds nothing from those fields.
     faults =
       for %{"request" => map, "error" => error} = vector <- v["refusals"],
           error in ["request_malformed", "unknown_operation"],
-          is_map(map["body"]) and nil not in Map.values(map["body"]),
           repaired = Map.merge(map, Map.take(valid, ~w(operation body))),
           tag(check(v, %{vector | "request" => repaired})) != "request_malformed",
           do: {vector["name"], map, error}
@@ -257,17 +265,36 @@ defmodule Prima.RegistryRequestTest do
                expires_at: valid["expires_at"],
                body: %{"handle" => "alice"}
              )
+
+    # A key the operation does not take is refused even when its value is
+    # nil, and the signer signs no bytes past the size bound: 4000 NUL bytes
+    # fit the argument's own bound and escape to six bytes each.
+    assert {:error, :request_malformed} =
+             new(Map.put(valid, "body", %{"handle" => "alice", "unexpected" => nil}))
+
+    {:ok, appeal} =
+      new(%{
+        valid
+        | "operation" => "appeal.file",
+          "body" => %{
+            "action_type" => "ban",
+            "action_ref" => valid["identifier"],
+            "argument" => :binary.copy(<<0>>, 4000)
+          }
+      })
+
+    assert RegistryRequest.sign(appeal, private(v, "alice_live_1")) ==
+             {:error, :request_malformed}
   end
 
-  test "an address withdrawn is a body without one, and a nil address the signer drops" do
+  test "an address withdrawn is a body without one, and a null address is refused" do
     v = vectors()
     map = v["requests"]["address_withdraw"]["request"]
     assert map["body"] == %{}
 
-    {:ok, request} = new(Map.put(map, "body", %{"address" => nil}))
-    assert request.body == %{}
-
-    assert RegistryRequest.sign(request, private(v, "alice_live_1")) == Encoding.jcs!(map)
+    assert {:ok, request} = new(map)
+    assert RegistryRequest.sign(request, private(v, "alice_live_1")) == {:ok, Encoding.jcs!(map)}
+    assert new(Map.put(map, "body", %{"address" => nil})) == {:error, :request_malformed}
   end
 
   test "each handle and publisher spelling is held to the slug grammar on both sides" do
@@ -316,7 +343,7 @@ defmodule Prima.RegistryRequestTest do
         body: %{"label" => "laptop"}
       )
 
-    bytes = RegistryRequest.sign(request, private(v, "alice_live_1"))
+    {:ok, bytes} = RegistryRequest.sign(request, private(v, "alice_live_1"))
     registry = %{host: "cyfr.run", directory: genesis.directory}
 
     assert {:ok, verified} = RegistryRequest.verify(bytes, genesis, registry, now)

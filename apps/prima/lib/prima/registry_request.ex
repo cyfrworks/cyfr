@@ -23,7 +23,7 @@ defmodule Prima.RegistryRequest do
     * `address.set` — `address`, a home's origin
       (`Prima.Identity.Encoding.home?/1`) to publish; a body without it
       withdraws the published address. JCS has no null (`Prima.JCS`), so
-      absence is the one spelling of "none".
+      absence is the one spelling of "none", and a null is refused.
     * `policy.accept` — `policy_version`, the version the registry
       publishes: text of at most 128 bytes.
     * `appeal.file` — `action_type` (`takedown` or `ban`), `action_ref`
@@ -206,8 +206,10 @@ defmodule Prima.RegistryRequest do
 
   @doc """
   CYFR's name for the refusal in a registry error envelope, its JSON bytes
-  or their decoded map: the code of its first error. An envelope of
-  another shape, or a code outside `refusals/0`, is `:malformed_answer`.
+  or their decoded map: the code of its first error, which carries a
+  string `message` beside it. An envelope of another shape, a null or a
+  float anywhere in it, or a code outside `refusals/0`, is
+  `:malformed_answer`.
   """
   @spec refusal(binary() | map()) :: {:ok, refusal()} | {:error, :malformed_answer}
   def refusal(envelope) when is_binary(envelope) do
@@ -217,16 +219,23 @@ defmodule Prima.RegistryRequest do
     end
   end
 
-  def refusal(%{"errors" => [%{"code" => code} | _]}) when is_map_key(@by_code, code),
-    do: {:ok, Map.fetch!(@by_code, code)}
+  def refusal(%{"errors" => [%{"code" => code, "message" => message} | _]} = envelope)
+      when is_map_key(@by_code, code) and is_binary(message) do
+    case Encoding.jcs(envelope) do
+      {:ok, _bytes} -> {:ok, Map.fetch!(@by_code, code)}
+      {:error, _reason} -> {:error, :malformed_answer}
+    end
+  end
 
   def refusal(_envelope), do: {:error, :malformed_answer}
 
   @doc """
   An unsigned request from its fields (atom keys; the nonce as raw bytes,
-  the body a map with string keys). A field of the wrong shape answers
-  `:request_malformed` and an operation this protocol does not know
-  `:unknown_operation`, as the registry would. Sign it with `sign/2`.
+  the body a map with string keys, held as given: a key the operation does
+  not take is refused even when its value is nil). A field of the wrong
+  shape answers `:request_malformed` and an operation this protocol does
+  not know `:unknown_operation`, as the registry would. Sign it with
+  `sign/2`.
   """
   @spec new(map() | keyword()) :: {:ok, t()} | {:error, :request_malformed | :unknown_operation}
   def new(attrs) do
@@ -241,7 +250,7 @@ defmodule Prima.RegistryRequest do
         "key_epoch" => attrs[:key_epoch],
         "nonce" => is_binary(attrs[:nonce]) && Encoding.b64(attrs[:nonce]),
         "expires_at" => attrs[:expires_at],
-        "body" => is_map(attrs[:body]) && Encoding.compact(attrs[:body])
+        "body" => attrs[:body]
       })
 
     with {:ok, request} <- read(map, false),
@@ -270,14 +279,20 @@ defmodule Prima.RegistryRequest do
 
   @doc """
   Sign a request with the person's live private key: the bytes the signer
-  sends, the JCS form of the request with its `sig`.
+  sends, the JCS form of the request with its `sig`. A request whose bytes
+  would exceed `max_bytes/0` (JSON escaping can make a body that fits its
+  own bounds larger) is `:request_malformed`, as the registry would answer
+  it.
   """
-  @spec sign(t(), binary()) :: binary()
+  @spec sign(t(), binary()) :: {:ok, binary()} | {:error, :request_malformed}
   def sign(%__MODULE__{} = request, live_private_key) do
-    %{request | sig: nil}
-    |> encode()
-    |> Encoding.sign(live_private_key)
-    |> Encoding.jcs!()
+    bytes =
+      %{request | sig: nil}
+      |> encode()
+      |> Encoding.sign(live_private_key)
+      |> Encoding.jcs!()
+
+    if byte_size(bytes) > @max_bytes, do: {:error, :request_malformed}, else: {:ok, bytes}
   end
 
   @doc """
