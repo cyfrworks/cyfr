@@ -180,28 +180,29 @@ defmodule Emissary.Web.TinctureAssets do
   def canvas_sdk, do: @sdk_source
 
   @doc """
-  A canvas's page: the version's entry document (`entry`, its path inside
-  the version), read through `Arca` under `ctx` as every served file is,
-  with `<base href="base">` and `<script src="sdk_src"></script>` put
-  first in its `<head>`, in that order and with no nonce, since no inline
-  script runs in a canvas page. An entry with no `<head>` is answered as
-  it is. `:error` when the entry cannot be read.
+  A canvas's page: CYFR's prefix, `<!doctype html>`, `<base href="base">`
+  and `<script src="sdk_src"></script>` in that order and with no nonce,
+  since no inline script runs in a canvas page; then the version's entry
+  document (`entry`, its path inside the version), read through `Arca`
+  under `ctx` as every served file is, byte for byte as published.
+  Nothing of the entry is read or matched, so no markup of its own moves
+  where CYFR's tags land (`Emissary.Web.CanvasController` says how the
+  browser parses the two together). `:error` when the entry cannot be read.
   """
   @spec canvas_page(Sanctum.Context.t(), map(), String.t(), String.t(), String.t()) ::
           {:ok, binary()} | :error
   def canvas_page(%Sanctum.Context{} = ctx, tincture, entry, base, sdk_src)
       when is_binary(entry) and is_binary(base) and is_binary(sdk_src) do
     case Arca.get(Sanctum.Context.actor(ctx), tincture.segments ++ String.split(entry, "/")) do
-      {:ok, content} ->
-        tags =
-          ~s(<base href="#{Plug.HTML.html_escape(base)}">) <>
-            ~s(<script src="#{Plug.HTML.html_escape(sdk_src)}"></script>)
-
-        {:ok, Regex.replace(@head_re, content, &(&1 <> tags), global: false)}
-
-      {:error, _} ->
-        :error
+      {:ok, content} -> {:ok, canvas_prefix(base, sdk_src) <> content}
+      {:error, _} -> :error
     end
+  end
+
+  defp canvas_prefix(base, sdk_src) do
+    "<!doctype html>" <>
+      ~s(<base href="#{Plug.HTML.html_escape(base)}">) <>
+      ~s(<script src="#{Plug.HTML.html_escape(sdk_src)}"></script>)
   end
 
   # ---------------------------------------------------------------------------

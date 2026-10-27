@@ -7,8 +7,12 @@ defmodule Emissary.Web.CanvasControllerTest do
   own entry, served only for a standing asset credential and a standing
   frame of its person, athanor and version, while its release digest is
   the credential's, for a version whose placement is `canvas`, and 404
-  with no body otherwise, a missing entry included; its `<base>` and the
-  SDK's script first in its head, no nonce and no inline script in it;
+  with no body otherwise, a missing entry included; CYFR's prefix (a
+  doctype, its `<base>` and the SDK's script) followed by the entry's
+  bytes as published, which the HTML parser reads with CYFR's two
+  elements first in the head and the entry's `<html>` attributes kept,
+  whatever case its tags are in or comment comes before them; no nonce and
+  no inline script in it;
   the canvas's one policy for its own open and the connection allowlist on
   the page alone; relative URLs of a vanilla and a react page resolving to
   the version's files under the `<base>`, which a page's own `<base>`
@@ -162,17 +166,36 @@ defmodule Emissary.Web.CanvasControllerTest do
   # The endpoint's origin as a tincture document's policy names it.
   defp endpoint_origin, do: TinctureAssets.endpoint_origin()
 
-  # The two tags CYFR puts first in a canvas page's head: the `<base>` of
-  # the entry's directory under the version's served prefix, and the
-  # SDK's script from its one path.
-  defp canvas_tags(credential, name, entry_dir \\ "") do
+  # What a canvas page starts with, ahead of the entry's bytes: a doctype,
+  # the `<base>` of the entry's directory under the version's served
+  # prefix, and the SDK's script from its one path. Answers the `<base>`'s
+  # URL and the prefix.
+  defp canvas_prefix(credential, name, entry_dir \\ "") do
     base =
       endpoint_origin() <>
         Prima.TinctureUrl.asset_path(credential, ["local", name, @version]) <> "/" <> entry_dir
 
     {base,
-     ~s(<base href="#{base}">) <>
+     "<!doctype html>" <>
+       ~s(<base href="#{base}">) <>
        ~s(<script src="#{endpoint_origin()}#{TinctureAssets.canvas_sdk_path()}"></script>)}
+  end
+
+  # The page as an HTML parser builds it (lexbor's, as a browser's does):
+  # the html element's attributes, and its head's and body's children.
+  defp parsed(body) do
+    assert [{"html", attributes, [{"head", [], head}, {"body", _, body_nodes}]}] =
+             body |> LazyHTML.from_document() |> LazyHTML.to_tree()
+
+    %{html: attributes, head: head, body: body_nodes}
+  end
+
+  # The two elements CYFR's prefix puts first in the parsed head.
+  defp cyfr_elements(base) do
+    [
+      {"base", [{"href", base}], []},
+      {"script", [{"src", endpoint_origin() <> TinctureAssets.canvas_sdk_path()}], []}
+    ]
   end
 
   # What a URL the page writes resolves to under its `<base>`, as a path
@@ -216,19 +239,30 @@ defmodule Emissary.Web.CanvasControllerTest do
   # ---------------------------------------------------------------------------
 
   describe "the page" do
-    test "is the version's entry with its <base> and the SDK's script first in its head", %{
-      credential: credential,
-      open: open
-    } do
+    test "is CYFR's prefix and the version's entry as published, its <base> and the SDK's " <>
+           "script first in the head the browser parses",
+         %{credential: credential, open: open} do
       conn = page(credential, open.frame_id, headers: [{"accept-encoding", "gzip"}])
       assert conn.status == 200
       body = conn.resp_body
 
-      # The entry's bytes whole, with CYFR's two tags right after its
-      # `<head>`: the `<base>`, then the SDK's script, and nothing else.
-      {_base, tags} = canvas_tags(credential, "page-canvas")
-      [before, rest] = String.split(@entry, "<head>", parts: 2)
-      assert body == before <> "<head>" <> tags <> rest
+      # Exactly the prefix, a doctype, the `<base>` and the SDK's script,
+      # then the entry's bytes whole: nothing of the entry is moved.
+      {base, prefix} = canvas_prefix(credential, "page-canvas")
+      assert body == prefix <> @entry
+
+      # Parsed, CYFR's two elements are the head's first, the entry's own
+      # head children follow them there, and its `<html>` keeps its `lang`.
+      assert parsed(body) == %{
+               html: [{"lang", "en"}],
+               head:
+                 cyfr_elements(base) ++
+                   [
+                     {"meta", [{"charset", "utf-8"}], []},
+                     {"link", [{"rel", "stylesheet"}, {"href", "style.css"}], []}
+                   ],
+               body: [{"main", [{"id", "app"}], []}, {"script", [{"src", "app.js"}], []}]
+             }
 
       # No nonce anywhere, and no inline script: every script element
       # loads its source.
@@ -293,7 +327,7 @@ defmodule Emissary.Web.CanvasControllerTest do
       # script can read in its URL: in the body it is only in the `<base>`
       # that resolves the page's relative URLs under that address.
       assert Prima.TinctureWire.page_path(credential, open.frame_id) =~ credential
-      {base, _tags} = canvas_tags(credential, "page-canvas")
+      {base, _prefix} = canvas_prefix(credential, "page-canvas")
       assert [_one] = Regex.scan(~r/#{Regex.escape(credential)}/, body)
       assert body =~ ~s(<base href="#{base}">)
 
@@ -312,12 +346,60 @@ defmodule Emissary.Web.CanvasControllerTest do
       end
     end
 
+    # The entry's markup is never read: an uppercase `<HEAD>`, or a
+    # `<head>` inside a comment before the real one, leaves the prefix
+    # and the entry's bytes as they are, the head the parser builds starts
+    # with CYFR's two elements, and the page's relative URLs load its own
+    # files under the `<base>`.
+    for {label, name, entry} <- [
+          {"an uppercase <HEAD>", "uppercase-head", String.replace(@entry, "<head>", "<HEAD>")},
+          {"a comment naming <head> before the head", "comment-head",
+           "<!-- <head> is the HTML head -->" <> @entry}
+        ] do
+      @tag canvas_entry: entry, canvas_name: name
+      test "a page with #{label} is the prefix and its entry, and loads its assets", %{
+        source: source,
+        canvas_entry: entry,
+        canvas_name: name
+      } do
+        digest = canvas!(source, name)
+        files = [{"index.html", entry} | List.keydelete(@files, "index.html", 0)]
+        lay!(source, name, files)
+        credential = asset!(source, digest)
+        open = frame!(source, name, digest)
+
+        conn = page(credential, open.frame_id)
+        assert conn.status == 200
+        {base, prefix} = canvas_prefix(credential, name)
+        assert conn.resp_body == prefix <> entry
+
+        %{html: html, head: head} = parsed(conn.resp_body)
+        assert html == [{"lang", "en"}]
+        assert Enum.take(head, 2) == cyfr_elements(base)
+
+        assert Enum.reject(head, &match?({:comment, _}, &1)) ==
+                 cyfr_elements(base) ++
+                   [
+                     {"meta", [{"charset", "utf-8"}], []},
+                     {"link", [{"rel", "stylesheet"}, {"href", "style.css"}], []}
+                   ]
+
+        for {url, file} <- [{"app.js", "app.js"}, {"style.css", "style.css"}] do
+          {path, served} = resolved(base, url)
+          assert path == Prima.TinctureUrl.asset_path(credential, ["local", name, @version, file])
+
+          assert {served.status, served.resp_body} ==
+                   {200, List.keyfind(files, file, 0) |> elem(1)}
+        end
+      end
+    end
+
     test "a vanilla page's relative URLs resolve to the version's own files under its <base>", %{
       credential: credential,
       open: open
     } do
       assert page(credential, open.frame_id).status == 200
-      {base, _tags} = canvas_tags(credential, "page-canvas")
+      {base, _prefix} = canvas_prefix(credential, "page-canvas")
 
       for {url, file} <- [{"app.js", "app.js"}, {"./style.css", "style.css"}] do
         {path, conn} = resolved(base, url)
@@ -364,9 +446,8 @@ defmodule Emissary.Web.CanvasControllerTest do
       assert conn.status == 200
 
       # The built entry is the page, its `<base>` its build's directory.
-      {base, tags} = canvas_tags(credential, "react-canvas", "dist/")
-      [before, rest] = String.split(entry, "<head>", parts: 2)
-      assert conn.resp_body == before <> "<head>" <> tags <> rest
+      {base, prefix} = canvas_prefix(credential, "react-canvas", "dist/")
+      assert conn.resp_body == prefix <> entry
       refute conn.resp_body =~ "source"
 
       for {url, file, bytes} <- [
@@ -400,13 +481,15 @@ defmodule Emissary.Web.CanvasControllerTest do
       conn = page(credential, open.frame_id)
       assert conn.status == 200
 
-      {base, tags} = canvas_tags(credential, "based-canvas")
-      assert String.starts_with?(conn.resp_body, "<html><head>" <> tags <> "<base href=")
+      {base, prefix} = canvas_prefix(credential, "based-canvas")
+      assert conn.resp_body == prefix <> entry
 
-      # The first `<base>` is the document's; and the policy lets a `<base>`
-      # name the version's own files and nothing else.
-      [first | _] = Regex.scan(~r/<base href="([^"]*)">/, conn.resp_body, capture: :all_but_first)
-      assert first == [base]
+      # The first `<base>` of the head the parser builds is CYFR's, so it is
+      # the document's; and the policy lets a `<base>` name the version's
+      # own files and nothing else.
+      assert parsed(conn.resp_body).head ==
+               cyfr_elements(base) ++
+                 [{"base", [{"href", "https://elsewhere.example/"}], []}, {"title", [], ["x"]}]
 
       [policy] = get_resp_header(conn, "content-security-policy")
       assert policy =~ "; base-uri #{endpoint_origin()}/_s/#{credential}/;"

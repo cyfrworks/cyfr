@@ -19,13 +19,23 @@ defmodule Emissary.Web.CanvasController do
   as a version's served files answer it
   (`Emissary.Web.TinctureController`): that refuses nothing.
 
-  The body is the version's entry, read through `Arca` as every served
-  file is (`Emissary.Web.TinctureAssets.canvas_page/5`), with two tags put
-  first in its `<head>`: a `<base>` naming the entry's directory under the
+  The body is CYFR's prefix followed by the version's entry, read through
+  `Arca` as every served file is and sent byte for byte as published
+  (`Emissary.Web.TinctureAssets.canvas_page/5`). The prefix is
+  `<!doctype html>`, then a `<base>` naming the entry's directory under the
   version's served prefix and the asset credential, so the page's
-  relative URLs resolve to its own files, and the SDK's script from its
-  one path (`Emissary.Web.TinctureAssets.canvas_sdk_path/0`). No inline
-  script runs in the page and none carries a nonce. The page's policy is
+  relative URLs resolve to its own files, then the SDK's script from its
+  one path (`Emissary.Web.TinctureAssets.canvas_sdk_path/0`). No HTML of
+  the entry is read or matched: the HTML parser puts the two elements
+  first in the document's head whatever the entry holds. Before any
+  `<html>` or `<head>` tag, the `<base>` makes the parser create the html
+  and head elements and both elements land in that head. The entry's own
+  doctype is then ignored, its `<html>` start tag adds its attributes
+  (`lang` among them) to the html element, its `<head>` start tag is
+  ignored, and its head's children follow CYFR's two in the same head; a
+  comment before them is kept as a comment. The leading doctype keeps the
+  page out of quirks mode. No inline script runs in the page and none
+  carries a nonce. The page's policy is
   the canvas's one policy (`Compendium.tincture_canvas_page_csp/1`),
   which names the version's files under the credential, the SDK's path,
   the open's own data path and the shell. The page carries no credential
@@ -157,13 +167,14 @@ defmodule Emissary.Web.CanvasController do
 
   defp decode_manifest(_manifest), do: %{}
 
-  # The page: the version's entry with its `<base>` and the SDK's script
-  # first in its head, under the canvas's policy and the served files'
-  # document headers, except that the page is never cached and carries no
+  # The page: CYFR's prefix and the version's entry as published, under
+  # the canvas's policy and the served files' document headers, except
+  # that the page is never cached and carries no
   # `access-control-allow-origin`: only the shell frames it. The body is
-  # the version's own immutable entry and tags built from the credential
-  # the route verified and the version it names; nothing in it is echoed
-  # from the request, so Sobelow's send_resp finding does not apply here.
+  # the version's own immutable entry after a prefix built from the
+  # credential the route verified and the version it names; nothing in it
+  # is echoed from the request, so Sobelow's send_resp finding does not
+  # apply here.
   # sobelow_skip ["XSS.SendResp"]
   defp page(conn, ctx, version, credential, frame_id) do
     # The shell is framed from the endpoint's own origin, as a tincture
