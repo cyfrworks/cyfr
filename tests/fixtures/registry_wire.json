@@ -1,0 +1,3226 @@
+{
+  "answers": [
+    {
+      "bytes": "{\"address\":\"https://alice.example\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "handle": "alice",
+      "name": "an answer with a published address",
+      "registry": "cyfr.run",
+      "result": {
+        "address": "https://alice.example",
+        "directory": "https://cyfr.run",
+        "handle": "alice",
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "registry": "cyfr.run"
+      }
+    },
+    {
+      "bytes": "{\"address\":\"http://alice.example:4000\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "handle": "alice",
+      "name": "an answer with an address on a port",
+      "registry": "cyfr.run",
+      "result": {
+        "address": "http://alice.example:4000",
+        "directory": "https://cyfr.run",
+        "handle": "alice",
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "registry": "cyfr.run"
+      }
+    },
+    {
+      "bytes": "{\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "handle": "alice",
+      "name": "an answer with no published address",
+      "registry": "cyfr.run",
+      "result": {
+        "directory": "https://cyfr.run",
+        "handle": "alice",
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "registry": "cyfr.run"
+      }
+    },
+    {
+      "bytes": "{\"directory\":\"https://directory.example/v1\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "handle": "alice",
+      "name": "an answer whose owner names another directory",
+      "registry": "cyfr.run",
+      "result": {
+        "directory": "https://directory.example/v1",
+        "handle": "alice",
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "registry": "cyfr.run"
+      }
+    },
+    {
+      "bytes": "{\"address\":null,\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "an address of null",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"address\":\"https://alice.example/home\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "an address with a path",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"address\":\"https://alice.example?x=1\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "an address with a query",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"address\":\"https://bob@alice.example\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "an address with a user part",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"address\":\"https://alice.example:443\",\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "an address naming the default port",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"directory\":\"https://cyfr.run\",\"handle\":\"bob\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "an answer for another handle",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"registry.example\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "an answer from another registry",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v2\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "another protocol",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"keys\":[],\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "an unknown key",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "no identifier",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"directory\":\"https://cyfr.run\",\"handle\":\"alice\",\"identifier\":\"usr_0000000000000000000000000000000000000000000000000000000000000000\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "an identifier that is not one",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"directory\":\"https://cyfr.run?x=1\",\"handle\":\"alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "a directory with a query",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"directory\":\"https://cyfr.run\",\"handle\":\"Alice\",\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"protocol\":\"cyfr-handle/v1\",\"registry\":\"cyfr.run\"}",
+      "error": "malformed_answer",
+      "handle": "Alice",
+      "name": "a handle asked outside the grammar",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "alice is per_",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "not JSON",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "[]",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "a JSON array",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"HANDLE_NOT_FOUND\",\"message\":\"handle not found\"}]}\n",
+      "error": "handle_not_found",
+      "handle": "alice",
+      "name": "a handle no one holds",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"RATE_LIMITED\",\"message\":\"too many requests\"}]}\n",
+      "error": "rate_limited",
+      "handle": "alice",
+      "name": "too many lookups",
+      "registry": "cyfr.run"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"NOT_FOUND\",\"message\":\"not found\"}]}\n",
+      "error": "malformed_answer",
+      "handle": "alice",
+      "name": "an envelope with a code outside the table",
+      "registry": "cyfr.run"
+    }
+  ],
+  "codes": [
+    {
+      "code": "REQUEST_MALFORMED",
+      "refusal": "request_malformed",
+      "status": 400
+    },
+    {
+      "code": "WRONG_PROTOCOL",
+      "refusal": "wrong_protocol",
+      "status": 400
+    },
+    {
+      "code": "WRONG_REGISTRY",
+      "refusal": "wrong_registry",
+      "status": 400
+    },
+    {
+      "code": "UNKNOWN_OPERATION",
+      "refusal": "unknown_operation",
+      "status": 400
+    },
+    {
+      "code": "REQUEST_EXPIRED",
+      "refusal": "expired",
+      "status": 400
+    },
+    {
+      "code": "EXPIRY_TOO_FAR",
+      "refusal": "expiry_too_far",
+      "status": 400
+    },
+    {
+      "code": "UNKNOWN_IDENTITY",
+      "refusal": "unknown_identity",
+      "status": 404
+    },
+    {
+      "code": "DIRECTORY_UNAVAILABLE",
+      "refusal": "directory_unavailable",
+      "status": 503
+    },
+    {
+      "code": "WRONG_DIRECTORY",
+      "refusal": "wrong_directory",
+      "status": 403
+    },
+    {
+      "code": "STALE_KEY_EPOCH",
+      "refusal": "stale_key_epoch",
+      "status": 409
+    },
+    {
+      "code": "BAD_SIGNATURE",
+      "refusal": "bad_signature",
+      "status": 401
+    },
+    {
+      "code": "REPLAYED",
+      "refusal": "replayed",
+      "status": 409
+    },
+    {
+      "code": "IDENTITY_BANNED",
+      "refusal": "banned",
+      "status": 403
+    },
+    {
+      "code": "SLUG_TAKEN",
+      "refusal": "handle_taken",
+      "status": 409
+    },
+    {
+      "code": "ALREADY_CLAIMED",
+      "refusal": "has_other_handle",
+      "status": 409
+    },
+    {
+      "code": "INVALID_USERNAME",
+      "refusal": "handle_invalid",
+      "status": 400
+    },
+    {
+      "code": "RESERVED",
+      "refusal": "handle_reserved",
+      "status": 400
+    },
+    {
+      "code": "NO_HANDLE",
+      "refusal": "no_handle",
+      "status": 409
+    },
+    {
+      "code": "NAMESPACE_RESERVED",
+      "refusal": "namespace_reserved",
+      "status": 403
+    },
+    {
+      "code": "CLAIM_NOT_PENDING",
+      "refusal": "claim_not_pending",
+      "status": 409
+    },
+    {
+      "code": "DNS_UNVERIFIED",
+      "refusal": "dns_unverified",
+      "status": 400
+    },
+    {
+      "code": "DNS_TIMEOUT",
+      "refusal": "dns_timeout",
+      "status": 504
+    },
+    {
+      "code": "POLICY_ACCEPTANCE_REQUIRED",
+      "refusal": "policy_required",
+      "status": 412
+    },
+    {
+      "code": "RATE_LIMITED",
+      "refusal": "rate_limited",
+      "status": 429
+    },
+    {
+      "code": "HANDLE_NOT_FOUND",
+      "refusal": "handle_not_found",
+      "status": 404
+    }
+  ],
+  "comment": "The vectors pinning Prima.RegistryRequest (cyfr-registry-request/v1) and Prima.HandleAnswer (cyfr-handle/v1), read by CYFR and by the registry at cyfr.run. Every side derives each public key from its seed; walks the identity entries to each head, reproducing its identifier, directory, key_epoch, recovery_epoch and live key; re-signs every request whose signer is named and reproduces its sig byte for byte, and its bytes as the JCS form of the request; verifies each verify case's bytes (the named request's JCS bytes, padded with trailing spaces to pad_with_spaces_to when present) as the registry named (its host and the directory every identity it accepts names) at now_ms (Unix milliseconds) under the named head, reaching the result or the refusal; does the same with each refusal's input (request, sent as its JSON, or raw, sent as those exact bytes; a request whose signer is null was altered after signing or is not signed at all); holds each handle and publisher spelling under slugs to the grammar of a handle.claim or publisher.claim body; and parses each answer's bytes for the handle and registry asked, reaching its result, which encodes back to those bytes, or its refusal. Refusals are checked in the order: size, JSON, exact keys and their types; protocol; registry; operation and body; expiry; the head's identifier; the head's directory; key_epoch; signature. A request expires at expires_at and may expire at most 360000 ms after the clock. JCS has no null: an address.set body without address withdraws the address, and an answer without address has none published; a null anywhere is refused. Under codes, every refusal of the protocol and of the handle answer: CYFR's name, the code the registry writes in its error envelope {\"errors\":[{\"code\",\"message\"}]} and the HTTP status; every refusal named under verify, refusals, envelopes and answers is one of them. Each envelope's bytes read back to the refusal named, or are refused as malformed_answer; an answer's bytes that are an envelope read back to its refusal. An envelope's first error carries a string message, and a null anywhere in an envelope is refused. A request is at most 16384 bytes as sent; one whose escaped content passes that bound is refused by its signer as by the registry.",
+  "envelopes": [
+    {
+      "bytes": "{\"errors\":[{\"code\":\"REQUEST_MALFORMED\",\"message\":\"refused\"}]}\n",
+      "name": "the request_malformed envelope",
+      "refusal": "request_malformed"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"WRONG_PROTOCOL\",\"message\":\"refused\"}]}\n",
+      "name": "the wrong_protocol envelope",
+      "refusal": "wrong_protocol"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"WRONG_REGISTRY\",\"message\":\"refused\"}]}\n",
+      "name": "the wrong_registry envelope",
+      "refusal": "wrong_registry"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"UNKNOWN_OPERATION\",\"message\":\"refused\"}]}\n",
+      "name": "the unknown_operation envelope",
+      "refusal": "unknown_operation"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"REQUEST_EXPIRED\",\"message\":\"refused\"}]}\n",
+      "name": "the expired envelope",
+      "refusal": "expired"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"EXPIRY_TOO_FAR\",\"message\":\"refused\"}]}\n",
+      "name": "the expiry_too_far envelope",
+      "refusal": "expiry_too_far"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"UNKNOWN_IDENTITY\",\"message\":\"refused\"}]}\n",
+      "name": "the unknown_identity envelope",
+      "refusal": "unknown_identity"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"DIRECTORY_UNAVAILABLE\",\"message\":\"refused\"}]}\n",
+      "name": "the directory_unavailable envelope",
+      "refusal": "directory_unavailable"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"WRONG_DIRECTORY\",\"message\":\"refused\"}]}\n",
+      "name": "the wrong_directory envelope",
+      "refusal": "wrong_directory"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"STALE_KEY_EPOCH\",\"message\":\"refused\"}]}\n",
+      "name": "the stale_key_epoch envelope",
+      "refusal": "stale_key_epoch"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"BAD_SIGNATURE\",\"message\":\"refused\"}]}\n",
+      "name": "the bad_signature envelope",
+      "refusal": "bad_signature"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"REPLAYED\",\"message\":\"refused\"}]}\n",
+      "name": "the replayed envelope",
+      "refusal": "replayed"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"IDENTITY_BANNED\",\"message\":\"refused\"}]}\n",
+      "name": "the banned envelope",
+      "refusal": "banned"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"SLUG_TAKEN\",\"message\":\"refused\"}]}\n",
+      "name": "the handle_taken envelope",
+      "refusal": "handle_taken"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"ALREADY_CLAIMED\",\"message\":\"refused\"}]}\n",
+      "name": "the has_other_handle envelope",
+      "refusal": "has_other_handle"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"INVALID_USERNAME\",\"message\":\"refused\"}]}\n",
+      "name": "the handle_invalid envelope",
+      "refusal": "handle_invalid"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"RESERVED\",\"message\":\"refused\"}]}\n",
+      "name": "the handle_reserved envelope",
+      "refusal": "handle_reserved"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"NO_HANDLE\",\"message\":\"refused\"}]}\n",
+      "name": "the no_handle envelope",
+      "refusal": "no_handle"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"NAMESPACE_RESERVED\",\"message\":\"refused\"}]}\n",
+      "name": "the namespace_reserved envelope",
+      "refusal": "namespace_reserved"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"CLAIM_NOT_PENDING\",\"message\":\"refused\"}]}\n",
+      "name": "the claim_not_pending envelope",
+      "refusal": "claim_not_pending"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"DNS_UNVERIFIED\",\"message\":\"refused\"}]}\n",
+      "name": "the dns_unverified envelope",
+      "refusal": "dns_unverified"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"DNS_TIMEOUT\",\"message\":\"refused\"}]}\n",
+      "name": "the dns_timeout envelope",
+      "refusal": "dns_timeout"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"POLICY_ACCEPTANCE_REQUIRED\",\"message\":\"refused\"}]}\n",
+      "name": "the policy_required envelope",
+      "refusal": "policy_required"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"RATE_LIMITED\",\"message\":\"refused\"}]}\n",
+      "name": "the rate_limited envelope",
+      "refusal": "rate_limited"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"HANDLE_NOT_FOUND\",\"message\":\"refused\"}]}\n",
+      "name": "the handle_not_found envelope",
+      "refusal": "handle_not_found"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"POLICY_ACCEPTANCE_REQUIRED\",\"message\":\"accept the policy\"}],\"required_version\":\"v2\"}\n",
+      "name": "a policy refusal with the version to accept",
+      "refusal": "policy_required"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"INTERNAL\",\"message\":\"internal\"}]}",
+      "error": "malformed_answer",
+      "name": "a code outside the table"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"slug_taken\",\"message\":\"taken\"}]}",
+      "error": "malformed_answer",
+      "name": "a code in lower case"
+    },
+    {
+      "bytes": "{\"errors\":[]}",
+      "error": "malformed_answer",
+      "name": "no errors"
+    },
+    {
+      "bytes": "{\"errors\":[{\"message\":\"taken\"}]}",
+      "error": "malformed_answer",
+      "name": "an error without a code"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":409,\"message\":\"taken\"}]}",
+      "error": "malformed_answer",
+      "name": "a code that is not a string"
+    },
+    {
+      "bytes": "{\"code\":\"SLUG_TAKEN\"}",
+      "error": "malformed_answer",
+      "name": "an object without errors"
+    },
+    {
+      "bytes": "Bad Gateway",
+      "error": "malformed_answer",
+      "name": "not JSON"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"SLUG_TAKEN\"}]}",
+      "error": "malformed_answer",
+      "name": "an error without a message"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"SLUG_TAKEN\",\"message\":null}]}",
+      "error": "malformed_answer",
+      "name": "a null message"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"SLUG_TAKEN\",\"message\":409}]}",
+      "error": "malformed_answer",
+      "name": "a message that is not a string"
+    },
+    {
+      "bytes": "{\"errors\":[{\"code\":\"POLICY_ACCEPTANCE_REQUIRED\",\"message\":\"accept\"}],\"required_version\":null}",
+      "error": "malformed_answer",
+      "name": "a null beside the errors"
+    }
+  ],
+  "identity": {
+    "entries": {
+      "elsewhere": {
+        "entry": {
+          "directory": "https://directory.example",
+          "kind": "genesis",
+          "live_key": "izvwid1gv2gjLcroLbURU8WRYLQV6jU6nI71c3jXmKY",
+          "operational_key": "Ot4hSbOmkyKmJr85hpYOg8yScrb7zA26D8BePjBLrjw",
+          "protocol": "cyfr-identity/v1",
+          "recovery_keys": [
+            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+          ],
+          "revision": 0,
+          "sig": "vwLl1IlNSg3fPc5RHbWzv2osciq7udxIF1utIokYMI960o3zXBl69edDepkfJQ_v0NHaVqDrrsSTUBOow3F-CQ"
+        },
+        "hash": "sha256:6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "signer": "bob_op"
+      },
+      "genesis": {
+        "entry": {
+          "directory": "https://cyfr.run",
+          "kind": "genesis",
+          "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+          "operational_key": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+          "protocol": "cyfr-identity/v1",
+          "recovery_keys": [
+            "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc"
+          ],
+          "revision": 0,
+          "sig": "SQ_0_rt8UcXKi_5py7KhA601JNXcAZZa1eJ5TGZ3CIH616w7vb1wyWi9QjfUBU4EjIox_B5OUgbkxBNy5ZvrBg"
+        },
+        "hash": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "signer": "alice_op_1"
+      },
+      "recover": {
+        "entry": {
+          "kind": "recover",
+          "prev": "sha256:4e5be689c56cbd17c9168fcfc0370e6a6ff1152eac6e55ecc9a9b4f7d7c3a3b2",
+          "protocol": "cyfr-identity/v1",
+          "request": {
+            "directory": "https://cyfr.run",
+            "expected_revision": 0,
+            "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+            "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
+            "operational_key": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+            "protocol": "cyfr-identity/v1",
+            "request_id": "req-alice-1",
+            "sig": "Go41lhgYKIbxrsg5IFn4EMzRfJx_Mb4xKLjmQQmtoGIZXELUYXOxpYumHbQvNyRX-1AGbVi50pXYh59lGGsaAA"
+          }
+        },
+        "hash": "sha256:479fe0e6cde2a19ea8aafebb6d74e3cbe2f7e55a6b32659b108105c307590b3f",
+        "signer": "kit_a"
+      },
+      "rotate": {
+        "entry": {
+          "kind": "rotate",
+          "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+          "prev": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+          "protocol": "cyfr-identity/v1",
+          "sig": "vX5cNutPihk_YrePdJcUjKMS2Up3QFmV5Ie-w-nDPV4GTUqJlJqlhOeM8i_QDHnDncefZOaal9y1tKovgoUGAg"
+        },
+        "hash": "sha256:4e5be689c56cbd17c9168fcfc0370e6a6ff1152eac6e55ecc9a9b4f7d7c3a3b2",
+        "signer": "alice_op_1"
+      }
+    },
+    "heads": {
+      "elsewhere": {
+        "directory": "https://directory.example",
+        "entries": [
+          "elsewhere"
+        ],
+        "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "key_epoch": "sha256:6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "live_key": "izvwid1gv2gjLcroLbURU8WRYLQV6jU6nI71c3jXmKY",
+        "recovery_epoch": "sha256:6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9"
+      },
+      "genesis": {
+        "directory": "https://cyfr.run",
+        "entries": [
+          "genesis"
+        ],
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "live_key": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+        "recovery_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992"
+      },
+      "recovered": {
+        "directory": "https://cyfr.run",
+        "entries": [
+          "genesis",
+          "rotate",
+          "recover"
+        ],
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:479fe0e6cde2a19ea8aafebb6d74e3cbe2f7e55a6b32659b108105c307590b3f",
+        "live_key": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
+        "recovery_epoch": "sha256:479fe0e6cde2a19ea8aafebb6d74e3cbe2f7e55a6b32659b108105c307590b3f"
+      },
+      "rotated": {
+        "directory": "https://cyfr.run",
+        "entries": [
+          "genesis",
+          "rotate"
+        ],
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:4e5be689c56cbd17c9168fcfc0370e6a6ff1152eac6e55ecc9a9b4f7d7c3a3b2",
+        "live_key": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+        "recovery_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992"
+      }
+    }
+  },
+  "keys": {
+    "alice_live_1": {
+      "public": "z4SbNwACH3EJP0catDkfCNQWpQNdsYAUCTHlKOcyrGU",
+      "seed": "4vIF-wGusnX6R8S7SdjJjBxW6dBj3EU4QcOQUbcbIe4"
+    },
+    "alice_live_2": {
+      "public": "Wc8SfHJKHZOrNh0Qtc7YtRAUCUS82P-Gt8-1horAyAo",
+      "seed": "3Qr8Wgo0gayyfmVRyc1AnQvPy6Sm-IO3J5IJr4PLBUk"
+    },
+    "alice_live_3": {
+      "public": "_GWuSiJv2Lma_tc6LEN-KJWvA02IH6onW8hxh4qXtTw",
+      "seed": "7nF-tWgTc0ssOVcktGwGSXhuHb9ildATVJf5CNNqabE"
+    },
+    "alice_op_1": {
+      "public": "eeutcBO3svGffX_iz5AhBmlHb_sKTBBh1ftMjsgQU5o",
+      "seed": "jPMRJIjhizAe6c-JHpn_mu0pkNgRyKnng33Q-29zt2g"
+    },
+    "alice_op_3": {
+      "public": "5eAt0KUYrcCNFtmeYPxn9ZEHl_EfSHyKshvGq8FCOGU",
+      "seed": "4XttHfIMyvlJywy8bMskQgZQGCa1UPMh7Qm2ccBB2WA"
+    },
+    "bob_live": {
+      "public": "izvwid1gv2gjLcroLbURU8WRYLQV6jU6nI71c3jXmKY",
+      "seed": "229bxvj6IOXutXkKfZRBVu8J8XIkYFAF7YYUSh4VxoE"
+    },
+    "bob_op": {
+      "public": "Ot4hSbOmkyKmJr85hpYOg8yScrb7zA26D8BePjBLrjw",
+      "seed": "36LAjjXux6K0-YLe-MzxRF3z3wO-cSjarLfzZ_uZqZg"
+    },
+    "kit_a": {
+      "public": "0OxTidkGKIVD1DjlN78M2Lu5h8USUYAbnaqqniXRcNc",
+      "seed": "ykx6n7J2WvwsQ09vE1IqJO_R1Q8mUXP41S-J7RGvQVs"
+    },
+    "stranger": {
+      "public": "uVBfMdqGCeReZTvOumX3dKEkwpJ1DvjpXrIbcwZCnrM",
+      "seed": "ldiVKG7kxLyNRN_VHEKHfueVbbSQg6yAFDXkOpRuj8I"
+    }
+  },
+  "refusals": [
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "not JSON",
+      "now_ms": 1790000001000,
+      "raw": "claim alice",
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      }
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a JSON array",
+      "now_ms": 1790000001000,
+      "raw": "[]",
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      }
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a float expires_at",
+      "now_ms": 1790000001000,
+      "raw": "{\"body\":{\"handle\":\"alice\"},\"expires_at\":1790000120000.0,\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"key_epoch\":\"sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"nonce\":\"bC7c9mJKIdcAnjLRAU4Tyw\",\"operation\":\"handle.claim\",\"protocol\":\"cyfr-registry-request/v1\",\"registry\":\"cyfr.run\",\"sig\":\"U34K3eQZQuHWjmKXb_z6y6r03HG-0p5z1TQ0h-EhKz3r0EJ9C237m0n-0csizSMeg1SUBawPXWrthE2YrihLBA\"}",
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      }
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an expires_at of 1.0",
+      "now_ms": 1790000001000,
+      "raw": "{\"body\":{\"handle\":\"alice\"},\"expires_at\":1.0,\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"key_epoch\":\"sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"nonce\":\"bC7c9mJKIdcAnjLRAU4Tyw\",\"operation\":\"handle.claim\",\"protocol\":\"cyfr-registry-request/v1\",\"registry\":\"cyfr.run\",\"sig\":\"U34K3eQZQuHWjmKXb_z6y6r03HG-0p5z1TQ0h-EhKz3r0EJ9C237m0n-0csizSMeg1SUBawPXWrthE2YrihLBA\"}",
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      }
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an expires_at in exponent form",
+      "now_ms": 1790000001000,
+      "raw": "{\"body\":{\"handle\":\"alice\"},\"expires_at\":1.79000012E12,\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"key_epoch\":\"sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"nonce\":\"bC7c9mJKIdcAnjLRAU4Tyw\",\"operation\":\"handle.claim\",\"protocol\":\"cyfr-registry-request/v1\",\"registry\":\"cyfr.run\",\"sig\":\"U34K3eQZQuHWjmKXb_z6y6r03HG-0p5z1TQ0h-EhKz3r0EJ9C237m0n-0csizSMeg1SUBawPXWrthE2YrihLBA\"}",
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      }
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an expires_at past 2^53",
+      "now_ms": 1790000001000,
+      "raw": "{\"body\":{\"handle\":\"alice\"},\"expires_at\":9007199254740993,\"identifier\":\"per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"key_epoch\":\"sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992\",\"nonce\":\"bC7c9mJKIdcAnjLRAU4Tyw\",\"operation\":\"handle.claim\",\"protocol\":\"cyfr-registry-request/v1\",\"registry\":\"cyfr.run\",\"sig\":\"U34K3eQZQuHWjmKXb_z6y6r03HG-0p5z1TQ0h-EhKz3r0EJ9C237m0n-0csizSMeg1SUBawPXWrthE2YrihLBA\"}",
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      }
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an unknown key",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "session": "abc",
+        "sig": "oV1S-ofmOMpul3du2k0MPy8m8Yz5l3i-ObDr7Cprm2S_uLh_yR9-EUa2ynEzHXGSF53fPoPZOFaf9lWh_WDKDQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "no nonce",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "gRqCSwJwqonsAzWVqUbQouNvuRXx1stjZMFfafPIVCscYyZeWxN08bQKmwc7xnBgCcdX20vUemSv8qy02ALVAg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "no body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "445Pm0EpQI71gpVyVdbeWGTQwhpLIuUASVHPlIP8KZCAgfzYOCLIlC5ZtLvYMj5yu9Zyy6Vnq-exFP1nG-JHCA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "no sig",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run"
+      },
+      "signer": null
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a sig of 63 bytes",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH"
+      },
+      "signer": null
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a padded nonce",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw==",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "kvCcCKLsVMdoXiNLtEbjVQ82BrUJbD6JHTSXyOe7fnRJsnq8bjw7kRFlsyRB4ZERiTVODUHZ-K2qTtBBT9yZBg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a nonce of 15 bytes",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "AQEBAQEBAQEBAQEBAQEB",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "1Vw-374LFSKHZ3pVAQ0J05_MrtNPYYGJqG7tk8Rq4nMLS0A5fmC1pLaZngEilda9TbboV3ZImGq6tkCQn-FnAQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an expires_at as a string",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": "1790000120000",
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "E60mTtYzUih8r3d9uiHhDyRKljZNwNoGpmiIpgj4kpy7lSi6iaDuylrzjn821ZdPnVHHNwQLJuzL1518WY_fAw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a negative expires_at",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": -1,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "U5ZmI4VNZhgpLAyFWsq8_2kg82tu_1YQ5E4PL1mkZBxdGDKrAy_uRx7h_zToye3E-OzjCbiwgl8PPVGLW14lBw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an identifier in capitals",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "PER_6AF2297AC1A8679976851B4DAF80E1004ED005105471A6EDECB0C511B3E60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "o_c7U_cArGkH9Xhtkn8JF-pshzJ8LKdY5ZEtcoh9qNK4F1hHwlXIvpZSw0Osi98jVD5tm7TKTsotXZ1Ouv2HDw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a key_epoch that is not a digest",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "epoch-1",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "0Eh122AnAlFMnKqWpfSAgDR0HKxaT6_8zgnTgO8IkxAKD05H5ymXohrx7Xjsa4s3LuOsGhRwDI7vMXjMThCNBA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a registry in capitals",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "CYFR.RUN",
+        "sig": "NMriucIJrayKAX9WP0g8Ao3wBd5nCgCBf2dgDiIi02pHZ_KYjgtyia8XOtagp-9wmhKppOvgZKEgbmfn68BnAA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a registry as a URL",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "https://cyfr.run",
+        "sig": "T8pDZVAZSlb5dzEDm3Enu48sFEfeTXpHYrmuE3hpaYQDMZ9gq8MPVJeWPAle3yn1em_tC4D5U9UvGIlAbFSDAQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an operation that is not a string",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": 1,
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "3xfzjkKz9d9rbC4if0wIDmYGHNlbxdW4BV7ITCaFJbmbkW8QA5P3G236KagYRBJnjc6SqBNFgWwExzW6w4B0Cw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a body that is an array",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": [
+          "alice"
+        ],
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "bGLQ1GWKDuTqJVEsBYDssgSb5lucXP3RzYNFSysszUkqD9kBuU12FlB15riL3Uc7NOf6zse38WmD2hH1fQqCAQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an address of null",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "address": null
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "tco4phA-WVU97EKMmkI7AB-bnmrm5xxZuAX1ALFSzoDHUh86IFaZ-TJgAFgM6gkgrfidIaIglHwujG0MvhVVDg"
+      },
+      "signer": null
+    },
+    {
+      "error": "wrong_protocol",
+      "head": "genesis",
+      "name": "another protocol",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v2",
+        "registry": "cyfr.run",
+        "sig": "hsvDvKiO2OLuCyoQb_0ci2ONxrkCCAxoVzUSK5zNqv060WNKPKZpM0sx_ceTU-TQ-omdAqwDKp4dthpZ3LP3Bw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "another protocol with an unknown key: the keys are checked first",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v2",
+        "registry": "cyfr.run",
+        "session": "abc",
+        "sig": "j0OAXSLxm5K136LYGHDreK0wOoVt7V8ejKqkyPXVq5PWnsa6Rjy9cRX0Jj34Q6R_PjJPjBgAbGTKsHCZsubmBw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "wrong_registry",
+      "head": "genesis",
+      "name": "a request for another registry",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "registry.example",
+        "sig": "lOX_UuH4wKpNSRC2Ga7QxDS8OITXaGdw_3EibHnnrUwkujWCVwywd6b3cyHukBkitAy-W0HyG10qdj7q-_4QCQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "wrong_registry",
+      "head": "genesis",
+      "name": "another registry and an unknown operation: the registry is checked first",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.release",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "registry.example",
+        "sig": "b1n_QhyAmrIkCJ9bzlCN5onRLmw-hFG52O-LfNga7GF_xExs4Za_J-Skh_5g0y7mn_h6oF98FPzMTiaDNzIDDg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "unknown_operation",
+      "head": "genesis",
+      "name": "an unknown operation",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.release",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "XlGffJHoi69oLyxwqHi-G2qbyBJcy8J5UmFR5g-qHkEOWlA3tdZCr4fpQ_K_UF84xPkIRfHCzYGLCXR61Jz5DQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "unknown_operation",
+      "head": "genesis",
+      "name": "an unknown operation and an expiry passed: the operation is checked first",
+      "now_ms": 1790000120000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.release",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "XlGffJHoi69oLyxwqHi-G2qbyBJcy8J5UmFR5g-qHkEOWlA3tdZCr4fpQ_K_UF84xPkIRfHCzYGLCXR61Jz5DQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a body of another operation",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "tokens.mint",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "S4I-s_JVn2eVf-kuvWnAFjUHijrg_pGsg9MUQQ706lKcmgRDwXc7rf9__hwnpjw1oGKqh0Q8ixP1-aqfkcyoCA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "expired",
+      "head": "genesis",
+      "name": "an expired request",
+      "now_ms": 1790000120000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "U34K3eQZQuHWjmKXb_z6y6r03HG-0p5z1TQ0h-EhKz3r0EJ9C237m0n-0csizSMeg1SUBawPXWrthE2YrihLBA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "expiry_too_far",
+      "head": "genesis",
+      "name": "an expiry too far ahead",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000361001,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "fVzu3rCiMBSpdJ1E41amiqF2CIG-8YQ8GTV8hqQXsdAT1ajwCorTg5BEkr906XiJDhABXXB3XRP0w8vn9-K8DA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "unknown_identity",
+      "head": "elsewhere",
+      "name": "a head of another identifier",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "U34K3eQZQuHWjmKXb_z6y6r03HG-0p5z1TQ0h-EhKz3r0EJ9C237m0n-0csizSMeg1SUBawPXWrthE2YrihLBA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "wrong_directory",
+      "head": "elsewhere",
+      "name": "a genesis naming another directory",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "bob"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "key_epoch": "sha256:6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "nonce": "LgwI82c2hIkcoPVXGW-iUQ",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "5oREMISiQm6YwYYxmoT-P5MFwe6GlfVeYc_kzwL7HhzRB_kPclS2mXUGBsDeCAk4PxYEnkmwFufatJjW0XKWAg"
+      },
+      "signer": "bob_live"
+    },
+    {
+      "error": "stale_key_epoch",
+      "head": "rotated",
+      "name": "a superseded key_epoch",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "U34K3eQZQuHWjmKXb_z6y6r03HG-0p5z1TQ0h-EhKz3r0EJ9C237m0n-0csizSMeg1SUBawPXWrthE2YrihLBA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "bad_signature",
+      "head": "genesis",
+      "name": "a body altered after signing",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "mallory"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "U34K3eQZQuHWjmKXb_z6y6r03HG-0p5z1TQ0h-EhKz3r0EJ9C237m0n-0csizSMeg1SUBawPXWrthE2YrihLBA"
+      },
+      "signer": null
+    },
+    {
+      "error": "bad_signature",
+      "head": "genesis",
+      "name": "a signature by another key",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "MDNSEcTlI6u7hr87VtUaBTWZ7CaeZEBJqh2_ZiH0IY1SlKYUwGWYDVWr1eLv04xBa5hqveH6K1AGmxsIi0gbBg"
+      },
+      "signer": "stranger"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "handle.claim with an extra key in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "extra": "x",
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "X7cAPw4EbqdjezhdHTQ0HA",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "MyD708lpgHkCBweecffWHY1hfdPIwjWMTyVrSM-krpo4bc4ea43NeISNBDSZ57_SOfbJt-B-DmIGikOPvwwOCQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "handle.claim with no handle in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {},
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "X7cAPw4EbqdjezhdHTQ0HA",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "ndmjJSnmKJsEyyXxTAADp10w0R4ClPZsFwCzdF-OaUvs6__IG3MNQObz5bbKfh_KJEf9FUpZRVjpfibor3RMAw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "tokens.mint with an extra key in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "extra": "x",
+          "label": "laptop"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "5qIhxKsSSruUfbx34j5s9A",
+        "operation": "tokens.mint",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "JUh3MO36_Y_O8GtnjYliHNU2XMDNF6j4BOfH_Emi4XL1oTSesbVszez4VzFZ3NMMu8tUXPmiQllf_hd6Q4IpBg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "tokens.mint with no label in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {},
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "5qIhxKsSSruUfbx34j5s9A",
+        "operation": "tokens.mint",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "k95KRCywznt_wf6rWKiEhef02z45b0Ao1AiudCap26D8vqs0klk7uqEPigN3D1eABDPS__jGNgtS16KtJsqyAw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "address.set with an extra key in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "address": "https://alice.example",
+          "extra": "x"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "91aLsHBzL5dGCCpGIqA6ztP4JrjWIrEyQmX5hs1nK9Volofkb2RSaATNzGHGlG1teEl6f8f0rIZ1Y7Br2oftCQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "policy.accept with an extra key in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "extra": "x",
+          "policy_version": "v1"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "Q8Do7AJz4Ttpxo3vXgnepQ",
+        "operation": "policy.accept",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "JFtkL4cGbR9Rt8mROCs-6P59RsMbUPPq1oYXJ2kSo366KD2QWbCW9DRx3EaJ8PjpPoD4s-75Zu_KdhBtxr4dCQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "policy.accept with no policy_version in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {},
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "Q8Do7AJz4Ttpxo3vXgnepQ",
+        "operation": "policy.accept",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "5GfRe7nrGQ7bSrR08PjyWc0UxMfVkBfpt-XVRjHvStn71NAeVFeweaBp_QidCGXv2wsi4wCJXwPLb3Xvp9KuCw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "appeal.file with an extra key in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "action_ref": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+          "action_type": "ban",
+          "argument": "I published nothing that breaks the policy.\nPlease look again.",
+          "extra": "x"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "D_RyIpIKtigwWtd0vW0Z7w",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "gNKa-hZsBRa_en-LpJ7DL997nGHUTN0J9gp4LZbi75DZhmlcgLSXd8ddG5um1x8WadCX66kfouLVNFQEvt-rCQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "appeal.file with no action_ref in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "action_type": "ban",
+          "argument": "I published nothing that breaks the policy.\nPlease look again."
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "D_RyIpIKtigwWtd0vW0Z7w",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "lZnw4w17S3Jm6F_QGNRBeI7klU3xi1OoL3dOVbdkZ_LfOB3UYj-aYrBVZFm0sgbbNLa_uUTx4_neJsu4ZntxDQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "appeal.file with no action_type in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "action_ref": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+          "argument": "I published nothing that breaks the policy.\nPlease look again."
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "D_RyIpIKtigwWtd0vW0Z7w",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "CN3MR8lfS_hHA6tAJOJ9q0jKAQ3veBz0y9gxqNKx91YYz7muDQn4681eGfslgbkaXVxmuT8-z9Mm6gS6eAihDQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "appeal.file with no argument in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "action_ref": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+          "action_type": "ban"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "D_RyIpIKtigwWtd0vW0Z7w",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "i0F9NL-JgNzsmMBo2rbnpjE2KZyLKeCwFPF_jc0mObf6K1gfCgIxEo4lz0hy43sUDqdew7wdezlHg83d72Z0Bg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "publisher.claim with an extra key in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "extra": "x",
+          "slug": "alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "S9eFMuchNRbdO4RweOnPCw",
+        "operation": "publisher.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "aonNLJvMT5gJl28PF2SFCMvfbn4NQVdz1KED5xwTPn8TETnhSx0GKP7OzUJv5OZUO3NAC6JDKxv8VcxXGdPhAQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "publisher.claim with no slug in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {},
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "S9eFMuchNRbdO4RweOnPCw",
+        "operation": "publisher.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "jYKp7tDGfpVQqUzep6PUf3ce-5Jsg0xNfoKCKjSCSA_f9DmadGf6uYt3m_v_RF5kemr1vTiopKzlPaZrA3OPDQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "publisher.verify with an extra key in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "extra": "x",
+          "label": "laptop",
+          "slug": "alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "47Fz-aSseeMsD9JliHbZXA",
+        "operation": "publisher.verify",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "tQQaCxGTmnu1ZlpkQA96h_4J5oxSx2vbbU4Mg6M56gpe9jnZ5BZj3YvlwHDfvAFB4lPO9K4yv-6Nj06ZNCCTAA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "publisher.verify with no label in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "slug": "alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "47Fz-aSseeMsD9JliHbZXA",
+        "operation": "publisher.verify",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "O8gxGfLpobfmjt8VRGjXvHeHsA4efPtnnjffxexpmcmKFtwDJRytvSX9BfiB2qp1hcWrjBF8GcAU20UmpGGWAQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "publisher.verify with no slug in its body",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "label": "laptop"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "47Fz-aSseeMsD9JliHbZXA",
+        "operation": "publisher.verify",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "OIAkvjb0qveZiHISxsY8Ccogk_5HB90MHDMezcR_qn9FTBi5WDHSShOouowdpbWqtQ3sYMbcbv5_1S1eFcT_BQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a handle with a capital",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "Alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "X7cAPw4EbqdjezhdHTQ0HA",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "e2PgBEOTHetma1LeIf0llnzqynf18fhnWvOP5GMGKRRmB_EK9x81at4_eylBDu7pN6NSi0Xr9xUmIDbFNwd_Dg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a handle with a leading hyphen",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "-alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "X7cAPw4EbqdjezhdHTQ0HA",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "-xlIYZvTEEKyq0B1f7CMWegtFJYQdwcaL1X4bfsR7At7nWIEd7Yr-wnCQu6va6z16nK0Psar6NadYP8Y2oORDA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a handle with two hyphens together",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "al--ice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "X7cAPw4EbqdjezhdHTQ0HA",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "Il8tEmPHylO0H86qkFqlFfC-D85Ad4wmvhf2tCj0bvliPzFlnvrpp9M910NysM5TozC4Z0pMBo_mqbUZWKXqBA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a handle of 40 characters",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "X7cAPw4EbqdjezhdHTQ0HA",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "gZDnbtZau5d9W3OqIPcfyTqNifWEXIfTYWzLIcOngtEQ1j7NhLETaoldqT2HnzM4cdf0qRyxE8x6hRY5ok7rDQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a publisher name as a handle",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": "alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "X7cAPw4EbqdjezhdHTQ0HA",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "uAaZF3RBN3i3uRLYLfOpeNrAKJUlg3HCqZDBEH6OEMJdqLqDmLw1M54iMdj31jaJOg3sX49HppvnL1DCh475Cg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an empty handle",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "handle": ""
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "X7cAPw4EbqdjezhdHTQ0HA",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "G0IK2VaT6ATMwD6Tlz5uRQq5EMh74gMYceHLRUzwM780KIoQltBcLC2e9VkgxExNzsySr13E-2hJJCfpmImdCQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an empty label",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "label": ""
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "5qIhxKsSSruUfbx34j5s9A",
+        "operation": "tokens.mint",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "e_Oruf48FNnfTq4rbWYs5b9ylVgDTQabLYES-ZWmL5L6D6EZPhOSRwBICtVHCs9zsPOvso-RjpN8CTp3T3F-Dg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a label of 65 characters",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "label": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "5qIhxKsSSruUfbx34j5s9A",
+        "operation": "tokens.mint",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "astEMBDvF6yee_-raY0acg2S-mHnTG6d-T3FH9gTrlsQqWRaNf6ZKyeLwLQV_lf6go8Dy4m_7YeAJqfHZ05CAQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a label outside printable ASCII",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "label": "Café"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "5qIhxKsSSruUfbx34j5s9A",
+        "operation": "tokens.mint",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "A3h8tn2knmO4L9dYTw813tuGh8nzbLERwDQp9dJewAkWRhHhuRQAsjWF5YwjJeDA8oD3o16HetZel3ruwDiuDg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a label with a tab",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "label": "a\tb"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "5qIhxKsSSruUfbx34j5s9A",
+        "operation": "tokens.mint",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "50YpsCYB0jz7pnzlMNQrnQQYYsfOyygLxdFVuLYLMcFlO1f49UCWkx1nlmLofJF9zU7pj6c0gDhLgD9_xTZqCQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an address with a path",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "address": "https://alice.example/home"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "Y83Dz-87PfwS3BjJK0iu5CpANhGNtYxlWx2xyoOqeO_PVlop4SzYClk6696_GNvhrDTWJj2V59YBuwNMZZsgDw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an address with a trailing slash",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "address": "https://alice.example/"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "GWtBncFUk7ZJ6uSiyk4RuSoLMLA0zg7NkwmlA6QqN-XVTpjoBl60r8UyBa4y2snDAd9eowJ667YlLdpI8tFODQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an address with a query",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "address": "https://alice.example?x=1"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "EiijQz51on3EpscyawL1zzFEYm9V_8SFozm6d2OTKmXCVSLxCWEXHCfJgdpMSpkTBfXeHLMiLo7pyPFYVx0OAg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an address with a user part",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "address": "https://bob@alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "P7fN4moBLHQh7qKU6lbzqIkxl3ZIrG9ENWKomrUyIxYTp1qsn3p1TagSWZ5OX-LiOd4P4Bp_YW2J75itEtEbAQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an address with a fragment",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "address": "https://alice.example#top"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "n9EJNidmtvjuaTSepmqwY2p55ke6xJQWVoDg0T6DUsm3l3rBhb5UfnWM5sAcdMsV03SXbvrrY3fEEox8nVM-DA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an address with a capital",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "address": "https://Alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "JF7_m0AU2vD8QX_2QJIntACSKcPE8-5u-lEAa7aSaPcJTGw2eJi5HgDGY-SEmy58Xl1_nbzxPXJ42Nx_lcEJDQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an address naming the default port",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "address": "https://alice.example:443"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "XJfG1Y0rT1c21qFPEeLFhFMBx15MsC8vvmpX9ePj9nMosRj4t9NWcwdg1VEdmJXgJwvFgA-njp5su1xI1j1qCg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an address of another scheme",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "address": "ftp://alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "RmhJAV7PLGcTiG2HB06_wbcO9mrFQ1BXH4TAtCyC7JxRWHNhElvy7GLSt0nJDDpI_JqsOfjJd65bhPUuNBwrAw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an empty address",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "address": ""
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "CIi0RZZNgfyPh1IrZvsXjQ",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "tGAayHB20tVt7otdg-gGVcWTZ5HKhmvVahx6D6LIJuCZH-Bg811EwHFC8LuN0wPeFQuXHlJTgzH8LgUafSdvBQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an empty policy version",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "policy_version": ""
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "Q8Do7AJz4Ttpxo3vXgnepQ",
+        "operation": "policy.accept",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "VleW9WOVfNFv0rz8GQ2av8lB87fG3La-Vx8ma5uAzJc5EdN-wwAYDrywFeSUw45RXMG8uUhDDv3TRb5TUkZZBQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a policy version of 129 bytes",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "policy_version": "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "Q8Do7AJz4Ttpxo3vXgnepQ",
+        "operation": "policy.accept",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "ujdqtEVUFr1ra9WU7s2PRy_IyS1kHHDgxS1CUWBApoWCIUuFks1eg1FzBPcKGM5JG5q1_4T2Rbt8AttPG_fLAg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an appeal of a revocation",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "action_ref": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+          "action_type": "revocation",
+          "argument": "I published nothing that breaks the policy.\nPlease look again."
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "D_RyIpIKtigwWtd0vW0Z7w",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "Z2lrVzxLy1FPN7lyWJ1l5tLePEr4T1gaPCg1pK8fbi0_akOlTJGPWaA4VmnIqMsF9X6hKIaF5OPLvOuijtR1DA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an empty action_ref",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "action_ref": "",
+          "action_type": "ban",
+          "argument": "I published nothing that breaks the policy.\nPlease look again."
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "D_RyIpIKtigwWtd0vW0Z7w",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "K74_zwyIHpdct8ZQ_sLX42D1cB_jCF695TCpF8lwlJsvsBGVmHwOIbCwvvugqTgwKS20ezE7GvoQbdg_23ApBQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an argument of only blanks",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "action_ref": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+          "action_type": "ban",
+          "argument": " \t\r\n"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "D_RyIpIKtigwWtd0vW0Z7w",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "7vlxBoCnTVSaCB6HPdjM_ckx7SOGI8GSwCdkK5SMDRuggxH6q-9dFhE4gRkortu2o00XW-mSuXLR61EVOKBrCA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an argument of 4001 bytes",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "action_ref": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+          "action_type": "ban",
+          "argument": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "D_RyIpIKtigwWtd0vW0Z7w",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "6NMLfLBwQHqzA1ZEW81sPcu4GyisQkHtJNMqM-pEZBh36ofP1-Xxpfpsye60gDU_lqUrkvmKbnBZk-dB4z_7BA"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a publisher slug without a dot",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "slug": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "S9eFMuchNRbdO4RweOnPCw",
+        "operation": "publisher.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "zWZlntcl5xm4qsdjYmgUVw3nNVoxPPlLW8zRBqgpbCkVTR8D12umDPRkzK2JA-6QAngWcfVgk1rk6Mo2_Q3OBg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a publisher slug with an @",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "slug": "@alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "S9eFMuchNRbdO4RweOnPCw",
+        "operation": "publisher.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "KqjQrxaEoIhO95ogZW53ZA-GLfyF57sLG836SBJ945an0XY4XHOIzWz5nkRqRA80RhBRojVY3fF9Isewt2SLDQ"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a publisher slug with a capital",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "label": "laptop",
+          "slug": "Alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "47Fz-aSseeMsD9JliHbZXA",
+        "operation": "publisher.verify",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "XDZvxHVvg0JhSJQGoGqQJUkBshtEEnilQlwzZw87AXXRZf5rDfQFQZbs_uLObm5VqJXsgMAEQF3pMCOMHOPBAg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a publisher verification with an empty label",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "label": "",
+          "slug": "alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "47Fz-aSseeMsD9JliHbZXA",
+        "operation": "publisher.verify",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "yhKNJvFmXXaGr0VltfxVbR8cOagEz3MMPhFxrXPw4QCy4MKABi5THfvi6C0kh3Eu9nIzAJ3-J2YsbFvwulIcAw"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a publisher verification with a label outside printable ASCII",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "label": "Café",
+          "slug": "alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "47Fz-aSseeMsD9JliHbZXA",
+        "operation": "publisher.verify",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "PAV9YL57rtqRWZx5jIg2l8IPknKzhmWeaxQi_tSAop44UbXO6xid6Oat1UREjgd2z2A9aBjlM83IN2bJmIeXBg"
+      },
+      "signer": "alice_live_1"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "a publisher slug with an empty label",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": {
+        "body": {
+          "label": "laptop",
+          "slug": "alice..example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "47Fz-aSseeMsD9JliHbZXA",
+        "operation": "publisher.verify",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "i0xL3WwnqPP9qxHOE9oEqny9-aQrthLza6eRVCOEWmt48q_gCHsXnBy-4IVK3AarAunUZW0WktL8S0Ho8qPABA"
+      },
+      "signer": "alice_live_1"
+    }
+  ],
+  "requests": {
+    "address_set": {
+      "request": {
+        "body": {
+          "address": "https://alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "-WZMC25Afxwqqi_SFzusMw",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "2XQRGtAaRr5_lPk2b4Z6h4zFa59Sk0VrUV33nWEFGm1p0rKGZaOUXKqPXFL9Ufz0gu4iq-56zwzmr3fPNdY0BA"
+      },
+      "signer": "alice_live_1"
+    },
+    "address_withdraw": {
+      "request": {
+        "body": {},
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "h2XDJeqRAPibYvByIoIXag",
+        "operation": "address.set",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "tco4phA-WVU97EKMmkI7AB-bnmrm5xxZuAX1ALFSzoDHUh86IFaZ-TJgAFgM6gkgrfidIaIglHwujG0MvhVVDg"
+      },
+      "signer": "alice_live_1"
+    },
+    "after_recovery": {
+      "request": {
+        "body": {
+          "label": "Alice's phone"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:479fe0e6cde2a19ea8aafebb6d74e3cbe2f7e55a6b32659b108105c307590b3f",
+        "nonce": "eT348AYUVTZEWbZNPWYdcQ",
+        "operation": "tokens.mint",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "KyZRoGA5vZG1HPVeqiVWDvaWA2ChysxQcbRQWAI9SRgjFhIVxeSNUjtu6G-y2U-TTYu-31LHW6u9Bq_IKcyHDg"
+      },
+      "signer": "alice_live_3"
+    },
+    "after_rotation": {
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:4e5be689c56cbd17c9168fcfc0370e6a6ff1152eac6e55ecc9a9b4f7d7c3a3b2",
+        "nonce": "4u2AtzvZ1BG0PHROwIu53A",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "spTXLUCG_uAzoxqTzi1Zm73n9giqRyjOgNe8bxsBChvFao0TUn1yJYAI7Tm00mOeimKxApi2ynrgVIS6fQMLDA"
+      },
+      "signer": "alice_live_2"
+    },
+    "appeal_escaped": {
+      "request": {
+        "body": {
+          "action_ref": "0199e2f0-1b2c-7d3e-8f40-5a6b7c8d9e0f",
+          "action_type": "takedown",
+          "argument": "Grüße, 日本語 and 👋: <b>this</b> & \"that\" \\ / \u0001\u001F\b\f\n\r\t    é"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "M7ZbBtVXQq1F4gVWWxfHxQ",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "GobGdGdN1P6I3O-e0MPNNGkfIJkdmRw_pE3aoX25aYiRZ8M26q2oQYUPOS2-nYDpWwAiBLV6CQzA_EydXz2VBg"
+      },
+      "signer": "alice_live_1"
+    },
+    "appeal_file": {
+      "request": {
+        "body": {
+          "action_ref": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+          "action_type": "ban",
+          "argument": "I published nothing that breaks the policy.\nPlease look again."
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "JNI2_YcqjFuHX8clexylZA",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "EClj0-zRbWpeugCWLb_u-0WJz_uO7r6lngKo4zCPKBxgkByYxRd89KMBTgM9iAoLOqb6IdLQlgI_H5KrtDLWDQ"
+      },
+      "signer": "alice_live_1"
+    },
+    "argument_at_bound": {
+      "request": {
+        "body": {
+          "action_ref": "0199e2f0-1b2c-7d3e-8f40-5a6b7c8d9e0f",
+          "action_type": "takedown",
+          "argument": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "WtN4H6Oc6yPC7mGKYDte7g",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "0-8wAuVleOh6IfljqZppsGbG087C6svIu9GPQingfexALQInR-vp1RkXTh54LFnOgMTjT7RVpfXaRZKu7J6sBg"
+      },
+      "signer": "alice_live_1"
+    },
+    "content_at_bound": {
+      "request": {
+        "body": {
+          "action_ref": "0199e2f0-1b2c-7d3e-8f40-5a6b7c8d9e0f",
+          "action_type": "takedown",
+          "argument": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000aa"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "jlf6reeRMan9cEVHvnnLSA",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "5tKpT3UynVkwn6ENHiGqafkJM3px3mEz4-JFBCs5xPwJV1t82azRWRBsGl5n8ox9jWyyxVSArW6kb_6NSkGRAg"
+      },
+      "signer": "alice_live_1"
+    },
+    "content_past_bound": {
+      "request": {
+        "body": {
+          "action_ref": "0199e2f0-1b2c-7d3e-8f40-5a6b7c8d9e0f",
+          "action_type": "takedown",
+          "argument": "\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000aaa"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "kQaQNcwxmiBU4f_M2s-Xzg",
+        "operation": "appeal.file",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "XRfKU4BG3vm-LamBqt7HapKO1qbTYfN-lZGROKoJvOfksg4UsHnf5AU-V4z_dHhMs0ivX809hdDJuNBFR2pSCQ"
+      },
+      "signer": "alice_live_1"
+    },
+    "elsewhere": {
+      "request": {
+        "body": {
+          "handle": "bob"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "key_epoch": "sha256:6cbe1d70f3b818fe0c44503b601b6cd2c8c94feca30540093498706a4465a9d9",
+        "nonce": "LgwI82c2hIkcoPVXGW-iUQ",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "5oREMISiQm6YwYYxmoT-P5MFwe6GlfVeYc_kzwL7HhzRB_kPclS2mXUGBsDeCAk4PxYEnkmwFufatJjW0XKWAg"
+      },
+      "signer": "bob_live"
+    },
+    "forged": {
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "-ElV5ESCbN2LBLU_IRVHzw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "UFaDOTkKnrCvLWfv8N81Pczp6sJFF1wkDDoaous_VSsPgrm-AOqY_xZqi_itHhxl7Vp0f9wbODc5SE03ftz3Dw"
+      },
+      "signer": "stranger"
+    },
+    "handle_claim": {
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "bC7c9mJKIdcAnjLRAU4Tyw",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "U34K3eQZQuHWjmKXb_z6y6r03HG-0p5z1TQ0h-EhKz3r0EJ9C237m0n-0csizSMeg1SUBawPXWrthE2YrihLBA"
+      },
+      "signer": "alice_live_1"
+    },
+    "old_epoch_new_key": {
+      "request": {
+        "body": {
+          "handle": "alice"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "UDdSFBZTFz8CbEPS-10t8A",
+        "operation": "handle.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "x_r4eajUKFrTpI_eQBSMAIQc7CJlDC0BggGEvNGtp41k9KWKW-uKTvgpkZTLV9ZlLwG9A7aLP9kHLZvBN5ejCA"
+      },
+      "signer": "alice_live_2"
+    },
+    "policy_accept": {
+      "request": {
+        "body": {
+          "policy_version": "v1"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "4wRw1dmHSAwsfxj4zLgvVA",
+        "operation": "policy.accept",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "zpWMytAGXWMxI7xtI3yDY-5fcU0dx8E39eykRzvnsVp17Vv9n4OrD30irjD9-EMa1LZGla8hvLuG_fD6SbiyDw"
+      },
+      "signer": "alice_live_1"
+    },
+    "publisher_claim": {
+      "request": {
+        "body": {
+          "slug": "alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "Cb1MOTkraXdn0_QDLpvF6w",
+        "operation": "publisher.claim",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "SgiJYQhl80wiRN-s6iBF6gGM0HtgCQq-f16y3ME5z7MLvmp-GbSQ7CXixjbSyM9DiUAvryCUFWVJdWvWdPH4CA"
+      },
+      "signer": "alice_live_1"
+    },
+    "publisher_verify": {
+      "request": {
+        "body": {
+          "label": "Alice's laptop",
+          "slug": "alice.example"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "0PKRHVIxYUkgRHqDRoV_qw",
+        "operation": "publisher.verify",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "Wq8acLEMh_KRoD9PXSMjOM1I3R498-maKVMBhqeR6y77SDf_UJG4BgH9Clxoe6yaiOeLmZ_al3G0m7WUsJwgDw"
+      },
+      "signer": "alice_live_1"
+    },
+    "tokens_mint": {
+      "request": {
+        "body": {
+          "label": "Alice's laptop"
+        },
+        "expires_at": 1790000120000,
+        "identifier": "per_6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "key_epoch": "sha256:6af2297ac1a8679976851b4daf80e1004ed005105471a6edecb0c511b3e60992",
+        "nonce": "cvCz_gZrLOWNEfkpKfdyuA",
+        "operation": "tokens.mint",
+        "protocol": "cyfr-registry-request/v1",
+        "registry": "cyfr.run",
+        "sig": "ywmdJWPEAmSSr0B4t6wsgQdKMmcyUqGJ5WxI5dnk9VwFCisTRr6mlPEEXvmgukqGbiMKa1DY9eecno_lQKQ1Dg"
+      },
+      "signer": "alice_live_1"
+    }
+  },
+  "slugs": {
+    "handles": {
+      "invalid": [
+        "",
+        "Alice",
+        "-alice",
+        "alice-",
+        "al--ice",
+        "al_ice",
+        "al ice",
+        "alice.example",
+        "@alice",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "élise"
+      ],
+      "valid": [
+        "alice",
+        "a",
+        "a1",
+        "al-ice",
+        "0",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "a-b-c"
+      ]
+    },
+    "publishers": {
+      "invalid": [
+        "alice",
+        "",
+        "Alice.example",
+        "@alice.example",
+        "alice..example",
+        ".alice.example",
+        "alice.example.",
+        "-alice.example",
+        "alice-.example",
+        "alice_x.example"
+      ],
+      "valid": [
+        "alice.example",
+        "a.b",
+        "acme-corp.example.com",
+        "x1.y2"
+      ]
+    }
+  },
+  "verify": [
+    {
+      "head": "genesis",
+      "name": "a handle claim under the head it was signed at",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "handle_claim",
+      "result": "ok"
+    },
+    {
+      "head": "genesis",
+      "name": "a token mint",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "tokens_mint",
+      "result": "ok"
+    },
+    {
+      "head": "genesis",
+      "name": "an address published",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "address_set",
+      "result": "ok"
+    },
+    {
+      "head": "genesis",
+      "name": "an address withdrawn",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "address_withdraw",
+      "result": "ok"
+    },
+    {
+      "head": "genesis",
+      "name": "a policy accepted",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "policy_accept",
+      "result": "ok"
+    },
+    {
+      "head": "genesis",
+      "name": "an appeal",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "appeal_file",
+      "result": "ok"
+    },
+    {
+      "head": "genesis",
+      "name": "an appeal whose argument is at its bound",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "argument_at_bound",
+      "result": "ok"
+    },
+    {
+      "head": "genesis",
+      "name": "a publisher claim",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "publisher_claim",
+      "result": "ok"
+    },
+    {
+      "head": "genesis",
+      "name": "a publisher verification",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "publisher_verify",
+      "result": "ok"
+    },
+    {
+      "head": "rotated",
+      "name": "a claim under the rotated head by the new live key",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "after_rotation",
+      "result": "ok"
+    },
+    {
+      "head": "recovered",
+      "name": "a mint under the recovered head by the recovered live key",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "after_recovery",
+      "result": "ok"
+    },
+    {
+      "error": "stale_key_epoch",
+      "head": "rotated",
+      "name": "a request signed under a head the log has moved past",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "handle_claim"
+    },
+    {
+      "error": "stale_key_epoch",
+      "head": "recovered",
+      "name": "a request from before a recovery",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "after_rotation"
+    },
+    {
+      "error": "stale_key_epoch",
+      "head": "rotated",
+      "name": "the old key_epoch signed by the new live key, under the new head",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "old_epoch_new_key"
+    },
+    {
+      "error": "bad_signature",
+      "head": "genesis",
+      "name": "the old key_epoch signed by the new live key, under the old head",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "old_epoch_new_key"
+    },
+    {
+      "error": "bad_signature",
+      "head": "genesis",
+      "name": "a request signed by a key the log never named",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "forged"
+    },
+    {
+      "error": "wrong_directory",
+      "head": "elsewhere",
+      "name": "an identity whose genesis names another directory",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "elsewhere"
+    },
+    {
+      "error": "unknown_identity",
+      "head": "elsewhere",
+      "name": "a head read for another identifier",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "handle_claim"
+    },
+    {
+      "head": "genesis",
+      "name": "one millisecond before its expiry",
+      "now_ms": 1790000119999,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "handle_claim",
+      "result": "ok"
+    },
+    {
+      "error": "expired",
+      "head": "genesis",
+      "name": "at its expiry",
+      "now_ms": 1790000120000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "handle_claim"
+    },
+    {
+      "error": "expired",
+      "head": "genesis",
+      "name": "after its expiry",
+      "now_ms": 1790000120001,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "handle_claim"
+    },
+    {
+      "head": "genesis",
+      "name": "expiring exactly max_ahead after the clock",
+      "now_ms": 1789999760000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "handle_claim",
+      "result": "ok"
+    },
+    {
+      "error": "expiry_too_far",
+      "head": "genesis",
+      "name": "expiring one millisecond past max_ahead",
+      "now_ms": 1789999759999,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "handle_claim"
+    },
+    {
+      "error": "expired",
+      "head": "rotated",
+      "name": "expired and under a moved head: the expiry is checked first",
+      "now_ms": 1790000120000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "handle_claim"
+    },
+    {
+      "head": "genesis",
+      "name": "padded with spaces to the size bound",
+      "now_ms": 1790000001000,
+      "pad_with_spaces_to": 16384,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "handle_claim",
+      "result": "ok"
+    },
+    {
+      "head": "genesis",
+      "name": "an appeal whose argument JSON escapes: Unicode, <>&, quotes and control characters",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "appeal_escaped",
+      "result": "ok"
+    },
+    {
+      "head": "genesis",
+      "name": "an appeal whose escaped content lands exactly at the size bound",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "content_at_bound",
+      "result": "ok"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "an appeal whose escaped content lands one byte past the size bound",
+      "now_ms": 1790000001000,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "content_past_bound"
+    },
+    {
+      "error": "request_malformed",
+      "head": "genesis",
+      "name": "padded with spaces one byte past the size bound",
+      "now_ms": 1790000001000,
+      "pad_with_spaces_to": 16385,
+      "registry": {
+        "directory": "https://cyfr.run",
+        "host": "cyfr.run"
+      },
+      "request": "handle_claim"
+    }
+  ]
+}
