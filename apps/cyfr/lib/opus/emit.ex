@@ -106,7 +106,7 @@ defmodule Opus.Emit do
       {push(emitter, released), %{emitter | held: held}}
     else
       {:error, :event_too_large} ->
-        {encode_error(:resource_limit, "emit event exceeds the server's request size limit"),
+        {encode_error(:resource_limit, "emit event exceeds the component's request size limit"),
          emitter}
 
       {:error, :emit_rate_limited} ->

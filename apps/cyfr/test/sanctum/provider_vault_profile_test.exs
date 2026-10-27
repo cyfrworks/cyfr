@@ -27,6 +27,16 @@ defmodule Sanctum.ProviderVaultProfileTest do
     {:ok, ctx: Sanctum.TestContext.local()}
   end
 
+  test "create calls an unknown destination key a field", %{ctx: ctx} do
+    assert {:error, "invalid_destination: it names an unknown field"} =
+             Sanctum.Providers.Vault.handle(ctx, %{
+               "action" => "create",
+               "name" => "unknown-destination-field",
+               "kind" => "api_key",
+               "destination" => %{"hosts" => ["api.example"], "unexpected" => true}
+             })
+  end
+
   test "the whole walk works over the wire shape — string keys end to end", %{ctx: ctx} do
     {:ok, _} =
       Compendium.Registry.publish_bytes(ctx, @wasm, %{

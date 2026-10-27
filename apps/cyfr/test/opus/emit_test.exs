@@ -237,6 +237,51 @@ defmodule Opus.EmitTest do
              Prima.RateLimiter.check({:emit, ctx.athanor_id, root}, 5, :timer.minutes(1))
   end
 
+  test "an event below the platform ceiling names the component's exceeded request limit", %{
+    ctx: ctx,
+    stream_id: stream_id
+  } do
+    ref = "formula:local.emit-size"
+    limits = Prima.Test.AuthorityFixtures.limits_map(%{"max_request_size" => 64})
+
+    {:ok, blob} =
+      Prima.Authority.Blob.parse(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{ref => %{"limits" => limits, "edges" => %{"@ingress" => %{}}}}
+      })
+
+    ceiling = Prima.Limits.Ceiling.lowered(%{})
+
+    profile = %{
+      profile_id: "emit-size-profile",
+      consent_id: "emit-size-consent",
+      source_ref: ref,
+      kind: :owner,
+      invoke_mode: :open_inert,
+      activation: %{ref => "sha256:emit-size"}
+    }
+
+    {:ok, authority} = Prima.Authority.root(profile, blob, ceiling: ceiling)
+    assert Prima.Authority.limits(authority).max_request_size == 64
+    assert ceiling.max_request_size == 10 * 1024 * 1024
+
+    payload = Jason.encode!(%{"text" => String.duplicate("x", 100)})
+    assert byte_size(payload) == 111
+    assert byte_size(payload) < ceiling.max_request_size
+    emitter = new(ctx, stream_id, authority: authority)
+
+    {answer, ^emitter} = Emit.emit(emitter, payload, [])
+
+    assert %{
+             "error" => %{
+               "type" => "resource_limit",
+               "message" => "emit event exceeds the component's request size limit"
+             }
+           } = Jason.decode!(answer)
+
+    assert received() == []
+  end
+
   test "an oversized or malformed event is refused", %{ctx: ctx, stream_id: stream_id} do
     emitter = new(ctx, stream_id)
     max = Prima.Authority.limits(Prima.Authority.zero()).max_request_size

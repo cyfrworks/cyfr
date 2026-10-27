@@ -624,7 +624,7 @@ defmodule Cyfr.Cell do
         :ok
 
       others ->
-        raise "[Cyfr] FATAL: this server is connected to #{length(others)} other servers " <>
+        raise "[Cyfr] FATAL: this server is connected to other servers (#{length(others)} in total) " <>
                 "but CYFR_CLUSTER is " <>
                 "not set. A cluster of control planes needs cluster support; a single one " <>
                 "must not be distributed."

@@ -152,6 +152,18 @@ defmodule Sanctum.Providers.InstanceEntryTest do
       assert entries() == []
     end
 
+    test "create calls an unknown destination key a field", %{admin: admin} do
+      args =
+        create_args(%{
+          "destination" => %{"hosts" => ["api.example"], "unexpected" => true}
+        })
+
+      assert {:error, {:invalid_argument, "invalid_destination: it names an unknown field"}} =
+               Sanctum.Providers.InstanceEntry.handle(admin, args)
+
+      assert entries() == []
+    end
+
     test "a destination without methods or paths is refused before a handler", %{admin: admin} do
       for missing <- ["methods", "paths"] do
         assert {:error, %Prima.Refusal{stage: :admission, class: :invalid_argument}} =
