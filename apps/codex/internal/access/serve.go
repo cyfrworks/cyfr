@@ -146,7 +146,7 @@ func (e *Engine) statusOnce(ctx context.Context, args []string) (tsStatus, bool)
 // when the name alone does not tell two apart.
 func identity(name, id string, withID bool) string {
 	if withID {
-		return name + " (node " + id + ")"
+		return name + " (node ID " + id + ")"
 	}
 	return name
 }

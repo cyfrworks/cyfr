@@ -396,7 +396,7 @@ func TestRestoreRefusesALiveMemberOfAnyRelease(t *testing.T) {
 			r.answer("eval.out", "CYFR_LIVE_SLOTS="+`{"release":"0.8.0","slots":[{"node":"cyfr@other-host","owner":"o2","release":`+release+`,"lease_until":"2026-10-16T12:00:12Z"}]}`+"\n")
 			before := read(t, filepath.Join(r.project, "docker-compose.yml"))
 			out, err := r.restore(true)
-			if err == nil || !strings.Contains(err.Error(), "cyfr@other-host") || !strings.Contains(err.Error(), "whole cell stopped") || !strings.Contains(err.Error(), "left stopped") {
+			if err == nil || !strings.Contains(err.Error(), "cyfr@other-host") || !strings.Contains(err.Error(), "whole cluster stopped") || !strings.Contains(err.Error(), "left stopped") {
 				t.Fatalf("restore answered %v\n%s", err, out)
 			}
 			r.stoppedUndeclared()

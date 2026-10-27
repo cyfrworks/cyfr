@@ -75,7 +75,7 @@ func TestSettingsLines_ShowSourcePendingAndEachMember(t *testing.T) {
 		"b@h observed unknown",
 		"(pending 64)",
 		"1125899906842624",
-		"(pinned on some members only)",
+		"(pinned on some servers only)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("want %q in:\n%s", want, got)

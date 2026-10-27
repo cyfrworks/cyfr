@@ -30,10 +30,10 @@ var settingsCmd = &cobra.Command{
 	Use:     "settings",
 	Short:   "The platform settings: limits, windows and the log level (platform admins)",
 	GroupID: "admin",
-	Long: "The platform settings are the server's own: every member of a cell reads the same " +
-		"stored value. A live change reaches new and refreshed work on every member within " +
+	Long: "The platform settings are the server's own: every server of a cluster reads the same " +
+		"stored value. A live change reaches new and refreshed work on every server within " +
 		"the settings cache's bound, not work already in flight; a restart setting applies " +
-		"at each member's next start and is listed as pending until then. A setting the " +
+		"at each server's next start and is listed as pending until then. A setting the " +
 		"deployment's environment pins cannot be changed here.",
 }
 
@@ -139,7 +139,7 @@ func settingsLines(result map[string]any) []string {
 			line += " (pending " + settingText(s["desired"]) + ")"
 		}
 		if divergent, _ := s["divergent"].(bool); divergent {
-			line += " (pinned on some members only)"
+			line += " (pinned on some servers only)"
 		}
 		lines = append(lines, strings.TrimRight(line, " "))
 	}

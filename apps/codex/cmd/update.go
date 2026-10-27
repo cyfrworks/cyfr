@@ -55,7 +55,7 @@ The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what cha
 
 1. Fetch the release's signed manifest (release.json) and verify it; a manifest that does not verify, or no network access to it, refuses.
 2. Read docker-compose.yml. Every bundled service (locus-runtime, locus-builds, locus-backends and both egress guards) must be present; one missing refuses, naming 'cyfr init --force'. An image line naming ghcr.io/cyfrworks/cyfr, ghcr.io/cyfrworks/cyfr-locus, the bundled Caddy or the bundled Tailscale is managed; any other image is an override, left as written and reported.
-3. While the stack still runs: read its configuration, naming the storage root it snapshots, pull every managed image by the manifest's digest, read the cell's roster, refusing a running cyfr on a newer release than this one and refusing while a member outside this stack holds a live slot on another release than this one (a host of the cell already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses.
+3. While the stack still runs: read its configuration, naming the storage root it snapshots, pull every managed image by the manifest's digest, read the cluster's roster, refusing a running cyfr on a newer release than this one and refusing while a server outside this stack holds a live slot on another release than this one (a host of the cluster already updated stays), then fetch and verify the release's scaffold files (guides, WIT definitions, the keeper's seccomp profile, the shipped AQUA prompts) without writing them. A restore that has not finished (CYFR_RESTORE_INCOMPLETE in .env) refuses.
 4. Cancel a tailnet join that waits for approval, then stop every service, timing each, and re-read the roster offline until no slot of another release than this one is live (at most one lease); one still live, or an image on a newer release than this one, restarts the old stack and refuses.
 5. Snapshot the database, the local storage root, every scaffold file the release manages as it stands, the keyring, .env and docker-compose.yml as it stands into backups/<UTC timestamp>/, snapshot.json last.
 6. Write the release's scaffold files and rewrite the managed image lines to <image>:<version>@<digest> (Caddy and Tailscale keep their tags); a failure of either puts the scaffold files back from the snapshot and starts the old stack again. Then start the stack as every cyfr start runs, waiting for cyfr's health. A failure from here leaves the stack stopped and prints the snapshot and the restore command; old code never starts over migrated data.
@@ -1074,7 +1074,7 @@ func (u *updater) readConfig() error {
 	}
 	env := func(name string) string { return serviceSetting(cyfr.Environment, name) }
 	if snapshot := env(restoreBarrier); snapshot != "" {
-		return fmt.Errorf("A cyfr restore of %s has not finished (%s is set in .env), so the cell may hold the snapshot's data undeclared; run 'cyfr restore %s' again before updating; nothing was changed", snapshot, restoreBarrier, snapshot)
+		return fmt.Errorf("A cyfr restore of %s has not finished (%s is set in .env), so CYFR may hold the snapshot's data undeclared; run 'cyfr restore %s' again before updating; nothing was changed", snapshot, restoreBarrier, snapshot)
 	}
 	containerToHost := func(p string) (string, bool) { return mountedHost(mounts, p) }
 	// nestedMounts answers every mount whose target lies strictly under the
@@ -1432,7 +1432,7 @@ func (u *updater) readRoster() error {
 	}
 	output, err := u.composeOutput(ctx, "exec", "-T", "cyfr", "bin/cyfr", "rpc", rosterExpr)
 	if err != nil {
-		return fmt.Errorf("cyfr update could not read the cell's roster through the running cyfr (%v); nothing was changed", err)
+		return fmt.Errorf("cyfr update could not read the cluster's roster through the running cyfr (%v); nothing was changed", err)
 	}
 	var answer struct {
 		Self    string        `json:"self"`
@@ -1444,10 +1444,10 @@ func (u *updater) readRoster() error {
 		err = json.Unmarshal([]byte(payload), &answer)
 	}
 	if err == nil && (answer.Self == "" || answer.Slots == nil) {
-		err = errors.New("no node or no slots")
+		err = errors.New("no server name or no slots")
 	}
 	if err != nil {
-		return fmt.Errorf("The cell's roster did not read (%v); cyfr update reads no answer as an empty roster, and nothing was changed", err)
+		return fmt.Errorf("The cluster's roster did not read (%v); cyfr update reads no answer as an empty roster, and nothing was changed", err)
 	}
 	// The release the running cyfr reports holds the refusal whatever the
 	// compose file's tags say (latest, or a set that differs).
@@ -1461,7 +1461,7 @@ func (u *updater) readRoster() error {
 		}
 	}
 	if len(foreign) > 0 {
-		return fmt.Errorf("The cell has a live member outside this stack on another release than %s: %s. cyfr update cannot stop it; stop it first, then run 'cyfr update' again. Nothing was changed", u.version, strings.Join(foreign, ", "))
+		return fmt.Errorf("The cluster has a live server outside this stack on another release than %s: %s. cyfr update cannot stop it; stop it first, then run 'cyfr update' again. Nothing was changed", u.version, strings.Join(foreign, ", "))
 	}
 	return nil
 }
@@ -1545,7 +1545,7 @@ func (u *updater) rereadOffline() error {
 		return err
 	}
 	if len(others) > 0 {
-		return fmt.Errorf("A slot is still live %s after the stop: %s. A member outside this stack holds the cell; stop it first", liveSlotsWindow, slotNames(others))
+		return fmt.Errorf("A slot is still live %s after the stop: %s. A server outside this stack holds it; stop that server first", liveSlotsWindow, slotNames(others))
 	}
 	// A home whose cyfr was not running, so no roster answered before the
 	// stop, is held to the release its image answers here, before the
