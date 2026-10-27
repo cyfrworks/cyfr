@@ -215,7 +215,6 @@ class CyfrStack(Stack):
                 "CYFR_CORS_ALLOWED_ORIGINS=",
                 "CYFR_AUTO_MIGRATE=on",
                 "CYFR_GITHUB_CLIENT_ID=Ov23lib66tiIwXkgUpwm",
-                "CYFR_PLATFORM_ADMIN_EMAILS=operator@example.com",
                 "",
             ]))
         self.cyfr = None

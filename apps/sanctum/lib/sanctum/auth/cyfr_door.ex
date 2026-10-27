@@ -68,11 +68,12 @@ defmodule Sanctum.Auth.CyfrDoor do
   fresh again, verifies the assertion under the current live key
   (`Prima.PersonAssertion.verify/3`: identifier, `key_epoch`, signature,
   this home as audience, the exact challenge, the carry the challenge was
-  bound to, expiry), and asks the door about the identity
-  `cyfr|<directory>|<identifier>` (`Sanctum.Auth.Identity.cyfr_key/2`),
-  which judges it by its identifier. An admitted person is recorded
-  (`Sanctum.SignIn.admitted/2`: a `remote` identity row, no key, no
-  personal athanor of their own) and their session minted
+  bound to, expiry). A person here already linked to the identity
+  `cyfr|<directory>|<identifier>` (`Sanctum.Auth.Identity.cyfr_key/2`) is
+  unlocked (`Sanctum.SignIn.unlock/1`, which asks the door about them); a
+  first-time one is admitted (`Sanctum.Newcomer.admit/2`'s `remote`
+  admission: the door admits the identifier, and a `remote` identity row
+  is written with no key and no personal athanor). Their session is minted
   (`Sanctum.Session.create/2`) with the login receipt in its transaction
   and the head's `key_epoch` recorded, read fresh once more; an epoch
   that moved since the assertion was verified admits nothing.
@@ -377,9 +378,7 @@ defmodule Sanctum.Auth.CyfrDoor do
          :ok <- same_identity(assertion, held),
          {:ok, state} <- fresh_state(assertion.identifier, transport["genesis"]),
          {:ok, assertion} <- verified_assertion(assertion, state, held, home),
-         key = Sanctum.Auth.Identity.cyfr_key(state.directory, state.identifier),
-         {:ok, verdict} <- Sanctum.Door.admit_identity(key, %{email: nil, verified: :unknown}),
-         {:ok, user} <- Sanctum.SignIn.admitted(person(key, state, genesis), verdict),
+         {:ok, user} <- person(state, genesis),
          {:ok, ctx} <- context(user) do
       receipt = %{
         action_id: held["action_id"],
@@ -433,23 +432,29 @@ defmodule Sanctum.Auth.CyfrDoor do
     {:error, :unavailable}
   end
 
-  # What the door admitted, for `Sanctum.SignIn.admitted/2`: a person with
-  # no email, whose identity is the identifier at the directory its
-  # genesis names.
-  defp person(key, state, genesis) do
-    %{
-      id: key,
-      provider: "cyfr",
-      email: nil,
-      verified: :unknown,
-      name: nil,
-      remote: %{
-        identifier: state.identifier,
-        directory_url: state.directory,
-        genesis_hash: Identity.hash(genesis),
-        head_hash: state.head
-      }
-    }
+  # The person the identity names: unlocked when one here holds it, and
+  # otherwise admitted as a remote newcomer.
+  defp person(state, genesis) do
+    key = Sanctum.Auth.Identity.cyfr_key(state.directory, state.identifier)
+
+    case Sanctum.SignIn.unlock(%{id: key, provider: "cyfr"}) do
+      {:ok, user} ->
+        {:ok, user}
+
+      {:error, :no_person} ->
+        remote = %{
+          identifier: state.identifier,
+          directory_url: state.directory,
+          genesis_hash: Identity.hash(genesis),
+          head_hash: state.head
+        }
+
+        with {:ok, %{person: user}} <- Sanctum.Newcomer.admit({:remote, remote}, :none),
+             do: {:ok, user}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   # The person's own context, bound to the athanor their memberships give,

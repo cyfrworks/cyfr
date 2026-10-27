@@ -3,9 +3,12 @@
 
 defmodule PrismWeb.LoginLive do
   @moduledoc """
-  The sign-in page. GitHub and Google use device flow on this page
-  (`Sanctum.Auth.DeviceFlow`); a configured OIDC issuer still kicks off
-  through `GET /auth/oidcc`. A completed device flow hands a one-time
+  The sign-in page. It offers each linked sign-in method this CYFR is
+  configured for, beside the passkey and the CYFR sign-in, which are
+  always offered: GitHub and Google use device flow on this page
+  (`Sanctum.Auth.DeviceFlow`), and a configured OIDC issuer kicks off
+  through `GET /auth/oidcc`. A linked method unlocks a person who already
+  linked it (`Sanctum.SignIn.unlock/1`), and never makes one. A completed device flow hands a one-time
   ticket to `GET /auth/device/complete/:ticket`, which sets the cookie
   session this origin has.
 
@@ -600,13 +603,10 @@ defmodule PrismWeb.LoginLive do
     Process.send_after(self(), :login_poll, ms)
   end
 
-  # The built-in provider offers GitHub and Google device flow; a deployment
-  # with its own OIDC issuer authenticates through `/auth/oidcc`.
+  # The linked methods offered: each one configured, several at once.
   defp available_providers do
-    case Sanctum.Auth.provider() do
-      Sanctum.Auth.OIDC -> [:oidcc]
-      _ -> DeviceFlow.configured_providers()
-    end
+    oidc = if Sanctum.Auth.OIDC.issuer(), do: [:oidcc], else: []
+    DeviceFlow.configured_providers() ++ oidc
   end
 
   # Map an auth redirect (`/login?error=<code>`) to a user-facing banner.
@@ -736,13 +736,6 @@ defmodule PrismWeb.LoginLive do
             >
               Cancel
             </button>
-          </div>
-
-          <div
-            :if={@login_state == :idle && @providers == []}
-            class="text-center text-gray-400 text-sm py-4"
-          >
-            No providers configured. Set CYFR_GITHUB_CLIENT_ID or CYFR_GOOGLE_CLIENT_ID.
           </div>
 
           <div :if={@login_state == :idle} class="flex flex-col gap-3">

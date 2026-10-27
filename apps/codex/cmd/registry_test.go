@@ -11,7 +11,7 @@ import (
 
 // The answer registry.sync gives: the namespaces it synced and never a
 // token.
-const registrySyncAnswer = `{"personal_namespace":"alice","memberships":[{"slug":"acme.com","role":"admin"}],"unsynced":[]}`
+const registrySyncAnswer = `{"personal_namespace":"alice","memberships":[{"slug":"acme.com","role":"admin"}]}`
 
 // `cyfr registry sync` asks registry.sync and nothing more, and prints the
 // namespaces it answered.

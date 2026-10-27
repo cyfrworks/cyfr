@@ -9,8 +9,8 @@ defmodule Cyfr.RuntimeConfig do
   The contract is **set-or-default, never silent fallback**: an unset variable
   takes the documented default, but a *set* variable that is incomplete or
   unrecognized returns `{:error, message}` so the caller can fail the boot
-  loudly. This avoids footguns like `CYFR_AUTH_PROVIDER=oidc` quietly degrading
-  to no authentication.
+  loudly. This avoids footguns like a partly set OIDC issuer quietly
+  degrading to no OIDC sign-in.
 
   Every function takes a `getenv` reader — `(String.t() -> String.t() | nil)` —
   so it is exercised directly in tests without touching the real environment.
@@ -45,44 +45,12 @@ defmodule Cyfr.RuntimeConfig do
   @max_storage_reserve_bytes 1024 * 1024 * 1024 * 1024
 
   @doc """
-  Resolve the auth provider module from the environment.
-
-  - unset `CYFR_AUTH_PROVIDER` → the built-in device flows: a GitHub or
-    Google client present ⇒ `Sanctum.Auth.OAuth`, otherwise `nil` (the
-    no-sign-in default).
-  - `"oidc"` → `Sanctum.Auth.OIDC`, requires the full OIDC trio.
-  - anything else → `{:error, _}`.
-  """
-  @spec resolve_auth_provider(getenv) :: {:ok, module() | nil} | {:error, String.t()}
-  def resolve_auth_provider(getenv) when is_function(getenv, 1) do
-    github? = present?(getenv.("CYFR_GITHUB_CLIENT_ID"))
-    google? = present?(getenv.("CYFR_GOOGLE_CLIENT_ID"))
-
-    case blank_to_nil(getenv.("CYFR_AUTH_PROVIDER")) do
-      nil ->
-        if github? or google?, do: {:ok, Sanctum.Auth.OAuth}, else: {:ok, nil}
-
-      "oidc" ->
-        case oidc_config(getenv) do
-          {:ok, _} -> {:ok, Sanctum.Auth.OIDC}
-          {:error, _} = err -> err
-        end
-
-      other ->
-        {:error,
-         ~s(Unknown CYFR_AUTH_PROVIDER="#{other}"; expected "oidc", or unset for the ) <>
-           "built-in GitHub and Google device flows."}
-    end
-  end
-
-  @doc """
-  Resolve and validate the generic-OIDC configuration trio.
-
-  Returns `{:ok, %{issuer:, client_id:, client_secret:}}` or an error naming the
-  missing variables.
+  Resolve the OpenID Connect issuer's three settings: `{:ok, nil}` when
+  none is set, `{:ok, %{issuer:, client_id:, client_secret:}}` when all
+  three are, and an error naming the missing ones for a partly set issuer.
   """
   @spec oidc_config(getenv) ::
-          {:ok, %{issuer: String.t(), client_id: String.t(), client_secret: String.t()}}
+          {:ok, %{issuer: String.t(), client_id: String.t(), client_secret: String.t()} | nil}
           | {:error, String.t()}
   def oidc_config(getenv) when is_function(getenv, 1) do
     fields = [
@@ -94,9 +62,17 @@ defmodule Cyfr.RuntimeConfig do
     resolved = for {var, key} <- fields, into: %{}, do: {key, blank_to_nil(getenv.(var))}
     missing = for {var, key} <- fields, is_nil(resolved[key]), do: var
 
-    case missing do
-      [] -> {:ok, resolved}
-      _ -> {:error, "CYFR_AUTH_PROVIDER=oidc requires #{Enum.join(missing, ", ")}."}
+    cond do
+      missing == [] ->
+        {:ok, resolved}
+
+      length(missing) == length(fields) ->
+        {:ok, nil}
+
+      true ->
+        {:error,
+         "The OpenID Connect sign-in needs all of CYFR_OIDC_ISSUER, CYFR_OIDC_CLIENT_ID and " <>
+           "CYFR_OIDC_CLIENT_SECRET; #{Enum.join(missing, ", ")} is not set."}
     end
   end
 
@@ -104,8 +80,8 @@ defmodule Cyfr.RuntimeConfig do
   Browser cross-origin allowlist: `config/config.exs` configures the empty
   one, which admits no cross-origin browser caller, and
   `CYFR_CORS_ALLOWED_ORIGINS` replaces it. Read by both the CORS plug
-  (enforcement) and the boot guard (which refuses a wildcard once an auth
-  provider is configured), so the two never disagree about what it holds.
+  (enforcement) and the boot guard (which refuses a wildcard), so the two
+  never disagree about what it holds.
   """
   @spec cors_allowed_origins() :: [String.t()]
   def cors_allowed_origins, do: Application.fetch_env!(:cyfr, :cors_allowed_origins)
@@ -1233,8 +1209,6 @@ defmodule Cyfr.RuntimeConfig do
   defp reject_nil(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
 
   # ── helpers ────────────────────────────────────────────────────────────────
-
-  defp present?(value), do: not is_nil(blank_to_nil(value))
 
   defp blank_to_nil(nil), do: nil
 

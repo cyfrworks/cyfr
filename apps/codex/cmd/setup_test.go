@@ -97,11 +97,10 @@ func approvedJoins(s *fakeStack, approve <-chan struct{}, fail ...access.Receipt
 }
 
 // A local home: the pages' answers are written into .env as init writes
-// them, the email the administrators' setting, and the home started; the
-// pages move to its address.
+// them, and the home started; the pages move to its address.
 func TestSetupWritesTheAnswersAndStartsALocalHome(t *testing.T) {
 	s, sess, out := newSetupRun(t)
-	if err := sess.Start(setup.Answers{Mode: access.ModeLocal, Email: "me@example.com"}); err != nil {
+	if err := sess.Start(setup.Answers{Mode: access.ModeLocal}); err != nil {
 		t.Fatal(err)
 	}
 	st := ended(t, sess)
@@ -112,8 +111,8 @@ func TestSetupWritesTheAnswersAndStartsALocalHome(t *testing.T) {
 	if err := sess.result(); err != nil {
 		t.Errorf("a home up as asked ends the process with %v", err)
 	}
-	if admins, _ := projectEnv(t).value(adminEmailVar); admins != "me@example.com" || accessOf(t) != access.ModeLocal {
-		t.Errorf(".env names %q as administrators and is reached as %s", admins, accessOf(t))
+	if accessOf(t) != access.ModeLocal {
+		t.Errorf(".env is reached as %s", accessOf(t))
 	}
 	if s.starts != 1 || len(s.switches) != 0 || len(s.joins) != 0 {
 		t.Errorf("%d starts, %d switches and %d joins, want one start alone", s.starts, len(s.switches), len(s.joins))
@@ -121,7 +120,7 @@ func TestSetupWritesTheAnswersAndStartsALocalHome(t *testing.T) {
 	if holder := s.held(); holder != "" {
 		t.Errorf("the run left the lock held by %s", holder)
 	}
-	if err := sess.Start(setup.Answers{Mode: access.ModeLocal, Email: "me@example.com"}); !errors.Is(err, setup.ErrNotNow) {
+	if err := sess.Start(setup.Answers{Mode: access.ModeLocal}); !errors.Is(err, setup.ErrNotNow) {
 		t.Errorf("a second start answered %v", err)
 	}
 }
@@ -145,7 +144,7 @@ func TestSetupNamesItsSteps(t *testing.T) {
 		}
 	}
 	_, sess, _ := newSetupRun(t)
-	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet, Email: "me@example.com"}); err != nil {
+	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
 		t.Fatal(err)
 	}
 	if st := sess.State(); !slices.Equal(st.Steps, setupSteps(access.ModeTailnet, true)) || st.Mode != access.ModeTailnet {
@@ -163,7 +162,7 @@ func TestSetupShowsTheJoinAndTakesANewName(t *testing.T) {
 	s, sess, out := newSetupRun(t)
 	approve := make(chan struct{})
 	approvedJoins(s, approve)
-	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet, Email: "me@example.com"}); err != nil {
+	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
 		t.Fatal(err)
 	}
 	st := awaitPhase(t, sess, setup.PhaseApproval)
@@ -210,7 +209,7 @@ func TestSetupCancelsTheJoinForThisDeviceOnly(t *testing.T) {
 	if err := sess.Cancel(); !errors.Is(err, setup.ErrNotNow) {
 		t.Errorf("a cancel before any join answered %v", err)
 	}
-	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet, Email: "me@example.com"}); err != nil {
+	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
 		t.Fatal(err)
 	}
 	awaitPhase(t, sess, setup.PhaseApproval)
@@ -240,7 +239,7 @@ func TestSetupOffersTheJoinAgainWhenItFails(t *testing.T) {
 			approve := make(chan struct{})
 			close(approve)
 			approvedJoins(s, approve, expired)
-			if err := sess.Start(setup.Answers{Mode: access.ModeTailnet, Email: "me@example.com"}); err != nil {
+			if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
 				t.Fatal(err)
 			}
 			st := awaitPhase(t, sess, setup.PhaseProblem)
@@ -277,7 +276,7 @@ func TestSetupOffersTheStartAgainOrThisDeviceOnly(t *testing.T) {
 			s, sess, out := newSetupRun(t)
 			s.startErr = errors.New("cyfr did not become healthy")
 			s.composeErr = errors.New("no compose here")
-			if err := sess.Start(setup.Answers{Mode: access.ModeTailnet, Email: "me@example.com"}); err != nil {
+			if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
 				t.Fatal(err)
 			}
 			st := awaitPhase(t, sess, setup.PhaseProblem)
@@ -320,7 +319,7 @@ func TestSetupOffersTheStartAgainOrThisDeviceOnly(t *testing.T) {
 func TestSetupReportsAStartOnThisMachineOnly(t *testing.T) {
 	s, sess, _ := newSetupRun(t)
 	s.startReceipt = startedLocalReceipt("start")
-	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet, Email: "me@example.com"}); err != nil {
+	if err := sess.Start(setup.Answers{Mode: access.ModeTailnet}); err != nil {
 		t.Fatal(err)
 	}
 	st := ended(t, sess)
@@ -335,33 +334,22 @@ func TestSetupReportsAStartOnThisMachineOnly(t *testing.T) {
 
 // The answers the start would refuse are refused before anything is
 // written, each with its sentence: a mode that is none, a public home's
-// domain that is not one, and anything but one email.
+// domain or certificate email that is not one.
 func TestSetupRefusesAnswersBeforeWriting(t *testing.T) {
 	s, sess, _ := newSetupRun(t)
-	emailRule := "Type the one email you sign in with, such as you@example.com: it makes you this CYFR's administrator"
 	for _, c := range []struct {
 		a    setup.Answers
 		want string
 	}{
-		{setup.Answers{Mode: "tls", Email: "me@example.com"}, `"tls" is none of them`},
-		{setup.Answers{Mode: access.ModePublic, Domain: "localhost", Email: "me@example.com"}, "`localhost` is not a valid domain"},
-		{setup.Answers{Mode: access.ModePublic, Email: "me@example.com"}, "Type the domain CYFR is reached at"},
-		{setup.Answers{Mode: access.ModePublic, Domain: "cyfr.example.com", ACMEEmail: "nope", Email: "me@example.com"}, "`nope` is not a valid email address"},
-		{setup.Answers{Mode: access.ModeLocal, Domain: "cyfr.example.com", Email: "me@example.com"}, "for public access alone"},
-		{setup.Answers{Mode: access.ModeLocal}, emailRule},
-		{setup.Answers{Mode: access.ModeLocal, Email: "me@example.com, you@example.com"}, emailRule},
-		{setup.Answers{Mode: access.ModeLocal, Email: "Me <me@example.com>"}, emailRule},
-		{setup.Answers{Mode: access.ModeLocal, Email: "not-an-email"}, emailRule},
+		{setup.Answers{Mode: "tls"}, `"tls" is none of them`},
+		{setup.Answers{Mode: access.ModePublic, Domain: "localhost"}, "`localhost` is not a valid domain"},
+		{setup.Answers{Mode: access.ModePublic}, "Type the domain CYFR is reached at"},
+		{setup.Answers{Mode: access.ModePublic, Domain: "cyfr.example.com", ACMEEmail: "nope"}, "`nope` is not a valid email address"},
+		{setup.Answers{Mode: access.ModeLocal, Domain: "cyfr.example.com"}, "for public access alone"},
 	} {
 		if err := sess.Start(c.a); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("the start of %+v answered %v, want %q", c.a, err, c.want)
 		}
-	}
-	if err := sess.Check(setup.Answers{Mode: access.ModePublic, Domain: "localhost"}); err == nil || !strings.Contains(err.Error(), "`localhost` is not a valid domain") {
-		t.Errorf("the check answered %v", err)
-	}
-	if err := sess.Check(setup.Answers{Mode: access.ModePublic, Domain: "cyfr.example.com", ACMEEmail: "ops@example.com"}); err != nil {
-		t.Errorf("the check of a valid domain answered %v", err)
 	}
 	if st := sess.State(); st.Phase != setup.PhaseAnswering || s.locks != 0 {
 		t.Errorf("refused answers began %+v", st)
@@ -396,7 +384,7 @@ func TestSetupRefusesAnExistingHome(t *testing.T) {
 	if err := os.WriteFile(".env", []byte("CYFR_ACCESS=local\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Start(setup.Answers{Mode: access.ModeLocal, Email: "me@example.com"}); err == nil || !strings.Contains(err.Error(), "cyfr setup leaves how an existing CYFR is reached alone") {
+	if err := sess.Start(setup.Answers{Mode: access.ModeLocal}); err == nil || !strings.Contains(err.Error(), "cyfr setup leaves how an existing CYFR is reached alone") {
 		t.Errorf("a start once .env exists answered %v", err)
 	}
 	if st := sess.State(); st.Phase != setup.PhaseAnswering {
@@ -508,7 +496,7 @@ func TestSetupServesThePagesUntilTheyReadTheHomeUp(t *testing.T) {
 	if info, err := os.Stat(setupURLFile); err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("%s is %v (%v), want mode 0600", setupURLFile, info.Mode(), err)
 	}
-	if _, status := c.do(http.MethodPost, "/api/start", setup.Answers{Mode: access.ModeLocal, Email: "me@example.com"}); status != http.StatusOK {
+	if _, status := c.do(http.MethodPost, "/api/start", setup.Answers{Mode: access.ModeLocal}); status != http.StatusOK {
 		t.Fatalf("the start answered %d", status)
 	}
 	if st := c.await(setup.PhaseDone); st.Address != "http://localhost:4000" || !st.Moves {
@@ -538,7 +526,7 @@ func TestSetupStopsAWhileAfterAnEndNoPageReads(t *testing.T) {
 	setupLinger = 50 * time.Millisecond
 	done := runSetupInBackground(context.Background(), io.Discard)
 	c := openPages(t)
-	c.do(http.MethodPost, "/api/start", setup.Answers{Mode: access.ModeLocal, Email: "me@example.com"})
+	c.do(http.MethodPost, "/api/start", setup.Answers{Mode: access.ModeLocal})
 	if err := awaitEnd(t, done); err != nil {
 		t.Fatalf("cyfr setup ended with %v", err)
 	}
@@ -574,7 +562,7 @@ func TestSetupInterrupted(t *testing.T) {
 		defer cancel()
 		done := runSetupInBackground(ctx, io.Discard)
 		c := openPages(t)
-		c.do(http.MethodPost, "/api/start", setup.Answers{Mode: access.ModeTailnet, Email: "me@example.com"})
+		c.do(http.MethodPost, "/api/start", setup.Answers{Mode: access.ModeTailnet})
 		c.await(setup.PhaseApproval)
 		cancel()
 		err := awaitEnd(t, done)
@@ -715,7 +703,7 @@ func switchFailsAfterCommit(t *testing.T, sess *setupSession) setup.State {
 		}
 		return &blockedReceiptEngine{Engine: e, d: d, dir: abs}, nil
 	}
-	if err := sess.Start(setup.Answers{Mode: access.ModePublic, Domain: "home.example.com", Email: "me@example.com"}); err != nil {
+	if err := sess.Start(setup.Answers{Mode: access.ModePublic, Domain: "home.example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	st := awaitPhase(t, sess, setup.PhaseProblem)

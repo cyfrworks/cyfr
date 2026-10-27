@@ -13,7 +13,7 @@ defmodule Arca.PersonIdentitiesTest do
   # Takes the cell's slot, which is process-wide; each case restores it.
   use ExUnit.Case, async: false
 
-  alias Arca.{PersonIdentities, Users}
+  alias Arca.PersonIdentities
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -95,7 +95,7 @@ defmodule Arca.PersonIdentitiesTest do
 
   defp person! do
     {user, identity} = person_attrs()
-    {:ok, person} = Users.mint(server(), user, identity)
+    {:ok, person} = Arca.Test.People.mint(server(), user, identity)
     person
   end
 

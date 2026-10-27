@@ -303,7 +303,7 @@ const FIELDS = {
     id: minted(SIGN_IN),
     email: exact,
     email_verified: exact,
-    provider: exact,
+    admission: exact,
     display_name: exact,
     namespace: exact,
     personal_athanor_id: minted(SIGN_IN),
@@ -638,10 +638,9 @@ async function main() {
     // -----------------------------------------------------------------------
     // first_sign_in
     // -----------------------------------------------------------------------
-    const allowed = [
-      await door(admin, settings, "ana@example.com", "allow"),
-      await door(admin, settings, "bea@example.com", "allow"),
-    ];
+    // The administrator opens the door to newcomers, which admits Ana and
+    // Bea when they are made.
+    const allowed = [await door(admin, settings, "*", "allow")];
     ana = await ask({ op: "sign_in", name: "ana", email: "ana@example.com" });
     // The loader's decision on her root names the profile and consent it
     // roots on: the ids the model takes for the profile and head the
@@ -780,7 +779,8 @@ async function main() {
     await open(anaPage, pagePath(ana.segment, "/vault"));
     const afterNarrow = await offered(anaPage);
     // Bea's first sign-in leaves her row as the release fixture's person
-    // signs in (GitHub, verified, "Release proof"), active, at security
+    // is made and signs in (an open admission, her GitHub email verified,
+    // "Release proof"), active, at security
     // generation 1, her personal athanor the one her sign-in names. Company
     // AI is listed for Bea alone; Ana's claim and row binding are refused
     // as not offered, and her vault offers Company Mail alone.
@@ -789,7 +789,7 @@ async function main() {
         id: bea.user_id,
         email: "bea@example.com",
         email_verified: true,
-        provider: "github",
+        admission: "open",
         display_name: "Release proof",
         namespace: null,
         personal_athanor_id: bea.athanor_id,
@@ -860,7 +860,8 @@ async function main() {
     // -----------------------------------------------------------------------
     // deny_person
     // -----------------------------------------------------------------------
-    const denied = await door(admin, settings, "bea@example.com", "deny");
+    // A deny names the person, by her user id.
+    const denied = await door(admin, settings, bea.user_id, "deny");
     await open(admin, settings);
     const audienceShown = await admin.locator(`${card(ai.id)} [data-test="instance-audience"]`).innerText()
       .catch(() => "");

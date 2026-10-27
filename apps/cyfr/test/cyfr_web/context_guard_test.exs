@@ -21,7 +21,7 @@ defmodule CyfrWeb.ContextGuardTest do
   alias Sanctum.{Caller, Context}
   alias Sanctum.Tenancy.{Athanors, Members}
 
-  @sanctum_keys [:caller_memo_ttl_ms, :platform_admin_emails]
+  @sanctum_keys [:caller_memo_ttl_ms]
 
   setup do
     prev = Map.new(@sanctum_keys, &{&1, Application.get_env(:sanctum, &1)})
@@ -86,11 +86,15 @@ defmodule CyfrWeb.ContextGuardTest do
     group
   end
 
+  # A person identifier the door would allow, so a refusal is the
+  # revocation's and never the value's.
+  defp identifier(label),
+    do: "per_" <> Prima.Digest.sha256_hex("#{label}-#{System.unique_integer([:positive])}")
+
   defp door_has?(value), do: Enum.any?(Sanctum.Door.Store.list(), &(&1.value == value))
 
   defp operator!(conn) do
     ops = test_user()
-    Application.put_env(:sanctum, :platform_admin_emails, [ops.email])
     {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
     {conn, token, hash} = signed_in(conn, ops)
     {ops, conn, token, hash}
@@ -112,15 +116,15 @@ defmodule CyfrWeb.ContextGuardTest do
       delete_session!(hash)
       bound!(0)
 
-      email = "never-#{System.unique_integer([:positive])}@example.com"
+      identifier = identifier("never")
 
       assert {:error, _refused} =
-               PrismWeb.Ops.call_tool(captured, "door/allow", %{"value" => email})
+               PrismWeb.Ops.call_tool(captured, "door/allow", %{"value" => identifier})
 
       assert {:error, {:redirect, %{to: "/login"}}} =
-               render_click(view, "door_allow", %{"door" => email})
+               render_click(view, "door_allow", %{"door" => identifier})
 
-      refute door_has?(email)
+      refute door_has?(identifier)
     end
 
     test "the grant alone withdrawn: the refreshed context carries no capability to act on",
@@ -132,10 +136,10 @@ defmodule CyfrWeb.ContextGuardTest do
       drop_seats!(ctx.user_id, "platform")
       bound!(0)
 
-      email = "not-now-#{System.unique_integer([:positive])}@example.com"
-      render_click(view, "door_allow", %{"door" => email})
+      identifier = identifier("not-now")
+      render_click(view, "door_allow", %{"door" => identifier})
 
-      refute door_has?(email)
+      refute door_has?(identifier)
       refute :sys.get_state(view.pid).socket.assigns.context.platform_admin
       refute render(view) =~ "Server allowlist"
     end

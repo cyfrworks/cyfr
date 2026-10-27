@@ -257,18 +257,38 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
     count
   end
 
-  # A real person row, so a mint that holds them holds a row.
+  # A real person row, so a mint that holds them holds a row: the row and
+  # its sign-in method alone, with no athanor yet, so the case's own mints
+  # are the only athanors they hold.
   defp person!(run, i) do
-    {:ok, user} =
+    now = DateTime.utc_now()
+    subject = "census-#{run}-#{i}"
+
+    {:ok, %{id: user_id}} =
       unboxed(fn ->
-        Users.upsert_from_provider(%{
-          id: "github|https://github.com|census-#{run}-#{i}",
-          provider: "github",
-          email: "census#{run}-#{i}@example.com",
-          verified: true
-        })
+        Arca.Test.People.mint(
+          Prima.Actor.system(),
+          %{
+            id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+            email: "census#{run}-#{i}@example.com",
+            email_verified: true,
+            first_seen_at: now,
+            last_seen_at: now,
+            created_at: now,
+            updated_at: now
+          },
+          %{
+            key: "github|https://github.com|" <> subject,
+            provider: "github",
+            issuer: "https://github.com",
+            subject: subject,
+            first_seen_at: now,
+            last_seen_at: now
+          }
+        )
       end)
 
+    {:ok, user} = unboxed(fn -> Users.get(user_id) end)
     user
   end
 

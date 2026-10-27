@@ -1529,14 +1529,16 @@ defmodule PrismWeb.SettingsLive do
         <.card :if={@context.platform_admin}>
           <h3 class="text-sm font-medium text-gray-400 mb-1">Server allowlist</h3>
           <p class="text-xs text-gray-500 mb-4">
-            Who may sign in here. An email, an IdP subject, or <code>*</code>
-            for anyone the provider authenticates. A deny is sticky and ejects the person.
+            Who may sign in here. A person made here signs in unless denied. A person
+            whose keys another CYFR holds signs in when <code>*</code>
+            or an allow names their identifier (<code>per_…</code>). A deny names a person
+            (<code>usr_…</code>) or an identifier, is sticky and ejects the person.
           </p>
 
           <div :if={@door_requests != []} class="mb-4">
             <h4 class="text-xs text-gray-500 uppercase mb-2">Requests</h4>
             <.table id="door-requests" rows={@door_requests}>
-              <:col :let={r} label="Email">{r.value}</:col>
+              <:col :let={r} label="Identifier">{r.value}</:col>
               <:col :let={r} label="Asked by">{r.requested_by || "-"}</:col>
               <:col :let={r} label="Actions">
                 <div class="flex gap-2">
@@ -1562,7 +1564,7 @@ defmodule PrismWeb.SettingsLive do
           </div>
 
           <div :if={@door_entries == []} class="py-4">
-            <.empty_state message="Only the platform admins can sign in — the list is empty" />
+            <.empty_state message="No entries: everyone made here signs in, and no one from another CYFR" />
           </div>
           <.table :if={@door_entries != []} id="door-entries" rows={@door_entries}>
             <:col :let={e} label="Entry">{e.value}</:col>
@@ -1581,7 +1583,12 @@ defmodule PrismWeb.SettingsLive do
           <form phx-change="door_form_changed" class="mt-4 space-y-2">
             <div class="flex gap-2 items-end">
               <div class="flex-1">
-                <.input name="value" value={@door_value} required placeholder="email, subject, or *" />
+                <.input
+                  name="value"
+                  value={@door_value}
+                  required
+                  placeholder="per_…, usr_…, or *"
+                />
               </div>
               <div class="flex-1">
                 <.input name="note" value={@door_note} placeholder="note (optional)" />

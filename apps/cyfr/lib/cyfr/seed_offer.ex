@@ -8,8 +8,8 @@ defmodule Cyfr.SeedOffer do
   already exist are offered it — additively, never over anything they own
   (`Compendium.sync_seeds/0`).
 
-  Optional work, and never a gate. It starts after `Cyfr.Bootstrap`'s
-  checked success, last in the infra tier and before the web tier that
+  Optional work, and never a gate. It starts after the boot's gate
+  (`Cyfr.Application`), last in the infra tier and before the web tier that
   holds the endpoint, and its start returns at once: the offer runs after `init/1`, so the infra tier
   finishes and the endpoint starts without waiting for it. A person who
   signs in while it runs finds the athanor claim the sync holds, and their

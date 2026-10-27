@@ -67,10 +67,6 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :sanctum, :auth] => %{consumers: [:audit]},
     [:cyfr, :sanctum, :door, :refused] => %{consumers: [:audit]},
     [:cyfr, :sanctum, :door, :denied] => %{consumers: [:audit]},
-    [:cyfr, :sanctum, :door, :revoke_failed] => %{
-      consumers: [:audit],
-      note: "a revoked person's sessions could not be retired — must be findable later"
-    },
     [:cyfr, :sanctum, :identity, :namespace_divergence] => %{
       consumers: [:audit],
       note: "a provider answered a different namespace than the stored identity"

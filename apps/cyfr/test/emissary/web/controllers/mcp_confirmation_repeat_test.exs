@@ -75,7 +75,7 @@ defmodule Emissary.Web.MCPConfirmationRepeatTest do
 
   alias Prima.MCP.Protocol
   alias Sanctum.{Context, TestContext}
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   @key "cyfr/confirmationId"
 
@@ -86,7 +86,7 @@ defmodule Emissary.Web.MCPConfirmationRepeatTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|mcp-repeat-#{n}",
         provider: "github",
         email: "mcp-repeat#{n}@example.com",

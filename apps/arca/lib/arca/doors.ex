@@ -85,6 +85,10 @@ defmodule Arca.Doors do
   @spec kinds() :: [String.t()]
   def kinds, do: Entry.kinds()
 
+  @doc "The kinds an entry of `effect` (`\"allow\"` or `\"deny\"`) may name."
+  @spec kinds(String.t()) :: [String.t()]
+  def kinds(effect), do: Entry.kinds(effect)
+
   @doc "Every entry, allowed and requested, newest first."
   @spec list(Prima.Actor.t()) :: {:ok, [entry()]} | refusal()
   def list(%Prima.Actor{scope: :platform}) do

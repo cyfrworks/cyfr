@@ -86,7 +86,7 @@ defmodule Arca.PairingInvitationsTest do
     now = DateTime.utc_now()
 
     {:ok, person} =
-      Users.mint(
+      Arca.Test.People.mint(
         server(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
@@ -306,7 +306,7 @@ defmodule Arca.PairingInvitationsTest do
     other = "usr_other_#{System.unique_integer([:positive])}"
 
     {:ok, _} =
-      Arca.Users.mint(
+      Arca.Test.People.mint(
         Prima.Actor.system(),
         %{
           id: other,
@@ -728,8 +728,7 @@ defmodule Arca.PairingInvitationsRaceTest do
     Members,
     PairedClients,
     PairingInvitations,
-    PersonIdentities,
-    Users
+    PersonIdentities
   }
 
   alias Arca.PairingInvitationsTest.Confirmations
@@ -788,7 +787,7 @@ defmodule Arca.PairingInvitationsRaceTest do
         Arca.Test.Actor.ensure_athanor_row(athanor_id)
 
         {:ok, _} =
-          Users.mint(
+          Arca.Test.People.mint(
             server(),
             %{
               id: user_id,

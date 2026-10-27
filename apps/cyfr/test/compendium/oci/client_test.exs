@@ -222,17 +222,13 @@ defmodule Compendium.OCI.ClientTest do
 
       original_base = Application.get_env(:arca, :base_path)
       original_registry = Application.get_env(:cyfr, :oci_registry_url)
-      original_auth = Application.get_env(:sanctum, :auth_provider)
 
       Application.put_env(:arca, :base_path, test_dir)
-      # No auth provider → localhost registries are reachable (private_policy: :allow_all).
-      Application.delete_env(:sanctum, :auth_provider)
 
       on_exit(fn ->
         File.rm_rf!(test_dir)
         restore_env(:arca, :base_path, original_base)
         restore_env(:oci_registry_url, original_registry)
-        restore_env(:sanctum, :auth_provider, original_auth)
       end)
 
       # A caller holding no push token: every request it makes is anonymous.
@@ -719,10 +715,8 @@ defmodule Compendium.OCI.ClientTest do
 
     original_base = Application.get_env(:arca, :base_path)
     original_registry = Application.get_env(:cyfr, :oci_registry_url)
-    original_auth = Application.get_env(:sanctum, :auth_provider)
 
     Application.put_env(:arca, :base_path, test_dir)
-    Application.delete_env(:sanctum, :auth_provider)
 
     # The reagent guest: a pull that gets as far as storing it stores it.
     wasm = Cyfr.Test.Guests.wasm(:reagent)
@@ -751,7 +745,6 @@ defmodule Compendium.OCI.ClientTest do
       File.rm_rf!(test_dir)
       restore_env(:arca, :base_path, original_base)
       restore_env(:oci_registry_url, original_registry)
-      restore_env(:sanctum, :auth_provider, original_auth)
     end)
 
     a = caller("oci_entitle_a")
@@ -1038,8 +1031,7 @@ defmodule Compendium.OCI.ClientTest do
 
   defp restore_env(key, value), do: restore_env(:cyfr, key, value)
 
-  # `:auth_provider` is the identity domain's key and `:base_path` the
-  # storage's; the registry URL is the host's.
+  # `:base_path` is the storage's key; the registry URL is the host's.
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 end

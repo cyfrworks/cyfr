@@ -26,7 +26,7 @@ defmodule Cyfr.StorageReserveTest do
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Prima.Identity.Encoding
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   # A reserve small enough for any test filesystem.
   @bytes 64 * 1024
@@ -537,7 +537,7 @@ defmodule Cyfr.StorageReserveTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|storage-reserve-#{n}",
         provider: "github",
         email: "storage-reserve#{n}@example.com",

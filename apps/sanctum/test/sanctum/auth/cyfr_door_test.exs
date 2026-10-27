@@ -13,7 +13,8 @@ defmodule Sanctum.Auth.CyfrDoorTest do
   challenge is held in the browser's cookie and the browser goes back to
   the carry's signed return URL; the assertion is verified under the
   current live key, for this home, this challenge and this carry, and the
-  door judges the identity by its identifier. An admitted person is a
+  door judges the identity by its identifier. A first-time person is made
+  by the remote admission (`Sanctum.Newcomer`), a known one unlocked: a
   remote person here, with no key and no athanor of their own; their
   session records the head's `key_epoch` and commits with its login
   receipt, and a retried login resumes it. Every carry that reaches a
@@ -50,6 +51,15 @@ defmodule Sanctum.Auth.CyfrDoorTest do
     end)
 
     directory = DirectoryServer.start!(tls)
+
+    # An installation already set up: a remote newcomer is admitted only
+    # where a person exists (`Sanctum.Newcomer`).
+    {:ok, _} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|cyfr-door-installation",
+        provider: "github"
+      })
+
     %{directory: directory, home: Sanctum.Person.home()}
   end
 

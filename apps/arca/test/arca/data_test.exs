@@ -236,7 +236,7 @@ defmodule Arca.DataTest do
       n = System.unique_integer([:positive])
 
       {:ok, user} =
-        Arca.Users.mint(
+        Arca.Test.People.mint(
           server(),
           %{
             id: "usr_data_#{n}",

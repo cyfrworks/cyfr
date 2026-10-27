@@ -43,7 +43,7 @@ defmodule Sanctum.TinctureAuthTest do
 
   defp frame_person! do
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: @person,
         provider: "github",
         email: "frame-person@example.com",
@@ -302,7 +302,7 @@ defmodule Sanctum.TinctureAuthTest do
         TinctureAuth.mint_frame_credential(ctx, @tincture, @digest, 1, frame_id())
 
       {:ok, other} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "github|https://github.com|frame-other",
           provider: "github",
           email: "frame-other@example.com",
@@ -691,7 +691,7 @@ defmodule Sanctum.TinctureAuthTest do
       authority: authority
     } do
       {:ok, other} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "github|https://github.com|page-other",
           provider: "github",
           email: "page-other@example.com",

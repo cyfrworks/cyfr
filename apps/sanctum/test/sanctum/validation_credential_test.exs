@@ -328,7 +328,7 @@ defmodule Sanctum.ValidationCredentialTest do
 
   defp person!(id) do
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: id,
         provider: "github",
         email: String.replace(id, ~r/\A.*\|/, "") <> "@example.com",

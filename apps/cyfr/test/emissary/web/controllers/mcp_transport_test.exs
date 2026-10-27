@@ -268,7 +268,7 @@ defmodule Emissary.Web.MCPTransportTest do
       directory = "https://localhost:1"
 
       {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "github|https://github.com|mcp-remote-#{n}",
           provider: "github",
           email: "mcp-remote#{n}@example.com",

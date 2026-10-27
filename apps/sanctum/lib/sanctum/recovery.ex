@@ -97,26 +97,27 @@ defmodule Sanctum.Recovery do
     5. **minted** — the head read again, as a restore stopped at
        `keys_active` may have been superseded meanwhile; then the person,
        their identity row (provenance `local`, enrolled at the accepted
-       head) with the staged keys re-sealed under their own frame, and a
-       door entry naming them, all in the mint's transaction
-       (`Arca.Users.mint/4`'s `also:`), which advances the attempt too, so
-       a crash can never leave a resume refused as a non-empty node. The
+       head) with the staged keys re-sealed under their own frame, their
+       athanor and their platform grant, all in the transaction of the
+       restore's admission (`Sanctum.Newcomer`), which advances the
+       attempt too, so a crash can never leave a resume refused as a
+       non-empty node. The
        transaction holds the cached head that read left
        (`Arca.DirectoryHeads.certifiable!/3`): a later recovery this home
        cached in between refuses the mint and ends the attempt
        `superseded`;
-    6. **completed** — the head read once more, their own athanor
-       provisioned, and a session issued with the reserved provider
+    6. **completed** — the head read once more, their own athanor's fill
+       asked for, and a session issued with the reserved provider
        `restore` to the holder of the capability, before the attempt ends.
        Superseded after the mint, the attempt ends `superseded` with no
-       athanor provisioned and no session, and the person it minted stays,
+       fill asked for and no session, and the person it minted stays,
        under keys their head no longer names and with no linked door or
        passkey, so the node is no longer empty for another restore;
        a session issued as a concurrent request superseded it is deleted,
        never answered.
 
-  A restore brings back the identity alone: the person, their keys, a
-  door entry and their own athanor. It restores no private data, and a
+  A restore brings back the identity alone: the person, their keys and
+  their own athanor. It restores no private data, and a
   membership an athanor's home revoked stays revoked, since each
   membership is kept at its athanor's home.
 
@@ -128,12 +129,10 @@ defmodule Sanctum.Recovery do
   seed signed its request; nothing resumes at boot. A completed restore
   answers `:restored` and issues no session.
 
-  The door entry (`Sanctum.Door.Store`, a `user_id` entry naming the
-  restored person's own id) is what passkey sign-in and the door's
-  reconciliation ask about a person with no linked door, so the owner
-  signs in by passkey after the restore session ends. The operator can
-  still deny them, and they hold no platform administration unless a door
-  they later link carries an operator's address.
+  The restored person is local, so the door admits them unless a deny
+  names them (`Sanctum.Door`), and the owner signs in by passkey after
+  the restore session ends. They are the installation's first person and
+  so its platform administrator (`Sanctum.Newcomer`).
 
   ## The first method after restore
 
@@ -1629,7 +1628,7 @@ defmodule Sanctum.Recovery do
 
   # The session goes only to keys the head still names, read again before
   # anything of this phase: superseded after the mint, the attempt ends
-  # with no athanor provisioned and no session, and the person it minted
+  # with no fill asked for and no session, and the person it minted
   # stays.
   defp continue_restore(%{phase: "minted", user_id: user_id} = attempt, opts)
        when is_binary(user_id) do
@@ -1717,35 +1716,25 @@ defmodule Sanctum.Recovery do
   defp genesis_hash(_attempt), do: {:error, :unavailable}
 
   # The person, their identity row with the staged keys re-sealed under
-  # their own frame, the attempt's `minted` phase and the door entry naming
-  # them, in the one transaction the installation guard admits a restore's
-  # mint in. A cached head that no longer names the attempt's keys refuses
-  # the mint as `:superseded` (`minted/3`).
+  # their own frame and the attempt's `minted` phase, in the one
+  # transaction of the restore's admission (`Sanctum.Newcomer`), which the
+  # installation guard admits and which writes the person's athanor and
+  # their platform grant beside them: the restored person is the
+  # installation's first. A cached head that no longer names the attempt's
+  # keys refuses the mint as `:superseded` (`minted/3`).
   defp mint_restored(attempt, genesis_hash) do
-    now = DateTime.utc_now()
-    user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
-
-    user_attrs = %{
-      id: user_id,
-      provider: "restore",
-      prefs: Jason.encode!(%{}),
-      first_seen_at: now,
-      last_seen_at: now,
-      created_at: now,
-      updated_at: now
+    restore = %{
+      claim: %{request_id: attempt.request_id, token_digest: attempt.token_digest},
+      also: fn person -> minted(person, attempt, genesis_hash) end
     }
 
-    case Arca.Users.mint(system(), user_attrs, nil,
-           restore: %{request_id: attempt.request_id, token_digest: attempt.token_digest},
-           also: fn person -> minted(person, attempt, genesis_hash) end
-         ) do
-      {:ok, person} -> {:ok, person}
+    case Sanctum.Newcomer.admit({:restore, restore}, :none) do
+      {:ok, %{person: person}} -> {:ok, person}
       {:error, :not_empty} -> {:error, :not_empty}
       {:error, :not_claimed} -> {:error, :token_claimed}
       {:error, :restore_reserved} -> {:error, :token_claimed}
       {:error, :stale_key_epoch} -> {:error, :superseded}
       {:error, :not_owner} -> {:error, :unavailable}
-      {:error, :database_error} -> {:error, :unavailable}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -1774,9 +1763,7 @@ defmodule Sanctum.Recovery do
          {:ok, _minted} <-
            Arca.IdentityAttempts.advance(system(), attempt.id, "keys_active", "minted", %{
              user_id: user_id
-           }),
-         {:ok, _entry} <-
-           Sanctum.Door.Store.allow("user_id", user_id, nil, "restored " <> attempt.identifier) do
+           }) do
       :ok
     else
       {:error, reason} -> {:error, reason}
@@ -1836,13 +1823,8 @@ defmodule Sanctum.Recovery do
 
   defp public_half?(_private, _public), do: false
 
-  defp provisioned(user_id) do
-    case Sanctum.Provisioning.after_sign_in(user_id) do
-      {:error, {:limit_reached, _key, _cap} = reason} -> {:error, reason}
-      {:error, _transient} -> {:error, {:retry, "minted", 1}}
-      _provisioned -> :ok
-    end
-  end
+  # The athanor was minted with the person; its fill is asked for here.
+  defp provisioned(user_id), do: Sanctum.Provisioning.after_sign_in(user_id)
 
   # The restore's session: the reserved provider, issued for the person the
   # attempt minted and named by the attempt (`Sanctum.Session.create/2`).

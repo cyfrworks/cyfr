@@ -15,7 +15,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
   import Ecto.Query
 
   alias Sanctum.{Caller, Context}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
   alias Sanctum.Vault.OAuthGrant
 
   @redirect "https://cyfr.test/auth/oauth/callback"
@@ -30,7 +30,7 @@ defmodule Sanctum.Vault.OAuthGrantStandingTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|grant-#{n}",
         provider: "github",
         email: "grant#{n}@example.com",

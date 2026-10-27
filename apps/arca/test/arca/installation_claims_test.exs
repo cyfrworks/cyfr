@@ -4,12 +4,16 @@
 defmodule Arca.InstallationClaimsTest do
   @moduledoc """
   Who may mint the installation's first person: the installed mode, read
-  inside every person mint, and the claim a restore makes of an empty
-  node, only by opening its attempt. An uninstalled mode refuses;
-  `:restore_reserved` refuses an ordinary first door on an empty node; a
-  pending claim reserves the node whatever the mode; a restore's own mint
-  is admitted only under its exact claim, on an empty node; a claim exists
-  only with its attempt, ends with it, and spends its token for good.
+  inside every person mint, the mint's admission, and the claim a restore
+  makes of an empty node, only by opening its attempt. Only setup and a
+  restore make the first person, who holds the platform grant from the
+  mint's own transaction; every other admission onto an empty node is
+  refused. Setup answers its person again while they hold no sign-in
+  method, and opens nothing after. An uninstalled mode refuses;
+  `:restore_reserved` refuses setup on an empty node; a pending claim
+  reserves the node whatever the mode; a restore's own mint is admitted
+  only under its exact claim, on an empty node; a claim exists only with
+  its attempt, ends with it, and spends its token for good.
   """
 
   # Installs the process-wide mode and takes the cell's slot; each case
@@ -18,8 +22,16 @@ defmodule Arca.InstallationClaimsTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.{ControlPlane, IdentityAttempts, InstallationClaims, Users}
-  alias Arca.Schemas.{CellLease, IdentityAttempt, InstallationClaim, ServerMeta, User}
+  alias Arca.{ControlPlane, IdentityAttempts, InstallationClaims, Members, Users}
+
+  alias Arca.Schemas.{
+    CellLease,
+    IdentityAttempt,
+    InstallationClaim,
+    Membership,
+    ServerMeta,
+    User
+  }
 
   @slot_keys [
     {Arca.ControlPlane, :standing},
@@ -82,7 +94,6 @@ defmodule Arca.InstallationClaimsTest do
 
     {%{
        id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-       provider: "github",
        email: "first#{n}@example.com",
        email_verified: true,
        first_seen_at: now,
@@ -100,10 +111,22 @@ defmodule Arca.InstallationClaimsTest do
      }}
   end
 
+  # A setup mint, naming no sign-in method: a linked one closes setup.
   defp mint(opts \\ []) do
-    {user, identity} = person_attrs()
-    Users.mint(server(), user, identity, opts)
+    {user, _identity} = person_attrs()
+    Users.mint(server(), user, nil, Keyword.put_new(opts, :admission, "setup"))
   end
+
+  # A mint under `admission`, linking a sign-in method.
+  defp admitted(admission, opts \\ []) do
+    {user, identity} = person_attrs()
+    Users.mint(server(), user, identity, [admission: admission] ++ opts)
+  end
+
+  defp platform?(user_id), do: match?({:ok, _}, Members.find_platform(server(), user_id))
+
+  defp grants,
+    do: Arca.Repo.aggregate(from(m in Membership, where: m.scope == "platform"), :count)
 
   # A restore's submission under `token`: opening it claims the node.
   defp restore(token \\ digest("token")) do
@@ -158,33 +181,147 @@ defmodule Arca.InstallationClaimsTest do
     end
   end
 
-  describe "an ordinary mint" do
-    test "under :ordinary mints as today" do
-      assert {:ok, %{id: id}} = mint()
+  describe "the first person" do
+    test "is made by setup, and holds the platform grant from the mint's transaction" do
+      me = self()
+
+      assert {:ok, %{id: id, admission: "setup"}} =
+               mint(
+                 also: fn person ->
+                   send(me, {:granted, platform?(person.id)})
+                   :ok
+                 end
+               )
+
+      # The closure runs after the grant, inside the transaction.
+      assert_received {:granted, true}
       assert people() == 1
-      assert {:ok, %{id: ^id}} = Users.get(server(), id)
+      assert platform?(id)
+      assert grants() == 1
     end
 
-    test "under :restore_reserved is refused on an empty node, and nothing is written" do
+    test "is refused to every other admission, and nothing is written" do
+      for admission <- ~w(open remote invitation) do
+        assert {:error, :not_set_up} = admitted(admission)
+      end
+
+      assert people() == 0
+      assert grants() == 0
+    end
+
+    test "is refused to setup under :restore_reserved, and nothing is written" do
       :ok = InstallationClaims.install_mode!(:restore_reserved)
       assert {:error, :restore_reserved} = mint()
       assert people() == 0
-    end
-
-    test "under :restore_reserved is admitted once the node holds a person" do
-      assert {:ok, _first} = mint()
-      :ok = InstallationClaims.install_mode!(:restore_reserved)
-      assert {:ok, _second} = mint()
-      assert people() == 2
     end
 
     test "is refused while a claim is pending, whatever the mode" do
       assert {:ok, _attempt} = open(restore())
       assert {:error, :restore_reserved} = mint()
+      assert {:error, :restore_reserved} = admitted("open")
 
       :ok = InstallationClaims.install_mode!(:restore_reserved)
       assert {:error, :restore_reserved} = mint()
       assert people() == 0
+    end
+
+    test "is the only one granted: a later person holds no grant, under either mode" do
+      assert {:ok, %{id: first}} = mint()
+      assert {:ok, %{id: second, admission: "open"}} = admitted("open")
+      :ok = InstallationClaims.install_mode!(:restore_reserved)
+      assert {:ok, %{id: third}} = admitted("remote")
+
+      assert platform?(first)
+      refute platform?(second)
+      refute platform?(third)
+      assert grants() == 1
+    end
+
+    test "a refusal of the mint's closure takes the grant back with the person" do
+      assert {:error, :keys_unavailable} =
+               mint(also: fn _person -> {:error, :keys_unavailable} end)
+
+      assert people() == 0
+      assert grants() == 0
+    end
+  end
+
+  describe "setup once its person exists" do
+    test "names that person again while they hold no sign-in method, and mints nothing" do
+      me = self()
+      {:ok, %{id: first}} = mint()
+
+      assert {:error, {:readmit, %{id: ^first}}} =
+               mint(
+                 also: fn _person ->
+                   send(me, :also)
+                   :ok
+                 end
+               )
+
+      refute_received :also
+      assert people() == 1
+      assert grants() == 1
+    end
+
+    test "readmit/3 runs its closure for that person, decided again under the order row" do
+      me = self()
+      {:ok, %{id: first}} = mint()
+
+      assert {:ok, %{id: ^first}} =
+               Users.readmit(server(), first,
+                 also: fn person ->
+                   send(me, {:again, person.id})
+                   :ok
+                 end
+               )
+
+      assert_received {:again, ^first}
+
+      assert {:error, :closure_refused} =
+               Users.readmit(server(), first, also: fn _ -> {:error, :closure_refused} end)
+
+      assert people() == 1
+      assert grants() == 1
+    end
+
+    test "opens nothing from the commit that marks their first passkey or device" do
+      {:ok, %{id: first}} = mint()
+      identity_row!(first)
+
+      {:ok, :marked} =
+        Arca.Repo.transaction(fn -> Arca.PersonIdentities.first_method!(first) end)
+
+      assert {:error, :setup_closed} = mint()
+      assert {:error, :setup_closed} = Users.readmit(server(), first, also: fn _ -> :ok end)
+      assert people() == 1
+    end
+
+    test "opens nothing once a sign-in method is linked to them" do
+      {:ok, %{id: first}} = mint()
+      {_user, identity} = person_attrs()
+      {:ok, %{linked: true}} = Users.link_identity(server(), first, identity)
+
+      assert {:error, :setup_closed} = mint()
+      assert {:error, :setup_closed} = Users.readmit(server(), first, also: fn _ -> :ok end)
+    end
+
+    test "opens nothing on a node whose people setup did not make" do
+      attrs = restore()
+      {:ok, _} = open(attrs)
+      {user, _identity} = person_attrs()
+
+      {:ok, _restored} =
+        Users.mint(server(), user, nil, admission: "restore", restore: ref(attrs))
+
+      # While the restore's claim is pending it refuses setup as it refuses
+      # every other mint; once its attempt ends, setup opens nothing.
+      assert {:error, :restore_reserved} = mint()
+
+      {:ok, 1} =
+        Arca.Repo.transaction(fn -> InstallationClaims.end!(attrs.request_id, "completed") end)
+
+      assert {:error, :setup_closed} = mint()
     end
   end
 
@@ -195,21 +332,33 @@ defmodule Arca.InstallationClaimsTest do
       {user, _identity} = person_attrs()
       other = %{ref(attrs) | request_id: "req_other"}
 
-      assert {:error, :not_claimed} = Users.mint(server(), user, nil, restore: other)
-      assert {:ok, %{id: id}} = Users.mint(server(), user, nil, restore: ref(attrs))
+      assert {:error, :not_claimed} =
+               Users.mint(server(), user, nil, admission: "restore", restore: other)
+
+      assert {:ok, %{id: id, admission: "restore"}} =
+               Users.mint(server(), user, nil, admission: "restore", restore: ref(attrs))
+
       assert {:ok, []} = Users.identities(server(), id)
+      assert platform?(id)
 
       {second, _} = person_attrs()
-      assert {:error, :not_empty} = Users.mint(server(), second, nil, restore: ref(attrs))
+
+      assert {:error, :not_empty} =
+               Users.mint(server(), second, nil, admission: "restore", restore: ref(attrs))
     end
 
-    test "without a claim is refused, and an ordinary mint names its identity" do
+    test "without a claim is refused, and an admission outside the five is refused" do
       {user, _identity} = person_attrs()
 
       assert {:error, :not_claimed} =
-               Users.mint(server(), user, nil, restore: %{request_id: "r", token_digest: "t"})
+               Users.mint(server(), user, nil,
+                 admission: "restore",
+                 restore: %{request_id: "r", token_digest: "t"}
+               )
 
-      assert {:error, {:invalid, %{identity: _}}} = Users.mint(server(), user, nil)
+      assert {:error, {:invalid, %{admission: _}}} =
+               Users.mint(server(), user, nil, admission: "provider")
+
       assert people() == 0
     end
   end
@@ -275,7 +424,7 @@ defmodule Arca.InstallationClaimsTest do
       assert claims() == 3
     end
 
-    test "a failed attempt leaves the node to an ordinary door" do
+    test "a failed attempt leaves the node to setup" do
       attrs = restore()
       {:ok, attempt} = open(attrs)
       assert {:error, :restore_reserved} = mint()
@@ -322,17 +471,42 @@ defmodule Arca.InstallationClaimsTest do
       assert {:error, :not_owner} = open(restore())
       assert {:error, :not_found} = InstallationClaims.get(server())
     end
+
+    test "a stale owner mints no first person and grants nothing", %{slot: slot} do
+      {1, _} =
+        Arca.Repo.update_all(from(l in CellLease, where: l.node == ^slot.node),
+          set: [owner: "someone-else", generation: slot.generation + 1]
+        )
+
+      assert {:error, :not_owner} = mint()
+      assert people() == 0
+      assert grants() == 0
+    end
+  end
+
+  # The person's local identity row, with no sign-in method marked yet.
+  defp identity_row!(user_id) do
+    {:ok, _} =
+      Arca.PersonIdentities.create(server(), %{
+        user_id: user_id,
+        provenance: "local",
+        live_public_key: :crypto.strong_rand_bytes(32),
+        operational_public_key: :crypto.strong_rand_bytes(32),
+        live_key_sealed: "sealed-live",
+        operational_key_sealed: "sealed-op"
+      })
   end
 end
 
 defmodule Arca.InstallationClaimsRaceTest do
   @moduledoc """
-  A restore's claim racing a first door, and two kits racing under one
-  token, on two real connections outside the sandbox. Both sides decide
-  after locking one row, the schema fingerprint's, so the one that waits
-  reads what the other committed: a door behind a claim is refused, a
-  claim behind a door finds the node taken, and a second kit behind the
-  first finds the node claimed. On PostgreSQL the waiter blocks on that
+  A restore's claim racing setup, two setups at once, and two kits racing
+  under one token, on two real connections outside the sandbox. Both
+  sides decide after locking one row, the schema fingerprint's, so the
+  one that waits reads what the other committed: setup behind a claim is
+  refused, a claim behind setup finds the node taken, a second setup
+  behind the first answers the first's person again, and a second kit
+  behind the first finds the node claimed. On PostgreSQL the waiter blocks on that
   row; on SQLite at the lock its transaction takes at entry.
   """
 
@@ -342,7 +516,16 @@ defmodule Arca.InstallationClaimsRaceTest do
   import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{ControlPlane, IdentityAttempts, InstallationClaims, Users}
-  alias Arca.Schemas.{CellLease, ExternalIdentity, IdentityAttempt, InstallationClaim, User}
+
+  alias Arca.Schemas.{
+    CellLease,
+    ExternalIdentity,
+    IdentityAttempt,
+    InstallationClaim,
+    Membership,
+    User
+  }
+
   alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -361,6 +544,7 @@ defmodule Arca.InstallationClaimsRaceTest do
     mode = if InstallationClaims.installed?(), do: InstallationClaims.mode()
     token = digest("token")
     door_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+    second_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
 
     on_exit(fn ->
       if mode, do: InstallationClaims.install_mode!(mode), else: InstallationClaims.reset()
@@ -368,8 +552,12 @@ defmodule Arca.InstallationClaimsRaceTest do
       unboxed(fn ->
         Arca.Repo.delete_all(where(IdentityAttempt, token_digest: ^token))
         Arca.Repo.delete_all(where(InstallationClaim, token_digest: ^token))
-        Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^door_id))
-        Arca.Repo.delete_all(where(User, id: ^door_id))
+
+        for id <- [door_id, second_id] do
+          Arca.Repo.delete_all(where(Membership, user_id: ^id))
+          Arca.Repo.delete_all(where(ExternalIdentity, user_id: ^id))
+          Arca.Repo.delete_all(where(User, id: ^id))
+        end
       end)
     end)
 
@@ -383,7 +571,7 @@ defmodule Arca.InstallationClaimsRaceTest do
                 Arca.Repo.exists?(where(InstallationClaim, state: "pending"))}
              end)
 
-    {:ok, token: token, door_id: door_id}
+    {:ok, token: token, door_id: door_id, second_id: second_id}
   end
 
   # This member's slot, taken on a real connection so every connection
@@ -451,6 +639,7 @@ defmodule Arca.InstallationClaimsRaceTest do
     }
   end
 
+  # Setup's mint of the first person `id`.
   defp door(id, opts) do
     n = System.unique_integer([:positive])
     now = DateTime.utc_now()
@@ -459,7 +648,6 @@ defmodule Arca.InstallationClaimsRaceTest do
       server(),
       %{
         id: id,
-        provider: "github",
         email: "door#{n}@example.com",
         email_verified: true,
         first_seen_at: now,
@@ -467,19 +655,12 @@ defmodule Arca.InstallationClaimsRaceTest do
         created_at: now,
         updated_at: now
       },
-      %{
-        key: "github|https://github.com|door#{n}",
-        provider: "github",
-        issuer: "https://github.com",
-        subject: "door#{n}",
-        first_seen_at: now,
-        last_seen_at: now
-      },
-      opts
+      nil,
+      [admission: "setup"] ++ opts
     )
   end
 
-  test "a first door waiting behind a restore's claim is refused", %{token: token, door_id: id} do
+  test "setup waiting behind a restore's claim is refused", %{token: token, door_id: id} do
     test = self()
 
     claimant =
@@ -508,7 +689,7 @@ defmodule Arca.InstallationClaimsRaceTest do
     refute unboxed(fn -> Arca.Repo.exists?(where(User, id: ^id)) end)
   end
 
-  test "a restore waiting behind a first door finds the node taken", %{token: token, door_id: id} do
+  test "a restore waiting behind setup finds the node taken", %{token: token, door_id: id} do
     test = self()
 
     opener =
@@ -531,6 +712,38 @@ defmodule Arca.InstallationClaimsRaceTest do
     assert {:ok, %{id: ^id}} = Task.await(opener, 25_000)
     assert {:error, :not_empty} = Task.await(claimant, 25_000)
     refute unboxed(fn -> Arca.Repo.exists?(where(InstallationClaim, token_digest: ^token)) end)
+  end
+
+  test "a second setup waits behind the first and answers its person again", %{
+    door_id: id,
+    second_id: second_id
+  } do
+    test = self()
+
+    first = Task.async(fn -> unboxed(fn -> door(id, also: pause(test, :door)) end) end)
+    assert_receive {:door, :holds}, 5_000
+
+    second =
+      Task.async(fn ->
+        unboxed(fn ->
+          send(test, {:second, backend()})
+
+          door(second_id, [])
+        end)
+      end)
+
+    assert_receive {:second, pid}, 5_000
+    assert_waits_on_order!(second, pid)
+
+    send(first.pid, :go)
+    assert {:ok, %{id: ^id}} = Task.await(first, 25_000)
+    assert {:error, {:readmit, %{id: ^id}}} = Task.await(second, 25_000)
+
+    assert {1, 1} ==
+             unboxed(fn ->
+               {Arca.Repo.aggregate(User, :count),
+                Arca.Repo.aggregate(where(Membership, scope: "platform", user_id: ^id), :count)}
+             end)
   end
 
   test "a second kit under one token waits behind the first and is refused", %{token: token} do

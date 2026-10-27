@@ -6,7 +6,7 @@ How a person gets an identifier any CYFR knows them by, how its keys are kept an
 
 ## Keys, Identifier and Directory
 
-Your CYFR holds two keys for you, created at your first sign-in:
+Your CYFR holds two keys for you, created when it made you (its setup, an invitation, or signing up while its allowlist admits everyone; a sign-in method such as GitHub, Google or an OIDC issuer only unlocks the person who linked it, and never makes or recovers one):
 
 - the **live key**, which signs what you send to any other CYFR: a sign-in at another CYFR, and the certificates of your devices;
 - the **operational key**, which only rotates the live key.
@@ -79,7 +79,7 @@ If a recovery or another rotation replaced the keys first, the attempt ends with
 
 A restore brings your identity back onto an empty installation from one kit. It is not an operation, since no person exists there yet, and it needs the installation's own capability besides the kit:
 
-1. The operator sets `CYFR_RESTORE_TOKEN` on the fresh installation (`openssl rand -hex 32`) and gives you the token. While it is set, the installation's first sign-in is reserved for a restore: no sign-in method, an administrator's included, signs anyone in first.
+1. The operator sets `CYFR_RESTORE_TOKEN` on the fresh installation (`openssl rand -hex 32`) and gives you the token. While it is set, the installation's first person is reserved for the restore: setup makes no one first, and the restored person is the installation's administrator.
 2. Open `https://<installation>/restore`, and type the token and the kit's three lines. The browser sends them to that installation alone, the token in a request header; nothing goes into an address or the browser's storage, and the form is emptied once the restore completes or you clear it.
 3. The installation checks the token first, then that the kit is one of your identity's kits now, before it claims anything. A wrong token or a mistyped kit spends nothing.
 4. It stages new keys and asks the directory to recover your identity onto them. Each step is durable: if the installation stops partway, sending the same kit under the same token again resumes from the step it reached, and the page does that itself while the restore is underway.
@@ -123,7 +123,7 @@ Signing in at another CYFR with your CYFR identity begins at your own CYFR, whic
 
 ## Joining a CYFR That Is Not Your Own
 
-Any CYFR that is not your own, a household's or a team's included, lets you in by your identifier (`per_…`, shown on your settings page), as it lets in an email address: its platform administrator adds your identifier to its allowlist, and a member invites it to an athanor there. Nothing about this reaches your own CYFR, and nothing at the CYFR you join learns your keys.
+Any CYFR that is not your own, a household's or a team's included, lets you in by your identifier (`per_…`, shown on your settings page): its platform administrator adds your identifier to its allowlist, and a member invites it to an athanor there. Nothing about this reaches your own CYFR, and nothing at the CYFR you join learns your keys.
 
 1. Open the address of the CYFR you join. On its sign-in page, under **Sign in with your CYFR**, give your own CYFR's address. It sends you there; a link someone sends you only fills that form, and never begins or confirms anything.
 2. At your CYFR's `/carry` page, press **Begin**: the sign-in is for that one CYFR. Sign in at your CYFR first if you are not.

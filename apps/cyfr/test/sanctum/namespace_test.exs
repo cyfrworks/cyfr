@@ -18,7 +18,7 @@ defmodule Sanctum.NamespaceTest do
     id = "github|https://github.com|ns-#{n}"
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: id,
         provider: "github",
         email: "ns#{n}@example.com",

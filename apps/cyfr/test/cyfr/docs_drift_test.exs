@@ -1287,10 +1287,11 @@ defmodule Cyfr.DocsDriftTest do
     assert Enum.sort(assigned) == Enum.sort(@deployment_file_assignments),
            ".env.example assigns #{inspect(assigned)}"
 
-    # `cyfr init` writes the operators' line over its commented anchor,
-    # matched by prefix, so the template carries the anchor once.
-    assert length(Regex.scan(~r/^# CYFR_PLATFORM_ADMIN_EMAILS=$/m, text)) == 1
-    refute text =~ ~r/^#?\s*CYFR_PLATFORM_ADMIN_EMAILS=.+$/m
+    # No line names an operator or a sign-in provider: the installation's
+    # administrator is the first person setup makes, and a sign-in method
+    # is offered exactly when its credentials are set.
+    refute text =~ "CYFR_PLATFORM_ADMIN_EMAILS"
+    refute text =~ "CYFR_AUTH_PROVIDER"
 
     settings = MapSet.new(Roster.variables())
 

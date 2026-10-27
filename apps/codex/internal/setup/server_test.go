@@ -38,8 +38,7 @@ func (f *fakeSession) State() State {
 	defer f.mu.Unlock()
 	return f.state
 }
-func (f *fakeSession) Check(a Answers) error { return f.record("check " + a.Mode + " " + a.Domain) }
-func (f *fakeSession) Start(a Answers) error { return f.record("start " + a.Mode + " " + a.Email) }
+func (f *fakeSession) Start(a Answers) error { return f.record("start " + a.Mode + " " + a.Domain) }
 func (f *fakeSession) Rename(n string) error { return f.record("rename " + n) }
 func (f *fakeSession) Cancel() error         { return f.record("cancel") }
 func (f *fakeSession) Choose(o string) error { return f.record("choose " + o) }
@@ -112,7 +111,7 @@ func TestServerRequiresTheRunsToken(t *testing.T) {
 		if w := request(t, srv, http.MethodGet, "/api/state", "", set); w.Code != http.StatusForbidden {
 			t.Errorf("the state with token %q answered %d, want 403", token, w.Code)
 		}
-		if w := request(t, srv, http.MethodPost, "/api/start", `{"mode":"local","email":"me@example.com"}`, set); w.Code != http.StatusForbidden {
+		if w := request(t, srv, http.MethodPost, "/api/start", `{"mode":"local"}`, set); w.Code != http.StatusForbidden {
 			t.Errorf("a start with token %q answered %d, want 403", token, w.Code)
 		}
 	}
@@ -138,7 +137,7 @@ func TestServerRequiresTheRunsToken(t *testing.T) {
 func TestServerTakesActionsFromThePagesAlone(t *testing.T) {
 	f := &fakeSession{state: State{Phase: PhaseAnswering}}
 	srv := NewServer(f, testToken, testPort)
-	const start = `{"mode":"local","email":"me@example.com"}`
+	const start = `{"mode":"public","domain":"cyfr.example.com"}`
 	for _, c := range []struct {
 		name   string
 		method string
@@ -153,8 +152,9 @@ func TestServerTakesActionsFromThePagesAlone(t *testing.T) {
 		{"a form", http.MethodPost, start, func(r *http.Request) { r.Header.Set("Content-Type", "application/x-www-form-urlencoded") }, http.StatusUnsupportedMediaType},
 		{"plain text", http.MethodPost, start, func(r *http.Request) { r.Header.Set("Content-Type", "text/plain") }, http.StatusUnsupportedMediaType},
 		{"an unknown field", http.MethodPost, `{"mode":"local","admin":"me@example.com"}`, nil, http.StatusBadRequest},
+		{"an email", http.MethodPost, `{"mode":"local","email":"me@example.com"}`, nil, http.StatusBadRequest},
 		{"two objects", http.MethodPost, start + start, nil, http.StatusBadRequest},
-		{"too large", http.MethodPost, `{"mode":"local","email":"` + strings.Repeat("a", maxBody) + `"}`, nil, http.StatusBadRequest},
+		{"too large", http.MethodPost, `{"mode":"public","domain":"` + strings.Repeat("a", maxBody) + `"}`, nil, http.StatusBadRequest},
 		{"a GET", http.MethodGet, "", nil, http.StatusMethodNotAllowed},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -172,11 +172,12 @@ func TestServerTakesActionsFromThePagesAlone(t *testing.T) {
 	if w := request(t, srv, http.MethodPost, "/", "{}", nil); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("a POST of the page answered %d", w.Code)
 	}
-	if w := request(t, srv, http.MethodPost, "/api/nothing", "{}", nil); w.Code != http.StatusNotFound {
-		t.Errorf("an unknown action answered %d", w.Code)
+	for _, path := range []string{"/api/nothing", "/api/check"} {
+		if w := request(t, srv, http.MethodPost, path, "{}", nil); w.Code != http.StatusNotFound {
+			t.Errorf("the unknown action %s answered %d", path, w.Code)
+		}
 	}
 	for path, want := range map[string]string{
-		"/api/check":  `{"mode":"public","domain":"cyfr.example.com"}`,
 		"/api/start":  start,
 		"/api/name":   `{"name":"home"}`,
 		"/api/cancel": `{}`,
@@ -187,7 +188,7 @@ func TestServerTakesActionsFromThePagesAlone(t *testing.T) {
 		}
 	}
 	got := strings.Join(f.called(), "\n")
-	for _, want := range []string{"check public cyfr.example.com", "start local me@example.com", "rename home", "cancel", "choose retry"} {
+	for _, want := range []string{"start public cyfr.example.com", "rename home", "cancel", "choose retry"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the session was not asked %q:\n%s", want, got)
 		}
@@ -200,7 +201,7 @@ func TestServerAnswersRefusalsWithTheirSentence(t *testing.T) {
 	f := &fakeSession{state: State{Phase: PhaseAnswering}}
 	srv := NewServer(f, testToken, testPort)
 	f.set(State{Phase: PhaseAnswering}, errors.New("`localhost` is not a valid domain"))
-	w := request(t, srv, http.MethodPost, "/api/check", `{"mode":"public","domain":"localhost"}`, nil)
+	w := request(t, srv, http.MethodPost, "/api/start", `{"mode":"public","domain":"localhost"}`, nil)
 	var body map[string]string
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusUnprocessableEntity || body["sentence"] != "`localhost` is not a valid domain" {
 		t.Errorf("a refusal answered %d %s", w.Code, w.Body)

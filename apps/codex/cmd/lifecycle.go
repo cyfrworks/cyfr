@@ -80,7 +80,6 @@ const (
 	buildsURLVar     = "CYFR_LOCUS_BUILDS_URL"
 	buildsKeyVar     = "CYFR_LOCUS_BUILDS_KEY"
 	corsOriginsVar   = "CYFR_CORS_ALLOWED_ORIGINS"
-	adminEmailVar    = "CYFR_PLATFORM_ADMIN_EMAILS"
 
 	// The locus-runtime service's id when .env names none: docker-compose.yml's
 	// default for both LOCUS_RUNTIME_SERVICE_ID and the entry of CYFR_LOCUS_RUNTIME_WORKERS.
@@ -245,12 +244,10 @@ func ensureEnvFileKeys(path string) ([]envChange, error) {
 }
 
 // newEnv is the .env init writes for a new home from the template at
-// path, through the engine's editor (access.EditEnv): the answer to init's
-// email question (the operators' setting), the stack's keys (stackKeys)
-// and the local head's access settings, every other line of the template kept.
-// The template documents the email on a commented line, which stays; its
-// assignment is added at the end.
-func newEnv(path, adminEmail string) ([]byte, []envChange, access.Derivation, error) {
+// path, through the engine's editor (access.EditEnv): the stack's keys
+// (stackKeys) and the local head's access settings, every other line of the
+// template kept.
+func newEnv(path string) ([]byte, []envChange, access.Derivation, error) {
 	tmpl, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, access.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, err)
@@ -260,9 +257,6 @@ func newEnv(path, adminEmail string) ([]byte, []envChange, access.Derivation, er
 		return nil, nil, access.Derivation{}, fmt.Errorf("Failed to read %s: %w", path, engineFailure(err))
 	}
 	set := map[string]string{}
-	if adminEmail != "" {
-		set[adminEmailVar] = adminEmail
-	}
 	add, changes, err := stackKeys(values)
 	if err != nil {
 		return nil, nil, access.Derivation{}, err
@@ -410,7 +404,7 @@ var initCmd = &cobra.Command{
 
 Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
-How CYFR is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. Then your email, as CYFR's administrator. .env is written for this computer only, with every key; then, for tailnet access, the machine joins your tailnet (the link it prints approves the machine, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves CYFR reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: access is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional). Given no email, no one is authorized to use CYFR yet, and init says so: CYFR_PLATFORM_ADMIN_EMAILS in .env names its administrators.
+How CYFR is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. .env is written for this computer only, with every key; then, for tailnet access, the machine joins your tailnet (the link it prints approves the machine, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves CYFR reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: access is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional).
 
 .env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
@@ -450,10 +444,9 @@ type accessChoice struct {
 // the terminal's questions and printed link (runInit), or the setup pages
 // (cyfr setup). Every step and its order are initProject's either way.
 type initFace struct {
-	// answers is how a new home is reached and its administrator's email
-	// ("" for none), asked once, before init writes anything, when it is to
-	// write a new .env; an error ends init there.
-	answers func(ctx context.Context) (accessChoice, string, error)
+	// answers is how a new home is reached, asked once, before init writes
+	// anything, when it is to write a new .env; an error ends init there.
+	answers func(ctx context.Context) (accessChoice, error)
 	// apply applies a new home's mode, other than local, to its stopped
 	// stack and answers the head it switched to (applyInitAccess).
 	apply func(ctx context.Context, c accessChoice, key []byte) (access.Head, error)
@@ -478,22 +471,12 @@ func (f initFace) begin(name string) {
 // runInit is `cyfr init` in the working directory, asking on the terminal.
 func runInit(ctx context.Context, o initOptions, out, errOut io.Writer) error {
 	return initProject(ctx, o, initFace{
-		answers: func(ctx context.Context) (accessChoice, string, error) {
-			r := bufio.NewReader(askInput)
-			interactive := askTerminal()
-			choice, err := chooseAccess(ctx, o, interactive, r, out)
+		answers: func(ctx context.Context) (accessChoice, error) {
+			choice, err := chooseAccess(ctx, o, askTerminal(), bufio.NewReader(askInput), out)
 			if err != nil {
-				return choice, "", interruption{errQuestionInterrupted}
+				return choice, interruption{errQuestionInterrupted}
 			}
-			adminEmail := ""
-			if interactive {
-				fmt.Fprintln(out, "CYFR authorizes by membership — list your email as the platform admin so you can use this instance.")
-				adminEmail, err = ask(ctx, r, out, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)", "")
-				if err != nil {
-					return choice, "", interruption{errQuestionInterrupted}
-				}
-			}
-			return choice, adminEmail, nil
+			return choice, nil
 		},
 		apply: func(ctx context.Context, c accessChoice, key []byte) (access.Head, error) {
 			return applyInitAccess(ctx, c, key, joinChoice{
@@ -532,9 +515,8 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 	// already there.
 	asked := !envExisted && (releaseBuild || fileExists(".env.example"))
 	choice := accessChoice{mode: access.ModeLocal}
-	var adminEmail string
 	if asked {
-		if choice, adminEmail, err = face.answers(ctx); err != nil {
+		if choice, err = face.answers(ctx); err != nil {
 			return err
 		}
 	}
@@ -611,13 +593,11 @@ database_path: ./data/cyfr.db
 	// download is a no-op — skip it; the dev-build notice below tells the
 	// user where to get it.
 	envCreated := false
-	adminEmailConfigured := false
 	sel := existingSelection(".env")
 	var head access.Head
 	if asked && fileExists(".env.example") {
-		adminEmailConfigured = adminEmail != ""
 		face.begin(initStepSettings)
-		text, changes, d, err := newEnv(".env.example", adminEmail)
+		text, changes, d, err := newEnv(".env.example")
 		if err != nil {
 			return err
 		}
@@ -761,11 +741,6 @@ database_path: ./data/cyfr.db
 		fmt.Fprintln(out, "   scaffold (guides, wit/, aqua/) are only fetched for released")
 		fmt.Fprintln(out, "   versions. Run the server from source with `mix phx.server`, or copy those")
 		fmt.Fprintln(out, "   files from a repo checkout.")
-	}
-	if envCreated && !adminEmailConfigured {
-		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "⚠  CYFR_PLATFORM_ADMIN_EMAILS is unset in .env — no one is authorized to use this instance yet.")
-		fmt.Fprintln(out, "   Set CYFR_PLATFORM_ADMIN_EMAILS=you@example.com in .env so you (the operator) can sign in.")
 	}
 	fmt.Fprintln(out, "")
 	if composeExists {

@@ -13,16 +13,18 @@
 # bytes.
 #
 #   person EMAIL SUB NAME
-#       The GitHub identity SUB with the verified EMAIL and the name NAME,
-#       signed in as the device flow signs one in, from the door on
-#       (`Sanctum.Door`, `Sanctum.SignIn.admitted/2`, the session), as the
-#       release fixture's `person` does (tests/release-boot/fixture.exs):
-#       the person, their own athanor, its route segment, their namespace
-#       and the session token.
+#       The person the GitHub identity SUB is linked to, made the first
+#       time and signed in with the verified EMAIL and the name NAME, by the
+#       release fixture's `person` (tests/release-boot/fixture.exs): the
+#       installation's first person by its setup admission, every later one
+#       by an open admission's rows once the door's `*` admits. Answers the
+#       person, their own athanor, its route segment, their namespace and
+#       the session token.
 #
-#   admit SESSION_TOKEN EMAIL
-#       EMAIL let in at the door by the session's person, an operator, as
-#       the console lets one in (`door.allow` through the gate).
+#   admit SESSION_TOKEN
+#       The door opened to newcomers by the session's person, an
+#       administrator, as the console opens it (`door.allow` of `*` through
+#       the gate).
 #
 #   group SESSION_TOKEN USER_ID NAME
 #       A group NAME created by the session's person and the person USER_ID
@@ -171,21 +173,11 @@ fn args ->
 
   case args do
     ["person", email, sub, name] ->
-      identity = Sanctum.Auth.Identity.builtin_key(:github, sub)
-
-      user_info = %{
-        id: identity,
-        provider: :github,
-        email: email,
-        verified: true,
-        name: name
-      }
-
-      {:ok, verdict} = Sanctum.Door.admit_identity(identity, user_info)
-      {:ok, user} = Sanctum.SignIn.admitted(user_info, verdict)
-      ctx = person_ctx.(user.id)
-      {:ok, session} = Sanctum.Session.create(ctx)
-      {:ok, user} = Sanctum.Tenancy.Users.get(user.id)
+      {release, _binding} = Code.eval_file(Path.expand("../release-boot/fixture.exs", __DIR__))
+      "FIXTURE=" <> signed_in = release.(["person", email, sub, name])
+      %{"user_id" => user_id, "token" => token} = Jason.decode!(signed_in)
+      ctx = person_ctx.(user_id)
+      {:ok, user} = Sanctum.Tenancy.Users.get(user_id)
 
       answer.(%{
         user_id: user.id,
@@ -194,12 +186,12 @@ fn args ->
         namespace: user.namespace,
         athanor_id: ctx.athanor_id,
         segment: segment.(ctx.athanor_id),
-        token: session.token
+        token: token
       })
 
-    ["admit", token, email] ->
-      entry = console.(token, "door/allow", %{"value" => email, "kind" => "email"})
-      answer.(%{allowed: email, entry: Map.get(entry, :id)})
+    ["admit", token] ->
+      entry = console.(token, "door/allow", %{"value" => "*"})
+      answer.(%{allowed: "*", entry: Map.get(entry, :id)})
 
     ["group", token, user_id, name] ->
       group = console.(token, "athanor/create", %{"name" => name})

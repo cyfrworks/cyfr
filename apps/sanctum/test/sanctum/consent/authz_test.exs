@@ -72,7 +72,7 @@ defmodule Sanctum.Consent.AuthzTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|authz-#{n}",
         provider: "github",
         email: "authz#{n}@example.com",
@@ -1065,7 +1065,7 @@ defmodule Sanctum.Consent.AuthzTest do
       n = System.unique_integer([:positive])
 
       {:ok, other} =
-        Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "github|https://github.com|authz-other-#{n}",
           provider: "github",
           email: "authz-other#{n}@example.com",
@@ -1428,11 +1428,10 @@ defmodule Sanctum.Consent.AuthzRaceTest do
 
   defp person!(user_id, athanor_id, n, now) do
     {:ok, _} =
-      Arca.Users.mint(
+      Arca.Test.People.mint(
         Prima.Actor.system(),
         %{
           id: user_id,
-          provider: "github",
           email: "consume-race#{n}@example.com",
           email_verified: true,
           first_seen_at: now,

@@ -11,7 +11,7 @@ defmodule Aqua.AttachmentWriteRaceTest do
 
   use ExUnit.Case, async: false
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   defmodule ParkedPut do
     @moduledoc false
@@ -72,7 +72,7 @@ defmodule Aqua.AttachmentWriteRaceTest do
     [alice, bob] =
       for name <- ["alice", "bob"] do
         {:ok, user} =
-          Users.upsert_from_provider(%{
+          Sanctum.Test.People.linked(%{
             id: "github|https://github.com|#{name}-race-#{n}",
             provider: "github",
             email: "#{name}-race-#{n}@example.com",

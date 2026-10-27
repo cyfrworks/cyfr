@@ -10,7 +10,7 @@ defmodule Arca.SecurityTransitions do
   A transition changes a standing and retires what that standing issued:
   a denial marks the person denied, archives their own athanor, every
   frozen athanor they sit in and every group they leave empty, removes
-  their memberships, the invitations their address or identifier still
+  their memberships, the invitations their identifier still
   holds and their thread follows, deletes their sessions and revokes the
   keys they created and the keys of every athanor it archives, the frame
   credentials (`Arca.FrameCredentials`), paired clients
@@ -398,7 +398,7 @@ defmodule Arca.SecurityTransitions do
            :ok <- same_set(planned, athanors_of(user, rows)),
            peers = lock_peers(user_id, group_ids(athanors)),
            identifier = identifier_of(user_id),
-           invitations = lock_invitations(user.email, identifier),
+           invitations = lock_invitations(identifier),
            retire = to_retire(user, athanors, rows, peers),
            :ok <-
              decide(verify, %{
@@ -417,7 +417,7 @@ defmodule Arca.SecurityTransitions do
         with {:ok, generation, moved?} <- deny_row(user, now),
              {:ok, archived} <- archive_rows(active_ids(retire, athanors), now) do
           removed = delete_person_rows(user_id)
-          withdrawn = delete_invitations(user.email, identifier)
+          withdrawn = delete_invitations(identifier)
           unfollowed = delete_follows(user_id, planned)
           hashes = delete_sessions(user_id)
           key_ids = revoke_keys(user_id, retire, now)
@@ -558,9 +558,9 @@ defmodule Arca.SecurityTransitions do
     Enum.sort_by(rows || [], & &1.id)
   end
 
-  # arca:unscoped-ok invitations are keyed by address or identifier, across every athanor that holds one.
-  defp delete_invitations(email, identifier) do
-    case invited_query(email, identifier) do
+  # arca:unscoped-ok invitations are keyed by identifier, across every athanor that holds one.
+  defp delete_invitations(identifier) do
+    case invited_query(identifier) do
       nil ->
         []
 
@@ -572,28 +572,15 @@ defmodule Arca.SecurityTransitions do
     end
   end
 
-  # The invitations a person's address or identifier still holds, or nil
-  # when they have neither.
-  defp invited_query(email, identifier) do
-    email = if is_binary(email) and email != "", do: email
-    identifier = if is_binary(identifier) and identifier != "", do: identifier
-
-    base = from(m in Membership, where: m.status == "invited" and m.scope == "athanor")
-
-    case {email, identifier} do
-      {nil, nil} ->
-        nil
-
-      {email, nil} ->
-        where(base, [m], m.email == ^email)
-
-      {nil, identifier} ->
-        where(base, [m], m.person_identifier == ^identifier)
-
-      {email, identifier} ->
-        where(base, [m], m.email == ^email or m.person_identifier == ^identifier)
-    end
+  # The invitations a person's identifier still holds, or nil when they
+  # have none.
+  defp invited_query(identifier) when is_binary(identifier) and identifier != "" do
+    from(m in Membership,
+      where: m.status == "invited" and m.scope == "athanor" and m.person_identifier == ^identifier
+    )
   end
+
+  defp invited_query(_none), do: nil
 
   defp identifier_of(user_id) do
     Arca.Repo.one(from(p in PersonIdentity, where: p.user_id == ^user_id, select: p.identifier))
@@ -2096,9 +2083,9 @@ defmodule Arca.SecurityTransitions do
     |> Arca.Repo.all()
   end
 
-  # arca:unscoped-ok invitations are keyed by address or identifier, across every athanor that holds one.
-  defp lock_invitations(email, identifier) do
-    case invited_query(email, identifier) do
+  # arca:unscoped-ok invitations are keyed by identifier, across every athanor that holds one.
+  defp lock_invitations(identifier) do
+    case invited_query(identifier) do
       nil ->
         []
 

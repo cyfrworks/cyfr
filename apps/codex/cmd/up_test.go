@@ -752,7 +752,7 @@ func newTailnetHome(t *testing.T) string {
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	text, _ := newEnvFromTemplate(t, "me@example.com")
+	text, _ := newEnvFromTemplate(t)
 	t.Chdir(dir)
 	d, err := access.Derive(access.Target{Mode: access.ModeTailnet}, access.Current{Port: 4000, BuildsURL: defaultBuildsURL}, &access.Join{Name: "cyfr.tail1234.ts.net", NodeID: "nAAAAAAAAACNTRL"})
 	if err != nil {

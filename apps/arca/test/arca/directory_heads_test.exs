@@ -93,7 +93,7 @@ defmodule Arca.DirectoryHeadsTest do
     now = DateTime.utc_now()
 
     {:ok, person} =
-      Users.mint(
+      Arca.Test.People.mint(
         server(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
@@ -655,7 +655,7 @@ defmodule Arca.DirectoryHeadsRaceTest do
 
     unboxed(fn ->
       {:ok, _} =
-        Arca.Users.mint(
+        Arca.Test.People.mint(
           server(),
           %{
             id: user_id,

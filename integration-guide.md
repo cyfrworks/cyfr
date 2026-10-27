@@ -1206,22 +1206,23 @@ themselves.
 CYFR is one product: deploy it as-is (sqlite, local FS) or configure OIDC /
 Postgres / a custom registry.
 
-Once authentication is configured, two lists do two jobs. `CYFR_PLATFORM_ADMIN_EMAILS`
-names the server's operators (platform admins): always let in, minted their
-own athanor past the server caps, and able to run the operator verbs
-(`door.*`, `instance_entry.*` but `offered`, `execution.force_release`,
-`athanor.purge`, `athanor.destroy`).
+The installation's first person, made by its setup (or by a restore onto it
+empty), is its platform administrator, and no other grant exists: minted
+their own athanor past the server caps, never denied by the allowlist, and able
+to run the operator verbs (`door.*`, `instance_entry.*` but `offered`,
+`execution.force_release`, `athanor.purge`, `athanor.destroy`).
 The capability is over the instance, not a seat: an operator works inside one
 athanor at a time like everyone else, and only in one they are a member of.
 They enter no other athanor — opening one they hold no seat in is refused like
 anyone's, and a session that names one they have left falls back to their own
 — and there is no cross-athanor reach. The **server allowlist** (`cyfr admin allow
-<email|user_id|identifier|*>`, `cyfr admin deny …`, or the Settings page) is who else may
-sign in at all: a match on first sign-in lets them in, no match is a 403, and
-`*` lets in anyone the configured provider authenticates. Groups never widen the
-allowlist: adding an unknown email to a group leaves an invitation that activates on
-that person's first admitted sign-in and, when the allowlist would refuse them, a
-request for the operator.
+<identifier|*>`, `cyfr admin deny <person|identifier>`, or the Settings page) judges
+people: a person made here signs in unless a deny names them, and a person whose
+keys another CYFR holds signs in when `*` or an allow naming their identifier
+(`per_…`) admits them. `*` also lets anyone make a person here with a passkey.
+Groups never widen the allowlist: adding an unknown identifier to a group leaves an
+invitation that activates on that person's first admitted CYFR sign-in and, when the
+allowlist would refuse them, a request for the operator.
 
 On **Settings**, the operator offers instance entries to everyone or listed people, with request caps per person and in total. Creation defaults to `component_policy: any`; the optional `shipped` policy admits only an unmodified shipped component. Both require destination methods and path prefixes. Entering or rotating the material needs fresh confirmation; widening the audience or changing `shipped` to `any` needs fresh `credential_sharing` confirmation. Members grant an offered entry through the same consent walk as their own entries; no policy bypasses consent, egress or caps, discloses the key, or lets an MCP definition name it.
 
@@ -1249,15 +1250,12 @@ all denied keeps no member to unarchive it — allowing them on the allowlist ag
 reopens only their own athanors — so it can be purged or destroyed, and
 reopened by no one.
 
-With no auth configured, the deployment runs without sign-in: requests reach the
-public read-only surface as an unauthenticated context, and tenant-scoped
-operations are rejected.
-
 ### OIDC (federated identity)
 
-Set `CYFR_AUTH_PROVIDER=oidc` to federate against a generic OIDC issuer. All
-three variables, `CYFR_OIDC_ISSUER`, `CYFR_OIDC_CLIENT_ID` and `CYFR_OIDC_CLIENT_SECRET`, are required when oidc is selected — the server refuses to boot
-otherwise rather than silently degrading to no authentication. The issuer must
+Setting `CYFR_OIDC_ISSUER`, `CYFR_OIDC_CLIENT_ID` and `CYFR_OIDC_CLIENT_SECRET`
+offers a generic OIDC issuer as a sign-in method a person links; it unlocks the
+person who linked it and never makes one. Any of the three set without the others
+refuses the boot rather than silently offering no OIDC sign-in. The issuer must
 not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 
 ### Several servers on one database (a cluster)

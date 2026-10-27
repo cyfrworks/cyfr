@@ -777,89 +777,64 @@ defmodule Sanctum.ProviderTest do
   end
 
   # ============================================================================
-  # Device-flow gate — single-user only
+  # Device-flow gate — offered exactly when GitHub or Google is configured
   # ============================================================================
 
   describe "session.device_init / device_poll gate" do
-    test "device_init is available when auth_provider is OAuth", %{ctx: ctx} do
-      previous = Application.get_env(:sanctum, :auth_provider)
-
-      try do
-        Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
-
-        # The call will still fail because no GitHub client_id is set in the
-        # test env, but it should fail with the "client ID not configured"
-        # message (proving the gate let it through), not the disabled message.
-        result =
-          Provider.handle("session", ctx, %{"action" => "device_init", "provider" => "github"})
-
-        case result do
-          {:error, msg} ->
-            refute err_msg(msg) =~ "requires the GitHub/Google OAuth provider"
-            assert err_msg(msg) =~ "client ID" or err_msg(msg) =~ "Failed to initialize"
-
-          {:ok, _} ->
-            :ok
-        end
-      after
-        restore_env(:auth_provider, previous)
-      end
+    setup do
+      keys = [:github_client_id, :google_client_id, :google_client_secret]
+      previous = Map.new(keys, &{&1, Application.get_env(:sanctum, &1)})
+      on_exit(fn -> Enum.each(previous, fn {key, value} -> restore_env(key, value) end) end)
+      Enum.each(keys, &Application.delete_env(:sanctum, &1))
+      :ok
     end
 
-    test "device_init is disabled when auth_provider is a non-OAuth provider", %{ctx: ctx} do
-      previous = Application.get_env(:sanctum, :auth_provider)
+    test "device_init is offered when GitHub is configured", %{ctx: ctx} do
+      Application.put_env(:sanctum, :github_client_id, "test-github-client")
 
-      try do
-        Application.put_env(:sanctum, :auth_provider, Sanctum.Test.AltAuthProvider)
+      # Google is not configured, so the flow it asks for still fails, but
+      # on the provider's credentials (proving the gate let it through),
+      # not on the gate's sentence.
+      assert {:error, msg} =
+               Provider.handle("session", ctx, %{
+                 "action" => "device_init",
+                 "provider" => "google"
+               })
 
-        assert {:error, msg} =
-                 Provider.handle("session", ctx, %{
-                   "action" => "device_init",
-                   "provider" => "github"
-                 })
-
-        assert err_msg(msg) =~ "requires the GitHub/Google OAuth provider"
-        assert err_msg(msg) =~ "/auth/"
-      after
-        restore_env(:auth_provider, previous)
-      end
+      refute err_msg(msg) =~ "offers no GitHub or Google sign-in"
+      assert err_msg(msg) =~ "client ID" or err_msg(msg) =~ "Failed to initialize"
     end
 
-    test "device_poll is disabled when auth_provider is a non-OAuth provider", %{ctx: ctx} do
-      previous = Application.get_env(:sanctum, :auth_provider)
+    test "device_init and device_poll are refused when neither GitHub nor Google is configured",
+         %{ctx: ctx} do
+      assert {:error, msg} =
+               Provider.handle("session", ctx, %{
+                 "action" => "device_init",
+                 "provider" => "github"
+               })
 
-      try do
-        Application.put_env(:sanctum, :auth_provider, Sanctum.Test.AltAuthProvider)
+      assert err_msg(msg) =~ "offers no GitHub or Google sign-in"
 
-        assert {:error, msg} =
-                 Provider.handle("session", ctx, %{
-                   "action" => "device_poll",
-                   "device_code" => "dummy",
-                   "provider" => "github"
-                 })
+      assert {:error, msg} =
+               Provider.handle("session", ctx, %{
+                 "action" => "device_poll",
+                 "device_code" => "dummy",
+                 "provider" => "github"
+               })
 
-        assert err_msg(msg) =~ "requires the GitHub/Google OAuth provider"
-      after
-        restore_env(:auth_provider, previous)
-      end
+      assert err_msg(msg) =~ "offers no GitHub or Google sign-in"
     end
 
-    test "nil auth_provider is treated as single-user (OAuth-equivalent)", %{ctx: ctx} do
-      previous = Application.get_env(:sanctum, :auth_provider)
+    test "a Google client id without its secret configures no device flow", %{ctx: ctx} do
+      Application.put_env(:sanctum, :google_client_id, "test-google-client")
 
-      try do
-        Application.delete_env(:sanctum, :auth_provider)
+      assert {:error, msg} =
+               Provider.handle("session", ctx, %{
+                 "action" => "device_init",
+                 "provider" => "google"
+               })
 
-        result =
-          Provider.handle("session", ctx, %{"action" => "device_init", "provider" => "github"})
-
-        case result do
-          {:error, msg} -> refute err_msg(msg) =~ "requires the GitHub/Google OAuth provider"
-          {:ok, _} -> :ok
-        end
-      after
-        restore_env(:auth_provider, previous)
-      end
+      assert err_msg(msg) =~ "offers no GitHub or Google sign-in"
     end
   end
 
@@ -920,8 +895,9 @@ defmodule Sanctum.ProviderTest do
     end
   end
 
-  # `:auth_provider` is the identity domain's key: restoring it under the
-  # host's application would leave a provider set for every test after.
+  # The sign-in methods' credentials are the identity domain's keys:
+  # restoring them under the host's application would leave them set for
+  # every test after.
   defp restore_env(key, nil), do: Application.delete_env(:sanctum, key)
   defp restore_env(key, value), do: Application.put_env(:sanctum, key, value)
 

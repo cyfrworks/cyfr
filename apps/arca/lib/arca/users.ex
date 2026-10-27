@@ -3,14 +3,14 @@
 
 defmodule Arca.Users do
   @moduledoc """
-  Person rows and the IdP identities that name them
+  Person rows and the sign-in methods linked to them
   (`Arca.Schemas.User`, `Arca.Schemas.ExternalIdentity`).
 
   ## Why none of this is athanor-scoped
 
   A person is not a row inside an athanor. They exist before any athanor
-  does — the row is written at the first admitted sign-in, before
-  membership resolution has chosen anything — they sit in several at
+  does — the row is written by their admission, before membership
+  resolution has chosen anything — they sit in several at
   once, and the one column that names an athanor
   (`personal_athanor_id`) is a pointer out of the row, not a tenant
   stamp. Scoping these reads to an athanor would make sign-in impossible
@@ -26,7 +26,7 @@ defmodule Arca.Users do
 
   Nothing that belongs to Ecto crosses the boundary: a person or an
   identity is answered as a plain map (`Arca.Data`). A refusal is
-  `:conflict` (a unique index — a concurrent first sign-in won it, so the
+  `:conflict` (a unique index — a concurrent admission won it, so the
   loser re-reads), `{:invalid, %{field => [message]}}`, `:not_found`,
   `:cross_tenant` or `:database_error`.
   """
@@ -88,18 +88,6 @@ defmodule Arca.Users do
   end
 
   def get_by_namespace(%Prima.Actor{}, _namespace), do: {:error, :cross_tenant}
-
-  @doc "Every person who signed in with this (already lowercased) address, oldest first."
-  @spec list_by_email(Prima.Actor.t(), String.t()) :: {:ok, [map()]} | refusal()
-  def list_by_email(%Prima.Actor{scope: :platform}, email) when is_binary(email) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Users.list_by_email", fn ->
-      {:ok,
-       Arca.Repo.all(from(u in User, where: u.email == ^email, order_by: [asc: u.first_seen_at]))}
-    end)
-    |> Arca.Data.project()
-  end
-
-  def list_by_email(%Prima.Actor{}, _email), do: {:error, :cross_tenant}
 
   @doc """
   Everyone the server knows, a page at a time, `limit:` people to a page
@@ -241,82 +229,143 @@ defmodule Arca.Users do
   def update(%Prima.Actor{}, _user_id, _attrs), do: {:error, :cross_tenant}
 
   @doc """
-  Mint a person and the IdP identity that names them, as ONE transaction:
-  a person with no identity could never sign in again, and an identity
-  with no person names nobody.
-
-  The installation guard runs first, inside the same transaction
-  (`Arca.InstallationClaims.guard!/1`), so a first sign-in cannot race a
-  restore's claim of the node: an ordinary mint is refused
-  `:restore_reserved` while a restore claim is pending, or on a node with
-  no person while the installed mode is `:restore_reserved`, even when it
-  wins the race. A node whose boot installed no mode raises
-  `Arca.InstallationClaims.NotInstalledError` and mints nothing.
+  Mint a person, as ONE transaction run only by the control plane's
+  holder (`Arca.Repo.owned/2`): a member whose slot was taken mints no one
+  (`{:error, :not_owner}`).
 
   `opts`:
 
+    * `admission:` (required) — how the person is made here
+      (`Arca.Schemas.User.admissions/0`), recorded on their row.
+    * `restore:` — the installation claim a restore's mint names
+      (`%{request_id: …, token_digest: …}`), never a caller's argument.
     * `also:` — the higher owner's closure (`ARCHITECTURE.md` §4.4), run
-      inside the transaction after the person and identity rows are
-      written. It is handed the person as a plain map and answers `:ok` or
+      inside the transaction after the person's rows are written. It is
+      handed the person as a plain map and answers `:ok` or
       `{:error, reason}`, which rolls the whole mint back with that reason.
       It writes only its owner's rows through Arca and makes no network
       call.
-    * `restore:` — the installation claim a restore's mint names
-      (`%{request_id: …, token_digest: …}`), never a caller's argument. A
-      restore's mint may name no IdP identity (`identity_attrs` nil); it is
-      refused `:not_claimed` unless the claim is pending exactly as named,
-      and `:not_empty` on a node that holds a person.
 
-  A concurrent first sign-in of the same identity wins the unique index;
-  the loser rolls back and reads the person the winner minted, so both
-  answer the same row rather than one of them reporting a conflict.
+  The installation guard runs first, inside the same transaction
+  (`Arca.InstallationClaims.guard!/2`): the installation's first person is
+  made only by `setup` or a restore, and is granted the platform role in
+  this transaction, after their rows and before `also:`
+  (`Arca.Members.grant_platform!/1`); no other mint grants it. Every other
+  admission onto an empty node is `:not_set_up`; a pending restore claim,
+  or a node with no person whose installed mode is `:restore_reserved`,
+  refuses everything but its restore (`:restore_reserved`); a restore is
+  `:not_claimed` unless its claim is pending exactly as named, and
+  `:not_empty` on a node that holds a person; a `setup` past its person's
+  first sign-in method is `:setup_closed`. A `setup` on a node whose person
+  setup made holds no sign-in method yet mints nothing and answers
+  `{:error, {:readmit, person}}`: that person is admitted again through
+  `readmit/3`. A node whose boot installed no
+  mode raises `Arca.InstallationClaims.NotInstalledError` and mints
+  nothing.
+
+  `identity_attrs` is the sign-in method linked with the person, or nil
+  for none. A concurrent mint naming the same identity wins the unique
+  index; the loser rolls back and reads the person the winner minted, so
+  both answer the same row.
   """
   @spec mint(Prima.Actor.t(), map(), map() | nil, keyword()) ::
           {:ok, map()}
-          | {:error, :restore_reserved | :not_claimed | :not_empty | term()}
+          | {:error,
+             :restore_reserved
+             | :not_claimed
+             | :not_empty
+             | :not_set_up
+             | :setup_closed
+             | :not_owner
+             | {:readmit, map()}
+             | term()}
           | refusal()
           | write_refusal()
-  def mint(actor, user_attrs, identity_attrs, opts \\ [])
+  def mint(actor, user_attrs, identity_attrs, opts)
 
   def mint(%Prima.Actor{scope: :platform} = actor, user_attrs, identity_attrs, opts)
       when is_map(user_attrs) and (is_map(identity_attrs) or is_nil(identity_attrs)) and
              is_list(opts) do
-    restore = Keyword.get(opts, :restore)
-    also = Keyword.get(opts, :also, fn _user -> :ok end)
+    admission = Keyword.fetch!(opts, :admission)
 
-    if is_nil(identity_attrs) and is_nil(restore) do
-      {:error, {:invalid, %{identity: ["an ordinary mint names the identity that admitted it"]}}}
+    if admission in User.admissions() do
+      mint_guarded(actor, admission, user_attrs, identity_attrs, opts)
     else
-      mint_guarded(actor, user_attrs, identity_attrs, restore, also)
+      {:error, {:invalid, %{admission: ["is not an admission"]}}}
     end
   end
 
   def mint(%Prima.Actor{}, _user_attrs, _identity_attrs, _opts), do: {:error, :cross_tenant}
 
-  defp mint_guarded(actor, user_attrs, identity_attrs, restore, also) when is_function(also, 1) do
-    Arca.Repo.Errors.with_db_rescue("Arca.Users.mint", fn ->
-      identity_attrs =
-        identity_attrs &&
-          identity_attrs |> Map.new() |> Map.put_new(:id, Prima.UUID7.generate_id("ext"))
+  defp mint_guarded(actor, admission, user_attrs, identity_attrs, opts) do
+    restore = Keyword.get(opts, :restore)
+    also = Keyword.get(opts, :also, fn _user -> :ok end)
+    user_attrs = user_attrs |> Map.new() |> Map.put(:admission, admission)
 
-      Arca.Repo.locking_transaction(fn ->
-        with :ok <- Arca.InstallationClaims.guard!(restore),
-             {:ok, user} <-
-               %User{} |> User.changeset(user_attrs) |> Arca.Repo.insert() |> settled(),
-             {:ok, _identity} <- insert_identity(identity_attrs, user.id),
-             :ok <- also_ran(also.(Arca.Data.project(user))) do
-          user
-        else
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
-      end)
-      |> case do
-        {:ok, user} -> {:ok, user}
-        {:error, reason} -> lost_the_race(actor, identity_attrs && identity_attrs[:key], reason)
+    identity_attrs =
+      identity_attrs &&
+        identity_attrs |> Map.new() |> Map.put_new(:id, Prima.UUID7.generate_id("ext"))
+
+    Arca.Repo.owned("Arca.Users.mint", fn ->
+      case Arca.InstallationClaims.guard!(admission, restore) do
+        {:readmit, %User{} = user} ->
+          {:error, {:readmit, Arca.Data.project(user)}}
+
+        {:error, _reason} = refusal ->
+          refusal
+
+        admitted when admitted in [:first, :ok] ->
+          with {:ok, user} <-
+                 %User{} |> User.changeset(user_attrs) |> Arca.Repo.insert() |> settled(),
+               {:ok, _identity} <- insert_identity(identity_attrs, user.id),
+               :ok <- first_grant(admitted, user.id),
+               :ok <- also_ran(also.(Arca.Data.project(user))) do
+            {:ok, user}
+          end
       end
     end)
-    |> Arca.Data.project()
+    |> case do
+      {:ok, user} -> {:ok, user}
+      {:error, reason} -> lost_the_race(actor, identity_attrs && identity_attrs[:key], reason)
+    end
   end
+
+  @doc """
+  Admit again the person `setup` made, `user_id`, while they hold no
+  sign-in method yet: the installation guard decides it again under the
+  order row (`Arca.InstallationClaims.guard!/2`), as `mint/4` decided it,
+  so a method registered since refuses `:setup_closed`. `also:` runs in
+  that transaction, handed the person, with `mint/4`'s contract. A member
+  that lost its slot is refused `:not_owner`.
+  """
+  @spec readmit(Prima.Actor.t(), String.t(), keyword()) ::
+          {:ok, map()}
+          | {:error, :setup_closed | :restore_reserved | :not_owner | term()}
+  def readmit(%Prima.Actor{scope: :platform}, user_id, opts)
+      when is_binary(user_id) and is_list(opts) do
+    also = Keyword.get(opts, :also, fn _user -> :ok end)
+
+    Arca.Repo.owned("Arca.Users.readmit", fn ->
+      case Arca.InstallationClaims.guard!("setup", nil) do
+        {:readmit, %User{id: ^user_id} = user} ->
+          with :ok <- also_ran(also.(Arca.Data.project(user))), do: {:ok, user}
+
+        {:readmit, %User{}} ->
+          {:error, :setup_closed}
+
+        {:error, _reason} = refusal ->
+          refusal
+
+        _first_or_open ->
+          {:error, :setup_closed}
+      end
+    end)
+  end
+
+  def readmit(%Prima.Actor{}, _user_id, _opts), do: {:error, :cross_tenant}
+
+  defp first_grant(:first, user_id), do: Arca.Members.grant_platform!(user_id)
+  defp first_grant(:ok, _user_id), do: :ok
 
   @doc """
   Link another IdP identity (`attrs`: its `:key`, `:provider`, `:issuer`
@@ -490,12 +539,12 @@ defmodule Arca.Users do
   end
 
   # The unique index on the identity key is the arbiter of a concurrent
-  # first sign-in: the loser reads the row the winner wrote rather than
+  # admission: the loser reads the row the winner wrote rather than
   # reporting a conflict nobody can act on.
-  defp lost_the_race(actor, key, reason) when is_binary(key) do
+  defp lost_the_race(actor, key, :conflict) when is_binary(key) do
     case get_by_identity(actor, key) do
       {:ok, user} -> {:ok, user}
-      _ -> {:error, reason}
+      _ -> {:error, :conflict}
     end
   end
 

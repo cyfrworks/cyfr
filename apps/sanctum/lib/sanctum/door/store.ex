@@ -5,15 +5,16 @@ defmodule Sanctum.Door.Store do
   @moduledoc """
   The server allowlist: what the door reads and what platform admins edit.
 
-  Entries name an email, an IdP subject (`user_id`), a person identifier
-  (`identifier`, `per_…`, how the `cyfr` door's people are named) or the
-  wildcard `*`. An `allow` entry with `status: "requested"` is one a
-  member asked for by inviting an address the door does not know, or a
-  sign-in the door refused; it admits nobody until a platform admin
-  resolves it. A `deny` entry cannot be written for an operator — named by
-  an email in `CYFR_PLATFORM_ADMIN_EMAILS`, or by the subject or identifier
-  of a person who signed in with one — the operators can only be removed
-  from that list.
+  An allow names a person identifier (`identifier`, `per_…`, how the
+  CYFR sign-in's people are named) or the wildcard `*` (`wildcard`); a
+  deny names a person of this server (`person`, their `usr_…` id) or a
+  person identifier (`Arca.Doors.kinds/1`). An `allow` entry with
+  `status: "requested"` is one a member asked for by inviting an
+  identifier the door does not admit, or a CYFR sign-in the door refused;
+  it admits nobody until a platform admin resolves it. A `deny` entry
+  cannot be written for a platform administrator, named by their person
+  id or their identifier: the installation's administrator is never shut
+  out of it.
 
   The rows are `Arca.Doors`', asked as the server (`Prima.Actor.system/0`).
   The door is consulted **before** a session exists, so at admission time
@@ -30,7 +31,8 @@ defmodule Sanctum.Door.Store do
 
   alias Arca.Doors
 
-  @kinds Doors.kinds()
+  @allow_kinds Doors.kinds("allow")
+  @deny_kinds Doors.kinds("deny")
 
   @typedoc "A door row as this module hands it on: the ten columns, as a plain map."
   @type entry :: Doors.entry()
@@ -62,26 +64,23 @@ defmodule Sanctum.Door.Store do
 
   @doc """
   Write an allow entry (or turn an existing deny / request into one).
-  `kind` is `"email"`, `"user_id"`, `"identifier"` or `"wildcard"`.
+  `kind` is `"identifier"` or `"wildcard"`.
   """
   @spec allow(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
           {:ok, entry()} | {:error, term()}
-  def allow(kind, value, added_by, note \\ nil) when kind in @kinds do
+  def allow(kind, value, added_by, note \\ nil) when kind in @allow_kinds do
     upsert(kind, value, %{effect: "allow", status: "allowed", added_by: added_by, note: note})
   end
 
   @doc """
-  Write a deny entry (or turn an existing allow / request into one). Refuses
-  an operator — named by an email in `CYFR_PLATFORM_ADMIN_EMAILS`, or by the
-  IdP subject of an identity that signed in with one.
+  Write a deny entry (or turn an existing allow / request into one).
+  `kind` is `"person"` or `"identifier"`. Refuses a platform administrator
+  (`:platform_admin`), named by their person id or their identifier.
   """
   @spec deny(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
           {:ok, entry()} | {:error, :platform_admin | term()}
-  def deny(kind, value, added_by, note \\ nil) when kind in @kinds do
+  def deny(kind, value, added_by, note \\ nil) when kind in @deny_kinds do
     cond do
-      kind == "wildcard" ->
-        {:error, :wildcard_cannot_be_denied}
-
       names_platform_admin?(kind, value) ->
         {:error, :platform_admin}
 
@@ -98,53 +97,37 @@ defmodule Sanctum.Door.Store do
     end
   end
 
-  # An operator is named two ways. The email is the list's own vocabulary; the
-  # IdP subject is what a `user_id` entry carries, so it is resolved through
-  # the identity that signed in with it. An identity that has never signed in
-  # has no address to resolve and no session to lose — `Sanctum.Door.admit/3`
-  # is the backstop that keeps the env list winning whatever rows exist.
-  defp names_platform_admin?("email", value), do: Sanctum.Door.platform_admin_email?(value)
-
-  defp names_platform_admin?("user_id", value) do
-    case Sanctum.Tenancy.Users.get_by_identity(value) do
-      {:ok, %{email: email}} -> Sanctum.Door.platform_admin_email?(email)
-      _ -> false
-    end
-  end
+  # The person an entry names, by their id or by the identifier their
+  # identity row holds, read for their platform grant.
+  defp names_platform_admin?("person", value), do: Sanctum.Tenancy.platform_admin?(value)
 
   defp names_platform_admin?("identifier", value) do
     case Sanctum.Tenancy.Users.get_by_identifier(value) do
-      {:ok, %{email: email}} -> Sanctum.Door.platform_admin_email?(email)
+      {:ok, %{id: user_id}} -> Sanctum.Tenancy.platform_admin?(user_id)
       _ -> false
     end
   end
-
-  defp names_platform_admin?(_kind, _value), do: false
 
   @doc "Delete an entry by id."
   @spec remove(String.t()) :: :ok | {:error, :not_found | :database_error}
   def remove(id) when is_binary(id), do: Doors.delete(actor(), id)
 
   @doc """
-  Record that someone wants `value` let in — an address a member invited,
-  the IdP subject of a sign-in the door refused, or the person identifier
-  of a `cyfr` sign-in it refused.
+  Record that someone wants the person identifier `value` let in — one a
+  member invited, or one whose CYFR sign-in the door refused.
 
   Idempotent, and it says which it was: a real entry for that value (allow or
   deny) is left untouched and answers `:existing`, so the caller does not tell
   the operator someone is waiting at a door that already has its answer. That
-  also bounds it — one row per address or identity, ever, however many times
-  it is asked.
+  also bounds it — one row per identifier, ever, however many times it is
+  asked.
 
   A request is not an allow: `allowed/2` needs `status: "allowed"`, which
   only `resolve/3` writes.
   """
   @spec request(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
           {:ok, :created | :existing, entry()} | {:error, term()}
-  def request(kind, value, requested_by, note \\ nil)
-      when kind in ["email", "user_id", "identifier"] and is_binary(value) do
-    value = if kind == "email", do: String.downcase(value), else: value
-
+  def request("identifier" = kind, value, requested_by, note \\ nil) when is_binary(value) do
     case find(kind, value) do
       {:ok, entry} ->
         {:ok, :existing, entry}
@@ -190,14 +173,15 @@ defmodule Sanctum.Door.Store do
   @type answer :: {:ok, boolean()} | {:error, :unavailable}
 
   @doc """
-  Is there a deny entry for this identity, email or person identifier?
-  Deliberately reads `effect` alone — unlike `allowed/2`, which also wants
-  `status: "allowed"` — so a deny row is honoured whatever its status
-  says: a malformed or half-written deny must never read as an admit.
+  Is there a deny entry for this person (their `usr_…` id) or person
+  identifier? Deliberately reads `effect` alone — unlike `allowed/2`,
+  which also wants `status: "allowed"` — so a deny row is honoured
+  whatever its status says: a malformed or half-written deny must never
+  read as an admit.
   """
-  @spec denied(String.t() | nil, String.t() | nil, String.t() | nil) :: answer()
-  def denied(user_id, email, identifier \\ nil) do
-    [{"user_id", user_id}, {"email", downcase(email)}, {"identifier", identifier}]
+  @spec denied(String.t() | nil, String.t() | nil) :: answer()
+  def denied(user_id, identifier) do
+    [{"person", user_id}, {"identifier", identifier}]
     |> Enum.reject(&match?({_kind, nil}, &1))
     |> Enum.reduce_while({:ok, false}, fn {kind, value}, acc ->
       case find(kind, value) do
@@ -213,14 +197,10 @@ defmodule Sanctum.Door.Store do
   @spec wildcard() :: answer()
   def wildcard, do: in_force(find("wildcard", "*"))
 
-  @doc "Is this exact email, IdP subject or person identifier allowed (a request does not count)?"
+  @doc "Is this exact person identifier allowed (a request does not count)?"
   @spec allowed(String.t(), String.t() | nil) :: answer()
   def allowed(_kind, nil), do: {:ok, false}
-
-  def allowed(kind, value) when kind in ["email", "user_id", "identifier"] do
-    value = if kind == "email", do: downcase(value), else: value
-    in_force(find(kind, value))
-  end
+  def allowed("identifier" = kind, value), do: in_force(find(kind, value))
 
   defp in_force({:ok, %{effect: "allow", status: "allowed"}}), do: {:ok, true}
   defp in_force({:ok, _entry}), do: {:ok, false}
@@ -237,8 +217,6 @@ defmodule Sanctum.Door.Store do
   defp find(kind, value), do: Doors.find(actor(), kind, value)
 
   defp upsert(kind, value, attrs) do
-    value = if kind == "email", do: downcase(value), else: value
-
     case find(kind, value) do
       {:ok, entry} ->
         update(entry, attrs)
@@ -271,7 +249,4 @@ defmodule Sanctum.Door.Store do
   end
 
   defp update(%{id: id}, attrs), do: Doors.update(actor(), id, attrs)
-
-  defp downcase(nil), do: nil
-  defp downcase(v) when is_binary(v), do: String.downcase(v)
 end

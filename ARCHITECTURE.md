@@ -180,7 +180,7 @@ The person decides; Sanctum validates, records and checks; and the place that re
 
 - The athanor is the one tenancy unit, a person's or a group's, and every active member holds the same authority.
 - Tenant identity comes from the authenticated actor, never from a guest's argument, and ownership travels with rows, blobs, events and cache keys.
-- A platform administrator holds a capability over the instance, not a seat: what the instance holds for them is its own, such as the host's decisions and archived athanors, never an athanor's decisions.
+- A platform administrator holds a capability over the instance, not a seat: what the instance holds for them is its own, such as the host's decisions and archived athanors, never an athanor's decisions. The installation's first person, made by its setup or by a restore onto it empty, is its platform administrator, and no other grant exists.
 - Outsiders learn nothing of an athanor: anyone without a current seat gets the answer a missing athanor gets.
 - Nothing lands in an athanor its members did not accept.
 
@@ -222,7 +222,7 @@ Each control-plane member owns its slot through a database lease with a generati
 
 ### 6.2 Boot and standing transitions
 
-No admission path opens before the platform administrators' security reconciliation succeeds under the live lease. A standing transition retires everything it ends in the same transaction.
+No admission path opens before a declared restore's transition commits under the live lease. A standing transition retires everything it ends in the same transaction.
 
 ### 6.3 Publication
 
@@ -288,7 +288,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 
 ### 9.1 Identity
 
-An enrolled person is an identifier, the hash of the genesis of a log their own keys extend, ordered by one directory (`Sanctum.Directory`), cyfr.run's by default; a person who never enrolls keeps their keys, home and local devices without one. A handle at the registry names an identifier and is claimed by a request the person's live key signs; a home resolves a handle to that identifier and reads its keys from the directory (`Sanctum.Handle`). A live key at their home signs for them, an operational key rotates it, and recovery keys in a printed kit replace both (`Sanctum.Recovery`). A home reads a remote person's head fresh within a bound (`Sanctum.IdentityFreshness`); doors are sign-in methods at a relying home; restore is an entry path, not an operation. *Not built yet:* memberships and attribution by identifier, delegated work, the email door, and the mail transport it and an emailed confirmation code need.
+A person is made only by an admission at the CYFR that holds them: its setup, an invitation, an open door, a verified CYFR sign-in, or a restore (`Sanctum.Newcomer`); a sign-in method unlocks a person and never creates or recovers one. An enrolled person is an identifier, the hash of the genesis of a log their own keys extend, ordered by one directory (`Sanctum.Directory`), cyfr.run's by default; a person who never enrolls keeps their keys, home and local devices without one. A handle at the registry names an identifier and is claimed by a request the person's live key signs; a home resolves a handle to that identifier and reads its keys from the directory (`Sanctum.Handle`). A live key at their home signs for them, an operational key rotates it, and recovery keys in a printed kit replace both (`Sanctum.Recovery`). A home reads a remote person's head fresh within a bound (`Sanctum.IdentityFreshness`); doors are sign-in methods at a relying home; restore is an entry path, not an operation. *Not built yet:* memberships and attribution by identifier, delegated work, the email door, and the mail transport it and an emailed confirmation code need.
 
 ### 9.2 Joining a home that is not your own
 

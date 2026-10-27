@@ -103,8 +103,8 @@ defmodule Cyfr.DeclaredOperationsTest do
       identifier = "per_" <> String.duplicate("ab", 32)
 
       for action <- ~w(add remove) do
-        for other <- [%{"email" => "someone@example.com"}, %{"user_id" => "usr_1"}] do
-          assert {:error, {:invalid_argument, "Name one of email, user_id or identifier" <> _}} =
+        for other <- [%{"user_id" => "usr_1"}] do
+          assert {:error, {:invalid_argument, "Name one of user_id or identifier" <> _}} =
                    call(ctx, "member", action, Map.put(other, "identifier", identifier)),
                  "member.#{action}"
         end

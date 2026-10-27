@@ -6,13 +6,25 @@
 # file evaluates to a function of the argument list; each command prints
 # nothing and answers one line, `FIXTURE=` and a JSON object.
 #
-#   person EMAIL SUB
-#       The GitHub identity SUB with the verified EMAIL signed in as the
-#       device flow signs one in, from the door on (`Sanctum.Door`,
-#       `Sanctum.SignIn.admitted/2`, the membership read, the session):
+#   person EMAIL SUB [NAME]
+#       The person the GitHub identity SUB is linked to, made the first
+#       time, then signed in with it as the device flow signs one in, from
+#       the unlock on (`Sanctum.SignIn.unlock/1`: the door asked about the
+#       person, the verified EMAIL and the name NAME, default "Release
+#       proof", recorded on their row, the membership read, the session):
 #       everything but the identity provider, which the proofs cannot
-#       reach. Answers the person, the athanor the session is focused on,
-#       the route segment of that athanor and the session token.
+#       reach. An installation's first person is made by the setup
+#       admission (`Sanctum.Newcomer.admit/2`, under a setup token the
+#       fixture puts for the call and takes away after), and so is its
+#       platform administrator; the command-line session setup mints is
+#       ended at once. Every later person is made with the rows an open
+#       admission writes (`Arca.Users.mint/4` under `open`, their keys,
+#       their athanor), once the door's `*` admits newcomers, which the
+#       proof opens as an administrator does (`door.allow`); a sign-in
+#       method is never an admission, so the identity is linked to the
+#       person made. Answers the person, the athanor the session is
+#       focused on, the route segment of that athanor and the session
+#       token.
 #
 #   tincture USER_ID DIR NAME public|private
 #       The files under DIR committed into the person's athanor as the
@@ -91,6 +103,79 @@ fn args ->
     if athanor.kind == "person", do: "@" <> athanor.slug, else: athanor.slug
   end
 
+  # The setup admission (`Sanctum.Newcomer.admit/2`) under a setup token
+  # put for this call alone: the installation's configured token, if it
+  # has one, is put back however the admission ends.
+  setup = fn machine ->
+    token = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
+    configured = Application.fetch_env(:sanctum, :setup_token)
+    Application.put_env(:sanctum, :setup_token, token)
+
+    try do
+      Sanctum.Newcomer.admit({:setup, token}, {:command_line, machine})
+    after
+      case configured do
+        {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)
+        :error -> Application.delete_env(:sanctum, :setup_token)
+      end
+    end
+  end
+
+  # The person the identity `key` is linked to, made the first time (the
+  # `person` command above). The setup admission makes the installation's
+  # first person and refuses every later one (`:setup_closed`), which an
+  # open admission's rows then make, past a door whose `*` admits.
+  admitted = fn key ->
+    system = Prima.Actor.system()
+    {:ok, %{provider: provider, issuer: issuer, subject: subject}} =
+      Sanctum.Auth.Identity.parse(key)
+
+    link = %{key: key, provider: provider, issuer: issuer, subject: subject}
+
+    case Sanctum.Tenancy.Users.get_by_identity(key) do
+      {:ok, _person} ->
+        :ok
+
+      {:error, :not_found} ->
+        case setup.("release-proof") do
+          {:ok, %{person: person, readmitted: false, session_token: token}} ->
+            :ok = Sanctum.Session.destroy(token)
+            {:ok, %{linked: true}} = Arca.Users.link_identity(system, person.id, link)
+            :ok
+
+          {:error, :setup_closed} ->
+            unless Sanctum.Door.Store.wildcard() == {:ok, true},
+              do: raise("the door's * admits no newcomer: allow * before a second person")
+
+            now = DateTime.utc_now()
+
+            person = %{
+              id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+              prefs: Jason.encode!(%{}),
+              first_seen_at: now,
+              last_seen_at: now,
+              created_at: now,
+              updated_at: now
+            }
+
+            {:ok, _person} =
+              Arca.Users.mint(
+                system,
+                person,
+                Map.merge(link, %{first_seen_at: now, last_seen_at: now}),
+                admission: "open",
+                also: fn person ->
+                  with :ok <- Sanctum.Person.mint_keys(person),
+                       {:ok, _athanor} <- Sanctum.Provisioning.mint_personal(person, []),
+                       do: :ok
+                end
+              )
+
+            :ok
+        end
+    end
+  end
+
   # Returns once no fill holds the context's athanor. The sign-in takes
   # the athanor's claim before it answers and fills it in the background,
   # copying the shipped units into `components/`; while a unit's move is
@@ -143,19 +228,19 @@ fn args ->
   end
 
   case args do
-    ["person", email, sub] ->
+    ["person", email, sub | name] when length(name) <= 1 ->
       identity = Sanctum.Auth.Identity.builtin_key(:github, sub)
 
-      user_info = %{
+      method = %{
         id: identity,
         provider: :github,
         email: email,
         verified: true,
-        name: "Release proof"
+        name: List.first(name, "Release proof")
       }
 
-      {:ok, verdict} = Sanctum.Door.admit_identity(identity, user_info)
-      {:ok, user} = Sanctum.SignIn.admitted(user_info, verdict)
+      :ok = admitted.(identity)
+      {:ok, user} = Sanctum.SignIn.unlock(method)
       ctx = person_ctx.(user.id)
       {:ok, session} = Sanctum.Session.create(ctx)
 

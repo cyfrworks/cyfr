@@ -2,10 +2,10 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Package setup serves the pages `cyfr setup` shows on a device's own
-// screen before its home starts: how the home is reached, its
-// administrator's email, then the start. The pages are plain HTML and a
-// little JavaScript embedded in the program; the run they drive is the
-// Session, which is cyfr init's own sequence and cyfr up's start.
+// screen before its home starts: how the home is reached, then the start.
+// The pages are plain HTML and a little JavaScript embedded in the program;
+// the run they drive is the Session, which is cyfr init's own sequence and
+// cyfr up's start.
 //
 // Only this machine reaches the pages: the listener binds 127.0.0.1, every
 // request must name this listener as its Host (no other name resolving to
@@ -63,7 +63,6 @@ type Answers struct {
 	Mode      string `json:"mode"`
 	Domain    string `json:"domain,omitempty"`
 	ACMEEmail string `json:"acme_email,omitempty"`
-	Email     string `json:"email,omitempty"`
 }
 
 // State is where a run stands, as the pages read it.
@@ -104,9 +103,7 @@ var ErrNotNow = errors.New("setup is not at that step")
 // does not take.
 type Session interface {
 	State() State
-	// Check refuses answers the start would refuse, before the start.
-	Check(a Answers) error
-	// Start begins the run with a.
+	// Start begins the run with a, refusing answers it would not start.
 	Start(a Answers) error
 	// Rename joins again under name while the join waits.
 	Rename(name string) error
@@ -263,7 +260,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // actions are the POST requests, each taking the fields it reads.
 func (s *Server) actions() map[string]func(a Answers, name, offer string) error {
 	return map[string]func(Answers, string, string) error{
-		"/api/check":  func(a Answers, _, _ string) error { return s.session.Check(a) },
 		"/api/start":  func(a Answers, _, _ string) error { return s.session.Start(a) },
 		"/api/name":   func(_ Answers, name, _ string) error { return s.session.Rename(name) },
 		"/api/cancel": func(Answers, string, string) error { return s.session.Cancel() },

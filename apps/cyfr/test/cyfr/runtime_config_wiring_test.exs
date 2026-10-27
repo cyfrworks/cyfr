@@ -517,7 +517,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     # Ueberauth then builds from it).
     test "the OpenID Connect callback is the home's own address", %{tmp_dir: dir} do
       oidc = %{
-        "CYFR_AUTH_PROVIDER" => "oidc",
         "CYFR_OIDC_ISSUER" => "https://auth.example.com",
         "CYFR_OIDC_CLIENT_ID" => "cyfr",
         "CYFR_OIDC_CLIENT_SECRET" => "secret"

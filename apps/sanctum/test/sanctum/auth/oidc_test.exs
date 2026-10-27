@@ -54,21 +54,26 @@ defmodule Sanctum.Auth.OIDCTest do
       assert ctx.athanor_id == nil
     end
 
-    test "rejects an issuer that says the email is not verified" do
+    test "an issuer that says the email is not verified still names the person: the email decides nothing" do
       auth =
         oidcc_auth(
           info: %{email: "bob@example.com"},
           extra: %{raw_info: %{userinfo: %{"email_verified" => false}}}
         )
 
-      assert {:error, :email_not_verified} = OIDC.authenticate(auth)
+      assert {:ok, %{user_id: "oidcc|https://auth.example.com|sub-123"}} =
+               OIDC.authenticate(auth)
+
+      # What the issuer said is read once, for the contact email alone.
+      assert OIDC.email_verified(auth) == false
     end
 
-    test "rejects missing email" do
-      assert {:error, :missing_email} = OIDC.authenticate(oidcc_auth(info: %{nickname: "alice"}))
+    test "an identity with no email names the person all the same" do
+      assert {:ok, %{user_id: "oidcc|https://auth.example.com|sub-123", email: nil}} =
+               OIDC.authenticate(oidcc_auth(info: %{nickname: "alice"}))
     end
 
-    test "refuses an issuer that names no email, as ueberauth_oidcc builds the auth" do
+    test "an issuer that names no email, as ueberauth_oidcc builds the auth, names the person with none" do
       auth = %Ueberauth.Auth{
         uid: "sub-123",
         provider: :oidcc,
@@ -78,7 +83,10 @@ defmodule Sanctum.Auth.OIDCTest do
         }
       }
 
-      assert {:error, :missing_email} = OIDC.authenticate(auth)
+      assert {:ok, %{user_id: "oidcc|https://auth.example.com|sub-123", email: nil}} =
+               OIDC.authenticate(auth)
+
+      assert OIDC.email_verified(auth) == :unknown
     end
 
     test "reads the email the strategy put on the auth's info" do

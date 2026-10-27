@@ -92,6 +92,20 @@ defmodule Arca.Repo.Migrations.Baseline do
       expr: "security_generation > 0"
     }
 
+    # How a person was made here (`Arca.Users.mint/4`): the admission that
+    # wrote their row, and nothing else ever writes it.
+    user_admission =
+      known("users_admission_known", "admission", ~w(setup invitation open remote restore))
+
+    # The door's entries: an allow names a person identifier or the
+    # wildcard, a deny names a person of this server or a person identifier.
+    allowlist_kind = %{
+      name: "server_allowlist_kind_known",
+      expr:
+        "(effect = 'allow' AND kind IN ('identifier', 'wildcard')) OR " <>
+          "(effect = 'deny' AND kind IN ('person', 'identifier'))"
+    }
+
     create table(:athanors, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :kind, :string, null: false
@@ -150,7 +164,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       # Tri-state on purpose: true when the provider proved the address,
       # false when it said the opposite, NULL when it said nothing.
       add :email_verified, :boolean
-      add :provider, :string, null: false
+      add :admission, :string, null: false, check: if(sqlite?, do: user_admission)
       add :display_name, :string
       # The cyfr.run publisher namespace, once linked. Not identity.
       add :namespace, :string
@@ -174,6 +188,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       create constraint(:users, user_generation.name, check: user_generation.expr)
     end
 
+    checked(sqlite?, :users, [user_admission])
+
     create index(:users, [:email])
     create index(:users, [:status])
     create unique_index(:users, [:namespace], where: "namespace IS NOT NULL")
@@ -196,14 +212,14 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:external_identities, [:key])
     create index(:external_identities, [:user_id])
 
-    # The door: who may sign in to this server. Entries name an email, an
-    # IdP subject, or the wildcard `*`; a deny wins over everything.
-    # `requested` rows are allow entries a member asked for by inviting an
-    # email the door does not know — they take effect when a platform admin
-    # resolves them.
+    # The door: who may sign in to this server. An allow names a person
+    # identifier or the wildcard `*`; a deny names a person of this server
+    # or a person identifier, and wins over every allow. `requested` rows
+    # are identifier allows a sign-in or an invitation asked for — they
+    # take effect when a platform admin resolves them.
     create table(:server_allowlist, primary_key: false) do
       add :id, :string, primary_key: true, null: false
-      add :kind, :string, null: false
+      add :kind, :string, null: false, check: if(sqlite?, do: allowlist_kind)
       add :value, :string, null: false
       add :effect, :string, null: false, default: "allow"
       add :status, :string, null: false, default: "allowed"
@@ -214,18 +230,18 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :updated_at, :utc_datetime_usec, null: false
     end
 
+    checked(sqlite?, :server_allowlist, [allowlist_kind])
     create unique_index(:server_allowlist, [:kind, :value])
     create index(:server_allowlist, [:status])
 
     # Presence-only assignments: a row means "user X is a member of athanor A"
     # (or, with no athanor, a platform admin). No roles. An `invited` row is
-    # keyed by exactly one of an email or a person identifier (`per_…`)
-    # before the person has signed in and carries no user_id; it activates,
-    # atomically, on their first admitted sign-in.
+    # keyed by a person identifier (`per_…`) before the person has signed in
+    # and carries no user_id; it activates, atomically, on their first
+    # admitted sign-in.
     create table(:memberships, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :user_id, :string
-      add :email, :string
       add :person_identifier, :string
       add :scope, :string, null: false, default: "athanor"
       add :status, :string, null: false, default: "active"
@@ -236,18 +252,17 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create index(:memberships, [:user_id])
-    create index(:memberships, [:email])
     create index(:memberships, [:person_identifier])
     create index(:memberships, [:athanor_id])
 
     # Raw SQL because the uniqueness has to treat a NULL as a value — a
     # platform assignment carries no athanor, an invited row no user, an
-    # active row no email and no identifier — and two rows agreeing on all
-    # five are the same assignment. COALESCE in an index expression is not
-    # something `unique_index/3` can express.
+    # active row no identifier — and two rows agreeing on all four are the
+    # same assignment. COALESCE in an index expression is not something
+    # `unique_index/3` can express.
     execute """
     CREATE UNIQUE INDEX memberships_assignment_index
-    ON memberships (scope, COALESCE(athanor_id, ''), COALESCE(user_id, ''), COALESCE(email, ''),
+    ON memberships (scope, COALESCE(athanor_id, ''), COALESCE(user_id, ''),
                     COALESCE(person_identifier, ''))
     """
   end

@@ -31,13 +31,14 @@ var adminCmd = &cobra.Command{
 	Use:     "admin",
 	Short:   "The sign-in allowlist: who may sign in to this server (platform admins)",
 	GroupID: "admin",
-	Long: "The server allowlist says who may sign in. Entries name an email, an IdP subject, " +
-		"a person identifier (per_…, how a person signing in with their CYFR identity " +
-		"is named), or `*` for anyone the configured provider authenticates or the " +
-		"CYFR sign-in presents. A deny is sticky and ejects the person; requests are " +
-		"invites members made for addresses or identifiers the allowlist does not know, " +
-		"and sign-ins it refused. Platform admins (CYFR_PLATFORM_ADMIN_EMAILS) " +
-		"are always let in and are the only ones who may edit the list.",
+	Long: "The server allowlist says who may sign in. A person made here signs in unless " +
+		"a deny names them. A person who signs in with their CYFR identity from elsewhere " +
+		"is let in by an allow naming their person identifier (per_…), or by `*`, which " +
+		"lets anyone in, and lets anyone create an identity here. A deny names a person " +
+		"here by their id (usr_…) or a person identifier; it is sticky and ejects the " +
+		"person. Requests are invites members made for identifiers the allowlist does " +
+		"not know, and sign-ins it refused. Only platform admins may edit the list, and " +
+		"no deny names one.",
 }
 
 var adminListCmd = &cobra.Command{
@@ -54,7 +55,7 @@ var adminListCmd = &cobra.Command{
 		}
 		entries, _ := result["entries"].([]any)
 		if len(entries) == 0 {
-			fmt.Println("The allowlist is empty — only the platform admins can sign in.")
+			fmt.Println("The allowlist is empty: the people made here sign in, and no one from elsewhere.")
 			return nil
 		}
 		for _, raw := range entries {
@@ -71,7 +72,7 @@ var adminListCmd = &cobra.Command{
 
 var adminRequestsCmd = &cobra.Command{
 	Use:   "requests",
-	Short: "Pending invites for addresses or person identifiers (per_…) the allowlist does not know, and refused sign-ins",
+	Short: "Pending invites for person identifiers (per_…) the allowlist does not know, and refused sign-ins",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		result, err := newClient().CallTool(cmd.Context(), ops.Door, ops.DoorRequestsArgs{})
 		if err != nil {
@@ -98,8 +99,8 @@ var adminRequestsCmd = &cobra.Command{
 }
 
 var adminAllowCmd = &cobra.Command{
-	Use:   "allow <email|user_id|identifier|*>",
-	Short: "Let an identity sign in, by email, IdP subject or person identifier (per_…), or * for anyone",
+	Use:   "allow <identifier|*>",
+	Short: "Let a person from elsewhere sign in, by person identifier (per_…), or * for anyone",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")
@@ -118,8 +119,8 @@ var adminAllowCmd = &cobra.Command{
 }
 
 var adminDenyCmd = &cobra.Command{
-	Use:   "deny <email|user_id|identifier>",
-	Short: "Keep an identity out, by email, IdP subject or person identifier (per_…) — and eject them if they are here",
+	Use:   "deny <person|identifier>",
+	Short: "Keep a person out, by their id here (usr_…) or person identifier (per_…), and eject them if they are here",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")

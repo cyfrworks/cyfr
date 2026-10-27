@@ -55,7 +55,7 @@ defmodule Sanctum.PersonTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|person#{n}",
         provider: "github",
         email: "person#{n}@example.com",
@@ -345,11 +345,10 @@ defmodule Sanctum.PersonTest do
       now = DateTime.utc_now()
 
       {:ok, keyless} =
-        Arca.Users.mint(
+        Arca.Test.People.mint(
           Prima.Actor.system(),
           %{
             id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-            provider: "github",
             email: "keyless#{n}@example.com",
             first_seen_at: now,
             last_seen_at: now,
@@ -367,11 +366,11 @@ defmodule Sanctum.PersonTest do
         )
 
       {:ok, remote} =
-        Arca.Users.mint(
+        Arca.Test.People.mint(
           Prima.Actor.system(),
           %{
             id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-            provider: "cyfr",
+            admission: "remote",
             first_seen_at: now,
             last_seen_at: now,
             created_at: now,

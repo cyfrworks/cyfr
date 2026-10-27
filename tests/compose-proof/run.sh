@@ -865,11 +865,10 @@ project_new() {
   cp "$ROOT/.env.example" "$WORK/.env.example"
   cli_ok init init --no-interactive --no-pull --access local
   [ -f "$WORK/.env" ] || fail "cyfr init wrote no .env"
-  # The run's own settings: its images, migration, its operator, the
-  # private host the shutdown case's upstream is, and builds off as an
-  # operator turns them off, both empty.
+  # The run's own settings: its images, migration, the private host the
+  # shutdown case's upstream is, and builds off as an operator turns them
+  # off, both empty.
   env_set CYFR_AUTO_MIGRATE on
-  env_set CYFR_PLATFORM_ADMIN_EMAILS operator@example.com
   env_set CYFR_LOCUS_BUILDS_URL ""
   env_set CYFR_LOCUS_BUILDS_KEY ""
   if [ "$CASE" = shutdown ]; then

@@ -326,13 +326,15 @@ defmodule PrismWeb.AuthController do
   @doc """
   Handles the OIDC callback from the issuer — the browser sign-in.
 
-  Door → what sign-in records (`Sanctum.SignIn.admitted/2`) → a session
-  and a redirect. Every outcome is a redirect or a page; the session token
+  The unlock (`Sanctum.SignIn.unlock/1`: the person who linked the
+  identity, asked about by the door) → a session and a redirect. Every outcome is a redirect or a page; the session token
   travels in the cookie and nowhere else, and the provider's token goes
   nowhere: no sign-in speaks to the registry.
 
-  - admitted → session, cookie, `/`
-  - a membership read failed while minting → no session, a page saying so
+  - unlocked → session, cookie, `/`
+  - a membership read failed → no session, a page saying so
+  - no person here linked the identity → 403 page saying how to link it,
+    no session
   - refused at the door → 403 page, no session
 
   A callback that finds a link intent in the cookie session links a door
@@ -368,8 +370,8 @@ defmodule PrismWeb.AuthController do
   end
 
   # Link mode: the issuer's identity, held to the session that asked and
-  # still standing, becomes a link ticket the door admitted. No person is
-  # minted and no session issued.
+  # still standing, becomes a link ticket. No person is minted and no
+  # session issued.
   defp link(conn, auth, intent) do
     with {:ok, identity_ctx} <- authenticate_with_provider(auth),
          {:ok, standing} <- standing_session(conn, intent),
@@ -378,20 +380,12 @@ defmodule PrismWeb.AuthController do
              key: identity_ctx.user_id,
              provider: to_string(Map.get(auth, :provider)),
              email: identity_ctx.email,
-             verified: verified_claim(auth, identity_ctx.email)
+             verified: Sanctum.Auth.OIDC.email_verified(auth)
            }) do
       conn
       |> put_session(@link_ticket, %{"provider" => "oidcc", "ticket" => ticket})
       |> redirect(to: intent["return_to"])
     else
-      {:error, {:door, _reason}} ->
-        page(
-          conn,
-          403,
-          "Not allowed on this server",
-          "<p>#{CyfrWeb.MinimalPage.h(Sanctum.Door.refusal_message())}</p>"
-        )
-
       {:error, :unavailable} ->
         page(
           conn,
@@ -461,21 +455,9 @@ defmodule PrismWeb.AuthController do
 
   defp standing_session(_conn, _expired), do: {:error, :expired}
 
-  # What the issuer proved about the email: `true`, `false` or `:unknown`.
-  defp verified_claim(auth, email) do
-    case Sanctum.Auth.EmailVerification.verify_with_claim(
-           Map.get(auth, :provider),
-           email,
-           Map.get(auth, :extra) || %{}
-         ) do
-      {:ok, claim} -> claim
-      {:error, _} -> :unknown
-    end
-  end
-
   defp sign_in(conn, auth) do
     with {:ok, ctx} <- authenticate_with_provider(auth),
-         {:ok, ctx, user} <- admit(ctx, auth) do
+         {:ok, ctx, user} <- unlock(ctx, auth) do
       # The athanor may have been minted a moment ago: resolve again so the
       # session names it. A failed read here answers 503 with no session —
       # not a session whose tenant gate 403s every request.
@@ -490,6 +472,15 @@ defmodule PrismWeb.AuthController do
           )
       end
     else
+      {:error, :no_person} ->
+        page(
+          conn,
+          403,
+          "No one here signs in with this account",
+          "<p>#{CyfrWeb.MinimalPage.h(Prima.Refusal.message(:no_person))}</p>" <>
+            "<p><a href=\"/login\">Sign in another way</a></p>"
+        )
+
       {:error, {:door, _reason}} ->
         # Refused at the door: no session, no cookie. One message whichever
         # branch refused.
@@ -565,36 +556,24 @@ defmodule PrismWeb.AuthController do
     |> redirect(to: "/login")
   end
 
-  # The door, then what sign-in records — before any session exists. It
-  # runs here, at the one place the web flow mints a session, so no auth
-  # provider (built-in or a deployment's own) can step around it. What the
-  # provider proved about the email decides how the door reads it.
-  defp admit(%Sanctum.Context{} = ctx, auth) do
-    email = ctx.email
-    extra = Map.get(auth, :extra) || %{}
-    provider = Map.get(auth, :provider)
-
-    verified =
-      case Sanctum.Auth.EmailVerification.verify_with_claim(provider, email, extra) do
-        {:ok, claim} -> claim
-        {:error, _} -> :unknown
-      end
-
-    user_info = %{
+  # The unlock, before any session exists. It runs here, at the one place
+  # the web flow mints a session, so no sign-in method can step around it.
+  # What the issuer proved about the email decides only whether it is
+  # written to the person's contact email.
+  defp unlock(%Sanctum.Context{} = ctx, auth) do
+    method = %{
       id: ctx.user_id,
-      provider: ctx.provider || to_string(provider),
-      email: email,
-      verified: verified,
+      provider: ctx.provider || to_string(Map.get(auth, :provider)),
+      email: ctx.email,
+      verified: Sanctum.Auth.OIDC.email_verified(auth),
       name: screen_name(auth)
     }
 
     # The provider's context names the person by their IdP identity key;
-    # from admission on they are named by their own id.
-    with {:ok, verdict} <- Sanctum.Door.admit_identity(ctx.user_id, user_info),
-         {:ok, user} <- Sanctum.SignIn.admitted(user_info, verdict) do
-      # The context is renamed to the person's own id and nothing else: an
-      # athanor pinned here is the one every later resolve keeps, and the
-      # mint is what decides which. The callback resolves after it.
+    # from the unlock on they are named by their own id.
+    with {:ok, user} <- Sanctum.SignIn.unlock(method) do
+      # The context is renamed to the person's own id and nothing else: the
+      # callback resolves the athanor after it.
       {:ok, %{ctx | user_id: user.id}, user}
     end
   end
@@ -606,14 +585,12 @@ defmodule PrismWeb.AuthController do
 
   defp screen_name(_), do: nil
 
-  # Dispatch to the provider configuration resolved at boot
-  # (`Cyfr.RuntimeConfig.resolve_auth_provider/1`); only `Sanctum.Auth.OIDC`
-  # accepts a callback.
+  # The one sign-in method with a browser callback: the OpenID Connect
+  # issuer, when this CYFR is configured with one.
   defp authenticate_with_provider(auth) do
-    case Sanctum.Auth.provider() do
-      nil -> {:error, :auth_provider_not_configured}
-      provider -> provider.authenticate(auth)
-    end
+    if Sanctum.Auth.OIDC.issuer(),
+      do: Sanctum.Auth.OIDC.authenticate(auth),
+      else: {:error, :auth_provider_not_configured}
   end
 
   defp failure_message(%{errors: errors}) when is_list(errors) do
@@ -627,36 +604,11 @@ defmodule PrismWeb.AuthController do
 
   defp failure_message(_failure), do: "Authentication failed"
 
-  # The sign-in page's own words for the refusals a sign-in answers; any
-  # other reason reads as the table's sentence (`Sanctum.Refusals.render/1`),
-  # which logs an unknown term by its shape.
-  defp friendly_error_message(:session_not_found), do: "Session not found"
-  defp friendly_error_message(:session_expired), do: "Session has expired"
-  defp friendly_error_message(:invalid_token), do: "Invalid session token"
-
+  # The sign-in page's own words for the refusals the OpenID Connect
+  # callback answers before the unlock.
   defp friendly_error_message(:auth_provider_not_configured),
-    do: "Authentication provider not configured"
+    do: "This CYFR offers no OpenID Connect sign-in"
 
-  defp friendly_error_message(:auth_provider_not_supported),
-    do: "Authentication provider not supported"
-
-  # The server is at capacity: a real refusal with a cause the person can
-  # act on (wait, or ask the operator), not an unhandled term.
-  defp friendly_error_message({:limit_reached, :mint_per_hour, _cap}),
-    do: "This server is admitting new people slowly right now. Please try again shortly."
-
-  defp friendly_error_message({:limit_reached, _key, _cap}),
-    do: "This server is full and cannot make you an athanor. Ask its operator for room."
-
-  defp friendly_error_message(:email_not_verified),
-    do: "Your provider reported an unverified email. Please verify your email and try again."
-
-  defp friendly_error_message(:missing_email),
-    do:
-      "Your provider did not return an email address. Please check your account privacy settings and try again."
-
-  defp friendly_error_message({:validation_error, _}), do: "Invalid authentication data"
-  defp friendly_error_message({:provider_error, _}), do: "Authentication provider error"
-
-  defp friendly_error_message(reason), do: Sanctum.Refusals.render(reason)
+  defp friendly_error_message(:invalid_credentials),
+    do: "The sign-in carried no identity"
 end

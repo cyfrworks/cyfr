@@ -3,13 +3,15 @@
 
 defmodule Arca.Schemas.User do
   @moduledoc """
-  A person this server knows: one row per person, written on the first
-  admitted sign-in and touched on every later one.
+  A person this server knows: one row per person, written by the
+  admission that made them (`Arca.Users.mint/4`) and touched on every
+  later sign-in.
 
   `id` is this server's own (`usr_…`, `id_prefix/0`) — the `user_id` the
-  rest of the system carries; how an identity provider names the person is
-  an `Arca.Schemas.ExternalIdentity` row. `provider` is the one they last
-  signed in through. `email` is lowercased and not unique.
+  rest of the system carries; a sign-in method linked to the person is an
+  `Arca.Schemas.ExternalIdentity` row. `admission` is how the person was
+  made here (`admissions/0`), written once at birth. `email` is a contact
+  field, lowercased and not unique, and decides nothing.
   `namespace` is the durable copy of the cyfr.run personal namespace;
   `personal_athanor_id` names the person's own athanor once minted. `status`
   is `"active"` or `"denied"` (server-denied: sessions and keys revoked, the
@@ -32,6 +34,7 @@ defmodule Arca.Schemas.User do
   @primary_key {:id, :string, autogenerate: false}
 
   @statuses ["active", "denied"]
+  @admissions ~w(setup invitation open remote restore)
 
   @type t :: %__MODULE__{}
 
@@ -54,7 +57,7 @@ defmodule Arca.Schemas.User do
   schema "users" do
     field(:email, :string)
     field(:email_verified, :boolean)
-    field(:provider, :string)
+    field(:admission, :string)
     field(:display_name, :string)
     field(:namespace, :string)
     field(:personal_athanor_id, :string)
@@ -73,7 +76,7 @@ defmodule Arca.Schemas.User do
     :id,
     :email,
     :email_verified,
-    :provider,
+    :admission,
     :display_name,
     :namespace,
     :personal_athanor_id,
@@ -91,6 +94,10 @@ defmodule Arca.Schemas.User do
 
   def statuses, do: @statuses
 
+  @doc "The admissions a person is made by (`users_admission_known`)."
+  @spec admissions() :: [String.t()]
+  def admissions, do: @admissions
+
   @doc "The changeset a person is minted with."
   def changeset(user, attrs) do
     user
@@ -102,12 +109,12 @@ defmodule Arca.Schemas.User do
   @doc """
   The changeset an ordinary attribute update writes through. The standing
   columns are refused as read-only: they move only with a deny or an
-  allow.
+  allow. The admission is refused too: it is the person's birth.
   """
   def update_changeset(user, attrs) do
     user
-    |> cast(attrs, @create_fields -- @standing_fields)
-    |> read_only(attrs, @standing_fields)
+    |> cast(attrs, @create_fields -- [:admission | @standing_fields])
+    |> read_only(attrs, [:admission | @standing_fields])
     |> validated()
   end
 
@@ -121,7 +128,8 @@ defmodule Arca.Schemas.User do
 
   defp validated(changeset) do
     changeset
-    |> validate_required([:id, :provider, :first_seen_at, :last_seen_at])
+    |> validate_required([:id, :admission, :first_seen_at, :last_seen_at])
+    |> validate_inclusion(:admission, @admissions)
     # A person's id is minted here (`id_prefix/0`); the server's synthetic
     # principals — `system`, `_seed`, `webhook:<slug>`, … — never carry
     # it, so they can never become a `users` row.
@@ -130,6 +138,8 @@ defmodule Arca.Schemas.User do
     end)
     |> validate_inclusion(:status, @statuses)
     |> update_change(:email, &downcase/1)
+    |> unique_constraint(:id, name: :users_pkey)
+    |> unique_constraint(:id, name: :users_id_index)
     |> unique_constraint(:namespace)
     |> unique_constraint(:personal_athanor_id)
   end

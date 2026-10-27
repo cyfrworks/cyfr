@@ -1478,10 +1478,8 @@ func (args DecisionListGlobalArgs) MarshalJSON() ([]byte, error) {
 
 // DoorAllowArgs carries arguments for door.allow.
 type DoorAllowArgs struct {
-	// An email, an IdP subject, a person identifier, or * (allow, deny)
+	// A person identifier (per_…) or * to allow; a person's id (usr_…) or a person identifier to deny (allow, deny)
 	Value string `json:"value"`
-	// How to read value; inferred from its shape when absent
-	Kind Field[string] `json:"kind,omitzero"`
 	// Why (allow, deny)
 	Note Field[*string] `json:"note,omitzero"`
 }
@@ -1497,10 +1495,8 @@ func (args DoorAllowArgs) MarshalJSON() ([]byte, error) {
 
 // DoorDenyArgs carries arguments for door.deny.
 type DoorDenyArgs struct {
-	// An email, an IdP subject, a person identifier, or * (allow, deny)
+	// A person identifier (per_…) or * to allow; a person's id (usr_…) or a person identifier to deny (allow, deny)
 	Value string `json:"value"`
-	// How to read value; inferred from its shape when absent
-	Kind Field[string] `json:"kind,omitzero"`
 	// Why (allow, deny)
 	Note Field[*string] `json:"note,omitzero"`
 }
@@ -2698,11 +2694,9 @@ func (args *McpServersUpdateArgsConfigBackendsItem) UnmarshalJSON(data []byte) e
 type MemberAddArgs struct {
 	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
 	Athanor Field[string] `json:"athanor,omitzero"`
-	// The person's email (add, remove)
-	Email Field[string] `json:"email,omitzero"`
 	// The person's user id, when already on this server (add, remove)
 	UserId Field[string] `json:"user_id,omitzero"`
-	// The person's identifier (per_…), in place of an email or a user id (add, remove)
+	// The person's identifier (per_…), in place of a user id (add, remove)
 	Identifier Field[string] `json:"identifier,omitzero"`
 }
 
@@ -2753,13 +2747,11 @@ func (args MemberListArgs) MarshalJSON() ([]byte, error) {
 type MemberRemoveArgs struct {
 	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
 	Athanor Field[string] `json:"athanor,omitzero"`
-	// The person's email (add, remove)
-	Email Field[string] `json:"email,omitzero"`
 	// The person's user id, when already on this server (add, remove)
 	UserId Field[string] `json:"user_id,omitzero"`
-	// The person's identifier (per_…), in place of an email or a user id (add, remove)
+	// The person's identifier (per_…), in place of a user id (add, remove)
 	Identifier Field[string] `json:"identifier,omitzero"`
-	// With an email or an identifier: withdraw only its pending invitation, never a member, and answer not found once it has been accepted (remove)
+	// With an identifier: withdraw only its pending invitation, never a member, and answer not found once it has been accepted (remove)
 	Invitation Field[bool] `json:"invitation,omitzero"`
 }
 

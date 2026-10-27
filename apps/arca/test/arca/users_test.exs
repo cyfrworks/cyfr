@@ -3,7 +3,7 @@
 
 defmodule Arca.UsersTest do
   @moduledoc """
-  The person rows and the IdP identities that name them. None of this is
+  The person rows and the sign-in methods linked to them. None of this is
   athanor-scoped — a person exists before any athanor does and sits in
   several at once — so every function is asked for with the platform
   scope and refuses an athanor-scoped actor.
@@ -25,7 +25,6 @@ defmodule Arca.UsersTest do
 
     {%{
        id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-       provider: "github",
        first_seen_at: now,
        last_seen_at: now,
        created_at: now,
@@ -51,7 +50,6 @@ defmodule Arca.UsersTest do
       Map.merge(
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-          provider: "github",
           email: "p#{n}@example.com",
           email_verified: true,
           display_name: "P#{n}",
@@ -64,7 +62,7 @@ defmodule Arca.UsersTest do
       )
 
     {:ok, user} =
-      Users.mint(server(), user_attrs, %{
+      Arca.Test.People.mint(server(), user_attrs, %{
         key: "github|https://github.com|#{n}",
         provider: "github",
         issuer: "https://github.com",
@@ -129,13 +127,12 @@ defmodule Arca.UsersTest do
       assert {:error, :cross_tenant} = Users.get(member, "usr_1")
       assert {:error, :cross_tenant} = Users.get_by_identity(member, "github|iss|sub")
       assert {:error, :cross_tenant} = Users.get_by_namespace(member, "alice")
-      assert {:error, :cross_tenant} = Users.list_by_email(member, "a@example.com")
       assert {:error, :cross_tenant} = Users.list(member)
       assert {:error, :cross_tenant} = Users.identities(member, "usr_1")
       assert {:error, :cross_tenant} = Users.personal_athanor?(member, "ath_1")
       assert {:error, :cross_tenant} = Users.touch_identity(member, "k", DateTime.utc_now())
       assert {:error, :cross_tenant} = Users.update(member, row.id, %{display_name: "X"})
-      assert {:error, :cross_tenant} = Users.mint(member, %{}, %{})
+      assert {:error, :cross_tenant} = Users.mint(member, %{}, %{}, admission: "open")
       assert {:error, :cross_tenant} = Users.link_identity(member, "usr_1", %{key: "k"})
       assert {:error, :cross_tenant} = Users.unlink_identity(member, "usr_1", "k")
       refute_received :queried
@@ -164,14 +161,44 @@ defmodule Arca.UsersTest do
   end
 
   describe "mint/4 is one transaction" do
-    test "the person and the identity that names them land together" do
-      user = person!()
+    # An installation that holds a person already: the mints below are
+    # open admissions, which the first person never is.
+    setup do
+      %{first: person!()}
+    end
 
-      assert {:ok, %{id: id}} = Users.get(server(), user.id)
-      assert id == user.id
-      assert {:ok, [identity]} = Users.identities(server(), user.id)
-      assert identity.user_id == user.id
+    test "the person, their admission and the identity linked to them land together" do
+      {user, identity} = attrs_pair()
+
+      assert {:ok, %{id: id, admission: "open"}} =
+               Users.mint(server(), user, identity, admission: "open")
+
+      assert {:ok, %{id: ^id, admission: "open"}} = Users.get(server(), id)
+      assert {:ok, [linked]} = Users.identities(server(), id)
+      assert linked.key == identity.key
       assert {:ok, %{id: ^id}} = Users.get_by_identity(server(), identity.key)
+    end
+
+    test "a person may be minted with no linked sign-in method" do
+      {user, _identity} = attrs_pair()
+      assert {:ok, %{id: id}} = Users.mint(server(), user, nil, admission: "open")
+      assert {:ok, []} = Users.identities(server(), id)
+    end
+
+    test "the admission is required, one of the five, and never rewritten" do
+      {user, identity} = attrs_pair()
+
+      assert_raise KeyError, fn -> Users.mint(server(), user, identity, []) end
+
+      assert {:error, {:invalid, %{admission: _}}} =
+               Users.mint(server(), user, identity, admission: "github")
+
+      assert {:error, :not_found} = Users.get(server(), user.id)
+
+      {:ok, %{id: id}} = Users.mint(server(), user, identity, admission: "remote")
+
+      assert {:error, {:invalid, %{admission: _}}} =
+               Users.update(server(), id, %{admission: "setup"})
     end
 
     test "an identity that cannot be written leaves no person behind" do
@@ -183,7 +210,6 @@ defmodule Arca.UsersTest do
                  server(),
                  %{
                    id: id,
-                   provider: "github",
                    first_seen_at: now,
                    last_seen_at: now,
                    created_at: now,
@@ -196,7 +222,8 @@ defmodule Arca.UsersTest do
                    subject: nil,
                    first_seen_at: now,
                    last_seen_at: now
-                 }
+                 },
+                 admission: "open"
                )
 
       assert {:error, :not_found} = Users.get(server(), id)
@@ -212,7 +239,6 @@ defmodule Arca.UsersTest do
                  server(),
                  %{
                    id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-                   provider: "github",
                    first_seen_at: now,
                    last_seen_at: now,
                    created_at: now,
@@ -225,7 +251,8 @@ defmodule Arca.UsersTest do
                    subject: identity.subject,
                    first_seen_at: now,
                    last_seen_at: now
-                 }
+                 },
+                 admission: "open"
                )
 
       assert same == user.id
@@ -240,7 +267,6 @@ defmodule Arca.UsersTest do
                  server(),
                  %{
                    id: "system",
-                   provider: "github",
                    first_seen_at: now,
                    last_seen_at: now,
                    created_at: now,
@@ -253,7 +279,8 @@ defmodule Arca.UsersTest do
                    subject: "sys",
                    first_seen_at: now,
                    last_seen_at: now
-                 }
+                 },
+                 admission: "open"
                )
 
       assert {:error, :not_found} = Users.get(server(), "system")
@@ -261,6 +288,10 @@ defmodule Arca.UsersTest do
   end
 
   describe "mint/4's also: closure" do
+    setup do
+      %{first: person!()}
+    end
+
     test "runs inside the mint's transaction, after the person row is written" do
       {user, identity} = attrs_pair()
       me = self()
@@ -272,7 +303,7 @@ defmodule Arca.UsersTest do
         :ok
       end
 
-      assert {:ok, person} = Users.mint(server(), user, identity, also: also)
+      assert {:ok, person} = Users.mint(server(), user, identity, admission: "open", also: also)
       assert_received {:also, id, true}
       assert id == person.id
       assert {:ok, %{display_name: "Written beside"}} = Users.get(server(), person.id)
@@ -283,6 +314,7 @@ defmodule Arca.UsersTest do
 
       assert {:error, :keys_unavailable} =
                Users.mint(server(), user, identity,
+                 admission: "open",
                  also: fn _person -> {:error, :keys_unavailable} end
                )
 
@@ -294,7 +326,7 @@ defmodule Arca.UsersTest do
       {user, identity} = attrs_pair()
 
       assert_raise ArgumentError, fn ->
-        Users.mint(server(), user, identity, also: fn _person -> :nope end)
+        Users.mint(server(), user, identity, admission: "open", also: fn _person -> :nope end)
       end
 
       assert {:error, :not_found} = Users.get(server(), user.id)
@@ -302,13 +334,12 @@ defmodule Arca.UsersTest do
   end
 
   describe "the reads and writes" do
-    test "a person is found by id, identity, address and namespace" do
+    test "a person is found by id, identity and namespace" do
       user = person!()
       {:ok, [identity]} = Users.identities(server(), user.id)
 
       assert {:ok, %{id: id}} = Users.get_by_identity(server(), identity.key)
       assert id == user.id
-      assert {:ok, [%{id: ^id}]} = Users.list_by_email(server(), user.email)
       assert {:error, :not_found} = Users.get_by_identity(server(), "github|iss|nobody")
       assert {:error, :not_found} = Users.get_by_namespace(server(), "nobody-here")
 

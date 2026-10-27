@@ -165,7 +165,7 @@ defmodule Emissary.Web.WebhookControllerTest do
       other = "github|https://github.com|other-#{n}"
 
       {:ok, _} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: other,
           provider: "github",
           email: "other#{n}@example.com",

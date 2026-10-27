@@ -181,7 +181,7 @@ func TestEditEnvWritesEveryKeyComposeReadsBack(t *testing.T) {
 	written := append(headKeys(),
 		"CYFR_RESTORE_INCOMPLETE",                     // restore's bar
 		"CYFR_CRYPTO_KEYRING", "CYFR_SECRET_KEY_BASE", // the snapshot keyring
-		"CYFR_CORS_ALLOWED_ORIGINS", "CYFR_PLATFORM_ADMIN_EMAILS", // init
+		"CYFR_CORS_ALLOWED_ORIGINS", // init
 		"LOCUS_RUNTIME_KEY", "CYFR_LOCUS_BACKENDS_KEY", "CYFR_LOCUS_BUILDS_KEY", "CYFR_PRIVATE_EGRESS_TARGETS",
 	)
 	values := []string{
