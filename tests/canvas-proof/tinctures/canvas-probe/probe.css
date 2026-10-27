@@ -1,0 +1,15 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Copyright 2026 CYFR Works Inc. */
+/* The probe's own stylesheet, a served file of its version: it proves a
+   canvas's stylesheet loads under the page policy's style-src F. */
+#root {
+  font-family: system-ui, sans-serif;
+  padding: 1rem;
+}
+.candle {
+  fill: #3b82f6;
+}
+button {
+  min-height: 2rem;
+  min-width: 6rem;
+}

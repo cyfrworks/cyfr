@@ -3,10 +3,10 @@
   "type": "tincture",
   "version": "1.0.0",
   "publisher": "local",
-  "description": "The canvas proof's broken canvas: this version declares no feed and answers its tree; the versions written after it fail as the feed they read says.",
+  "description": "The canvas proof's broken canvas: this working version is a vanilla page that reads no stream and becomes ready; the versions written after it fail at validation, or crash live, as each one's page says.",
   "tincture": {
     "frame": {"placement": "canvas"},
-    "canvas": {"module": "canvas.js", "toolkit": 1},
+    "entry": "index.html",
     "streams": []
   }
 }
