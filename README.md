@@ -114,8 +114,8 @@ Around the chat:
 - **The chat** — one page, `/chat`: a rail of your own thread, your DMs, and the threads of every group you belong to (`/chat?a=<athanor>&c=<thread>` deep-links one). The athanor's **AQUA** page at `/a/<athanor>/aqua` holds the soul, its roles, its scrolls, the pinned page and the notes drawer. What AQUA keeps out of a thread is a note — the `notes` tool's `keep`, `pin`, `list`, `read`, `search`, `forget` and `endorse` (a person's click making a note kept after outside reading their own) — and a schedule with `keep_outcome` in its metadata files each run's output as one.
 - **The switcher** — You, then the groups you belong to (hidden as a list when it is only you), each row badged with what happened there while you were elsewhere. The one create is **New group…**.
 - **The drawer** — off the chat, on every screen size: **AQUA**, **Apps** (tinctures), **Files**, **Members**, **Vault**, **Schedules**, **Webhooks**, **MCP Servers**, **Settings**, **Legal**. Connect a model to AQUA from **AQUA** — the system layer's grant sheet binds an entry to the model's catalyst. The shipped model catalysts name their connection on each request; CYFR attaches the key in the host, and the catalyst receives no key.
-- **Canvases** — **Apps** in the drawer (`/a/<athanor>/tinctures`) is the shell: your canvases, each one page of your own data that CYFR's toolkit draws from what it reads, with the apps you open over them. Move between canvases with the canvas switcher, Ctrl+Alt+←/→ or a swipe along the bottom edge; only the canvas you are looking at runs. Ask AQUA for a canvas and it writes one (`canvas.write`) as a new version, which your glass validates before it shows it, keeping the version it replaces. A **feed** runs one operation of an installed component on an interval, and a canvas reads its results by the feed's name; AQUA always asks before it binds one, and the **Schedules** page lists and removes them. A canvas that does not start, or Ctrl+Alt+S, opens safe mode, which offers the canvas again, its kept version or the shipped canvas.
-- **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has a door (an auth provider); operators and private boxes start in `dev`.
+- **Canvases** — **Apps** in the drawer (`/a/<athanor>/tinctures`) is the shell: your canvases, each one page of your own data that CYFR's toolkit draws from what it reads, with the apps you open over them. Move between canvases with the canvas switcher, Ctrl+Alt+←/→ or a swipe along the bottom edge; only the canvas you are looking at runs. Ask AQUA for a canvas and it writes one (`canvas.write`) as a new version, which your browser validates before it shows it, keeping the version it replaces. A **feed** runs one operation of an installed component on an interval, and a canvas reads its results by the feed's name; AQUA always asks before it binds one, and the **Schedules** page lists and removes them. A canvas that does not start, or Ctrl+Alt+S, opens safe mode, which offers the canvas again, its kept version or the shipped canvas.
+- **`lite` / `dev`** — a per-person preference in Settings, not an edition. `dev` adds the developer views — **Executions**, **Activities**, **Enforcements**, **Components**, **Builds**, **Registry**, **API Keys**, **Reports** — in a sidebar with live indicators; the ops surface stays reachable in `lite`, it just isn't the face. `lite` is the default when the server has an auth provider; operators and private boxes start in `dev`.
 - **⌘⇧K** — the command palette, also from the drawer's Search… row.
 
 Tinctures can stay private inside Prism, or be made public and shared at CYFR's address, `<address>/t/<athanor>/<publisher>/<name>`: `http://localhost:4000` with local access, which only its own computer reaches; `https://<machine>.<tailnet>.ts.net` with tailnet access, which your tailnet's devices reach through Tailscale Serve; and `https://<your domain>` with public access, through Caddy under a certificate it obtains over ACME. See [Deploy to a Server](#deploy-to-a-server). A canvas is never public: it is your own data page, so no public profile is staged for one and the public route serves none.
@@ -444,12 +444,12 @@ Then open the address `cyfr up` prints (`http://localhost:4000/` with local acce
 - **CYFR.** In CYFR's directory it then fetches the release's `release.json` and its signature and verifies them: signed keyless by the release workflow of that version's tag, naming that version. Without network access to the release, or with a manifest that does not verify, it refuses and changes nothing, as it refuses a `docker-compose.yml` that lacks a service of the bundled stack (`cyfr init --force` regenerates the file and keeps `.env`). It then shows the release CYFR is on, each image line that changes and where the release notes are, and asks before changing anything (`--yes` makes the change without asking; with no terminal and no `--yes` it shows the change and makes none). A CYFR already on the program's release is left alone, with no stop and no snapshot. A CYFR on a newer release than the program, by its compose file's tags or by the release its running cyfr reports, is refused before anything stops, since older code never starts over a database a newer release migrated: restore a snapshot of the older release instead. Once confirmed, in order, it:
 
 1. pulls every image the manifest names by its digest, and fetches and verifies the release's managed scaffold files without writing them, while the stack still runs; a failed pull changes nothing. It names the storage root it will snapshot as compose resolves it. On PostgreSQL it first reads the server's major through a client image the CLI pins by digest, one for each of PostgreSQL 14 to 18, and pulls the pin of that major for the dump; a server of another major refuses the update before anything changes;
-2. refuses while a member of the [cell](#several-members-on-one-database-a-cell) on another release than this one runs outside this stack;
-3. cancels a tailnet join waiting for approval, stops every service, printing how long each took (the update holds the stack's lock, `.cyfr/lock` in the project directory, from before its first docker call to its end, as `cyfr restore` and `cyfr access` do, and `cyfr up` holds it across its own start: `cyfr up` refuses while an update runs, and an update refuses while a start runs), and reads the cell's slots with the server stopped: any member of another release still holding one after a lease (15 s) starts the old stack again and ends the update;
-4. copies the cell into `backups/<timestamp>/`: the database (the SQLite file, or a `pg_dump` in the PostgreSQL server's own major version), the storage root, every managed scaffold file the release replaces as it stood (part `scaffold`, the keeper's seccomp profile among them), the keyring, `.env` and `docker-compose.yml` as it stood (part `compose`), with `snapshot.json` written last, so a backup without it is incomplete. `backups/` ignores itself for git, since a snapshot holds the keyring; An object store (`CYFR_STORAGE=s3`) is outside the snapshot: it relies on the bucket's own versioning;
+2. refuses while a server of the [cluster](#several-servers-on-one-database-a-cluster) on another release than this one runs outside this stack;
+3. cancels a tailnet join waiting for approval, stops every service, printing how long each took (the update holds the stack's lock, `.cyfr/lock` in the project directory, from before its first docker call to its end, as `cyfr restore` and `cyfr access` do, and `cyfr up` holds it across its own start: `cyfr up` refuses while an update runs, and an update refuses while a start runs), and reads the cluster's slots with the server stopped: any server of another release still holding one after a lease (15 s) starts the old stack again and ends the update;
+4. copies the cluster into `backups/<timestamp>/`: the database (the SQLite file, or a `pg_dump` in the PostgreSQL server's own major version), the storage root, every managed scaffold file the release replaces as it stood (part `scaffold`, the keeper's seccomp profile among them), the keyring, `.env` and `docker-compose.yml` as it stood (part `compose`), with `snapshot.json` written last, so a backup without it is incomplete. `backups/` ignores itself for git, since a snapshot holds the keyring; An object store (`CYFR_STORAGE=s3`) is outside the snapshot: it relies on the bucket's own versioning;
 5. writes the managed scaffold files, putting them back from the snapshot and starting the old stack again if that or the next step fails, rewrites the `image:` lines naming `ghcr.io/cyfrworks/cyfr`, `ghcr.io/cyfrworks/cyfr-locus`, the bundled caddy and the bundled tailscale to the release's version and digest (caddy and tailscale keep their tags), leaving and reporting any other image, then starts the stack and waits for readiness. A release that fails to migrate or start leaves the stack stopped, since old code never starts over migrated bytes, and the update prints the backup's path and `cyfr restore <backup>`.
 
-A member whose release differs from a live member's is refused at boot, naming both releases. `cyfr init` run again in the project adds a key a newer stack needs that `.env` lacks, and changes nothing else. From a source checkout without the CLI: `docker compose --profile locus-builds pull && docker compose --profile locus-builds up -d` (add `--profile public` or `--profile tailnet` for public or tailnet access, and drop the builds profile if builds are off), which is outside the supported path (below). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server. A database built from an earlier version of the schema is not carried forward: the server refuses to boot on it and names the database to recreate.
+A server whose release differs from a live server's is refused at boot, naming both releases. `cyfr init` run again in the project adds a key a newer stack needs that `.env` lacks, and changes nothing else. From a source checkout without the CLI: `docker compose --profile locus-builds pull && docker compose --profile locus-builds up -d` (add `--profile public` or `--profile tailnet` for public or tailnet access, and drop the builds profile if builds are off), which is outside the supported path (below). Check the [release notes](https://github.com/cyfrworks/cyfr/releases) first: there is no compatibility layer for behaviour, and a release says what it changes for a running server. A database built from an earlier version of the schema is not carried forward: the server refuses to boot on it and names the database to recreate.
 
 ### How CYFR is reached
 
@@ -504,12 +504,12 @@ How it holds together:
 Components run on a worker service, not in `cyfr`: the `locus-runtime` container, Locus's runtime role, runs the WASM engine, and `cyfr` reaches it over HTTP to start and kill runs while the service carries its runners' host calls to `cyfr`'s host API for everything a run needs (its attempt, its credentials, its stream, its children). Every request and host call is authenticated with keys derived from one root, which only `cyfr` holds.
 
 - **Two keys.** `CYFR_LOCUS_RUNTIME_ROOT` (32 random bytes as 64 hex digits) is the root, in `.env` and read by `cyfr` alone. `LOCUS_RUNTIME_KEY` is the key derived from it for the worker's service id, `LOCUS_RUNTIME_SERVICE_ID` (`wrk_locus` by default; another id is named in `CYFR_LOCUS_RUNTIME_WORKERS` too), and compose hands the id and the key to `locus-runtime` alone, from `.env`. `cyfr init` mints the root and derives the key; by hand, the root is `openssl rand -hex 32`, and `CYFR_LOCUS_RUNTIME_ROOT=… mix cyfr.locus.runtime_key wrk_locus` prints the key from a source checkout, or `printf 'cyfr-locus/v1/runtime\nwrk_locus' | openssl dgst -sha256 -mac HMAC -macopt hexkey:$CYFR_LOCUS_RUNTIME_ROOT` is the same HMAC without one. The runtime never sees the root, the keyring or the database; it refuses to start with any of them in its environment, or with the builds or backends key beside its own. Changing the root ends every run in flight and needs every service key derived again: remove `LOCUS_RUNTIME_KEY` beside the new root and `cyfr init` derives it.
-- **Who is where.** `CYFR_LOCUS_RUNTIME_WORKERS` lists the worker services `cyfr` dispatches to as `<service_id>=<url>` entries, tried in order; compose sets `wrk_locus=http://locus-runtime:4200`. `cyfr`'s host API listens at `CYFR_HOST_API_BIND:CYFR_HOST_API_PORT` (default `127.0.0.1:4300`; compose binds `cyfr`'s own address on the `locus-runtime` network, so it answers on that network alone, and serves only calls signed with a runtime worker's key) and `LOCUS_RUNTIME_HOST_API_URL` tells the worker where that is. An attempt's host calls go to the member that admitted it: the assignment carries that member's address, `CYFR_HOST_API_URL`, and the worker posts them there. With one member the address is the worker's own `LOCUS_RUNTIME_HOST_API_URL` and nothing more is set. `cyfr` asks each worker for its status every `CYFR_LOCUS_RUNTIME_WATCH_POLL_MS` and, after `CYFR_LOCUS_RUNTIME_WATCH_MISSES` misses in a row or when a worker comes back as a new boot, closes the runs that boot held as lapsed. The runtime's own settings are in `.env.locus` (copy `.env.locus.example`), one file for every Locus role.
+- **Who is where.** `CYFR_LOCUS_RUNTIME_WORKERS` lists the worker services `cyfr` dispatches to as `<service_id>=<url>` entries, tried in order; compose sets `wrk_locus=http://locus-runtime:4200`. `cyfr`'s host API listens at `CYFR_HOST_API_BIND:CYFR_HOST_API_PORT` (default `127.0.0.1:4300`; compose binds `cyfr`'s own address on the `locus-runtime` network, so it answers on that network alone, and serves only calls signed with a runtime worker's key) and `LOCUS_RUNTIME_HOST_API_URL` tells the worker where that is. An attempt's host calls go to the server that admitted it: the assignment carries that server's address, `CYFR_HOST_API_URL`, and the worker posts them there. With one server the address is the worker's own `LOCUS_RUNTIME_HOST_API_URL` and nothing more is set. `cyfr` asks each worker for its status every `CYFR_LOCUS_RUNTIME_WATCH_POLL_MS` and, after `CYFR_LOCUS_RUNTIME_WATCH_MISSES` misses in a row or when a worker comes back as a new boot, closes the runs that boot held as lapsed. The runtime's own settings are in `.env.locus` (copy `.env.locus.example`), one file for every Locus role.
 - **Runners.** Inside `locus-runtime`, `cyfr-locus` — the keeper binary every Locus role runs under — starts the service as the `locus` user with no capability and runs every subtree in a runner: a VM of its own under a pooled uid (`locus-runner01`…`08`) with a private home directory on a tmpfs, holding no key, reached by the service alone over a control channel. The service runs only under `cyfr-locus`, which hands it the keeper channel: started any other way, a plain `mix` boot included, it refuses to boot, naming `cyfr-locus`, and no setting chooses another launcher. The service keeps `LOCUS_RUNTIME_POOL_SIZE` runners spawned ahead; a runner that completes cleanly is kept idle for its athanor for `LOCUS_RUNTIME_IDLE_TTL_MS`; one that was killed, lost a host answer or exited with attempts open is tainted, never assigned again, and retired — every process of its uid killed and its home directory scrubbed before the uid is reused — with `LOCUS_RUNTIME_RELEASE_GRACE_MS` to report what it held; a guest that ignores its deadline is halted by the runner's watchdog `LOCUS_RUNTIME_WATCHDOG_GRACE_MS` past it. `tests/locus-runtime-image/` runs each of these against the shipped image.
 - **No network in a runner.** `cyfr-locus` clones every runner into a user namespace that maps only its own uid and gid, holding no capability, and a network namespace of its own whose loopback is down and which has no route: a runner reaches neither `cyfr`, nor the service's listener, nor the container's loopback, nor anything outside. What a run needs from outside leaves through the runner's relay, a socket to the service: its host calls, which the service verifies against the run's attempt and posts to `cyfr`'s host API, and its guests' outbound requests, for which the service takes the request from the run's rate and connects to the address `cyfr` pinned. The `locus-runtime` network is the service's alone.
 - **The seccomp profile and the host.** Docker's default seccomp profile denies the clone that makes those namespaces, so the `locus-runtime` service runs under `keeper.seccomp.json` (Docker's default with that clone allowed and `unshare` and `setns` denied; the image carries it as `/etc/cyfr/keeper.json`). The shipped `docker-compose.yml` names it as `security_opt: seccomp=./keeper.seccomp.json`, which compose reads from the project directory: `cyfr init` and `cyfr update` write it there, and a source checkout copies `apps/locus/keeper/seccomp/keeper.json` there. The host must allow unprivileged user namespaces: `user.max_user_namespaces` above 0, and where AppArmor restricts them (`kernel.apparmor_restrict_unprivileged_userns=1`, as on Ubuntu 24.04 and later) the container keeps Docker's default AppArmor profile, under which the clone is allowed; an unconfined container, a privileged one included, gets a namespace without the ids its runner needs. Without the profile or the host's allowance `cyfr-locus` refuses to start, naming both settings, the service never starts and the container restart-loops.
 - **Memory.** Every runner is held to `LOCUS_RUNTIME_MEMORY_BYTES` (384 MiB by default; 16 MiB to 1 TiB): its VM, every guest's linear memory, its home directory and the kernel memory charged to it, together. A runner that reaches it is ended whole by the kernel, the runs it held are reported, and it is never reused; a sibling is untouched. The container's limit, `LOCUS_RUNTIME_MEMORY_LIMIT` in `.env` (4G), holds all eight runner uids at their bound and the service beside them — raise it with the bound. The bound needs the [Docker requirement](#prerequisites) above.
-- **One versioned wire.** Every request, host call, answer and exit report carries the wire's version, `"v": 1`, as its first member, and every `x-cyfr-auth` header begins with its version token, `v1`. A listener refuses a header at another version as `unknown_version` before it reads the body, and a body without `v` or at another version as `unknown_version` before it reads the operation, so a worker and a `cyfr` at different versions of the wire refuse each other's work rather than misread it.
+- **One versioned wire.** Every request, host call, answer and exit report carries the wire's version, `"v": 1`, as its first field, and every `x-cyfr-auth` header begins with its version token, `v1`. A listener refuses a header at another version as `unknown_version` before it reads the body, and a body without `v` or at another version as `unknown_version` before it reads the operation, so a worker and a `cyfr` at different versions of the wire refuse each other's work rather than misread it.
 - **`cyfr` pins every outbound address.** The engine resolves no name. Before a run's outbound request its runner asks `cyfr` for the address (`egress_pin`), and `cyfr` resolves the host and decides the address under the run's admitted consent: a metadata address is refused before any policy, a private one only under the consent's `egress.private_ips`, and `CYFR_PRIVATE_EGRESS_TARGETS`, the server's own private targets, never applies to a run. The service connects to exactly the pinned address for the runner, keeping the host for TLS and the `Host` header, and streams the answer back through the relay. A redirect's next hop is pinned from the request it came from, and a hop to another scheme or host is refused (`redirect_credentials`), so a request's credentials never follow it to another origin.
 - **Nothing on disk.** The worker keeps no state. A run's identity, budget, credentials and output live in `cyfr`; the worker holds only what it was assigned, sealed for its key, and reports a runner that exits. A worker restart ends its runs, which `cyfr` closes as lapsed.
 
@@ -526,10 +526,10 @@ Builds are on after `cyfr init`: it writes both settings into `.env`, and `cyfr 
 
 **`OOMKilled` is not the container's.** Docker marks the `locus-runtime` or `locus-builds` container `OOMKilled` whenever a runner or a build is ended at its own bound, though neither the container nor its release was touched: the kernel reports the kill in the container's cgroup tree. Read it as a runner or a build that passed its bound — the service's log says which — not as the container running out of memory; alert on the container restarting instead.
 
-### Operator notes for shared and open-door servers
+### Operator notes for shared servers and open sign-in
 
-- **The seed `local.http` catalyst asks for wildcard egress** (`domains: ["*"]`, http+https; private IPs stay denied) and first-run provisioning consents the bundle automatically — on a server whose allowlist is `*`, that is a consented HTTP relay per signed-in stranger. The minted grant is pinned byte-for-byte by `apps/cyfr/test/sanctum/consent/bootstrap_golden_test.exs`, so widening or narrowing it is always a reviewed diff; narrow the seed manifest before opening the door if that posture is too generous for your deployment.
-- **The audit trail carries identity fields, email included.** The door's refusal telemetry carries the attempted email (that is the audit content — who was turned away), and `Prima.Sanitizer` deliberately does not redact identity fields on the audit plane. Every entry is logged, and is also emitted once as the `[:cyfr, :audit, :recorded]` telemetry event carrying the sanitized `Arca.Audit.Event`: attach your own handler there to write the trail to a SIEM or an object store, and only to one that may hold PII.
+- **The seed `local.http` catalyst asks for wildcard egress** (`domains: ["*"]`, http+https; private IPs stay denied) and first-run provisioning consents the bundle automatically — on a server whose allowlist is `*`, that is a consented HTTP relay per signed-in stranger. The minted grant is pinned byte-for-byte by `apps/cyfr/test/sanctum/consent/bootstrap_golden_test.exs`, so widening or narrowing it is always a reviewed diff; narrow the seed manifest before opening sign-in to everyone if that posture is too generous for your deployment.
+- **The audit trail carries identity fields, email included.** The allowlist's refusal telemetry carries the attempted email (that is the audit content — who was turned away), and `Prima.Sanitizer` deliberately does not redact identity fields on the audit plane. Every entry is logged, and is also emitted once as the `[:cyfr, :audit, :recorded]` telemetry event carrying the sanitized `Arca.Audit.Event`: attach your own handler there to write the trail to a SIEM or an object store, and only to one that may hold PII.
 - **A first sign-in proceeds whatever the registry answers; filling the athanor needs it.** Sign-in asks cyfr.run once, under a short budget, for the person's publishing namespace and push tokens, and proceeds whatever that probe answers. The person and their own athanor are minted at sign-in, and the athanor is then filled in the background, pulling the bundle's published dependencies, the AQUA formula's provider catalysts among them, from the registry. On an air-gapped or registry-unreachable install the athanor is created but left unprovisioned — retried on the next sign-in, with the cause in the server log and the `[:cyfr, :sanctum, :provisioning, :failed]` telemetry event. AQUA stays unavailable until a retry succeeds. A cyfr.run namespace is needed only to publish (`cyfr push`, above), never to sign in.
 - **A webhook's replay store is part of its delivery.** A webhook configured with an idempotency key header runs a delivery only once its claim is recorded; when the store cannot answer the claim, the delivery answers 503 `unavailable` with `Retry-After: 5` and runs nothing, and the `[:cyfr, :emissary, :webhook, :dedup_unavailable]` telemetry event is the alarm for the outage. The sender's retry runs it once the store answers.
 
@@ -556,11 +556,11 @@ loud: if an option is enabled but incompletely configured, the server
 refuses to start rather than silently falling back.
 
 The server's limits, windows and log level are **platform settings**: stored
-in the database, the same on every member, and changed by a platform admin
+in the database, the same on every server, and changed by a platform admin
 on Prism's **Settings** page or with `cyfr settings`, a live one reaching
 new work within seconds. [configuration-guide.md](configuration-guide.md)
 lists every deployment variable and every platform setting with its
-default, and says how to change a setting on a node with no console.
+default, and says how to change a setting on a server with no console.
 
 ### CORS allowlist
 
@@ -613,20 +613,20 @@ CYFR_OIDC_CLIENT_SECRET=...
 
 All three `CYFR_OIDC_*` values are required once `oidc` is selected.
 Sign-in is still gated by `CYFR_PLATFORM_ADMIN_EMAILS` and the server allowlist
-(`cyfr admin allow …`) — authentication says who you are, the door says whether
+(`cyfr admin allow …`) — authentication says who you are, the allowlist says whether
 you may come in.
 
-### The door, and what a first sign-in needs
+### Sign-in methods, and what a first sign-in needs
 
-A person signs in at a server through one of its doors: GitHub, Google or
+A person signs in at a server with one of its sign-in methods: GitHub, Google or
 your OIDC provider, a passkey they registered at this server, or, for a
-person whose keys another CYFR holds, the CYFR door (**Sign in with your
+person whose keys another CYFR holds, their CYFR identity (**Sign in with your
 CYFR** on the sign-in page; [identity-guide.md](identity-guide.md)). The
 server allowlist decides who may come in by any of them, by email, IdP
 subject or person identifier, `per_…` (`cyfr admin allow
 <email|user_id|identifier|*>`).
 
-A person's first sign-in through one of the server's own doors mints them
+A person's first sign-in through one of the server's own sign-in methods mints them
 with their own keys and their own athanor, seeded and baseline-consented
 (the bundled `catalyst:local.http`
 is granted `egress.domains ["*"]` for public hosts, GET/POST/HEAD, 60/min;
@@ -637,24 +637,24 @@ reachable from a chain as an MCP server on `CYFR_PRIVATE_EGRESS_TARGETS`,
 which is the server's own, and not as a URL to fetch). Sign-in proceeds
 whatever cyfr.run's short probe for a publishing namespace answers: the
 athanor is filled in the background (see [Operator
-notes](#operator-notes-for-shared-and-open-door-servers)), and a cyfr.run
-namespace is needed only to publish. A person admitted through the CYFR
-door is minted no keys and no athanor: theirs stay at their own CYFR, and
+notes](#operator-notes-for-shared-servers-and-open-sign-in)), and a cyfr.run
+namespace is needed only to publish. A person admitted with their CYFR
+identity is minted no keys and no athanor: theirs stay at their own CYFR, and
 here they hold what their memberships give them. An installation set up
 for a restore (`CYFR_RESTORE_TOKEN`) reserves its first person for the
-restore: no door signs anyone in before it ([Backup and
+restore: no sign-in method signs anyone in before it ([Backup and
 restore](#backup-and-restore)). `cyfr admin deny <email>` revokes a
 person's sessions and keys, archives their own athanor, removes them from every group
 and withdraws the invitations that address was still holding; `cyfr admin
 allow` lets them back in and reopens their own athanor — group seats are not
 restored, a member adds them again. Work running in an athanor when it is
-archived stops for good, on every member, whether or not the member heard:
+archived stops for good, on every server, whether or not the server heard:
 a reopen admits only runs started after it.
 
-### Opening the door to everyone (`*`), and the caps that bound it
+### Opening sign-in to everyone (`*`), and the caps that bound it
 
 `cyfr admin allow '*'` admits any identity your provider authenticates,
-and anyone who signs in through the CYFR door —
+and anyone who signs in with their CYFR identity —
 that is the public-hosting configuration, and it is the one where the limits
 matter. They are platform settings in
 [configuration-guide.md](configuration-guide.md): the `tenancy` group's
@@ -674,7 +674,7 @@ athanor's whole tree; copying a shipped version in is never refused by the
 storage cap, but its bytes count from then on. A specific `cyfr admin deny`
 always beats `*`.
 
-Closing the door again — `cyfr admin remove` on the `*` entry — ejects
+Closing sign-in to everyone again — `cyfr admin remove` on the `*` entry — ejects
 everyone it was the only reason for: their sessions end and the API keys they
 created are revoked. Their standing is untouched (nothing is archived, no
 group seat is lost); that is what `deny` is for. The eject happens when the
@@ -682,33 +682,33 @@ entry is removed, so an allowlist row edited directly in the database, or a
 `*` removed while the server is down, leaves live credentials behind — remove
 it through `cyfr admin` on a running server.
 
-### A hub for a household or a team
+### A CYFR for a household or a team
 
-A **hub** is an always-on server that holds shared athanors: a
-household's, a team's, or two people's. Someone with no CYFR of their own
-signs in through one of the hub's doors, as on any server; someone with a
-CYFR of their own joins from it, and keeps their keys and their own
-athanor there:
+A household, a team or two people can keep their shared athanors on one
+always-on server, the group's CYFR. Someone with no CYFR of their own
+signs in there with one of its sign-in methods, as on any server; someone with a
+CYFR of their own joins from it, where their keys and their own
+athanor stay:
 
-- **Letting them in.** The hub's platform admin allows their person
+- **Letting them in.** The platform admin of the group's CYFR allows their person
   identifier, `per_…`, which their own CYFR's **Settings → Your identity**
   shows (`cyfr admin allow per_…`), and a member adds them to a group by
   the same identifier (**Members**, or `cyfr member add per_…`). An
-  identifier the hub has not seen yet leaves an invitation that activates
+  identifier the group's CYFR has not seen yet leaves an invitation that activates
   at their first sign-in.
-- **Signing in.** On the hub's sign-in page they choose **Sign in with your
-  CYFR** and name their own CYFR's address; they confirm there, and the hub
-  and their own CYFR show the same short code. The hub reads their identity at the
-  directory it names, which need not be the hub's own, and mints them no
+- **Signing in.** On the sign-in page of the group's CYFR they choose **Sign in
+  with your CYFR** and name their own CYFR's address; they confirm there, and
+  both show the same short code. The group's CYFR reads their identity at the
+  directory it names, which need not be its own, and mints them no
   keys and no athanor.
-- **Confirming at the hub.** A sign-in through the CYFR door is not a fresh
-  proof. Their first passkey at the hub, which the hub's sensitive changes
+- **Confirming at the group's CYFR.** Signing in with their CYFR identity is
+  not a fresh proof. Their first passkey there, which its sensitive changes
   need, is authorized by its platform admin under the admin's own fresh
   confirmation; after that they confirm for themselves. A phone they pair
-  with the hub is certified at their own CYFR ([devices-guide.md](devices-guide.md)).
+  there is certified at their own CYFR ([devices-guide.md](devices-guide.md)).
 - **Leaving.** Leaving one athanor, or being removed from it, ends that
   membership, the sessions bound to it and the devices paired for it;
-  their other athanors at the hub, and their own CYFR, are untouched.
+  their other athanors there, and their own CYFR, are untouched.
 
 CYFR enrolls its own people at the directory `CYFR_DIRECTORY_URL` names,
 with no hosted default. Any operator, a household or a team included, may
@@ -731,7 +731,7 @@ CYFR_DATABASE_URL=postgres://user:pass@host:5432/cyfr
 `CYFR_DATABASE_URL` is required for a Postgres build (no localhost fallback).
 Both adapters run as blocking legs in CI.
 
-The server migrates the schema on boot. Several nodes sharing one Postgres,
+The server migrates the schema on boot. Several servers sharing one Postgres,
 or an operator who wants that step in their own hands, set
 `CYFR_AUTO_MIGRATE=false` and run it from the release before starting:
 
@@ -739,102 +739,102 @@ or an operator who wants that step in their own hands, set
 bin/cyfr eval "Cyfr.Release.migrate()"
 ```
 
-### Several members on one database (a cell)
+### Several servers on one database (a cluster)
 
 One server per database is the default, and a second one pointed at the
 same database refuses to boot rather than quietly running every sweep
-twice. A **cell** is the deliberate alternative: one deployment — one
+twice. A **cluster** is the deliberate alternative: one deployment — one
 database, one object store, one set of workers — served by several
-control-plane **members**, each holding its own slot in `cell_leases` and
+control-plane **servers**, each holding its own slot in `cell_leases` and
 taking a peer's work only after that peer's lease has run out on the
 database's clock.
 
-`CYFR_CLUSTER=1` turns it on, and the flag alone is not a cell. A member
+`CYFR_CLUSTER=1` turns it on, and the flag alone is not a cluster. A server
 boots only with all seven of:
 
 - **Postgres** (`CYFR_DATABASE=postgres`). SQLite is one file with one
-  writer and no server clock, so members could not agree which lease
+  writer and no server clock, so the servers could not agree which lease
   stands.
 - **Shared object storage** (`CYFR_STORAGE=s3`). Local storage is one
-  member's filesystem; two members would each hold half of every athanor.
+  server's filesystem; two servers would each hold half of every athanor.
 - **TLS distribution** — `-proto_dist inet_tls` with an
-  `-ssl_dist_optfile` naming the member's certificate, key and CA. Plain
+  `-ssl_dist_optfile` naming the server's certificate, key and CA. Plain
   distribution between control planes is an unauthenticated remote shell
   onto the database.
-- **A cell-only cookie** — `CYFR_CELL_COOKIE`, at least 32 characters,
-  the same value on every member and the value each member's BEAM
+- **A cluster-only cookie** — `CYFR_CELL_COOKIE`, at least 32 characters,
+  the same value on every server and the value each server's BEAM
   actually runs under (`RELEASE_COOKIE`, or `-setcookie`). An ambient
-  `~/.erlang.cookie` is the machine's, not the cell's.
-- **A discovery topology** — `CYFR_CLUSTER_NODES` naming the members, or
+  `~/.erlang.cookie` is the machine's, not the cluster's.
+- **A discovery topology** — `CYFR_CLUSTER_NODES` naming the servers, or
   `CYFR_CLUSTER_DNS_QUERY` with `CYFR_CLUSTER_NODE_BASENAME` for a
   headless service.
 - **A shared worker root** — `CYFR_LOCUS_RUNTIME_ROOT`, identical on every
-  member. A `mix` boot mints one when it is unset; a release without one runs
+  server. A `mix` boot mints one when it is unset; a release without one runs
   no component.
-- **This member's own address** — `CYFR_HOST_API_URL`, the address a
-  worker service reaches this member's host API at. Every assignment a
-  member issues carries its own address, and a worker posts that
+- **This server's own address** — `CYFR_HOST_API_URL`, the address a
+  worker service reaches this server's host API at. Every assignment a
+  server issues carries its own address, and a worker posts that
   attempt's host calls there; with no address the worker falls back to
-  the one address it was configured with, and whichever member that is
-  answers every other member's runs.
+  the one address it was configured with, and whichever server that is
+  answers every other server's runs.
 
 Each missing one is a named refusal at boot, saying what it found and what
 to change.
 
-What a cell gives up and what it keeps:
+What a cluster gives up and what it keeps:
 
-- Work is not routed. A turn runs on the member that accepted it and an
-  execution on the member that admitted it; ownership is settled after
-  the fact by a claim row. Put the members behind any load balancer.
-- A member's lease is 15 s, renewed every 5 s, so a member that stops
+- Work is not routed. A turn runs on the server that accepted it and an
+  execution on the server that admitted it; ownership is settled after
+  the fact by a claim row. Put the servers behind any load balancer.
+- A server's lease is 15 s, renewed every 5 s, so a server that stops
   without releasing is taken over within **20 s**. A clean stop releases
   at once.
-- Each member sets **`CYFR_HOST_API_URL` to its own host API**, and a
-  cell refuses to boot without it. Every assignment a member issues
-  carries that address and that member's boot, so a worker posts an
-  attempt's host calls to the member holding it and names that member in
-  every header. A member that is not the one named refuses the call —
+- Each server sets **`CYFR_HOST_API_URL` to its own host API**, and a
+  cluster refuses to boot without it. Every assignment a server issues
+  carries that address and that server's boot, so a worker posts an
+  attempt's host calls to the server holding it and names that server in
+  every header. A server that is not the one named refuses the call —
   including a lease renewal it could have written from the rows — so a
   misrouted worker loses the call loudly rather than keeping a peer's
   lease alive while its work goes nowhere. One worker service may serve
-  several members; each member still lists the workers it dispatches to
+  several servers; each server still lists the workers it dispatches to
   in its own `CYFR_LOCUS_RUNTIME_WORKERS`.
-- Stdio MCP servers are not available in a cell.
-- Per-member ceilings multiply: `CYFR_OPUS_MAX_CONCURRENT` and its
-  per-tenant cap, and the per-credential stream cap, are each member's.
+- Stdio MCP servers are not available in a cluster.
+- Per-server ceilings multiply: `CYFR_OPUS_MAX_CONCURRENT` and its
+  per-tenant cap, and the per-credential stream cap, are each server's.
   The tenant's durable ceilings — its consented invocation rate and its
-  budget — are rows, and hold for the cell.
-- A cell runs one release. A member whose release differs from a live
-  member's is refused its slot and stops at boot, naming both releases
-  (an older member whose slot names no release counts as another). To
-  upgrade a cell on several hosts, stop the stack on every host, run
+  budget — are rows, and hold for the cluster.
+- A cluster runs one release. A server whose release differs from a live
+  server's is refused its slot and stops at boot, naming both releases
+  (an older server whose slot names no release counts as another). To
+  upgrade a cluster on several hosts, stop the stack on every host, run
   `cyfr update` on one, which starts the new release there, then on each
-  of the others: an update admits a live member outside its own stack
-  only when that member already runs the release it installs, and
+  of the others: an update admits a live server outside its own stack
+  only when that server already runs the release it installs, and
   refuses any other, as **Upgrading** under [Setup](#setup) says.
 
 `scripts/test-partitioned.sh -n 1 -a postgres -- --only cluster
-apps/cyfr/test/cluster` is the suite that proves this: two real nodes, one
+apps/cyfr/test/cluster` is the suite that proves this: two real servers, one
 Postgres, one object store, with both process death and a live
 partitioned owner.
 
-Before it admits any work, every member reconciles the platform
+Before it admits any work, every server reconciles the platform
 administrators against `CYFR_PLATFORM_ADMIN_EMAILS` under its own slot,
 ending the sessions of anyone the list does not name, and a
 reconciliation that fails or stalls refuses the boot. The same holds after
-a restart inside a running member: when the database checks, discovery,
-the member's claim, the bus or anything else before the reconciliation
+a restart inside a running server: when the database checks, discovery,
+the server's claim, the bus or anything else before the reconciliation
 restarts, it runs again before anything that admits work comes back, and
 the web tier, whose crashes restart it alone, never restarts the rest.
 
-### Headless nodes
+### Headless servers
 
-`CYFR_HEADLESS=true` makes a node Codex-only: `/mcp`, `/api` and public
+`CYFR_HEADLESS=true` makes a server Codex-only: `/mcp`, `/api` and public
 tinctures under `/t` are served, and every browser page — sign-in, the chat,
 Prism — answers 404. The CLI still signs in through the built-in device flow
-on `/mcp`, so this is for nodes that never show a face (a build worker, a
+on `/mcp`, so this is for servers that never show a face (a build worker, a
 relay); it does not combine with an external OIDC provider, which moves
-sign-in to the browser page a headless node refuses.
+sign-in to the browser page a headless server refuses.
 
 ### Storage paths
 
@@ -921,10 +921,10 @@ from process memory.
 
 **Restore is declared.** `cyfr restore backups/<timestamp>` puts a snapshot
 `cyfr update` took back: it refuses an incomplete snapshot or one whose
-layout it cannot put back, stops the stack and bars the cell from starting
+layout it cannot put back, stops the stack and bars the cluster from starting
 before anything lands: it sets `CYFR_RESTORE_INCOMPLETE` in `.env`, which
 the image's entrypoint, `cyfr up` and `cyfr update` refuse, and removes the
-stopped `cyfr` container. It refuses while any member of the cell still
+stopped `cyfr` container. It refuses while any server of the cluster still
 runs, on any host and of any release, or while the PostgreSQL server is of
 a major the CLI pins no client image for, and otherwise puts back the managed
 scaffold files as they stood before the update, the database, the storage
@@ -940,12 +940,12 @@ and only then takes the bar out of `.env` and starts the stack
 (`--no-start` leaves it stopped). A restore cut short anywhere leaves the
 bar up; `cyfr restore <backup>` run again puts every part back and
 declares it. A backup put back by hand, with no bar in `.env`, is declared
-by the same command, with the whole cell stopped, before its first start.
+by the same command, with the whole cluster stopped, before its first start.
 The next boot retires what the backup's authority
 could still do before it admits anything: every session ends; API keys,
 webhook secrets, paired devices and passkeys are suspended until their
-person re-enables them from the system layer's checklist under a door's
-fresh sign-in, an emailed code or their kit (`/restore`, **Recover after a
+person re-enables them from the system layer's checklist under a fresh
+sign-in with one of their sign-in methods, an emailed code or their kit (`/restore`, **Recover after a
 restore**); every component grant asks for consent again; standing
 approvals, unused once-bindings and pending confirmations are dropped;
 every stored credential is unusable until it is rotated where it came from
@@ -977,7 +977,7 @@ own CYFR's **Settings → Your identity**) restores their identifier and new
 keys onto a fresh installation from their printed kit, never their data.
 The operator sets a one-time `CYFR_RESTORE_TOKEN` there and hands it to
 them, and they open `https://<installation>/restore`; until it completes,
-no door signs anyone in. Their memberships at any other CYFR stand, and they
+no sign-in method signs anyone in. Their memberships at any other CYFR stand, and they
 pair their devices again. [identity-guide.md](identity-guide.md) has the
 steps and what each loss costs.
 
@@ -995,7 +995,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr access status` | Show how CYFR is reached, what runs and the last change, without the lock and changing nothing |
 | `cyfr up` / `cyfr down` | Start / stop the stack under its lock: cyfr, locus-runtime and locus-backends, plus locus-builds when `CYFR_LOCUS_BUILDS_URL` in `.env` names it (as `cyfr init` writes it) and the proxy `CYFR_ACCESS` selects (tailscale for tailnet, caddy for public); `up` refuses a `.env` that contradicts its access settings with the server's own sentence; `down` refuses a directory that holds no compose file, since the stack it stops is the directory's own |
 | `cyfr update` | Update this program to the newest release (through brew for a Homebrew install), then the CYFR in this directory to it: shows what changes and asks (`--yes`), verifies the release's signed manifest, pulls every image by digest, stops the stack, snapshots it into `backups/`, rewrites `docker-compose.yml`'s managed image lines (cyfr, cyfr-locus, the bundled caddy and tailscale) to the release's digests and starts it (see **Upgrading**); `--version <version>` installs exactly that release, a pre-release or an older one included; leaves `.env`, `Caddyfile` and every other image line alone, a CYFR already on the release untouched, refuses a CYFR on a newer release and a `docker-compose.yml` that lacks a service of the bundled stack |
-| `cyfr restore <snapshot>` | Put a snapshot from `backups/` back with the whole cell stopped (refused while any member of the cell runs), declare the restore and start the stack (`--no-start` leaves it stopped); see **Backup and restore** |
+| `cyfr restore <snapshot>` | Put a snapshot from `backups/` back with the whole cluster stopped (refused while any server of the cluster runs), declare the restore and start the stack (`--no-start` leaves it stopped); see **Backup and restore** |
 
 > `cyfr --version` and `cyfr status` print a one-line hint when a newer release is available. The check only runs in an interactive terminal and is cached for a day; set `CYFR_NO_UPDATE_CHECK=1` (e.g. in your shell profile) to turn it off.
 
@@ -1069,7 +1069,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr admin list/allow/deny/remove/requests/resolve` | The door: who may sign in to this server, by email, IdP subject or person identifier (`per_…`), or `*` for anyone, and the pending requests to approve or drop (platform admins) |
+| `cyfr admin list/allow/deny/remove/requests/resolve` | The sign-in allowlist: who may sign in to this server, by email, IdP subject or person identifier (`per_…`), or `*` for anyone, and the pending requests to approve or drop (platform admins) |
 | `cyfr settings list/set/reset` | The platform settings: limits, windows and the log level, and where each value comes from (platform admins; [configuration-guide.md](configuration-guide.md)) |
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
 | `cyfr decision list/get/correlate` | View admission decisions, and cross-reference a request's decisions with its logs and executions |
@@ -1109,7 +1109,7 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | Name | Is | Directory | Binary or image | Compose service | Environment prefix | MAC domain | Service label | Log label |
 |------|----|-----------|-----------------|-----------------|--------------------|------------|---------------|-----------|
 | Prima | pure contracts and the rostered runtime primitives | `apps/prima` | in every release | — | — | — | — | `[Prima…]` |
-| Arca | persistence: rows, blobs, cache, leases, retention kinds, the records and file doors | `apps/arca` | the `cyfr` release | — | — | — | `arca` | `[Arca…]` |
+| Arca | persistence: rows, blobs, cache, leases, retention kinds, the records and file entry points | `apps/arca` | the `cyfr` release | — | — | — | `arca` | `[Arca…]` |
 | Sanctum | decisions and the gate: identity, tenancy, authority, consent, vault, caps, the operation table, admission and dispatch, the request log and decision record | `apps/sanctum` | the `cyfr` release | — | — | — | `sanctum` | `[Sanctum…]` |
 | Cyfr | the host: boot, ownership, bus, telemetry, configuration and settings, the endpoint and every other admission path, wiring | `apps/cyfr/lib/cyfr`, `apps/cyfr/lib/cyfr_web` | the `cyfr` release, image `cyfr` | `cyfr`, with `caddy` in front for public access and `tailscale` in front for tailnet access, with a loopback SOCKS5 proxy for this device's browser | `CYFR_` | — | — | `[Cyfr…]` |
 | Compendium | components: kinds, manifests, registry, activation, provenance, builds over Locus, the tincture rules | `apps/cyfr/lib/compendium` | the `cyfr` release | — | — | — | `compendium` | `[Compendium…]` |
@@ -1125,16 +1125,14 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | plane | the kind of caller an operation is admitted for: an external caller, or a call inside a running chain | — | — | — | — | — | — | — |
 | actor | the tenant and identity carrier | — | — | — | — | — | — | — |
 | athanor | the tenancy unit, a person's own or a group's, with no organization or project above it; the one CYFR that holds it decides everything about it | — | — | — | — | — | — | — |
-| lease | a control-plane member's database-held claim to its slot | — | — | — | — | — | — | — |
+| lease | a control-plane server's database-held claim to its slot | — | — | — | — | — | — | — |
 | fence | the lease row's renewal token, which each renewal and takeover of the row names and raises; never a publication's identity ([`ARCHITECTURE.md` §6.3](ARCHITECTURE.md#63-publication)) | — | — | — | — | — | — | — |
 | attempt | one try at running an execution on a worker service | — | — | — | — | — | — | — |
 | backend | one stdio process of an external MCP server, run by the Locus backends service | — | — | — | — | — | — | — |
-| cell | several control-plane members sharing one database | — | — | — | — | — | — | — |
-| hub | a CYFR that keeps shared athanors (a household's, a team's, two people's) always on, which people join from their own CYFR | — | — | — | — | — | — | — |
-| glass | the client: a browser or an application showing CYFR's Prism, holding device keys it never exports and no store, vault or person key | — | — | — | — | — | — | — |
-| door | a way a person signs in at CYFR: GitHub, Google, an OIDC provider, a passkey, or the CYFR door for a person whose keys another CYFR holds; the server allowlist decides who may come in by each | — | — | — | — | — | — | — |
+| cluster | several control-plane servers sharing one database | — | — | — | — | — | — | — |
+| sign-in method | a way a person signs in at CYFR: GitHub, Google, an OIDC provider, a passkey, or their CYFR identity when another CYFR holds their keys; the server allowlist decides who may come in by each | — | — | — | — | — | — | — |
 | person identifier | `per_…`, the hash of the first entry of a person's identity log: it names them at every CYFR and grants no membership anywhere | — | — | — | — | — | — | — |
-| directory | the CYFR node that orders an identifier's identity log and serves its current public keys, holding no private key and no address of a person's CYFR | — | — | — | — | — | — | — |
+| directory | the CYFR that orders an identifier's identity log and serves its current public keys, holding no private key and no address of a person's CYFR | — | — | — | — | — | — | — |
 | live key | the key a person's CYFR holds for them to sign their sign-ins at any other CYFR and their devices' certificates | — | — | — | — | — | — | — |
 | operational key | the key a person's CYFR holds for them to rotate the live key, and nothing else | — | — | — | — | — | — | — |
 | recovery key | a key held away from the person's CYFR that replaces the live and operational keys without their cooperation | — | — | — | — | — | — | — |
@@ -1142,12 +1140,12 @@ Each part of CYFR has one name, and the name is its directory, its binary or ima
 | `key_epoch` | the identity log entry that introduced a person's current live key; when it changes, every other CYFR retires what it bound to the old one | — | — | — | — | — | — | — |
 | `recovery_epoch` | the first entry of a person's identity log, or the latest recovery that replaced their live key; a passkey another CYFR registered for them is bound to it | — | — | — | — | — | — | — |
 | restore | bringing a person's identity onto a fresh installation from their recovery kit, under that installation's single-use restore token; it restores no data | — | — | — | — | — | — | — |
-| carry | a sign-in at another CYFR, begun at the person's own CYFR and carried between the two by their browser | — | — | — | — | — | — | — |
+| carry | a sign-in at another CYFR, such as one that keeps a household's or a team's shared athanors always on, begun at the person's own CYFR and carried between the two by their browser | — | — | — | — | — | — | — |
 | pending action | the durable record of one carry: its destination, challenge and return address, resumed by an exact retry | — | — | — | — | — | — | — |
 | passkey | a credential registered at one CYFR, under that CYFR's host, that signs the person in there and gives their fresh confirmations there | — | — | — | — | — | — | — |
-| device key | the key pair a glass makes and never exports, which its device certificates name | — | — | — | — | — | — | — |
+| device key | the key pair a paired device makes and never exports, which its device certificates name | — | — | — | — | — | — | — |
 | device certificate | a short-lived statement, signed with the person's live key at their CYFR, naming a device key, its client, the CYFR and the athanor | — | — | — | — | — | — | — |
-| paired client | a glass paired with CYFR for one athanor, revocable on its own and renewed only while it stands | — | — | — | — | — | — | — |
+| paired client | a device paired with CYFR for one athanor, holding device keys it never exports and no store, vault or person key, revocable on its own and renewed only while it stands | — | — | — | — | — | — | — |
 | fresh confirmation | a proof that the person approved one pending confirmation: a passkey or a fresh sign-in; each sensitive change needs one | — | — | — | — | — | — | — |
 | pending confirmation | one sensitive change waiting for its fresh confirmation, with the preview CYFR stores and shows on every device of the person's | — | — | — | — | — | — | — |
 | origin | how a run started, `interactive`, `programmatic`, `schedule` or `webhook`, set by the path that admitted it; a grant names the origins it admits | — | — | — | — | — | — | — |

@@ -865,7 +865,7 @@ streaming::close(handle);
 | Error | Cause |
 |-------|-------|
 | `stream_limit` | Max 3 concurrent streams per execution |
-| `timeout` | The stream outlasted the node's consented `timeout`, or no data arrived for that long |
+| `timeout` | The stream outlasted the component's consented `timeout`, or no data arrived for that long |
 | `request_failed` | The request failed before any response (connection refused, TLS, DNS) |
 | `stream_error` | The transport broke mid-stream |
 | `invalid_handle` | Unknown or already-closed handle |
@@ -875,7 +875,7 @@ streaming::close(handle);
 Returns `Ok(value)` or `Err("access-denied: {name}")`. Requires a granted profile whose projection includes `name`. Private vault material is served from an entry that permits disclosure, projected to the `fields` the need declared; an attach-only entry refuses the read. Public `provides` values are also readable through this interface without a vault entry.
 
 ### `cyfr:emit/events` — `emit(json-event) -> string`
-Push one event (a JSON object) to the execution's event stream before `run` answers — what a caller subscribed to the execution sees as it happens. Answers `{"ok": true, "sequence": "N.n"}`, `{"ok": true}` when streamed text is held back to mask a credential across events, or `{"error": {...}}` (too large for the node's `max_request_size`, over the execution's budget of 3000 a minute, not an object). A refused event never stops the run. Model catalysts emit the `model/chat@1` stream events (see [Model catalysts](#model-catalysts-the-modelchat1-contract)).
+Push one event (a JSON object) to the execution's event stream before `run` answers — what a caller subscribed to the execution sees as it happens. Answers `{"ok": true, "sequence": "N.n"}`, `{"ok": true}` when streamed text is held back to mask a credential across events, or `{"error": {...}}` (too large for the component's `max_request_size`, over the execution's budget of 3000 a minute, not an object). A refused event never stops the run. Model catalysts emit the `model/chat@1` stream events (see [Model catalysts](#model-catalysts-the-modelchat1-contract)).
 
 ### `cyfr:oauth/token` — `get-access-token(provider) -> result<string, string>`
 Returns `Ok(access_token)` or `Err("authorization_required: ...")`. Requires an explicitly disclosed OAuth binding. The host manages client credentials, token exchange and refresh; the component receives only the short-lived token, masked in output. An attach-only binding instead names its connection on the request and receives no token.
@@ -912,7 +912,7 @@ Error: `{"error": {"type": "...", "message": "..."}}`.
 |---|---|
 | `storage_path_denied` | The path is outside the granted scopes, or not a path at all; or a write names a version directory that does not exist yet: "Nothing is here to write into yet: a component is created by scaffold, pull, fork or publish, and a role, the soul or a scroll by writing its own file first" |
 | `action_denied` | The action is not one this component was granted |
-| `request_too_large` / `response_too_large` | The request, or what a read would answer, is past the node's size limits |
+| `request_too_large` / `response_too_large` | The request, or what a read would answer, is past the component's size limits |
 | `storage_quota_exceeded` | The athanor's storage cap, or the public profile's quota, would be passed |
 | `storage_unavailable` | The scope's or the athanor's storage usage could not be read, so the write was refused; asking again later is safe |
 | `not_found` | Nothing is at the path |
@@ -1179,7 +1179,7 @@ All three are frozen at consent time. Nothing auto-applies the manifest's `caps`
 
 ### Storage (`caps.storage`)
 
-- `paths` — directory prefixes end with `/` (e.g. `"data/"`), exact files without, or `"*"`. Paths must start with `data/` or `components/` and be canonical: no empty, `.` or `..` segment, and no spelling the storage door would serve under another name; a manifest naming one is refused at publish. Empty = hard deny.
+- `paths` — directory prefixes end with `/` (e.g. `"data/"`), exact files without, or `"*"`. Paths must start with `data/` or `components/` and be canonical: no empty, `.` or `..` segment, and no spelling storage would serve under another name; a manifest naming one is refused at publish. Empty = hard deny.
 - `actions` — `read`, `write`, `append`, `list`, `delete`, `exists`; each must be asked for.
 
 ### Tools (`caps.tools`)

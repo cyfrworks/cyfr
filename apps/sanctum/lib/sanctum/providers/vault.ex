@@ -614,7 +614,7 @@ defmodule Sanctum.Providers.Vault do
   # is the caller's own input and is not repeated back.
   defp destination_refusal(:hosts_required), do: "it names at least one host"
   defp destination_refusal(:not_a_map), do: "it is an object"
-  defp destination_refusal({:unknown_key, _key}), do: "it names an unknown member"
+  defp destination_refusal({:unknown_key, _key}), do: "it names an unknown field"
   defp destination_refusal({:invalid_host, _host}), do: "a host is outside the domain grammar"
   defp destination_refusal({:invalid_scheme, _}), do: "the scheme is http or https"
   defp destination_refusal({:invalid_port, _}), do: "the port is 1 to 65535"

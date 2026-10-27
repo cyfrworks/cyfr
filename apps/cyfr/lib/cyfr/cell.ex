@@ -185,10 +185,10 @@ defmodule Cyfr.Cell do
 
   defp postgres(%{adapter: :sqlite}) do
     """
-    CYFR_CLUSTER=on needs Postgres, and this member's database is SQLite. \
-    SQLite is one file with one writer and no server clock, so members \
+    CYFR_CLUSTER=on needs Postgres, and this server's database is SQLite. \
+    SQLite is one file with one writer and no server clock, so servers \
     cannot agree which lease stands. Set CYFR_DATABASE=postgres and point \
-    every member at one database, or unset CYFR_CLUSTER.\
+    every server at one database, or unset CYFR_CLUSTER.\
     """
   end
 
@@ -196,18 +196,18 @@ defmodule Cyfr.Cell do
 
   defp shared_storage(%{shared_storage?: false}) do
     """
-    CYFR_CLUSTER=on needs shared object storage, and this member's storage \
-    is local. Local storage is one member's filesystem: two members would \
+    CYFR_CLUSTER=on needs shared object storage, and this server's storage \
+    is local. Local storage is one server's filesystem: two servers would \
     each hold half of every athanor. Set CYFR_STORAGE=s3 with the bucket \
-    and credentials every member shares, or unset CYFR_CLUSTER.\
+    and credentials every server shares, or unset CYFR_CLUSTER.\
     """
   end
 
   defp tls_distribution(%{proto_dist: proto}) when proto not in [:inet_tls, :inet6_tls] do
     """
-    CYFR_CLUSTER=on needs TLS distribution, and this node speaks \
-    #{inspect(proto)}. A cell of control planes on plain distribution is an \
-    unauthenticated remote shell onto the database. Start every member with \
+    CYFR_CLUSTER=on needs TLS distribution, and this server speaks \
+    #{inspect(proto)}. A cluster of control planes on plain distribution is an \
+    unauthenticated remote shell onto the database. Start every server with \
     `-proto_dist inet_tls` (or inet6_tls) and `-ssl_dist_optfile` naming its \
     certificates, or unset CYFR_CLUSTER.\
     """
@@ -215,10 +215,10 @@ defmodule Cyfr.Cell do
 
   defp tls_distribution(%{dist_certificates?: false}) do
     """
-    CYFR_CLUSTER=on needs TLS distribution with certificates, and this node \
+    CYFR_CLUSTER=on needs TLS distribution with certificates, and this server \
     was started with neither `-ssl_dist_optfile` nor `-ssl_dist_opt`. TLS \
     distribution without configured certificates verifies no peer. Name the \
-    member's certificate, key and CA in an `-ssl_dist_optfile`, or unset \
+    server's certificate, key and CA in an `-ssl_dist_optfile`, or unset \
     CYFR_CLUSTER.\
     """
   end
@@ -227,18 +227,18 @@ defmodule Cyfr.Cell do
 
   defp cell_cookie(%{cell_cookie: cookie}) when not is_binary(cookie) do
     """
-    CYFR_CLUSTER=on needs a cell-only cookie, and CYFR_CELL_COOKIE is not \
-    set. An ambient ~/.erlang.cookie is the machine's, not the cell's, and \
-    a cookie bounds exactly one cell. Set CYFR_CELL_COOKIE to at least 32 \
-    random characters on every member, or unset CYFR_CLUSTER.\
+    CYFR_CLUSTER=on needs a cluster-only cookie, and CYFR_CELL_COOKIE is not \
+    set. An ambient ~/.erlang.cookie is the machine's, not the cluster's, and \
+    a cookie bounds exactly one cluster. Set CYFR_CELL_COOKIE to at least 32 \
+    random characters on every server, or unset CYFR_CLUSTER.\
     """
   end
 
   defp cell_cookie(%{cell_cookie: cookie}) when byte_size(cookie) < 32 do
     """
-    CYFR_CLUSTER=on needs a cell-only cookie of at least 32 characters, and \
+    CYFR_CLUSTER=on needs a cluster-only cookie of at least 32 characters, and \
     CYFR_CELL_COOKIE is #{byte_size(cookie)}. Generate one with \
-    `openssl rand -hex 32` and set the same value on every member, or unset \
+    `openssl rand -hex 32` and set the same value on every server, or unset \
     CYFR_CLUSTER.\
     """
   end
@@ -247,10 +247,10 @@ defmodule Cyfr.Cell do
 
   defp cell_cookie(%{node_cookie: node_cookie}) do
     """
-    CYFR_CLUSTER=on needs this node to be running under the cell's own \
+    CYFR_CLUSTER=on needs this server to be running under the cluster's own \
     cookie, and its distribution cookie is #{inspect(node_cookie)}, not \
     CYFR_CELL_COOKIE. An ambient ~/.erlang.cookie is the machine's, not the \
-    cell's. Start every member with CYFR_CELL_COOKIE as its distribution \
+    cluster's. Start every server with CYFR_CELL_COOKIE as its distribution \
     cookie (RELEASE_COOKIE, or `-setcookie`), or unset CYFR_CLUSTER.\
     """
   end
@@ -260,8 +260,8 @@ defmodule Cyfr.Cell do
   defp topology(_facts) do
     """
     CYFR_CLUSTER=on needs a discovery topology, and none is configured. A \
-    cell that never forms is a set of members that each believe they are a \
-    cell. Set CYFR_CLUSTER_NODES to the members' node names, or \
+    cluster that never forms is a set of servers that each believe they are a \
+    cluster. Set CYFR_CLUSTER_NODES to the servers' Erlang names, or \
     CYFR_CLUSTER_DNS_QUERY and CYFR_CLUSTER_NODE_BASENAME for a headless \
     service, or unset CYFR_CLUSTER.\
     """
@@ -271,10 +271,10 @@ defmodule Cyfr.Cell do
 
   defp locus_runtime_root(_facts) do
     """
-    CYFR_CLUSTER=on needs CYFR_LOCUS_RUNTIME_ROOT set and identical on every member. \
+    CYFR_CLUSTER=on needs CYFR_LOCUS_RUNTIME_ROOT set and identical on every server. \
     Unset, the worker root is random per boot, so a worker's report to a \
     peer fails MAC verification and its assignment is refused. Generate one \
-    with `openssl rand -hex 32` and set the same value on every member, or \
+    with `openssl rand -hex 32` and set the same value on every server, or \
     unset CYFR_CLUSTER.\
     """
   end
@@ -284,12 +284,12 @@ defmodule Cyfr.Cell do
   defp host_api_url(_facts) do
     """
     CYFR_CLUSTER=on needs CYFR_HOST_API_URL, the address a worker service \
-    reaches THIS member's host API at, and it is not set. Every assignment \
-    a member issues carries its own address, and a worker posts that \
+    reaches THIS server's host API at, and it is not set. Every assignment \
+    a server issues carries its own address, and a worker posts that \
     attempt's host calls there; with no address the worker falls back to \
-    the single address it was configured with, and whichever member that \
-    is answers every other member's runs. Set CYFR_HOST_API_URL on each \
-    member to that member's own host API (http://member-1:4300), or unset \
+    the single address it was configured with, and whichever server that \
+    is answers every other server's runs. Set CYFR_HOST_API_URL on each \
+    server to that server's own host API (http://member-1:4300), or unset \
     CYFR_CLUSTER.\
     """
   end
@@ -372,13 +372,13 @@ defmodule Cyfr.Cell do
         {:ok, state}
 
       {:busy, row} ->
-        raise "[Cyfr] FATAL: another control plane (#{row.owner}) holds the slot of node " <>
+        raise "[Cyfr] FATAL: another control plane (#{row.owner}) holds the server slot named " <>
                 "#{slot} until #{DateTime.to_iso8601(row.lease_until)} and is renewing it. " <>
-                "Two boots under one node name each run every sweep and accept every turn. " <>
-                "Stop the other one; a second member of a cell needs a node name of its own."
+                "Two boots under one Erlang name each run every sweep and accept every turn. " <>
+                "Stop the other one; a second server in a cluster needs an Erlang name of its own."
 
       {:error, reason} ->
-        raise "[Cyfr] FATAL: this member's cell slot could not be read or written " <>
+        raise "[Cyfr] FATAL: this server's cluster slot could not be read or written " <>
                 "(#{Prima.LoggerContext.shape(reason)})."
     end
   end
@@ -470,9 +470,9 @@ defmodule Cyfr.Cell do
   # Nothing was written: the boot stops holding no slot, and the live
   # member of the other release goes on as it was.
   defp refuse_mixed_release!({:error, {:mixed_release, other}}, state) do
-    raise "[Cyfr] FATAL: this member runs release #{state.release}, and a live member of " <>
-            "this cell runs release #{other}. A cell runs one release: a member " <>
-            "of another reads rows its code did not write. Stop every member before starting " <>
+    raise "[Cyfr] FATAL: this server runs release #{state.release}, and a live server of " <>
+            "this cluster runs release #{other}. A cluster runs one release: a server " <>
+            "of another reads rows its code did not write. Stop every server before starting " <>
             "the new release (`cyfr update` does), or start this one on release " <>
             "#{other}."
   end
@@ -526,7 +526,7 @@ defmodule Cyfr.Cell do
       {:error, reason} ->
         _ = Arca.ControlPlane.release()
 
-        raise "[Cyfr] FATAL: this member's settings pins could not be recorded " <>
+        raise "[Cyfr] FATAL: this server's settings pins could not be recorded " <>
                 "(#{Prima.LoggerContext.shape(reason)})."
     end
   end
@@ -586,9 +586,9 @@ defmodule Cyfr.Cell do
                 "this database until #{DateTime.to_iso8601(peer.lease_until)} and is " <>
                 "renewing it. Two servers on one database each run every sweep and accept " <>
                 "every turn. Stop the other one, or set CYFR_CLUSTER=on — which needs " <>
-                "Postgres, shared object storage, TLS distribution, a cell cookie, a " <>
-                "discovery topology, one CYFR_LOCUS_RUNTIME_ROOT on every member and " <>
-                "each member's own CYFR_HOST_API_URL."
+                "Postgres, shared object storage, TLS distribution, a cluster cookie, a " <>
+                "discovery topology, one CYFR_LOCUS_RUNTIME_ROOT on every server and " <>
+                "each server's own CYFR_HOST_API_URL."
     end
   end
 
@@ -600,7 +600,7 @@ defmodule Cyfr.Cell do
       {:error, reason} ->
         _ = Arca.ControlPlane.release()
 
-        raise "[Cyfr] FATAL: the cell roster could not be read (#{Prima.LoggerContext.shape(reason)})."
+        raise "[Cyfr] FATAL: the cluster roster could not be read (#{Prima.LoggerContext.shape(reason)})."
     end
   end
 
@@ -613,7 +613,7 @@ defmodule Cyfr.Cell do
         :ok
 
       messages ->
-        raise "[Cyfr] FATAL: this deployment cannot form a cell.\n\n" <>
+        raise "[Cyfr] FATAL: this deployment cannot form a cluster.\n\n" <>
                 Enum.map_join(messages, "\n\n", &("  * " <> &1))
     end
   end
@@ -624,9 +624,9 @@ defmodule Cyfr.Cell do
         :ok
 
       others ->
-        raise "[Cyfr] FATAL: this node is connected to #{length(others)} other node(s) " <>
+        raise "[Cyfr] FATAL: this server is connected to other servers (#{length(others)} in total) " <>
                 "but CYFR_CLUSTER is " <>
-                "not set. A cell of control planes needs the multi-node work; a single one " <>
+                "not set. A cluster of control planes needs cluster support; a single one " <>
                 "must not be distributed."
     end
   end

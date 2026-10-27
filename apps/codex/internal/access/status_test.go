@@ -56,7 +56,7 @@ func TestStatusTakesNoLockAndChangesNothing(t *testing.T) {
 	if !slices.ContainsFunc(s.Containers, func(c Container) bool { return c.Service == "tailscale" && c.State == "running" }) {
 		t.Errorf("status shows %v", s.Containers)
 	}
-	for _, want := range []string{"Tailscale: connected as cyfr.tail1234.ts.net (node n0001CNTRL), the machine .env names", "HTTPS certificates: on", "Serve: open", "Certificate: "} {
+	for _, want := range []string{"Tailscale: connected as cyfr.tail1234.ts.net (node ID n0001CNTRL), the machine .env names", "HTTPS certificates: on", "Serve: open", "Certificate: "} {
 		if !slices.ContainsFunc(s.Health, func(l string) bool { return strings.HasPrefix(l, want) }) {
 			t.Errorf("health lacks %q: %v", want, s.Health)
 		}

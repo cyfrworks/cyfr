@@ -276,7 +276,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 
 ## 8. Homes, glasses and hubs
 
-- A home is the one installation that decides for an athanor. It is this document's word: what a person reads, the setup pages, the command line, Prism, the README and the guides, calls the installation CYFR and the assistant Aqua, and never says home.
+- A home is the one installation that decides for an athanor. Home, glass, hub, cell, node and door are this document's words: what a person reads, the setup pages, the command line, Prism, the README and the guides, says CYFR for the installation and Aqua for the assistant, device or browser for the glass, the CYFR you join for a hub, cluster for a cell and server for a member of it, machine or server or CYFR for a node by its sense, and sign-in method for a door, and never these words.
 - Every athanor has exactly one home; a cell is several members acting as that one home on one database (§6.1). *Not built yet:* replicas and their journal, and home transfer; a node is the home of every athanor its store holds.
 - The glass is the client: display, input and device keys it never exports, bound to each home separately. *Not built yet:* an application that hosts Prism, a client shell with its own home switcher, listening without a page, notices and their read state across homes, and push delivery.
 - A hub is the always-on home of shared athanors and an instance that offers entries to its people. *Not built yet:* the hub as a model provider and as a standby, the governance floor, which shows every member of a group a consent that exports their contributions and lets each withhold what they authored, and a join that requires a company's single sign-on beside the person's own identity.

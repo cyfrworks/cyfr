@@ -95,11 +95,11 @@ defmodule Aqua.Providers.Notes do
             ),
             Arg.new("thread", :string,
               description:
-                "keep, pin, at the door: provenance — the thread the note was kept from. In a chain the host stamps it and this is ignored."
+                "keep, pin, at the external entry: provenance — the thread the note was kept from. In a chain the host stamps it and this is ignored."
             ),
             Arg.new("execution", :string,
               description:
-                "keep, pin, at the door: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored."
+                "keep, pin, at the external entry: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored."
             )
           ],
           kind: :write,
@@ -124,11 +124,11 @@ defmodule Aqua.Providers.Notes do
             ),
             Arg.new("thread", :string,
               description:
-                "keep, pin, at the door: provenance — the thread the note was kept from. In a chain the host stamps it and this is ignored."
+                "keep, pin, at the external entry: provenance — the thread the note was kept from. In a chain the host stamps it and this is ignored."
             ),
             Arg.new("execution", :string,
               description:
-                "keep, pin, at the door: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored."
+                "keep, pin, at the external entry: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored."
             )
           ],
           kind: :write,

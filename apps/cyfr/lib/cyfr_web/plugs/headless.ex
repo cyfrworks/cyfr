@@ -27,7 +27,7 @@ defmodule CyfrWeb.Plugs.Headless do
     if Cyfr.RuntimeConfig.headless?() do
       conn
       |> put_resp_content_type("text/plain")
-      |> send_resp(404, "This node is headless: no browser surface is served here.")
+      |> send_resp(404, "This CYFR is headless: no browser surface is served here.")
       |> halt()
     else
       conn

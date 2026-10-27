@@ -971,7 +971,7 @@ defmodule Emissary.Web.DeviceChannel do
   defp class(_reason), do: :unauthenticated
 
   defp sentence(:oversize_frame), do: "The frame is larger than any device protocol message"
-  defp sentence(:malformed_frame), do: "The frame is not a device protocol message a glass sends"
+  defp sentence(:malformed_frame), do: "The frame is not a device protocol message a device sends"
   defp sentence(:proof_missing), do: "The device has not proven its key on this connection"
   defp sentence(:proof_unchallenged), do: "The proof answers no challenge this connection holds"
   defp sentence(:proof_expired), do: "The proof arrived after its challenge expired"

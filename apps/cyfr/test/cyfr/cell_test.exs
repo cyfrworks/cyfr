@@ -292,8 +292,8 @@ defmodule Cyfr.CellTest do
                  release: "0.0.0-other"
                )
 
-      assert message =~ "this member runs release 0.0.0-other"
-      assert message =~ "a live member of this cell runs release #{Prima.Version.current()}"
+      assert message =~ "this server runs release 0.0.0-other"
+      assert message =~ "a live server of this cluster runs release #{Prima.Version.current()}"
       assert ControlPlane.slot(node) == {:error, :not_found}
       refute ControlPlane.held?()
       assert ControlPlane.held() == :none
@@ -438,14 +438,14 @@ defmodule Cyfr.CellTest do
     test "SQLite is refused, naming the database and what to set" do
       assert [message] = Cell.refusals(%{@cell_facts | adapter: :sqlite})
       assert message =~ "needs Postgres"
-      assert message =~ "this member's database is SQLite"
+      assert message =~ "this server's database is SQLite"
       assert message =~ "CYFR_DATABASE=postgres"
     end
 
     test "local storage is refused, naming it and what to set" do
       assert [message] = Cell.refusals(%{@cell_facts | shared_storage?: false})
       assert message =~ "shared object storage"
-      assert message =~ "this member's storage is local"
+      assert message =~ "this server's storage is local"
       assert message =~ "CYFR_STORAGE=s3"
     end
 
@@ -499,7 +499,7 @@ defmodule Cyfr.CellTest do
     test "a member with no address of its own is refused, naming what a worker falls back to" do
       assert [message] = Cell.refusals(%{@cell_facts | host_api_url: nil})
       assert message =~ "CYFR_HOST_API_URL"
-      assert message =~ "THIS member"
+      assert message =~ "THIS server"
       assert message =~ "falls back"
     end
 
@@ -556,7 +556,7 @@ defmodule Cyfr.CellTest do
                  renew_ms: 60_000
                )
 
-      assert message =~ "cannot form a cell"
+      assert message =~ "cannot form a cluster"
       assert message =~ "discovery topology"
 
       # Nothing was written: the refusal comes before the claim.

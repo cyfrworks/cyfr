@@ -620,7 +620,7 @@ defmodule Sanctum.PasskeysTest do
       # Refused before any proof is asked; the passkey stands.
       assert {:error, {:conflict, message}} = Passkeys.revoke(ctx, first.id)
       assert message =~ "only way to sign in"
-      assert message =~ "link a door"
+      assert message =~ "link a sign-in method"
       assert {:ok, %{state: "active"}} = Arca.Passkeys.get(Prima.Actor.system(), first.id)
 
       # With another active passkey, the first goes; the other is then the last.

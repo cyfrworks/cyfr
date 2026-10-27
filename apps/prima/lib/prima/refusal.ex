@@ -225,10 +225,10 @@ defmodule Prima.Refusal do
 
   # The bootstrap's refusals of a member's boot, by sub-reason.
   @bootstrap %{
-    slot_not_held: {:not_owner, "This server does not hold its member slot"},
+    slot_not_held: {:not_owner, "This server does not hold its slot in the cluster"},
     busy: {:conflict, "Another server is starting against this database"},
     malformed_configuration: {:invalid_argument, "The server configuration is malformed"},
-    slot_lost: {:not_owner, "This server lost its member slot while starting"},
+    slot_lost: {:not_owner, "This server lost its slot in the cluster while starting"},
     claim_taken: {:conflict, "Another server took the start-up claim"},
     claim_lapsed: {:timeout, "The start-up claim lapsed before start-up finished"},
     missing_user: {:setup_required, "The configured first user does not exist"},
@@ -493,7 +493,7 @@ defmodule Prima.Refusal do
     do: {:not_owner, "This server does not currently own its control plane — retry shortly"}
 
   defp row(:slot_not_held),
-    do: {:not_owner, "This server does not hold its member slot — retry shortly"}
+    do: {:not_owner, "This server does not hold its slot in the cluster — retry shortly"}
 
   # The component index has not caught up with the tree it projects: an
   # answer from it would be stale, so none is given.

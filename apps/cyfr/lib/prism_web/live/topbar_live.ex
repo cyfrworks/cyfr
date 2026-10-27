@@ -707,7 +707,7 @@ defmodule PrismWeb.TopbarLive do
           navigate={PrismWeb.Focus.path(@athanor_route, "/settings")}
           id="door-requests"
           class="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[11px] text-amber-200 hover:bg-amber-500/30"
-          title="People waiting at the door"
+          title="People waiting for sign-in approval"
         >
           <span class="h-1.5 w-1.5 rounded-full bg-amber-400" />
           {@platform_requests} {if @platform_requests == 1, do: "request", else: "requests"}

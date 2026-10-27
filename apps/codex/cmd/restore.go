@@ -36,17 +36,17 @@ func init() {
 
 var restoreCmd = &cobra.Command{
 	Use:   "restore <snapshot>",
-	Short: "Put a snapshot from backups/ back with the whole cell stopped, and declare the restore",
+	Short: "Put a snapshot from backups/ back with the whole cluster stopped, and declare the restore",
 	Long: `Put back a snapshot 'cyfr update' took (backups/<timestamp>/) and declare the restore, so the next start suspends every credential and method the backup carried until its owner re-enables it.
 
 1. Read the snapshot: snapshot.json must be there and say complete, its parts must be exactly what the directory holds, and its .env must be one cyfr can start CYFR from (no COMPOSE_* setting, and access settings that agree); an incomplete snapshot, a layout cyfr restore cannot invert or a .env cyfr refuses refuses before anything stops.
 2. Take the stack's lock, finishing a change an interrupted command left; cancel a tailnet join that waits for approval; then stop this host's stack, timing each service.
-3. Bar the cell from starting: set CYFR_RESTORE_INCOMPLETE=<snapshot> in .env, synced, and remove the stopped cyfr container, so every start of the cyfr service until the restore is declared is a new container that reads the setting and refuses (the image's entrypoint), and 'cyfr up' and 'cyfr update' refuse it too.
+3. Bar CYFR from starting: set CYFR_RESTORE_INCOMPLETE=<snapshot> in .env, synced, and remove the stopped cyfr container, so every start of the cyfr service until the restore is declared is a new container that reads the setting and refuses (the image's entrypoint), and 'cyfr up' and 'cyfr update' refuse it too.
 4. Put the snapshot's .env (with the setting) back and its docker-compose.yml beside the project's, and read the configuration they give cyfr: the setting must reach the cyfr service, the database, the storage root and every bind mounted under it must be where the snapshot can be put back, and the keyring must be the snapshot's. Only then does the snapshot's docker-compose.yml replace the project's, so the compose file in place delivers the setting at every step. A refusal here puts the two files back as they were, which lifts the bar.
-5. Read the cell's live slots offline, in the snapshot's image: a live member on any host refuses, whatever its release, since the database is shared by every member.
+5. Read the cluster's live slots offline, in the snapshot's image: a live server on any host refuses, whatever its release, since every server of the cluster shares the database.
 6. Put the scaffold files back as they stood before the update (the keeper's seccomp profile among them), then the storage root, each bind mounted under it at its own source, then the database (the SQLite file, or the dump through pg_restore in the PostgreSQL server's own major).
 7. Declare the restore: bin/cyfr eval 'IO.puts("CYFR_RESTORE_ID=" <> Cyfr.Release.mark_restore())' in the snapshot's image, then take CYFR_RESTORE_INCOMPLETE out of .env. A restore that is not declared never starts.
-8. Forget the record of the machine's last tailnet join, since the snapshot's .env names its own node, then start the stack as every cyfr start runs, waiting for cyfr's health, unless --no-start.
+8. Forget the record of the machine's last tailnet join, since the snapshot's .env names its own tailnet machine, then start the stack as every cyfr start runs, waiting for cyfr's health, unless --no-start.
 
 Exit status 3: the restore is declared and CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one the snapshot's .env names, not joined, or HTTPS off); the message says what to do. A failure leaves the stack stopped and says what to do; from step 3 until the declaration, a crash leaves it barred, and 'cyfr restore <snapshot>' run again puts every part back from the start. An object store (S3) is outside the snapshot: objects written since it was taken stay, and objects deleted since come back only from the bucket's own versioning.`,
 	GroupID: "server",
@@ -510,7 +510,7 @@ func (r *restorer) raiseBarrier() error {
 		err = writeDurable(".env", barred, 0600)
 	}
 	if err != nil {
-		return fmt.Errorf("cyfr restore could not bar the cell from starting (%v)", err)
+		return fmt.Errorf("cyfr restore could not bar CYFR from starting (%v)", err)
 	}
 	ctx, cancel := r.detached(composeRunTimeout)
 	defer cancel()
@@ -870,7 +870,7 @@ func (r *restorer) probeRestoredPostgres() error {
 // holds no slot.
 func (r *restorer) refuseLiveMembers() error {
 	if r.config.adapter == "sqlite" && !r.sqliteLive {
-		fmt.Fprintf(r.out, "No database is at %s yet, so no member of the cell holds a slot in it.\n", r.config.sqliteFile)
+		fmt.Fprintf(r.out, "No database is at %s yet, so no server of the cluster holds a slot in it.\n", r.config.sqliteFile)
 		return nil
 	}
 	_, live, err := r.waitLiveSlots(func(rosterSlot) bool { return false })
@@ -878,7 +878,7 @@ func (r *restorer) refuseLiveMembers() error {
 		return err
 	}
 	if len(live) > 0 {
-		return fmt.Errorf("A member of the cell is still live %s after the stop: %s. A restore needs the whole cell stopped; stop it on its host with 'cyfr down', then run 'cyfr restore %s' again", liveSlotsWindow, slotNames(live), r.snap.dir)
+		return fmt.Errorf("A server of the cluster is still live %s after the stop: %s. A restore needs the whole cluster stopped; stop it on its host with 'cyfr down', then run 'cyfr restore %s' again", liveSlotsWindow, slotNames(live), r.snap.dir)
 	}
 	return nil
 }

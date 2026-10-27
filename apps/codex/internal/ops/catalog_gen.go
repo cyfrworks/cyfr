@@ -927,7 +927,7 @@ func (args BuildValidateArgs) MarshalJSON() ([]byte, error) {
 type CanvasActivateArgs struct {
 	// activate: the canvas's name
 	Canvas string `json:"canvas"`
-	// activate: the version the glass trialled
+	// activate: the version the device trialled
 	Version string `json:"version"`
 	// activate: the id of the frame the version was trialled in
 	Frame string `json:"frame"`
@@ -2825,9 +2825,9 @@ type NotesKeepArgs struct {
 	Name string `json:"name"`
 	// keep: what to file. pin: the page — empty content clears it
 	Content string `json:"content"`
-	// keep, pin, at the door: provenance — the thread the note was kept from. In a chain the host stamps it and this is ignored.
+	// keep, pin, at the external entry: provenance — the thread the note was kept from. In a chain the host stamps it and this is ignored.
 	Thread Field[string] `json:"thread,omitzero"`
-	// keep, pin, at the door: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored.
+	// keep, pin, at the external entry: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored.
 	Execution Field[string] `json:"execution,omitzero"`
 }
 
@@ -2865,9 +2865,9 @@ type NotesPinArgs struct {
 	Name string `json:"name"`
 	// keep: what to file. pin: the page — empty content clears it
 	Content string `json:"content"`
-	// keep, pin, at the door: provenance — the thread the note was kept from. In a chain the host stamps it and this is ignored.
+	// keep, pin, at the external entry: provenance — the thread the note was kept from. In a chain the host stamps it and this is ignored.
 	Thread Field[string] `json:"thread,omitzero"`
-	// keep, pin, at the door: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored.
+	// keep, pin, at the external entry: provenance — the execution the note was kept from. In a chain the host stamps it and this is ignored.
 	Execution Field[string] `json:"execution,omitzero"`
 }
 
@@ -3404,9 +3404,9 @@ func (args PersonKitAckArgs) MarshalJSON() ([]byte, error) {
 
 // PersonLinkDoorArgs carries arguments for person.link_door.
 type PersonLinkDoorArgs struct {
-	// link_door: the door to link, as its provider name
+	// link_door: the sign-in method to link, as its provider name
 	Provider string `json:"provider"`
-	// link_door: the single-use ticket a completed sign-in with that door answered, proving control of its subject
+	// link_door: the single-use ticket a completed sign-in with that sign-in method answered, proving control of its subject
 	Ticket string `json:"ticket"`
 }
 
@@ -3466,7 +3466,7 @@ func (args PersonStatusArgs) MarshalJSON() ([]byte, error) {
 
 // PersonUnlinkDoorArgs carries arguments for person.unlink_door.
 type PersonUnlinkDoorArgs struct {
-	// unlink_door: the linked door's identity key (provider|issuer|subject)
+	// unlink_door: the linked sign-in method's identity key (provider|issuer|subject)
 	Door string `json:"door"`
 }
 
@@ -3571,7 +3571,7 @@ type ProfileCommitArgsDecisions struct {
 	DurableStorage Field[bool]                                        `json:"durable_storage,omitzero"`
 	// The origins the grant admits; absent, interactive alone
 	Origins Field[[]string] `json:"origins,omitzero"`
-	// Per consent-graph node, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
+	// Per consent-graph component, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
 	Subset Field[map[string]ProfileCommitArgsDecisionsSubsetItem] `json:"subset,omitzero"`
 }
 
@@ -3949,7 +3949,7 @@ type ProfilePreviewArgsDecisions struct {
 	DurableStorage Field[bool]                                         `json:"durable_storage,omitzero"`
 	// The origins the grant admits; absent, interactive alone
 	Origins Field[[]string] `json:"origins,omitzero"`
-	// Per consent-graph node, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
+	// Per consent-graph component, the part of the ask granted; a missing kind or field keeps its ask, an empty set grants none
 	Subset Field[map[string]ProfilePreviewArgsDecisionsSubsetItem] `json:"subset,omitzero"`
 }
 

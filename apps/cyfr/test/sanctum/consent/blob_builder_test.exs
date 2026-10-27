@@ -373,7 +373,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       assert {:error, {:invalid_argument, why}} =
                preview(ctx, %{"reagent:local.elsewhere" => %{"tools" => []}})
 
-      assert why =~ "not a node of this grant's consent graph"
+      assert why =~ "not a component of this grant's consent graph"
     end
   end
 

@@ -106,7 +106,7 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:bridge],
       note:
         "an established-caller memo — a cached authorization decision — is no longer " <>
-          "good; every member drops the memos it holds for that session row key"
+          "good; every server drops the memos it holds for that session row key"
     },
     [:cyfr, :sanctum, :session, :created] => %{
       consumers: [:bridge],
@@ -122,7 +122,7 @@ defmodule Cyfr.Telemetry.Catalog do
       consumers: [:bridge],
       note:
         "a person's frame credential was suspended or revoked; a stream held open " <>
-          "under it ends at once on every member"
+          "under it ends at once on every server"
     },
     [:cyfr, :sanctum, :membership, :changed] => %{
       consumers: [:bridge],
@@ -477,7 +477,7 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :seed_offer, :completed] => %{
       consumers: [:operator],
       note:
-        "the boot's seed offer ran to its end under the cell's seed_release claim: " <>
+        "the boot's seed offer ran to its end under the cluster's seed_release claim: " <>
           "readiness does not wait for it, so this is where an operator learns it finished"
     },
     [:cyfr, :seed_offer, :aborted] => %{

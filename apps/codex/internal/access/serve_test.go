@@ -21,7 +21,7 @@ func TestNodeMismatchLeavesServeClosedAndCyfrRunning(t *testing.T) {
 		node, inEnv string
 	}{
 		{"renamed", func(n *fakeNode) { n.Name = "other.tail1234.ts.net" }, "other.tail1234.ts.net", "cyfr.tail1234.ts.net"},
-		{"re-identified", func(n *fakeNode) { n.ID = "N0001CNTRL" }, "cyfr.tail1234.ts.net (node N0001CNTRL)", "cyfr.tail1234.ts.net (node n0001CNTRL)"},
+		{"re-identified", func(n *fakeNode) { n.ID = "N0001CNTRL" }, "cyfr.tail1234.ts.net (node ID N0001CNTRL)", "cyfr.tail1234.ts.net (node ID n0001CNTRL)"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHome(t)

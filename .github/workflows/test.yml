@@ -2107,28 +2107,53 @@ jobs:
           assert_spelling apps/codex/cmd/lifecycle.go '"data"'
           assert_spelling apps/codex/cmd/lifecycle.go '"aqua"'
           assert_spelling scripts/scaffold-tarball.sh '-C seed aqua'
-          # "home" is no word a person reads: the installation is CYFR and the
-          # assistant is Aqua. The prose surfaces (README.md, the six guides,
-          # the setup pages and the access vector's words and refusals, which
-          # `cyfr` prints) carry it only where it means something else. Each
-          # exception, exact:
+          # The prose surfaces (README.md, the six guides, the setup pages and
+          # the access vector's words and refusal templates, which `cyfr`
+          # prints) name the installation CYFR and the assistant Aqua, and
+          # carry none of the concept words home, hub, cell, door or glass
+          # where a person reads them: a cluster, a sign-in method and a
+          # device say so. "node" and "member" are not gated: each is also
+          # ordinary English and technical vocabulary (Node.js, a tree's or a
+          # graph's nodes, Tailscale's and Erlang's nodes, a person who is a
+          # member), so their installation and cluster senses are the
+          # reviewer's to check. In Markdown and in the vector a `code span`
+          # (delimited by a run of backticks, closed by a run of the same
+          # length) is not prose: an identifier, event name, wire field or
+          # command is spelled as the code spells it (`door.*`, the canvas id
+          # `home`), so the check skips code spans. In the setup pages a
+          # backtick delimits a JavaScript template literal, whose text a
+          # person reads, so it is scanned with only its ${...} placeholders
+          # taken out; a refusal template is likewise read with its `{slot}`
+          # placeholders taken out, since a slot is a payload key. The other
+          # exceptions, exact, all of the word home:
           # - "Add to Home Screen": the phone's own wording for installing Prism.
           # - $HOME and ${HOME}: the environment variable.
           # - "home directory": the operating system's, a person's files.
-          # - `home`, backquoted: the shipped canvas's identifier
-          #   (tests/fixtures/layout.json), quoted as the code spells it; bare
-          #   prose "home" still fails.
-          # "Homebrew", UserHomeDir and home_dir are not the word: the letters
-          # around it make them other words.
+          # "Homebrew", UserHomeDir, home_dir and CYFR_CELL_COOKIE are not the
+          # words: the letters around each make it another word.
           python3 -I - <<'PY' || fail=1
           import json, re, subprocess, sys
-          word = re.compile(r"(?<![A-Za-z0-9_])home(?:s|'s)?(?![A-Za-z0-9_])", re.I)
-          stays = re.compile(r"Add to Home Screen|\$\{?HOME\b\}?|\b[Hh]ome director(?:y|ies)\b|`home`")
-          def found(where, text):
-              hits = [line for line in text.split("\n") if word.search(stays.sub("", line))]
-              for line in hits:
-                  print(f"::error::{where} says home: {line.strip()}")
-              return bool(hits)
+          def word(spelled):
+              return re.compile(r"(?<![A-Za-z0-9_])(?:" + spelled + r")(?![A-Za-z0-9_])", re.I)
+          code = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
+          placeholder = re.compile(r"\$\{[^}]*\}")
+          words = {
+              "home": (word(r"homes?|home's"),
+                       re.compile(r"Add to Home Screen|\$\{?HOME\b\}?|\b[Hh]ome director(?:y|ies)\b")),
+              "hub": (word(r"hubs?|hub's"), None),
+              "cell": (word(r"cells?|cell's"), None),
+              "door": (word(r"doors?|door's"), None),
+              "glass": (word(r"glass(?:es)?|glass's"), None),
+          }
+          def found(where, text, markdown=True):
+              bad = False
+              for line in text.split("\n"):
+                  prose = code.sub("", line) if markdown else placeholder.sub("", line)
+                  for name, (pattern, stays) in words.items():
+                      if pattern.search(stays.sub("", prose) if stays else prose):
+                          print(f"::error::{where} says {name}: {line.strip()}")
+                          bad = True
+              return bad
           files = ["README.md", "devices-guide.md", "identity-guide.md", "configuration-guide.md",
                    "integration-guide.md", "component-guide.md", "tincture-guide.md"]
           files += subprocess.run(["git", "ls-files", "apps/codex/internal/setup/assets"],
@@ -2139,20 +2164,15 @@ jobs:
               if b"\0" in data:
                   continue
               for n, line in enumerate(data.decode().split("\n"), 1):
-                  bad |= found(f"{path}:{n}", line)
-          def strings(value):
-              if isinstance(value, str):
-                  yield value
-              elif isinstance(value, dict):
-                  for v in value.values():
-                      yield from strings(v)
-              elif isinstance(value, list):
-                  for v in value:
-                      yield from strings(v)
+                  bad |= found(f"{path}:{n}", line, markdown=path.endswith(".md"))
           vector = json.load(open("tests/fixtures/access_modes.json"))
-          for section in ("words", "refusals"):
-              for text in strings(vector[section]):
-                  bad |= found(f"tests/fixtures/access_modes.json {section}", text)
+          for words_row in vector["words"]:
+              for sentence in words_row["sentences"]:
+                  bad |= found("tests/fixtures/access_modes.json words", sentence)
+          for refusal in vector["refusals"]:
+              for variant in refusal["variants"]:
+                  template = re.sub(r"\{[a-z_]+\}", "", variant["template"])
+                  bad |= found(f"tests/fixtures/access_modes.json refusals {refusal['code']}", template)
           sys.exit(1 if bad else 0)
           PY
           exit $fail
