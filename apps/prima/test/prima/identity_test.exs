@@ -401,6 +401,35 @@ defmodule Prima.IdentityTest do
       assert Encoding.home_host("https://alice.example:8443") == "alice.example"
     end
 
+    test "a home written another way is given its one spelling, and nothing else is a home" do
+      for {spelling, home} <- [
+            {"https://alice.example", "https://alice.example"},
+            {"HTTPS://Alice.EXAMPLE", "https://alice.example"},
+            {"https://alice.example/", "https://alice.example"},
+            {"https://alice.example:443", "https://alice.example"},
+            {"http://localhost:80", "http://localhost"},
+            {"http://localhost:443", "http://localhost:443"},
+            {"https://alice.example:8443/", "https://alice.example:8443"}
+          ] do
+        assert {spelling, {:ok, home}} == {spelling, Encoding.canonical_home(spelling)}
+        assert Encoding.home?(home), home
+      end
+
+      for value <- [
+            "https://alice.example/carry",
+            "https://user@alice.example",
+            "https://alice.example?x=1",
+            "https://alice.example#top",
+            "ftp://alice.example",
+            "alice.example",
+            "https://[::1]",
+            "https://alice.eKample",
+            nil
+          ] do
+        assert {value, :error} == {value, Encoding.canonical_home(value)}
+      end
+    end
+
     test "a directory URL is a home and an optional path with no trailing slash" do
       assert Encoding.directory_url?("https://directory.example")
       assert Encoding.directory_url?("https://directory.example/cyfr/v1")

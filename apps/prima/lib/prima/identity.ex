@@ -114,12 +114,29 @@ defmodule Prima.Identity.Encoding do
 
   @doc "Whether `value` names a home in its one accepted spelling."
   @spec home?(term()) :: boolean()
-  def home?(value), do: match?({:ok, _host}, parse_home(value))
+  def home?(value), do: match?({:ok, ^value, _host}, parse_home(value))
+
+  @doc """
+  The one accepted spelling of a home written another way: its scheme and
+  host lowercased (ASCII only), the scheme's default port and a trailing
+  `/` dropped. Anything that is not a home however it is spelled, such as
+  another scheme, a path, a user, a query or a fragment, is `:error`.
+
+  It is for an origin this side was configured with. A home on the wire
+  must already be in its spelling (`home?/1`).
+  """
+  @spec canonical_home(term()) :: {:ok, String.t()} | :error
+  def canonical_home(value) do
+    case parse_home(value) do
+      {:ok, home, _host} -> {:ok, home}
+      :error -> :error
+    end
+  end
 
   @doc "A home's host name. The home must be a valid spelling."
   @spec home_host(String.t()) :: String.t()
   def home_host(home) do
-    {:ok, host} = parse_home(home)
+    {:ok, ^home, host} = parse_home(home)
     host
   end
 
@@ -146,13 +163,16 @@ defmodule Prima.Identity.Encoding do
 
   defp bare?(uri), do: is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment)
 
+  # A home's spelling and host, from any spelling of it. `URI.new/1`
+  # lowercases the scheme; the host is lowercased in ASCII alone, so no
+  # Unicode case mapping (the Kelvin sign to `k`) can make a host.
   defp parse_home(value) when is_binary(value) and byte_size(value) <= 300 do
     with {:ok, %URI{scheme: scheme, host: host, port: port} = uri}
          when scheme in ["http", "https"] and is_binary(host) <- URI.new(value),
          true <- bare?(uri),
-         true <- uri.path in [nil, ""] and Regex.match?(@host, host),
-         ^value <- origin(scheme, host, port) do
-      {:ok, host}
+         host = String.downcase(host, :ascii),
+         true <- uri.path in [nil, "", "/"] and Regex.match?(@host, host) do
+      {:ok, origin(scheme, host, port), host}
     else
       _ -> :error
     end

@@ -49,6 +49,7 @@ defmodule Emissary.Web.DirectoryController do
   | 422 | `invalid` | `reason`, and `field` when one is named |
   | 422 | `unverified` | `reason`, why the chain refuses the entry |
   | 422 | `wrong_identifier` | the request names another identifier |
+  | 422 | `wrong_directory` | the genesis names another directory than this node's origin |
   | 429 | `rate_limited` | `retry_after` seconds, and the header |
   | 500 | `corrupt` | the stored log does not verify |
   | 503 | `capacity` | `exhausted`: `identities` or `log_bytes` with `retry-after: 60`, or `rotations` (the identifier's 100 a day) with the seconds left in its window |
@@ -194,6 +195,9 @@ defmodule Emissary.Web.DirectoryController do
 
   defp refusal(:wrong_identifier),
     do: {422, :invalid_argument, %{"error" => "wrong_identifier"}, []}
+
+  defp refusal(:wrong_directory),
+    do: {422, :invalid_argument, %{"error" => "wrong_directory"}, []}
 
   defp refusal({:rate_limited, seconds}),
     do:
