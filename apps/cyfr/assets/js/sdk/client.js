@@ -25,8 +25,14 @@ import {
 const HANDSHAKE_TIMEOUT_MS = 30000
 const MAX_QUEUED_VERBS = 32
 
-// No failure: browsers report these when a ResizeObserver callback resizes what it observes.
-const BENIGN_ERROR = /ResizeObserver loop (completed with undelivered notifications|limit exceeded)/
+// No failure: the two messages, whole, that browsers report when a
+// ResizeObserver callback resizes what it observes (Chromium, Firefox and
+// WebKit today, with its period; Chromium before, without one). An error
+// whose message merely contains either is the page's own.
+const BENIGN_ERRORS = Object.freeze([
+  "ResizeObserver loop completed with undelivered notifications.",
+  "ResizeObserver loop limit exceeded"
+])
 
 // The value a page hears, through `on`, of what the shell told its canvas.
 const heard = (verb, args) =>
@@ -198,7 +204,7 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   // `error` and `unhandledrejection`). Nothing of it leaves but its stage.
   function onPageError(event) {
     if (failure !== null) return
-    if (event && typeof event.message === "string" && BENIGN_ERROR.test(event.message)) return
+    if (event && BENIGN_ERRORS.includes(event.message)) return
     failure = readyCalled ? "runtime" : "load"
     verb("failed", {stage: failure})
   }

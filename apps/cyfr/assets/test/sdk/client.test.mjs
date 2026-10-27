@@ -798,6 +798,25 @@ describe("a canvas reports its own failure, once", () => {
     assert.deepEqual(heard.at(-1), failed("runtime"))
   })
 
+  test("an error whose message is not one of those two, whole, is a failure, though it contains one", async () => {
+    for (const message of [
+      "Uncaught Error: Saving failed after ResizeObserver loop limit exceeded",
+      "Uncaught ResizeObserver loop limit exceeded",
+      "ResizeObserver loop limit exceeded.",
+      "ResizeObserver loop completed with undelivered notifications",
+      "ResizeObserver loop completed with undelivered notifications. Saving failed"
+    ]) {
+      const {open, heard, onPageError, api} = await canvasClient()
+      open()
+      api.ready()
+      await eventually(() => heard.length === 1)
+
+      onPageError({type: "error", message, error: new Error("Saving failed")})
+      await eventually(() => heard.length === 2)
+      assert.deepEqual(heard.at(-1), failed("runtime"), message)
+    }
+  })
+
   test("before ready() too, a ResizeObserver loop report is no failure, and the canvas still becomes ready", async () => {
     const {open, heard, onPageError, api} = await canvasClient()
     open()

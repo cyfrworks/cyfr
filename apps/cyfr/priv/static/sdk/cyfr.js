@@ -230,7 +230,10 @@
   // js/sdk/client.js
   var HANDSHAKE_TIMEOUT_MS = 3e4;
   var MAX_QUEUED_VERBS = 32;
-  var BENIGN_ERROR = /ResizeObserver loop (completed with undelivered notifications|limit exceeded)/;
+  var BENIGN_ERRORS = Object.freeze([
+    "ResizeObserver loop completed with undelivered notifications.",
+    "ResizeObserver loop limit exceeded"
+  ]);
   var heard = (verb, args) => verb === "covered" ? args.rects : verb === "installed" ? args.tinctures : verb === "posture" ? args.posture : args.state;
   var CyfrError = class extends Error {
     constructor(message, code, stage) {
@@ -326,7 +329,7 @@
     }
     function onPageError(event) {
       if (failure !== null) return;
-      if (event && typeof event.message === "string" && BENIGN_ERROR.test(event.message)) return;
+      if (event && BENIGN_ERRORS.includes(event.message)) return;
       failure = readyCalled ? "runtime" : "load";
       verb("failed", { stage: failure });
     }
