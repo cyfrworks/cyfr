@@ -7,7 +7,9 @@ defmodule Sanctum.Test.RegistryStub do
   per connection, answering `handler.(request)` with `{status, body}`,
   `:hang` (answer nothing) or `:close` (close without answering). Every
   request is told to the test that started it as
-  `{:registry_request, %{method:, path:, body:}}`.
+  `{:registry_request, %{method:, path:, body:, headers:}}`, the headers
+  as their raw lines. Each stub adds its loopback address to the
+  operator's private egress targets while it serves.
 
   `start!/1` points both applications' copies of the registry
   (`:sanctum, :registry_url` and `:cyfr, :registry_url`) at it, so the
@@ -61,6 +63,7 @@ defmodule Sanctum.Test.RegistryStub do
   """
   def serve!(handler) when is_function(handler, 1) do
     observer = self()
+    loopback!()
 
     {:ok, listen} =
       :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false, reuseaddr: true])
@@ -75,6 +78,30 @@ defmodule Sanctum.Test.RegistryStub do
     end)
 
     %{port: port}
+  end
+
+  # The stub's own permission to be reached: its loopback address added to
+  # the operator's private egress targets, restored on exit, registered
+  # before the change so a test killed at its timeout restores it too. An
+  # application's suite that loads no umbrella configuration (the Sanctum
+  # island) has no other.
+  defp loopback! do
+    previous = Application.fetch_env(:sanctum, :private_egress_targets)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:sanctum, :private_egress_targets, value)
+        :error -> Application.delete_env(:sanctum, :private_egress_targets)
+      end
+    end)
+
+    targets =
+      case previous do
+        {:ok, list} when is_list(list) -> list
+        _none -> []
+      end
+
+    Application.put_env(:sanctum, :private_egress_targets, Enum.uniq(targets ++ [@host]))
   end
 
   defp accept(listen, handler, observer) do
@@ -130,7 +157,7 @@ defmodule Sanctum.Test.RegistryStub do
           end)
 
         with {:ok, body} <- body(socket, rest, length),
-             do: {:ok, %{method: method, path: path, body: body}}
+             do: {:ok, %{method: method, path: path, body: body, headers: headers}}
 
       [_partial] ->
         with {:ok, data} <- :gen_tcp.recv(socket, 0, 5_000), do: read(socket, acc <> data)

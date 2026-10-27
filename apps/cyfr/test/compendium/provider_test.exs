@@ -826,6 +826,120 @@ defmodule Compendium.ProviderTest do
       assert err_msg(msg) =~ "Component not found locally"
     end
 
+    @tag :capture_log
+    test "a 401 removes the token that request carried, never one a sync stored after it",
+         %{ctx: ctx} do
+      ctx = claimed_pusher(ctx)
+      {:ok, count} = Agent.start_link(fn -> 0 end)
+
+      # The first request carries the token stored before the push; a sync
+      # replaces it while that request runs, and the next request, carrying
+      # the replacement, is refused.
+      %{port: port} =
+        Sanctum.Test.RegistryStub.serve!(fn _request ->
+          n = Agent.get_and_update(count, &{&1, &1 + 1})
+
+          if n == 0 do
+            :ok =
+              Registry.CredentialStore.put_push_token(
+                ctx,
+                Compendium.RegistryHost.canonical_host(),
+                "testns",
+                "cyfr_pt_after_sync",
+                "personal"
+              )
+
+            {200, ""}
+          else
+            {401, ""}
+          end
+        end)
+
+      original = Application.get_env(:cyfr, :oci_registry_url)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :oci_registry_url, original),
+          else: Application.delete_env(:cyfr, :oci_registry_url)
+      end)
+
+      Application.put_env(:cyfr, :oci_registry_url, "127.0.0.1:#{port}")
+      registry = Compendium.RegistryHost.canonical_host()
+
+      :ok =
+        Registry.CredentialStore.put_push_token(
+          ctx,
+          registry,
+          "testns",
+          "cyfr_pt_before_sync",
+          "personal"
+        )
+
+      assert {:error, :registry_token_missing} =
+               Compendium.OCI.Client.push(ctx, "r:local.pushed-tool:1.0.0", registry)
+
+      assert_received {:registry_request, %{headers: first}}
+      assert_received {:registry_request, %{headers: second}}
+      assert Enum.any?(first, &(&1 =~ "cyfr_pt_before_sync"))
+      assert Enum.any?(second, &(&1 =~ "cyfr_pt_after_sync"))
+
+      # The refused token, the replacement, is the one removed.
+      assert {:error, :not_found} = Registry.CredentialStore.get(ctx, registry, "testns")
+    end
+
+    @tag :capture_log
+    test "a 401 to a token a sync replaced after it was sent keeps the replacement",
+         %{ctx: ctx} do
+      ctx = claimed_pusher(ctx)
+      {:ok, count} = Agent.start_link(fn -> 0 end)
+
+      # Every request is refused, and while each runs a sync stores a newer
+      # token than the one that request carried: the token stored last was
+      # carried by no refused request.
+      %{port: port} =
+        Sanctum.Test.RegistryStub.serve!(fn _request ->
+          n = Agent.get_and_update(count, &{&1, &1 + 1})
+
+          :ok =
+            Registry.CredentialStore.put_push_token(
+              ctx,
+              Compendium.RegistryHost.canonical_host(),
+              "testns",
+              "cyfr_pt_replacement_#{n}",
+              "personal"
+            )
+
+          {401, ""}
+        end)
+
+      original = Application.get_env(:cyfr, :oci_registry_url)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:cyfr, :oci_registry_url, original),
+          else: Application.delete_env(:cyfr, :oci_registry_url)
+      end)
+
+      Application.put_env(:cyfr, :oci_registry_url, "127.0.0.1:#{port}")
+      registry = Compendium.RegistryHost.canonical_host()
+
+      :ok =
+        Registry.CredentialStore.put_push_token(
+          ctx,
+          registry,
+          "testns",
+          "cyfr_pt_sent",
+          "personal"
+        )
+
+      assert {:error, :registry_token_missing} =
+               Compendium.OCI.Client.push(ctx, "r:local.pushed-tool:1.0.0", registry)
+
+      last = Agent.get(count, & &1) - 1
+      assert {:ok, %{token: stored}} = Registry.CredentialStore.get(ctx, registry, "testns")
+      assert stored == "cyfr_pt_replacement_#{last}"
+    end
+
     test "rejects a push to a non-cyfr.run registry", %{ctx: ctx} do
       {:error, msg} =
         Provider.handle("component", ctx, %{

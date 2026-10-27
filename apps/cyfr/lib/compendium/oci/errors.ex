@@ -22,15 +22,21 @@ defmodule Compendium.OCI.Errors do
           | :taken_down
           | :registry_host_mismatch
 
+  @typedoc """
+  `credential` is set on a 401 the OCI transport answers: the key of the
+  credential that request carried (`Compendium.OCI.Auth.credential_key/1`
+  of its authorization header, or `"anonymous"`), never the credential.
+  """
   @type t :: %__MODULE__{
           reason: error_reason(),
           message: String.t(),
           registry: String.t() | nil,
           status: integer() | nil,
-          detail: term()
+          detail: term(),
+          credential: String.t() | nil
         }
 
-  defstruct [:reason, :message, :registry, :status, :detail]
+  defstruct [:reason, :message, :registry, :status, :detail, :credential]
 
   @doc "Build an error from an HTTP response status and body."
   @spec from_response(integer(), binary(), String.t()) :: t()

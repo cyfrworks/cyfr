@@ -191,6 +191,32 @@ defmodule Arca.Users do
   def touch_identity(%Prima.Actor{}, _key, _now), do: {:error, :cross_tenant}
 
   @doc """
+  Record `namespace`, the registry's personal namespace for the person
+  `user_id` names, as a write only the control plane's holder makes
+  (`Arca.Repo.owned/2`): it follows a registry's answer, and a member
+  whose slot was taken while the registry answered writes nothing
+  (`{:error, :not_owner}`).
+  """
+  @spec set_namespace(Prima.Actor.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, :not_found | :not_owner} | refusal() | write_refusal()
+  def set_namespace(%Prima.Actor{scope: :platform}, user_id, namespace)
+      when is_binary(user_id) and user_id != "" and is_binary(namespace) do
+    Arca.Repo.owned("Arca.Users.set_namespace", fn ->
+      with {:ok, user} <- found(Arca.Repo.get(User, user_id)) do
+        user
+        |> User.update_changeset(%{namespace: namespace, updated_at: DateTime.utc_now()})
+        |> Arca.Repo.update()
+        |> settled()
+      end
+    end)
+  end
+
+  def set_namespace(%Prima.Actor{scope: :platform}, _user_id, _namespace),
+    do: {:error, :not_found}
+
+  def set_namespace(%Prima.Actor{}, _user_id, _namespace), do: {:error, :cross_tenant}
+
+  @doc """
   Write `attrs` over the person `user_id` names, as the row reads now.
   `updated_at` is stamped here. The standing columns (`status`,
   `denied_at`, `security_generation`) are refused as read-only:

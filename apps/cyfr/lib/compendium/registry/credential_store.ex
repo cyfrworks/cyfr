@@ -51,6 +51,28 @@ defmodule Compendium.Registry.CredentialStore do
   end
 
   @doc """
+  The label a token-minting request carries (`tokens.mint`,
+  `publisher.verify`), derived from `device_label/0` to the registry
+  protocol's grammar (`Prima.RegistryRequest`: 1 to 64 printable ASCII
+  characters): every printable ASCII character of the configured label
+  kept, in order, and the rest dropped, then cut to 64. A label with none
+  left falls back to the machine's hostname, derived the same way, and
+  then to `cyfr`. The setting itself keeps what the operator wrote; only
+  the wire sees this form.
+  """
+  @spec wire_label() :: String.t()
+  def wire_label do
+    {:ok, host} = :inet.gethostname()
+
+    Enum.find_value([device_label(), to_string(host)], "cyfr", fn label ->
+      case label |> String.replace(~r/[^\x20-\x7E]/u, "") |> String.slice(0, 64) do
+        "" -> nil
+        printable -> printable
+      end
+    end)
+  end
+
+  @doc """
   Store a push token for the caller under this device's label,
   best-effort.
 
@@ -61,7 +83,7 @@ defmodule Compendium.Registry.CredentialStore do
   that is not a non-empty string, yields `:skipped`.
   """
   @spec put_push_token(Context.t(), String.t(), term(), term(), String.t()) ::
-          :ok | :skipped | {:error, :unavailable | :forbidden}
+          :ok | :skipped | {:error, :unavailable | :forbidden | :not_owner}
   def put_push_token(%Context{} = ctx, registry, slug, token, role) do
     case RegistryCredentials.put_push_token(ctx, registry, slug, token, role,
            label: device_label()

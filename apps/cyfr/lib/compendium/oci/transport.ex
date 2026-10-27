@@ -131,10 +131,7 @@ defmodule Compendium.OCI.Transport do
   def credential_key(ctx, %Reference{registry: registry, repository: repository}) do
     with {:ok, headers} <-
            Auth.auth_headers(registry, repository, namespace_from_repository(repository), ctx) do
-      case List.keyfind(headers, "authorization", 0) do
-        {_, value} -> {:ok, Prima.Digest.sha256_hex(value)}
-        nil -> {:ok, "anonymous"}
-      end
+      {:ok, Auth.credential_key(headers)}
     end
   end
 
@@ -203,7 +200,14 @@ defmodule Compendium.OCI.Transport do
               "push token missing or revoked; caller should prompt re-login"
           )
 
-          {:error, Errors.from_response(401, resp_body, registry)}
+          # The credential this request carried, as its key: a push compares
+          # it with the one stored before removing it, since another request
+          # may have carried a token a sync stored meanwhile.
+          {:error,
+           %{
+             Errors.from_response(401, resp_body, registry)
+             | credential: Auth.credential_key(auth_headers)
+           }}
 
         {:ok, 429, resp_headers, _resp_body} ->
           retry_or_give_up(

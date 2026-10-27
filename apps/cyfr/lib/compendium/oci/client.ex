@@ -183,10 +183,10 @@ defmodule Compendium.OCI.Client do
     with :ok <- Compendium.RegistryHost.validate_host(registry),
          {:ok, cref} <- Prima.ComponentRef.parse(component_ref_str),
          {:ok, publisher} <- resolve_push_publisher(cref, registry, ctx),
-         {:ok, token} <- push_token(ctx, registry, publisher) do
+         :ok <- push_token(ctx, registry, publisher) do
       ctx
       |> upload(cref, publisher, component_ref_str, registry)
-      |> refused_token(ctx, registry, publisher, token)
+      |> refused_token(ctx, registry, publisher)
     end
     |> pushed(component_ref_str, registry)
   end
@@ -195,7 +195,7 @@ defmodule Compendium.OCI.Client do
   # is refused before anything is sent.
   defp push_token(ctx, registry, publisher) do
     case Compendium.OCI.Auth.fetch_credential(registry, publisher, ctx) do
-      {:ok, %{token: token}} -> {:ok, token}
+      {:ok, %{token: _token}} -> :ok
       :anonymous -> {:error, :registry_token_missing}
       {:error, :unavailable} -> {:error, {:unavailable, "Registry credentials"}}
       {:error, corrupt} -> {:error, corrupt}
@@ -203,14 +203,23 @@ defmodule Compendium.OCI.Client do
   end
 
   # A token the registry no longer accepts (a ban or a recovery retired
-  # it) is removed, unless a sync stored another meanwhile, and the push is
-  # refused as missing its token.
-  defp refused_token({:error, %Errors{status: 401}}, ctx, registry, publisher, token) do
-    _ = Sanctum.RegistryCredentials.delete_push_token(ctx, registry, publisher, token)
+  # it) is removed and the push refused as missing its token. The token
+  # removed is the one the refused request carried: each request reads the
+  # stored token afresh, so the stored one is removed only while its key is
+  # that request's (`Compendium.OCI.Auth.credential_key/1`), and only while
+  # the row still holds it (`Sanctum.RegistryCredentials.delete_push_token/4`).
+  # A token a sync stored after that request stays.
+  defp refused_token({:error, %Errors{status: 401, credential: sent}}, ctx, registry, publisher) do
+    with {:ok, %{token: stored}} <-
+           Compendium.OCI.Auth.fetch_credential(registry, publisher, ctx),
+         true <- Compendium.OCI.Auth.push_token_key(stored) == sent do
+      _ = Sanctum.RegistryCredentials.delete_push_token(ctx, registry, publisher, stored)
+    end
+
     {:error, :registry_token_missing}
   end
 
-  defp refused_token(result, _ctx, _registry, _publisher, _token), do: result
+  defp refused_token(result, _ctx, _registry, _publisher), do: result
 
   defp upload(ctx, cref, publisher, component_ref_str, registry) do
     push_cref = %{cref | namespace: publisher}

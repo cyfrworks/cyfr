@@ -227,15 +227,8 @@ defmodule PrismWeb.RegistryLive do
 
   defp sync(socket) do
     case SystemLayer.call(socket, :sync, "registry/sync", %{}) do
-      {:ok, %{unsynced: []}, socket} ->
+      {:ok, _synced, socket} ->
         socket |> put_flash(:info, "Your push tokens are synced.") |> load_registry()
-
-      {:ok, %{unsynced: slugs}, socket} ->
-        put_flash(
-          socket,
-          :error,
-          "Push tokens for #{Enum.join(slugs, ", ")} could not be stored; sync again."
-        )
 
       {:asked, socket} ->
         put_flash(socket, :info, "Confirm the sync to mint your push tokens.")

@@ -439,6 +439,7 @@ defmodule Compendium.Providers.Registry do
       when is_binary(user_id) do
     with :ok <- valid_handle(handle),
          {:ok, answer} <- Client.signed(user_id, "handle.claim", %{"handle" => handle}),
+         :ok <- claimed(answer, handle),
          {:ok, _fresh} <- record_claim(ctx, answer) do
       {:ok, answer}
     else
@@ -600,7 +601,13 @@ defmodule Compendium.Providers.Registry do
         {:ok, fresh}
 
       {:error, reason}
-      when reason in [:unauthenticated, :unavailable, :identity_stale, :malformed_answer] ->
+      when reason in [
+             :unauthenticated,
+             :unavailable,
+             :identity_stale,
+             :malformed_answer,
+             :not_owner
+           ] ->
         {:error, reason}
 
       {:error, :namespace_owned_by_another_identity} ->
@@ -705,28 +712,22 @@ defmodule Compendium.Providers.Registry do
   # The verification mints the founding member's push token, so it is
   # confirmed fresh before the registry is asked, and the token it answers
   # is stored. A repeat of a verification the registry already recorded
-  # answers it verified and mints nothing; `sync` then mints the token.
+  # answers it verified with no token and mints nothing; `sync` then mints
+  # the token.
   defp handle_gated(%Context{user_id: user_id} = ctx, %{
          "action" => "verify_publisher",
          "slug" => slug
        })
        when is_binary(user_id) do
-    label = CredentialStore.device_label()
-    body = %{"slug" => slug, "label" => label}
+    body = %{"slug" => slug, "label" => CredentialStore.wire_label()}
 
     with {:ok, _host} <- Sanctum.registry_host(),
          :ok <- confirm(ctx, "registry.verify_publisher", body),
          {:ok, answer} <- Client.signed(user_id, "publisher.verify", body),
-         {:ok, fresh} <- still_standing(ctx) do
-      token = answer["token"]
-      unsynced = store_tokens(fresh, [{slug, token, "admin"}])
-
-      {:ok,
-       %{
-         slug: slug,
-         token_stored: is_binary(token) and token != "" and unsynced == [],
-         unsynced: unsynced
-       }}
+         {:ok, token} <- verified(answer, slug),
+         {:ok, fresh} <- still_standing(ctx),
+         :ok <- store_tokens(fresh, List.wrap(token && {slug, token, "admin"})) do
+      {:ok, %{slug: slug, token_stored: token != nil}}
     else
       {:error, reason} -> refuse(reason)
     end
@@ -734,35 +735,23 @@ defmodule Compendium.Providers.Registry do
 
   # Every push token the person's namespaces publish with, minted again
   # (`tokens.mint`) under a fresh confirmation and stored, and the personal
-  # namespace the registry names recorded. The answer names each namespace
-  # and never a token; `unsynced` lists those whose token could not be
-  # stored.
+  # namespace the registry names recorded. The answer is read whole before
+  # anything is written, and names each namespace and never a token.
   defp handle_gated(%Context{user_id: user_id} = ctx, %{"action" => "sync"})
        when is_binary(user_id) do
-    label = CredentialStore.device_label()
+    label = CredentialStore.wire_label()
 
     with {:ok, _host} <- Sanctum.registry_host(),
          :ok <- confirm(ctx, "registry.sync", %{"label" => label}),
          {:ok, answer} <- Client.signed(user_id, "tokens.mint", %{"label" => label}),
+         {:ok, %{personal: personal, memberships: memberships}} <- minted(answer),
          {:ok, fresh} <- still_standing(ctx),
-         {:ok, personal} <- record_personal(user_id, answer["personal_namespace"]) do
-      memberships = memberships(answer["memberships"])
-
-      personal_entry =
-        if personal, do: [{personal["slug"], personal["token"], "personal"}], else: []
-
-      unsynced =
-        store_tokens(
-          fresh,
-          personal_entry ++
-            Enum.map(memberships, &{&1["slug"], &1["token"], &1["role"] || "member"})
-        )
-
+         :ok <- record_personal(user_id, personal),
+         :ok <- store_tokens(fresh, List.wrap(personal) ++ memberships) do
       {:ok,
        %{
-         personal_namespace: personal && personal["slug"],
-         memberships: Enum.map(memberships, &%{slug: &1["slug"], role: &1["role"]}),
-         unsynced: unsynced
+         personal_namespace: personal && elem(personal, 0),
+         memberships: for({slug, _token, role} <- memberships, do: %{slug: slug, role: role})
        }}
     else
       {:error, reason} -> refuse(reason)
@@ -882,20 +871,80 @@ defmodule Compendium.Providers.Registry do
     end
   end
 
+  # The answers that write, each read whole against its shape before
+  # anything is written: a key of the wrong type, a token that is no
+  # non-empty text or a slug outside its grammar is `:malformed_answer`,
+  # and nothing is written. An absent key is the one spelling of none; a
+  # null is malformed.
+
+  # `tokens.mint`: `memberships` a list, `personal_namespace` absent when
+  # there is none, each entry a namespace, a role and its token.
+  defp minted(%{"memberships" => memberships} = answer) when is_list(memberships) do
+    with {:ok, personal} <- minted_personal(answer),
+         {:ok, memberships} <- minted_memberships(memberships) do
+      {:ok, %{personal: personal, memberships: memberships}}
+    end
+  end
+
+  defp minted(_answer), do: {:error, :malformed_answer}
+
+  defp minted_personal(%{"personal_namespace" => %{"slug" => slug, "token" => token}})
+       when is_binary(slug) do
+    if Prima.ComponentRef.valid_personal_slug?(slug) and token?(token),
+      do: {:ok, {slug, token, "personal"}},
+      else: {:error, :malformed_answer}
+  end
+
+  defp minted_personal(%{"personal_namespace" => _malformed}), do: {:error, :malformed_answer}
+  defp minted_personal(_none), do: {:ok, nil}
+
+  defp minted_memberships(memberships) do
+    Enum.reduce_while(memberships, {:ok, []}, fn
+      %{"slug" => slug, "role" => role, "token" => token}, {:ok, acc}
+      when is_binary(slug) and is_binary(role) and role != "" ->
+        if Prima.ComponentRef.validate_namespace(slug) == :ok and token?(token),
+          do: {:cont, {:ok, acc ++ [{slug, token, role}]}},
+          else: {:halt, {:error, :malformed_answer}}
+
+      _malformed, _acc ->
+        {:halt, {:error, :malformed_answer}}
+    end)
+  end
+
+  # `handle.claim`: the handle asked for and an identifier, which
+  # `Sanctum.SignIn.record_claim/2` holds to the caller's own.
+  defp claimed(%{"handle" => handle, "identifier" => identifier}, handle)
+       when is_binary(identifier),
+       do: :ok
+
+  defp claimed(_answer, _handle), do: {:error, :malformed_answer}
+
+  # `publisher.verify`: the namespace asked for, and the founding member's
+  # token only when one was minted.
+  defp verified(%{"slug" => slug} = answer, slug) do
+    case Map.fetch(answer, "token") do
+      :error -> {:ok, nil}
+      {:ok, token} -> if token?(token), do: {:ok, token}, else: {:error, :malformed_answer}
+    end
+  end
+
+  defp verified(_answer, _slug), do: {:error, :malformed_answer}
+
+  defp token?(token), do: is_binary(token) and token != ""
+
   # The personal namespace a mint answers, recorded on the person's row
   # (`Sanctum.SignIn.record_namespace/2`) before its token is stored.
-  defp record_personal(_user_id, nil), do: {:ok, nil}
+  defp record_personal(_user_id, nil), do: :ok
 
-  defp record_personal(user_id, %{"slug" => slug} = personal) when is_binary(slug) do
+  defp record_personal(user_id, {slug, _token, _role}) do
     case Sanctum.SignIn.record_namespace(user_id, slug) do
-      {:ok, _user} -> {:ok, personal}
+      {:ok, _user} -> :ok
       {:error, :namespace_owned_by_another_identity} -> record_claim_conflict()
+      {:error, :not_owner} -> {:error, :not_owner}
       {:error, :invalid_slug} -> {:error, :malformed_answer}
       {:error, _unanswered} -> {:error, {:unavailable, "Storage"}}
     end
   end
-
-  defp record_personal(_user_id, _malformed), do: {:error, :malformed_answer}
 
   defp record_claim_conflict do
     {:error,
@@ -904,18 +953,20 @@ defmodule Compendium.Providers.Registry do
         "holds — ask the operator."}}
   end
 
-  defp memberships(list) when is_list(list),
-    do: Enum.filter(list, &match?(%{"slug" => slug} when is_binary(slug), &1))
-
-  defp memberships(_none), do: []
-
-  # Each `{slug, token, role}` stored for the caller; answers the slugs
-  # whose token could not be stored. An entry with no token stores nothing.
+  # Each `{slug, token, role}` stored for the caller, each a holder's write
+  # (`Arca.RegistryTokenStorage.put/1`). A member whose slot was taken
+  # stores nothing more and refuses `:not_owner`; a store that cannot take
+  # a token refuses as unavailable, the tokens before it kept, and a sync
+  # mints them again.
   defp store_tokens(ctx, entries) do
     registry = Compendium.RegistryHost.canonical_host()
 
-    for {slug, token, role} <- entries,
-        match?({:error, _}, CredentialStore.put_push_token(ctx, registry, slug, token, role)),
-        do: slug
+    Enum.reduce_while(entries, :ok, fn {slug, token, role}, :ok ->
+      case CredentialStore.put_push_token(ctx, registry, slug, token, role) do
+        :ok -> {:cont, :ok}
+        {:error, :not_owner} -> {:halt, {:error, :not_owner}}
+        {:error, _unstored} -> {:halt, {:error, {:unavailable, "Registry credentials"}}}
+      end
+    end)
   end
 end

@@ -310,13 +310,15 @@ defmodule Sanctum.Tenancy.Users do
   @doc """
   Record the person's cyfr.run namespace once it is known. This row is what
   every request reads for it (`Sanctum.Namespace`), so the write drops the
-  cached slug.
+  cached slug. It follows a registry's answer, so it is the holder's write
+  alone (`Arca.Users.set_namespace/3`): a member whose slot was taken
+  meanwhile is refused `:not_owner` and records nothing.
   """
   @spec set_namespace(user(), String.t()) :: {:ok, user()} | {:error, term()}
   def set_namespace(%{namespace: ns} = user, ns), do: {:ok, user}
 
-  def set_namespace(%{id: _} = user, namespace) when is_binary(namespace) do
-    with {:ok, updated} <- update(user, %{namespace: namespace}) do
+  def set_namespace(%{id: user_id}, namespace) when is_binary(namespace) do
+    with {:ok, updated} <- Arca.Users.set_namespace(server(), user_id, namespace) do
       Sanctum.Namespace.invalidate(updated.id)
       {:ok, updated}
     end

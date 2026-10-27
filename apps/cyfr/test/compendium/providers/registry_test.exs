@@ -565,8 +565,7 @@ defmodule Compendium.Providers.RegistryTest do
 
       assert answer == %{
                personal_namespace: "mint-person",
-               memberships: [%{slug: "acme.com", role: "admin"}],
-               unsynced: []
+               memberships: [%{slug: "acme.com", role: "admin"}]
              }
 
       refute inspect(answer) =~ "cyfr_pt_"
@@ -613,7 +612,7 @@ defmodule Compendium.Providers.RegistryTest do
         [{200, RegistryStub.answer(%{"slug" => "acme.com", "token" => "cyfr_pt_founder"})}]
       end)
 
-      assert {:ok, %{slug: "acme.com", token_stored: true, unsynced: []} = answer} =
+      assert {:ok, %{slug: "acme.com", token_stored: true} = answer} =
                Sanctum.TestContext.confirming(ctx, &RegistryProvider.handle(&1, args))
 
       refute inspect(answer) =~ "cyfr_pt_"
@@ -642,6 +641,216 @@ defmodule Compendium.Providers.RegistryTest do
                  "action" => "verify_publisher",
                  "slug" => "acme.com"
                })
+    end
+  end
+
+  # What a registry answer may write, and when: only an answer of the
+  # operation's shape, only by the member that still holds its slot, and
+  # with a label the protocol takes, whatever the operator configured.
+  describe "what an answer writes" do
+    # This member's slot, taken as the control plane's claimant takes it;
+    # the claim switch and the slot's terms restored on exit, registered
+    # before either changes.
+    defp hold_slot do
+      keys = for k <- [:standing, :generation, :slot], do: {Arca.ControlPlane, k}
+      saved = for k <- keys, do: {k, :persistent_term.get(k, :absent)}
+      claimed = Application.fetch_env(:arca, :control_plane_claim_enabled)
+
+      on_exit(fn ->
+        for {k, v} <- saved do
+          if v == :absent, do: :persistent_term.erase(k), else: :persistent_term.put(k, v)
+        end
+
+        case claimed do
+          {:ok, v} -> Application.put_env(:arca, :control_plane_claim_enabled, v)
+          :error -> Application.delete_env(:arca, :control_plane_claim_enabled)
+        end
+      end)
+
+      Application.put_env(:arca, :control_plane_claim_enabled, true)
+      node = "registry-#{System.unique_integer([:positive])}"
+      {:ok, slot} = Arca.ControlPlane.take(node, node <> "#boot", 60_000)
+      slot
+    end
+
+    # A successor takes the slot while the registry answers.
+    defp taken_over(slot) do
+      {1, _} =
+        Arca.Repo.update_all(
+          from(l in Arca.Schemas.CellLease, where: l.node == ^slot.node),
+          set: [owner: "successor", generation: slot.generation + 1]
+        )
+
+      :ok
+    end
+
+    test "a member whose slot is taken while the registry answers a claim records nothing" do
+      %{ctx: ctx, state: state, slug: slug} = signed_in_person()
+      slot = hold_slot()
+
+      registry(state, fn _request ->
+        taken_over(slot)
+        claimed(slug, state)
+      end)
+
+      assert {:error, :not_owner} = claim(ctx, slug)
+      assert {:error, :not_owner} = Arca.Repo.owned("positive control", fn -> {:ok, :ran} end)
+      assert namespace(ctx) == nil
+    end
+
+    test "a member whose slot is taken while the registry mints stores nothing" do
+      %{ctx: ctx, state: state} = signed_in_person()
+      slot = hold_slot()
+
+      registry(state, fn _request ->
+        taken_over(slot)
+
+        {200,
+         RegistryStub.answer(%{
+           "personal_namespace" => %{"slug" => "stale-owner", "token" => "cyfr_pt_stale"},
+           "memberships" => [
+             %{"slug" => "acme.com", "role" => "admin", "token" => "cyfr_pt_stale_acme"}
+           ]
+         })}
+      end)
+
+      assert {:error, :not_owner} =
+               Sanctum.TestContext.confirming(
+                 ctx,
+                 &RegistryProvider.handle(&1, %{"action" => "sync"})
+               )
+
+      assert namespace(ctx) == nil
+      assert {:error, :not_found} = push_token(ctx, "stale-owner")
+      assert {:error, :not_found} = push_token(ctx, "acme.com")
+    end
+
+    test "a member whose slot is taken while the registry verifies stores no founding token" do
+      %{ctx: ctx, state: state} = signed_in_person()
+      slot = hold_slot()
+
+      registry(state, fn _request ->
+        taken_over(slot)
+        {200, RegistryStub.answer(%{"slug" => "acme.com", "token" => "cyfr_pt_founder"})}
+      end)
+
+      assert {:error, :not_owner} =
+               Sanctum.TestContext.confirming(
+                 ctx,
+                 &RegistryProvider.handle(&1, %{
+                   "action" => "verify_publisher",
+                   "slug" => "acme.com"
+                 })
+               )
+
+      assert {:error, :not_found} = push_token(ctx, "acme.com")
+    end
+
+    test "a mint answer outside its shape writes nothing" do
+      %{ctx: ctx, state: state} = signed_in_person()
+      {:ok, answers} = Agent.start_link(fn -> [] end)
+      registry(state, fn _request -> Agent.get(answers, & &1) end)
+
+      for body <- [
+            ~s({"personal_namespace":{"slug":"mint-null","token":null},"memberships":[]}),
+            ~s({"personal_namespace":{"token":"cyfr_pt_x"},"memberships":[]}),
+            ~s({"personal_namespace":null,"memberships":[]}),
+            ~s({"personal_namespace":{"slug":"mint-ok","token":"cyfr_pt_ok"},"memberships":["acme.com"]}),
+            ~s({"personal_namespace":{"slug":"mint-ok","token":"cyfr_pt_ok"},"memberships":[{"slug":"acme.com","role":"admin","token":""}]}),
+            ~s({"personal_namespace":{"slug":"mint-ok","token":"cyfr_pt_ok"}})
+          ] do
+        Agent.update(answers, fn _ -> {200, body} end)
+
+        assert {:error, :malformed_answer} =
+                 Sanctum.TestContext.confirming(
+                   ctx,
+                   &RegistryProvider.handle(&1, %{"action" => "sync"})
+                 ),
+               body
+
+        assert namespace(ctx) == nil
+        assert {:error, :not_found} = push_token(ctx, "mint-ok")
+        assert {:error, :not_found} = push_token(ctx, "acme.com")
+      end
+    end
+
+    test "a verification answer with a null token is malformed; an absent one minted nothing" do
+      %{ctx: ctx, state: state} = signed_in_person()
+      {:ok, answers} = Agent.start_link(fn -> [] end)
+      registry(state, fn _request -> Agent.get(answers, & &1) end)
+      args = %{"action" => "verify_publisher", "slug" => "acme.com"}
+
+      Agent.update(answers, fn _ -> {200, ~s({"slug":"acme.com","token":null})} end)
+
+      assert {:error, :malformed_answer} =
+               Sanctum.TestContext.confirming(ctx, &RegistryProvider.handle(&1, args))
+
+      Agent.update(answers, fn _ -> {200, ~s({"slug":"other.com","token":"cyfr_pt_x"})} end)
+
+      assert {:error, :malformed_answer} =
+               Sanctum.TestContext.confirming(ctx, &RegistryProvider.handle(&1, args))
+
+      assert {:error, :not_found} = push_token(ctx, "acme.com")
+
+      Agent.update(answers, fn _ -> {200, ~s({"slug":"acme.com"})} end)
+
+      assert {:ok, %{token_stored: false}} =
+               Sanctum.TestContext.confirming(ctx, &RegistryProvider.handle(&1, args))
+    end
+
+    test "a configured label too long for the protocol, or not ASCII, mints under its wire form" do
+      %{ctx: ctx, state: state} = signed_in_person()
+      parent = self()
+
+      registry(state, fn %{signed: signed} ->
+        send(parent, {:label, signed.body["label"]})
+        {200, RegistryStub.answer(%{"memberships" => []})}
+      end)
+
+      for {configured, wire} <- [
+            {String.duplicate("x", 65), String.duplicate("x", 64)},
+            {"筆電 laptop", " laptop"},
+            {"筆電", nil}
+          ] do
+        {:ok, entry} = Cyfr.Platform.Settings.Roster.fetch("device_label")
+        assert {:ok, ^configured} = entry.validator.(configured)
+        Cyfr.Test.Settings.put("device_label", configured)
+
+        assert {:ok, _synced} =
+                 Sanctum.TestContext.confirming(
+                   ctx,
+                   &RegistryProvider.handle(&1, %{"action" => "sync"})
+                 )
+
+        assert_receive {:label, label}
+        assert label =~ ~r/\A[\x20-\x7E]{1,64}\z/
+
+        if wire,
+          do: assert(label == wire),
+          else: assert(label == Compendium.Registry.CredentialStore.wire_label())
+      end
+    end
+
+    test "the registry's typed refusals on 429 and 5xx reach the caller typed" do
+      %{ctx: ctx, state: state, slug: slug} = signed_in_person()
+      {:ok, answers} = Agent.start_link(fn -> [] end)
+      registry(state, fn _request -> Agent.get(answers, & &1) end)
+
+      for refusal <- [:directory_unavailable, :dns_timeout, :rate_limited] do
+        Agent.update(answers, fn _ -> RegistryStub.refusal(refusal) end)
+
+        capture_log(fn ->
+          assert Compendium.Registry.Client.signed(ctx.user_id, "handle.claim", %{
+                   "handle" => slug
+                 }) == {:error, refusal}
+        end)
+      end
+
+      Agent.update(answers, fn _ -> {503, "Bad Gateway"} end)
+
+      capture_log(fn ->
+        assert {:error, :registry_unavailable} = claim(ctx, slug)
+      end)
     end
   end
 

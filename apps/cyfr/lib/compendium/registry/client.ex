@@ -252,9 +252,8 @@ defmodule Compendium.Registry.Client do
   Call `GET /v1/namespaces/{slug}/tokens`. Lists push tokens for the namespace.
 
   Auth: Bearer for `{slug}`. The server only lists tokens for the namespace
-  the bearer authorizes (403 otherwise). Response shape:
-  `{"tokens": [{id, label, created_at, last_used_at, revoked_at, created_via}, ...]}`.
-  The response contains token IDs and metadata only — no raw secrets — so
+  the bearer authorizes (403 otherwise). The response lists each token's id
+  and metadata only — no raw secrets — so
   there is no log-redaction wrapper around this call.
   """
   @spec list_tokens(String.t(), String.t()) :: {:ok, map()} | {:error, Errors.t()}
@@ -414,7 +413,7 @@ defmodule Compendium.Registry.Client do
   @doc """
   Call `POST /v1/abuse-reports`. Auth: any valid push token (user must hold
   at least one — verified server-side). Body carries category + target +
-  details; `reporter_created_via` is captured server-side from the bearer.
+  details.
 
   At least one of `target_namespace` or `target_component_id` must be set.
   """

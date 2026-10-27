@@ -63,12 +63,14 @@ defmodule Sanctum.RegistryCredentials do
   @doc """
   Seal and store a push token for the caller, replacing the one the same
   `(registry, namespace_slug)` held. A non-binary slug, or a token that
-  is not a non-empty string, stores nothing and answers `:skipped`.
+  is not a non-empty string, stores nothing and answers `:skipped`. A
+  member whose slot was taken is refused `:not_owner`
+  (`Arca.RegistryTokenStorage.put/1`).
 
   `opts`: `:label`, the name of the device the token was issued to.
   """
   @spec put_push_token(Context.t(), String.t(), term(), term(), String.t(), keyword()) ::
-          :ok | :skipped | {:error, :unavailable | :forbidden}
+          :ok | :skipped | {:error, :unavailable | :forbidden | :not_owner}
   def put_push_token(ctx, registry, namespace_slug, token, role, opts \\ [])
 
   def put_push_token(%Context{} = ctx, registry, namespace_slug, token, role, opts)
@@ -124,7 +126,7 @@ defmodule Sanctum.RegistryCredentials do
   since nothing can use it. Answers `:ok` whether or not one was removed.
   """
   @spec delete_push_token(Context.t(), String.t(), String.t(), String.t()) ::
-          :ok | {:error, :unavailable | :forbidden}
+          :ok | {:error, :unavailable | :forbidden | :not_owner}
   def delete_push_token(%Context{} = ctx, registry, namespace_slug, token)
       when is_binary(registry) and is_binary(namespace_slug) and is_binary(token) do
     with {:ok, user_id} <- person(ctx) do
@@ -138,6 +140,7 @@ defmodule Sanctum.RegistryCredentials do
                    row.credential_ciphertext
                  ) do
               :ok -> :ok
+              {:error, :not_owner} -> {:error, :not_owner}
               {:error, _unreadable} -> {:error, :unavailable}
             end
           else
@@ -244,6 +247,7 @@ defmodule Sanctum.RegistryCredentials do
            issued_at: issued_at
          }) do
       :ok -> :ok
+      {:error, :not_owner} -> {:error, :not_owner}
       {:error, _unreadable} -> {:error, :unavailable}
     end
   rescue
