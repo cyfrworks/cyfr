@@ -98,7 +98,7 @@ On a canvas's page the SDK carries these calls:
 
 The shell drops a canvas's `close`, `title` and `credential`, and the shared routes refuse its credential, so `cyfr.invoke` and `cyfr.action` reject: a canvas writes nothing and invokes no component.
 
-The shell forwards a canvas's `open` or `press` only within moments of the person's own input, never from a script on its own: the shell must hold the person's transient activation from a click or key press of theirs, the canvas's frame must be the focused element, and the shell must have seen no click of its own in that time. Several sent inside one activation are each forwarded, and one sent otherwise is dropped, so send each from the person's click or key. The shell sends a press to `feed.press` under the person's session, only from the visible, live canvas whose served version declares that feed; a binding removed or rebound since is refused, so a press made for an earlier binding never presses the new one.
+The shell forwards a canvas's `open` or `press` only within moments of the person's own input, never from a script on its own: the shell must hold the person's transient activation from a click or key press of theirs, and the canvas's frame must be the focused element. Several sent inside one activation are each forwarded, and one sent otherwise is dropped, so send each from the person's click or key. The shell sends a press to `feed.press` under the person's session, only from the visible, live canvas whose served version declares that feed; a binding removed or rebound since is refused, so a press made for an earlier binding never presses the new one.
 
 Every label a canvas shows, on a control or anywhere else, is the canvas's own text: CYFR does not check that a control says what it does.
 

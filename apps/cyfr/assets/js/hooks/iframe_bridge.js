@@ -27,36 +27,13 @@ const FROM_CANVAS = Object.freeze({
   validation: Object.freeze(["ready", "failed"])
 })
 
-// The verbs of a canvas that act for the person, forwarded only inside the
-// person's own press on the shown canvas.
+// The verbs of a canvas that act for the person, forwarded only within
+// moments of the person's own input, on the shown canvas.
 const PERSON_VERBS = Object.freeze(["open", "press"])
 
 // What the shell tells a canvas after its open, the latest of each held
 // and posted again after its handshake, in this order.
 const TOLD = Object.freeze(["posture", "covered", "installed", "state"])
-
-// Chromium's transient activation lasts 5 s; the other engines' last no longer.
-const ACTIVATION_WINDOW_MS = 5000
-
-// The time, on the shell's monotonic clock, of each shell document's last
-// trusted click. A click inside a frame reaches only the frame's own
-// document, so a click heard here is one in the shell itself.
-const shellClicks = new WeakMap()
-
-function watchShellClicks(doc) {
-  if (!doc || typeof doc.addEventListener !== "function" || shellClicks.has(doc)) return
-  shellClicks.set(doc, -Infinity)
-  doc.addEventListener(
-    "click",
-    (event) => {
-      if (event.isTrusted === true && window.performance) shellClicks.set(doc, window.performance.now())
-    },
-    true
-  )
-}
-
-// From the start, so a click in the shell before any canvas mounts is heard.
-if (typeof window !== "undefined") watchShellClicks(window.document)
 
 /**
  * IframeBridge hook — the shell's end of a tincture frame's MessagePort.
@@ -84,11 +61,12 @@ if (typeof window !== "undefined") watchShellClicks(window.document)
  * from a validation frame only `ready` and `failed`. A canvas's `open` or
  * `press` is forwarded only within moments of the person's own input,
  * never from a script on its own: while the shell document holds transient
- * user activation (which no script in a frame can grant it), the canvas's
- * frame is its active element, the shell itself saw no trusted click
- * within the activation window (so the activation came from input inside a
- * frame), and the frame is shown, live and not inert. Several inside one
- * activation are each forwarded.
+ * user activation (which only the person's input gives it, never a
+ * script), the canvas's frame is its active element, and the frame is
+ * shown, live and not inert. Neither condition names the input as the
+ * canvas's: a click elsewhere in the shell, or in a sibling frame,
+ * followed by the canvas focusing itself within the activation window
+ * passes. Several inside one activation are each forwarded.
  *
  * A later load (a reload, or the frame navigating itself) gets no second
  * handshake: the port is closed and the frame is spent until the person
@@ -127,7 +105,6 @@ const IframeBridge = {
 
     this._standing = {state: "live", connected: true}
     this._apply(this.el.dataset.frameState === "frozen" ? "frozen" : "live")
-    if (this._canvas && typeof window !== "undefined") watchShellClicks(window.document)
 
     this._onLoad = () => this._handshake()
     this.el.addEventListener("load", this._onLoad)
@@ -262,17 +239,15 @@ const IframeBridge = {
     return wrapper !== null && wrapper.dataset.canvasShown === "true" && el.closest("[inert]") === null
   },
 
-  // The person gave input within the activation window, and not by a click
-  // in the shell: the shell document holds transient user activation, the
-  // frame is its active element, and no trusted shell click is that recent.
-  // Where the browser has no activation API, or no clock, nothing counts.
+  // The person gave input within the activation window: the shell document
+  // holds transient user activation, which no script can give it, and the
+  // frame is its active element. Reading the activation consumes nothing.
+  // Where the browser has no activation API, nothing counts.
   _personActed() {
     if (typeof window === "undefined") return false
-    const {navigator, document: doc, performance} = window
+    const {navigator, document: doc} = window
     if (!navigator || !navigator.userActivation || navigator.userActivation.isActive !== true) return false
-    if (!doc || doc.activeElement !== this.el) return false
-    if (!performance || !shellClicks.has(doc)) return false
-    return performance.now() - shellClicks.get(doc) >= ACTIVATION_WINDOW_MS
+    return Boolean(doc) && doc.activeElement === this.el
   },
 
   _drop() {

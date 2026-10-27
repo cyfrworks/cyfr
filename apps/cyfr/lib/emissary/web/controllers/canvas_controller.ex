@@ -28,9 +28,10 @@ defmodule Emissary.Web.CanvasController do
   script runs in the page and none carries a nonce. The page's policy is
   the canvas's one policy (`Compendium.tincture_canvas_page_csp/1`),
   which names the version's files under the credential, the SDK's path,
-  the open's own data path and the shell. No bearer and no frame
-  credential is in the page, and the asset credential only in its policy
-  and its `<base>`. It is never cached.
+  the open's own data path and the shell. The page carries no credential
+  beyond the one its own address carries: the asset credential, which its
+  script can read in its URL, is in its `<base>` and its policy, and no
+  bearer and no frame credential is in it. It is never cached.
 
   The SDK is served to anyone at its one path, whose name is its digest,
   and cached as immutable; any other name under that prefix is 404.

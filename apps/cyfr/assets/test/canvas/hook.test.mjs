@@ -487,17 +487,13 @@ describe("a canvas frame's bridge", () => {
   const forwarded = (events) => events.filter(({event}) => event === "frame_verb").map(({payload}) => payload.message)
 
   // The shell's document as the bridge reads it: its active element, and
-  // its capturing click listeners, to which `click` delivers a click as the
-  // browser would, trusted or synthetic. Its clock is `now`, in ms.
-  let now
+  // every listener anything adds to it, by type.
+  let documentListeners
   beforeEach(() => {
-    now = 100000
-    const capturing = []
-    globalThis.window.performance = {now: () => now}
+    documentListeners = []
     globalThis.window.document = {
       activeElement: null,
-      addEventListener: (type, fn, capture) => type === "click" && capture === true && capturing.push(fn),
-      click: (isTrusted) => capturing.forEach((fn) => fn({type: "click", isTrusted}))
+      addEventListener: (type) => documentListeners.push(type)
     }
   })
 
@@ -508,9 +504,6 @@ describe("a canvas frame's bridge", () => {
     else globalThis.window.navigator = {userActivation: {isActive: state === "active"}}
   }
   const focus = (element) => (globalThis.window.document.activeElement = element)
-
-  // The clock moved past the activation window since anything before.
-  const later = () => (now += 5001)
 
   const stateEvent = (state) => new CustomEvent(FRAME_STATE_EVENT, {detail: {state}})
 
@@ -608,7 +601,7 @@ describe("a canvas frame's bridge", () => {
     }
   })
 
-  test("an open or a press reaches the view only inside the person's press on the canvas, live and shown", async () => {
+  test("an open or a press reaches the view only under the shell's activation with the frame focused, live and shown", async () => {
     const bridge = connect()
     const port = bridge.load()
     const other = {id: "another element"}
@@ -621,105 +614,36 @@ describe("a canvas frame's bridge", () => {
       for (const state of ["active", "inactive", "absent"]) {
         for (const focused of ["frame", "other"]) {
           for (const standing of ["live", "hidden", "disconnected"]) {
-            for (const shellClick of ["none", "recent"]) {
-              for (const message of asks) {
-                later()
-                if (shellClick === "recent") globalThis.window.document.click(true)
-                activation(state)
-                focus(focused === "frame" ? bridge.el : other)
-                stand(bridge.el, standing)
-                const before = forwarded(bridge.events).length
-                await send(bridge, port, message)
+            for (const message of asks) {
+              activation(state)
+              focus(focused === "frame" ? bridge.el : other)
+              stand(bridge.el, standing)
+              const before = forwarded(bridge.events).length
+              await send(bridge, port, message)
 
-                const expected =
-                  state === "active" && focused === "frame" && standing === "live" && shellClick === "none" ? 1 : 0
-                assert.equal(
-                  forwarded(bridge.events).length - before,
-                  expected,
-                  `${message.verb}: activation ${state}, ${focused} focused, ${standing}, shell click ${shellClick}`
-                )
-              }
+              const expected = state === "active" && focused === "frame" && standing === "live" ? 1 : 0
+              assert.equal(
+                forwarded(bridge.events).length - before,
+                expected,
+                `${message.verb}: activation ${state}, ${focused} focused, ${standing}`
+              )
             }
           }
         }
       }
       // The one combination that forwards, for each verb, and nothing else.
       assert.deepEqual(forwarded(bridge.events), asks)
+      // Those two conditions are the whole check: the bridge tracks no
+      // input of its own, on the shell's document or its window.
+      assert.deepEqual(documentListeners, [])
+      assert.deepEqual(Object.keys(listeners), [])
     } finally {
       bridge.close()
       port.close()
     }
   })
 
-  test("a trusted click in the shell blocks a canvas's open and press for the activation window, and only then", async () => {
-    const bridge = connect()
-    const port = bridge.load()
-    const press = {v: 1, verb: "press", frame: CANVAS, args: PRESS}
-
-    try {
-      activation("active")
-      focus(bridge.el)
-
-      // A synthetic click, which a script can dispatch, counts for nothing.
-      globalThis.window.document.click(false)
-      await send(bridge, port, press)
-      assert.equal(forwarded(bridge.events).length, 1)
-
-      // The person's own click in the shell: the activation may be that click's.
-      globalThis.window.document.click(true)
-      await send(bridge, port, press)
-      now += 4999
-      await send(bridge, port, press)
-      assert.equal(forwarded(bridge.events).length, 1)
-
-      // Older than any activation window, it blocks nothing.
-      now += 1
-      await send(bridge, port, press)
-      assert.deepEqual(forwarded(bridge.events), [press, press])
-    } finally {
-      bridge.close()
-      port.close()
-    }
-  })
-
-  // The bridge's module loads with the shell's page, before any canvas: a
-  // fresh instance of it, loaded once the shell's window is there.
-  test("a click in the shell before any canvas's bridge mounted is heard all the same", async () => {
-    const {default: Bridge} = await import(`../../js/hooks/iframe_bridge.js?shell=${Math.random()}`)
-    globalThis.window.document.click(true)
-
-    const el = canvasFrame(CANVAS)
-    const posted = []
-    el.contentWindow = {postMessage: (_data, _origin, transfer) => posted.push(...transfer)}
-    const events = []
-    const hook = Object.assign(Object.create(Bridge), {
-      el,
-      pushEvent: (event, payload, onReply) => {
-        events.push({event, payload})
-        if (event === "frame_handshake") onReply(LIVE)
-      }
-    })
-    hook.mounted()
-    el.dispatchEvent(new Event("load"))
-    const [port] = posted
-    const bridge = {hook, events}
-    const press = {v: 1, verb: "press", frame: CANVAS, args: PRESS}
-
-    try {
-      activation("active")
-      focus(el)
-      await send(bridge, port, press)
-      assert.equal(forwarded(events).length, 0)
-      later()
-      await send(bridge, port, press)
-      assert.deepEqual(forwarded(events), [press])
-    } finally {
-      hook.destroyed()
-      port.close()
-    }
-  })
-
-  test("inside one press every open and press is forwarded, and none once it has passed", async () => {
+  test("inside one activation every open and press is forwarded, and none once it has passed", async () => {
     const bridge = connect()
     const port = bridge.load()
     const asks = [

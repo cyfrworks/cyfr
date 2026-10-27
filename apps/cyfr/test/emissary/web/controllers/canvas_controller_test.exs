@@ -12,11 +12,12 @@ defmodule Emissary.Web.CanvasControllerTest do
   the canvas's one policy for its own open and the connection allowlist on
   the page alone; relative URLs of a vanilla and a react page resolving to
   the version's files under the `<base>`, which a page's own `<base>`
-  never precedes; the SDK at its one digest-named path and nothing else
-  under it; no HTML file of a canvas, or of a version whose declaration
-  today's rules refuse, served as a page on the served files' route; no
-  redirect on any canvas, SDK, data or served path; and the credential in
-  no telemetry span or log line.
+  never precedes; no credential in the page beyond the asset credential
+  its own address carries; the SDK at its one digest-named path and
+  nothing else under it; no HTML file of a canvas, or of a version whose
+  declaration today's rules refuse, served as a page on the served files'
+  route; no redirect on any canvas, SDK, data or served path; and the
+  credential in no telemetry span or log line.
   """
 
   # Mints credentials, flips the rate limit and the global log level,
@@ -59,7 +60,12 @@ defmodule Emissary.Web.CanvasControllerTest do
     lay!(source, "page-canvas", @files)
     open = frame!(source, "page-canvas", digest)
 
-    {:ok, source: source, digest: digest, credential: asset!(source, digest), open: open}
+    {:ok,
+     source: source,
+     session: session,
+     digest: digest,
+     credential: asset!(source, digest),
+     open: open}
   end
 
   # ---------------------------------------------------------------------------
@@ -271,12 +277,39 @@ defmodule Emissary.Web.CanvasControllerTest do
       assert get_resp_header(conn, "content-type") == ["text/html; charset=utf-8"]
       assert get_resp_header(conn, "content-encoding") == []
 
-      # No bearer and no frame id in the markup; the asset credential only
-      # in the `<base>`.
-      refute body =~ open.bearer
+      # No frame id in the markup.
       refute body =~ open.frame_id
+    end
+
+    test "carries no credential beyond the one its own address carries: the asset credential " <>
+           "only where the page's address carries it, and no bearer or frame credential",
+         %{source: source, session: session, digest: digest, credential: credential, open: open} do
+      trial = frame!(source, "page-canvas", digest, :mint_validation_credential)
+      conn = page(credential, open.frame_id)
+      assert conn.status == 200
+      body = conn.resp_body
+
+      # The asset credential is the page's own address's, which the page's
+      # script can read in its URL: in the body it is only in the `<base>`
+      # that resolves the page's relative URLs under that address.
+      assert Prima.TinctureWire.page_path(credential, open.frame_id) =~ credential
+      {base, _tags} = canvas_tags(credential, "page-canvas")
       assert [_one] = Regex.scan(~r/#{Regex.escape(credential)}/, body)
-      assert tags =~ credential
+      assert body =~ ~s(<base href="#{base}">)
+
+      # No other credential, in the body or any header: not the person's
+      # session bearer, not the open's frame credential, not a validation
+      # trial's.
+      for {name, other} <- [
+            {"session bearer", session.token},
+            {"frame credential", open.bearer},
+            {"validation credential", trial.bearer}
+          ] do
+        refute body =~ other, "the page's body carries the #{name}"
+
+        for {header, value} <- conn.resp_headers,
+            do: refute(value =~ other, "the page's #{header} carries the #{name}")
+      end
     end
 
     test "a vanilla page's relative URLs resolve to the version's own files under its <base>", %{

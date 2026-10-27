@@ -5,7 +5,10 @@ defmodule Aqua.CanvasWriteTest do
   @moduledoc """
   Aqua writes a canvas itself, through `canvas.write`, and asks the person
   first (the soul's standing `ask`): a scripted turn's call opens a card
-  and writes nothing until it is decided. The card names the streams the
+  and writes nothing until it is decided. Every write asks: the action
+  takes no standing answer (`standing: false`), so its card offers only
+  this call's approval, and no allow, given on a card or stored past the
+  rule, covers a later write. The card names the streams the
   version reads, from the call it binds. Approved, the call runs as the
   card showed it, and the new version is laid whole, registered and
   allocated, while the turn opens no stream and the request log holds
@@ -98,6 +101,22 @@ defmodule Aqua.CanvasWriteTest do
     assert named =~ "runs.changes"
     assert named =~ "schedules.changes"
 
+    # The card offers this call's approval and no standing answer, and one
+    # that would stand is refused while the card waits.
+    assert intent["standing"] == false
+    assert html =~ ~s(phx-value-scope="once")
+    refute html =~ ~s(data-test="approval-standing")
+    refute html =~ ~s(phx-value-scope="thread")
+    refute html =~ ~s(phx-value-scope="always")
+
+    for scope <- [:thread, :always] do
+      assert {:error, {:scope_not_permitted, :never_standing}} =
+               Aqua.Approvals.resolve(ctx, approval.id, %{decision: :approved, scope: scope})
+    end
+
+    assert {:ok, %{status: "pending"}} = Tape.approval(ctx, approval.id)
+    assert_nothing_written(ctx)
+
     # Approved, the call runs as it was shown.
     assert {:ok, %{decision: "approved"}} =
              Aqua.Approvals.resolve(ctx, approval.id, %{decision: :approved})
@@ -146,6 +165,45 @@ defmodule Aqua.CanvasWriteTest do
 
     assert Jason.decode!(write.input)["files"] ==
              Map.new(@files, fn {path, text} -> {path, measured(text)} end)
+  end
+
+  test "no standing answer covers a later write: none is taken at either scope, and one " <>
+         "stored past the rule leaves the next write waiting on its card",
+       %{ctx: ctx, thread: thread} do
+    allow = fn scope, thread_id ->
+      %{
+        scope: scope,
+        effect: "allow",
+        thread_id: thread_id,
+        agent_name: "aqua",
+        tool: "canvas",
+        action: "write"
+      }
+    end
+
+    standing = [{"thread", thread.id}, {"agent", nil}]
+
+    for {scope, thread_id} <- standing do
+      assert {:error, {:scope_not_permitted, :never_standing}} =
+               Sanctum.ToolGrants.put(ctx, allow.(scope, thread_id)),
+             "canvas.write took a #{scope}-scope standing allow"
+    end
+
+    # Allows written straight to storage, as by a surface that never went
+    # through the rule, at both scopes: the turn's write still asks.
+    for {scope, thread_id} <- standing do
+      assert {:ok, _} =
+               Arca.ToolGrantStorage.put(
+                 Map.merge(allow.(scope, thread_id), %{
+                   athanor_id: ctx.athanor_id,
+                   granted_by: ctx.user_id
+                 })
+               )
+    end
+
+    turn = asked!(ctx, thread)
+    assert %{intent: %{"standing" => false}} = pending_card(ctx, turn)
+    assert_nothing_written(ctx)
   end
 
   test "a declined card writes nothing", %{ctx: ctx, thread: thread} do

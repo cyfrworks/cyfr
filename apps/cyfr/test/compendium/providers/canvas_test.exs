@@ -88,10 +88,13 @@ defmodule Compendium.Providers.CanvasTest do
       assert {ops["restore"].kind, ops["restore"].planes, ops["restore"].permission} ==
                {:write, [:external], nil}
 
-      # As the layout's operations, none carries a consent, standing or
-      # resource annotation: the agent's consent names the keys it reaches.
-      for {_action, op} <- ops do
-        assert {op.consent, op.standing, op.resource} == {nil, nil, nil}
+      # As the layout's operations, none carries a consent or resource
+      # annotation: the agent's consent names the keys it reaches. Only
+      # write takes no standing answer, so each write an assistant proposes
+      # asks on its own card.
+      for {action, op} <- ops do
+        standing = if action == "write", do: false, else: nil
+        assert {op.consent, op.standing, op.resource} == {nil, standing, nil}, action
       end
     end
 
