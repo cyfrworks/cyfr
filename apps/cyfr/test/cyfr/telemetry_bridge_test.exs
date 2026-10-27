@@ -23,6 +23,7 @@ defmodule Cyfr.TelemetryBridgeTest do
     Components,
     Confirmation,
     Execution,
+    FeedRun,
     FileOffer,
     FrameCredential,
     InstanceEntryChanged,
@@ -69,9 +70,9 @@ defmodule Cyfr.TelemetryBridgeTest do
        Bus.builds(@actor), {Build, %{kind: :progress, phase: :compiling}}},
       {[:cyfr, :locus, :build, :stop], Map.put(tenant, :status, :ok), Bus.builds(@actor),
        {Build, %{kind: :stopped, status: :ok}}},
-      {[:cyfr, :schedules, :fired], Map.put(tenant, :schedule_id, "s1"),
+      {[:cyfr, :schedules, :fired], Map.merge(tenant, %{schedule_id: "s1", kind: "schedule"}),
        Bus.schedule_runs(@actor), {ScheduleRun, %{kind: :fired, schedule_id: "s1"}}},
-      {[:cyfr, :schedules, :failed], Map.put(tenant, :schedule_id, "s1"),
+      {[:cyfr, :schedules, :failed], Map.merge(tenant, %{schedule_id: "s1", kind: "schedule"}),
        Bus.schedule_runs(@actor), {ScheduleRun, %{kind: :failed, schedule_id: "s1"}}},
       {[:cyfr, :compendium, :component, :install], Map.put(tenant, :name, "c"),
        Bus.components(@actor), {Components, %{kind: :installed, name: "c"}}},
@@ -434,6 +435,82 @@ defmodule Cyfr.TelemetryBridgeTest do
     end
   end
 
+  describe "a run of a schedule or a feed" do
+    test "a schedule's fire carries its occurrence and due time, and only the fields the payload names" do
+      listen(Bus.schedule_runs(@actor))
+      listen(Bus.feed_runs(@actor))
+      due = ~U[2026-10-27 09:00:00.000000Z]
+
+      :telemetry.execute([:cyfr, :schedules, :fired], %{}, %{
+        athanor_id: @athanor,
+        schedule_id: "s_due",
+        kind: "schedule",
+        occurrence_id: "occ_1",
+        scheduled_for: due,
+        execution_id: "exec_1",
+        reference: "reagent:local.private:1.0.0",
+        request_id: "req_private",
+        user_id: "user_private"
+      })
+
+      assert_receive %ScheduleRun{} = run
+
+      assert Map.from_struct(run) == %{
+               athanor_id: @athanor,
+               kind: :fired,
+               schedule_id: "s_due",
+               occurrence_id: "occ_1",
+               execution_id: "exec_1",
+               scheduled_for: due,
+               reason: nil
+             }
+
+      refute_receive %FeedRun{}, 100
+    end
+
+    test "a feed's fire and failure ride the feeds' runs, never the schedules', and its failure keeps its tray notice" do
+      listen(Bus.schedule_runs(@actor))
+      listen(Bus.feed_runs(@actor))
+      listen(Bus.notify(@actor))
+
+      :telemetry.execute([:cyfr, :schedules, :fired], %{}, %{
+        athanor_id: @athanor,
+        schedule_id: "feed_btc",
+        kind: "feed",
+        occurrence_id: "occ_f",
+        execution_id: "exec_f"
+      })
+
+      assert_receive %FeedRun{kind: :fired, binding: "feed_btc", occurrence_id: "occ_f"}
+
+      :telemetry.execute([:cyfr, :schedules, :failed], %{}, %{
+        athanor_id: @athanor,
+        schedule_id: "feed_btc",
+        kind: "feed",
+        reason: {:missing_permission, :execute}
+      })
+
+      assert_receive %FeedRun{kind: :failed, binding: "feed_btc", reason: %{class: :forbidden}}
+      assert_receive %Notify{kind: :schedule_failed, payload: %{schedule_id: "feed_btc"}}
+      refute_receive %ScheduleRun{}, 100
+    end
+
+    test "a run whose row kind is not named reaches neither topic, and is counted as dropped" do
+      listen(Bus.schedule_runs(@actor))
+      listen(Bus.feed_runs(@actor))
+      count_drops(self())
+
+      :telemetry.execute([:cyfr, :schedules, :fired], %{}, %{
+        athanor_id: @athanor,
+        schedule_id: "s_unknown"
+      })
+
+      assert_receive {:dropped, %{count: 1}, %{event: [:cyfr, :schedules, :fired]}}
+      refute_receive %ScheduleRun{}, 100
+      refute_received %FeedRun{}
+    end
+  end
+
   describe "what the bridge does not forward" do
     test "a tenant event that names no athanor is dropped and counted" do
       count_drops(self())
@@ -454,6 +531,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       :telemetry.execute([:cyfr, :schedules, :failed], %{}, %{
         athanor_id: @athanor,
         schedule_id: "s_err",
+        kind: "schedule",
         reason: secret
       })
 
@@ -477,6 +555,7 @@ defmodule Cyfr.TelemetryBridgeTest do
       :telemetry.execute([:cyfr, :schedules, :failed], %{}, %{
         athanor_id: @athanor,
         schedule_id: "s_denied",
+        kind: "schedule",
         reason: {:missing_permission, :execute}
       })
 

@@ -51,6 +51,7 @@ defmodule Cyfr.Bus do
     Execution,
     ExecutionEvent,
     FeedPublished,
+    FeedRun,
     FileOffer,
     FrameCredential,
     InstanceEntryChanged,
@@ -141,8 +142,22 @@ defmodule Cyfr.Bus do
       match: {:exact, "bus:schedule_runs"},
       template: "tenant:<athanor_id>:bus:schedule_runs",
       producers: ["Cyfr.TelemetryBridge"],
+      consumers: [
+        "PrismWeb.ActivitiesLive",
+        "PrismWeb.TopbarLive",
+        "stream:schedule_runs.changes"
+      ],
+      reason: "a schedule of the athanor fired or failed, for its dashboards and canvases"
+    },
+    %{
+      key: :feed_runs,
+      scope: :tenant,
+      struct: FeedRun,
+      match: {:exact, "bus:feed_runs"},
+      template: "tenant:<athanor_id>:bus:feed_runs",
+      producers: ["Cyfr.TelemetryBridge"],
       consumers: ["PrismWeb.ActivitiesLive", "PrismWeb.TopbarLive"],
-      reason: "a schedule of the athanor fired or failed"
+      reason: "a feed of the athanor fired or failed, apart from its schedules' firings"
     },
     %{
       key: :tinctures,
@@ -200,9 +215,9 @@ defmodule Cyfr.Bus do
       struct: Schedules,
       match: {:exact, "bus:schedules"},
       template: "tenant:<athanor_id>:bus:schedules",
-      producers: ["Opus.Schedules.Scheduler"],
-      consumers: ["PrismWeb.SchedulesLive"],
-      reason: "a schedule's occurrence started or its run ended"
+      producers: ["Opus.Schedules.Changes", "Compendium.Cascade"],
+      consumers: ["PrismWeb.SchedulesLive", "stream:schedules.changes"],
+      reason: "a schedule row of the athanor changed or was removed, after the write committed"
     },
     %{
       key: :feeds,
@@ -594,6 +609,10 @@ defmodule Cyfr.Bus do
   @spec schedule_runs(Actor.t()) :: String.t()
   def schedule_runs(actor), do: prefix(actor) <> "bus:schedule_runs"
 
+  @doc "Feed firings and failures (`Cyfr.Bus.FeedRun`)."
+  @spec feed_runs(Actor.t()) :: String.t()
+  def feed_runs(actor), do: prefix(actor) <> "bus:feed_runs"
+
   @doc "Tincture invocations and changes (`Cyfr.Bus.Tinctures`)."
   @spec tinctures(Actor.t()) :: String.t()
   def tinctures(actor), do: prefix(actor) <> "bus:tinctures"
@@ -614,7 +633,7 @@ defmodule Cyfr.Bus do
   @spec mcp_servers(Actor.t()) :: String.t()
   def mcp_servers(actor), do: prefix(actor) <> "bus:mcp_servers"
 
-  @doc "Schedule occurrences (`Cyfr.Bus.Schedules`)."
+  @doc "Schedule rows as their committed writes left them (`Cyfr.Bus.Schedules`)."
   @spec schedules(Actor.t()) :: String.t()
   def schedules(actor), do: prefix(actor) <> "bus:schedules"
 

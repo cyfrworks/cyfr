@@ -427,6 +427,107 @@ defmodule Opus.Schedules.SchedulerTest do
     assert row.last_execution_id == execution_id
   end
 
+  describe "the schedule's announcements" do
+    # A payload as a canvas reads it on `stream`: projected by its grant,
+    # passed through JSON, and checked against the declared shape.
+    defp read_as(name, payload) do
+      {:ok, {_provider, stream}} = Sanctum.Catalog.lookup_stream(name)
+
+      grant = %Prima.StreamGrant{
+        topic: stream.topic,
+        projection: stream.projection,
+        subject: nil,
+        deadline: DateTime.utc_now(),
+        grant_id: "sgr_scheduler"
+      }
+
+      data =
+        grant
+        |> Prima.StreamGrant.project(Map.from_struct(payload))
+        |> Jason.encode!()
+        |> Jason.decode!()
+
+      assert :ok = Prima.Canvas.Shape.check(stream.shape, data), inspect(data)
+      assert Enum.sort(Map.keys(data)) == Enum.sort(stream.projection)
+      data
+    end
+
+    test "a fire names its occurrence and due time, and its start and end announce the row as each left it",
+         %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.schedules(actor))
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.schedule_runs(actor))
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.feed_runs(actor))
+      script!([{:probe, self()}, %{"ran" => true}])
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
+      id = schedule.id
+      scheduler!()
+
+      assert_receive {:scripted_probe, runner, execution_id}, 10_000
+      assert_receive %Cyfr.Bus.ScheduleRun{kind: :fired, schedule_id: ^id} = fired, 10_000
+      [occurrence] = occurrences(ctx, schedule)
+
+      assert {fired.occurrence_id, fired.execution_id, fired.reason} ==
+               {occurrence.id, execution_id, nil}
+
+      assert DateTime.compare(fired.scheduled_for, schedule.next_run_at) == :eq
+
+      assert %{"kind" => "fired", "scheduled_for" => due} =
+               read_as("schedule_runs.changes", fired)
+
+      {:ok, wired_due, 0} = DateTime.from_iso8601(due)
+      assert DateTime.compare(wired_due, schedule.next_run_at) == :eq
+
+      # The start: the cursor moved past the due time, and nothing ran yet.
+      assert_receive %Cyfr.Bus.Schedules{kind: :changed, schedule_id: ^id, run_count: 0} =
+                       started,
+                     10_000
+
+      assert DateTime.compare(started.next_run_at, schedule.next_run_at) == :gt
+      assert %{"status" => "active", "run_count" => 0} = read_as("schedules.changes", started)
+
+      send(runner, :continue)
+
+      assert_receive %Cyfr.Bus.Schedules{kind: :changed, schedule_id: ^id, run_count: 1} =
+                       ended,
+                     10_000
+
+      assert %DateTime{} = ended.last_run_at
+      assert %{"run_count" => 1, "error_count" => 0} = read_as("schedules.changes", ended)
+      refute_received %Cyfr.Bus.FeedRun{}
+    end
+
+    test "a schedule deleted while its occurrence runs announces removed once and nothing after",
+         %{ctx: ctx} do
+      actor = Sanctum.Context.actor(ctx)
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.schedules(actor))
+      script!([{:probe, self()}, %{"ran" => true}])
+      schedule = due!(create_schedule(ctx, %{cron_expression: hourly_away()}))
+      id = schedule.id
+      scheduler!()
+
+      assert_receive {:scripted_probe, runner, _execution_id}, 10_000
+      assert_receive %Cyfr.Bus.Schedules{kind: :changed, schedule_id: ^id}, 10_000
+
+      assert {:ok, %{deleted: true}} =
+               Opus.Schedules.Provider.handle("schedule", ctx, %{
+                 "action" => "delete",
+                 "schedule_id" => id
+               })
+
+      assert_receive %Cyfr.Bus.Schedules{kind: :removed, schedule_id: ^id, status: "active"} =
+                       removed,
+                     10_000
+
+      assert %{"kind" => "removed", "name" => name} = read_as("schedules.changes", removed)
+      assert name == schedule.name
+
+      send(runner, :continue)
+      wait_until(fn -> match?([%{state: "completed"}], occurrences(ctx, schedule)) end)
+      refute_receive %Cyfr.Bus.Schedules{schedule_id: ^id}, 500
+    end
+  end
+
   describe "the fire's decision" do
     defp fire_decisions do
       Arca.Repo.all(from(d in Arca.Schemas.DecisionLog, where: d.tool == "schedule"))
@@ -551,6 +652,9 @@ defmodule Opus.Schedules.SchedulerTest do
     ctx: ctx
   } do
     script!([%{"ran" => true}])
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.schedule_runs(actor))
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.schedules(actor))
     # A profile no consent source holds: the root is refused before admission.
     schedule =
       due!(
@@ -560,13 +664,23 @@ defmodule Opus.Schedules.SchedulerTest do
         })
       )
 
+    id = schedule.id
     scheduler!()
 
     wait_until(fn ->
       match?({:ok, %{error_count: 1}}, CronSchedule.get_for_daemon(schedule.id))
     end)
 
-    assert [%{state: "failed", execution_id: nil, attempts: 0}] = occurrences(ctx, schedule)
+    assert [%{state: "failed", execution_id: nil, attempts: 0} = occurrence] =
+             occurrences(ctx, schedule)
+
+    # The live failure names the occurrence and its due time, and the
+    # recorded error is announced with the row.
+    assert_receive %Cyfr.Bus.ScheduleRun{kind: :failed, schedule_id: ^id} = failed, 10_000
+    assert failed.occurrence_id == occurrence.id
+    assert DateTime.compare(failed.scheduled_for, occurrence.scheduled_for) == :eq
+    assert %{class: _, message: _} = failed.reason
+    assert_receive %Cyfr.Bus.Schedules{schedule_id: ^id, error_count: 1}, 10_000
     assert [] = Arca.Repo.all(Arca.Schemas.Execution)
     assert ScriptedWorker.calls() == []
   end
@@ -769,6 +883,9 @@ defmodule Opus.Schedules.SchedulerTest do
       )
 
     skipped = due!(create_schedule(ctx, %{cron_expression: hourly_away()}), 7_200)
+    skipped_id = skipped.id
+    actor = Sanctum.Context.actor(ctx)
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.schedules(actor))
     scheduler = scheduler!()
 
     # The first tick's run, and the cursor it moves, under the suite's load:
@@ -794,6 +911,11 @@ defmodule Opus.Schedules.SchedulerTest do
     assert DateTime.compare(fired, once.next_run_at) == :eq
     assert [] = occurrences(ctx, skipped)
     assert [_] = ScriptedWorker.calls()
+
+    # The skip ran nothing and moved the cursor, and the row it left is
+    # announced.
+    assert_receive %Cyfr.Bus.Schedules{schedule_id: ^skipped_id, run_count: 0} = moved, 10_000
+    assert DateTime.compare(moved.next_run_at, skipped.next_run_at) == :gt
   end
 
   describe "missed runs" do

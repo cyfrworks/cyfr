@@ -29,6 +29,7 @@ defmodule Opus.Providers.FeedTest do
   alias Arca.CronSchedule
   alias Opus.Feeds
   alias Opus.Providers.Feed
+  alias Prima.Canvas.Shape
   alias Cyfr.Bus.FeedPublished
   alias Cyfr.Test.ScriptedWorker
   alias Prima.Test.AuthorityFixtures
@@ -173,6 +174,32 @@ defmodule Opus.Providers.FeedTest do
                ~w(kind execution_id parent_execution_id reference component_type duration_ms error)
 
       assert runs.shape["fields"]["kind"]["values"] == ~w(started completed failed cancelled)
+
+      # An error is absent or a class and its sentence, the class never nil.
+      error = runs.shape["fields"]["error"]
+
+      assert {error["type"], error["nullable"], Enum.sort(error["required"])} ==
+               {"object", true, ["class", "message"]}
+
+      run = %{
+        "kind" => "failed",
+        "execution_id" => "e",
+        "parent_execution_id" => nil,
+        "reference" => "catalyst:local.x:1.0.0",
+        "component_type" => "catalyst",
+        "duration_ms" => 1
+      }
+
+      assert :ok = Shape.check(runs.shape, Map.put(run, "error", nil))
+
+      assert :ok =
+               Shape.check(
+                 runs.shape,
+                 Map.put(run, "error", %{"class" => "internal", "message" => "x"})
+               )
+
+      assert {:error, _} =
+               Shape.check(runs.shape, Map.put(run, "error", %{"class" => nil, "message" => "x"}))
     end
   end
 
@@ -747,68 +774,72 @@ defmodule Opus.Providers.FeedTest do
       {:ok, _} = press(ctx, id, "refresh")
       {:ok, %{execution_id: ran}} = press(ctx, id, "buy")
 
-      assert {:ok, changes} = Feed.recent_runs(ctx, nil)
-      assert length(changes) == 2
-      assert %{"kind" => "completed", "reference" => @pinned} = List.last(changes)
-      assert List.last(changes)["execution_id"] == ran
-
       {:ok, {_feed, stream}} = Sanctum.Catalog.lookup_stream("runs.changes")
+      assert {:ok, items} = Feed.recent_runs(ctx, nil)
+      changes = Enum.map(items, &on_the_wire(stream, &1))
+
+      assert length(changes) == 2
+      assert %{"kind" => "completed", "reference" => @pinned, "error" => nil} = List.last(changes)
+      assert List.last(changes)["execution_id"] == ran
+      assert Enum.all?(changes, &(Map.keys(&1) |> Enum.sort() == Enum.sort(stream.projection)))
       for change <- changes, do: assert(:ok = Prima.Canvas.Shape.check(stream.shape, change))
 
       assert {:ok, []} = Feed.recent_runs(foreign(ctx), nil)
       assert {:error, :no_athanor} = Feed.recent_runs(%{ctx | athanor_id: nil}, nil)
     end
 
-    test "the runs' carries a failed run's error in the live payload's form", %{
-      ctx: ctx,
-      actor: actor
-    } do
-      script!([%{"price" => 1.0}, {:error, "upstream gone"}])
+    test "the runs' carries a failed run's error as the live failure carried it: classified and cut",
+         %{ctx: ctx, actor: actor} do
+      long = String.duplicate("é", 150)
+      script!([{:error, "upstream gone"}, {:error, long}])
+      :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.executions(actor))
       {:ok, %{binding: id}} = call(ctx, bind_args("btc"))
-      {:ok, _} = press(ctx, id, "refresh")
-      {:error, _failed} = press(ctx, id, "refresh")
-
-      assert {:ok, [_, _] = changes} = Feed.recent_runs(ctx, nil)
-      assert %{"error" => nil} = Enum.find(changes, &(&1["kind"] == "completed"))
-      failed = Enum.find(changes, &(&1["kind"] == "failed"))
-
-      # The record keeps the sentence and no class.
-      assert %{"kind" => "failed", "error" => %{"class" => nil, "message" => message}} = failed
-      assert is_binary(message) and message != ""
+      {:error, _} = press(ctx, id, "refresh")
+      {:error, _} = press(ctx, id, "refresh")
 
       {:ok, {_feed, stream}} = Sanctum.Catalog.lookup_stream("runs.changes")
-      assert :ok = Prima.Canvas.Shape.check(stream.shape, failed)
+      live = live_failures(2) |> Enum.map(&on_the_wire(stream, Map.from_struct(&1)))
+      assert {:ok, items} = Feed.recent_runs(ctx, nil)
+      refreshed = Enum.map(items, &on_the_wire(stream, &1))
 
-      # A live failure's projected error is an object of the same keys on
-      # the wire, and fits the same shape.
-      grant = %Prima.StreamGrant{
-        topic: :executions,
-        projection: stream.projection,
-        subject: nil,
-        deadline: DateTime.utc_now(),
-        grant_id: "sgr_runs"
-      }
+      for %{"execution_id" => execution_id, "error" => error} = failed <- refreshed do
+        assert %{"kind" => "failed", "error" => %{"class" => class, "message" => message}} =
+                 failed
 
-      live =
-        Cyfr.Bus.Execution.new(actor, :failed,
-          execution_id: "exec_live",
-          reference: @pinned,
-          component_type: :catalyst,
-          error: "upstream gone"
-        )
+        assert class in Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
+        assert String.valid?(message) and byte_size(message) <= 200 and message != ""
+        assert :ok = Prima.Canvas.Shape.check(stream.shape, failed)
 
-      projected = grant |> Prima.StreamGrant.project(Map.from_struct(live)) |> wire()
-      refreshed = wire(failed)
+        assert %{"error" => ^error} = Enum.find(live, &(&1["execution_id"] == execution_id)),
+               "the refreshed error differs from the live one"
+      end
 
-      assert projected["error"] |> Map.keys() |> Enum.sort() ==
-               refreshed["error"] |> Map.keys() |> Enum.sort()
-
-      assert Enum.sort(Map.keys(refreshed["error"])) == ["class", "message"]
-      assert :ok = Prima.Canvas.Shape.check(stream.shape, projected)
+      # The long sentence is cut to the bound on a character boundary.
+      assert Enum.any?(refreshed, &(byte_size(&1["error"]["message"]) in 199..200))
     end
   end
 
-  # A payload as the stream's wire carries it: JSON text read back.
+  # A refresh item or a live payload as a canvas reads it: projected by the
+  # grant and passed through JSON.
+  defp on_the_wire(stream, payload) do
+    grant = %Prima.StreamGrant{
+      topic: stream.topic,
+      projection: stream.projection,
+      subject: nil,
+      deadline: DateTime.utc_now(),
+      grant_id: "sgr_wire"
+    }
+
+    grant |> Prima.StreamGrant.project(payload) |> wire()
+  end
+
+  defp live_failures(0), do: []
+
+  defp live_failures(n) do
+    assert_receive %Cyfr.Bus.Execution{kind: :failed} = failed, 10_000
+    [failed | live_failures(n - 1)]
+  end
+
   defp wire(data), do: data |> Jason.encode!() |> Jason.decode!()
 
   # ---------------------------------------------------------------------------

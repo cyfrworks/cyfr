@@ -481,6 +481,25 @@ defmodule Arca.CronScheduleTest do
     end
   end
 
+  describe "a deleted row" do
+    test "is not updated or deleted again: each answers :not_found and writes nothing",
+         %{actor: actor} do
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "gone"}))
+      # The delete answers the row as it found it, live.
+      assert {:ok, %{status: "active"}} = CronSchedule.soft_delete(actor, schedule.id)
+      before = CronSchedule.get_for_daemon(schedule.id)
+      assert {:ok, %{status: "deleted"}} = before
+
+      assert {:error, :not_found} = CronSchedule.soft_delete(actor, schedule.id)
+
+      for attrs <- [%{status: "paused"}, %{status: "active"}, %{name: "back"}] do
+        assert {:error, :not_found} = CronSchedule.update(actor, schedule.id, attrs)
+      end
+
+      assert CronSchedule.get_for_daemon(schedule.id) == before
+    end
+  end
+
   describe "another athanor's actor" do
     test "naming a feed id reads, claims, accepts and removes nothing", %{
       actor: actor,
@@ -522,6 +541,17 @@ defmodule Arca.CronScheduleTest do
       assert id == feed.id
     end
 
+    test "reads no row through get_held/2, while a member holding its slot does",
+         %{actor: actor, slot: slot} do
+      {:ok, schedule} = CronSchedule.create(actor, valid_attrs(%{name: "held"}))
+      assert {:ok, %{id: id}} = CronSchedule.get_held(actor, schedule.id)
+      assert id == schedule.id
+
+      take_over!(slot)
+      assert Arca.ControlPlane.held?()
+      assert {:error, :not_owner} = CronSchedule.get_held(actor, schedule.id)
+    end
+
     test "creates no schedule", %{actor: actor, slot: slot} do
       take_over!(slot)
 
@@ -556,7 +586,8 @@ defmodule Arca.CronScheduleTest do
 
         assert {:ok, %{error_count: 1}} = CronSchedule.record_error(actor, id, "boom")
         assert {:ok, %{status: "paused"}} = CronSchedule.update(actor, id, %{status: "paused"})
-        assert {:ok, %{status: "deleted"}} = CronSchedule.soft_delete(actor, id)
+        assert {:ok, %{status: "paused"}} = CronSchedule.soft_delete(actor, id)
+        assert {:ok, %{status: "deleted"}} = CronSchedule.get_for_daemon(id)
       end
     end
   end

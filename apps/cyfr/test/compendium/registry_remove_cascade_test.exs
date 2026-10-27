@@ -122,6 +122,49 @@ defmodule Compendium.RegistryRemoveCascadeTest do
     refute Enum.any?(live, &(&1.name == "cascade-hook"))
   end
 
+  test "a schedule of the removed component is removed and announced as removed, once",
+       %{ctx: ctx} do
+    publish!(ctx, "cascade-timed", "1.0.0")
+    actor = Sanctum.Context.actor(ctx)
+
+    {:ok, schedule} =
+      Arca.CronSchedule.create(actor, %{
+        user_id: ctx.user_id,
+        athanor_id: ctx.athanor_id,
+        name: "cascade-nightly",
+        cron_expression: "0 3 * * *",
+        reference: "reagent:local.cascade-timed",
+        resolved_reference: "reagent:local.cascade-timed:1.0.0",
+        profile_id: "prof-cascade-timed",
+        next_run_at: DateTime.add(DateTime.utc_now(), 3_600, :second),
+        cap: 0
+      })
+
+    id = schedule.id
+    :ok = Cyfr.Bus.subscribe(actor, Cyfr.Bus.schedules(actor))
+
+    {:ok, _} = Compendium.Registry.delete(ctx, "cascade-timed", "1.0.0", "local")
+
+    assert {:ok, %{status: "deleted"}} = Arca.CronSchedule.get(actor, id)
+
+    assert_receive %Cyfr.Bus.Schedules{kind: :removed, schedule_id: ^id} = removed
+    assert {removed.name, removed.status, removed.run_count} == {"cascade-nightly", "active", 0}
+
+    {:ok, {_provider, stream}} = Sanctum.Catalog.lookup_stream("schedules.changes")
+
+    grant = %Prima.StreamGrant{
+      topic: stream.topic,
+      projection: stream.projection,
+      subject: nil,
+      deadline: DateTime.utc_now(),
+      grant_id: "sgr_cascade"
+    }
+
+    data = grant |> Prima.StreamGrant.project(removed) |> Jason.encode!() |> Jason.decode!()
+    assert :ok = Prima.Canvas.Shape.check(stream.shape, data)
+    refute_receive %Cyfr.Bus.Schedules{schedule_id: ^id}, 200
+  end
+
   test "removing one of several versions cascades nothing", %{ctx: ctx} do
     publish!(ctx, "cascade-multi", "1.0.0")
     publish!(ctx, "cascade-multi", "1.0.1")

@@ -129,6 +129,8 @@ defmodule Compendium.Providers.CanvasTest do
 
       {:ok, {_provider, feeds}} = Sanctum.Catalog.lookup_stream("feed.results")
       {:ok, {_provider, runs}} = Sanctum.Catalog.lookup_stream("runs.changes")
+      {:ok, {_provider, schedule_runs}} = Sanctum.Catalog.lookup_stream("schedule_runs.changes")
+      {:ok, {_provider, schedules}} = Sanctum.Catalog.lookup_stream("schedules.changes")
 
       assert streams == [
                %{
@@ -142,6 +144,20 @@ defmodule Compendium.Providers.CanvasTest do
                  name: "runs.changes",
                  subject: nil,
                  shape: runs.shape,
+                 filter: nil,
+                 refresh: true
+               },
+               %{
+                 name: "schedule_runs.changes",
+                 subject: nil,
+                 shape: schedule_runs.shape,
+                 filter: nil,
+                 refresh: true
+               },
+               %{
+                 name: "schedules.changes",
+                 subject: nil,
+                 shape: schedules.shape,
                  filter: nil,
                  refresh: true
                }

@@ -13,6 +13,8 @@ defmodule PrismWeb.ActivitiesLiveTest do
   """
   use PrismWeb.ConnCase, async: false
 
+  import Prima.Test.Wait
+
   setup %{conn: conn} do
     conn = log_in_user(conn, test_user())
     {view, _html} = mount_athanor(conn, "/activities")
@@ -175,6 +177,29 @@ defmodule PrismWeb.ActivitiesLiveTest do
 
     assert has_element?(view, ~s(tr[data-call-id="#{refused.call_id}"]))
     refute has_element?(view, ~s(tr[data-call-id="#{admitted.call_id}"]))
+  end
+
+  for {who, kind} <- [{"feed", "feed"}, {"schedule", "schedule"}] do
+    test "a #{who}'s fire shows its decision without a reload", %{view: view} do
+      ctx = athanor_context()
+      fire = decision(ctx, tool: "schedule", action: "fire")
+      :ok = Sanctum.Decisions.open(ctx, fire, %{method: "cron/fire", input: %{}})
+      row = ~s(tr[data-call-id="#{fire.call_id}"])
+
+      # Nothing told the page yet: the row it read at mount stands.
+      settled_render(view)
+      refute has_element?(view, row)
+
+      :telemetry.execute([:cyfr, :schedules, :fired], %{}, %{
+        athanor_id: ctx.athanor_id,
+        schedule_id: "sch_or_feed_1",
+        kind: unquote(kind),
+        occurrence_id: "occ_1",
+        execution_id: "exec_1"
+      })
+
+      wait_until(fn -> has_element?(view, row) end, 5_000, "the fire's decision to show")
+    end
   end
 
   test "?id=req_… focuses the request and correlates it", %{conn: conn} do

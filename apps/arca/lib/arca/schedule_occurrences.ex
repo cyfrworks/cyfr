@@ -769,6 +769,36 @@ defmodule Arca.ScheduleOccurrences do
   def list(%Prima.Actor{}, _schedule_id, _opts), do: {:error, :no_athanor}
 
   @doc """
+  The athanor's `limit:` newest occurrences of rows of kind `schedule`,
+  newest due time first (the id breaks a tie), a feed's never among them.
+  Read only while this member still holds its slot (`Arca.Repo.owned/2`),
+  so a member that lost it answers `:not_owner` rather than what its
+  store last held.
+  """
+  @spec recent(Prima.Actor.t(), keyword()) ::
+          {:ok, [map()]} | {:error, :no_athanor | :not_owner | :database_error}
+  def recent(%Prima.Actor{athanor_id: athanor_id}, opts)
+      when is_binary(athanor_id) and athanor_id != "" do
+    limit = Keyword.fetch!(opts, :limit)
+
+    Arca.Repo.owned("ScheduleOccurrences.recent", fn ->
+      {:ok,
+       Arca.Repo.all(
+         from(o in ScheduleOccurrence,
+           join: s in CronSchedule,
+           on: s.id == o.schedule_id and s.athanor_id == o.athanor_id,
+           where: o.athanor_id == ^athanor_id and s.athanor_id == ^athanor_id,
+           where: s.kind == "schedule",
+           order_by: [desc: o.scheduled_for, desc: o.id],
+           limit: ^limit
+         )
+       )}
+    end)
+  end
+
+  def recent(%Prima.Actor{}, _opts), do: {:error, :no_athanor}
+
+  @doc """
   What a member may take over: the occurrences claimed and never invoked
   (their execution admission never happened, so they run once), and the
   started ones whose execution has ended or was swept while the occurrence

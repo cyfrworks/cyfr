@@ -220,16 +220,18 @@ defmodule Opus.Providers.Feed do
   @doc """
   The refresh of `runs.changes`: the caller's athanor's #{@recent_runs}
   newest runs, read as the runs page reads them (`Opus.Record.list/2`,
-  scoped to the athanor), oldest first, each as the change it last made.
-  A running or paused run reads as `started`. An error is in the live
-  payload's form, `class` and `message`: the record keeps its sentence as
-  the message, and no class, so `class` is nil. The subject is none.
+  scoped to the athanor), oldest first, each as the change it last made,
+  built as the live payload is (`Cyfr.Bus.Execution`): its error is the
+  stored sentence classified and cut as a live failure's is. A running or
+  paused run reads as `started`. The subject is none.
   """
-  @spec recent_runs(Context.t(), nil) :: {:ok, [map()]} | {:error, term()}
+  @spec recent_runs(Context.t(), nil) :: {:ok, [Cyfr.Bus.Execution.t()]} | {:error, term()}
   def recent_runs(%Context{athanor_id: athanor_id} = ctx, _subject)
       when is_binary(athanor_id) and athanor_id != "" do
+    actor = Context.actor(ctx)
+
     with {:ok, records} <- Opus.Record.list(ctx, limit: @recent_runs) do
-      {:ok, records |> Enum.map(&run_change/1) |> Enum.reverse()}
+      {:ok, records |> Enum.map(&run_change(actor, &1)) |> Enum.reverse()}
     end
   end
 
@@ -257,26 +259,22 @@ defmodule Opus.Providers.Feed do
     }
   end
 
-  defp run_change(%Opus.Record{status: status} = record) do
-    %{
-      "kind" => change_kind(status),
-      "execution_id" => record.id,
-      "parent_execution_id" => record.parent_execution_id,
-      "reference" => record.reference,
-      "component_type" => Atom.to_string(record.component_type),
-      "duration_ms" => record.duration_ms,
-      "error" => run_error(record.error)
-    }
+  # The executions topic's payload of a record: the live failure's error
+  # is the sentence the record stores, so the same constructor classifies
+  # and cuts both.
+  defp run_change(actor, %Opus.Record{status: status} = record) do
+    Cyfr.Bus.Execution.new(actor, change_kind(status),
+      execution_id: record.id,
+      parent_execution_id: record.parent_execution_id,
+      reference: record.reference,
+      component_type: record.component_type,
+      duration_ms: record.duration_ms,
+      error: record.error
+    )
   end
 
-  # The live payload's form of an error (`Cyfr.Bus.Execution`): its class
-  # and its sentence. A record keeps the sentence alone, so its class is
-  # unknown here.
-  defp run_error(nil), do: nil
-  defp run_error(message) when is_binary(message), do: %{"class" => nil, "message" => message}
-
-  defp change_kind(status) when status in [:running, :paused], do: "started"
-  defp change_kind(status), do: Atom.to_string(status)
+  defp change_kind(status) when status in [:running, :paused], do: :started
+  defp change_kind(status) when status in [:completed, :failed, :cancelled], do: status
 
   defp feed_results_shape do
     normalized(%{
@@ -315,7 +313,18 @@ defmodule Opus.Providers.Feed do
         "reference" => %{"type" => "string"},
         "component_type" => %{"type" => "string", "nullable" => true},
         "duration_ms" => %{"type" => "integer", "nullable" => true},
-        "error" => %{"type" => "json", "nullable" => true}
+        "error" => %{
+          "type" => "object",
+          "nullable" => true,
+          "fields" => %{
+            "class" => %{
+              "type" => "enum",
+              "values" => Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
+            },
+            "message" => %{"type" => "string"}
+          },
+          "required" => ["class", "message"]
+        }
       },
       "required" => [
         "kind",

@@ -15,7 +15,23 @@ defmodule Opus.Schedules.Provider do
 
   Every action reads rows of kind `schedule` only: a feed shares the
   table (`Opus.Feeds`), but its id or name is `not_found` here, `list`
-  omits it, and the schedules' cap counts schedules alone.
+  omits it, and the schedules' cap counts schedules alone. Every write
+  that commits announces the row (`Opus.Schedules.Changes`): `changed`
+  after a create, an update, a pause, a resume or a re-resolve, and
+  `removed` after a delete.
+
+  The streams (`streams/0`) are canvas-readable, each declaring a shape,
+  taking no subject, and handed its current state first:
+
+    * `schedules.changes` rides the athanor's schedules topic. Its
+      refresh is every live schedule of the athanor, paused ones
+      included, as `changed` (`live_schedules/2`).
+    * `schedule_runs.changes` rides the athanor's schedule runs topic. Its
+      refresh is the athanor's 20 newest occurrences of schedules
+      (`recent_runs/2`).
+
+  Neither carries a schedule's input, metadata, profile, pinned
+  reference, maker or feed columns.
 
   The cap is the platform setting `max_schedules_per_athanor` (0 is no
   ceiling), read at each create and handed to `Arca.CronSchedule.create/2`,
@@ -31,7 +47,17 @@ defmodule Opus.Schedules.Provider do
   @impl true
   def service, do: "opus"
 
+  alias Cyfr.Bus.ScheduleRun
+  alias Opus.Schedules.Changes
+  alias Prima.Canvas.Shape
   alias Sanctum.{Context, Refusals}
+
+  # The newest occurrences a `schedule_runs.changes` subscriber is handed
+  # first.
+  @recent_runs 20
+
+  # A day: the longest a grant on either stream lives.
+  @deadline_bound 86_400
 
   require Logger
 
@@ -355,6 +381,7 @@ defmodule Opus.Schedules.Provider do
         case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, update_attrs) do
           {:ok, updated} ->
             Opus.Schedules.Scheduler.update(updated.id)
+            Changes.changed(Sanctum.Context.actor(ctx), updated.id)
             {:ok, format_schedule(updated)}
 
           {:error, reason} ->
@@ -377,6 +404,7 @@ defmodule Opus.Schedules.Provider do
         case Arca.CronSchedule.update(Sanctum.Context.actor(ctx), schedule.id, %{status: "paused"}) do
           {:ok, updated} ->
             Opus.Schedules.Scheduler.pause(updated.id)
+            Changes.changed(Sanctum.Context.actor(ctx), updated.id)
             {:ok, format_schedule(updated)}
 
           {:error, reason} ->
@@ -406,6 +434,7 @@ defmodule Opus.Schedules.Provider do
              }) do
           {:ok, updated} ->
             Opus.Schedules.Scheduler.resume(updated.id)
+            Changes.changed(Sanctum.Context.actor(ctx), updated.id)
             {:ok, format_schedule(updated)}
 
           {:error, reason} ->
@@ -422,8 +451,9 @@ defmodule Opus.Schedules.Provider do
 
       {:ok, schedule} ->
         case Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), schedule.id) do
-          {:ok, _} ->
+          {:ok, deleted} ->
             Opus.Schedules.Scheduler.remove(schedule.id)
+            Changes.removed(Sanctum.Context.actor(ctx), deleted)
             {:ok, %{deleted: true, schedule_id: schedule.id, name: schedule.name}}
 
           {:error, reason} ->
@@ -447,6 +477,169 @@ defmodule Opus.Schedules.Provider do
             {:error, "Failed to re-resolve '#{schedule.reference}': #{Refusals.render(reason)}"}
         end
     end
+  end
+
+  @doc """
+  The streams a canvas reads: `schedules.changes` and
+  `schedule_runs.changes`, each with its shape and refresh (the
+  moduledoc's).
+  """
+  @impl true
+  def streams do
+    [
+      %Prima.Provider.Stream{
+        name: "schedules.changes",
+        topic: :schedules,
+        projection: [
+          "kind",
+          "schedule_id",
+          "name",
+          "reference",
+          "cron_expression",
+          "status",
+          "next_run_at",
+          "last_run_at",
+          "run_count",
+          "error_count"
+        ],
+        deadline_bound: @deadline_bound,
+        shape: schedules_shape(),
+        refresh: {__MODULE__, :live_schedules}
+      },
+      %Prima.Provider.Stream{
+        name: "schedule_runs.changes",
+        topic: :schedule_runs,
+        projection: [
+          "kind",
+          "schedule_id",
+          "occurrence_id",
+          "execution_id",
+          "scheduled_for",
+          "reason"
+        ],
+        deadline_bound: @deadline_bound,
+        shape: schedule_runs_shape(),
+        refresh: {__MODULE__, :recent_runs}
+      }
+    ]
+  end
+
+  @doc """
+  The refresh of `schedules.changes`: every live schedule of the caller's
+  athanor, paused ones included, newest first, each as `changed`. The
+  schedules' cap bounds how many there are, so no other bound applies.
+  The subject is none.
+  """
+  @spec live_schedules(Context.t(), nil) :: {:ok, [Cyfr.Bus.Schedules.t()]} | {:error, term()}
+  def live_schedules(%Context{athanor_id: athanor_id} = ctx, _subject)
+      when is_binary(athanor_id) and athanor_id != "" do
+    actor = Sanctum.Context.actor(ctx)
+
+    with {:ok, rows} <- Arca.CronSchedule.list(actor, kind: @kind, limit: :infinity) do
+      {:ok, Enum.map(rows, &Changes.payload(actor, :changed, &1))}
+    end
+  end
+
+  def live_schedules(%Context{}, _subject), do: {:error, :no_athanor}
+
+  @doc """
+  The refresh of `schedule_runs.changes`: the caller's athanor's
+  #{@recent_runs} newest occurrences of schedules
+  (`Arca.ScheduleOccurrences.recent/2`), oldest first. A `failed` or
+  `uncertain` occurrence reads as `failed` and any other as `fired`. An
+  occurrence keeps no reason, so its `reason` is nil. The subject is
+  none.
+  """
+  @spec recent_runs(Context.t(), nil) :: {:ok, [ScheduleRun.t()]} | {:error, term()}
+  def recent_runs(%Context{} = ctx, _subject) do
+    actor = Sanctum.Context.actor(ctx)
+
+    with {:ok, occurrences} <- Arca.ScheduleOccurrences.recent(actor, limit: @recent_runs) do
+      {:ok, occurrences |> Enum.reverse() |> Enum.map(&run_change(actor, &1))}
+    end
+  end
+
+  defp run_change(actor, occurrence) do
+    ScheduleRun.new(actor, run_kind(occurrence.state),
+      schedule_id: occurrence.schedule_id,
+      occurrence_id: occurrence.id,
+      execution_id: occurrence.execution_id,
+      scheduled_for: occurrence.scheduled_for,
+      reason: nil
+    )
+  end
+
+  defp run_kind(state) when state in ["failed", "uncertain"], do: :failed
+  defp run_kind(_state), do: :fired
+
+  defp schedules_shape do
+    normalized(%{
+      "type" => "object",
+      "fields" => %{
+        "kind" => %{"type" => "enum", "values" => ["changed", "removed"]},
+        "schedule_id" => %{"type" => "string"},
+        "name" => %{"type" => "string"},
+        "reference" => %{"type" => "string"},
+        "cron_expression" => %{"type" => "string"},
+        "status" => %{"type" => "enum", "values" => Arca.CronSchedule.statuses() -- ["deleted"]},
+        "next_run_at" => %{"type" => "time", "nullable" => true},
+        "last_run_at" => %{"type" => "time", "nullable" => true},
+        "run_count" => %{"type" => "integer"},
+        "error_count" => %{"type" => "integer"}
+      },
+      "required" => [
+        "kind",
+        "schedule_id",
+        "name",
+        "reference",
+        "cron_expression",
+        "status",
+        "next_run_at",
+        "last_run_at",
+        "run_count",
+        "error_count"
+      ]
+    })
+  end
+
+  defp schedule_runs_shape do
+    normalized(%{
+      "type" => "object",
+      "fields" => %{
+        "kind" => %{"type" => "enum", "values" => ["fired", "failed"]},
+        "schedule_id" => %{"type" => "string"},
+        "occurrence_id" => %{"type" => "string", "nullable" => true},
+        "execution_id" => %{"type" => "string", "nullable" => true},
+        "scheduled_for" => %{"type" => "time", "nullable" => true},
+        "reason" => %{
+          "type" => "object",
+          "nullable" => true,
+          "fields" => %{
+            "class" => %{
+              "type" => "enum",
+              "values" => Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
+            },
+            "message" => %{"type" => "string"}
+          },
+          "required" => ["class", "message"]
+        }
+      },
+      "required" => [
+        "kind",
+        "schedule_id",
+        "occurrence_id",
+        "execution_id",
+        "scheduled_for",
+        "reason"
+      ]
+    })
+  end
+
+  # Declared in the normalized form the stream table keeps
+  # (`Prima.Provider.Stream.valid?/1`).
+  defp normalized(shape) do
+    {:ok, normalized} = Shape.validate(shape)
+    normalized
   end
 
   # Helpers
@@ -526,6 +719,7 @@ defmodule Opus.Schedules.Provider do
       case Arca.CronSchedule.create(Sanctum.Context.actor(ctx), Map.put(attrs, :cap, cap)) do
         {:ok, schedule} ->
           Opus.Schedules.Scheduler.add(schedule.id)
+          Changes.changed(Sanctum.Context.actor(ctx), schedule.id)
           {:ok, format_schedule(schedule)}
 
         {:error, :schedule_cap} ->
@@ -631,6 +825,7 @@ defmodule Opus.Schedules.Provider do
            }) do
         {:ok, updated} ->
           Opus.Schedules.Scheduler.update(updated.id)
+          Changes.changed(Sanctum.Context.actor(ctx), updated.id)
           {:ok, format_schedule(updated)}
 
         {:error, reason} ->

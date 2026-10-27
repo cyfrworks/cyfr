@@ -602,6 +602,70 @@ defmodule Arca.ScheduleOccurrencesTest do
              )
   end
 
+  describe "recent/2" do
+    # An occurrence row as a claim and its end leave one, due at `at`.
+    defp occurrence!(athanor_id, schedule_id, at, state \\ "completed") do
+      %Arca.Schemas.ScheduleOccurrence{}
+      |> Arca.Schemas.ScheduleOccurrence.changeset(%{
+        id: "occ_" <> String.pad_leading("#{System.unique_integer([:positive])}", 12, "0"),
+        athanor_id: athanor_id,
+        schedule_id: schedule_id,
+        scheduled_for: at,
+        state: state,
+        claimed_at: at
+      })
+      |> Arca.Repo.insert!()
+    end
+
+    defp minutes_ago(n), do: DateTime.add(~U[2026-10-27 12:00:00.000000Z], -n * 60, :second)
+
+    test "answers the athanor's newest occurrences of schedules, a feed's and another athanor's never",
+         %{actor: actor} do
+      a = due!(actor)
+      b = due!(actor)
+      feed = due_feed!(actor)
+
+      older = for n <- 1..24, do: occurrence!(actor.athanor_id, a.id, minutes_ago(n + 1))
+      # Two schedules due at one instant: the greater id comes first.
+      tied = for row <- [a, b], do: occurrence!(actor.athanor_id, row.id, minutes_ago(1))
+      # Newer than every schedule's, so a filter applied after the limit
+      # would let them in.
+      for n <- 1..3,
+          do: occurrence!(actor.athanor_id, feed.id, DateTime.add(minutes_ago(0), n, :second))
+
+      other = Arca.Test.Actor.in_athanor("ath_recent_other")
+      Arca.Test.Actor.athanor!(other.athanor_id)
+      theirs = due!(%{other | user_id: actor.user_id})
+      occurrence!(other.athanor_id, theirs.id, minutes_ago(0))
+
+      expected =
+        (Enum.sort_by(tied, & &1.id, :desc) ++ Enum.take(older, 18)) |> Enum.map(& &1.id)
+
+      assert {:ok, recent} = ScheduleOccurrences.recent(actor, limit: 20)
+      assert Enum.map(recent, & &1.id) == expected
+      assert {:ok, [_]} = ScheduleOccurrences.recent(actor, limit: 1)
+    end
+
+    test "an actor that names no athanor is refused before any read" do
+      for athanor_id <- [nil, ""] do
+        assert {:error, :no_athanor} =
+                 ScheduleOccurrences.recent(%Prima.Actor{athanor_id: athanor_id}, limit: 20)
+      end
+    end
+
+    test "a member whose slot was taken over reads nothing: :not_owner, not an empty answer",
+         %{actor: actor} do
+      slot = claimant!()
+      schedule = due!(actor)
+      occurrence!(actor.athanor_id, schedule.id, minutes_ago(1))
+      assert {:ok, [_]} = ScheduleOccurrences.recent(actor, limit: 20)
+
+      take_over!(slot)
+      assert Arca.ControlPlane.held?()
+      assert {:error, :not_owner} = ScheduleOccurrences.recent(actor, limit: 20)
+    end
+  end
+
   describe "the claim's slot fence" do
     test "a schedule's and a feed's claim are refused :not_owner after a takeover, nothing moved",
          %{actor: actor} do

@@ -41,7 +41,12 @@ defmodule PrismWeb.ActivitiesLive do
     if connected?(socket) do
       actor = Sanctum.Context.actor(socket.assigns[:context])
 
-      for topic <- [Bus.requests(actor), Bus.tinctures(actor), Bus.schedule_runs(actor)] do
+      for topic <- [
+            Bus.requests(actor),
+            Bus.tinctures(actor),
+            Bus.schedule_runs(actor),
+            Bus.feed_runs(actor)
+          ] do
         Bus.subscribe(actor, topic)
       end
     end
@@ -157,6 +162,8 @@ defmodule PrismWeb.ActivitiesLive do
   def handle_info(%Bus.Tinctures{}, socket), do: {:noreply, socket}
 
   def handle_info(%Bus.ScheduleRun{}, socket), do: schedule_refresh(socket)
+
+  def handle_info(%Bus.FeedRun{}, socket), do: schedule_refresh(socket)
 
   def handle_info(:load_data, socket) do
     {:noreply, fetch_decisions(socket)}

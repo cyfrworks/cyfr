@@ -219,6 +219,55 @@ defmodule PrismWeb.TopbarLiveTest do
     wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the second burst to drain")
   end
 
+  for {who, kind} <- [{"feed", "feed"}, {"schedule", "schedule"}] do
+    test "a #{who}'s fire shows its request in flight", %{conn: conn} do
+      conn = log_in_user(conn, test_user())
+      {view, _html} = mount_athanor(conn, "")
+      bar = topbar(view)
+      wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the mount's refresh to drain")
+      render_click(bar, "toggle_popover", %{"name" => "activity"})
+      assert render(bar) =~ "In-flight requests (0)"
+
+      athanor_id = seated_athanor().id
+
+      ctx = %{
+        Sanctum.TestContext.local(:prism)
+        | athanor_id: athanor_id,
+          request_id: Prima.UUID7.request_id()
+      }
+
+      fire =
+        Prima.Decision.new(
+          call_id: Prima.UUID7.generate_id("call"),
+          request_id: ctx.request_id,
+          user_id: ctx.user_id,
+          athanor_id: athanor_id,
+          plane: :external,
+          tool: "schedule",
+          action: "fire",
+          inserted_at: DateTime.utc_now(),
+          admission: :admitted
+        )
+
+      :ok = Sanctum.Decisions.open(ctx, fire, %{method: "cron/fire", input: %{}})
+      assert render(bar) =~ "In-flight requests (0)"
+
+      :telemetry.execute([:cyfr, :schedules, :fired], %{}, %{
+        athanor_id: athanor_id,
+        schedule_id: "sch_or_feed_1",
+        kind: unquote(kind),
+        occurrence_id: "occ_1",
+        execution_id: "exec_1"
+      })
+
+      wait_until(
+        fn -> render(bar) =~ "In-flight requests (1)" end,
+        5_000,
+        "the fire's request to show in flight"
+      )
+    end
+  end
+
   test "a badge counts the offers waiting for the person, on each of their browsers, as they " <>
          "come and go",
        %{conn: conn} do

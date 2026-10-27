@@ -130,18 +130,19 @@ defmodule Arca.CronSchedule do
   def create(%Prima.Actor{}, %{}), do: {:error, :no_athanor}
 
   @doc """
-  Updates an existing row with tenant-scoped lookup. Every row, whatever
-  its kind, is written only under the member's live slot (`:not_owner`
-  otherwise).
+  Updates a live row with tenant-scoped lookup: a deleted row is
+  `:not_found`, decided in the write's own locked read, so a write that
+  raced a delete changes nothing. Every row, whatever its kind, is
+  written only under the member's live slot (`:not_owner` otherwise).
   """
   @spec update(Prima.Actor.t(), String.t(), map()) ::
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
   def update(%Prima.Actor{} = actor, id, attrs) do
     Errors.with_db_rescue("CronSchedule.update", fn ->
-      guarded(actor, id, fn schedule ->
+      guarded(actor, id, :live, fn schedule ->
         attrs = Map.put(attrs, :updated_at, DateTime.utc_now())
 
         schedule
@@ -160,6 +161,16 @@ defmodule Arca.CronSchedule do
     Errors.with_db_rescue("CronSchedule.get", fn -> get_tenant(actor, id) end)
     |> Arca.Data.project()
   end
+
+  @doc """
+  Gets a schedule by ID with tenant-scoped lookup, read only while this
+  member holds its slot (`Arca.Repo.owned/2`): a member that lost it
+  answers `:not_owner` rather than a row it may no longer speak for.
+  """
+  @spec get_held(Prima.Actor.t(), String.t()) ::
+          {:ok, map()} | {:error, :not_found | :not_owner | :database_error}
+  def get_held(%Prima.Actor{} = actor, id),
+    do: Arca.Repo.owned("CronSchedule.get_held", fn -> get_tenant(actor, id) end)
 
   @doc """
   Gets a schedule by ID (unscoped).
@@ -212,7 +223,8 @@ defmodule Arca.CronSchedule do
 
   @doc """
   Lists the athanor's live rows, newest first. `kind:` lists one kind and
-  nil (the default) both; `limit:` bounds the answer (50).
+  nil (the default) both; `limit:` bounds the answer (50), and `:infinity`
+  answers every live row.
   """
   @spec list(Prima.Actor.t(), keyword()) ::
           {:ok, [map()]} | {:error, :database_error}
@@ -220,14 +232,9 @@ defmodule Arca.CronSchedule do
 
   def list(%Prima.Actor{} = actor, opts) do
     Errors.with_db_rescue("CronSchedule.list", fn ->
-      limit = Keyword.get(opts, :limit, 50)
-
       rows =
-        from(s in Row,
-          where: s.status != "deleted",
-          order_by: [desc: s.created_at],
-          limit: ^limit
-        )
+        from(s in Row, where: s.status != "deleted", order_by: [desc: s.created_at])
+        |> limited(Keyword.get(opts, :limit, 50))
         |> where_tenant_unless_platform(actor)
         |> of_kind(Keyword.get(opts, :kind))
         |> Arca.Repo.all()
@@ -269,7 +276,7 @@ defmodule Arca.CronSchedule do
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
   # Increment atomically; concurrent runs must not overwrite each other’s counts.
   def record_run(%Prima.Actor{} = actor, id, execution_id) do
     Errors.with_db_rescue("CronSchedule.record_run", fn ->
@@ -297,7 +304,7 @@ defmodule Arca.CronSchedule do
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
   # Atomic increment, for the reason spelled out at `record_run/3`.
   def record_error(%Prima.Actor{} = actor, id, _reason) do
     Errors.with_db_rescue("CronSchedule.record_error", fn ->
@@ -315,22 +322,29 @@ defmodule Arca.CronSchedule do
   end
 
   @doc """
-  Soft-deletes a row with tenant-scoped lookup. Every row, whatever its
-  kind, is written only under the member's live slot (`:not_owner`
-  otherwise).
+  Soft-deletes a live row with tenant-scoped lookup, and answers the row
+  as the delete's own locked read found it, the moment before it was
+  deleted. A row already deleted is `:not_found`, decided in that read,
+  so of two deletes that race exactly one answers the removed row. Every
+  row, whatever its kind, is written only under the member's live slot
+  (`:not_owner` otherwise).
   """
   @spec soft_delete(Prima.Actor.t(), String.t()) ::
           {:ok, map()}
           | {:error,
              :not_found | :not_owner | {:validation, %{atom() => [String.t()]}} | :database_error}
-  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/3`'s locked_tenant/2.
+  # arca:unscoped-ok the row was read and locked tenant-scoped by `guarded/4`'s locked_tenant/3.
   def soft_delete(%Prima.Actor{} = actor, id) do
     Errors.with_db_rescue("CronSchedule.soft_delete", fn ->
-      guarded(actor, id, fn schedule ->
+      guarded(actor, id, :live, fn schedule ->
         schedule
         |> Row.delete_changeset(DateTime.utc_now())
         |> Arca.Repo.update()
         |> mapped_validation()
+        |> case do
+          {:ok, _deleted} -> {:ok, schedule}
+          refused -> refused
+        end
       end)
     end)
     |> Arca.Data.project()
@@ -530,6 +544,12 @@ defmodule Arca.CronSchedule do
     end
   end
 
+  defp live_only(query, :any), do: query
+  defp live_only(query, :live), do: where(query, [s], s.status != "deleted")
+
+  defp limited(query, :infinity), do: query
+  defp limited(query, limit) when is_integer(limit) and limit >= 0, do: limit(query, ^limit)
+
   defp of_kind(query, nil), do: query
   defp of_kind(query, kind) when kind in @kinds, do: where(query, [s], s.kind == ^kind)
 
@@ -674,11 +694,12 @@ defmodule Arca.CronSchedule do
 
   # A generic writer's transaction (`update/3`, `record_run/3`,
   # `record_error/3`, `soft_delete/2`): the row is read and locked
-  # tenant-scoped, then the member's slot is checked, in the same
-  # transaction and before anything is written, whatever the row's kind.
-  defp guarded(actor, id, write) do
+  # tenant-scoped, `:live` reading a row that is not deleted and `:any`
+  # any row, then the member's slot is checked, in the same transaction
+  # and before anything is written, whatever the row's kind.
+  defp guarded(actor, id, rows \\ :any, write) do
     Arca.Repo.locking_transaction(fn ->
-      with {:ok, row} <- locked_tenant(actor, id),
+      with {:ok, row} <- locked_tenant(actor, id, rows),
            :ok <- slot_fence() do
         write.(row) |> Arca.Repo.committed()
       else
@@ -687,8 +708,9 @@ defmodule Arca.CronSchedule do
     end)
   end
 
-  defp locked_tenant(actor, id) do
+  defp locked_tenant(actor, id, rows) do
     from(s in Row, where: s.id == ^id)
+    |> live_only(rows)
     |> where_tenant_unless_platform(actor)
     |> QueryHelpers.for_update()
     |> Arca.Repo.one()

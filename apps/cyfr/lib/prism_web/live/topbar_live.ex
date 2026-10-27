@@ -17,10 +17,10 @@ defmodule PrismWeb.TopbarLive do
   | Indicator   | Source                 | Subscribes              |
   |-------------|------------------------|-------------------------|
   | Health      | system/status          | (loaded on mount)       |
-  | Activity    | mcp_log/list           | bus:requests + tinctures + schedules |
+  | Activity    | mcp_log/list           | bus:requests + tinctures + schedule_runs + feed_runs |
   | Executions  | execution/list         | bus:executions        |
   | Rate        | mcp_log/stats          | bus:requests          |
-  | Schedules   | schedule/list          | bus:schedules         |
+  | Schedules   | schedule/list          | bus:schedule_runs     |
   | Builds      | telemetry-only         | bus:builds            |
   | Tinctures   | telemetry-only         | bus:tinctures         |
   | User        | the session            |                         |
@@ -111,6 +111,7 @@ defmodule PrismWeb.TopbarLive do
           Bus.requests(actor),
           Bus.executions(actor),
           Bus.schedule_runs(actor),
+          Bus.feed_runs(actor),
           Bus.builds(actor),
           Bus.tinctures(actor)
         ] do
@@ -229,6 +230,14 @@ defmodule PrismWeb.TopbarLive do
   end
 
   def handle_info(%Bus.ScheduleRun{}, socket), do: {:noreply, socket}
+
+  # A feed's fire refreshes what a schedule's does: it is a running
+  # request too.
+  def handle_info(%Bus.FeedRun{kind: :fired}, socket) do
+    {:noreply, refresh(socket, [:schedules, :requests])}
+  end
+
+  def handle_info(%Bus.FeedRun{}, socket), do: {:noreply, socket}
 
   def handle_info(:do_refresh, socket) do
     pending = socket.assigns.refresh_pending

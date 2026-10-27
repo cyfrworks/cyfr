@@ -14,6 +14,7 @@ defmodule Compendium.Cascade do
   require Logger
 
   alias Compendium.ComponentPath
+  alias Cyfr.Bus.Schedules
   alias Sanctum.Context
 
   @doc """
@@ -103,8 +104,15 @@ defmodule Compendium.Cascade do
   # behind, so it is said by the row's id and the reason, never its
   # content, and the uninstall goes on.
   defp remove_registration(ctx, schedule) do
-    case Arca.CronSchedule.soft_delete(Sanctum.Context.actor(ctx), schedule.id) do
-      {:ok, _removed} ->
+    actor = Sanctum.Context.actor(ctx)
+
+    case Arca.CronSchedule.soft_delete(actor, schedule.id) do
+      {:ok, removed} ->
+        announce_removed(actor, removed)
+
+      # Removed by another delete since the sweep listed it: that delete
+      # removed it and announced it.
+      {:error, :not_found} ->
         :ok
 
       {:error, reason} ->
@@ -114,6 +122,31 @@ defmodule Compendium.Cascade do
         )
     end
   end
+
+  # A schedule's removal is announced as the schedule tool's delete
+  # announces one (`Opus.Schedules.Changes`, which this layer cannot
+  # reach): by the delete whose write removed the live row, after its
+  # commit, with the row as that delete's locked read found it, under the
+  # schedule's lock and only while this member holds its slot. A feed's
+  # row is not a schedule's.
+  defp announce_removed(actor, %{kind: "schedule"} = removed) do
+    Schedules.serialized(removed.id, fn ->
+      payload =
+        Schedules.new(actor, :removed, Schedules.row_fields(removed))
+
+      with {:ok, _held} <- Arca.CronSchedule.get_held(actor, removed.id),
+           :ok <- Cyfr.Bus.broadcast(actor, Cyfr.Bus.schedules(actor), payload) do
+        :ok
+      else
+        {:error, reason} ->
+          Logger.warning(
+            "[Compendium.Cascade] removal of #{removed.id} not announced: #{inspect(reason)}"
+          )
+      end
+    end)
+  end
+
+  defp announce_removed(_actor, _feed), do: :ok
 
   # The reason's name alone: a validation's map would carry its messages.
   defp refusal_word({:validation, _errors}), do: "validation"
