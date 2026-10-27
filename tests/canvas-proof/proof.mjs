@@ -355,6 +355,65 @@ const instrument = (page) =>
 const receiptsOf = (marks, from, frame, verb) =>
   marks.receipts.slice(from).filter((r) => (!frame || r.frame === frame) && (!verb || r.verb === verb));
 
+// The receipts of `frame`'s `verb` after index `from`, read once the shell
+// has handled `count` of them (or 5 s have passed) and 600 ms more, so any
+// beyond them is counted too.
+async function handled(page, from, frame, verb, count) {
+  await lib.waitFor(async () => receiptsOf(await instrument(page), from, frame, verb).filter((r) => r.dropped !== undefined).length >= count || null,
+    { timeoutMs: 5_000, stepMs: 50, what: `the shell's receipt of ${count} ${verb}` }).catch(() => null);
+  await sleep(600);
+  return receiptsOf(await instrument(page), from, frame, verb);
+}
+
+// What the shell did with receipts of one verb: how many it received,
+// forwarded and dropped, and, for the last, whether it held activation and
+// the canvas's frame was its active element.
+function receiptFacts(receipts) {
+  const last = receipts[receipts.length - 1] || null;
+  return {
+    received: receipts.length,
+    forwarded: receipts.filter((r) => r.dropped === false).length,
+    dropped: receipts.filter((r) => r.dropped === true).length,
+    active: last && last.active,
+    active_element_is_frame: last && last.activeElementIsFrame,
+  };
+}
+
+// A person's click at (x, y), the viewport point a frame's element was
+// measured at, in the frame with id `frame`: the button goes down there and
+// comes up once the shell's document holds that frame as its active
+// element, or after 2 s, as a person's click comes up a moment after it
+// lands. Playwright's own click sends the button's down and up at once. In
+// Chromium the canvas's frame runs in a process of its own, and the shell
+// learns that the click focused it by way of the browser process, which on
+// a loaded host can come after the verb the page sends over its port from
+// the click handler; the bridge forwards an `open` or a `press` only from
+// the frame that is the shell's active element, so it drops that verb. Only
+// the shell's document is read while the button is down; nothing is
+// evaluated on the frame, and the page sends its verb from its own click
+// handler. Answers whether the shell held the frame as its active element
+// before the button came up.
+async function personClick(page, frame, x, y) {
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  const focused = await lib.waitFor(
+    () => page.evaluate((id) => {
+      const el = document.activeElement;
+      return el !== null && el.tagName === "IFRAME" && el.getAttribute("data-frame-id") === id;
+    }, frame).catch(() => false),
+    { timeoutMs: 2_000, stepMs: 10, what: "the shell's focus on the frame clicked" },
+  ).then(() => true, () => false);
+  await page.mouse.up();
+  return focused;
+}
+
+// The center of `locator` in the page's viewport, scrolled into view.
+async function centerOf(locator) {
+  await locator.scrollIntoViewIfNeeded();
+  const b = await locator.boundingBox();
+  return b ? { x: b.x + b.width / 2, y: b.y + b.height / 2 } : null;
+}
+
 // ---- the frame recorder (a canvas page's document) ------------------------------
 //
 // Wraps MessagePort.prototype.postMessage in one canvas frame, so every
@@ -772,12 +831,15 @@ async function stepFeedChart(page, name) {
 
 // app_over_canvas: canvas-full opened full from the shipped canvas's
 // launcher tile over the shipped canvas, frozen with it on a switch, shown
-// again on the way back, and closed.
+// again on the way back, and closed. The tile is clicked as a person
+// clicks it (personClick), and the page opens from its click handler.
 async function stepAppOverCanvas(page, name) {
   const start = await showCanvas(page, "start");
   await until(start.frame, shippedDrawing, (d) => d.tiles.includes("canvas-full"), "the canvas-full launcher");
+  const tile = await centerOf(start.frame.locator('.tile', { has: start.frame.locator('.name', { hasText: "canvas-full" }) }).first());
+  if (!tile) throw new Error("the canvas-full launcher could not be measured");
   const from = (await instrument(page)).receipts.length;
-  await start.frame.locator('.tile', { has: start.frame.locator('.name', { hasText: "canvas-full" }) }).first().click();
+  await personClick(page, start.id, tile.x, tile.y);
   const full = await lib.waitFor(async () => {
     const el = await page.$('[data-canvas-place="full"][data-canvas-shown="true"] iframe');
     if (!el) return null;
@@ -1026,24 +1088,20 @@ async function stepActivation(page, name) {
   // receipts of the markets frame since `from`. This evaluates on the shell,
   // never on a frame, so it leaves no user gesture on the canvas.
   const readMarks = () => instrument(page);
-  const since = async (from) => {
-    const marks = await readMarks();
-    const press = receiptsOf(marks, from, shown.id, "press");
-    return { forwarded: press.filter((r) => r.dropped === false).length, dropped: press.filter((r) => r.dropped === true).length, total: press.length, receipts: press };
-  };
+  const classify = (press) =>
+    ({ forwarded: press.filter((r) => r.dropped === false).length, dropped: press.filter((r) => r.dropped === true).length, total: press.length, receipts: press });
+  const since = async (from) => classify(receiptsOf(await readMarks(), from, shown.id, "press"));
 
-  // One inside a click: a real browser click on the button dispatches one
-  // press, inside the click, forwarded.
+  // One inside a click: a person's click on the button (personClick)
+  // dispatches one press, inside the click, forwarded.
   let mark = (await readMarks()).receipts.length;
-  await page.mouse.click(centers.press.x, centers.press.y);
-  await sleep(600);
-  const inside = await since(mark);
+  await personClick(page, shown.id, centers.press.x, centers.press.y);
+  const inside = classify(await handled(page, mark, shown.id, "press", 1));
 
   // Several inside one click: three presses, each forwarded.
   mark = (await readMarks()).receipts.length;
-  await page.mouse.click(centers.press3.x, centers.press3.y);
-  await sleep(600);
-  const several = await since(mark);
+  await personClick(page, shown.id, centers.press3.x, centers.press3.y);
+  const several = classify(await handled(page, mark, shown.id, "press", 3));
 
   // The residual cases, recorded per browser, no drop asserted. A click
   // elsewhere (the markets switcher button, in the shell; the sibling column
@@ -1116,18 +1174,28 @@ async function stepActivation(page, name) {
 // names the new binding and the shell forwards it. The stream is reopened
 // because an open feed stream was seen to keep its old binding after a
 // rebind, an open finding the record and the README name; this step does
-// not show what an open stream does across a rebind.
+// not show what an open stream does across a rebind. Each press is the
+// page's own, sent from its click handler inside a person's click
+// (personClick) on the press button where it was measured on the frame
+// shown at that moment, and each records what the shell did with it.
 async function stepReboundControl(page, name) {
   const { shown, centers } = await marketsBound(page);
-  const frame = shown.frame;
   const old = await feedState("candles");
   if (!centers.press) throw new Error("the markets press button could not be measured");
 
+  // One click on the press button at `at` in the shown frame `on`: the
+  // presses it posted, read from the page once the shell has received them,
+  // and what the shell did with them.
+  const pressAt = async (on, at) => {
+    const from = (await instrument(page)).receipts.length;
+    const n = (await posts(on.frame)).length;
+    await personClick(page, on.id, at.x, at.y);
+    const shell = receiptFacts(await handled(page, from, on.id, "press", 1));
+    return { sent: (await posts(on.frame)).slice(n).filter((p) => p.verb === "press"), shell };
+  };
+
   // While the binding is live, a press names it.
-  let n = (await posts(frame)).length;
-  await page.mouse.click(centers.press.x, centers.press.y);
-  await sleep(500);
-  const live = (await posts(frame)).slice(n).filter((p) => p.verb === "press");
+  const live = await pressAt(shown, centers.press);
 
   const symbol = `ETH-${name}`;
   const rebound = await ask({ op: "rebind", feed: "candles", args: { symbol } });
@@ -1135,11 +1203,8 @@ async function stepReboundControl(page, name) {
   const fresh = rebound.bound.ok.binding;
 
   // The canvas still holds the old binding, so a press before a new result
-  // names it; the shell drops it, since the old binding is no longer live.
-  n = (await posts(frame)).length;
-  await page.mouse.click(centers.press.x, centers.press.y);
-  await sleep(500);
-  const stale = (await posts(frame)).slice(n).filter((p) => p.verb === "press");
+  // names it; the view drops it, since the old binding is no longer live.
+  const stale = await pressAt(shown, centers.press);
 
   // feed.press naming the old binding is refused not_found.
   const refused = await ask({ op: "press", binding: old.binding, action: "refresh" });
@@ -1150,30 +1215,29 @@ async function stepReboundControl(page, name) {
   const accepted = await ask({ op: "accept", feed: "candles", data: { symbol, price: 2, change: null, at: new Date().toISOString().replace(/\.\d+Z$/, "Z"), candles: candles(symbol) } });
   // Switched away and back, markets' feed stream closes with its suspended
   // credential and opens again from its refresh, which carries the new
-  // binding; then wait for it.
+  // binding; then wait for it, and measure the press button on the frame
+  // shown again before the click.
   await showCanvas(page, "start");
   const again = await showCanvas(page, "markets");
   await until(again.frame, (f) => f.evaluate(() => (window.__canvas ? window.__canvas.current() : null)), (b) => b === fresh, "the new binding reaching the canvas on reopen");
   await again.frame.evaluate(installRecorder);
-  const from = (await instrument(page)).receipts.length;
-  n = (await posts(again.frame)).length;
-  await page.mouse.click(centers.press.x, centers.press.y);
-  await sleep(600);
-  const renewed = (await posts(again.frame)).slice(n).filter((p) => p.verb === "press");
-  const forwarded = receiptsOf(await instrument(page), from, again.id, "press").filter((r) => r.dropped === false).length;
+  const at = await centerOf(again.frame.locator("#press"));
+  if (!at) throw new Error("the markets press button could not be measured on the canvas shown again");
+  const renewed = await pressAt(again, at);
+  const forwarded = renewed.shell.forwarded;
 
   note("rebound_control", name,
-    live.length === 1 && live[0].binding === old.binding &&
+    live.sent.length === 1 && live.sent[0].binding === old.binding &&
       fresh !== old.binding && rebound.old === old.binding &&
-      stale.length === 1 && stale[0].binding === old.binding &&
+      stale.sent.length === 1 && stale.sent[0].binding === old.binding &&
       refusal === `{:not_found, "Feed", "${old.binding}"}` &&
-      renewed.length === 1 && renewed[0].binding === fresh && forwarded === 1,
+      renewed.sent.length === 1 && renewed.sent[0].binding === fresh && forwarded === 1,
     {
-      while_live: { press_names_current: live.length === 1 && live[0].binding === old.binding },
+      while_live: { press_names_current: live.sent.length === 1 && live.sent[0].binding === old.binding, shell: live.shell },
       rebound: { new_binding: fresh !== old.binding, args: { symbol } },
-      stale_press: { dispatches: stale.length, names_old_binding: stale.length === 1 && stale[0].binding === old.binding },
+      stale_press: { dispatches: stale.sent.length, names_old_binding: stale.sent.length === 1 && stale.sent[0].binding === old.binding, shell: stale.shell },
       feed_press_naming_old: { refused: refusal !== null, not_found_naming_old: refusal === `{:not_found, "Feed", "${old.binding}"}`, refusal: refusal && refusal.slice(0, 160) },
-      after_new_result: { accepted_revision: accepted.revision, new_press_names_new_binding: renewed.length === 1 && renewed[0].binding === fresh, forwarded },
+      after_new_result: { accepted_revision: accepted.revision, new_press_names_new_binding: renewed.sent.length === 1 && renewed.sent[0].binding === fresh, forwarded, shell: renewed.shell },
       stream_reopened: {
         how: "markets switched away and back: its feed stream closes with the suspended credential and opens again from its refresh",
         why: "an open feed stream was once seen to keep its old binding after a rebind (one debug run, not proven)",
