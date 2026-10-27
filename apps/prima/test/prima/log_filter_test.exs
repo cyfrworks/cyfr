@@ -117,7 +117,7 @@ defmodule Prima.LogFilterTest do
         logged(fn ->
           {:ok, task} = Task.start(__MODULE__, :fail, [@message_secret])
           ref = Process.monitor(task)
-          assert_receive {:DOWN, ^ref, :process, ^task, _reason}
+          assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 5_000
           task
         end)
 
@@ -132,7 +132,7 @@ defmodule Prima.LogFilterTest do
     test "a plain process's argument error names the call by arity" do
       record!()
       {pid, ref} = spawn_monitor(fn -> String.to_existing_atom(@message_secret) end)
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
 
       # The VM reports a plain process's error through Logger's proxy once
       # the process is gone, so the event is awaited. Logger's translator
@@ -189,7 +189,7 @@ defmodule Prima.LogFilterTest do
         logged(fn ->
           {:ok, task} = Task.start(fn -> GenServer.call(target, {:put, @message_secret}, 50) end)
           ref = Process.monitor(task)
-          assert_receive {:DOWN, ^ref, :process, ^task, _reason}
+          assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 5_000
           task
         end)
 
@@ -500,7 +500,7 @@ defmodule Prima.LogFilterTest do
     {:ok, pid} = GenServer.start(server, %{token: @state_secret})
     ref = Process.monitor(pid)
     GenServer.cast(pid, message)
-    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
     pid
   end
 
