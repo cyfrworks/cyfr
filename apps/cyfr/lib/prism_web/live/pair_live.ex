@@ -174,13 +174,13 @@ defmodule PrismWeb.PairLive do
       <h1 class="text-xl font-semibold">Pair this device</h1>
       <p class="text-sm text-gray-300">
         This device makes a key of its own that never leaves it, and connects under the
-        certificate this home issues for that key. Approve its code on a device of yours signed
-        in to this home, then open the pairing link that device shows here.
+        certificate this CYFR issues for that key. Approve its code on a device of yours signed
+        in to this CYFR, then open the pairing link that device shows here.
       </p>
 
       <section :if={@key && !@paired} class="space-y-2" data-test="pair-key">
         <p class="text-sm">
-          Type this code under Pair a device on a device of yours signed in to this home:
+          Type this code under Pair a device on a device of yours signed in to this CYFR:
         </p>
         <p class="font-mono text-lg" data-test="pair-key-code">{@key.code}</p>
         <div :if={@key.svg} class="w-fit rounded bg-white p-2" data-test="pair-key-qr">

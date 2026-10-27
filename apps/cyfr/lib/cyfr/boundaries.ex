@@ -606,7 +606,7 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Passkeys` is the sign-in page's passkey door: the challenge it holds " <>
           "and the answer it verifies into a session, as the device flow's poll is " <>
           "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` door's: " <>
-          "the signing home the sign-in page sends a person to (`signing_home/1`), the " <>
+          "the CYFR that holds the person's identity, where the sign-in page sends them (`signing_home/1`), the " <>
           "challenge it mints for the carry they bring back (`challenge/1`), where the " <>
           "callback's hop returns them (`redirect_url/1`), the assertion the callback " <>
           "admits into a session, behind the door (`callback/2`), and the carry's " <>
@@ -2218,7 +2218,7 @@ defmodule Cyfr.Boundaries do
     browser_cyfr_callback: %{
       admits: :flow_state,
       why:
-        "the `cyfr` door's callback: a person assertion over the challenge this home keeps " <>
+        "the `cyfr` door's callback: a person assertion over the challenge this CYFR keeps " <>
           "in the browser's own session cookie, posted with the browser pipeline's CSRF " <>
           "token, verified under the person's head read fresh from the directory their " <>
           "genesis names, and redeemed once through its login receipt " <>
@@ -2271,8 +2271,8 @@ defmodule Cyfr.Boundaries do
     device_key_proof: %{
       admits: :credential,
       why:
-        "a certified device's renewal at its person's home: the device key's proof over a " <>
-          "renewal challenge this home issued for a certification it recorded, under the " <>
+        "a certified device's renewal at the CYFR that holds its person's identity: the device key's proof over a " <>
+          "renewal challenge this CYFR issued for a certification it recorded, under the " <>
           "person's current `key_epoch` (`Sanctum.RemoteCertification`); no session or cookie " <>
           "is read, and CORS answers any origin with no credentials, since the proof is the " <>
           "only credential"
@@ -2289,7 +2289,7 @@ defmodule Cyfr.Boundaries do
       admits: :credential,
       why:
         "a person recovering from a declared restore, with no door or method left: a " <>
-          "challenge this home holds for their identifier while their recovery is open, " <>
+          "challenge this CYFR holds for their identifier while their recovery is open, " <>
           "bounded per address and per person; a kit proof over it, signed by a recovery " <>
           "key of their identity read fresh from its directory and redeemed once; and the " <>
           "kit credential it answers, admitted for the four re-enable operations and their " <>

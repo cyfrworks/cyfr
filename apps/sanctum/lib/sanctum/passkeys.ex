@@ -1325,7 +1325,7 @@ defmodule Sanctum.Passkeys do
       resource: "passkey " <> String.slice(passkey.credential_id, 0, 16),
       details: %{
         "effect" =>
-          "This passkey, suspended when this home was restored from a backup, signs you in " <>
+          "This passkey, suspended when this CYFR was restored from a backup, signs you in " <>
             "and confirms for you again"
       }
     }

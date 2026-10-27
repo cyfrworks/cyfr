@@ -246,7 +246,7 @@ defmodule Sanctum.Providers.PersonTest do
       assert effect =~ @unreachable
       assert effect =~ "cannot be reached"
       assert effect =~ "If every kit is lost, nothing can add one"
-      assert effect =~ "never your private data or the homes your devices saved"
+      assert effect =~ "never your private data or the CYFR addresses your devices saved"
     end
   end
 

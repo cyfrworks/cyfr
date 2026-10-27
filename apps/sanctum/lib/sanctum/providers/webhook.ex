@@ -187,7 +187,7 @@ defmodule Sanctum.Providers.Webhook do
             Arg.new("webhook_id", :string,
               required: true,
               description:
-                "The id of your webhook that restoring this home from a backup suspended (webhook.list shows it)"
+                "The id of your webhook that restoring this CYFR from a backup suspended (webhook.list shows it)"
             )
           ],
           kind: :write,

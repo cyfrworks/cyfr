@@ -1468,7 +1468,7 @@ defmodule PrismWeb.SystemLayer do
                assign(
                  socket,
                  :error,
-                 "Type the code the new device shows: open this home's /pair page on it first"
+                 "Type the code the new device shows: open this CYFR's /pair page on it first"
                )}
           end
 
@@ -3302,7 +3302,7 @@ defmodule PrismWeb.SystemLayer do
 
   defp description(%{kind: :pairing}),
     do:
-      "Pair a phone or another browser with this home, or revoke a device you paired. " <>
+      "Pair a phone or another browser with this CYFR, or revoke a device you paired. " <>
         "Pairing and revoking each need a fresh confirmation. Command lines you signed in " <>
         "are listed too, and revoking one needs none."
 
@@ -3341,7 +3341,7 @@ defmodule PrismWeb.SystemLayer do
   defp asker(%{"kind" => "client"} = asker), do: "a paired device#{named(asker)}"
   defp asker(%{"kind" => "key"} = asker), do: "an API key#{named(asker)}"
   defp asker(%{"kind" => "frame"} = asker), do: "an app#{named(asker)}"
-  defp asker(%{"kind" => "unbound"}), do: "this home"
+  defp asker(%{"kind" => "unbound"}), do: "this CYFR"
 
   defp asker(%{"kind" => "session"} = asker),
     do:

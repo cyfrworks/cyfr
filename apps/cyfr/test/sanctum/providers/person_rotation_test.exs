@@ -254,7 +254,7 @@ defmodule Sanctum.Providers.PersonRotationTest do
       assert %Prima.Refusal{class: :conflict, message: message} =
                refusal(rotate(person.ctx, stale))
 
-      assert message =~ "moved past this home's head"
+      assert message =~ "moved past this CYFR's head"
     end
 
     test "another rotation in progress is named, before any proof is asked" do
@@ -294,7 +294,7 @@ defmodule Sanctum.Providers.PersonRotationTest do
       assert %Prima.Refusal{class: :conflict, message: message} =
                refusal(rotate(remote, request_id()))
 
-      assert message =~ "another home"
+      assert message =~ "another CYFR"
       assert rotations(user.id) == 0
       assert rotations(remote_user.id) == 0
     end

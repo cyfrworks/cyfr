@@ -73,7 +73,7 @@ defmodule PrismWeb.CarryLive do
 
     {:ok,
      socket
-     |> assign(:page_title, "Sign in at another home")
+     |> assign(:page_title, "Sign in at another CYFR")
      |> assign(:active_nav, nil)
      |> assign(:lifetime_ms, CyfrDoor.carry_lifetime_ms())
      |> assign(:destination, "")
@@ -117,7 +117,8 @@ defmodule PrismWeb.CarryLive do
     if Encoding.home?(destination) do
       {:noreply, assign(socket, destination: destination, notice: nil)}
     else
-      {:noreply, notice(socket, :error, "That link names no home; type the home to sign in at.")}
+      {:noreply,
+       notice(socket, :error, "That link has no CYFR address; type the address to sign in at.")}
     end
   end
 
@@ -156,7 +157,7 @@ defmodule PrismWeb.CarryLive do
         {:noreply, complete(socket, action_id, Atom.to_string(outcome))}
 
       {:error, _unread} ->
-        {:noreply, notice(socket, :error, "That answer from the other home could not be read.")}
+        {:noreply, notice(socket, :error, "That answer from the other CYFR could not be read.")}
     end
   end
 
@@ -275,7 +276,7 @@ defmodule PrismWeb.CarryLive do
           |> assign(:notice, {:info, "Signing you in at #{audience}…"})
           |> push_event("carry:go", %{to: callback})
         else
-          notice(socket, :error, "The assertion came back for another home; nothing was sent.")
+          notice(socket, :error, "The assertion came back for another CYFR; nothing was sent.")
         end
 
       {:asked, socket} ->
@@ -307,7 +308,7 @@ defmodule PrismWeb.CarryLive do
         })
 
       {:ok, _another, socket} ->
-        notice(socket, :error, "The certificate came back for another home; nothing was sent.")
+        notice(socket, :error, "The certificate came back for another CYFR; nothing was sent.")
 
       {:asked, socket} ->
         assign(
@@ -438,7 +439,7 @@ defmodule PrismWeb.CarryLive do
       data-max-fragment={Prima.Carry.max_fragment_bytes()}
       class="max-w-2xl space-y-6"
     >
-      <.page_header title="Sign in at another home" />
+      <.page_header title="Sign in at another CYFR" />
 
       <div
         :if={@notice}
@@ -512,7 +513,7 @@ defmodule PrismWeb.CarryLive do
 
       <form id="carry-begin" phx-submit="begin" class="space-y-2">
         <label for="carry-destination" class="text-sm text-gray-300">
-          The home to sign in at
+          The address of the CYFR to sign in at
         </label>
         <div class="flex gap-2">
           <input
@@ -528,7 +529,7 @@ defmodule PrismWeb.CarryLive do
           <.button type="submit">Begin</.button>
         </div>
         <p class="text-xs text-gray-500">
-          The home you sign in at learns this home's address, and this home learns that one's.
+          The CYFR you sign in at learns this CYFR's address, and this CYFR learns that one's.
         </p>
       </form>
 

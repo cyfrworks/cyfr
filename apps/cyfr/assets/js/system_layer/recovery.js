@@ -229,7 +229,7 @@ const REFUSALS = {
 export function restoreOutcome(status, body) {
   const answer = body && typeof body === "object" ? body : {}
   if (status === 200 && answer.status === "completed") {
-    return {state: "completed", text: "Restored. Your identity is back on this installation; register a passkey on your home's settings page to sign in again."}
+    return {state: "completed", text: "Restored. Your identity is back on this installation; register a passkey on your CYFR's settings page to sign in again."}
   }
   if (status === 503 && typeof answer.status === "string") {
     const seconds = Math.min(Math.max(Number(answer.retry_after) || 1, 1), MAX_RETRY_S)
@@ -530,14 +530,14 @@ export function kitItemText(operation, item) {
 const ENDED = "This recovery has ended: it lasts ten minutes and ends once a passkey or device is re-enabled. Recover again from your kit, or sign in with the method you re-enabled."
 
 const KIT_REFUSALS = {
-  not_recovering: "This home holds no open recovery for that identifier: it was not restored from a backup with you enrolled, or your recovery has ended. Sign in with a method you re-enabled, or ask this home's administrator.",
-  invalid_proof: "That recovery secret did not make a proof this home reads. Check the kit's recovery secret.",
+  not_recovering: "This CYFR holds no open recovery for that identifier: it was not restored from a backup with you enrolled, or your recovery has ended. Sign in with a method you re-enabled, or ask this CYFR's administrator.",
+  invalid_proof: "That recovery secret did not make a proof this CYFR reads. Check the kit's recovery secret.",
   challenge_refused: "The challenge expired or was used. Recover again.",
   not_a_holder: "That recovery secret is not one of this identity's kits now.",
   invalid_credential: ENDED,
   not_standing: ENDED,
   operation_not_permitted: "Your recovery covers re-enabling what the restore suspended, and nothing else.",
-  not_found: "That item is no longer on this home.",
+  not_found: "That item is no longer on this CYFR.",
   revoked: "That item was revoked, and a revoked item is never re-enabled.",
   not_suspended: "That item is active already.",
   directory_unavailable: "Your identity's directory could not be reached. Try again shortly."
@@ -608,13 +608,13 @@ export class KitStep {
     const values = this.read()
     if (values.refused) return this.show("refused", values.refused)
     const run = this.start()
-    this.show("working", "Proving your kit to this home…")
+    this.show("working", "Proving your kit to this CYFR…")
 
     const challenge = await this.post(kitRequest("/restore/kit/challenge", {identifier: values.identifier}))
     if (this.run !== run) return
     if (challenge.status !== 200 || !challenge.body || typeof challenge.body.challenge !== "string") return this.refuse(challenge)
     if (typeof challenge.body.restore_id !== "string" || !exactBytes(challenge.body.challenge, KIT_CHALLENGE_BYTES)) {
-      return this.show("refused", "This home's answer was not a kit challenge. Try again shortly.")
+      return this.show("refused", "This CYFR's answer was not a kit challenge. Try again shortly.")
     }
 
     let proof
@@ -650,7 +650,7 @@ export class KitStep {
     this.items = items
     this.draw()
     const none = Object.values(items).every((list) => list.length === 0)
-    return this.show("listed", none ? "Nothing of yours is suspended on this home." : "Re-enable what is yours. Re-enabling a passkey or a device ends this recovery: then sign in with it.")
+    return this.show("listed", none ? "Nothing of yours is suspended on this CYFR." : "Re-enable what is yours. Re-enabling a passkey or a device ends this recovery: then sign in with it.")
   }
 
   async reenable(operation, id) {
@@ -684,7 +684,7 @@ export class KitStep {
       }
       return {status: response.status, body}
     } catch (_error) {
-      return {status: 0, body: {message: "This home could not be reached. Try again shortly."}}
+      return {status: 0, body: {message: "This CYFR could not be reached. Try again shortly."}}
     }
   }
 

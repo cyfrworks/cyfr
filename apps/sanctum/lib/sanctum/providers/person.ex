@@ -93,7 +93,7 @@ defmodule Sanctum.Providers.Person do
     Operation.tool(
       operations() ++ Assertion.operations(),
       description:
-        "A person's identity at their own home: read its status, enroll and print the recovery kit, abandon an unfinished enrollment, add another kit, rotate the live key, link or unlink a sign-in door, certify a device for another home and renew that certificate, and begin, list, cancel or complete a sign-in carry to another home.",
+        "A person's identity at their own CYFR: read its status, enroll and print the recovery kit, abandon an unfinished enrollment, add another kit, rotate the live key, link or unlink a sign-in door, certify a device for another CYFR and renew that certificate, and begin, list, cancel or complete a sign-in carry to another CYFR.",
       title: "Person"
     )
   end
@@ -203,11 +203,11 @@ defmodule Sanctum.Providers.Person do
       Operation.new(
         "person",
         "carry_begin",
-        "Begin a sign-in carry to another home",
+        "Begin a sign-in carry to another CYFR",
         [
           Arg.new("destination", :string,
             required: true,
-            description: "carry_begin: the home to sign in at, as its origin"
+            description: "carry_begin: the CYFR to sign in at, as its origin"
           )
         ],
         kind: :write,
@@ -247,7 +247,7 @@ defmodule Sanctum.Providers.Person do
       Operation.new(
         "person",
         "certify",
-        "Certify a device for another home",
+        "Certify a device for another CYFR",
         [
           Arg.new("device_key", :string,
             required: true,
@@ -256,15 +256,15 @@ defmodule Sanctum.Providers.Person do
           Arg.new("audience", :string,
             required: true,
             description:
-              "The other home, as its origin: the assertion's audience, or the home a certificate is presented to"
+              "The other CYFR, as its origin: the assertion's audience, or the CYFR a certificate is presented to"
           ),
           Arg.new("athanor", :string,
             required: true,
-            description: "certify: the athanor at that home the device joins"
+            description: "certify: the athanor at that CYFR the device joins"
           ),
           Arg.new("client_id", :string,
             required: true,
-            description: "certify: the paired-client id that home reserved for the device (pcl_…)"
+            description: "certify: the paired-client id that CYFR reserved for the device (pcl_…)"
           )
         ],
         kind: :write,
@@ -290,12 +290,12 @@ defmodule Sanctum.Providers.Person do
       Operation.new(
         "person",
         "renew_certificate",
-        "Renew a device certificate this home issued for another home",
+        "Renew a device certificate this CYFR issued for another CYFR",
         [
           Arg.new("certificate", :json,
             required: true,
             description:
-              "renew_certificate: a certificate this home issued for the device, which only locates its certification"
+              "renew_certificate: a certificate this CYFR issued for the device, which only locates its certification"
           ),
           Arg.new("proof", :json,
             description:
@@ -384,7 +384,7 @@ defmodule Sanctum.Providers.Person do
       do: answer(Carry.begin(ctx, destination))
 
   def handle(%Context{}, %{"action" => "carry_begin"}),
-    do: {:error, {:invalid_argument, "carry_begin needs the destination home"}}
+    do: {:error, {:invalid_argument, "carry_begin needs the destination CYFR"}}
 
   def handle(
         %Context{} = ctx,
@@ -454,7 +454,7 @@ defmodule Sanctum.Providers.Person do
       refused(
         :setup_required,
         :no_directory,
-        "This home names no identity directory; its operator sets CYFR_DIRECTORY_URL before " <>
+        "This CYFR names no identity directory; its operator sets CYFR_DIRECTORY_URL before " <>
           "anyone enrolls."
       )
 
@@ -465,7 +465,7 @@ defmodule Sanctum.Providers.Person do
     do: {:conflict, "This needs an enrolled identity; enroll first."}
 
   defp refusal(:not_found),
-    do: {:conflict, "Your keys are held at another home; do this there."}
+    do: {:conflict, "Your keys are held at another CYFR; do this there."}
 
   defp refusal(:enrollment_refused),
     do: {:conflict, "The directory refused this identity, so you have none yet; enroll again."}
@@ -498,7 +498,7 @@ defmodule Sanctum.Providers.Person do
   defp refusal(:stale_head),
     do:
       {:conflict,
-       "Your identity's log has moved past this home's head, so nothing changed. A recovery " <>
+       "Your identity's log has moved past this CYFR's head, so nothing changed. A recovery " <>
          "may have replaced your keys."}
 
   defp refusal({:attempt_in_progress, request_id}) when is_binary(request_id),
@@ -516,7 +516,7 @@ defmodule Sanctum.Providers.Person do
   defp refusal(:directory_unavailable), do: {:unavailable, "Your identity's directory"}
 
   defp refusal(:wrong_audience),
-    do: {:invalid_argument, "A certificate for this home is a pairing's"}
+    do: {:invalid_argument, "A certificate for this CYFR is a pairing's"}
 
   defp refusal(:stale_key_epoch),
     do:
@@ -552,7 +552,7 @@ defmodule Sanctum.Providers.Person do
       refused(
         :not_found,
         :not_found,
-        "This home holds no certification of that device; certify it again at your home."
+        "This CYFR holds no certification of that device; certify it again at your CYFR."
       )
 
   defp renewal_refusal(:certification_ended),
@@ -560,7 +560,7 @@ defmodule Sanctum.Providers.Person do
       refused(
         :conflict,
         :certification_ended,
-        "Your keys changed since this device was certified; certify it again at your home."
+        "Your keys changed since this device was certified; certify it again at your CYFR."
       )
 
   defp renewal_refusal(:binding_changed),
@@ -608,7 +608,7 @@ defmodule Sanctum.Providers.Person do
     do: {:invalid_argument, "The request_id is not a valid request id"}
 
   defp rotation_refusal(:not_found),
-    do: {:conflict, "Your keys are held at another home; rotate them there."}
+    do: {:conflict, "Your keys are held at another CYFR; rotate them there."}
 
   defp rotation_refusal(:not_enrolled),
     do: {:conflict, "Rotating the live key needs an enrolled identity; enroll first."}
@@ -616,7 +616,7 @@ defmodule Sanctum.Providers.Person do
   defp rotation_refusal(:stale_head),
     do:
       {:conflict,
-       "Your identity's log has moved past this home's head, so nothing was rotated. A " <>
+       "Your identity's log has moved past this CYFR's head, so nothing was rotated. A " <>
          "recovery or another rotation may have replaced your keys."}
 
   defp rotation_refusal(:superseded),

@@ -284,7 +284,7 @@ defmodule Sanctum.IdentityFreshness do
       resource: identifier,
       details: %{
         "effect" =>
-          "Replaces the live key that signs for you. Every other home ends the sessions, " <>
+          "Replaces the live key that signs for you. Every other CYFR ends the sessions, " <>
             "devices and passkeys it bound to the old key once it sees the new one."
       }
     }

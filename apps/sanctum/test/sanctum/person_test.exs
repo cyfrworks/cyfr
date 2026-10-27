@@ -753,7 +753,7 @@ defmodule Sanctum.PersonTest do
           Jason.decode!(record.preview)["details"]["effect"]
         end)
 
-      assert ("Signs you in at https://hub.example, which learns this home's address. " <>
+      assert ("Signs you in at https://hub.example, which learns this CYFR's address. " <>
                 "https://hub.example shows the code #{code}; confirm only if it matches.") in effects
 
       other_code = Prima.PersonAssertion.comparison_code(substituted)

@@ -78,7 +78,7 @@ defmodule Cyfr.Telemetry.Catalog do
     [:cyfr, :sanctum, :identity, :not_descendant] => %{
       consumers: [:audit],
       note:
-        "a directory served a log that does not contain the head this home verified; " <>
+        "a directory served a log that does not contain the head this CYFR verified; " <>
           "the cache was left as it was, and the trail keeps the evidence"
     },
     [:cyfr, :sanctum, :identity, :stale] => %{

@@ -118,7 +118,7 @@ defmodule Cyfr.Admission do
                      "themselves and record their own decisions: a webhook's delivery, " <>
                      "admitted under its row and run as its bound profile's root; an " <>
                      "execution's event stream, read under the caller's own standing; " <>
-                     "and what no person of this home admits: the identity directory, " <>
+                     "and what no person of this CYFR admits: the identity directory, " <>
                      "whose writes the identifier's own chain authorizes, restore, an " <>
                      "entry path that runs before its person exists, and the recovery " <>
                      "kit, its own ingress (§9.1, §6.9), the OAuth callback, which " <>
@@ -145,8 +145,8 @@ defmodule Cyfr.Admission do
       sockets: @endpoint_sockets,
       entries: @endpoint_entries,
       reason:
-        "the endpoint's proxy listener, which a tailnet or public home's proxy forwards to " <>
-          "from other devices, the one listener whose forwarded headers are trusted from " <>
+        "the endpoint's proxy listener, which CYFR's proxy forwards to " <>
+          "from other devices with tailnet or public access, the one listener whose forwarded headers are trusted from " <>
           "that proxy alone: " <> @endpoint_reason
     },
     %{

@@ -85,7 +85,7 @@ defmodule PrismWeb.SystemLayer.Pairing do
           Scan this with the device showing the code below, or open the link on it, before {@invitation.expires_at}. Only that device can pair under it.
         </p>
         <p :if={is_nil(@invitation.svg)} class="text-sm" data-test="pairing-link-only">
-          This home's address is too long for a QR code: open the link on the device showing the code below, before {@invitation.expires_at}. Only that device can pair under it.
+          This CYFR's address is too long for a QR code: open the link on the device showing the code below, before {@invitation.expires_at}. Only that device can pair under it.
         </p>
         <p class="font-mono text-sm" data-test="pairing-key-code">{@invitation.code}</p>
         <div :if={@invitation.svg} class="w-fit rounded bg-white p-2" data-test="pairing-qr">
@@ -114,7 +114,7 @@ defmodule PrismWeb.SystemLayer.Pairing do
       >
         <input type="hidden" name="prompt_id" value={@prompt_id} />
         <label class="block text-sm" for={"#{@prompt_id}-pairing-key-code"}>
-          Open this home's /pair page on the new device and type the code it shows
+          Open this CYFR's /pair page on the new device and type the code it shows
         </label>
         <input
           id={"#{@prompt_id}-pairing-key-code"}

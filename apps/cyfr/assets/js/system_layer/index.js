@@ -704,7 +704,7 @@ export default {
       return this.glass.start(certificate)
     }
 
-    this.pairRefused("That certificate is not one this device asked its home for, so nothing changed.")
+    this.pairRefused("That certificate does not match what this device asked your own CYFR to certify, so nothing changed.")
     return stored ? this.glass.start() : this.drawGlass(this.glass)
   },
 
@@ -781,7 +781,7 @@ export default {
     try {
       const prepared = await this.store.loadPrepared()
       if (!prepared) {
-        return this.pairRefused("This browser made no key for this pairing. Open this home's /pair page here first, approve the code it shows on a device of yours, then open the link it gives you here.")
+        return this.pairRefused("This browser made no key for this pairing. Open this CYFR's /pair page here first, approve the code it shows on a device of yours, then open the link it gives you here.")
       }
       const {privateKey, publicKey: deviceKey, keyDigest: digest} = prepared
       const started = await this.pushAsync("pair_start", {invitation_secret: code, device_key: deviceKey, key_digest: digest})
@@ -794,7 +794,7 @@ export default {
         await this.store.savePending({code, privateKey, publicKey: deviceKey, keyDigest: digest, certify: started.certify, at: Date.now()})
         await this.store.clearPrepared()
         this.certifyAsk = {request: {...started.certify, device_key: deviceKey}, home: ""}
-        this.drawStatus("certify", "Your keys are held at another home. Certify this device there to pair it here.")
+        this.drawStatus("certify", "Your keys are held at another CYFR. Certify this device there to pair it here.")
         return "certify"
       }
 
@@ -885,18 +885,18 @@ export default {
     const ask = this.certifyOffer()
     const home = homeOrigin(typed)
     if (!ask || !home) {
-      this.pairError = "That is not a home's address, like https://home.example."
+      this.pairError = "That is not a CYFR's address, like https://cyfr.example."
       return this.drawGlass(this.glass)
     }
     if (home === this.home) {
-      this.pairError = "That is this home's address; name the home that holds your keys."
+      this.pairError = "That is this CYFR's address; name the CYFR that holds your keys."
       return this.drawGlass(this.glass)
     }
     const {request} = ask
     try {
       await this.store.saveCertify({home, client: request.client_id, audience: request.audience, athanor: request.athanor, at: Date.now()})
     } catch (_error) {
-      this.pairError = "This browser would not keep what this device asks of your home. Allow site storage for this page and try again."
+      this.pairError = "This browser would not keep what this device asks of your CYFR. Allow site storage for this page and try again."
       return this.drawGlass(this.glass)
     }
     globalThis.location.assign(certifyUrl(home, request))
@@ -932,7 +932,7 @@ export default {
             doc,
             "p",
             {class: "text-sm"},
-            "This device is already paired with this home. Pairing it under this code pairs the key this browser made for the code you approved, and forgets the device it holds once the new one is paired."
+            "This device is already paired with this CYFR. Pairing it under this code pairs the key this browser made for the code you approved, and forgets the device it holds once the new one is paired."
           ),
           element(doc, "button", {type: "button", "data-test": "glass-replace", "data-action": "replace"}, "Forget this device and pair again"),
           element(doc, "button", {type: "button", "data-test": "glass-keep", "data-action": "keep"}, "Keep this device")
@@ -948,14 +948,14 @@ export default {
             "p",
             {class: "text-sm"},
             this.certifyAsk
-              ? "Your keys are held at another home. Name it to certify this device there; you confirm it there, then come back here."
+              ? "Your keys are held at another CYFR. Name it to certify this device there; you confirm it there, then come back here."
               : glass.certifyReason === "unreachable"
-                ? "Your home could not be reached to renew this device's certificate. If your keys are now held at another home, name it; you confirm it there, then come back here. This device keeps trying meanwhile."
-                : "Your home ended this device's certification, as it does when your keys change. Certify it again there; you confirm it there, then come back here."
+                ? "Your CYFR could not be reached to renew this device's certificate. If your keys are now held at another CYFR, name it; you confirm it there, then come back here. This device keeps trying meanwhile."
+                : "Your CYFR ended this device's certification, as it does when your keys change. Certify it again there; you confirm it there, then come back here."
           ),
           element(doc, "form", {"data-form": "certify-home", class: "flex gap-2"}, [
-            element(doc, "input", {"data-test": "glass-home", name: "home", type: "text", inputmode: "url", autocomplete: "url", value: offer.home || "", "aria-label": "The address of the home that holds your keys"}),
-            element(doc, "button", {type: "submit", "data-test": "glass-home-submit"}, this.certifyAsk ? "Certify at my home" : "Certify this device again at your home")
+            element(doc, "input", {"data-test": "glass-home", name: "home", type: "text", inputmode: "url", autocomplete: "url", value: offer.home || "", "aria-label": "The address of the CYFR that holds your keys"}),
+            element(doc, "button", {type: "submit", "data-test": "glass-home-submit"}, this.certifyAsk ? "Certify at my CYFR" : "Certify this device again at your CYFR")
           ])
         ])
       )
@@ -993,7 +993,7 @@ export default {
       }
       if (model.offers.includes("oidc")) {
         children.push(button(doc, "glass-reauth", "oidc", model.ref, "Sign in again"))
-        children.push(element(doc, "p", {"data-test": "glass-reauth-note", class: "text-xs text-gray-400"}, "The sign-in opens in a new tab; approve the change there in a browser signed in to this home."))
+        children.push(element(doc, "p", {"data-test": "glass-reauth-note", class: "text-xs text-gray-400"}, "The sign-in opens in a new tab; approve the change there in a browser signed in to this CYFR."))
       }
       children.push(button(doc, "glass-cancel", "cancel", model.ref, "Cancel this request"))
       if (outcome) children.push(element(doc, "p", {"data-test": "glass-outcome", "data-ok": String(outcome.ok), role: "status", class: "text-sm"}, outcome.text))
@@ -1080,7 +1080,7 @@ export function glassStatus(glass, drawn) {
     // from a link opened on the page already showing its code, says so.
     case "unpaired":
       if (drawn && PAIRING_STATES.includes(drawn.state)) return drawn
-      return {state: "unpaired", text: "This device is not paired. Approve the code shown here on a device of yours signed in to this home, then open the pairing link it gives you here."}
+      return {state: "unpaired", text: "This device is not paired. Approve the code shown here on a device of yours signed in to this CYFR, then open the pairing link it gives you here."}
     case "connecting":
       return {state: "connecting", text: "Connecting…"}
     case "renewing":
@@ -1092,7 +1092,7 @@ export function glassStatus(glass, drawn) {
     case "revoked":
       return {state: "revoked", text: "This device's pairing was revoked. Pair it again from a signed-in browser."}
     case "recertify":
-      return {state: "recertify", text: "This device's certification at your home ended. Certify it again there."}
+      return {state: "recertify", text: "This device's certification at your CYFR ended. Certify it again there."}
     default:
       return drawn || {state: "starting", text: "Starting…"}
   }
