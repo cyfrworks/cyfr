@@ -109,13 +109,13 @@ Putting a backup back is a different thing: the operator runs `cyfr restore`, wh
 
 ## Your Saved Addresses Are Your Device's
 
-The address of each CYFR you visit, saved as a tab or a bookmark, belongs to the device that saved it. No CYFR stores, synchronizes or backs up those addresses, and a new browser starts with none. Saving an address grants no membership, and forgetting one revokes nothing.
+The address of each CYFR you visit, saved as a tab or a bookmark, belongs to the device that saved it. No CYFR stores, synchronizes or backs up your list of saved addresses, and a new browser starts with none. Saving an address grants no membership, and forgetting one revokes nothing.
 
-So a recovery, or a new device, restores no list of addresses: you add each address again, from a device that still holds it, from your bookmarks, or from an invitation, and sign in at each CYFR. Each CYFR keeps your memberships there on its own.
+So a recovery, or a new device, restores no list of saved addresses: you add each address again, from a device that still holds it, from your bookmarks, or from an invitation, and sign in at each CYFR. Each CYFR keeps your memberships there on its own.
 
 ### Signing in at another CYFR
 
-Signing in at another CYFR with your CYFR identity begins at your own CYFR, which you name by its address, and both show the same short code so you can tell your sign-in is the one you started. Each learns the other's address: the CYFR you sign in at learns where your own CYFR is, and your own CYFR learns where you signed in. Neither learns your saved addresses. See `devices-guide.md` for how such a CYFR admits you, and for your passkeys there.
+Signing in at another CYFR with your CYFR identity begins at your own CYFR, which you name by its address, and both show the same short code so you can tell your sign-in is the one you started. Each learns the other's address: the CYFR you sign in at learns where your own CYFR is, and your own CYFR learns where you signed in. Neither learns your list of saved addresses. See `devices-guide.md` for how such a CYFR admits you, and for your passkeys there.
 
 ---
 
