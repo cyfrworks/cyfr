@@ -17,7 +17,8 @@ defmodule Sanctum.Directory.Client do
   two directories resolve independently, each at their own.
 
   A directory URL names the node serving it, with any path its proxy
-  adds; the protocol's paths, `/directory/v1/…`, follow it.
+  adds; the protocol's paths, `/directory/v1/…`, follow it. A CYFR serving
+  one serves it at its origin alone (`Sanctum.Directory`).
 
   ## Transport
 
@@ -70,7 +71,8 @@ defmodule Sanctum.Directory.Client do
   `:not_served`, `:not_found`, `:read_only`, `:body_too_large`,
   `{:stale_head, head}`, `{:stale_policy, recorded}`,
   `:request_id_reused`, `:conflict`,
-  `{:refused, :invalid | :unverified | :wrong_identifier, reason | nil}`,
+  `{:refused, :invalid | :unverified | :wrong_identifier | :wrong_directory,
+  reason | nil}`,
   `:corrupt`, and the retryable `{:rate_limited, seconds}`,
   `{:capacity, seconds}` (a quota, or an identifier's day of rotations,
   up to a day), `{:busy, seconds}` and `{:unavailable, seconds}`.
@@ -470,6 +472,9 @@ defmodule Sanctum.Directory.Client do
 
   defp refusal(422, %{"error" => "wrong_identifier"}, _headers),
     do: {:refused, :wrong_identifier, nil}
+
+  defp refusal(422, %{"error" => "wrong_directory"}, _headers),
+    do: {:refused, :wrong_directory, nil}
 
   defp refusal(422, body, _headers), do: {:refused, :invalid, reason_text(body)}
   defp refusal(429, _body, headers), do: {:rate_limited, retry_after(headers)}

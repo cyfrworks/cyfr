@@ -731,6 +731,15 @@ defmodule Sanctum.Directory.ClientTest do
       assert {:error, :body_too_large} = append.()
     end
 
+    test "a genesis refused for naming another directory than the one serving is wrong_directory",
+         ctx do
+      dir = directory(ctx, "dir-a.test", fn _ -> json(422, %{"error" => "wrong_directory"}) end)
+      alice = person(dir.url)
+
+      assert {:error, {:refused, :wrong_directory, nil}} =
+               Client.register(alice.identifier, genesis(alice), opts(ctx))
+    end
+
     test "an accepted answer is held to what was sent", ctx do
       {:ok, mode} = Agent.start_link(fn -> :honest end)
 

@@ -9,8 +9,9 @@ defmodule Emissary.Web.DirectoryControllerTest do
   end to end.
   """
 
-  # The directory setting, this member's rate counters, the private-egress
-  # configuration and the resolver's observer are process-wide.
+  # The directory setting, this node's public URL, this member's rate
+  # counters, the private-egress configuration and the resolver's observer
+  # are process-wide.
   use CyfrWeb.ConnCase, async: false
 
   import Ecto.Query, only: [from: 2]
@@ -24,8 +25,24 @@ defmodule Emissary.Web.DirectoryControllerTest do
   setup do
     Prima.Test.RateLimiter.reset!()
     on_exit(&Prima.Test.RateLimiter.reset!/0)
+    serve_at(@directory)
     Cyfr.Test.Settings.put("directory_serve", "writer")
     :ok
+  end
+
+  # This node's public URL, and so the directory it serves
+  # (`Sanctum.origin/0`), restored when the test ends.
+  defp serve_at(url) do
+    previous = Application.fetch_env(:sanctum, :public_url)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:sanctum, :public_url, value)
+        :error -> Application.delete_env(:sanctum, :public_url)
+      end
+    end)
+
+    Application.put_env(:sanctum, :public_url, url)
   end
 
   # ---- fixtures ----------------------------------------------------------------
@@ -125,6 +142,26 @@ defmodule Emissary.Web.DirectoryControllerTest do
 
       assert %{"entries" => [_one], "length" => 1, "next" => nil} =
                json_response(get(build_conn(), "/directory/v1/#{id}"), 200)
+    end
+
+    test "a genesis naming another directory, or this host on another port or under a path, " <>
+           "is 422 wrong_directory and stores nothing",
+         %{conn: conn} do
+      register!(conn, person())
+
+      for directory <- [
+            "https://elsewhere.example",
+            "https://dir.example:8443",
+            "https://dir.example/directory"
+          ] do
+        stranger = person(directory)
+
+        assert {^directory, %{"error" => "wrong_directory"}} =
+                 {directory, json_response(register(build_conn(), stranger), 422)}
+
+        assert json_response(get(build_conn(), "/directory/v1/#{stranger.identifier}"), 404) ==
+                 %{"error" => "not_found"}
+      end
     end
 
     test "is 429 past five a minute from one address, with its bound", %{conn: conn} do
@@ -512,6 +549,7 @@ defmodule Emissary.Web.DirectoryControllerTest do
          %{port: port, opts: opts} do
       alice = person("https://dir-a.test:#{port}")
       genesis = Entry.encode(alice.genesis)
+      serve_at(alice.directory)
 
       assert {:ok, %{seq: 0}} = Client.register(alice.identifier, genesis, opts)
 
@@ -553,8 +591,12 @@ defmodule Emissary.Web.DirectoryControllerTest do
       alice = person("https://dir-a.test:#{port}")
       bob = person("https://dir-b.test:#{port}")
 
+      # One endpoint answers under both names, as two nodes sharing one
+      # store would: each genesis is registered while it serves the
+      # directory that genesis names.
       for someone <- [alice, bob] do
         genesis = Entry.encode(someone.genesis)
+        serve_at(someone.directory)
         assert {:ok, _} = Client.register(someone.identifier, genesis, opts)
 
         assert {:ok, %{head: %{directory_url: url}}} =

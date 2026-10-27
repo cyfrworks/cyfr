@@ -20,6 +20,18 @@ defmodule Sanctum.Directory do
   `writer` serves reads and writes, and `mirror` is this module read-only,
   answering `:read_only` to every write before anything else is done.
 
+  The directory a node serves is its origin (`Sanctum.origin/0`) and
+  nothing else. Its routes are mounted at the root, `/directory/v1`, never
+  under a path a proxy adds, and its origin is already in the one spelling
+  `Prima.Identity.Encoding` gives a directory URL (in a tailnet or public
+  home `CYFR_PUBLIC_URL` is exactly `https://<CYFR_HOST>`, a lowercase
+  host), so the two compare byte for byte. A genesis naming anything
+  else, such as another host, this host on another port or scheme, or
+  this host under a path, is refused `:wrong_directory` once it decodes,
+  before its signature is checked and before anything is stored. A
+  recovery must name its genesis's directory and a rotation names none,
+  so every log this node registers names it.
+
   ## Order of work
 
   Every request is admitted to its bounds before any signature is checked:
@@ -142,6 +154,7 @@ defmodule Sanctum.Directory do
           | :read_only
           | :not_found
           | :wrong_identifier
+          | :wrong_directory
           | :request_id_reused
           | :conflict
           | :busy
@@ -177,13 +190,15 @@ defmodule Sanctum.Directory do
 
   @doc """
   Register a genesis: `genesis` is its JSON map. Answers the identifier it
-  hashes to; the same genesis again answers the same registration.
+  hashes to; the same genesis again answers the same registration. A
+  genesis naming another directory than this node's is `:wrong_directory`.
   """
   @spec register(%{genesis: term(), source: source()}) :: {:ok, accepted()} | {:error, reason()}
   def register(%{genesis: genesis, source: source}) when is_binary(source) do
     with :ok <- serving(:write),
          :ok <- admit(every_request(source) ++ registration(source)),
          {:ok, entry} <- decode_entry(genesis, :genesis),
+         :ok <- served_here(entry),
          {:ok, state} <- chain([Entry.encode(entry)]),
          {:ok, policy} <- policy() do
       attrs = %{
@@ -457,6 +472,10 @@ defmodule Sanctum.Directory do
     do: :ok
 
   defp position(_after_seq), do: {:error, {:invalid, {:invalid_field, "after"}}}
+
+  defp served_here(%Entry{directory: directory}) do
+    if directory == Sanctum.origin(), do: :ok, else: {:error, :wrong_directory}
+  end
 
   defp names(%RecoverRequest{identifier: identifier}, identifier), do: :ok
   defp names(%RecoverRequest{}, _identifier), do: {:error, :wrong_identifier}

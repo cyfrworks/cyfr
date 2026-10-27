@@ -3,7 +3,8 @@
 
 defmodule Sanctum.DirectoryTest do
   @moduledoc """
-  The directory's decisions: a genesis registered once, a rotation against
+  The directory's decisions: a genesis registered once, and only when it
+  names the directory this node serves, a rotation against
   the head it names, a recovery against the current policy revision and
   never refused because a rotation moved the head, a request id answered
   with its recorded outcome, a mirror that takes no write, and every
@@ -12,14 +13,14 @@ defmodule Sanctum.DirectoryTest do
   recovery keeping its reserve when rotations have spent theirs.
   """
 
-  # The directory setting, this member's rate counters and the directory's
-  # one usage row are process-wide.
+  # The directory setting, this node's public URL, this member's rate
+  # counters and the directory's one usage row are process-wide.
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
   import ExUnit.CaptureLog
 
-  alias Arca.Schemas.RequestRateWindow
+  alias Arca.Schemas.{IdentityLogEntry, RequestRateWindow, ServerMeta}
   alias Prima.Identity
   alias Prima.Identity.{Entry, RecoverRequest}
   alias Sanctum.Directory
@@ -31,8 +32,24 @@ defmodule Sanctum.DirectoryTest do
     Arca.Test.Sandbox.setup!(tags)
     Prima.Test.RateLimiter.reset!()
     on_exit(&Prima.Test.RateLimiter.reset!/0)
+    serve_at(@directory)
     Sanctum.Test.Settings.put("directory_serve", "writer")
     :ok
+  end
+
+  # This node's public URL, and so the directory it serves
+  # (`Sanctum.origin/0`), restored when the test ends.
+  defp serve_at(url) do
+    previous = Application.fetch_env(:sanctum, :public_url)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:sanctum, :public_url, value)
+        :error -> Application.delete_env(:sanctum, :public_url)
+      end
+    end)
+
+    Application.put_env(:sanctum, :public_url, url)
   end
 
   # ---- fixtures ----------------------------------------------------------------
@@ -123,6 +140,13 @@ defmodule Sanctum.DirectoryTest do
   defp page(identifier, after_seq \\ -1),
     do: Directory.resolve(%{identifier: identifier, after: after_seq, source: source()})
 
+  # Everything a registration writes: every log entry and the directory's
+  # usage row.
+  defp stored do
+    {Arca.Repo.all(from(e in IdentityLogEntry, order_by: [e.identifier, e.seq])),
+     Arca.Repo.get(ServerMeta, "directory_usage")}
+  end
+
   defp windows(bucket, key) do
     Arca.Repo.all(
       from(w in RequestRateWindow,
@@ -206,6 +230,36 @@ defmodule Sanctum.DirectoryTest do
                Directory.register(%{genesis: %{}, source: source()})
 
       assert log(alice.identifier) == []
+    end
+
+    test "refuses a genesis naming any directory but the one this node serves, storing nothing" do
+      register!(person())
+      before = stored()
+
+      # Another host; this host on another port or scheme; this host under
+      # a path. The directory served is this node's origin and nothing else.
+      for directory <- [
+            "https://elsewhere.example",
+            "https://dir.example:8443",
+            "http://dir.example",
+            "https://dir.example/directory"
+          ] do
+        stranger = person(directory: directory)
+
+        assert {^directory, {:error, :wrong_directory}} =
+                 {directory,
+                  Directory.register(%{genesis: Entry.encode(stranger.genesis), source: source()})}
+
+        assert stored() == before
+        assert {:error, :not_found} = page(stranger.identifier)
+      end
+
+      # The served directory is read from the node's origin as it stands.
+      serve_at("https://elsewhere.example")
+      register!(person(directory: "https://elsewhere.example"))
+
+      assert {:error, :wrong_directory} =
+               Directory.register(%{genesis: Entry.encode(person().genesis), source: source()})
     end
 
     test "refuses a new genesis at the identity quota, retryably, and still answers an old one" do
