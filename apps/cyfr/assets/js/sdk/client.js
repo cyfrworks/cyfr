@@ -91,12 +91,13 @@ const unanswered = (status, rejection) =>
 // data path and declared streams; any other frame's first message is its
 // credential. Until the first of the two, shell verbs wait, since what
 // reaches the shell depends on which the page is. A canvas's streams go to
-// its data path's stream route, and only the pairs it declares; what the
-// shell tells it after (`posture`, `covered`, `installed`, `state`)
-// reaches the page through `on`. A canvas reports its own failure once: an
-// uncaught error or unhandled rejection before `ready()` as `failed` at
-// stage `load`, after it at stage `runtime`, and a canvas that failed to
-// load sends no `ready`. Any other page reports none, and sends no `press`.
+// its data path's stream route, only the pairs it declares and only once
+// the shell has told it `state` `live`; what the shell tells it after
+// (`posture`, `covered`, `installed`, `state`) reaches the page through
+// `on`. A canvas reports its own failure once: an uncaught error or
+// unhandled rejection before `ready()` as `failed` at stage `load`, after
+// it at stage `runtime`, and a canvas that failed to load sends no `ready`.
+// Any other page reports none, and sends no `press`.
 export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS}) {
   const framed = win.parent !== win && win.parent !== null && win.parent !== undefined
   const standalone = framed ? null : publicIdentity(win.location && win.location.pathname)
@@ -117,6 +118,8 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   const queued = []
   const latest = new Map()
   const handlers = new Map(CANVAS_EVENTS.map((event) => [event, new Set()]))
+  // The resolvers of a canvas's stream opens waiting for it to be shown.
+  const unshown = []
 
   let settle
   const credentialArrived = new Promise((resolve) => {
@@ -173,7 +176,15 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
 
     const value = heard(told, args)
     latest.set(told, value)
+    if (told === "state" && value === "live") for (const resolve of unshown.splice(0)) resolve()
     for (const entry of handlers.get(told)) deliver(told, entry, value)
+  }
+
+  // Settles once the shell's last word on this canvas is `live`. The
+  // bridge tells a canvas its state right after its credential, so one
+  // opened hidden is known to be hidden before anything is sent.
+  function shown() {
+    return latest.get("state") === "live" ? Promise.resolve() : new Promise((resolve) => unshown.push(resolve))
   }
 
   // Each handler is called on its own, so one that throws stops no other,
@@ -252,8 +263,13 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   }
 
   async function postRequest(requestKind, fields, signal) {
-    const who = await identity()
+    let who = await identity()
     const path = routeOf(requestKind, fields)
+    if (canvas !== null && requestKind === "stream_open") {
+      // A hidden canvas reads nothing: it opens once shown, and the refresh it opens with covers what it missed.
+      await shown()
+      who = await identity()
+    }
     const headers = {"content-type": "application/json"}
     if (who.credential) headers[BEARER_HEADER] = bearer(who.credential)
 
@@ -397,7 +413,9 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
     /**
      * Open a stream the tincture declares and deliver its events. On a
      * canvas it opens on the canvas's data path, and a pair the canvas does
-     * not declare is refused as `forbidden` before anything is sent.
+     * not declare is refused as `forbidden` before anything is sent; asked
+     * for while the canvas is hidden, it sends nothing and opens once the
+     * canvas is shown.
      * @param {string} name - the stream's name
      * @param {string|null} subject - a literal subject, or null for a stream that takes none
      * @param {function} onEvent - called with {id, event, data} per event

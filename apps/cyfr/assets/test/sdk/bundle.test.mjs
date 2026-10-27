@@ -56,9 +56,10 @@ function page() {
   return {win, requests}
 }
 
-// The shell's handshake for the canvas, as the bridge posts it: the port on
-// the window, then over it the canvas message and the credential. Answers
-// the shell's end of the port and every message heard on it.
+// The shell's handshake for a shown canvas, as the bridge posts it: the
+// port on the window, then over it the canvas message, the credential and
+// its state. Answers the shell's end of the port and every message heard
+// on it.
 function handshake(win) {
   const channel = new MessageChannel()
   ports.push(channel.port1)
@@ -73,6 +74,7 @@ function handshake(win) {
   )
   channel.port1.postMessage(toFrameMessage("canvas", CANVAS, OPEN.canvas))
   channel.port1.postMessage({v: 1, type: CREDENTIAL, frame: CANVAS, credential: OPEN.credential})
+  channel.port1.postMessage(toFrameMessage("state", CANVAS, {state: "live"}))
   return heard
 }
 

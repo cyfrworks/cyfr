@@ -825,19 +825,24 @@ async function showCanvasAway(page, id) {
 }
 
 // hidden_canvas: a hidden canvas reads and acts on nothing. The probe is
-// shown and reading its stream; switched away, a new feed result reaches it
-// not, and a press it sends is dropped (counted in the frame's data-dropped,
-// never received by the shell); switched back, its stream refreshes to the
-// new result. Nothing here reads the page's own timer as proof it stopped.
-async function stepHiddenCanvas(page, name) {
+// shown and reading its stream, and tags each feed event with the state the
+// shell last told it; switched away, once it has heard `frozen` no stream
+// open of it reaches the server, a new feed result reaches it not, and a
+// press it sends is dropped (counted in the frame's data-dropped, never
+// received by the shell); switched back, its stream refreshes to the new
+// result, and no feed event it ever read is tagged `frozen`. Nothing here
+// reads the page's own timer as proof it stopped.
+async function stepHiddenCanvas(page, name, proxy) {
   const probe = await showCanvas(page, "probe");
-  const before = await until(probe.frame, probeState, (s) => s.stream.settled && s.stream.events >= 1 && s.candles === 6, "the probe reading its stream");
+  const before = await until(probe.frame, probeState, (s) => s.stream.settled && s.stream.events >= 1 && s.candles === 6 && s.told === "live", "the probe reading its stream");
   const from = (await instrument(page)).receipts.length;
   const droppedBefore = Number((await canvasFrame(page, probe.id)).dropped);
 
-  // Switched away, the probe's frame is frozen.
+  // Switched away, the probe's frame is frozen, and the probe hears it.
   await showCanvas(page, "start");
   const frozen = await canvasFrame(page, probe.id);
+  await until(frozen.frame, probeState, (s) => s.told === "frozen", "the hidden probe hearing it is frozen");
+  const proxyMark = proxy.seen.length;
 
   // A new result published while the probe is hidden reaches its closed
   // stream not.
@@ -852,6 +857,13 @@ async function stepHiddenCanvas(page, name) {
   const pressReceipts = receiptsOf(await instrument(page), from, probe.id, "press");
   const pressForwarded = pressReceipts.filter((r) => r.dropped === false).length;
 
+  // The probe asks for its stream again on a timer while it is hidden; no
+  // open of it reached the server since it heard `frozen`.
+  const streamPath = `/_f/v1/o/${probe.id}/stream`;
+  const opensWhileHidden = proxy.seen.slice(proxyMark).filter((r) => {
+    try { return r.method === "POST" && new URL(r.url).pathname === streamPath; } catch { return false; }
+  }).length;
+
   // Switched back, its stream refreshes to the new result.
   const back = await showCanvas(page, "probe");
   const after = await until(back.frame, probeState, (s) => s.stream.settled && s.stream.events > whileHidden.stream.events && s.revision === accepted.revision, "the probe's stream refreshed on return");
@@ -859,20 +871,26 @@ async function stepHiddenCanvas(page, name) {
   note("hidden_canvas", name,
     back.id === probe.id && frozen.state === "frozen" &&
       whileHidden.stream.events === before.stream.events && whileHidden.revision === before.revision &&
+      opensWhileHidden === 0 &&
       droppedAfterPress === droppedBefore + 1 && pressForwarded === 0 &&
-      after.stream.events > whileHidden.stream.events && after.revision === accepted.revision,
+      after.stream.events > whileHidden.stream.events && after.revision === accepted.revision &&
+      after.tagged.frozen === 0 && after.tagged.none === 0 && after.tagged.live === after.stream.events,
     {
-      before: { events: before.stream.events, revision: before.revision },
+      before: { events: before.stream.events, revision: before.revision, tagged: before.tagged },
       while_hidden: {
         frame: frozen.state,
+        told: whileHidden.told,
         new_result_accepted_revision: accepted.revision,
         events: whileHidden.stream.events,
         revision: whileHidden.revision,
         stream_event_reached_it: whileHidden.stream.events !== before.stream.events,
+        stream_opens_reaching_the_server: opensWhileHidden,
         press_dropped: droppedAfterPress - droppedBefore,
         press_forwarded: pressForwarded,
+        tagged: whileHidden.tagged,
       },
-      shown_again: { same_frame: back.id === probe.id, events: after.stream.events, refresh: after.stream.refresh, revision: after.revision },
+      shown_again: { same_frame: back.id === probe.id, told: after.told, events: after.stream.events, refresh: after.stream.refresh, revision: after.revision, tagged: after.tagged },
+      tagged_frozen: after.tagged.frozen,
     });
   await showCanvas(page, "start");
 }
@@ -1094,8 +1112,11 @@ async function stepActivation(page, name) {
 // rebound_control: the feed is removed and bound again with other
 // arguments. feed.press naming the old binding is refused not_found, the
 // canvas's stale press still names the old binding, and once a new result
-// of the new binding reaches the canvas its press names the new binding and
-// the shell forwards it.
+// of the new binding reaches the canvas on a reopened stream its press
+// names the new binding and the shell forwards it. The stream is reopened
+// because an open feed stream was seen to keep its old binding after a
+// rebind, an open finding the record and the README name; this step does
+// not show what an open stream does across a rebind.
 async function stepReboundControl(page, name) {
   const { shown, centers } = await marketsBound(page);
   const frame = shown.frame;
@@ -1127,9 +1148,9 @@ async function stepReboundControl(page, name) {
   // A result of the new binding reaches the canvas, whose press then names
   // the new binding and the shell forwards it.
   const accepted = await ask({ op: "accept", feed: "candles", data: { symbol, price: 2, change: null, at: new Date().toISOString().replace(/\.\d+Z$/, "Z"), candles: candles(symbol) } });
-  // The canvas keeps the old binding on its open stream; it takes the new
-  // binding only when its stream reopens from its refresh, which showing it
-  // again does. Switch away and back, then wait for the new binding.
+  // Switched away and back, markets' feed stream closes with its suspended
+  // credential and opens again from its refresh, which carries the new
+  // binding; then wait for it.
   await showCanvas(page, "start");
   const again = await showCanvas(page, "markets");
   await until(again.frame, (f) => f.evaluate(() => (window.__canvas ? window.__canvas.current() : null)), (b) => b === fresh, "the new binding reaching the canvas on reopen");
@@ -1153,6 +1174,12 @@ async function stepReboundControl(page, name) {
       stale_press: { dispatches: stale.length, names_old_binding: stale.length === 1 && stale[0].binding === old.binding },
       feed_press_naming_old: { refused: refusal !== null, not_found_naming_old: refusal === `{:not_found, "Feed", "${old.binding}"}`, refusal: refusal && refusal.slice(0, 160) },
       after_new_result: { accepted_revision: accepted.revision, new_press_names_new_binding: renewed.length === 1 && renewed[0].binding === fresh, forwarded },
+      stream_reopened: {
+        how: "markets switched away and back: its feed stream closes with the suspended credential and opens again from its refresh",
+        why: "an open feed stream was once seen to keep its old binding after a rebind (one debug run, not proven)",
+        open_finding: "on the follow-up list; its unit check: after a rebind, an open feed stream delivers the new binding's results or closes",
+        shown_here: "not what an open stream does across a rebind",
+      },
     });
   await showCanvas(page, "start");
 }
@@ -1271,7 +1298,10 @@ async function stepPolicy(page, name, proxy, receiver, udp) {
   const pathOf = (r) => { try { return new URL(r.url).pathname; } catch { return ""; } };
   const blockedReached = proxy.seen.slice(proxyMark).filter((r) => r.host === lib.SITE && (pathOf(r) === "/_f/v1/invoke" || pathOf(r).startsWith("/hooks/"))).length;
 
-  // 4. The connection allowlist against a peer connection.
+  // 4. The connection allowlist against a peer connection. The listener is
+  // on loopback: a browser other than Chromium that sends it nothing has not
+  // shown the disclosure here, and the canvas plan's Appendix A.3 measured
+  // it against a non-loopback address.
   const udpMark = udp.packets;
   await probe.frame.evaluate(({ host, port }) => window.__probe.peerConnection(host, port), { host: "127.0.0.1", port: udp.port });
   await sleep(2500);
@@ -1294,14 +1324,16 @@ async function stepPolicy(page, name, proxy, receiver, udp) {
   };
 
   // 6. An open carrying arguments beyond ref is dropped by the bridge: no
-  // tincture opens and the frame's data-dropped moves.
+  // tincture opens, none is forwarded and the frame's data-dropped moves.
   const droppedBefore = Number((await canvasFrame(page, probe.id)).dropped);
+  const openFrom = (await instrument(page)).receipts.length;
   const fullBefore = await page.$('[data-canvas-place="full"][data-canvas-shown="true"] iframe');
   await probe.frame.evaluate(() => window.__probe.openRaw());
   await sleep(600);
   const droppedAfter = Number((await canvasFrame(page, probe.id)).dropped);
   const fullAfter = await page.$('[data-canvas-place="full"][data-canvas-shown="true"] iframe');
-  const openDropped = { dropped_delta: droppedAfter - droppedBefore, no_full_opened: !fullBefore && !fullAfter };
+  const openForwarded = receiptsOf(await instrument(page), openFrom, probe.id, "open").filter((r) => r.dropped === false).length;
+  const openDropped = { dropped_delta: droppedAfter - droppedBefore, forwarded: openForwarded, no_full_opened: !fullBefore && !fullAfter };
 
   const chromiumAllowlist = name !== "chromium" || udpPackets === 0;
 
@@ -1312,12 +1344,19 @@ async function stepPolicy(page, name, proxy, receiver, udp) {
       invokeFetch.outcome === "refused" && webhookFetch.outcome === "refused" && blockedReached === 0 &&
       chromiumAllowlist &&
       routes.shared_invoke.canvas_path_required && routes.data_path_mismatch.frame_path_mismatch && routes.own_data_path_invoke.no_route &&
-      openDropped.dropped_delta >= 1 && openDropped.no_full_opened,
+      openDropped.dropped_delta >= 1 && openDropped.forwarded === 0 && openDropped.no_full_opened,
     {
       served_policy: policy,
       foreign_script: { outcome: foreign.outcome, attacker_requests: attackerRequests },
       blocked_fetch: { invoke: invokeFetch.outcome, webhook: webhookFetch.outcome, requests_at_proxy: blockedReached },
-      connection_allowlist: { browser: name, udp_packets: udpPackets, chromium_sends_none: name === "chromium" ? udpPackets === 0 : "recorded (disclosure P1 (a))" },
+      connection_allowlist: name === "chromium"
+        ? { browser: name, udp_packets: udpPackets, chromium_sends_none: udpPackets === 0 }
+        : {
+          browser: name, udp_packets: udpPackets,
+          disclosure: udpPackets > 0
+            ? "recorded (disclosure P1 (a))"
+            : "not demonstrated against the loopback listener, which no packet reached; the canvas plan's Appendix A.3 measurement against a non-loopback address stands",
+        },
       data_routes: routes,
       open_with_arguments: openDropped,
     });
@@ -1566,7 +1605,7 @@ const STEP_FNS = {
   written_canvas: (page, name) => stepWrittenCanvas(page, name),
   feed_chart: (page, name) => stepFeedChart(page, name),
   app_over_canvas: (page, name) => stepAppOverCanvas(page, name),
-  hidden_canvas: (page, name) => stepHiddenCanvas(page, name),
+  hidden_canvas: (page, name, { proxy }) => stepHiddenCanvas(page, name, proxy),
   activation: (page, name) => stepActivation(page, name),
   rebound_control: (page, name) => stepReboundControl(page, name),
   connection_allowlist: (page, name) => stepConnectionAllowlist(page, name),

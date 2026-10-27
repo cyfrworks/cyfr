@@ -8,13 +8,15 @@
 // first in the page's head.
 //
 // It reads the feed `candles` and draws the result's candles as its own
-// SVG (one `.candle` rect each), keeps a counter running on a timer so a
-// hidden canvas is seen to keep running without any claim that it reads or
-// acts, opens an app from a button the person clicks, and exposes, on
-// `window.__probe`, its state and a few page-own requests the `policy`
-// step drives and reads (never framed as an escape): a script element with
-// a foreign `src`, a fetch to a route the policy's `connect-src` does not
-// name, and a peer connection to the proof's UDP listener.
+// SVG (one `.candle` rect each), tags each feed event it reads with the
+// state the shell last told it (`cyfr.on("state")`), keeps a counter
+// running on a timer so a hidden canvas is seen to keep running without any
+// claim that it reads or acts, opens an app from a button the person
+// clicks, and exposes, on `window.__probe`, its state and a few page-own
+// requests the `policy` step drives and reads (never framed as an escape):
+// a script element with a foreign `src`, a fetch to a route the policy's
+// `connect-src` does not name, and a peer connection to the proof's UDP
+// listener.
 
 const root = document.getElementById("root")
 const generation = Math.random().toString(36).slice(2, 10)
@@ -36,6 +38,14 @@ let count = 0
 let binding = null
 let result = null
 const stream = { opened: false, events: 0, refresh: false, revision: null }
+
+// The state the shell last told this canvas, and the feed events read under
+// each: `none` before the shell told it anything.
+let told = null
+const tagged = { live: 0, frozen: 0, none: 0 }
+cyfr.on("state", (state) => {
+  told = state
+})
 
 // The shell's handshake carries the frame's port, which the SDK keeps; this
 // page captures a reference to the same port so the `policy` step can post a
@@ -81,6 +91,7 @@ let refreshedOpen = 0
 function onEvent(event, open) {
   const data = event && event.data
   if (!data || data.feed !== "candles") return
+  tagged[told === null ? "none" : told] += 1
   stream.events += 1
   stream.revision = data.revision
   stream.refresh = data.refresh === true
@@ -92,10 +103,9 @@ function onEvent(event, open) {
 }
 
 // Keep the feed stream open: when the shell suspends the canvas the stream
-// closes, and when the canvas is shown again it opens again from its
-// refresh. A refused open (the canvas is hidden) is retried on a timer, so
-// no stream event reaches it while it is hidden and its stream is back once
-// it is shown.
+// closes, and it is opened again after a pause. While the canvas is hidden
+// the SDK sends that open only once the canvas is shown, so it opens again
+// from its refresh then; a refused open is retried on the same pause.
 function follow() {
   const open = ++opens
   cyfr.stream("feed.results", "candles", (event) => onEvent(event, open)).then(
@@ -165,8 +175,9 @@ async function blockedFetch(url) {
 
 // A peer connection to the proof's UDP listener: constructed and offered,
 // its ICE gathering sends to the STUN host. Chromium sends none under the
-// page's connection allowlist; Firefox and WebKit send, recorded as the
-// disclosure P1 (a) accepts.
+// page's connection allowlist; what Firefox and WebKit send is recorded as
+// the disclosure P1 (a) accepts, and a browser that sends none to this
+// loopback listener has not shown it here.
 async function peerConnection(host, port) {
   let pc
   try {
@@ -199,6 +210,8 @@ window.__probe = Object.freeze({
     stream: { ...stream, settled: stream.opened && refreshedOpen === opens },
     candles: result && Array.isArray(result.candles) ? result.candles.length : 0,
     revision: stream.revision,
+    told,
+    tagged: { ...tagged },
   }),
   // A press the page sends on its own, with no person input: the shell
   // drops it while the canvas is hidden, whatever the frame's activation.

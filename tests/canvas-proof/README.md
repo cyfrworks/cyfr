@@ -88,11 +88,13 @@ token, answers `answer-N.json`.
   the sibling frame the `activation` step clicks in. In the hand a column
   app is laid over the whole canvas, so `markets` has none there.
 - `canvas-probe`: a canvas page (`tinctures/canvas-probe/`) that reads the
-  feed `candles` and draws its candles as its own SVG, keeps a counter
-  running on a timer, opens an app from its own button, and offers the
-  `policy` step its page-own requests: a script element with a foreign
-  `src`, a fetch its `connect-src` refuses, a peer connection to the
-  proof's UDP listener, and a malformed `open` posted over its port.
+  feed `candles` and draws its candles as its own SVG, tags each feed event
+  it reads with the state the shell last told it (`cyfr.on("state")`),
+  keeps a counter running on a timer, opens an app from its own button,
+  and offers the `policy` step its page-own requests: a script element
+  with a foreign `src`, a fetch its `connect-src` refuses, a peer
+  connection to the proof's UDP listener, and a malformed `open` posted
+  over its port.
 - `canvas-broken`: a canvas page whose working version (1.0.0) becomes
   ready; each later version, written with `canvas.write`, never becomes
   ready, dies before ready, or crashes after ready, as its page says.
@@ -125,11 +127,11 @@ instrument (below).
 | `written_canvas` | a canvas written with `canvas.write` at 0.1.0 is validated in its own frame (ending on `ready`), activated (working 0.1.0, nothing failed) and opened live at that version, drawing its version |
 | `feed_chart` | the feed `candles`' fixed result is drawn by the probe page as six candles at the accepted revision; the observation says the result is fixed and no run executed |
 | `app_over_canvas` | `canvas-full` opens full from the shipped canvas's launcher tile (one forwarded `open`), the canvas under it frozen; on a switch the full frame is frozen and inert; switched back it is live again over its canvas, and closing it shows the canvas's same frame live |
-| `hidden_canvas` | switched away, the probe's frame is frozen; a feed result accepted while it is hidden reaches its closed stream not, and a press it sends is dropped (its frame's `data-dropped` moves, the shell receives nothing); switched back, its stream refreshes to the new result. Nothing asserts the page's JavaScript stopped |
+| `hidden_canvas` | switched away, the probe's frame is frozen and the probe hears `state` `frozen`; from then no stream open of it reaches the server, a feed result accepted while it is hidden reaches its closed stream not, and a press it sends is dropped (its frame's `data-dropped` moves, the shell receives nothing); switched back, its stream refreshes to the new result. Every feed event the probe read is tagged with the state the shell last told it, and none is tagged `frozen`. Nothing asserts the page's JavaScript stopped |
 | `validation_failures` | `canvas-broken` 1.0.0 is working; a later version that never becomes ready is recorded `not_ready` at its deadline, and one that dies before ready (the shell's receipt of its validation frame's `failed`) is recorded `died`; each later version reads a stream 1.0.0 does not, so once its validation fails the working version, 1.0.0, opens nothing (the canvas shows its `ungranted` refusal) and the shell's grant prompt asks for 1.0.0 itself; the person confirms it and 1.0.0 opens |
 | `crash_safe_mode` | a version that becomes ready is activated, then crashes live after `ready()` (the SDK's `failed` at stage `runtime`): safe mode `crashed`, offering retry, the kept version and the shipped canvas; the kept version reads no stream, so choosing it raises the grant prompt for the kept version in front of safe mode, with nothing restored and no canvas frame open; the person confirms it, and the kept version is restored and opens |
 | `activation` | a genuine click on the press button dispatches one `press`, inside the click, forwarded with the shell's activation active and the canvas its active element; several presses inside one click are each forwarded; a press the page sends with no input, and one held 8 s past the click, are each dropped (the frame's `data-dropped` moves, the shell receives nothing). Recorded per browser, no drop asserted: a press after a click elsewhere in the shell, and after a click in a sibling frame (on the desk; the hand has no sibling beside the canvas, which the record says), each with the canvas focusing itself by `window.focus()` and by an element's `focus()` and with neither |
-| `rebound_control` | while the binding is live, a press names it; the feed is removed and bound again with other arguments and a new binding id; `feed.press` naming the old binding is refused `not_found`; the canvas's stale press still names the old binding; once a result of the new binding reaches the canvas, its press names the new binding and the shell forwards it |
+| `rebound_control` | while the binding is live, a press names it; the feed is removed and bound again with other arguments and a new binding id; `feed.press` naming the old binding is refused `not_found`; the canvas's stale press still names the old binding; once a result of the new binding reaches the canvas, its press names the new binding and the shell forwards it. The probe and markets open their feed stream again whenever it closes, and the step switches markets away and back before it waits, so the new binding reaches it on a reopened stream's refresh. That is because an open feed stream was once seen to keep its old binding after a rebind (one debug run, not proven): an open finding on the follow-up list, which a unit check would settle (after a rebind, an open feed stream delivers the new binding's results or closes). The step does not show what an open stream does across a rebind, and its record says so |
 | `connection_allowlist` | under the canvas page's `connection-allowlist` header the SDK loads and runs, the page's own stylesheet loads and applies, and the feed stream opens and delivers, in all three browsers |
 | `policy` | ordinary requests and checks on a canvas open, none framed as an escape (below) |
 | `disconnect` | the phone's or the PC's socket is cut: the canvas is marked disconnected, still drawn, and its frame is inert; regained, the canvas is live and the shell switches again |
@@ -160,17 +162,23 @@ server sees it; none tries to leave the sandbox.
   URL and to a webhook URL of the site is refused by `connect-src` before
   it is sent, so no request reaches the proxy (§6 row 9h).
 - **The connection allowlist.** The page opens an `RTCPeerConnection` to
-  the proof's UDP listener: in Chromium no UDP packet arrives under the
-  page's `connection-allowlist`; in Firefox and WebKit the packets are
-  recorded as the disclosure P1 (a) accepts (§6 row 9g).
+  the proof's UDP listener, on loopback: in Chromium no UDP packet arrives
+  under the page's `connection-allowlist`; in Firefox and WebKit the
+  packets that arrive are recorded as the disclosure P1 (a) accepts (§6 row
+  9g). A browser other than Chromium that sends the loopback listener
+  nothing, Firefox as run here, is recorded as not demonstrating the
+  disclosure against loopback, and the canvas plan's Appendix A.3
+  measurement against a non-loopback address (12 packets from Firefox,
+  with the header and without) stands.
 - **No write route.** A canvas credential on the shared invoke route is
   refused `canvas_path_required`; a credential of another open on this
   canvas's data path is refused `frame_path_mismatch` before any authority
   is derived; and the canvas's own data path has no invoke route (404)
   (§6 rows 9i and 9j).
 - **An open carrying arguments.** An `open` carrying arguments beyond
-  `ref`, posted over the port by the page, is dropped by the bridge: no
-  tincture opens and the frame's `data-dropped` moves (§6 row 9k).
+  `ref`, posted over the port by the page, is dropped by the bridge: none is
+  forwarded, no tincture opens and the frame's `data-dropped` moves (§6 row
+  9k).
 
 ## Containment shown elsewhere
 

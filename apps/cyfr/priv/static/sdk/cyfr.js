@@ -261,6 +261,7 @@
     const queued = [];
     const latest = /* @__PURE__ */ new Map();
     const handlers = new Map(CANVAS_EVENTS.map((event) => [event, /* @__PURE__ */ new Set()]));
+    const unshown = [];
     let settle;
     const credentialArrived = new Promise((resolve) => {
       settle = resolve;
@@ -305,7 +306,11 @@
       if (kind !== "canvas") return;
       const value = heard(told, args);
       latest.set(told, value);
+      if (told === "state" && value === "live") for (const resolve of unshown.splice(0)) resolve();
       for (const entry of handlers.get(told)) deliver(told, entry, value);
+    }
+    function shown() {
+      return latest.get("state") === "live" ? Promise.resolve() : new Promise((resolve) => unshown.push(resolve));
     }
     function deliver(event, entry, value) {
       queueMicrotask(() => {
@@ -359,8 +364,12 @@
       return streamPath(frame);
     }
     async function postRequest(requestKind, fields, signal) {
-      const who = await identity();
+      let who = await identity();
       const path = routeOf(requestKind, fields);
+      if (canvas !== null && requestKind === "stream_open") {
+        await shown();
+        who = await identity();
+      }
       const headers = { "content-type": "application/json" };
       if (who.credential) headers[BEARER_HEADER] = bearer(who.credential);
       try {
@@ -481,7 +490,9 @@
       /**
        * Open a stream the tincture declares and deliver its events. On a
        * canvas it opens on the canvas's data path, and a pair the canvas does
-       * not declare is refused as `forbidden` before anything is sent.
+       * not declare is refused as `forbidden` before anything is sent; asked
+       * for while the canvas is hidden, it sends nothing and opens once the
+       * canvas is shown.
        * @param {string} name - the stream's name
        * @param {string|null} subject - a literal subject, or null for a stream that takes none
        * @param {function} onEvent - called with {id, event, data} per event
