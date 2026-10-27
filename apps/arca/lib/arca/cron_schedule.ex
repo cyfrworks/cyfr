@@ -164,25 +164,13 @@ defmodule Arca.CronSchedule do
 
   @doc """
   Gets a schedule by ID with tenant-scoped lookup, read only while this
-  member holds its slot (`slot_fence/0`, checked in the read's own
-  locking transaction): a member that lost it answers `:not_owner`
-  rather than a row it may no longer speak for.
+  member holds its slot (`Arca.Repo.owned/2`): a member that lost it
+  answers `:not_owner` rather than a row it may no longer speak for.
   """
   @spec get_held(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found | :not_owner | :database_error}
-  def get_held(%Prima.Actor{} = actor, id) do
-    Errors.with_db_rescue("CronSchedule.get_held", fn ->
-      Arca.Repo.locking_transaction(fn ->
-        with :ok <- slot_fence(),
-             {:ok, row} <- get_tenant(actor, id) do
-          row
-        else
-          {:error, reason} -> Arca.Repo.rollback(reason)
-        end
-      end)
-    end)
-    |> Arca.Data.project()
-  end
+  def get_held(%Prima.Actor{} = actor, id),
+    do: Arca.Repo.owned("CronSchedule.get_held", fn -> get_tenant(actor, id) end)
 
   @doc """
   Gets a schedule by ID (unscoped).
