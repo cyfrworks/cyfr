@@ -320,8 +320,8 @@ Every request authenticates itself and declares its own version, so:
 - `Authorization: Bearer ...` goes on **every** request. Both an API key and a
   Sanctum session token are accepted in that header, and both are checked
   against the database on each call: revoking either takes effect on the very
-  next call to the member that revoked it, and within two seconds on the other
-  members of a cell.
+  next call to the server that revoked it, and within two seconds on the other
+  servers of a cluster.
 
 ### Discovering What A Server Speaks
 
@@ -1048,9 +1048,9 @@ commit   {decisions, plan_token, proof,
           expected_consent_revision}      → an immutable consent revision
 ```
 
-`preview` exists so the approval proof binds the exact commit digest that was rendered — a decision changed after approval cannot ride on the old approval. `commit` CAS-checks the head revision, so concurrent grants conflict instead of clobbering. Decisions carry the bindings (`[{need, entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}]`), the selections that fill a dependency's need (`[{dep, from, label | entry_id | instance_entry_id, need, name, fields, lifetime, renew}]`), the scope (`versionless` covers every release of the line — the default; `pinned` names one), a `subset` that narrows the ask per node and resource kind (exact domains, methods, schemes, private ranges, storage paths and actions, tools, and limits under the ask and the ceiling; a superset is refused), and the `origins` the grant admits.
+`preview` exists so the approval proof binds the exact commit digest that was rendered — a decision changed after approval cannot ride on the old approval. `commit` CAS-checks the head revision, so concurrent grants conflict instead of clobbering. Decisions carry the bindings (`[{need, entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}]`), the selections that fill a dependency's need (`[{dep, from, label | entry_id | instance_entry_id, need, name, fields, lifetime, renew}]`), the scope (`versionless` covers every release of the line — the default; `pinned` names one), a `subset` that narrows the ask per component and resource kind (exact domains, methods, schemes, private ranges, storage paths and actions, tools, and limits under the ask and the ceiling; a superset is refused), and the `origins` the grant admits.
 
-**Each need's choice.** In the plan, every need and every need of a dependency lists its `candidates`: your active entries and the instance entries offered to you of the need's kind whose provider is the need's (`api_key:openai.com` is met by an `api_key` entry of `openai.com` and nothing else), each with its `source` (`own` or `instance`), destination and whether it is disclosed. A need the component reads itself — one that declares no `attach` rule, or `disclose: true` — is met by a disclosed entry of yours alone, never by an instance entry, and the plan names the newer shipped version (`newer_shipped`) where an update would attach it instead. An instance entry is a candidate only where its component policy admits the component. `suggested` is the athanor's default of the provider when it is a candidate (`vault/set_default`), else the only candidate, else the one instance entry offered when you hold none of the provider; `choice_required` is true only when several match and none is suggested, and only then is the person asked. A dependency's need the app's own `provides` covers answers `source: "provided"` with its destination and no candidates. Each declared need, the app's and a dependency's, also names its `kind` and `provider`, `disclose_only` (it declares no `attach` rule), `disclose` (it declares `disclose: true`), and the `hosts` and `paths` it declares (`null` where it declares none), which a surface prefills a new entry from. A dependency's lending profiles (its row's `candidates`) each name the `fields` and the OAuth `scopes` their binding lends (`[]` for none). A plan for a profile with a head names `head_bindings`: each binding's `binding_key`, what it binds (its `entry_id`, `instance_entry_id` or a lending profile's `label`, and which of them as `source`: `own`, `instance` or `label`), where it sits (the `node` and `edge` its key names, the `dep` a dependency's edge reaches and the account's `connection`, as a preview's `removed` names them), the `need` it was bound for (absent when that cannot be told), its `lifetime` and whether a root has `consumed` it, so a consumed `once` binding can be granted again with `renew`; a binding whose key cannot be read names none of `source`, `node`, `edge`, `dep`, `connection` and `need`. `head_narrowing` names the head's narrowing per node in the decisions' `subset` shape, clamped to the current ask. A re-grant opens from that narrowing: a method newly asked for, or a newly added dependency, opens off. When the shape moved, `shape_diff` compares every node of the narrowed head with the current ask; each difference names its component (`node`) and marks a new or dropped dependency (`new`, `dropped`).
+**Each need's choice.** In the plan, every need and every need of a dependency lists its `candidates`: your active entries and the instance entries offered to you of the need's kind whose provider is the need's (`api_key:openai.com` is met by an `api_key` entry of `openai.com` and nothing else), each with its `source` (`own` or `instance`), destination and whether it is disclosed. A need the component reads itself — one that declares no `attach` rule, or `disclose: true` — is met by a disclosed entry of yours alone, never by an instance entry, and the plan names the newer shipped version (`newer_shipped`) where an update would attach it instead. An instance entry is a candidate only where its component policy admits the component. `suggested` is the athanor's default of the provider when it is a candidate (`vault/set_default`), else the only candidate, else the one instance entry offered when you hold none of the provider; `choice_required` is true only when several match and none is suggested, and only then is the person asked. A dependency's need the app's own `provides` covers answers `source: "provided"` with its destination and no candidates. Each declared need, the app's and a dependency's, also names its `kind` and `provider`, `disclose_only` (it declares no `attach` rule), `disclose` (it declares `disclose: true`), and the `hosts` and `paths` it declares (`null` where it declares none), which a surface prefills a new entry from. A dependency's lending profiles (its row's `candidates`) each name the `fields` and the OAuth `scopes` their binding lends (`[]` for none). A plan for a profile with a head names `head_bindings`: each binding's `binding_key`, what it binds (its `entry_id`, `instance_entry_id` or a lending profile's `label`, and which of them as `source`: `own`, `instance` or `label`), where it sits (the `node` and `edge` its key names, the `dep` a dependency's edge reaches and the account's `connection`, as a preview's `removed` names them), the `need` it was bound for (absent when that cannot be told), its `lifetime` and whether a root has `consumed` it, so a consumed `once` binding can be granted again with `renew`; a binding whose key cannot be read names none of `source`, `node`, `edge`, `dep`, `connection` and `need`. `head_narrowing` names the head's narrowing per component in the decisions' `subset` shape, clamped to the current ask. A re-grant opens from that narrowing: a method newly asked for, or a newly added dependency, opens off. When the shape moved, `shape_diff` compares every component of the narrowed head with the current ask; each difference names its component (`node`) and marks a new or dropped dependency (`new`, `dropped`).
 
 **Binding.** A binding names exactly one of `entry_id` and `instance_entry_id`; an entry of another provider is refused `provider_mismatch`, an attach-only entry bound where the component reads the value `disclosure_refused`, an instance entry not offered to you `not_offered`, and one whose policy does not admit the component `component_not_admitted`, each naming the need. A grant's bindings fill one need: one names no `name` and is the default, and each other names its account (`name`) and rides beside it, so a call can name one. Each binding, and each selection, carries its `lifetime` — `{"kind": "standing"}` (the default), `{"kind": "until", "until": "<RFC 3339 UTC, at most 24 hours ahead>"}` or `{"kind": "once"}` (one root run) — and `renew: true` makes a consumed `once` binding usable again; both are part of what the commit digest binds. A selection names a lender profile by `label`, or binds an entry to the dependency's edge directly (`entry_id` or `instance_entry_id`, with `need` when the dependency declares several); a need the app provides takes no selection. A dependency's edge may bind named accounts as the app's own calls do: one selection of the edge names no `name` and is its default, an entry chosen here, and each other names its account (`name`, 1 to 128 bytes of text without a `|` or a control character) and an entry (never a `label`) for the default's need, checked as the default is and with a lifetime of its own, so a call through that edge can name one. A name used twice on one edge, compared by Unicode's full lowercase mapping, accounts beside no default or beside a key a lending profile lends, and accounts for another need than the default's are each refused as `invalid_argument`, naming the dependency; `profile/grant` re-issues the head's named accounts as they stand, and `publish` refuses an edge it would keep that carries them. On the command line, `--entry 'api_key|Work=vlt_abc:1h'` and `--selection 'reagent:local.db|Work=vlt_def'` name an account after the need or dependency: the value splits at its last `=`, and what precedes it at its first `|`. A flag names its slot alone, the default or one account, and a slot no flag names takes what it would take with no flags: the grant's own binding, else the plan's suggestion for a required need.
 
@@ -1058,7 +1058,7 @@ commit   {decisions, plan_token, proof,
 
 **An assistant's launch.** An `execution.run` an agent proposes for a component is a launch. It is denied when the agent's own policy denies `execution.run` or does not name it, and otherwise it always asks the person on a card, even where that policy runs it at once: `execution.run` takes no standing answer, bounded or not, so one approval is for one launch. A launch naming an account (`connection`) has it resolved on the app's own profile before it asks: the card names the account as its binding stores the name, whatever case the launch spelled it in, and the approval binds that name and the entry it resolved to. Before the launch runs, the name is resolved again. A damaged or lost head refuses the launch as damage, with its human-readable refusal sentence, never as a stale approval or setup to make. A store that cannot answer refuses as unavailable. An account on a readable head that now resolves to another entry or another stored name, or is no longer bound, refuses as a stale approval with nothing run, to be asked again. A name the app's profile does not bind ends the turn as setup required, naming the account: the person grants it on the app's own profile, and the retry is a new turn.
 
-**The preview is typed rows.** It answers `v`, `rows`, `origins`, `removed` and `commit_digest` (the `Prima.ConsentPreview` document, whose shape `tests/fixtures/consent_preview.json` pins), beside the `proof` and `expected_consent_revision` a commit presents. `removed` lists every binding of the profile's head the revision drops, empty when it drops none: a binding whose key the revision no longer binds, or binds for another need, as a grant for another need of the app's own calls drops its default and its accounts. Each item names its `binding_key`, the `node` and `edge` it sits on, its `connection` for a named account, the `need` it was bound for (`null` when that cannot be told), exactly one of `entry_id`, `instance_entry_id` or `via` (the lending profile's label), and the entry's `name` and `source` when the entry can be read; items are sorted by `binding_key`, and the commit digest covers them, so a commit whose preview did not show a removal is refused. Each row is one resource an edge of the grant gives — a credential and its projection, egress, storage, tools, tool servers, the exits its requests may reach with the source classes each may carry (`exits`, whose flows a decision's `subset` may remove and never add), limits, and for a tincture its frame capabilities, placement, background permission, streams and system actions — with the node it belongs to and whether a decision narrowed it. Render the rows yourself; there is no prose summary. Explanatory text, such as a need's reason, is shown but not bound, so rewording it invalidates no grant.
+**The preview is typed rows.** It answers `v`, `rows`, `origins`, `removed` and `commit_digest` (the `Prima.ConsentPreview` document, whose shape `tests/fixtures/consent_preview.json` pins), beside the `proof` and `expected_consent_revision` a commit presents. `removed` lists every binding of the profile's head the revision drops, empty when it drops none: a binding whose key the revision no longer binds, or binds for another need, as a grant for another need of the app's own calls drops its default and its accounts. Each item names its `binding_key`, the `node` and `edge` it sits on, its `connection` for a named account, the `need` it was bound for (`null` when that cannot be told), exactly one of `entry_id`, `instance_entry_id` or `via` (the lending profile's label), and the entry's `name` and `source` when the entry can be read; items are sorted by `binding_key`, and the commit digest covers them, so a commit whose preview did not show a removal is refused. Each row is one resource an edge of the grant gives — a credential and its projection, egress, storage, tools, tool servers, the exits its requests may reach with the source classes each may carry (`exits`, whose flows a decision's `subset` may remove and never add), limits, and for a tincture its frame capabilities, placement, background permission, streams and system actions — with the component it belongs to and whether a decision narrowed it. Render the rows yourself; there is no prose summary. Explanatory text, such as a need's reason, is shown but not bound, so rewording it invalidates no grant.
 
 **Origins.** Every run carries the origin of the path that admitted it, whatever credential it holds: `interactive` for Prism under a session or a paired device (a tincture's frame and a public tincture's page included), `programmatic` for the HTTP API and MCP, `schedule` for a schedule's fire, `webhook` for a webhook delivery. A child runs under its root's origin. A grant admits the origins its decisions name, and `interactive` alone when they name none; a run under an origin the grant does not name is refused with `consent_required`, so a script, an API key or a schedule runs a component only under a grant that names its origin. `cyfr profile grant <ref> --origin programmatic` names one at grant time; a re-grant keeps the origins the grant had unless `--origin` names others.
 
@@ -1099,7 +1099,7 @@ The committed consent is the runtime capability — `ask ∩ operator choices �
 - **Domains** — exact (`"api.stripe.com"`) or wildcard (`"*.stripe.com"`); deny-by-default. Schemes default to https-only.
 - **Private IPs** — all private/reserved ranges blocked (SSRF prevention) unless the ask carried `egress.private_ips` and the operator approved it. `169.254.0.0/16` (link-local / cloud metadata) is always blocked.
 - **Addresses** — the engine resolves no name. CYFR resolves each outbound host and pins the address the engine connects to, under the execution's grant (`egress_pin`); `CYFR_PRIVATE_EGRESS_TARGETS` is CYFR's own and never applies to a component. The engine follows no redirect: a component's next request to a `Location` is the redirect's next hop, pinned from the request it came from, and a hop to another scheme or host is refused as `redirect_credentials`, so a request's credentials never cross origins.
-- **Storage** — granted `storage.paths` (directory prefixes end with `/`, must start with `data/` or `components/`) and `storage.actions`; empty = hard deny. A path is spelled as the storage door reaches it: no empty segment (`data//secrets/`), no `.` or `..` segment, and a folder ends in exactly one `/`. A manifest spelling a path otherwise is refused when it is published, and a grant already stored under such a spelling is refused at every run until it is granted again; the server lists those grants at boot and tells each athanor that holds one.
+- **Storage** — granted `storage.paths` (directory prefixes end with `/`, must start with `data/` or `components/`) and `storage.actions`; empty = hard deny. A path is spelled as storage reaches it: no empty segment (`data//secrets/`), no `.` or `..` segment, and a folder ends in exactly one `/`. A manifest spelling a path otherwise is refused when it is published, and a grant already stored under such a spelling is refused at every run until it is granted again; the server lists those grants at boot and tells each athanor that holds one.
 - **Tools (formulas)** — granted patterns (`"execution.run"`, `"component.*"`, `"*"`) expand to the concrete action list at commit; a tool added to the platform later never widens an existing consent. Discovery via `{"tool": "tools", "action": "list"}`.
 - **Limits** — `timeout`, `rate_limit`, sizes, `max_concurrent_tasks`; the manifest's suggestions as adjusted by the operator, capped by the ceiling. Defaults when unasked: catalyst `"3m"`, formula `"5m"`, reagent `"1m"`, rate limit `{"requests": 100, "window": "1m"}`, memory 64 MB, request 1 MB, response 5 MB.
 
@@ -1145,14 +1145,14 @@ A typical live-data pipeline:
 
 ### Canvases (`canvas` tool)
 
-A canvas is a tincture whose placement is `canvas`: one page CYFR's toolkit draws from the canvas's module, which runs in a worker and reads only the streams its manifest declares (the [Tincture Guide](tincture-guide.md) lists the declaration). The `canvas` tool reads and writes a person's canvases. Which version a glass opens is the canvas's versions document, one per canvas in its athanor; every change publishes it at the revision it read, and a document published since refuses the change as a `conflict`, merging nothing. A version `write` creates is validated by the glass that is to show it, before anything of it opens live: the shell opens it once in a hidden frame under a validation credential, on which each declared stream the version opens is answered once from a fixture (of the stream's shape, or for a feed of the bound feed's result shape) and admits nothing, gives it ten seconds to answer a tree, and reports what it did to `activate` as the outcome.
+A canvas is a tincture whose placement is `canvas`: one page CYFR's toolkit draws from the canvas's module, which runs in a worker and reads only the streams its manifest declares (the [Tincture Guide](tincture-guide.md) lists the declaration). The `canvas` tool reads and writes a person's canvases. Which version a browser opens is the canvas's versions document, one per canvas in its athanor; every change publishes it at the revision it read, and a document published since refuses the change as a `conflict`, merging nothing. A version `write` creates is validated by the browser that is to show it, before anything of it opens live: the shell opens it once in a hidden frame under a validation credential, on which each declared stream the version opens is answered once from a fixture (of the stream's shape, or for a feed of the bound feed's result shape) and admits nothing, gives it ten seconds to answer a tree, and reports what it did to `activate` as the outcome.
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
 | `catalog` | — | What a canvas may read: the toolkit majors, and each stream that declares a shape with its subject grammar, shape, filter and whether it refreshes. Shapes, never values |
 | `versions` | `canvas` | The canvas's versions document (`allocated`, `working`, `kept` and the last `failed` validation) and its revision. A canvas installed with none yet answers the empty document at revision 0 |
-| `write` | `name`, `module` (at most 256 KiB), `streams` (each a stream's name and, for a feed's results, the feed's name as its subject) | Allocate the next version, one patch above every version allocated, installed or shipped, then create that version whole, its manifest and its module, never over a version that exists, and register it. Answers the `canvas`, the `version` and the pinned `reference`. A refused declaration allocates nothing; a name installed as a tincture that is not a canvas is a `conflict`. It activates nothing: a glass validates the version first |
-| `activate` | `canvas`, `version`, `frame`, `outcome` (`tree`, `no_tree` or `died`) | Report a glass's trial of a version in the frame named. It spends that frame's validation credential for every outcome, and refuses `forbidden` (`not_validated`) without one. A tree makes the version the working one and keeps the one it replaces, once the canvas's grant is current (`consent_required` otherwise). A tree changes nothing for the version already working, and for a version older than the working one it changes nothing and answers `conflict`, since a newer version is working; any other outcome records the failure alone. Never from a chain |
+| `write` | `name`, `module` (at most 256 KiB), `streams` (each a stream's name and, for a feed's results, the feed's name as its subject) | Allocate the next version, one patch above every version allocated, installed or shipped, then create that version whole, its manifest and its module, never over a version that exists, and register it. Answers the `canvas`, the `version` and the pinned `reference`. A refused declaration allocates nothing; a name installed as a tincture that is not a canvas is a `conflict`. It activates nothing: a browser validates the version first |
+| `activate` | `canvas`, `version`, `frame`, `outcome` (`tree`, `no_tree` or `died`) | Report a browser's trial of a version in the frame named. It spends that frame's validation credential for every outcome, and refuses `forbidden` (`not_validated`) without one. A tree makes the version the working one and keeps the one it replaces, once the canvas's grant is current (`consent_required` otherwise). A tree changes nothing for the version already working, and for a version older than the working one it changes nothing and answers `conflict`, since a newer version is working; any other outcome records the failure alone. Never from a chain |
 | `restore` | `canvas` | Make the kept version the working one again and keep the one it replaces, under today's grant (`consent_required` otherwise); `not_found` without a kept version, or when the kept version is no longer installed. Never from a chain |
 
 ### The layout (`layout` tool)
@@ -1164,7 +1164,7 @@ A person's layout is their canvases in order and, over each, per posture (`hand`
 | `get` | `posture` (optional, `hand` or `desk`) | The caller's document, its `revision` and `digest`, and `shipped_default`: a person who never arranged one gets the shipped layout, one canvas `home` on `tincture:local.canvas`, at revision 0. With a `posture`, also that posture's `arrangement`: every canvas in order, each with the apps and floating tinctures placed over it |
 | `edit` | `document` (the whole document), `revision` (the one `get` answered) | Publish the document, held to its shape, at that revision. A layout published since refuses the edit as a `conflict`, merging nothing; otherwise it answers the new `revision` and `digest`. Every shell the person has open reads the layout again when the edit is announced, or on its next posture change or reconnect when the announcement does not go out |
 
-A layout is a person's: a caller that is not one is refused as `invalid_argument`. `edit` is reached by the CLI, the API and a glass paired with the person, for the person, and from a run by an agent whose policy and grant name it exactly. No tincture declares it among its actions, a manifest of any type but an agent's that names it in `caps.tools` is refused, and no pattern (`*`, `layout.*`) grants it, so no other component's grant holds it.
+A layout is a person's: a caller that is not one is refused as `invalid_argument`. `edit` is reached by the CLI, the API and a device paired with the person, for the person, and from a run by an agent whose policy and grant name it exactly. No tincture declares it among its actions, a manifest of any type but an agent's that names it in `caps.tools` is refused, and no pattern (`*`, `layout.*`) grants it, so no other component's grant holds it.
 
 ### Feeds (`feed` tool)
 
@@ -1213,12 +1213,12 @@ The capability is over the instance, not a seat: an operator works inside one
 athanor at a time like everyone else, and only in one they are a member of.
 They enter no other athanor — opening one they hold no seat in is refused like
 anyone's, and a session that names one they have left falls back to their own
-— and there is no cross-athanor reach. The **server allowlist** (the door — `cyfr admin allow
+— and there is no cross-athanor reach. The **server allowlist** (`cyfr admin allow
 <email|user_id|identifier|*>`, `cyfr admin deny …`, or the Settings page) is who else may
 sign in at all: a match on first sign-in lets them in, no match is a 403, and
-`*` lets in anyone the configured provider authenticates. Groups never open the
-door: adding an unknown email to a group leaves an invitation that activates on
-that person's first admitted sign-in and, when the door would refuse them, a
+`*` lets in anyone the configured provider authenticates. Groups never widen the
+allowlist: adding an unknown email to a group leaves an invitation that activates on
+that person's first admitted sign-in and, when the allowlist would refuse them, a
 request for the operator.
 
 On **Settings**, the operator offers instance entries to everyone or listed people, with request caps per person and in total. Creation defaults to `component_policy: any`; the optional `shipped` policy admits only an unmodified shipped component. Both require destination methods and path prefixes. Entering or rotating the material needs fresh confirmation; widening the audience or changing `shipped` to `any` needs fresh `credential_sharing` confirmation. Members grant an offered entry through the same consent walk as their own entries; no policy bypasses consent, egress or caps, discloses the key, or lets an MCP definition name it.
@@ -1228,7 +1228,7 @@ On **Settings**, the operator offers instance entries to everyone or listed peop
 Archiving an athanor revokes its keys and cancels its running work but
 deliberately leaves its storage tree (`data/athanors/<id>/`) in place, so
 `athanor.unarchive` reopens the furnace intact; a member unarchives a group,
-and allowing a denied person at the door reopens their own athanor. When the
+and allowing a denied person on the allowlist again reopens their own athanor. When the
 bytes should actually be reclaimed, a platform admin runs `athanor.purge`
 (the `athanor` tool) naming the archived athanor: it deletes the whole tree —
 blobs only, rows remain — and is final. `athanor.destroy` deletes the rows
@@ -1243,7 +1243,7 @@ no seat as a missing one does. `athanor.get`, `athanor.unarchive` and every
 other verb refuse them like any non-member, for an archived athanor as for
 an open one. A purged athanor that
 is later unarchived comes back with empty storage. A group whose members were
-all denied keeps no member to unarchive it — allowing them again at the door
+all denied keeps no member to unarchive it — allowing them on the allowlist again
 reopens only their own athanors — so it can be purged or destroyed, and
 reopened by no one.
 
@@ -1258,56 +1258,56 @@ three variables, `CYFR_OIDC_ISSUER`, `CYFR_OIDC_CLIENT_ID` and `CYFR_OIDC_CLIENT
 otherwise rather than silently degrading to no authentication. The issuer must
 not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 
-### Several members on one database (a cell)
+### Several servers on one database (a cluster)
 
 One server per database is the default: a second one pointed at the same
-database refuses to boot. A **cell** is several control-plane members
+database refuses to boot. A **cluster** is several control-plane servers
 sharing one database, one object store and one set of workers, each
 holding its own slot and taking a peer's work only after that peer's
 lease has run out on the database's clock. `CYFR_CLUSTER=1` turns it on,
 and it boots only with Postgres, `CYFR_STORAGE=s3`, TLS distribution,
 `CYFR_CELL_COOKIE`, a discovery topology, a shared `CYFR_LOCUS_RUNTIME_ROOT` and
-this member's own `CYFR_HOST_API_URL`; each missing one is a named
+this server's own `CYFR_HOST_API_URL`; each missing one is a named
 refusal at boot, and the configuration guide says what each one sets.
 
-Distribution must be TLS: start every member with `-proto_dist inet_tls`
-and an `-ssl_dist_optfile` naming its certificate, key and CA. A cell of
+Distribution must be TLS: start every server with `-proto_dist inet_tls`
+and an `-ssl_dist_optfile` naming its certificate, key and CA. A cluster of
 control planes on plain distribution is an unauthenticated remote shell
 onto the database.
 
-What a cell changes for a client and an operator:
+What a cluster changes for a client and an operator:
 
-- **Nothing is routed by the client.** A turn runs on the member that
-  accepted it and an execution on the member that admitted it. Put the
-  members behind any load balancer; ownership is settled by rows.
-- **A member's lease is 15 s, renewed every 5 s**, so an unclean stop is
+- **Nothing is routed by the client.** A turn runs on the server that
+  accepted it and an execution on the server that admitted it. Put the
+  servers behind any load balancer; ownership is settled by rows.
+- **A server's lease is 15 s, renewed every 5 s**, so an unclean stop is
   taken over within 20 s and a clean one at once. An execution whose
-  member died is settled by the attempt lease (180 s) and the sweeper.
-- **Every member names its own address.** `CYFR_HOST_API_URL` is the
-  address a worker service reaches *this* member's host API at, and a
-  cell refuses to boot without it. Every assignment a member issues
-  carries that address and that member's boot, and a worker posts an
+  server died is settled by the attempt lease (180 s) and the sweeper.
+- **Every server names its own address.** `CYFR_HOST_API_URL` is the
+  address a worker service reaches *this* server's host API at, and a
+  cluster refuses to boot without it. Every assignment a server issues
+  carries that address and that server's boot, and a worker posts an
   attempt's host calls and its runner's exit report there, naming that
-  member in every header. A member that is not the one named refuses the
+  server in every header. A server that is not the one named refuses the
   call, a lease renewal included, so one worker service can serve several
-  members and a misrouted call is lost loudly rather than answered for
-  work the member does not hold. Each member still lists the workers it
+  servers and a misrouted call is lost loudly rather than answered for
+  work the server does not hold. Each server still lists the workers it
   dispatches to in its own `CYFR_LOCUS_RUNTIME_WORKERS`.
-- **Stdio MCP servers are not available** in a cell.
-- **Per-member ceilings multiply.** `CYFR_OPUS_MAX_CONCURRENT`,
+- **Stdio MCP servers are not available** in a cluster.
+- **Per-server ceilings multiply.** `CYFR_OPUS_MAX_CONCURRENT`,
   `CYFR_OPUS_MAX_CONCURRENT_PER_TENANT` and the per-credential
   stream cap on the execution event stream and on `subscriptions/listen` are each
-  member's, so N members admit N times each. The tenant's durable
-  ceilings are rows and hold for the cell: its consented invocation rate,
+  server's, so N servers admit N times each. The tenant's durable
+  ceilings are rows and hold for the cluster: its consented invocation rate,
   its budget reservations and charges, and its storage cap.
-- **Ingress rate limits are each member's too.** The ceiling that sees
-  the whole cell is the reverse proxy's; set it there.
-- **A cell runs one release.** Every slot names the release of the
-  member holding it, and a member whose release differs from a live
-  member's is refused its slot and stops at boot, naming both releases; a
-  live slot that names no release counts as another. Stop every member
+- **Ingress rate limits are each server's too.** The ceiling that sees
+  the whole cluster is the reverse proxy's; set it there.
+- **A cluster runs one release.** Every slot names the release of the
+  server holding it, and a server whose release differs from a live
+  server's is refused its slot and stops at boot, naming both releases; a
+  live slot that names no release counts as another. Stop every server
   before the new release starts: stop the stack on every host, update
-  one, then the others. `cyfr update` refuses while a member outside its
+  one, then the others. `cyfr update` refuses while a server outside its
   own stack is live on another release, admits one that already runs
   the release it installs, and stops, snapshots and switches its own
   stack only once no other release holds a slot.
@@ -1320,7 +1320,7 @@ the root into `.env` and derives the `locus-runtime` service's key from
 it. Compose hands the worker its id, its key and the host API's URL from
 `.env`; `.env.locus.example` documents the worker's own settings, and
 [Running a worker outside Compose](#running-a-worker-outside-compose) what
-compose sets for it. A node holding the runtime's key refuses to start
+compose sets for it. A Locus service holding the runtime's key refuses to start
 with the builds or the backends key beside it.
 
 CYFR and its workers speak one versioned wire. Every body and answer
@@ -1353,7 +1353,7 @@ server's definition and a memory bound of its own; the service keeps no
 state, and CYFR sends each server's definition again when the service
 restarts. With the URL or the key unset CYFR refuses stdio servers; with a
 malformed value it refuses to boot. Stdio servers are not available in a
-cell. `.env.locus.example` documents the service's own `LOCUS_BACKENDS_*`
+cluster. `.env.locus.example` documents the service's own `LOCUS_BACKENDS_*`
 side.
 
 A backend's environment may name only a single-field disclosed entry of its own athanor (`NAME=vault:entry`). An attach-only entry is refused when the definition is made and when the backend starts; instance entries are never available to definitions. Material is resolved in the host and sent sealed to the backends service for that server's environment, never in the command line.
@@ -1379,8 +1379,8 @@ compose fixes for its container. It runs under the keeper's isolated
 and under the keeper's seccomp profile. CYFR lists the worker in
 `CYFR_LOCUS_RUNTIME_WORKERS` under its service id at the URL of this
 listener, and binds `CYFR_HOST_API_BIND` to an address the worker reaches
-at `LOCUS_RUNTIME_HOST_API_URL` — or, where several members share the
-worker, at each member's own `CYFR_HOST_API_URL`.
+at `LOCUS_RUNTIME_HOST_API_URL` — or, where several servers share the
+worker, at each server's own `CYFR_HOST_API_URL`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -1403,7 +1403,7 @@ backends:20001-20032 …`) in place of the image's build pool; CYFR's
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LOCUS_BACKENDS_KEY` | — | The backends key, 64 hex digits: the same value as `CYFR_LOCUS_BACKENDS_KEY`. A node with none of this, `LOCUS_BUILDS_KEY` and `LOCUS_RUNTIME_KEY` refuses to start |
+| `LOCUS_BACKENDS_KEY` | — | The backends key, 64 hex digits: the same value as `CYFR_LOCUS_BACKENDS_KEY`. A Locus service with none of this, `LOCUS_BUILDS_KEY` and `LOCUS_RUNTIME_KEY` refuses to start |
 
 ### Docker requirement
 
