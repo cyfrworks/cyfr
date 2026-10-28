@@ -534,6 +534,11 @@ def test_build(stack, case, limit, measure):
            f"{case}: the release and the container were not touched", {"before": before, "after": after})
 
 
+def container_limit(stack):
+    """The container's own memory.max, which bounds the hostile work."""
+    return imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/memory.max"), "the container's memory.max").strip()
+
+
 def main(image, measure, cases):
     # Registered for removal at exit as soon as it exists, so a signal
     # before the `try` leaves no directory behind.
@@ -543,7 +548,7 @@ def main(image, measure, cases):
         for case in cases:
             # A fresh container per case, so one case's damage is not the next one's start.
             stack.up(pool=f"{POOL_FIRST}-{PROBE_FIRST - 1}", timeout_ms=DEADLINE_MS)
-            limit = stack.exec("cat /sys/fs/cgroup/memory.max").stdout.strip()
+            limit = container_limit(stack)
             expect(limit.isdigit(), "the container has a memory limit of its own, which bounds the hostile work", limit)
             if case == "keeper":
                 test_keeper(stack, int(limit), canary)

@@ -164,5 +164,23 @@ class ContainerState(unittest.TestCase):
         self.assertEqual(self.state(current=(0, "4096\n"))["current"], 4096)
 
 
+class ContainerLimit(unittest.TestCase):
+    """The container's memory.max is read from a command that exits 0: a failed read fails the observation, and the value read is the control."""
+
+    def exec_answering(self, status, stdout):
+        class Observer:
+            def exec(self, script, user=None):
+                return subprocess.CompletedProcess([], status, stdout, "" if status == 0 else "daemon error")
+
+        return Observer()
+
+    def test_a_failed_read_fails_the_container_limit(self):
+        with self.assertRaises(SystemExit):
+            memory.container_limit(self.exec_answering(1, ""))
+
+    def test_the_limit_that_was_read_is_the_control(self):
+        self.assertEqual(memory.container_limit(self.exec_answering(0, "1073741824\n")), "1073741824")
+
+
 if __name__ == "__main__":
     unittest.main()

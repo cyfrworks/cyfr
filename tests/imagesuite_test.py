@@ -390,6 +390,9 @@ class SuiteObservations(unittest.TestCase):
     def test_backends_residue_reads(self):
         self.run_entry("locus-backends-image", "residue_test.py")
 
+    def test_backends_memory_cgroup_reads(self):
+        self.run_entry("locus-backends-image", "memory_test.py")
+
     def test_builder_isolation_ipc_tables(self):
         self.run_entry("builder-image", "isolation_test.py")
 
@@ -420,14 +423,11 @@ DIRECT_READ_ROSTER = {
     ("builder-image/headroom.py", "setting"): (1, "pending"),
     ("builder-image/isolation.py", "test_process_model"): (1, "pending"),
     ("builder-image/memory.py", "test_keeper"): (1, "pending"),
-    ("builder-image/memory.py", "main"): (1, "pending"),
     ("builder-image/stack.py", "Stack.guard_counters"): (1, "pending"),
     ("locus-backends-image/e2e.py", "scripted_controller"): (1, "pending"),
     ("locus-backends-image/e2e.py", "cyfr_controller"): (1, "pending"),
     ("locus-backends-image/harness.py", "Stack.guard_counters"): (1, "pending"),
     ("locus-backends-image/isolation.py", "main"): (1, "pending"),
-    ("locus-backends-image/memory.py", "cgroup_limit"): (2, "pending"),
-    ("locus-backends-image/memory.py", "main"): (1, "pending"),
 }
 
 
