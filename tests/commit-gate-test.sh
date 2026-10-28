@@ -484,6 +484,8 @@ CI_RUNS = {
     ("test.yml", "static", "The built SDK is its source's"): ["sdk_bundle"],
     ("test.yml", "static", "Every test WASM fixture is its source's build"): ["test_wasm"],
     ("test.yml", "static", "The image suites' shared plumbing"): ["imagesuite_checks"],
+    ("test.yml", "static", "The runtime suite's signing reproduces the worker protocol vectors"): ["worker_auth_check"],
+    ("test.yml", "static", "The backends suite's signing reproduces its vectors"): ["backends_check"],
     ("test.yml", "static", "The prebuilt binary fetch lays down what the deps' own downloads name"): ["prebuilt_binaries"],
     ("test.yml", "js-unit", "Install the lint and coverage tools"): ["eslint"],
     ("test.yml", "js-unit", "Lint the console's JavaScript and the SDK"): ["eslint"],
