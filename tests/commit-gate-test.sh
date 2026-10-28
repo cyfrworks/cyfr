@@ -475,6 +475,7 @@ CI_RUNS = {
     ("test.yml", "static", "Check formatting"): ["format"],
     ("test.yml", "static", "The CLI catalog is the operation table's"): ["opsgen"],
     ("test.yml", "static", "The configuration guide is the roster's"): ["confguide"],
+    ("test.yml", "static", "The dev stack's compose override"): ["devstack"],
     ("test.yml", "static", "The built SDK is its source's"): ["sdk_bundle"],
     ("test.yml", "static", "Every test WASM fixture is its source's build"): ["test_wasm"],
     ("test.yml", "static", "The image suites' shared plumbing"): ["imagesuite_checks"],
