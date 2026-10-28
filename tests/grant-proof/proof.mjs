@@ -19,7 +19,7 @@
 //                run is asked to grant again, and the sheet shows the
 //                background row; granted, the head is the first head one
 //                revision on, under the version's shape and the digest the
-//                command line previews for the same decisions
+//                command line previews for what the re-grant commits
 //   reworded     a version that only rewords its need's reason: the same
 //                shape digest, and the run is admitted under the grant it
 //                had, nothing asked
@@ -267,12 +267,23 @@ async function main() {
     await confirm(page);
     const regranted = await ask({ op: "head" });
     const admitted = await ask({ op: "admit" });
-    // The re-grant keeps the first grant's narrowing, so the same decisions,
-    // previewed for this version, answer the digest it committed.
-    const backgroundShown = await ask({ op: "cli_preview", decisions });
+    // A re-grant opens from the head's narrowing (`Plan.head_narrowing/4`),
+    // which names every narrowable field the head grants otherwise than the
+    // version asks: the host and folder kept, and the one flow kept named as an
+    // exit. Those decisions, previewed for this version, answer the digest it
+    // committed.
+    const regrantDecisions = {
+      ref: REF, subset: { [REF]: { ...subset, exits: [{ from: "files_by_grant", to: KEPT }] } }, origins: ["interactive"],
+    };
+    const backgroundShown = await ask({ op: "cli_preview", decisions: regrantDecisions });
+    // Diagnostic: the first grant's decisions, with no exit named; its digest is not the head's.
+    const backgroundUnnarrowed = await ask({ op: "cli_preview", decisions });
     const backgroundGrant = { before: head, shape: plan.shape_digest, digest: backgroundShown.commit_digest };
     const backgroundCopies = [...changedCopies(regranted, DROPPED), ...digestCopies(regranted, head.commit_digest)];
-    record.background = { plan, asking, again, regranted, admitted, digest: previewShown(backgroundShown) };
+    record.background = {
+      plan, asking, again, regranted, admitted, regrantDecisions,
+      digest: previewShown(backgroundShown), unnarrowed: previewShown(backgroundUnnarrowed),
+    };
     if (!row("background",
       sameHead(plan, { shape_digest: plan.shape_digest, background: true }) && plan.shape_digest !== head.shape_digest &&
         sameHead(asking, { admitted: false, refusal: "consent_required" }) &&
@@ -280,9 +291,10 @@ async function main() {
         regrantHeld(regranted, backgroundGrant) &&
         backgroundCopies.every((copy) => !regrantHeld(copy, backgroundGrant)) &&
         sameHead(admitted, { admitted: true, consent_id: regranted.consent_id }),
-      "a version asking to run in the background is shown and asked again; granted, the head is the first head one revision on, under a new consent, the version's shape and the digest the command line previews for the same decisions, every other field held, and it runs; a copy with another revision, a host or flow added or removed, or another digest is refused",
+      "a version asking to run in the background is shown and asked again; granted, the head is the first head one revision on, under a new consent, the version's shape and the digest the command line previews for what the re-grant commits, every other field held, and it runs; a copy with another revision, a host or flow added or removed, or another digest is refused",
       { asking, frame: frame && frame.text, origins_kept: again.origins, head: regranted,
-        digest: previewShown(backgroundShown), held: regrantHeld(regranted, backgroundGrant),
+        digest: previewShown(backgroundShown), unnarrowed: previewShown(backgroundUnnarrowed),
+        held: regrantHeld(regranted, backgroundGrant),
         copies_refused: backgroundCopies.map((copy) => !regrantHeld(copy, backgroundGrant)), admitted })) return;
 
     // -----------------------------------------------------------------------
