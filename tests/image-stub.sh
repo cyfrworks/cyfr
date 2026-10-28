@@ -171,7 +171,7 @@ COPY --link LICENSE \
   put "$repo/seed/a.txt" 'seed'
   put "$repo/LICENSE" 'license'
   put "$repo/README.md" 'readme'
-  put "$repo/docs/notes.txt" 'notes'
+  put "$repo/notes/readme.txt" 'notes'
   git -C "$repo" add -A
   git -C "$repo" -c user.name=test -c user.email=test@invalid commit -q -m init
 }

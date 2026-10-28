@@ -94,10 +94,10 @@ git -C "$repo" checkout -q -- config/config.exs
 [ "$(tag_of "$repo" locus)" = "$base_locus" ] || fail 'the restored tree did not give its tag back'
 
 begin 'an edit outside every source keeps the tag'
-printf 'more\n' >>"$repo/docs/notes.txt"
-[ "$(tag_of "$repo" locus)" = "$base_locus" ] || fail 'docs/notes.txt changed the locus tag'
-[ "$(tag_of "$repo" app)" = "$base_app" ] || fail 'docs/notes.txt changed the app tag'
-git -C "$repo" checkout -q -- docs/notes.txt
+printf 'more\n' >>"$repo/notes/readme.txt"
+[ "$(tag_of "$repo" locus)" = "$base_locus" ] || fail 'notes/readme.txt changed the locus tag'
+[ "$(tag_of "$repo" app)" = "$base_app" ] || fail 'notes/readme.txt changed the app tag'
+git -C "$repo" checkout -q -- notes/readme.txt
 
 begin 'a mode change on a source gives a new tag'
 chmod +x "$repo/config/config.exs"
