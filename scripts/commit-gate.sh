@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
-# The per-commit gate: scripts/commit-gate.sh [-l LOGDIR] [-n N] [--close] [-- PostgreSQL test paths]
+# CI's checks on this host: scripts/commit-gate.sh [-l LOGDIR] [-n N] [--close] [-- PostgreSQL test paths]
 #
-# Runs the checks a commit must pass as concurrent legs, one log per step
-# under LOGDIR, and frames its stdout with `_START=<pid>` first and
-# `_EXIT=<pid> <status>` last, both carrying the gate's own pid, which
-# scripts/await-task.sh waits for. Under scripts/heavy-check.sh
-# (HEAVY_CHECK_HELD set) heavy-check writes those lines and the gate
-# writes neither; a scoped check (`heavy-check.sh -s`) is refused with 64,
-# because the gate sizes itself to the whole host. Legs:
+# For working offline or reproducing a failing CI job: a change's check is
+# its pull request's run on GitHub. scripts/stage.sh runs this gate as the
+# pull-request stage and its close as the release stage (scripts/stages.tsv).
+# Runs CI's checks as concurrent legs, one log per step under LOGDIR, and
+# frames its stdout with `_START=<pid>` first and `_EXIT=<pid> <status>`
+# last, both carrying the gate's own pid, which scripts/await-task.sh waits
+# for. Under scripts/heavy-check.sh (HEAVY_CHECK_HELD set) heavy-check
+# writes those lines and the gate writes neither; a scoped or proof check
+# (`heavy-check.sh -s` or `-p`) is refused with 64, because the gate sizes
+# itself to the whole host. What the gate itself makes is named
+# cyfr-gate-<pid>-gate-, whatever PROOF_RUN_PREFIX it was given. Legs:
 #   static    SQLite test compile and forced dev compile (warnings as
 #             errors, so every Boundary declaration is checked), format,
 #             credo, ops.gen.cli --check, cyfr.gen.configuration_guide
@@ -1238,10 +1242,14 @@ while [ "$#" -gt 0 ]; do
 done
 PG_PATHS=("$@")
 
-if [ "${HEAVY_CHECK_HELD:-}" = scoped ]; then
-  echo 'the commit gate takes the whole host: run it under scripts/heavy-check.sh without -s' >&2
-  exit 64
-fi
+case "${HEAVY_CHECK_HELD:-}" in
+  scoped|proof)
+    echo 'the commit gate takes the whole host: run it under scripts/heavy-check.sh without -s or -p' >&2
+    exit 64 ;;
+esac
+# The gate's own names, whatever prefix heavy-check gave it: its sweeps
+# find what it made by these, and each leg sets its own below.
+export PROOF_RUN_PREFIX="cyfr-gate-$$-gate-"
 
 # The terminal lines are heavy-check's when it runs the gate.
 TERMINAL=false

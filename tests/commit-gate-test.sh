@@ -948,7 +948,11 @@ run_gate scoped HEAVY_CHECK_HELD=scoped -- "$gate" -l "$scratch/scoped.log"; [ "
 no_line '^_(START|EXIT)=' "$scratch/scoped.out" || fail 'a refused scoped gate wrote a terminal line under heavy-check'
 [ ! -e "$scratch/scoped.log" ] || fail 'a refused scoped gate touched its log directory'
 no_mix_ran scoped || fail 'a refused scoped gate ran Mix'
-echo 'ok: scoped refusal'
+run_gate proof HEAVY_CHECK_HELD=proof -- "$gate" -l "$scratch/proof.log"; [ "$gate_rc" = 64 ] || fail 'the gate ran as a proof check'
+no_line '^_(START|EXIT)=' "$scratch/proof.out" || fail 'a refused proof gate wrote a terminal line under heavy-check'
+[ ! -e "$scratch/proof.log" ] || fail 'a refused proof gate touched its log directory'
+no_mix_ran proof || fail 'a refused proof gate ran Mix'
+echo 'ok: scoped and proof refusal'
 
 # --- step deadlines the containment library cannot take ------------------------
 # Zero, and seven digits where contain_wait takes six: refused with 64
@@ -1287,9 +1291,16 @@ selection "$plant" > "$scratch/plant.txt" || fail 'the selection failed on the p
 echo 'ok: the PostgreSQL selection'
 
 # --- a whole gate that passes ------------------------------------------------------
-run_gate pass -- "$gate" -n 2 -l "$scratch/pass.log"
+# Given a prefix, as scripts/heavy-check.sh gives every check one, the gate
+# still names its own clients cyfr-gate-<pid>-gate- and its legs'
+# cyfr-gate-<pid>-<leg>-, the names its sweeps find.
+run_gate pass PROOF_RUN_PREFIX=cyfr-aaaaaaaaaa-1-inherited- -- "$gate" -n 2 -l "$scratch/pass.log"
 pass_id=$gate_pid
 [ "$gate_rc" = 0 ] || fail "a gate whose every step passes exited $gate_rc: $(cat "$scratch/pass.err")"
+has_line "^run --rm --name cyfr-gate-$pass_id-gate-psql-" "$scratch/pass.trace/docker.calls" ||
+  fail "the gate's own client was not named cyfr-gate-$pass_id-gate-: $(grep -- '--name' "$scratch/pass.trace/docker.calls" | head -3)"
+no_line 'cyfr-aaaaaaaaaa-1-inherited-' "$scratch/pass.trace/docker.calls" ||
+  fail "the gate named something with the prefix it was given: $(grep -F cyfr-aaaaaaaaaa-1-inherited- "$scratch/pass.trace/docker.calls" | head -3)"
 framed pass "$gate_pid" 0
 has_line '^==> gate passed in ' "$scratch/pass.out" || fail "a passing gate did not report its verdict: $(cat "$scratch/pass.out")"
 # Every suite the gate runs reported a result, so a gate whose partitions
