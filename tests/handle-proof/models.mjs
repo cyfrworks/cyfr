@@ -36,7 +36,16 @@ const SLACK_MS = 5;
 
 export const exact = (value, { tamper, shown } = {}) => ({ cls: "exact", value, tamper, shown });
 export const derived = (value, from, { tamper } = {}) => ({ cls: "derived", value, from, tamper });
-export const captured = (says, holds, outside) => ({ cls: "captured", says, holds, outside });
+// A captured field is bound (`bindCaptured`) to the value its first read
+// read: it holds when it has its shape and is that value.
+export const captured = (says, shape, outside) => ({
+  cls: "captured", says, outside, shape,
+  holds(v) { return shape(v) && (!("value" in this) || isDeepStrictEqual(v, this.value)); },
+});
+// A row's stable label in the field table, from what the row is (its key),
+// never its position: a list's rows print sorted by it.
+export const LABEL = Symbol("label");
+export const labelled = (model, label) => Object.assign(model, { [LABEL]: label });
 export const bound = (says, holds, outside) => ({ cls: "bound", says, holds, outside });
 
 export const msOf = (text) => {
@@ -73,24 +82,28 @@ export function otherId(v) {
 
 // The value a tamper writes: one the field's model refuses. A field's own
 // `tamper` comes first; a first read's or a bound's comes next, outside
-// its shape or window; then a byte field has one byte flipped, a time is
-// moved, and an id or digest becomes another valid one.
+// its window; then a byte field, captured or exact, has one byte flipped,
+// and an id or digest of a shaped kind becomes another valid one of that
+// kind, before any malformed replacement.
+const SHAPED_ID = /^[a-z]+_[0-9a-f]{32}$/;
 export function tampered(spec, value) {
   if (spec.tamper !== undefined) return spec.tamper;
-  if ((spec.cls === "captured" || spec.cls === "bound") && spec.outside !== undefined) return spec.outside;
   const asBytes = bytesOf(value);
   if (asBytes) {
     asBytes[0] ^= 0xff;
     return bytes(asBytes);
   }
+  // PostgreSQL's bytes, as row_to_json writes them: the first digit changed.
+  if (typeof value === "string" && /^\\x[0-9a-f]+$/.test(value)) return `\\x${value[2] === "0" ? "1" : "0"}${value.slice(3)}`;
+  if (typeof value === "string" && (PER.test(value) || HASH.test(value) || UUID.test(value) || CYFR_ID.test(value) || SHAPED_ID.test(value))) {
+    return otherId(value);
+  }
+  if ((spec.cls === "captured" || spec.cls === "bound") && spec.outside !== undefined) return spec.outside;
   if (value === null) return "tampered";
   if (typeof value === "boolean") return !value;
   if (typeof value === "number") return value + 1;
   if (Array.isArray(value)) return [...value, "00000000-0000-0000-0000-000000000000"];
   if (typeof value === "string" && ISO.test(value)) return LONG_AGO;
-  // PostgreSQL's bytes, as row_to_json writes them: the first digit changed.
-  if (typeof value === "string" && /^\\x[0-9a-f]+$/.test(value)) return `\\x${value[2] === "0" ? "1" : "0"}${value.slice(3)}`;
-  if (typeof value === "string" && (PER.test(value) || HASH.test(value) || UUID.test(value) || CYFR_ID.test(value))) return otherId(value);
   if (typeof value === "string") return `${value}~`;
   return null;
 }
@@ -126,18 +139,31 @@ export function mismatches(object, model, at = "") {
 // The model's fields as the README's table rows.
 export function classification(name, model) {
   const one = Array.isArray(model) ? model : [model];
-  return one.flatMap((m, i) => Object.entries(m).map(([field, spec]) => {
+  const describe = (m) => Object.entries(m).map(([field, spec]) => {
     const what = spec.cls === "exact" ? spec.shown ?? `\`${JSON.stringify(spec.value)}\`` : spec.cls === "derived" ? spec.from : spec.says;
-    return `| ${name}${one.length > 1 ? `[${i}]` : ""} | ${field} | ${spec.cls} | ${what} |`;
-  }));
+    return [field, spec.cls, what];
+  });
+  // Each row by its label, then by what it says; a label two rows share
+  // takes an ordinal after that order, so the table does not depend on the
+  // order the run read the rows in.
+  const rows = one.map((m) => ({ label: m[LABEL] ?? "", lines: describe(m) }))
+    .sort((x, y) => (x.label + JSON.stringify(x.lines)).localeCompare(y.label + JSON.stringify(y.lines)));
+  const seen = new Map();
+  return rows.flatMap(({ label, lines }) => {
+    const n = (seen.get(label) ?? 0) + 1;
+    seen.set(label, n);
+    const shared = rows.filter((r) => r.label === label).length > 1;
+    const tag = !Array.isArray(model) ? "" : `[${label || "row"}${shared ? ` ${n}` : ""}]`;
+    return lines.map(([field, cls, what]) => `| ${name}${tag} | ${field} | ${cls} | ${what} |`);
+  });
 }
 
 // A row read before, held: every field exact but those in `moves`, each
 // given its own spec. `base`, the row's first model, lends each field the
 // tamper its column's type needs.
 export function held(row, moves = {}, shown = "as read before", base = {}) {
-  return Object.fromEntries(Object.entries(row).map(([field, value]) =>
-    [field, field in moves ? moves[field] : exact(value, { shown: `${shown}`, tamper: base[field]?.tamper })]));
+  return labelled(Object.fromEntries(Object.entries(row).map(([field, value]) =>
+    [field, field in moves ? moves[field] : exact(value, { shown: `${shown}`, tamper: base[field]?.tamper })])), base[LABEL]);
 }
 
 // One claimed object, compared whole with `model`, then each stored field
@@ -146,8 +172,12 @@ export function held(row, moves = {}, shown = "as read before", base = {}) {
 // (phase `tamper` or `restore`) and answers `{set, role?}`, and
 // `io.state()` answers the whole stored table with its schema or
 // constraints, which must be the same before the first tamper and after
-// every restore. `io.only(i, field)` names why a field's loop runs
-// elsewhere, or nothing. For a view (`io.via`), each field names the stored field
+// every restore. `io.identity` ({store, key}) names each row of a stored
+// object; `io.ran` (a Map shared by the run) records each loop that ran by
+// store, row key and field, with the predicate it ran under; with
+// `io.skipIfRan` a field's loop is skipped only when an identical
+// predicate (equality to the same value) already ran on that same row.
+// For a view (`io.via`), each field names the stored field
 // that makes it and the value its tamper writes and its restore writes
 // back, or `{none: reason}`. `io.controls` are in-memory negative
 // controls: a copy of the object with one field corrupted, which the
@@ -169,9 +199,13 @@ export async function check(object, model, io) {
   for (let i = 0; i < list.length; i++) {
     for (const [field, spec] of Object.entries(list[i])) {
       const name = Array.isArray(model) ? `[${i}].${field}` : `.${field}`;
-      const elsewhere = io.only ? io.only(i, field) : null;
-      if (elsewhere) {
-        out.skipped.push({ field: name, reason: elsewhere });
+      // An equality predicate's fingerprint: its value. A bound has none,
+      // so a bound's loop never stands for an exact one's.
+      const fingerprint = spec.cls === "bound" || !("value" in spec) ? null : JSON.stringify(spec.value);
+      const rowId = io.identity ? `${io.identity.store}|${io.identity.key(objects[i])}|${field}` : null;
+      const prior = rowId && io.ran ? io.ran.get(rowId) : null;
+      if (io.skipIfRan && fingerprint !== null && prior && prior.fingerprint === fingerprint) {
+        out.skipped.push({ field: name, reason: `the identical predicate already ran on this row (${prior.at})` });
         continue;
       }
       const via = io.via ? io.via[field] : null;
@@ -202,6 +236,7 @@ export async function check(object, model, io) {
       loop.role_back = loop.restored?.role === undefined || loop.restored.role === "origin";
       loop.held_again = mismatches(await io.read(), model).length === 0;
       out.loops.push(loop);
+      if (rowId && io.ran && fingerprint !== null && loop.named && loop.state_same && loop.held_again) io.ran.set(rowId, { fingerprint, at: io.at });
       if (!loop.named) out.failures.push(`a tamper of ${name} was not refused`);
       if (!loop.state_same) out.failures.push(`after ${name}'s restore the table, its schema or its constraints differ`);
       if (!loop.role_back) out.failures.push(`after ${name}'s restore the registry's session is ${loop.restored.role}, not origin`);
@@ -277,17 +312,35 @@ const until = (S, name, object) => ({ name: `${S.w[name].name} up to ${object}'s
 const relatedTo = (value, related, from) => derived(related ? value : { relationship: "did not hold" }, from);
 
 // The models of rows a table reads in its own order, each found by its
-// key (`keyOf`) among `expected` (`[key, model]` pairs): when the rows read
-// are not exactly the expected keys, the expected models in their own
-// order, which the comparison then refuses.
+// key (`keyOf`) among `expected` (`[key, model, label]`, the label what
+// the row is, for the field table): when the rows read are not exactly the
+// expected keys, the expected models in their own order, which the
+// comparison then refuses.
 function byKey(rows, keyOf, expected) {
-  const want = new Map(expected);
+  const want = new Map(expected.map(([key, model, label]) => [key, labelled(model, label)]));
   const read = rows.map(keyOf);
   const same = read.length === want.size && read.every((k) => want.has(k)) && new Set(read).size === read.length;
-  return same ? read.map((k) => want.get(k)) : expected.map(([, model]) => model);
+  return same ? read.map((k) => want.get(k)) : [...want.values()];
 }
 
 export function objectModels(S) {
+  const M = models(S);
+  // Every captured field bound to the value the object's first read read.
+  return Object.fromEntries(Object.entries(M).map(([key, build]) => [key, () => {
+    const model = build();
+    const rows = S.rows[key];
+    if (Array.isArray(model) && Array.isArray(rows)) {
+      model.forEach((m, i) => {
+        for (const [field, spec] of Object.entries(m)) if (spec.cls === "captured" && rows[i] && field in rows[i]) spec.value = rows[i][field];
+      });
+    }
+    return model;
+  }]));
+}
+
+const withLabels = (labels, rows) => rows.map((m, i) => labelled(m, labels[i]));
+
+function models(S) {
   const A = S.origins.a;
   const id = S.identifier ?? "";
   const genesisHash = `sha256:${id.slice(4)}`;
@@ -484,8 +537,8 @@ export function objectModels(S) {
   // A person's seat in their athanor and, for the first person, the
   // platform grant: one row each, in the order the table reads them.
   const seats = (name, user, athanor, window) => byKey(first(name), (r) => r.scope, [
-    ["athanor", membership(user, derived(athanor, "the person's one athanor"), "athanor", window)],
-    ["platform", membership(user, nil(), "platform", window)],
+    ["athanor", membership(user, derived(athanor, "the person's one athanor"), "athanor", window), "the athanor's seat"],
+    ["platform", membership(user, nil(), "platform", window), "the platform grant"],
   ]);
   M["setup:a.memberships"] = () => seats("setup:a.memberships", aUser(), first("setup:a.athanors")[0]?.id, win(S, "setup"));
   M["setup:a.person_identities"] = () => {
@@ -525,8 +578,8 @@ export function objectModels(S) {
   const grown = (before, now, step, added, window) => {
     const fresh = now.filter((r) => !before.some((b) => b.nonce === r.nonce)).map((r) => r.nonce);
     return byKey(now, (r) => r.nonce, [
-      ...before.map((b) => [b.nonce, held(b, {}, `as read at ${step}`)]),
-      ...Array.from({ length: added }, (_, i) => [fresh[i] ?? `new ${i}`, nonce(id, window)]),
+      ...before.map((b) => [b.nonce, held(b, {}, `as read at ${step}`), `a nonce read at ${step}`]),
+      ...Array.from({ length: added }, (_, i) => [fresh[i] ?? `new ${i}`, nonce(id, window), `a new nonce`]),
     ]);
   };
   M["publish:registry.request_nonces[a]"] = () =>
@@ -592,7 +645,7 @@ export function objectModels(S) {
     return { ...pair("live", "live_public_key", "live_key_sealed"), ...pair("operational", "operational_public_key", "operational_key_sealed") };
   };
   const remote = () => first("sign_in:b.person_identities").find((r) => r.identifier === id)?.user_id;
-  M["sign_in:b.person_identities"] = () => [
+  M["sign_in:b.person_identities"] = () => withLabels(["the administrator's", "the person's"], [
     {
       id: anId("pid"),
       user_id: derived(bAdmin(), "B's administrator"),
@@ -626,8 +679,8 @@ export function objectModels(S) {
       inserted_at: within(win(S, "signin")),
       updated_at: within(win(S, "signin")),
     },
-  ];
-  M["sign_in:b.users"] = () => [
+  ]);
+  M["sign_in:b.users"] = () => withLabels(["the administrator's", "the person's"], [
     held(first("allow:b.users")[0], {
       last_seen_at: sameOrWithin(first("allow:b.users")[0].last_seen_at, win(S, "signin"), "as read at allow"),
       updated_at: sameOrWithin(first("allow:b.users")[0].updated_at, win(S, "signin"), "as read at allow"),
@@ -649,7 +702,7 @@ export function objectModels(S) {
       created_at: within(win(S, "signin")),
       updated_at: within(until(S, "signin", "sign_in:b.users")),
     },
-  ];
+  ]);
   M["sign_in:b.sessions[proof]"] = () => [{
     id: anId("ses"),
     token_hash: derived(bytes(Buffer.from(S.cookies.remote?.sha256 ?? "", "hex")), "the SHA-256 of the session token the browser's cookie carries"),
@@ -673,8 +726,8 @@ export function objectModels(S) {
   M["wrong_identity:registry.policy_acceptances[c]"] = () => [policy(S.other, win(S, "other"))];
   M["wrong_identity:registry.request_nonces[c]"] = () => [nonce(S.other, win(S, "other")), nonce(S.other, win(S, "other")), nonce(S.other, win(S, "other"))];
   M["wrong_identity:dir.identity_log_entries"] = () => byKey(first("wrong_identity:dir.identity_log_entries"), (r) => r.identifier, [
-    [id, held(first("setup:dir.identity_log_entries")[0], {}, "as read at setup")],
-    [S.other, logEntry(S.other, genesisC, win(S, "other"))],
+    [id, held(first("setup:dir.identity_log_entries")[0], {}, "as read at setup"), "A's genesis"],
+    [S.other, logEntry(S.other, genesisC, win(S, "other")), "the second identity's genesis"],
   ]);
   M["wrong_identity:handle_answer[other]"] = () => handleAnswer(OTHER, S.other, A);
   M["wrong_identity:pre:b.sessions"] = () => (() => {
@@ -691,7 +744,7 @@ export function objectModels(S) {
     identity_key_epoch: nil(),
     cli_machine: nil(),
     inserted_at: within(win(S, "admin")),
-  }], [remote(), held(first("sign_in:b.sessions[proof]")[0], {}, "as read at sign_in")]]);
+  }, "the administrator's"], [remote(), held(first("sign_in:b.sessions[proof]")[0], {}, "as read at sign_in"), "the person's"]]);
   })();
   const unchangedThrough = (rows, step, window) => rows.map((r) => held(r, Object.fromEntries(["last_seen_at", "updated_at"].filter((f) => f in r)
     .map((f) => [f, sameOrWithin(r[f], window, `as read at ${step}`)])), `as read at ${step}`));

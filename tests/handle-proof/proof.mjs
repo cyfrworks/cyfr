@@ -50,6 +50,8 @@ const record = { objects: {}, checks: {} };
 const table = [];
 const tally = { loops: 0, skipped: [], controls: 0 };
 const contexts = [];
+// Every tamper loop that ran, by store, row key and field (models.mjs check).
+const ran = new Map();
 
 function row(step, held, what, detail) {
   rows.push({ step, held, what, detail });
@@ -87,7 +89,7 @@ async function claim(key, what, read, io = {}) {
   table.push(...classification(key, model));
   let result;
   try {
-    result = await check(object, model, { read, ...io });
+    result = await check(object, model, { read, ran, at: key, ...io });
   } catch (error) {
     return row(step, false, `${what}: ${error.message}`, {});
   }
@@ -108,6 +110,7 @@ const filtered = (read, column) => Object.assign(read, { filter: column || null 
 const cyfrRows = (cell, tableName, column = "", value = "") => filtered(async () =>
   (await ask({ op: "rows", cell, table: tableName, column, value })).rows, column);
 const cyfrIo = (cell, tableName) => ({
+  identity: { store: `${cell}.${tableName}`, key: (row) => row.id },
   write: async (i, field, value, rowNow) => {
     const answer = await ask({ op: "set", cell, table: tableName, id: rowNow.id, field, value });
     if (answer.set !== 1) throw new Error(`${cell}.${tableName}.${field}: the write changed ${JSON.stringify(answer)}`);
@@ -123,17 +126,10 @@ const registryWrite = async (tableName, key, keyValue, field, value, phase) => {
   return answer;
 };
 const registryIo = (tableName, key) => ({
+  identity: { store: `registry.${tableName}`, key: (row) => row[key] },
   write: (i, field, value, rowNow, phase) => registryWrite(tableName, key, rowNow[key], field, value, phase),
   state: async () => ask({ op: "registry_state", table: tableName }),
 });
-// The fields of a held re-read whose loop ran at their first read: every
-// field but those the first read only shaped.
-const capturedAt = (firstKey) => (i, field) => {
-  const model = objectModels(S)[firstKey]();
-  const spec = (Array.isArray(model) ? model[i] : model)?.[field];
-  return spec && spec.cls === "captured" ? null : `shown failing at its first read (${firstKey})`;
-};
-
 const handleAnswer = (handle) => async () => {
   const { status, body } = await ask({ op: "handle_answer", handle });
   let parsed;
@@ -622,34 +618,37 @@ async function main(chromium) {
   // Every object read again, held to what was read before.
   S.credentials.aLast = { signCount: (await credentialFor(desk, "a.test")).signCount };
   const again = [
-    ["a.passkeys", "setup:a.passkeys", cyfrRows("a", "passkeys"), cyfrIo("a", "passkeys")],
-    ["a.users", "setup:a.users", cyfrRows("a", "users"), cyfrIo("a", "users")],
-    ["a.person_identities", "setup:a.person_identities", cyfrRows("a", "person_identities"), cyfrIo("a", "person_identities")],
-    ["a.athanors", "setup:a.athanors", cyfrRows("a", "athanors"), cyfrIo("a", "athanors")],
-    ["a.memberships", "setup:a.memberships", cyfrRows("a", "memberships"), cyfrIo("a", "memberships")],
-    ["a.identity_attempts", "setup:pre:a.identity_attempts", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts")],
-    ["a.registry_tokens", "sync:a.registry_tokens", cyfrRows("a", "registry_tokens"), cyfrIo("a", "registry_tokens")],
-    ["dir.identity_log_entries", "setup:dir.identity_log_entries", cyfrRows("dir", "identity_log_entries"), cyfrIo("dir", "identity_log_entries")],
-    ["registry.namespaces[proof]", "setup:registry.namespaces[proof]", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug")],
-    ["registry.namespaces[other]", "wrong_identity:registry.namespaces[other]", registryRows("namespaces", "slug", OTHER), registryIo("namespaces", "slug")],
-    ["registry.identity_heads[a]", "setup:registry.identity_heads[a]", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier")],
-    ["registry.identity_heads[c]", "wrong_identity:registry.identity_heads[c]", registryRows("identity_heads", "identifier", other.identifier), registryIo("identity_heads", "identifier")],
-    ["registry.policy_acceptances[a]", "setup:registry.policy_acceptances[a]", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id")],
-    ["registry.policy_acceptances[c]", "wrong_identity:registry.policy_acceptances[c]", registryRows("policy_acceptances", "identifier", other.identifier), registryIo("policy_acceptances", "id")],
-    ["registry.request_nonces[a]", "setup:registry.request_nonces[a]", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce")],
-    ["registry.request_nonces[c]", "wrong_identity:registry.request_nonces[c]", registryRows("request_nonces", "identifier", other.identifier), registryIo("request_nonces", "nonce")],
-    ["registry.push_tokens[proof]", "sync:registry.push_tokens[proof]", registryRows("push_tokens", "namespace_slug", HANDLE), registryIo("push_tokens", "id")],
-    ["registry.banned_identities", "ban:registry.banned_identities", registryRows("banned_identities", "identifier", id), registryIo("banned_identities", "id")],
-    ["b.passkeys", "allow:b.passkeys", cyfrRows("b", "passkeys"), cyfrIo("b", "passkeys")],
-    ["b.users", "sign_in:b.users", cyfrRows("b", "users"), cyfrIo("b", "users")],
-    ["b.person_identities", "sign_in:b.person_identities", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities")],
-    ["b.sessions", "wrong_identity:pre:b.sessions", cyfrRows("b", "sessions"), cyfrIo("b", "sessions")],
-    ["b.athanors", "allow:b.athanors", cyfrRows("b", "athanors"), cyfrIo("b", "athanors")],
-    ["b.memberships", "allow:b.memberships", cyfrRows("b", "memberships"), cyfrIo("b", "memberships")],
-    ["b.server_allowlist", "allow:b.server_allowlist", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist")],
+    ["a.passkeys", cyfrRows("a", "passkeys"), cyfrIo("a", "passkeys")],
+    ["a.users", cyfrRows("a", "users"), cyfrIo("a", "users")],
+    ["a.person_identities", cyfrRows("a", "person_identities"), cyfrIo("a", "person_identities")],
+    ["a.athanors", cyfrRows("a", "athanors"), cyfrIo("a", "athanors")],
+    ["a.memberships", cyfrRows("a", "memberships"), cyfrIo("a", "memberships")],
+    ["a.identity_attempts", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts")],
+    ["a.registry_tokens", cyfrRows("a", "registry_tokens"), cyfrIo("a", "registry_tokens")],
+    ["dir.identity_log_entries", cyfrRows("dir", "identity_log_entries"), cyfrIo("dir", "identity_log_entries")],
+    ["registry.namespaces[proof]", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug")],
+    ["registry.namespaces[other]", registryRows("namespaces", "slug", OTHER), registryIo("namespaces", "slug")],
+    ["registry.identity_heads[a]", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier")],
+    ["registry.identity_heads[c]", registryRows("identity_heads", "identifier", other.identifier), registryIo("identity_heads", "identifier")],
+    ["registry.policy_acceptances[a]", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id")],
+    ["registry.policy_acceptances[c]", registryRows("policy_acceptances", "identifier", other.identifier), registryIo("policy_acceptances", "id")],
+    ["registry.request_nonces[a]", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce")],
+    ["registry.request_nonces[c]", registryRows("request_nonces", "identifier", other.identifier), registryIo("request_nonces", "nonce")],
+    ["registry.push_tokens[proof]", registryRows("push_tokens", "namespace_slug", HANDLE), registryIo("push_tokens", "id")],
+    ["registry.banned_identities", registryRows("banned_identities", "identifier", id), registryIo("banned_identities", "id")],
+    ["b.passkeys", cyfrRows("b", "passkeys"), cyfrIo("b", "passkeys")],
+    ["b.users", cyfrRows("b", "users"), cyfrIo("b", "users")],
+    ["b.person_identities", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities")],
+    ["b.sessions", cyfrRows("b", "sessions"), cyfrIo("b", "sessions")],
+    ["b.athanors", cyfrRows("b", "athanors"), cyfrIo("b", "athanors")],
+    ["b.memberships", cyfrRows("b", "memberships"), cyfrIo("b", "memberships")],
+    ["b.server_allowlist", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist")],
   ];
-  for (const [name, firstKey, read, io] of again) {
-    await claim(`held:${name}`, `${name}, read again at the end, is what was read before`, read, { ...io, only: capturedAt(firstKey) });
+  // Each field's loop runs again unless the identical predicate already
+  // ran on that same row (models.mjs check): a bound that is now exact, or
+  // a row a later step first read, runs here.
+  for (const [name, read, io] of again) {
+    await claim(`held:${name}`, `${name}, read again at the end, is what was read before`, read, { ...io, skipIfRan: true });
   }
 }
 
