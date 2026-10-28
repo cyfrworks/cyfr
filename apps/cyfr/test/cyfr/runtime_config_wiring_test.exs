@@ -54,13 +54,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
-  # The child specs under `id` in a census of `Cyfr.Application.tiers/0`.
-  defp specs({_id, _strategy, _intensity, children}, id),
-    do: Enum.flat_map(children, &specs(&1, id))
-
-  defp specs(%{id: id} = spec, id), do: [spec]
-  defp specs(_spec, _id), do: []
-
   defp read_prod_config! do
     Config.Reader.read!(Path.join(@root, "config/runtime.exs"),
       env: :prod,
@@ -1016,29 +1009,34 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       )
     end
 
-    # The address runtime.exs parses is the one the boot hands the host
-    # API's listener: read through the census of the tree `start/2` starts,
-    # down through `Opus.Supervisor`'s own `init/1`, to the listener's spec.
-    test "the parsed CYFR_HOST_API_BIND is the host API listener's bind" do
+    # The bind runtime.exs parses is the one the configuration gives the host
+    # API. It is evaluated here, as the rest of this file evaluates the file,
+    # and not applied: a listener restarted on it would move the one every
+    # other test in this VM shares. The listener the VM started is checked
+    # below, against the bind this VM is configured with.
+    test "the parsed CYFR_HOST_API_BIND is the host API's configured bind" do
       with_env(%{"CYFR_HOST_API_BIND" => "127.0.0.2"}, fn ->
-        bind = read_prod_config!()[:cyfr][:host_api_bind]
-        assert bind == {127, 0, 0, 2}
-
-        previous = Application.fetch_env(:cyfr, :host_api_bind)
-        Application.put_env(:cyfr, :host_api_bind, bind)
-
-        try do
-          specs = Enum.flat_map(Cyfr.Application.tiers(), &specs(&1, Opus.HostListener))
-
-          assert [%{start: {Opus.HostListener.Supervisor, :start_link, [opts]}}] = specs
-          assert opts[:bind] == {127, 0, 0, 2}
-        after
-          case previous do
-            {:ok, value} -> Application.put_env(:cyfr, :host_api_bind, value)
-            :error -> Application.delete_env(:cyfr, :host_api_bind)
-          end
-        end
+        assert read_prod_config!()[:cyfr][:host_api_bind] == {127, 0, 0, 2}
       end)
+    end
+
+    # The listener the boot started, observed in the running tree: found by its
+    # child id under its parent, `Opus.Supervisor`, which started it from the
+    # bind and port the boot passed down. Its configured options are the ones
+    # its parent holds, and the port it is bound to is the one it reports.
+    test "the running host API listener is on the bind and port its configuration names" do
+      {Opus.HostListener, listener, :supervisor, _modules} =
+        Opus.Supervisor |> Supervisor.which_children() |> List.keyfind(Opus.HostListener, 0)
+
+      assert {:ok, %{start: {Opus.HostListener.Supervisor, :start_link, [opts]}}} =
+               :supervisor.get_childspec(Opus.Supervisor, Opus.HostListener)
+
+      assert opts[:bind] == Cyfr.RuntimeConfig.host_api_bind()
+      assert opts[:port] == Cyfr.RuntimeConfig.host_api_port()
+
+      configured = Cyfr.RuntimeConfig.host_api_port()
+      bound = Opus.HostListener.port(listener)
+      assert bound == configured or (configured == 0 and bound > 0), "bound to #{bound}"
     end
 
     test "a malformed worker entry, address or port refuses the boot by name" do
