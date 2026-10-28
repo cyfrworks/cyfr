@@ -24,7 +24,8 @@
 #   command  the rest of the line, run as `bash -c` from the worktree's
 #            root
 # Lines that start with #, and blank lines, are skipped. The whole table
-# is read before any row runs, and the rows of a stage run in its order,
+# is read, and every row's when decided on the changed set as the stage
+# found it, before any row runs; the rows of a stage run in its order,
 # every one of them whatever an earlier one ended with.
 #
 # The changed set is every path the diff from the base to the working
@@ -56,7 +57,8 @@
 # inside a heavy-check (HEAVY_CHECK_HELD set), since each row queues in
 # its own lane; 65 for a table it cannot read, naming the line, or a
 # touched path with whitespace, before any row runs; 69 outside a Git
-# checkout or without the stage's base; 130, 143 and 129 on INT, TERM and
+# checkout, without the stage's base, or when Git cannot list the changed
+# paths a row's globs match; 130, 143 and 129 on INT, TERM and
 # HUP, once the running row has stopped. The frame starts after the
 # options are read, so a usage refusal writes none.
 set -uo pipefail
@@ -193,15 +195,31 @@ if [ "${#tests[@]}" -gt 0 ]; then
 fi
 
 # Whether a path of the changed set matches one of the comma-separated
-# globs in $1.
+# globs in $1. Both listings are read whole: a reader that stops at the
+# first path ends the second listing with SIGPIPE, which pipefail reports
+# as no match.
 matches() {
-  local glob specs=()
+  local glob globs specs=() found
   IFS=, read -r -a globs <<<"$1"
   for glob in "${globs[@]}"; do specs+=(":(glob)$glob"); done
-  { git diff --name-only --no-renames "$base" -- "${specs[@]}"
-    git ls-files --others --exclude-standard -- "${specs[@]}"
-  } 2>/dev/null | grep -q .
+  found=$(git diff --name-only --no-renames "$base" -- "${specs[@]}" &&
+    git ls-files --others --exclude-standard -- "${specs[@]}") ||
+    refuse 69 "cannot list the changed paths that match $1"
+  [ -n "$found" ]
 }
+
+# Each row's reason to be skipped, empty for a row that runs.
+reasons=()
+for row in ${rows[@]+"${rows[@]}"}; do
+  IFS=$'\t' read -r _ _ _ _ _ when _ <<<"$row"
+  reason=
+  case $when in
+    always) ;;
+    tests) [ -n "${tests[*]+${tests[*]}}" ] || reason='no touched test' ;;
+    *) matches "$when" || reason="no changed path matches $when" ;;
+  esac
+  reasons+=("$reason")
+done
 
 if ! $dry; then
   if [ -n "$logdir" ]; then
@@ -214,15 +232,9 @@ fi
 export STAGE="$stage" STAGE_TESTS="${tests[*]+${tests[*]}}" STAGE_LOGDIR="$logdir"
 
 failures=0
-for row in ${rows[@]+"${rows[@]}"}; do
-  line=${row#*$'\t'}
-  IFS=$'\t' read -r _ check lane hold when command <<<"$line"
-  reason=
-  case $when in
-    always) ;;
-    tests) [ -n "$STAGE_TESTS" ] || reason='no touched test' ;;
-    *) matches "$when" || reason="no changed path matches $when" ;;
-  esac
+for i in ${rows[@]+"${!rows[@]}"}; do
+  IFS=$'\t' read -r _ _ check lane hold _ command <<<"${rows[$i]}"
+  reason=${reasons[$i]}
   if $dry; then
     if [ -n "$reason" ]; then echo "would skip $check: $reason"; else echo "would run $check ($lane): $command"; fi
     continue

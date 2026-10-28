@@ -122,6 +122,16 @@ printf '%s\n' apps/arca/test/arca/x_test.exs apps/cyfr/test/cyfr/a_test.exs apps
 diff "$S/want" "$S/logs-planted/tests.txt" >/dev/null || fail "the touched tests: $(tr '\n' ' ' <"$S/logs-planted/tests.txt")"
 grep -qx 'arca: ok [0-9]*s' "$S/planted.out" || fail 'an Arca change did not select the Arca row'
 
+begin 'a new file selects the rows its path matches, alone and beside an edited path the same glob matches'
+reset_tree
+put "$repo/docs/new.md" new
+printf '# edit\n' >>"$repo/apps/cyfr/lib/cyfr/a.ex"
+put "$repo/apps/cyfr/lib/cyfr/new.ex" new
+stage untracked -n handoff
+[ "$rc" = 0 ] || fail "exited $rc"
+for check in compile dialyzer docs; do grep -q "^would run $check " "$S/untracked.out" || fail "$check would not run: $(cat "$S/untracked.out")"; done
+reset_tree
+
 begin 'a deleted lib file alone selects the compile, dialyzer and Arca rows and puts its mirror test, never itself, in the list'
 reset_tree
 rm "$repo/apps/arca/lib/arca/x.ex"
