@@ -14,7 +14,7 @@ defmodule PrismWeb.IdentityCard do
 
   | Where the person stands | The card offers |
   |---|---|
-  | not enrolled | choose a handle, then enroll |
+  | not enrolled | choose a handle, then enroll; or enroll without one, for an identifier alone |
   | an enrollment the directory has not accepted, its prompt open here | nothing beside the prompt, which retries under the same request id and seed |
   | the same, with no prompt here holding its seed | "Abandon and start again", then enroll under a new seed |
   | accepted, kit not acknowledged | show the kit again, under a fresh confirmation |
@@ -44,6 +44,7 @@ defmodule PrismWeb.IdentityCard do
   `identity-identifier`, `identity-directory`, `identity-remote`,
   `identity-handle` (the handle form), `identity-handle-input`,
   `identity-handle-check` (with `data-check`), `identity-choose`,
+  `identity-enroll` (enrollment with no handle),
   `identity-abandon`, `identity-kit` (with `data-attempt` and
   `data-phase`), `identity-kit-show`, `identity-claim`, `identity-claim-error`,
   `identity-claimed`, `identity-publish` (with `data-published`) and
@@ -58,7 +59,7 @@ defmodule PrismWeb.IdentityCard do
   alias Sanctum.Tenancy.Users
 
   @prompt_prefix "identity-recovery-"
-  @events ~w(check choose abandon show_kit claim publish)
+  @events ~w(check choose enroll abandon show_kit claim publish)
 
   @doc "The card's component id."
   @spec id() :: String.t()
@@ -101,19 +102,27 @@ defmodule PrismWeb.IdentityCard do
         _other -> socket
       end
 
-    {:ok, guarded(socket, &(&1 |> load() |> claim_when_acknowledged()))}
+    {:noreply, socket} =
+      CyfrWeb.ContextGuard.guard(socket, fn socket ->
+        {:noreply, socket |> load() |> claim_when_acknowledged()}
+      end)
+
+    {:ok, socket}
   end
 
-  def update(%{reload: true}, socket), do: {:ok, guarded(socket, &load/1)}
+  def update(%{reload: true}, socket) do
+    {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, load(&1)})
+    {:ok, socket}
+  end
 
   def update(assigns, socket) do
-    socket = socket |> assign(Map.take(assigns, [:context, :offer, :enrolled, :id]))
-    {:ok, if(socket.assigns.loaded, do: socket, else: guarded(socket, &load/1))}
-  end
+    socket = assign(socket, Map.drop(assigns, [:report, :reload]))
 
-  defp guarded(socket, fun) do
-    case CyfrWeb.ContextGuard.guard(socket, &{:noreply, fun.(&1)}) do
-      {:noreply, socket} -> socket
+    if socket.assigns.loaded do
+      {:ok, socket}
+    else
+      {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, load(&1)})
+      {:ok, socket}
     end
   end
 
@@ -146,32 +155,47 @@ defmodule PrismWeb.IdentityCard do
   # Whether the registry publishes this CYFR's address with the handle:
   # its live answer for the handle (`Sanctum.Handle.resolve/1`).
   defp read_publication(%{assigns: %{handle: handle}} = socket) when is_binary(handle) do
-    start_async(socket, :publication, fn -> {handle, Sanctum.Handle.resolve(handle)} end)
+    tag = CyfrWeb.ContextGuard.capture(socket)
+    start_async(socket, :publication, fn -> {tag, handle, Sanctum.Handle.resolve(handle)} end)
   end
 
   defp read_publication(socket), do: assign(socket, :published, :unread)
 
   @impl true
-  def handle_async(:publication, {:ok, {handle, answer}}, %{assigns: %{handle: handle}} = socket) do
-    published =
-      case answer do
-        {:ok, %{address: address}} -> is_binary(address)
-        {:error, _unanswered} -> :unknown
-      end
+  # A registry answer is taken only for the focus it was asked under and the
+  # handle still shown.
+  def handle_async(
+        :publication,
+        {:ok, {tag, handle, answer}},
+        %{assigns: %{handle: handle}} = socket
+      ) do
+    CyfrWeb.ContextGuard.deliver(socket, tag, fn socket ->
+      published =
+        case answer do
+          {:ok, %{address: address}} -> is_binary(address)
+          {:error, _unanswered} -> :unknown
+        end
 
-    {:noreply, assign(socket, :published, published)}
+      {:noreply, assign(socket, :published, published)}
+    end)
   end
 
-  def handle_async(:check, {:ok, {handle, answer}}, %{assigns: %{handle_input: handle}} = socket) do
-    check =
-      case answer do
-        {:ok, _held} -> :taken
-        {:error, :not_found} -> :free
-        {:error, :invalid_handle} -> :invalid
-        {:error, _unanswered} -> :unavailable
-      end
+  def handle_async(
+        :check,
+        {:ok, {tag, handle, answer}},
+        %{assigns: %{handle_input: handle}} = socket
+      ) do
+    CyfrWeb.ContextGuard.deliver(socket, tag, fn socket ->
+      check =
+        case answer do
+          {:ok, _held} -> :taken
+          {:error, :not_found} -> :free
+          {:error, :invalid_handle} -> :invalid
+          {:error, _unanswered} -> :unavailable
+        end
 
-    {:noreply, assign(socket, :check, check)}
+      {:noreply, assign(socket, :check, check)}
+    end)
   end
 
   def handle_async(_name, _result, socket), do: {:noreply, socket}
@@ -195,10 +219,12 @@ defmodule PrismWeb.IdentityCard do
         {:noreply, assign(socket, :check, :invalid)}
 
       true ->
+        tag = CyfrWeb.ContextGuard.capture(socket)
+
         {:noreply,
          socket
          |> assign(:check, :checking)
-         |> start_async(:check, fn -> {handle, Sanctum.Handle.resolve(handle)} end)}
+         |> start_async(:check, fn -> {tag, handle, Sanctum.Handle.resolve(handle)} end)}
     end
   end
 
@@ -214,6 +240,12 @@ defmodule PrismWeb.IdentityCard do
       {:noreply, socket}
     end
   end
+
+  # Enrollment on its own, with no handle: an identifier, which signs the
+  # person in at another CYFR, and the kit that recovers it, whether or not
+  # the registry answers; a handle is claimed later.
+  defp act("enroll", _params, %{assigns: %{status: %{enrollment: "none"}}} = socket),
+    do: {:noreply, socket |> enroll() |> assign(:claim_on_ack, false)}
 
   defp act("abandon", _params, socket) do
     case Ops.call_tool(socket.assigns.context, "person/enroll_abandon", %{}) do
@@ -326,11 +358,11 @@ defmodule PrismWeb.IdentityCard do
          {:ok, _accepted} <-
            Ops.call_tool(ctx, "registry/legal_accept", %{"policy_version" => version}),
          {:ok, _claimed} <- Ops.call_tool(ctx, "registry/claim_personal", %{"handle" => handle}),
-         {:ok, socket} <- want(socket, nil) do
-      load(socket)
+         {:ok, cleared} <- want(socket, nil) do
+      load(cleared)
     else
-      {:error, %Phoenix.LiveView.Socket{} = socket} ->
-        socket
+      {:error, %Phoenix.LiveView.Socket{} = unsaved} ->
+        unsaved
 
       {:error, reason} ->
         claim_refused(socket, reason)
@@ -493,6 +525,20 @@ defmodule PrismWeb.IdentityCard do
             legal_path={@legal_path}
             label={if @choose_another, do: "Choose another handle", else: "Your handle"}
           />
+          <div :if={@status.enrollment == "none"} class="space-y-2 pt-2">
+            <p class="text-sm text-gray-400">
+              Or enroll without a handle: your identity gets an identifier, which signs you in at
+              another CYFR, and the kit that recovers it. A handle can be claimed later.
+            </p>
+            <.button
+              variant="ghost"
+              phx-click="enroll"
+              phx-target={@myself}
+              data-test="identity-enroll"
+            >
+              Enroll without a handle
+            </.button>
+          </div>
         </div>
 
         <div :if={@state == :pending} class="space-y-2">

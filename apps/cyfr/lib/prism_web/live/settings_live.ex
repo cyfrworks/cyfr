@@ -1543,7 +1543,7 @@ defmodule PrismWeb.SettingsLive do
             </:col>
           </.table>
 
-          <form phx-change="door_form_changed" class="mt-4 space-y-2">
+          <form id="door-form" phx-change="door_form_changed" class="mt-4 space-y-2">
             <div class="flex gap-2 items-end">
               <div class="flex-1">
                 <.input

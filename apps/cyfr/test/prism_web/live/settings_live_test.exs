@@ -1851,6 +1851,23 @@ defmodule PrismWeb.SettingsLiveTest do
       refute has_element?(view, ~s(#system-layer [data-test="recovery"]))
     end
 
+    test "with the registry not answering, the person still enrolls on their own, for an identifier and its kit",
+         %{conn: conn} do
+      person = test_user()
+      registry(nil, %{"alice" => :close})
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+
+      type_handle(view, "alice")
+      assert has_element?(view, ~s([data-check="unavailable"]))
+
+      view |> element(~s([data-test="identity-enroll"])) |> render_click()
+      render(view)
+
+      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
+      assert has_element?(view, ~s(#system-layer [data-test="recovery-directory"]), @directory)
+      assert wanted(person) == nil
+    end
+
     test "a kit not yet saved is offered again; another kit and the rotation are offered once enrolled",
          %{conn: conn} do
       person = test_user()
