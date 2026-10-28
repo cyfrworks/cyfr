@@ -200,6 +200,34 @@ def read_listing(done, what):
     sys.exit(f"FAIL: {what} printed no listing in word form\n{done.stdout!r}")
 
 
+def parse_counters(text, names, what):
+    """The `name count` lines of a cgroup file, as a dict, with each of `names` among them.
+
+    A counter that is not there is no answer, so it fails rather than being
+    read as zero.
+    """
+    counters = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) != 2 or not fields[1].isdigit():
+            sys.exit(f"FAIL: {what} printed a line that is no counter: {line!r}")
+        counters[fields[0]] = int(fields[1])
+    missing = [name for name in names if name not in counters]
+    if missing:
+        sys.exit(f"FAIL: {what} holds no counter {missing}: {counters}")
+    return counters
+
+
+def read_counters(done, names, what):
+    """The counters of a cgroup file from a command that exits 0 (parse_counters)."""
+    return parse_counters(read_output(done, what), names, what)
+
+
+def no_kills(events):
+    """Whether a cgroup's events count no OOM and no OOM kill: both counters must be read, never defaulted."""
+    return events["oom"] == 0 and events["oom_kill"] == 0
+
+
 class Stack:
     """A compose project of the suite's own: its name, its project directory and its teardown.
 
@@ -232,7 +260,11 @@ class Stack:
         and by the exit status when it fails again at exit.
         """
         if os.environ.get("CI"):
-            print(self.logs())
+            try:
+                print(self.logs())
+            except SystemExit as unread:
+                # A failed read of the logs is reported here, and the teardown goes on.
+                print(unread, file=sys.stderr, flush=True)
         stop = ["--timeout", str(SIGNALLED_STOP_S)] if signalled() else []
         for attempt in range(1, DOWN_ATTEMPTS + 1):
             result = self.compose("down", "--volumes", "--remove-orphans", *stop, check=False)

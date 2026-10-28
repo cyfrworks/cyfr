@@ -86,7 +86,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_plane import ControlPlane  # noqa: E402
 from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, ROLE, RUN_DIR, SERVICE, SERVICE_UID, SERVICE_USER,  # noqa: E402
                    Stack, expect, run, wait_until)
-from imagesuite import PROJECT_PREFIX, read_word, run_name  # noqa: E402
+from imagesuite import PROJECT_PREFIX, read_output, read_word, run_name  # noqa: E402
 
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
 STEPS = ("refusals", "connect", "relay", "nested", "spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
@@ -397,7 +397,7 @@ def runner_facts(stack, runner):
               f"echo routes=$(tail -n +2 /proc/{pid}/net/route | wc -l); "
               f"for fd in /proc/{pid}/fd/*; do echo \"fd=${{fd##*/}} $(readlink $fd)\"; done")
     facts = {"fds": {}}
-    for line in stack.observe(script).stdout.splitlines():
+    for line in read_output(stack.observe(script), f"the facts of runner uid {runner['uid']}").splitlines():
         key, _, value = line.partition("=")
         if key == "fd":
             number, _, target = value.partition(" ")

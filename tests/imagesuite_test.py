@@ -394,6 +394,12 @@ class SuiteObservations(unittest.TestCase):
     def test_builder_memory_keeper_groups(self):
         self.run_entry("builder-image", "memory_test.py")
 
+    def test_builder_headroom_cgroup_reads(self):
+        self.run_entry("builder-image", "headroom_test.py")
+
+    def test_runtime_memory_cgroup_reads(self):
+        self.run_entry("locus-runtime-image", "memory_test.py")
+
 
 class ObservationAnswers(unittest.TestCase):
     """What a probe's output or a container's state may answer: a word from a successful exec, and no process in a stopped container."""
@@ -440,6 +446,12 @@ class ObservationAnswers(unittest.TestCase):
             with self.subTest(returncode=returncode, stdout=stdout):
                 with self.assertRaises(SystemExit):
                     imagesuite.read_listing(self.probe(returncode, stdout), "the listing")
+
+    def test_a_counter_that_is_not_read_is_refused_not_read_as_zero(self):
+        self.assertEqual(imagesuite.parse_counters("oom 0\noom_kill 1\n", ("oom", "oom_kill"), "the events"),
+                         {"oom": 0, "oom_kill": 1})
+        with self.assertRaises(SystemExit):
+            imagesuite.parse_counters("oom 0\n", ("oom", "oom_kill"), "the events")
 
     def test_a_table_is_read_only_from_a_command_that_exits_zero(self):
         self.assertEqual(imagesuite.read_output(self.probe(0, "table\n"), "the table"), "table\n")

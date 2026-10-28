@@ -132,5 +132,24 @@ class Listings(unittest.TestCase):
         self.assertFalse(runners.home_scrubbed(observed, {"home": HOME}))
 
 
+class Logs(unittest.TestCase):
+    """The container's log is read whole from a compose call that exits 0: a failed read fails, and the text that
+    was read is the control."""
+
+    def observed(self, returncode, stdout):
+        observed = stack.Stack.__new__(stack.Stack)
+        observed.container = CONTAINER
+        observed.compose = lambda *args, **kwargs: subprocess.CompletedProcess(
+            [], returncode, stdout, "" if returncode == 0 else "daemon error")
+        return observed
+
+    def test_a_failed_read_of_the_log_fails_it(self):
+        with self.assertRaises(SystemExit):
+            self.observed(1, "").logs()
+
+    def test_the_log_that_was_read_is_the_control(self):
+        self.assertIn("quarantined", self.observed(0, "quarantined\n").logs())
+
+
 if __name__ == "__main__":
     unittest.main()

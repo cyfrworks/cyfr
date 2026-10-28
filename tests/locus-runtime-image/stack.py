@@ -40,7 +40,7 @@ if os.path.join(ROOT, "tests") not in sys.path:
 
 import imagesuite  # noqa: E402
 import worker_auth as auth  # noqa: E402
-from imagesuite import listing, run  # noqa: E402
+from imagesuite import listing, read_output, run  # noqa: E402
 
 imagesuite.stop_on_signals()
 # The keeper's seccomp profile and the name the locus-runtime service reads it by.
@@ -186,7 +186,7 @@ class Stack(imagesuite.Stack):
         )
 
     def logs(self):
-        return self.compose("logs", "--no-color", COMPOSE_SERVICE, check=False).stdout
+        return read_output(self.compose("logs", "--no-color", COMPOSE_SERVICE, check=False), "the runtime service's log")
 
     # ------------------------------------------------------------------
     # The service's requests

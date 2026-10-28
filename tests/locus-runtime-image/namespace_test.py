@@ -86,5 +86,27 @@ class KillRunner(unittest.TestCase):
             self.kill("failed", status=1)
 
 
+class RunnerFacts(unittest.TestCase):
+    """The facts of a runner are read whole from the observer, which must exit 0: a failed read fails the observation
+    that reads them, and the facts read are the control."""
+
+    def observed(self, returncode, stdout):
+        class Observer:
+            def observe(self, script):
+                return subprocess.CompletedProcess([], returncode, stdout, "" if returncode == 0 else "daemon error")
+
+        return Observer()
+
+    def test_a_failed_observer_fails_the_runner_facts(self):
+        with self.assertRaises(SystemExit):
+            namespace.runner_facts(self.observed(1, ""), {"pid": 4242, "uid": 30101})
+
+    def test_the_facts_that_were_read_are_the_control(self):
+        facts = namespace.runner_facts(self.observed(0, "uid_map=30101 30101 1\nfd=3 socket:[9]\n"),
+                                       {"pid": 4242, "uid": 30101})
+        self.assertEqual(facts["uid_map"], "30101 30101 1")
+        self.assertEqual(facts["fds"], {3: "socket:[9]"})
+
+
 if __name__ == "__main__":
     unittest.main()

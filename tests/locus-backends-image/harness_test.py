@@ -20,6 +20,7 @@ from unittest import mock
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import e2e  # noqa: E402
 import harness  # noqa: E402
 import isolation  # noqa: E402
 import imagesuite  # noqa: E402
@@ -105,6 +106,33 @@ class HomeProbe(Stub):
             with self.subTest(status=status):
                 with self.assertRaises(SystemExit):
                     isolation.home_gone(self.container(OTHER, status=status), HOME)
+
+
+class Logs(unittest.TestCase):
+    """The logs are read whole from a compose call that exits 0: a failed read fails the predicate that reads them,
+    and the text that was read is the control."""
+
+    def observed(self, cls, returncode, stdout):
+        observed = cls.__new__(cls)
+        observed.container = CONTAINER
+        observed.compose = lambda *args, **kwargs: subprocess.CompletedProcess(
+            [], returncode, stdout, "" if returncode == 0 else "daemon error")
+        return observed
+
+    def test_a_failed_read_of_the_service_log_fails_it(self):
+        with self.assertRaises(SystemExit):
+            self.observed(harness.Stack, 1, "").logs()
+
+    def test_a_failed_read_of_the_guard_log_fails_it(self):
+        with self.assertRaises(SystemExit):
+            self.observed(harness.Stack, 1, "").guard_logs()
+
+    def test_a_failed_read_of_the_app_log_fails_it(self):
+        with self.assertRaises(SystemExit):
+            self.observed(e2e.CyfrStack, 1, "").cyfr_logs()
+
+    def test_the_service_log_that_was_read_is_the_control(self):
+        self.assertIn("[cyfr-locus] info: stopped", self.observed(harness.Stack, 0, "[cyfr-locus] info: stopped\n").logs())
 
 
 if __name__ == "__main__":

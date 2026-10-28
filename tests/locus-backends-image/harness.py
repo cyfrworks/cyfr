@@ -63,7 +63,7 @@ if os.path.join(ROOT, "tests") not in sys.path:
     sys.path.append(os.path.join(ROOT, "tests"))
 
 import imagesuite  # noqa: E402
-from imagesuite import PROJECT_PREFIX, listing, run  # noqa: E402
+from imagesuite import PROJECT_PREFIX, listing, read_output, run  # noqa: E402
 
 imagesuite.stop_on_signals()
 
@@ -693,7 +693,7 @@ class Stack(imagesuite.Stack):
         return self.base
 
     def guard_logs(self):
-        return self.compose("logs", "--no-color", GUARD, check=False).stdout
+        return read_output(self.compose("logs", "--no-color", GUARD, check=False), "the backends guard's log")
 
     def guard_exec(self, script):
         return run("docker", "exec", self.guard, "sh", "-c", script, check=False)
@@ -754,7 +754,7 @@ class Stack(imagesuite.Stack):
         return Controller(self.base, self.key, **options)
 
     def logs(self):
-        return self.compose("logs", "--no-color", SERVICE, check=False).stdout
+        return read_output(self.compose("logs", "--no-color", SERVICE, check=False), "the backends service's log")
 
     def exec(self, script, user=None, target=None):
         user_args = ["-u", user] if user else []
