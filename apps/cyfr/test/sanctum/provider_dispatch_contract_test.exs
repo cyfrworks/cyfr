@@ -24,6 +24,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "device_init",
       "device_poll",
       "cli_begin",
+      "setup",
       "cli_poll",
       "cli_cancel",
       "cli_approve",
