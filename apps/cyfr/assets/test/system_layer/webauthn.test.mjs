@@ -242,3 +242,94 @@ describe("the sign-in page's hook", () => {
     assert.deepEqual(pushed, [])
   })
 })
+
+describe("the setup page's hook", () => {
+  let original, location
+
+  beforeEach(() => {
+    original = Object.getOwnPropertyDescriptor(globalThis.navigator, "credentials")
+    location = Object.getOwnPropertyDescriptor(globalThis, "location")
+    Object.defineProperty(globalThis, "location", {configurable: true, value: {hash: "#ab12"}})
+  })
+
+  afterEach(() => {
+    if (original) Object.defineProperty(globalThis.navigator, "credentials", original)
+    else delete globalThis.navigator.credentials
+    if (location) Object.defineProperty(globalThis, "location", location)
+    else delete globalThis.location
+  })
+
+  function setupHook(pushed) {
+    const el = new EventTarget()
+    el.dataset = {webauthn: "setup"}
+    const hook = Object.create(SystemLayer)
+    hook.el = el
+    hook.pushEvent = (event, payload, reply) => {
+      pushed.push({event, payload})
+      if (event === "setup_start" && reply)
+        reply({public_key: {challenge: "AQID", user: {id: "BAU", name: "a", displayName: "a"}}, registration: "token-1"})
+    }
+    hook.mounted()
+    return {hook, el}
+  }
+
+  function clickStart(el) {
+    const start = {closest: (selector) => (selector === "[data-webauthn-start]" ? start : null)}
+    const event = new Event("click")
+    Object.defineProperty(event, "target", {value: start})
+    el.dispatchEvent(event)
+  }
+
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  test("hands the page the fragment's token, then registers under the options it answers, drawing no prompt", async () => {
+    Object.defineProperty(globalThis.navigator, "credentials", {
+      configurable: true,
+      value: {create: async () => created()}
+    })
+
+    const pushed = []
+    const {hook, el} = setupHook(pushed)
+    assert.equal(hook.dialog, undefined)
+    assert.deepEqual(pushed, [{event: "setup_token", payload: {token: "ab12"}}])
+
+    clickStart(el)
+    await settled()
+
+    assert.deepEqual(
+      pushed.map((entry) => entry.event),
+      ["setup_token", "setup_start", "setup_passkey"]
+    )
+    assert.equal(pushed[2].payload.credential.registration, "token-1")
+
+    hook.updated()
+    hook.destroyed()
+  })
+
+  test("hands the token over again to the page process a reconnect starts", () => {
+    const pushed = []
+    const {hook} = setupHook(pushed)
+    hook.reconnected()
+    assert.deepEqual(
+      pushed.map((entry) => entry.event),
+      ["setup_token", "setup_token"]
+    )
+  })
+
+  test("says the ceremony did not finish when the person cancels it", async () => {
+    Object.defineProperty(globalThis.navigator, "credentials", {
+      configurable: true,
+      value: {create: async () => Promise.reject(new Error("NotAllowedError"))}
+    })
+
+    const pushed = []
+    const {el} = setupHook(pushed)
+    clickStart(el)
+    await settled()
+
+    assert.deepEqual(
+      pushed.map((entry) => entry.event),
+      ["setup_token", "setup_start", "setup_error"]
+    )
+  })
+})

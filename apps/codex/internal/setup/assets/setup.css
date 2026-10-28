@@ -198,13 +198,11 @@ input:focus, button:focus-visible {
   height: 100%;
 }
 
-.link, .address {
+.link {
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: 0.8rem;
   overflow-wrap: anywhere;
 }
-
-.address { font-size: 1rem; }
 
 /* What a person copies, beside its Copy button. */
 .copyrow {
@@ -218,7 +216,16 @@ input:focus, button:focus-visible {
   min-width: 0;
 }
 
-/* On Done the address and its button sit together in the middle. */
+/* On Done the setup link's words and its row show together. */
+.setup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.setup[hidden] { display: none; }
+
+/* On Done the setup link and its button sit together in the middle. */
 section[data-screen="done"] .copyrow { justify-content: center; }
 section[data-screen="done"] .copyrow p { flex: 0 1 auto; }
 

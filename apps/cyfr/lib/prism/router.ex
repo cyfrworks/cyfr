@@ -188,11 +188,16 @@ defmodule Prism.Router do
       # installation serves its returning person: sessionless too, its form
       # posts the kit and the installation token to the restore ingress
       # (`POST /restore`) from the browser, never through this view.
+      # `/setup` is the page the setup link opens: its first step, the
+      # first person's passkey under the setup token in its fragment, is
+      # sessionless, and once that person is signed in it guards their
+      # session as every console page does (`PrismWeb.SetupLive`).
       scope "/", PrismWeb do
         pipe_through :browser
 
         live "/login", LoginLive, :login, metadata: %{auth: :browser_public_login}
         live "/restore", RestoreLive, :restore, metadata: %{auth: :browser_public_login}
+        live "/setup", SetupLive, :setup, metadata: %{auth: :browser_public_login}
       end
 
       # The glass's page alone may reach other homes by `fetch`: a device

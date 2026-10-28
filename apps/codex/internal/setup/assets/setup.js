@@ -26,7 +26,7 @@
   let busy = false;
   let moved = false;
   let nameEdited = false;
-  let lastAddress = "";
+  let setupURL = "";
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -156,22 +156,23 @@
 
   function renderDone(state) {
     const section = $('[data-screen="done"]');
-    lastAddress = state.address || "";
-    const address = $("[data-address]", section);
-    if (address.textContent !== lastAddress) address.textContent = lastAddress;
+    setupURL = state.setup_url || "";
+    const link = $("[data-setup-url]", section);
+    if (link.textContent !== setupURL) link.textContent = setupURL;
+    $("[data-setup]", section).hidden = !setupURL;
+    $("[data-headless]", section).hidden = !state.headless;
     $("[data-sentence]", section).textContent = state.sentence || "";
     let tailnet = false;
     try {
-      tailnet = new URL(lastAddress).hostname.endsWith(".ts.net");
+      tailnet = new URL(state.address || "").hostname.endsWith(".ts.net");
     } catch {
       tailnet = false;
     }
-    $("[data-tailnet]", section).hidden = !(tailnet && !state.sentence);
-    $('[data-action="open"]', section).hidden = !lastAddress;
-    $("[data-copy]", section).hidden = !lastAddress;
-    if (state.moves && lastAddress && !moved) {
+    $("[data-tailnet]", section).hidden = !(tailnet && setupURL && !state.sentence);
+    $('[data-action="open"]', section).hidden = !setupURL;
+    if (state.moves && setupURL && !moved) {
       moved = true;
-      setTimeout(() => location.assign(lastAddress), 1500);
+      setTimeout(() => location.assign(setupURL), 1500);
     }
   }
 
@@ -277,7 +278,7 @@
     }
     for (const b of $$("[data-copy]")) b.addEventListener("click", () => copy(b));
     on("open", () => {
-      if (lastAddress) location.assign(lastAddress);
+      if (setupURL) location.assign(setupURL);
     });
   }
 

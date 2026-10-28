@@ -8,6 +8,13 @@ defmodule Sanctum.Providers.Session do
   line in by approving it in Prism (`Sanctum.CliSignIn`), and the caller's
   self-description resources.
 
+  `setup` is `auth: :anonymous`: the command line of a CYFR with no
+  person yet (`cyfr login --setup`) presents the installation's setup
+  token, and the setup admission (`Sanctum.Newcomer`) makes the first
+  person, or signs them in again while they hold no sign-in method, with
+  a command-line session for its machine. Any other token, or a CYFR set
+  up already, is `:setup_closed`.
+
   `cli_begin`, `cli_poll` and `cli_cancel` are `auth: :anonymous`, as
   the device flow's actions are: the command line that calls them holds
   no credential yet, and the token `cli_begin` answers it is the only
@@ -102,6 +109,28 @@ defmodule Sanctum.Providers.Session do
         ),
         Operation.new(
           "session",
+          "setup",
+          "Set this CYFR up from the command line",
+          [
+            # Nullable: a present null reaches the admission, which answers it
+            # as a wrong token (`setup_closed`); an absent one is the gate's.
+            Arg.new("setup_token", :string,
+              required: true,
+              nullable: true,
+              description: "setup: the installation's setup token, CYFR_SETUP_TOKEN in its .env"
+            ),
+            Arg.new("machine", :string,
+              required: true,
+              description:
+                "setup: the command line's host name, which its session is listed by in Prism"
+            )
+          ],
+          auth: :anonymous,
+          kind: :write,
+          planes: [:external]
+        ),
+        Operation.new(
+          "session",
           "cli_poll",
           "Poll a command line's sign-in",
           [cli_token("cli_poll")],
@@ -188,7 +217,7 @@ defmodule Sanctum.Providers.Session do
         )
       ],
       description:
-        "Manage user sessions — logout, get local identity, focus another athanor, run device-flow OAuth, or sign a command line in by approving it in Prism and list or revoke command-line sessions. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
+        "Manage user sessions — logout, get local identity, focus another athanor, set this CYFR up from the command line with its setup token, run device-flow OAuth, or sign a command line in by approving it in Prism and list or revoke command-line sessions. Registry identity (push tokens, namespaces) is a separate `registry` tool under Compendium.",
       title: "Session Management"
     )
   end
@@ -197,6 +226,18 @@ defmodule Sanctum.Providers.Session do
     case Sanctum.CliSignIn.begin(args["machine"], ctx.client_ip) do
       {:ok, begun} -> {:ok, begun}
       {:error, reason} -> {:error, cli_refusal(reason)}
+    end
+  end
+
+  # The installation's first person, made or signed in again by the setup
+  # token (`Sanctum.Newcomer`): a command-line session for the machine.
+  def handle(_ctx, %{"action" => "setup"} = args) do
+    case Sanctum.Newcomer.admit({:setup, args["setup_token"]}, {:command_line, args["machine"]}) do
+      {:ok, %{person: person, readmitted: readmitted, session_token: session_token}} ->
+        {:ok, %{session_token: session_token, user_id: person.id, readmitted: readmitted}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

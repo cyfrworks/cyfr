@@ -42,7 +42,7 @@ const (
 	// PhaseProblem is a step that failed, State.Sentence saying why and
 	// State.Offers what the person can choose.
 	PhaseProblem = "problem"
-	// PhaseDone is the home up at State.Address.
+	// PhaseDone is CYFR up at State.Address, its setup link State.SetupURL.
 	PhaseDone = "done"
 	// PhaseFailed is a run that ended without the home up, State.Sentence
 	// saying why.
@@ -86,10 +86,16 @@ type State struct {
 	// know, in the command line's words.
 	Sentence string   `json:"sentence,omitempty"`
 	Offers   []string `json:"offers,omitempty"`
-	// Address is a done home's address, and Moves whether the pages move
+	// Address is CYFR's address once done. SetupURL is its setup link, the
+	// setup page at that address with the setup token in its fragment,
+	// which sets up CYFR's first person; Moves is whether the pages move
 	// the browser there by themselves.
-	Address string `json:"address,omitempty"`
-	Moves   bool   `json:"moves,omitempty"`
+	Address  string `json:"address,omitempty"`
+	SetupURL string `json:"setup_url,omitempty"`
+	// Headless is a done CYFR that serves no setup page, whose first
+	// person runs `cyfr login --setup` in its directory.
+	Headless bool `json:"headless,omitempty"`
+	Moves    bool `json:"moves,omitempty"`
 }
 
 // Final reports whether the run has ended, done or failed.

@@ -1195,6 +1195,36 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end
     end
 
+    test "the setup token is read into Sanctum, and a malformed one stops the boot naming the variable, never the value" do
+      with_env(%{"CYFR_SETUP_TOKEN" => nil}, fn ->
+        assert read_prod_config!()[:sanctum][:setup_token] == nil
+      end)
+
+      token = String.duplicate("5e", 32)
+
+      with_env(%{"CYFR_SETUP_TOKEN" => token}, fn ->
+        config = read_prod_config!()
+        assert config[:sanctum][:setup_token] == token
+        assert config[:cyfr][:deployment_pinned] == []
+      end)
+
+      for bad <- [
+            String.duplicate("5E", 32),
+            String.duplicate("5e", 31),
+            String.duplicate("5e", 33),
+            String.duplicate("zz", 32)
+          ] do
+        with_env(%{"CYFR_SETUP_TOKEN" => bad}, fn ->
+          message = refusal!()
+
+          assert message =~
+                   "[Cyfr] FATAL: CYFR_SETUP_TOKEN must be exactly 64 lowercase hexadecimal"
+
+          refute message =~ bad
+        end)
+      end
+    end
+
     test "a pinned recovery reserve at or above the log quota stops the boot" do
       with_env(
         %{
@@ -1246,7 +1276,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       assert message =~ "must be exactly 64 lowercase hexadecimal characters"
       refute message =~ bad
 
-      # This suite's boot configured none, so it admits a first person by a door.
+      # This suite's boot configured none, so setup admits its first person.
       assert Arca.InstallationClaims.mode() == :ordinary
     end
 

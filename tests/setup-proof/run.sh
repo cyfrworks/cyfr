@@ -12,9 +12,12 @@
 # (tests/compose-proof/tailscale-standin/). Its cases, in order:
 #
 #   local    Welcome, "Only this device", which starts it: .env written
-#            and the home started, the browser moved to
-#            http://localhost:<CYFR_PORT>, the home's sign-in page, and the
-#            command exited 0, its address gone.
+#            and the home started, the browser moved to the setup link
+#            http://localhost:<CYFR_PORT>/setup#<token>, a passkey from a
+#            virtual authenticator making the first person, the handle
+#            skipped and the person in CYFR, the same link in another
+#            browser then closed, and the command exited 0, its address
+#            gone.
 #   refusal  `cyfr setup` again in that project: exit 1 with the sentence
 #            of an existing home, which points at `cyfr access`, nothing
 #            written and nothing served at the port asked for.
@@ -283,7 +286,12 @@ setup_wait 120
 [ ! -e "$WORK/$LOCAL/.cyfr/setup.url" ] || fail "cyfr setup left its address behind"
 [ "$(env_value "$LOCAL" CYFR_ACCESS)" = local ] || fail ".env says the home is reached as $(env_value "$LOCAL" CYFR_ACCESS)"
 [ "$(stat -c %a "$WORK/$LOCAL/.env")" = 600 ] || fail ".env is not mode 0600"
-ok "the home runs at http://localhost:$LOCAL_PORT, and cyfr setup exited 0"
+token="$(env_value "$LOCAL" CYFR_SETUP_TOKEN)"
+[[ "$token" =~ ^[0-9a-f]{64}$ ]] || fail ".env holds no setup token of 64 lowercase hexadecimal characters"
+if compose_in "$LOCAL" logs --no-color cyfr 2>&1 | grep -qF "$token"; then
+  fail "the cyfr service's log records the setup token"
+fi
+ok "the home runs at http://localhost:$LOCAL_PORT, set up by its first person, and cyfr setup exited 0"
 
 step "refusal: cyfr setup again where .env exists"
 port="$(free_port)"

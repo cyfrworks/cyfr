@@ -240,6 +240,21 @@ func TestServerDrawsTheLinkWhileTheJoinWaits(t *testing.T) {
 	}
 }
 
+// A done run's setup link reaches the pages as setup_url, beside the
+// address and whether the pages move there.
+func TestServerAnswersTheSetupLink(t *testing.T) {
+	const link = "http://localhost:4000/setup#" + testToken
+	f := &fakeSession{state: State{Phase: PhaseDone, Mode: "local", Address: "http://localhost:4000", SetupURL: link, Moves: true}}
+	w := request(t, NewServer(f, testToken, testPort), http.MethodGet, "/api/state", "", nil)
+	var got map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("the state answered %d %s (%v)", w.Code, w.Body, err)
+	}
+	if got["setup_url"] != link || got["address"] != "http://localhost:4000" || got["moves"] != true {
+		t.Errorf("the state answered %v, want the setup link %q", got, link)
+	}
+}
+
 // The run's end is marked read once a page has read a done or failed
 // state, and not before.
 func TestServerMarksTheEndRead(t *testing.T) {

@@ -96,6 +96,66 @@ func TestUpSurfacesTheBootRefusal(t *testing.T) {
 	}
 }
 
+// A headless CYFR serves no setup page: after its start, `cyfr up` reads
+// cyfr's log through the engine and, when the boot logged that no one is
+// set up yet, says so and that `cyfr login --setup` sets up its first
+// person. A log without that line, or one that cannot be read, adds
+// nothing, and a CYFR that is not headless reads no log.
+func TestUpSaysHowAHeadlessCYFRIsSetUp(t *testing.T) {
+	const notice = "  No one is set up on this CYFR yet: 'cyfr login --setup' in this directory sets up its first person.\n"
+	const startedAt = "2026-10-28T00:01:02.123456789Z"
+	const line = "[Cyfr] Not set up: no one is set up on this CYFR yet. Its first person, who administers it, runs `cyfr login --setup` in its directory.\n"
+	for _, c := range []struct {
+		name, env, log, exit string
+		reads, says          bool
+	}{
+		{"headless with no one set up", "CYFR_HEADLESS=on\n", "booting\n" + line, "0", true, true},
+		{"headless with its switch spaced", `CYFR_HEADLESS=" on "` + "\n", line, "0", true, true},
+		{"headless with someone set up", "CYFR_HEADLESS=on\n", "booting\n", "0", true, false},
+		{"headless with its log unread", "CYFR_HEADLESS=on\n", line, "1", true, false},
+		{"headless with no cyfr container to read", "CYFR_HEADLESS=on\n", line, "0", false, false},
+		{"not headless", "CYFR_HEADLESS=off\n", line, "0", false, false},
+		{"headless unset", "", line, "0", false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newUpdateScenario(t, shippedCompose(t), nil)
+			s.edit(".env", scenarioEnv+c.env)
+			s.answer("logs.out", c.log)
+			s.answer("logs.exit", c.exit)
+			container := "c0ffee"
+			if c.name == "headless with no cyfr container to read" {
+				container = ""
+			}
+			s.answer("ps.out", container+"\n")
+			s.answer("inspect.out", startedAt+"\n")
+			var out bytes.Buffer
+			if err := runUp(context.Background(), &out); err != nil {
+				t.Fatalf("cyfr up: %v", err)
+			}
+			started := "CYFR server started.\n  Prism:           https://cyfr.example.com/\n"
+			if says := strings.Contains(out.String(), started+notice); says != c.says || !strings.Contains(out.String(), started) || (!c.says && strings.Contains(out.String(), "No one is set up")) {
+				t.Errorf("cyfr up printed\n%s\nwant the notice after the start: %v", out.String(), c.says)
+			}
+			want := []string{"ENGINE lock up", "ENGINE resume", "ENGINE check-stack", "ENGINE start up", profiles + "up -d"}
+			if headlessEnv := strings.Contains(c.env, "on"); headlessEnv {
+				want = append(want, profiles+"ps -q cyfr")
+			}
+			if c.reads {
+				// Only the lines since the container's current start, so an
+				// earlier boot's notice is never said again.
+				want = append(want, "inspect --format {{.State.StartedAt}} c0ffee",
+					profiles+"logs --no-color --no-log-prefix --since "+startedAt+" cyfr")
+			}
+			if log := s.log(); !slices.Equal(log, want) {
+				t.Errorf("cyfr up ran\n%s\nwant\n%s", strings.Join(log, "\n"), strings.Join(want, "\n"))
+			}
+			if holder := s.engine.held(); holder != "" {
+				t.Errorf("the lock is still held, by %s", holder)
+			}
+		})
+	}
+}
+
 // `cyfr up` starts through the engine's one start path, under the lock,
 // after the stack's check, and prints the home's address from its head; a
 // start that answers a refusal, as a tailnet node that is not .env's, is

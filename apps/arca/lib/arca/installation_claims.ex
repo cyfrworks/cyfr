@@ -175,28 +175,53 @@ defmodule Arca.InstallationClaims do
   def guard!(admission, _claim) when is_binary(admission) do
     mode = mode()
     lock_order!()
+    decide(admission, mode, :locked)
+  end
 
+  @doc """
+  Whether a `setup` would be admitted now: the guard's own decision
+  (`guard!/2`) read outside any transaction and without its locks, for a
+  surface that says setup is closed before it starts a ceremony. The
+  mint decides again under the order row, so this answer is advice and
+  never authority.
+  """
+  @spec setup_open?(Prima.Actor.t()) ::
+          {:ok, boolean()} | {:error, :cross_tenant | :database_error}
+  def setup_open?(%Prima.Actor{scope: :platform}) do
+    Arca.Repo.Errors.with_db_rescue("Arca.InstallationClaims.setup_open?", fn ->
+      case decide("setup", mode(), :unlocked) do
+        :first -> {:ok, true}
+        {:readmit, _user} -> {:ok, true}
+        {:error, _closed} -> {:ok, false}
+      end
+    end)
+  end
+
+  def setup_open?(%Prima.Actor{}), do: {:error, :cross_tenant}
+
+  defp decide(admission, mode, lock) do
     cond do
       pending() != nil -> {:error, :restore_reserved}
       empty?() and mode == :restore_reserved -> {:error, :restore_reserved}
       empty?() and admission == "setup" -> :first
       empty?() -> {:error, :not_set_up}
-      admission == "setup" -> readmitted()
+      admission == "setup" -> readmitted(lock)
       true -> :ok
     end
   end
 
-  # The person setup made, while they hold no sign-in method: read under
-  # their lock, which a passkey's first-method mark, a pairing's and a link
-  # each take before they write, so a method committed first is seen and
-  # one that starts later waits for this decision.
-  defp readmitted do
+  # The person setup made, while they hold no sign-in method: under the
+  # guard, read under their lock, which a passkey's first-method mark, a
+  # pairing's and a link each take before they write, so a method
+  # committed first is seen and one that starts later waits for this
+  # decision.
+  defp readmitted(lock) do
     case Arca.Repo.one(from(u in User, where: u.admission == "setup", select: u.id)) do
       nil ->
         {:error, :setup_closed}
 
       user_id ->
-        _locked = Arca.DirectoryHeads.lock_person!(user_id)
+        if lock == :locked, do: Arca.DirectoryHeads.lock_person!(user_id)
         user = Arca.Repo.get!(User, user_id)
 
         holds_method? =

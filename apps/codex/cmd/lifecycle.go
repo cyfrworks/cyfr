@@ -60,8 +60,9 @@ func generateSecretKey() (string, error) {
 }
 
 // generateHexKey returns 32 cryptographically random bytes as 64
-// hexadecimal digits: the one form of CYFR_LOCUS_BACKENDS_KEY,
-// CYFR_LOCUS_RUNTIME_ROOT and CYFR_LOCUS_BUILDS_KEY that cyfr and each service accept.
+// lowercase hexadecimal digits: the one form of CYFR_LOCUS_BACKENDS_KEY,
+// CYFR_LOCUS_RUNTIME_ROOT and CYFR_LOCUS_BUILDS_KEY that cyfr and each service accept,
+// and of CYFR_SETUP_TOKEN, which cyfr takes in lowercase alone.
 func generateHexKey() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -74,6 +75,7 @@ func generateHexKey() (string, error) {
 const (
 	secretKeyBaseVar = "CYFR_SECRET_KEY_BASE"
 	backendsKeyVar   = "CYFR_LOCUS_BACKENDS_KEY"
+	setupTokenVar    = "CYFR_SETUP_TOKEN"
 	workerRootVar    = "CYFR_LOCUS_RUNTIME_ROOT"
 	serviceIDVar     = "LOCUS_RUNTIME_SERVICE_ID"
 	serviceKeyVar    = "LOCUS_RUNTIME_KEY"
@@ -165,6 +167,11 @@ func stackKeys(values map[string]string) (map[string]string, []envChange, error)
 	}
 	if values[backendsKeyVar] == "" {
 		if err := mint(backendsKeyVar, "generated", generateHexKey); err != nil {
+			return nil, nil, err
+		}
+	}
+	if values[setupTokenVar] == "" {
+		if err := mint(setupTokenVar, "generated", generateHexKey); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -406,7 +413,7 @@ Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime 
 
 How CYFR is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. .env is written for this computer only, with every key; then, for tailnet access, the machine joins your tailnet (the link it prints approves the machine, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves CYFR reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: access is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional).
 
-.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
+.env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with a passkey. A headless CYFR (CYFR_HEADLESS=on) serves no page, so its first person runs 'cyfr login --setup' in this directory instead. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
 Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml.`,
 	Example: `  cyfr init
@@ -595,6 +602,7 @@ database_path: ./data/cyfr.db
 	envCreated := false
 	sel := existingSelection(".env")
 	var head access.Head
+	var envValues map[string]string
 	if asked && fileExists(".env.example") {
 		face.begin(initStepSettings)
 		text, changes, d, err := newEnv(".env.example")
@@ -603,6 +611,9 @@ database_path: ./data/cyfr.db
 		}
 		if err := writeFileAtomic(".env", text, 0600); err != nil {
 			return fmt.Errorf("Failed to write .env: %w", err)
+		}
+		if envValues, err = access.ReadEnvValues(".env"); err != nil {
+			return fmt.Errorf("Failed to read .env: %w", engineFailure(err))
 		}
 		envCreated = true
 		envChanges = changes
@@ -749,11 +760,42 @@ database_path: ./data/cyfr.db
 		fmt.Fprintln(out, "Next: get docker-compose.yml + Caddyfile (a released CLI or a repo checkout), then 'cyfr up'.")
 	}
 	if envCreated {
-		fmt.Fprintln(out, "  Prism:           "+hyperlink(out, access.Describe(head).Address+"/"))
+		setupNext(out, head, envValues)
 	} else {
 		fmt.Fprintln(out, "  `cyfr access status` shows how CYFR is reached.")
 	}
 	return accessErr
+}
+
+// headlessVar is the switch that makes CYFR headless: the API and /mcp,
+// and no browser page.
+const headlessVar = "CYFR_HEADLESS"
+
+// headless reports whether .env's values make CYFR headless, CYFR_HEADLESS
+// read as the server's switch reads it (Prima.EnvValue.switch): `on`, white
+// space around it aside.
+func headless(values map[string]string) bool {
+	return strings.TrimSpace(values[headlessVar]) == "on"
+}
+
+// setupLink is the link that sets up the first person of the CYFR at
+// address with the setup token .env's values hold: its setup page, the
+// token in the fragment, which no request carries and so no server log
+// records.
+func setupLink(address string, values map[string]string) string {
+	return address + "/setup#" + strings.TrimSpace(values[setupTokenVar])
+}
+
+// setupNext says how the first person of the new CYFR at head is set up:
+// through the setup link, or on a headless CYFR, which serves no page, by
+// `cyfr login --setup`.
+func setupNext(out io.Writer, head access.Head, values map[string]string) {
+	if headless(values) {
+		fmt.Fprintln(out, "  CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.")
+		return
+	}
+	fmt.Fprintln(out, "  Setup link:      "+hyperlink(out, setupLink(access.Describe(head).Address, values)))
+	fmt.Fprintln(out, "  Once CYFR is up, the setup link sets up its first person, who administers it, with a passkey.")
 }
 
 // leftLocal is what a new home whose mode was not applied is told: it is
@@ -1148,7 +1190,7 @@ var upCmd = &cobra.Command{
 
 The stack is cyfr (the one endpoint: Prism, API, MCP, tinctures), locus-runtime (the runtime that runs components), locus-builds (the builds service that compiles components and tinctures), locus-backends (the backends service that runs the stdio/npx MCP servers an athanor adds on Prism's "MCP Servers" page, each backend under a uid and a memory bound of its own; cyfr tells it what to run), and the proxy of the way CYFR is reached: tailscale for tailnet access (Tailscale Serve, HTTPS at the machine's tailnet name) and caddy for public access (TLS on :80/:443).
 
-cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1.
+cyfr, locus-runtime and locus-backends always start. locus-builds starts when CYFR_LOCUS_BUILDS_URL in .env names it (http://locus-builds:4100, which 'cyfr init' writes). CYFR_ACCESS in .env chooses the proxy: none for local, where Prism is at http://localhost:<CYFR_PORT>, tailscale for tailnet and caddy for public. cyfr up first takes the stack's lock and finishes a change an interrupted command left, then refuses a .env whose settings contradict how CYFR is reached, with the sentence the server would refuse it with, before anything starts. With tailnet access, CYFR is served on the tailnet only once the machine's tailnet identity is the one .env names. A start that fails says why, with the server's own refusal from its log when it gave one, and exits 1. A headless CYFR (CYFR_HEADLESS=on) serves no setup page: when its log says no one is set up on it yet, cyfr up says so after the start, and that 'cyfr login --setup' in this directory sets up its first person.
 
 Exit status 3: cyfr started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do.`,
 	Example: `  cyfr up`,
@@ -1206,6 +1248,7 @@ func runUp(ctx context.Context, out io.Writer) error {
 	if local := (startedLocally{}); startErr != nil && !errors.As(startErr, &local) {
 		startErr = withBootFatal(ctx, e, head, startErr)
 	}
+	noOneYet := startErr == nil && headlessNotSetUp(ctx, e, head)
 	release()
 	select {
 	case <-interrupts:
@@ -1217,6 +1260,9 @@ func runUp(ctx context.Context, out io.Writer) error {
 	}
 	fmt.Fprintln(out, "CYFR server started.")
 	fmt.Fprintln(out, "  Prism:           "+hyperlink(out, access.Describe(head).Address+"/"))
+	if noOneYet {
+		fmt.Fprintln(out, "  No one is set up on this CYFR yet: 'cyfr login --setup' in this directory sets up its first person.")
+	}
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Optional next steps:")
 	fmt.Fprintln(out, "  cyfr login      authenticate this CLI")
@@ -1234,13 +1280,7 @@ const bootFatalMarker = "[Cyfr] FATAL:"
 // release reads, such as a retired name, is refused there, and the start
 // alone sees no more than an unhealthy container.
 func withBootFatal(ctx context.Context, e stackEngine, head access.Head, startErr error) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), composeRunTimeout)
-	defer cancel()
-	args, err := e.ComposeArgs(ctx, head, "logs", "--no-color", "--no-log-prefix", "--tail", "200", "cyfr")
-	if err != nil {
-		return startErr
-	}
-	res, err := e.Docker().Run(ctx, access.Call{Args: args, Deadline: composeRunTimeout})
+	res, err := cyfrLog(ctx, e, head)
 	if err != nil {
 		return startErr
 	}
@@ -1254,6 +1294,67 @@ func withBootFatal(ctx context.Context, e stackEngine, head access.Head, startEr
 		return startErr
 	}
 	return fmt.Errorf("%w\ncyfr refused to boot, and its log says why:\n  %s", startErr, e.Redactor().Text(fatal))
+}
+
+// notSetUpMarker begins the line the boot of a CYFR with no person yet
+// logs (Cyfr.Application.not_set_up_marker/0).
+const notSetUpMarker = "[Cyfr] Not set up:"
+
+// headlessNotSetUp reports whether .env makes CYFR headless, so that no
+// setup page sets up its first person, and the cyfr service's log, read
+// under the lock, holds the boot's line for a CYFR with no person yet. A
+// log that cannot be read holds none.
+func headlessNotSetUp(ctx context.Context, e stackEngine, head access.Head) bool {
+	values, err := access.ReadEnvValues(".env")
+	if err != nil || !headless(values) {
+		return false
+	}
+	res, err := cyfrLogSinceStart(ctx, e, head)
+	return err == nil && res.ExitCode == 0 &&
+		strings.Contains(string(res.Stdout)+"\n"+string(res.Stderr), notSetUpMarker)
+}
+
+// cyfrLogSinceStart is the cyfr service's log since its container's
+// current start (its StartedAt), so a notice an earlier boot logged is
+// never read as this one's.
+func cyfrLogSinceStart(ctx context.Context, e stackEngine, head access.Head) (access.Result, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), composeRunTimeout)
+	defer cancel()
+	run := func(args []string) (string, error) {
+		res, err := e.Docker().Run(ctx, access.Call{Args: args, Deadline: composeRunTimeout})
+		if err == nil && res.ExitCode != 0 {
+			err = fmt.Errorf("docker %s exited %d", args[0], res.ExitCode)
+		}
+		return strings.TrimSpace(string(res.Stdout)), err
+	}
+	args, err := e.ComposeArgs(ctx, head, "ps", "-q", "cyfr")
+	if err != nil {
+		return access.Result{}, err
+	}
+	id, err := run(args)
+	if err != nil || id == "" || strings.ContainsAny(id, " \n") {
+		return access.Result{}, errors.New("no one cyfr container to read")
+	}
+	started, err := run([]string{"inspect", "--format", "{{.State.StartedAt}}", id})
+	if err != nil || started == "" {
+		return access.Result{}, errors.New("the cyfr container's start is not known")
+	}
+	if args, err = e.ComposeArgs(ctx, head, "logs", "--no-color", "--no-log-prefix", "--since", started, "cyfr"); err != nil {
+		return access.Result{}, err
+	}
+	return e.Docker().Run(ctx, access.Call{Args: args, Deadline: composeRunTimeout})
+}
+
+// cyfrLog is the cyfr service's last 200 log lines, read through the
+// engine's compose selection and Docker runner.
+func cyfrLog(ctx context.Context, e stackEngine, head access.Head) (access.Result, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), composeRunTimeout)
+	defer cancel()
+	args, err := e.ComposeArgs(ctx, head, "logs", "--no-color", "--no-log-prefix", "--tail", "200", "cyfr")
+	if err != nil {
+		return access.Result{}, err
+	}
+	return e.Docker().Run(ctx, access.Call{Args: args, Deadline: composeRunTimeout})
 }
 
 var downCmd = &cobra.Command{

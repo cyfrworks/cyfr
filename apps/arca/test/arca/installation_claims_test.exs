@@ -156,6 +156,7 @@ defmodule Arca.InstallationClaimsTest do
   end
 
   defp people, do: Arca.Repo.aggregate(User, :count)
+  defp open?, do: InstallationClaims.setup_open?(server())
   defp claims, do: Arca.Repo.aggregate(InstallationClaim, :count)
 
   describe "the installed mode" do
@@ -322,6 +323,40 @@ defmodule Arca.InstallationClaimsTest do
         Arca.Repo.transaction(fn -> InstallationClaims.end!(attrs.request_id, "completed") end)
 
       assert {:error, :setup_closed} = mint()
+    end
+  end
+
+  describe "setup_open?/1, the guard's answer read without its locks" do
+    test "answers what a setup's mint would: open on an empty node and for a person with no method" do
+      assert {:ok, true} = open?()
+      {:ok, %{id: first}} = mint()
+      assert {:ok, true} = open?()
+
+      identity_row!(first)
+
+      {:ok, :marked} =
+        Arca.Repo.transaction(fn -> Arca.PersonIdentities.first_method!(first) end)
+
+      assert {:ok, false} = open?()
+      assert {:error, :setup_closed} = mint()
+    end
+
+    test "is closed under :restore_reserved, while a claim is pending, and to any actor but the platform's" do
+      :ok = InstallationClaims.install_mode!(:restore_reserved)
+      assert {:ok, false} = open?()
+
+      :ok = InstallationClaims.install_mode!(:ordinary)
+      {:ok, _} = open(restore())
+      assert {:ok, false} = open?()
+
+      assert {:error, :cross_tenant} =
+               InstallationClaims.setup_open?(%Prima.Actor{user_id: "per_x"})
+    end
+
+    test "reads and writes nothing it holds: no row is added" do
+      before = {people(), claims()}
+      assert {:ok, true} = open?()
+      assert {people(), claims()} == before
     end
   end
 

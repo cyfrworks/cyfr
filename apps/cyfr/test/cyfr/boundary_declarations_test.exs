@@ -144,6 +144,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           UnauthorizedError Vault Vault.OAuthGrant VaultReader),
        "the identity, authority, consent and vault entries the layers above call " <>
          "downward, each rostered for its callers in `Cyfr.Boundaries`' surface rows"},
+      {~w(Handle Newcomer),
+       "the setup page's first-person admission (`Newcomer`) and the identity card's " <>
+         "live handle check (`Handle`), each rostered for its callers in `Cyfr.Boundaries`' " <>
+         "surface rows"},
       {~w(Consent.Components Proxy Tenancy.Caps),
        "the ports the composition root installs: component facts, proxied tool " <>
          "resolution and the storage cap"},

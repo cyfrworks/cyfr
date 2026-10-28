@@ -123,6 +123,27 @@ defmodule Sanctum.Newcomer do
     end
   end
 
+  @doc """
+  Whether `token` opens setup now: it is the configured setup token, and
+  a setup would be admitted (`Arca.InstallationClaims.setup_open?/1`).
+  The setup page asks before it starts a passkey ceremony, so a link that
+  is not valid, or a CYFR set up already, creates no passkey; the
+  admission decides again in its transaction. One refusal for both, as
+  the admission answers, so a guesser learns nothing from it.
+  """
+  @spec setup_open(term()) :: :ok | {:error, :setup_closed | :unavailable}
+  def setup_open(token) when is_binary(token) do
+    with :ok <- admissible({:setup, token}) do
+      case Arca.InstallationClaims.setup_open?(Prima.Actor.system()) do
+        {:ok, true} -> :ok
+        {:ok, false} -> {:error, :setup_closed}
+        {:error, _unanswered} -> {:error, :unavailable}
+      end
+    end
+  end
+
+  def setup_open(_token), do: {:error, :setup_closed}
+
   # ---- before the transaction ----------------------------------------------
 
   # A missing token is refused as a wrong one is.
