@@ -246,7 +246,9 @@ class Stack(imagesuite.Stack):
 
     def guard_counters(self):
         """The packets each of the guard's rules has matched, by the rule's text, both families."""
-        return guard_counters(self.guard_exec("iptables-save -c -t filter; ip6tables-save -c -t filter").stdout)
+        saved = read_output(self.guard_exec("iptables-save -c -t filter && ip6tables-save -c -t filter"),
+                            "the builds guard's rule counters")
+        return guard_counters(saved)
 
     def inspect(self, container):
         return json.loads(run("docker", "inspect", container).stdout)[0]
