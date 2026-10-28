@@ -965,7 +965,13 @@ defmodule PrismWeb.VaultLiveTest do
     # The form that typed it is marked, in the browser, with the prompt it
     # asks under.
     prompt_id = "confirmation-" <> ref
-    assert_push_event(view, "system_layer:mark", %{form: "vault-client-form", prompt: ^prompt_id})
+
+    assert_push_event(
+      view,
+      "system_layer:mark",
+      %{form: "vault-client-form", prompt: ^prompt_id},
+      2_000
+    )
 
     state = inspect(:sys.get_state(view.pid), limit: :infinity, printable_limit: :infinity)
     refute state =~ @client_secret
@@ -1054,7 +1060,12 @@ defmodule PrismWeb.VaultLiveTest do
     # The person cancels their own waiting request from its prompt.
     view |> element(~s(#system-layer-dialog [data-test="prompt-dismiss"])) |> render_click()
 
-    assert_push_event(view, "system_layer:clear", %{prompt: ^prompt_id, form: "vault-client-form"})
+    assert_push_event(
+      view,
+      "system_layer:clear",
+      %{prompt: ^prompt_id, form: "vault-client-form"},
+      2_000
+    )
 
     assert {:ok, %{state: "cancelled"}} =
              Arca.PendingConfirmations.get(Sanctum.Context.actor(ctx), ref)

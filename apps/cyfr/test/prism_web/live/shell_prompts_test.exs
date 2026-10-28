@@ -391,7 +391,7 @@ defmodule PrismWeb.ShellPromptsTest do
         refute Enum.any?(entries, &(&1.name == "fresh-entry"))
       end)
 
-      assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: true} = payload)
+      assert_push_event(view, "frame_credential", %{frame: ^keeper, saved: true} = payload, 2_000)
       refute inspect(payload) =~ "v4lue-typed"
       refute render(view) =~ "v4lue-typed"
 

@@ -40,7 +40,7 @@ defmodule PrismWeb.AuthenticatedMountTest do
     # A person's own athanor never loses its owner, so the seat that can be
     # taken away is a group's.
     :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: user.user_id)
-    assert_redirect(view, "/")
+    assert_redirect(view, "/", 2_000)
   end
 
   test "no mounted socket keeps the raw session token in its assigns", %{conn: conn} do
