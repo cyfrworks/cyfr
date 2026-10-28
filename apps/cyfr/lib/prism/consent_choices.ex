@@ -907,8 +907,9 @@ defmodule Prism.ConsentChoices do
 
   # The default an account sits beside: the app's need's, as it stands; a
   # dependency's, which a profile lending its key is first switched to the
-  # entry that profile lends, since an account sits beside an entry
-  # chosen here. Answers the choices and the default's need.
+  # entry that profile lends, under the field map that profile binds it
+  # with, since an account sits beside an entry chosen here. Answers the
+  # choices and the default's need.
   def account_default(_plan, choices, {:need, _need}), do: {:ok, choices, nil}
 
   def account_default(plan, choices, {:dep, from, dep}) do
@@ -916,10 +917,12 @@ defmodule Prism.ConsentChoices do
 
     case Map.get(choices, slot) do
       %{source: "label", id: label} = default ->
-        with {:ok, source, id, need} <- switch_lent(dep_row(plan, from, dep), dep, label) do
+        with {:ok, source, id, need, fields} <-
+               switch_lent(dep_row(plan, from, dep), dep, label) do
           switched =
             %{default | source: source, id: id, need: need, renew: false}
             |> Map.put(:lent_by, label)
+            |> put_fields(fields)
 
           {:ok, Map.put(choices, slot, switched), need}
         end
@@ -933,9 +936,9 @@ defmodule Prism.ConsentChoices do
   end
 
   # The entry the `label` profile lends, as the plan's lender candidate
-  # names it, and the dependency's need it fills: none to name where the
-  # dependency declares one need, else the one need whose candidates hold
-  # it.
+  # names it, the field map it lends it under, and the dependency's need
+  # it fills: none to name where the dependency declares one need, else
+  # the one need whose candidates hold it.
   defp switch_lent(row, dep, label) do
     lender =
       row |> field(:candidates) |> List.wrap() |> Enum.find(&(field(&1, :label) == label))
@@ -943,12 +946,14 @@ defmodule Prism.ConsentChoices do
     with %{} <- lender,
          id when is_binary(id) <- field(lender, :entry_id),
          source when source in ["own", "instance"] <- field(lender, :source) do
+      fields = field(lender, :fields)
+
       case {row_needs(row), Enum.filter(row_needs(row), &holds?(&1, id))} do
         {[_one], _holding} ->
-          {:ok, source, id, nil}
+          {:ok, source, id, nil, fields}
 
         {_several, [need]} ->
-          {:ok, source, id, field(need, :need)}
+          {:ok, source, id, field(need, :need), fields}
 
         _cannot_tell ->
           {:error,

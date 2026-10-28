@@ -1993,12 +1993,37 @@ defmodule PrismWeb.SystemLayerTest do
     end
 
     test "adding an account beside a lent default first switches the default to the entry " <>
-           "its lender lends",
+           "its lender lends, under the lender's field map",
          %{view: view, ctx: ctx} do
-      %{local: local, caller: caller, dep: dep, keys: {first, second, _third}} = named_world(ctx)
+      %{local: local, caller: caller, dep: dep, keys: {first, _second, _third}} = named_world(ctx)
 
-      {:ok, _} = commit_with!(local, dep, %{bindings: [%{need: "api_key", entry_id: second.id}]})
+      # The lender binds its key under a map that renames the field, which
+      # the switched default keeps.
+      lent =
+        entry!(local, %{
+          name: "named key renamed",
+          provider_hint: "named.test",
+          fields: %{"NAMED_KEY" => "sk-named", "ALT_KEY" => "sk-alt"},
+          destination: %{"hosts" => ["api.named.example"]}
+        })
+
+      {:ok, _} =
+        commit_with!(local, dep, %{
+          bindings: [%{need: "api_key", entry_id: lent.id, fields: %{"NAMED_KEY" => "ALT_KEY"}}]
+        })
+
       {:ok, _} = commit_with!(local, caller, %{selections: [%{dep: dep, label: "default"}]})
+
+      # Opened for an account, the default is switched before the prompt shows.
+      {:ok, for_account} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-lent-account", caller,
+          account: %{name: "Home", dep: dep}
+        )
+
+      assert %{"entry_id" => lent_id, "fields" => %{"NAMED_KEY" => "ALT_KEY"}} =
+               Enum.find(for_account.subject.decisions["selections"], &is_nil(&1["name"]))
+
+      assert lent_id == lent.id
 
       {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-lent", caller)
       assert [%{"label" => "default"}] = grant.subject.decisions["selections"]
@@ -2006,8 +2031,11 @@ defmodule PrismWeb.SystemLayerTest do
 
       click(view, ~s([data-test="grant-add-account"][data-edge="#{dep}"]))
 
-      assert [%{"dep" => ^dep, "entry_id" => lent}] = decisions_now(view)["selections"]
-      assert lent == second.id
+      assert [%{"dep" => ^dep, "entry_id" => lent_id, "fields" => fields}] =
+               decisions_now(view)["selections"]
+
+      assert lent_id == lent.id
+      assert fields == %{"NAMED_KEY" => "ALT_KEY"}
 
       assert has_element?(
                view,
@@ -2029,7 +2057,7 @@ defmodule PrismWeb.SystemLayerTest do
 
       {_profile, head} = head_rows(local, caller)
 
-      assert %{"#{caller}|#{dep}|default" => second.id, "#{caller}|#{dep}|name:Home" => first.id} ==
+      assert %{"#{caller}|#{dep}|default" => lent.id, "#{caller}|#{dep}|name:Home" => first.id} ==
                Map.new(head.vault_refs, &{&1.binding_key, &1.vault_entry_id})
     end
 
