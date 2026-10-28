@@ -10,8 +10,12 @@ defmodule Arca.CompanyLoginAttempts do
   needs, and its expiry on the database's clock.
 
   A person holds at most one: `open/2` deletes their earlier rows in the
-  transaction that inserts the new one, so nothing else sweeps them, and
-  every row goes with the person's `users` row.
+  transaction that inserts the new one, under the person's lock, so
+  nothing else sweeps them, and every row goes with the person's `users`
+  row. The binding a consumed attempt leads to spends it under the same
+  lock (`spend!/2`, inside `Arca.CompanyAuthorizations.bind/3`), so a
+  start that replaces an attempt and the binding of that attempt never
+  both commit.
 
   `consume/3` answers a row once: a conditional write that marks it
   consumed only while it is unconsumed, unexpired and the presenting
@@ -47,6 +51,7 @@ defmodule Arca.CompanyLoginAttempts do
       when is_integer(lifetime_ms) and lifetime_ms > 0 do
     Arca.Repo.Errors.with_db_rescue("Arca.CompanyLoginAttempts.open", fn ->
       fn ->
+        _person = Arca.DirectoryHeads.lock_person!(attrs.user_id)
         now = Arca.ServerMetaStorage.now!()
 
         Arca.Repo.delete_all(from(a in CompanyLoginAttempt, where: a.user_id == ^attrs.user_id))
@@ -117,4 +122,22 @@ defmodule Arca.CompanyLoginAttempts do
   end
 
   def consume(%Prima.Actor{}, _state_hash, _session_hash), do: {:error, :cross_tenant}
+
+  @doc false
+  # A step of `Arca.CompanyAuthorizations.bind/3`'s transaction, under the
+  # person's lock: delete the consumed attempt `id` of `user_id`, or answer
+  # `{:error, :attempt_replaced}` when a later start already deleted it.
+  @spec spend!(String.t(), String.t()) :: :ok | {:error, :attempt_replaced}
+  # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
+  def spend!(user_id, id) when is_binary(user_id) and is_binary(id) do
+    spent =
+      from(a in CompanyLoginAttempt,
+        where: a.id == ^id and a.user_id == ^user_id and not is_nil(a.consumed_at)
+      )
+
+    case Arca.Repo.delete_all(spent) do
+      {1, _} -> :ok
+      {0, _} -> {:error, :attempt_replaced}
+    end
+  end
 end

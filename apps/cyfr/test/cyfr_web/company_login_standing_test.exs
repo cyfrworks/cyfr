@@ -80,14 +80,10 @@ defmodule CyfrWeb.CompanyLoginStandingTest do
     {:ok, {client_id, _secret}} = Sanctum.Auth.OIDC.client_credentials()
 
     assert {:ok, _bound} =
-             Arca.CompanyAuthorizations.bind(
-               Prima.Actor.system(),
-               %{
-                 user_id: user_id,
-                 configuration: Jason.encode!(["oidc", @issuer, client_id]),
-                 subject: "sub-#{System.unique_integer([:positive])}"
-               },
-               verify: fn -> :ok end
+             Arca.Test.CompanyLogin.bind(
+               user_id,
+               Jason.encode!(["oidc", @issuer, client_id]),
+               "sub-#{System.unique_integer([:positive])}"
              )
 
     :ok

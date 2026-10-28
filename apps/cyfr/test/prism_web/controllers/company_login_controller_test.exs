@@ -167,11 +167,7 @@ defmodule PrismWeb.CompanyLoginControllerTest do
   # CYFR names.
   defp bound!(user_id, subject) do
     assert {:ok, :bound} =
-             Arca.CompanyAuthorizations.bind(
-               Prima.Actor.system(),
-               %{user_id: user_id, configuration: configuration(), subject: subject},
-               verify: fn -> :ok end
-             )
+             Arca.Test.CompanyLogin.bind(user_id, configuration(), subject)
 
     :ok
   end

@@ -268,11 +268,7 @@ defmodule Sanctum.CompanyLoginTest do
   # verify.
   defp bind!(user_id, configuration \\ @oidc, subject \\ "sub-1") do
     {:ok, _bound_or_refreshed} =
-      Arca.CompanyAuthorizations.bind(
-        Prima.Actor.system(),
-        %{user_id: user_id, configuration: configuration, subject: subject},
-        verify: fn -> :ok end
-      )
+      Arca.Test.CompanyLogin.bind(user_id, configuration, subject)
 
     :ok
   end
@@ -658,6 +654,28 @@ defmodule Sanctum.CompanyLoginTest do
   # ---------------------------------------------------------------------------
 
   describe "a company sign-in" do
+    # A later start replaces the earlier attempt, and the binding spends
+    # its attempt under the person's lock: the replaced attempt's exchange,
+    # answering after the replacement, binds nothing, and the later
+    # attempt binds its own subject.
+    test "an exchange from an attempt replaced by a newer start cannot bind first", %{
+      user: user,
+      token: token
+    } do
+      require!(:join)
+      earlier = begun!(token)
+
+      exchange =
+        exchanging!(callback(earlier, {:ok, claims(earlier, "subject-earlier")}, :hold), token)
+
+      later = begun!(token)
+      old_answer = released(exchange)
+      new_answer = CompanyLogin.complete(signed_in(later, "subject-later"), token)
+
+      assert {old_answer, new_answer, authorization(user.id).subject} ==
+               {{:error, :attempt_invalid}, {:ok, :bound}, "subject-later"}
+    end
+
     test "start/1 asks the issuer for an ordinary login carrying the attempt", %{
       user: user,
       token: token
@@ -707,7 +725,9 @@ defmodule Sanctum.CompanyLoginTest do
       assert %CompanyAuthorization{configuration: @oidc, subject: "sub-1"} =
                authorization(user.id)
 
-      assert %DateTime{} = attempt!(user.id).consumed_at
+      assert Arca.Repo.all(from(a in CompanyLoginAttempt, where: a.user_id == ^user.id)) == [],
+             "the binding spent its attempt"
+
       assert {:ok, %Context{}} = Caller.establish({:session, token}, refresh: false)
     end
 

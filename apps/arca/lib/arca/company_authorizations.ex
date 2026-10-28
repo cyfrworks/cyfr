@@ -15,8 +15,14 @@ defmodule Arca.CompanyAuthorizations do
   (`Sanctum.CompanyLogin`).
 
   `bind/3` writes in one transaction that proves this member still owns
-  its slot (`Arca.Repo.owned/2`), locks the person, runs the caller's
-  `verify:` closure, then decides on the row as it is under that lock:
+  its slot (`Arca.Repo.owned/2`) and locks the person. Under that lock it
+  spends the company sign-in attempt the binding comes from
+  (`Arca.CompanyLoginAttempts.spend!/2`): one a later start replaced is
+  gone, and the binding is refused `:attempt_replaced`. A start takes the
+  same lock before it replaces an attempt, so a replacement and the
+  binding of the attempt it replaces never both commit. Then it runs the
+  caller's `verify:` closure and decides on the row as it is under that
+  lock:
 
     * a row under the same configuration: the subject must be the row's,
       and `authorized_at` moves to the database's clock (`:refreshed`);
@@ -60,28 +66,35 @@ defmodule Arca.CompanyAuthorizations do
 
   @doc """
   Bind or refresh `user_id`'s company sign-in under `configuration` and
-  `subject` (the module doc). `verify:` runs first under the person's
-  lock, inside the transaction, and answers `:ok` or `{:error, reason}`,
+  `subject`, from the consumed attempt `attempt_id` (the module doc).
+  The attempt is spent first under the person's lock, then `verify:`
+  runs, inside the transaction, and answers `:ok` or `{:error, reason}`,
   which rolls it back. Answers `{:ok, :bound}` or `{:ok, :refreshed}`,
-  or `:subject_bound`, `:not_owner`, `:cross_tenant`,
-  `:database_error` or the closure's reason. The platform's own actor
-  alone binds.
+  or `:attempt_replaced`, `:subject_bound`, `:not_owner`,
+  `:cross_tenant`, `:database_error` or the closure's reason. The
+  platform's own actor alone binds.
   """
   @spec bind(Prima.Actor.t(), map(), keyword()) ::
           {:ok, :bound | :refreshed} | {:error, term()}
   def bind(
         %Prima.Actor{scope: :platform, system: true},
-        %{user_id: user_id, configuration: configuration, subject: subject},
+        %{
+          user_id: user_id,
+          attempt_id: attempt_id,
+          configuration: configuration,
+          subject: subject
+        },
         opts
       )
-      when is_binary(user_id) and is_binary(configuration) and is_binary(subject) and
-             is_list(opts) do
+      when is_binary(user_id) and is_binary(attempt_id) and is_binary(configuration) and
+             is_binary(subject) and is_list(opts) do
     verify = Keyword.fetch!(opts, :verify)
 
     Arca.Repo.owned("Arca.CompanyAuthorizations.bind", fn ->
       _person = Arca.DirectoryHeads.lock_person!(user_id)
 
-      with :ok <- verify.() do
+      with :ok <- Arca.CompanyLoginAttempts.spend!(user_id, attempt_id),
+           :ok <- verify.() do
         now = Arca.ServerMetaStorage.now!()
 
         case Arca.Repo.get(CompanyAuthorization, user_id) do

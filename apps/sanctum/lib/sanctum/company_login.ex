@@ -46,14 +46,17 @@ defmodule Sanctum.CompanyLogin do
     2. it exchanges the code with the issuer outside any transaction
        (ARCHITECTURE.md §4.4: a transaction's closures call no network);
     3. in the transaction that binds (`Arca.CompanyAuthorizations.bind/3`)
-       it reads again, under the person's lock, the session's standing
-       (it still exists, is the attempt's person's, and is refused for
-       nothing but this condition) and the company configuration (the one
-       the exchange answered under). Only then is the subject bound or
-       its binding refreshed.
+       it spends the attempt under the person's lock, which fails for an
+       attempt a later start replaced, and reads again the session's
+       standing (it still exists, is the attempt's person's, and is
+       refused for nothing but this condition) and the company
+       configuration (the one the exchange answered under). Only then is
+       the subject bound or its binding refreshed.
 
   A revocation, a denial or a sign-out that commits during the exchange
-  is read by step 3, and nothing is bound. Whatever happens after step 1,
+  is read by step 3, and nothing is bound. So is a later start: it
+  replaces the attempt under the same lock, so the replaced attempt's
+  exchange binds nothing and the later attempt is free to bind. Whatever happens after step 1,
   the attempt stays consumed, so the person starts again from the page.
 
   ## The binding
@@ -209,7 +212,7 @@ defmodule Sanctum.CompanyLogin do
   @doc """
   Begin a company sign-in for the session `token` (`held/1`): open its
   attempt and answer the issuer's URL. A new attempt replaces the
-  person's earlier one. Refusals: `held/1`'s, `:not_required` when no
+  person's earlier one, whose exchange then binds nothing. Refusals: `held/1`'s, `:not_required` when no
   company sign-in is configured, `:unavailable`.
   """
   @spec start(String.t() | nil) :: {:ok, String.t()} | {:error, term()}
@@ -242,8 +245,8 @@ defmodule Sanctum.CompanyLogin do
   Finish a company sign-in from the issuer's callback `params`, presented
   with the session `token` (the module doc's three steps). Answers
   `{:ok, :bound}` or `{:ok, :refreshed}`, or a refusal: `:attempt_invalid`
-  (no attempt for this state and session: unknown, consumed, expired, or
-  another session's), `:issuer_refused`, `:wrong_organization`,
+  (no attempt for this state and session: unknown, consumed, expired,
+  another session's, or replaced by a later start before it bound), `:issuer_refused`, `:wrong_organization`,
   `:session_ended` (the session no longer stands but for this
   condition), `:configuration_changed`, `:company_subject_bound`,
   `:not_required` or `:unavailable`. Nothing is bound on a refusal, and
@@ -304,11 +307,17 @@ defmodule Sanctum.CompanyLogin do
 
     case Arca.CompanyAuthorizations.bind(
            Prima.Actor.system(),
-           %{user_id: row.user_id, configuration: encode(configuration), subject: subject},
+           %{
+             user_id: row.user_id,
+             attempt_id: row.id,
+             configuration: encode(configuration),
+             subject: subject
+           },
            verify: fn -> still(row, configuration) end
          ) do
       {:ok, outcome} -> {:ok, outcome}
       {:error, :subject_bound} -> {:error, :company_subject_bound}
+      {:error, :attempt_replaced} -> {:error, :attempt_invalid}
       {:error, reason} when reason in [:session_ended, :configuration_changed] -> {:error, reason}
       {:error, _unanswered} -> {:error, :unavailable}
     end

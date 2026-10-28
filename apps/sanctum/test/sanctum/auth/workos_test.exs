@@ -462,11 +462,7 @@ defmodule Sanctum.Auth.WorkOSTest do
 
   defp bind!(user_id, configuration, subject) do
     assert {:ok, :bound} =
-             Arca.CompanyAuthorizations.bind(
-               Prima.Actor.system(),
-               %{user_id: user_id, configuration: Jason.encode!(configuration), subject: subject},
-               verify: fn -> :ok end
-             )
+             Arca.Test.CompanyLogin.bind(user_id, Jason.encode!(configuration), subject)
   end
 
   defp token_body(profile), do: elem(WorkOSStub.token(profile), 1)

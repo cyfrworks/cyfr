@@ -49,13 +49,8 @@ defmodule Arca.CompanyAuthorizationsTest do
     person.id
   end
 
-  defp bind(user_id, configuration, subject, verify \\ fn -> :ok end) do
-    CompanyAuthorizations.bind(
-      server(),
-      %{user_id: user_id, configuration: configuration, subject: subject},
-      verify: verify
-    )
-  end
+  defp bind(user_id, configuration, subject, verify \\ fn -> :ok end),
+    do: Arca.Test.CompanyLogin.bind(user_id, configuration, subject, verify: verify)
 
   defp row(user_id), do: Arca.Repo.get(CompanyAuthorization, user_id)
 
@@ -83,11 +78,39 @@ defmodule Arca.CompanyAuthorizationsTest do
     assert {:error, :cross_tenant} =
              CompanyAuthorizations.bind(
                %Prima.Actor{user_id: user_id},
-               %{user_id: user_id, configuration: @oidc, subject: "sub-1"},
+               %{
+                 user_id: user_id,
+                 attempt_id: Arca.Test.CompanyLogin.consumed_attempt(user_id),
+                 configuration: @oidc,
+                 subject: "sub-1"
+               },
                verify: fn -> :ok end
              )
 
     assert row(user_id) == nil
+  end
+
+  test "spends its attempt, and an attempt a later start replaced binds nothing" do
+    user_id = person!()
+    replaced = Arca.Test.CompanyLogin.consumed_attempt(user_id)
+    current = Arca.Test.CompanyLogin.consumed_attempt(user_id)
+
+    bind = fn attempt_id, subject ->
+      CompanyAuthorizations.bind(
+        server(),
+        %{user_id: user_id, attempt_id: attempt_id, configuration: @oidc, subject: subject},
+        verify: fn -> :ok end
+      )
+    end
+
+    assert {:error, :attempt_replaced} = bind.(replaced, "sub-replaced")
+    assert row(user_id) == nil
+
+    assert {:ok, :bound} = bind.(current, "sub-current")
+    assert %{subject: "sub-current"} = row(user_id)
+
+    assert {:error, :attempt_replaced} = bind.(current, "sub-current"),
+           "an attempt binds once"
   end
 
   test "the same configuration and subject refreshes authorized_at, and another subject is refused" do
@@ -166,7 +189,7 @@ defmodule Arca.CompanyAuthorizationsRaceTest do
   import Arca.Test.Adapter, only: [postgres?: 0]
 
   alias Arca.{CompanyAuthorizations, ControlPlane}
-  alias Arca.Schemas.{CellLease, CompanyAuthorization, User}
+  alias Arca.Schemas.{CellLease, CompanyAuthorization, CompanyLoginAttempt, User}
   alias Ecto.Adapters.SQL.Sandbox
 
   @configuration ~s(["workos","org_race","conn_race"])
@@ -189,6 +212,8 @@ defmodule Arca.CompanyAuthorizationsRaceTest do
         Arca.Repo.delete_all(
           from(c in CompanyAuthorization, where: c.user_id in ^[first, second])
         )
+
+        Arca.Repo.delete_all(from(a in CompanyLoginAttempt, where: a.user_id in ^[first, second]))
 
         Arca.Repo.delete_all(from(u in User, where: u.id in ^[first, second]))
       end)
@@ -237,11 +262,21 @@ defmodule Arca.CompanyAuthorizationsRaceTest do
     slot
   end
 
-  defp bind(user_id, verify) do
+  # Each person's consumed attempt, opened before the race so the race is
+  # the two bindings alone.
+  defp attempts!(user_ids),
+    do: unboxed(fn -> Enum.map(user_ids, &Arca.Test.CompanyLogin.consumed_attempt/1) end)
+
+  defp bind(user_id, attempt_id, verify) do
     unboxed(fn ->
       CompanyAuthorizations.bind(
         server(),
-        %{user_id: user_id, configuration: @configuration, subject: "prof_shared"},
+        %{
+          user_id: user_id,
+          attempt_id: attempt_id,
+          configuration: @configuration,
+          subject: "prof_shared"
+        },
         verify: verify
       )
     end)
@@ -252,10 +287,11 @@ defmodule Arca.CompanyAuthorizationsRaceTest do
     second: second
   } do
     test = self()
+    [first_attempt, second_attempt] = attempts!([first, second])
 
     held =
       Task.async(fn ->
-        bind(first, fn ->
+        bind(first, first_attempt, fn ->
           send(test, :first_open)
 
           receive do
@@ -265,7 +301,7 @@ defmodule Arca.CompanyAuthorizationsRaceTest do
       end)
 
     assert_receive :first_open, 5_000
-    other = Task.async(fn -> bind(second, fn -> :ok end) end)
+    other = Task.async(fn -> bind(second, second_attempt, fn -> :ok end) end)
 
     {first_answer, second_answer} =
       if postgres?() do
