@@ -4,9 +4,9 @@
 defmodule Sanctum.Providers.InvitationTest do
   @moduledoc """
   The `invitation` tool through the gate: `create` answers the code once,
-  with the link that opens it; `list` and `revoke` answer the invitation
-  without it; no answer carries a null; and each is a person's act, which
-  an API key is refused.
+  with the link that opens it, under keys the request log redacts; `list`
+  and `revoke` answer the invitation without it; no answer carries a
+  null; and each is a person's act, which an API key is refused.
   """
 
   use ExUnit.Case, async: false
@@ -58,13 +58,16 @@ defmodule Sanctum.Providers.InvitationTest do
 
   test "create answers the code once with its link, and list and revoke answer the invitation without it",
        %{alice: alice, group: group} do
-    assert {:ok, %{invitation: invitation, code: code, link: link} = created} =
+    assert {:ok, %{invitation: invitation, code: code, invitation_url: link} = created} =
              call(ctx(alice), %{"action" => "create", "athanor_id" => group.id})
 
     assert link == Sanctum.Person.home() <> "/invite#" <> code
     assert %{state: "pending", athanor_id: athanor_id, athanor_name: name} = invitation
     assert {athanor_id, name} == {group.id, group.name}
     assert nulls(created) == []
+
+    refute inspect(Prima.Sanitizer.sanitize(created)) =~ code
+    refute Enum.any?(Arca.Repo.all(Arca.Schemas.McpLog), &(inspect(&1) =~ code))
 
     assert {:ok, %{invitations: [listed], count: 1} = answer} =
              call(ctx(alice), %{"action" => "list"})

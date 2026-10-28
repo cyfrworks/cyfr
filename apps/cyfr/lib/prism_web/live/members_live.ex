@@ -184,7 +184,7 @@ defmodule PrismWeb.MembersLive do
 
   def handle_event("invitation_create", _params, %{assigns: %{athanor: %{id: id}}} = socket) do
     case call_tool(socket, "invitation/create", %{"athanor_id" => id}) do
-      {:ok, %{link: link}} ->
+      {:ok, %{invitation_url: link}} ->
         {:noreply, socket |> assign(:new_link, link) |> load()}
 
       {:error, reason} ->
