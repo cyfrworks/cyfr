@@ -6,7 +6,9 @@ defmodule PrismWeb.MembersLiveTest do
   The members page of a group: any member adds by person identifier (a
   seat that waits when the person has never signed in) or by the person's
   id here, removes, withdraws an invitation, and creates a group — all
-  through the same verbs Codex uses.
+  through the same verbs Codex uses. In an open group the invitation
+  links section creates a link, shows it once, lists the group's links
+  and revokes one.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -219,6 +221,70 @@ defmodule PrismWeb.MembersLiveTest do
     assert has_element?(view, "td", "You")
     assert has_element?(view, "td", bob.email)
   end
+
+  describe "invitation links" do
+    test "a member creates a link shown once with a copy control, sees it pending, and revokes it",
+         %{conn: conn} do
+      alice = test_user()
+      conn = log_in_user(conn, alice)
+      {:ok, group} = Athanors.create_group(alice.user_id, "Links #{alice.namespace}")
+      {view, _html} = mount_athanor(conn, "/members", group)
+
+      refute has_element?(view, ~s([data-test="invitation-new"]))
+      view |> element(~s([data-test="invitation-create"])) |> render_click()
+
+      link = view |> element(~s([data-test="invitation-link"])) |> render() |> link_text()
+      assert String.starts_with?(link, Sanctum.Person.home() <> "/invite#")
+      code = link |> String.split("#") |> List.last()
+      assert {:ok, %{athanor: name}} = Sanctum.Invitations.lookup(code)
+      assert name == group.name
+      assert has_element?(view, ~s([data-test="invitation-copy"]))
+
+      [%{id: id}] = Arca.Repo.all(Arca.Schemas.Invitation)
+      assert has_element?(view, "#invitations button[phx-value-id='#{id}']", "Revoke")
+
+      # Shown once: the page read again lists the link and no longer shows it.
+      {again, html} = mount_athanor(conn, "/members", group)
+      refute has_element?(again, ~s([data-test="invitation-new"]))
+      refute html =~ code
+      assert has_element?(again, "#invitations", "pending")
+
+      again |> element("#invitations button[phx-value-id='#{id}']") |> render_click()
+      assert has_element?(again, "#invitations", "revoked")
+      refute has_element?(again, "#invitations button[phx-value-id='#{id}']")
+      assert %DateTime{} = Arca.Repo.get!(Arca.Schemas.Invitation, id).revoked_at
+      assert {:error, :invitation_invalid} = Sanctum.Invitations.lookup(code)
+    end
+
+    test "lists only this group's links", %{conn: conn} do
+      alice = test_user()
+      conn = log_in_user(conn, alice)
+      {:ok, here} = Athanors.create_group(alice.user_id, "Here #{alice.namespace}")
+      {:ok, there} = Athanors.create_group(alice.user_id, "There #{alice.namespace}")
+      ctx = Sanctum.TestContext.session!(alice.user_id)
+      {:ok, %{invitation: mine}} = Sanctum.Invitations.create(ctx, here.id)
+      {:ok, %{invitation: elsewhere}} = Sanctum.Invitations.create(ctx, there.id)
+
+      {view, _html} = mount_athanor(conn, "/members", here)
+      assert has_element?(view, "#invitations button[phx-value-id='#{mine.id}']")
+      refute has_element?(view, "#invitations button[phx-value-id='#{elsewhere.id}']")
+    end
+
+    test "a person's own athanor and a direct thread offer no links", %{conn: conn} do
+      alice = test_user()
+      bob = test_user()
+      conn = log_in_user(conn, alice)
+      {:ok, pair} = Athanors.create_pair(alice.user_id, bob.user_id)
+
+      {own, _html} = mount_athanor(conn, "/members")
+      refute has_element?(own, ~s([data-test="invitation-create"]))
+
+      {thread, _html} = mount_athanor(conn, "/members", pair)
+      refute has_element?(thread, ~s([data-test="invitation-create"]))
+    end
+  end
+
+  defp link_text(html), do: html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.trim()
 
   defp rows!({:ok, rows}), do: rows
 

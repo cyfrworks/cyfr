@@ -11,6 +11,7 @@ defmodule Sanctum.Newcomer do
   | Admission | Checked | Makes |
   |---|---|---|
   | `{:setup, token}` | the token equals the configured setup token (constant-time); in the mint's transaction, under the installation claims' order row, no person exists and no restore holds the installation | a local person, their keys, their athanor, the platform grant |
+  | `{:invitation, code}` | in the mint's transaction before the person's row, the code's invitation is unexpired, unredeemed and unrevoked, its issuer still an active person here and, when it names a group athanor, still seated there with the group active and open, or else still the platform administrator (`Sanctum.Invitations.redeemable/1`), then the mint rate and the athanor cap; redeemed by one conditional write after the person's row | a local person, their keys, their athanor, and the seat the invitation names, counted against the group's member cap |
   | `:open` | the door's `*` admits; the mint rate and the athanor cap, in the mint's transaction before the person's row | a local person, their keys, their athanor |
   | `{:remote, remote}` | the door admits the identifier (`Sanctum.Door.sign_in_identifier/1`); the head the CYFR sign-in verified is still fresh | a remote person row with no keys and no athanor; pending identifier invitations activate |
   | `{:restore, restore}` | the restore's installation claim, in the mint's transaction (`Arca.InstallationClaims`) | the restored person, their athanor, the platform grant |
@@ -22,6 +23,20 @@ defmodule Sanctum.Newcomer do
   :platform_admin_bootstrap]`). Only setup and a restore make the first
   person; any other admission onto an empty installation is refused
   `:not_set_up`.
+
+  ## The invitation
+
+  The invitation is the admitting act, as setup's token is, so the door
+  is not asked. Its code is checked before the passkey is verified, so a
+  code that admits no one starts nothing, and decided again in the mint's
+  transaction, where its redemption commits with the person or not at
+  all: a refused cap, a member cap the group has reached, a redemption
+  another admission won first and a killed process each leave no person
+  and the code unredeemed. Every refusal of the invitation itself is
+  `:invitation_invalid`. Its athanor caps are the open admission's: the
+  invitation mints its person an athanor as an open admission does, and
+  an issuer cannot take the CYFR past the rate and the ceiling its
+  operator set. The seat's announcement follows the commit.
 
   ## The setup token's re-admission
 
@@ -39,7 +54,8 @@ defmodule Sanctum.Newcomer do
 
   A local admission brings its credential:
 
-    * `{:passkey, registration}` — the browser's answer to
+    * `{:passkey, registration}`, for setup, an invitation and an open
+      admission — the browser's answer to
       `Sanctum.Passkeys.newcomer_options/0`, verified with no transaction
       open (`Sanctum.Passkeys.verify_newcomer/1`) and written, active,
       inside the admission's transaction (`Sanctum.Passkeys.write_newcomer/2`),
@@ -68,8 +84,10 @@ defmodule Sanctum.Newcomer do
   once the head still names the restored keys.
 
   Refusals: `:setup_closed`, `:not_set_up`, `:restore_reserved`,
-  `{:door, reason}`, `:identity_stale`, `:registration_refused`, a cap's
-  `{:limit_reached, key, cap}` or `{:cap_unverifiable, key}`, `:not_owner`
+  `:invitation_invalid`, `{:door, reason}`, `:identity_stale`,
+  `:registration_refused`, a cap's `{:limit_reached, key, cap}` or
+  `{:cap_unverifiable, key}`, the invited seat's own refusals
+  (`:recovering_from_restore` among them), `:not_owner`
   (this member no longer holds its slot), `:unavailable`,
   `{:invalid_argument, sentence}` for a credential the admission does not
   take, and the restore's own refusals.
@@ -98,7 +116,12 @@ defmodule Sanctum.Newcomer do
           required(:also) => (map() -> :ok | {:error, term()})
         }
 
-  @type admission :: {:setup, String.t()} | :open | {:remote, remote()} | {:restore, restore()}
+  @type admission ::
+          {:setup, String.t()}
+          | {:invitation, String.t()}
+          | :open
+          | {:remote, remote()}
+          | {:restore, restore()}
   @type credential :: {:passkey, map()} | {:command_line, String.t()} | :none
 
   @typedoc """
@@ -158,6 +181,13 @@ defmodule Sanctum.Newcomer do
     with {:ok, machine} <- Sanctum.CliSignIn.machine(machine), do: {:ok, {:command_line, machine}}
   end
 
+  defp taken({:invitation, code}, _credential) when not is_binary(code),
+    do: {:error, :invitation_invalid}
+
+  defp taken({:invitation, _code}, {:passkey, registration} = credential)
+       when is_map(registration),
+       do: {:ok, credential}
+
   defp taken(:open, {:passkey, registration} = credential) when is_map(registration),
     do: {:ok, credential}
 
@@ -173,7 +203,7 @@ defmodule Sanctum.Newcomer do
       {:error,
        {:invalid_argument,
         "This admission does not take that credential: setup takes a passkey or the command " <>
-          "line, an open admission a passkey"}}
+          "line, an invitation and an open admission a passkey"}}
 
   defp admissible({:setup, token}) do
     case Application.get_env(:sanctum, :setup_token) do
@@ -184,6 +214,10 @@ defmodule Sanctum.Newcomer do
         {:error, :setup_closed}
     end
   end
+
+  # An invitation that admits no one starts nothing: its passkey is not
+  # verified. The mint's transaction decides it again.
+  defp admissible({:invitation, code}), do: Sanctum.Invitations.redeemable(code)
 
   # An open admission needs the door's `*`. It names no identifier, so a
   # refusal leaves no request.
@@ -267,13 +301,24 @@ defmodule Sanctum.Newcomer do
   defp refused(_credential, reason), do: {:error, reason}
 
   defp kind({:setup, _token}), do: "setup"
+  defp kind({:invitation, _code}), do: "invitation"
   defp kind(:open), do: "open"
   defp kind({:remote, _remote}), do: "remote"
   defp kind({:restore, _restore}), do: "restore"
 
   # Inside the mint's transaction, before the person's row: an open
-  # admission's caps. The installation's first person is minted past them.
+  # admission's caps, and an invitation's own check before them. The
+  # installation's first person is minted past them.
   defp verify(:open), do: [verify: &Sanctum.Provisioning.personal_admissible/0]
+
+  defp verify({:invitation, code}),
+    do: [
+      verify: fn ->
+        with :ok <- Sanctum.Invitations.redeemable(code),
+             do: Sanctum.Provisioning.personal_admissible()
+      end
+    ]
+
   defp verify(_admission), do: []
 
   defp restore_claim({:restore, %{claim: claim}}), do: [restore: claim]
@@ -298,6 +343,12 @@ defmodule Sanctum.Newcomer do
   # person's grant.
   defp also({:setup, _token}, write, person), do: local(person, write)
   defp also(:open, write, person), do: local(person, write)
+
+  defp also({:invitation, code}, write, person) do
+    with {:ok, invitation} <- Sanctum.Invitations.redeem(code, person.id),
+         :ok <- local(person, write),
+         do: seated(invitation, person)
+  end
 
   defp also({:remote, remote}, _write, %{id: user_id}) do
     case Arca.PersonIdentities.create(Prima.Actor.system(), %{
@@ -330,6 +381,24 @@ defmodule Sanctum.Newcomer do
     end
   end
 
+  # The seat the invitation names, under the group's lock: its issuer
+  # still seated there, read again under that lock, and the group's member
+  # cap counted as an add counts it.
+  defp seated(%{athanor_id: nil}, _person), do: :ok
+
+  defp seated(%{athanor_id: athanor_id, issued_by: issuer} = invitation, %{id: user_id}) do
+    case Members.create(
+           %{user_id: user_id, scope: "athanor", athanor_id: athanor_id, added_by: issuer},
+           reserve: fn ->
+             with :ok <- Sanctum.Invitations.issuer_seated(invitation),
+                  do: Members.member_cap(athanor_id)
+           end
+         ) do
+      {:ok, _seat} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   # The credential written in the transaction: a passkey. A session needs
   # the committed person, so it follows the commit.
   defp written(%{id: user_id}, {:passkey, _registration}, verified),
@@ -355,6 +424,7 @@ defmodule Sanctum.Newcomer do
 
   defp committed(admission, person, readmitted, credential) do
     granted(admission, person, readmitted)
+    joined(admission, person)
     filled(admission, person)
 
     with {:ok, admitted} <- answered(person, readmitted) do
@@ -376,6 +446,20 @@ defmodule Sanctum.Newcomer do
   end
 
   defp granted(_admission, _person, _readmitted), do: :ok
+
+  # The group an invitation seated the person in is told of its new member.
+  defp joined({:invitation, code}, %{id: user_id}) do
+    case Sanctum.Invitations.seat(code) do
+      {:ok, athanor_id} ->
+        Members.broadcast_change(user_id, athanor_id, :joined)
+        Sanctum.Notify.member_changed(athanor_id)
+
+      :none ->
+        :ok
+    end
+  end
+
+  defp joined(_admission, _person), do: :ok
 
   # A restore may be superseded after its commit: `Sanctum.Recovery` asks
   # for its fill once the head still names the restored keys.

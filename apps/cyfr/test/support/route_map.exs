@@ -756,6 +756,15 @@
         },
         %{
           verb: "GET",
+          path: "/invite",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":invite",
+          auth: "browser_public_login",
+          live_view: "PrismWeb.InviteLive",
+          pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
           path: "/login",
           plug: "Phoenix.LiveView.Plug",
           plug_opts: ":login",

@@ -10,7 +10,9 @@ defmodule PrismWeb.PasskeyController do
   routes as every sign-in does (`CyfrWeb.SignInResponse`). The setup page
   (`PrismWeb.SetupLive`) hands the same ticket for the first person's
   passkey, naming its own path in the ticket (`to`), so setup goes on
-  there signed in; no request chooses where a ticket lands.
+  there signed in, and the invitation page (`PrismWeb.InviteLive`) hands
+  one for an invited newcomer's, naming none; no request chooses where a
+  ticket lands.
 
   The ticket is taken in one operation, so of two requests presenting it
   only one finds it, and it is spent whichever way the check goes. It is

@@ -14,8 +14,8 @@ defmodule Sanctum.ProviderDispatchContractTest do
 
   alias Sanctum.Provider
 
-  @tool_names ~w(session athanor member door oauth key tincture_visibility webhook vault profile
-                  person pairing passkey confirmation instance_entry)
+  @tool_names ~w(session athanor member invitation door oauth key tincture_visibility webhook vault
+                  profile person pairing passkey confirmation instance_entry)
 
   @action_enums %{
     "session" => [
@@ -47,6 +47,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
       "destroy"
     ],
     "member" => ["list", "add", "remove", "leave"],
+    "invitation" => ["create", "revoke", "list"],
     "door" => ["list", "requests", "allow", "deny", "remove", "resolve"],
     "oauth" => ["set_client", "list", "delete_client"],
     "key" => ["create", "get", "list", "revoke", "rotate", "reenable"],
@@ -107,6 +108,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
     "session" => "Unknown action: session.___no_such_action___",
     "athanor" => "Unknown action: athanor.___no_such_action___",
     "member" => "Unknown action: member.___no_such_action___",
+    "invitation" => "Unknown action: invitation.___no_such_action___",
     "door" => "Unknown action: door.___no_such_action___",
     "oauth" => "Invalid oauth action. Use: set_client, list, or delete_client",
     "key" => "Invalid key action. Use: create, get, list, revoke, rotate, or reenable",
@@ -127,7 +129,7 @@ defmodule Sanctum.ProviderDispatchContractTest do
   }
 
   describe "tools/0 — frozen surface" do
-    test "exactly these 15 tools, in order" do
+    test "exactly these 16 tools, in order" do
       assert Enum.map(Provider.tools(), & &1.name) == @tool_names
     end
 

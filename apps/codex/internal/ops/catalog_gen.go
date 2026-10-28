@@ -25,6 +25,7 @@ const (
 	Feed               = "feed"
 	File               = "file"
 	InstanceEntry      = "instance_entry"
+	Invitation         = "invitation"
 	Key                = "key"
 	Layout             = "layout"
 	McpLog             = "mcp_log"
@@ -158,6 +159,9 @@ const (
 	InstanceEntrySetCaps            = "set_caps"
 	InstanceEntrySetComponentPolicy = "set_component_policy"
 	InstanceEntryUsage              = "usage"
+	InvitationCreate                = "create"
+	InvitationList                  = "list"
+	InvitationRevoke                = "revoke"
 	KeyCreate                       = "create"
 	KeyGet                          = "get"
 	KeyList                         = "list"
@@ -342,6 +346,7 @@ var Actions = map[string][]string{
 	"feed":                {"bind", "list", "press", "remove"},
 	"file":                {"accept", "decline", "delete", "list", "offer", "offers", "read", "withdraw", "write"},
 	"instance_entry":      {"create", "delete", "list", "offered", "people", "rebind", "revoke", "rotate", "set_audience", "set_caps", "set_component_policy", "usage"},
+	"invitation":          {"create", "list", "revoke"},
 	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "get", "list", "stats"},
@@ -2249,6 +2254,49 @@ func (args InstanceEntryUsageArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: InstanceEntryUsage, fields: fields(args)})
+}
+
+// InvitationCreateArgs carries arguments for invitation.create.
+type InvitationCreateArgs struct {
+	// The group athanor the newcomer is seated in, which you hold a seat in. Left out, the invitation seats them in no group: the platform administrator's alone (create)
+	AthanorId Field[string] `json:"athanor_id,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InvitationCreateArgs) MarshalJSON() ([]byte, error) {
+	type fields InvitationCreateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InvitationCreate, fields: fields(args)})
+}
+
+// InvitationListArgs carries arguments for invitation.list.
+type InvitationListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InvitationListArgs) MarshalJSON() ([]byte, error) {
+	type fields InvitationListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InvitationList, fields: fields(args)})
+}
+
+// InvitationRevokeArgs carries arguments for invitation.revoke.
+type InvitationRevokeArgs struct {
+	// The invitation's id, as list answers it (revoke)
+	InvitationId string `json:"invitation_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InvitationRevokeArgs) MarshalJSON() ([]byte, error) {
+	type fields InvitationRevokeArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InvitationRevoke, fields: fields(args)})
 }
 
 // KeyCreateArgs carries arguments for key.create.

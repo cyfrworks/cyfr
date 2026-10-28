@@ -340,7 +340,7 @@ defmodule Cyfr.Boundaries do
     Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog
     Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
-    Arca.CliSignIns
+    Arca.CliSignIns Arca.Invitations
     Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage
     Arca.DecisionLog Arca.McpLog Arca.PolicyLog Arca.SecurityTransitions
   )
@@ -583,7 +583,8 @@ defmodule Cyfr.Boundaries do
         Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
         Sanctum.Catalog Sanctum.CliSignIn Sanctum.ClientIp Sanctum.Consent Sanctum.Context
         Sanctum.Decisions
-        Sanctum.Door Sanctum.Gate Sanctum.Handle Sanctum.Newcomer Sanctum.Pairing
+        Sanctum.Door Sanctum.Gate Sanctum.Handle Sanctum.Invitations Sanctum.Newcomer
+        Sanctum.Pairing
         Sanctum.Passkeys Sanctum.PolicyLog
         Sanctum.Recovery Sanctum.Refusals Sanctum.RequestLog Sanctum.Session
         Sanctum.SignIn
@@ -613,7 +614,11 @@ defmodule Cyfr.Boundaries do
           "which decides in its own transaction; it is also the sign-in page's open " <>
           "admission, offered while the door's `*` admits " <>
           "(`Sanctum.Door.Store.wildcard/0`, which only shows the offer: the admission " <>
-          "asks the door again). `Sanctum.Handle` is the identity card's " <>
+          "asks the door again), and the invitation page's admission of the person an " <>
+          "invitation names (`admit/2`). `Sanctum.Invitations` is that page's read of " <>
+          "who invited and to which athanor, or that the code admits no one " <>
+          "(`lookup/1`), before any ceremony, which grants nothing: the admission " <>
+          "decides again in its transaction. `Sanctum.Handle` is the identity card's " <>
           "live check of a handle against the registry's answer, and the sign-in page's " <>
           "reading of the identifier and published address a handle names (`resolve/1`), " <>
           "navigation that grants nothing. " <>
@@ -1180,7 +1185,8 @@ defmodule Cyfr.Boundaries do
           "sessions, API keys, tincture frame credentials, paired clients, their " <>
           "pairing invitations and device certificates, registry push tokens, " <>
           "provider credentials, webhooks, " <>
-          "the identities, memberships, athanors and sign-in permissions that decide standing, a " <>
+          "the identities, memberships, athanors and sign-in permissions that decide standing, " <>
+          "the invitations that admit a person and seat them, a " <>
           "person's identity row, keys, attempts and carries, the directory's logs " <>
           "and cached heads, passkeys, pending confirmations, the installation claim, " <>
           "the pre-authentication rate windows, the instance's own entries and " <>
@@ -1526,6 +1532,15 @@ defmodule Cyfr.Boundaries do
           "page asks whether this server holds the slot right now before a passkey ceremony."
     },
     %{
+      from: "PrismWeb.InviteLive",
+      into: "Arca.ControlPlane",
+      functions: [:held?],
+      reason:
+        "a server that does not hold its control-plane slot signs nobody in: the " <>
+          "invitation page asks whether this server holds the slot right now before a " <>
+          "passkey ceremony."
+    },
+    %{
       from: "PrismWeb.LoginLive",
       into: "Arca.ControlPlane",
       functions: [:held?],
@@ -1714,6 +1729,15 @@ defmodule Cyfr.Boundaries do
       functions: [:put],
       reason:
         "the setup page leaves the passkey sign-in's single-use ticket, bound to the " <>
+          "browser, for the callback that completes it, for a bounded time: server-local " <>
+          "memory, never a row."
+    },
+    %{
+      from: "PrismWeb.InviteLive",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the invitation page leaves the passkey sign-in's single-use ticket, bound to the " <>
           "browser, for the callback that completes it, for a bounded time: server-local " <>
           "memory, never a row."
     },
@@ -1981,6 +2005,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.Handle" => [resolve: 1],
     "Sanctum.InstanceEntries" => [sweep_usage: 0],
+    "Sanctum.Invitations" => [lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
     "Sanctum.Newcomer" => [admit: 2, setup_open: 1],
@@ -2323,6 +2348,7 @@ defmodule Cyfr.Boundaries do
     {:post, "/auth/logout"},
     {:get, "/directory/v1/:identifier"},
     {:post, "/directory/v1/genesis"},
+    {:get, "/invite"},
     {:get, "/login"},
     {:get, "/pair"},
     {:get, "/restore"},

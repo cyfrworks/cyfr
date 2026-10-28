@@ -299,11 +299,17 @@ defmodule Sanctum.Tenancy.Members do
     end
   end
 
-  # Every seat the athanor has handed out — active members and pending
-  # invitations — is what the cap bounds; an invitation is a seat someone
-  # will take. It runs as `Arca.Members.seat/3`'s `reserve:`, with the
-  # athanor's row locked, so two adds cannot both take the last seat.
-  defp member_cap(athanor_id) do
+  @doc """
+  The per-group member cap, as a seat's `reserve:` (`create/2`) counts
+  it: every seat the athanor has handed out, active members and the
+  `invited` rows identifiers hold, since such a row is a seat someone will
+  take. Run as
+  `Arca.Members.seat/3`'s `reserve:`, with the athanor's row locked, so two
+  seats cannot both take the last place. `add/3` passes it, and so does an
+  invitation's admission (`Sanctum.Newcomer`).
+  """
+  @spec member_cap(String.t()) :: :ok | {:error, term()}
+  def member_cap(athanor_id) do
     Caps.check_counted(:max_members_per_group, fn ->
       Arca.Members.count_seats(in_athanor(athanor_id))
     end)
