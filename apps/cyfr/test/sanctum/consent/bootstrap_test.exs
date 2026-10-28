@@ -464,6 +464,31 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert head.vault_refs == []
     end
 
+    # The binding read is the one bound, so its destination is the one the
+    # fit is held to: a rebind between the offer's read and the binding's
+    # to a destination the need does not call binds nothing.
+    test "a chosen entry rebound off the need's hosts between the reads mints the catalyst " <>
+           "without it",
+         %{person: person} do
+      ship_model!(person)
+      offered = offer!()
+
+      after_read!("instance_entries", fn ->
+        {:ok, _moved} =
+          Arca.InstanceEntries.move_binding(
+            Arca.Test.Actor.platform(),
+            offered.id,
+            offered.binding_digest,
+            %{destination: @anthropic_inference, binding_digest: "sha256:moved-elsewhere"},
+            "needs_consent"
+          )
+      end)
+
+      assert Bootstrap.run(person) == {:ok, %{minted: [@model], revised: [], skipped: []}}
+      assert {head, nil} = model_head!(person)
+      assert head.vault_refs == []
+    end
+
     test "with no instance entry offered the catalyst is minted without one, and nothing is " <>
            "skipped",
          %{person: person} do

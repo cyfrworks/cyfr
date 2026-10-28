@@ -500,12 +500,16 @@ defmodule Sanctum.Consent.Bootstrap do
     {:skip, {:unavailable, "Instance entries"}}
   end
 
-  # Provisioning has no person to ask for a field map, so it binds only
-  # under the automatic one (`Sanctum.Consent.Plan.field_map/2`), computed
-  # from the need it binds and the entry's field names, and refuses
-  # `{:fields_unmapped, need}` where there is none.
+  # The binding view is the read the binding takes its destination and
+  # digest from, so the fit is checked on it: a rebind after the offer was
+  # read binds nothing. Provisioning has no person to ask for a field map,
+  # so it binds only under the automatic one
+  # (`Sanctum.Consent.Plan.field_map/2`), computed from the need it binds
+  # and the entry's field names, and refuses `{:fields_unmapped, need}`
+  # where there is none.
   defp instance_binding(view, need) do
-    with %{} = map <- view.destination,
+    with true <- Sanctum.Consent.Plan.entry_fit(need, view) != :none,
+         %{} = map <- view.destination,
          {:ok, destination} <- Prima.Destination.from_map(map),
          digest when is_binary(digest) <- view.binding_digest,
          {:ok, fields} <- automatic_map(need, view.field_names) do
@@ -557,7 +561,6 @@ defmodule Sanctum.Consent.Bootstrap do
          %{} = need <- instance_need(component, source_ref),
          {:ok, view} <- entry_binding(ctx, id, source_ref),
          true <- is_binary(view.binding_digest) and view.binding_digest == digest,
-         true <- Sanctum.Consent.Plan.entry_fit(need, view) != :none,
          true <-
            Sanctum.InstanceEntries.admits?(
              ctx,
