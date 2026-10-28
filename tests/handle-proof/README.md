@@ -24,11 +24,16 @@ CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -- tests/handle-proof/ru
 | the registry and directory | `registry.test` | cyfr.run's image, built from `git archive HEAD` of `CYFR_RUN_DIR` by its `Dockerfile`, on a `postgres:16-alpine` of the run's own, with `DOMAIN=registry.test`, behind a front of the identity proof's kind on `127.77.0.3` |
 
 The model checks run independently with
-`node --test tests/handle-proof/models-test.mjs`.
+`node --test tests/handle-proof/models-test.mjs`. The PostgreSQL tamper
+helper's checks run with
+`scripts/heavy-check.sh -- bash tests/handle-proof/registry-test.sh`.
 
 The directory's whole rows are read from `directory.identity_log_entries`
 in the registry's PostgreSQL. Their canonical entries, hashes, lengths
-and timestamps are checked and tampered as before.
+and timestamps are checked and tampered as before. A generated ID is
+updated in `BY DEFAULT` mode, with its `ALWAYS` declaration restored in
+the same transaction. Every tamper's restore compares the identity
+columns' declarations as well as the rows and constraints.
 
 The CYFRs reach the directory and the registry by name through their
 `ERL_INETRC` at addresses listed in `CYFR_PRIVATE_EGRESS_TARGETS`, and trust

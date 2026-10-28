@@ -47,6 +47,8 @@ source "$ROOT/tests/browser/harness.sh"
 source "$ROOT/tests/identity-proof/front.sh"
 # shellcheck source=../identity-proof/cells.sh
 source "$ROOT/tests/identity-proof/cells.sh"
+# shellcheck source=registry.sh
+source "$ROOT/tests/handle-proof/registry.sh"
 OUT="${PROOF_OUT:-$WORK/out}"
 PROOF_PID=""
 SECRETS="$WORK/secrets"
@@ -95,23 +97,6 @@ handle_fixture() {
   local cell="$1"
   shift
   cell_fixture "$cell" "$ROOT/tests/handle-proof/fixture.exs" FIXTURE "$@"
-}
-
-# psql in the registry's database, the SQL on stdin, `$@` its -v
-# variables; one value a line, unaligned.
-registry_sql() {
-  local vars=() pair table schema
-  for pair in "$@"; do
-    if [[ "$pair" == t=* ]]; then
-      table="${pair#t=}"
-      schema=public
-      if [[ "$table" == *.* ]]; then schema="${table%%.*}"; table="${table#*.}"; fi
-      vars+=(-v "s=$schema" -v "t=$table")
-    else
-      vars+=(-v "$pair")
-    fi
-  done
-  docker exec -i "$PG" psql -X -q -At -v ON_ERROR_STOP=1 -U cyfrrun -d cyfrrun "${vars[@]}"
 }
 
 # A request to the registry at https://registry.test through its front,
@@ -331,22 +316,10 @@ answer_ask() {
       ANSWER="$(handle_fixture "$WORK/$(asked "$ask" cell)" setting "$(asked "$ask" key)")" || ANSWER=""
       ;;
     registry_rows)
-      ANSWER="$(registry_sql "t=$(asked "$ask" table)" "c=$(asked "$ask" column)" "v=$(asked "$ask" value)" <<'SQL'
-SELECT json_build_object('rows', coalesce(json_agg(row_to_json(x) ORDER BY to_jsonb(x)->>'expires_at', row_to_json(x)::text), '[]'::json))
-  FROM (SELECT * FROM :"s".:"t" r WHERE :'c' = '' OR to_jsonb(r)->>:'c' = :'v') x;
-SQL
-)" || ANSWER=""
+      ANSWER="$(registry_rows "$(asked "$ask" table)" "$(asked "$ask" column)" "$(asked "$ask" value)")" || ANSWER=""
       ;;
     registry_state)
-      # The whole table, and every constraint on it as PostgreSQL prints
-      # it, which a tamper's restore must leave as they were.
-      ANSWER="$(registry_sql "t=$(asked "$ask" table)" <<'SQL'
-SELECT json_build_object(
-  'rows', (SELECT coalesce(json_agg(row_to_json(x) ORDER BY row_to_json(x)::text), '[]'::json) FROM :"s".:"t" x),
-  'constraints', (SELECT coalesce(json_agg(json_build_array(conname, pg_get_constraintdef(oid)) ORDER BY conname), '[]'::json)
-                    FROM pg_constraint WHERE conrelid = format('%I.%I', :'s', :'t')::regclass));
-SQL
-)" || ANSWER=""
+      ANSWER="$(registry_state "$(asked "$ask" table)")" || ANSWER=""
       ;;
     admin_id)
       ANSWER="$(registry_sql <<'SQL'
@@ -356,45 +329,8 @@ SQL
       ;;
     registry_set)
       value="$(python3 -I -c 'import json, sys; a = json.load(open(sys.argv[1])); print(json.dumps({a["field"]: a["value"]}))' "$ask")"
-      # Behind the registry's back and with its checks off for the write:
-      # foreign keys off for the transaction, and a tamper saves and drops
-      # the table's CHECK constraints, which its restore adds back from
-      # their saved definitions once the stored value is the original.
-      if ANSWER="$(registry_sql "t=$(asked "$ask" table)" "k=$(asked "$ask" key)" "kv=$(asked "$ask" key_value)" \
-        "f=$(asked "$ask" field)" "patch=$value" "phase=$(asked "$ask" phase)" <<'SQL' 2>"$WORK/psql.err" | tail -n 1
-BEGIN;
-SET LOCAL session_replication_role = replica;
-SELECT set_config('handle_proof.t', format('%I.%I', :'s', :'t'), true), set_config('handle_proof.phase', :'phase', true) \g /dev/null
-CREATE TABLE IF NOT EXISTS handle_proof_checks (tbl text, name text, def text);
-DO $$
-DECLARE c record;
-BEGIN
-  IF current_setting('handle_proof.phase') = 'tamper' THEN
-    FOR c IN SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
-              WHERE conrelid = current_setting('handle_proof.t')::regclass AND contype = 'c' LOOP
-      INSERT INTO handle_proof_checks VALUES (current_setting('handle_proof.t'), c.conname, c.def);
-      EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', current_setting('handle_proof.t'), c.conname);
-    END LOOP;
-  END IF;
-END $$;
-WITH changed AS (
-  UPDATE :"s".:"t" SET :"f" = (json_populate_record(CAST(NULL AS :"s".:"t"), :'patch'::json)).:"f"
-   WHERE :"k"::text = :'kv' RETURNING 1)
-SELECT count(*) AS changed FROM changed \gset
-DO $$
-DECLARE c record;
-BEGIN
-  IF current_setting('handle_proof.phase') = 'restore' THEN
-    FOR c IN SELECT name, def FROM handle_proof_checks WHERE tbl = current_setting('handle_proof.t') LOOP
-      EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s', current_setting('handle_proof.t'), c.name, c.def);
-    END LOOP;
-    DELETE FROM handle_proof_checks WHERE tbl = current_setting('handle_proof.t');
-  END IF;
-END $$;
-COMMIT;
-SELECT json_build_object('set', :changed, 'role', current_setting('session_replication_role'));
-SQL
-)" && [ -n "$ANSWER" ]; then :; else
+      if ANSWER="$(registry_set "$(asked "$ask" table)" "$(asked "$ask" key)" "$(asked "$ask" key_value)" \
+        "$(asked "$ask" field)" "$value" "$(asked "$ask" phase)" 2>"$WORK/psql.err" | tail -n 1)" && [ -n "$ANSWER" ]; then :; else
         ANSWER="$(python3 -I -c 'import json, sys; print(json.dumps({"error": "the registry refused the write: " + open(sys.argv[1]).read().strip()}))' "$WORK/psql.err")"
       fi
       ;;
