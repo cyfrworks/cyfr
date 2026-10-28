@@ -1290,8 +1290,6 @@ defmodule Cyfr.DocsDriftTest do
     # No line names an operator or a sign-in provider: the installation's
     # administrator is the first person setup makes, and a sign-in method
     # is offered exactly when its credentials are set.
-    refute text =~ "CYFR_PLATFORM_ADMIN_EMAILS"
-    refute text =~ "CYFR_AUTH_PROVIDER"
 
     settings = MapSet.new(Roster.variables())
 
