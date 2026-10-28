@@ -36,7 +36,6 @@ defmodule CyfrWeb do
       LiveSocket,
       MetricsPlug,
       MinimalPage,
-      PendingProbe,
       Pipelines,
       Plugs.ApiSecurityHeaders,
       Plugs.AuthRateLimit,

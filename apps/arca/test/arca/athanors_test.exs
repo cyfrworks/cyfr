@@ -109,6 +109,7 @@ defmodule Arca.AthanorsTest do
 
       assert {:error, :cross_tenant} = Athanors.insert(member, %{kind: "group"})
       assert {:error, :cross_tenant} = Athanors.mint(member, attrs: %{})
+      assert {:error, :cross_tenant} = Athanors.within_caps(member, [:max_athanors])
       assert {:error, :cross_tenant} = Athanors.get(member, "ath_elsewhere")
       assert {:error, :cross_tenant} = Athanors.get_by_owner(member, "usr_1")
       assert {:error, :cross_tenant} = Athanors.get_by_slug(member, "group", "g")

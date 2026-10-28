@@ -32,8 +32,8 @@ defmodule PrismWeb.NavTest do
     assert Enum.find(Nav.items("dev"), &(&1.key == "tinctures")).label == "Tinctures"
   end
 
-  test "an unknown mode is dev, and ids keep the sidebar's spelling" do
-    assert Nav.items(nil) == Nav.items("dev")
+  test "an unknown mode is the default, lite, and ids keep the sidebar's spelling" do
+    assert Nav.items(nil) == Nav.items("lite")
     assert Nav.dom_id("nav", "api_keys") == "nav-api-keys"
     assert Nav.dom_id("drawer-nav", "mcp_servers") == "drawer-nav-mcp-servers"
   end

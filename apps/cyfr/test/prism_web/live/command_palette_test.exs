@@ -28,6 +28,10 @@ defmodule PrismWeb.CommandPaletteTest do
        %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
+
+    # The developer's lookups, components among them, are offered in dev.
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
     athanor = seated_athanor()
     ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
 

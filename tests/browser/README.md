@@ -291,8 +291,9 @@ from inside it. Every browser reaches the server through the harness's proxy
 tincture route redirects) and forwards the rest as the stack's proxy
 forwards it. The document's origin is `null` in all three browsers.
 
-Each browser sees the shell at `/a/@release-proof/tinctures` frame
-`/t/@release-proof/local/frame-probe`. The experiment asserts no outcome:
+Each browser sees the shell at `/a/<segment>/tinctures` frame
+`/t/<segment>/local/frame-probe`, `<segment>` the route segment of the
+fixture person's own athanor, as the release fixture answers it. The experiment asserts no outcome:
 it fails only when an attempt cannot be observed, and `frame-facts.json`,
 written by each run, holds every request, message, CSP report and console
 line behind a row. Each column names the browser version the facts were

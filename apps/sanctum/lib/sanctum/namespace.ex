@@ -5,14 +5,16 @@ defmodule Sanctum.Namespace do
   @moduledoc """
   A person's cyfr.run namespace, as this server knows it.
 
-  cyfr.run is the authority for *what* the slug is — it is claimed once,
-  bound to the IdP identity there, and the same on every server. The
-  `users` row is the authority for *whether this server knows it*: the
-  slug is recorded on `users.namespace` the moment a probe or a claim
-  yields it (`Sanctum.SignIn.record_namespace/2`) and read from there
-  ever after. The registry push tokens in `Compendium.Registry.CredentialStore`
-  are what a push needs, not who a person is — losing them costs a
-  re-probe, never the identity.
+  cyfr.run is the authority for *what* the slug is: it is the person's
+  handle there, claimed by a request their live key signs and bound to
+  their identifier, never to a sign-in provider, and the same on every
+  server. The `users` row is the authority for *whether this server
+  knows it*: the slug is recorded on `users.namespace` the moment the
+  registry's answer to a claim or a token mint names it
+  (`Sanctum.SignIn.record_claim/2`, `Sanctum.SignIn.record_namespace/2`)
+  and read from there ever after. The registry push tokens in
+  `Compendium.Registry.CredentialStore` are what a push needs, not who a
+  person is: losing them costs a sync, never the identity.
 
   This module is the one-line lookup callers use to materialize
   `ctx.namespace` from `ctx.user_id`: a session's context

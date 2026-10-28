@@ -340,7 +340,7 @@ defmodule Cyfr.Boundaries do
     Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog
     Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
-    Arca.CliSignIns
+    Arca.CliSignIns Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
     Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage
     Arca.DecisionLog Arca.McpLog Arca.PolicyLog Arca.SecurityTransitions
   )
@@ -406,10 +406,10 @@ defmodule Cyfr.Boundaries do
       from: ["apps/cyfr/lib/compendium/**/*.ex", "apps/cyfr/lib/compendium.ex"],
       into: "Sanctum",
       allow: ~w(
-        Sanctum Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress Sanctum.Gate
-        Sanctum.Network Sanctum.Namespace Sanctum.Provisioning Sanctum.Refusals
-        Sanctum.RegistryCredentials Sanctum.SignIn Sanctum.TinctureAuth Sanctum.VaultReader
-        Sanctum.VirtualTools Sanctum.Webhook
+        Sanctum Sanctum.Caller Sanctum.Catalog Sanctum.Consent Sanctum.Context Sanctum.Egress
+        Sanctum.Gate Sanctum.Network Sanctum.Namespace Sanctum.Person Sanctum.Provisioning
+        Sanctum.Refusals Sanctum.RegistryCredentials Sanctum.SignIn Sanctum.TinctureAuth
+        Sanctum.VaultReader Sanctum.VirtualTools Sanctum.Webhook
       ),
       reason:
         "`Sanctum.Provisioning` is the first-need hook and the half of filling an " <>
@@ -418,7 +418,11 @@ defmodule Cyfr.Boundaries do
           "the component work and calls down into it. OCI and registry transports " <>
           "use Sanctum.Network and Sanctum.Egress for validated outbound requests. " <>
           "A person's push tokens are sealed and read by `Sanctum.RegistryCredentials`, " <>
-          "which also decides the fresh confirmation issuing another one needs; " <>
+          "which also decides the fresh confirmation issuing another one needs; every " <>
+          "request a person makes at the registry is signed by their live key " <>
+          "(`Sanctum.Person.sign_registry_request/3`), and what its answer writes is " <>
+          "written only while the caller still stands " <>
+          "(`Sanctum.Caller.revalidate_session/1`); " <>
           "removing a component's last version revokes its profiles " <>
           "(`Sanctum.Consent.revoke_source/2`) and disables its webhooks " <>
           "(`Sanctum.Webhook.disable_for_component/2`). " <>
@@ -446,7 +450,7 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
-        Sanctum.Door Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries
+        Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
         Sanctum.Session Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
       ),
@@ -455,8 +459,7 @@ defmodule Cyfr.Boundaries do
           "admission, the invoke budget, the vault edge a run is attached with, and " <>
           "the policy record of every admission. `Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
-          "runs under, `auth_configured?/0` says whether this " <>
-          "deployment has sign-in, and `build_tincture_context/2` is a tincture " <>
+          "runs under, and `build_tincture_context/2` is a tincture " <>
           "invocation's. A call on the root is a reach like any other and is rostered " <>
           "like one. `Sanctum.Caller` is " <>
           "here for `drop_memo/1` alone: the identity domain announces that an " <>
@@ -555,7 +558,7 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/prism/**/*.ex", "apps/cyfr/lib/prism.ex"],
       into: "Sanctum",
-      allow: ~w(Sanctum Sanctum.Context Sanctum.Tenancy Sanctum.TinctureAuth),
+      allow: ~w(Sanctum.Context Sanctum.Tenancy Sanctum.TinctureAuth),
       reason:
         "console domain code: the tenancy carrier. The tray's messages arrive on " <>
           "`Cyfr.Bus` as its own structs, so the console names none of the identity " <>
@@ -578,9 +581,11 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
-        Sanctum.Catalog Sanctum.CliSignIn Sanctum.ClientIp Sanctum.Consent Sanctum.Context
-        Sanctum.Decisions
-        Sanctum.Door Sanctum.Gate Sanctum.Pairing Sanctum.Passkeys Sanctum.PolicyLog
+        Sanctum.Catalog Sanctum.CliSignIn Sanctum.ClientIp Sanctum.CompanyLogin Sanctum.Consent
+        Sanctum.Context Sanctum.Decisions
+        Sanctum.Door Sanctum.Gate Sanctum.Handle Sanctum.Invitations Sanctum.Newcomer
+        Sanctum.Pairing
+        Sanctum.Passkeys Sanctum.PolicyLog
         Sanctum.Recovery Sanctum.Refusals Sanctum.RequestLog Sanctum.Session
         Sanctum.SignIn
         Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
@@ -603,11 +608,31 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Recovery` is the system layer's read of the person's checklist after " <>
           "a declared restore (`checklist/1`), what it lists for them to re-enable, " <>
           "re-consent and rotate; each re-enable it offers is an operation, decided there. " <>
+          "`Sanctum.Newcomer` is the setup page's admission of the installation's first " <>
+          "person: whether the setup link's token opens setup now (`setup_open/1`), " <>
+          "before any ceremony, and the setup admission its passkey brings (`admit/2`), " <>
+          "which decides in its own transaction; it is also the sign-in page's open " <>
+          "admission, offered while the door's `*` admits " <>
+          "(`Sanctum.Door.Store.wildcard/0`, which only shows the offer: the admission " <>
+          "asks the door again), and the invitation page's admission of the person an " <>
+          "invitation names (`admit/2`). `Sanctum.Invitations` is that page's read of " <>
+          "who invited and to which athanor, or that the code admits no one " <>
+          "(`lookup/1`), before any ceremony, which grants nothing: the admission " <>
+          "decides again in its transaction. `Sanctum.Handle` is the identity card's " <>
+          "live check of a handle against the registry's answer, and the sign-in page's " <>
+          "reading of the identifier and published address a handle names (`resolve/1`), " <>
+          "navigation that grants nothing. " <>
+          "`Sanctum.CompanyLogin` is the company page's: whether the browser's session is " <>
+          "refused for the company sign-in alone (`held/1`), the sign-in it begins for that " <>
+          "session (`start/1`) and the issuer's callback it finishes (`complete/2`), which " <>
+          "binds only in its own transaction and unlocks no one. " <>
           "`Sanctum.Passkeys` is the sign-in page's passkey sign-in method: the challenge it holds " <>
           "and the answer it verifies into a session, as the device flow's poll is " <>
           "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` sign-in method's: " <>
-          "the CYFR that holds the person's identity, where the sign-in page sends them (`signing_home/1`), the " <>
-          "challenge it mints for the carry they bring back (`challenge/1`), where the " <>
+          "the CYFR that holds the person's identity, where the sign-in page sends them (`signing_home/1`), " <>
+          "the hosted CYFR it offers (`hosted/0`), the " <>
+          "challenge it mints for the carry they bring back, held to the identifier a " <>
+          "handle requested (`challenge/2`), where the " <>
           "callback's hop returns them (`redirect_url/1`), the assertion the callback " <>
           "admits into a session, through the sign-in method (`callback/2`), and the carry's " <>
           "lifetime the sign-in and `/carry` pages hand their script " <>
@@ -958,8 +983,7 @@ defmodule Cyfr.Boundaries do
       allow: [],
       reason:
         "everything consent reads about a component comes through the " <>
-          "`Sanctum.Consent.Components` port, and the sign-in probe is the component " <>
-          "domain's: `Compendium.SignInSync` holds it and calls down. " <>
+          "`Sanctum.Consent.Components` port, and no sign-in speaks to the registry. " <>
           "A foundation's build does not see the host's boundaries: its pruned code path " <>
           "makes a call an undefined-module warning that names no boundary, and a bare name " <>
           "compiles."
@@ -976,7 +1000,7 @@ defmodule Cyfr.Boundaries do
       into: "CyfrWeb",
       depth: 3,
       allow: ~w(
-        CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage CyfrWeb.PendingProbe
+        CyfrWeb CyfrWeb.ContextGuard CyfrWeb.Endpoint CyfrWeb.MinimalPage
         CyfrWeb.Pipelines CyfrWeb.Plugs.ApiSecurityHeaders CyfrWeb.Plugs.AuthRateLimit
         CyfrWeb.Plugs.BrowserCSP CyfrWeb.Plugs.CallIdentity CyfrWeb.Plugs.ConfiguredUeberauth
         CyfrWeb.Plugs.FrameRequest
@@ -1165,7 +1189,9 @@ defmodule Cyfr.Boundaries do
           "sessions, API keys, tincture frame credentials, paired clients, their " <>
           "pairing invitations and device certificates, registry push tokens, " <>
           "provider credentials, webhooks, " <>
-          "the identities, memberships, athanors and sign-in permissions that decide standing, a " <>
+          "the identities, memberships, athanors and sign-in permissions that decide standing, " <>
+          "the invitations that admit a person and seat them, a person's company sign-in " <>
+          "and the company sign-ins in flight, a " <>
           "person's identity row, keys, attempts and carries, the directory's logs " <>
           "and cached heads, passkeys, pending confirmations, the installation claim, " <>
           "the pre-authentication rate windows, the instance's own entries and " <>
@@ -1503,13 +1529,21 @@ defmodule Cyfr.Boundaries do
           "constant that reads no row, so the page and the files API refuse at one size."
     },
     %{
-      from: "PrismWeb.LegalAcceptController",
-      into: "Arca.Cache",
-      functions: [:get],
+      from: "PrismWeb.SetupLive",
+      into: "Arca.ControlPlane",
+      functions: [:held?],
       reason:
-        "the legal texts a version names are kept for a while once read; a read " <>
-          "answers them or a miss, and drops an expired entry as it finds it, which is " <>
-          "the cache's own housekeeping."
+        "a server that does not hold its control-plane slot signs nobody in: the setup " <>
+          "page asks whether this server holds the slot right now before a passkey ceremony."
+    },
+    %{
+      from: "PrismWeb.InviteLive",
+      into: "Arca.ControlPlane",
+      functions: [:held?],
+      reason:
+        "a server that does not hold its control-plane slot signs nobody in: the " <>
+          "invitation page asks whether this server holds the slot right now before a " <>
+          "passkey ceremony."
     },
     %{
       from: "PrismWeb.LoginLive",
@@ -1695,12 +1729,22 @@ defmodule Cyfr.Boundaries do
           "completes it, so a ticket cannot be replayed: server-local memory, never a row."
     },
     %{
-      from: "PrismWeb.LegalAcceptController",
+      from: "PrismWeb.SetupLive",
       into: "Arca.Cache",
       functions: [:put],
       reason:
-        "the legal texts a version names are kept once read, for a bounded time: " <>
-          "server-local memory, never a row."
+        "the setup page leaves the passkey sign-in's single-use ticket, bound to the " <>
+          "browser, for the callback that completes it, for a bounded time: server-local " <>
+          "memory, never a row."
+    },
+    %{
+      from: "PrismWeb.InviteLive",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the invitation page leaves the passkey sign-in's single-use ticket, bound to the " <>
+          "browser, for the callback that completes it, for a bounded time: server-local " <>
+          "memory, never a row."
     },
     %{
       from: "PrismWeb.LoginLive",
@@ -1834,10 +1878,10 @@ defmodule Cyfr.Boundaries do
   # reported stale. Boundary checks modules, never functions.
   @sanctum_exports %{
     "Sanctum" => [
-      auth_configured?: 0,
       build_tincture_context: 2,
       origin: 0,
-      reconcile_platform_admins: 2,
+      registry_base_url: 1,
+      registry_host: 0,
       system_context: 0
     ],
     "Sanctum.Annotations" => [
@@ -1850,18 +1894,23 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
     "Sanctum.Attach" => [resolve: 5],
-    "Sanctum.Auth" => [provider: 0],
     "Sanctum.Auth.CyfrDoor" => [
       callback: 2,
       carry_lifetime_ms: 0,
-      challenge: 1,
+      challenge: 2,
+      hosted: 0,
       redirect_url: 1,
       signing_home: 1
     ],
-    "Sanctum.Auth.DeviceFlow" => [configured_providers: 0, impl: 0, provider?: 1, providers: 0],
-    "Sanctum.Auth.EmailVerification" => [verify_with_claim: 3],
+    "Sanctum.Auth.DeviceFlow" => [configured_providers: 0, impl: 0, provider?: 1],
     "Sanctum.Auth.Identity" => [reserved_issuer?: 1],
-    "Sanctum.Auth.OIDC" => [issuer: 0, reauth_callback: 1, reauth_decide: 3],
+    "Sanctum.Auth.OIDC" => [
+      authenticate: 1,
+      email_verified: 1,
+      issuer: 0,
+      reauth_callback: 1,
+      reauth_decide: 3
+    ],
     "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
     "Sanctum.Authority.BudgetCounter" => [release: 1],
     "Sanctum.BearerToken" => [read: 1],
@@ -1871,7 +1920,6 @@ defmodule Cyfr.Boundaries do
       establish_context: 1,
       establish_kit: 2,
       fresh?: 1,
-      peek: 1,
       revalidate_session: 1
     ],
     "Sanctum.Carry" => [sweep: 1],
@@ -1913,6 +1961,7 @@ defmodule Cyfr.Boundaries do
     # definition, the family and the refusal each member answers. The
     # tincture data routes read a frame's grant, for the flows its
     # tincture's ingress declares, as the loader reads a stored head.
+    "Sanctum.CompanyLogin" => [complete: 2, held: 1, start: 1],
     "Sanctum.Consent.Loader" => [
       admitted_blob: 3,
       damage?: 1,
@@ -1949,8 +1998,8 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 2],
     "Sanctum.Directory" => [append: 2, recover: 2, register: 1, resolve: 1],
-    "Sanctum.Door" => [admit_identity: 2, platform_admin_emails: 0, refusal_message: 0],
-    "Sanctum.Door.Store" => [requests: 0],
+    "Sanctum.Door" => [refusal_message: 0],
+    "Sanctum.Door.Store" => [requests: 0, wildcard: 0],
     "Sanctum.Egress" => [pinned_request: 5],
     "Sanctum.ExecutionStanding" => [capture: 1, retired_attempts: 3, stamp_only: 1, verify: 1],
     "Sanctum.Gate" => [
@@ -1960,12 +2009,15 @@ defmodule Cyfr.Boundaries do
       open_stream: 2,
       open_stream: 3
     ],
+    "Sanctum.Handle" => [resolve: 1],
     "Sanctum.InstanceEntries" => [sweep_usage: 0],
+    "Sanctum.Invitations" => [lookup: 1],
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
+    "Sanctum.Newcomer" => [admit: 2, setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],
     "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
-    "Sanctum.Passkeys" => [sign_in: 2, sign_in_challenge: 0],
+    "Sanctum.Passkeys" => [newcomer_options: 0, sign_in: 2, sign_in_challenge: 0],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.PolicyLog" => [list: 2],
     "Sanctum.Provisioning" => [
@@ -2000,8 +2052,10 @@ defmodule Cyfr.Boundaries do
       restore_challenge: 1
     ],
     "Sanctum.Refusals" => [classify: 1, classify: 2, code_override: 1, known?: 1, render: 1],
+    "Sanctum.Person" => [home: 0, sign_registry_request: 3],
     "Sanctum.RegistryCredentials" => [
       confirm_issuance: 4,
+      delete_push_token: 4,
       get: 3,
       list: 2,
       put_push_token: 6
@@ -2011,11 +2065,10 @@ defmodule Cyfr.Boundaries do
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1],
     "Sanctum.SignIn" => [
-      admitted: 2,
       link_ticket: 2,
       record_claim: 2,
       record_namespace: 2,
-      suggested_slug: 2
+      unlock: 1
     ],
     "Sanctum.Tenancy" => [
       channel_active?: 2,
@@ -2042,6 +2095,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Tenancy.Users" => [
       display_name: 1,
       get: 1,
+      list_by_id: 1,
       own_athanor?: 2,
       personal_athanor_id: 1,
       prefs: 1,
@@ -2225,19 +2279,6 @@ defmodule Cyfr.Boundaries do
           "genesis names, and redeemed once through its login receipt " <>
           "(`Sanctum.Auth.CyfrDoor`)"
     },
-    browser_claim_gate: %{
-      admits: :flow_state,
-      why:
-        "the publisher-namespace claim page and its throttled submit, gated by the " <>
-          "pending sign-in probe the session holds — expired, the page says so and " <>
-          "sends the caller back to sign in"
-    },
-    browser_public_legal: %{
-      admits: :flow_state,
-      why:
-        "renders the bundled policies and relays an acceptance, under the same " <>
-          "pending sign-in the claim gate reads"
-    },
     public_health: %{
       admits: :nothing,
       why: "a load balancer's probe, throttled per address"
@@ -2298,6 +2339,14 @@ defmodule Cyfr.Boundaries do
           "and no CSRF token, since no cross-site form sets the header and no CORS answer " <>
           "admits one"
     },
+    browser_company_login: %{
+      admits: :session,
+      why:
+        "the browser's own cookie session, admitted only while it is refused for the " <>
+          "company sign-in a CYFR requires and nothing else (`Sanctum.CompanyLogin.held/1`): " <>
+          "the company page and its start, a POST under the browser pipeline's CSRF token; " <>
+          "every other route refuses that session"
+    },
     browser_session: %{
       admits: :session,
       why:
@@ -2314,9 +2363,11 @@ defmodule Cyfr.Boundaries do
     {:post, "/auth/logout"},
     {:get, "/directory/v1/:identifier"},
     {:post, "/directory/v1/genesis"},
+    {:get, "/invite"},
     {:get, "/login"},
     {:get, "/pair"},
-    {:get, "/restore"}
+    {:get, "/restore"},
+    {:get, "/setup"}
   ]
 
   @doc """
@@ -2418,6 +2469,10 @@ defmodule Cyfr.Boundaries do
   @config_key_classes %{
     # Test seams — see `Sanctum.Auth.DeviceFlow.impl/0` for the rule.
     allow_tenancy_resolver_override: :seam,
+    # The bearer a test signs in with (`Sanctum.Auth`'s `current_user/1`,
+    # read by `CyfrWeb.Plugs.Authenticate`): `CyfrWeb.ConnCase` sets it,
+    # a release never does.
+    bearer_provider: :seam,
     tenancy_resolver_override: :seam,
     tool_providers_lenient: :seam,
     thread_recovery: :seam,
@@ -2425,10 +2480,14 @@ defmodule Cyfr.Boundaries do
     device_flow_endpoints: :seam,
     provisioning_inline: :seam,
     record_sink_inline: :seam,
-    # The issuer's side of an OpenID Connect re-authentication
-    # (`Sanctum.Auth.OIDC`): a test stands in its own for the token
+    # The issuer's side of an OpenID Connect re-authentication or company
+    # sign-in (`Sanctum.Auth.OIDC`): a test stands in its own for the token
     # exchange, as `device_flow` does for the device flow's.
     oidc_reauth_client: :seam,
+    # WorkOS's API base URL (`Sanctum.Auth.WorkOS`), which a suite points at
+    # its scripted WorkOS on loopback; a release never sets it, so the
+    # company sign-in reaches https://api.workos.com.
+    workos_api_url: :seam,
     # The directory client's resolver and trusted certificates
     # (`Sanctum.Directory.Client`), which a suite sets to reach its
     # scripted directory through paths that pass no options; a caller's
@@ -2445,8 +2504,8 @@ defmodule Cyfr.Boundaries do
     # one; a release never sets it, so only the shipped presets are read.
     scripted_oauth_provider: :seam,
     # Compiled in by `config/test.exs` alone; with the runtime switch off it
-    # lets the sandboxed suite boot omit `Cyfr.Bootstrap`
-    # (`Cyfr.Application.bootstrap_skipped?/2`).
+    # lets the sandboxed suite boot omit the boot gate's children and the
+    # no-person notice (`Cyfr.Application.bootstrap_skipped?/2`).
     bootstrap_skip_permitted: :seam,
     # Compiled in by `config/test.exs` alone, shortening the transports'
     # retry backoff base (`Compendium.Transport.Retry`); never read at runtime.
@@ -2500,7 +2559,6 @@ defmodule Cyfr.Boundaries do
     cache_max_binary_bytes: :default,
     cache_max_compiled_components: :default,
     tincture_max_decompressed_bytes: :default,
-    returning_probe_ms: :default,
 
     # Operator-shaped, with nothing to set them from. Each has a sensible
     # in-code default, so this is a gap in reach, not a broken deployment.
@@ -2700,6 +2758,13 @@ defmodule Cyfr.Boundaries do
       reason:
         "declared and implemented inside Sanctum (`auth/oauth.ex`, `auth/oidc.ex`) and " <>
           "selected by configuration. An internal strategy behaviour, not a port."
+    },
+    %{
+      behaviour: "Sanctum.CompanyLogin.Issuer",
+      reason:
+        "a company's issuer, declared and implemented inside Sanctum (`auth/oidc.ex`, " <>
+          "`auth/workos.ex`) and selected by `CYFR_COMPANY_LOGIN`'s configuration. An " <>
+          "internal strategy behaviour, not a port."
     }
   ]
 
@@ -2859,7 +2924,8 @@ defmodule Cyfr.Boundaries do
     # The browser's sign-in, re-authentication and policy acceptance, which
     # establish a person's sign-in, prove it fresh or complete it rather
     # than act under a context the gate admitted: a sign-in's start,
-    # its tickets, callbacks and door link, a fresh sign-in's proof of a
+    # its tickets, callbacks and door link, a company sign-in's start and
+    # callback, a fresh sign-in's proof of a
     # confirmation and the answer to it, and the registry policy a sign-in
     # accepts. The browser's sign-out decides nothing and is no entry.
     # Cyfr's boundary does not depend on PrismWeb, so these rows name their
@@ -2873,6 +2939,24 @@ defmodule Cyfr.Boundaries do
     %{
       module: Module.concat(["PrismWeb", "AuthController"]),
       site: :request,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "AuthController"]),
+      site: :cyfr_start,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "AuthController"]),
+      site: :company_start,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "AuthController"]),
+      site: :company_callback,
       plane: :external,
       origin: :none
     },
@@ -2895,12 +2979,6 @@ defmodule Cyfr.Boundaries do
       origin: :none
     },
     %{
-      module: Module.concat(["PrismWeb", "AuthController"]),
-      site: :post_legal_accept,
-      plane: :external,
-      origin: :none
-    },
-    %{
       module: Module.concat(["PrismWeb", "PasskeyController"]),
       site: :complete,
       plane: :external,
@@ -2918,21 +2996,9 @@ defmodule Cyfr.Boundaries do
       plane: :external,
       origin: :none
     },
-    %{
-      module: Module.concat(["PrismWeb", "LegalAcceptController"]),
-      site: :show,
-      plane: :external,
-      origin: :none
-    },
-    %{
-      module: Module.concat(["PrismWeb", "LegalAcceptController"]),
-      site: :submit,
-      plane: :external,
-      origin: :none
-    },
     # The pre-session throttle on the routes whose pipeline mints a call
     # identity: restore, the OAuth callback, a device's certificate
-    # renewal, and the browser's sign-in and policy acceptance.
+    # renewal, and the browser's sign-in.
     %{module: CyfrWeb.Plugs.AuthRateLimit, site: :call, plane: :external, origin: :none},
     # The scheduler's fire: its own admission is the occurrence claimed
     # under a held generation, and a run admission refusal is that fire's

@@ -16,7 +16,7 @@ defmodule Cyfr.StandingWatchTest do
   import Prima.Test.Wait
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Arca.Cache.init()
@@ -36,7 +36,7 @@ defmodule Cyfr.StandingWatchTest do
     n = System.unique_integer([:positive])
 
     {:ok, owner} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|standing-#{n}",
         provider: "github",
         email: "standing#{n}@example.com",

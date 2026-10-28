@@ -40,13 +40,13 @@ defmodule Prism.Labels do
   }
 
   @doc """
-  The mode a person without a saved preference sees. On a server with a
-  door — an auth provider — everyone but the operators lands in `lite`,
-  the chat; a private box, or an operator, gets `dev`.
+  The mode a person without a saved preference sees: everyone but the
+  platform administrator lands in `lite`, the chat; the administrator
+  gets `dev`.
   """
   @spec default(map() | nil) :: String.t()
   def default(%{platform_admin: true}), do: "dev"
-  def default(_ctx), do: if(Sanctum.auth_configured?(), do: "lite", else: "dev")
+  def default(_ctx), do: "lite"
 
   @doc "Normalise a stored preference to a mode, falling back to `default/1`."
   @spec mode(term(), map() | nil) :: String.t()

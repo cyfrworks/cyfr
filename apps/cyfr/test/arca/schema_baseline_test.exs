@@ -10,7 +10,7 @@ defmodule Arca.SchemaBaselineTest do
 
   The athanor is the only tenant column: the tables that carry `athanor_id`
   are exactly `Arca.TenantTables`'s roster, only `memberships`,
-  `sessions` and `decision_logs` may leave it null, and the tables without it are the ones the
+  `sessions`, `decision_logs` and `invitations` may leave it null, and the tables without it are the ones the
   roster names as not athanor-scoped or reached through a parent, the
   athanors themselves, and the server's people and door.
 
@@ -72,14 +72,14 @@ defmodule Arca.SchemaBaselineTest do
     end
   end
 
-  test "the tables carrying athanor_id are Arca.TenantTables's roster, NOT NULL but three",
+  test "the tables carrying athanor_id are Arca.TenantTables's roster, NOT NULL but four",
        %{declared: declared} do
     scoped = for {table, %{"athanor_id" => column}} <- declared, into: %{}, do: {table, column}
 
     assert Enum.sort(Map.keys(scoped)) == Enum.sort(Arca.TenantTables.roster())
 
     nullable = for {table, %{not_null?: false}} <- scoped, do: table
-    assert Enum.sort(nullable) == ["decision_logs", "memberships", "sessions"]
+    assert Enum.sort(nullable) == ["decision_logs", "invitations", "memberships", "sessions"]
 
     for table <- Map.keys(scoped) do
       athanor = Enum.find(columns(table), &(&1.name == "athanor_id"))
@@ -109,11 +109,17 @@ defmodule Arca.SchemaBaselineTest do
     refute "scope" in Enum.map(columns("sessions"), & &1.name)
     user_names = Enum.map(columns("users"), & &1.name)
 
-    for col <- ~w(email email_verified namespace personal_athanor_id status prefs),
+    for col <- ~w(email email_verified namespace personal_athanor_id status prefs admission),
         do: assert(col in user_names)
 
+    # A person is made by an admission, recorded on their row; no provider
+    # names them.
+    refute "provider" in user_names
+
+    # A seat names a person or the identifier it waits for; no email does.
     membership_names = Enum.map(columns("memberships"), & &1.name)
-    for col <- ~w(email status added_by), do: assert(col in membership_names)
+    for col <- ~w(person_identifier status added_by), do: assert(col in membership_names)
+    refute "email" in membership_names
     refute Enum.find(columns("memberships"), &(&1.name == "user_id")).not_null?
   end
 
@@ -146,7 +152,7 @@ defmodule Arca.SchemaBaselineTest do
     person = fn generation ->
       %{
         id: "usr_gen_#{System.unique_integer([:positive])}",
-        provider: "github",
+        admission: "open",
         security_generation: generation,
         first_seen_at: now,
         last_seen_at: now,

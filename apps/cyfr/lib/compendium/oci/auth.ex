@@ -12,8 +12,9 @@ defmodule Compendium.OCI.Auth do
 
   1. Client resolves the per-namespace push token from `CredentialStore`.
   2. Client emits `Authorization: Bearer <cyfr_pt_...>` on every request.
-  3. On 401, caller surfaces `:token_revoked` (or similar) and prompts the
-     user to re-probe — no automatic refresh.
+  3. On 401 to a push, the stored token is removed and the push refuses
+     `registry_token_missing`, naming `cyfr registry sync`; there is no
+     automatic refresh.
 
   `Authorization: Basic base64(anyuser:token)` is also accepted server-side
   for Docker/OCI client compatibility; cyfr itself always uses Bearer.
@@ -40,7 +41,7 @@ defmodule Compendium.OCI.Auth do
   def auth_headers(registry, _repository, namespace_slug, ctx \\ nil) do
     case fetch_credential(registry, namespace_slug, ctx) do
       {:ok, %{type: :push_token, token: token}} when is_binary(token) and token != "" ->
-        {:ok, [{"authorization", "Bearer #{token}"}]}
+        {:ok, bearer(token)}
 
       :anonymous ->
         {:ok, []}
@@ -54,6 +55,26 @@ defmodule Compendium.OCI.Auth do
         {:error, credential_unreadable(reason, namespace_slug)}
     end
   end
+
+  @doc """
+  The key of the credential `headers` carry: the SHA-256 of their
+  authorization header, or `"anonymous"` when they carry none. It names a
+  credential without holding it: the OCI cache memoizes entitlement under
+  it, and a refused push compares the stored token's key with the one the
+  refused request carried (`push_token_key/1`).
+  """
+  @spec credential_key([{String.t(), String.t()}]) :: String.t()
+  def credential_key(headers) when is_list(headers) do
+    case List.keyfind(headers, "authorization", 0) do
+      {_, value} -> Prima.Digest.sha256_hex(value)
+      nil -> "anonymous"
+    end
+  end
+
+  @doc "The key a request carrying the push token `token` has (`credential_key/1`)."
+  @spec push_token_key(String.t()) :: String.t()
+  def push_token_key(token) when is_binary(token),
+    do: credential_key(bearer(token))
 
   @doc """
   Fetch the per-namespace push-token credential for a user.
@@ -86,6 +107,8 @@ defmodule Compendium.OCI.Auth do
         :anonymous
     end
   end
+
+  defp bearer(token), do: [{"authorization", "Bearer #{token}"}]
 
   defp unreadable(namespace_slug, reason) do
     Logger.warning(

@@ -42,8 +42,7 @@ defmodule Sanctum.DeviceFlowProvidersTest do
     test "is refused by name rather than crashing" do
       for verb <- [
             fn p -> DeviceFlow.init_device_flow(p, nil) end,
-            fn p -> DeviceFlow.poll_for_session(p, "dc", nil) end,
-            fn p -> DeviceFlow.poll_for_access_token(p, "dc", nil) end
+            fn p -> DeviceFlow.poll_for_session(p, "dc", nil) end
           ] do
         assert {:error, {:unknown_provider, "acme"}} = verb.("acme")
       end

@@ -50,9 +50,15 @@ defmodule Arca.RegistryTokenStorage do
     |> Arca.Data.project()
   end
 
-  @spec put(map()) :: :ok | {:error, :database_error}
+  @doc """
+  Store a push-token row, replacing the one its `(user, registry,
+  namespace)` held. A token is stored after the registry answered, so it
+  is the holder's write alone (`Arca.Repo.owned/2`): a member whose slot
+  was taken meanwhile is refused `:not_owner` and stores nothing.
+  """
+  @spec put(map()) :: :ok | {:error, :not_owner | :database_error}
   def put(attrs) do
-    Arca.Repo.Errors.with_db_rescue("RegistryTokenStorage.put", fn ->
+    Arca.Repo.owned("Arca.RegistryTokenStorage.put", fn ->
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       row = %{
@@ -71,8 +77,38 @@ defmodule Arca.RegistryTokenStorage do
         conflict_target: [:user_id, :registry, :namespace_slug]
       )
 
-      :ok
+      {:ok, :ok}
     end)
-    |> Arca.Data.project()
+    |> stored()
+  end
+
+  defp stored({:ok, :ok}), do: :ok
+  defp stored({:error, _reason} = refused), do: refused
+
+  @doc """
+  Delete the row of `(user_id, registry, namespace_slug)` only while it
+  still holds `credential_ciphertext`: a token stored since the caller
+  read the row is kept. Answers `:ok` whether or not a row went. It
+  follows the registry's refusal of a push, so it is the holder's write
+  alone (`Arca.Repo.owned/2`).
+  """
+  @spec delete_if_unchanged(String.t(), String.t(), String.t(), binary()) ::
+          :ok | {:error, :not_owner | :database_error}
+  def delete_if_unchanged(user_id, registry, namespace_slug, credential_ciphertext)
+      when is_binary(user_id) and is_binary(registry) and is_binary(namespace_slug) and
+             is_binary(credential_ciphertext) do
+    Arca.Repo.owned("Arca.RegistryTokenStorage.delete_if_unchanged", fn ->
+      query =
+        from(t in RegistryToken,
+          where:
+            t.user_id == ^user_id and t.registry == ^registry and
+              t.namespace_slug == ^namespace_slug and
+              t.credential_ciphertext == ^credential_ciphertext
+        )
+
+      {_count, _} = Arca.Repo.delete_all(query)
+      {:ok, :ok}
+    end)
+    |> stored()
   end
 end

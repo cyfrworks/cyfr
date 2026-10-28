@@ -110,7 +110,7 @@ identity_front_start "$DIR"
 identity_front_start "$DIR2"
 for cell in "$A" "$H" "$A2"; do identity_start "$cell"; done
 
-step "the person at a.test and H's operator, signed in by the release fixture's door"
+step "the person at a.test and H's operator, signed in by the release fixture"
 person="$(server_fixture "$A" person operator@example.com join-person)"
 [ -n "$person" ] || fail "the fixture signed nobody in at A"
 USER_A="$(field "$person" user_id)"
@@ -172,7 +172,7 @@ answer_ask() {
       ;;
     h_setup)
       identifier="$(asked "$ask" identifier)"
-      allowed="$(admin_console door/allow "{\"kind\":\"identifier\",\"value\":\"$identifier\",\"note\":\"join proof\"}")"
+      allowed="$(admin_console door/allow "{\"value\":\"$identifier\",\"note\":\"join proof\"}")"
       group="$(join_fixture "$H" group "@$SECRETS/admin-token" "Household")"
       pair="$(join_fixture "$H" group "@$SECRETS/admin-token" "Pair")"
       invited_group="$(admin_console member/add "{\"athanor\":\"$(field "$group" athanor_id)\",\"identifier\":\"$identifier\"}")"

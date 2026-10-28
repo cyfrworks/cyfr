@@ -10,30 +10,36 @@ defmodule Sanctum do
   - **Authorization**: What they're allowed to do (permissions)
   - **Context**: The execution context that flows through all services
 
-  ## Signing in
+  ## People and signing in
 
-  Every session is minted by `Sanctum.Session`, on one of these paths:
+  A person is made only by an admission (`Sanctum.Newcomer`): setup, an
+  invitation (`Sanctum.Invitations`), an open door, a verified CYFR
+  sign-in, or a restore. Every session is
+  minted by `Sanctum.Session`, on one of these paths:
 
-  - the browser flow — `PrismWeb.AuthController.callback/2` asks the door
-    (`Sanctum.Door.admit_identity/2`) after the configured provider
-    (`Sanctum.Auth.provider/0`: `Sanctum.Auth.OAuth` or
-    `Sanctum.Auth.OIDC`) proves the identity;
-  - the CLI device flow — `Sanctum.Auth.DeviceFlow.poll_for_session/3`
-    behind the `session` MCP tool (`cyfr login`), which asks the door the
-    same way;
+  - an admission that brings its credential (`Sanctum.Newcomer`);
+  - the OpenID Connect browser flow — `PrismWeb.AuthController.callback/2`
+    unlocks the person who linked the identity `Sanctum.Auth.OIDC` proves
+    (`Sanctum.SignIn.unlock/1`, which asks the door about them);
+  - the GitHub and Google device flows —
+    `Sanctum.Auth.DeviceFlow.poll_for_session/4` behind the `session` MCP
+    tool (`cyfr login`) and the sign-in page, which unlock the same way;
   - a command line a signed-in person approves in Prism
     (`Sanctum.CliSignIn`);
-  - the `cyfr` door (`Sanctum.Auth.CyfrDoor`), which asks the door for
-    the person's identity, and a passkey (`Sanctum.Passkeys`), which asks
-    it for each door identity the person holds and their verified email;
+  - the CYFR sign-in (`Sanctum.Auth.CyfrDoor`), which unlocks a person
+    admitted before or admits a remote newcomer, and a passkey
+    (`Sanctum.Passkeys`), which asks the door about the person;
   - the installation-authorized restore (`Sanctum.Recovery`).
 
-  Providers prove who someone is; they never mint sessions themselves.
+  A sign-in method proves who someone is; it never makes a person and
+  never mints a session itself. The methods offered are the ones
+  configured (`Sanctum.Auth.DeviceFlow.configured_providers/0`,
+  `Sanctum.Auth.OIDC.issuer/0`); passkeys, paired devices and the CYFR
+  sign-in are always offered.
 
-  ## Configuration
-
-      config :sanctum,
-        auth_provider: Sanctum.Auth.OAuth  # or the configured auth provider
+  A CYFR may also require a company sign-in of every person here
+  (`Sanctum.CompanyLogin`): a standing condition, never a sign-in method,
+  which `Sanctum.Caller` checks last wherever a person's standing is read.
   """
 
   use Boundary,
@@ -47,7 +53,6 @@ defmodule Sanctum do
       Auth.DeviceFlow,
       Auth.EmailVerification,
       Auth.Identity,
-      Auth.OAuth,
       Auth.OIDC,
       Authority,
       Authority.BudgetCounter,
@@ -60,6 +65,7 @@ defmodule Sanctum do
       Cipher.Rotation,
       CliSignIn,
       ClientIp,
+      CompanyLogin,
       Consent,
       Consent.Accounts,
       Consent.Components,
@@ -79,10 +85,13 @@ defmodule Sanctum do
       ExecutionStanding,
       Gate,
       Gate.Supervisor,
+      Handle,
       IdentityFreshness,
       InstanceEntries,
+      Invitations,
       Namespace,
       Network,
+      Newcomer,
       Notify,
       Pairing,
       Passkeys,
@@ -131,18 +140,6 @@ defmodule Sanctum do
   alias Sanctum.Context
 
   @doc """
-  True when an auth provider is configured.
-
-  When false, requests run as the unauthenticated public context and the
-  instance is operated by a single trusted operator — so operator-only
-  conveniences (private-IP egress, host-filesystem artifact reads, broad
-  anonymous browsing) are safe. When true, untrusted signed-in users may be
-  present, so those are locked down.
-  """
-  @spec auth_configured?() :: boolean()
-  def auth_configured?, do: not is_nil(Sanctum.Auth.provider())
-
-  @doc """
   The externally reachable base URL of this instance, without a trailing
   slash, or `nil` when the operator has not declared one
   (`:sanctum, :public_url`, from `CYFR_PUBLIC_URL`).
@@ -184,14 +181,67 @@ defmodule Sanctum do
 
   @doc """
   The directory this deployment enrolls its local people at
-  (`:sanctum, :directory_url`, from `CYFR_DIRECTORY_URL`), or `nil` when
-  it names none: local operation and local pairing need none, and
-  enrollment needs one. There is no hosted default, and no operation takes
-  a directory URL. `Sanctum.Supervisor` refuses the boot on a value
+  (`:sanctum, :directory_url`, from `CYFR_DIRECTORY_URL`, `https://cyfr.run`
+  when unset), or `nil` when it names none: local operation and local
+  pairing need none, and enrollment needs one. No operation takes a
+  directory URL. `Sanctum.Supervisor` refuses the boot on a value
   `enrollment_directory?/1` refuses.
   """
   @spec directory_url() :: String.t() | nil
   def directory_url, do: Application.get_env(:sanctum, :directory_url)
+
+  @doc """
+  The registry this deployment speaks to (`:sanctum, :registry_url`, from
+  the one parse of `CYFR_REGISTRY_URL` that sets Compendium's too): a host
+  with an optional port, or `"none"` for no registry.
+  """
+  @spec registry_url() :: String.t()
+  def registry_url, do: Application.get_env(:sanctum, :registry_url, "none")
+
+  @doc """
+  The registry's canonical host, the name a signed registry request binds
+  (`Prima.RegistryRequest`): `registry_url/0` lowercased without its port.
+  `{:error, :no_registry}` when this deployment names no registry, or a
+  value with no host.
+  """
+  @spec registry_host() :: {:ok, String.t()} | {:error, :no_registry}
+  def registry_host do
+    with url when url != "none" <- registry_url(),
+         %URI{host: host} when is_binary(host) and host != "" <- URI.parse("//" <> url),
+         host = String.downcase(host),
+         true <- Prima.Identity.Encoding.host?(host) do
+      {:ok, host}
+    else
+      _none -> {:error, :no_registry}
+    end
+  end
+
+  @doc """
+  The base URL of a registry host (a name or address with an optional
+  port): `http://` for a loopback host, `localhost`, `127.0.0.0/8` or
+  `::1`, a registry on this machine, and `https://` for every other.
+  """
+  @spec registry_base_url(String.t()) :: String.t()
+  def registry_base_url(host) when is_binary(host) do
+    if loopback?(host), do: "http://" <> host, else: "https://" <> host
+  end
+
+  defp loopback?(host) do
+    case URI.parse("//" <> host) do
+      %URI{host: "localhost"} ->
+        true
+
+      %URI{host: name} when is_binary(name) ->
+        case :inet.parse_address(String.to_charlist(name)) do
+          {:ok, {127, _, _, _}} -> true
+          {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
 
   @doc """
   Whether `value` is a directory this deployment may pin for enrollment:
@@ -215,67 +265,14 @@ defmodule Sanctum do
   def restore_token?(value), do: is_binary(value) and Regex.match?(~r/\A[0-9a-f]{64}\z/, value)
 
   @doc """
-  The boot's operator reconcile, under the `bootstrap` claim `claim`.
-
-  The operator list (`CYFR_PLATFORM_ADMIN_EMAILS`) is validated and
-  snapshotted here, once: a list of lowercased addresses, or
-  `{:error, :malformed_configuration}` before any row is read. Storage
-  then removes, in one transaction under the member slot and the claim,
-  every platform grant whose person that snapshot no longer names, with
-  all of that person's sessions (`Arca.Members.reconcile_platform/3`).
-  Only after that commit are the removed sessions' established contexts
-  dropped and their revocation announced.
-
-  `opts`: `:slot` (`Arca.ControlPlane.held/0`'s slot, or `:none` where no
-  member claims one) and `:lease_ms` (the claim lease the final renewal
-  extends). Answers the renewed claim the caller releases, or the
-  refusal; nothing is announced on a refusal, because nothing committed.
+  Whether `value` is an installation's setup token, in the restore
+  token's form: exactly 64 lowercase hexadecimal characters, 32 random
+  bytes. The token admits the installation's first person
+  (`Sanctum.Newcomer`); unset, setup opens nothing. It is never a
+  platform setting or a log value.
   """
-  @spec reconcile_platform_admins(Arca.JobClaims.held(), keyword()) ::
-          {:ok, map()} | {:error, atom()}
-  def reconcile_platform_admins(%{kind: _, key: _, owner: _, fence: _} = claim, opts)
-      when is_list(opts) do
-    with {:ok, operators} <- operator_snapshot(),
-         {:ok, %{claim: renewed, revoked: revoked}} <-
-           Arca.Members.reconcile_platform(Prima.Actor.system(), claim,
-             slot: Keyword.fetch!(opts, :slot),
-             lease_ms: Keyword.fetch!(opts, :lease_ms),
-             operators: operators,
-             policy_digest: policy_digest(operators)
-           ) do
-      for %{user_id: user_id, session_hashes: hashes} <- revoked do
-        Sanctum.Session.announce_revoked(user_id, hashes)
-      end
-
-      {:ok, renewed}
-    end
-  end
-
-  # The configured list, read through the door that compares sign-ins
-  # against it (`Sanctum.Door.platform_admin_emails/0`), and accepted only
-  # in the shape the door assumes: a list of lowercased addresses with
-  # nothing around them. Anything else is a configuration the reconcile
-  # cannot read, and reading it loosely could keep an operator the list no
-  # longer names.
-  defp operator_snapshot do
-    case Sanctum.Door.platform_admin_emails() do
-      emails when is_list(emails) ->
-        if Enum.all?(emails, &operator_email?/1),
-          do: {:ok, emails |> Enum.uniq() |> Enum.sort()},
-          else: {:error, :malformed_configuration}
-
-      _malformed ->
-        {:error, :malformed_configuration}
-    end
-  end
-
-  defp operator_email?(email) when is_binary(email),
-    do: email != "" and email == email |> String.trim() |> String.downcase()
-
-  defp operator_email?(_email), do: false
-
-  defp policy_digest(operators),
-    do: Prima.Digest.sha256(Jason.encode!(%{version: 1, operators: operators}))
+  @spec setup_token?(term()) :: boolean()
+  def setup_token?(value), do: restore_token?(value)
 
   @doc """
   Server-internal context for background/system operations — sweepers, health

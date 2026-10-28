@@ -88,7 +88,6 @@ defmodule Sanctum.Vault.OAuthRedirectUriTest do
         "CYFR_HOST" => "cyfr.tail1a2b3c.ts.net",
         "CYFR_TAILNET_NODE_ID" => "nAbc123XYZ1CNTRL",
         "CYFR_PUBLIC_URL" => @home,
-        "CYFR_AUTH_PROVIDER" => "oidc",
         "CYFR_OIDC_ISSUER" => "https://auth.example.com",
         "CYFR_OIDC_CLIENT_ID" => "cyfr",
         "CYFR_OIDC_CLIENT_SECRET" => "secret"

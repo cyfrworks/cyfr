@@ -70,7 +70,7 @@ defmodule Sanctum.AnonymousIngressTest do
       n = System.unique_integer([:positive])
 
       {:ok, departed} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "github|https://github.com|departed-#{n}",
           provider: "github",
           email: "departed-#{n}@example.com",

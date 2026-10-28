@@ -46,7 +46,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     n = uniq()
 
     {:ok, user} =
-      Arca.Users.mint(
+      Arca.Test.People.mint(
         server(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
@@ -463,6 +463,30 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     id
   end
 
+  # An invitation to become a person here, issued by `issuer` at the
+  # standing their row holds now, ended or not as `ending` says.
+  defp admission_invitation!(issuer, ending \\ %{}) do
+    id = Prima.UUID7.generate_id("inv")
+
+    insert!(
+      Schemas.Invitation,
+      Map.merge(
+        %{
+          id: id,
+          code_hash: Prima.Digest.sha256_hex(:crypto.strong_rand_bytes(32)),
+          issued_by: issuer.id,
+          issuer_generation: issuer.security_generation,
+          expires_at: DateTime.add(now(), 3600, :second),
+          inserted_at: now(),
+          updated_at: now()
+        },
+        ending
+      )
+    )
+
+    id
+  end
+
   defp get(schema, id), do: Arca.Repo.get(schema, id)
 
   defp invited(athanor_id, invitee) do
@@ -520,6 +544,12 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       pending_passkey: passkey!(alice.id, "pending"),
       revoked_passkey: passkey!(alice.id, "revoked"),
       confirmation: confirmation!(own.id, alice.id),
+      invitation: admission_invitation!(alice),
+      expired_invitation:
+        admission_invitation!(alice, %{expires_at: DateTime.add(now(), -60, :second)}),
+      redeemed_invitation:
+        admission_invitation!(alice, %{redeemed_by: bob.id, redeemed_at: now()}),
+      revoked_invitation: admission_invitation!(alice, %{revoked_at: now()}),
       profile: profile,
       blocked_profile: profile!(own.id, "needs_consent"),
       revoked_profile: profile!(own.id, "revoked"),
@@ -628,6 +658,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       fixture = home!()
       alice_generation = fixture.alice.security_generation
       own_generation = get(Schemas.Athanor, fixture.own.id).security_generation
+      revoked_at = get(Schemas.Invitation, fixture.revoked_invitation).revoked_at
       restore_id = marked!()
 
       assert {:ok, change} = SecurityTransitions.restore(slot: :none)
@@ -657,6 +688,20 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       # Pending confirmations are deleted.
       refute get(Schemas.PendingConfirmation, fixture.confirmation)
       assert change.deleted_confirmation_refs == [fixture.confirmation]
+
+      # Open invitations to become a person are revoked, expired or not; a
+      # redeemed one stays redeemed, a revoked one keeps its revocation.
+      for id <- [fixture.invitation, fixture.expired_invitation] do
+        assert %{revoked_at: %DateTime{}, redeemed_at: nil} = get(Schemas.Invitation, id)
+      end
+
+      assert %{revoked_at: nil, redeemed_at: %DateTime{}} =
+               get(Schemas.Invitation, fixture.redeemed_invitation)
+
+      assert get(Schemas.Invitation, fixture.revoked_invitation).revoked_at == revoked_at
+
+      assert change.revoked_admission_invitation_ids ==
+               Enum.sort([fixture.invitation, fixture.expired_invitation])
 
       # Profiles need consent; a blocked one stays blocked, a revoked one revoked.
       assert get(Schemas.Profile, fixture.profile).status == "needs_consent"
@@ -833,6 +878,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       assert get(Schemas.ApiKey, fixture.key).suspended == false
       assert get(Schemas.Profile, fixture.profile).status == "active"
       assert get(Schemas.Execution, fixture.open_execution).status == "running"
+      assert get(Schemas.Invitation, fixture.invitation).revoked_at == nil
       assert rows(fixture.alice.id) == []
       assert %{value: ^restore_id} = marker()
 
@@ -852,6 +898,21 @@ defmodule Arca.SecurityTransitionsRestoreTest do
         assert {:error, :postcondition_failed} = SecurityTransitions.restore(slot: :none)
         assert get(Schemas.Passkey, fixture.passkey).state == "active"
         assert rows(fixture.alice.id) == []
+        assert marker()
+      after
+        clear_failure!(trigger)
+      end
+    end
+
+    test "an open invitation a statement leaves standing fails the postcondition and rolls back" do
+      fixture = home!()
+      marked!()
+      trigger = skip_on!("invitations", "UPDATE")
+
+      try do
+        assert {:error, :postcondition_failed} = SecurityTransitions.restore(slot: :none)
+        assert get(Schemas.Invitation, fixture.invitation).revoked_at == nil
+        assert get(Schemas.Passkey, fixture.passkey).state == "active"
         assert marker()
       after
         clear_failure!(trigger)
@@ -934,12 +995,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       # takes (`Arca.Members.seat/3`).
       identifier = "per_" <> String.duplicate("a", 64)
 
-      insert!(Schemas.Membership, invited(f.group.id, %{email: newcomer.email}))
       insert!(Schemas.Membership, invited(f.group.id, %{person_identifier: identifier}))
-
-      # Her own athanor is no group; an invitation there would activate.
-      assert {:ok, []} =
-               Arca.Members.activate_invited(server(), newcomer.id, newcomer.email, now())
 
       assert {:ok, []} =
                Arca.Members.activate_invited_identifier(server(), newcomer.id, identifier, now())
@@ -958,7 +1014,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       group = f.group.id
 
       assert {:ok, [^group]} =
-               Arca.Members.activate_invited(server(), newcomer.id, newcomer.email, now())
+               Arca.Members.activate_invited_identifier(server(), newcomer.id, identifier, now())
     end
 
     test "the checklist names what the person must re-enable, re-consent and rotate", %{

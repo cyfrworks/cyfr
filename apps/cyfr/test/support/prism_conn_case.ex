@@ -133,8 +133,9 @@ defmodule PrismWeb.ConnCase do
   def session_key, do: @session_key
 
   @doc """
-  A distinct test person, signed in once: `user_id` is their own id (the
-  `users` row is minted here), `identity` the IdP key that names them,
+  A distinct test person: `user_id` is their own id (the person is made
+  here, `Sanctum.Test.People.linked/1`), `identity` the sign-in method's key
+  linked to them,
   plus an email and a personal namespace slug. Every call yields a new
   person.
   """
@@ -145,7 +146,7 @@ defmodule PrismWeb.ConnCase do
     email = Map.get(attrs, :email, "user#{n}@example.com")
 
     {:ok, row} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: identity,
         provider: "github",
         email: email,
@@ -161,9 +162,9 @@ defmodule PrismWeb.ConnCase do
 
   @doc """
   Record a claimed personal namespace for `user` on their users row, the
-  way the cyfr.run probe/claim does.
+  way the registry's answer to a handle claim does.
   """
-  def claim_namespace!(%{user_id: user_id, namespace: slug}) do
+  def record_namespace!(%{user_id: user_id, namespace: slug}) do
     {:ok, row} = Sanctum.Tenancy.Users.get(user_id)
     {:ok, _} = Sanctum.Tenancy.Users.set_namespace(row, slug)
     :ok
@@ -180,7 +181,7 @@ defmodule PrismWeb.ConnCase do
   process so `athanor_path/2` and `mount_athanor/3` name the same one.
   """
   def log_in_user(conn, user, opts \\ []) do
-    if Keyword.get(opts, :claim, true), do: claim_namespace!(user)
+    if Keyword.get(opts, :claim, true), do: record_namespace!(user)
 
     athanor_id = Keyword.get_lazy(opts, :athanor_id, fn -> own_athanor!(user).id end)
     Process.put(:prism_test_athanor_id, athanor_id)
@@ -211,9 +212,14 @@ defmodule PrismWeb.ConnCase do
 
   # The person's own athanor, minted the way admission does: one per owner,
   # slugged from their namespace. Idempotent, so repeated sign-ins in one
-  # test reuse it.
+  # test reuse it. Signed in on an athanor that is set up, which is what a
+  # console test is about; filling one is `Sanctum.Provisioning`'s own suite.
   defp own_athanor!(user) do
     case Sanctum.Tenancy.Athanors.get_by_owner(user.user_id) do
+      {:ok, %{provisioned_at: nil} = athanor} ->
+        {:ok, provisioned} = Sanctum.TestContext.mark_provisioned(athanor)
+        provisioned
+
       {:ok, athanor} ->
         athanor
 

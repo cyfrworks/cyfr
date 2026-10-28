@@ -28,8 +28,8 @@ func init() {
 	rootCmd.AddCommand(pushCmd)
 	rootCmd.AddCommand(registryCmd)
 	registryCmd.AddCommand(registryDiscoverCmd)
-	// cyfr.run push tokens are provisioned by `cyfr login` through
-	// /v1/identity/probe.
+	// cyfr.run push tokens are provisioned by `cyfr registry sync`
+	// (registry.go), never by sign-in.
 	newCmd.Flags().String("version", "0.1.0", "Component version (semver)")
 	newCmd.Flags().String("template", "", "Scaffold template (tincture only: vanilla, vite or react)")
 	rootCmd.AddCommand(newCmd)

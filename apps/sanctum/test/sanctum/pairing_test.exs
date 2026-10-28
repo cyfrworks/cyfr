@@ -87,7 +87,7 @@ defmodule Sanctum.PairingTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|pairing-#{n}",
         provider: "github",
         email: "pairing#{n}@example.com",

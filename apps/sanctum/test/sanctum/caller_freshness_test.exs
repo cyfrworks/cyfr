@@ -25,7 +25,7 @@ defmodule Sanctum.CallerFreshnessTest do
   import ExUnit.CaptureLog
 
   alias Sanctum.{Caller, Context, Session}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   @keys [:caller_memo_ttl_ms]
 
@@ -53,7 +53,7 @@ defmodule Sanctum.CallerFreshnessTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|fresh-#{n}",
         provider: "github",
         email: "fresh#{n}@example.com",
@@ -533,7 +533,7 @@ defmodule Sanctum.CallerFreshnessTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|remote-#{n}",
         provider: "github",
         email: "remote#{n}@example.com",

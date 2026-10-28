@@ -84,6 +84,22 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
     end
   end
 
+  test "personal admissions at the server's last two places: each counts before it writes, two land",
+       %{run: run} do
+    owners = for i <- 1..@racers, do: person!(run, i)
+    cap = cap!(2)
+
+    answers = race(Enum.map(owners, fn owner -> fn -> admitted(owner) end end))
+
+    assert Enum.count(answers, &match?({:ok, _}, &1)) == 2
+    assert Enum.count(answers, &(&1 == refused(cap))) == @racers - 2
+    assert active() == cap
+
+    for {owner, answer} <- Enum.zip(owners, answers), answer == refused(cap) do
+      assert {:error, :not_found} = unboxed(fn -> Athanors.get_by_owner(owner.id) end)
+    end
+  end
+
   test "group mints at the server's last two places: two land, and a refusal leaves no row or seat",
        %{run: run} do
     creators = for i <- 1..@racers, do: person!(run, i)
@@ -257,18 +273,38 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
     count
   end
 
-  # A real person row, so a mint that holds them holds a row.
+  # A real person row, so a mint that holds them holds a row: the row and
+  # its sign-in method alone, with no athanor yet, so the case's own mints
+  # are the only athanors they hold.
   defp person!(run, i) do
-    {:ok, user} =
+    now = DateTime.utc_now()
+    subject = "census-#{run}-#{i}"
+
+    {:ok, %{id: user_id}} =
       unboxed(fn ->
-        Users.upsert_from_provider(%{
-          id: "github|https://github.com|census-#{run}-#{i}",
-          provider: "github",
-          email: "census#{run}-#{i}@example.com",
-          verified: true
-        })
+        Arca.Test.People.mint(
+          Prima.Actor.system(),
+          %{
+            id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+            email: "census#{run}-#{i}@example.com",
+            email_verified: true,
+            first_seen_at: now,
+            last_seen_at: now,
+            created_at: now,
+            updated_at: now
+          },
+          %{
+            key: "github|https://github.com|" <> subject,
+            provider: "github",
+            issuer: "https://github.com",
+            subject: subject,
+            first_seen_at: now,
+            last_seen_at: now
+          }
+        )
       end)
 
+    {:ok, user} = unboxed(fn -> Users.get(user_id) end)
     user
   end
 
@@ -280,6 +316,22 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
       owner_user_id: owner.id,
       created_by: owner.id
     }
+  end
+
+  # An admission's shape (`Sanctum.Newcomer`): the place counted under the
+  # census lock before anything is written, and the person's athanor
+  # minted later in the same transaction with no cap of its own.
+  defp admitted(owner) do
+    attrs = personal(owner)
+
+    Arca.Repo.transaction(fn ->
+      with :ok <- Athanors.personal_place(),
+           {:ok, athanor} <- Athanors.create_personal(Map.delete(attrs, :slug), [attrs.slug]) do
+        athanor
+      else
+        {:error, reason} -> Arca.Repo.rollback(reason)
+      end
+    end)
   end
 
   # A group the person made, archived; made before the cap is stored.

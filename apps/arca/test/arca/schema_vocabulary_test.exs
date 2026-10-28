@@ -20,7 +20,9 @@ defmodule Arca.SchemaVocabularyTest do
   nullable column still takes NULL. The schedule's missed-run columns are
   held the same way, NULL and zero limits among the refused rows, and so
   is a pairing invitation's confirmer, whose kind and id are set together
-  or not at all.
+  or not at all, an invitation's end, whose redeemer and time are set
+  together and never beside a revocation, and an invitation's issuer
+  generation, which is positive.
   """
 
   use ExUnit.Case, async: false
@@ -62,7 +64,9 @@ defmodule Arca.SchemaVocabularyTest do
       {"passkeys", "passkeys_state_known", "state", Arca.Schemas.Passkey.states()},
       # `Arca.CliSignIns` approves or cancels a command line's pending
       # sign-in, and nothing leaves either.
-      {"cli_sign_ins", "cli_sign_ins_state_known", "state", Arca.Schemas.CliSignIn.states()}
+      {"cli_sign_ins", "cli_sign_ins_state_known", "state", Arca.Schemas.CliSignIn.states()},
+      # How a person was made here (`Arca.Users.mint/4`), written once.
+      {"users", "users_admission_known", "admission", Arca.Schemas.User.admissions()}
     ]
   end
 
@@ -188,6 +192,45 @@ defmodule Arca.SchemaVocabularyTest do
     end
   end
 
+  describe "a person's admission" do
+    test "lands every admission, and refuses any other and none" do
+      for admission <- ~w(setup invitation open remote restore) do
+        assert {1, _} = insert!("users", person(admission))
+      end
+
+      refused!("users", person("github"), "users_admission_known")
+
+      refused!("users", person(nil), [
+        "users_admission_known",
+        "NOT NULL",
+        "not-null",
+        "null value"
+      ])
+    end
+  end
+
+  describe "a door entry's kind" do
+    test "an allow names an identifier or *, a deny a person or an identifier" do
+      for {kind, effect} <- [
+            {"identifier", "allow"},
+            {"wildcard", "allow"},
+            {"person", "deny"},
+            {"identifier", "deny"}
+          ] do
+        assert {1, _} = insert!("server_allowlist", door(kind, effect))
+      end
+
+      for {kind, effect} <- [
+            {"person", "allow"},
+            {"wildcard", "deny"},
+            {"email", "allow"},
+            {"user_id", "deny"}
+          ] do
+        refused!("server_allowlist", door(kind, effect), "server_allowlist_kind_known")
+      end
+    end
+  end
+
   describe "a pairing invitation's confirmer" do
     test "lands every kind with its id, or neither, and refuses another kind or one without the other",
          ctx do
@@ -217,6 +260,35 @@ defmodule Arca.SchemaVocabularyTest do
     end
   end
 
+  describe "an invitation's end" do
+    test "lands open, redeemed with its redeemer, or revoked, and refuses a half redemption or both ends",
+         ctx do
+      at = now()
+
+      for ending <- [%{}, %{redeemed_by: id("usr"), redeemed_at: at}, %{revoked_at: at}] do
+        assert {1, _} = insert!("invitations", invitation(ctx, ending))
+      end
+
+      for half <- [%{redeemed_by: id("usr")}, %{redeemed_at: at}] do
+        refused!("invitations", invitation(ctx, half), "invitations_redeemed_whole")
+      end
+
+      refused!(
+        "invitations",
+        invitation(ctx, %{redeemed_by: id("usr"), redeemed_at: at, revoked_at: at}),
+        "invitations_one_end"
+      )
+    end
+
+    test "records a positive issuer generation, and refuses zero", ctx do
+      refused!(
+        "invitations",
+        invitation(ctx, %{issuer_generation: 0}),
+        "invitations_issuer_generation_positive"
+      )
+    end
+  end
+
   describe "a person's recovery from a declared restore" do
     test "is open exactly while it has no closing time, and a text false is refused" do
       user = id("usr")
@@ -224,7 +296,7 @@ defmodule Arca.SchemaVocabularyTest do
       {1, _} =
         insert!("users", %{
           id: user,
-          provider: "github",
+          admission: "open",
           email: "#{user}@example.com",
           first_seen_at: now(),
           last_seen_at: now(),
@@ -416,6 +488,33 @@ defmodule Arca.SchemaVocabularyTest do
   end
 
   defp id(prefix), do: "#{prefix}_#{System.unique_integer([:positive])}"
+
+  defp person(admission) do
+    user = id("usr")
+
+    %{
+      id: user,
+      admission: admission,
+      first_seen_at: now(),
+      last_seen_at: now(),
+      created_at: now(),
+      updated_at: now()
+    }
+  end
+
+  # The value is unique per row, so only the kind and the effect decide.
+  defp door(kind, effect) do
+    %{
+      id: id("door"),
+      kind: kind,
+      value: id("v"),
+      effect: effect,
+      status: "allowed",
+      created_at: now(),
+      updated_at: now()
+    }
+  end
+
   defp now, do: NaiveDateTime.utc_now()
 
   defp execution(%{athanor: athanor}, status) do
@@ -584,6 +683,22 @@ defmodule Arca.SchemaVocabularyTest do
       inserted_at: now(),
       updated_at: now()
     }
+  end
+
+  defp invitation(%{athanor: athanor}, ending) do
+    Map.merge(
+      %{
+        id: id("inv"),
+        code_hash: id("hash"),
+        issued_by: id("usr"),
+        issuer_generation: 1,
+        athanor_id: athanor,
+        expires_at: now(),
+        inserted_at: now(),
+        updated_at: now()
+      },
+      ending
+    )
   end
 
   defp instance_entry(_ctx, status) do

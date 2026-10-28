@@ -28,7 +28,7 @@ defmodule Sanctum.RestoreKitProofTest do
   alias Prima.Identity.{Encoding, Entry, RestoreKit}
   alias Sanctum.{Context, TestContext}
   alias Sanctum.Test.DirectoryServer, as: Directory
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   @fixture "../../../../tests/fixtures/restore_kit.json"
 
@@ -59,7 +59,7 @@ defmodule Sanctum.RestoreKitProofTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|kit-#{n}",
         provider: "github",
         email: "kit#{n}@example.com",
@@ -436,7 +436,7 @@ defmodule Sanctum.RestoreKitProofTest do
     restored!()
 
     {:ok, newcomer} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|kit-new-#{System.unique_integer([:positive])}",
         provider: "github",
         email: "kit-new@example.com",
@@ -483,7 +483,7 @@ defmodule Sanctum.RestoreKitProofTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|kit-admin-#{n}",
         provider: "github",
         email: "kit-admin#{n}@example.com",

@@ -36,14 +36,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     other = test_user()
     n = System.unique_integer([:positive])
 
-    {:ok, mine} =
-      Athanors.create(%{
-        kind: "person",
-        name: "Me",
-        slug: "me-panel#{n}",
-        owner_user_id: user.user_id,
-        created_by: user.user_id
-      })
+    mine = Sanctum.Test.People.athanor!(user.user_id)
 
     {:ok, room} = Athanors.create_group(user.user_id, "Team #{n}")
 
@@ -54,10 +47,6 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
     conn = log_in_user(conn, user, athanor_id: room.id)
     :ok = Sanctum.TestContext.shipped!(mine.id)
-
-    {:ok, u} = Sanctum.Tenancy.Users.get(user.user_id)
-    {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, mine.id)
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: mine.id)
 
     {:ok, _} =
       Sanctum.Tenancy.Members.ensure(other.user_id, scope: "athanor", athanor_id: room.id)
@@ -295,6 +284,10 @@ defmodule PrismWeb.AquaPanelLiveTest do
 
   test "a navigate from the panel never moves the page: a thread of You opens in the panel, another page is a link",
        %{conn: conn, user: user, mine: mine, room: room, me: me, thread: thread} do
+    # The page it points to is dev's, which a person chooses.
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
+
     {:ok, view, _} = live(conn, PrismWeb.ChatLive.chat_path(route(room), thread.id))
     settled_render(view)
     {panel, _html} = open_panel(view)
@@ -444,7 +437,7 @@ defmodule PrismWeb.AquaPanelLiveTest do
     render(pane)
     render(panel)
     assert has_element?(panel, ~s(#system-layer-panel-dialog [data-kind="grant"]))
-    assert has_element?(panel, "#system-layer-panel-dialog .consent-sheet", "in Me")
+    assert has_element?(panel, "#system-layer-panel-dialog .consent-sheet", "in #{mine.name}")
     refute has_element?(view, ~s(#system-layer-dialog [data-kind="grant"]))
 
     panel |> element(~s(#system-layer-panel-dialog button[phx-click="confirm"])) |> render_click()

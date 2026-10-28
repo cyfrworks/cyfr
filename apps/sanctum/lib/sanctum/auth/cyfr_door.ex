@@ -12,19 +12,29 @@ defmodule Sanctum.Auth.CyfrDoor do
 
   ## Where the person starts
 
-  The person names their signing home by its address; `signing_home/1`
-  answers that home's `/carry` page with this home as the destination in
-  its fragment, where they begin the carry themselves
-  (`person.carry_begin`).
+  The person names their signing home by its address, takes the hosted
+  CYFR (`hosted/0`), or names a handle whose published address the
+  sign-in page resolves (`Sanctum.Handle`); `signing_home/1` answers that
+  home's `/carry` page with this home as the destination in its fragment,
+  where they begin the carry themselves (`person.carry_begin`). A
+  published address is navigation only: the identifier the handle named
+  is what the carry must prove.
 
   ## The challenge
 
-  `challenge/1` takes the carry fragment the person's browser brought
+  `challenge/2` takes the carry fragment the person's browser brought
   from their signing home (`Prima.Carry`: the signed envelope and its
-  payload, `%{"genesis" => genesis}`) and, before any network use, holds
-  the envelope's destination to this home (`Sanctum.Person.home/0`) and
-  the genesis to the envelope's identifier (`Prima.Identity.locate/2`: a
-  genesis that does not hash to it causes no request). It then reads the
+  payload, `%{"genesis" => genesis}`) and what the attempt requested
+  (`t:requested/0`): no identifier, for an address or the hosted CYFR;
+  the identifier a handle resolved to; or a request this browser's
+  session no longer holds. A lost request is refused before anything
+  else, and a carry whose envelope names another identifier than the one
+  requested is refused before any directory read, so a handle whose
+  published address serves someone else signs nobody in. Before any
+  network use it holds the envelope's destination to this home
+  (`Sanctum.Person.home/0`) and the genesis to the envelope's identifier
+  (`Prima.Identity.locate/2`: a genesis that does not hash to it causes
+  no request). It then reads the
   identity's head fresh from the directory that genesis names
   (`Sanctum.IdentityFreshness.fresh!/2`, never a cache and never a URL the
   browser supplied; the directory client's pinned transport refuses a
@@ -68,11 +78,12 @@ defmodule Sanctum.Auth.CyfrDoor do
   fresh again, verifies the assertion under the current live key
   (`Prima.PersonAssertion.verify/3`: identifier, `key_epoch`, signature,
   this home as audience, the exact challenge, the carry the challenge was
-  bound to, expiry), and asks the door about the identity
-  `cyfr|<directory>|<identifier>` (`Sanctum.Auth.Identity.cyfr_key/2`),
-  which judges it by its identifier. An admitted person is recorded
-  (`Sanctum.SignIn.admitted/2`: a `remote` identity row, no key, no
-  personal athanor of their own) and their session minted
+  bound to, expiry). A person here already linked to the identity
+  `cyfr|<directory>|<identifier>` (`Sanctum.Auth.Identity.cyfr_key/2`) is
+  unlocked (`Sanctum.SignIn.unlock/1`, which asks the door about them); a
+  first-time one is admitted (`Sanctum.Newcomer.admit/2`'s `remote`
+  admission: the door admits the identifier, and a `remote` identity row
+  is written with no key and no personal athanor). Their session is minted
   (`Sanctum.Session.create/2`) with the login receipt in its transaction
   and the head's `key_epoch` recorded, read fresh once more; an epoch
   that moved since the assertion was verified admits nothing.
@@ -82,6 +93,11 @@ defmodule Sanctum.Auth.CyfrDoor do
     * `:invalid_carry` — a fragment, envelope, payload or genesis that does
       not read, is too large, or does not hash to its identifier.
     * `:wrong_destination` — a carry for another home.
+    * `:no_request` — an attempt whose request this browser's session
+      no longer holds (`:lost`): expired, cleared, replaced by a later
+      start, or made for another home.
+    * `:wrong_identity` — a carry of another identity than the one the
+      handle named.
     * `{:refused, reason}` — an envelope or assertion that does not verify
       under the current head, with `Prima.Carry.Envelope.verify/4`'s or
       `Prima.PersonAssertion.verify/3`'s reason, or `:wrong_identifier`
@@ -107,6 +123,7 @@ defmodule Sanctum.Auth.CyfrDoor do
   alias Sanctum.{Context, IdentityFreshness, Person}
   alias Sanctum.Directory.Client
 
+  @hosted "https://my.cyfr.run"
   @challenge_bytes 32
   @secret_bytes 32
   @held ~w(challenge challenge_id browser_secret action_id identifier source return_url key_epoch expires_at)
@@ -115,7 +132,7 @@ defmodule Sanctum.Auth.CyfrDoor do
   @window_ms 60_000
 
   @typedoc """
-  The challenge a browser's session cookie carries between `challenge/1`
+  The challenge a browser's session cookie carries between `challenge/2`
   and `callback/2`, string keyed: `challenge` (unpadded base64url of its
   32 bytes), `challenge_id`, `browser_secret`, `action_id`, `identifier`,
   `source`, `return_url`, `key_epoch` and `expires_at` (Unix
@@ -123,10 +140,17 @@ defmodule Sanctum.Auth.CyfrDoor do
   """
   @type held :: %{required(String.t()) => String.t() | non_neg_integer()}
 
-  @typedoc "An admitted, or resumed, sign-in: the session's token and the outcome to render."
+  @typedoc """
+  What a sign-in attempt requested of the carry that answers it: `:none`
+  (begun from an address, the hosted CYFR's included), `{:identifier,
+  identifier}` (begun from a handle that resolved to it), or `:lost`
+  (an attempt whose request this browser's session no longer holds).
+  """
+  @type requested :: :none | {:identifier, String.t()} | :lost
+
+  @typedoc "An admitted, or resumed, sign-in: the session's token and where it returns."
   @type admitted :: %{
           session_token: String.t(),
-          outcome: {:proceed, map()},
           resumed: boolean(),
           action_id: String.t(),
           return_url: String.t()
@@ -135,6 +159,13 @@ defmodule Sanctum.Auth.CyfrDoor do
   # ---------------------------------------------------------------------------
   # The signing home
   # ---------------------------------------------------------------------------
+
+  @doc """
+  The hosted CYFR's address, which the sign-in page offers beside a CYFR
+  the person names: compiled in, never a setting.
+  """
+  @spec hosted() :: String.t()
+  def hosted, do: @hosted
 
   @doc """
   Where the sign-in page sends a person who names their signing home by
@@ -192,15 +223,19 @@ defmodule Sanctum.Auth.CyfrDoor do
   # ---------------------------------------------------------------------------
 
   @doc """
-  The challenge for the carry `fragment` the browser brought (the module
-  doc). Answers `{:ok, held}` (`t:held/0`) or a refusal.
+  The challenge for the carry `fragment` the browser brought, for an
+  attempt that `requested` it (the module doc). Answers `{:ok, held}`
+  (`t:held/0`) or a refusal.
   """
-  @spec challenge(String.t()) :: {:ok, held()} | {:error, term()}
-  def challenge(fragment) when is_binary(fragment) do
+  @spec challenge(String.t(), requested()) :: {:ok, held()} | {:error, term()}
+  def challenge(_fragment, :lost), do: {:error, :no_request}
+
+  def challenge(fragment, requested) when is_binary(fragment) do
     home = Person.home()
 
     with {:ok, %{envelope: envelope, payload: payload}} <- carry(fragment),
          :ok <- destination(envelope, home),
+         :ok <- requested_identity(envelope, requested),
          {:ok, genesis} <- payload_genesis(payload, envelope.identifier),
          {:ok, digest} <- payload_digest(payload),
          :ok <- installation_room(),
@@ -224,7 +259,7 @@ defmodule Sanctum.Auth.CyfrDoor do
     end
   end
 
-  def challenge(_fragment), do: {:error, :invalid_carry}
+  def challenge(_fragment, _requested), do: {:error, :invalid_carry}
 
   @doc """
   The fragment the source's `/carry` page reads for a held challenge: the
@@ -261,6 +296,12 @@ defmodule Sanctum.Auth.CyfrDoor do
   # Before any network use: the carry is for this home.
   defp destination(%Envelope{destination: home}, home), do: :ok
   defp destination(%Envelope{}, _home), do: {:error, :wrong_destination}
+
+  # Before any network use: an attempt begun from a handle is answered by
+  # the identity that handle named, or by no one.
+  defp requested_identity(%Envelope{identifier: identifier}, {:identifier, identifier}), do: :ok
+  defp requested_identity(%Envelope{}, {:identifier, _another}), do: {:error, :wrong_identity}
+  defp requested_identity(%Envelope{}, :none), do: :ok
 
   # The payload is the genesis alone, held to the envelope's identifier
   # before anything uses its directory.
@@ -378,9 +419,7 @@ defmodule Sanctum.Auth.CyfrDoor do
          :ok <- same_identity(assertion, held),
          {:ok, state} <- fresh_state(assertion.identifier, transport["genesis"]),
          {:ok, assertion} <- verified_assertion(assertion, state, held, home),
-         key = Sanctum.Auth.Identity.cyfr_key(state.directory, state.identifier),
-         {:ok, verdict} <- Sanctum.Door.admit_identity(key, %{email: nil, verified: :unknown}),
-         {:ok, user} <- Sanctum.SignIn.admitted(person(key, state, genesis), verdict),
+         {:ok, user} <- person(state, genesis),
          {:ok, ctx} <- context(user) do
       receipt = %{
         action_id: held["action_id"],
@@ -413,7 +452,6 @@ defmodule Sanctum.Auth.CyfrDoor do
   defp answer(token, held, resumed?) do
     %{
       session_token: token,
-      outcome: {:proceed, %{unsynced: [], probe: :skipped}},
       resumed: resumed?,
       action_id: held["action_id"],
       return_url: held["return_url"]
@@ -435,23 +473,29 @@ defmodule Sanctum.Auth.CyfrDoor do
     {:error, :unavailable}
   end
 
-  # What the door admitted, for `Sanctum.SignIn.admitted/2`: a person with
-  # no email, whose identity is the identifier at the directory its
-  # genesis names.
-  defp person(key, state, genesis) do
-    %{
-      id: key,
-      provider: "cyfr",
-      email: nil,
-      verified: :unknown,
-      name: nil,
-      remote: %{
-        identifier: state.identifier,
-        directory_url: state.directory,
-        genesis_hash: Identity.hash(genesis),
-        head_hash: state.head
-      }
-    }
+  # The person the identity names: unlocked when one here holds it, and
+  # otherwise admitted as a remote newcomer.
+  defp person(state, genesis) do
+    key = Sanctum.Auth.Identity.cyfr_key(state.directory, state.identifier)
+
+    case Sanctum.SignIn.unlock(%{id: key, provider: "cyfr"}) do
+      {:ok, user} ->
+        {:ok, user}
+
+      {:error, :no_person} ->
+        remote = %{
+          identifier: state.identifier,
+          directory_url: state.directory,
+          genesis_hash: Identity.hash(genesis),
+          head_hash: state.head
+        }
+
+        with {:ok, %{person: user}} <- Sanctum.Newcomer.admit({:remote, remote}, :none),
+             do: {:ok, user}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   # The person's own context, bound to the athanor their memberships give,

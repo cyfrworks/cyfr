@@ -3,66 +3,51 @@
 
 defmodule PrismWeb.RegistryLiveTest do
   @moduledoc """
-  Appealing a registry takedown runs a device flow, and a device flow can
-  fail for reasons that have nothing to do with the person: a provider
-  blip, a dropped connection, a timeout.
+  The registry page's acts are requests the person's identity signs: an
+  appeal of a takedown, the acceptance of the registry's policies, and a
+  sync of their push tokens, which waits on a fresh confirmation. No
+  identity provider is asked for any of them.
 
-  A failed appeal poll must return to the form and preserve typed
-  input so the person can retry.
-
-  `LoginLive` handles the identical case correctly, which is what made this
-  worth pinning on both sides: the message AND the state it leaves behind.
+  The registry is `Sanctum.Test.RegistryStub`, which verifies each signed
+  request under the person's head as the registry does.
   """
   use PrismWeb.ConnCase, async: false
 
-  defmodule FakeDeviceFlow do
-    @moduledoc false
-
-    # See LoginLiveTest's fake: the appeal flow is the second anonymous
-    # device flow on a socket that passes no rate-limit plug, so the
-    # address it budgets against is recorded and asserted.
-    def init_device_flow(provider, client_ip) when provider in [:github, :google] do
-      Application.put_env(:cyfr, :device_flow_last_ip, client_ip)
-
-      {:ok,
-       %{
-         device_code: "dev-code",
-         user_code: "WXYZ-1234",
-         verification_uri: "https://github.com/login/device",
-         expires_in: 900,
-         interval: 60
-       }}
-    end
-
-    def poll_for_access_token(_provider, _code, client_ip) do
-      Application.put_env(:cyfr, :device_flow_last_ip, client_ip)
-      Application.get_env(:cyfr, :device_flow_poll_result, {:ok, %{status: "pending"}})
-    end
-  end
+  alias Sanctum.Test.RegistryStub
 
   setup %{conn: conn} do
-    original = Application.get_env(:sanctum, :device_flow)
-    Application.put_env(:sanctum, :device_flow, FakeDeviceFlow)
+    user = test_user()
+    state = RegistryStub.enroll!(user.user_id)
+    {:ok, conn: log_in_user(conn, user), user: user, state: state}
+  end
 
-    on_exit(fn ->
-      Application.delete_env(:cyfr, :device_flow_poll_result)
+  # The registry: the policy version answered to the page's load, every
+  # other request verified under `state` and handed to `answer`.
+  defp registry(state, answer) do
+    RegistryStub.start!(fn
+      %{method: "GET", path: "/v1/legal/version"} ->
+        {200,
+         RegistryStub.answer(%{
+           "policy_version" => "2026-09",
+           "policies" => [%{"name" => "terms", "title" => "Terms of Service", "sha256" => "x"}]
+         })}
 
-      if original,
-        do: Application.put_env(:sanctum, :device_flow, original),
-        else: Application.delete_env(:sanctum, :device_flow)
+      %{method: "GET"} ->
+        {404, ""}
+
+      %{body: body} = request ->
+        case RegistryStub.verify(body, state) do
+          {:ok, signed} -> answer.(Map.put(request, :signed, signed))
+          {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
+        end
     end)
-
-    {view, _html} = conn |> log_in_user(test_user()) |> mount_athanor("/registry")
-    {:ok, view: view}
   end
 
   # `registry.whoami` names the person's publisher namespaces, and the page
   # lists each beside the personal one. The test registry is a closed
   # port, so the namespace is kept unconfirmed and its listing is refused.
   test "a publisher namespace the person holds a push token for is one the page reads",
-       %{conn: conn} do
-    user = test_user()
-    conn = log_in_user(conn, user)
+       %{conn: conn, user: user} do
     ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: seated_athanor().id}
 
     :ok =
@@ -78,72 +63,74 @@ defmodule PrismWeb.RegistryLiveTest do
     assert "acme.dev" in :sys.get_state(view.pid).socket.assigns.namespaces
   end
 
-  defp open_appeal(view) do
-    render_click(view, "open-appeal", %{"id" => "reagent:acme.widget:1.0.0"})
+  test "an appeal is signed by the person's identity, with no sign-in method asked",
+       %{conn: conn, state: state} do
+    parent = self()
+
+    registry(state, fn %{path: "/v1/appeals", signed: signed} ->
+      send(parent, {:appealed, signed.body})
+      {201, RegistryStub.answer(%{"id" => "apl_1"})}
+    end)
+
+    {view, _html} = mount_athanor(conn, "/registry")
+    html = render_click(view, "open-appeal", %{"id" => "cmp_taken_down"})
+    refute html =~ "GitHub"
+    refute html =~ "provider"
+
+    render_submit(view, "submit-appeal", %{"argument" => "This named the wrong component."})
+
+    assert_receive {:appealed,
+                    %{
+                      "action_type" => "takedown",
+                      "action_ref" => "cmp_taken_down",
+                      "argument" => "This named the wrong component."
+                    }}
+
+    assert render(view) =~ "Appeal filed"
   end
 
-  defp start_appeal(view) do
-    render_submit(view, "start-appeal", %{
-      "argument" => "This takedown named the wrong component.",
-      "provider" => "github"
-    })
+  test "an appeal the registry cannot take keeps the form and what was typed",
+       %{conn: conn, state: state} do
+    registry(state, fn %{path: "/v1/appeals"} -> {503, "Bad Gateway"} end)
+
+    {view, _html} = mount_athanor(conn, "/registry")
+    render_click(view, "open-appeal", %{"id" => "cmp_taken_down"})
+
+    {submitted, _log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        render_submit(view, "submit-appeal", %{"argument" => "Again."})
+      end)
+
+    assert submitted =~ "Submit failed"
+    assert has_element?(view, "form[phx-submit=submit-appeal]")
+    assert render(view) =~ "Again."
   end
 
-  test "a poll error returns the appeal to its form, and the appeal can be retried",
-       %{view: view} do
-    open_appeal(view)
+  test "the registry's policies are shown, and accepting signs their version",
+       %{conn: conn, state: state} do
+    parent = self()
 
-    # The device flow is out: the code is on screen and a retry would be
-    # refused, which is correct while the flow is genuinely live.
-    assert start_appeal(view) =~ "WXYZ-1234"
-    assert render(view) =~ "Waiting for authorization"
+    registry(state, fn %{path: "/v1/legal/accept", signed: signed} ->
+      send(parent, {:accepted, signed.body})
+      {201, RegistryStub.answer(%{"accepted" => true})}
+    end)
 
-    # The provider blips. The scheduled poll is 60s out, so drive the arm.
-    Application.put_env(:cyfr, :device_flow_poll_result, {:error, :timeout})
-    send(view.pid, :appeal_poll)
+    {view, _html} = mount_athanor(conn, "/registry")
     html = render(view)
+    assert html =~ "Terms of Service"
+    assert html =~ "Accept version 2026-09"
 
-    refute html =~ "Waiting for authorization",
-           "the appeal is still waiting on a flow that already failed"
-
-    assert has_element?(view, "form[phx-submit=start-appeal]"),
-           "the error left no form to retry from"
-
-    # And the retry is real: the guard that refuses a second click while a
-    # flow is out no longer sees one.
-    Application.put_env(:cyfr, :device_flow_poll_result, {:ok, %{status: "pending"}})
-    assert start_appeal(view) =~ "WXYZ-1234"
-    assert render(view) =~ "Waiting for authorization"
+    render_click(view, "accept-policy", %{"version" => "2026-09"})
+    assert_receive {:accepted, %{"policy_version" => "2026-09"}}
+    assert render(view) =~ "Accepted the registry"
   end
 
-  test "a denied poll returns the appeal to its form too", %{view: view} do
-    open_appeal(view)
-    start_appeal(view)
+  test "a sync waits on a fresh confirmation and sends nothing until it is given",
+       %{conn: conn, state: state} do
+    registry(state, fn _request -> flunk("nothing is sent before the confirmation") end)
 
-    Application.put_env(:cyfr, :device_flow_poll_result, {:ok, %{status: "denied"}})
-    send(view.pid, :appeal_poll)
-
-    assert render(view) =~ "Authorization was denied."
-    assert has_element?(view, "form[phx-submit=start-appeal]")
-  end
-
-  # The fake has recorded the address since the budget landed; nothing read
-  # it back, so a `nil` would have passed. The appeal is the second
-  # anonymous device flow on a socket that passes no rate-limit plug —
-  # `/live` is handled by the endpoint before the router — which makes this
-  # assign the only per-address bound the surface has.
-  test "the appeal flow is charged to a resolved address, not nil", %{view: view} do
-    Application.delete_env(:cyfr, :device_flow_last_ip)
-
-    open_appeal(view)
-    start_appeal(view)
-
-    ip = Application.get_env(:cyfr, :device_flow_last_ip)
-
-    assert is_binary(ip), "the appeal device flow was charged no address"
-    assert {:ok, _} = ip |> to_charlist() |> :inet.parse_address()
-
-    refute ip == "0.0.0.0",
-           "the appeal fell back to the unresolved address, so every caller shares one bucket"
+    {view, _html} = mount_athanor(conn, "/registry")
+    assert render_click(view, "sync", %{}) =~ "Confirm the sync"
+    refute_received {:registry_request, %{method: "POST"}}
   end
 end

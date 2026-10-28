@@ -7,11 +7,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/cyfr/codex/internal/access"
 	"github.com/cyfr/codex/internal/config"
 	"github.com/cyfr/codex/internal/mcp"
 	"github.com/cyfr/codex/internal/ops"
@@ -19,12 +22,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var flagLoginProvider string
+var (
+	flagLoginProvider string
+	flagLoginSetup    bool
+)
 
 func init() {
 	loginCmd.Flags().StringVar(&flagLoginProvider, "provider", "",
 		"Sign in with an OAuth provider's device flow instead of approving in Prism ("+
 			strings.Join(ops.DeviceFlowProviders, " or ")+")")
+	loginCmd.Flags().BoolVar(&flagLoginSetup, "setup", false,
+		"Sign in as this CYFR's first person with CYFR_SETUP_TOKEN from .env in this directory, setting them up the first time (a headless CYFR)")
 
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
@@ -49,6 +57,14 @@ On a machine where no one can approve it in Prism, --provider signs in with
 GitHub or Google instead: the command line prints the provider's address and
 a code, and receives its session once you enter the code there.
 
+A headless CYFR (CYFR_HEADLESS=on) serves no setup page, so --setup sets up
+its first person, who administers it: run in the directory cyfr init set
+up, it reads CYFR_SETUP_TOKEN from .env there and signs the command line in
+as that person. Run again, it signs the same person in again, until they
+have a passkey, a device they connected or a sign-in method they linked;
+from then on the token opens nothing, and the command line signs in with
+cyfr login.
+
 The session is saved under the context the command used: --context, or the
 current one. A --url that is not that context's address saves nothing; add a
 context for it first (cyfr context add <name> <url>). A context changed to
@@ -56,8 +72,12 @@ another address while the command waits keeps nothing: the sign-in is
 withdrawn.`,
 	Example: `  cyfr login
   cyfr login --context work
-  cyfr login --provider google`,
+  cyfr login --provider google
+  cyfr login --setup`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if flagLoginSetup && cmd.Flags().Changed("provider") {
+			return errors.New("--setup signs in with this CYFR's setup token and --provider with a provider: use one of them.")
+		}
 		target, err := sessionContext("save the session under")
 		if err != nil {
 			return err
@@ -66,6 +86,13 @@ withdrawn.`,
 		if cmd.Flags().Changed("provider") && !slices.Contains(ops.DeviceFlowProviders, flagLoginProvider) {
 			return fmt.Errorf("Unsupported provider %q — use '%s'.", flagLoginProvider,
 				strings.Join(ops.DeviceFlowProviders, "' or '"))
+		}
+
+		var setupToken string
+		if flagLoginSetup {
+			if setupToken, err = setupTokenHere(); err != nil {
+				return err
+			}
 		}
 
 		// The client is the validated context's own: its address, from the
@@ -80,6 +107,9 @@ withdrawn.`,
 			return fmt.Errorf("Failed to connect: %w", err)
 		}
 
+		if flagLoginSetup {
+			return loginWithSetup(cmd.Context(), client, target, setupToken, machineName())
+		}
 		if !cmd.Flags().Changed("provider") {
 			return loginInPrism(cmd.Context(), client, target, machineName())
 		}
@@ -124,22 +154,8 @@ withdrawn.`,
 		// signed in through.
 		sessionID, _ := pollResult["session_token"].(string)
 		if sessionID != "" {
-			if err := saveSession(target, sessionID); errors.Is(err, errContextMoved) {
-				// The context names another home now: the session is ended
-				// at the home that issued it rather than kept under the
-				// other's address.
-				client.SessionID = sessionID
-				if _, lerr := client.CallTool(cmd.Context(), ops.Session, ops.SessionLogoutArgs{}); lerr != nil {
-					return fmt.Errorf("Signed in, but nothing was saved (%w), and CYFR could not end "+
-						"the session (%v): it may still be active, so revoke the command line under "+
-						"Devices in Prism", err, lerr)
-				}
-				return fmt.Errorf("Signed in, but the session was ended and nothing saved: %w", err)
-			} else if err != nil {
-				// Login already succeeded server-side; a failed local save
-				// must say so or the next command's "not authenticated"
-				// has no visible cause.
-				fmt.Fprintf(os.Stderr, "warning: could not persist session locally: %v\n", err)
+			if err := keepSession(cmd.Context(), client, target, sessionID); err != nil {
+				return err
 			}
 		}
 
@@ -159,6 +175,87 @@ withdrawn.`,
 		}
 		return nil
 	},
+}
+
+// keepSession saves sessionID, the session CYFR signed the command line in
+// with, as the credential of the context target names (saveSession).
+func keepSession(ctx context.Context, client *mcp.Client, target storedContext, sessionID string) error {
+	if err := saveSession(target, sessionID); errors.Is(err, errContextMoved) {
+		// The context names another CYFR now: the session is ended at the
+		// CYFR that issued it rather than kept under the other's address.
+		client.SessionID = sessionID
+		if _, lerr := client.CallTool(ctx, ops.Session, ops.SessionLogoutArgs{}); lerr != nil {
+			return fmt.Errorf("Signed in, but nothing was saved (%w), and CYFR could not end "+
+				"the session (%v): it may still be active, so revoke the command line under "+
+				"Devices in Prism", err, lerr)
+		}
+		return fmt.Errorf("Signed in, but the session was ended and nothing saved: %w", err)
+	} else if err != nil {
+		// Login already succeeded server-side; a failed local save
+		// must say so or the next command's "not authenticated"
+		// has no visible cause.
+		fmt.Fprintf(os.Stderr, "warning: could not persist session locally: %v\n", err)
+	}
+	return nil
+}
+
+// setupTokenHere is CYFR_SETUP_TOKEN as the .env in the working directory
+// assigns it, trimmed as the server reads it. No .env, or no token in it,
+// is refused naming .env.
+func setupTokenHere() (string, error) {
+	values, err := access.ReadEnvValues(".env")
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", errors.New("There is no .env here, so no CYFR_SETUP_TOKEN: run cyfr login --setup in the directory cyfr init set up.")
+	}
+	if err != nil {
+		return "", fmt.Errorf("Could not read .env here: %w", engineFailure(err))
+	}
+	token := strings.TrimSpace(values[setupTokenVar])
+	if token == "" {
+		return "", errors.New("There is no CYFR_SETUP_TOKEN in .env here: run cyfr login --setup in the directory cyfr init set up.")
+	}
+	return token, nil
+}
+
+// loginWithSetup signs the command line in as this CYFR's first person
+// with its setup token (session.setup): the person is made by the first
+// call, and signed in again by each later one while they hold no passkey,
+// no device they connected and no sign-in method they linked. The session
+// is kept as the device flow keeps one.
+func loginWithSetup(ctx context.Context, client *mcp.Client, target storedContext, token, machine string) error {
+	answer, err := client.CallTool(ctx, ops.Session, ops.SessionSetupArgs{SetupToken: &token, Machine: machine})
+	switch {
+	case errors.Is(err, context.Canceled):
+		return interrupted("Stopped before CYFR answered.")
+	case errors.As(err, new(*url.Error)):
+		return fmt.Errorf("Failed to set up: %w", err)
+	case err != nil:
+		// The answer carries the refusal's sentence alone, so the way in
+		// once the setup token opens nothing is said beside any refusal.
+		return fmt.Errorf("%w\nOnce this CYFR's first person has a passkey, a device they connected or "+
+			"a sign-in method they linked, this command line signs in with cyfr login.", err)
+	}
+
+	sessionID, _ := answer["session_token"].(string)
+	if sessionID == "" {
+		return errors.New("CYFR answered no session, so nothing was saved. Run cyfr login --setup again.")
+	}
+	if err := keepSession(ctx, client, target, sessionID); err != nil {
+		return err
+	}
+
+	readmitted, _ := answer["readmitted"].(bool)
+	if flagJSON {
+		output.JSON(map[string]any{"status": "signed_in", "context": target.name,
+			"user_id": answer["user_id"], "readmitted": readmitted})
+		return nil
+	}
+	if readmitted {
+		fmt.Println("Signed in again as this CYFR's first person.")
+	} else {
+		fmt.Println("Signed in as this CYFR's first person.")
+	}
+	return nil
 }
 
 // pollDeviceAuth polls until completion, expiry, denial, deadline or
@@ -196,14 +293,12 @@ func pollDeviceAuth(ctx context.Context, client *mcp.Client, provider, deviceCod
 		case "denied":
 			return nil, errors.New("Authorization denied.")
 
-		case "registry_unavailable", "error":
-			// A first sign-in needs cyfr.run once, to find or claim the
-			// namespace that is this person's identity everywhere; the
-			// server set nothing up and issued no session. Say so and
-			// stop — the device code is one-shot.
+		case "error":
+			// The server issued no session and says why; the device code
+			// is one-shot, so stop.
 			msg, _ := pollResult["message"].(string)
 			if msg == "" {
-				msg = "cyfr.run could not be reached. Run `cyfr login` again in a moment."
+				msg = "The sign-in did not complete. Run `cyfr login` again in a moment."
 			}
 			return nil, errors.New(msg)
 

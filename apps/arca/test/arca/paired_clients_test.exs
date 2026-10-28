@@ -87,7 +87,7 @@ defmodule Arca.PairedClientsTest do
     now = DateTime.utc_now()
 
     {:ok, person} =
-      Arca.Users.mint(
+      Arca.Test.People.mint(
         Prima.Actor.system(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),

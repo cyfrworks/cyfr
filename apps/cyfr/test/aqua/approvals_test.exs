@@ -637,7 +637,7 @@ defmodule Aqua.ApprovalsTest do
     n = System.unique_integer([:positive])
 
     {:ok, approver} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|approver#{n}",
         provider: "github",
         email: "approver#{n}@example.com",

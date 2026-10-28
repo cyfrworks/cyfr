@@ -10,7 +10,7 @@ defmodule Arca.SecurityTransitions do
   A transition changes a standing and retires what that standing issued:
   a denial marks the person denied, archives their own athanor, every
   frozen athanor they sit in and every group they leave empty, removes
-  their memberships, the invitations their address or identifier still
+  their memberships, the invitations their identifier still
   holds and their thread follows, deletes their sessions and revokes the
   keys they created and the keys of every athanor it archives, the frame
   credentials (`Arca.FrameCredentials`), paired clients
@@ -54,12 +54,13 @@ defmodule Arca.SecurityTransitions do
   A declared restore (`restore/1`) consumes the marker `cyfr restore`
   writes (`mark_restore/1`): it raises every person's and athanor's
   standing, retires every session, suspends every key, webhook, paired
-  client and passkey, blocks every profile and stored credential, drops
-  every standing allow, once binding and pending confirmation, settles
-  every open run terminal, and opens one `restore_people` row for each
-  person who held a passkey or device it suspended: a person who signs in
-  only through a door has nothing to re-enable, and every confirmation of
-  theirs already comes from one.
+  client and passkey, revokes every open invitation to become a person
+  here (`Arca.Invitations`), blocks every profile and stored credential,
+  drops every standing allow, once binding and pending confirmation,
+  settles every open run terminal, and opens one `restore_people` row for
+  each person who held a passkey or device it suspended: a person who
+  signs in only through a door has nothing to re-enable, and every
+  confirmation of theirs already comes from one.
   This module owns those rows — written, read (`restore_open/2`,
   `restore_frozen?/1`, `restore_checklist/3`) and closed
   (`close_restore!/1`) — and the kit's challenges and credential the
@@ -76,9 +77,10 @@ defmodule Arca.SecurityTransitions do
   one order: people sorted by id, athanors sorted by id, then
   memberships, invitations and follows, then cached identity heads, then
   sessions, then API keys, then frame credentials, then paired clients,
-  then device certificates, pairing invitations, passkeys and pending
-  confirmations, then instance entry audiences, then file offers by offer
-  and file name (`Arca.FileOffers`).
+  then device certificates, pairing invitations, admission invitations
+  (`Arca.Invitations`), passkeys and pending confirmations, then instance
+  entry audiences, then file offers by offer and file name
+  (`Arca.FileOffers`).
   A writer of a membership row naming a person takes the person's lock
   first (`Arca.Members`), so a seat or a claim racing a leave or a denial
   waits for it, or it for them; a file offer is written under its two
@@ -159,6 +161,7 @@ defmodule Arca.SecurityTransitions do
     AthanorCensus,
     DeviceCertificates,
     FrameCredentials,
+    Invitations,
     PairedClients,
     PairingInvitations,
     Passkeys,
@@ -178,6 +181,7 @@ defmodule Arca.SecurityTransitions do
     FrameCredential,
     InstanceEntry,
     InstanceEntryMember,
+    Invitation,
     Membership,
     PairedClient,
     PairingInvitation,
@@ -398,7 +402,7 @@ defmodule Arca.SecurityTransitions do
            :ok <- same_set(planned, athanors_of(user, rows)),
            peers = lock_peers(user_id, group_ids(athanors)),
            identifier = identifier_of(user_id),
-           invitations = lock_invitations(user.email, identifier),
+           invitations = lock_invitations(identifier),
            retire = to_retire(user, athanors, rows, peers),
            :ok <-
              decide(verify, %{
@@ -417,7 +421,7 @@ defmodule Arca.SecurityTransitions do
         with {:ok, generation, moved?} <- deny_row(user, now),
              {:ok, archived} <- archive_rows(active_ids(retire, athanors), now) do
           removed = delete_person_rows(user_id)
-          withdrawn = delete_invitations(user.email, identifier)
+          withdrawn = delete_invitations(identifier)
           unfollowed = delete_follows(user_id, planned)
           hashes = delete_sessions(user_id)
           key_ids = revoke_keys(user_id, retire, now)
@@ -558,9 +562,9 @@ defmodule Arca.SecurityTransitions do
     Enum.sort_by(rows || [], & &1.id)
   end
 
-  # arca:unscoped-ok invitations are keyed by address or identifier, across every athanor that holds one.
-  defp delete_invitations(email, identifier) do
-    case invited_query(email, identifier) do
+  # arca:unscoped-ok invitations are keyed by identifier, across every athanor that holds one.
+  defp delete_invitations(identifier) do
+    case invited_query(identifier) do
       nil ->
         []
 
@@ -572,28 +576,15 @@ defmodule Arca.SecurityTransitions do
     end
   end
 
-  # The invitations a person's address or identifier still holds, or nil
-  # when they have neither.
-  defp invited_query(email, identifier) do
-    email = if is_binary(email) and email != "", do: email
-    identifier = if is_binary(identifier) and identifier != "", do: identifier
-
-    base = from(m in Membership, where: m.status == "invited" and m.scope == "athanor")
-
-    case {email, identifier} do
-      {nil, nil} ->
-        nil
-
-      {email, nil} ->
-        where(base, [m], m.email == ^email)
-
-      {nil, identifier} ->
-        where(base, [m], m.person_identifier == ^identifier)
-
-      {email, identifier} ->
-        where(base, [m], m.email == ^email or m.person_identifier == ^identifier)
-    end
+  # The invitations a person's identifier still holds, or nil when they
+  # have none.
+  defp invited_query(identifier) when is_binary(identifier) and identifier != "" do
+    from(m in Membership,
+      where: m.status == "invited" and m.scope == "athanor" and m.person_identifier == ^identifier
+    )
   end
+
+  defp invited_query(_none), do: nil
 
   defp identifier_of(user_id) do
     Arca.Repo.one(from(p in PersonIdentity, where: p.user_id == ^user_id, select: p.identifier))
@@ -1178,11 +1169,13 @@ defmodule Arca.SecurityTransitions do
   The transition (`ARCHITECTURE.md` §6.9) raises every person's and every
   athanor's `security_generation`, so nothing admitted under the backup's
   standing stands after it: an execution grant read before it never
-  admits a successor (`Arca.ExecutionStanding`), and a context read
-  before it issues nothing. It deletes every session; suspends every
+  admits a successor (`Arca.ExecutionStanding`), a context read before
+  it issues nothing, and an invitation issued before it admits no one
+  (`Arca.Invitations`). It deletes every session; suspends every
   unrevoked API key, every webhook, every active paired client and every
-  active passkey; revokes every frame credential and every pending
-  pairing invitation; deletes every pending confirmation
+  active passkey; revokes every frame credential, every pending pairing
+  invitation and every open admission invitation
+  (`Arca.Invitations.revoke_all!/0`); deletes every pending confirmation
   (`Arca.PendingConfirmations.delete_all!/0`); moves every active profile
   to `needs_consent` and every active vault and instance entry to
   `needs_reauth` (`Arca.StatusTransitions.restored/1`); deletes every
@@ -1582,6 +1575,7 @@ defmodule Arca.SecurityTransitions do
       )
 
     invitation_ids = PairingInvitations.revoke_all(PairingInvitation)
+    admission_invitation_ids = Invitations.revoke_all!()
 
     passkey_ids =
       updated(from(p in Passkey, where: p.state == "active", select: p.id),
@@ -1652,6 +1646,7 @@ defmodule Arca.SecurityTransitions do
       revoked_frame_credential_ids: frame_ids,
       suspended_paired_client_ids: client_ids,
       revoked_pairing_invitation_ids: invitation_ids,
+      revoked_admission_invitation_ids: admission_invitation_ids,
       suspended_passkey_ids: passkey_ids,
       deleted_confirmation_refs: confirmation_refs,
       needs_consent_profile_ids: profile_ids,
@@ -1792,6 +1787,7 @@ defmodule Arca.SecurityTransitions do
       from(f in FrameCredential, where: f.state != "revoked"),
       from(p in PairedClient, where: p.standing == "active"),
       from(i in PairingInvitation, where: i.state == "pending"),
+      from(i in Invitation, where: is_nil(i.redeemed_at) and is_nil(i.revoked_at)),
       from(p in Passkey, where: p.state == "active"),
       PendingConfirmation,
       from(p in Profile, where: p.status == ^profile_from),
@@ -2096,9 +2092,9 @@ defmodule Arca.SecurityTransitions do
     |> Arca.Repo.all()
   end
 
-  # arca:unscoped-ok invitations are keyed by address or identifier, across every athanor that holds one.
-  defp lock_invitations(email, identifier) do
-    case invited_query(email, identifier) do
+  # arca:unscoped-ok invitations are keyed by identifier, across every athanor that holds one.
+  defp lock_invitations(identifier) do
+    case invited_query(identifier) do
       nil ->
         []
 

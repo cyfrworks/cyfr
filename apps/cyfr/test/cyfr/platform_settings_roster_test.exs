@@ -1101,12 +1101,12 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       end)
     end
 
-    test "the directory URL and the restore token are read into Sanctum, nil when unset" do
+    test "the directory URL and the restore token are read into Sanctum; the directory is cyfr.run's when unset" do
       unset = %{"CYFR_DIRECTORY_URL" => nil, "CYFR_RESTORE_TOKEN" => nil}
 
       with_env(unset, fn ->
         config = read_prod_config!()
-        assert config[:sanctum][:directory_url] == nil
+        assert config[:sanctum][:directory_url] == "https://cyfr.run"
         assert config[:sanctum][:restore_token] == nil
       end)
 
@@ -1126,6 +1126,20 @@ defmodule Cyfr.PlatformSettingsRosterTest do
           assert config[:cyfr][:deployment_pinned] == []
         end
       )
+    end
+
+    test "one parse of the registry URL sets both applications' copies" do
+      with_env(%{"CYFR_REGISTRY_URL" => nil}, fn ->
+        config = read_prod_config!()
+        assert config[:cyfr][:registry_url] == "cyfr.run"
+        assert config[:sanctum][:registry_url] == "cyfr.run"
+      end)
+
+      with_env(%{"CYFR_REGISTRY_URL" => "none"}, fn ->
+        config = read_prod_config!()
+        assert config[:cyfr][:registry_url] == "none"
+        assert config[:sanctum][:registry_url] == "none"
+      end)
     end
 
     test "a directory URL as long as a preview can name is read, and one byte more is refused" do
@@ -1175,6 +1189,36 @@ defmodule Cyfr.PlatformSettingsRosterTest do
 
           assert message =~
                    "[Cyfr] FATAL: CYFR_RESTORE_TOKEN must be exactly 64 lowercase hexadecimal"
+
+          refute message =~ bad
+        end)
+      end
+    end
+
+    test "the setup token is read into Sanctum, and a malformed one stops the boot naming the variable, never the value" do
+      with_env(%{"CYFR_SETUP_TOKEN" => nil}, fn ->
+        assert read_prod_config!()[:sanctum][:setup_token] == nil
+      end)
+
+      token = String.duplicate("5e", 32)
+
+      with_env(%{"CYFR_SETUP_TOKEN" => token}, fn ->
+        config = read_prod_config!()
+        assert config[:sanctum][:setup_token] == token
+        assert config[:cyfr][:deployment_pinned] == []
+      end)
+
+      for bad <- [
+            String.duplicate("5E", 32),
+            String.duplicate("5e", 31),
+            String.duplicate("5e", 33),
+            String.duplicate("zz", 32)
+          ] do
+        with_env(%{"CYFR_SETUP_TOKEN" => bad}, fn ->
+          message = refusal!()
+
+          assert message =~
+                   "[Cyfr] FATAL: CYFR_SETUP_TOKEN must be exactly 64 lowercase hexadecimal"
 
           refute message =~ bad
         end)
@@ -1232,7 +1276,7 @@ defmodule Cyfr.PlatformSettingsRosterTest do
       assert message =~ "must be exactly 64 lowercase hexadecimal characters"
       refute message =~ bad
 
-      # This suite's boot configured none, so it admits a first person by a door.
+      # This suite's boot configured none, so setup admits its first person.
       assert Arca.InstallationClaims.mode() == :ordinary
     end
 

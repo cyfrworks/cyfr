@@ -165,22 +165,20 @@ defmodule Sanctum.Auth.DeviceFlow do
   end
 
   @doc """
-  Poll for the IdP token; once authorized, run the door and the sign-in
-  (`Sanctum.SignIn.admitted/2`) and open the session. `command_line:`
+  Poll for the IdP token; once authorized, unlock the person the identity
+  names (`Sanctum.SignIn.unlock/1`, which asks the door about them) and
+  open the session. A device flow never makes a person: an identity no
+  person here has linked is refused `:no_person`. `command_line:`
   names the machine a command line's sign-in runs on
   (`Sanctum.CliSignIn.machine/1` checked it), which the session records
   so its person lists and revokes it; the browser's sign-in names none.
 
   Returns one of:
   - `{:ok, %{status: "pending"}}` - User hasn't authorized yet
-  - `{:ok, %{status: "complete", session_token: token, user: user_info,
-      outcome: {:proceed, report}}}` - Authorized and signed in. The
-    report (`t:Sanctum.SignIn.report/0`) names no unsynced namespace and
-    a skipped probe: a publisher namespace is claimed at first publish,
-    never at the door, and `cyfr whoami` probes cyfr.run.
+  - `{:ok, %{status: "complete", session_token: token, user: user_info}}` -
+    Authorized and signed in. Nothing here speaks to the registry.
   - `{:ok, %{status: "expired"}}` - Device code expired
-  - `{:ok, %{status: "denied"}}` - User denied authorization, or the door
-    refused them
+  - `{:ok, %{status: "denied"}}` - User denied authorization
 
   ## Examples
 
@@ -200,76 +198,12 @@ defmodule Sanctum.Auth.DeviceFlow do
          {:ok, provider, client_id} <- usable(provider) do
       case request_token(provider, client_id, device_code) do
         {:ok, tokens} ->
-          # Got tokens: user info, the door, what sign-in records, then the
-          # one decision both sign-in paths take.
-          # A door refusal (`{:error, {:door, reason}}`) passes up as it
-          # is, and `Sanctum.Providers.Session` renders it uniformly.
+          # Got tokens: user info, then the unlock. A refusal
+          # (`{:error, {:door, reason}}`, `{:error, :no_person}`) passes up
+          # as it is, and `Sanctum.Providers.Session` renders it.
           with {:ok, user_info} <- fetch_user_info(provider, tokens),
-               {:ok, user, ctx} <- admit(user_info, provider) do
+               {:ok, user, ctx} <- unlock(user_info, provider) do
             {:ok, complete(user, ctx, user_info, Keyword.get(opts, :command_line))}
-          end
-
-        {:error, :authorization_pending} ->
-          {:ok, %{status: "pending"}}
-
-        {:error, :slow_down} ->
-          {:ok, %{status: "pending", slow_down: true}}
-
-        {:error, :expired_token} ->
-          {:ok, %{status: "expired"}}
-
-        {:error, :access_denied} ->
-          {:ok, %{status: "denied"}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      {:budget, :slow_down} -> {:ok, %{status: "pending", slow_down: true}}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  @doc """
-  Poll for a raw provider access token without creating a Sanctum
-  session. Used by the closed-platform appeal flow: an appellant has
-  already lost their push tokens (the takedown cascade revoked them),
-  but they still need to prove they are the action's rightful subject
-  to cyfr.run's `POST /v1/appeals`. cyfr.run verifies the access_token
-  against the provider's userinfo endpoint, so we surface it here
-  without the session-creation side effects.
-
-  Returns one of:
-  - `{:ok, %{status: "pending"}}`
-  - `{:ok, %{status: "complete", access_token: string, subject: string,
-      provider: provider}}`
-  - `{:ok, %{status: "expired"}}`
-  - `{:ok, %{status: "denied"}}`
-  - `{:error, reason}`
-  """
-  @spec poll_for_access_token(provider(), String.t(), String.t() | nil) ::
-          {:ok, map()} | {:error, term()}
-  def poll_for_access_token(provider, device_code, client_ip) do
-    # The appeal flow's raw-token poll deliberately bypasses the Door — an
-    # appellant is by definition someone the takedown cascade already
-    # revoked, and they must still be able to prove who they are to
-    # cyfr.run. The Door exemption is the point; the poll BUDGET below is
-    # not exempt, and neither is its per-address half: this flow's only
-    # caller is a LiveView, which passes no rate-limit plug.
-    with :ok <- check_poll_budget(device_code, client_ip),
-         {:ok, provider, client_id} <- usable(provider) do
-      case request_token(provider, client_id, device_code) do
-        {:ok, tokens} ->
-          with {:ok, user_info} <- fetch_user_info(provider, tokens) do
-            {:ok,
-             %{
-               status: "complete",
-               access_token: tokens.access_token,
-               subject: to_string(user_info.id),
-               provider: provider
-             }}
-          else
-            error -> error
           end
 
         {:error, :authorization_pending} ->
@@ -296,15 +230,15 @@ defmodule Sanctum.Auth.DeviceFlow do
   @doc """
   Poll a device flow begun to link a door for the person signed in on
   `ctx`, instead of signing anyone in: once the provider authorizes, the
-  identity it names is handed to `Sanctum.SignIn.link_ticket/2`, which asks
-  the door and binds a single-use link ticket to that person and session.
+  identity it names is handed to `Sanctum.SignIn.link_ticket/2`, which
+  binds a single-use link ticket to that person and session.
   No person is minted and no session is created; the ticket is answered
   to the page that polled, which presents it to `person.link_door`.
 
   Returns `{:ok, %{status: "pending"}}`, `{:ok, %{status: "complete",
   provider:, ticket:}}`, `{:ok, %{status: "expired" | "denied"}}`, or a
   refusal: the poll's own, and `link_ticket/2`'s (`:unauthenticated`,
-  `:not_linkable`, `{:door, reason}`, `:unavailable`). The budget is the
+  `:not_linkable`, `:unavailable`). The budget is the
   sign-in poll's.
   """
   @spec poll_for_link(provider(), String.t(), String.t() | nil, Context.t()) ::
@@ -480,7 +414,8 @@ defmodule Sanctum.Auth.DeviceFlow do
     case http_get(urls(:github).userinfo, headers) do
       {:ok, %{"id" => id} = user_data} ->
         # The public profile email carries no verification signal; the
-        # primary from /user/emails does, and the door needs it.
+        # primary from /user/emails does, and only a proved address is
+        # written to the person's contact email.
         {email, verified} =
           case fetch_github_email(tokens.access_token) do
             {:ok, primary, verified} -> {primary, verified}
@@ -510,17 +445,14 @@ defmodule Sanctum.Auth.DeviceFlow do
     ]
 
     case http_get(urls(:google).userinfo, headers) do
-      {:ok, %{"sub" => sub, "email_verified" => true} = user_data} ->
+      {:ok, %{"sub" => sub} = user_data} ->
         {:ok,
          %{
            id: to_string(sub),
            email: user_data["email"],
-           verified: true,
+           verified: user_data["email_verified"] == true,
            name: user_data["name"] || user_data["given_name"] || user_data["email"]
          }}
-
-      {:ok, %{"sub" => _sub, "email_verified" => false}} ->
-        {:error, {:user_info_error, "Google account email is not verified"}}
 
       {:ok, %{"error" => error}} ->
         {:error, {:user_info_error, error}}
@@ -561,14 +493,13 @@ defmodule Sanctum.Auth.DeviceFlow do
   # Session Creation
   # ============================================================================
 
-  # The door runs before the session exists and before cyfr.run hears of the
-  # identity: a refused sign-in leaves no row and makes no call.
-  defp admit(user_info, provider) do
+  # The unlock runs before the session exists: a refused sign-in writes
+  # nothing and makes no call.
+  defp unlock(user_info, provider) do
     identity = Identity.builtin_key(provider, user_info.id)
     user_info = Map.merge(user_info, %{id: identity, provider: provider})
 
-    with {:ok, verdict} <- Sanctum.Door.admit_identity(identity, user_info),
-         {:ok, user} <- Sanctum.SignIn.admitted(user_info, verdict) do
+    with {:ok, user} <- Sanctum.SignIn.unlock(user_info) do
       ctx =
         Context.build(
           user_id: user.id,
@@ -585,31 +516,15 @@ defmodule Sanctum.Auth.DeviceFlow do
     end
   end
 
-  # What follows the door. The sign-in report travels intact on the result
-  # for the browser's page to read. The IdP token never travels: nothing
-  # after the door needs it.
-  #
-  # And nothing here probes cyfr.run. The probe is the component domain's
-  # (`Compendium.SignInSync`), which sits above Sanctum and cannot be
-  # called from inside it; reaching it would mean handing the IdP token up
-  # out of the door, which is the one thing this module's own invariant
-  # forbids. So a CLI sign-in reports `:skipped` and records no namespace
-  # and no push token. The `registry` tool's re-probe does both on request,
-  # which is an explicit ask rather than a credential travelling silently.
+  # What follows the unlock: the session. The IdP token never travels:
+  # nothing after the unlock needs it, and no sign-in speaks to the registry.
   defp complete(user, ctx, user_info, machine) do
     base = %{
       status: "complete",
       user: %{id: user_info.id, email: user_info.email, name: user_info.name}
     }
 
-    report = %{unsynced: [], probe: :skipped}
-
-    with_session(
-      base,
-      %{ctx | namespace: user.namespace},
-      %{outcome: {:proceed, report}},
-      machine
-    )
+    with_session(base, %{ctx | namespace: user.namespace}, machine)
   end
 
   @doc """
@@ -618,12 +533,12 @@ defmodule Sanctum.Auth.DeviceFlow do
   through as it is.
 
   `cyfr login` reads these exact keys (`apps/codex/cmd/login.go`), so this
-  flattening is a wire contract: one adapter, byte-stable, exercised by
-  its own test. The browser page consumes the rich result directly; only
-  the MCP session tool's `device_poll` flattens through here.
+  projection is a wire contract: one adapter, byte-stable, exercised by
+  its own test. The browser page consumes the result directly; only the
+  MCP session tool's `device_poll` projects through here.
   """
   @spec wire(map()) :: map()
-  def wire(%{outcome: {:proceed, _report}, user: user, session_token: token}),
+  def wire(%{status: "complete", user: user, session_token: token}),
     do: %{status: "complete", user: user, session_token: token}
 
   def wire(result), do: result
@@ -631,14 +546,12 @@ defmodule Sanctum.Auth.DeviceFlow do
   # A command line's sign-in names the machine it runs on, so its person
   # lists and revokes its session (`Sanctum.CliSignIn`); the browser's
   # sign-in page names none.
-  defp with_session(base, ctx, extras, machine) do
+  defp with_session(base, ctx, machine) do
     case Sanctum.Tenancy.resolve_status(ctx, force: true) do
       {:ok, ctx} ->
         case Session.create(ctx, command_line: machine) do
           {:ok, session} ->
-            base
-            |> Map.put(:session_token, session.token)
-            |> Map.merge(extras)
+            Map.put(base, :session_token, session.token)
 
           # What the sign-in stood on went while it ran: the door it came
           # through was retired, by a recovery of the person's keys that

@@ -35,11 +35,12 @@ defmodule Compendium.Providers.SharedRefusalTest do
   end
 
   test "the sentence carries the actionable hint" do
-    assert Shared.refusal(error(401, :unauthorized)).message =~ "cyfr login"
+    assert Shared.refusal(error(401, :unauthorized)).message =~ "cyfr registry sync"
   end
 
-  test "a spent provider token is unauthenticated, and anything else is left to the gate" do
-    assert %Prima.Refusal{class: :unauthenticated} = Shared.refusal(:invalid_access_token)
+  test "anything else, a signed request's refusal among them, is left to the gate" do
+    assert Shared.refusal(:handle_taken) == :handle_taken
+    assert Shared.refusal({:policy_required, "v3"}) == {:policy_required, "v3"}
     assert Shared.refusal({:invalid_argument, "x"}) == {:invalid_argument, "x"}
     assert Shared.refusal("a sentence") == "a sentence"
   end

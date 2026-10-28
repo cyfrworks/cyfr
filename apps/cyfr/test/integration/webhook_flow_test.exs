@@ -54,9 +54,9 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
   end
 
   defp create_hook!(ctx, name, opts \\ %{}) do
-    # ConnCase configures an auth provider, so the webhook's owner must hold
+    # ConnCase configures a bearer provider, so the webhook's owner must hold
     # a live membership or the owner re-check refuses the invoke.
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "platform")
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ctx.user_id)
 
     # Registered but artifact-less: create-time target validation passes,
     # execution fails cleanly, which is the path these tests observe.
@@ -284,7 +284,7 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
   # consent that admits webhook deliveries, and a webhook firing it with
   # `input` as its template.
   defp attached_hook!(ctx, port, until, input) do
-    {:ok, _} = Sanctum.Tenancy.Members.ensure(ctx.user_id, scope: "platform")
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ctx.user_id)
     walk = Sanctum.TestContext.via(ctx, :prism)
     name = "webhook-probe-#{System.unique_integer([:positive])}"
 

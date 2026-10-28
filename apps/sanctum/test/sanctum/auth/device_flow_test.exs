@@ -78,10 +78,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       # A different device code has its own budget.
       assert {:error, {:client_id_not_configured, :github}} =
                DeviceFlow.poll_for_session("github", "another_code", nil)
-
-      # The appeal-path poll shares the same budget vocabulary.
-      assert {:ok, %{status: "pending", slow_down: true}} =
-               DeviceFlow.poll_for_access_token("github", code, nil)
     end
   end
 
@@ -152,16 +148,16 @@ defmodule Sanctum.Auth.DeviceFlowTest do
     # change here is a cross-language wire change and must be deliberate.
     @user %{id: "u1", email: "u@example.com", name: "U"}
 
-    test "a signed-in result is its status, user and session token" do
+    test "a signed-in result is its status, user and session token, and nothing else" do
       assert DeviceFlow.wire(%{
                status: "complete",
                user: @user,
                session_token: "tok",
-               outcome: {:proceed, %{unsynced: [], probe: :skipped}}
+               extra: :dropped
              }) == %{status: "complete", user: @user, session_token: "tok"}
     end
 
-    test "outcome-less statuses pass through untouched" do
+    test "every other status passes through untouched" do
       for passthrough <- [
             %{status: "pending"},
             %{status: "pending", slow_down: true},
@@ -197,22 +193,25 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       ctx = %{Sanctum.TestContext.local() | client_ip: "203.0.113.9", authenticated: false}
 
       prev_flow = Application.get_env(:sanctum, :device_flow)
-      prev_provider = Application.get_env(:sanctum, :auth_provider)
-      Application.put_env(:sanctum, :device_flow, IpRecordingDeviceFlow)
-      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
-      Application.delete_env(:sanctum, :device_flow_last_ip)
+      prev_client = Application.fetch_env(:sanctum, :github_client_id)
 
       on_exit(fn ->
         if prev_flow,
           do: Application.put_env(:sanctum, :device_flow, prev_flow),
           else: Application.delete_env(:sanctum, :device_flow)
 
-        if prev_provider,
-          do: Application.put_env(:sanctum, :auth_provider, prev_provider),
-          else: Application.delete_env(:sanctum, :auth_provider)
+        case prev_client do
+          {:ok, id} -> Application.put_env(:sanctum, :github_client_id, id)
+          :error -> Application.delete_env(:sanctum, :github_client_id)
+        end
 
         Application.delete_env(:sanctum, :device_flow_last_ip)
       end)
+
+      Application.put_env(:sanctum, :device_flow, IpRecordingDeviceFlow)
+      # The device flow is offered once GitHub is configured.
+      Application.put_env(:sanctum, :github_client_id, "charged-client")
+      Application.delete_env(:sanctum, :device_flow_last_ip)
 
       Sanctum.Providers.Session.handle(ctx, %{"action" => "device_init", "provider" => "github"})
 
@@ -226,7 +225,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       ip = "198.51.100.77"
       ctx = %{Sanctum.TestContext.local() | client_ip: ip, authenticated: false}
       prev_flow = Application.get_env(:sanctum, :device_flow)
-      prev_provider = Application.get_env(:sanctum, :auth_provider)
       prev_client = Application.fetch_env(:sanctum, :github_client_id)
 
       on_exit(fn ->
@@ -240,15 +238,10 @@ defmodule Sanctum.Auth.DeviceFlowTest do
         if prev_flow,
           do: Application.put_env(:sanctum, :device_flow, prev_flow),
           else: Application.delete_env(:sanctum, :device_flow)
-
-        if prev_provider,
-          do: Application.put_env(:sanctum, :auth_provider, prev_provider),
-          else: Application.delete_env(:sanctum, :auth_provider)
       end)
 
       Prima.Test.RateLimiter.reset!()
       Application.delete_env(:sanctum, :device_flow)
-      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
       # No client id, so an admitted init stops at the configuration and
       # never reaches a provider.
       Application.delete_env(:sanctum, :github_client_id)
@@ -257,6 +250,10 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       outcomes = for _ <- 1..200, do: DeviceFlow.init_device_flow("github", ip)
       assert {:error, {:rate_limited, retry_after_s}} = List.last(outcomes)
       assert retry_after_s > 0
+
+      # GitHub configured, so the session tool offers the device flow; the
+      # spent budget answers before any provider is reached.
+      Application.put_env(:sanctum, :github_client_id, "budget-client")
 
       # The wait is read again, so it may have ticked down a second.
       assert {:error, {:rate_limited, wait_s} = limited} =
@@ -268,17 +265,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       assert wait_s > 0 and wait_s <= retry_after_s
       assert %Prima.Refusal{class: :rate_limited} = Prima.Refusal.classify(limited)
     end
-  end
-
-  defmodule FullServerDeviceFlow do
-    # A server at capacity: the door refuses the mint, so `admitted/2`
-    # refuses the sign-in and the poll carries that reason out — the
-    # athanors it holds, or how fast it admits strangers.
-    def poll_for_session(_provider, "dc_slow", _client_ip, _opts),
-      do: {:error, {:limit_reached, :mint_per_hour, 10}}
-
-    def poll_for_session(_provider, _device_code, _client_ip, _opts),
-      do: {:error, {:limit_reached, :max_athanors, 1}}
   end
 
   defmodule IdP do
@@ -391,7 +377,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       n = System.unique_integer([:positive])
 
       {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "oidcc|https://idp.test|device-link-#{n}",
           provider: "oidcc",
           email: "device-link-#{n}@idp.test",
@@ -484,19 +470,14 @@ defmodule Sanctum.Auth.DeviceFlowTest do
                )
     end
 
-    test "a pending authorization answers pending, and a closed door mints no ticket" do
+    test "a pending authorization answers pending, and no standing session mints no ticket" do
       person = signed_in!()
       n = idp!(%{"error" => "authorization_pending"})
 
       assert {:ok, %{status: "pending"}} =
                DeviceFlow.poll_for_link("github", "dc-pending-#{n}", nil, person.ctx)
 
-      [entry] = Sanctum.Door.Store.list()
-      :ok = Sanctum.Door.Store.remove(entry.id)
       _ = idp!(%{"access_token" => "gho_link", "token_type" => "bearer"})
-
-      assert {:error, {:door, :not_allowed}} =
-               DeviceFlow.poll_for_link("github", "dc-closed-#{n}", nil, person.ctx)
 
       assert {:error, :unauthenticated} =
                DeviceFlow.poll_for_link(
@@ -544,12 +525,7 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       n = idp!(%{"access_token" => "gho_recovered", "token_type" => "bearer"})
       key = Sanctum.Auth.Identity.builtin_key(:github, to_string(n))
 
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: key,
-          provider: "github",
-          verified: :unknown
-        })
+      {:ok, user} = Sanctum.Test.People.linked(%{id: key, provider: "github", verified: :unknown})
 
       :ok = DirectoryServer.remote_person!(user.id, identity)
 
@@ -598,8 +574,25 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       :ok
     end
 
+    test "an identity no person here has linked is refused, and makes no one" do
+      n = idp!(%{"access_token" => "gho_nobody", "token_type" => "bearer"})
+      people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
+
+      assert {:error, :no_person} =
+               DeviceFlow.poll_for_session(:github, "dc_nobody_#{n}", "203.0.113.29")
+
+      assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
+      assert Sanctum.Door.Store.requests() == []
+    end
+
     test "the session a command line signs in is listed by its machine, and the browser's names none" do
       n = idp!(%{"access_token" => "gho_command_line", "token_type" => "bearer"})
+
+      {:ok, _person} =
+        Sanctum.Test.People.linked(%{
+          id: Sanctum.Auth.Identity.builtin_key(:github, to_string(n)),
+          provider: "github"
+        })
 
       assert {:ok, %{status: "complete", session_token: token}} =
                DeviceFlow.poll_for_session(:github, "dc_cli_#{n}", "203.0.113.30",
@@ -618,47 +611,6 @@ defmodule Sanctum.Auth.DeviceFlowTest do
       {:ok, browser_row} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(browser))
       assert browser_row.cli_machine == nil
       assert {:ok, [_command_line_alone]} = Arca.SessionStorage.list_command_lines(row.user_id)
-    end
-  end
-
-  describe "a full server, seen from the CLI" do
-    setup do
-      prev_flow = Application.get_env(:sanctum, :device_flow)
-      prev_provider = Application.get_env(:sanctum, :auth_provider)
-      Application.put_env(:sanctum, :device_flow, FullServerDeviceFlow)
-      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
-
-      on_exit(fn ->
-        if prev_flow,
-          do: Application.put_env(:sanctum, :device_flow, prev_flow),
-          else: Application.delete_env(:sanctum, :device_flow)
-
-        if prev_provider,
-          do: Application.put_env(:sanctum, :auth_provider, prev_provider),
-          else: Application.delete_env(:sanctum, :auth_provider)
-      end)
-
-      :ok
-    end
-
-    test "the poller is told the server is at capacity, as a rate limit and never an internal failure" do
-      ctx = %{Sanctum.TestContext.local() | authenticated: false}
-
-      for {code, sentence} <- [
-            {"dc_full", "This server holds as many athanors as it may — ask its operator"},
-            {"dc_slow",
-             "This server is admitting new people slowly right now — try again shortly"}
-          ] do
-        assert {:error, reason} =
-                 Sanctum.Providers.Session.handle(ctx, %{
-                   "action" => "device_poll",
-                   "provider" => "github",
-                   "device_code" => code
-                 })
-
-        assert %Prima.Refusal{class: :rate_limited, message: ^sentence} =
-                 Sanctum.Refusals.classify(reason)
-      end
     end
   end
 end

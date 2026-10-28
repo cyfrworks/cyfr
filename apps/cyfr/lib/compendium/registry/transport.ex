@@ -30,6 +30,11 @@ defmodule Compendium.Registry.Transport do
   the only thing that keeps those endpoints honest. The decision itself —
   classification, `Retry-After`, backoff — is `Compendium.Transport.Retry`,
   shared with the OCI transport.
+
+  A 429 or 5xx the transport gives up on is answered as the response it is
+  when it carries the registry's refusal envelope, so a signed operation
+  reads its typed refusal (`DIRECTORY_UNAVAILABLE`, `DNS_TIMEOUT`,
+  `RATE_LIMITED`); one without an envelope is an error.
   """
 
   require Logger
@@ -117,10 +122,10 @@ defmodule Compendium.Registry.Transport do
           Retry.classify({:status, 429}),
           "429",
           max(Retry.retry_after_ms(resp_headers), Retry.backoff(attempt)),
-          fn -> {:error, Errors.from_api_response(429, resp_body, "request")} end
+          fn -> refused(429, resp_headers, resp_body) end
         )
 
-      {:ok, status, _resp_headers, resp_body} when status >= 500 ->
+      {:ok, status, resp_headers, resp_body} when status >= 500 ->
         retry_or_give_up(
           method,
           url,
@@ -131,7 +136,7 @@ defmodule Compendium.Registry.Transport do
           Retry.classify({:status, status}),
           "#{status}",
           Retry.backoff(attempt),
-          fn -> {:error, Errors.from_api_response(status, resp_body, "request")} end
+          fn -> refused(status, resp_headers, resp_body) end
         )
 
       {:ok, status, resp_headers, resp_body} ->
@@ -186,6 +191,17 @@ defmodule Compendium.Registry.Transport do
 
         Process.sleep(delay)
         do_request(method, url, headers, body, attempt + 1, limits)
+    end
+  end
+
+  # A 429 or a 5xx given up on: an answer carrying the registry's refusal
+  # envelope (`Prima.RegistryRequest.refusal/1`) is the registry's own
+  # typed refusal, handed on as the answer it is; any other is the error
+  # an unusable answer is.
+  defp refused(status, headers, body) do
+    case Prima.RegistryRequest.refusal(body) do
+      {:ok, _refusal} -> {:ok, status, headers, body}
+      {:error, :malformed_answer} -> {:error, Errors.from_api_response(status, body, "request")}
     end
   end
 

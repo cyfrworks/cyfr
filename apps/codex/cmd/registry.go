@@ -2,8 +2,10 @@
 // Copyright 2026 CYFR Works Inc.
 
 // Registry namespace and push-token management commands.
-// Each command delegates to the MCP registry tool. The server resolves
-// credentials for the authenticated user; cyfr login provisions push tokens.
+// Each command delegates to the MCP registry tool. The server signs each
+// request with the person's identity key and resolves the push tokens it
+// stores for them; `cyfr registry claim` claims the personal namespace and
+// `cyfr registry sync` provisions push tokens. Sign-in never does either.
 package cmd
 
 import (
@@ -23,6 +25,8 @@ var (
 func init() {
 	// Top-level
 	registryCmd.AddCommand(registryWhoamiCmd)
+	registryCmd.AddCommand(registryClaimCmd)
+	registryCmd.AddCommand(registrySyncCmd)
 	registryCmd.AddCommand(registryGetNamespaceCmd)
 
 	// publisher
@@ -79,6 +83,67 @@ you only want the registry state.`,
 }
 
 // ----------------------------------------------------------------------------
+// registry claim <handle> — claim the personal namespace
+// ----------------------------------------------------------------------------
+
+var registryClaimCmd = &cobra.Command{
+	Use:   "claim <handle>",
+	Short: "Claim your handle (your personal namespace) at cyfr.run",
+	Long: `Claims your handle at cyfr.run with a request your identity signs, so
+it needs an enrolled identity. The handle is your personal namespace: what
+` + "`cyfr push`" + ` publishes under. A repeat by the same identity answers the
+same claim again.
+
+The claim issues no token — run ` + "`cyfr registry sync`" + ` for push tokens.`,
+	Args:    cobra.ExactArgs(1),
+	Example: "  cyfr registry claim alice",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client := newClient()
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistryClaimPersonalArgs{Handle: args[0]})
+		if err != nil {
+			return handleToolError(err, "Registry claim failed")
+		}
+		if flagJSON {
+			output.JSON(result)
+			return nil
+		}
+		output.KeyValue(result)
+		return nil
+	},
+}
+
+// ----------------------------------------------------------------------------
+// registry sync — mint and store push tokens
+// ----------------------------------------------------------------------------
+
+var registrySyncCmd = &cobra.Command{
+	Use:   "sync",
+	Short: "Mint and store your push tokens at cyfr.run",
+	Long: `Mints push tokens for your personal namespace and every publisher
+namespace you are a member of, with a request your identity signs, and stores
+them on the server for ` + "`cyfr push`" + `. It waits for a fresh confirmation,
+given in Prism, before minting.
+
+Prints your personal namespace and your memberships. No token is ever printed.
+Run it again after a token is revoked or a membership is added.`,
+	Args:    cobra.NoArgs,
+	Example: "  cyfr registry sync",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client := newClient()
+		result, err := client.CallTool(cmd.Context(), ops.Registry, ops.RegistrySyncArgs{})
+		if err != nil {
+			return handleToolError(err, "Registry sync failed")
+		}
+		if flagJSON {
+			output.JSON(result)
+			return nil
+		}
+		output.KeyValue(result)
+		return nil
+	},
+}
+
+// ----------------------------------------------------------------------------
 // registry get-namespace <slug>
 // ----------------------------------------------------------------------------
 
@@ -86,8 +151,7 @@ var registryGetNamespaceCmd = &cobra.Command{
 	Use:   "get-namespace <slug>",
 	Short: "Inspect a cyfr.run namespace",
 	Long: `Public endpoint — returns the namespace's kind (personal / publisher /
-reserved), DNS verification status, and the provider that originally claimed
-it. Works without a push token.`,
+reserved) and its DNS verification status. Works without a push token.`,
 	Args:    cobra.ExactArgs(1),
 	Example: "  cyfr registry get-namespace stripe.com",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -120,10 +184,10 @@ var registryPublisherCmd = &cobra.Command{
 var registryPublisherClaimCmd = &cobra.Command{
 	Use:   "claim <domain>",
 	Short: "Start a publisher-namespace claim (issues a DNS TXT challenge)",
-	Long: `Requires a push token for your personal namespace (get one via
-` + "`cyfr login`" + `). cyfr.run returns a TXT challenge to install at
-_cyfr-verify.<domain>; run ` + "`cyfr registry publisher verify <domain>`" + ` once
-the record is live.`,
+	Long: `Sent as a request your identity signs; needs a claimed handle (see
+` + "`cyfr registry claim <handle>`" + `). cyfr.run returns a TXT challenge to
+install at _cyfr-verify.<domain>; run
+` + "`cyfr registry publisher verify <domain>`" + ` once the record is live.`,
 	Args:    cobra.ExactArgs(1),
 	Example: "  cyfr registry publisher claim acme.com",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -146,11 +210,14 @@ the record is live.`,
 
 var registryPublisherVerifyCmd = &cobra.Command{
 	Use:   "verify <domain>",
-	Short: "Verify a publisher claim via DNS and receive the first push token",
-	Long: `Polls the DNS TXT record installed for a prior ` + "`claim`" + `. On
+	Short: "Verify a publisher claim via DNS and store its first push token",
+	Long: `Polls the DNS TXT record installed for a prior ` + "`claim`" + `, with a
+request your identity signs, after a fresh confirmation given in Prism. On
 success the caller becomes the sole admin of the publisher namespace and
-cyfr.run issues the first push token for it — stored server-side in the
-user's CredentialStore so ` + "`cyfr push`" + ` can use it immediately.`,
+cyfr.run mints the founding member's push token, which the server stores so
+` + "`cyfr push`" + ` can use it immediately; ` + "`token_stored`" + ` says whether
+it was. A repeat of a verification already recorded mints nothing — run
+` + "`cyfr registry sync`" + ` for the token then.`,
 	Args:    cobra.ExactArgs(1),
 	Example: "  cyfr registry publisher verify acme.com",
 	RunE: func(cmd *cobra.Command, args []string) error {

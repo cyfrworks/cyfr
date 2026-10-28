@@ -59,7 +59,7 @@ defmodule Sanctum.IssuanceTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|issuance-#{n}",
         provider: "github",
         email: "issuance#{n}@example.com",
@@ -645,7 +645,7 @@ defmodule Sanctum.IssuanceTest do
     # the person's and the athanor's current generations, still issues
     # nothing in the athanor.
     {:ok, other} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|issuance-other-#{System.unique_integer([:positive])}",
         provider: "github",
         email: "issuance-other#{System.unique_integer([:positive])}@example.com",
@@ -732,7 +732,7 @@ defmodule Sanctum.IssuanceTest do
     # The seat lost, another member keeping the group open: the platform
     # row still stands, and stands for nothing in the athanor.
     {:ok, other} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|device-other-#{System.unique_integer([:positive])}",
         provider: "github",
         email: "device-other#{System.unique_integer([:positive])}@example.com",
@@ -815,7 +815,7 @@ defmodule Sanctum.IssuanceTest do
 
     # A group the person holds no seat in, kept open by its own member.
     {:ok, other} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|pairing-other-#{n}",
         provider: "github",
         email: "pairing-other#{n}@example.com",
@@ -1506,11 +1506,10 @@ defmodule Sanctum.IssuanceRaceTest do
 
   defp person!(user_id, athanor_id, n, now) do
     {:ok, _} =
-      Arca.Users.mint(
+      Arca.Test.People.mint(
         Prima.Actor.system(),
         %{
           id: user_id,
-          provider: "github",
           email: "race#{n}@example.com",
           email_verified: true,
           first_seen_at: now,

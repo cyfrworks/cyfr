@@ -146,7 +146,7 @@ defmodule Sanctum.TenancyMCPTest do
                Provider.handle("member", ctx, %{
                  "action" => "add",
                  "athanor" => created.id,
-                 "email" => "someone@example.com"
+                 "identifier" => "per_" <> Prima.Digest.sha256_hex("someone")
                })
 
       # And it reopens.
@@ -214,30 +214,40 @@ defmodule Sanctum.TenancyMCPTest do
   # ==========================================================================
 
   describe "member.add" do
-    test "an address nobody has signed in with yet is seated all the same", %{ctx: ctx} do
+    test "an identifier nobody here holds yet is seated all the same", %{ctx: ctx} do
       created = group!(ctx)
+      identifier = "per_" <> Prima.Digest.sha256_hex("newcomer-#{System.unique_integer()}")
 
-      assert {:ok, %{member: %{email: "newcomer@example.com"}, state: "added"}} =
+      assert {:ok, %{member: %{identifier: ^identifier}, state: "added"}} =
                Provider.handle("member", ctx, %{
                  "action" => "add",
                  "athanor" => created.id,
-                 "email" => "Newcomer@Example.com"
+                 "identifier" => identifier
                })
     end
 
-    test "a target that is neither an email nor a user id is refused", %{ctx: ctx} do
+    test "a target that is neither a user id, an identifier nor a handle is refused, and an email names no one",
+         %{ctx: ctx} do
       created = group!(ctx)
 
-      assert {:error,
-              {:invalid_argument, "Missing required argument: email, user_id or identifier"}} =
-               Provider.handle("member", ctx, %{"action" => "add", "athanor" => created.id})
+      for args <- [%{}, %{"email" => "Newcomer@Example.com"}] do
+        assert {:error,
+                {:invalid_argument, "Missing required argument: user_id, identifier or handle"}} =
+                 Provider.handle(
+                   "member",
+                   ctx,
+                   Map.merge(%{"action" => "add", "athanor" => created.id}, args)
+                 )
+      end
 
-      assert {:error, {:invalid_argument, "That is not an email address"}} =
+      assert {:error, {:invalid_argument, message}} =
                Provider.handle("member", ctx, %{
                  "action" => "add",
                  "athanor" => created.id,
-                 "email" => "not-an-email"
+                 "identifier" => "per_x"
                })
+
+      assert message =~ "person identifier"
     end
   end
 
@@ -245,11 +255,13 @@ defmodule Sanctum.TenancyMCPTest do
     test "removing someone who is not there names them", %{ctx: ctx} do
       created = group!(ctx)
 
-      assert {:error, {:not_found, "Member", "ghost@example.com"}} =
+      ghost = "per_" <> Prima.Digest.sha256_hex("ghost")
+
+      assert {:error, {:not_found, "Member", ^ghost}} =
                Provider.handle("member", ctx, %{
                  "action" => "remove",
                  "athanor" => created.id,
-                 "email" => "Ghost@Example.com"
+                 "identifier" => ghost
                })
     end
 
@@ -312,7 +324,7 @@ defmodule Sanctum.TenancyMCPTest do
       n = System.unique_integer([:positive])
 
       {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "github|https://github.com|own-#{n}",
           provider: "github",
           email: "own#{n}@example.com",
@@ -321,7 +333,7 @@ defmodule Sanctum.TenancyMCPTest do
         })
 
       {:ok, user} = Sanctum.Tenancy.Users.set_namespace(user, "own#{n}")
-      {:ok, own} = Sanctum.Provisioning.ensure_personal_athanor(user)
+      own = Sanctum.Test.People.athanor!(user)
       assert own.kind == "person"
 
       ctx =
@@ -344,7 +356,7 @@ defmodule Sanctum.TenancyMCPTest do
                Provider.handle("member", ctx, %{
                  "action" => "add",
                  "athanor" => own.id,
-                 "email" => "someone@example.com"
+                 "identifier" => "per_" <> Prima.Digest.sha256_hex("someone")
                })
 
       assert message =~ "add people to a group"
@@ -369,7 +381,7 @@ defmodule Sanctum.TenancyMCPTest do
                  Provider.handle("member", key_ctx, %{
                    "action" => action,
                    "athanor" => "ath_does_not_exist",
-                   "email" => "someone@example.com"
+                   "identifier" => "per_" <> Prima.Digest.sha256_hex("someone")
                  })
 
         assert message == "member.#{action} is a person's act — sign in; an API key cannot do it",

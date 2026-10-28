@@ -2,7 +2,7 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.TenancyTest do
-  # async: false — global :tenancy_resolver_override / :platform_admin_emails mutation.
+  # async: false — global :tenancy_resolver_override mutation.
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
@@ -27,7 +27,7 @@ defmodule Sanctum.TenancyTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|#{name}-#{n}",
         provider: "github",
         email: "#{name}-#{n}@example.com",
@@ -83,13 +83,11 @@ defmodule Sanctum.TenancyTest do
     setup tags do
       Arca.Test.Sandbox.setup!(tags)
 
-      orig_admins = Application.get_env(:sanctum, :platform_admin_emails)
       orig_override = Application.get_env(:sanctum, :tenancy_resolver_override)
       # Membership resolution must run, not the override seam.
       Application.delete_env(:sanctum, :tenancy_resolver_override)
 
       on_exit(fn ->
-        restore(:platform_admin_emails, orig_admins)
         restore(:tenancy_resolver_override, orig_override)
       end)
 
@@ -115,7 +113,7 @@ defmodule Sanctum.TenancyTest do
       uid = "u-multi-#{System.unique_integer([:positive])}"
       athanor = group!("home-b")
       {:ok, _} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: athanor.id})
-      {:ok, _} = Members.ensure(uid, scope: "platform")
+      {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
 
       {:ok, result} = Tenancy.resolve_status(%Context{user_id: uid, athanor_id: nil}, force: true)
       assert result.scope == :athanor
@@ -128,15 +126,14 @@ defmodule Sanctum.TenancyTest do
       # nobody. What guarantees an operator an athanor is the one minted for
       # them at admission, past the server caps.
       uid = "u-plat-only-#{System.unique_integer([:positive])}"
-      {:ok, _} = Members.ensure(uid, scope: "platform")
+      {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
 
       {:ok, result} = Tenancy.resolve_status(%Context{user_id: uid, athanor_id: nil}, force: true)
       assert result.platform_admin
       assert result.athanor_id == nil
     end
 
-    test "resolution never mints anything — the operator list is applied at sign-in only" do
-      Application.put_env(:sanctum, :platform_admin_emails, ["admin@example.com"])
+    test "resolution never mints anything — the platform grant is the first person's mint alone" do
       uid = "u-admin-#{System.unique_integer([:positive])}"
 
       ctx = %Context{user_id: uid, athanor_id: nil, email: "admin@example.com"}
@@ -172,7 +169,7 @@ defmodule Sanctum.TenancyTest do
       seated = group!("basis-seated")
       other = group!("basis-other")
       {:ok, seat} = Members.create(%{user_id: uid, scope: "athanor", athanor_id: seated.id})
-      {:ok, _} = Members.ensure(uid, scope: "platform")
+      {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
       {:ok, memberships} = Members.list_by_user(uid)
       admin = %Context{user_id: uid, scope: :athanor, platform_admin: true}
 
@@ -200,7 +197,7 @@ defmodule Sanctum.TenancyTest do
 
     test "keeps the capability and loses the athanor" do
       uid = "u-reval-keep-#{System.unique_integer([:positive])}"
-      {:ok, _} = Members.ensure(uid, scope: "platform")
+      {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
 
       # The session names a group the operator holds no seat in: the
       # capability is over the instance, not a seat, so it keeps them in
@@ -227,9 +224,9 @@ defmodule Sanctum.TenancyTest do
       assert out.athanor_id == seated.id
     end
 
-    test "drops the capability once the platform membership is revoked" do
+    test "drops the capability once the platform membership is gone" do
       uid = "u-reval-revoke-#{System.unique_integer([:positive])}"
-      {:ok, _} = Members.ensure(uid, scope: "platform")
+      {:ok, grant} = Sanctum.TestContext.ensure_platform(uid)
 
       ctx = %Context{
         user_id: uid,
@@ -241,8 +238,9 @@ defmodule Sanctum.TenancyTest do
 
       assert {:ok, %{platform_admin: true}} = Tenancy.revalidate(ctx)
 
-      [_grant] = rows!(Members.list_by_user(uid))
-      :ok = Members.revoke_platform(uid)
+      [%{id: grant_id}] = rows!(Members.list_by_user(uid))
+      assert grant_id == grant.id
+      Arca.Repo.delete!(%Arca.Schemas.Membership{id: grant.id})
 
       # No memberships → no capability, no athanor; the tenant gate then
       # rejects tenant-scoped routes.
@@ -303,7 +301,7 @@ defmodule Sanctum.TenancyTest do
     test "a platform admin sees their own memberships only, not every athanor" do
       uid = "u-list-plat-#{System.unique_integer([:positive])}"
       _other = group!("list-other")
-      {:ok, _} = Members.ensure(uid, scope: "platform")
+      {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
 
       assert Tenancy.list_athanors(%Context{user_id: uid, scope: :athanor, platform_admin: true}) ==
                []
@@ -371,7 +369,7 @@ defmodule Sanctum.TenancyTest do
     test "an invite names an identifier with no directory read; the cyfr sign-in claims it; a removal retires the person here; recovered, they sign in to nothing",
          %{directory: directory, identity: identity} do
       group = group!("join")
-      {:ok, peer} = Sanctum.Tenancy.Users.upsert_from_provider(github("peer"))
+      {:ok, peer} = Sanctum.Test.People.linked(github("peer"))
       {:ok, :added} = Members.add(group, [user_id: peer.id], "system")
 
       # Invited before they ever signed in here: held as invited, queued for
@@ -411,7 +409,7 @@ defmodule Sanctum.TenancyTest do
                Arca.PersonIdentities.get(Prima.Actor.system(), user.id)
 
       assert identifier == identity.identifier
-      assert {:ok, :allowed} = Sanctum.Door.admit(key, nil, :unknown)
+      assert {:ok, :allowed} = Sanctum.Door.admit_person(user)
       assert Members.member?(peer.id, group.id)
 
       # Recovered at their own home: their identity is current, and the
@@ -445,7 +443,7 @@ defmodule Sanctum.TenancyTest do
          %{identity: identity} do
       stay = group!("stay")
       leave = group!("leave")
-      {:ok, user} = Sanctum.Tenancy.Users.upsert_from_provider(github("two"))
+      {:ok, user} = Sanctum.Test.People.linked(github("two"))
       :ok = DirectoryServer.remote_person!(user.id, identity)
       {:ok, :added} = Members.add(stay, [user_id: user.id], "system")
       {:ok, :added} = Members.add(leave, [user_id: user.id], "system")
@@ -486,24 +484,29 @@ defmodule Sanctum.TenancyTest do
 
     # What the cyfr door does once it verified the person's assertion: the
     # head read fresh from the directory their genesis names, then the
-    # admitted sign-in.
+    # person the identity names unlocked, or a newcomer's remote admission.
     defp cyfr_sign_in!(identity, key) do
       _head = DirectoryServer.cached!(identity)
 
-      {:ok, user} =
-        Sanctum.SignIn.admitted(
-          %{
-            id: key,
-            provider: "cyfr",
-            email: nil,
-            verified: :unknown,
-            name: nil,
-            remote: %{identifier: identity.identifier, directory_url: identity.url}
-          },
-          :allowed
-        )
+      case Sanctum.SignIn.unlock(%{id: key, provider: "cyfr", verified: :unknown}) do
+        {:ok, user} ->
+          user
 
-      user
+        {:error, :no_person} ->
+          {:ok, %{person: user}} =
+            Sanctum.Newcomer.admit(
+              {:remote,
+               %{
+                 identifier: identity.identifier,
+                 directory_url: identity.url,
+                 genesis_hash: Prima.Identity.hash(identity.genesis),
+                 head_hash: DirectoryServer.key_epoch(identity)
+               }},
+              :none
+            )
+
+          user
+      end
     end
 
     # A session of the person, bound to `athanor_id` (or to none), as the

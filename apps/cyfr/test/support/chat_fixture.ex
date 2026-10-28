@@ -40,7 +40,7 @@ defmodule Cyfr.Test.ChatFixture do
     any table, a file under the base path, or a term the caller passes.
   """
 
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   @wasm Path.expand("test_wasm/chat_fixture/chat_fixture.wasm", __DIR__)
   @readme Path.expand("test_wasm/chat_fixture/README.md", __DIR__)
@@ -179,7 +179,7 @@ defmodule Cyfr.Test.ChatFixture do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|chat-fixture-#{n}",
         provider: "github",
         email: "chat-fixture-#{n}@example.com",

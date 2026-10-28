@@ -4,14 +4,23 @@
 defmodule PrismWeb.MembersLive do
   @moduledoc """
   Who is in the focused athanor: the members, the pending invites, and the
-  controls every member has — add by email or by person identifier
-  (`per_…`), remove, withdraw an invite, leave. Withdraw reaches only an
+  controls every member has — add by handle (`@name`, the identifier the
+  registry answers for it added in its place), by person identifier
+  (`per_…`) or by the person's id here (`usr_…`), remove, withdraw an
+  invite, leave. Withdraw reaches only an
   invitation: one accepted since the page loaded stays a member. A
   person's own athanor has one member and no controls beyond the list.
+
+  In an open group, the invitation links section creates a link that
+  makes a new person here and seats them in the group, shows it once with
+  a copy control, lists the links the viewer sees for this group
+  (`invitation.list`: their own, or every one for the platform
+  administrator) and revokes one still pending.
   """
 
   use PrismWeb, :live_view
 
+  alias Phoenix.LiveView.JS
   alias Sanctum.Tenancy.Athanors
 
   @impl true
@@ -33,6 +42,8 @@ defmodule PrismWeb.MembersLive do
      |> assign(:groups, [])
      |> assign(:new_person, "")
      |> assign(:new_group_name, "")
+     |> assign(:invitations, [])
+     |> assign(:new_link, nil)
      |> assign(:loading, true)}
   end
 
@@ -75,7 +86,7 @@ defmodule PrismWeb.MembersLive do
   # has claimed it, the row is their seat, and Withdraw must never remove a
   # member. The roster this page shows may be older than that claim.
   def handle_event("remove_invite", params, socket) do
-    args = params |> Map.take(["identifier", "email"]) |> Map.put("invitation", true)
+    args = params |> Map.take(["identifier"]) |> Map.put("invitation", true)
 
     case call_tool(socket, "member/remove", args) do
       {:ok, _} ->
@@ -105,7 +116,7 @@ defmodule PrismWeb.MembersLive do
   # Growing a DM is a NEW open group with the three of you — the pair's
   # door stays closed and its history stays where it was said. The partner
   # is seated by user id (an active seat at once); the new person arrives
-  # by email or identifier, the ordinary first contact on an open athanor.
+  # by identifier or user id, the ordinary first contact on an open athanor.
   def handle_event("add_third", %{"person" => person}, socket) do
     %{athanor: pair, members: members, context: ctx} = socket.assigns
 
@@ -171,6 +182,27 @@ defmodule PrismWeb.MembersLive do
     end
   end
 
+  def handle_event("invitation_create", _params, %{assigns: %{athanor: %{id: id}}} = socket) do
+    case call_tool(socket, "invitation/create", %{"athanor_id" => id}) do
+      {:ok, %{invitation_url: link}} ->
+        {:noreply, socket |> assign(:new_link, link) |> load()}
+
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Could not create the link: #{error_message(reason)}")}
+    end
+  end
+
+  def handle_event("invitation_revoke", %{"id" => id}, socket) do
+    case call_tool(socket, "invitation/revoke", %{"invitation_id" => id}) do
+      {:ok, _} ->
+        {:noreply, socket |> load() |> put_flash(:info, "Invitation link revoked.")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not revoke: #{error_message(reason)}")}
+    end
+  end
+
   def handle_event("form_changed", params, socket) do
     {:noreply,
      socket
@@ -218,16 +250,16 @@ defmodule PrismWeb.MembersLive do
   defp frozen?(%{roster: "frozen"}), do: true
   defp frozen?(_), do: false
 
-  # Who the add form names: a person identifier when it starts `per_` and
-  # holds no `@`, else an email, so an address such as
-  # `per_hansen@example.com` stays an address. A malformed identifier with
-  # no `@` is still sent as one, so the refusal names what was wrong with it.
+  # Who the add form names: a handle when it starts `@`, a person
+  # identifier when it starts `per_`, else a person's id here. A malformed
+  # handle or identifier is still sent as one, so the refusal names what
+  # was wrong with it.
   defp target(person) do
-    person = String.trim(person)
-
-    if String.starts_with?(person, "per_") and not String.contains?(person, "@"),
-      do: %{"identifier" => person},
-      else: %{"email" => person}
+    case String.trim(person) do
+      "@" <> _ = handle -> %{"handle" => handle}
+      "per_" <> _ = identifier -> %{"identifier" => identifier}
+      user_id -> %{"user_id" => user_id}
+    end
   end
 
   defp load(socket) do
@@ -256,6 +288,30 @@ defmodule PrismWeb.MembersLive do
     |> assign(:athanor_label, athanor && PrismWeb.Athanors.label(athanor, ctx))
     |> assign(:members, members)
     |> assign(:groups, groups)
+    |> assign(:invitations, invitations(socket, athanor))
+  end
+
+  # The invitation links the viewer sees that seat people in this group,
+  # newest first.
+  defp invitations(socket, %{id: athanor_id} = athanor) do
+    with true <- invitable?(athanor),
+         {:ok, %{invitations: invitations}} <- call_tool(socket, "invitation/list", %{}) do
+      Enum.filter(invitations, &(&1[:athanor_id] == athanor_id))
+    else
+      _none -> []
+    end
+  end
+
+  defp invitations(_socket, _athanor), do: []
+
+  defp invitable?(%{kind: "group", status: "active", roster: "open"}), do: true
+  defp invitable?(_athanor), do: false
+
+  defp until(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, at, _offset} -> Calendar.strftime(at, "%-d %b %Y, %H:%M UTC")
+      _unparsed -> iso
+    end
   end
 
   @impl true
@@ -300,8 +356,8 @@ defmodule PrismWeb.MembersLive do
           <div :if={@members == []} class="py-8"><.empty_state message="No members" /></div>
           <.table :if={@members != []} id="members" rows={@members}>
             <:col :let={m} label="Who">{PrismWeb.People.label(m, @context)}</:col>
-            <:col :let={m} label="Email or identifier">
-              {m[:email] || m[:identifier] || "-"}
+            <:col :let={m} label="Identifier">
+              {m[:identifier] || m[:email] || "-"}
             </:col>
             <:col :let={m} label="Status">
               <.badge color={if m[:status] == "active", do: "green", else: "yellow"}>
@@ -331,14 +387,6 @@ defmodule PrismWeb.MembersLive do
                 >
                   Withdraw
                 </.button>
-                <.button
-                  :if={m[:status] == "invited" && !m[:identifier]}
-                  variant="ghost"
-                  phx-click="remove_invite"
-                  phx-value-email={m[:email]}
-                >
-                  Withdraw
-                </.button>
               </div>
             </:col>
           </.table>
@@ -356,11 +404,20 @@ defmodule PrismWeb.MembersLive do
                 value={@new_person}
                 type="text"
                 required
-                placeholder="someone@example.com or per_…"
+                placeholder="@handle, per_… or usr_…"
               />
             </div>
             <.button type="submit">Add member</.button>
           </form>
+          <p
+            :if={@athanor && @athanor.kind == "group" && not frozen?(@athanor)}
+            class="mt-1 text-xs text-gray-500"
+            data-test="member-add-help"
+          >
+            Name someone by their handle (@name), their person identifier (per_…) or
+            their id here (usr_…). A handle is looked up at the registry, and the
+            group keeps the identifier it names now.
+          </p>
 
           <%!-- A DM's door is closed; growing the room is a different act.
                 The pair stands, nothing is copied. --%>
@@ -377,11 +434,67 @@ defmodule PrismWeb.MembersLive do
                 value={@new_person}
                 type="text"
                 required
-                placeholder="someone@example.com or per_…"
+                placeholder="@handle, per_… or usr_…"
               />
             </div>
             <.button type="submit">Add someone — starts a new group</.button>
           </form>
+        </.card>
+
+        <.card :if={invitable?(@athanor)}>
+          <h3 class="text-sm font-medium text-gray-400 mb-1">Invitation links</h3>
+          <p class="text-xs text-gray-500 mb-4">
+            A link makes someone new to this CYFR a person here and seats them in this group. It
+            works once and expires after seven days. Someone who already has a CYFR identity is
+            added above instead.
+          </p>
+
+          <div :if={@new_link} data-test="invitation-new" class="mb-4 space-y-2">
+            <p class="text-xs text-gray-400">
+              Send this link to the person you invite. It is shown only now.
+            </p>
+            <div class="flex gap-2 items-center">
+              <code
+                data-test="invitation-link"
+                class="flex-1 text-xs text-gray-200 bg-gray-800 rounded px-2 py-2 break-all"
+              >
+                {@new_link}
+              </code>
+              <.button
+                variant="ghost"
+                data-test="invitation-copy"
+                phx-click={JS.dispatch("phx:clipboard", detail: %{text: @new_link})}
+              >
+                Copy
+              </.button>
+            </div>
+          </div>
+
+          <div :if={@invitations != []} id="invitations">
+            <.table id="invitation-rows" rows={@invitations}>
+              <:col :let={i} label="State">
+                <.badge color={if i[:state] == "pending", do: "green", else: "yellow"}>
+                  {i[:state]}
+                </.badge>
+              </:col>
+              <:col :let={i} label="Expires">{until(i[:expires_at])}</:col>
+              <:col :let={i} label="Actions">
+                <.button
+                  :if={i[:state] == "pending"}
+                  variant="ghost"
+                  phx-click="invitation_revoke"
+                  phx-value-id={i[:id]}
+                  data-confirm="Revoke this link? It will admit no one."
+                >
+                  Revoke
+                </.button>
+              </:col>
+            </.table>
+          </div>
+
+          <.button class="mt-4" phx-click="invitation_create" data-test="invitation-create">
+            Create an invitation link
+          </.button>
         </.card>
 
         <.card>

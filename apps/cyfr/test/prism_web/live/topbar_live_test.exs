@@ -161,9 +161,9 @@ defmodule PrismWeb.TopbarLiveTest do
     bar = topbar(view)
     refute has_element?(bar, "#door-requests")
 
-    email = "carol-#{ops.namespace}@example.com"
-    {:ok, :created, _} = Sanctum.Door.Store.request("email", email, ops.user_id)
-    Sanctum.Notify.allowlist_request(email)
+    identifier = "per_" <> Prima.Digest.sha256_hex("carol-#{ops.namespace}")
+    {:ok, :created, _} = Sanctum.Door.Store.request("identifier", identifier, ops.user_id)
+    Sanctum.Notify.allowlist_request(identifier)
     :sys.get_state(bar.pid)
     assert render(bar) =~ "1 request"
 
@@ -221,7 +221,13 @@ defmodule PrismWeb.TopbarLiveTest do
 
   for {who, kind} <- [{"feed", "feed"}, {"schedule", "schedule"}] do
     test "a #{who}'s fire shows its request in flight", %{conn: conn} do
-      conn = log_in_user(conn, test_user())
+      user = test_user()
+      conn = log_in_user(conn, user)
+
+      # The live indicators are dev's; a person lands in lite unless they
+      # chose dev.
+      {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+      {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
       {view, _html} = mount_athanor(conn, "")
       bar = topbar(view)
       wait_until(fn -> Enum.empty?(pending(bar)) end, 2_000, "the mount's refresh to drain")

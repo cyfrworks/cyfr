@@ -73,7 +73,6 @@ defmodule Compendium.FacadeTest do
   end
 
   @roster [
-    accept_registry_policies: 4,
     acknowledged_projection_epoch: 2,
     acknowledged_projection_epoch: 3,
     agent: 2,
@@ -88,7 +87,6 @@ defmodule Compendium.FacadeTest do
     agent_type_of: 1,
     agents: 1,
     canvas_versions: 2,
-    complete_sign_in: 4,
     discover_components: 1,
     enabled_agent_roster: 1,
     encode_activation_graph: 1,
@@ -103,9 +101,6 @@ defmodule Compendium.FacadeTest do
     parse_agent: 2,
     parse_agent_frontmatter: 1,
     parse_component_path: 1,
-    registry_legal_page: 1,
-    registry_legal_version: 0,
-    registry_required_version: 1,
     resolve: 2,
     resolve_activation: 2,
     resolve_verified_activation: 2,
@@ -204,85 +199,6 @@ defmodule Compendium.FacadeTest do
     test "catalogue grouping answers as Compendium.Catalogue" do
       assert Compendium.group_by_component([]) == Compendium.Catalogue.group_by_component([])
       assert Compendium.group_search_results([]) == Compendium.Catalogue.group_search_results([])
-    end
-
-    test "a registry refusal's required policy version is read off its reason" do
-      err = %Compendium.OCI.Errors{
-        reason: :policy_version_mismatch,
-        status: 412,
-        detail: %{original_detail: %{"required_version" => "2026-09"}}
-      }
-
-      refusal = Compendium.Providers.Shared.refusal(err)
-
-      assert %Prima.Refusal{
-               class: :conflict,
-               reason: {:registry, :policy_version_mismatch, "2026-09"}
-             } = refusal
-
-      assert Sanctum.Refusals.render(refusal) =~ "policy version 2026-09"
-      assert Compendium.registry_required_version(refusal) == "2026-09"
-
-      assert Compendium.registry_required_version(
-               Compendium.Providers.Shared.refusal(%{err | detail: nil})
-             ) == nil
-
-      assert Compendium.registry_required_version(Sanctum.Refusals.classify(:busy)) == nil
-    end
-  end
-
-  describe "the registry's policy acceptance" do
-    setup do
-      bypass = Bypass.open()
-      original_url = Application.get_env(:cyfr, :registry_url)
-
-      Application.put_env(:cyfr, :registry_url, "127.0.0.1:#{bypass.port}")
-
-      on_exit(fn ->
-        if original_url,
-          do: Application.put_env(:cyfr, :registry_url, original_url),
-          else: Application.delete_env(:cyfr, :registry_url)
-      end)
-
-      {:ok, bypass: bypass}
-    end
-
-    defp json_resp(conn, status, body) do
-      conn
-      |> Plug.Conn.put_resp_header("content-type", "application/json")
-      |> Plug.Conn.resp(status, Jason.encode!(body))
-    end
-
-    test "a policy acceptance the registry refuses is its refusal, with the version it requires",
-         %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/v1/legal/accept", fn conn ->
-        json_resp(conn, 412, %{
-          "errors" => [%{"code" => "POLICY_VERSION_MISMATCH"}],
-          "required_version" => "2026-10"
-        })
-      end)
-
-      assert {:error,
-              %Prima.Refusal{
-                class: :conflict,
-                reason: {:registry, :policy_version_mismatch, "2026-10"}
-              } = refusal} =
-               Compendium.accept_registry_policies(:github, "gho_access", nil, "2026-09")
-
-      assert Compendium.registry_required_version(refusal) == "2026-10"
-      assert Sanctum.Refusals.render(refusal) =~ "policy version 2026-10"
-
-      Bypass.expect_once(bypass, "POST", "/v1/legal/accept", fn conn ->
-        json_resp(conn, 403, %{"errors" => [%{"code" => "IDENTITY_BANNED"}]})
-      end)
-
-      assert {:error, %Prima.Refusal{reason: {:registry, :unauthorized}}} =
-               Compendium.accept_registry_policies(:github, "gho_access", nil, "2026-09")
-
-      Bypass.down(bypass)
-
-      assert {:error, %Prima.Refusal{class: :unavailable}} = Compendium.registry_legal_version()
-      assert {:error, %Prima.Refusal{class: :unavailable}} = Compendium.registry_legal_page("tos")
     end
   end
 

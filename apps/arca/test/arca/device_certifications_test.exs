@@ -17,7 +17,7 @@ defmodule Arca.DeviceCertificationsTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.{DeviceCertifications, Users}
+  alias Arca.DeviceCertifications
   alias Arca.Schemas.{CellLease, DeviceCertification, PersonIdentity, User}
 
   @hub "https://hub.example"
@@ -64,7 +64,7 @@ defmodule Arca.DeviceCertificationsTest do
     now = DateTime.utc_now()
 
     {:ok, person} =
-      Users.mint(
+      Arca.Test.People.mint(
         Prima.Actor.system(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),

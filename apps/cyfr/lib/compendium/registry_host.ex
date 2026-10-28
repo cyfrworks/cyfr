@@ -46,31 +46,11 @@ defmodule Compendium.RegistryHost do
   def canonical_rest_host, do: Application.fetch_env!(:cyfr, :registry_url)
 
   @doc """
-  The base URL of a registry `host` (a name or address, with an optional
-  port): `http://` for a loopback host — `localhost`, `127.0.0.0/8` or
-  `::1`, a registry on this machine — and `https://` for every other.
+  The base URL of a registry `host`, under the scheme its host takes
+  (`Sanctum.registry_base_url/1`).
   """
   @spec base_url(String.t()) :: String.t()
-  def base_url(host) when is_binary(host) do
-    if loopback?(host), do: "http://" <> host, else: "https://" <> host
-  end
-
-  defp loopback?(host) do
-    case URI.parse("//" <> host) do
-      %URI{host: "localhost"} ->
-        true
-
-      %URI{host: name} when is_binary(name) ->
-        case :inet.parse_address(String.to_charlist(name)) do
-          {:ok, {127, _, _, _}} -> true
-          {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
-          _ -> false
-        end
-
-      _ ->
-        false
-    end
-  end
+  defdelegate base_url(host), to: Sanctum, as: :registry_base_url
 
   @doc """
   Whether an OCI registry host is this deployment's canonical one. Any

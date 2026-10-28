@@ -24,7 +24,7 @@ defmodule Sanctum.Providers.CliSignInTest do
 
   alias Prima.Identity.Encoding
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -39,7 +39,7 @@ defmodule Sanctum.Providers.CliSignInTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|#{label}-#{n}",
         provider: "github",
         email: "#{label}#{n}@example.com",
@@ -354,6 +354,19 @@ defmodule Sanctum.Providers.CliSignInTest do
     end
 
     test "a provider device-flow poll names its machine by the same rule" do
+      # The device flow is offered only while GitHub or Google is
+      # configured; the machine is read once it is.
+      previous = Application.fetch_env(:sanctum, :github_client_id)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:sanctum, :github_client_id, value)
+          :error -> Application.delete_env(:sanctum, :github_client_id)
+        end
+      end)
+
+      Application.put_env(:sanctum, :github_client_id, "test-github-client")
+
       assert {:error, {:invalid_argument, message}} =
                Sanctum.Providers.Session.handle(command_line(), %{
                  "action" => "device_poll",

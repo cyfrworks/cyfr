@@ -222,17 +222,13 @@ defmodule Compendium.OCI.ClientTest do
 
       original_base = Application.get_env(:arca, :base_path)
       original_registry = Application.get_env(:cyfr, :oci_registry_url)
-      original_auth = Application.get_env(:sanctum, :auth_provider)
 
       Application.put_env(:arca, :base_path, test_dir)
-      # No auth provider → localhost registries are reachable (private_policy: :allow_all).
-      Application.delete_env(:sanctum, :auth_provider)
 
       on_exit(fn ->
         File.rm_rf!(test_dir)
         restore_env(:arca, :base_path, original_base)
         restore_env(:oci_registry_url, original_registry)
-        restore_env(:sanctum, :auth_provider, original_auth)
       end)
 
       # A caller holding no push token: every request it makes is anonymous.
@@ -398,10 +394,10 @@ defmodule Compendium.OCI.ClientTest do
       # pull asks for a blob only once the manifest path has proven the
       # caller's entitlement, so each refusal comes before any cached blob.
       assert {:error, tag_refusal} = Client.pull(b, "#{registry}/#{@repo}:1.0.0")
-      assert tag_refusal =~ "cyfr login"
+      assert tag_refusal =~ "cyfr registry sync"
 
       assert {:error, pin_refusal} = Client.pull(b, "#{registry}/#{@repo}@#{ctx.pin}")
-      assert pin_refusal =~ "cyfr login"
+      assert pin_refusal =~ "cyfr registry sync"
 
       # Every refusal was the registry's answer to B's own credential.
       assert [_ | _] = seen = requests(ctx.agent)
@@ -428,7 +424,7 @@ defmodule Compendium.OCI.ClientTest do
       :ok = Cache.forget_entitlement(key(a, ref), ctx.registry, @repo)
 
       assert {:error, refusal} = Client.pull(a, pinned)
-      assert refusal =~ "cyfr login"
+      assert refusal =~ "cyfr registry sync"
       assert [{"HEAD", _, "Bearer tok_a"}] = requests(ctx.agent)
       refute Cache.entitled?(key(a, ref), ctx.registry, @repo)
     end
@@ -492,7 +488,7 @@ defmodule Compendium.OCI.ClientTest do
       _readme = with_readme(ctx.agent, 401)
 
       assert {:error, message} = Client.pull(a, "#{registry}/#{@repo}:1.0.0")
-      assert message =~ "cyfr login"
+      assert message =~ "cyfr registry sync"
     end
   end
 
@@ -558,7 +554,7 @@ defmodule Compendium.OCI.ClientTest do
 
       assert message =~ Sanctum.Refusals.render({:limit_reached, :athanor_storage_bytes, 1})
       assert message =~ "No credentials configured for"
-      assert message =~ "cyfr login"
+      assert message =~ "cyfr registry sync"
     end
   end
 
@@ -719,10 +715,8 @@ defmodule Compendium.OCI.ClientTest do
 
     original_base = Application.get_env(:arca, :base_path)
     original_registry = Application.get_env(:cyfr, :oci_registry_url)
-    original_auth = Application.get_env(:sanctum, :auth_provider)
 
     Application.put_env(:arca, :base_path, test_dir)
-    Application.delete_env(:sanctum, :auth_provider)
 
     # The reagent guest: a pull that gets as far as storing it stores it.
     wasm = Cyfr.Test.Guests.wasm(:reagent)
@@ -751,7 +745,6 @@ defmodule Compendium.OCI.ClientTest do
       File.rm_rf!(test_dir)
       restore_env(:arca, :base_path, original_base)
       restore_env(:oci_registry_url, original_registry)
-      restore_env(:sanctum, :auth_provider, original_auth)
     end)
 
     a = caller("oci_entitle_a")
@@ -1038,8 +1031,7 @@ defmodule Compendium.OCI.ClientTest do
 
   defp restore_env(key, value), do: restore_env(:cyfr, key, value)
 
-  # `:auth_provider` is the identity domain's key and `:base_path` the
-  # storage's; the registry URL is the host's.
+  # `:base_path` is the storage's key; the registry URL is the host's.
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 end

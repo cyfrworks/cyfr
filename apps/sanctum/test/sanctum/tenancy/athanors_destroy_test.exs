@@ -32,7 +32,7 @@ defmodule Sanctum.Tenancy.AthanorsDestroyTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|destroy-#{n}",
         provider: "github",
         email: "destroy#{n}@example.com",

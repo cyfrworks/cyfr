@@ -22,19 +22,11 @@ defmodule Sanctum.AuthTenantResolutionTest do
     Arca.Test.Sandbox.setup!(tags)
 
     original_override = Application.get_env(:sanctum, :tenancy_resolver_override)
-    original_admins = Application.get_env(:sanctum, :platform_admin_emails)
-    # Membership-based resolution must not be short-circuited by a leaked
-    # admin-email bootstrap from another test.
-    Application.put_env(:sanctum, :platform_admin_emails, [])
 
     on_exit(fn ->
       if original_override,
         do: Application.put_env(:sanctum, :tenancy_resolver_override, original_override),
         else: Application.delete_env(:sanctum, :tenancy_resolver_override)
-
-      if original_admins,
-        do: Application.put_env(:sanctum, :platform_admin_emails, original_admins),
-        else: Application.delete_env(:sanctum, :platform_admin_emails)
     end)
 
     :ok
@@ -90,33 +82,39 @@ defmodule Sanctum.AuthTenantResolutionTest do
     end
   end
 
-  describe "the operator list is applied at sign-in, not by resolution" do
-    test "a CYFR_PLATFORM_ADMIN_EMAILS-listed email gets the capability on first sign-in" do
+  describe "the platform grant is the first person's, and resolution only reads it" do
+    test "the installation's first person holds the capability; resolution mints nothing" do
+      Application.delete_env(:sanctum, :tenancy_resolver_override)
       ctx = oauth_shaped_context()
-      Application.put_env(:sanctum, :platform_admin_emails, [String.downcase(ctx.email)])
 
       # Resolution alone mints nothing.
       assert {:ok, %{platform_admin: false}} = Tenancy.resolve_status(ctx, force: true)
       assert rows!(Members.list_by_user(ctx.user_id)) == []
 
-      # The door admits the operator; sign-in records it; resolution reads it.
-      assert {:ok, :admin} = Sanctum.Door.admit(ctx.user_id, ctx.email, true)
+      # The setup admission's mint writes the grant with the first person.
+      first = Sanctum.Test.People.first!()
 
-      assert {:ok, user} =
-               Sanctum.SignIn.admitted(
-                 %{id: ctx.user_id, provider: "github", email: ctx.email, verified: true},
-                 :admin
-               )
-
-      # From admission on the person is named by their own id.
-      {:ok, result} = Tenancy.resolve_status(%{ctx | user_id: user.id}, force: true)
+      {:ok, result} = Tenancy.resolve_status(%{ctx | user_id: first.id}, force: true)
       assert result.platform_admin
       assert result.scope == :athanor
-      assert Enum.any?(rows!(Members.list_by_user(user.id)), &(&1.scope == "platform"))
+      assert Enum.any?(rows!(Members.list_by_user(first.id)), &(&1.scope == "platform"))
+
+      # Everyone after them is admitted without it.
+      {:ok, later} =
+        Sanctum.Test.People.linked(%{
+          id: ctx.user_id,
+          provider: "github",
+          email: ctx.email,
+          verified: true
+        })
+
+      {:ok, result} = Tenancy.resolve_status(%{ctx | user_id: later.id}, force: true)
+      refute result.platform_admin
+      refute Enum.any?(rows!(Members.list_by_user(later.id)), &(&1.scope == "platform"))
     end
 
-    test "an unlisted, unmembered user stays unresolved with no membership row" do
-      # :platform_admin_emails is [] (setup) and no membership exists for this user.
+    test "an unmembered user stays unresolved with no membership row" do
+      Application.delete_env(:sanctum, :tenancy_resolver_override)
       ctx = oauth_shaped_context()
 
       {:ok, result} = Tenancy.resolve_status(ctx, force: true)

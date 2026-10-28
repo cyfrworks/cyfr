@@ -18,7 +18,7 @@ defmodule Arca.DeviceCertificatesTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.{DeviceCertificates, DirectoryHeads, PairedClients, PersonIdentities, Users}
+  alias Arca.{DeviceCertificates, DirectoryHeads, PairedClients, PersonIdentities}
   alias Arca.Schemas.DeviceCertificate
 
   setup tags do
@@ -96,7 +96,7 @@ defmodule Arca.DeviceCertificatesTest do
     now = DateTime.utc_now()
 
     {:ok, person} =
-      Users.mint(
+      Arca.Test.People.mint(
         Prima.Actor.system(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),

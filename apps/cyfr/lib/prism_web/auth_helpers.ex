@@ -21,12 +21,15 @@ defmodule PrismWeb.AuthHelpers do
     * `:sign_in` — no session, or one denied or revoked since it was
       minted: back through the door.
     * `:no_workspace` — signed in, but nowhere to work.
+    * `:company_login` — signed in, and standing but for the company
+      sign-in this CYFR requires: to the company page.
     * `:unavailable` — a transient failure reading who the person is, or
       a remote person's identity that could not be confirmed fresh: say
       so; never bounce them into a claim or sign-in they did not earn.
   """
-  @spec disposition(Caller.refusal()) :: :sign_in | :no_workspace | :unavailable
+  @spec disposition(Caller.refusal()) :: :sign_in | :no_workspace | :company_login | :unavailable
   def disposition({:denied, _ctx}), do: :sign_in
+  def disposition(:company_login_required), do: :company_login
   def disposition(reason) when reason in [:unavailable, :identity_stale], do: :unavailable
 
   def disposition(reason) when reason in [:no_athanor, :not_member, :archived, :not_found],

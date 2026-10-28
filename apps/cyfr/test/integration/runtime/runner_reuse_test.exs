@@ -48,7 +48,7 @@ defmodule Locus.Runtime.RunnerReuseTest do
     unique = System.unique_integer([:positive])
 
     {:ok, athanor} =
-      Sanctum.Tenancy.Athanors.create_for_operator(%{
+      Arca.Athanors.insert(Prima.Actor.system(), %{
         kind: "group",
         name: "Reuse #{unique}",
         slug: "reuse-#{unique}",

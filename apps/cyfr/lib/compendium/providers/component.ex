@@ -1552,7 +1552,8 @@ defmodule Compendium.Providers.Component do
     if anonymous? do
       Logger.warning(
         "[Compendium.Providers.Component] No credentials for #{Compendium.RegistryHost.canonical_host()} — " <>
-          "pull may fail for non-public components. Run `cyfr login` to authenticate."
+          "pull may fail for non-public components. Run `cyfr registry sync` to mint your " <>
+          "push tokens."
       )
     end
 
@@ -1567,7 +1568,8 @@ defmodule Compendium.Providers.Component do
               result,
               :auth_note,
               "You are pulling anonymously from #{Compendium.RegistryHost.canonical_host()}. " <>
-                "Private components will not be accessible. Run `cyfr login` to authenticate."
+                "Private components will not be accessible. Run `cyfr registry sync` to mint " <>
+                "your push tokens."
             )
           else
             result
@@ -1580,7 +1582,7 @@ defmodule Compendium.Providers.Component do
           {:error,
            pull_failure_text(reason) <>
              " — No credentials configured for #{Compendium.RegistryHost.canonical_host()}. " <>
-             "Run `cyfr login` to authenticate."}
+             "Run `cyfr registry sync` to mint your push tokens."}
         else
           {:error, reason}
         end

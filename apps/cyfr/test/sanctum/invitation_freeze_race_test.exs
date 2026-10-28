@@ -4,8 +4,8 @@
 defmodule Sanctum.InvitationFreezeRaceTest do
   @moduledoc """
   The membership freeze holds at an invitation's acceptance as at an
-  add: an activation, by email or by person identifier, locks the
-  invitations' athanors after the person, in the order a seat takes them,
+  add: an activation by person identifier locks the invitations'
+  athanors after the person, in the order a seat takes them,
   before it reads the freeze, so a member whose recovery is still open,
   seated by an add still uncommitted, freezes the group for the
   activation that waited on it. PostgreSQL alone shows the lock waits the
@@ -21,17 +21,11 @@ defmodule Sanctum.InvitationFreezeRaceTest do
 
   @tag :postgres
   @tag timeout: 60_000
-  test "email invitation cannot activate after its group freezes while its UPDATE waits" do
-    run_race(:email)
-  end
-
-  @tag :postgres
-  @tag timeout: 60_000
   test "identifier invitation cannot activate after its group freezes while its UPDATE waits" do
-    run_race(:identifier)
+    run_race()
   end
 
-  defp run_race(kind) do
+  defp run_race do
     ids = for _ <- 1..3, do: Prima.UUID7.generate_id(Prima.PersonId.prefix())
     [alice, bob, carol] = ids
     athanor_id = Prima.UUID7.generate_id("ath")
@@ -59,11 +53,10 @@ defmodule Sanctum.InvitationFreezeRaceTest do
         subject = "freeze-race-" <> id
 
         assert {:ok, _} =
-                 Arca.Users.mint(
+                 Arca.Test.People.mint(
                    Prima.Actor.system(),
                    %{
                      id: id,
-                     provider: "github",
                      first_seen_at: now,
                      last_seen_at: now,
                      created_at: now,
@@ -99,17 +92,16 @@ defmodule Sanctum.InvitationFreezeRaceTest do
       Arca.Repo.insert!(%RestorePerson{restore_id: restore_id, user_id: bob, open: true})
     end)
 
-    email = "carol-#{carol}@example.test"
     identifier = "per_" <> Prima.Digest.sha256_hex(carol)
 
     invitation_id =
       unboxed(fn ->
-        attrs = %{scope: "athanor", status: "invited", added_by: alice}
-
-        attrs =
-          if kind == :email,
-            do: Map.put(attrs, :email, email),
-            else: Map.put(attrs, :person_identifier, identifier)
+        attrs = %{
+          scope: "athanor",
+          status: "invited",
+          added_by: alice,
+          person_identifier: identifier
+        }
 
         assert {:ok, invitation} = Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), attrs)
         invitation.id
@@ -182,23 +174,12 @@ defmodule Sanctum.InvitationFreezeRaceTest do
           %{rows: [[backend]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
           send(parent, {:add_backend, backend})
 
-          case kind do
-            :email ->
-              Arca.Members.activate_invited(
-                Prima.Actor.system(),
-                carol,
-                email,
-                DateTime.utc_now()
-              )
-
-            :identifier ->
-              Arca.Members.activate_invited_identifier(
-                Prima.Actor.system(),
-                carol,
-                identifier,
-                DateTime.utc_now()
-              )
-          end
+          Arca.Members.activate_invited_identifier(
+            Prima.Actor.system(),
+            carol,
+            identifier,
+            DateTime.utc_now()
+          )
         end)
       end)
 

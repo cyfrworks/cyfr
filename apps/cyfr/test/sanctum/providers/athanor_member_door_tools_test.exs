@@ -11,24 +11,25 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   alias Sanctum.Refusals
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Test.DirectoryServer
+  alias Sanctum.Test.RegistryStub
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
 
-    original = Application.get_env(:sanctum, :platform_admin_emails, [])
-    Application.put_env(:sanctum, :platform_admin_emails, ["ops@example.com"])
-    on_exit(fn -> Application.put_env(:sanctum, :platform_admin_emails, original) end)
-
     n = System.unique_integer([:positive])
-    alice = "github|https://github.com|alice-#{n}"
-    bob = "github|https://github.com|bob-#{n}"
-    ops = "github|https://github.com|ops-#{n}"
 
-    # The identities sign in; from then on each person is named by their own id.
-    [alice, bob] =
-      for {key, email} <- [{alice, "alice#{n}@example.com"}, {bob, "bob#{n}@example.com"}] do
+    # Local people, each named by their own id; `ops` holds the platform
+    # grant.
+    [alice, bob, ops] =
+      for name <- ["alice", "bob", "ops"] do
         {:ok, user} =
-          Users.upsert_from_provider(%{id: key, provider: "github", email: email, verified: true})
+          Sanctum.Test.People.linked(%{
+            id: "github|https://github.com|#{name}-#{n}",
+            provider: "github",
+            email: "#{name}#{n}@example.com",
+            verified: true
+          })
 
         user.id
       end
@@ -95,134 +96,6 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     assert {:ok, %{status: "archived"}} = Athanors.get(group.id)
   end
 
-  test "member.add answers the same for a stranger's email and a known one, and never opens the door",
-       %{alice: alice, bob: bob, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Team #{n}"})
-
-    stranger = "stranger#{n}@example.com"
-
-    assert {:ok, %{state: "added", member: %{email: ^stranger}}} =
-             call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => stranger})
-
-    known = "bob#{n}@example.com"
-
-    assert {:ok, %{state: "added", member: %{email: ^known}}} =
-             call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => known})
-
-    # bob (known, verified) is active at once; the stranger sits invited
-    assert Members.member?(bob, group.id)
-
-    assert Enum.any?(
-             rows!(Members.list_by_athanor(group.id)),
-             &(&1.status == "invited" and &1.email == stranger)
-           )
-
-    # and the door queued a request rather than admitting anyone
-    assert [%{value: ^stranger, status: "requested"}] = Sanctum.Door.Store.requests()
-
-    assert {:error, :not_allowed} =
-             Sanctum.Door.admit("github|https://github.com|s", stranger, true)
-  end
-
-  test "door.deny of an address nobody has signed in with withdraws the seats it was holding",
-       %{alice: alice, ops: ops, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Pending #{n}"})
-
-    stranger = "pending#{n}@example.com"
-    {:ok, _} = call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => stranger})
-
-    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
-
-    # Nobody has signed in with the address, so there is no account to eject —
-    # the seat is the whole of what the deny has to reach.
-    assert {:ok, %{ejected: 0, invites_withdrawn: 1}} =
-             call(admin, "door", %{"action" => "deny", "value" => stranger})
-
-    refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.email == stranger))
-
-    # the request the invite queued is now the deny itself, and it names no
-    # requester any more
-    assert Sanctum.Door.Store.requests() == []
-
-    assert {:error, :denied} =
-             Sanctum.Door.admit("github|https://github.com|p#{n}", stranger, true)
-  end
-
-  test "an address two identities sign in with, or one a provider refuses, is refused with the reason — never a dead invite",
-       %{alice: alice, ctx: ctx, n: n} do
-    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
-    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Careful #{n}"})
-
-    shared = "shared#{n}@example.com"
-
-    for provider <- ["github", "google"] do
-      {:ok, _} =
-        Users.upsert_from_provider(%{
-          id: "#{provider}|https://#{provider}.com|dup-#{n}",
-          provider: provider,
-          email: shared,
-          verified: true
-        })
-    end
-
-    assert {:error, msg} =
-             call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => shared})
-
-    assert Refusals.render(msg) =~ "More than one person"
-
-    # An address the provider positively refuses cannot be seated by email:
-    # a permanent invitation nobody could ever claim is the alternative.
-    unverified = "unverified#{n}@example.com"
-
-    {:ok, _} =
-      Users.upsert_from_provider(%{
-        id: "oidc|https://idp.example|unv-#{n}",
-        provider: "oidc",
-        email: unverified,
-        verified: false
-      })
-
-    assert {:error, msg} =
-             call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => unverified})
-
-    assert Refusals.render(msg) =~ "not verified"
-    refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
-
-    # By user id they are seatable — the id is the person.
-    assert {:ok, %{state: "added"}} =
-             call(a, "member", %{
-               "action" => "add",
-               "athanor" => group.id,
-               "user_id" => "oidc|https://idp.example|unv-#{n}"
-             })
-
-    # An issuer that simply never claims verification is not a refusal, but
-    # it is not proof either: the address holds an invited seat that the
-    # first sign-in proving it claims — never an active membership handed
-    # out on an unverified claim. By user id they are seatable at once.
-    silent = "silent#{n}@example.com"
-
-    {:ok, _} =
-      Users.upsert_from_provider(%{
-        id: "oidc|https://idp.example|silent-#{n}",
-        provider: "oidc",
-        email: silent,
-        verified: :unknown
-      })
-
-    assert {:ok, %{state: "added"}} =
-             call(a, "member", %{"action" => "add", "athanor" => group.id, "email" => silent})
-
-    refute Members.member?("oidc|https://idp.example|silent-#{n}", group.id)
-
-    assert Enum.any?(
-             rows!(Members.list_by_athanor(group.id)),
-             &(&1.status == "invited" and &1.email == silent)
-           )
-  end
-
   test "an API key cannot create groups or add members, and lists its own athanor alone",
        %{alice: alice, ctx: ctx, n: n} do
     {:ok, home} = Athanors.create_group(alice, "Key home #{n}")
@@ -231,7 +104,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     assert {:error, msg} = call(k, "athanor", %{"action" => "create", "name" => "Nope"})
     assert Refusals.render(msg) =~ "person's act"
-    assert {:error, msg} = call(k, "member", %{"action" => "add", "email" => "x@example.com"})
+    assert {:error, msg} = call(k, "member", %{"action" => "add", "user_id" => alice})
     assert Refusals.render(msg) =~ "person's act"
     # Reads are the key's athanor's, never its creator's other seats.
     assert {:ok, %{athanors: [%{id: id}], count: 1}} = call(k, "athanor", %{"action" => "list"})
@@ -244,24 +117,14 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     {:ok, athanor} = Athanors.create_group(alice, "Door #{n}")
     {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: athanor.id)
     a = ctx.(alice, athanor.id, [])
-
-    {:ok, personal} =
-      Athanors.create(%{
-        kind: "person",
-        name: "Alice",
-        slug: "alice#{n}",
-        owner_user_id: alice,
-        created_by: alice
-      })
-
-    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: personal.id)
+    personal = personal!(alice)
     assert {:error, msg} = call(a, "athanor", %{"action" => "archive", "athanor" => personal.id})
     assert Refusals.render(msg) =~ "own athanor"
     assert {:error, msg} = call(a, "member", %{"action" => "leave", "athanor" => personal.id})
     assert Refusals.render(msg) =~ "own athanor"
   end
 
-  test "door.* is the operator's: refused for a member, hidden from tools/list, open to an admin",
+  test "door.* is the operator's: refused for a member, open to an admin; a local person is admitted unless denied",
        %{alice: alice, ops: ops, ctx: ctx, n: n} do
     member = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
 
@@ -271,58 +134,60 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
     assert {:ok, %{entries: []}} = call(admin, "door", %{"action" => "list"})
 
-    email = "carol#{n}@example.com"
+    # A local person needs no entry: their admission was the admitting act.
+    {:ok, carol} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|carol-#{n}",
+        provider: "github",
+        email: "carol#{n}@example.com",
+        verified: true
+      })
 
-    assert {:ok, %{kind: "email", effect: "allow"}} =
-             call(admin, "door", %{"action" => "allow", "value" => email, "note" => "friend"})
+    assert {:ok, :allowed} = Sanctum.Door.admit_person(carol)
+
+    # Allows name an identifier or `*`, never a person or an address.
+    identifier = "per_" <> Prima.Digest.sha256_hex("door-op-#{n}")
+
+    assert {:ok, %{kind: "identifier", effect: "allow", note: "friend"}} =
+             call(admin, "door", %{"action" => "allow", "value" => identifier, "note" => "friend"})
+
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(identifier)
 
     assert {:ok, %{kind: "wildcard"}} =
              call(admin, "door", %{"action" => "allow", "value" => "*"})
 
-    assert {:ok, :allowed} = Sanctum.Door.admit("github|https://github.com|c", email, true)
+    for value <- [carol.id, "carol#{n}@example.com", "github|https://github.com|carol-#{n}"] do
+      assert {:error, {:invalid_argument, _}} =
+               call(admin, "door", %{"action" => "allow", "value" => value}),
+             "door.allow took #{value}"
+    end
 
-    # deny ejects a known person and is sticky against *
-    {:ok, _} =
-      Users.upsert_from_provider(%{
-        id: "github|https://github.com|carol-#{n}",
-        provider: "github",
-        email: email,
-        verified: true
-      })
+    # A deny names a person and ejects them, sticky against `*`.
+    assert {:ok, %{kind: "person", effect: "deny", ejected: 1, id: deny_id}} =
+             call(admin, "door", %{"action" => "deny", "value" => carol.id})
 
-    assert {:ok, %{effect: "deny", ejected: 1}} =
-             call(admin, "door", %{"action" => "deny", "value" => email})
+    assert {:error, :denied} = Sanctum.Door.admit_person(carol)
+    assert {:ok, %{status: "denied"}} = Users.get(carol.id)
 
-    assert {:error, :denied} = Sanctum.Door.admit("github|https://github.com|c", email, true)
+    # `*` is not denied, and an address is not a person.
+    for value <- ["*", "carol#{n}@example.com"] do
+      assert {:error, {:invalid_argument, _}} =
+               call(admin, "door", %{"action" => "deny", "value" => value}),
+             "door.deny took #{value}"
+    end
 
-    assert {:ok, %{status: "denied"}} =
-             Users.get_by_identity("github|https://github.com|carol-#{n}")
+    # The platform administrator is never denied.
+    assert {:error, msg} = call(admin, "door", %{"action" => "deny", "value" => ops})
+    assert Refusals.render(msg) =~ "platform administrator"
+    assert {:ok, :allowed} = Sanctum.Door.admit_person(%{id: ops})
 
-    # an operator email cannot be denied
-    assert {:error, msg} =
-             call(admin, "door", %{"action" => "deny", "value" => "ops@example.com"})
+    # Removing the deny lets the person back: nobody is left denied with no
+    # entry to say why.
+    assert {:ok, %{removed: true, restored: 1}} =
+             call(admin, "door", %{"action" => "remove", "id" => deny_id})
 
-    assert Refusals.render(msg) =~ "platform admin"
-
-    # allowing again reverses the standing
-    assert {:ok, _} = call(admin, "door", %{"action" => "allow", "value" => email})
-
-    assert {:ok, %{status: "active"}} =
-             Users.get_by_identity("github|https://github.com|carol-#{n}")
-
-    # so does removing a deny entry — nobody is left denied with no entry to say why
-    assert {:ok, %{effect: "deny", id: deny_id}} =
-             call(admin, "door", %{"action" => "deny", "value" => email})
-
-    assert {:ok, %{status: "denied"}} =
-             Users.get_by_identity("github|https://github.com|carol-#{n}")
-
-    assert {:ok, %{removed: true}} = call(admin, "door", %{"action" => "remove", "id" => deny_id})
-
-    assert {:ok, %{status: "active"}} =
-             Users.get_by_identity("github|https://github.com|carol-#{n}")
-
-    assert {:ok, :allowed} = Sanctum.Door.admit("github|https://github.com|c", email, true)
+    assert {:ok, %{status: "active"}} = Users.get(carol.id)
+    assert {:ok, :allowed} = Sanctum.Door.admit_person(carol)
   end
 
   # A session the door's verdict issued to `user_id`.
@@ -342,66 +207,72 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     session
   end
 
-  test "door.remove of an allow through the gate ejects the stranger it admitted, and only them",
-       %{ops: ops, ctx: ctx, n: n} do
+  test "door.remove of an allow through the gate ejects the remote person it admitted, and only them",
+       %{alice: alice, ops: ops, ctx: ctx, n: n} do
     admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
 
-    [{dave_key, dave_email}, {erin_key, erin_email}] =
-      for name <- ["dave", "erin"],
-          do: {"github|https://github.com|#{name}-#{n}", "#{name}#{n}@example.com"}
+    # Two remote people, their heads fresh at this home as the CYFR
+    # sign-in leaves them, so the door issued each a session.
+    tls = DirectoryServer.tls()
+    DirectoryServer.listen!()
+    DirectoryServer.seam!(tls)
+    directory = DirectoryServer.start!(tls)
 
-    assert {:ok, %{effect: "allow", id: dave_allow}} =
-             call(admin, "door", %{"action" => "allow", "value" => dave_email})
+    [{dave, dave_identifier}, {erin, erin_identifier}] =
+      for _name <- ["dave", "erin"] do
+        identity = DirectoryServer.identity!(directory.dir, directory.url)
 
-    assert {:ok, %{effect: "allow"}} =
-             call(admin, "door", %{"action" => "allow", "value" => erin_email})
-
-    [dave, erin] =
-      for {key, email} <- [{dave_key, dave_email}, {erin_key, erin_email}] do
         {:ok, user} =
-          Users.upsert_from_provider(%{id: key, provider: "github", email: email, verified: true})
+          Sanctum.Test.People.remote(
+            %{
+              id: Sanctum.Auth.Identity.cyfr_key(identity.url, identity.identifier),
+              provider: "cyfr"
+            },
+            %{identifier: identity.identifier, directory_url: identity.url}
+          )
 
-        user
+        _head = DirectoryServer.cached!(identity)
+        {user, identity.identifier}
       end
 
-    # What the open door issued: a session for each, and a key for dave.
-    dave_session = session_for(dave.id, dave_email)
-    erin_session = session_for(erin.id, erin_email)
-    tenant = Sanctum.TestContext.local()
+    assert {:ok, %{effect: "allow", id: dave_allow}} =
+             call(admin, "door", %{"action" => "allow", "value" => dave_identifier})
 
-    {:ok, dave_key_row} =
-      Sanctum.TestContext.create_key(%{tenant | user_id: dave.id, email: dave_email}, %{
-        name: "dave-key-#{n}"
-      })
+    assert {:ok, %{effect: "allow"}} =
+             call(admin, "door", %{"action" => "allow", "value" => erin_identifier})
+
+    # What the door issued: a session for each; and a local person's
+    # session, which no allow issued.
+    dave_session = session_for(dave.id, nil)
+    erin_session = session_for(erin.id, nil)
+    alice_session = session_for(alice, "alice#{n}@example.com")
 
     assert {:ok, _} = Sanctum.Session.get(dave_session.token)
-    assert {:ok, _} = Sanctum.ApiKey.validate(dave_key_row.api_key)
 
-    assert {:ok, %{id: ^dave_allow, removed: true, ejected: ejected}} =
+    assert {:ok, %{id: ^dave_allow, removed: true, ejected: 1}} =
              call(admin, "door", %{"action" => "remove", "id" => dave_allow})
 
-    assert ejected >= 1
-    assert {:error, :not_allowed} = Sanctum.Door.admit(dave_key, dave_email, true)
+    assert {:error, :not_allowed} = Sanctum.Door.admit_person(dave)
     assert {:error, :invalid_session} = Sanctum.Session.get(dave_session.token)
-    assert {:error, _} = Sanctum.ApiKey.validate(dave_key_row.api_key)
 
-    # The person another entry still admits keeps what they hold.
-    assert {:ok, :allowed} = Sanctum.Door.admit(erin_key, erin_email, true)
+    # The person another entry still admits keeps what they hold, and a
+    # local person needs no entry at all.
+    assert {:ok, :allowed} = Sanctum.Door.admit_person(erin)
     assert {:ok, _} = Sanctum.Session.get(erin_session.token)
+    assert {:ok, :allowed} = Sanctum.Door.admit_person(%{id: alice})
+    assert {:ok, _} = Sanctum.Session.get(alice_session.token)
 
     # Closing a door is not denying a person.
-    assert {:ok, %{status: "active"}} = Users.get_by_identity(dave_key)
+    assert {:ok, %{status: "active"}} = Users.get(dave.id)
   end
 
   test "door.* allows, denies, lists and resolves a person identifier, which the cyfr door is judged by",
        %{ops: ops, ctx: ctx, n: n} do
     admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
     identifier = "per_" <> Prima.Digest.sha256_hex("door-tools-#{n}")
-    key = Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier)
 
-    # An unadmitted cyfr sign-in waits for the operator as an identifier.
-    assert {:error, {:door, :not_allowed}} =
-             Sanctum.Door.admit_identity(key, %{email: nil, verified: :unknown})
+    # An unadmitted remote newcomer waits for the operator as an identifier.
+    assert {:error, {:door, :not_allowed}} = Sanctum.Door.sign_in_identifier(identifier)
 
     assert {:ok, %{requests: requests}} = call(admin, "door", %{"action" => "requests"})
 
@@ -415,48 +286,173 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
                "decision" => "allow"
              })
 
-    assert {:ok, :allowed} = Sanctum.Door.admit(key, nil, :unknown)
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(identifier)
 
-    # Its shape names its kind; a malformed one is refused as that kind.
+    # Its shape names its kind; a value of no kind is refused.
     other = "per_" <> Prima.Digest.sha256_hex("door-tools-other-#{n}")
 
     assert {:ok, %{kind: "identifier", effect: "allow"}} =
              call(admin, "door", %{"action" => "allow", "value" => other})
 
     assert {:error, {:invalid_argument, message}} =
-             call(admin, "door", %{
-               "action" => "allow",
-               "value" => "per_x",
-               "kind" => "identifier"
-             })
+             call(admin, "door", %{"action" => "allow", "value" => "per_x"})
 
     assert message =~ "person identifier"
 
-    # A deny by identifier ejects the person the door admitted under it,
-    # and is sticky against `*`.
-    {:ok, user} =
-      Sanctum.SignIn.admitted(
-        %{
-          id: key,
-          provider: "cyfr",
-          email: nil,
-          verified: :unknown,
-          name: nil,
-          remote: %{identifier: identifier, directory_url: "https://dir.example"}
-        },
-        :allowed
-      )
-
+    # A deny by identifier ejects the remote person the door admitted under
+    # it, and is sticky against `*`.
+    user = remote!(identifier)
     assert {:ok, _} = call(admin, "door", %{"action" => "allow", "value" => "*"})
+    assert {:ok, :allowed} = Sanctum.Door.admit_person(user)
 
     assert {:ok, %{effect: "deny", kind: "identifier", ejected: 1}} =
              call(admin, "door", %{"action" => "deny", "value" => identifier})
 
-    assert {:error, :denied} = Sanctum.Door.admit(key, nil, :unknown)
+    assert {:error, :denied} = Sanctum.Door.admit_person(user)
+    assert {:error, :denied} = Sanctum.Door.admit_identifier(identifier)
     assert {:ok, %{status: "denied"}} = Users.get(user.id)
 
     assert {:ok, %{entries: entries}} = call(admin, "door", %{"action" => "list"})
     assert Enum.any?(entries, &(&1.kind == "identifier" and &1.value == identifier))
+
+    # Allowing the identifier again restores the person.
+    assert {:ok, %{effect: "allow", restored: 1}} =
+             call(admin, "door", %{"action" => "allow", "value" => identifier})
+
+    assert {:ok, %{status: "active"}} = Users.get(user.id)
+    assert {:ok, :allowed} = Sanctum.Door.admit_person(user)
+  end
+
+  test "door.allow and door.deny take a handle: the entry keeps the identifier it names, labelled with the handle",
+       %{ops: ops, ctx: ctx, n: n} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    first = "per_" <> Prima.Digest.sha256_hex("door-handle-#{n}")
+    second = "per_" <> Prima.Digest.sha256_hex("door-handle-second-#{n}")
+    RegistryStub.handles!(%{"alice" => first, "bob" => second})
+
+    assert {:ok, %{kind: "identifier", effect: "allow", value: ^first, label: "alice"}} =
+             call(admin, "door", %{"action" => "allow", "value" => "@alice"})
+
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(first)
+
+    assert {:ok, %{kind: "identifier", effect: "deny", value: ^second, label: "bob"}} =
+             call(admin, "door", %{"action" => "deny", "value" => "@bob"})
+
+    # The list shows the label where there is one, and no label key where
+    # there is none.
+    assert {:ok, _} = call(admin, "door", %{"action" => "allow", "value" => "*"})
+    assert {:ok, %{entries: entries}} = call(admin, "door", %{"action" => "list"})
+    assert %{label: "alice"} = Enum.find(entries, &(&1.value == first))
+    assert %{label: "bob"} = Enum.find(entries, &(&1.value == second))
+    refute Map.has_key?(Enum.find(entries, &(&1.value == "*")), :label)
+
+    # The registry gives the handle to the second identifier: the entry
+    # still names the first, and admits only them.
+    RegistryStub.handles!(%{"alice" => second})
+    assert {:ok, %{entries: entries}} = call(admin, "door", %{"action" => "list"})
+    assert [%{value: ^first}] = Enum.filter(entries, &(&1[:label] == "alice"))
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(first)
+    assert {:error, :denied} = Sanctum.Door.admit_identifier(second)
+  end
+
+  test "a handle the registry does not resolve is refused through the gate in its own sentence, and nothing is written",
+       %{ops: ops, ctx: ctx} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    before = Sanctum.Door.Store.list()
+
+    RegistryStub.handles!(%{"alice" => :close})
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert {:error, reason} = call(admin, "door", %{"action" => "allow", "value" => "@alice"})
+      assert %{reason: :registry_unavailable, class: :unavailable} = Refusals.classify(reason)
+    end)
+
+    RegistryStub.handles!(%{})
+    assert {:error, reason} = call(admin, "door", %{"action" => "deny", "value" => "@nobody"})
+    assert Refusals.render(reason) == "No one holds that handle at the registry."
+
+    assert {:error, {:invalid_argument, message}} =
+             call(admin, "door", %{"action" => "allow", "value" => "@Not-A-Handle"})
+
+    assert message =~ "not a handle"
+
+    Application.put_env(:sanctum, :registry_url, "none")
+    assert {:error, reason} = call(admin, "door", %{"action" => "allow", "value" => "@alice"})
+    assert %{reason: :no_registry} = Refusals.classify(reason)
+
+    assert Sanctum.Door.Store.list() == before
+  end
+
+  test "member.add takes a handle, with or without @, alone; its identifier is seated or invited as by identifier",
+       %{alice: alice, ctx: ctx, n: n} do
+    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Handles #{n}"})
+    known = "per_" <> Prima.Digest.sha256_hex("member-handle-known-#{n}")
+    stranger = "per_" <> Prima.Digest.sha256_hex("member-handle-stranger-#{n}")
+    user = remote!(known)
+    RegistryStub.handles!(%{"known" => known, "stranger" => stranger})
+
+    assert {:ok, %{state: "added", member: %{handle: "known"}}} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@known"})
+
+    assert Members.member?(user.id, group.id)
+
+    assert {:ok, %{state: "added", member: %{handle: "stranger"}}} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "stranger"})
+
+    assert [%{status: "invited", user_id: nil}] =
+             Enum.filter(
+               rows!(Members.list_by_athanor(group.id)),
+               &(&1.person_identifier == stranger)
+             )
+
+    # A handle stands alone.
+    for other <- [%{"user_id" => alice}, %{"identifier" => known}] do
+      assert {:error, {:invalid_argument, message}} =
+               call(
+                 a,
+                 "member",
+                 Map.merge(
+                   %{"action" => "add", "athanor" => group.id, "handle" => "@known"},
+                   other
+                 )
+               )
+
+      assert message =~ "not two"
+    end
+
+    # Refused in its own sentence, and nothing written.
+    seats = rows!(Members.list_by_athanor(group.id))
+    RegistryStub.handles!(%{"down" => :close})
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert {:error, reason} =
+               call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@down"})
+
+      assert %{reason: :registry_unavailable} = Refusals.classify(reason)
+    end)
+
+    RegistryStub.handles!(%{})
+
+    assert {:error, reason} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@nobody"})
+
+    assert Refusals.render(reason) == "No one holds that handle at the registry."
+
+    assert {:error, {:invalid_argument, message}} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@No"})
+
+    assert message =~ "not a handle"
+
+    Application.put_env(:sanctum, :registry_url, "none")
+
+    assert {:error, reason} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@known"})
+
+    assert %{reason: :no_registry} = Refusals.classify(reason)
+
+    assert rows!(Members.list_by_athanor(group.id)) == seats
+    assert Enum.map(Sanctum.Door.Store.requests(), & &1.value) == [stranger]
   end
 
   test "member.add and member.remove take an identifier: an invite waits at the door, list shows it, remove withdraws it",
@@ -520,66 +516,36 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
     {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Withdraw #{n}"})
     identifier = "per_" <> Prima.Digest.sha256_hex("member-withdraw-#{n}")
-    email = "withdraw#{n}@example.com"
+    invitee = %{"identifier" => identifier}
 
     withdraw =
       &Map.merge(%{"action" => "remove", "athanor" => group.id, "invitation" => true}, &1)
 
-    # Pending: each is withdrawn, and a second withdrawal finds nothing.
-    for person <- [%{"identifier" => identifier}, %{"email" => email}] do
-      {:ok, _} = call(a, "member", Map.merge(%{"action" => "add", "athanor" => group.id}, person))
-      assert {:ok, %{state: "removed"}} = call(a, "member", withdraw.(person))
-      assert {:error, {:not_found, "Invitation", _}} = call(a, "member", withdraw.(person))
-    end
+    # Pending: it is withdrawn, and a second withdrawal finds nothing.
+    {:ok, _} = call(a, "member", Map.merge(%{"action" => "add", "athanor" => group.id}, invitee))
+    assert {:ok, %{state: "removed"}} = call(a, "member", withdraw.(invitee))
+    assert {:error, {:not_found, "Invitation", _}} = call(a, "member", withdraw.(invitee))
 
     refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
 
-    # Claimed by the invitees' first sign-ins: the invitation is a seat
-    # now, and a withdrawal reaches no seat.
-    for person <- [%{"identifier" => identifier}, %{"email" => email}] do
-      {:ok, _} = call(a, "member", Map.merge(%{"action" => "add", "athanor" => group.id}, person))
-    end
-
-    {:ok, by_identifier} =
-      Sanctum.SignIn.admitted(
-        %{
-          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
-          provider: "cyfr",
-          email: nil,
-          verified: :unknown,
-          name: nil,
-          remote: %{identifier: identifier, directory_url: "https://dir.example"}
-        },
-        :allowed
-      )
-
-    {:ok, by_email} =
-      Users.upsert_from_provider(%{
-        id: "github|https://github.com|withdraw-#{n}",
-        provider: "github",
-        email: email,
-        verified: true
-      })
-
-    {:ok, 1} = Members.activate_invited(by_email)
+    # Claimed by the invitee's arrival: the invitation is a seat now, and
+    # a withdrawal reaches no seat.
+    {:ok, _} = call(a, "member", Map.merge(%{"action" => "add", "athanor" => group.id}, invitee))
+    by_identifier = remote!(identifier)
+    {:ok, 1} = Members.activate_invited(by_identifier)
     assert Members.member?(by_identifier.id, group.id)
-    assert Members.member?(by_email.id, group.id)
 
     assert {:error, {:not_found, "Invitation", ^identifier}} =
-             call(a, "member", withdraw.(%{"identifier" => identifier}))
-
-    assert {:error, {:not_found, "Invitation", ^email}} =
-             call(a, "member", withdraw.(%{"email" => email}))
+             call(a, "member", withdraw.(invitee))
 
     assert Members.member?(by_identifier.id, group.id)
-    assert Members.member?(by_email.id, group.id)
 
     # A user id holds no invitation; the flag beside one is refused before
     # anything is read.
-    assert {:error, {:invalid_argument, "invitation names an email or an identifier"}} =
-             call(a, "member", withdraw.(%{"user_id" => by_email.id}))
+    assert {:error, {:invalid_argument, "invitation names an identifier"}} =
+             call(a, "member", withdraw.(%{"user_id" => by_identifier.id}))
 
-    assert Members.member?(by_email.id, group.id)
+    assert Members.member?(by_identifier.id, group.id)
 
     # The flag is a boolean, as declared: the gate refuses anything else.
     assert {:error,
@@ -605,19 +571,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
     {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Known #{n}"})
     identifier = "per_" <> Prima.Digest.sha256_hex("member-known-#{n}")
-
-    {:ok, user} =
-      Sanctum.SignIn.admitted(
-        %{
-          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
-          provider: "cyfr",
-          email: nil,
-          verified: :unknown,
-          name: nil,
-          remote: %{identifier: identifier, directory_url: "https://dir.example"}
-        },
-        :allowed
-      )
+    user = remote!(identifier)
 
     assert {:ok, %{state: "added"}} =
              call(a, "member", %{
@@ -672,12 +626,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
              )
     end
 
-    assert {:error, :denied} =
-             Sanctum.Door.admit(
-               Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
-               nil,
-               :unknown
-             )
+    assert {:error, :denied} = Sanctum.Door.admit_identifier(identifier)
   end
 
   test "session.use repoints the session and refuses what focus refuses",
@@ -759,19 +708,11 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
   test "a person's own athanor has one member on every path — its owner is neither joined nor removed",
        %{alice: alice, bob: bob, ctx: ctx, n: n} do
-    {:ok, personal} =
-      Athanors.create(%{
-        kind: "person",
-        name: "Alice",
-        slug: "alice#{n}",
-        owner_user_id: alice,
-        created_by: alice
-      })
-
-    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: personal.id)
+    personal = personal!(alice)
     a = ctx.(alice, personal.id, [])
+    identifier = "per_" <> Prima.Digest.sha256_hex("own-#{n}")
 
-    for target <- [%{"user_id" => bob}, %{"email" => "bob#{n}@example.com"}] do
+    for target <- [%{"user_id" => bob}, %{"identifier" => identifier}] do
       assert {:error, msg} = call(a, "member", Map.merge(%{"action" => "add"}, target))
       assert Refusals.render(msg) =~ "one member"
     end
@@ -864,29 +805,17 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
              })
   end
 
-  test "a denied person's own athanor is archived by deny at the door and reopened by allow, never by an operator's unarchive",
-       %{alice: alice, ops: ops, ctx: ctx, n: n} do
-    {:ok, personal} =
-      Athanors.create(%{
-        kind: "person",
-        name: "Alice",
-        slug: "alice#{n}",
-        owner_user_id: alice,
-        created_by: alice
-      })
-
-    {:ok, _} = Members.ensure(alice, scope: "athanor", athanor_id: personal.id)
-    {:ok, user} = Users.get(alice)
-    {:ok, _} = Users.set_personal_athanor(user, personal.id)
+  test "a denied person's own athanor is archived by deny at the door and reopened by removing the deny, never by an operator's unarchive",
+       %{alice: alice, ops: ops, ctx: ctx} do
+    personal = personal!(alice)
 
     # The door verbs are the operator's platform-scope acts: they run under
     # the server's own transitions and need no seat in the athanor they
     # close and reopen.
     operator = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
-    email = "alice#{n}@example.com"
 
-    assert {:ok, %{effect: "deny", ejected: 1}} =
-             call(operator, "door", %{"action" => "deny", "value" => email})
+    assert {:ok, %{effect: "deny", ejected: 1, id: deny_id}} =
+             call(operator, "door", %{"action" => "deny", "value" => alice})
 
     assert {:ok, %{status: "denied"}} = Users.get(alice)
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
@@ -902,8 +831,10 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     assert {:ok, %{status: "archived"}} = Athanors.get(personal.id)
 
-    # Allowing her again at the door reopens it and seats her in it.
-    assert {:ok, _} = call(operator, "door", %{"action" => "allow", "value" => email})
+    # Removing the deny at the door reopens it and seats her in it.
+    assert {:ok, %{removed: true, restored: 1}} =
+             call(operator, "door", %{"action" => "remove", "id" => deny_id})
+
     assert {:ok, %{status: "active"}} = Users.get(alice)
     assert {:ok, %{status: "active"}} = Athanors.get(personal.id)
     assert Members.member?(alice, personal.id)
@@ -964,17 +895,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
     refute Members.member?(alice, group.id)
 
     # A person's own athanor is not destroyed here, by anyone.
-    {:ok, personal} =
-      Athanors.create(%{
-        kind: "person",
-        name: "Alice",
-        slug: "alice-own-#{n}",
-        owner_user_id: alice,
-        created_by: alice
-      })
-
-    {:ok, user} = Users.get(alice)
-    {:ok, _} = Users.set_personal_athanor(user, personal.id)
+    personal = personal!(alice)
     {:ok, _} = Athanors.archive(personal, force: true)
 
     assert {:error, msg} =
@@ -1108,4 +1029,26 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   end
 
   defp rows!({:ok, rows}), do: rows
+
+  # The person's own athanor, made with them by their admission.
+  defp personal!(user_id) do
+    {:ok, athanor_id} = Users.personal_athanor_id(user_id)
+    {:ok, athanor} = Athanors.get(athanor_id)
+    athanor
+  end
+
+  # A person whose keys another CYFR holds, admitted here under the CYFR
+  # sign-in identity `identifier` names.
+  defp remote!(identifier) do
+    {:ok, user} =
+      Sanctum.Test.People.remote(
+        %{
+          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
+          provider: "cyfr"
+        },
+        %{identifier: identifier, directory_url: "https://dir.example"}
+      )
+
+    user
+  end
 end

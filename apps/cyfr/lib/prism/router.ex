@@ -7,7 +7,9 @@ defmodule Prism.Router do
   layout, the browser sign-in pipelines and their throttles, the claim,
   legal-acceptance and attachment pipelines, browser sign-in and
   sign-out with their callbacks, linking an OpenID Connect door, passkey
-  sign-in's completion, the `cyfr` door's challenge hop and callback, the
+  sign-in's completion, the `cyfr` door's start from a handle, its
+  challenge hop and callback, the company sign-in's page, start and
+  callback, the
   OpenID Connect re-authentication's callback, the claim and legal pages, the
   attachment and file downloads and the `:athanor` LiveView session.
 
@@ -73,26 +75,6 @@ defmodule Prism.Router do
           window_ms: 60_000
       end
 
-      # Submit path on the claim page: defends against username enumeration
-      # (cyfr.run's 409 distinguishes SLUG_TAKEN / ALREADY_CLAIMED) and
-      # claim-spam DOS.
-      pipeline :claim_submit_throttle do
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :claim_submit,
-          max_requests: 10,
-          window_ms: 60_000
-      end
-
-      # The legal pages proxy cyfr.run (a cold GET fetches every policy body;
-      # the submit relays the acceptance) — a modest per-IP budget keeps one
-      # client from turning this server into an amplifier against cyfr.run.
-      pipeline :legal_accept_throttle do
-        plug CyfrWeb.Plugs.AuthRateLimit,
-          bucket: :legal_accept,
-          max_requests: 12,
-          window_ms: 60_000
-      end
-
       # A chat attachment's bytes, for the member reading the thread on another
       # device. Its own pipeline: no `:accepts` (a browser asks for an image or
       # a PDF, not html), the session cookie for who, the URL's athanor for
@@ -130,9 +112,6 @@ defmodule Prism.Router do
         # POST, never GET: signing someone out must not be one <img src> away
         # — the browser pipeline's CSRF token guards the state change.
         post "/logout", AuthController, :browser_logout, metadata: %{auth: :browser_public_auth}
-
-        get "/post-legal-accept", AuthController, :post_legal_accept,
-          metadata: %{auth: :browser_oauth_flow}
 
         scope "/" do
           pipe_through :device_complete_throttle
@@ -185,6 +164,37 @@ defmodule Prism.Router do
           post "/link/oidcc", AuthController, :link_start, metadata: %{auth: :browser_session}
         end
 
+        # The start of a `cyfr` sign-in: the sign-in page's one-time
+        # ticket, bound to this browser, which keeps the attempt (its home,
+        # and the identifier a handle named) in the browser's session and
+        # sends it to that home's `/carry`. Above `/:provider`, under the
+        # starts' throttle.
+        scope "/" do
+          pipe_through :oauth_start_throttle
+
+          get "/cyfr/start", AuthController, :cyfr_start, metadata: %{auth: :browser_oauth_flow}
+        end
+
+        # A company sign-in, the standing condition a CYFR may require of
+        # every person (`Sanctum.CompanyLogin`): its start, a POST the
+        # browser pipeline's CSRF token guards from the company page,
+        # under the browser's own session refused for that condition
+        # alone, and the issuer's callback, which both company issuers
+        # share. Above `/:provider` so neither is read as a provider.
+        scope "/" do
+          pipe_through :oauth_start_throttle
+
+          post "/company", AuthController, :company_start,
+            metadata: %{auth: :browser_company_login}
+        end
+
+        scope "/" do
+          pipe_through :oauth_callback_throttle
+
+          get "/company/callback", AuthController, :company_callback,
+            metadata: %{auth: :browser_oauth_callback}
+        end
+
         scope "/" do
           pipe_through :oauth_start_throttle
 
@@ -199,33 +209,6 @@ defmodule Prism.Router do
         end
       end
 
-      # The publisher-namespace claim (web flow): a person who wants to publish
-      # to cyfr.run claims their namespace here, whenever they choose. Signing
-      # in never depends on it.
-      scope "/claim-namespace", PrismWeb do
-        pipe_through :browser
-
-        get "/", ClaimNamespaceController, :show, metadata: %{auth: :browser_claim_gate}
-
-        # Submit is the only write endpoint; throttle it, not the form render.
-        scope "/" do
-          pipe_through :claim_submit_throttle
-
-          post "/submit", ClaimNamespaceController, :submit,
-            metadata: %{auth: :browser_claim_gate}
-        end
-      end
-
-      # Policy acceptance: renders bundled policies and posts acceptance to
-      # cyfr.run /v1/legal/accept. Used after a 412 POLICY_ACCEPTANCE_REQUIRED
-      # response or during post-login setup.
-      scope "/legal/accept", PrismWeb do
-        pipe_through [:sign_in_identity, :browser, :legal_accept_throttle]
-
-        get "/", LegalAcceptController, :show, metadata: %{auth: :browser_public_legal}
-        post "/submit", LegalAcceptController, :submit, metadata: %{auth: :browser_public_legal}
-      end
-
       # ==========================================================================
       # Prism — the LiveView face, on this origin
       # ==========================================================================
@@ -238,11 +221,24 @@ defmodule Prism.Router do
       # installation serves its returning person: sessionless too, its form
       # posts the kit and the installation token to the restore ingress
       # (`POST /restore`) from the browser, never through this view.
+      # `/setup` is the page the setup link opens: its first step, the
+      # first person's passkey under the setup token in its fragment, is
+      # sessionless, and once that person is signed in it guards their
+      # session as every console page does (`PrismWeb.SetupLive`).
+      # `/invite` is the page an invitation link opens: sessionless, the
+      # code in its fragment, the newcomer's passkey made under it
+      # (`PrismWeb.InviteLive`). `/company-login` is the one page a
+      # session refused for the company sign-in alone opens
+      # (`PrismWeb.CompanyLoginLive`).
       scope "/", PrismWeb do
         pipe_through :browser
 
         live "/login", LoginLive, :login, metadata: %{auth: :browser_public_login}
         live "/restore", RestoreLive, :restore, metadata: %{auth: :browser_public_login}
+        live "/setup", SetupLive, :setup, metadata: %{auth: :browser_public_login}
+        live "/invite", InviteLive, :invite, metadata: %{auth: :browser_public_login}
+
+        live "/company-login", CompanyLoginLive, :index, metadata: %{auth: :browser_company_login}
       end
 
       # The glass's page alone may reach other homes by `fetch`: a device

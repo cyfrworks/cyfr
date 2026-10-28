@@ -11,9 +11,9 @@ defmodule Cyfr.Cluster.Boot do
   starts the same supervision tree a release starts, under the same
   refusals: `Cyfr.Cell` reads `Cyfr.Cell.facts/0` and raises if this
   deployment cannot form a cell, the member claims its `cell_leases`
-  slot, and `Cyfr.Bootstrap` reconciles the operators under that slot
-  before anything that admits work — a refused reconcile is a boot that
-  answers `{:error, reason}` here.
+  slot, and the gate's declared-restore step runs under that slot before
+  anything that admits work — a refused gate is a boot that answers
+  `{:error, reason}` here.
 
   A worker service is **not** started with the application. It is the
   suite's scripted one (`Cyfr.Test.ScriptedWorker`), served over HTTP on a

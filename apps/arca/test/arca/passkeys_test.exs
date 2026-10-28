@@ -70,7 +70,7 @@ defmodule Arca.PasskeysTest do
     now = DateTime.utc_now()
 
     {:ok, person} =
-      Users.mint(
+      Arca.Test.People.mint(
         server(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
@@ -732,7 +732,7 @@ defmodule Arca.PasskeysRaceTest do
     passkey =
       unboxed(fn ->
         {:ok, _} =
-          Users.mint(
+          Arca.Test.People.mint(
             server(),
             %{
               id: user_id,

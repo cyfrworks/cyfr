@@ -223,22 +223,6 @@ defmodule Prima.Refusal do
     :invalid_request
   ]
 
-  # The bootstrap's refusals of a member's boot, by sub-reason.
-  @bootstrap %{
-    slot_not_held: {:not_owner, "This server does not hold its slot in the cluster"},
-    busy: {:conflict, "Another server is starting against this database"},
-    malformed_configuration: {:invalid_argument, "The server configuration is malformed"},
-    slot_lost: {:not_owner, "This server lost its slot in the cluster while starting"},
-    claim_taken: {:conflict, "Another server took the start-up claim"},
-    claim_lapsed: {:timeout, "The start-up claim lapsed before start-up finished"},
-    missing_user: {:setup_required, "The configured first user does not exist"},
-    release_failed:
-      {:uncertain,
-       "Start-up could not confirm that it released its claim — check before starting again"},
-    database_error: {:unavailable, "The database could not answer during start-up"},
-    exception: {:internal, "Start-up failed unexpectedly"}
-  }
-
   # How the home is reached: the boot's and the access engine's refusals
   # that carry nothing but their code.
   @access %{
@@ -406,23 +390,95 @@ defmodule Prima.Refusal do
   defp row({:unavailable, what}) when is_binary(what),
     do: {:unavailable, "#{what} is unavailable — retry shortly"}
 
-  # A stored registry credential that no longer opens: the person signs in
-  # again, which is the only thing that replaces it.
+  # A stored registry credential that no longer opens: minting the
+  # person's tokens again replaces it.
   defp row({:corrupt, :registry_credential}),
-    do: {:corrupt, "The stored registry credential is damaged; sign in to the registry again."}
+    do:
+      {:corrupt,
+       "The stored registry credential is damaged; run `cyfr registry sync` to replace it."}
 
-  # The registry's own refusals of a policy acceptance, as the component
-  # domain rosters them: the version it now requires the person to accept,
-  # and an identity it refuses. A refusal carrying the HTTP answer keeps
-  # that answer's class; this row is the reason's own.
-  defp row({:registry, :policy_version_mismatch, version}) when is_binary(version),
-    do: {:conflict, "The registry requires acceptance of policy version #{version}"}
+  # A registry operation the person signs (`Prima.RegistryRequest`), refused
+  # before it is sent: the person has no identifier to sign under, their
+  # keys are held by another CYFR, or this deployment names no registry.
+  defp row(:not_enrolled),
+    do: {:setup_required, "This needs your identity: enroll it in Settings, then try again."}
 
-  defp row({:registry, :policy_version_mismatch, nil}),
-    do: {:conflict, "The registry requires acceptance of a newer policy version"}
+  defp row(:remote),
+    do: {:forbidden, "Your keys are held by your own CYFR; do this there."}
 
-  defp row({:registry, :unauthorized}),
-    do: {:unauthenticated, "The registry refused this identity; sign in to the registry again"}
+  defp row(:no_registry),
+    do: {:setup_required, "No registry is configured on this server (CYFR_REGISTRY_URL=none)."}
+
+  defp row(:registry_unavailable),
+    do: {:unavailable, "The registry could not be reached just now; try again shortly."}
+
+  # A push for a namespace this server holds no usable token for, or whose
+  # token the registry no longer accepts: the stale token is removed, and a
+  # sync mints the person's tokens again.
+  defp row(:registry_token_missing),
+    do:
+      {:unauthenticated,
+       "There is no valid push token for this namespace; run `cyfr registry sync`, then " <>
+         "push again."}
+
+  # The registry's own refusals of a signed request that CYFR passes on
+  # (`Prima.RegistryRequest.refusals/0` names each one's code); the last
+  # two are the directory's too, as a recovery meets them.
+  defp row(:malformed_answer),
+    do: {:unavailable, "The registry's answer could not be read; try again shortly."}
+
+  defp row(:handle_taken), do: {:conflict, "That handle is already taken; pick another."}
+
+  defp row(:has_other_handle),
+    do: {:conflict, "Your identity already holds another handle at the registry."}
+
+  defp row(:handle_invalid), do: {:invalid_argument, "The registry does not accept that handle."}
+  defp row(:handle_reserved), do: {:invalid_argument, "That handle is reserved; pick another."}
+
+  defp row(:no_handle),
+    do: {:setup_required, "Claim a handle at the registry first: run `cyfr registry claim`."}
+
+  defp row(:namespace_reserved),
+    do: {:forbidden, "That namespace is reserved at the registry."}
+
+  defp row(:claim_not_pending),
+    do: {:conflict, "No pending claim of yours names that namespace; claim it first."}
+
+  defp row(:dns_unverified),
+    do: {:conflict, "The registry did not find the DNS record the claim asked for yet."}
+
+  defp row(:dns_timeout),
+    do: {:unavailable, "The registry's DNS lookup timed out; try again shortly."}
+
+  defp row({:policy_required, version}) when is_binary(version),
+    do: {:conflict, "Accept the registry's policy version #{version} first."}
+
+  defp row({:policy_required, nil}),
+    do: {:conflict, "Accept the registry's current policy first."}
+
+  defp row(:banned), do: {:forbidden, "The registry has banned this identity."}
+
+  defp row(:not_appellant), do: {:forbidden, "This action is not yours to appeal."}
+
+  defp row(:action_not_found), do: {:not_found, "The registry has no such action to appeal."}
+
+  defp row(:appeal_too_early),
+    do: {:forbidden, "This ban's cool-off has not passed; appeal once it has."}
+
+  defp row(:namespace_unowned),
+    do:
+      {:forbidden,
+       "That namespace has no owner at the registry, so its operator handles this appeal by hand."}
+
+  defp row(:wrong_directory),
+    do:
+      {:forbidden,
+       "The registry accepts only identities its own directory orders; this one names another."}
+
+  defp row(:unknown_identity), do: {:not_found, "The directory does not know this identity."}
+
+  defp row(:directory_unavailable),
+    do: {:unavailable, "The identity's directory could not be read just now; try again shortly."}
 
   # Stored bytes that no longer match the digest their row recorded: an
   # integrity refusal, not an outage — a retry will not help, and the
@@ -824,6 +880,71 @@ defmodule Prima.Refusal do
        "This installation is waiting for its owner to restore their identity; no one signs " <>
          "in here until that restore finishes or the operator ends it."}
 
+  # The setup token past its person's first sign-in method: it opens
+  # nothing, whoever presents it.
+  defp row(:setup_closed),
+    do:
+      {:forbidden,
+       "This CYFR is set up. Sign in with your passkey, a device you connected, or a " <>
+         "sign-in method you linked."}
+
+  # An admission other than setup or a restore onto a CYFR with no person:
+  # its first person is its administrator, made only by its setup.
+  defp row(:not_set_up),
+    do: {:setup_required, "This CYFR is not set up yet. Its operator opens the setup link first."}
+
+  # A linked sign-in method no person here holds: a method unlocks a person
+  # and never makes one.
+  defp row(:no_person),
+    do:
+      {:not_found,
+       "No one here signs in with this account. Sign in another way, then link it in Settings."}
+
+  # An invitation code that admits no one: unknown, expired, redeemed,
+  # revoked, or issued by someone who has since lost the seat or the
+  # standing it was issued under. One answer for all of them.
+  defp row(:invitation_invalid),
+    do:
+      {:not_found,
+       "This invitation can no longer be used. Ask whoever invited you for a new one."}
+
+  # A handle the registry answers no one for, a reserved one included.
+  defp row(:handle_not_found), do: {:not_found, "No one holds that handle at the registry."}
+
+  # A handle whose owner publishes no address: their CYFR is reached by
+  # the address they give.
+  defp row(:address_not_published),
+    do:
+      {:not_found,
+       "That handle has no published address. Enter the address of the CYFR that holds " <>
+         "those keys instead."}
+
+  # A CYFR sign-in begun from a handle, answered by a carry of another
+  # identity: the address the handle published serves someone else.
+  defp row(:wrong_identity),
+    do:
+      {:forbidden,
+       "That sign-in came from someone other than the handle you named, so nobody was " <>
+         "signed in."}
+
+  # A person at a CYFR that requires a company sign-in, whose sign-in with
+  # it is missing, past its days, or given under another company
+  # configuration: everything else about their standing holds, and the
+  # company page is the one place open to them.
+  defp row(:company_login_required),
+    do:
+      {:forbidden,
+       "This CYFR requires you to sign in with your company's account. Sign in with it to " <>
+         "go on."}
+
+  # A company account another person here is bound to, or another account
+  # than the one this person is bound to, under the same configuration.
+  defp row(:company_subject_bound),
+    do:
+      {:conflict,
+       "That company account is bound to someone else here, or you are bound to another " <>
+         "one. Sign in with the company account that is yours here."}
+
   # A remote person's identity whose head this home could not confirm
   # fresh within its bound: their work here pauses and their session
   # stands, so it is no sign-out and no denial.
@@ -854,9 +975,6 @@ defmodule Prima.Refusal do
     do: {:invalid_argument, "The request body's length must be declared"}
 
   defp row(:internal_error), do: {:internal, "Internal error"}
-
-  defp row({:bootstrap_refused, sub}) when is_map_key(@bootstrap, sub),
-    do: Map.fetch!(@bootstrap, sub)
 
   defp row(:missing_grant),
     do: {:internal, "The execution's standing could not be read"}

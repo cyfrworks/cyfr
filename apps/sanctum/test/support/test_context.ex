@@ -93,11 +93,34 @@ defmodule Sanctum.TestContext do
   end
 
   @doc """
-  Seat `user_id` as a platform admin with no sign-in behind it: a
-  fixture's operator, never one the door admitted
-  (`Sanctum.Tenancy.Members.grant_platform/2` is the server's).
+  Seat `user_id` as a platform admin with no admission behind it: a
+  fixture's operator, its row written straight into the sandbox. The
+  product's one grant is the installation's first person's
+  (`Sanctum.Newcomer`, `Sanctum.Test.People.first!/1`). Idempotent:
+  answers the row that stands.
   """
-  def ensure_platform(user_id), do: Sanctum.Tenancy.Members.ensure(user_id, scope: "platform")
+  def ensure_platform(user_id) when is_binary(user_id) do
+    case Sanctum.Tenancy.Members.platform_seat(user_id) do
+      {:ok, row} ->
+        {:ok, row}
+
+      :none ->
+        now = DateTime.utc_now()
+
+        %Arca.Schemas.Membership{}
+        |> Arca.Schemas.Membership.changeset(%{
+          id: Prima.UUID7.generate_id("mem"),
+          user_id: user_id,
+          scope: "platform",
+          status: "active",
+          created_at: now,
+          updated_at: now
+        })
+        |> Arca.Repo.insert!()
+        |> Arca.Data.project()
+        |> then(&{:ok, &1})
+    end
+  end
 
   @doc """
   Leave `port` (`Sanctum.Consent.Components`, `Sanctum.Proxy`) with no
@@ -218,14 +241,15 @@ defmodule Sanctum.TestContext do
       )
 
   @doc """
-  The context's identity signed in: the `users` row minted (or found)
-  for `ctx.user_id` read as an IdP identity key, and the context re-named
-  by the person's own id — what every request carries after admission.
-  Returns the context and the row.
+  The context's identity signed in: the person `ctx.user_id`, read as the
+  identity key of a linked sign-in method, names (made the first time,
+  `Sanctum.Test.People.linked/1`), and the context re-named by the
+  person's own id — what every request carries after admission. Returns
+  the context and the row.
   """
   def person!(%Context{} = ctx, attrs \\ %{}) do
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(
+      Sanctum.Test.People.linked(
         Map.merge(
           %{
             id: ctx.user_id,
@@ -484,11 +508,10 @@ defmodule Sanctum.TestContext do
         now = DateTime.utc_now()
 
         {:ok, _person} =
-          Arca.Users.mint(
+          Arca.Test.People.mint(
             Prima.Actor.system(),
             %{
               id: user_id,
-              provider: "local",
               prefs: "{}",
               first_seen_at: now,
               last_seen_at: now,
@@ -584,9 +607,8 @@ defmodule Sanctum.TestContext do
   fixture person (`person!/2`) holds one: a verified email, whose code the
   suite's transport (`MailSink`) delivers to the asking process. The
   registration is asked and confirmed on a new session of a local door
-  focused on the person's own athanor, minted for them as admission
-  mints one (`Sanctum.Provisioning.ensure_personal_athanor/1`) when they
-  have none, and the code mailed to them proves it. A person who holds no
+  focused on an athanor the person sits in, and the code mailed to them
+  proves it. A person who holds no
   fresh method (one with no email) registers it at once under the local
   first-method rule; a test of that rule builds such a person itself.
   """
@@ -698,14 +720,10 @@ defmodule Sanctum.TestContext do
     end
   end
 
-  # The person's own athanor, minted as admission mints it when they have
-  # none.
   # An athanor the person has standing in, where the registration can be
   # asked: their personal athanor when they hold a seat there (a fixture
   # may have made the athanor by hand, without one), otherwise any
-  # athanor they sit in, otherwise one provisioned for them as admission
-  # provisions it. A person provisioning refuses (denied, or gone) has
-  # no standing.
+  # athanor they sit in. A person who sits in none has no standing.
   defp own_athanor(user_id) do
     with {:ok, rows} <- Sanctum.Tenancy.Members.list_by_user(user_id) do
       seats = for %{scope: "athanor", athanor_id: id} <- rows, is_binary(id), do: id
@@ -719,17 +737,8 @@ defmodule Sanctum.TestContext do
       cond do
         personal in seats -> {:ok, personal}
         seats != [] -> {:ok, hd(seats)}
-        true -> provisioned_athanor(user_id)
+        true -> {:error, :not_standing}
       end
-    end
-  end
-
-  defp provisioned_athanor(user_id) do
-    with {:ok, user} <- Sanctum.Tenancy.Users.get(user_id),
-         {:ok, athanor} <- Sanctum.Provisioning.ensure_personal_athanor(user) do
-      {:ok, athanor.id}
-    else
-      {:error, _refused} -> {:error, :not_standing}
     end
   end
 

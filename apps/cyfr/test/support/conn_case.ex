@@ -88,15 +88,13 @@ defmodule CyfrWeb.ConnCase do
     # puts on a conn, so a bare conn stays anonymous.
     # Global app env is not concurrency-safe, so only sync tests get the
     # provider (the async ConnCase users don't touch auth). On exit, restore
-    # the test-env BASELINE (unset — config/test.exs sets no :auth_provider)
-    # rather than a captured "original": a capture taken mid-run can be
-    # another module's temporary value, and restoring it leaks the provider
-    # into later suites (a lingering provider flips operator-only
-    # conveniences off and breaks unrelated ones — e.g. external server URL
-    # validation).
+    # the test-env BASELINE (unset — config/test.exs sets no
+    # :bearer_provider) rather than a captured "original": a capture taken
+    # mid-run can be another module's temporary value, and restoring it
+    # leaks the provider into later suites.
     unless tags[:async] do
-      Application.put_env(:sanctum, :auth_provider, Emissary.TestAuthProvider)
-      on_exit(fn -> Application.delete_env(:sanctum, :auth_provider) end)
+      on_exit(fn -> Application.delete_env(:sanctum, :bearer_provider) end)
+      Application.put_env(:sanctum, :bearer_provider, Emissary.TestAuthProvider)
     end
 
     {:ok, conn: conn}

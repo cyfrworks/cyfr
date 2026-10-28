@@ -7,7 +7,9 @@ defmodule Arca.AthanorCensus do
 
   `CYFR_MAX_ATHANORS` bounds how many athanors are active at once, and
   every write that can raise that number counts it inside the transaction
-  that writes: a mint (`Arca.Athanors.mint/2`), and the two transitions
+  that writes: a mint (`Arca.Athanors.mint/2`), an admission counting
+  before the person whose athanor it mints (`Arca.Athanors.within_caps/2`),
+  and the two transitions
   that reopen an archived athanor (`Arca.SecurityTransitions`
   `allow_user/3` and `unarchive_athanor/3`). Row locks cannot serialize
   them, because two mints hold no row in common and a count reads rows
@@ -24,7 +26,8 @@ defmodule Arca.AthanorCensus do
   It is the last lock its caller takes before the count: after the rows
   the caller already holds (the people a mint holds, the person or
   athanor a transition locks), and no row is locked after it that another
-  holder of the lock takes before it.
+  holder of the lock takes before it. An admission takes it before its
+  person's row, which no other holder can take before it commits.
 
   Under the SQL sandbox a test's writes run inside one transaction that
   lasts the whole test, so a test that mints, reopens or allows holds the

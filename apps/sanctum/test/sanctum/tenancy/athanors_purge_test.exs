@@ -11,7 +11,7 @@ defmodule Sanctum.Tenancy.AthanorsPurgeTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -31,7 +31,7 @@ defmodule Sanctum.Tenancy.AthanorsPurgeTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|purge-#{n}",
         provider: "github",
         email: "purge#{n}@example.com",

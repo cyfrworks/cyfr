@@ -67,7 +67,7 @@ defmodule Sanctum.DeviceCertsTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|devcert-#{n}",
         provider: "github",
         email: "devcert#{n}@example.com",

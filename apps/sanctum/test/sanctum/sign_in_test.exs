@@ -2,15 +2,24 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.SignInTest do
+  @moduledoc """
+  What a sign-in records, and linking a sign-in method. A linked method
+  unlocks the person who linked it (`Sanctum.SignIn.unlock/1`): the door
+  is asked about that person, their contact email is refreshed only from
+  a claim the provider proved, and no person is ever made — an identity
+  no person holds is `:no_person` and leaves no door request. A method is
+  linked to a standing person under a fresh proof, and their last one
+  goes only while they keep a way in.
+  """
+
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
-  import ExUnit.CaptureLog
 
-  alias Arca.InstallationClaims
-  alias Arca.Schemas.{ExternalIdentity, PersonIdentity, User}
+  alias Arca.Schemas.PersonIdentity
   alias Sanctum.SignIn
   alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Test.People
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -30,163 +39,134 @@ defmodule Sanctum.SignInTest do
     )
   end
 
-  test "an admitted person gets a users row, refreshed on every sign-in" do
-    i = info(1)
-    assert {:ok, user} = SignIn.admitted(i, :allowed)
-    # The person's id is this server's; the identity that signed in names it.
-    assert Arca.Schemas.User.person_id?(user.id)
-    assert {:ok, %{id: same}} = Users.get_by_identity(i.id)
-    assert same == user.id
-    assert user.email == "user1@example.com"
-    assert user.display_name == "User 1"
-    assert user.email_verified
-    first = user.first_seen_at
-
-    assert {:ok, again} = SignIn.admitted(%{i | name: "Renamed"}, :allowed)
-    assert again.id == user.id
-    assert again.first_seen_at == first
-    assert again.display_name == "Renamed"
-    assert DateTime.compare(again.last_seen_at, first) in [:gt, :eq]
-  end
-
-  test "a person the cyfr door admits is remote here: no key, and no athanor of their own" do
-    identifier = "per_" <> Prima.Digest.sha256_hex("remote-#{System.unique_integer()}")
+  # A person whose keys another CYFR holds, linked to their CYFR identity.
+  defp remote!(n) do
+    identifier = "per_" <> Prima.Digest.sha256_hex("sign-in-#{n}")
     key = Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier)
+    now = DateTime.utc_now()
 
-    info = %{
-      id: key,
-      provider: "cyfr",
-      email: nil,
-      verified: :unknown,
-      name: nil,
-      remote: %{
+    {:ok, user} =
+      Arca.Test.People.mint(
+        Prima.Actor.system(),
+        %{
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          admission: "remote",
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        %{
+          key: key,
+          provider: "cyfr",
+          issuer: "https://dir.example",
+          subject: identifier,
+          first_seen_at: now,
+          last_seen_at: now
+        }
+      )
+
+    {:ok, _} =
+      Arca.PersonIdentities.create(Prima.Actor.system(), %{
+        user_id: user.id,
+        provenance: "remote",
         identifier: identifier,
-        directory_url: "https://dir.example",
-        head_hash: Prima.Digest.sha256("head")
-      }
-    }
+        directory_url: "https://dir.example"
+      })
 
-    before = counts()
-    assert {:ok, user} = SignIn.admitted(info, :allowed)
-
-    row = identity_row!(user.id)
-    assert row.provenance == "remote"
-    assert row.identifier == identifier
-    assert row.directory_url == "https://dir.example"
-    assert is_nil(row.live_key_sealed) and is_nil(row.operational_key_sealed)
-    assert Users.personal_athanor_id(user.id) == :none
-    assert counts().people == before.people + 1
-
-    # Admitted again by the same identifier: the same person, one row.
-    assert {:ok, %{id: same}} = SignIn.admitted(info, :allowed)
-    assert same == user.id
-    assert identity_rows(user.id) == 1
-    assert counts().people == before.people + 1
+    %{user: user, key: key, identifier: identifier}
   end
 
-  test "a local person keeps their provenance whichever door admits them" do
-    i = info(System.unique_integer([:positive]))
-    {:ok, user} = SignIn.admitted(i, :allowed)
-    assert identity_row!(user.id).provenance == "local"
+  describe "unlock/1" do
+    test "answers the person who linked the method, and makes no one for an unlinked one" do
+      n = System.unique_integer([:positive])
+      {:ok, person} = People.linked(info(n))
+      people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
 
-    # A later sign-in carrying another provenance changes nothing: the
-    # person, and their key set, are as they were minted.
-    identifier = "per_" <> Prima.Digest.sha256_hex("not-theirs-#{System.unique_integer()}")
+      assert {:ok, %{id: id}} = SignIn.unlock(info(n))
+      assert id == person.id
 
-    assert {:ok, %{id: same}} =
-             SignIn.admitted(
-               Map.put(i, :remote, %{identifier: identifier, directory_url: "https://dir.example"}),
-               :allowed
-             )
-
-    assert same == user.id
-    assert identity_row!(user.id).provenance == "local"
-    assert is_binary(identity_row!(user.id).live_key_sealed)
-  end
-
-  test "an operator gets the platform row, minted once and audited once" do
-    handler = "signin-test-#{System.unique_integer([:positive])}"
-    parent = self()
-
-    :telemetry.attach(
-      handler,
-      [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
-      fn _e, _m, meta, _c -> send(parent, {:bootstrap, meta}) end,
-      nil
-    )
-
-    on_exit(fn -> :telemetry.detach(handler) end)
-
-    i = info(2)
-    assert {:ok, user} = SignIn.admitted(i, :admin)
-    assert_receive {:bootstrap, %{user_id: uid}}
-    assert uid == user.id
-
-    rows = rows!(Members.list_by_user(user.id))
-    assert Enum.any?(rows, &(&1.scope == "platform"))
-
-    assert {:ok, _} = SignIn.admitted(i, :admin)
-    refute_receive {:bootstrap, _}
-    # the platform row and the seat in their own athanor, and nothing else:
-    # no athanor is shared server-wide for an operator to be seated in
-    assert length(rows!(Members.list_by_user(user.id))) == 2
-  end
-
-  test "an email dropped from the operator list loses the platform row on the next sign-in" do
-    i = info(3)
-    assert {:ok, user} = SignIn.admitted(i, :admin)
-    assert Enum.any?(rows!(Members.list_by_user(user.id)), &(&1.scope == "platform"))
-
-    assert {:ok, _} = SignIn.admitted(i, :allowed)
-    refute Enum.any?(rows!(Members.list_by_user(user.id)), &(&1.scope == "platform"))
-    # their own athanor is theirs whatever the operator list says
-    assert Enum.any?(rows!(Members.list_by_user(user.id)), &(&1.scope == "athanor"))
-  end
-
-  test "invited rows for the person's verified email activate on first sign-in" do
-    {:ok, group} = Athanors.create_group("github|https://github.com|creator", "Home Team")
-    {:ok, :invited} = Members.add(group, [email: "User4@Example.com"], "creator")
-
-    assert [%{status: "invited", email: "user4@example.com"}] =
-             Enum.filter(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
-
-    i = info(4)
-    assert {:ok, user} = SignIn.admitted(i, :allowed)
-
-    assert Members.member?(user.id, group.id)
-    refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
-  end
-
-  test "only a proved address claims its invitations; the seat waits for the rest" do
-    # Admission and seating are different questions. The door may let an
-    # identity in on an unasserted address (`*`, or a `user_id` entry), but an
-    # invited row is keyed on the email alone, so seating it needs the address
-    # proved — otherwise an issuer asserting someone else's address inherits
-    # their groups. The seat is held, not withdrawn.
-    for {n, claim} <- [{5, :unknown}, {9, false}] do
-      {:ok, group} = Athanors.create_group("github|https://github.com|creator2", "Team #{n}")
-      {:ok, :invited} = Members.add(group, [email: "user#{n}@example.com"], "creator2")
-
-      assert {:ok, user} = SignIn.admitted(info(n, %{verified: claim}), :allowed)
-
-      refute Members.member?(user.id, group.id)
-      assert Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
+      assert {:error, :no_person} = SignIn.unlock(info(n + 1))
+      assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
+      assert Sanctum.Door.Store.list() == []
     end
 
-    {:ok, group} = Athanors.create_group("github|https://github.com|creator2", "Proved Team")
-    {:ok, :invited} = Members.add(group, [email: "user11@example.com"], "creator2")
+    test "records the sign-in: last seen and the name, and an email only when the provider proved it" do
+      n = System.unique_integer([:positive])
+      {:ok, person} = People.linked(info(n, %{email: "first#{n}@example.com"}))
 
-    assert {:ok, %{email_verified: true}} =
-             SignIn.admitted(info(11, %{verified: true}), :allowed)
+      {1, _} =
+        Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^person.id),
+          set: [last_seen_at: ~U[2026-01-01 00:00:00.000000Z]]
+        )
 
-    assert {:ok, %{id: proved}} = Users.get_by_identity(info(11).id)
-    assert Members.member?(proved, group.id)
-    refute Enum.any?(rows!(Members.list_by_athanor(group.id)), &(&1.status == "invited"))
+      assert {:ok, unproved} =
+               SignIn.unlock(
+                 info(n, %{email: "said#{n}@example.com", verified: :unknown, name: "Said"})
+               )
+
+      assert unproved.email == "first#{n}@example.com"
+      assert unproved.display_name == "Said"
+      assert DateTime.compare(unproved.last_seen_at, ~U[2026-01-01 00:00:00.000000Z]) == :gt
+
+      proved = "said#{n}@example.com"
+
+      assert {:ok, %{email: ^proved, email_verified: true}} =
+               SignIn.unlock(info(n, %{email: "Said#{n}@Example.com", verified: true}))
+
+      assert {:ok, %{email: ^proved}} =
+               SignIn.unlock(info(n, %{email: "other#{n}@example.com", verified: false}))
+    end
+
+    test "asks the door about the person: a denied one, or one no longer active, is refused" do
+      n = System.unique_integer([:positive])
+      {:ok, person} = People.linked(info(n))
+      {:ok, deny} = Sanctum.Door.Store.deny("person", person.id, "ops")
+
+      assert {:error, {:door, :denied}} = SignIn.unlock(info(n))
+      :ok = Sanctum.Door.Store.remove(deny.id)
+      assert {:ok, _} = SignIn.unlock(info(n))
+
+      {:ok, _} = Users.deny(person)
+      assert {:error, {:door, :denied}} = SignIn.unlock(info(n))
+    end
+
+    test "a remote person is admitted by * or their identifier, and an unadmitted one leaves one request" do
+      n = System.unique_integer([:positive])
+      %{user: user, key: key, identifier: identifier} = remote!(n)
+
+      assert {:error, {:door, :not_allowed}} = SignIn.unlock(%{id: key, provider: "cyfr"})
+      assert [%{kind: "identifier", value: ^identifier} = request] = Sanctum.Door.Store.requests()
+
+      {:ok, _} = Sanctum.Door.Store.resolve(request.id, :allow, "ops")
+      assert {:ok, %{id: id}} = SignIn.unlock(%{id: key, provider: "cyfr"})
+      assert id == user.id
+    end
+
+    test "activates the invitations the person's CYFR identity holds" do
+      n = System.unique_integer([:positive])
+      {:ok, owner} = People.linked(info(n))
+      %{user: user, key: key, identifier: identifier} = remote!(n)
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identifier, "ops")
+      {:ok, group} = Athanors.create_group(owner.id, "Invited #{n}")
+
+      {:ok, _} =
+        Members.create(%{
+          person_identifier: identifier,
+          scope: "athanor",
+          status: "invited",
+          athanor_id: group.id,
+          added_by: owner.id
+        })
+
+      refute Members.member?(user.id, group.id)
+      assert {:ok, _} = SignIn.unlock(%{id: key, provider: "cyfr"})
+      assert Members.member?(user.id, group.id)
+    end
   end
 
   test "record_namespace/2 lands the claim on the users row and refuses a slug another identity holds" do
-    i = info(6)
-    assert {:ok, %{id: uid, personal_athanor_id: pid}} = SignIn.admitted(i, :allowed)
+    {:ok, %{id: uid, personal_athanor_id: pid}} = People.linked(info(6))
 
     assert {:ok, user} = SignIn.record_namespace(uid, "user6ns")
     assert user.namespace == "user6ns"
@@ -202,8 +182,7 @@ defmodule Sanctum.SignInTest do
     assert {:ok, %{namespace: "user6ns"}} = SignIn.record_namespace(uid, "user6other")
 
     # Another person cannot take it, and a malformed slug is refused.
-    j = info(7)
-    assert {:ok, %{id: jid}} = SignIn.admitted(j, :allowed)
+    {:ok, %{id: jid}} = People.linked(info(7))
 
     assert {:error, :namespace_owned_by_another_identity} =
              SignIn.record_namespace(jid, "user6ns")
@@ -213,317 +192,9 @@ defmodule Sanctum.SignInTest do
     assert {:error, :not_found} = SignIn.record_namespace("usr_ghost", "ghost")
   end
 
-  test "`*` on the door admits a stranger who then gets their own athanor — no platform bit, no group" do
-    n = System.unique_integer([:positive])
-    i = info(n, %{email: "stranger#{n}@example.com"})
-    {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "ops")
-
-    assert {:ok, verdict} = Sanctum.Door.admit(i.id, i.email, true)
-    assert verdict == :allowed
-
-    assert {:ok, %{id: uid, personal_athanor_id: pid}} = SignIn.admitted(i, verdict)
-    assert {:ok, user} = SignIn.record_namespace(uid, "stranger#{n}")
-
-    assert {:ok, %{kind: "person", owner_user_id: owner}} = Athanors.get(pid)
-    assert owner == user.id
-
-    rows = rows!(Members.list_by_user(user.id))
-    refute Enum.any?(rows, &(&1.scope == "platform"))
-    assert Enum.map(Athanors.list_for_user(user.id), & &1.kind) == ["person"]
-  end
-
-  describe "the identity facts a sign-in grants or revokes on" do
-    test "are this assertion's: its lowercased email, or the stored one when it carried none" do
-      row = %Arca.Schemas.User{email: "stored@example.com", email_verified: true}
-
-      assert %{email: "mixed@example.com", email_verified: true} =
-               SignIn.expected_identity(%{email: "Mixed@Example.com", verified: true}, row)
-
-      for absent <- [nil, ""] do
-        assert %{email: "stored@example.com"} =
-                 SignIn.expected_identity(%{email: absent, verified: true}, row)
-      end
-
-      # A concurrent first sign-in that lost the mint is answered the
-      # winner's row; the winner's address never becomes the loser's.
-      assert %{email: "loser@example.com"} =
-               SignIn.expected_identity(%{email: "loser@example.com"}, row)
-
-      for {claim, stored} <- [{true, true}, {false, false}, {:unknown, nil}, {nil, nil}] do
-        assert %{email_verified: ^stored} =
-                 SignIn.expected_identity(%{email: "a@example.com", verified: claim}, row)
-      end
-    end
-
-    test "an earlier operator assertion overtaken by a later one grants nothing" do
-      n = System.unique_integer([:positive])
-      ops = info(n, %{email: "ops#{n}@example.com"})
-      assert {:ok, user} = SignIn.admitted(ops, :admin)
-      asserted = SignIn.expected_identity(ops, user)
-
-      # A later assertion for the same identity carries another address, and
-      # the door no longer calls it an operator.
-      later = %{ops | email: "someone#{n}@example.com"}
-      assert {:ok, _} = SignIn.admitted(later, :allowed)
-      refute platform?(user.id)
-
-      # The earlier sign-in's delayed grant lands on facts that are gone.
-      assert {:error, :stale_identity} = Members.grant_platform(user.id, asserted)
-      refute platform?(user.id)
-    end
-
-    test "an earlier non-operator assertion overtaken by an operator one revokes nothing" do
-      n = System.unique_integer([:positive])
-      plain = info(n, %{email: "plain#{n}@example.com"})
-      assert {:ok, user} = SignIn.admitted(plain, :allowed)
-      asserted = SignIn.expected_identity(plain, user)
-
-      assert {:ok, _} = SignIn.admitted(%{plain | email: "ops#{n}@example.com"}, :admin)
-      assert platform?(user.id)
-
-      assert {:error, :stale_identity} =
-               Members.revoke_platform(user.id, expected_identity: asserted)
-
-      assert platform?(user.id)
-    end
-
-    test "an unchanged delayed verdict still lands" do
-      n = System.unique_integer([:positive])
-      ops = info(n)
-      assert {:ok, user} = Users.upsert_from_provider(ops)
-      asserted = SignIn.expected_identity(ops, user)
-
-      # The same facts asserted again in between: the delayed grant stands.
-      assert {:ok, _} = Users.upsert_from_provider(%{ops | name: "Renamed"})
-      assert {:ok, :granted} = Members.grant_platform(user.id, asserted)
-      assert {:ok, :held} = Members.grant_platform(user.id, asserted)
-    end
-
-    test "a grant that fails refuses the sign-in before anything after it" do
-      n = System.unique_integer([:positive])
-
-      # An explicitly unverified address is never granted, whatever verdict
-      # the caller hands over.
-      assert {:error, :stale_identity} = SignIn.admitted(info(n, %{verified: false}), :admin)
-
-      assert {:ok, user} = Users.get_by_identity(info(n).id)
-      refute platform?(user.id)
-      assert user.personal_athanor_id == nil, "the sign-in went on past a refused grant"
-    end
-  end
-
-  describe "the person's keys, minted with the person" do
-    test "a person whose identity row is missing is damage, never a local person" do
-      i = info(21)
-      assert {:ok, user} = SignIn.admitted(i, :allowed)
-      {1, _} = Arca.Repo.delete_all(from(p in PersonIdentity, where: p.user_id == ^user.id))
-
-      assert {:error, {:corrupt, :person_identity}} = SignIn.admitted(i, :allowed)
-
-      ctx =
-        Sanctum.Context.build(
-          user_id: user.id,
-          provider: "github",
-          email: user.email,
-          athanor_id: user.personal_athanor_id,
-          permissions: Sanctum.Atoms.person_permissions(),
-          auth_method: :oidc,
-          authenticated: true
-        )
-
-      assert {:error, {:corrupt, :person_identity}} = Sanctum.Session.create(ctx)
-      assert {:error, {:corrupt, :person_identity}} = Sanctum.Recovery.status(ctx)
-    end
-
-    test "a first sign-in writes one local key set, and a later sign-in keeps it" do
-      i = info(20)
-      assert {:ok, user} = SignIn.admitted(i, :allowed)
-
-      row = identity_row!(user.id)
-      assert row.provenance == "local"
-      assert row.enrollment == "none"
-      assert byte_size(row.live_public_key) == 32
-      assert byte_size(row.operational_public_key) == 32
-      refute row.live_public_key == row.operational_public_key
-      assert is_binary(row.live_key_sealed) and is_binary(row.operational_key_sealed)
-
-      # The identifier is on the identity row, never on the users row, and
-      # an unenrolled person has none.
-      refute Map.has_key?(user, :identifier)
-      assert {:ok, nil} = Users.identifier(user.id)
-
-      assert {:ok, _} = SignIn.admitted(%{i | name: "Again"}, :allowed)
-      assert identity_row!(user.id) == row
-      assert identity_rows(user.id) == 1
-    end
-
-    test "Users.identifier/1 reads the identifier the identity row carries" do
-      assert {:ok, user} = SignIn.admitted(info(21), :allowed)
-
-      identifier = "per_" <> Prima.Digest.sha256_hex("identifier-#{user.id}")
-
-      {1, _} =
-        Arca.Repo.update_all(from(p in PersonIdentity, where: p.user_id == ^user.id),
-          set: [
-            identifier: identifier,
-            enrollment: "enrolled",
-            head_hash: Prima.Digest.sha256("genesis"),
-            directory_url: "https://dir.example"
-          ]
-        )
-
-      assert {:ok, ^identifier} = Users.identifier(user.id)
-      assert {:error, :not_found} = Users.identifier("usr_ghost")
-    end
-
-    test "a key set that cannot be minted refuses the sign-in, and nothing is written" do
-      keyring = Application.get_env(:sanctum, :crypto_keyring)
-      on_exit(fn -> restore_env(:sanctum, :crypto_keyring, keyring) end)
-      Application.delete_env(:sanctum, :crypto_keyring)
-
-      i = info(22)
-      before = counts()
-
-      capture_log(fn -> assert {:error, :unavailable} = SignIn.admitted(i, :admin) end)
-
-      # Not the person, not the door that admitted them, not a key, and not
-      # the platform row the operator's verdict would have granted.
-      assert {:error, :not_found} = Users.get_by_identity(i.id)
-      assert counts() == before
-    end
-
-    test "a member that lost its slot mints no person" do
-      standing = :persistent_term.get({Arca.ControlPlane, :standing}, :absent)
-      claim = Application.get_env(:arca, :control_plane_claim_enabled)
-
-      on_exit(fn ->
-        if standing == :absent,
-          do: :persistent_term.erase({Arca.ControlPlane, :standing}),
-          else: :persistent_term.put({Arca.ControlPlane, :standing}, standing)
-
-        restore_env(:arca, :control_plane_claim_enabled, claim)
-      end)
-
-      Application.put_env(:arca, :control_plane_claim_enabled, true)
-      :persistent_term.put({Arca.ControlPlane, :standing}, :lost)
-
-      i = info(23)
-      before = counts()
-
-      assert {:error, :not_owner} = SignIn.admitted(i, :allowed)
-      assert {:error, :not_found} = Users.get_by_identity(i.id)
-      assert counts() == before
-    end
-  end
-
-  describe "an installation reserved for a restore" do
-    setup do
-      mode = if InstallationClaims.installed?(), do: InstallationClaims.mode()
-
-      on_exit(fn ->
-        if mode,
-          do: InstallationClaims.install_mode!(mode),
-          else: InstallationClaims.reset()
-      end)
-
-      # The node holds no person inside this test's transaction, whatever
-      # another suite committed: the reservation is about the first one.
-      Arca.Repo.delete_all(User)
-      :ok = InstallationClaims.install_mode!(:restore_reserved)
-      :ok
-    end
-
-    test "refuses every first door, the operator's included, before a person or a key" do
-      oidc = %{
-        id: "oidcc|https://idp.example|31",
-        provider: :oidcc,
-        email: "ops31@example.com",
-        verified: true
-      }
-
-      before = counts()
-      assert %{people: 0, keys: 0} = before
-
-      for {assertion, verdict} <- [{info(30), :allowed}, {oidc, :admin}] do
-        assert {:error, :restore_reserved} = SignIn.admitted(assertion, verdict)
-        assert {:error, :not_found} = Users.get_by_identity(assertion.id)
-      end
-
-      assert counts() == before
-    end
-
-    test "refuses a direct mint before the key closure runs" do
-      test = self()
-      now = DateTime.utc_now()
-      before = counts()
-
-      closure = fn person ->
-        send(test, :keys_minted)
-        Sanctum.Person.mint_keys(person)
-      end
-
-      assert {:error, :restore_reserved} =
-               Arca.Users.mint(
-                 Prima.Actor.system(),
-                 %{
-                   id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-                   provider: "github",
-                   first_seen_at: now,
-                   last_seen_at: now,
-                   created_at: now,
-                   updated_at: now
-                 },
-                 %{
-                   key: "github|https://github.com|direct",
-                   provider: "github",
-                   issuer: "https://github.com",
-                   subject: "direct",
-                   first_seen_at: now,
-                   last_seen_at: now
-                 },
-                 also: closure
-               )
-
-      refute_received :keys_minted
-      assert counts() == before
-    end
-
-    test "admits an ordinary first door again once the token is unset before any claim" do
-      :ok = InstallationClaims.install_mode!(:ordinary)
-
-      assert {:ok, user} = SignIn.admitted(info(32), :admin)
-      assert identity_row!(user.id).provenance == "local"
-    end
-
-    test "stays reserved for a pending restore once the token is unset" do
-      token = Prima.Digest.sha256("token-#{System.unique_integer([:positive])}")
-
-      {:ok, _attempt} =
-        Arca.IdentityAttempts.open(Prima.Actor.system(), %{
-          kind: "restore",
-          request_id: "req_#{System.unique_integer([:positive])}",
-          identifier: "per_" <> Prima.Digest.sha256_hex("restored"),
-          directory_url: "https://dir.example",
-          entry: "recover-request",
-          request_digest: Prima.Digest.sha256("recover"),
-          expected_revision: 0,
-          token_digest: token,
-          staged_live_public_key: :crypto.strong_rand_bytes(32),
-          staged_operational_public_key: :crypto.strong_rand_bytes(32),
-          staged_live_key_sealed: "sealed-live",
-          staged_operational_key_sealed: "sealed-operational"
-        })
-
-      :ok = InstallationClaims.install_mode!(:ordinary)
-      before = counts()
-
-      assert {:error, :restore_reserved} = SignIn.admitted(info(33), :admin)
-      assert counts() == before
-      assert before.people == 0
-    end
-  end
-
   describe "linking a door" do
+    # `*` admits the remote people these cases make, as their CYFR
+    # sign-in was admitted.
     setup do
       Arca.Cache.init()
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
@@ -535,7 +206,7 @@ defmodule Sanctum.SignInTest do
     # session establishes there.
     defp seated!(overrides \\ %{}) do
       n = System.unique_integer([:positive])
-      {:ok, user} = Users.upsert_from_provider(info(n, overrides))
+      {:ok, user} = People.linked(info(n, overrides))
       {:ok, athanor} = Athanors.create_group(user.id, "Link #{n}")
       {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: athanor.id)
       %{user: user, athanor: athanor, ctx: session_ctx(user, athanor)}
@@ -638,7 +309,7 @@ defmodule Sanctum.SignInTest do
       )
     end
 
-    test "a ticket is minted for a standing session and a linkable door the door admits" do
+    test "a ticket is minted for a standing session and a linkable method" do
       person = seated!()
       n = System.unique_integer([:positive])
 
@@ -660,11 +331,9 @@ defmodule Sanctum.SignInTest do
       assert {:error, :unauthenticated} =
                SignIn.link_ticket(%{person.ctx | plane: :guest}, oidc(n))
 
-      # The door is asked, and its refusal is the operator's to act on.
-      [entry] = Sanctum.Door.Store.list()
-      :ok = Sanctum.Door.Store.remove(entry.id)
-      assert {:error, {:door, :not_allowed}} = SignIn.link_ticket(person.ctx, oidc(n))
-      assert Enum.any?(Sanctum.Door.Store.requests(), &(&1.value == oidc(n).key))
+      # The door judges people, never a method: linking asks it nothing and
+      # leaves no request.
+      assert Sanctum.Door.Store.requests() == []
     end
 
     test "under a fresh proof the door is linked once, and the ticket is spent" do
@@ -780,7 +449,7 @@ defmodule Sanctum.SignInTest do
                )
     end
 
-    test "another person's identity is a conflict, and a door closed since is not linked" do
+    test "another person's identity is a conflict" do
       person = seated!()
       other = seated!()
       {:ok, [taken]} = Arca.Users.identities(Prima.Actor.system(), other.user.id)
@@ -789,19 +458,6 @@ defmodule Sanctum.SignInTest do
         ticket!(person, %{key: taken.key, provider: "github", email: nil, verified: :unknown})
 
       assert {:error, {:conflict, _}} = SignIn.link_door(person.ctx, "github", ticket)
-
-      n = System.unique_integer([:positive])
-      ticket = ticket!(person, oidc(n, %{verified: :unknown}))
-      [entry] = Enum.filter(Sanctum.Door.Store.list(), &(&1.kind == "wildcard"))
-      :ok = Sanctum.Door.Store.remove(entry.id)
-
-      assert {:error, {:door, :not_allowed}} =
-               Sanctum.TestContext.confirming(
-                 person.ctx,
-                 &SignIn.link_door(&1, "oidcc", ticket)
-               )
-
-      assert {:error, :not_found} = Users.get_by_identity(oidc(n).key)
     end
 
     test "a remote person links a door only under a fresh proof here, and its sessions carry the fresh head's key_epoch" do
@@ -894,15 +550,15 @@ defmodule Sanctum.SignInTest do
       # method here; it is not one any more.
       refute Sanctum.Passkeys.fresh_method?(person.ctx)
 
-      # The door names no one of theirs: signing in through it again is a
-      # stranger's first sign-in, never the recovered person's.
-      assert {:ok, %{id: stranger}, _session} = door_sign_in(door)
-      refute stranger == person.user.id
+      # The method names no one here now: signing in through it again makes
+      # no one, and is refused as no person's.
+      assert {:error, :no_person} = door_sign_in(door)
+      assert {:error, :not_found} = Users.get_by_identity(door.key)
     end
 
-    # A sign-in through a door as the browser callback runs it
-    # (`PrismWeb.AuthController`): the door's context names the identity
-    # and the door itself, the sign-in is recorded, the context is renamed
+    # A sign-in through a linked method as the browser callback runs it
+    # (`PrismWeb.AuthController`): the method's context names the identity
+    # and the door itself, the person is unlocked, the context is renamed
     # to the person and resolved, and the session is issued.
     defp door_sign_in(identity) do
       ctx =
@@ -923,7 +579,7 @@ defmodule Sanctum.SignInTest do
         name: nil
       }
 
-      with {:ok, user} <- SignIn.admitted(user_info, :allowed),
+      with {:ok, user} <- SignIn.unlock(user_info),
            {:ok, ctx} <- Sanctum.Tenancy.resolve_status(%{ctx | user_id: user.id}, force: true),
            {:ok, session} <- Sanctum.Session.create(ctx) do
         {:ok, user, session}
@@ -999,48 +655,18 @@ defmodule Sanctum.SignInTest do
       # A passkey here, so only the door's admission is in question.
       auth = Sanctum.TestContext.passkey!(person.user.id)
 
-      [wildcard] = Enum.filter(Sanctum.Door.Store.list(), &(&1.kind == "wildcard"))
-      :ok = Sanctum.Door.Store.remove(wildcard.id)
-
-      # An entry naming only this door's identity admits no one once the
-      # door is gone, so it is refused before any proof is asked.
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", github.key, "ops")
+      # A deny naming the person, written while their session stands: the
+      # door would admit them through no way at all, so the last method is
+      # kept, before any proof is asked.
+      {:ok, deny} = Sanctum.Door.Store.deny("person", person.user.id, "ops")
       assert {:error, {:conflict, message}} = SignIn.unlink_door(person.ctx, github.key)
       assert message =~ "ask the operator"
       assert message =~ "link another sign-in method"
       assert {:ok, _person} = Users.get_by_identity(github.key)
 
-      admits? = fn ->
-        case SignIn.unlink_door(person.ctx, github.key) do
-          {:error, {:confirmation_required, _}} -> true
-          {:error, {:conflict, _}} -> false
-        end
-      end
-
-      verified = fn claim ->
-        {1, _} =
-          Arca.Repo.update_all(from(u in User, where: u.id == ^person.user.id),
-            set: [email_verified: claim]
-          )
-      end
-
-      # An email entry admits the address only while it is verified.
-      {:ok, email} = Sanctum.Door.Store.allow("email", person.user.email, "ops")
-      assert admits?.()
-      verified.(false)
-      refute admits?.()
-      :ok = Sanctum.Door.Store.remove(email.id)
-
-      # `*` admits an address not known to be unverified.
-      {:ok, wildcard} = Sanctum.Door.Store.allow("wildcard", "*", "ops")
-      refute admits?.()
-      verified.(nil)
-      assert admits?.()
-      :ok = Sanctum.Door.Store.remove(wildcard.id)
-      refute admits?.()
-
-      # Their own id: the door goes, and the passkey door admits them by it.
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", person.user.id, "ops")
+      # A local person is admitted unless denied: with the deny gone, the
+      # method goes, and the passkey signs them in.
+      :ok = Sanctum.Door.Store.remove(deny.id)
 
       assert {:ok, %{unlinked: %{key: key}}} =
                Sanctum.TestContext.confirming(person.ctx, &SignIn.unlink_door(&1, github.key))
@@ -1055,207 +681,4 @@ defmodule Sanctum.SignInTest do
                )
     end
   end
-
-  describe "concurrent sign-ins, on connections of their own" do
-    setup do
-      # These race on real connections: the shared sandbox connection would
-      # serialize the very interleavings under test.
-      Ecto.Adapters.SQL.Sandbox.mode(Arca.Repo, :manual)
-      :ok
-    end
-
-    test "differing first sign-ins of one identity leave a grant only on the operator's facts" do
-      for order <- [[:admin, :allowed], [:allowed, :admin]], _round <- 1..3 do
-        n = System.unique_integer([:positive])
-        ops = info(n, %{email: "ops#{n}@example.com"})
-        plain = %{ops | email: "plain#{n}@example.com"}
-        assertion = %{admin: ops, allowed: plain}
-
-        results =
-          order
-          |> Enum.map(fn verdict ->
-            Task.async(fn ->
-              {verdict, unboxed(fn -> SignIn.admitted(assertion[verdict], verdict) end)}
-            end)
-          end)
-          |> Enum.map(&Task.await(&1, 25_000))
-
-        {:ok, user} = unboxed(fn -> Users.get_by_identity(ops.id) end)
-        on_exit(fn -> purge!(user.id) end)
-
-        # Whoever wrote last, the operator bit is on exactly when the row
-        # carries the operator's address.
-        assert unboxed(fn -> platform?(user.id) end) == (user.email == ops.email)
-
-        # A sign-in overtaken by the other is refused as overtaken.
-        for {_verdict, {:error, reason}} <- results, do: assert(reason == :stale_identity)
-      end
-    end
-
-    test "concurrent operator sign-ins write one grant and announce it once" do
-      handler = "signin-race-#{System.unique_integer([:positive])}"
-      parent = self()
-
-      :telemetry.attach(
-        handler,
-        [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
-        fn _e, _m, meta, _c -> send(parent, {:bootstrap, meta.user_id}) end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      n = System.unique_integer([:positive])
-      ops = info(n)
-      {:ok, user} = unboxed(fn -> Users.upsert_from_provider(ops) end)
-      on_exit(fn -> purge!(user.id) end)
-
-      # Two racers, as `Arca.MembersLockTest` explains: more SQLite waiters
-      # than a partition's dirty I/O schedulers starve the lock's holder.
-      results =
-        1..2
-        |> Enum.map(fn _ ->
-          Task.async(fn -> unboxed(fn -> SignIn.admitted(ops, :admin) end) end)
-        end)
-        |> Enum.map(&Task.await(&1, 25_000))
-
-      assert Enum.all?(results, &match?({:ok, _}, &1))
-      assert_receive {:bootstrap, uid}
-      assert uid == user.id
-      refute_receive {:bootstrap, _}, 200
-
-      assert 1 ==
-               unboxed(fn ->
-                 {:ok, rows} = Members.list_by_user(user.id)
-                 Enum.count(rows, &(&1.scope == "platform"))
-               end)
-    end
-
-    # The unique index on the slug is checked before the one on the owner,
-    # so a lost mint is refused as `:slug_taken` when both racers derived
-    # the slug before either row landed. A row of that slug held
-    # uncommitted puts both racers there, each insert waiting on it, then
-    # lets them go: the first lands, the second is refused by the index
-    # and must adopt the first's row.
-    @tag :postgres
-    test "two first sign-ins of one person, past the slug check before either row lands, share the athanor the winner minted" do
-      n = System.unique_integer([:positive])
-      ops = info(n)
-      {:ok, user} = unboxed(fn -> Users.upsert_from_provider(ops) end)
-      on_exit(fn -> purge!(user.id) end)
-      parent = self()
-      {:ok, slug} = unboxed(fn -> Athanors.person_slug(nil, ops.name) end)
-
-      holder =
-        Task.async(fn ->
-          unboxed(fn ->
-            Arca.Repo.transaction(fn ->
-              {:ok, _barrier} =
-                Arca.Athanors.insert(Prima.Actor.system(), %{
-                  kind: "person",
-                  name: "the barrier",
-                  slug: slug,
-                  owner_user_id: user.id,
-                  created_by: user.id
-                })
-
-              send(parent, :held)
-
-              receive do
-                :release -> Arca.Repo.rollback(:released)
-              end
-            end)
-          end)
-        end)
-
-      assert_receive :held, 5_000
-
-      racers =
-        for _ <- 1..2 do
-          Task.async(fn ->
-            unboxed(fn ->
-              %{rows: [[backend]]} = Arca.Repo.query!("SELECT pg_backend_pid()")
-              send(parent, {:backend, backend})
-              SignIn.admitted(ops, :admin)
-            end)
-          end)
-        end
-
-      for _ <- racers do
-        assert_receive {:backend, backend}, 5_000
-
-        Arca.Test.LockWait.await_lock_wait!(backend, [~s(INSERT INTO "athanors")],
-          timeout_ms: 10_000
-        )
-      end
-
-      send(holder.pid, :release)
-      assert {:error, :released} = Task.await(holder, 5_000)
-
-      assert [{:ok, %{personal_athanor_id: id}}, {:ok, %{personal_athanor_id: id}}] =
-               Enum.map(racers, &Task.await(&1, 25_000))
-
-      assert is_binary(id)
-      assert {:ok, %{id: ^id, slug: ^slug}} = unboxed(fn -> Athanors.get_by_owner(user.id) end)
-    end
-  end
-
-  defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)
-
-  # Everything a sign-in on a connection of its own committed: the person's
-  # rows, and the athanor it minted with every row and file of that
-  # athanor's (its provisioning claim among them), since the sandbox rolls
-  # none of it back.
-  defp purge!(user_id) do
-    import Ecto.Query
-
-    unboxed(fn ->
-      Arca.Repo.delete_all(from(m in Arca.Schemas.Membership, where: m.user_id == ^user_id))
-      Arca.Repo.delete_all(from(s in Arca.Schemas.Session, where: s.user_id == ^user_id))
-
-      Arca.Repo.delete_all(from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user_id))
-
-      for athanor_id <-
-            Arca.Repo.all(
-              from(a in Arca.Schemas.Athanor, where: a.owner_user_id == ^user_id, select: a.id)
-            ) do
-        actor = Prima.Actor.in_athanor(athanor_id)
-        :ok = Arca.delete_tree(actor, [])
-        {:ok, _counts} = Arca.TenantTables.delete_all_for(actor)
-      end
-
-      Arca.Repo.delete_all(from(a in Arca.Schemas.Athanor, where: a.owner_user_id == ^user_id))
-      Arca.Repo.delete_all(from(u in Arca.Schemas.User, where: u.id == ^user_id))
-    end)
-  end
-
-  defp platform?(user_id) do
-    {:ok, rows} = Members.list_by_user(user_id)
-    Enum.any?(rows, &(&1.scope == "platform"))
-  end
-
-  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
-  defp restore_env(app, key, value), do: Application.put_env(app, key, value)
-
-  defp identity_row!(user_id), do: Arca.Repo.get_by!(PersonIdentity, user_id: user_id)
-
-  defp identity_rows(user_id),
-    do: Arca.Repo.aggregate(from(p in PersonIdentity, where: p.user_id == ^user_id), :count)
-
-  # What a first sign-in writes: the person, the door that names them, their
-  # key set and, for an operator, the platform row.
-  defp counts do
-    %{
-      people: Arca.Repo.aggregate(User, :count),
-      doors: Arca.Repo.aggregate(ExternalIdentity, :count),
-      keys: Arca.Repo.aggregate(PersonIdentity, :count),
-      platform:
-        Arca.Repo.aggregate(
-          from(m in Arca.Schemas.Membership, where: m.scope == "platform"),
-          :count
-        )
-    }
-  end
-
-  defp rows!({:ok, rows}), do: rows
 end

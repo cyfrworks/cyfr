@@ -208,11 +208,7 @@ defmodule CyfrWeb.RouterTest do
 
   describe "the invariants the map must keep" do
     test "a state-changing browser post pipes through the forgery guard" do
-      for label <- [
-            "POST /auth/logout",
-            "POST /claim-namespace/submit",
-            "POST /legal/accept/submit"
-          ] do
+      for label <- ["POST /auth/logout"] do
         found =
           for {_provider, section} <- sections(),
               row <- section.routes,

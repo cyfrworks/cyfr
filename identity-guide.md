@@ -6,7 +6,7 @@ How a person gets an identifier any CYFR knows them by, how its keys are kept an
 
 ## Keys, Identifier and Directory
 
-Your CYFR holds two keys for you, created at your first sign-in:
+Your CYFR holds two keys for you, created when it made you (its setup, an invitation, or signing up while its allowlist admits everyone; a sign-in method such as GitHub, Google or an OIDC issuer only unlocks the person who linked it, and never makes or recovers one):
 
 - the **live key**, which signs what you send to any other CYFR: a sign-in at another CYFR, and the certificates of your devices;
 - the **operational key**, which only rotates the live key.
@@ -17,9 +17,11 @@ Both are sealed at your CYFR, each under its own purpose, apart from every athan
 
 Your CYFR's settings page shows your identifier, the directory, and the head of your log (its `key_epoch`: the hash of the entry at the log's head, which every rotation and every recovery moves).
 
+A **handle** is a name at the registry, cyfr.run, that names your identifier; it is also your personal namespace for publishing components. Setup offers one, never required: the setup page, and Settings later, check a handle live against the registry's answer (taken or free), and a free one you choose runs the enrollment, which registers your identity at the directory and prints your kit. The handle waits in your preferences, and is claimed only once you say the kit is saved; a taken one asks for another and the enrollment stands, and a registry that does not answer leaves Settings offering "Claim @name". From the command line you claim it with `cyfr registry claim <handle>`, a request your live key signs, so claiming one needs an enrolled identity; no sign-in method or provider token is sent to the registry. Asked for a handle, the registry answers its identifier, its directory and, only if you publish it, your CYFR's address; publishing is off by default (`registry.publish_address`). The answer carries no keys: they are read at your directory, so a handle reassigned to someone else carries none of your keys with it.
+
 ### Choosing the directory
 
-The deployment names the directory its people enroll at, explicitly, in `CYFR_DIRECTORY_URL`: an `https` URL with no hosted default. No operation, page or person chooses another one. Unset, everything else works, local pairing included, and enrolling says which setting the operator owes.
+The deployment names the directory its people enroll at in `CYFR_DIRECTORY_URL`, an `https` URL that defaults to `https://cyfr.run`, the directory CYFR hosts. An operator may name another; no operation, page or person chooses one.
 
 Choosing a directory is choosing how long an identity lasts:
 
@@ -28,7 +30,7 @@ Choosing a directory is choosing how long an identity lasts:
 
 The directory holds your public keys, your recovery policy and your log. It holds no private key, no address of your CYFR, no thread, no contact list and no list of the addresses your devices saved. It is trusted to keep one consistent order and to answer honestly; signatures stop it forging anything, but a dishonest directory could withhold an update or keep answering an old head as current, and nothing detects that.
 
-Any CYFR can serve one (`CYFR_DIRECTORY_SERVE=writer`, or `mirror` for a read-only copy of a store it shares). Putting the only writer on the CYFR it recovers loses that recovery when that CYFR is lost. An operator serving a public directory owns its storage quota and its retention: each identifier's log is kept for good and only grows (`CYFR_DIRECTORY_MAX_IDENTITIES`, `CYFR_DIRECTORY_LOG_BYTES` and the recovery reserve bound it), and its requests are bounded per source and per installation. CYFR runs no hosted directory: a directory a deployment names is one its operator, or someone they trust, runs.
+Any CYFR can serve one (`CYFR_DIRECTORY_SERVE=writer`, or `mirror` for a read-only copy of a store it shares). Putting the only writer on the CYFR it recovers loses that recovery when that CYFR is lost. An operator serving a public directory owns its storage quota and its retention: each identifier's log is kept for good and only grows (`CYFR_DIRECTORY_MAX_IDENTITIES`, `CYFR_DIRECTORY_LOG_BYTES` and the recovery reserve bound it), and its requests are bounded per source and per installation. The default, `https://cyfr.run`, is the one CYFR runs; a deployment that names another relies on its operator, or someone they trust, to run it.
 
 The directory's URL is public, and a CYFR that relies on your identity reads it from that identity. A directory hosted on your own CYFR tells every CYFR you sign in at where your own CYFR is.
 
@@ -77,7 +79,7 @@ If a recovery or another rotation replaced the keys first, the attempt ends with
 
 A restore brings your identity back onto an empty installation from one kit. It is not an operation, since no person exists there yet, and it needs the installation's own capability besides the kit:
 
-1. The operator sets `CYFR_RESTORE_TOKEN` on the fresh installation (`openssl rand -hex 32`) and gives you the token. While it is set, the installation's first sign-in is reserved for a restore: no sign-in method, an administrator's included, signs anyone in first.
+1. The operator sets `CYFR_RESTORE_TOKEN` on the fresh installation (`openssl rand -hex 32`) and gives you the token. While it is set, the installation's first person is reserved for the restore: setup makes no one first, and the restored person is the installation's administrator.
 2. Open `https://<installation>/restore`, and type the token and the kit's three lines. The browser sends them to that installation alone, the token in a request header; nothing goes into an address or the browser's storage, and the form is emptied once the restore completes or you clear it.
 3. The installation checks the token first, then that the kit is one of your identity's kits now, before it claims anything. A wrong token or a mistyped kit spends nothing.
 4. It stages new keys and asks the directory to recover your identity onto them. Each step is durable: if the installation stops partway, sending the same kit under the same token again resumes from the step it reached, and the page does that itself while the restore is underway.
@@ -115,15 +117,15 @@ So a recovery, or a new device, restores no list of saved addresses: you add eac
 
 ### Signing in at another CYFR
 
-Signing in at another CYFR with your CYFR identity begins at your own CYFR, which you name by its address, and both show the same short code so you can tell your sign-in is the one you started. Each learns the other's address: the CYFR you sign in at learns where your own CYFR is, and your own CYFR learns where you signed in. Neither learns your list of saved addresses. See `devices-guide.md` for how such a CYFR admits you, and for your passkeys there.
+Signing in at another CYFR with your CYFR identity begins at your own CYFR. On the other CYFR's sign-in page, **Sign in with your CYFR** offers the hosted CYFR, `https://my.cyfr.run`, as a button, and **I run my own CYFR** takes your handle (`@name`) or your CYFR's address. A handle works there only when you publish your address with it; otherwise the page asks for the address. The address a handle publishes only says where to go: the CYFR you sign in at keeps the identifier the handle names for the attempt, and refuses a sign-in that comes back as anyone else, so a published address that serves someone else signs nobody in. If the browser no longer holds that attempt when you come back (it lasts five minutes, and a newer one replaces it), begin again. Both CYFRs show the same short code so you can tell your sign-in is the one you started. Each learns the other's address: the CYFR you sign in at learns where your own CYFR is, and your own CYFR learns where you signed in. Neither learns your list of saved addresses. See `devices-guide.md` for how such a CYFR admits you, and for your passkeys there.
 
 ---
 
 ## Joining a CYFR That Is Not Your Own
 
-Any CYFR that is not your own, a household's or a team's included, lets you in by your identifier (`per_…`, shown on your settings page), as it lets in an email address: its platform administrator adds your identifier to its allowlist, and a member invites it to an athanor there. Nothing about this reaches your own CYFR, and nothing at the CYFR you join learns your keys.
+Any CYFR that is not your own, a household's or a team's included, lets you in by your handle or your identifier (`per_…`, shown on your settings page): its platform administrator adds you to its allowlist, and a member adds you to an athanor there. Either way the CYFR you join keeps the identifier your handle names when you are added, never the handle, so a handle that later passes to someone else takes none of your access with it. Nothing about this reaches your own CYFR, and nothing at the CYFR you join learns your keys.
 
-1. Open the address of the CYFR you join. On its sign-in page, under **Sign in with your CYFR**, give your own CYFR's address. It sends you there; a link someone sends you only fills that form, and never begins or confirms anything.
+1. Open the address of the CYFR you join. On its sign-in page, under **Sign in with your CYFR**, choose **I run my own CYFR** and give your handle or your own CYFR's address. It sends you there; a link someone sends you only fills that form, and never begins or confirms anything.
 2. At your CYFR's `/carry` page, press **Begin**: the sign-in is for that one CYFR. Sign in at your CYFR first if you are not.
 3. The CYFR you join shows a short code, and your CYFR's confirmation names the same code. Confirm at your CYFR with a fresh proof only if they match. Your CYFR signs an assertion for the other CYFR's challenge alone, and the browser takes it back.
 4. The CYFR you join reads your identity at the directory your identity names, which need not be its own, checks the assertion under your current keys, admits you, and makes you a member of the athanors you were invited to. Your CYFR's `/carry` page records that you were admitted, and sends you on to the CYFR you joined.
@@ -137,6 +139,18 @@ At the CYFR you join, signing in with your CYFR identity is not a fresh proof. R
 - **After a recovery**, the CYFR you joined ends your sessions there within the same bound, and with them the passkeys and device certificates bound to the old keys. Sign in again, naming your CYFR's new address if it moved; your next passkey there is authorized by its administrator again, and your devices are certified again at your CYFR.
 - **With your identity's directory unreachable**, the CYFR you joined keeps admitting you on the head it last read for its `identity_freshness_seconds`, then pauses your protected work there with a sentence saying so, until the directory answers again. A new sign-in waits for the directory.
 - **A new browser or device** starts with no saved addresses and imports none: you open each CYFR by its address or an invitation, and sign in there.
+
+### Joining by an invitation link
+
+Someone with no CYFR identity of their own joins by an invitation link instead. A member creates one for a group they sit in, on **Members**; the platform administrator may also create one that names no group. The link is `<CYFR address>/invite#<code>`: it is shown once, works once, expires after seven days, and the CYFR keeps only the code's hash. Its page names who invited you and to which group, and **Create your identity here** makes your passkey, you, your keys and your own athanor at that CYFR, with your seat in the group. A link that has expired, been used or been revoked, whose issuer has since left the group or been denied (it stays dead if they are let back in), or that was made before the CYFR was restored from a backup, says it can no longer be used. The identity made this way is held by that CYFR, as one made by its setup is.
+
+### When a CYFR Requires Your Company's Sign-in
+
+A CYFR run for a company may require each person there to sign in with their company's account as well: once, or again every set number of days. That sign-in is a condition of being there. It is not a way to sign in, and it is not your identity. You still sign in with your passkey, a paired device, your CYFR identity or a linked sign-in method, and you keep each of them.
+
+While your company sign-in is missing or past its days, every page of that CYFR sends you to its company page. **Sign in with your company** takes you to your company's sign-in and back, and **Sign out** ends your session. Nothing else there opens until your company sign-in stands, and the API keys you made and the devices you paired there are refused. Your session, API keys, devices and memberships all stay, and work again once you sign in with your company.
+
+The CYFR binds your company account to you by the subject your company's sign-in names for it, never by an email address. A company account already bound to someone else there is refused, and once one is bound to you, another is refused too. No CYFR merges two people because their email addresses match, and a company sign-in never makes or unlocks a person. When the CYFR moves to another company configuration (another issuer, client or organization), everyone there signs in with their company again, and the new sign-in replaces the old binding.
 
 ### Where joining is proven
 

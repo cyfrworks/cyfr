@@ -8,7 +8,7 @@
 
 (() => {
   const token = location.hash.slice(1);
-  const answers = { mode: "", domain: "", acme_email: "", email: "" };
+  const answers = { mode: "", domain: "", acme_email: "" };
   const stepNames = {
     files: () => "Getting CYFR's files",
     settings: () => "Writing its settings",
@@ -26,7 +26,7 @@
   let busy = false;
   let moved = false;
   let nameEdited = false;
-  let lastAddress = "";
+  let setupURL = "";
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -83,8 +83,7 @@
   function go(name) {
     screen = name;
     if (phase === "answering") show(name);
-    const focus = { public: "#domain", email: "#email" }[name];
-    if (focus) $(focus).focus();
+    if (name === "public") $("#domain").focus();
   }
 
   function render(state) {
@@ -157,22 +156,23 @@
 
   function renderDone(state) {
     const section = $('[data-screen="done"]');
-    lastAddress = state.address || "";
-    const address = $("[data-address]", section);
-    if (address.textContent !== lastAddress) address.textContent = lastAddress;
+    setupURL = state.setup_url || "";
+    const link = $("[data-setup-url]", section);
+    if (link.textContent !== setupURL) link.textContent = setupURL;
+    $("[data-setup]", section).hidden = !setupURL;
+    $("[data-headless]", section).hidden = !state.headless;
     $("[data-sentence]", section).textContent = state.sentence || "";
     let tailnet = false;
     try {
-      tailnet = new URL(lastAddress).hostname.endsWith(".ts.net");
+      tailnet = new URL(state.address || "").hostname.endsWith(".ts.net");
     } catch {
       tailnet = false;
     }
-    $("[data-tailnet]", section).hidden = !(tailnet && !state.sentence);
-    $('[data-action="open"]', section).hidden = !lastAddress;
-    $("[data-copy]", section).hidden = !lastAddress;
-    if (state.moves && lastAddress && !moved) {
+    $("[data-tailnet]", section).hidden = !(tailnet && setupURL && !state.sentence);
+    $('[data-action="open"]', section).hidden = !setupURL;
+    if (state.moves && setupURL && !moved) {
       moved = true;
-      setTimeout(() => location.assign(lastAddress), 1500);
+      setTimeout(() => location.assign(setupURL), 1500);
     }
   }
 
@@ -242,24 +242,18 @@
         answers.mode = b.dataset.mode;
         answers.domain = "";
         answers.acme_email = "";
-        go(answers.mode === "public" ? "public" : "email");
+        if (answers.mode === "public") {
+          go("public");
+        } else {
+          act("how", async () => render(await api("/api/start", answers)));
+        }
       });
     }
     const on = (action, fn) => $(`[data-action="${action}"]`).addEventListener("click", fn);
-    on("public-next", () =>
+    on("public-start", () =>
       act("public", async () => {
-        const domain = $("#domain").value.trim();
-        const acme = $("#acme-email").value.trim();
-        await api("/api/check", { mode: "public", domain, acme_email: acme });
-        answers.domain = domain;
-        answers.acme_email = acme;
-        go("email");
-      }),
-    );
-    on("email-back", () => go(answers.mode === "public" ? "public" : "how"));
-    on("start", () =>
-      act("email", async () => {
-        answers.email = $("#email").value.trim();
+        answers.domain = $("#domain").value.trim();
+        answers.acme_email = $("#acme-email").value.trim();
         render(await api("/api/start", answers));
       }),
     );
@@ -268,7 +262,7 @@
       setError("approval", "");
     });
     // A refusal shown under a field goes once the field is typed in again.
-    for (const [field, where] of [["#domain", "public"], ["#acme-email", "public"], ["#email", "email"]]) {
+    for (const [field, where] of [["#domain", "public"], ["#acme-email", "public"]]) {
       $(field).addEventListener("input", () => setError(where, ""));
     }
     on("rename", () =>
@@ -284,7 +278,7 @@
     }
     for (const b of $$("[data-copy]")) b.addEventListener("click", () => copy(b));
     on("open", () => {
-      if (lastAddress) location.assign(lastAddress);
+      if (setupURL) location.assign(setupURL);
     });
   }
 

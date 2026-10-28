@@ -1503,7 +1503,7 @@ defmodule Aqua.LoopTest do
     n = System.unique_integer([:positive])
 
     {:ok, approver} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|launch-approver#{n}",
         provider: "github",
         email: "launch-approver#{n}@example.com",

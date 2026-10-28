@@ -5841,17 +5841,15 @@ defmodule PrismWeb.SystemLayerTest do
       view |> element(~s([data-test="identity-enroll"])) |> render_click()
       render(view)
       assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
-      assert %{enrolling: "recovery-" <> _} = :sys.get_state(view.pid).socket.assigns
 
       view |> element(~s(#system-layer [data-test="prompt-dismiss"])) |> render_click()
 
       wait_until(
-        fn -> :sys.get_state(view.pid).socket.assigns.enrolling == nil end,
+        fn -> not has_element?(view, ~s(#system-layer [data-test="recovery"])) end,
         2_000,
         "the enrollment let go"
       )
 
-      refute has_element?(view, ~s(#system-layer [data-test="recovery"]))
       assert has_element?(view, ~s([data-test="identity-enroll"]))
     end
 

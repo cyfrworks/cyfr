@@ -70,7 +70,7 @@ defmodule Arca.CredentialIssuanceTest do
 
     unboxed(fn ->
       {:ok, _} =
-        Arca.Users.mint(
+        Arca.Test.People.mint(
           server(),
           %{
             id: user_id,
@@ -1105,8 +1105,8 @@ defmodule Arca.CredentialIssuanceSandboxTest do
   test "the membership reaches the policy as stored: a platform row carries its scope and no athanor" do
     %{user_id: user_id, athanor_id: athanor_id, seat_id: seat_id} = standing!()
 
-    {:ok, platform} =
-      Arca.Members.grant_platform(Prima.Actor.system(), %{user_id: user_id, added_by: "x"})
+    {:ok, :ok} = Arca.Repo.transaction(fn -> Arca.Members.grant_platform!(user_id) end)
+    {:ok, platform} = Arca.Members.find_platform(Prima.Actor.system(), user_id)
 
     test = self()
 
@@ -1403,7 +1403,7 @@ defmodule Arca.CredentialIssuanceSandboxTest do
     athanor_id = Prima.UUID7.generate_id("ath")
 
     {:ok, _} =
-      Arca.Users.mint(
+      Arca.Test.People.mint(
         Prima.Actor.system(),
         %{
           id: user_id,

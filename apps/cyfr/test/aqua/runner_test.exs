@@ -24,7 +24,7 @@ defmodule Aqua.RunnerTest do
   alias Cyfr.Bus.ThreadEvent
   alias Cyfr.Test.ScriptedWorker
   alias Sanctum.Consent.{Bootstrap}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -122,7 +122,7 @@ defmodule Aqua.RunnerTest do
     n = System.unique_integer([:positive])
 
     {:ok, other} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|other#{n}",
         provider: "github",
         email: "other#{n}@example.com",

@@ -748,7 +748,7 @@ defmodule Arca.PendingConfirmationsRaceTest do
     {client, record} =
       unboxed(fn ->
         {:ok, _} =
-          Arca.Users.mint(
+          Arca.Test.People.mint(
             server(),
             %{
               id: user_id,

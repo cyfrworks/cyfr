@@ -5,7 +5,7 @@
 # The `cyfr` release, built as `Dockerfile` builds it (MIX_ENV=prod, the
 # adapter chosen at compile time by CYFR_DATABASE, `mix release cyfr`),
 # booted against a FRESH database of that adapter with auto-migration on
-# (tests/release-boot/release.sh). Six cases, in order:
+# (tests/release-boot/release.sh). Seven cases, in order:
 #
 #   boots    the deployment file `cyfr init` writes, a local home — the
 #            stack's keys, the empty CORS allowlist, authentication
@@ -22,6 +22,14 @@
 #            --domain cyfr.example.com` writes answers as https://cyfr.example.com
 #            (`Sanctum.Person.home()`), with nothing written for it but the
 #            test's ports, and its proxy listener answers readiness.
+#
+#   headless a headless cell (`CYFR_HEADLESS=on`) whose deployment file
+#            `cyfr init` wrote, its setup token among it: the boot says no
+#            one is set up and names `cyfr login --setup`, never the token;
+#            `cyfr login --setup`, the command line built from this tree,
+#            makes the first person with a command-line session that
+#            `cyfr whoami` answers under, and run again signs the same
+#            person in again with a second session, no other person made.
 #
 #   refuses  the same environment with the wildcard CORS allowlist, which a
 #            release with authentication configured must refuse at boot.
@@ -91,11 +99,11 @@
 #
 # Postgres needs CYFR_DATABASE_URL pointing at an EXISTING database with no
 # schema in it, as a role that may create databases: the boots case's public
-# home and the restores case create three databases beside it, named for
-# this run (`pg_run_database`), and drop them when it ends; it drops no
-# database it did not create, so runs that share one server and one URL
-# leave each other's alone. A run killed before its cleanup leaves its three
-# behind, under its own names. The dump and the
+# home, the headless case and the restores case create four databases beside
+# it, named for this run (`pg_run_database`), and drop them when it ends; it
+# drops no database it did not create, so runs that share one server and one
+# URL leave each other's alone. A run killed before its cleanup leaves its
+# four behind, under its own names. The dump and the
 # restore run in the postgres:18.6 image, with this host's network. The
 # cells' deployment files come from the `cyfr` command line, built from
 # apps/codex with this host's go, whose access switch asks Docker for the
@@ -412,7 +420,59 @@ echo "its proxy listener on 127.0.0.1:$(cell_proxy_port "$ADDRESS"): GET /api/he
 server_stop "$ADDRESS"
 
 # ---------------------------------------------------------------------------
-# Case 2: a boot that raises is loud
+# Case 2: a headless CYFR set up from the command line
+# ---------------------------------------------------------------------------
+
+# What cell `$1`'s release answers of its people and of the sessions setup
+# minted: `<count> <id> <admission>` and the number of `setup` sessions.
+people_of() {
+  cell_cyfr "$1" rpc '
+    people = Arca.Repo.all(Arca.Schemas.User)
+    sessions = Enum.count(Arca.Repo.all(Arca.Schemas.Session), &(&1.provider == "setup"))
+    IO.puts("CYFR_PEOPLE=" <> Enum.join([length(people) | Enum.flat_map(people, &[&1.id, &1.admission])], " ") <> " " <> Integer.to_string(sessions))' |
+    sed -n 's/^CYFR_PEOPLE=//p' | tail -1
+}
+
+step "headless: a CYFR with no person names cyfr login --setup, which makes its first person and then signs them in again"
+HEADLESS="$WORK/headless"
+HEADLESS_URL=""
+if [ "$ADAPTER" = postgres ]; then
+  HEADLESS_DB="$(pg_run_database headless)"
+  pg_fresh_database "$HEADLESS_DB"
+  HEADLESS_URL="$(pg_url "$HEADLESS_DB")"
+fi
+cell_new "$HEADLESS" "$HEADLESS_URL"
+cell_set "$HEADLESS" CYFR_HEADLESS on
+token="$(cell_value "$HEADLESS" CYFR_SETUP_TOKEN)"
+[[ "$token" =~ ^[0-9a-f]{64}$ ]] || fail "cyfr init wrote no setup token of 64 lowercase hexadecimal characters"
+grep -q '/setup#'"$token" "$HEADLESS/cli.log" ||
+  grep -q 'cyfr login --setup' "$HEADLESS/cli.log" || fail "cyfr init printed neither the setup link nor cyfr login --setup"
+server_start "$HEADLESS"
+grep -q '\[Cyfr\] Not set up:.*`cyfr login --setup`' "$HEADLESS/boot.log" ||
+  fail "the headless boot did not name cyfr login --setup"
+! grep -qF "$token" "$HEADLESS/boot.log" || fail "the boot log records the setup token"
+echo "the boot: $(grep -o '\[Cyfr\] Not set up:.*' "$HEADLESS/boot.log" | head -1)"
+
+cell_cli "$HEADLESS" context add headless "http://127.0.0.1:$PORT"
+cell_cli "$HEADLESS" --context headless login --setup
+first="$(people_of "$HEADLESS")"
+read -r count person admission sessions <<<"$first"
+[ "$count" = 1 ] && [ "$admission" = setup ] && [ "$sessions" = 1 ] ||
+  fail "the first cyfr login --setup left '$first', not one person made by setup with one session"
+cell_cli "$HEADLESS" --context headless whoami
+grep -qF "User ID: $person" "$HEADLESS/cli.log" || fail "cyfr whoami under the saved session did not name $person"
+grep -qx "Platform admin: yes" "$HEADLESS/cli.log" || fail "the first person set up from the command line is not the platform administrator"
+
+cell_cli "$HEADLESS" --context headless login --setup
+again="$(people_of "$HEADLESS")"
+read -r count again_person admission sessions <<<"$again"
+[ "$count" = 1 ] && [ "$again_person" = "$person" ] && [ "$sessions" = 2 ] ||
+  fail "the second cyfr login --setup left '$again', not the same person signed in again"
+echo "cyfr login --setup twice: $person, made by setup, signed in twice"
+server_stop "$HEADLESS"
+
+# ---------------------------------------------------------------------------
+# Case 3: a boot that raises is loud
 # ---------------------------------------------------------------------------
 
 step "a boot that raises exits non-zero and says why (the wildcard CORS allowlist)"
@@ -438,7 +498,7 @@ echo "the boot exited $status, naming the wildcard:"
 grep -o "FATAL: CORS wildcard.*" "$REFUSAL_LOG" | head -1
 
 # ---------------------------------------------------------------------------
-# Case 3: every boot refusal of the access vectors, and the bind a namespace
+# Case 4: every boot refusal of the access vectors, and the bind a namespace
 # shows the release refusing
 # ---------------------------------------------------------------------------
 
@@ -558,7 +618,7 @@ docker rm -f "$NS_HOLDER" >/dev/null
 NS_HOLDER=""
 
 # ---------------------------------------------------------------------------
-# Case 4: a backup of the four parts, restored and booted elsewhere
+# Case 5: a backup of the four parts, restored and booted elsewhere
 # ---------------------------------------------------------------------------
 
 step "a cell of its own, with its keyring kept apart from its deployment file"
@@ -689,7 +749,7 @@ serves "the copy"
 server_stop
 
 # ---------------------------------------------------------------------------
-# Case 5: the same backup, declared restored
+# Case 6: the same backup, declared restored
 # ---------------------------------------------------------------------------
 
 # What `$1` answers to the person's pre-backup session over /mcp: the HTTP
@@ -750,7 +810,7 @@ fi
 server_stop
 
 # ---------------------------------------------------------------------------
-# Case 6: the storage reserve, on a filesystem that fills
+# Case 7: the storage reserve, on a filesystem that fills
 # ---------------------------------------------------------------------------
 
 # The reserve's size and the limited filesystem's: room for the schema, a
@@ -1011,4 +1071,4 @@ reserve_stop
 docker rm -f "$RESERVE_HOLDER" >/dev/null
 RESERVE_HOLDER=""
 
-step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its access mode implies, refuses loudly, refuses every access setting the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore and keeps its storage reserve"
+step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its access mode implies, sets up a headless CYFR from the command line, refuses loudly, refuses every access setting the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore and keeps its storage reserve"

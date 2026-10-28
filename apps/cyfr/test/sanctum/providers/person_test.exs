@@ -25,7 +25,7 @@ defmodule Sanctum.Providers.PersonTest do
   alias Prima.Identity
   alias Prima.Identity.{Encoding, Entry}
   alias Sanctum.{Cipher, CipherAAD, Context, TestContext}
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   # A directory this home cannot reach: a loopback port nothing listens on.
   @unreachable "https://localhost:1"
@@ -52,7 +52,7 @@ defmodule Sanctum.Providers.PersonTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|person-tool-#{n}",
         provider: "github",
         email: "person-tool#{n}@example.com",

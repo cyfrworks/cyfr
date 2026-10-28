@@ -8,7 +8,7 @@ defmodule Sanctum.Tenancy.PairsTest do
   # somebody leaves.
   use ExUnit.Case, async: false
 
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -21,7 +21,7 @@ defmodule Sanctum.Tenancy.PairsTest do
     id = "github|https://github.com|#{handle}"
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: id,
         provider: "github",
         email: "#{handle}@example.com",
@@ -118,11 +118,15 @@ defmodule Sanctum.Tenancy.PairsTest do
       {:ok, pair} = Athanors.create_pair(alice, bob)
 
       # Guarded as a head clause beside the person guard, so an invitation
-      # by email cannot walk around a rule enforced only on user ids.
+      # by identifier cannot walk around a rule enforced only on user ids.
       assert {:error, :frozen_roster} = Members.add(pair, [user_id: carol], alice)
 
       assert {:error, :frozen_roster} =
-               Members.add(pair, [email: "carol-elsewhere@example.com"], alice)
+               Members.add(
+                 pair,
+                 [identifier: "per_" <> Prima.Digest.sha256_hex("carol-elsewhere")],
+                 alice
+               )
 
       refute Members.member?(carol, pair.id)
     end

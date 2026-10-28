@@ -11,7 +11,7 @@ defmodule Sanctum.ContextFocusTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -212,24 +212,14 @@ defmodule Sanctum.ContextFocusTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|ops-own-#{n}",
         provider: "github",
         email: "ops-own#{n}@example.com",
         verified: true
       })
 
-    {:ok, own} =
-      Athanors.create(%{
-        kind: "person",
-        name: "Ops",
-        slug: "ops-own-#{n}",
-        owner_user_id: user.id,
-        created_by: user.id
-      })
-
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: own.id)
-    {:ok, _} = Users.set_personal_athanor(user, own.id)
+    own = Sanctum.Test.People.athanor!(user)
     {:ok, _} = Sanctum.TestContext.ensure_platform(user.id)
     {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: a.id)
 

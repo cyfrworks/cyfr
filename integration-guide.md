@@ -48,7 +48,7 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 |------|--------|----------|------------------------|
 | **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
 | **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can list the metadata of stored OAuth client credentials. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. |
+| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, claiming a handle, minting push tokens, changing a registry namespace, its tokens or members, publishing an address, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead; each registry request among them is signed by the person's live key. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
@@ -134,7 +134,7 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 | `execute` | Run components, manage schedules, compile builds |
 | `vault_read` | `oauth.list`: the names of the OAuth providers the athanor has client credentials for, who stored them and when; never the secret |
 | `component_read` | Get component blobs, discover components |
-| `component_manage` | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim and verify publishers, manage registry tokens and members; change Aqua souls, roles, guides and scrolls and their skills |
+| `component_manage` | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim a handle, claim and verify publishers, mint and manage registry push tokens and members, publish an address; change Aqua souls, roles, guides and scrolls and their skills |
 | `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
 | `storage_write` | Set retention policies; write, edit and delete component source; write, delete, offer, accept, decline and withdraw files |
 | `admin` | API key management, retention cleanup, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
@@ -367,7 +367,7 @@ on the wire.
 |------|------|---------|
 | -33001 | `auth_required` | Not authenticated — tool requires login (see [Public Tools](#public-tools-no-auth-required) for exceptions) |
 | -33002 | `auth_invalid` | Invalid API key or token |
-| -33004 | `insufficient_permissions` | Key scope doesn't cover this action, the caller is not a platform admin, or the IP is not in the allowlist |
+| -33004 | `insufficient_permissions` | Key scope doesn't cover this action, the caller is not a platform admin, the IP is not in the allowlist, or the person behind the credential has not given the company sign-in this CYFR requires ([When a CYFR Requires a Company Sign-in](#when-a-cyfr-requires-a-company-sign-in)) |
 | -33100 | `internal` | The call failed for a reason the server could not confirm — check before retrying |
 | -33101 | `conflict` | The state moved on — read it again and retry |
 | -33102 | `not_owner` | This server does not currently own its control plane — retry shortly |
@@ -399,6 +399,29 @@ which carries the supported list in `error.data.supported`.
 
 > **MCP Tool Reference**: For a complete mapping of CLI commands to MCP tool/action pairs (useful when building HTTP integrations), see [CLI → MCP Tool Reference](component-guide.md#cli--mcp-tool-reference) in the Component Guide.
 
+### When a CYFR Requires a Company Sign-in
+
+A CYFR may require every person there to sign in with their company's
+account (`CYFR_COMPANY_LOGIN`, [README.md](README.md#requiring-a-company-sign-in)).
+While a person's company sign-in is missing, past its days, or given under
+another company configuration, CYFR refuses every request made with their
+credentials: an API key they made, their session token and their paired
+devices alike. The refusal, `company_login_required`, answers HTTP `403`
+with this message:
+
+> This CYFR requires you to sign in with your company's account. Sign in with it to go on.
+
+Over MCP it arrives as the JSON-RPC error `-33004`
+(`insufficient_permissions`). On an execution's event stream
+(`/api/executions/:id/events`) the body is
+`{"code": "forbidden", "message": "..."}`. A stream already open ends at
+its next revalidation.
+
+Retrying does not help, and no key or session needs to be made again. The
+person opens the CYFR in a browser, signs in, and chooses **Sign in with
+your company** on the page it sends them to. After that, the same API key
+and session token are admitted again.
+
 ### Public Tools (No Auth Required)
 
 Almost every tool call requires authentication. An uncredentialed caller
@@ -410,7 +433,7 @@ one annotation. It is short:
 |------|---------|------------|
 | `pairing` | `complete` | A new device holds neither a session nor a certificate: the short-lived, single-use pairing code a signed-in person's `pairing.begin` issued names the person and athanor, the device proves its key, and a session cookie the browser holds never chooses the person |
 | `person` | `renew_certificate` | A device paired at another CYFR renews the certificate this CYFR issued it, holding no session here: it proves the device key the certification names over a single-use challenge this CYFR issued, and only a certification still standing under the person's current keys is extended |
-| `session` | `logout`, `whoami`, `device_init`, `device_poll`, `cli_begin`, `cli_poll`, `cli_cancel`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions. `cli_begin` is `cyfr login` asking for a sign-in its person approves in Prism; `cli_poll` and `cli_cancel` name only the session token `cli_begin` answered, which no session holds until the person approves under a fresh confirmation ([devices-guide.md](devices-guide.md)) |
+| `session` | `logout`, `whoami`, `device_init`, `device_poll`, `cli_begin`, `setup`, `cli_poll`, `cli_cancel`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions. `setup` is `cyfr login --setup` presenting the installation's setup token, which makes the first person or signs them in again until they hold a passkey, a paired device or a linked sign-in method; any other token, or a null one, answers `setup_closed`. `cli_begin` is `cyfr login` asking for a sign-in its person approves in Prism; `cli_poll` and `cli_cancel` name only the session token `cli_begin` answered, which no session holds until the person approves under a fresh confirmation ([devices-guide.md](devices-guide.md)) |
 | `system` | `status` | Health checks |
 | `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace` or group slug, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |
 
@@ -436,9 +459,11 @@ params); and any other refusal the code of its class in the table above.
 
 A second tier sits between public and fully authenticated: actions
 annotated `auth: :signed_in` serve a caller holding a live session that
-has not yet claimed a namespace, which is how the first-login flow
-(`registry.probe`, `registry.claim_personal`) completes. Those are not
-public — they need the session — but they do not need a claimed identity.
+has not yet claimed a namespace: `registry.claim_personal` and the
+registry's policy reads and acceptance (`registry.legal_version`,
+`registry.legal_page`, `registry.legal_accept`), so a person can claim a
+handle before anything else. Those are not public — they need the
+session — but they do not need a claimed identity.
 
 Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `decision.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `component.read_resource`, `resource.read`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
@@ -948,7 +973,7 @@ Beside `list`, `read`, `write` and `delete`, the `file` tool sends a person a co
 |--------|----------|--------------|
 | `offer` | `paths` (one to ten files under `data/`), `to` (a person id, `usr_…`) | Copy the files and offer them to a person you share an athanor with — never yourself. The copy counts against your storage until the offer ends. Answers the `offer_id` and its `expires_at` (after `file_offer_days`, a retention setting, 7 by default) |
 | `offers` | — | `inbox` (offers sent to you, with `sender` and `folder`, the folder `accept` lands them in when you name none), `outbox` (offers you sent from this athanor, with `recipient`), each file with its `status`, `filename`, `size` and `expires_at`; and `receipts`, the files you accepted here that have not landed yet (`status` `received`) or never will (`failed`) |
-| `accept` | `offer_id`, optional `folder` (under `data/`) | Take the copy into your focused athanor, where you must hold a seat. It needs twice the files' size free until they land. Answers the `folder` they land in: `<folder>/<offer_id>/`, under `data/inbox/<sender>/` by default (the sender's namespace, or their person id), with `-2` and onward when that folder already holds files — nothing of yours is overwritten |
+| `accept` | `offer_id`, optional `folder` (under `data/`) | Take the copy into your focused athanor, where you must hold a seat. It needs twice the files' size free until they land. Answers the `folder` they land in: `<folder>/<offer_id>/`, under `data/inbox/<sender>/` by default (the sender's personal namespace, which is their handle, or their person id), with `-2` and onward when that folder already holds files — nothing of yours is overwritten |
 | `decline` | `offer_id` | Refuse an offer sent to you |
 | `withdraw` | `offer_id` | Take back an offer you sent, while it is not yet accepted. An accepted copy is the recipient's |
 
@@ -1206,22 +1231,23 @@ themselves.
 CYFR is one product: deploy it as-is (sqlite, local FS) or configure OIDC /
 Postgres / a custom registry.
 
-Once authentication is configured, two lists do two jobs. `CYFR_PLATFORM_ADMIN_EMAILS`
-names the server's operators (platform admins): always let in, minted their
-own athanor past the server caps, and able to run the operator verbs
-(`door.*`, `instance_entry.*` but `offered`, `execution.force_release`,
-`athanor.purge`, `athanor.destroy`).
+The installation's first person, made by its setup (or by a restore onto it
+empty), is its platform administrator, and no other grant exists: minted
+their own athanor past the server caps, never denied by the allowlist, and able
+to run the operator verbs (`door.*`, `instance_entry.*` but `offered`,
+`execution.force_release`, `athanor.purge`, `athanor.destroy`).
 The capability is over the instance, not a seat: an operator works inside one
 athanor at a time like everyone else, and only in one they are a member of.
 They enter no other athanor — opening one they hold no seat in is refused like
 anyone's, and a session that names one they have left falls back to their own
 — and there is no cross-athanor reach. The **server allowlist** (`cyfr admin allow
-<email|user_id|identifier|*>`, `cyfr admin deny …`, or the Settings page) is who else may
-sign in at all: a match on first sign-in lets them in, no match is a 403, and
-`*` lets in anyone the configured provider authenticates. Groups never widen the
-allowlist: adding an unknown email to a group leaves an invitation that activates on
-that person's first admitted sign-in and, when the allowlist would refuse them, a
-request for the operator.
+<identifier|*>`, `cyfr admin deny <person|identifier>`, or the Settings page) judges
+people: a person made here signs in unless a deny names them, and a person whose
+keys another CYFR holds signs in when `*` or an allow naming their identifier
+(`per_…`) admits them. `*` also lets anyone make a person here with a passkey.
+Groups never widen the allowlist: adding an unknown identifier to a group leaves an
+invitation that activates on that person's first admitted CYFR sign-in and, when the
+allowlist would refuse them, a request for the operator.
 
 On **Settings**, the operator offers instance entries to everyone or listed people, with request caps per person and in total. Creation defaults to `component_policy: any`; the optional `shipped` policy admits only an unmodified shipped component. Both require destination methods and path prefixes. Entering or rotating the material needs fresh confirmation; widening the audience or changing `shipped` to `any` needs fresh `credential_sharing` confirmation. Members grant an offered entry through the same consent walk as their own entries; no policy bypasses consent, egress or caps, discloses the key, or lets an MCP definition name it.
 
@@ -1249,15 +1275,12 @@ all denied keeps no member to unarchive it — allowing them on the allowlist ag
 reopens only their own athanors — so it can be purged or destroyed, and
 reopened by no one.
 
-With no auth configured, the deployment runs without sign-in: requests reach the
-public read-only surface as an unauthenticated context, and tenant-scoped
-operations are rejected.
-
 ### OIDC (federated identity)
 
-Set `CYFR_AUTH_PROVIDER=oidc` to federate against a generic OIDC issuer. All
-three variables, `CYFR_OIDC_ISSUER`, `CYFR_OIDC_CLIENT_ID` and `CYFR_OIDC_CLIENT_SECRET`, are required when oidc is selected — the server refuses to boot
-otherwise rather than silently degrading to no authentication. The issuer must
+Setting `CYFR_OIDC_ISSUER`, `CYFR_OIDC_CLIENT_ID` and `CYFR_OIDC_CLIENT_SECRET`
+offers a generic OIDC issuer as a sign-in method a person links; it unlocks the
+person who linked it and never makes one. Any of the three set without the others
+refuses the boot rather than silently offering no OIDC sign-in. The issuer must
 not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 
 ### Several servers on one database (a cluster)

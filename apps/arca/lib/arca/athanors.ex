@@ -204,6 +204,23 @@ defmodule Arca.Athanors do
 
   def mint(%Prima.Actor{}, _opts), do: {:error, :cross_tenant}
 
+  @doc """
+  Take the census lock (`Arca.AthanorCensus.lock/0`) for the rest of the
+  open transaction and count `caps` under it, as `mint/2` does: for a
+  write that must be refused at a cap before it writes the rows a later
+  mint in the same transaction needs (an admission's person, whose
+  athanor follows them, `Arca.Users.mint/4`'s `verify:`). The lock holds
+  to the transaction's end, so what was counted cannot move before that
+  mint lands, and that mint names no caps of its own. A cap refused is
+  the caps port's answer. Raises outside a transaction.
+  """
+  @spec within_caps(Prima.Actor.t(), [cap()]) :: :ok | {:error, term()}
+  def within_caps(%Prima.Actor{scope: :platform} = actor, caps) when is_list(caps) do
+    with :ok <- Arca.AthanorCensus.lock(), do: check_caps(actor, caps)
+  end
+
+  def within_caps(%Prima.Actor{}, _caps), do: {:error, :cross_tenant}
+
   @doc "The athanor row `id` names, whichever tenant it is."
   @spec get(Prima.Actor.t(), String.t()) ::
           {:ok, map()} | {:error, :not_found} | refusal()

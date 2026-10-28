@@ -61,38 +61,33 @@ defmodule Compendium.Registry.ClientTest do
 
   # Registry endpoint error paths against an unreachable host.
 
-  describe "probe_identity/3 - error handling" do
-    test "returns %Errors{} when cyfr.run is unreachable" do
-      {:error, %Errors{} = err} = Client.probe_identity(:github, "fake-access-token")
-      assert err.registry == "cyfr.run"
-      assert err.reason == :registry_unavailable
+  describe "signed/3 - error handling" do
+    test "a person with no identifier is refused before anything is sent" do
+      user = Sanctum.Test.RegistryStub.person!()
+
+      assert {:error, :not_enrolled} =
+               Client.signed(user.id, "handle.claim", %{"handle" => "alice"})
     end
-  end
 
-  describe "claim_personal_namespace/4 - error handling" do
-    test "returns %Errors{} when cyfr.run is unreachable" do
-      {:error, %Errors{} = err} =
-        Client.claim_personal_namespace("alice", :github, "fake-access-token")
+    test "an unreachable registry is unavailable for every operation, and nothing is written" do
+      user = Sanctum.Test.RegistryStub.person!()
+      Sanctum.Test.RegistryStub.enroll!(user.id)
 
-      assert err.reason == :registry_unavailable
-    end
-  end
+      for {operation, body} <- [
+            {"handle.claim", %{"handle" => "alice"}},
+            {"tokens.mint", %{"label" => "laptop"}},
+            {"address.set", %{}},
+            {"policy.accept", %{"policy_version" => "2026-09"}},
+            {"appeal.file",
+             %{"action_type" => "ban", "action_ref" => "x", "argument" => "it was not me"}},
+            {"publisher.claim", %{"slug" => "acme.com"}},
+            {"publisher.verify", %{"slug" => "acme.com", "label" => "laptop"}}
+          ] do
+        assert {:error, :registry_unavailable} = Client.signed(user.id, operation, body),
+               operation
+      end
 
-  describe "claim_publisher_namespace/2 - error handling" do
-    test "returns %Errors{} when cyfr.run is unreachable" do
-      {:error, %Errors{} = err} =
-        Client.claim_publisher_namespace("acme.com", "fake-bearer")
-
-      assert err.reason == :registry_unavailable
-    end
-  end
-
-  describe "verify_publisher_namespace/2 - error handling" do
-    test "returns %Errors{} when cyfr.run is unreachable" do
-      {:error, %Errors{} = err} =
-        Client.verify_publisher_namespace("acme.com", "fake-bearer")
-
-      assert err.reason == :registry_unavailable
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(user.id)
     end
   end
 

@@ -3,10 +3,11 @@
 
 defmodule Cyfr.StartupAdmissionBarrierTest do
   @moduledoc """
-  Startup order is the admission barrier: `Cyfr.Bootstrap` sits between
-  the children the security reconcile needs and every child that admits
-  work, and only its checked success lets the rest of the tree — and the
-  endpoint after it — start.
+  Startup order is the admission barrier: the gate — the declared
+  restore's step, then the storage reserve (`Cyfr.StorageReserve`) — sits
+  between the children a declared restore's transition needs and every
+  child that admits work, and only the step's checked success lets the
+  rest of the tree — and the endpoint after it — start.
 
   The census is read from `Cyfr.Application.tiers/0`, the tree the boot
   starts down through every subtree, and pinned exactly: a child added
@@ -14,17 +15,19 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   until someone decides where it belongs.
 
   The barrier is exercised on that same list under a supervisor of the
-  test's own. The real `Cyfr.Bootstrap` runs its real reconcile against
-  the database, paused behind a barrier the test lifts; every other child
-  is a stand-in that records being started and stopped, under supervisors
-  built with the product's strategies and intensities, because the
-  running suite's own tree already holds those names. With a due
-  schedule, an open turn, an enabled backend and a delisted operator in
-  the database, nothing after the gate starts, nothing is dispensed and
-  nothing is published until the reconcile has committed, released and
-  re-verified — and when it refuses (a claim a peer keeps, a release that
-  does not land, a lost slot, a raise, a gate killed mid-reconcile),
-  nothing after it ever does.
+  test's own. The step runs the product's own
+  (`Cyfr.Application.declared_restore/0`) against the database, in the
+  tier's process as the product runs it, paused behind a barrier the test
+  lifts; every other child is a stand-in that records being started and
+  stopped, under supervisors built with the product's strategies and
+  intensities, because the running suite's own tree already holds those
+  names. With a due schedule, an open turn, an enabled backend, a
+  person's session and a declared restore's marker in the database,
+  nothing after the gate starts, nothing is dispensed and nothing is
+  published until the transition has committed — and when the step
+  refuses (a lost slot, a member holding no slot, a tier killed
+  mid-step), nothing after it ever does, and the marker stays for the
+  next start.
 
   The same holds after boot. A stand-in killed before the gate restarts
   everything after it, the gate first; one killed after the gate restarts
@@ -39,9 +42,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query
-
-  alias Arca.JobClaims
-  alias Sanctum.Tenancy.{Members, Users}
 
   # Every switch that can add a child, on — the census is the full tree a
   # clustered, database-checked production boot starts.
@@ -63,10 +63,12 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Phoenix.PubSub.Supervisor,
     Cyfr.StandingWatch,
     Cyfr.TelemetryBridge,
-    Cyfr.Platform.Settings,
-    :declared_restore,
-    Cyfr.StorageReserve
+    Cyfr.Platform.Settings
   ]
+
+  # The gate: the declared restore's step, then the storage reserve, which
+  # derives its latch before anything admits work.
+  @gate [:declared_restore, Cyfr.StorageReserve]
 
   # A supervisor the census describes is `{id, children}`, in start order.
   @post_gate [
@@ -205,7 +207,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   # The leaves the product starts no lasting process for: the one-shot
   # checks and the declared restore's step answer `:ignore`, and the
   # recovery task exits once it has run.
-  # Their stand-ins record the start and leave no process either. The seed
+  # Their stand-ins leave no process either. The seed
   # offer is not among them: it runs after its start has returned, holding
   # its claim until it ends or is stopped.
   @no_process [
@@ -216,7 +218,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   ]
 
   # The children a rest_for_one restart from `Cyfr.Cell` starts before the
-  # gate, in order.
+  # declared restore's step, in order.
   @from_cell Enum.drop_while(@pre_gate, &(&1 != Cyfr.Cell))
 
   @credential_events [
@@ -236,14 +238,10 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     Cyfr.Test.Sandbox.setup!(tags)
 
     saved_env = for {app, key, _} <- @flags, do: {app, key, Application.fetch_env(app, key)}
-    saved_emails = Application.fetch_env(:sanctum, :platform_admin_emails)
     saved_terms = Map.new(@control_plane_keys, &{&1, :persistent_term.get(&1, :absent)})
 
-    for {app, key, value} <- @flags, do: Application.put_env(app, key, value)
-    Application.put_env(:sanctum, :platform_admin_emails, [])
-
     on_exit(fn ->
-      for {app, key, saved} <- [{:sanctum, :platform_admin_emails, saved_emails} | saved_env] do
+      for {app, key, saved} <- saved_env do
         case saved do
           {:ok, value} -> Application.put_env(app, key, value)
           :error -> Application.delete_env(app, key)
@@ -257,34 +255,35 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       end
     end)
 
-    {:ok, key: "cell-barrier-#{System.unique_integer([:positive])}"}
+    for {app, key, value} <- @flags, do: Application.put_env(app, key, value)
+
+    :ok
   end
 
   describe "the census" do
-    test "only the reconcile's needs start before the gate; everything that admits work after it" do
+    test "only the declared restore's needs start before the gate; everything that admits work after it" do
       tiers = Cyfr.Application.tiers()
 
       [{Cyfr.InfraSupervisor, _, _, infra}, {Cyfr.WebSupervisor, _, _, web}] = tiers
       ids = Enum.map(infra, &shape/1)
 
-      {pre, [Cyfr.Bootstrap | post]} = Enum.split_while(ids, &(&1 != Cyfr.Bootstrap))
+      {pre, post} = Enum.split_while(ids, &(&1 != :declared_restore))
 
       assert pre == @pre_gate
-      assert post == @post_gate
+      assert post == @gate ++ @post_gate
       assert Enum.map(web, &shape/1) == @web
       assert Map.new(Enum.flat_map(tiers, &strategies/1)) == @supervisors
 
-      # The gate is transient: it answers once and leaves no process, stays
-      # listed, and runs again on every restart of what precedes it; a
-      # refusal it returns is the supervisor's failure to start. The offer
-      # is temporary: it runs once, at boot.
-      assert %{restart: :transient} = infra |> Enum.find(&(shape(&1) == Cyfr.Bootstrap)) |> spec()
-
-      # The declared restore's step is the gate's first half: transient
-      # too, so a restart of what precedes it runs it again and finds no
-      # marker, and its refusal is the supervisor's failure to start.
-      assert %{restart: :transient} =
+      # The declared restore's step is transient: it answers once and
+      # leaves no process, stays listed, and runs again on every restart of
+      # what precedes it, finding no marker; a refusal it returns is the
+      # supervisor's failure to start. The reserve stops within its bound.
+      # The offer is temporary: it runs once, at boot.
+      assert %{restart: :transient, start: {Cyfr.Application, :declared_restore, []}} =
                infra |> Enum.find(&(shape(&1) == :declared_restore)) |> spec()
+
+      assert %{shutdown: 5_000} =
+               infra |> Enum.find(&(shape(&1) == Cyfr.StorageReserve)) |> spec()
 
       assert %{restart: :temporary} = infra |> Enum.find(&(shape(&1) == Cyfr.SeedOffer)) |> spec()
 
@@ -302,8 +301,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       Application.put_env(:cyfr, :provisioning_boot_enabled, false)
       [{_, _, _, infra}, _web] = Cyfr.Application.tiers()
       ids = Enum.map(infra, &shape/1)
-      refute Cyfr.Bootstrap in ids
       refute :declared_restore in ids
+      refute Cyfr.StorageReserve in ids
       refute Cyfr.SeedOffer in ids
     end
 
@@ -322,10 +321,10 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   end
 
   describe "the barrier" do
-    setup %{key: key} do
+    setup do
       slot = hold_slot!()
       rows = admitting_rows!()
-      delisted = delisted_operator!()
+      restored = declared_restore!()
 
       test = self()
       handler = "barrier-#{System.unique_integer([:positive])}"
@@ -341,12 +340,12 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
       for topic <- rows.topics, do: :ok = Cyfr.Bus.subscribe(rows.actor, topic)
 
-      {:ok, slot: slot, rows: rows, delisted: delisted, key: key}
+      {:ok, slot: slot, rows: rows, restored: restored}
     end
 
     test "nothing that admits work starts, is dispensed or is published until the gate returns",
-         %{key: key, rows: rows, delisted: delisted} do
-      starter = start_tree!(key: key, reconcile: paused(self()))
+         %{rows: rows, restored: restored} do
+      starter = start_tree!()
       assert_receive {:paused, gate}, 5_000
 
       assert started() == @pre_gate
@@ -354,109 +353,89 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       refute_receive {:credential, _}
       refute_receive {:tree, _, _}
       untouched!(rows)
-      assert platform?(delisted.user.id), "the reconcile committed before its barrier lifted"
 
-      send(gate, {:lift, &Sanctum.reconcile_platform_admins/2})
+      assert restore_state(restored) == %{marker: true, session: true},
+             "the transition committed before its barrier lifted"
+
+      send(gate, {:lift, real(self())})
+      assert_receive {:answered, :ignore}, 10_000
 
       assert_receive {:tree, ^starter, {:ok, _root}}, 10_000
-      # The endpoint is last: it starts only after the gate returned and
-      # every child that admits work is up.
-      assert started() == leaves(@post_gate) ++ @web
+      # The reserve derives its latch before anything that admits work,
+      # and the endpoint is last: it starts only after the gate returned
+      # and every child that admits work is up.
+      assert started() == [Cyfr.StorageReserve | leaves(@post_gate)] ++ @web
 
-      refute platform?(delisted.user.id)
-      assert {:error, _} = Sanctum.Session.load(delisted.token)
+      assert restore_state(restored) == %{marker: false, session: false}
       refute_receive {:credential, _}
       stop_tree(starter)
     end
 
-    test "a peer that keeps the claim past the wait refuses the boot, and nothing after starts",
-         %{key: key, delisted: delisted} do
-      {:ok, _peer} = JobClaims.claim("bootstrap", key, "member-b", 60_000)
-
-      starter = start_tree!(key: key, wait_ms: 300)
-      assert_receive {:tree, ^starter, {:error, reason}}, 10_000
-      assert refused(reason) == :busy
-      assert started() == @pre_gate
-      assert platform?(delisted.user.id)
-      stop_tree(starter)
-    end
-
-    test "a release that does not land, a lost slot or a raise refuses it the same way", %{
-      key: key,
-      slot: slot,
-      delisted: delisted
-    } do
-      failures = [
-        release_failed: fn claim, opts ->
-          {:ok, renewed} = Sanctum.reconcile_platform_admins(claim, opts)
-          {:ok, _moved} = JobClaims.record(renewed, "a peer's write")
-          {:ok, renewed}
-        end,
-        slot_lost: fn claim, opts ->
-          expire_slot!(slot)
-          Sanctum.reconcile_platform_admins(claim, opts)
-        end,
-        exception: fn _claim, _opts -> raise "boom" end
+    test "a lost slot or a member holding none refuses the boot, keeps the marker, and nothing after starts",
+         %{slot: slot, restored: restored} do
+      refusals = [
+        slot_lost: fn -> expire_slot!(slot) end,
+        slot_not_held: fn -> Arca.ControlPlane.record(:lost) end
       ]
 
-      for {class, lift} <- failures do
-        starter = start_tree!(key: key, reconcile: paused(self()))
+      for {class, lose} <- refusals do
+        starter = start_tree!()
         assert_receive {:paused, gate}, 5_000
         assert started() == @pre_gate
         refute_receive {:started, _}, 200
 
-        send(gate, {:lift, lift})
+        lose.()
+        send(gate, {:lift, real(self())})
+        assert_receive {:answered, {:error, {:restore_refused, ^class}}}, 10_000
         assert_receive {:tree, ^starter, {:error, reason}}, 10_000
         assert refused(reason) == class
         refute_receive {:started, _}, 100
         refute_receive {:credential, _}
         stop_tree(starter)
-      end
 
-      # The first failure committed its reconcile before its release did
-      # not land; the boot was refused all the same.
-      refute platform?(delisted.user.id)
+        # The transition rolled back whole: the next boot finds the marker.
+        assert restore_state(restored) == %{marker: true, session: true}
+      end
     end
 
-    test "a gate killed mid-reconcile starts nothing, and the next start reconciles first", %{
-      key: key,
-      delisted: delisted
-    } do
-      starter = start_tree!(key: key, reconcile: paused(self()))
+    test "a tier killed mid-step starts nothing, and the next start runs the step first",
+         %{restored: restored} do
+      starter = start_tree!()
       assert_receive {:paused, gate}, 5_000
       assert started() == @pre_gate
 
       Process.exit(gate, :kill)
       assert_receive {:tree, ^starter, {:error, _reason}}, 10_000
       refute_receive {:started, _}, 200
-      assert platform?(delisted.user.id)
+      assert restore_state(restored) == %{marker: true, session: true}
       stop_tree(starter)
 
-      # The restarted tree runs the gate again from the start, under the
-      # claim its dead predecessor took for this same boot.
-      starter = start_tree!(key: key, reconcile: paused(self()))
+      # The restarted tree runs the step again from the start, and finds
+      # the marker its dead predecessor left.
+      starter = start_tree!()
       assert_receive {:paused, gate}, 5_000
       assert started() == @pre_gate
       refute_receive {:started, _}, 200
 
-      send(gate, {:lift, &Sanctum.reconcile_platform_admins/2})
+      send(gate, {:lift, real(self())})
+      assert_receive {:answered, :ignore}, 10_000
       assert_receive {:tree, ^starter, {:ok, _root}}, 10_000
-      assert started() == leaves(@post_gate) ++ @web
-      refute platform?(delisted.user.id)
+      assert started() == [Cyfr.StorageReserve | leaves(@post_gate)] ++ @web
+      assert restore_state(restored) == %{marker: false, session: false}
       stop_tree(starter)
     end
   end
 
   describe "a restart after boot" do
-    setup %{key: key} do
+    setup do
       slot = hold_slot!()
       rows = admitting_rows!()
-      {:ok, slot: slot, rows: rows, key: key}
+      {:ok, slot: slot, rows: rows}
     end
 
     @tag :capture_log
-    test "an endpoint crash loop restarts the web tier alone, and no healthy domain", %{key: key} do
-      {starter, root} = booted!(key)
+    test "an endpoint crash loop restarts the web tier alone, and no healthy domain" do
+      {starter, root} = booted!()
       web = pid_at(root, [:barrier_web])
       web_ref = Process.monitor(web)
 
@@ -477,15 +456,16 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     end
 
     @tag :capture_log
-    test "a restarted infra tier serves the operation table this boot built", %{key: key} do
+    test "a restarted infra tier serves the operation table this boot built" do
       operations = Sanctum.Catalog.operations()
-      {starter, root} = booted!(key)
+      {starter, root} = booted!()
 
       kill!(root, [:barrier_infra, Cyfr.Cell])
       next_started!(@from_cell)
       assert_receive {:paused, gate}, 5_000
-      send(gate, {:lift, &Sanctum.reconcile_platform_admins/2})
-      next_started!(restarting(@post_gate))
+      send(gate, {:lift, real(self())})
+      assert_receive {:answered, :ignore}, 5_000
+      next_started!([Cyfr.StorageReserve | restarting(@post_gate)])
 
       assert Sanctum.Catalog.operations() === operations
       assert :persistent_term.get({Sanctum.Gate, :operations}) === operations
@@ -516,30 +496,32 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
     @tag :capture_log
     test "a partial infra restart reruns the gate before anything that admits work", %{
-      key: key,
+      slot: slot,
       rows: rows
     } do
-      {starter, root} = booted!(key)
+      {starter, root} = booted!()
+      infra = pid_at(root, [:barrier_infra])
 
-      # From the cell down: nothing before it restarts, the gate reruns
-      # before anything after it, and while it is paused nothing acts.
+      # From the cell down: nothing before it restarts, the step reruns
+      # before anything after it — in the tier's own process — and while
+      # it is paused nothing acts.
       kill!(root, [:barrier_infra, Cyfr.Cell])
       next_started!(@from_cell)
-      assert_receive {:paused, gate}, 5_000
+      assert_receive {:paused, ^infra}, 5_000
       quiet!()
       untouched!(rows)
 
-      send(gate, {:lift, &Sanctum.reconcile_platform_admins/2})
-      next_started!(restarting(@post_gate))
+      send(infra, {:lift, real(self())})
+      assert_receive {:answered, :ignore}, 5_000
+      next_started!([Cyfr.StorageReserve | restarting(@post_gate)])
       quiet!()
 
-      # The gate is the product's transient child: once its rerun has
+      # The step is the product's transient child: once its rerun has
       # answered it stays listed, with no process, for the next cascade.
-      infra = pid_at(root, [:barrier_infra])
-      assert {:ok, %{restart: :transient}} = :supervisor.get_childspec(infra, Cyfr.Bootstrap)
+      assert {:ok, %{restart: :transient}} = :supervisor.get_childspec(infra, :declared_restore)
 
-      assert {Cyfr.Bootstrap, :undefined, :worker, _} =
-               infra |> Supervisor.which_children() |> List.keyfind(Cyfr.Bootstrap, 0)
+      assert {:declared_restore, :undefined, :worker, _} =
+               infra |> Supervisor.which_children() |> List.keyfind(:declared_restore, 0)
 
       # From a domain after the gate: only what follows it restarts, and
       # the gate does not run.
@@ -552,9 +534,10 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       quiet!()
       refute_received {:paused, _}
 
-      # A rerun that keeps refusing fails the tier, whose restart by the
-      # root runs the gate in the tier's own start and fails it again,
-      # until the root gives up too.
+      # A rerun that keeps refusing — the slot lapsed — fails the tier,
+      # whose restart by the root runs the step in the tier's own start and
+      # fails it again, until the root gives up too.
+      expire_slot!(slot)
       infra_ref = Process.monitor(infra)
       kill!(root, [:barrier_infra, Cyfr.Cell])
       next_started!(@from_cell)
@@ -571,28 +554,27 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
     @tag :capture_log
     test "a rerun under a lapsed slot refuses, and a cascade keeps this boot's id", %{
-      key: key,
       slot: slot
     } do
       boot = Prima.Boot.id()
-      {starter, root} = booted!(key)
+      {starter, root} = booted!()
 
       kill!(root, [:barrier_infra, Cyfr.Cell])
       next_started!(@from_cell)
       assert_receive {:paused, gate}, 5_000
-      send(gate, {:lift, &Sanctum.reconcile_platform_admins/2})
-      next_started!(restarting(@post_gate))
+      send(gate, {:lift, real(self())})
+      assert_receive {:answered, :ignore}, 5_000
+      next_started!([Cyfr.StorageReserve | restarting(@post_gate)])
       assert Prima.Boot.id() == boot
 
       expire_slot!(slot)
       kill!(root, [:barrier_infra, Cyfr.Cell])
       next_started!(@from_cell)
       assert_receive {:paused, gate}, 5_000
-      ref = Process.monitor(gate)
-      send(gate, {:lift, &Sanctum.reconcile_platform_admins/2})
-      assert_receive {:DOWN, ^ref, :process, ^gate, {:bootstrap_refused, :slot_lost}}, 5_000
+      send(gate, {:lift, real(self())})
+      assert_receive {:answered, {:error, {:restore_refused, :slot_lost}}}, 5_000
 
-      # The tier tries the gate again; nothing after it starts meanwhile.
+      # The tier tries the step again; nothing after it starts meanwhile.
       assert_receive {:paused, retry}, 5_000
       quiet!()
       stop_tree(starter, [retry])
@@ -603,10 +585,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     # it, with the reconciler that fills them; the registry before it,
     # and everything outside the group, keep running.
     @tag :capture_log
-    test "a dead backends controller restarts the servers it releases, and nothing else", %{
-      key: key
-    } do
-      {starter, root} = booted!(key)
+    test "a dead backends controller restarts the servers it releases, and nothing else" do
+      {starter, root} = booted!()
       group = [:barrier_infra, Emissary.Supervisor, Emissary.External.ServerTree]
       registry = pid_at(root, group ++ [Emissary.External.ServerRegistry])
 
@@ -631,23 +611,23 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
       {:ok, slot: hold_slot!()}
     end
 
-    test "runs the start backwards, and every claim holder is down before its tier returns", %{
-      key: key
-    } do
-      {starter, root} = booted!(key)
+    test "runs the start backwards, and every claim holder is down before its tier returns" do
+      {starter, root} = booted!()
       infra = pid_at(root, [:barrier_infra])
 
-      # The gate answered and left no process: its claim was released
-      # before the tier went on, and nothing of it is left to stop.
-      assert {Cyfr.Bootstrap, :undefined, :worker, _} =
-               infra |> Supervisor.which_children() |> List.keyfind(Cyfr.Bootstrap, 0)
+      # The step answered and left no process: nothing of it is left to
+      # stop.
+      assert {:declared_restore, :undefined, :worker, _} =
+               infra |> Supervisor.which_children() |> List.keyfind(:declared_restore, 0)
 
       infra_ref = Process.monitor(infra)
       :ok = Supervisor.stop(root)
       stops = stops(infra_ref)
 
       assert stops -- [:infra_down] == @stop_order
-      assert @stop_order == Enum.reverse(@pre_gate ++ leaves(@post_gate) ++ @web) -- @no_process
+
+      assert @stop_order ==
+               Enum.reverse(@pre_gate ++ @gate ++ leaves(@post_gate) ++ @web) -- @no_process
 
       # The tier's own exit is the last thing a stop of the tree sees.
       assert List.last(stops) == :infra_down
@@ -663,7 +643,7 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   end
 
   # ---------------------------------------------------------------------------
-  # The tree, with stand-ins for every child but the gate
+  # The tree, with stand-ins for every child but the declared restore's step
   # ---------------------------------------------------------------------------
 
   defmodule StandIn do
@@ -697,17 +677,29 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     :ignore
   end
 
+  @doc false
+  # The declared restore's step as the tier starts it, in the tier's own
+  # process: it says it is paused and runs the work the test hands it — the
+  # product's step (`real/1`) — answering what that answers.
+  def paused_step(test) do
+    send(test, {:paused, self()})
+
+    receive do
+      {:lift, work} -> work.()
+    end
+  end
+
   # The tiers under a root with the product root's strategy and intensity
   # (`Cyfr.Supervisor`), and under ids of the test's own, so a refusal
   # names them. The starter reports the root's exit and stops the tree
   # when told to.
-  defp start_tree!(bootstrap_opts) do
+  defp start_tree! do
     test = self()
     [infra, web] = Cyfr.Application.tiers()
 
     root = [
-      %{stand_in(infra, test, bootstrap_opts) | id: :barrier_infra},
-      %{stand_in(web, test, bootstrap_opts) | id: :barrier_web}
+      %{stand_in(infra, test) | id: :barrier_infra},
+      %{stand_in(web, test) | id: :barrier_web}
     ]
 
     spawn(fn ->
@@ -738,8 +730,8 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     end
   end
 
-  # A gate paused while the tree stops would hold its tier's shutdown for
-  # good: the gates the test holds, and any the tier starts meanwhile, are
+  # A step paused while the tree stops would hold its tier for good: the
+  # paused tiers the test holds, and any the root starts meanwhile, are
   # killed.
   defp stop_tree(starter, gates \\ []) do
     ref = Process.monitor(starter)
@@ -761,13 +753,15 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     end
   end
 
-  # A tree whose gate ran the real reconcile, with every start drained.
-  defp booted!(key) do
-    starter = start_tree!(key: key, reconcile: paused(self()))
+  # A tree whose step ran the product's (no restore declared), with every
+  # start drained.
+  defp booted! do
+    starter = start_tree!()
     assert_receive {:paused, gate}, 5_000
-    send(gate, {:lift, &Sanctum.reconcile_platform_admins/2})
+    send(gate, {:lift, real(self())})
+    assert_receive {:answered, :ignore}, 5_000
     assert_receive {:tree, ^starter, {:ok, root}}, 10_000
-    assert started() == @pre_gate ++ leaves(@post_gate) ++ @web
+    assert started() == @pre_gate ++ [Cyfr.StorageReserve | leaves(@post_gate)] ++ @web
     {starter, root}
   end
 
@@ -851,14 +845,14 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     end)
   end
 
-  # Lifts every rerun with a raise until the root gives up, answering the
-  # root's exit reason and the tier each rerun ran under, in order.
+  # Lifts every rerun with the product's step, which refuses, until the
+  # root gives up, answering the root's exit reason and the tier each
+  # rerun ran in, in order.
   defp refuse_until_root_exits(starter, tiers \\ []) do
     receive do
-      {:paused, gate} ->
-        {:dictionary, dictionary} = Process.info(gate, :dictionary)
-        [tier | _] = Keyword.fetch!(dictionary, :"$ancestors")
-        send(gate, {:lift, fn _claim, _opts -> raise "boom" end})
+      {:paused, tier} ->
+        send(tier, {:lift, real(self())})
+        assert_receive {:answered, {:error, {:restore_refused, _class}}}, 5_000
         refuse_until_root_exits(starter, [tier | tiers])
 
       {:tree_exit, ^starter, reason} ->
@@ -870,28 +864,28 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
 
   # A supervisor the census describes is built, unnamed, with the
   # product's strategy and intensity over its children's stand-ins.
-  defp stand_in({id, strategy, {max_restarts, max_seconds}, children}, test, bootstrap_opts) do
+  defp stand_in({id, strategy, {max_restarts, max_seconds}, children}, test) do
     %{
       id: id,
       start:
         {Supervisor, :start_link,
          [
-           Enum.map(children, &stand_in(&1, test, bootstrap_opts)),
+           Enum.map(children, &stand_in(&1, test)),
            [strategy: strategy, max_restarts: max_restarts, max_seconds: max_seconds]
          ]},
       type: :supervisor
     }
   end
 
-  # A leaf keeps the product's id, restart and shutdown: the gate is the
-  # real one, a leaf the product leaves no process for is the probe, and
-  # every other leaf is a live stand-in.
-  defp stand_in(child, test, bootstrap_opts) do
+  # A leaf keeps the product's id, restart and shutdown: the declared
+  # restore's step is the paused product step, a leaf the product leaves
+  # no process for is the probe, and every other leaf is a live stand-in.
+  defp stand_in(child, test) do
     spec = child |> spec() |> Map.take([:id, :restart, :shutdown, :type])
 
     start =
       case spec.id do
-        Cyfr.Bootstrap -> {Cyfr.Bootstrap, :start_link, [bootstrap_opts]}
+        :declared_restore -> {__MODULE__, :paused_step, [test]}
         id when id in @no_process -> {__MODULE__, :probe, [id, test]}
         id -> {StandIn, :start_link, [id, test]}
       end
@@ -929,22 +923,20 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     end
   end
 
-  # A reconcile that announces itself and waits for the test to hand it
-  # the work to do: the real reconcile, or a failure.
-  defp paused(test) do
-    fn claim, opts ->
-      send(test, {:paused, self()})
-
-      receive do
-        {:lift, work} -> work.(claim, opts)
-      end
+  # The product's step, its answer reported to `test` before the tier
+  # reads it.
+  defp real(test) do
+    fn ->
+      answer = Cyfr.Application.declared_restore()
+      send(test, {:answered, answer})
+      answer
     end
   end
 
   defp refused(
          {:shutdown,
           {:failed_to_start_child, :barrier_infra,
-           {:shutdown, {:failed_to_start_child, Cyfr.Bootstrap, {:bootstrap_refused, class}}}}}
+           {:shutdown, {:failed_to_start_child, :declared_restore, {:restore_refused, class}}}}}
        ),
        do: class
 
@@ -1035,23 +1027,21 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
     refute_receive %Cyfr.Bus.ThreadEvent{}
   end
 
-  defp delisted_operator! do
-    n = System.unique_integer([:positive])
-
-    {:ok, user} =
-      Users.upsert_from_provider(%{
-        id: "github|https://github.com|barrier-#{n}",
+  # A person's session, and the declared restore `cyfr restore` marked
+  # once the backup's parts were back: the transition the step runs deletes
+  # every session and the marker with it.
+  defp declared_restore! do
+    {:ok, person} =
+      Sanctum.Test.People.linked(%{
+        id: "github|https://github.com|barrier-#{System.unique_integer([:positive])}",
         provider: "github",
-        email: "barrier#{n}@example.com",
         verified: true
       })
-
-    {:ok, _} = Sanctum.TestContext.ensure_platform(user.id)
 
     {:ok, session} =
       Sanctum.TestContext.create_session(
         Sanctum.Context.build(
-          user_id: user.id,
+          user_id: person.id,
           athanor_id: Sanctum.TestContext.athanor_id(),
           provider: "github",
           permissions: [:*],
@@ -1061,11 +1051,20 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
         )
       )
 
-    %{user: user, token: session.token}
+    {:ok, restore_id} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+    %{restore_id: restore_id, token: session.token}
   end
 
-  defp platform?(user_id) do
-    {:ok, rows} = Members.list_by_user(user_id)
-    Enum.any?(rows, &(&1.scope == "platform"))
+  # Whether the marker still names the restore, and the session still loads.
+  defp restore_state(%{restore_id: restore_id, token: token}) do
+    %{
+      marker:
+        Arca.Repo.exists?(
+          from(m in Arca.Schemas.ServerMeta,
+            where: m.key == "restore_pending" and m.value == ^restore_id
+          )
+        ),
+      session: match?({:ok, _}, Sanctum.Session.load(token))
+    }
   end
 end

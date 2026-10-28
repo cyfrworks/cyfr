@@ -85,7 +85,7 @@ defmodule Arca.IdentityAttemptsTest do
     now = DateTime.utc_now()
 
     {:ok, person} =
-      Users.mint(
+      Arca.Test.People.mint(
         server(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
@@ -180,13 +180,13 @@ defmodule Arca.IdentityAttemptsTest do
         server(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-          provider: "restore",
           first_seen_at: now,
           last_seen_at: now,
           created_at: now,
           updated_at: now
         },
         nil,
+        admission: "restore",
         restore: %{request_id: restore.request, token_digest: restore.token},
         also: fn minted ->
           case IdentityAttempts.advance(server(), attempt.id, "keys_active", "minted", %{
@@ -765,13 +765,13 @@ defmodule Arca.IdentityAttemptsTest do
           server(),
           %{
             id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-            provider: "restore",
             first_seen_at: now,
             last_seen_at: now,
             created_at: now,
             updated_at: now
           },
           nil,
+          admission: "restore",
           restore: %{request_id: restore.request, token_digest: restore.token},
           also: fn minted ->
             case IdentityAttempts.advance(server(), attempt.id, "keys_active", "minted", %{
@@ -822,13 +822,13 @@ defmodule Arca.IdentityAttemptsTest do
           server(),
           %{
             id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-            provider: "restore",
             first_seen_at: now,
             last_seen_at: now,
             created_at: now,
             updated_at: now
           },
           nil,
+          admission: "restore",
           restore: %{request_id: restore.request, token_digest: restore.token},
           also: fn minted ->
             {:ok, _} =
@@ -875,13 +875,13 @@ defmodule Arca.IdentityAttemptsTest do
           server(),
           %{
             id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-            provider: "restore",
             first_seen_at: now,
             last_seen_at: now,
             created_at: now,
             updated_at: now
           },
           nil,
+          admission: "restore",
           restore: %{request_id: restore.request, token_digest: restore.token},
           also: fn minted ->
             {:ok, _} =
@@ -1078,7 +1078,7 @@ defmodule Arca.IdentityAttemptsRaceTest do
 
     unboxed(fn ->
       {:ok, _} =
-        Users.mint(
+        Arca.Test.People.mint(
           server(),
           %{
             id: user_id,
