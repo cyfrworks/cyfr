@@ -5,14 +5,14 @@
 # The handle proof (README.md): a handle at the registry carries a sign-in
 # from one CYFR to another, end to end. `cyfr` releases started as the
 # browser harness starts homes (tests/browser/harness.sh), each a SQLite
-# cell on a `.test` name behind the harness's HTTPS front: the directory
-# dir.test, the person's CYFR a.test and the CYFR b.test they sign in at,
-# both set up through /setup. The registry is cyfr.run's, built from the
+# cell on a `.test` name behind the harness's HTTPS front: the person's
+# CYFR a.test and the CYFR b.test they sign in at, both set up through
+# /setup. The registry and directory are cyfr.run's, built from the
 # checkout CYFR_RUN_DIR names (its `git archive HEAD`, as its Dockerfile
 # builds it), on a PostgreSQL of the run's own, behind a front of the
 # identity proof's kind (tests/identity-proof/front.sh and cells.sh) at
-# registry.test, as the directory is at dir.test. proof.mjs drives the
-# browsers; this script answers its asks for the servers' part
+# registry.test. proof.mjs drives the browsers; this script answers its
+# asks for the servers' part
 # (`ask-N.json`, answered `answer-N.json`).
 #
 # Usage: CYFR_RUN_DIR=<cyfr.run checkout> tests/handle-proof/run.sh
@@ -57,7 +57,6 @@ PG_VOLUME="$RUN-pgdata"
 REGISTRY="$RUN-registry"
 REGISTRY_IMAGE="$RUN-registry:$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 REGISTRY_HOST=registry.test
-DIRECTORY_FRONT=127.77.0.1
 REGISTRY_FRONT=127.77.0.3
 SMOKEID="$WORK/bin/smokeid"
 
@@ -101,8 +100,17 @@ handle_fixture() {
 # psql in the registry's database, the SQL on stdin, `$@` its -v
 # variables; one value a line, unaligned.
 registry_sql() {
-  local vars=() pair
-  for pair in "$@"; do vars+=(-v "$pair"); done
+  local vars=() pair table schema
+  for pair in "$@"; do
+    if [[ "$pair" == t=* ]]; then
+      table="${pair#t=}"
+      schema=public
+      if [[ "$table" == *.* ]]; then schema="${table%%.*}"; table="${table#*.}"; fi
+      vars+=(-v "s=$schema" -v "t=$table")
+    else
+      vars+=(-v "$pair")
+    fi
+  done
   docker exec -i "$PG" psql -X -q -At -v ON_ERROR_STOP=1 -U cyfrrun -d cyfrrun "${vars[@]}"
 }
 
@@ -120,17 +128,8 @@ registry_http() {
   rm -f "$body"
 }
 
-# The same to the directory at https://dir.test.
-directory_http() {
-  local method="$1" path="$2" body status
-  shift 2
-  body="$(mktemp "$WORK/body.XXXXXX")"
-  status="$(curl -sS -m 30 -o "$body" -w '%{http_code}' -X "$method" \
-    --resolve "dir.test:443:$DIRECTORY_FRONT" --cacert "$BROWSER_AUTHORITY/authority.pem" \
-    "$@" "https://dir.test$path")" || status=0
-  python3 -I -c 'import json, sys; print(json.dumps({"status": int(sys.argv[1]), "body": open(sys.argv[2]).read()}))' "$status" "$body"
-  rm -f "$body"
-}
+# Directory requests use the registry's own HTTPS front.
+directory_http() { registry_http "$@"; }
 
 release_build
 
@@ -145,21 +144,17 @@ docker build -q -t "$REGISTRY_IMAGE" "$WORK/registry-src" >"$WORK/registry-build
 
 step "the run's authority and the homes"
 browser_authority
-DIR="$WORK/dir"
 A="$WORK/a"
 B="$WORK/b"
-browser_home "$DIR" dir.test
 browser_home "$A" a.test
 browser_home "$B" b.test
 browser_certificate "$REGISTRY_HOST"
 openssl rand -hex 32 | tr -d '\n' >"$SECRETS/setup-a"
 openssl rand -hex 32 | tr -d '\n' >"$SECRETS/setup-b"
 
-identity_directory dir.test "$DIRECTORY_FRONT"
 identity_directory "$REGISTRY_HOST" "$REGISTRY_FRONT"
-identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
-identity_reaches_directory "$A" dir.test
-identity_reaches_directory "$B" dir.test
+identity_reaches_directory "$A" registry.test
+identity_reaches_directory "$B" registry.test
 for cell in "$A" "$B"; do identity_env "$cell" CYFR_REGISTRY_URL "$REGISTRY_HOST"; done
 identity_env "$A" CYFR_SETUP_TOKEN "$(cat "$SECRETS/setup-a")"
 identity_env "$B" CYFR_SETUP_TOKEN "$(cat "$SECRETS/setup-b")"
@@ -185,17 +180,11 @@ openssl rand -hex 32 | tr -d '\n' >"$SECRETS/admin-token"
     "DATABASE_URL=postgres://cyfrrun:$(cat "$SECRETS/pg")@127.0.0.1:$PG_PORT/cyfrrun?sslmode=disable" \
     "ZOT_INTERNAL_URL=http://127.0.0.1:9" \
     "DOMAIN=$REGISTRY_HOST" \
-    "DIRECTORY_URL=https://dir.test" \
-    "DIRECTORY_PRIVATE_TARGETS=$DIRECTORY_FRONT/32" \
-    "DIRECTORY_CA_FILE=/authority/authority.pem" \
     "ADMIN_TOKEN=$(cat "$SECRETS/admin-token")" \
     "LOG_LEVEL=info" >"$SECRETS/registry.env"
 )
 
-server_start "$DIR"
-identity_front_start "$DIR"
-docker run -d --name "$REGISTRY" --network host --add-host "dir.test:$DIRECTORY_FRONT" \
-  -v "$BROWSER_AUTHORITY:/authority:ro" --env-file "$SECRETS/registry.env" \
+docker run -d --name "$REGISTRY" --network host --env-file "$SECRETS/registry.env" \
   "$REGISTRY_IMAGE" >/dev/null || fail "the registry did not start"
 closes=$((SECONDS + 90))
 until curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$REGISTRY_PORT/health" 2>/dev/null; do
@@ -263,12 +252,12 @@ registry_admin() {
 }
 
 # The second identity: the smoke's person (cmd/smokeid), enrolled at
-# dir.test, which accepts the registry's policy, claims the handle `$1`
+# registry.test, which accepts the registry's policy, claims the handle `$1`
 # and publishes the address `$2` with it, each a request its live key
 # signs. Answers its identifier and each answer.
 other_identity() {
   local handle="$1" address="$2" state="$WORK/other.json" identifier steps="[]" request version
-  identifier="$("$SMOKEID" -state "$state" new https://dir.test)"
+  identifier="$("$SMOKEID" -state "$state" new "https://$REGISTRY_HOST")"
   "$SMOKEID" -state "$state" genesis >"$WORK/other-genesis"
   add() { steps="$(python3 -I -c 'import json, sys; s = json.loads(sys.argv[1]); s.append({"op": sys.argv[2], **json.loads(sys.argv[3])}); print(json.dumps(s))' "$steps" "$1" "$2")"; }
   add genesis "$(directory_http POST /directory/v1/genesis -H 'content-type: application/json' --data-binary "@$WORK/other-genesis")"
@@ -344,7 +333,7 @@ answer_ask() {
     registry_rows)
       ANSWER="$(registry_sql "t=$(asked "$ask" table)" "c=$(asked "$ask" column)" "v=$(asked "$ask" value)" <<'SQL'
 SELECT json_build_object('rows', coalesce(json_agg(row_to_json(x) ORDER BY to_jsonb(x)->>'expires_at', row_to_json(x)::text), '[]'::json))
-  FROM (SELECT * FROM :"t" WHERE :'c' = '' OR to_jsonb(:"t")->>:'c' = :'v') x;
+  FROM (SELECT * FROM :"s".:"t" r WHERE :'c' = '' OR to_jsonb(r)->>:'c' = :'v') x;
 SQL
 )" || ANSWER=""
       ;;
@@ -353,9 +342,9 @@ SQL
       # it, which a tamper's restore must leave as they were.
       ANSWER="$(registry_sql "t=$(asked "$ask" table)" <<'SQL'
 SELECT json_build_object(
-  'rows', (SELECT coalesce(json_agg(row_to_json(x) ORDER BY row_to_json(x)::text), '[]'::json) FROM :"t" x),
+  'rows', (SELECT coalesce(json_agg(row_to_json(x) ORDER BY row_to_json(x)::text), '[]'::json) FROM :"s".:"t" x),
   'constraints', (SELECT coalesce(json_agg(json_build_array(conname, pg_get_constraintdef(oid)) ORDER BY conname), '[]'::json)
-                    FROM pg_constraint WHERE conrelid = CAST(:'t' AS regclass)));
+                    FROM pg_constraint WHERE conrelid = format('%I.%I', :'s', :'t')::regclass));
 SQL
 )" || ANSWER=""
       ;;
@@ -375,7 +364,7 @@ SQL
         "f=$(asked "$ask" field)" "patch=$value" "phase=$(asked "$ask" phase)" <<'SQL' 2>"$WORK/psql.err" | tail -n 1
 BEGIN;
 SET LOCAL session_replication_role = replica;
-SELECT set_config('handle_proof.t', :'t', true), set_config('handle_proof.phase', :'phase', true) \g /dev/null
+SELECT set_config('handle_proof.t', format('%I.%I', :'s', :'t'), true), set_config('handle_proof.phase', :'phase', true) \g /dev/null
 CREATE TABLE IF NOT EXISTS handle_proof_checks (tbl text, name text, def text);
 DO $$
 DECLARE c record;
@@ -384,12 +373,12 @@ BEGIN
     FOR c IN SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
               WHERE conrelid = current_setting('handle_proof.t')::regclass AND contype = 'c' LOOP
       INSERT INTO handle_proof_checks VALUES (current_setting('handle_proof.t'), c.conname, c.def);
-      EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', current_setting('handle_proof.t'), c.conname);
+      EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', current_setting('handle_proof.t'), c.conname);
     END LOOP;
   END IF;
 END $$;
 WITH changed AS (
-  UPDATE :"t" SET :"f" = (json_populate_record(CAST(NULL AS :"t"), :'patch'::json)).:"f"
+  UPDATE :"s".:"t" SET :"f" = (json_populate_record(CAST(NULL AS :"s".:"t"), :'patch'::json)).:"f"
    WHERE :"k"::text = :'kv' RETURNING 1)
 SELECT count(*) AS changed FROM changed \gset
 DO $$
@@ -397,7 +386,7 @@ DECLARE c record;
 BEGIN
   IF current_setting('handle_proof.phase') = 'restore' THEN
     FOR c IN SELECT name, def FROM handle_proof_checks WHERE tbl = current_setting('handle_proof.t') LOOP
-      EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I %s', current_setting('handle_proof.t'), c.name, c.def);
+      EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s', current_setting('handle_proof.t'), c.name, c.def);
     END LOOP;
     DELETE FROM handle_proof_checks WHERE tbl = current_setting('handle_proof.t');
   END IF;
