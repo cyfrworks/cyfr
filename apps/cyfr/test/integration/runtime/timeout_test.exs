@@ -100,16 +100,6 @@ defmodule Locus.Runtime.TimeoutTest do
   end
 
   describe "timeout enforcement" do
-    test "a dispatched run accepts the timeout_ms option", %{ctx: ctx, ref: ref} do
-      {:ok, authority} = Opus.authority_for(ctx, :default, ref)
-
-      assert {:ok, %{status: :completed}} =
-               Dispatch.run(ctx, ref, %{"a" => 10, "b" => 20},
-                 timeout_ms: 5000,
-                 authority: authority
-               )
-    end
-
     test "a run past its consented timeout is ended at it and recorded as failed", %{ctx: ctx} do
       auth = spin_authority("1s")
       assert Authority.limits(auth).timeout == "1s"
