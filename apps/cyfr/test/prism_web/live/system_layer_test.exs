@@ -3255,6 +3255,52 @@ defmodule PrismWeb.SystemLayerTest do
       answer
     end
 
+    test "a choice refused after a failed re-plan says only its own refusal",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(local, "h-error-#{System.unique_integer([:positive])}", "0.1.0", ["GET"])
+
+      [a, b, c] = for _ <- 1..3, do: regrant_key!(local)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: a.id}]})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h-error", app)
+      prompt(view, grant)
+
+      # Another client grants B and revokes it: the re-plan the refused
+      # confirm asks for fails on B.
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: b.id}]})
+      {:ok, _} = Sanctum.Vault.revoke(local, b.id)
+      assert {:refused, _} = confirm_now(view, "g-h-error")
+      assert has_element?(view, ".consent-sheet__error", "entry_unavailable")
+
+      # C, still offered from the sheet's plan, has moved off the need's
+      # host: choosing it is refused, and that refusal alone is said.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.VaultEntry,
+            where: e.athanor_id == ^local.athanor_id and e.id == ^c.id
+          ),
+          set: [
+            destination:
+              Jason.encode!(%{"hosts" => ["other.regrant.example"], "scheme" => "https"})
+          ]
+        )
+
+      click(view, ~s([data-test="grant-change"]))
+      click(view, ~s([data-test="grant-pick"][phx-value-entry_id="#{c.id}"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-need"][data-need="api_key"] [data-test="grant-refusal"]),
+               "entry_mismatch"
+             )
+
+      refute has_element?(view, ".consent-sheet__error")
+      refute render(view) =~ "entry_unavailable"
+      assert has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+    end
+
     test "a refused commit replans over a head narrowed elsewhere, same ask",
          %{view: view, ctx: ctx} do
       local = local_of(ctx)

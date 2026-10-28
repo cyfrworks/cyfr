@@ -1201,18 +1201,23 @@ defmodule PrismWeb.ConsentSheetComponent do
           {nil, _previewed} ->
             assign(socket, preview: nil, error: Ops.error_message(reason))
 
+          # A choice's refusal is the sheet's one: it takes the place of a
+          # failed re-plan's sentence, which spoke of another walk.
           {at, %{} = last} ->
             socket
             |> assign(
               choices: last.choices,
               origins: last.origins,
               subset: last.subset,
-              preview: last.preview
+              preview: last.preview,
+              error: nil
             )
             |> refuse(at, Ops.error_message(reason))
 
           {at, nil} ->
-            socket |> assign(:preview, nil) |> refuse(at, Ops.error_message(reason))
+            socket
+            |> assign(preview: nil, error: nil)
+            |> refuse(at, Ops.error_message(reason))
         end
     end
   end
