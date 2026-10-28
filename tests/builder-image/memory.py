@@ -319,17 +319,23 @@ def container_state(stack):
     """
     inspect = json.loads(run("docker", "inspect", stack.container).stdout)[0]
     events = {}
-    for line in stack.exec("cat /sys/fs/cgroup/memory.events").stdout.splitlines():
+    for line in imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/memory.events"),
+                                       "the container's memory events").splitlines():
         name, count = line.split()
         events[name] = int(count)
     pids = [1] + [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]]
-    started = stack.exec(" ".join(f"echo {pid}:$(cut -d' ' -f22 /proc/{pid}/stat 2>/dev/null);" for pid in pids)).stdout.split()
+    # Each start time is read by a cut that exits 0, chained so a failed read ends the script with its status: a
+    # process that has gone fails the state rather than reading as an empty start time.
+    started = imagesuite.read_output(stack.exec(" && ".join(
+        f"x=$(cut -d' ' -f22 /proc/{pid}/stat) && echo {pid}:$x" for pid in pids)),
+        "the start times of the container's processes").split()
     return {
         "oom_killed": inspect["State"]["OOMKilled"],
         "init": started[:1],
         "events": events,
         "release": started[1:],
-        "current": int(stack.exec("cat /sys/fs/cgroup/memory.current").stdout.strip() or 0),
+        "current": int(imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/memory.current"),
+                                              "the container's memory use").strip()),
     }
 
 
@@ -364,6 +370,17 @@ def own_limit_writable(stack):
         return ("writable from inside: this host mounts cgroup2 without nsdelegate, so uid 0 in the container "
                 "(cyfr-locus and the container's init, nothing else) can rewrite the container's own limits")
     return "not writable from inside: " + (result.stderr.strip().rsplit(": ", 1)[-1] or "refused")
+
+
+def keeper_groups(stack):
+    """The keeper cgroup groups the container holds, read in word form: `absent` alone from a command that exits 0.
+
+    `find` exits 0 with no output when no group matches, and non-zero on a
+    read error, so the word is printed only after the enumeration succeeded.
+    """
+    script = ('groups="$(find /sys/fs/cgroup -maxdepth 1 -name \'keeper-*\')" || exit 3; '
+              'if [ -n "$groups" ]; then echo present; echo "$groups"; else echo absent; fi')
+    return imagesuite.read_listing(stack.exec(script), "the keeper cgroups the container holds")
 
 
 def test_keeper(stack, limit, canary):
@@ -450,7 +467,7 @@ def test_keeper(stack, limit, canary):
     left = stack.pool_processes()
     expect(left == [], "no process of any spawn's uid is left, the daemon included", left)
     expect(stack.homes() == [], "no home is left", stack.homes())
-    groups = stack.exec("ls -d /sys/fs/cgroup/keeper-* 2>/dev/null").stdout.split()
+    groups = keeper_groups(stack)
     expect(groups == [], "no spawn's cgroup is left", groups)
     expect(not again and after["release"] == before["release"] and after["release"],
            "the release and the container were not touched", {"before": before, "after": after})

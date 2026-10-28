@@ -141,6 +141,93 @@ def guard_failed(inspected):
     return state.get("Health", {}).get("Status") != "healthy" and (state.get("ExitCode") == 1 or inspected["RestartCount"] >= 1)
 
 
+# Docker's refusals of a call on a container whose main process is not running: the container is stopped, or it is
+# between one exit of its main process and the next start.
+NO_PROCESS_REFUSALS = ("is not running", "is restarting, wait until the container is running")
+
+
+def listing(done, what):
+    """The stdout of `done`, a docker call on a container made with check=False, read as what the container holds.
+
+    A failed call answers nothing about the container's processes or its home
+    root, so it fails the observation. The one exception is Docker's refusal
+    of the call itself: a container whose main process is not running holds
+    no process, and its home root, a tmpfs mount of each role, goes with it.
+    The refusal is read from the call, since an inspection made afterwards
+    may find the restart already over.
+    """
+    if done.returncode == 0:
+        return done.stdout
+    if any(refusal in done.stderr for refusal in NO_PROCESS_REFUSALS):
+        return ""
+    sys.exit(f"FAIL: {what} exited {done.returncode}\n{done.stderr.strip()}")
+
+
+def read_word(done, words, what):
+    """The word a probe printed in a successful exec, which must be one of `words`; anything else fails.
+
+    A probe such as `test -e PATH && echo present || echo absent` answers in
+    its output, so a failed exec is no answer whatever its status, and output
+    of neither word is none either.
+    """
+    answer = done.stdout.strip()
+    if done.returncode != 0 or answer not in words:
+        sys.exit(f"FAIL: {what} answered {answer!r} with status {done.returncode}\n{done.stderr.strip()}")
+    return answer
+
+
+def read_output(done, what):
+    """The stdout of a command that exits 0: a table or a listing is an answer only when its command ran to the end.
+
+    Any other status, a failed docker exec's included, fails the observation.
+    """
+    if done.returncode != 0:
+        sys.exit(f"FAIL: {what} exited {done.returncode}\n{done.stderr.strip()}")
+    return done.stdout
+
+
+def read_listing(done, what):
+    """The rows of a listing in word form, from a command that exits 0: `present` and its rows, or `absent` alone.
+
+    Absence is the word `absent` from a successful exec. A failed exec, and
+    output that answers neither word, or `present` with no rows, are no answer.
+    """
+    lines = read_output(done, what).splitlines()
+    if lines == ["absent"]:
+        return []
+    if lines and lines[0] == "present" and len(lines) > 1:
+        return lines[1:]
+    sys.exit(f"FAIL: {what} printed no listing in word form\n{done.stdout!r}")
+
+
+def parse_counters(text, names, what):
+    """The `name count` lines of a cgroup file, as a dict, with each of `names` among them.
+
+    A counter that is not there is no answer, so it fails rather than being
+    read as zero.
+    """
+    counters = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) != 2 or not fields[1].isdigit():
+            sys.exit(f"FAIL: {what} printed a line that is no counter: {line!r}")
+        counters[fields[0]] = int(fields[1])
+    missing = [name for name in names if name not in counters]
+    if missing:
+        sys.exit(f"FAIL: {what} holds no counter {missing}: {counters}")
+    return counters
+
+
+def read_counters(done, names, what):
+    """The counters of a cgroup file from a command that exits 0 (parse_counters)."""
+    return parse_counters(read_output(done, what), names, what)
+
+
+def no_kills(events):
+    """Whether a cgroup's events count no OOM and no OOM kill: both counters must be read, never defaulted."""
+    return events["oom"] == 0 and events["oom_kill"] == 0
+
+
 class Stack:
     """A compose project of the suite's own: its name, its project directory and its teardown.
 
@@ -173,7 +260,11 @@ class Stack:
         and by the exit status when it fails again at exit.
         """
         if os.environ.get("CI"):
-            print(self.logs())
+            try:
+                print(self.logs())
+            except SystemExit as unread:
+                # A failed read of the logs is reported here, and the teardown goes on.
+                print(unread, file=sys.stderr, flush=True)
         stop = ["--timeout", str(SIGNALLED_STOP_S)] if signalled() else []
         for attempt in range(1, DOWN_ATTEMPTS + 1):
             result = self.compose("down", "--volumes", "--remove-orphans", *stop, check=False)

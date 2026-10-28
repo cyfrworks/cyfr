@@ -33,7 +33,7 @@ from harness import (  # noqa: E402
     HOME_ROOT, POOL_FIRST, RELEASE_BIN, RELEASE_UID, RELEASE_USER, ROLE, RUN_DIR, Stack, build_canary, eventually,
     expect, owner_of, probe, require_docker, run,
 )
-from imagesuite import run_name  # noqa: E402
+from imagesuite import read_listing, run_name  # noqa: E402
 
 UID = POOL_FIRST
 TAG = "locus-backends-residue"
@@ -43,15 +43,25 @@ IPC = ["shm", "sem", "msg", "mqueue"]
 
 
 def held_by_uid(stack):
-    """What the kernel holds for the uid, read as root inside the container."""
+    """What the kernel holds for the uid, read as root inside the container: its rows, or none.
+
+    Each read exits 3 when it fails, and the answer is the word `absent` only
+    from a command that exits 0 (read_listing).
+    """
     script = f"""
-      find {HOME_ROOT} /dev/mqueue -mindepth 1 -maxdepth 1 -user {UID} 2>/dev/null
-      for t in shm sem msg; do
-        awk -v u={UID} 'NR == 1 {{ for (i = 1; i <= NF; i++) h[i] = $i; next }}
-          {{ for (i = 1; i <= NF; i++) if ((h[i] == "uid" || h[i] == "cuid") && $i == u) {{ print FILENAME ": " $2; next }} }}' \\
-          /proc/sysvipc/$t
-      done"""
-    return [line for line in stack.exec(script).stdout.splitlines() if line]
+      home="$(find {HOME_ROOT} /dev/mqueue -mindepth 1 -maxdepth 1 -user {UID})" || exit 3
+      ipc="$(for t in shm sem msg; do
+          awk -v u={UID} 'NR == 1 {{ for (i = 1; i <= NF; i++) h[i] = $i; next }}
+            {{ for (i = 1; i <= NF; i++) if ((h[i] == "uid" || h[i] == "cuid") && $i == u) {{ print FILENAME ": " $2; next }} }}' \\
+            /proc/sysvipc/$t || exit 3
+        done)" || exit 3
+      if [ -n "$home$ipc" ]; then
+        echo present
+        printf '%s\\n' "$home" "$ipc" | sed '/^$/d'
+      else
+        echo absent
+      fi"""
+    return read_listing(stack.exec(script), f"what the kernel holds for uid {UID}")
 
 
 def sync_probe(c, owner):

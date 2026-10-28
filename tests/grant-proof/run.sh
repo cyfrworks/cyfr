@@ -80,6 +80,9 @@ grant_fixture() {
   cell_fixture "$CELL" "$HERE/fixture.exs" GRANT "$@"
 }
 
+step "the head predicates, on heads alone"
+node --test "$HERE/heads-test.mjs" || fail "the head predicates refused the flows head or held a head under another digest"
+
 release_build
 
 step "the command line, built from apps/codex"
