@@ -132,6 +132,15 @@ context_paths "$(last_context)" | grep -qxF config/config.exs || fail 'export-ig
 diff "$S/want" <(context_paths "$(last_context)") >/dev/null || fail "the context changed under attributes: $(diff "$S/want" <(context_paths "$(last_context)") | tr '\n' ' ')"
 rm "$repo/.git/info/attributes" "$repo/.gitattributes"
 
+begin 'one tree gives the same context bytes every time'
+first=$(last_context)
+sleep 1.1   # a context that carried the clock's time would now differ
+rm "$(image_file "$base_locus")"
+(cd "$repo" && scripts/image.sh locus) >/dev/null 2>&1
+second=$(last_context)
+[ "$first" != "$second" ] || fail 'the rebuild kept no new context'
+[ "$(sha256 <"$first")" = "$(sha256 <"$second")" ] || fail "two contexts of one tree differ: $(sha256 <"$first") $(sha256 <"$second")"
+
 begin 'apps/*/mix.exs resolves to the mix files alone, a continued COPY line is read whole'
 out=$(cd "$repo" && scripts/image.sh app 2>/dev/null)
 [ "$out" = "$base_app" ] || fail "the build printed $out"

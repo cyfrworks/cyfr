@@ -283,20 +283,27 @@ while IFS= read -r -d '' dir; do
     for n in $unreadable; do kept directory "$dir" "partition $n's database receipt cannot be read"; done
     continue
   fi
-  dropped= left=
+  # A database's drop and its receipt's removal are separate outcomes: a
+  # dropped database whose receipt stays is dropped, and the next run
+  # finds it gone (DROP DATABASE IF EXISTS) and removes the receipt.
+  dropped= left= receipts=
   for drop in ${drops[@]+"${drops[@]}"}; do
     read -r n server database <<<"$drop"
     if $dry; then removed database "$database"; continue; fi
-    if out=$(drop_database "$server" "$database" "$n" 2>&1) && rm -f "$dir/p$n/database-created"; then
-      removed database "$database"
-      dropped="$dropped${dropped:+, }$database"
-    else
-      failure database "$database" "${out:-its receipt could not be removed}"
+    if ! out=$(drop_database "$server" "$database" "$n" 2>&1); then
+      failure database "$database" "${out:-the drop failed}"
       left="$left${left:+, }$database"
+      continue
+    fi
+    removed database "$database"
+    dropped="$dropped${dropped:+, }$database"
+    if ! out=$(rm -f "$dir/p$n/database-created" 2>&1); then
+      failure receipt "$dir/p$n/database-created" "${out:-rm failed}"
+      receipts="$receipts${receipts:+, }$database"
     fi
   done
-  if [ -n "$left" ]; then
-    failure directory "$dir" "kept; it dropped ${dropped:-no database} and left $left"
+  if [ -n "$left$receipts" ]; then
+    failure directory "$dir" "kept; it dropped ${dropped:-no database}${left:+ and left $left}${receipts:+, and the receipts of $receipts stay}"
     continue
   fi
   if $dry; then removed directory "$dir"

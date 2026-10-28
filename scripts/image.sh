@@ -294,15 +294,16 @@ if $tag_only; then
 fi
 
 # Writes the build's context to stdout: a tar of each input's blob, read
-# raw (`git cat-file --batch`), with its mode. $2 holds the inputs as
-# `<mode> <blob id>\t<path>\0` records.
+# raw (`git cat-file --batch`), with its mode, in the inputs' byte order
+# and with every time at the epoch, so one tree always gives the same
+# bytes. $2 holds the inputs as `<mode> <blob id>\t<path>\0` records,
+# sorted.
 context_tar=$(cat <<'PY'
-import io, subprocess, sys, tarfile, time
+import io, subprocess, sys, tarfile
 
 root, inputs_path = sys.argv[1:3]
 records = [r for r in open(inputs_path, "rb").read().split(b"\0") if r]
 batch = subprocess.Popen(["git", "-C", root, "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-now = int(time.time())
 with tarfile.open(fileobj=sys.stdout.buffer, mode="w|", format=tarfile.PAX_FORMAT) as tar:
     for record in records:
         meta, path = record.split(b"\t", 1)
@@ -315,7 +316,7 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode="w|", format=tarfile.PAX_FORMA
         content = batch.stdout.read(int(header[2]))
         batch.stdout.read(1)
         info = tarfile.TarInfo(path.decode("utf-8", "surrogateescape"))
-        info.mtime = now
+        info.mtime = 0
         if mode == "120000":
             info.type = tarfile.SYMTYPE
             info.linkname = content.decode("utf-8", "surrogateescape")

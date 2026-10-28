@@ -272,6 +272,30 @@ grep -qF "failed database $db2: stub: the run failed" "$S/partial.out" || fail '
 has partial "failed directory $S/tmp/cyfr-t.r9: kept; it dropped $db1 and left $db2"
 gone "$S/tmp/cyfr-t.r9/p1/database-created"; there "$S/tmp/cyfr-t.r9/p2/database-created"
 
+begin 'a dropped database whose receipt cannot be removed is reported as dropped'
+db3=cyfr_test_33333333333333333333333333333333_p1
+run_dir cyfr-t.r10 "$(dead_pid)"; receipt "$S/tmp/cyfr-t.r10" 1 "$db3"
+age 4 "$S/tmp/cyfr-t.r10"
+mkdir -p "$S/rm-bin"
+cat >"$S/rm-bin/rm" <<EOF
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = "$S/tmp/cyfr-t.r10/p1/database-created" ]; then echo 'stub: the receipt could not be removed' >&2; exit 1; fi
+done
+exec $(command -v rm) "\$@"
+EOF
+chmod +x "$S/rm-bin/rm"
+status=0; PATH="$S/rm-bin:$PATH" janitor receipt --keep-build-cache || status=$?
+[ "$status" = 1 ] || fail "exited $status, not 1"
+has receipt "removed database $db3"
+grep -qF "failed receipt $S/tmp/cyfr-t.r10/p1/database-created: stub: the receipt could not be removed" "$S/receipt.out" ||
+  fail 'the receipt that stayed is not named'
+has receipt "failed directory $S/tmp/cyfr-t.r10: kept; it dropped $db3, and the receipts of $db3 stay"
+there "$S/tmp/cyfr-t.r10/p1/database-created"
+janitor receipt-again --keep-build-cache || fail "the next run exited $?"
+has receipt-again "removed database $db3"
+gone "$S/tmp/cyfr-t.r10"
+
 begin 'a removal that fails exits 1 naming it, and keeps what it names'
 receipt "$S/tmp/cyfr-t.r5" 1 "$db"
 age 4 "$S/tmp/cyfr-t.r5"
