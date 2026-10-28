@@ -399,6 +399,7 @@ for tool in bash sleep pgrep pkill kill cat perl ps tr mktemp mkfifo rm; do ln -
 caller c16 <<EOF
 hash -r
 contain_start -g 2 $(forever c16.leader ignore)
+echo "\$CONTAIN_WATCHDOG" > "\$S/c16.watchdog"
 echo "\$CONTAIN_PID" > "\$S/c16.contain_pid"
 contain_wait "\$CONTAIN_PID" 0
 EOF
@@ -409,6 +410,8 @@ until_true 10 test -s "$S/c16.contain_pid" || fail 'contain_start did not return
 [ "$(cat "$S/c16.contain_pid")" = "$leader" ] || fail 'CONTAIN_PID is not the command'
 [ "$(sid_of "$leader")" = "$leader" ] || fail 'the command does not lead its own session'
 [ -n "$(watchdogs_of "$(cat "$S/c16.caller")")" ] || fail 'no watchdog runs'
+[ "$(cat "$S/c16.watchdog")" = "$(watchdogs_of "$(cat "$S/c16.caller")")" ] ||
+  fail "CONTAIN_WATCHDOG is $(cat "$S/c16.watchdog"), not the watchdog that runs"
 kill_child "$bg"
 until_true $((2 + 15 + 2)) dead "$leader" || fail "perl's watchdog did not stop the session"
 
@@ -612,5 +615,34 @@ until_true 10 test -s "$S/c24.took" || fail 'the bare wait did not return after 
 dead "$leader" || fail 'the bare wait returned while the leader ran'
 [ "$(cat "$S/c24.took")" -le 3 ] || fail "the bare wait took $(cat "$S/c24.took")s for a 2 s leader"
 until_true 10 no_watchdog_of "$(cat "$S/c24.caller")" || fail 'the watchdog stayed after the session was retired'
+
+# --- 25: the watchdog's pid ---------------------------------------------------
+begin '25 CONTAIN_WATCHDOG names the live watchdog of the session'
+# A run is over only when its session is empty and its watchdog has exited:
+# the pid is the watchdog's own report, so it names the process that holds
+# the caller's held descriptors until the session is stopped.
+caller c25 <<EOF
+contain_start -g 1 $(forever c25.leader)
+echo "\$CONTAIN_WATCHDOG" > "\$S/c25.watchdog"
+until [ -e "\$S/c25.stop" ]; do sleep 0.1; done
+contain_stop "\$CONTAIN_PID" 1 || :
+echo stopped > "\$S/c25.stopped"
+until [ -e "\$S/c25.end" ]; do sleep 0.1; done
+EOF
+run_bg c25
+leader=$(pid_of c25.leader)
+until_true 10 test -s "$S/c25.watchdog" || fail 'contain_start did not return'
+watchdog=$(cat "$S/c25.watchdog")
+case $watchdog in ''|0*|*[!0-9]*) fail "CONTAIN_WATCHDOG is not a pid: $watchdog" ;; esac
+[ "$watchdog" = "$(watchdogs_of "$(cat "$S/c25.caller")")" ] ||
+  fail "CONTAIN_WATCHDOG is $watchdog, not the one watchdog of the caller: $(watchdogs_of "$(cat "$S/c25.caller")" | tr '\n' ' ')"
+alive "$watchdog" || fail 'the named watchdog is not running while its session is'
+[ "$(sid_of "$watchdog")" = "$watchdog" ] || fail 'the named watchdog does not lead its own session'
+touch "$S/c25.stop"
+until_true 10 test -e "$S/c25.stopped" || fail 'contain_stop did not return'
+dead "$leader" || fail 'the session outlived contain_stop'
+until_true 10 dead "$watchdog" || fail 'the named watchdog outlived its stopped session'
+touch "$S/c25.end"
+wait "$bg"
 
 echo 'contain tests passed'
