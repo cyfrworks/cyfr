@@ -836,8 +836,17 @@ defmodule PrismWeb.ConsentSheetComponentTest do
                "Fields: DB_USER from username, password from password"
              )
 
-      # Answered, the question stays as answered and asks nothing more.
+      # Answered, the question stays as answered and asks nothing more, and
+      # the pair whose names differ is said as an automatic map's is.
       assert has_element?(view, question.("DB_USER") <> ~s( option[value="username"][selected]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-map-pair"]),
+               "DB_USER comes from username"
+             )
+
+      refute has_element?(view, ~s([data-test="grant-map-pair"]), "password comes from")
     end
 
     test "a preview refusing the map shows its sentence on the need and grants nothing",

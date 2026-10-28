@@ -1980,7 +1980,7 @@ defmodule PrismWeb.ConsentSheetComponent do
         pairs:
           for(
             {need_field, entry_field} <- Enum.sort(fields || automatic || %{}),
-            is_map(automatic) and need_field != entry_field,
+            need_field != entry_field,
             do: {need_field, entry_field}
           ),
         due?: is_map(assigns.choice) and map_pending?(assigns.choice)
