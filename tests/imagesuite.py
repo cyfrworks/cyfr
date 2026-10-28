@@ -176,6 +176,30 @@ def read_word(done, words, what):
     return answer
 
 
+def read_output(done, what):
+    """The stdout of a command that exits 0: a table or a listing is an answer only when its command ran to the end.
+
+    Any other status, a failed docker exec's included, fails the observation.
+    """
+    if done.returncode != 0:
+        sys.exit(f"FAIL: {what} exited {done.returncode}\n{done.stderr.strip()}")
+    return done.stdout
+
+
+def read_listing(done, what):
+    """The rows of a listing in word form, from a command that exits 0: `present` and its rows, or `absent` alone.
+
+    Absence is the word `absent` from a successful exec. A failed exec, and
+    output that answers neither word, or `present` with no rows, are no answer.
+    """
+    lines = read_output(done, what).splitlines()
+    if lines == ["absent"]:
+        return []
+    if lines and lines[0] == "present" and len(lines) > 1:
+        return lines[1:]
+    sys.exit(f"FAIL: {what} printed no listing in word form\n{done.stdout!r}")
+
+
 class Stack:
     """A compose project of the suite's own: its name, its project directory and its teardown.
 

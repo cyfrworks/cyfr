@@ -385,6 +385,9 @@ class SuiteObservations(unittest.TestCase):
     def test_backends_listing_and_home_probe(self):
         self.run_entry("locus-backends-image", "harness_test.py")
 
+    def test_backends_residue_reads(self):
+        self.run_entry("locus-backends-image", "residue_test.py")
+
 
 class ObservationAnswers(unittest.TestCase):
     """What a probe's output or a container's state may answer: a word from a successful exec, and no process in a stopped container."""
@@ -421,6 +424,21 @@ class ObservationAnswers(unittest.TestCase):
 
     def test_a_successful_call_lists_its_output(self):
         self.assertEqual(imagesuite.listing(subprocess.CompletedProcess([], 0, "a\n", ""), "the listing"), "a\n")
+
+    def test_a_listing_in_word_form_is_read_from_a_command_that_exits_zero(self):
+        self.assertEqual(imagesuite.read_listing(self.probe(0, "present\n/a: 1\n"), "the listing"), ["/a: 1"])
+        self.assertEqual(imagesuite.read_listing(self.probe(0, "absent\n"), "the listing"), [])
+
+    def test_a_failed_or_wordless_listing_is_no_answer(self):
+        for returncode, stdout in ((1, "absent\n"), (125, ""), (0, ""), (0, "present\n"), (0, "absent\n/a: 1\n")):
+            with self.subTest(returncode=returncode, stdout=stdout):
+                with self.assertRaises(SystemExit):
+                    imagesuite.read_listing(self.probe(returncode, stdout), "the listing")
+
+    def test_a_table_is_read_only_from_a_command_that_exits_zero(self):
+        self.assertEqual(imagesuite.read_output(self.probe(0, "table\n"), "the table"), "table\n")
+        with self.assertRaises(SystemExit):
+            imagesuite.read_output(self.probe(1, "table\n"), "the table")
 
 
 # A suite's one-off containers as its functions start them, each call to
