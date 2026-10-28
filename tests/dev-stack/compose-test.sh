@@ -163,7 +163,8 @@ cat >"$stubs/curl" <<'STUB'
 #!/usr/bin/env python3
 # The server's /mcp for the check: records the arguments, the header
 # file's modes and content, and each action; answers each run completed,
-# or refused where STUB_FAIL names its action.
+# or refused where STUB_FAIL names its action. STUB_READ_RESULT stands for
+# the read's result.
 import json, os, sys
 log = os.environ["STUB_LOG"]
 args = sys.argv[1:]
@@ -194,6 +195,8 @@ if action == "write_text":
     result = {"path": given["path"]}
 elif action == "read_text":
     result = {"path": given["path"], "content": files.get(given["path"])}
+    if "STUB_READ_RESULT" in os.environ:
+        result = json.loads(os.environ["STUB_READ_RESULT"])
 else:
     files.pop(given["path"], None)
     result = {"deleted": given["path"]}
@@ -310,7 +313,30 @@ case_failed_read() {
   grep -qF "dev-stack: $left is left in the athanor's storage" "$case_dir/err" || echo "the check did not name the file it left: $(cat "$case_dir/err")"
   [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: read_text: refused: stub read_text failure" ] || echo "the check did not end with the read's failure: $(cat "$case_dir/err")"
 }
-BOUNDARY_CASES="case_provision case_retained case_refused case_docker_fails case_check case_failed_read"
+case_release_root() {
+  local sentence="dev-stack: RELEASE_ROOT is set, and it names a release: the dev stack runs CYFR from the checkout, which reads the .env at its root. Unset RELEASE_ROOT and run again."
+  local command
+  mkdir -p "$scratch/release"
+  printf 'CYFR_LOCUS_RUNTIME_ROOT=%s\nCYFR_PORT=4557\n' "$(printf 'cd%.0s' {1..32})" >"$scratch/release/.env"
+  for command in up check; do
+    stack "$1" release-root $'CYFR_PLATFORM_ADMIN_EMAILS=dev@example.test\n' 0644 "$command" \
+      RELEASE_ROOT="$scratch/release" CYFR_TOKEN="$token"
+    [ "$(cat "$case_dir/status")" != 0 ] || echo "$command exited 0 under RELEASE_ROOT"
+    [ "$(tail -n 1 "$case_dir/err")" = "$sentence" ] || echo "$command did not end on the RELEASE_ROOT refusal: $(cat "$case_dir/err")"
+    cmp -s "$case_dir/.env" "$case_dir/env.before" || echo "$command changed .env under RELEASE_ROOT: $(cat "$case_dir/.env")"
+    [ -z "$(record docker.calls)" ] || echo "$command ran compose under RELEASE_ROOT: $(record docker.calls)"
+    [ -z "$(record curl.actions)" ] || echo "$command ran the files catalyst under RELEASE_ROOT: $(record curl.actions)"
+  done
+}
+case_failed_parse() {
+  stack "$1" failed-parse "" none check CYFR_TOKEN="$token" STUB_READ_RESULT='[]'
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "check exited 0 though its read answered no content"
+  [ "$(record curl.actions | awk '{print $1}')" = $'write_text\nread_text\ndelete' ] || echo "after a read with no content the check ran: $(record curl.actions)"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: read_text: the run answered no content: []" ] || echo "the check did not end with the read's failure: $(cat "$case_dir/err")"
+  [ "$(cat "$case_dir/log/store.json")" = "{}" ] || echo "a read with no content left its file: $(cat "$case_dir/log/store.json")"
+  [ -z "$(ls -A "$case_dir/tmp")" ] || echo "the failed check left $(ls -A "$case_dir/tmp") behind"
+}
+BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_docker_fails case_check case_failed_read case_failed_parse"
 
 # boundary SCRIPT [CASE...]: the failures of SCRIPT under each case.
 boundary() {
@@ -351,7 +377,7 @@ break_script() {
 break_script wrongid "the key derived for another service id" "case_provision case_retained" 's/key "\$SERVICE_ID"/key wrk_wrong/g'
 break_script chmod "the root written with .env's mode left as it was" case_provision '/chmod 600 \.env/d'
 break_script argv "the bearer on curl's command line" case_check 's|-H @"\$PRIVATE/authorization"|-H "authorization: Bearer $CYFR_TOKEN"|'
-break_script discard "no delete after a failed read" case_failed_read '/^    discard "\$path"$/d'
+break_script discard "no delete after a failed read" "case_failed_read case_failed_parse" '/^    discard "\$path"$/d'
 break_script keep "the private directory kept" case_check "s/^trap .*EXIT$/trap ':' EXIT/"
 
 # ships_neither TARBALL: the scaffold holds the shipped compose file and

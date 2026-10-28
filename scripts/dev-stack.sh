@@ -132,6 +132,21 @@ if run.get("status") != "completed":
 print(json.dumps(run.get("result")))' "$1"
 }
 
+# verify PATH NONCE: the runtime reads NONCE back from PATH. Prints the
+# failure and fails otherwise, every way it can, so its caller's one
+# cleanup path follows each; errexit does not apply inside it.
+verify() {
+  local read content
+  read="$(files read_text "\"path\":\"$1\"")" || { printf '%s' "$read"; return 1; }
+  content="$(printf '%s' "$read" | python3 -I -c '
+import json, sys
+result = json.load(sys.stdin)
+if not isinstance(result, dict) or not isinstance(result.get("content"), str):
+    sys.exit(1)
+print(result["content"])' 2>/dev/null)" || { printf 'read_text: the run answered no content: %s' "$read"; return 1; }
+  [ "$content" = "$2" ] || { printf 'the runtime read back %s from %s, not %s.' "${content@Q}" "$1" "${2@Q}"; return 1; }
+}
+
 # discard PATH: the check's file deleted once after a failure; saying so
 # when that fails too.
 discard() {
@@ -143,7 +158,7 @@ discard() {
 check() {
   [ -n "${CYFR_TOKEN:-}" ] ||
     die "CYFR_TOKEN is not set: the check runs a component as a signed-in person. Create an API key on Prism's API Keys page, or sign the dev CLI in with \`cyfr login\`, and pass the key or the session token as CYFR_TOKEN."
-  local out port nonce path read content
+  local out port nonce path failure
   out="$(mix cyfr.locus.dev_stack endpoint 2>&1)" || die "$(refusal "$out")"
   port="$(line CYFR_PORT "$out")"
   [ -n "$port" ] || die "mix cyfr.locus.dev_stack printed no port."
@@ -157,14 +172,11 @@ check() {
   path="data/dev-stack-check-$nonce.txt"
 
   out="$(files write_text "\"path\":\"$path\",\"content\":\"$nonce\"")" || die "$out"
-  if ! read="$(files read_text "\"path\":\"$path\"")"; then
+  # The write landed: every failure from here deletes the file once and
+  # ends with its own sentence.
+  if ! failure="$(verify "$path" "$nonce")"; then
     discard "$path"
-    die "$read"
-  fi
-  content="$(printf '%s' "$read" | python3 -I -c 'import json, sys; print(json.load(sys.stdin).get("content"))')"
-  if [ "$content" != "$nonce" ]; then
-    discard "$path"
-    die "the runtime read back ${content@Q} from $path, not ${nonce@Q}."
+    die "$failure"
   fi
   out="$(files delete "\"path\":\"$path\"")" ||
     die "$path is left in the athanor's storage, since its delete failed: $out"

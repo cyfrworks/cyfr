@@ -17,11 +17,12 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   prints `LOCUS_RUNTIME_KEY=<64 hex>`, the key of SERVICE_ID derived from
   `CYFR_LOCUS_RUNTIME_ROOT` (`Prima.WorkerAuth.worker_key/2`), and
   `CYFR_HOST_API_PORT=<port>`, the port the boot's host API listens on.
-  It refuses, naming the variable and its fix, a malformed root, a root
-  the environment sets empty over the file, a `CYFR_LOCUS_RUNTIME_WORKERS`
-  other than `SERVICE_ID=WORKER_URL`, a `CYFR_HOST_API_BIND` other than
-  HOST_API_BIND and a `CYFR_HOST_API_URL` other than the host API at
-  HOST_API_BIND: each would send runs, or the runtime's calls, somewhere
+  It refuses, naming the variable and its fix, a `RELEASE_ROOT` (the
+  stack is a mix boot from the checkout, never a release), a malformed
+  root, a root the environment sets empty over the file, a
+  `CYFR_LOCUS_RUNTIME_WORKERS` other than `SERVICE_ID=WORKER_URL`, a
+  `CYFR_HOST_API_BIND` other than HOST_API_BIND and a `CYFR_HOST_API_URL`
+  other than the host API at HOST_API_BIND: each would send runs, or the runtime's calls, somewhere
   the stack is not. A root set nowhere is refused with exit status 3, the
   one refusal the script answers by writing a root into `.env`.
 
@@ -41,7 +42,21 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   @url "CYFR_HOST_API_URL"
 
   @impl Mix.Task
-  def run(["key", service_id, worker_url, host_api_bind]) do
+  def run(args) do
+    # A release reads the .env at RELEASE_ROOT (config/runtime.exs); the
+    # stack's mix boot reads the checkout's, so the two would read two
+    # files. Refused before anything is read.
+    if System.get_env("RELEASE_ROOT") != nil do
+      Mix.raise(
+        "RELEASE_ROOT is set, and it names a release: the dev stack runs CYFR from the " <>
+          "checkout, which reads the .env at its root. Unset RELEASE_ROOT and run again."
+      )
+    end
+
+    answer(args)
+  end
+
+  defp answer(["key", service_id, worker_url, host_api_bind]) do
     env = environment()
     # config/runtime.exs's reader: an empty value is unset. The resolvers
     # it hands values to trim them first, and so do the checks below.
@@ -60,10 +75,14 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end
   end
 
-  def run(["endpoint"]) do
+  defp answer(["endpoint"]) do
     env = environment()
 
-    case Cyfr.RuntimeConfig.resolve_access(%{file: file_env(), process: env, release?: false}) do
+    case Cyfr.RuntimeConfig.resolve_access(%{
+           file: file_env(),
+           process: env,
+           release?: Cyfr.RuntimeConfig.release?()
+         }) do
       {:ok, %{listeners: %{loopback: {_address, port}}}} ->
         Mix.shell().info("CYFR_PORT=#{port}")
 
@@ -72,7 +91,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end
   end
 
-  def run(_args) do
+  defp answer(_args) do
     Mix.raise(
       "usage: mix cyfr.locus.dev_stack key SERVICE_ID WORKER_URL HOST_API_BIND | endpoint"
     )

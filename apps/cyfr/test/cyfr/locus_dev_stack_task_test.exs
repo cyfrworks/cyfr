@@ -22,7 +22,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   @external_resource @fixture
   @vectors @fixture |> File.read!() |> Jason.decode!()
 
-  @names ~w(CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_RUNTIME_WORKERS CYFR_HOST_API_BIND
+  @names ~w(RELEASE_ROOT CYFR_LOCUS_RUNTIME_ROOT CYFR_LOCUS_RUNTIME_WORKERS CYFR_HOST_API_BIND
             CYFR_HOST_API_URL CYFR_HOST_API_PORT CYFR_PORT CYFR_ACCESS)
   @worker_url "http://127.0.0.1:4200"
   @gateway "172.16.231.1"
@@ -175,6 +175,32 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       env_file("CYFR_PORT = 4555\n")
       DevStack.run(["endpoint"])
       answered(["CYFR_PORT=4555"])
+    end
+  end
+
+  # A release reads the .env at RELEASE_ROOT, the stack's mix boot the
+  # checkout's: with it set the two would read two files, so nothing is
+  # read, a root set nowhere included, and nothing is answered.
+  @tag :tmp_dir
+  test "RELEASE_ROOT set refuses every command before anything is read", %{tmp_dir: dir} do
+    File.mkdir_p!(Path.join(dir, "release"))
+
+    File.write!(
+      Path.join(dir, "release/.env"),
+      "CYFR_LOCUS_RUNTIME_ROOT=#{root()}\nCYFR_PORT=4557\n"
+    )
+
+    for release_root <- [Path.join(dir, "release"), ""],
+        args <- [["key", service(), @worker_url, @gateway], ["endpoint"], []] do
+      System.put_env("RELEASE_ROOT", release_root)
+      error = assert_raise Mix.Error, fn -> DevStack.run(args) end
+
+      assert Exception.message(error) ==
+               "RELEASE_ROOT is set, and it names a release: the dev stack runs CYFR from the " <>
+                 "checkout, which reads the .env at its root. Unset RELEASE_ROOT and run again."
+
+      assert error.mix == 1
+      refute_received {:mix_shell, _, _}
     end
   end
 
