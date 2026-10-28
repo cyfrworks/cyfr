@@ -235,13 +235,17 @@ defmodule Sanctum.SessionTest do
       {:ok, session} = Session.create(Sanctum.TestContext.issuer!(Sanctum.TestContext.local()))
       token_hash = :crypto.hash(:sha256, session.token)
       expiry = fn -> elem(Session.get(session.token), 1).expires_at end
+      refresh = {Task.Supervisor, :start_child, 2}
 
-      # A fresh session is not due: the load says so and no slide runs.
+      # A fresh session is not due: the load says so and no refresh starts.
       assert {:ok, %Context{}, false} = Session.load_sliding(session.token)
-      untouched = expiry.()
-      {:ok, _} = Sanctum.Caller.establish(session.token)
-      Process.sleep(50)
-      assert expiry.() == untouched
+
+      {_ok, calls} =
+        traced([refresh], fn ->
+          {:ok, _} = Sanctum.Caller.establish(session.token)
+        end)
+
+      refute started_refresh?(calls)
 
       # One that is due is slid by the establish that read it.
       soon = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:microsecond)
@@ -250,7 +254,13 @@ defmodule Sanctum.SessionTest do
       |> Arca.Repo.update_all(set: [expires_at: soon])
 
       assert {:ok, %Context{}, true} = Session.load_sliding(session.token)
-      {:ok, _} = Sanctum.Caller.establish(session.token)
+
+      {_ok, calls} =
+        traced([refresh], fn ->
+          {:ok, _} = Sanctum.Caller.establish(session.token)
+        end)
+
+      assert started_refresh?(calls)
 
       Prima.Test.Wait.wait_until(fn ->
         {:ok, at, _} = DateTime.from_iso8601(expiry.())
@@ -503,5 +513,52 @@ defmodule Sanctum.SessionTest do
       assert {:error, :no_person} =
                Sanctum.SignIn.unlock(%{id: key, provider: "restore", verified: :unknown})
     end
+  end
+
+  # `fun`'s answer, and the calls this process made to `mfas` while it ran,
+  # in order. A process's call trace is not delivered to itself, so a
+  # collector takes it; every trace message is delivered before the
+  # collector is asked for what it holds.
+  defp traced(mfas, fun) do
+    test = self()
+    collector = spawn_link(fn -> collect(test, []) end)
+
+    on_exit(fn -> for mfa <- mfas, do: :erlang.trace_pattern(mfa, false, [:global]) end)
+
+    # A pattern applies only to a loaded module, so each is loaded first,
+    # and one that matched nothing fails here rather than tracing nothing.
+    for {module, _function, _arity} = mfa <- mfas do
+      Code.ensure_loaded!(module)
+      assert :erlang.trace_pattern(mfa, true, [:global]) == 1
+    end
+
+    :erlang.trace(test, true, [:call, {:tracer, collector}])
+
+    answer =
+      try do
+        fun.()
+      after
+        :erlang.trace(test, false, [:call])
+      end
+
+    delivered = :erlang.trace_delivered(test)
+    assert_receive {:trace_delivered, ^test, ^delivered}, 5_000
+    send(collector, {:done, delivered})
+    assert_receive {:collected, ^delivered, calls}, 5_000
+    {answer, calls}
+  end
+
+  defp collect(test, calls) do
+    receive do
+      {:trace, ^test, :call, call} -> collect(test, [call | calls])
+      {:done, ref} -> send(test, {:collected, ref, Enum.reverse(calls)})
+    end
+  end
+
+  defp started_refresh?(calls) do
+    Enum.any?(calls, fn
+      {Task.Supervisor, :start_child, [Sanctum.TaskSupervisor | _]} -> true
+      _ -> false
+    end)
   end
 end
