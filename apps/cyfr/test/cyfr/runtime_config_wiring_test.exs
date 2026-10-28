@@ -12,6 +12,18 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   """
   use ExUnit.Case, async: false
 
+  # Each test's scratch directory is under System.tmp_dir!(), which the runner
+  # keys per partition, so two runs in one checkout never share one. Its
+  # removal is registered before it is made.
+  setup do
+    dir =
+      Path.join(System.tmp_dir!(), "runtime_config_wiring_#{System.unique_integer([:positive])}")
+
+    on_exit(fn -> File.rm_rf!(dir) end)
+    File.mkdir_p!(dir)
+    {:ok, tmp_dir: dir}
+  end
+
   @root Path.expand("../../../..", __DIR__)
 
   # Every setting the access resolver reads, so a case clears the ones it does not
@@ -54,18 +66,21 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     end
   end
 
-  # The child specs under `id` in a census of `Cyfr.Application.tiers/0`.
-  defp specs({_id, _strategy, _intensity, children}, id),
-    do: Enum.flat_map(children, &specs(&1, id))
-
-  defp specs(%{id: id} = spec, id), do: [spec]
-  defp specs(_spec, _id), do: []
-
   defp read_prod_config! do
     Config.Reader.read!(Path.join(@root, "config/runtime.exs"),
       env: :prod,
       imports: :disabled
     )
+  end
+
+  # A configured port is the one a listener binds. Configured 0 asks the OS for
+  # a port, so any positive port is right; a listener bound to 0 is never right.
+  defp assert_bound_port(configured, bound) do
+    if configured > 0 do
+      assert bound == configured, "bound to #{bound}, configured #{configured}"
+    else
+      assert bound > 0, "bound to #{bound}, configured #{configured}"
+    end
   end
 
   describe "the prod branch evaluates" do
@@ -126,8 +141,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     # The file reads its .env files from RELEASE_ROOT, so each test points
     # that at a directory of its own: no ambient file supplies the key the
     # environment lacks.
-    @describetag :tmp_dir
-
     # An empty value is unset, as for every other setting this file reads,
     # so both refuse the boot by name before anything derives from it.
     for {label, value} <- [{"missing", nil}, {"empty", ""}] do
@@ -391,8 +404,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   defp trust(%{"hops" => hops}), do: {:hops, hops}
 
   describe "access" do
-    @describetag :tmp_dir
-
     test "every refused boot vector refuses the boot with its sentence", %{tmp_dir: dir} do
       refused =
         for %{"refusal" => refusal} = vector <- @access_vectors["boot"], do: {vector, refusal}
@@ -1016,29 +1027,44 @@ defmodule Cyfr.RuntimeConfigWiringTest do
       )
     end
 
-    # The address runtime.exs parses is the one the boot hands the host
-    # API's listener: read through the census of the tree `start/2` starts,
-    # down through `Opus.Supervisor`'s own `init/1`, to the listener's spec.
-    test "the parsed CYFR_HOST_API_BIND is the host API listener's bind" do
+    # The bind runtime.exs parses is the one the configuration gives the host
+    # API. It is evaluated here, as the rest of this file evaluates the file,
+    # and not applied: a listener restarted on it would move the one every
+    # other test in this VM shares. The listener the VM started is checked
+    # below, against the bind this VM is configured with.
+    test "the parsed CYFR_HOST_API_BIND is the host API's configured bind" do
       with_env(%{"CYFR_HOST_API_BIND" => "127.0.0.2"}, fn ->
-        bind = read_prod_config!()[:cyfr][:host_api_bind]
-        assert bind == {127, 0, 0, 2}
-
-        previous = Application.fetch_env(:cyfr, :host_api_bind)
-        Application.put_env(:cyfr, :host_api_bind, bind)
-
-        try do
-          specs = Enum.flat_map(Cyfr.Application.tiers(), &specs(&1, Opus.HostListener))
-
-          assert [%{start: {Opus.HostListener.Supervisor, :start_link, [opts]}}] = specs
-          assert opts[:bind] == {127, 0, 0, 2}
-        after
-          case previous do
-            {:ok, value} -> Application.put_env(:cyfr, :host_api_bind, value)
-            :error -> Application.delete_env(:cyfr, :host_api_bind)
-          end
-        end
+        assert read_prod_config!()[:cyfr][:host_api_bind] == {127, 0, 0, 2}
       end)
+    end
+
+    # The listener the boot started, observed in the running tree: found by its
+    # child id under its parent, `Opus.Supervisor`, which started it from the
+    # bind and port the boot passed down. Its configured options are the ones
+    # its parent holds, and the port it is bound to is the one it reports.
+    test "the running host API listener is on the bind and port its configuration names" do
+      {Opus.HostListener, listener, :supervisor, _modules} =
+        Opus.Supervisor |> Supervisor.which_children() |> List.keyfind(Opus.HostListener, 0)
+
+      assert {:ok, %{start: {Opus.HostListener.Supervisor, :start_link, [opts]}}} =
+               :supervisor.get_childspec(Opus.Supervisor, Opus.HostListener)
+
+      assert opts[:bind] == Cyfr.RuntimeConfig.host_api_bind()
+      assert opts[:port] == Cyfr.RuntimeConfig.host_api_port()
+
+      configured = Cyfr.RuntimeConfig.host_api_port()
+      bound = Opus.HostListener.port(listener)
+      assert_bound_port(configured, bound)
+    end
+
+    # The check on the observations it can meet: a configured 0 leaves the port
+    # to the OS, and a configured port is the one bound. A listener bound to 0
+    # is refused under any configuration.
+    test "the bound-port check refuses a listener bound to nothing" do
+      assert_bound_port(0, 23001)
+      assert_bound_port(4300, 4300)
+      assert_raise ExUnit.AssertionError, fn -> assert_bound_port(4300, 4301) end
+      assert_raise ExUnit.AssertionError, fn -> assert_bound_port(0, 0) end
     end
 
     test "a malformed worker entry, address or port refuses the boot by name" do

@@ -2891,11 +2891,15 @@ defmodule Cyfr.BoundariesTest.CompilerPlants do
   @root Path.expand("../../../..", __DIR__)
 
   setup_all do
-    copy =
-      Path.join(System.tmp_dir!(), "cyfr-boundary-plant-#{System.unique_integer([:positive])}")
+    # The copy is under the runner's TMPDIR, named for this VM (pid and a random
+    # token), so two runs on one host never share a copy. Its removal is
+    # registered before it is made, and an earlier copy of that name is emptied.
+    token = Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+    copy = Path.join(System.tmp_dir!(), "cyfr-boundary-plant-#{:os.getpid()}-#{token}")
 
-    copy_tree!(copy)
     on_exit(fn -> File.rm_rf!(copy) end)
+    File.rm_rf!(copy)
+    copy_tree!(copy)
 
     # The forced compile below does not rewrite a dependency's links, so a
     # reused build with a dangling one is removed before it.
