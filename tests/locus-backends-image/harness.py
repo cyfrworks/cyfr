@@ -571,6 +571,11 @@ def backend_environ(stack, pid, uid):
     return read_output(stack.exec(f"tr '\\0' '\\n' < /proc/{pid}/environ", user=str(uid)), f"the environment of pid {pid}")
 
 
+def image_user_name(stack, uid):
+    """The name the image gives `uid`, read from its passwd entry."""
+    return read_output(stack.exec(f'user="$(getent passwd {uid})" && echo "${{user%%:*}}"'), f"the image's name for uid {uid}").strip()
+
+
 # A probe of one connection per target, run by node under a backend's uid:
 # for each `host:port` after the argument `targets` (an IPv6 host in
 # brackets, a zone allowed), the code the kernel answers the connect with,

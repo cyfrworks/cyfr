@@ -195,5 +195,34 @@ class BackendEnviron(unittest.TestCase):
         self.assertEqual(observer.users, ["30001"])
 
 
+class ImageUserName(unittest.TestCase):
+    """A uid's name in the image is read from a lookup that exits 0: a failed lookup is no answer, not an empty name."""
+
+    def lookup(self, status, stdout):
+        """An observer whose exec runs its script under sh, with a fake getent on the path that prints `stdout` and exits `status`."""
+        bin_dir = tempfile.mkdtemp(prefix="backends-image-user-")
+        self.addCleanup(shutil.rmtree, bin_dir, True)
+        tool = os.path.join(bin_dir, "getent")
+        with open(tool, "w") as f:
+            f.write(f"#!/bin/sh\nprintf '%s' {shlex.quote(stdout)}\nexit {status}\n")
+        os.chmod(tool, 0o700)
+
+        class Shell:
+            def exec(self, script, user=None):
+                return subprocess.run(["/bin/sh", "-c", script],
+                                      env={**os.environ, "PATH": bin_dir + os.pathsep + os.environ["PATH"]},
+                                      capture_output=True, text=True)
+
+        return Shell()
+
+    def test_a_failed_lookup_is_no_answer(self):
+        with self.assertRaises(SystemExit):
+            harness.image_user_name(self.lookup(2, ""), 30001)
+
+    def test_the_name_that_was_read_is_the_control(self):
+        self.assertEqual(harness.image_user_name(self.lookup(0, "cyfr-pool-1:x:30001:30001::/home/x:/bin/sh\n"), 30001),
+                         "cyfr-pool-1")
+
+
 if __name__ == "__main__":
     unittest.main()

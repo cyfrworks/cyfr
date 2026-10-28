@@ -11,6 +11,7 @@ Usage: python3 -I tests/builder-image/memory_test.py
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -180,6 +181,34 @@ class ContainerLimit(unittest.TestCase):
 
     def test_the_limit_that_was_read_is_the_control(self):
         self.assertEqual(memory.container_limit(self.exec_answering(0, "1073741824\n")), "1073741824")
+
+
+class ReleaseUser(unittest.TestCase):
+    """The release's user name is read from a lookup that exits 0: a failed lookup is no answer, not an empty name."""
+
+    def lookup(self, status, stdout):
+        """An observer whose exec runs its script under sh, with a fake getent on the path that prints `stdout` and exits `status`."""
+        bin_dir = tempfile.mkdtemp(prefix="builder-release-user-")
+        self.addCleanup(shutil.rmtree, bin_dir, True)
+        tool = os.path.join(bin_dir, "getent")
+        with open(tool, "w") as f:
+            f.write(f"#!/bin/sh\nprintf '%s' {shlex.quote(stdout)}\nexit {status}\n")
+        os.chmod(tool, 0o700)
+
+        class Shell:
+            def exec(self, script, user=None):
+                return subprocess.run(["/bin/sh", "-c", script],
+                                      env={**os.environ, "PATH": bin_dir + os.pathsep + os.environ["PATH"]},
+                                      capture_output=True, text=True)
+
+        return Shell()
+
+    def test_a_failed_lookup_is_no_answer(self):
+        with self.assertRaises(SystemExit):
+            memory.release_user(self.lookup(2, ""))
+
+    def test_the_name_that_was_read_is_the_control(self):
+        self.assertEqual(memory.release_user(self.lookup(0, "cyfr-release:x:30001:30001::/home/x:/bin/sh\n")), "cyfr-release")
 
 
 if __name__ == "__main__":

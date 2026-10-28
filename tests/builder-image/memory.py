@@ -383,8 +383,14 @@ def keeper_groups(stack):
     return imagesuite.read_listing(stack.exec(script), "the keeper cgroups the container holds")
 
 
+def release_user(stack):
+    """The name the release's uid has in the image, which cyfr-locus starts a client under."""
+    return imagesuite.read_output(stack.exec(f'user="$(getent passwd {RELEASE_UID})" && echo "${{user%%:*}}"'),
+                                  "the release user's name").strip()
+
+
 def test_keeper(stack, limit, canary):
-    user = stack.exec(f"getent passwd {RELEASE_UID} | cut -d: -f1").stdout.strip()
+    user = release_user(stack)
     expect(user, "the release's user has a name cyfr-locus can start a client under", user)
     with open(os.path.join(canary, "memory-client.mjs"), "w") as out:
         out.write(CLIENT)

@@ -169,5 +169,24 @@ class CpuShare(unittest.TestCase):
         self.assertEqual(self.observed(0, "123456\n").cpu_usec(), 123456)
 
 
+class HostGateway(unittest.TestCase):
+    """The host gateway is read from a lookup that exits 0: a failed lookup is no answer, and a lookup that names no address is none."""
+
+    def observer(self, status, stdout):
+        observed = stack.Stack.__new__(stack.Stack)
+        observed.exec = lambda script, user=None: subprocess.CompletedProcess([], status, stdout, "" if status == 0 else "daemon error")
+        return observed
+
+    def test_a_failed_lookup_is_no_answer(self):
+        with self.assertRaises(SystemExit):
+            self.observer(2, "").host_gateway()
+
+    def test_the_address_that_was_read_is_the_control(self):
+        self.assertEqual(self.observer(0, "172.17.0.1      STREAM host.docker.internal\n").host_gateway(), "172.17.0.1")
+
+    def test_a_lookup_that_names_no_address_is_none(self):
+        self.assertIsNone(self.observer(0, "").host_gateway())
+
+
 if __name__ == "__main__":
     unittest.main()
