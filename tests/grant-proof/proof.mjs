@@ -17,7 +17,9 @@
 //                the commit digest the head was committed under
 //   background   a version asking to keep running when hidden: the person's
 //                run is asked to grant again, and the sheet shows the
-//                background row; granted, the head holds it
+//                background row; granted, the head is the first head one
+//                revision on, under the version's shape and the digest the
+//                command line previews for the same decisions
 //   reworded     a version that only rewords its need's reason: the same
 //                shape digest, and the run is admitted under the grant it
 //                had, nothing asked
@@ -41,7 +43,7 @@ import { join } from "node:path";
 import {
   ask as askRunSh, launchBrowser, pageTokens, readHomes, recordText, redact, redactFrames, signedIn, startProxy, waitFor,
 } from "../browser/lib.mjs";
-import { changedCopies, digestCopies, flowsHeld, grantedHeld, sameHead } from "./heads.mjs";
+import { changedCopies, digestCopies, flowsHeld, grantedHeld, regrantHeld, sameHead } from "./heads.mjs";
 
 const [homesFile, segment, cookie, outDir] = process.argv.slice(2);
 if (!homesFile || !segment || !cookie || !outDir) {
@@ -254,15 +256,23 @@ async function main() {
     await confirm(page);
     const regranted = await ask({ op: "head" });
     const admitted = await ask({ op: "admit" });
-    record.background = { plan, asking, again, regranted, admitted };
+    // The re-grant keeps the first grant's narrowing, so the same decisions,
+    // previewed for this version, answer the digest it committed.
+    const backgroundShown = await ask({ op: "cli_preview", decisions });
+    const backgroundGrant = { before: head, shape: plan.shape_digest, digest: backgroundShown.commit_digest };
+    const backgroundCopies = [...changedCopies(regranted, DROPPED), ...digestCopies(regranted, head.commit_digest)];
+    record.background = { plan, asking, again, regranted, admitted, digest: previewShown(backgroundShown) };
     if (!row("background",
       plan.background === true && plan.shape_digest !== head.shape_digest &&
-        asking.admitted === false && asking.refusal === "consent_required" &&
+        sameHead(asking, { admitted: false, refusal: "consent_required" }) &&
         frame && /background/.test(frame.text) &&
-        regranted.revision === 2 && JSON.stringify(regranted.admitted_origins) === JSON.stringify(["interactive"]) &&
-        admitted.admitted === true && admitted.consent_id === regranted.consent_id,
-      "a version asking to run in the background is shown and asked again; granted, it runs",
-      { asking, frame: frame && frame.text, origins_kept: again.origins, regranted: regranted.revision })) return;
+        regrantHeld(regranted, backgroundGrant) &&
+        backgroundCopies.every((copy) => !regrantHeld(copy, backgroundGrant)) &&
+        sameHead(admitted, { admitted: true, consent_id: regranted.consent_id }),
+      "a version asking to run in the background is shown and asked again; granted, the head is the first head one revision on, under a new consent, the version's shape and the digest the command line previews for the same decisions, every other field held, and it runs; a copy with another revision, a host or flow added or removed, or another digest is refused",
+      { asking, frame: frame && frame.text, origins_kept: again.origins, head: regranted,
+        digest: previewShown(backgroundShown), held: regrantHeld(regranted, backgroundGrant),
+        copies_refused: backgroundCopies.map((copy) => !regrantHeld(copy, backgroundGrant)), admitted })) return;
 
     // -----------------------------------------------------------------------
     // reworded

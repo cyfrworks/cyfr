@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { changedCopies, digestCopies, flowsHeld, grantedHeld, sameHead } from "./heads.mjs";
+import { changedCopies, digestCopies, flowsHeld, grantedHeld, regrantHeld, sameHead } from "./heads.mjs";
 
 const KEPT = "alpha.grant.test";
 const DROPPED = "beta.grant.test";
@@ -19,14 +19,14 @@ const digest = (hex) => `sha256:${hex.repeat(64)}`;
 const id = (prefix, n) => `${prefix}_0000000${n}-0000-7000-8000-000000000000`;
 
 const regranted = {
-  revision: 2, consent_id: "cons_regranted", profile_id: "prof_probe", admitted_origins: ["interactive"],
+  revision: 2, consent_id: id("cons", 2), profile_id: id("prof", 1), admitted_origins: ["interactive"],
   domains: [KEPT], paths: ["data/probe/notes/"], flows: [`files_by_grant to ${KEPT}`],
   shape_digest: digest("1"), commit_digest: digest("2"),
 };
 const shape = digest("3");
 const previewed = digest("4");
 const flowHead = {
-  revision: 3, consent_id: "cons_flows", profile_id: "prof_probe", admitted_origins: ["interactive"],
+  revision: 3, consent_id: id("cons", 3), profile_id: id("prof", 1), admitted_origins: ["interactive"],
   domains: [KEPT], paths: ["data/probe/notes/"], flows: [`files_by_grant to ${KEPT}`, `outside to ${KEPT}`],
   shape_digest: shape, commit_digest: previewed,
 };
@@ -120,6 +120,28 @@ test("a first head with a field changed, missing or added is refused", () => {
 test("a first grant asked under a malformed shape refuses every head", () => {
   for (const shape of [undefined, null, "", "sha256:wrong"]) {
     assert.equal(grantedHeld({ ...first, shape_digest: shape }, { ...firstGrant, shape }), false, `shape ${shape}`);
+  }
+});
+
+test("the head a re-grant commits is the head before it one revision on, under a new consent, the new shape and the previewed digest", () => {
+  const regrant = { before: first, shape: digest("8"), digest: digest("9") };
+  const head = { ...first, revision: 2, consent_id: id("cons", 2), shape_digest: digest("8"), commit_digest: digest("9") };
+  assert.equal(regrantHeld(head, regrant), true);
+  const copies = [
+    ...changedCopies(head, DROPPED),
+    ...digestCopies(head, first.commit_digest),
+    { ...head, consent_id: first.consent_id },
+    { ...head, consent_id: "cons_new" },
+    { ...head, profile_id: id("prof", 2) },
+    { ...head, shape_digest: first.shape_digest },
+    { ...head, admitted_origins: ["interactive", "programmatic"] },
+    { ...head, paths: [] },
+    { ...head, background: true },
+  ];
+  for (const copy of copies) assert.equal(regrantHeld(copy, regrant), false, JSON.stringify(copy));
+  for (const missing of [undefined, null, "", "sha256:wrong"]) {
+    assert.equal(regrantHeld(head, { ...regrant, digest: missing }), false, `digest ${missing}`);
+    assert.equal(regrantHeld({ ...head, shape_digest: missing }, { ...regrant, shape: missing }), false, `shape ${missing}`);
   }
 });
 
