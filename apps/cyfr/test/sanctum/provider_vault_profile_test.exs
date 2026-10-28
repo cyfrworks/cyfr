@@ -76,7 +76,11 @@ defmodule Sanctum.ProviderVaultProfileTest do
     decisions = %{
       "ref" => "reagent:local.mcp-walk",
       "bindings" => [
-        %{"need" => "@ingress", "entry_id" => entry.id, "fields" => ["url", "anon_key"]}
+        %{
+          "need" => "@ingress",
+          "entry_id" => entry.id,
+          "fields" => %{"url" => "url", "anon_key" => "anon_key"}
+        }
       ]
     }
 
@@ -383,6 +387,7 @@ defmodule Sanctum.ProviderVaultProfileTest do
             "needs" => %{
               "api_key" => %{
                 "type" => "api_key:openai.com",
+                "hosts" => ["api.openai.com"],
                 "reason" => "to call the model",
                 "fields" => ["OPENAI_API_KEY"],
                 "attach" => %{
@@ -391,7 +396,8 @@ defmodule Sanctum.ProviderVaultProfileTest do
                   "template" => "Bearer {value}"
                 }
               }
-            }
+            },
+            "caps" => %{"egress" => %{"domains" => ["api.openai.com"]}}
           })
       })
 
@@ -467,6 +473,7 @@ defmodule Sanctum.ProviderVaultProfileTest do
         "needs" => %{
           "api_key" => %{
             "type" => "api_key:openai.com",
+            "hosts" => ["api.openai.com"],
             "reason" => "to call the model",
             "fields" => ["OPENAI_API_KEY"],
             "attach" => %{
@@ -475,7 +482,8 @@ defmodule Sanctum.ProviderVaultProfileTest do
               "template" => "Bearer {value}"
             }
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.openai.com"]}}
       })
 
     {:ok, _} =
@@ -701,17 +709,20 @@ defmodule Sanctum.ProviderVaultProfileTest do
             "needs" => %{
               "api_key" => %{
                 "type" => "api_key:openai.com",
+                "hosts" => ["api.openai.com"],
                 "reason" => "to call the model",
                 "fields" => ["OPENAI_API_KEY"],
                 "attach" => attach
               },
               "other_key" => %{
                 "type" => "api_key:anthropic.com",
+                "hosts" => ["api.anthropic.com"],
                 "reason" => "to call the other model",
                 "fields" => ["ANTHROPIC_API_KEY"],
                 "attach" => attach
               }
-            }
+            },
+            "caps" => %{"egress" => %{"domains" => ["api.openai.com", "api.anthropic.com"]}}
           })
       })
 

@@ -20,7 +20,8 @@ defmodule Prima.ConsentPreview do
   and their values:
 
     * `credential` — one binding: `name`, the entry's display name;
-      `fields` and `scopes`, its projection; `edge`, the consent edge it
+      `fields`, an object from each field the component reads to the
+      entry field that answers it, and `scopes`, its projection; `edge`, the consent edge it
       rides, from the row's node to the node that uses the entry:
       `"@ingress"` for the node's own key, otherwise the dependency's
       name-level ref, spelled `ref|need` for a named need
@@ -388,7 +389,7 @@ defmodule Prima.ConsentPreview.Row do
           binding_key lifetime), ~w(label provider connection),
        %{
          "name" => &text?/1,
-         "fields" => &set?/1,
+         "fields" => &field_map?/1,
          "scopes" => &set?/1,
          "edge" => &edge?/1,
          "label" => &text?/1,
@@ -499,6 +500,11 @@ defmodule Prima.ConsentPreview.Row do
   defp set?(values) do
     is_list(values) and length(values) <= @max_set and Enum.all?(values, &text?/1) and
       length(Enum.uniq(values)) == length(values)
+  end
+
+  defp field_map?(map) do
+    is_map(map) and map_size(map) <= @max_set and
+      Enum.all?(map, fn {need_field, entry_field} -> text?(need_field) and text?(entry_field) end)
   end
 
   defp operations?(values), do: set?(values) and Enum.all?(values, &Tincture.operation_name?/1)

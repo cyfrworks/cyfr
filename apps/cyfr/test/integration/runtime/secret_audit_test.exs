@@ -173,7 +173,8 @@ defmodule Locus.Runtime.SecretAuditTest do
     {%Authority{resources: %Edge{vault: vault}} = authority, _entry} =
       AttemptFixtures.vault_authority!(ctx, %{kind: "api_key", fields: @fields}, root)
 
-    projected = %{vault | projection: %{fields: @projected, scopes: []}}
+    fields = Map.new(@projected, &{&1, &1})
+    projected = %{vault | projection: %{fields: fields, scopes: []}}
     %{authority | resources: %Edge{vault: projected}}
   end
 
@@ -507,6 +508,7 @@ defmodule Locus.Runtime.SecretAuditTest do
           "type" => "api_key:upstream.test",
           "reason" => "to call the upstream with your key",
           "fields" => ["KEY"],
+          "hosts" => ["127.0.0.1"],
           "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
         }
       },

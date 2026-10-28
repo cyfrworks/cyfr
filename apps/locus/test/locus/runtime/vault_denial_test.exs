@@ -8,10 +8,11 @@ defmodule Locus.Runtime.VaultDenialTest do
   to CYFR as a `secret_denied` `record_denial` of the run's attempt,
   carrying the name and nothing else; a name the contract bounds out (past
   256 bytes, or carrying a control byte) is refused, reported to no one
-  and logged without the name. A field of an entry the node's edge binds
-  whose value CYFR attaches to requests and never hands over, the default
-  binding's or a named account's, is refused as `disclosure_refused`,
-  reported as such, and the run goes on; a disclosed field and a
+  and logged without the name. A name the node's edge maps to a field of
+  an entry it binds (a key of the default binding's or a named account's
+  field map), whose value CYFR attaches to requests and never hands over,
+  is refused as `disclosure_refused`, reported as such, and the run goes
+  on; the entry field's own name is outside the projection. A disclosed field and a
   publisher's provided value are answered as handed over. The runner
   emits no telemetry of its own for any of it: CYFR audits what it
   dispensed and what a runner reports.
@@ -92,7 +93,7 @@ defmodule Locus.Runtime.VaultDenialTest do
   def emitted(event, _measurements, _metadata, test), do: send(test, {:emitted, event})
 
   # An edge binding the probe's entry under the need's attach rule,
-  # projecting `fields`, with `named` accounts beside it.
+  # projecting the field map `fields`, with `named` accounts beside it.
   defp attached_edge(fields, named \\ %{}) do
     vault = %{
       entry_id: "ent_probe",
@@ -126,7 +127,7 @@ defmodule Locus.Runtime.VaultDenialTest do
 
     second = %{
       entry_id: "ent_second",
-      projection: %{fields: ["PROBE_HIDDEN"], scopes: []},
+      projection: %{fields: %{"PROBE_HIDDEN" => "secret"}, scopes: []},
       attach: %{in: "header", name: "x-api-key", template: "{value}"}
     }
 
@@ -134,7 +135,11 @@ defmodule Locus.Runtime.VaultDenialTest do
     log =
       capture_log(fn ->
         assert {:ok, %{"status" => 200, "data" => %{"read" => "EEEE"}}} =
-                 probe(attempt.client, %{}, attached_edge(["PROBE_KEY"], %{"Second" => second}))
+                 probe(
+                   attempt.client,
+                   %{},
+                   attached_edge(%{"PROBE_KEY" => "API key"}, %{"Second" => second})
+                 )
       end)
 
     assert [
@@ -149,7 +154,11 @@ defmodule Locus.Runtime.VaultDenialTest do
     # name the edge projects nowhere is outside the projection.
     capture_log(fn ->
       assert {:ok, %{"data" => %{"read" => "OEEE"}}} =
-               probe(attempt.client, %{"PROBE_KEY" => @value}, attached_edge(["PROBE_KEY"]))
+               probe(
+                 attempt.client,
+                 %{"PROBE_KEY" => @value},
+                 attached_edge(%{"PROBE_KEY" => "API key"})
+               )
     end)
 
     assert [_, _, %{args: %{"type" => "secret_denied", "message" => "PROBE_HIDDEN"}}] =
@@ -168,5 +177,27 @@ defmodule Locus.Runtime.VaultDenialTest do
     for request <- ScriptedHost.requests(host) do
       refute inspect(request, limit: :infinity, printable_limit: :infinity) =~ @value
     end
+  end
+
+  test "a name the map holds and the attempt was not handed is `disclosure_refused`" do
+    host = ScriptedHost.start!()
+    attempt = ScriptedHost.attempt!(host, component_type: :catalyst)
+
+    # The probe reads `PROBE_KEY`, then `PROBE_HIDDEN`. The map's key is
+    # the first and its value the second: only the key is the
+    # component's name for the attached field.
+    log =
+      capture_log(fn ->
+        assert {:ok, %{"status" => 200, "data" => %{"read" => "EEEE"}}} =
+                 probe(attempt.client, %{}, attached_edge(%{"PROBE_KEY" => "PROBE_HIDDEN"}))
+      end)
+
+    assert [
+             %{args: %{"type" => "disclosure_refused", "message" => "PROBE_KEY"}},
+             %{args: %{"type" => "secret_denied", "message" => "PROBE_HIDDEN"}}
+           ] = ScriptedHost.requests(host, "record_denial")
+
+    assert log =~ "Field 'PROBE_KEY' is attached to requests by CYFR and never handed to"
+    assert log =~ "Field 'PROBE_HIDDEN' is outside the consent's projection"
   end
 end

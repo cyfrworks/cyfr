@@ -37,7 +37,7 @@ defmodule Sanctum.AnonymousIngressTest do
         binding_key: "tincture:alice.widget|@ingress|default",
         destination: %Prima.Destination{hosts: ["oauth2.googleapis.com"], scheme: "https"},
         attach: nil,
-        projection: %{fields: [], scopes: []}
+        projection: %{fields: %{}, scopes: []}
       }
 
       assert {:error, reason} =

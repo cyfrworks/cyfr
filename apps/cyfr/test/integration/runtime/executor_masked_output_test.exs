@@ -279,10 +279,12 @@ defmodule Locus.Runtime.ExecutorMaskedOutputTest do
           "reason" => "to be handed a key and a token, as a disclosed need is",
           "required" => true,
           "fields" => [@key_field],
-          "scopes" => TwoServices.stub_scopes()
+          "scopes" => TwoServices.stub_scopes(),
+          "hosts" => [TwoServices.stub_host()]
         }
       },
       "caps" => %{
+        "egress" => %{"domains" => [TwoServices.stub_host()]},
         "limits" => %{
           "timeout" => timeout,
           "max_memory_bytes" => 67_108_864,

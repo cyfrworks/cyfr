@@ -1582,7 +1582,7 @@ func describeRow(row map[string]any) []string {
 	case "credential":
 		lines := []string{credentialSentence(node, values),
 			"lifetime: " + lifetimeLabel(values["lifetime"]),
-			"fields: " + listOr(values["fields"], "none"),
+			"fields: " + fieldMapOr(values["fields"], "none"),
 			"scopes: " + listOr(values["scopes"], "none")}
 		if values["suggested"] == true {
 			lines = append(lines, "suggested")
@@ -1824,6 +1824,25 @@ func subjectLabel(subject any) string {
 	default:
 		return "for " + s
 	}
+}
+
+// fieldMapOr spells a field map as each field the component reads and the
+// entry field that answers it, in the order of the component's names.
+func fieldMapOr(value any, none string) string {
+	fields, _ := value.(map[string]any)
+	if len(fields) == 0 {
+		return none
+	}
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	pairs := make([]string, 0, len(names))
+	for _, name := range names {
+		pairs = append(pairs, name+" from "+str(fields[name]))
+	}
+	return strings.Join(pairs, ", ")
 }
 
 func listOr(value any, none string) string {

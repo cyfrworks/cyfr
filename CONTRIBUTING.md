@@ -35,6 +35,55 @@ The `license-lint` workflow enforces this boundary on every pull request for
 Elixir, Go, WIT, the console's JavaScript and the backends image suite — a
 missing or wrong header fails CI.
 
+## Running from source
+
+CYFR runs from the checkout with `mix phx.server` at the umbrella root, and
+Prism reloads as its files change. Components run in the `locus-runtime`
+container built from the same tree, because the runtime runs only under
+`cyfr-locus` in its container. A `mix` boot runs no Locus role.
+`docker-compose.dev.yml`, layered over `docker-compose.yml`, is that
+container's development shape, and `scripts/dev-stack.sh` drives it. Besides
+the setup the next section names (the pinned `wasm-tools`, the prebuilt
+binaries and the tailwind CLI), the stack needs Docker with its compose
+plugin, `openssl`, and a host that allows unprivileged user namespaces
+(`docker-compose.yml`'s `locus-runtime` service says why).
+
+1. Give `.env` at the checkout's root a way to sign in. Take
+   `CYFR_GITHUB_CLIENT_ID` from `.env.example`, and put your own email in
+   `CYFR_PLATFORM_ADMIN_EMAILS`. Copy no other line: `.env.example` is a
+   compose deployment's file.
+2. `scripts/dev-stack.sh` builds `cyfr-locus:dev` from the tree and starts it
+   as the worker service `wrk_local` on `127.0.0.1:4200`, where CYFR
+   dispatches by default. It reads `.env` and the environment through
+   `mix cyfr.locus.dev_stack`, as the mix boot reads them. When neither sets
+   `CYFR_LOCUS_RUNTIME_ROOT`, it makes `.env` mode 0600 and adds one; later
+   runs keep it. The runtime's key is derived from that root and reaches
+   the container through the environment alone. The script refuses a
+   `CYFR_LOCUS_RUNTIME_WORKERS`, `CYFR_HOST_API_BIND` or `CYFR_HOST_API_URL`
+   that would send runs or the runtime's calls elsewhere, and a root the
+   environment sets empty. Run it again after changing anything the Locus
+   image holds.
+3. Start CYFR as the script prints:
+   `CYFR_HOST_API_BIND=172.16.231.1 mix phx.server`. That address is the
+   runtime network's gateway, the one address the container reaches the host
+   API at. Without the stack, a plain `mix phx.server` serves Prism and runs
+   no component.
+4. Sign in at http://localhost:4000 and create an API key on the API Keys
+   page. `CYFR_TOKEN=<key> scripts/dev-stack.sh check` runs
+   `catalyst:local.files` through the server and the container: it writes a
+   nonce, reads it back and deletes it, and fails naming the refusal or the
+   failed run, deleting the nonce's file first. The token travels in a
+   header file of its own, never on a command line. A session token from
+   the dev CLI's `cyfr login` works too.
+5. `scripts/dev-stack.sh down` removes the container and its network.
+
+AQUA answers in the chat once a model provider's key is in the vault, as on
+any install. Builds and stdio MCP servers stay off: no builds or backends
+service is configured, so CYFR refuses a build and a stdio server. The stack
+takes the shipped `locus-runtime` network's subnet (`172.16.231.0/24`), so it
+does not run beside a stack started from `docker-compose.yml` on the same
+host.
+
 ## Before opening a PR
 
 - Consult [`ARCHITECTURE.md`](ARCHITECTURE.md) when deciding ownership,

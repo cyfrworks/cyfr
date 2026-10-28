@@ -156,7 +156,7 @@ defmodule Prima.Refusal do
     not_offered: {:forbidden, "This instance entry is not offered to you."},
     component_not_admitted:
       {:forbidden, "This instance entry requires an unmodified shipped component."},
-    provider_mismatch: {:invalid_argument, "The entry is for another provider than this need."},
+    provider_mismatch: {:invalid_argument, "The entry is for another provider."},
     credential_header_refused:
       {:invalid_argument, "A request that names a connection carries no credential header."},
     endpoints_immutable:

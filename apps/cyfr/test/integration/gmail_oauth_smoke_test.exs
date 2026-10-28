@@ -65,7 +65,8 @@ defmodule Cyfr.GmailOAuthSmokeTest do
                 "type" => "oauth:google",
                 "reason" => "to read your Gmail inbox",
                 "required" => true,
-                "scopes" => ["https://www.googleapis.com/auth/gmail.readonly"]
+                "scopes" => ["https://www.googleapis.com/auth/gmail.readonly"],
+                "hosts" => ["gmail.googleapis.com"]
               }
             },
             "caps" => %{

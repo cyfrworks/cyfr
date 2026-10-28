@@ -89,8 +89,8 @@ defmodule Locus.ApplicationTest do
       assert {Locus.Keeper, opts} = Enum.at(App.children(@runtime, true, launcher), 1)
       assert opts[:attach_dir] == Locus.Runtime.Settings.pool!().attach_dir
 
-      # A test or mix boot holds no channel: its runtime runs on the direct
-      # keeper, and no client starts.
+      # A test boot holds no channel: its runtime runs on the direct keeper,
+      # and no client starts.
       assert ids(App.children(@runtime, false, launcher)) == [
                Prima.Slots,
                Locus.Runtime.Supervisor

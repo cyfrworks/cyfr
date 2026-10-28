@@ -10,6 +10,7 @@ defmodule Prima.AuthorityTest do
   @formula "formula:local.daily-report"
   @catalyst "catalyst:supabase.com.database"
   @ceiling Prima.Limits.Ceiling.lowered(%{})
+  @projection %{"fields" => %{"url" => "url"}, "scopes" => []}
 
   defp limits_map(overrides \\ %{}) do
     Map.merge(
@@ -44,6 +45,7 @@ defmodule Prima.AuthorityTest do
                         "#{@catalyst}|source",
                         "vault-1",
                         "sha256:aaa",
+                        projection: @projection,
                         named: %{
                           "Second" =>
                             Prima.Test.AuthorityFixtures.bound_vault(
@@ -51,7 +53,8 @@ defmodule Prima.AuthorityTest do
                               "#{@catalyst}|source",
                               "vault-2",
                               "sha256:bbb",
-                              name: "Second"
+                              name: "Second",
+                              projection: @projection
                             )
                         }
                       ),
@@ -137,6 +140,7 @@ defmodule Prima.AuthorityTest do
               "@ingress",
               "vault-1",
               "sha256:aaa",
+              projection: @projection,
               named: %{
                 "Second" =>
                   Prima.Test.AuthorityFixtures.bound_vault(
@@ -144,7 +148,8 @@ defmodule Prima.AuthorityTest do
                     "@ingress",
                     "vault-2",
                     "sha256:bbb",
-                    name: "Second"
+                    name: "Second",
+                    projection: @projection
                   )
               }
             )
@@ -187,7 +192,8 @@ defmodule Prima.AuthorityTest do
               @formula,
               "@ingress",
               "vault-1",
-              "sha256:aaa"
+              "sha256:aaa",
+              projection: @projection
             )
         }
       }

@@ -355,7 +355,8 @@ defmodule Opus.AdmissionTest do
         "api_key" => %{
           "type" => "api_key:example.com",
           "reason" => "to call the example API",
-          "fields" => ["KEY"]
+          "fields" => ["KEY"],
+          "hosts" => ["api.example.com"]
         }
       },
       "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
@@ -656,7 +657,7 @@ defmodule Opus.AdmissionTest do
           @target_node,
           entry_id,
           "sha256:bind-" <> entry_id,
-          [projection: %{"fields" => ["KEY"]}] ++ opts
+          [projection: %{"fields" => %{"KEY" => "KEY"}, "scopes" => []}] ++ opts
         )
       end
 
@@ -808,7 +809,7 @@ defmodule Opus.AdmissionTest do
           @account_target,
           entry_id,
           "sha256:bind-" <> entry_id,
-          [projection: %{"scopes" => ["fixture.scope"]}] ++ opts
+          [projection: %{"fields" => %{}, "scopes" => ["fixture.scope"]}] ++ opts
         )
       end
 

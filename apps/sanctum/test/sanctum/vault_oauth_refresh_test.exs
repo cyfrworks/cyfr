@@ -55,7 +55,7 @@ defmodule Sanctum.VaultOAuthRefreshTest do
 
     # The edge a consent writes for an OAuth need: its projection is the
     # scopes the entry was authorized for.
-    projection = %{fields: [], scopes: @scopes}
+    projection = %{fields: %{}, scopes: @scopes}
     {entry, %{entry_id: entry.id, binding_digest: digest, projection: projection}}
   end
 

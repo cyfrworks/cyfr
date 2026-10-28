@@ -448,7 +448,8 @@ defmodule Locus.Runtime.Engine do
     }
   end
 
-  # The fields the node's edge projects from the entries it binds: the
+  # The fields the node's edge projects from the entries it binds, by the
+  # names the component reads them under (its field map's keys): the
   # default binding's and each named account's. Those the attempt was not
   # handed are attached by CYFR, never disclosed.
   defp attached_fields(%Edge{vault: %{entry_id: _entry} = vault}) do
@@ -458,7 +459,9 @@ defmodule Locus.Runtime.Engine do
 
   defp attached_fields(_edge), do: MapSet.new()
 
-  defp projected_fields(%{projection: %{fields: fields}}) when is_list(fields), do: fields
+  defp projected_fields(%{projection: %{fields: fields}}) when is_map(fields),
+    do: Map.keys(fields)
+
   defp projected_fields(_vault), do: []
 
   defp report_denied(host, name, component_ref, reason) do

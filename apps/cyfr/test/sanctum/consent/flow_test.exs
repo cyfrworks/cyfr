@@ -55,12 +55,12 @@ defmodule Sanctum.Consent.FlowTest do
           %{
             name: "conn-#{System.unique_integer([:positive])}",
             kind: "api_key",
-            # The provider the cases' declared need names; a slot of a
-            # manifest declaring none names no provider to match.
+            # The label and the host the cases' declared need names; a slot
+            # of a manifest declaring none matches neither.
             provider_hint: "anthropic.com",
             fields: %{"url" => "https://db.example", "anon_key" => "anon"},
             # A case reads what the attach answers, so the entry is disclosed.
-            destination: %{"hosts" => ["db.example"]},
+            destination: %{"hosts" => ["api.anthropic.com"]},
             disclose: true
           },
           over
@@ -174,7 +174,13 @@ defmodule Sanctum.Consent.FlowTest do
 
       decisions = %{
         ref: "reagent:local.flow-happy",
-        bindings: [%{need: "@ingress", entry_id: entry.id, fields: ["url", "anon_key"]}]
+        bindings: [
+          %{
+            need: "@ingress",
+            entry_id: entry.id,
+            fields: %{"url" => "url", "anon_key" => "anon_key"}
+          }
+        ]
       }
 
       {:ok, preview} = Commit.preview(ctx, decisions)
@@ -186,7 +192,7 @@ defmodule Sanctum.Consent.FlowTest do
                  "values" => %{
                    "name" => entry_name,
                    "edge" => "@ingress",
-                   "fields" => ["anon_key", "url"]
+                   "fields" => %{"anon_key" => "anon_key", "url" => "url"}
                  }
                }
              ] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
@@ -218,7 +224,7 @@ defmodule Sanctum.Consent.FlowTest do
                Loader.load_root(ctx, profile, live: {:ok, live})
 
       assert auth.resources.vault.entry_id == entry.id
-      assert auth.resources.vault.projection.fields == ["anon_key", "url"]
+      assert auth.resources.vault.projection.fields == %{"anon_key" => "anon_key", "url" => "url"}
 
       # The binding is the athanor's own, keyed where it sits; a manifest
       # declaring no need is disclose-only, so nothing is attached.
@@ -523,7 +529,7 @@ defmodule Sanctum.Consent.FlowTest do
 
       {:ok, %{profile_id: owner_id}} =
         walk!(ctx, "reagent:local.flow-pub", %{
-          bindings: [%{need: "@ingress", entry_id: entry.id, fields: ["url"]}]
+          bindings: [%{need: "@ingress", entry_id: entry.id}]
         })
 
       {:ok, staged} =
@@ -696,6 +702,7 @@ defmodule Sanctum.Consent.FlowTest do
     "needs" => %{
       "api_key" => %{
         "type" => "api_key:anthropic.com",
+        "hosts" => ["api.anthropic.com"],
         "reason" => "to call the API with your key",
         "fields" => ["ANTHROPIC_API_KEY"]
       }
@@ -818,7 +825,9 @@ defmodule Sanctum.Consent.FlowTest do
       {:ok, auth, _} = Loader.load_root(ctx, profile, live: {:ok, live})
 
       # The manifest's declared subset, NOT every field of the entry.
-      assert auth.resources.vault.projection.fields == ["ANTHROPIC_API_KEY"]
+      assert auth.resources.vault.projection.fields == %{
+               "ANTHROPIC_API_KEY" => "ANTHROPIC_API_KEY"
+             }
     end
 
     test "binding the declared need mints a loadable revision with the projection",
@@ -844,7 +853,10 @@ defmodule Sanctum.Consent.FlowTest do
 
       assert auth.resources.vault.entry_id == entry.id
       # The projection defaulted to the need's declared fields.
-      assert auth.resources.vault.projection.fields == ["ANTHROPIC_API_KEY"]
+      assert auth.resources.vault.projection.fields == %{
+               "ANTHROPIC_API_KEY" => "ANTHROPIC_API_KEY"
+             }
+
       assert auth.resources.egress.domains == ["api.anthropic.com"]
     end
 
@@ -853,14 +865,20 @@ defmodule Sanctum.Consent.FlowTest do
       entry = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-1"}})
       ref = "reagent:local.flow-needs-empty"
 
-      for over <- [%{fields: []}, %{scopes: []}] do
-        binding = Map.merge(%{need: "api_key", entry_id: entry.id}, over)
+      # An empty field map names none of the need's fields.
+      assert {:error, {:invalid_field_map, "api_key"}} =
+               Commit.preview(ctx, %{
+                 ref: ref,
+                 bindings: [%{need: "api_key", entry_id: entry.id, fields: %{}}]
+               })
 
-        assert {:error, {:invalid_argument, message}} =
-                 Commit.preview(ctx, %{ref: ref, bindings: [binding]})
+      assert {:error, {:invalid_argument, message}} =
+               Commit.preview(ctx, %{
+                 ref: ref,
+                 bindings: [%{need: "api_key", entry_id: entry.id, scopes: []}]
+               })
 
-        assert message =~ "api_key"
-      end
+      assert message =~ "api_key"
     end
 
     test "a key need grants no scopes, so its edge never dispenses a token", %{ctx: ctx} do
@@ -895,7 +913,7 @@ defmodule Sanctum.Consent.FlowTest do
 
       # The edge references its entry under a named projection, and the
       # attach's read answers exactly those fields.
-      assert auth.resources.vault.projection.fields == ["anon_key", "url"]
+      assert auth.resources.vault.projection.fields == %{"anon_key" => "anon_key", "url" => "url"}
 
       use = %{
         root_execution_id: "exec_flow",
@@ -927,7 +945,7 @@ defmodule Sanctum.Consent.FlowTest do
                  "values" => %{
                    "name" => ^entry_name,
                    "edge" => "@ingress",
-                   "fields" => ["ANTHROPIC_API_KEY"],
+                   "fields" => %{"ANTHROPIC_API_KEY" => "ANTHROPIC_API_KEY"},
                    "scopes" => []
                  }
                }
@@ -953,8 +971,8 @@ defmodule Sanctum.Consent.FlowTest do
 
     test "a second binding has nowhere to ride and is refused", %{ctx: ctx} do
       publish_needs!(ctx, "flow-needs-two")
-      a = entry!(ctx)
-      b = entry!(ctx)
+      a = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-a"}})
+      b = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-b"}})
 
       # Two defaults of one need: the second names no account to ride as.
       assert {:error, {:invalid_argument, why}} =
@@ -980,7 +998,8 @@ defmodule Sanctum.Consent.FlowTest do
             "needs" => %{
               "api_key" => @needs_manifest["needs"]["api_key"],
               "other_key" => @needs_manifest["needs"]["api_key"]
-            }
+            },
+            "caps" => @needs_manifest["caps"]
           })
       })
 
@@ -1111,6 +1130,66 @@ defmodule Sanctum.Consent.FlowTest do
         assert consent.blob_digest == Prima.Digest.sha256(consent.resolved_policy),
                "#{ref}'s stored digest does not describe its stored policy"
       end
+    end
+  end
+
+  describe "a head stored before the field map" do
+    # A revision whose bound entry's projection is the list a release
+    # before the field map wrote. Its bytes keep their blob digest, so the
+    # refusal is the blob grammar's, and nothing converts the list.
+    test "a head stored with a list projection is refused as damaged at a run and at a plan",
+         %{ctx: ctx} do
+      publish_needs!(ctx, "flow-list-projection")
+      entry = entry!(ctx, %{fields: %{"ANTHROPIC_API_KEY" => "sk-listed"}})
+      ref = "reagent:local.flow-list-projection"
+
+      {:ok, %{profile_id: profile_id}} =
+        walk!(ctx, ref, %{bindings: [%{need: "api_key", entry_id: entry.id}]})
+
+      assert {:ok, %{profile_id: ^profile_id}} = Opus.authority_for(ctx, :default, ref)
+      {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+      path = ["nodes", ref, "edges", "@ingress", "vault", "projection"]
+      blob = Jason.decode!(head.resolved_policy)
+
+      assert get_in(blob, path) == %{
+               "fields" => %{"ANTHROPIC_API_KEY" => "ANTHROPIC_API_KEY"},
+               "scopes" => []
+             }
+
+      {:ok, listed} =
+        blob
+        |> put_in(path, %{"fields" => ["ANTHROPIC_API_KEY"], "scopes" => []})
+        |> Prima.JCS.encode()
+
+      :ok =
+        Sanctum.Test.ConsentFixtures.hand_edit_head!(ctx, profile_id,
+          resolved_policy: listed,
+          blob_digest: Prima.Digest.sha256(listed)
+        )
+
+      {:ok, stored} = Sanctum.Consent.head_consent(ctx, profile_id)
+      assert stored.blob_digest == Prima.Digest.sha256(stored.resolved_policy)
+
+      assert Loader.head_blob(stored) ==
+               {:error,
+                {:invalid_blob,
+                 {:invalid_resource, ref, "@ingress", :vault, "fields must be an object"}}}
+
+      assert {:error, {:head_corrupt, ^profile_id} = reason} =
+               Opus.authority_for(ctx, :default, ref)
+
+      damaged =
+        "This app's consent is damaged and cannot be used — " <>
+          "revoke profile #{profile_id} and grant it again."
+
+      assert %Prima.Refusal{class: :corrupt, message: ^damaged} =
+               Sanctum.Refusals.classify(reason)
+
+      assert Plan.plan(ctx, %{ref: ref}) == {:error, {:corrupt, {:profile, profile_id}}}
+
+      # Nothing was rewritten on the way: the stored bytes are the list.
+      {:ok, after_reads} = Sanctum.Consent.head_consent(ctx, profile_id)
+      assert after_reads.resolved_policy == listed
     end
   end
 end

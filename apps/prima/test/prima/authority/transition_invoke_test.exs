@@ -28,7 +28,12 @@ defmodule Prima.Authority.TransitionInvokeTest do
 
       assert child.cursor == {:bound, @catalyst}
       assert child.resources.vault.entry_id == "vault-source"
-      assert child.resources.vault.projection.fields == ["url", "anon_key"]
+
+      assert child.resources.vault.projection.fields == %{
+               "url" => "url",
+               "anon_key" => "anon key"
+             }
+
       assert child.resources.egress.domains == ["prod.supabase.co"]
       assert child.chain == [@formula, @catalyst]
       assert child.depth == 1
@@ -114,7 +119,8 @@ defmodule Prima.Authority.TransitionInvokeTest do
     archive =
       Fixtures.bound_vault(@formula, source, "vault-archive", "sha256:bind-archive",
         name: "Archive",
-        attach: Fixtures.attach_map()
+        attach: Fixtures.attach_map(),
+        projection: %{"fields" => %{"url" => "url", "anon_key" => "anon key"}, "scopes" => []}
       )
 
     {:ok, blob} =

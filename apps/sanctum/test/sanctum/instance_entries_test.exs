@@ -1843,8 +1843,8 @@ defmodule Sanctum.InstanceEntriesTest do
   end
 
   describe "binding_facts/1" do
-    test "answers the kind, provider, status and digest alone, whatever the audience, " <>
-           "unsealing nothing and claiming no use",
+    test "answers the kind, provider, field names, status and digest alone, whatever the " <>
+           "audience, unsealing nothing and claiming no use",
          %{admin: admin} do
       listed = create!(admin, %{audience: "listed", members: [id("alice")]})
 
@@ -1853,6 +1853,7 @@ defmodule Sanctum.InstanceEntriesTest do
       assert facts == %{
                kind: "api_key",
                provider_hint: "openai.com",
+               field_names: ["API_KEY"],
                status: "active",
                binding_digest: stored(listed.id).binding_digest
              }
@@ -1864,6 +1865,57 @@ defmodule Sanctum.InstanceEntriesTest do
       {:ok, _} = InstanceEntries.revoke(admin, listed.id)
       assert {:ok, %{status: "revoked"}} = InstanceEntries.binding_facts(listed.id)
       assert {:error, :not_found} = InstanceEntries.binding_facts("ine_missing")
+    end
+  end
+
+  # What a consent may know of an entry's fields, from each answer it
+  # reads them in.
+  defp field_names_answered(ctx, entry_id) do
+    {:ok, offered} = InstanceEntries.offered(ctx)
+    {:ok, with_use} = InstanceEntries.offered_with_use(ctx)
+    {:ok, binding} = InstanceEntries.binding(ctx, entry_id)
+    {:ok, facts} = InstanceEntries.binding_facts(entry_id)
+
+    [
+      Enum.find(offered, &(&1.id == entry_id)).field_names,
+      Enum.find(with_use, &(&1.id == entry_id)).field_names,
+      binding.field_names,
+      facts.field_names
+    ]
+  end
+
+  describe "an entry's field names" do
+    test "`offered/1`, `offered_with_use/1`, `binding/2` and `binding_facts/1` name the " <>
+           "entry's field names, sorted",
+         %{admin: admin} do
+      entry =
+        create!(admin, %{
+          kind: "bundle",
+          fields: %{"url" => "https://db.example", "API key" => @secret, "Zone" => "eu"}
+        })
+
+      answers = field_names_answered(person("alice"), entry.id)
+
+      assert answers == List.duplicate(["API key", "Zone", "url"], 4)
+      refute inspect(answers) =~ @secret
+      assert {0, []} = usage(entry.id)
+    end
+
+    @tag :capture_log
+    test "a field-name column that does not decode reads as none", %{admin: admin} do
+      entry = create!(admin)
+      alice = person("alice")
+      assert field_names_answered(alice, entry.id) == List.duplicate(["API_KEY"], 4)
+
+      for damaged <- ["not json", ~s({"API_KEY":true}), ~s("API_KEY")] do
+        {1, _} =
+          Arca.Repo.update_all(
+            Ecto.Query.from(i in Arca.Schemas.InstanceEntry, where: i.id == ^entry.id),
+            set: [field_names: damaged]
+          )
+
+        assert field_names_answered(alice, entry.id) == List.duplicate([], 4), damaged
+      end
     end
   end
 

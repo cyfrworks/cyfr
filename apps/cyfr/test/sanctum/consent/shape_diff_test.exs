@@ -226,11 +226,13 @@ defmodule Sanctum.Consent.ShapeDiffTest do
               "needs" => %{
                 "database" => %{
                   "type" => "api_key:supabase.co",
+                  "hosts" => ["*.supabase.co"],
                   "reason" => "to reach the database",
                   "fields" => ["anon_key"],
                   "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["*.supabase.co"]}}
             })
         })
 

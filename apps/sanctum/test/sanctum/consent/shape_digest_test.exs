@@ -193,7 +193,12 @@ defmodule Sanctum.Consent.ShapeDigestTest do
   end
 
   describe "how a need attaches, where it goes, and what is provided" do
-    @need %{name: "api_key", type: "api_key:openai.com", fields: ["KEY"]}
+    @need %{
+      name: "api_key",
+      type: "api_key:openai.com",
+      fields: ["KEY"],
+      hosts: ["api.openai.com"]
+    }
     @attach %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
     @provided %{
       "catalyst:local.supabase" => %{
@@ -209,7 +214,7 @@ defmodule Sanctum.Consent.ShapeDigestTest do
 
       variants = [
         %{needs: [Map.put(@need, :attach, @attach)]},
-        %{needs: [Map.put(@need, :hosts, ["api.openai.com"])]},
+        %{needs: [Map.put(@need, :hosts, ["api.openai.com", "files.openai.com"])]},
         %{needs: [Map.put(@need, :paths, ["/v1/"])]},
         %{needs: [Map.put(@need, :disclose, true)]},
         %{provides: @provided},
@@ -242,14 +247,15 @@ defmodule Sanctum.Consent.ShapeDigestTest do
                  "name" => "api_key",
                  "type" => "api_key:openai.com",
                  "fields" => ["KEY"],
-                 "scopes" => []
+                 "scopes" => [],
+                 "hosts" => ["api.openai.com"]
                }
              ]
 
       refute Map.has_key?(canonical, "provides")
 
-      # A false disclose and empty hosts or paths declare nothing.
-      for undeclared <- [%{disclose: false}, %{hosts: []}, %{paths: []}] do
+      # A false disclose and empty paths declare nothing.
+      for undeclared <- [%{disclose: false}, %{paths: []}] do
         assert digest!(base) ==
                  digest!(Map.put(@base, :needs, [Map.merge(@need, undeclared)])),
                "#{inspect(undeclared)} moved the digest"
@@ -279,6 +285,22 @@ defmodule Sanctum.Consent.ShapeDigestTest do
              ] = canonical["needs"]
 
       assert canonical["provides"] == @provided
+    end
+
+    test "a credential need without hosts is refused, and a component-typed need takes none" do
+      for type <- ["api_key:openai.com", "oauth:google", "bundle:acme.example"],
+          hostless <- [Map.delete(@need, :hosts), Map.put(@need, :hosts, [])] do
+        need = Map.put(hostless, :type, type)
+
+        assert {:error, {:invalid_shape, :hosts, _why}} =
+                 ShapeDigest.compute(Map.put(@base, :needs, [need])),
+               "#{inspect(need)} was accepted"
+      end
+
+      component = %{name: "source", type: "catalyst:local.db"}
+      {:ok, canonical} = ShapeDigest.normalize(Map.put(@base, :needs, [component]))
+      assert [need] = canonical["needs"]
+      refute Map.has_key?(need, "hosts")
     end
 
     test "a malformed rule, disclose or provided entry is refused" do

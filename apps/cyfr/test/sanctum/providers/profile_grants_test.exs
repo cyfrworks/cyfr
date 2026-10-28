@@ -106,7 +106,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
     do: %{"storage" => %{"paths" => paths, "actions" => actions}}
 
   # `entry_id` bound on `node`'s `edge`: the athanor's own entry, keyed
-  # where it sits.
+  # where it sits, its `API key` field answering the need's `api_key`.
   defp vault(entry_id, node, edge),
     do: %{
       "vault" => %{
@@ -115,7 +115,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
         "scope" => "athanor",
         "binding_key" => Prima.Authority.Blob.binding_key(node, edge, nil),
         "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
-        "projection" => %{"fields" => ["api_key"], "scopes" => []}
+        "projection" => %{"fields" => %{"api_key" => "API key"}, "scopes" => []}
       }
     }
 
@@ -440,7 +440,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
                    vault: %{
                      entry_id: ^entry,
                      binding_digest: "sha256:binding",
-                     projection: %{fields: ["api_key"], scopes: []}
+                     projection: %{fields: %{"api_key" => "API key"}, scopes: []}
                    }
                  }
                ]
@@ -490,7 +490,8 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert ids(answer) == Enum.sort([lender, borrower])
       by_id = Map.new(answer.grants, &{&1.profile_id, &1})
 
-      # The borrower's row says it borrows, and through which label.
+      # The borrower's row says it borrows, and through which label, and
+      # reads under its lender's field map.
       assert by_id[borrower].admitted_origins == ["interactive"]
       assert [%{node: "reagent:local.g-borrower", vault: vault} = edge] = by_id[borrower].edges
       assert edge.edge == borrowed_edge()
@@ -498,7 +499,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       assert vault == %{
                entry_id: entry,
                binding_digest: "sha256:binding",
-               projection: %{fields: ["api_key"], scopes: []},
+               projection: %{fields: %{"api_key" => "API key"}, scopes: []},
                lender: %{label: "default", profile_id: lender}
              }
 
@@ -530,15 +531,8 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
     test "a borrower whose selection resolves to nothing does not reach the entry",
          %{ctx: ctx} do
-      entry = "vlt_narrowed_#{System.unique_integer([:positive])}"
+      entry = "vlt_unresolved_#{System.unique_integer([:positive])}"
       lender = lender!(ctx, entry)
-
-      # A projection asking only for a field the lender does not grant.
-      _narrowed =
-        borrower!(ctx, "g-narrowed", %{
-          "via" => %{"label" => "default"},
-          "projection" => %{"fields" => ["other_field"]}
-        })
 
       # A pinned binding the lender no longer holds, and a label it is not.
       _moved =
@@ -550,6 +544,27 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
 
       assert {:ok, answer} = grants(ctx, %{"entry_id" => entry})
       assert ids(answer) == [lender]
+    end
+
+    # A selection reads under its lender's projection and names none of its
+    # own, so one that carries a projection is a head the blob grammar
+    # refuses: the read is refused as that head's damage, never answered
+    # under a narrower or a wider projection.
+    test "a borrower whose selection carries a projection of its own refuses the read as its " <>
+           "damaged head",
+         %{ctx: ctx} do
+      entry = "vlt_projected_#{System.unique_integer([:positive])}"
+      _lender = lender!(ctx, entry)
+
+      projected =
+        borrower!(ctx, "g-projected", %{
+          "via" => %{"label" => "default"},
+          "projection" => %{"fields" => %{"api_key" => "API key"}, "scopes" => []}
+        })
+
+      for args <- [%{"entry_id" => entry}, %{"domain" => "borrow.example"}] do
+        assert {:error, {:head_corrupt, ^projected}} = grants(ctx, args), inspect(args)
+      end
     end
 
     # A lender the read cannot read is no grant that reaches nothing: the
@@ -900,6 +915,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:example.com",
+          "hosts" => ["api.example.com"],
           "reason" => "to call the example API",
           "fields" => ["KEY"]
         }

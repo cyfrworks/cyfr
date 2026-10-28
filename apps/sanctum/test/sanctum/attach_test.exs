@@ -195,7 +195,7 @@ defmodule Sanctum.AttachTest do
       binding_key: key,
       destination: destination,
       attach: @rule,
-      projection: Keyword.get(opts, :projection, %{fields: ["KEY"], scopes: []})
+      projection: Keyword.get(opts, :projection, %{fields: %{"KEY" => "KEY"}, scopes: []})
     }
 
     {vault, facts(profile_id, consent_id)}
@@ -285,7 +285,7 @@ defmodule Sanctum.AttachTest do
       binding_key: key,
       destination: destination,
       attach: @rule,
-      projection: %{fields: ["API_KEY"], scopes: []}
+      projection: %{fields: %{"API_KEY" => "API_KEY"}, scopes: []}
     }
 
     {vault, facts(profile_id, consent_id)}
@@ -330,7 +330,29 @@ defmodule Sanctum.AttachTest do
       end
     end
 
-    test "a projection naming two fields is ambiguous, with nothing consumed or unsealed", %{
+    test "the one field a key map names is the one attached", %{ctx: ctx} do
+      entry = entry!(ctx, %{fields: %{"API key" => @secret, "ORG" => "org-1"}})
+      url = request("https://api.example.com/v1")
+
+      {vault, facts} =
+        bound!(ctx, entry, projection: %{fields: %{"GROK_API_KEY" => "API key"}, scopes: []})
+
+      assert {:ok, %{value: @secret, masking: [@secret]}} =
+               Attach.resolve(ctx, vault, "api_key", url, facts)
+
+      other = %{vault | projection: %{fields: %{"GROK_API_KEY" => "ORG"}, scopes: []}}
+
+      assert {:ok, %{value: "org-1", masking: ["org-1"]}} =
+               Attach.resolve(ctx, other, "api_key", url, facts)
+
+      # An entry field the material lacks is refused by the component's name.
+      absent = %{vault | projection: %{fields: %{"GROK_API_KEY" => "SECRET"}, scopes: []}}
+
+      assert {:error, {:missing_field, "GROK_API_KEY"}} =
+               Attach.resolve(ctx, absent, "api_key", url, facts)
+    end
+
+    test "a map naming two fields is ambiguous, with nothing consumed or unsealed", %{
       ctx: ctx
     } do
       entry = entry!(ctx, %{fields: %{"KEY" => @secret, "ORG" => "org-1"}})
@@ -338,7 +360,7 @@ defmodule Sanctum.AttachTest do
 
       {vault, facts} =
         bound!(ctx, entry,
-          projection: %{fields: ["KEY", "ORG"], scopes: []},
+          projection: %{fields: %{"KEY" => "KEY", "ORG" => "ORG"}, scopes: []},
           lifetime: %{lifetime_kind: "once"}
         )
 
@@ -359,7 +381,7 @@ defmodule Sanctum.AttachTest do
           oauth_scopes: ["scope.a"]
         })
 
-      {vault, facts} = bound!(ctx, entry, projection: %{fields: [], scopes: ["scope.a"]})
+      {vault, facts} = bound!(ctx, entry, projection: %{fields: %{}, scopes: ["scope.a"]})
 
       assert {:ok, %{value: "ya29.attach", masking: ["ya29.attach"]}} =
                Attach.resolve(ctx, vault, "gmail", request("https://api.example.com/v1"), facts)
@@ -575,6 +597,21 @@ defmodule Sanctum.AttachTest do
       assert usage(entry.id) == 1
     end
 
+    test "the one field a key map names is the one attached", %{ctx: ctx, admin: admin} do
+      entry = instance!(admin, %{fields: %{"API key" => @secret}})
+      {vault, facts} = instance_bound!(ctx, entry)
+      vault = %{vault | projection: %{fields: %{"OPENAI_API_KEY" => "API key"}, scopes: []}}
+      url = request("https://api.openai.com/v1/chat/completions")
+
+      assert {:ok, %{value: @secret, masking: [@secret]}} =
+               Attach.resolve(ctx, vault, "api_key", url, facts)
+
+      absent = %{vault | projection: %{fields: %{"OPENAI_API_KEY" => "API_KEY"}, scopes: []}}
+
+      assert {:error, {:missing_field, "OPENAI_API_KEY"}} =
+               Attach.resolve(ctx, absent, "api_key", url, facts)
+    end
+
     test "under shipped, a custom node is refused with no claim, before and after tightening", %{
       ctx: ctx,
       admin: admin
@@ -620,7 +657,7 @@ defmodule Sanctum.AttachTest do
       # An instance entry holds a key or a bundle of fields, never a token.
       entry = instance!(admin)
       {vault, facts} = instance_bound!(ctx, entry)
-      vault = %{vault | projection: %{fields: [], scopes: ["scope.a"]}}
+      vault = %{vault | projection: %{fields: %{}, scopes: ["scope.a"]}}
 
       assert {:error, :no_oauth_material} =
                Attach.resolve(

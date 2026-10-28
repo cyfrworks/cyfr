@@ -54,10 +54,7 @@ defmodule Sanctum.Authority.BlobSelectionWireTest do
 
     assert {:ok, back} = Authority.from_wire(Authority.to_wire(child))
 
-    assert back.resources.vault == %{
-             via: %{label: "default", binding_digest: nil},
-             projection: nil
-           }
+    assert back.resources.vault == %{via: %{label: "default", binding_digest: nil}}
 
     assert back.policy == root.policy
   end
@@ -73,7 +70,7 @@ defmodule Sanctum.Authority.BlobSelectionWireTest do
       Fixtures.bound_vault(@formula, @catalyst, "vault-1", "sha256:key",
         destination: Fixtures.destination_map(["api.anthropic.com"]),
         attach: %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
-        projection: %{"fields" => ["ANTHROPIC_API_KEY"]},
+        projection: %{"fields" => %{"ANTHROPIC_API_KEY" => "API key"}, "scopes" => []},
         lender: lender
       )
 
@@ -86,7 +83,7 @@ defmodule Sanctum.Authority.BlobSelectionWireTest do
              scope: "athanor",
              binding_key: "formula:local.assistant|catalyst:local.claude|default",
              attach: %{in: "header", name: "x-api-key", template: "{value}"},
-             projection: %{fields: ["ANTHROPIC_API_KEY"], scopes: []},
+             projection: %{fields: %{"ANTHROPIC_API_KEY" => "API key"}, scopes: []},
              lender: %{
                profile_id: "prof-claude",
                consent_id: "consent-claude",

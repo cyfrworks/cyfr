@@ -404,6 +404,25 @@ func TestInitTakesTheEndOfInputAsNoAnswer(t *testing.T) {
 	}
 }
 
+// A dev build fetches no scaffold, and says where its files come from: a
+// repo checkout, or the checkout's own source development stack, never a
+// bare `mix phx.server`, which runs no component.
+func TestInitOnADevBuildSaysWhereTheScaffoldComesFrom(t *testing.T) {
+	const notice = "⚠  dev build — docker-compose.yml, Caddyfile, .env.example and the bundled\n" +
+		"   scaffold (guides, wit/, aqua/) are only fetched for released\n" +
+		"   versions. Copy those files from a repo checkout, or run the server from\n" +
+		"   the checkout itself as CONTRIBUTING.md's \"Running from source\" says.\n"
+	newInitProject(t)
+	useFakeEngine(t)
+	var out bytes.Buffer
+	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+		t.Fatalf("init: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "\n"+notice) {
+		t.Errorf("a dev build's init does not say where its scaffold comes from:\n%s", out.String())
+	}
+}
+
 // On a terminal the access question comes first; an answer that is none
 // of the three is asked again, and a public home's domain is asked, an
 // invalid one with the rule it breaks.

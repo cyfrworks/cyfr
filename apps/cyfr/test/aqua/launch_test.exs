@@ -294,7 +294,8 @@ defmodule Aqua.LaunchTest do
           "type" => "api_key:upstream.test",
           "reason" => "to call the upstream with your key",
           "fields" => ["KEY"],
-          "attach" => @rule
+          "attach" => @rule,
+          "hosts" => ["127.0.0.1"]
         }
       },
       "caps" => %{
@@ -349,7 +350,8 @@ defmodule Aqua.LaunchTest do
         "api_key" => %{
           "type" => "api_key:example.com",
           "reason" => "to call the example API",
-          "fields" => ["KEY"]
+          "fields" => ["KEY"],
+          "hosts" => ["api.example.com"]
         }
       },
       "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}

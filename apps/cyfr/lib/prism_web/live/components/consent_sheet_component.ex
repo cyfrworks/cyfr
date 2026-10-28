@@ -23,9 +23,24 @@ defmodule PrismWeb.ConsentSheetComponent do
   ## Credentials
 
   Each credential need, the app's own and each dependency's, is a row of
-  its own: what it is, and what can meet it — the entries the plan names
-  as its candidates, a profile of the dependency that lends its key, or
-  the configuration the app's publisher provides, which takes no choice.
+  its own: what it is and the hosts it calls, and what can meet it — the
+  entries the plan names as its candidates, each with where it may go
+  and, for one matched through a `*.` host, how wide that host is, a
+  profile of the dependency that lends its key, or the configuration the
+  app's publisher provides, which takes no choice. A need with a
+  suggested or chosen entry names it as the entry already held for its
+  hosts.
+
+  The chosen entry's field map is shown pair by pair where a field the
+  component reads comes from an entry field of another name. Where the
+  plan has no automatic map for the entry, the sheet asks once which of
+  the entry's fields the component reads as each of its own, the entry
+  field of the same name preselected, and holds the grant — no preview,
+  so nothing to confirm — until each has one. The map the person chose,
+  or the head's re-sent on a re-grant, goes in the decision
+  (`Prism.ConsentChoices.mapped/2`), so the preview shows it and the
+  commit digest covers it; a head's map naming a field the entry no
+  longer holds is asked again.
   The entry the plan suggests is preselected for a required need
   (`Prism.ConsentChoices.initial_choices/2`, which the grant prompt
   opens with), shown as the pressed choice with a "Change" control when
@@ -38,8 +53,10 @@ defmodule PrismWeb.ConsentSheetComponent do
   A need nothing can meet offers "Connect your <provider> account" where
   it takes an API key: the layer's credential-entry prompt, prefilled from
   the need, in front of the grant, whose sheet comes back with the new
-  entry bound. A need the component reads itself, with a newer version
-  shipped, links to the Components page to update it.
+  entry bound. A need the component reads itself says when the entries
+  for its hosts are attach-only (the plan's `attach_only_held`), and,
+  with a newer version shipped, links to the Components page to update
+  it.
 
   Each previewed credential is one sentence: who uses it, the entry and
   whose it is, the account, where it may go and whether the component
@@ -148,6 +165,7 @@ defmodule PrismWeb.ConsentSheetComponent do
       account_head: 3,
       account_problem: 2,
       accounts_on: 2,
+      answer_map: 5,
       asked_flows: 2,
       candidates_of: 1,
       choices_of: 2,
@@ -163,6 +181,8 @@ defmodule PrismWeb.ConsentSheetComponent do
       limit_label: 1,
       lowerable: 1,
       lowered: 3,
+      map_pending?: 1,
+      mapped: 2,
       new_choice: 3,
       origins_of: 2,
       row_needs: 1,
@@ -254,6 +274,11 @@ defmodule PrismWeb.ConsentSheetComponent do
 
           {:ok, socket}
         else
+          # A map still to be chosen holds the grant: the layer is told
+          # the walk has no preview to confirm.
+          if is_nil(socket.assigns.preview) and Map.get(walk, :preview) != nil,
+            do: tell_layer(socket)
+
           {:ok, socket}
         end
 
@@ -284,10 +309,12 @@ defmodule PrismWeb.ConsentSheetComponent do
     {choices, account_refusal} =
       if is_map(held), do: {choices, nil}, else: walk_account(plan, choices, walk, now)
 
+    choices = mapped(choices, plan)
+
     socket
     |> assign(
       plan: plan,
-      preview: Map.get(walk, :preview),
+      preview: if(maps_pending?(choices), do: nil, else: Map.get(walk, :preview)),
       choices: choices,
       origins: origins_of(decisions["origins"], plan),
       subset: subset_of(decisions["subset"]),
@@ -512,15 +539,39 @@ defmodule PrismWeb.ConsentSheetComponent do
            %{} = held <- Map.get(socket.assigns.choices, slot),
            {:ok, source, id} when source in ["own", "instance"] <- picked(params),
            true <- {source, id} in candidate_picks(account_need(socket.assigns.plan, slot, held)) do
+        choice = held |> rebound(source, id) |> Map.merge(%{source: source, id: id, renew: false})
+
         {:noreply,
          socket
-         |> assign(
-           :choices,
-           Map.put(socket.assigns.choices, slot, %{held | source: source, id: id, renew: false})
-         )
+         |> assign(:choices, Map.put(socket.assigns.choices, slot, choice))
          |> walk_again({:lifetime, slot})}
       else
         _not_offered -> {:noreply, socket}
+      end
+    end)
+  end
+
+  # The person's answer to the map question: which of the chosen entry's
+  # fields the component reads as one of its own.
+  def handle_event(
+        "map_field",
+        %{"slot" => token, "need_field" => need_field, "entry_field" => entry_field},
+        socket
+      )
+      when is_binary(need_field) and is_binary(entry_field) do
+    CyfrWeb.ContextGuard.guard(socket, fn socket ->
+      with {:ok, slot} <- slot_of(token),
+           {:ok, choices} <-
+             answer_map(
+               socket.assigns.choices,
+               socket.assigns.plan,
+               slot,
+               need_field,
+               entry_field
+             ) do
+        {:noreply, socket |> assign(:choices, choices) |> walk_again(map_refusal(slot))}
+      else
+        _not_asked -> {:noreply, socket}
       end
     end)
   end
@@ -822,12 +873,18 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp picked(_params), do: :error
 
   # A slot bound to what the person picked, keeping the lifetime they gave
-  # it; the candidates close once chosen.
+  # it, and its field map only while the entry is the same; the
+  # candidates close once chosen.
   defp choose(socket, slot, source, id, need) do
     choice =
       case Map.get(socket.assigns.choices, slot) do
-        %{} = held -> %{held | source: source, id: id, need: need, renew: false}
-        nil -> new_choice(source, id, need)
+        %{} = held ->
+          held
+          |> rebound(source, id)
+          |> Map.merge(%{source: source, id: id, need: need, renew: false})
+
+        nil ->
+          new_choice(source, id, need)
       end
 
     assign(socket,
@@ -836,10 +893,28 @@ defmodule PrismWeb.ConsentSheetComponent do
     )
   end
 
-  # Every choice previews the walk again and hands it to the layer. Called
-  # inside the event's own guard, naming the control that made the choice
-  # (`at`), beside which a refusal is shown.
-  defp walk_again(socket, at), do: socket |> preview(at) |> tell_layer()
+  # A map was chosen for one entry: another entry is asked again.
+  defp rebound(%{source: source, id: id} = held, source, id), do: held
+  defp rebound(held, _source, _id), do: Map.drop(held, [:fields, :unmapped])
+
+  # Every choice previews the walk again, each entry chosen held to its
+  # field map, and hands it to the layer. Called inside the event's own
+  # guard, naming the control that made the choice (`at`), beside which a
+  # refusal is shown.
+  defp walk_again(socket, at) do
+    socket
+    |> assign(:choices, mapped(socket.assigns.choices, socket.assigns.plan))
+    |> preview(at)
+    |> tell_layer()
+  end
+
+  # Where a refusal of a map answer is shown: on the need, or on the
+  # account's row.
+  defp map_refusal({:account, _edge, _ref} = slot), do: {:lifetime, slot}
+  defp map_refusal(slot), do: slot_refusal(slot)
+
+  defp maps_pending?(choices),
+    do: Enum.any?(choices, fn {_slot, choice} -> map_pending?(choice) end)
 
   # What the home last previewed: the choices and the preview of exactly
   # those, put back whole when it refuses a later choice.
@@ -1043,7 +1118,7 @@ defmodule PrismWeb.ConsentSheetComponent do
         socket = reopen_if_moved(socket, was, plan)
 
         socket
-        |> assign(plan: plan, error: nil)
+        |> assign(plan: plan, error: nil, choices: mapped(socket.assigns.choices, plan))
         |> assign(:origins, socket.assigns.origins || origins_of(nil, plan))
         |> preview()
 
@@ -1099,32 +1174,61 @@ defmodule PrismWeb.ConsentSheetComponent do
   # is never left holding a preview of other choices than its own. Beyond
   # offering only what the ask names, the sheet checks nothing: what a
   # narrowing may be is the home's to decide.
+  #
+  # A field map still to be chosen holds the grant: nothing is previewed,
+  # so there is nothing to confirm, until each field has an entry field.
+  # A refusal of a choice with no walk previewed before it is shown beside
+  # that choice too, with nothing to confirm.
   defp preview(socket, at \\ nil)
   defp preview(%{assigns: %{plan: nil}} = socket, _at), do: socket
   defp preview(%{assigns: %{plan: %{unresolved: %{}}}} = socket, _at), do: socket
 
   defp preview(socket, at) do
+    if maps_pending?(socket.assigns.choices) do
+      assign(socket, preview: nil, error: nil, refusal: nil)
+    else
+      read_preview(socket, at)
+    end
+  end
+
+  defp read_preview(socket, at) do
     case Ops.call_tool(socket, "profile/preview", %{"decisions" => decisions_payload(socket)}) do
       {:ok, preview} ->
         socket |> assign(preview: preview, error: nil, refusal: nil) |> previewed()
 
       {:error, reason} ->
         case {at, socket.assigns.previewed} do
-          {at, %{} = last} when not is_nil(at) ->
+          {nil, _previewed} ->
+            assign(socket, preview: nil, error: Ops.error_message(reason))
+
+          # A choice's refusal is the sheet's one: it takes the place of a
+          # failed re-plan's sentence, which spoke of another walk.
+          {at, %{} = last} ->
             socket
             |> assign(
               choices: last.choices,
               origins: last.origins,
               subset: last.subset,
-              preview: last.preview
+              preview: last.preview,
+              error: nil
             )
             |> refuse(at, Ops.error_message(reason))
 
-          _nothing_previewed ->
-            assign(socket, preview: nil, error: Ops.error_message(reason))
+          {at, nil} ->
+            socket
+            |> assign(preview: nil, error: nil)
+            |> refuse(unpreviewed_at(at), Ops.error_message(reason))
         end
     end
   end
+
+  # A need's or a dependency's lifetime refusal is drawn on its preview
+  # row, or on the need while its lifetime is still to be chosen. With no
+  # preview and a lifetime chosen there is neither, so it is drawn beside
+  # the choice; an account's row draws its own.
+  defp unpreviewed_at({:lifetime, {:account, _edge, _ref}} = at), do: at
+  defp unpreviewed_at({:lifetime, slot}), do: slot_refusal(slot)
+  defp unpreviewed_at(at), do: at
 
   # The layer holds what its confirmation commits: told each walk, the
   # preview of exactly these decisions or none.
@@ -1209,15 +1313,6 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp one_field([name]) when is_binary(name), do: name
   defp one_field(_none_or_several), do: PrismWeb.SystemLayer.Prompt.default_field()
-
-  # The athanor holds an entry of the need's kind and provider that the
-  # component may not read: why a need it reads itself has no candidate.
-  defp attach_only_held?(plan, need) do
-    Enum.any?(List.wrap(field(plan, :candidates)), fn entry ->
-      field(entry, :attach_only) == true and field(entry, :kind) == field(need, :kind) and
-        field(entry, :provider_hint) == field(need, :provider)
-    end)
-  end
 
   # Whether no credential need is declared by the app or any dependency.
   defp asks_no_credentials?(plan) do
@@ -1331,7 +1426,6 @@ defmodule PrismWeb.ConsentSheetComponent do
             edge={{:need, need.need}}
             edge_label="@ingress"
             accounts={account_rows(@plan, @choices, {:need, need.need}, fn _ -> true end)}
-            plan={@plan}
             myself={@myself}
             athanor_route={assigns[:athanor_route]}
             refusal={@refusal}
@@ -1360,7 +1454,6 @@ defmodule PrismWeb.ConsentSheetComponent do
               edge={{:dep, row.from, row.dep}}
               edge_label={row.dep}
               accounts={dep_accounts(@plan, @choices, row, need, index)}
-              plan={@plan}
               myself={@myself}
               athanor_route={assigns[:athanor_route]}
               refusal={@refusal}
@@ -1503,7 +1596,6 @@ defmodule PrismWeb.ConsentSheetComponent do
   attr :edge, :any, required: true
   attr :edge_label, :string, required: true
   attr :accounts, :list, default: []
-  attr :plan, :map, required: true
   attr :myself, :any, required: true
   attr :athanor_route, :any, default: nil
   attr :refusal, :map, default: nil
@@ -1540,10 +1632,20 @@ defmodule PrismWeb.ConsentSheetComponent do
       if open? or lender != nil or candidates == [], do: assigns.lenders, else: []
 
     options = length(candidates) + length(assigns.lenders)
+    chosen_candidate = chosen && Enum.find(candidates, &(candidate_pick(&1) == chosen))
+
+    # The entry the need already has: the one chosen, else the one the plan
+    # suggests while no profile's key is chosen instead.
+    held_entry =
+      chosen_candidate ||
+        (is_nil(lender) && suggestion &&
+           Enum.find(candidates, &(candidate_pick(&1) == suggestion)))
 
     assigns =
       assign(assigns,
         provided?: provided?,
+        held_entry: held_entry,
+        chosen_candidate: chosen_candidate,
         candidates: candidates,
         shown: shown,
         lenders_shown: lenders_shown,
@@ -1567,6 +1669,14 @@ defmodule PrismWeb.ConsentSheetComponent do
     >
       <div class="consent-sheet__need-reason">{field(@need, :reason)}</div>
       <div class="consent-sheet__need-what text-xs text-gray-400">{need_words(@need)}</div>
+
+      <p
+        :if={(not @provided? and @held_entry) && hosts_words(@need) != ""}
+        class="consent-sheet__held"
+        data-test="grant-held"
+      >
+        You already have an entry for {hosts_words(@need)}: {@held_entry.name}
+      </p>
 
       <p :if={@provided?} class="consent-sheet__provided" data-test="grant-provided">
         Provided by {publisher(@from)}, the app's public configuration, sent only to <span class="font-mono">{destination_label(field(@need, :destination))}</span>.
@@ -1634,16 +1744,24 @@ defmodule PrismWeb.ConsentSheetComponent do
         </button>
       </div>
 
+      <.field_map
+        :if={(not @provided? and @chosen_candidate) && declared?(@need)}
+        form={map_form_id(@sheet, @token)}
+        token={@token}
+        candidate={@chosen_candidate}
+        need={@need}
+        component={@component}
+        choice={@choice}
+        myself={@myself}
+      />
+
       <p
-        :if={
-          not @provided? and @candidates == [] and reads_itself?(@need) and declared?(@need) and
-            attach_only_held?(@plan, @need)
-        }
+        :if={not @provided? and field(@need, :attach_only_held) == true}
         class="consent-sheet__why"
         data-test="grant-why"
       >
         {@component} reads the value itself, so only an entry you let it read can meet this
-        need: your {field(@need, :provider)} entries are attach-only, and it never holds their
+        need: your entries for {hosts_words(@need)} are attach-only, and it never holds their
         value.
       </p>
 
@@ -1672,7 +1790,7 @@ defmodule PrismWeb.ConsentSheetComponent do
           Add a vault entry
         </.link>
         <span :if={!@athanor_route}>Add a vault entry</span>
-        for {field(@need, :provider)} first.
+        for {hosts_words(@need)} first.
       </p>
 
       <p :if={is_binary(field(@need, :newer_shipped))} class="consent-sheet__update">
@@ -1768,6 +1886,17 @@ defmodule PrismWeb.ConsentSheetComponent do
           </button>
         </div>
 
+        <.field_map
+          :if={account.pick != nil}
+          form={map_form_id(@sheet, account.token)}
+          token={account.token}
+          candidate={Enum.find(@candidates, &(candidate_pick(&1) == account.pick))}
+          need={@need}
+          component={@component}
+          choice={account.choice}
+          myself={@myself}
+        />
+
         <div
           class="consent-sheet__lifetime flex flex-wrap items-center gap-2"
           data-test="grant-account-lifetime"
@@ -1831,6 +1960,86 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp lent_by(%{lent_by: label}) when is_binary(label), do: label
   defp lent_by(_choice), do: nil
+
+  attr :form, :string, required: true
+  attr :token, :string, required: true
+  attr :candidate, :map, default: nil
+  attr :need, :map, required: true
+  attr :component, :string, required: true
+  attr :choice, :map, default: nil
+  attr :myself, :any, required: true
+
+  # The chosen entry's field map: each pair of the map it is bound under
+  # whose names differ, and, where the plan has no automatic map or the
+  # choice waits on an answer (a held map naming a field the entry no
+  # longer holds), the question, asked once: one select per field the need
+  # reads over the entry's fields, its answer selected.
+  defp field_map(assigns) do
+    candidate = assigns.candidate
+    fields = (is_map(assigns.choice) && Map.get(assigns.choice, :fields)) || nil
+    automatic = candidate && field(candidate, :fields)
+
+    assigns =
+      assign(assigns,
+        asked:
+          if(
+            candidate &&
+              (is_nil(automatic) or (is_map(assigns.choice) and map_pending?(assigns.choice))),
+            do: List.wrap(field(assigns.need, :fields)),
+            else: []
+          ),
+        answers: fields || %{},
+        names: List.wrap(candidate && field(candidate, :field_names)),
+        pairs:
+          for(
+            {need_field, entry_field} <- Enum.sort(fields || automatic || %{}),
+            need_field != entry_field,
+            do: {need_field, entry_field}
+          ),
+        due?: is_map(assigns.choice) and map_pending?(assigns.choice)
+      )
+
+    ~H"""
+    <div :if={@candidate} class="consent-sheet__map text-xs" data-test="grant-map">
+      <p :for={{need_field, entry_field} <- @pairs} data-test="grant-map-pair">
+        {need_field} comes from {entry_field}
+      </p>
+      <form
+        :for={{need_field, index} <- Enum.with_index(@asked)}
+        id={"#{@form}-#{index}"}
+        phx-change="map_field"
+        phx-submit="map_field"
+        phx-target={@myself}
+        data-test="grant-map-question"
+        data-field={need_field}
+      >
+        <input type="hidden" name="slot" value={@token} />
+        <input type="hidden" name="need_field" value={need_field} />
+        <label>
+          Which of {@candidate.name}'s fields does {@component} read as {need_field}?
+          <select name="entry_field" class="bg-transparent">
+            <option :if={!Map.has_key?(@answers, need_field)} value="" selected disabled></option>
+            <option
+              :for={name <- @names}
+              value={name}
+              selected={Map.get(@answers, need_field) == name}
+            >
+              {name}
+            </option>
+          </select>
+        </label>
+      </form>
+      <p :if={@due?} class="text-amber-400" data-test="grant-map-due">
+        Choose a field for each name before granting.
+      </p>
+    </div>
+    """
+  end
+
+  # The id of a map question's forms, one per rendered sheet and slot, as
+  # an account's name form is (`account_form_id/2`).
+  defp map_form_id(sheet, token),
+    do: "consent-sheet-#{sheet}-map-#{Base.url_encode64(token, padding: false)}"
 
   defp slot_events({:need, _need, _name}),
     do: %{pick: "pick_entry", clear: "clear_entry", values: %{}}
@@ -1913,7 +2122,7 @@ defmodule PrismWeb.ConsentSheetComponent do
       <div>Lifetime: {lifetime_label(@row["values"]["lifetime"])}</div>
       <div :if={@row["values"]["suggested"] == true}>Suggested</div>
       <div :if={@row["values"]["choice_required"] == true}>Choose which entry to use</div>
-      <div>Fields: {list_label(@row["values"]["fields"], "none")}</div>
+      <div>Fields: {field_map_label(@row["values"]["fields"], "none")}</div>
       <div>Scopes: {list_label(@row["values"]["scopes"], "none")}</div>
       <div class="font-mono text-xs">Binding: {@row["values"]["binding_key"]}</div>
 
@@ -2428,7 +2637,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp need_words(need) do
     if declared?(need) do
-      "#{field(need, :kind)} for #{field(need, :provider)}" <>
+      "#{field(need, :kind)} for #{hosts_words(need)}" <>
         if(field(need, :required) == true, do: ", required", else: ", optional") <>
         if(reads_itself?(need), do: "; the component reads the value itself", else: "")
     else
@@ -2436,23 +2645,40 @@ defmodule PrismWeb.ConsentSheetComponent do
     end
   end
 
+  # The hosts a need calls, as it declares them.
+  defp hosts_words(need), do: need |> field(:hosts) |> List.wrap() |> Enum.join(", ")
+
+  # Whose an entry is and where it may go; one that meets the need only
+  # through a `*.` host says how wide each such host is.
   defp candidate_words(candidate) do
     whose = source_words(field(candidate, :source), nil)
 
     case field(candidate, :destination) do
-      %{} = destination -> "#{whose}, sent only to #{destination_label(destination)}"
-      _none -> whose
+      %{} = destination ->
+        "#{whose}, sent only to #{destination_label(destination)}" <>
+          breadth_words(field(candidate, :fit), destination)
+
+      _none ->
+        whose
     end
   end
 
+  defp breadth_words("wildcard", destination) do
+    for "*." <> base <- List.wrap(destination["hosts"]), into: "" do
+      " (any name under #{base})"
+    end
+  end
+
+  defp breadth_words(_fit, _destination), do: ""
+
   defp lender_words(dep, lender) do
     scopes = List.wrap(field(lender, :scopes))
-    fields = List.wrap(field(lender, :fields))
+    fields = field(lender, :fields)
 
     lends =
       cond do
         scopes != [] -> "scopes #{Enum.join(scopes, ", ")}"
-        fields != [] -> Enum.join(fields, ", ")
+        is_map(fields) and fields != %{} -> field_map_label(fields, "")
         true -> "its key"
       end
 
@@ -2552,6 +2778,15 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp capability_label("storage." <> field), do: "Files #{field}:"
   defp capability_label("policy." <> mode), do: "Agent policy #{mode}:"
   defp capability_label(capability), do: "#{capability}:"
+
+  # Each field the component reads and the entry field that answers it.
+  defp field_map_label(fields, _none) when is_map(fields) and map_size(fields) > 0 do
+    fields
+    |> Enum.sort()
+    |> Enum.map_join(", ", fn {need_field, entry_field} -> "#{need_field} from #{entry_field}" end)
+  end
+
+  defp field_map_label(_fields, none), do: none
 
   defp list_label([], none), do: none
   defp list_label(values, _none) when is_list(values), do: Enum.join(values, ", ")

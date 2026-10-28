@@ -16,7 +16,8 @@ defmodule Sanctum.Attach do
 
     1. the resource names one value (`{:ambiguous, [key]}` otherwise): an
        OAuth projection, which names its `scopes`, the token dispensed for
-       them; a key or bundle projection, exactly one field; a provided
+       them; a key or bundle projection, a field map of exactly one field,
+       whose entry field is the one read; a provided
        resource, exactly one value. No value is ever guessed;
     2. the binding is live for this use (`lifetime/3`): the run's pins
        still name the profiles' heads, the head is the pinned consent, its
@@ -130,8 +131,10 @@ defmodule Sanctum.Attach do
   # What fills the rule's `{value}`, decided on the projection alone.
   defp one_take(%{projection: %{scopes: [_ | _]}}), do: {:ok, :token}
 
-  defp one_take(%{projection: %{fields: [field]}}) when is_binary(field),
-    do: {:ok, {:field, field}}
+  defp one_take(%{projection: %{fields: fields}}) when map_size(fields) == 1 do
+    [{need_field, entry_field}] = Map.to_list(fields)
+    {:ok, {:field, need_field, entry_field}}
+  end
 
   defp one_take(vault), do: {:error, {:ambiguous, [Map.get(vault, :binding_key)]}}
 
@@ -143,8 +146,8 @@ defmodule Sanctum.Attach do
     end
   end
 
-  defp athanor_value(_ctx, _entry, payload, {:field, field}, _vault),
-    do: field_value(payload, field)
+  defp athanor_value(_ctx, _entry, payload, {:field, _need_field, _entry_field} = take, _vault),
+    do: field_value(payload, take)
 
   # An OAuth entry serves the provider it names and none other; one naming
   # none serves nothing.
@@ -173,13 +176,13 @@ defmodule Sanctum.Attach do
   defp instance(ctx, vault, take, request, facts) do
     with {:ok, view} <- InstanceEntries.binding(ctx, vault.entry_id),
          :ok <- same_binding(view, vault),
-         {:ok, field} <- instance_field(take),
+         {:ok, take} <- instance_field(take),
          {:ok, _view, payload} <-
            InstanceEntries.resolve(ctx, vault.entry_id, request, %{
              node_ref: facts.node_ref,
              activation_digest: facts.activation_digest
            }),
-         {:ok, value} <- field_value(payload, field) do
+         {:ok, value} <- field_value(payload, take) do
       {:ok, %{value: value, attach: vault.attach, masking: [value]}}
     end
   end
@@ -192,12 +195,13 @@ defmodule Sanctum.Attach do
   defp same_binding(_view, _vault), do: {:error, :binding_went_stale}
 
   defp instance_field(:token), do: {:error, :no_oauth_material}
-  defp instance_field({:field, field}), do: {:ok, field}
+  defp instance_field({:field, _need_field, _entry_field} = take), do: {:ok, take}
 
-  defp field_value(%{"fields" => fields}, field) do
-    case Map.fetch(fields, field) do
+  # The entry field the map names, refused by the component's own name.
+  defp field_value(%{"fields" => fields}, {:field, need_field, entry_field}) do
+    case Map.fetch(fields, entry_field) do
       {:ok, value} when is_binary(value) and value != "" -> {:ok, value}
-      _absent -> {:error, {:missing_field, field}}
+      _absent -> {:error, {:missing_field, need_field}}
     end
   end
 

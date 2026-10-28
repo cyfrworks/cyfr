@@ -11,7 +11,8 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
   `cyfr:emit/events`, and names its one need, `api_key`, as the
   connection of every request it makes, so CYFR attaches the key and the
   runner is never handed it. Unbound, such a request is refused before
-  anything is dialled; bound to an attach-only entry, the request reaches
+  anything is dialled; bound to an attach-only entry that carries no
+  label and is offered by its destination alone, the request reaches
   CYFR's attachment as the shipped binary built it, and one outside the
   entry's destination is refused there, before anything is dialled. No
   case here reaches a provider: the shipped binary's request carried to
@@ -113,18 +114,29 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
 
       assert {:error, "'model' is required"} = run(ctx, ref, "chat", %{"messages" => []})
 
-      # The operator binds an attach-only entry, admitting POST alone, to the
-      # catalyst's one need.
+      # The operator binds an attach-only entry with no label, admitting
+      # POST alone to the need's hosts, to the catalyst's one need: its
+      # destination makes it the need's one candidate, and suggested.
       {:ok, entry} =
         Sanctum.TestContext.create_vault(ctx, %{
           name: "#{name} key",
           kind: "api_key",
-          provider_hint: need.qualifier,
           fields: %{field => secret},
           destination: %{"hosts" => need.hosts, "methods" => ["POST"]}
         })
 
-      consent!(ctx, ref, entry.id)
+      assert entry.provider_hint == ""
+
+      {:ok, walk_plan} = Plan.plan(ctx, %{ref: ref})
+      row = Enum.find(walk_plan.needs, &(&1.need == "api_key"))
+      entry_id = entry.id
+
+      assert [%{entry_id: ^entry_id, provider: "", fit: "exact", label_match: false}] =
+               row.candidates
+
+      assert row.suggested == %{entry_id: entry.id}
+
+      consent!(ctx, ref, %{entry_id: entry.id})
 
       # The model listing is a GET, which CYFR refuses outside the entry's
       # destination, before anything is dialled.
@@ -204,7 +216,7 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
         destination: %{"hosts" => ["api.anthropic.com"]}
       })
 
-    consent!(ctx, "catalyst:local.claude", entry.id)
+    consent!(ctx, "catalyst:local.claude", %{entry_id: entry.id})
 
     # The assistant's authority, loaded again, lends the key on its edge;
     # the child runs to its own refusal.
@@ -231,6 +243,80 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
              Opus.run_child(revoked, "catalyst:local.claude", nil, input, child_opts)
   end
 
+  test "an offered instance entry whose one field is `API key` is a candidate for the Grok " <>
+         "need with the map `GROK_API_KEY` to `API key`, commits with it, and attaches that " <>
+         "field's value as the Bearer header",
+       %{ctx: ctx} do
+    ref = "catalyst:local.grok"
+    secret = "xai-instance-never-handed"
+    register!(ctx, "grok", newest_shipped("catalysts", "grok"))
+    {person, _user} = Sanctum.TestContext.person!(ctx)
+
+    # The instance offers everyone a key for x.ai's API, with no label,
+    # whose one field is named as a person names it, not as the catalyst
+    # reads it.
+    params = %{
+      name: "xai-#{System.unique_integer([:positive])}",
+      kind: "api_key",
+      provider_hint: "",
+      fields: %{"API key" => secret},
+      destination: %{"hosts" => ["api.x.ai"], "methods" => ["POST"], "paths" => ["/v1/"]},
+      audience: "everyone"
+    }
+
+    confirmed =
+      Sanctum.TestContext.confirmed(%{person | platform_admin: true}, :credential_entry, %{
+        operation: "instance_entry.create",
+        arguments: params,
+        resource: params.name
+      })
+
+    {:ok, entry} = Sanctum.InstanceEntries.create(confirmed, params)
+
+    # The need's one field and the entry's one field: the automatic map.
+    {:ok, walk_plan} = Plan.plan(person, %{ref: ref})
+    row = Enum.find(walk_plan.needs, &(&1.need == "api_key"))
+
+    assert [candidate] =
+             Enum.filter(row.candidates, &(Map.get(&1, :instance_entry_id) == entry.id))
+
+    assert {candidate.field_names, candidate.fields} ==
+             {["API key"], %{"GROK_API_KEY" => "API key"}}
+
+    # Its destination, not a label, makes it a candidate.
+    assert {candidate.provider, candidate.fit, candidate.label_match} == {"", "exact", false}
+
+    # A binding naming no map commits under the automatic one.
+    consent!(person, ref, %{instance_entry_id: entry.id})
+
+    {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(person), ref)
+    {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(person), profile.id)
+    {:ok, blob} = Prima.Authority.Blob.parse(head.resolved_policy)
+    {:ok, %{vault: vault}} = Prima.Authority.Blob.ingress(blob, ref)
+    assert {vault.scope, vault.entry_id} == {"instance", entry.id}
+    assert vault.projection == %{fields: %{"GROK_API_KEY" => "API key"}, scopes: []}
+
+    # A run's request to the chat endpoint attaches the entry's `API key`
+    # as the need's Bearer header.
+    {:ok, component} = Compendium.Registry.get_latest(ctx, "grok", "local", "catalyst")
+
+    facts = %{
+      node_ref: "#{ref}:#{component.version}",
+      activation_digest: Map.get(component, :release_digest),
+      root_execution_id: "exec_root_#{System.unique_integer([:positive])}",
+      profile_id: profile.id,
+      consent_id: head.id
+    }
+
+    request = %{uri: URI.parse("https://api.x.ai/v1/chat/completions"), method: "POST"}
+
+    assert {:ok, %{value: ^secret, attach: attach}} =
+             Sanctum.Attach.resolve(person, vault, "api_key", request, facts)
+
+    assert {attach.in, attach.name} == {"header", "Authorization"}
+    assert Needs.render_attach(attach, secret) == "Bearer " <> secret
+  end
+
   # Copy a shipped version in as a fill copies it, then register it.
   defp register!(ctx, name, version) do
     unit = ["components", "catalysts", "local", name, version]
@@ -252,11 +338,12 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
     result
   end
 
-  # `ref`'s owner consent, binding `entry_id` to its `api_key` need through
-  # the consent walk.
-  defp consent!(ctx, ref, entry_id) do
+  # `ref`'s owner consent, binding the entry `identity` names
+  # (`entry_id` or `instance_entry_id`) to its `api_key` need through the
+  # consent walk, under the map the plan takes when the decision names none.
+  defp consent!(ctx, ref, identity) do
     {:ok, walk_plan} = Plan.plan(ctx, %{ref: ref})
-    decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: entry_id}]}
+    decisions = %{ref: ref, bindings: [Map.put(identity, :need, "api_key")]}
     {:ok, preview} = Commit.preview(ctx, decisions)
 
     {:ok, _} =

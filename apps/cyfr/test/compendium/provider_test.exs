@@ -1256,9 +1256,11 @@ defmodule Compendium.ProviderTest do
               "type" => "api_key:anthropic.com",
               "reason" => "to call the Anthropic API with your key",
               "fields" => ["ANTHROPIC_API_KEY"],
-              "required" => true
+              "required" => true,
+              "hosts" => ["api.anthropic.com"]
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.anthropic.com"]}}
         })
 
       {:ok, _} = Registry.register_from_arca(ctx, comp_dir)
@@ -1357,9 +1359,11 @@ defmodule Compendium.ProviderTest do
             "api_key" => %{
               "type" => "api_key:example.com",
               "reason" => "optional enrichment",
-              "required" => false
+              "required" => false,
+              "hosts" => ["api.example.com"]
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
         })
 
       {:ok, _} = Registry.register_from_arca(ctx, comp_dir)

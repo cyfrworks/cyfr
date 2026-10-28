@@ -1321,17 +1321,5 @@ defmodule Cyfr.PlatformSettingsRosterTest do
         assert config[:locus][:runtime][:service_key] == String.duplicate("ab", 32)
       end)
     end
-
-    test "a mix boot refuses a stray LOCUS_RUNTIME_* name through Locus.Config" do
-      with_env(runtime_env(%{"RELEASE_NAME" => nil, "LOCUS_RUNTIME_POOL_SIZ" => "4"}), fn ->
-        message = refusal!()
-
-        assert message =~
-                 "[Cyfr] FATAL: LOCUS_RUNTIME_POOL_SIZ is not a variable the locus release reads"
-
-        assert message ==
-                 "[Cyfr] FATAL: " <> Locus.Config.unknown(["LOCUS_RUNTIME_POOL_SIZ"])
-      end)
-    end
   end
 end

@@ -34,7 +34,7 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
   alias Sanctum.VaultReader
 
   # The edge a consent writes for these entries names the one field they hold.
-  @token_projection %{fields: ["token"], scopes: []}
+  @token_projection %{fields: %{"token" => "token"}, scopes: []}
 
   # Where the entry may go. The cases read it back, so it is disclosed.
   @destination %{"hosts" => ["api.example.com"]}
@@ -147,7 +147,7 @@ defmodule Sanctum.Vault.NoPlaintextLeakTest do
             %{
               entry_id: view.id,
               binding_digest: "sha256:wrong",
-              projection: %{fields: [], scopes: ["x"]}
+              projection: %{fields: %{}, scopes: ["x"]}
             },
             "google",
             @dispense

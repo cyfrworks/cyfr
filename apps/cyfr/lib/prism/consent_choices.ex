@@ -16,6 +16,12 @@ defmodule Prism.ConsentChoices do
 
   A choice is keyed by its slot: the default of one of the app's needs,
   the default of a dependency's edge, or a named account on an edge.
+
+  A choice of an entry carries the field map it is bound under where one
+  is sent (`mapped/2`): the map the person chose, or the head's re-sent
+  on a re-grant. Where the entry's candidate has no automatic map, the
+  need fields still to be mapped keep the choice out of the decisions
+  until each has an entry field (`answer_map/5`).
   """
 
   @interactive "interactive"
@@ -52,7 +58,10 @@ defmodule Prism.ConsentChoices do
   named account also carries its `name`, whether that name is `fixed`,
   and the order it was added in (`seq`); its entry may not be chosen yet.
   A default switched from a lending profile names that profile
-  (`lent_by`).
+  (`lent_by`). A choice of an entry may carry the map it sends, from each
+  field the need reads to the entry field that answers it (`fields`),
+  and, while the person has yet to map some of them, those need fields
+  (`unmapped`), `fields` then holding the ones mapped so far.
   """
   @type choice :: %{
           required(:source) => String.t() | nil,
@@ -64,7 +73,9 @@ defmodule Prism.ConsentChoices do
           optional(:name) => String.t(),
           optional(:fixed) => boolean(),
           optional(:seq) => non_neg_integer(),
-          optional(:lent_by) => String.t()
+          optional(:lent_by) => String.t(),
+          optional(:fields) => %{optional(String.t()) => String.t()},
+          optional(:unmapped) => [String.t(), ...]
         }
 
   # The walk's account placed among its choices. The grant previewed its
@@ -99,9 +110,11 @@ defmodule Prism.ConsentChoices do
   # credential entry, starts from them, so the lifetime the person pressed
   # for a binding the decisions hold unchanged stays pressed, an until
   # included, a binding whose lifetime is yet to be chosen, which no
-  # decision carries, is still offered, and every named account's row is
-  # the sheet's own, complete or not. A walk the grant opens with holds
-  # none: its only such bindings are the head's whose time has passed.
+  # decision carries, is still offered, as is one whose field map the
+  # person has yet to choose, and every named account's row is the
+  # sheet's own, complete or not. A walk the grant opens with holds none:
+  # its only such bindings are the head's whose time has passed and those
+  # whose map is still to be chosen.
   def held_choices(decided, held, plan, now) do
     {base, decided} =
       if is_map(held),
@@ -126,7 +139,10 @@ defmodule Prism.ConsentChoices do
   end
 
   defp pending(choices),
-    do: Map.filter(choices, fn {_slot, choice} -> is_nil(choice.lifetime) end)
+    do:
+      Map.filter(choices, fn {_slot, choice} ->
+        is_nil(choice.lifetime) or map_pending?(choice)
+      end)
 
   def origins_of(origins, _plan) when is_list(origins) and origins != [], do: in_order(origins)
   def origins_of(_none, %{head_origins: [_ | _] = origins}), do: in_order(origins)
@@ -170,6 +186,9 @@ defmodule Prism.ConsentChoices do
   edge carries one need's credentials, the app's own and a dependency's
   alike — each standing until revoked. An optional need, and the slot of
   a manifest that declares no needs, is bound by no one but the person.
+  Each choice is held to its field map (`mapped/2`): a head binding
+  re-sends the map its head holds while the entry still holds every
+  field it names, and asks again where it does not.
   """
   @spec initial_choices(map(), DateTime.t()) :: %{slot() => choice()}
   def initial_choices(plan, %DateTime{} = now) when is_map(plan) do
@@ -204,7 +223,7 @@ defmodule Prism.ConsentChoices do
         {slot, suggested_choice(suggested(need), named)}
       end
 
-    Map.merge(suggested, held)
+    suggested |> Map.merge(held) |> mapped(plan)
   end
 
   # What the head binds, by the slot each binding reopens, and the edges
@@ -231,14 +250,18 @@ defmodule Prism.ConsentChoices do
           into: %{} do
         {lifetime, choice} = head_lifetime(field(head, :lifetime), now)
 
-        held = %{
-          source: place.source,
-          id: place.id,
-          need: need,
-          lifetime: lifetime,
-          choice: choice,
-          renew: false
-        }
+        held =
+          put_fields(
+            %{
+              source: place.source,
+              id: place.id,
+              need: need,
+              lifetime: lifetime,
+              choice: choice,
+              renew: false
+            },
+            field(head, :fields)
+          )
 
         case slot do
           {:account, _edge, "name:" <> name} -> {slot, fixed_account(held, name)}
@@ -380,16 +403,19 @@ defmodule Prism.ConsentChoices do
 
   @doc """
   The decisions payload of a walk: the ref, the app's bindings and the
-  dependencies' selections with their entries, lifetimes and `renew`, each
-  edge's default first and then its named accounts under their names, the
+  dependencies' selections with their entries, lifetimes, `renew` and the
+  field map an entry is bound under where the choice holds one
+  (`fields`; a lending profile's label never sends one), each edge's
+  default first and then its named accounts under their names, the
   origins, and the label and narrowing when there are any, as
   `profile.preview` and `profile.commit` take them.
   """
   @spec decisions(String.t(), String.t() | nil, [String.t()], map(), %{slot() => choice()}) ::
           map()
   def decisions(ref, label, origins, subset, choices) do
-    # A binding whose lifetime the person has yet to choose is no decision,
-    # nor an account with no entry chosen or no name it can carry.
+    # A binding whose lifetime or field map the person has yet to choose is
+    # no decision, nor an account with no entry chosen or no name it can
+    # carry.
     sorted =
       choices
       |> Enum.filter(fn {slot, choice} -> decided?(slot, choice, choices) end)
@@ -414,14 +440,16 @@ defmodule Prism.ConsentChoices do
     |> then(&if subset == %{}, do: &1, else: Map.put(&1, "subset", subset))
   end
 
-  # Whether a choice is sent: a binding with a lifetime, and an account
-  # with its entry, its lifetime and a name it can carry.
+  # Whether a choice is sent: a binding with a lifetime and every field it
+  # reads mapped, and an account with its entry, its lifetime, its map and
+  # a name it can carry.
   defp decided?({:account, _edge, _ref} = slot, choice, choices) do
     is_map(choice.lifetime) and choice.source in ["own", "instance"] and is_binary(choice.id) and
-      is_nil(account_problem(slot, choices))
+      not map_pending?(choice) and is_nil(account_problem(slot, choices))
   end
 
-  defp decided?(_slot, choice, _choices), do: is_map(choice.lifetime)
+  defp decided?(_slot, choice, _choices),
+    do: is_map(choice.lifetime) and not map_pending?(choice)
 
   # The order accounts are sent in: by edge, then by name.
   defp account_order({{:account, edge, _ref}, choice}), do: {edge, choice.name}
@@ -518,6 +546,7 @@ defmodule Prism.ConsentChoices do
   defp binding(need, name, choice) do
     %{"need" => need, id_key(choice.source) => choice.id, "lifetime" => choice.lifetime}
     |> Prima.MapUtil.put_present("name", name)
+    |> put_map(choice)
     |> put_renew(choice)
   end
 
@@ -533,6 +562,7 @@ defmodule Prism.ConsentChoices do
         do: Map.put(item, "need", choice.need),
         else: item
     end)
+    |> put_map(choice)
     |> put_renew(choice)
   end
 
@@ -542,6 +572,16 @@ defmodule Prism.ConsentChoices do
 
   defp put_renew(item, %{renew: true}), do: Map.put(item, "renew", true)
   defp put_renew(item, _choice), do: item
+
+  # The map a choice of an entry is bound under, when it holds one; a
+  # lending profile's label lends its lender's map and names none.
+  defp put_map(item, %{source: source, fields: %{} = fields}) when source in ["own", "instance"],
+    do: Map.put(item, "fields", fields)
+
+  defp put_map(item, _choice), do: item
+
+  defp put_fields(choice, %{} = fields), do: Map.put(choice, :fields, fields)
+  defp put_fields(choice, _none), do: choice
 
   defp suggested_choice(%{entry_id: id}, need), do: new_choice("own", id, need)
   defp suggested_choice(%{instance_entry_id: id}, need), do: new_choice("instance", id, need)
@@ -602,15 +642,197 @@ defmodule Prism.ConsentChoices do
           %{"kind" => "standing"}
       end
 
-    %{
-      source: source,
-      id: id,
-      need: need,
-      lifetime: lifetime,
-      choice: if(lifetime["kind"] == "until", do: nil, else: lifetime["kind"]),
-      renew: item["renew"] == true
-    }
+    put_fields(
+      %{
+        source: source,
+        id: id,
+        need: need,
+        lifetime: lifetime,
+        choice: if(lifetime["kind"] == "until", do: nil, else: lifetime["kind"]),
+        renew: item["renew"] == true
+      },
+      if(source != "label", do: item["fields"])
+    )
   end
+
+  @doc """
+  `choices` with each choice of an entry held to the field map it is
+  bound under, against the need and the entry's candidate the plan
+  answers (`Sanctum.Consent.Plan`'s `field_names` and `fields`). A map the
+  choice holds, the person's or the head's, is kept while it names each
+  field the need reads once and only fields the entry holds. Otherwise a
+  choice holding no map, of a candidate with an automatic map, sends none,
+  and the commit takes that one. Any other asks: each answer held that the
+  entry still holds is kept, a need field with no held answer is
+  preselected to the entry field of its own name where the entry holds
+  one, and the rest, a held answer naming a field the entry no longer
+  holds among them, are `unmapped`, so a stale map is asked again whatever
+  the candidate's automatic map. A choice already waiting on the person
+  keeps waiting on the same fields however often it is held to the plan
+  again, with the answers the entry still holds. A lending profile's label, and the slot of a
+  manifest declaring no needs, whose map is the entry's own field names,
+  carry none. A choice whose entry or need the plan does not name keeps
+  a whole map it holds, drops a half-answered one and asks nothing, for
+  the home to judge.
+  """
+  @spec mapped(%{slot() => choice()}, map()) :: %{slot() => choice()}
+  def mapped(choices, plan) do
+    Map.new(choices, fn {slot, choice} -> {slot, map_choice(plan, slot, choice)} end)
+  end
+
+  defp map_choice(plan, slot, choice) do
+    case map_target(plan, slot, choice) do
+      {:ok, need, candidate} ->
+        need_fields = need_fields(need)
+        names = List.wrap(field(candidate, :field_names))
+        held = Map.get(choice, :fields)
+
+        cond do
+          # A choice waiting on the person keeps what it waits for: its
+          # answers the entry still holds, and nothing guessed for the rest,
+          # however often the choices are held to the plan.
+          map_pending?(choice) ->
+            settle(choice, need_fields, held_answers(held, need_fields, names))
+
+          total_map?(held, need_fields, names) ->
+            choice
+
+          held in [nil, %{}] and is_map(field(candidate, :fields)) ->
+            unmap(choice)
+
+          true ->
+            settle(choice, need_fields, preselected(held, need_fields, names))
+        end
+
+      :no_map ->
+        unmap(choice)
+
+      # No question can be shown for an entry the plan no longer offers,
+      # so none is left waiting on one.
+      :unknown ->
+        if map_pending?(choice), do: unmap(choice), else: choice
+    end
+  end
+
+  @doc """
+  `choices` with the person's answer to the map question of `slot`: the
+  need field `need_field` read from the entry field `entry_field`.
+  `:error` unless the question is asked (the slot's entry is a candidate
+  with no automatic map, or its choice waits on an answer), the need reads
+  `need_field` and the entry holds `entry_field`.
+  """
+  @spec answer_map(%{slot() => choice()}, map(), slot(), String.t(), String.t()) ::
+          {:ok, %{slot() => choice()}} | :error
+  def answer_map(choices, plan, slot, need_field, entry_field) do
+    with %{} = choice <- Map.get(choices, slot),
+         {:ok, need, candidate} <- map_target(plan, slot, choice),
+         true <- is_nil(field(candidate, :fields)) or map_pending?(choice),
+         true <- need_field in need_fields(need),
+         true <- entry_field in List.wrap(field(candidate, :field_names)) do
+      fields = choice |> Map.get(:fields, %{}) |> Map.put(need_field, entry_field)
+      {:ok, Map.put(choices, slot, settle(choice, need_fields(need), fields))}
+    else
+      _not_asked -> :error
+    end
+  end
+
+  @doc "Whether a choice waits on the person to map a field its need reads."
+  @spec map_pending?(choice()) :: boolean()
+  def map_pending?(choice), do: Map.has_key?(choice, :unmapped)
+
+  # The declared need a choice of an entry on `slot` meets and the entry's
+  # candidate for it, as the plan answers them; `:no_map` for a lending
+  # profile's label, a slot with no entry chosen and the slot of a
+  # manifest declaring no needs; `:unknown` when the plan names no such
+  # need or candidate.
+  defp map_target(plan, slot, %{source: source, id: id} = choice)
+       when source in ["own", "instance"] and is_binary(id) do
+    case choice_need(plan, slot, choice) do
+      nil ->
+        :unknown
+
+      need ->
+        if declared?(need) do
+          case Enum.find(candidates_of(need), &(candidate_id(&1) == {source, id})) do
+            nil -> :unknown
+            candidate -> {:ok, need, candidate}
+          end
+        else
+          :no_map
+        end
+    end
+  end
+
+  defp map_target(_plan, _slot, _choice), do: :no_map
+
+  # The need a slot's choice meets: the app's need its slot names, or the
+  # dependency's, the one the choice names where it declares several.
+  defp choice_need(plan, {:need, need, _name}, _choice), do: app_need(plan, need)
+  defp choice_need(plan, {:account, {:need, need}, _ref}, _choice), do: app_need(plan, need)
+  defp choice_need(plan, {:dep, from, dep}, choice), do: dep_need(plan, from, dep, choice)
+
+  defp choice_need(plan, {:account, {:dep, from, dep}, _ref}, choice),
+    do: dep_need(plan, from, dep, choice)
+
+  defp app_need(plan, need),
+    do: plan |> field(:needs) |> List.wrap() |> Enum.find(&(field(&1, :need) == need))
+
+  defp dep_need(plan, from, dep, choice) do
+    case plan |> dep_row(from, dep) |> row_needs() do
+      [one] -> one
+      needs -> Enum.find(needs, &(field(&1, :need) == Map.get(choice, :need)))
+    end
+  end
+
+  defp candidate_id(candidate) do
+    case candidate do
+      %{entry_id: id} when is_binary(id) -> {"own", id}
+      %{instance_entry_id: id} when is_binary(id) -> {"instance", id}
+      _other -> nil
+    end
+  end
+
+  defp need_fields(need), do: need |> field(:fields) |> List.wrap() |> Enum.uniq()
+
+  # A map naming each field the need reads once and only fields the entry
+  # holds, as the commit holds a decision's map.
+  defp total_map?(fields, need_fields, names) when is_map(fields) do
+    Enum.sort(Map.keys(fields)) == Enum.sort(need_fields) and
+      Enum.all?(fields, fn {_need_field, entry_field} -> entry_field in names end)
+  end
+
+  defp total_map?(_fields, _need_fields, _names), do: false
+
+  # The question's answers to start from: each answer held that the entry
+  # still holds; for a need field with no held answer, the entry field of
+  # its own name. A held answer the entry no longer holds is asked again,
+  # never replaced by a guess.
+  defp preselected(held, need_fields, names) do
+    held = if is_map(held), do: held, else: %{}
+
+    for need_field <- need_fields,
+        answer = Map.get(held, need_field, need_field),
+        answer in names,
+        into: %{},
+        do: {need_field, answer}
+  end
+
+  defp held_answers(held, need_fields, names) when is_map(held),
+    do:
+      Map.filter(held, fn {need_field, entry_field} ->
+        need_field in need_fields and entry_field in names
+      end)
+
+  defp held_answers(_held, _need_fields, _names), do: %{}
+
+  defp settle(choice, need_fields, fields) do
+    case Enum.reject(need_fields, &Map.has_key?(fields, &1)) do
+      [] -> choice |> Map.delete(:unmapped) |> Map.put(:fields, fields)
+      unmapped -> Map.merge(choice, %{fields: fields, unmapped: unmapped})
+    end
+  end
+
+  defp unmap(choice), do: Map.drop(choice, [:fields, :unmapped])
 
   @doc """
   `choices` with the named account `account` placed
@@ -706,8 +928,9 @@ defmodule Prism.ConsentChoices do
 
   # The default an account sits beside: the app's need's, as it stands; a
   # dependency's, which a profile lending its key is first switched to the
-  # entry that profile lends, since an account sits beside an entry
-  # chosen here. Answers the choices and the default's need.
+  # entry that profile lends, under the field map that profile binds it
+  # with, since an account sits beside an entry chosen here. Answers the
+  # choices and the default's need.
   def account_default(_plan, choices, {:need, _need}), do: {:ok, choices, nil}
 
   def account_default(plan, choices, {:dep, from, dep}) do
@@ -715,10 +938,12 @@ defmodule Prism.ConsentChoices do
 
     case Map.get(choices, slot) do
       %{source: "label", id: label} = default ->
-        with {:ok, source, id, need} <- switch_lent(dep_row(plan, from, dep), dep, label) do
+        with {:ok, source, id, need, fields} <-
+               switch_lent(dep_row(plan, from, dep), dep, label) do
           switched =
             %{default | source: source, id: id, need: need, renew: false}
             |> Map.put(:lent_by, label)
+            |> put_fields(fields)
 
           {:ok, Map.put(choices, slot, switched), need}
         end
@@ -732,9 +957,9 @@ defmodule Prism.ConsentChoices do
   end
 
   # The entry the `label` profile lends, as the plan's lender candidate
-  # names it, and the dependency's need it fills: none to name where the
-  # dependency declares one need, else the one need whose candidates hold
-  # it.
+  # names it, the field map it lends it under, and the dependency's need
+  # it fills: none to name where the dependency declares one need, else
+  # the one need whose candidates hold it.
   defp switch_lent(row, dep, label) do
     lender =
       row |> field(:candidates) |> List.wrap() |> Enum.find(&(field(&1, :label) == label))
@@ -742,12 +967,14 @@ defmodule Prism.ConsentChoices do
     with %{} <- lender,
          id when is_binary(id) <- field(lender, :entry_id),
          source when source in ["own", "instance"] <- field(lender, :source) do
+      fields = field(lender, :fields)
+
       case {row_needs(row), Enum.filter(row_needs(row), &holds?(&1, id))} do
         {[_one], _holding} ->
-          {:ok, source, id, nil}
+          {:ok, source, id, nil, fields}
 
         {_several, [need]} ->
-          {:ok, source, id, field(need, :need)}
+          {:ok, source, id, field(need, :need), fields}
 
         _cannot_tell ->
           {:error,

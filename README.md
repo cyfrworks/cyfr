@@ -861,8 +861,7 @@ boots only with all seven of:
   `CYFR_CLUSTER_DNS_QUERY` with `CYFR_CLUSTER_NODE_BASENAME` for a
   headless service.
 - **A shared worker root** — `CYFR_LOCUS_RUNTIME_ROOT`, identical on every
-  server. A `mix` boot mints one when it is unset; a release without one runs
-  no component.
+  server. A server without one runs no component.
 - **This server's own address** — `CYFR_HOST_API_URL`, the address a
   worker service reaches this server's host API at. Every assignment a
   server issues carries its own address, and a worker posts that

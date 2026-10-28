@@ -123,7 +123,7 @@ defmodule Opus.CredentialedIngressGateTest do
                  %{
                    entry_id: entry.id,
                    binding_digest: digest,
-                   projection: %{fields: ["api_key"], scopes: []}
+                   projection: %{fields: %{"api_key" => "api_key"}, scopes: []}
                  },
                  @dispense
                )
@@ -138,7 +138,7 @@ defmodule Opus.CredentialedIngressGateTest do
                  %{
                    entry_id: entry.id,
                    binding_digest: digest,
-                   projection: %{fields: ["api_key"], scopes: []}
+                   projection: %{fields: %{"api_key" => "api_key"}, scopes: []}
                  },
                  @dispense
                )

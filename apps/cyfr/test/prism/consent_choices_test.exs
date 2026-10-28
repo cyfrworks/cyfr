@@ -24,12 +24,19 @@ defmodule Prism.ConsentChoicesTest do
   # Generators
   # ---------------------------------------------------------------------------
 
+  # A need of one field, each candidate holding it by the same name, so
+  # its map is automatic, as the plan answers it.
   defp need(name, ids),
     do: %{
       need: name,
       kind: "api_key",
       required: true,
-      candidates: for(id <- ids, do: %{entry_id: id, source: "own"})
+      fields: ["KEY"],
+      candidates:
+        for(
+          id <- ids,
+          do: %{entry_id: id, source: "own", field_names: ["KEY"], fields: %{"KEY" => "KEY"}}
+        )
     }
 
   # A plan of one app need or two, and a dependency edge declaring one
@@ -439,6 +446,216 @@ defmodule Prism.ConsentChoicesTest do
                ConsentChoices.initial_choices(plan, now)
              )["bindings"] == []
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # The field map
+  # ---------------------------------------------------------------------------
+
+  # A need reading `KEY` and `ORG` that the entry `vlt_m` meets with no
+  # automatic map: it holds `ORG` by name and `secret` beside it. The
+  # dependency's edge offers the same entry.
+  defp unmapped_plan(head_bindings \\ []) do
+    candidate = %{
+      entry_id: "vlt_m",
+      source: "own",
+      field_names: ["ORG", "secret"],
+      fields: nil
+    }
+
+    two = fn name ->
+      %{
+        need: name,
+        kind: "api_key",
+        required: true,
+        fields: ["KEY", "ORG"],
+        candidates: [candidate],
+        suggested: %{entry_id: "vlt_m"}
+      }
+    end
+
+    %{
+      source_ref: @ref,
+      candidates: [],
+      needs: [two.("key_1")],
+      dependency_needs: [
+        %{from: @ref, dep: @dep, needs: [two.("db_1")], candidates: [%{label: "work"}]}
+      ],
+      head_bindings: head_bindings
+    }
+  end
+
+  test "a chosen map is sent as the binding's `fields`" do
+    plan = unmapped_plan()
+    opened = ConsentChoices.initial_choices(plan, @now)
+
+    # Asked, the same name preselected: no decision until each is mapped.
+    for slot <- [{:need, "key_1", nil}, {:dep, @ref, @dep}] do
+      assert %{fields: %{"ORG" => "ORG"}, unmapped: ["KEY"]} = opened[slot]
+    end
+
+    decisions = fn choices ->
+      ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, choices)
+    end
+
+    assert decisions.(opened)["bindings"] == []
+    refute Map.has_key?(decisions.(opened), "selections")
+
+    # An entry field the entry does not hold, or a field the need does not
+    # read, is no answer.
+    assert ConsentChoices.answer_map(opened, plan, {:need, "key_1", nil}, "KEY", "nope") == :error
+
+    assert ConsentChoices.answer_map(opened, plan, {:need, "key_1", nil}, "NOPE", "secret") ==
+             :error
+
+    {:ok, answered} =
+      ConsentChoices.answer_map(opened, plan, {:need, "key_1", nil}, "KEY", "secret")
+
+    {:ok, answered} =
+      ConsentChoices.answer_map(answered, plan, {:dep, @ref, @dep}, "KEY", "secret")
+
+    map = %{"KEY" => "secret", "ORG" => "ORG"}
+
+    assert decisions.(answered)["bindings"] == [
+             %{
+               "need" => "key_1",
+               "entry_id" => "vlt_m",
+               "lifetime" => %{"kind" => "standing"},
+               "fields" => map
+             }
+           ]
+
+    assert decisions.(answered)["selections"] == [
+             %{
+               "dep" => @dep,
+               "from" => @ref,
+               "entry_id" => "vlt_m",
+               "lifetime" => %{"kind" => "standing"},
+               "fields" => map
+             }
+           ]
+
+    # Drawn again from those decisions, the map is held as answered.
+    again = answered |> then(decisions) |> ConsentChoices.choices_of(plan)
+    assert ConsentChoices.mapped(again, plan) == again
+    assert decisions.(again) == decisions.(answered)
+
+    # A profile's key lends its lender's map: a label selection names none.
+    lent = Map.put(answered, {:dep, @ref, @dep}, ConsentChoices.new_choice("label", "work", nil))
+    lent = ConsentChoices.mapped(lent, plan)
+
+    assert decisions.(lent)["selections"] == [
+             %{
+               "dep" => @dep,
+               "from" => @ref,
+               "label" => "work",
+               "lifetime" => %{"kind" => "standing"}
+             }
+           ]
+  end
+
+  test "a held map is re-sent on a re-grant" do
+    place = %{source: "own", node: @ref, edge: "@ingress", need: "key_1"}
+    held = %{"KEY" => "secret", "ORG" => "ORG"}
+
+    plan =
+      unmapped_plan([
+        head("#{@ref}|@ingress|default", %{entry_id: "vlt_m", fields: held}, place)
+      ])
+
+    choices = ConsentChoices.initial_choices(plan, @now)
+    refute Map.has_key?(choices[{:need, "key_1", nil}], :unmapped)
+
+    assert ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, choices)["bindings"] == [
+             %{
+               "need" => "key_1",
+               "entry_id" => "vlt_m",
+               "lifetime" => %{"kind" => "standing"},
+               "fields" => held
+             }
+           ]
+
+    # An automatic map the head holds is re-sent too.
+    automatic =
+      regrant([
+        head("#{@ref}|@ingress|default", %{entry_id: "vlt_b1", fields: %{"KEY" => "KEY"}}, place)
+      ])
+
+    assert [%{"fields" => %{"KEY" => "KEY"}}] =
+             ConsentChoices.decisions(
+               @ref,
+               nil,
+               ["interactive"],
+               %{},
+               ConsentChoices.initial_choices(automatic, @now)
+             )["bindings"]
+
+    # A held map naming a field the entry no longer holds asks again, the
+    # answers it still can keep preselected, and is no decision until then.
+    stale =
+      unmapped_plan([
+        head(
+          "#{@ref}|@ingress|default",
+          %{entry_id: "vlt_m", fields: %{"KEY" => "gone", "ORG" => "secret"}},
+          place
+        )
+      ])
+
+    choices = ConsentChoices.initial_choices(stale, @now)
+
+    assert %{fields: %{"ORG" => "secret"}, unmapped: ["KEY"]} =
+             choices[{:need, "key_1", nil}]
+
+    assert ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, choices)["bindings"] == []
+
+    # The walk the grant opens with holds it still, to be asked.
+    opened =
+      @ref
+      |> ConsentChoices.decisions(nil, ["interactive"], %{}, choices)
+      |> ConsentChoices.choices_of(stale)
+      |> ConsentChoices.held_choices(nil, stale, @now)
+
+    assert opened[{:need, "key_1", nil}] == choices[{:need, "key_1", nil}]
+  end
+
+  test "a stale held map is asked again for its stale field alone, even where the entry has an " <>
+         "automatic map, and holds the grant until answered" do
+    place = %{source: "own", node: @ref, edge: "@ingress", need: "key_1"}
+
+    # The entry holds every field the need reads by name, so it has an
+    # automatic map; the head's map names a field it no longer holds.
+    plan =
+      put_in(
+        unmapped_plan([
+          head(
+            "#{@ref}|@ingress|default",
+            %{entry_id: "vlt_m", fields: %{"KEY" => "gone", "ORG" => "secret"}},
+            place
+          )
+        ]),
+        [:needs, Access.at(0), :candidates],
+        [
+          %{
+            entry_id: "vlt_m",
+            source: "own",
+            field_names: ["KEY", "ORG", "secret"],
+            fields: %{"KEY" => "KEY", "ORG" => "ORG"}
+          }
+        ]
+      )
+
+    choices = ConsentChoices.initial_choices(plan, @now)
+    slot = {:need, "key_1", nil}
+
+    assert %{fields: %{"ORG" => "secret"}, unmapped: ["KEY"]} = choices[slot]
+    assert ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, choices)["bindings"] == []
+
+    # Answered, the valid answer the head held is still sent beside it.
+    assert {:ok, answered} = ConsentChoices.answer_map(choices, plan, slot, "KEY", "KEY")
+    refute ConsentChoices.map_pending?(answered[slot])
+
+    assert [%{"fields" => %{"KEY" => "KEY", "ORG" => "secret"}}] =
+             ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, answered)["bindings"]
   end
 
   # ---------------------------------------------------------------------------

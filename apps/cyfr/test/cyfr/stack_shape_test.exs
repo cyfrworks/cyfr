@@ -487,7 +487,7 @@ defmodule Cyfr.StackShapeTest do
     flat = %{"LOCUS_BUILDS_KEY" => key, "LOCUS_BACKENDS_KEY" => key}
     {:ok, settings} = Locus.Config.from_env(&Map.get(flat, &1), Map.keys(flat))
     env = %{"LOCUS_RUNTIME_KEY" => key, "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"}
-    {:ok, runtime} = Locus.Config.runtime_from_env(&Map.get(env, &1), [])
+    {:ok, runtime} = Locus.Config.runtime_from_env(&Map.get(env, &1))
     %{builds: settings[:port], backends: settings[:backends_port], runtime: runtime[:port]}
   end
 
