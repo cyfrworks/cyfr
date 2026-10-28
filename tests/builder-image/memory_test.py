@@ -9,9 +9,12 @@ no answer.
 Usage: python3 -I tests/builder-image/memory_test.py
 """
 
+import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -107,6 +110,58 @@ class KeeperListShell(unittest.TestCase):
     def test_an_enumeration_that_finds_groups_lists_them(self):
         self.assertEqual(self.groups("echo /sys/fs/cgroup/keeper-30001; exit 0"),
                          ["/sys/fs/cgroup/keeper-30001"])
+
+
+class ContainerState(unittest.TestCase):
+    """The container's state is read only from commands that exit 0: a failed read of a start time, of the events or of
+    the memory in use fails the state, and each value that was read is the control."""
+
+    def state(self, cut=(0, "100"), events=(0, "oom 0\noom_kill 0\n"), current=(0, "4096\n")):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root)
+        bindir = os.path.join(root, "bin")
+        os.makedirs(bindir)
+        status, value = cut
+        tool = os.path.join(bindir, "cut")
+        with open(tool, "w") as f:
+            f.write(f"#!/bin/sh\n{f'echo {value}' if value else ':'}\nexit {status}\n")
+        os.chmod(tool, 0o700)
+        reads = {"cat /sys/fs/cgroup/memory.events": events, "cat /sys/fs/cgroup/memory.current": current}
+
+        class Shell:
+            container = "stub-container"
+
+            def processes(self):
+                return [{"pid": 777, "cmd": "beam.smp"}]
+
+            def exec(self, script, user=None):
+                if script in reads:
+                    status, out = reads[script]
+                    return subprocess.CompletedProcess([], status, out, "" if status == 0 else "read error")
+                return subprocess.run(["/bin/sh", "-c", script],
+                                      env={**os.environ, "PATH": bindir + os.pathsep + os.environ["PATH"]},
+                                      text=True, capture_output=True)
+
+        inspected = subprocess.CompletedProcess(
+            [], 0, json.dumps([{"State": {"OOMKilled": False}, "RestartCount": 0}]), "")
+        with mock.patch.object(memory, "run", return_value=inspected):
+            return memory.container_state(Shell())
+
+    def test_a_failed_start_time_read_fails_the_state(self):
+        with self.assertRaises(SystemExit):
+            self.state(cut=(1, None))
+
+    def test_the_start_time_that_was_read_is_the_control(self):
+        self.assertEqual(self.state()["release"], ["777:100"])
+
+    def test_a_failed_events_read_fails_the_state(self):
+        with self.assertRaises(SystemExit):
+            self.state(events=(1, "oom 0\n"))
+
+    def test_a_failed_memory_read_fails_the_state_and_is_not_read_as_zero(self):
+        with self.assertRaises(SystemExit):
+            self.state(current=(1, ""))
+        self.assertEqual(self.state(current=(0, "4096\n"))["current"], 4096)
 
 
 if __name__ == "__main__":

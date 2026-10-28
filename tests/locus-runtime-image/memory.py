@@ -121,11 +121,14 @@ def read_group(stack, uid):
     Absence is the word `absent` from a command that exits 0. The fields are
     read whole, and the events must carry both OOM counters.
     """
+    # Each field is read by its own command, chained so that any failed read ends the script with its status:
+    # a command substitution inside printf's arguments would hide the failure from the status.
     out = imagesuite.read_output(stack.exec(
         f"g={group(uid)}; if [ -d $g ]; then "
-        "printf 'present|%s|%s|%s|%s|%s|%s\\n' \"$(cat $g/memory.max)\" \"$(cat $g/memory.swap.max)\" "
-        "\"$(cat $g/memory.oom.group)\" \"$(cat $g/memory.peak)\" \"$(cat $g/memory.current)\" "
-        "\"$(tr '\\n' ' ' < $g/memory.events)\"; else echo absent; fi"), f"the group of uid {uid}").strip()
+        "m=$(cat $g/memory.max) && s=$(cat $g/memory.swap.max) && o=$(cat $g/memory.oom.group) && "
+        "p=$(cat $g/memory.peak) && c=$(cat $g/memory.current) && e=$(tr '\\n' ' ' < $g/memory.events) && "
+        "printf 'present|%s|%s|%s|%s|%s|%s\\n' \"$m\" \"$s\" \"$o\" \"$p\" \"$c\" \"$e\"; else echo absent; fi"),
+        f"the group of uid {uid}").strip()
     if out == "absent":
         return None
     word, limit, swap, oom_group, peak, current, events = out.split("|")

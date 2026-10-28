@@ -151,5 +151,23 @@ class Logs(unittest.TestCase):
         self.assertIn("quarantined", self.observed(0, "quarantined\n").logs())
 
 
+class CpuShare(unittest.TestCase):
+    """The container's CPU time is read only from a command that exits 0: a failed read fails the share, whatever its
+    stdout holds, and the time that was read is the control."""
+
+    def observed(self, status, stdout):
+        observed = stack.Stack.__new__(stack.Stack)
+        observed.exec = lambda *args, **kwargs: subprocess.CompletedProcess(
+            [], status, stdout, "" if status == 0 else "read error")
+        return observed
+
+    def test_a_failed_read_with_a_number_on_stdout_fails_the_share(self):
+        with self.assertRaises(SystemExit):
+            self.observed(1, "123456\n").cpu_share(0.01)
+
+    def test_the_cpu_time_that_was_read_is_the_control(self):
+        self.assertEqual(self.observed(0, "123456\n").cpu_usec(), 123456)
+
+
 if __name__ == "__main__":
     unittest.main()

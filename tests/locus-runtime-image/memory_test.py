@@ -10,8 +10,10 @@ Usage: python3 -I tests/locus-runtime-image/memory_test.py
 """
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -113,6 +115,45 @@ class ProcessProbe(unittest.TestCase):
     def test_a_failed_probe_is_no_answer(self):
         with self.assertRaises(SystemExit):
             self.probe(1, "dead\n")
+
+
+class ReadGroup(unittest.TestCase):
+    """A group is read only from commands that exit 0: a failed read of any of its fields fails the observation, however
+    much its command printed, and the group that was read is the control."""
+
+    FIELDS = {"memory.max": "1048576", "memory.swap.max": "max", "memory.oom.group": "0", "memory.peak": "0",
+              "memory.current": "4096", "memory.events": "oom 0\noom_kill 0"}
+
+    def group(self, tr_status):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root)
+        fs = os.path.join(root, "fs")
+        os.makedirs(os.path.join(fs, f"keeper-{UID}"))
+        for name, value in self.FIELDS.items():
+            with open(os.path.join(fs, f"keeper-{UID}", name), "w") as f:
+                f.write(value + "\n")
+        bindir = os.path.join(root, "bin")
+        os.makedirs(bindir)
+        tool = os.path.join(bindir, "tr")
+        with open(tool, "w") as f:
+            f.write(f"#!/bin/sh\nprintf 'oom 0 oom_kill 0 '\nexit {tr_status}\n")
+        os.chmod(tool, 0o700)
+
+        class Shell:
+            def exec(self, script, user=None):
+                return subprocess.run(
+                    ["/bin/sh", "-c", script.replace("/sys/fs/cgroup", fs)],
+                    env={**os.environ, "PATH": bindir + os.pathsep + os.environ["PATH"]},
+                    text=True, capture_output=True)
+
+        return memory.read_group(Shell(), UID)
+
+    def test_a_failed_tr_fails_the_group_read_whatever_it_printed(self):
+        with self.assertRaises(SystemExit):
+            self.group(1)
+
+    def test_the_group_that_was_read_is_the_control(self):
+        self.assertEqual(self.group(0)["events"], {"oom": 0, "oom_kill": 0})
 
 
 if __name__ == "__main__":

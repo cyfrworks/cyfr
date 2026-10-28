@@ -314,8 +314,9 @@ class Stack(imagesuite.Stack):
         return listing(self.exec(f"ls -A {HOME_ROOT}"), "the home root's listing").split()
 
     def cpu_usec(self):
-        """The container's CPU time from its cgroup, in microseconds."""
-        out = self.exec("awk '/^usage_usec/ {print $2}' /sys/fs/cgroup/cpu.stat").stdout.strip()
+        """The container's CPU time from its cgroup, in microseconds, read from a command that exits 0."""
+        out = read_output(self.exec("awk '/^usage_usec/ {print $2}' /sys/fs/cgroup/cpu.stat"),
+                          "the container's CPU time").strip()
         return int(out)
 
     def cpu_share(self, window_s):

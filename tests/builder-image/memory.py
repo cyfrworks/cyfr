@@ -319,17 +319,23 @@ def container_state(stack):
     """
     inspect = json.loads(run("docker", "inspect", stack.container).stdout)[0]
     events = {}
-    for line in stack.exec("cat /sys/fs/cgroup/memory.events").stdout.splitlines():
+    for line in imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/memory.events"),
+                                       "the container's memory events").splitlines():
         name, count = line.split()
         events[name] = int(count)
     pids = [1] + [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]]
-    started = stack.exec(" ".join(f"echo {pid}:$(cut -d' ' -f22 /proc/{pid}/stat 2>/dev/null);" for pid in pids)).stdout.split()
+    # Each start time is read by a cut that exits 0, chained so a failed read ends the script with its status: a
+    # process that has gone fails the state rather than reading as an empty start time.
+    started = imagesuite.read_output(stack.exec(" && ".join(
+        f"x=$(cut -d' ' -f22 /proc/{pid}/stat) && echo {pid}:$x" for pid in pids)),
+        "the start times of the container's processes").split()
     return {
         "oom_killed": inspect["State"]["OOMKilled"],
         "init": started[:1],
         "events": events,
         "release": started[1:],
-        "current": int(stack.exec("cat /sys/fs/cgroup/memory.current").stdout.strip() or 0),
+        "current": int(imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/memory.current"),
+                                              "the container's memory use").strip()),
     }
 
 
