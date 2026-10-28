@@ -54,6 +54,7 @@
 1.1	apps/arca/test/arca/installation_claims_test.exs
 0.7	apps/arca/test/arca/instance_entries_test.exs
 0.0	apps/arca/test/arca/instance_entry_usage_test.exs
+2.0	apps/arca/test/arca/invitations_test.exs
 0.9	apps/arca/test/arca/job_claims_test.exs
 0.1	apps/arca/test/arca/layouts_test.exs
 0.0	apps/arca/test/arca/lock_wait_test.exs
@@ -571,6 +572,7 @@
 1.1	apps/cyfr/test/prism_web/live/consent_sheet_component_test.exs
 0.6	apps/cyfr/test/prism_web/live/enforcements_live_test.exs
 2.0	apps/cyfr/test/prism_web/live/files_live_test.exs
+1.0	apps/cyfr/test/prism_web/live/invite_live_test.exs
 0.8	apps/cyfr/test/prism_web/live/login_live_test.exs
 1.7	apps/cyfr/test/prism_web/live/mcp_servers_live_test.exs
 1.3	apps/cyfr/test/prism_web/live/members_live_test.exs
@@ -681,6 +683,7 @@
 1.7	apps/cyfr/test/sanctum/providers/confirmation_test.exs
 0.3	apps/cyfr/test/sanctum/providers/decision_test.exs
 0.7	apps/cyfr/test/sanctum/providers/instance_entry_test.exs
+0.8	apps/cyfr/test/sanctum/providers/invitation_test.exs
 0.1	apps/cyfr/test/sanctum/providers/mcp_log_test.exs
 1.1	apps/cyfr/test/sanctum/providers/pairing_test.exs
 0.2	apps/cyfr/test/sanctum/providers/person_rotation_test.exs
@@ -924,6 +927,7 @@
 0.0	apps/sanctum/test/sanctum/execution_standing_test.exs
 1.0	apps/sanctum/test/sanctum/identity_freshness_test.exs
 1.3	apps/sanctum/test/sanctum/instance_entries_test.exs
+1.5	apps/sanctum/test/sanctum/invitations_test.exs
 1.8	apps/sanctum/test/sanctum/issuance_test.exs
 0.0	apps/sanctum/test/sanctum/network_private_policy_test.exs
 0.0	apps/sanctum/test/sanctum/network_test.exs

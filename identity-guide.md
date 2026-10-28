@@ -117,15 +117,15 @@ So a recovery, or a new device, restores no list of saved addresses: you add eac
 
 ### Signing in at another CYFR
 
-Signing in at another CYFR with your CYFR identity begins at your own CYFR, which you name by its address, and both show the same short code so you can tell your sign-in is the one you started. Each learns the other's address: the CYFR you sign in at learns where your own CYFR is, and your own CYFR learns where you signed in. Neither learns your list of saved addresses. See `devices-guide.md` for how such a CYFR admits you, and for your passkeys there.
+Signing in at another CYFR with your CYFR identity begins at your own CYFR. On the other CYFR's sign-in page, **Sign in with your CYFR** offers the hosted CYFR, `https://my.cyfr.run`, as a button, and **I run my own CYFR** takes your handle (`@name`) or your CYFR's address. A handle works there only when you publish your address with it; otherwise the page asks for the address. The address a handle publishes only says where to go: the CYFR you sign in at keeps the identifier the handle names for the attempt, and refuses a sign-in that comes back as anyone else, so a published address that serves someone else signs nobody in. If the browser no longer holds that attempt when you come back (it lasts five minutes, and a newer one replaces it), begin again. Both CYFRs show the same short code so you can tell your sign-in is the one you started. Each learns the other's address: the CYFR you sign in at learns where your own CYFR is, and your own CYFR learns where you signed in. Neither learns your list of saved addresses. See `devices-guide.md` for how such a CYFR admits you, and for your passkeys there.
 
 ---
 
 ## Joining a CYFR That Is Not Your Own
 
-Any CYFR that is not your own, a household's or a team's included, lets you in by your identifier (`per_…`, shown on your settings page): its platform administrator adds your identifier to its allowlist, and a member invites it to an athanor there. Nothing about this reaches your own CYFR, and nothing at the CYFR you join learns your keys.
+Any CYFR that is not your own, a household's or a team's included, lets you in by your handle or your identifier (`per_…`, shown on your settings page): its platform administrator adds you to its allowlist, and a member adds you to an athanor there. Either way the CYFR you join keeps the identifier your handle names when you are added, never the handle, so a handle that later passes to someone else takes none of your access with it. Nothing about this reaches your own CYFR, and nothing at the CYFR you join learns your keys.
 
-1. Open the address of the CYFR you join. On its sign-in page, under **Sign in with your CYFR**, give your own CYFR's address. It sends you there; a link someone sends you only fills that form, and never begins or confirms anything.
+1. Open the address of the CYFR you join. On its sign-in page, under **Sign in with your CYFR**, choose **I run my own CYFR** and give your handle or your own CYFR's address. It sends you there; a link someone sends you only fills that form, and never begins or confirms anything.
 2. At your CYFR's `/carry` page, press **Begin**: the sign-in is for that one CYFR. Sign in at your CYFR first if you are not.
 3. The CYFR you join shows a short code, and your CYFR's confirmation names the same code. Confirm at your CYFR with a fresh proof only if they match. Your CYFR signs an assertion for the other CYFR's challenge alone, and the browser takes it back.
 4. The CYFR you join reads your identity at the directory your identity names, which need not be its own, checks the assertion under your current keys, admits you, and makes you a member of the athanors you were invited to. Your CYFR's `/carry` page records that you were admitted, and sends you on to the CYFR you joined.
@@ -139,6 +139,10 @@ At the CYFR you join, signing in with your CYFR identity is not a fresh proof. R
 - **After a recovery**, the CYFR you joined ends your sessions there within the same bound, and with them the passkeys and device certificates bound to the old keys. Sign in again, naming your CYFR's new address if it moved; your next passkey there is authorized by its administrator again, and your devices are certified again at your CYFR.
 - **With your identity's directory unreachable**, the CYFR you joined keeps admitting you on the head it last read for its `identity_freshness_seconds`, then pauses your protected work there with a sentence saying so, until the directory answers again. A new sign-in waits for the directory.
 - **A new browser or device** starts with no saved addresses and imports none: you open each CYFR by its address or an invitation, and sign in there.
+
+### Joining by an invitation link
+
+Someone with no CYFR identity of their own joins by an invitation link instead. A member creates one for a group they sit in, on **Members**; the platform administrator may also create one that names no group. The link is `<CYFR address>/invite#<code>`: it is shown once, works once, expires after seven days, and the CYFR keeps only the code's hash. Its page names who invited you and to which group, and **Create your identity here** makes your passkey, you, your keys and your own athanor at that CYFR, with your seat in the group. A link that has expired, been used or been revoked, or whose issuer has since left the group or been denied, says it can no longer be used. The identity made this way is held by that CYFR, as one made by its setup is.
 
 ### Where joining is proven
 

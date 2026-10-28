@@ -292,7 +292,7 @@ A person is made only by an admission at the CYFR that holds them: its setup, an
 
 ### 9.2 Joining a home that is not your own
 
-A person signs in at another home through the CYFR door (`Sanctum.Auth.CyfrDoor`) with an assertion their own home signs after a fresh confirmation, carried by the browser (`Sanctum.Carry`); their devices there are certified by their own home (`Sanctum.RemoteCertification`), and each home admits under its own rules.
+A person signs in at another home through the CYFR door (`Sanctum.Auth.CyfrDoor`) with an assertion their own home signs after a fresh confirmation, carried by the browser (`Sanctum.Carry`); their devices there are certified by their own home (`Sanctum.RemoteCertification`), and each home admits under its own rules. A home knows a person by identifier: a handle is resolved to its identifier when an allowlist entry, a membership or a sign-in names it, and is never stored as the key, so a handle the registry later reassigns moves no access. A published address is navigation only: a sign-in begun from a handle keeps the identifier the handle named for the attempt, and the CYFR door refuses a carry of any other identity (`Sanctum.Auth.CyfrDoor.challenge/2`).
 
 ### 9.3 Devices and fresh confirmation
 
