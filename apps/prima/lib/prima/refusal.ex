@@ -223,7 +223,6 @@ defmodule Prima.Refusal do
     :invalid_request
   ]
 
-  # The bootstrap's refusals of a member's boot, by sub-reason.
   # How the home is reached: the boot's and the access engine's refusals
   # that carry nothing but their code.
   @access %{

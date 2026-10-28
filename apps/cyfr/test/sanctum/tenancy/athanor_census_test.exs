@@ -84,6 +84,22 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
     end
   end
 
+  test "personal admissions at the server's last two places: each counts before it writes, two land",
+       %{run: run} do
+    owners = for i <- 1..@racers, do: person!(run, i)
+    cap = cap!(2)
+
+    answers = race(Enum.map(owners, fn owner -> fn -> admitted(owner) end end))
+
+    assert Enum.count(answers, &match?({:ok, _}, &1)) == 2
+    assert Enum.count(answers, &(&1 == refused(cap))) == @racers - 2
+    assert active() == cap
+
+    for {owner, answer} <- Enum.zip(owners, answers), answer == refused(cap) do
+      assert {:error, :not_found} = unboxed(fn -> Athanors.get_by_owner(owner.id) end)
+    end
+  end
+
   test "group mints at the server's last two places: two land, and a refusal leaves no row or seat",
        %{run: run} do
     creators = for i <- 1..@racers, do: person!(run, i)
@@ -300,6 +316,22 @@ defmodule Sanctum.Tenancy.AthanorCensusTest do
       owner_user_id: owner.id,
       created_by: owner.id
     }
+  end
+
+  # An admission's shape (`Sanctum.Newcomer`): the place counted under the
+  # census lock before anything is written, and the person's athanor
+  # minted later in the same transaction with no cap of its own.
+  defp admitted(owner) do
+    attrs = personal(owner)
+
+    Arca.Repo.transaction(fn ->
+      with :ok <- Athanors.personal_place(),
+           {:ok, athanor} <- Athanors.create_personal(Map.delete(attrs, :slug), [attrs.slug]) do
+        athanor
+      else
+        {:error, reason} -> Arca.Repo.rollback(reason)
+      end
+    end)
   end
 
   # A group the person made, archived; made before the cap is stored.

@@ -11,7 +11,7 @@ defmodule Sanctum.Newcomer do
   | Admission | Checked | Makes |
   |---|---|---|
   | `{:setup, token}` | the token equals the configured setup token (constant-time); in the mint's transaction, under the installation claims' order row, no person exists and no restore holds the installation | a local person, their keys, their athanor, the platform grant |
-  | `:open` | the door's `*` admits; the athanor caps in the mint's transaction | a local person, their keys, their athanor |
+  | `:open` | the door's `*` admits; the mint rate and the athanor cap, in the mint's transaction before the person's row | a local person, their keys, their athanor |
   | `{:remote, remote}` | the door admits the identifier (`Sanctum.Door.sign_in_identifier/1`); the head the CYFR sign-in verified is still fresh | a remote person row with no keys and no athanor; pending identifier invitations activate |
   | `{:restore, restore}` | the restore's installation claim, in the mint's transaction (`Arca.InstallationClaims`) | the restored person, their athanor, the platform grant |
 
@@ -32,7 +32,8 @@ defmodule Sanctum.Newcomer do
   order row and the person's lock, so two re-admissions decide in one
   order. From the commit that gives the person any of the three, the
   token opens nothing (`:setup_closed`). A token that is not the
-  configured one, or a CYFR with none configured, opens nothing either.
+  configured one, a missing one, or a CYFR with none configured, opens
+  nothing either.
 
   ## The credential
 
@@ -57,11 +58,14 @@ defmodule Sanctum.Newcomer do
   ## One transaction
 
   The person's row, their keys (`Sanctum.Person.mint_keys/1`), their
-  athanor (`Sanctum.Provisioning.mint_personal/2`, its caps counted
-  there), the grant and the passkey commit together or not at all: an
-  admission refused at a cap, a process killed mid-admission and a member
-  whose slot was lost leave no row. The athanor's fill and the invitations'
-  announcements follow the commit.
+  athanor (`Sanctum.Provisioning.mint_personal/1`), the grant and the
+  passkey commit together or not at all: a process killed mid-admission
+  and a member whose slot was lost leave no row. An open admission's caps
+  are counted in the same transaction before the person's row
+  (`Sanctum.Provisioning.personal_admissible/0`), so one refused at a cap
+  writes none. The athanor's fill and the invitations' announcements
+  follow the commit; a restore's fill is asked for by `Sanctum.Recovery`,
+  once the head still names the restored keys.
 
   Refusals: `:setup_closed`, `:not_set_up`, `:restore_reserved`,
   `{:door, reason}`, `:identity_stale`, `:registration_refused`, a cap's
@@ -120,6 +124,10 @@ defmodule Sanctum.Newcomer do
   end
 
   # ---- before the transaction ----------------------------------------------
+
+  # A missing token is refused as a wrong one is.
+  defp taken({:setup, token}, _credential) when not is_binary(token),
+    do: {:error, :setup_closed}
 
   defp taken({:setup, token}, {:passkey, registration} = credential)
        when is_binary(token) and is_map(registration),
@@ -212,7 +220,7 @@ defmodule Sanctum.Newcomer do
       user_attrs,
       identity(admission, now),
       [admission: kind(admission), also: &also(admission, write, &1)] ++
-        restore_claim(admission)
+        verify(admission) ++ restore_claim(admission)
     )
     |> case do
       {:ok, person} -> {:ok, person}
@@ -242,6 +250,11 @@ defmodule Sanctum.Newcomer do
   defp kind({:remote, _remote}), do: "remote"
   defp kind({:restore, _restore}), do: "restore"
 
+  # Inside the mint's transaction, before the person's row: an open
+  # admission's caps. The installation's first person is minted past them.
+  defp verify(:open), do: [verify: &Sanctum.Provisioning.personal_admissible/0]
+  defp verify(_admission), do: []
+
   defp restore_claim({:restore, %{claim: claim}}), do: [restore: claim]
   defp restore_claim(_admission), do: []
 
@@ -262,8 +275,8 @@ defmodule Sanctum.Newcomer do
 
   # Inside the mint's transaction, after the person's row and the first
   # person's grant.
-  defp also({:setup, _token}, write, person), do: local(person, true, write)
-  defp also(:open, write, person), do: local(person, false, write)
+  defp also({:setup, _token}, write, person), do: local(person, write)
+  defp also(:open, write, person), do: local(person, write)
 
   defp also({:remote, remote}, _write, %{id: user_id}) do
     case Arca.PersonIdentities.create(Prima.Actor.system(), %{
@@ -280,17 +293,17 @@ defmodule Sanctum.Newcomer do
   end
 
   defp also({:restore, %{also: restored}}, _write, person) do
-    with :ok <- restored.(person), do: athanor(person, true)
+    with :ok <- restored.(person), do: athanor(person)
   end
 
-  defp local(person, operator?, write) do
+  defp local(person, write) do
     with :ok <- Sanctum.Person.mint_keys(person),
-         :ok <- athanor(person, operator?),
+         :ok <- athanor(person),
          do: write.(person)
   end
 
-  defp athanor(person, operator?) do
-    case Sanctum.Provisioning.mint_personal(person, operator: operator?) do
+  defp athanor(person) do
+    case Sanctum.Provisioning.mint_personal(person) do
       {:ok, _athanor} -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -321,7 +334,7 @@ defmodule Sanctum.Newcomer do
 
   defp committed(admission, person, readmitted, credential) do
     granted(admission, person, readmitted)
-    :ok = Sanctum.Provisioning.after_sign_in(person.id)
+    filled(admission, person)
 
     with {:ok, admitted} <- answered(person, readmitted) do
       case session(person, credential) do
@@ -342,6 +355,11 @@ defmodule Sanctum.Newcomer do
   end
 
   defp granted(_admission, _person, _readmitted), do: :ok
+
+  # A restore may be superseded after its commit: `Sanctum.Recovery` asks
+  # for its fill once the head still names the restored keys.
+  defp filled({:restore, _restore}, _person), do: :ok
+  defp filled(_admission, person), do: Sanctum.Provisioning.after_sign_in(person.id)
 
   defp answered(person, readmitted) do
     case Users.get(person.id) do

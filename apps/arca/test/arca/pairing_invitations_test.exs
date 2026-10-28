@@ -28,8 +28,7 @@ defmodule Arca.PairingInvitationsTest do
     PairingInvitations,
     Passkeys,
     PendingConfirmations,
-    PersonIdentities,
-    Users
+    PersonIdentities
   }
 
   alias Arca.PairingInvitationsTest.Confirmations

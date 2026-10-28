@@ -16,7 +16,7 @@ defmodule Arca.CarryActionsTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.{CarryActions, Users}
+  alias Arca.CarryActions
   alias Arca.Schemas.{CarryAction, CellLease}
 
   setup tags do

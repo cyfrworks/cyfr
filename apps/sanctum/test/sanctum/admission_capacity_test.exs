@@ -62,11 +62,12 @@ defmodule Sanctum.AdmissionCapacityTest do
   defp mint_rate!(value), do: Settings.put("mint_per_hour", value)
 
   # The admission's first query of the athanors table is the mint rate's
-  # count, after the person's keys are written; the table is renamed then.
+  # count, in its transaction before the person's row; the table is
+  # renamed once the door's `*` is read, before that transaction opens.
   # The rename lives in the test's sandbox transaction, which rolls it
   # back; on PostgreSQL the count's failure ends that transaction, so this
   # is the test's last database step.
-  defp break_count_after_keys! do
+  defp break_count_after_door! do
     owner = self()
     handler = {__MODULE__, make_ref()}
 
@@ -75,7 +76,7 @@ defmodule Sanctum.AdmissionCapacityTest do
         handler,
         [:arca, :repo, :query],
         fn _event, _measurements, metadata, _config ->
-          if self() == owner and metadata[:source] == "person_identities" and
+          if self() == owner and metadata[:source] == "server_allowlist" and
                Process.put(handler, :renamed) == nil do
             Arca.Repo.query!("ALTER TABLE athanors RENAME TO athanors_away")
           end
@@ -188,7 +189,7 @@ defmodule Sanctum.AdmissionCapacityTest do
       mint_rate!(5)
       # Read once, so the mint's own read is answered from the cache.
       assert {:ok, 5} = Arca.PlatformSettings.effective("mint_per_hour")
-      break_count_after_keys!()
+      break_count_after_door!()
 
       log =
         capture_log(fn ->

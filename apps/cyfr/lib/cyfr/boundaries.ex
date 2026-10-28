@@ -2425,8 +2425,8 @@ defmodule Cyfr.Boundaries do
     # one; a release never sets it, so only the shipped presets are read.
     scripted_oauth_provider: :seam,
     # Compiled in by `config/test.exs` alone; with the runtime switch off it
-    # lets the sandboxed suite boot omit `Cyfr.Bootstrap`
-    # (`Cyfr.Application.bootstrap_skipped?/2`).
+    # lets the sandboxed suite boot omit the boot gate's children and the
+    # no-person notice (`Cyfr.Application.bootstrap_skipped?/2`).
     bootstrap_skip_permitted: :seam,
     # Compiled in by `config/test.exs` alone, shortening the transports'
     # retry backoff base (`Compendium.Transport.Retry`); never read at runtime.

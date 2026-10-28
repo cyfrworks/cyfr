@@ -333,6 +333,61 @@ defmodule Arca.UsersTest do
     end
   end
 
+  describe "mint/4's verify: closure" do
+    setup do
+      %{first: person!()}
+    end
+
+    test "runs inside the mint's transaction, before any row is written" do
+      {user, identity} = attrs_pair()
+      me = self()
+
+      verify = fn ->
+        send(me, {:verify, Users.get(server(), user.id), Arca.Repo.in_transaction?()})
+        :ok
+      end
+
+      assert {:ok, %{id: id}} =
+               Users.mint(server(), user, identity, admission: "open", verify: verify)
+
+      assert_received {:verify, {:error, :not_found}, true}
+      assert id == user.id
+    end
+
+    test "a refusing check is the mint's answer: no row is inserted and the also: never runs" do
+      {user, identity} = attrs_pair()
+      me = self()
+      handler = "users-verify-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measure, meta, _config ->
+          if self() == me and meta[:source] == "users" and
+               String.starts_with?(meta[:query] || "", "INSERT"),
+             do: send(me, :person_inserted)
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert {:error, {:limit_reached, :max_athanors, 1}} =
+               Users.mint(server(), user, identity,
+                 admission: "open",
+                 verify: fn -> {:error, {:limit_reached, :max_athanors, 1}} end,
+                 also: fn _person ->
+                   send(me, :also_ran)
+                   :ok
+                 end
+               )
+
+      refute_received :person_inserted
+      refute_received :also_ran
+      assert {:error, :not_found} = Users.get(server(), user.id)
+    end
+  end
+
   describe "the reads and writes" do
     test "a person is found by id, identity and namespace" do
       user = person!()

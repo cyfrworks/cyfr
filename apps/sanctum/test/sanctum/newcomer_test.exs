@@ -87,6 +87,27 @@ defmodule Sanctum.NewcomerTest do
 
   defp identifier, do: "per_" <> Prima.Digest.sha256_hex("newcomer-#{System.unique_integer()}")
 
+  # Tells this process of every person row it inserts, rolled back or not:
+  # a refusal that counts before the row writes none.
+  defp watch_person_inserts! do
+    test = self()
+    handler = "newcomer-inserts-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:arca, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if self() == test and metadata[:source] == "users" and
+               String.starts_with?(metadata[:query] || "", "INSERT"),
+             do: send(test, :person_inserted)
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
+  end
+
   describe "setup" do
     test "makes the first person with their keys, athanor and passkey, signs them in, and grants the platform role" do
       assert {:ok, %{person: person, readmitted: false, session_token: token}} =
@@ -177,12 +198,16 @@ defmodule Sanctum.NewcomerTest do
       assert {:error, :setup_closed} = Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
     end
 
-    test "a token that is not the configured one, or none configured, opens nothing and writes nothing" do
+    test "a token that is not the configured one, a missing one, or none configured, opens nothing and writes nothing" do
       assert {:error, :setup_closed} =
                Newcomer.admit({:setup, String.duplicate("0", 64)}, {:command_line, "laptop"})
 
       assert {:error, :setup_closed} =
                Newcomer.admit({:setup, "short"}, {:command_line, "laptop"})
+
+      for credential <- [{:command_line, "laptop"}, {:passkey, registration()}, :none] do
+        assert {:error, :setup_closed} = Newcomer.admit({:setup, nil}, credential)
+      end
 
       Application.delete_env(:sanctum, :setup_token)
       assert {:error, :setup_closed} = Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
@@ -301,27 +326,33 @@ defmodule Sanctum.NewcomerTest do
       assert {:ok, %{user_id: _}} = Sanctum.Session.get(token)
     end
 
-    test "at a cap writes nothing: no person, no athanor, no passkey" do
+    test "at a cap is refused before the person's row: none is inserted, no athanor, no passkey" do
       %{person: _first} = setup!()
       {:ok, _} = Store.allow("wildcard", "*", "ops")
       Settings.put("max_athanors", 1)
+      credential = registration()
+      watch_person_inserts!()
 
       assert {:error, {:limit_reached, :max_athanors, 1}} =
-               Newcomer.admit(:open, {:passkey, registration()})
+               Newcomer.admit(:open, {:passkey, credential})
 
+      refute_received :person_inserted
       assert people() == 1
       assert passkeys() == 0
     end
 
-    test "past the mint rate writes nothing" do
+    test "past the mint rate is refused before the person's row" do
       %{person: _first} = setup!()
       {:ok, _} = Store.allow("wildcard", "*", "ops")
       {:ok, %{person: _second}} = Newcomer.admit(:open, {:passkey, registration()})
       Settings.put("mint_per_hour", 1)
+      credential = registration()
+      watch_person_inserts!()
 
       assert {:error, {:limit_reached, :mint_per_hour, 1}} =
-               Newcomer.admit(:open, {:passkey, registration()})
+               Newcomer.admit(:open, {:passkey, credential})
 
+      refute_received :person_inserted
       assert people() == 2
     end
 

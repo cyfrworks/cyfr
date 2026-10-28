@@ -628,10 +628,12 @@ signs in unless a deny names them, and a person whose keys another CYFR
 holds by `*` or an allow naming their identifier, `per_…` (`cyfr admin allow
 <identifier|*>`, `cyfr admin deny <person|identifier>`).
 
-The first person of a CYFR is made by its setup, and is its platform
-administrator; nothing else makes anyone an administrator. A person's
-admission at this server makes them with their own keys and
-their own athanor, seeded and baseline-consented
+The first person of a CYFR is made by its setup, or by a restore onto an
+empty installation, and is its platform administrator; nothing else makes
+anyone an administrator. A local admission at this server (setup, an open
+admission or a restore) makes the person with their own keys and their own
+athanor; a remote admission, of a person whose keys another CYFR holds,
+makes neither. The athanor is seeded and baseline-consented
 (the bundled `catalyst:local.http`
 is granted `egress.domains ["*"]` for public hosts, GET/POST/HEAD, 60/min;
 private addresses it cannot reach at all — its manifest declares no
@@ -641,11 +643,10 @@ reachable from a chain as an MCP server on `CYFR_PRIVATE_EGRESS_TARGETS`,
 which is the server's own, and not as a URL to fetch). Sign-in never asks
 cyfr.run: the athanor is filled in the background (see [Operator
 notes](#operator-notes-for-shared-servers-and-open-sign-in)), and a cyfr.run
-handle is needed only to publish. A person admitted with their CYFR
-identity is minted no keys and no athanor: theirs stay at their own CYFR, and
-here they hold what their memberships give them. An installation set up
-for a restore (`CYFR_RESTORE_TOKEN`) reserves its first person for the
-restore: setup makes no one before it ([Backup and
+handle is needed only to publish. A remote person's keys and athanor stay at
+their own CYFR, and here they hold what their memberships give them. An
+installation set up for a restore (`CYFR_RESTORE_TOKEN`) reserves its first
+person for the restore: setup makes no one before it ([Backup and
 restore](#backup-and-restore)). `cyfr admin deny <person|identifier>`
 (their id here, `usr_…`, or their person identifier) revokes a
 person's sessions and keys, archives their own athanor, removes them from every group

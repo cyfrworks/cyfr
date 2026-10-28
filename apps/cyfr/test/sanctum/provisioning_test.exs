@@ -143,7 +143,7 @@ defmodule Sanctum.ProvisioningTest do
   end
 
   # A person with no athanor yet, as an admission holds them before its
-  # mint of their own (`Provisioning.mint_personal/2`).
+  # mint of their own (`Provisioning.mint_personal/1`).
   defp unhoused(n) do
     now = DateTime.utc_now()
     subject = "prov-#{n}"
@@ -181,7 +181,7 @@ defmodule Sanctum.ProvisioningTest do
     n = System.unique_integer([:positive])
     {:ok, user} = Users.set_namespace(unhoused(n), "prov#{n}")
 
-    assert {:ok, personal} = Provisioning.mint_personal(user, [])
+    assert {:ok, personal} = Provisioning.mint_personal(user)
     assert personal.kind == "person"
     assert personal.slug == "prov#{n}"
     assert personal.owner_user_id == user.id
@@ -196,7 +196,7 @@ defmodule Sanctum.ProvisioningTest do
     assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(personal.id)
 
     # A person holds one: a second mint is refused, and a sign-in mints none.
-    assert {:error, _} = Provisioning.mint_personal(user, [])
+    assert {:error, _} = Provisioning.mint_personal(user)
     assert :ok = Provisioning.after_sign_in(user.id)
     assert [%{id: ^pid}] = Enum.filter(Athanors.list_for_user(user.id), &(&1.kind == "person"))
   end
@@ -208,7 +208,7 @@ defmodule Sanctum.ProvisioningTest do
     n = System.unique_integer([:positive])
     user = unhoused(n)
 
-    assert {:ok, personal} = Provisioning.mint_personal(user, [])
+    assert {:ok, personal} = Provisioning.mint_personal(user)
     assert personal.kind == "person"
     assert personal.slug == "prov-#{n}"
     assert personal.owner_user_id == user.id
@@ -227,12 +227,12 @@ defmodule Sanctum.ProvisioningTest do
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
-    assert {:ok, %{slug: taken}} = Provisioning.mint_personal(unhoused(n), [])
+    assert {:ok, %{slug: taken}} = Provisioning.mint_personal(unhoused(n))
     assert taken == "prov-#{n}"
 
     # The second person's namespace is the first person's address here.
     {:ok, second} = Users.set_namespace(unhoused(n + 1), "prov-#{n}")
-    assert {:ok, other} = Provisioning.mint_personal(second, [])
+    assert {:ok, other} = Provisioning.mint_personal(second)
     assert other.owner_user_id == second.id
     assert other.slug == "prov-#{n + 1}"
   end

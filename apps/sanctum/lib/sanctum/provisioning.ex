@@ -7,9 +7,10 @@ defmodule Sanctum.Provisioning do
   what it is allowed to run once it is, and what the row says went wrong.
 
   A person's own athanor is minted inside their admission's transaction
-  (`mint_personal/2`, called by `Sanctum.Newcomer`): a person needs no
+  (`mint_personal/1`, called by `Sanctum.Newcomer`): a person needs no
   registry, no namespace and no claim to have one, and a cap that refuses
-  it refuses the admission, so no person is made without the athanor. A
+  it refuses the admission before the person's row
+  (`personal_admissible/0`), so no person is made without the athanor. A
   group is minted as a bare row (`Sanctum.Tenancy.Athanors.create_group/3`)
   and filled the first time something reads its bundle
   (`start_provisioning/1`). Provisioning is idempotent — `provisioned_at`
@@ -144,7 +145,7 @@ defmodule Sanctum.Provisioning do
   the person's namespace is recorded (`Sanctum.SignIn.record_namespace/2`):
   asks for the fill of their own athanor while it is unfilled, and for a
   retry of any group of theirs whose provisioning failed earlier. Mints
-  nothing: a person's athanor is their admission's (`mint_personal/2`).
+  nothing: a person's athanor is their admission's (`mint_personal/1`).
   """
   @spec after_sign_in(String.t()) :: :ok
   def after_sign_in(user_id) when is_binary(user_id) do
@@ -172,30 +173,41 @@ defmodule Sanctum.Provisioning do
   only through Arca and makes no network call; its refusal rolls the
   admission back.
 
-  The installation's first person, its administrator (`operator: true`),
-  is minted past the server caps and the mint rate: a server at capacity,
-  or holding a mint rate it cannot use, must still be set up by the person
-  who can act on it. Everyone else is held to the caps and to the mint
-  rate — `CYFR_MINT_PER_HOUR` bounds how fast people may arrive, and this
-  is its only enforcement.
+  It counts no cap: the admission asked `personal_admissible/0` before
+  the person's row, or made the installation's administrator.
   """
-  @spec mint_personal(Sanctum.Tenancy.Users.user(), keyword()) ::
+  @spec mint_personal(Sanctum.Tenancy.Users.user()) ::
           {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()}
-  def mint_personal(%{id: user_id} = user, opts) when is_list(opts) do
-    operator? = Keyword.get(opts, :operator, false)
+  def mint_personal(%{id: user_id} = user) do
     name = personal_name(user)
 
-    with :ok <- if(operator?, do: :ok, else: mint_allowed()),
-         {:ok, slugs} <- Athanors.person_slugs(user[:namespace], name),
+    with {:ok, slugs} <- Athanors.person_slugs(user[:namespace], name),
          {:ok, athanor} <-
            Athanors.create_personal(
              %{kind: "person", name: name, owner_user_id: user_id, created_by: user_id},
-             slugs,
-             capped: not operator?
+             slugs
            ),
          {:ok, _user} <- Users.set_personal_athanor(user, athanor.id) do
       {:ok, athanor}
     end
+  end
+
+  @doc """
+  Whether a person may be admitted with an athanor of their own, asked
+  inside their admission's transaction before their row is written
+  (`Sanctum.Newcomer`, `Arca.Users.mint/4`'s `verify:`), so a refused
+  admission writes no row: the mint rate, then the server cap, counted
+  under the census lock the transaction then holds to its end
+  (`Sanctum.Tenancy.Athanors.personal_place/0`). `CYFR_MINT_PER_HOUR` bounds how fast
+  people may arrive, and this is its only enforcement.
+
+  The installation's first person, its administrator, is not asked: a
+  server at capacity, or holding a mint rate it cannot use, must still be
+  set up by the person who can act on it.
+  """
+  @spec personal_admissible() :: :ok | {:error, term()}
+  def personal_admissible do
+    with :ok <- mint_allowed(), do: Athanors.personal_place()
   end
 
   @doc """

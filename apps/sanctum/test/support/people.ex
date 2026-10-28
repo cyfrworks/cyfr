@@ -23,7 +23,7 @@ defmodule Sanctum.Test.People do
   `info` is `%{id: identity_key, provider:, email:, verified:, name:}`
   (`email`, `verified` and `name` optional). A new person is minted with
   admission `open`, their keys (`Sanctum.Person.mint_keys/1`), their own
-  athanor and its seat (`Sanctum.Provisioning.mint_personal/2`, past the
+  athanor and its seat (`Sanctum.Provisioning.mint_personal/1`, past the
   caps) and that identity linked, in one transaction. A second call with
   the same key answers the same person, with the email, its verification
   (`true`, `false`, or nil for none) and the name it carries written over
@@ -122,7 +122,7 @@ defmodule Sanctum.Test.People do
         admission: "setup",
         also: fn person ->
           with :ok <- Sanctum.Person.mint_keys(person),
-               {:ok, _athanor} <- Sanctum.Provisioning.mint_personal(person, operator: true),
+               {:ok, _athanor} <- Sanctum.Provisioning.mint_personal(person),
                do: :ok
         end
       )
@@ -134,7 +134,7 @@ defmodule Sanctum.Test.People do
   defp mint(info) do
     insert(info, "open", fn person ->
       :ok = Sanctum.Person.mint_keys(person)
-      {:ok, _athanor} = Sanctum.Provisioning.mint_personal(person, operator: true)
+      {:ok, _athanor} = Sanctum.Provisioning.mint_personal(person)
       :ok
     end)
   end

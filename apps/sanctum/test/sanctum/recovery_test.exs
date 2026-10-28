@@ -1,6 +1,44 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Sanctum.RecoveryTest.FillWatch do
+  @moduledoc """
+  The component-facts port as the suite installs it
+  (`Sanctum.Test.Components`), telling the process `watch!/1` names of
+  every fill asked for.
+  """
+
+  @behaviour Sanctum.Consent.Components
+
+  @doc "Install this port for the test, telling `observer` of each fill."
+  @spec watch!(pid()) :: :ok
+  def watch!(observer) do
+    real = Sanctum.Consent.Components.impl!()
+
+    ExUnit.Callbacks.on_exit(fn ->
+      Sanctum.Consent.Components.install!(real)
+      :persistent_term.erase({__MODULE__, :observer})
+    end)
+
+    :persistent_term.put({__MODULE__, :observer}, observer)
+    Sanctum.Consent.Components.install!(__MODULE__)
+    :ok
+  end
+
+  for {name, arity} <- Sanctum.Consent.Components.behaviour_info(:callbacks), name != :fill do
+    args = Macro.generate_arguments(arity, __MODULE__)
+    @impl true
+    def unquote(name)(unquote_splicing(args)),
+      do: Sanctum.Test.Components.unquote(name)(unquote_splicing(args))
+  end
+
+  @impl true
+  def fill(athanor, ctx, entry_kind) do
+    send(:persistent_term.get({__MODULE__, :observer}), {:fill, athanor.id, entry_kind})
+    Sanctum.Test.Components.fill(athanor, ctx, entry_kind)
+  end
+end
+
 defmodule Sanctum.RecoveryTest do
   @moduledoc """
   Recovery material and restore, against a scripted directory that speaks
@@ -1222,6 +1260,7 @@ defmodule Sanctum.RecoveryTest do
 
     test "superseded after its mint and before its session, it provisions and issues nothing, and its person stays",
          context do
+      :ok = Sanctum.RecoveryTest.FillWatch.watch!(self())
       reserved!()
       identity = elsewhere!(context.directory)
       _stopped = stopped_at_keys_active!(context, identity)
@@ -1236,6 +1275,7 @@ defmodule Sanctum.RecoveryTest do
         )
 
       assert answer == {:error, :superseded}
+      refute_received {:fill, _athanor_id, _entry_kind}
       assert [%{phase: "superseded", user_id: user_id}] = attempts("restore")
       assert is_binary(user_id)
       assert count(User) == 1
@@ -1286,17 +1326,23 @@ defmodule Sanctum.RecoveryTest do
 
     test "stopped at minted, a directory that cannot answer leaves it there, and a retry issues the session",
          context do
+      :ok = Sanctum.RecoveryTest.FillWatch.watch!(self())
       reserved!()
       identity = elsewhere!(context.directory)
 
       {:ok, %{user_id: user_id} = restored} =
         Recovery.restore(identity.kit, @token, context.opts)
 
+      # The fill is asked for once the head still names the restored keys.
+      {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(user_id)
+      assert_received {:fill, ^athanor_id, "sign_in"}
+
       :ok = stopped_at_minted!(restored)
 
       assert {:error, :unavailable} =
                Recovery.restore(identity.kit, @token, unreachable(context.opts))
 
+      refute_received {:fill, _athanor_id, _entry_kind}
       assert [%{phase: "minted"}] = attempts("restore")
       assert sessions(user_id) == 0
       assert {:ok, %{state: "pending"}} = InstallationClaims.get(system())
@@ -1304,6 +1350,7 @@ defmodule Sanctum.RecoveryTest do
       assert {:ok, %{status: "completed", user_id: ^user_id, session_token: token}} =
                Recovery.restore(identity.kit, @token, context.opts)
 
+      assert_received {:fill, ^athanor_id, "sign_in"}
       assert {:ok, %{user_id: ^user_id}} = Sanctum.Session.get(token)
       assert [%{phase: "completed"}] = attempts("restore")
       assert count(User) == 1

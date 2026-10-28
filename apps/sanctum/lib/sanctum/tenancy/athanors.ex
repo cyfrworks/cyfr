@@ -7,7 +7,7 @@ defmodule Sanctum.Tenancy.Athanors do
 
   An athanor is the unit everything is owned by — a person's or a group's.
   Rows are created here (a person's inside their admission's transaction,
-  `Sanctum.Provisioning.mint_personal/2`; a group's when a member creates
+  `Sanctum.Provisioning.mint_personal/1`; a group's when a member creates
   it) and archived, never deleted. Filling an athanor with components and consents is the caller's
   job (`Sanctum.Provisioning`), not this module's: a row is a name,
   provisioning is what fills it.
@@ -56,18 +56,18 @@ defmodule Sanctum.Tenancy.Athanors do
 
   @doc """
   Mint a person's own athanor, inside their admission's transaction
-  (`Sanctum.Provisioning.mint_personal/2`): the row, with the first slug of
+  (`Sanctum.Provisioning.mint_personal/1`): the row, with the first slug of
   `slugs` no person athanor holds, and its owner seated, in one
   `Arca.Athanors.mint/2` under the census lock, so two admissions cannot
-  take one slug. `capped: true` counts the server-wide cap on athanors
-  there; the installation's administrator is minted past it.
+  take one slug. It counts no cap: the admission counted the server-wide
+  cap before the person's row (`personal_place/0`), or is the
+  installation's administrator, minted past it.
   """
-  @spec create_personal(map(), [String.t()], keyword()) :: {:ok, athanor()} | {:error, term()}
-  def create_personal(%{owner_user_id: user_id} = attrs, slugs, opts)
+  @spec create_personal(map(), [String.t()]) :: {:ok, athanor()} | {:error, term()}
+  def create_personal(%{owner_user_id: user_id} = attrs, slugs)
       when is_binary(user_id) and is_list(slugs) do
     Arca.Athanors.mint(server(),
       hold: [user_id],
-      caps: if(Keyword.fetch!(opts, :capped), do: [:max_athanors], else: []),
       slugs: slugs,
       attrs: attrs,
       also: fn athanor ->
@@ -82,6 +82,15 @@ defmodule Sanctum.Tenancy.Athanors do
       end
     )
   end
+
+  @doc """
+  Inside an admission's transaction, before its person's row: the
+  server-wide cap on athanors, counted under the census lock, which holds
+  to the transaction's end so the place counted free stays free for the
+  person's athanor (`Arca.Athanors.within_caps/2`).
+  """
+  @spec personal_place() :: :ok | {:error, term()}
+  def personal_place, do: Arca.Athanors.within_caps(server(), [:max_athanors])
 
   @doc """
   Mint a group athanor for `creator_user_id`: the row, its slug (from the
@@ -741,7 +750,7 @@ defmodule Sanctum.Tenancy.Athanors do
   The candidates for a person athanor's slug, in order of preference:
   `hint` when it is a valid slug, then those derived from `name` with a
   numeric suffix. The mint takes the first one free in its own
-  transaction (`create_personal/3`).
+  transaction (`create_personal/2`).
   """
   @spec person_slugs(String.t() | nil, String.t()) :: {:ok, [String.t()]} | {:error, term()}
   def person_slugs(hint, name) do

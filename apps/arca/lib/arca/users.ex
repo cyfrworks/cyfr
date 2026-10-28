@@ -239,6 +239,12 @@ defmodule Arca.Users do
       (`Arca.Schemas.User.admissions/0`), recorded on their row.
     * `restore:` — the installation claim a restore's mint names
       (`%{request_id: …, token_digest: …}`), never a caller's argument.
+    * `verify:` — the higher owner's check (`ARCHITECTURE.md` §4.4), run
+      inside the transaction after the installation guard and before any
+      row is written. A zero-arity function answering `:ok` or
+      `{:error, reason}`, which refuses the mint with that reason, so a
+      refused mint has written nothing. It writes nothing and makes no
+      network call.
     * `also:` — the higher owner's closure (`ARCHITECTURE.md` §4.4), run
       inside the transaction after the person's rows are written. It is
       handed the person as a plain map and answers `:ok` or
@@ -299,6 +305,7 @@ defmodule Arca.Users do
 
   defp mint_guarded(actor, admission, user_attrs, identity_attrs, opts) do
     restore = Keyword.get(opts, :restore)
+    verify = Keyword.get(opts, :verify, fn -> :ok end)
     also = Keyword.get(opts, :also, fn _user -> :ok end)
     user_attrs = user_attrs |> Map.new() |> Map.put(:admission, admission)
 
@@ -315,7 +322,8 @@ defmodule Arca.Users do
           refusal
 
         admitted when admitted in [:first, :ok] ->
-          with {:ok, user} <-
+          with :ok <- also_ran(verify.()),
+               {:ok, user} <-
                  %User{} |> User.changeset(user_attrs) |> Arca.Repo.insert() |> settled(),
                {:ok, _identity} <- insert_identity(identity_attrs, user.id),
                :ok <- first_grant(admitted, user.id),
@@ -520,7 +528,7 @@ defmodule Arca.Users do
 
   defp also_ran(other) do
     raise ArgumentError,
-          "an also: closure answers :ok or {:error, reason}, got " <>
+          "a verify: or also: closure answers :ok or {:error, reason}, got " <>
             Prima.LoggerContext.shape(other)
   end
 
