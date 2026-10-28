@@ -257,8 +257,9 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
   # A test killed mid-body runs no `after`, so the helper's restore has to come
   # from its on_exit. A killed test takes a VM of its own: the probe runs one in
-  # a child VM and reports how many tests ran, how many failed, and whether the
-  # environment changed.
+  # a child VM, which writes a marker once the variable is mutated and before the
+  # kill. The regression holds only when the marker is there, the test that wrote
+  # it ended by kill, and the environment came back as it was.
   @tag timeout: 120_000
   test "a test killed mid-body leaves the environment as its helper found it" do
     probe = ~S"""
@@ -274,6 +275,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
       @tag :death
       test "killed mid-body" do
         Cyfr.RuntimeEnvReadingTest.with_env(%{"CYFR_CLUSTER" => "on"}, fn ->
+          IO.puts("mutated CYFR_CLUSTER=#{System.get_env("CYFR_CLUSTER")} in #{inspect(self())}")
           Process.exit(self(), :kill)
         end)
       end
@@ -289,6 +291,13 @@ defmodule Cyfr.RuntimeEnvReadingTest do
         env: [{"MIX_ENV", "test"}, {"CYFR_RUNTIME_ENV_READING_TEST", __ENV__.file}],
         stderr_to_stdout: true
       )
+
+    marker = Regex.run(~r/mutated CYFR_CLUSTER=on in (#PID<[^>]+>)/, output)
+    assert marker, "the mutation was never observed:\n#{output}"
+    [_, pid] = marker
+
+    assert output =~ "** (EXIT from #{pid}) killed",
+           "the marked test did not end by kill:\n#{output}"
 
     assert output =~ "ran=1 failures=1 leaked=false", output
   end
