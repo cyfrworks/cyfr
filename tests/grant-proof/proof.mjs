@@ -45,7 +45,7 @@ import {
   ask as askRunSh, launchBrowser, pageTokens, readHomes, recordText, redact, redactFrames, signedIn, startProxy, waitFor,
 } from "../browser/lib.mjs";
 import {
-  changedCopies, digestCopies, flowsHeld, grantedHeld, regrantHeld, revokedHeld, sameHead,
+  changedCopies, digestCopies, flowsHeld, grantedHeld, previewCopies, previewHeld, regrantHeld, revokedHeld, sameHead,
 } from "./heads.mjs";
 
 const [homesFile, segment, cookie, outDir] = process.argv.slice(2);
@@ -83,11 +83,18 @@ function row(step, held, what, detail) {
   return !!held;
 }
 
-// What the record keeps of a preview's answer: its commit digest, or, for an
-// error, the error and the answer's key names, never its values. The answer
+// What a row's detail shows of a preview's answer: its commit digest, or, for
+// an error, the error and the answer's key names, never its values. The answer
 // carries a single-use proof.
 const previewShown = (answer) =>
   answer.commit_digest || { error: answer.error ?? null, keys: Object.keys(answer).sort() };
+// What the record keeps of a preview's answer: the whole document with its
+// single-use proof replaced by its length, or what previewShown keeps of an
+// error.
+const previewRecord = (answer) =>
+  answer.commit_digest
+    ? { ...answer, proof: typeof answer.proof === "string" ? `[${answer.proof.length} characters]` : answer.proof }
+    : previewShown(answer);
 
 const ask = (request, options) => askRunSh(request, { outDir, ...options });
 
@@ -223,20 +230,27 @@ async function main() {
     const exitShown = (shown, host, cls) =>
       shown.rows.some((r) => r.kind === "exits" && r.text.includes(host) && r.text.includes(cls));
     const exitsShown = exitShown(first, KEPT, "files_by_grant") && exitShown(first, DROPPED, "filed");
+    // Exactly what the sheet decided, the host left ticked and the picked
+    // folder, previewed from the command line: its digest is the one the head
+    // must hold, and cli_digest holds its whole answer.
+    const subset = { egress: { domains: [KEPT] }, storage: { paths: [PICKED] } };
+    const decisions = { ref: REF, subset: { [REF]: subset }, origins: ["interactive"] };
+    const cli = await ask({ op: "cli_preview", decisions });
     // The head the grant committed, held whole (`grantedHeld` in heads.mjs),
-    // and the copies a change of permission would leave, each refused.
+    // and the copies a change of permission or of digest would leave, each
+    // refused.
     const firstGrant = {
-      shape: granted.shape_digest, origins: ["interactive"], domains: [KEPT], paths: [PICKED],
-      flows: [`files_by_grant to ${KEPT}`],
+      shape: granted.shape_digest, digest: cli.commit_digest, origins: ["interactive"], domains: [KEPT],
+      paths: [PICKED], flows: [`files_by_grant to ${KEPT}`],
     };
-    const grantCopies = changedCopies(head, DROPPED);
+    const grantCopies = [...changedCopies(head, DROPPED), ...digestCopies(head)];
     if (!row("prism_grant",
       promptSpoken && first.origins.length === 1 && first.origins[0] === "interactive" &&
         hostUnticked && hostSent && egress && /narrowed by you/.test(egress.text) &&
         storage && storage.text.includes(PICKED) && /narrowed by you/.test(storage.text) && exitsShown &&
         sameHead(granted, { shape_digest: granted.shape_digest, background: false }) &&
         grantedHeld(head, firstGrant) && grantCopies.every((copy) => !grantedHeld(copy, firstGrant)),
-      "the prompt a focused dialog described by its own sentence, every exit shown with its flows; granted in Prism, a host unticked and the folder narrowed through the picker, interactive alone, the dropped host's flow gone with it; the head is held whole under the version's shape, and a copy with another revision, or a host or flow added or removed, is refused",
+      "the prompt a focused dialog described by its own sentence, every exit shown with its flows; granted in Prism, a host unticked and the folder narrowed through the picker, interactive alone, the dropped host's flow gone with it; the head is held whole under the version's shape and the digest the command line previews for the same decisions, and a copy with another revision, a host or flow added or removed, or another digest is refused",
       { spoken, origins: first.origins, admits: narrowed.admits, head, shape: granted.shape_digest,
         held: grantedHeld(head, firstGrant), copies_refused: grantCopies.map((copy) => !grantedHeld(copy, firstGrant)),
         exits_shown: exitsShown, host_checkbox: record.prism_grant.host_checkbox })) return;
@@ -244,16 +258,17 @@ async function main() {
     // -----------------------------------------------------------------------
     // cli_digest
     // -----------------------------------------------------------------------
-    // Exactly what the sheet decided: the host left ticked and the picked
-    // folder.
-    const subset = { egress: { domains: [KEPT] }, storage: { paths: [PICKED] } };
-    const decisions = { ref: REF, subset: { [REF]: subset }, origins: ["interactive"] };
-    const cli = await ask({ op: "cli_preview", decisions });
-    const cliShown = previewShown(cli);
-    record.cli_digest = { decisions, cli: cliShown, head_digest: head.commit_digest };
-    row("cli_digest", cli.commit_digest && cli.commit_digest === head.commit_digest,
-      "the command line's preview of the same decisions answers the head's commit digest",
-      { cli: cliShown, head: head.commit_digest });
+    // The preview's whole answer (`previewHeld` in heads.mjs), judged by one
+    // function for the answer and each copy alike.
+    const cliPreview = {
+      digest: head.commit_digest, revision: head.revision, origins: ["interactive"], domains: [KEPT], paths: [PICKED],
+    };
+    const cliHeld = (answer) => previewHeld(answer, cliPreview);
+    const cliCopies = previewCopies(cli, DROPPED);
+    record.cli_digest = { decisions, cli: previewRecord(cli), head_digest: head.commit_digest };
+    row("cli_digest", cliHeld(cli) && cliCopies.every((copy) => !cliHeld(copy)),
+      "the command line's preview of the same decisions is held whole: document version 1, the head's commit digest and revision, interactive alone, nothing removed, a single-use proof of the home's form, and the host and folder rows narrowed as the sheet narrowed them; a copy with any of these changed, or a field added or missing, is refused",
+      { cli: previewShown(cli), held: cliHeld(cli), copies_refused: cliCopies.map((copy) => !cliHeld(copy)) });
 
     // -----------------------------------------------------------------------
     // background
@@ -280,9 +295,16 @@ async function main() {
     const backgroundUnnarrowed = await ask({ op: "cli_preview", decisions });
     const backgroundGrant = { before: head, shape: plan.shape_digest, digest: backgroundShown.commit_digest };
     const backgroundCopies = [...changedCopies(regranted, DROPPED), ...digestCopies(regranted, head.commit_digest)];
+    // The preview's whole answer, asked once the re-grant is the head.
+    const backgroundPreview = {
+      digest: regranted.commit_digest, revision: regranted.revision, origins: ["interactive"], domains: [KEPT],
+      paths: [PICKED],
+    };
+    const backgroundPreviewHeld = (answer) => previewHeld(answer, backgroundPreview);
+    const backgroundPreviewCopies = previewCopies(backgroundShown, DROPPED);
     record.background = {
       plan, asking, again, regranted, admitted, regrantDecisions,
-      digest: previewShown(backgroundShown), unnarrowed: previewShown(backgroundUnnarrowed),
+      preview: previewRecord(backgroundShown), unnarrowed: previewShown(backgroundUnnarrowed),
     };
     if (!row("background",
       sameHead(plan, { shape_digest: plan.shape_digest, background: true }) && plan.shape_digest !== head.shape_digest &&
@@ -290,12 +312,16 @@ async function main() {
         frame && /background/.test(frame.text) &&
         regrantHeld(regranted, backgroundGrant) &&
         backgroundCopies.every((copy) => !regrantHeld(copy, backgroundGrant)) &&
+        backgroundPreviewHeld(backgroundShown) &&
+        backgroundPreviewCopies.every((copy) => !backgroundPreviewHeld(copy)) &&
         sameHead(admitted, { admitted: true, consent_id: regranted.consent_id }),
-      "a version asking to run in the background is shown and asked again; granted, the head is the first head one revision on, under a new consent, the version's shape and the digest the command line previews for what the re-grant commits, every other field held, and it runs; a copy with another revision, a host or flow added or removed, or another digest is refused",
+      "a version asking to run in the background is shown and asked again; granted, the head is the first head one revision on, under a new consent, the version's shape and the digest the command line previews for what the re-grant commits, every other field held, and it runs; a copy with another revision, a host or flow added or removed, or another digest is refused, and the preview is held whole as cli_digest's is",
       { asking, frame: frame && frame.text, origins_kept: again.origins, head: regranted,
         digest: previewShown(backgroundShown), unnarrowed: previewShown(backgroundUnnarrowed),
         held: regrantHeld(regranted, backgroundGrant),
-        copies_refused: backgroundCopies.map((copy) => !regrantHeld(copy, backgroundGrant)), admitted })) return;
+        copies_refused: backgroundCopies.map((copy) => !regrantHeld(copy, backgroundGrant)),
+        preview_held: backgroundPreviewHeld(backgroundShown),
+        preview_copies_refused: backgroundPreviewCopies.map((copy) => !backgroundPreviewHeld(copy)), admitted })) return;
 
     // -----------------------------------------------------------------------
     // reworded
@@ -347,9 +373,16 @@ async function main() {
     const flowHead = await ask({ op: "head" });
     const flowAdmitted = await ask({ op: "admit" });
     const flowsGrant = { regranted, shape: flowed.shape_digest, kept: KEPT, digest: flowsShown.commit_digest };
+    // The preview's whole answer, asked while the background grant was the head.
+    const flowsPreview = {
+      digest: flowHead.commit_digest, revision: regranted.revision, origins: ["interactive"], domains: [KEPT],
+      paths: [PICKED],
+    };
+    const flowsPreviewHeld = (answer) => previewHeld(answer, flowsPreview);
+    const flowsPreviewCopies = previewCopies(flowsShown, DROPPED);
     record.flows = {
       flowed, flowAsking, flowSheet, flowHead, flowAdmitted,
-      flowsShown: previewShown(flowsShown), flowsUnnarrowed: previewShown(flowsUnnarrowed),
+      flowsShown: previewRecord(flowsShown), flowsUnnarrowed: previewShown(flowsUnnarrowed),
     };
     // The head after the flows grant moves in revision, consent, digest and
     // shape, its flows are exactly the two granted, and its digest is the one
@@ -363,11 +396,14 @@ async function main() {
         exitShown(flowSheet, KEPT, "outside") && exitShown(flowSheet, KEPT, "files_by_grant") &&
         openedOff && ticked && flowsHeld(flowHead, flowsGrant) &&
         flowsCopies.every((copy) => !flowsHeld(copy, flowsGrant)) &&
+        flowsPreviewHeld(flowsShown) && flowsPreviewCopies.every((copy) => !flowsPreviewHeld(copy)) &&
         sameHead(flowAdmitted, { admitted: true, consent_id: flowHead.consent_id }),
-      "a version letting one more class reach a host is asked again with that exit shown, the new flow unticked; ticked and granted, the head holds exactly its granted flows and every other field, under the digest the command line previews for the same decisions; copies with another revision, a host or flow added or removed, or another digest are refused",
+      "a version letting one more class reach a host is asked again with that exit shown, the new flow unticked; ticked and granted, the head holds exactly its granted flows and every other field, under the digest the command line previews for the same decisions; copies with another revision, a host or flow added or removed, or another digest are refused, and the preview is held whole as cli_digest's is",
       { asking: flowAsking, opened_off: openedOff, ticked, head: flowHead, digest: previewShown(flowsShown),
         unnarrowed: previewShown(flowsUnnarrowed),
-        held: flowsHeld(flowHead, flowsGrant), copies_refused: flowsCopies.map((copy) => !flowsHeld(copy, flowsGrant)) })) return;
+        held: flowsHeld(flowHead, flowsGrant), copies_refused: flowsCopies.map((copy) => !flowsHeld(copy, flowsGrant)),
+        preview_held: flowsPreviewHeld(flowsShown),
+        preview_copies_refused: flowsPreviewCopies.map((copy) => !flowsPreviewHeld(copy)) })) return;
 
     // -----------------------------------------------------------------------
     // revocation

@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  changedCopies, digestCopies, flowsHeld, grantedHeld, regrantHeld, revokedHeld, sameHead,
+  changedCopies, digestCopies, flowsHeld, grantedHeld, previewCopies, previewHeld, regrantHeld, revokedHeld, sameHead,
 } from "./heads.mjs";
 
 const KEPT = "alpha.grant.test";
@@ -99,7 +99,7 @@ const first = {
   shape_digest: basePlan, commit_digest: digest("6"),
 };
 const firstGrant = {
-  shape: basePlan, origins: ["interactive"], domains: [KEPT], paths: ["data/probe/notes/"],
+  shape: basePlan, digest: first.commit_digest, origins: ["interactive"], domains: [KEPT], paths: ["data/probe/notes/"],
   flows: [`files_by_grant to ${KEPT}`],
 };
 
@@ -111,6 +111,7 @@ test("a first head with a field changed, missing or added is refused", () => {
   const { paths: _paths, ...withoutPaths } = first;
   const copies = [
     ...changedCopies(first, DROPPED),
+    ...digestCopies(first),
     { ...first, shape_digest: digest("7") },
     { ...first, admitted_origins: ["interactive", "programmatic"] },
     { ...first, paths: ["data/probe/"] },
@@ -126,9 +127,68 @@ test("a first head with a field changed, missing or added is refused", () => {
   for (const copy of copies) assert.equal(grantedHeld(copy, firstGrant), false, JSON.stringify(copy));
 });
 
-test("a first grant asked under a malformed shape refuses every head", () => {
-  for (const shape of [undefined, null, "", "sha256:wrong"]) {
-    assert.equal(grantedHeld({ ...first, shape_digest: shape }, { ...firstGrant, shape }), false, `shape ${shape}`);
+test("a first grant asked under a malformed shape, or with no digest to bind it, refuses every head", () => {
+  for (const bad of [undefined, null, "", "sha256:wrong"]) {
+    assert.equal(grantedHeld({ ...first, shape_digest: bad }, { ...firstGrant, shape: bad }), false, `shape ${bad}`);
+    assert.equal(grantedHeld({ ...first, commit_digest: bad }, { ...firstGrant, digest: bad }), false, `digest ${bad}`);
+  }
+});
+
+// The command line's preview after the first grant, as
+// `Sanctum.Consent.Commit.preview/2` answers it.
+const PROOF_TOKEN = "Tq3xY0b_5Zr-8Kp2mW9vLc4HdJ7sFa1NoE6uRgViBkQ";
+const preview = {
+  v: 1, commit_digest: first.commit_digest, expected_consent_revision: 1, origins: ["interactive"], removed: [],
+  proof: PROOF_TOKEN,
+  rows: [
+    { kind: "egress", node: "tincture:local.grant-probe", narrowed: true,
+      values: { domains: [KEPT], methods: ["GET"], schemes: ["https"], private_ips: [] } },
+    { kind: "storage", node: "tincture:local.grant-probe", narrowed: true,
+      values: { paths: ["data/probe/notes/"], actions: ["read"] } },
+    { kind: "exits", node: "tincture:local.grant-probe", narrowed: false,
+      values: { exit: KEPT, flows: ["files_by_grant"] } },
+  ],
+};
+const previewWant = { digest: first.commit_digest, revision: 1, origins: ["interactive"], domains: [KEPT], paths: ["data/probe/notes/"] };
+
+test("the command line's preview is held whole: version 1, the digest and revision, the origins, nothing removed, a proof of the home's form, the narrowed rows", () => {
+  assert.equal(PROOF_TOKEN.length, 43);
+  assert.equal(previewHeld(preview, previewWant), true);
+});
+
+test("a preview with version 2, expected revision 99 and an empty proof is refused, and so is each change alone", () => {
+  assert.equal(previewHeld({ ...preview, v: 2, expected_consent_revision: 99, proof: "" }, previewWant), false);
+  for (const change of [{ v: 2 }, { expected_consent_revision: 99 }, { proof: "" }]) {
+    assert.equal(previewHeld({ ...preview, ...change }, previewWant), false, JSON.stringify(change));
+  }
+});
+
+test("each copy of a preview changes it and is refused", () => {
+  const copies = previewCopies(preview, DROPPED);
+  assert.equal(copies.length, 17);
+  for (const copy of copies) {
+    assert.equal(sameHead(copy, preview), false, JSON.stringify(copy));
+    assert.equal(previewHeld(copy, previewWant), false, JSON.stringify(copy));
+  }
+});
+
+test("a preview with a malformed proof, an unnarrowed or doubled row, or a row of another shape is refused", () => {
+  const [egress, storage, exits] = preview.rows;
+  const copies = [
+    { ...preview, proof: PROOF_TOKEN.slice(1) },
+    { ...preview, proof: `${PROOF_TOKEN.slice(1)}+` },
+    { ...preview, proof: null },
+    { ...preview, rows: [egress, egress, storage, exits] },
+    { ...preview, rows: [egress, exits] },
+    { ...preview, rows: [egress, { ...storage, narrowed: false }, exits] },
+    { ...preview, rows: [egress, storage, { ...exits, also: true }] },
+    { ...preview, rows: [egress, storage, { ...exits, narrowed: "no" }] },
+    { ...preview, rows: [egress, storage, null] },
+    { ...preview, rows: "rows" },
+  ];
+  for (const copy of copies) assert.equal(previewHeld(copy, previewWant), false, JSON.stringify(copy));
+  for (const want of [{ ...previewWant, revision: 2 }, { ...previewWant, digest: digest("7") }, { ...previewWant, revision: undefined }]) {
+    assert.equal(previewHeld(preview, want), false, JSON.stringify(want));
   }
 });
 

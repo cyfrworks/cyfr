@@ -11,6 +11,11 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const PROFILE = /^prof_[0-9a-f-]{36}$/;
 const CONSENT = /^cons_[0-9a-f-]{36}$/;
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+// A commit proof: 32 random bytes the home mints for one commit, URL-safe
+// base64 without padding (`Sanctum.Consent.Proof.mint_token/0`).
+const PROOF = /^[A-Za-z0-9_-]{43}$/;
+const PREVIEW_KEYS = ["commit_digest", "expected_consent_revision", "origins", "proof", "removed", "rows", "v"];
+const ROW_KEYS = ["kind", "narrowed", "node", "values"];
 
 // Arrays as sets, so an extra or a missing flow, domain or path differs.
 export const sameSet = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
@@ -40,23 +45,85 @@ export const changedCopies = (head, dropped) => {
 };
 
 // Copies of a head committed under no digest, an empty or malformed one, a
-// well-formed digest no preview answered, and `previous`, the digest the head
-// before it held.
+// well-formed digest no preview answered, and `previous`, when given, the
+// digest the head before it held.
 export const digestCopies = (head, previous) =>
-  [null, "", "sha256:wrong", `sha256:${"0".repeat(64)}`, previous].map((commit_digest) => ({ ...head, commit_digest }));
+  [null, "", "sha256:wrong", `sha256:${"0".repeat(64)}`, ...(previous === undefined ? [] : [previous])]
+    .map((commit_digest) => ({ ...head, commit_digest }));
 
 // The head the first grant commits: revision 1 and exactly the decisions the
 // person made (origins, hosts, folders and flows, as sets), under the shape the
-// version's plan asks, held by an owner profile and a consent of their own.
-// Its commit digest is well formed here; the cli_digest row binds it to the
-// command line's preview of the same decisions.
-export const grantedHeld = (head, { shape, origins, domains, paths, flows }) =>
-  PROFILE.test(head.profile_id) && CONSENT.test(head.consent_id) && DIGEST.test(head.commit_digest) &&
-  DIGEST.test(shape) &&
+// version's plan asks and `digest`, the command line's preview of the same
+// decisions, held by an owner profile and a consent of their own.
+export const grantedHeld = (head, { shape, digest, origins, domains, paths, flows }) =>
+  PROFILE.test(head.profile_id) && CONSENT.test(head.consent_id) && DIGEST.test(digest) && DIGEST.test(shape) &&
   sameHead(head, {
-    profile_id: head.profile_id, consent_id: head.consent_id, commit_digest: head.commit_digest,
+    profile_id: head.profile_id, consent_id: head.consent_id, commit_digest: digest,
     revision: 1, shape_digest: shape, admitted_origins: origins, domains, paths, flows,
   });
+
+// The one row of `kind` among a preview's rows, or none.
+const onlyRow = (rows, kind) => {
+  const of = rows.filter((row) => isObject(row) && row.kind === kind);
+  return of.length === 1 ? of[0] : null;
+};
+
+// The command line's preview of a grant's decisions, whole
+// (`Sanctum.Consent.Commit.preview/2`): document version 1, `digest`, the
+// head's `revision` as the one a commit must find, exactly the origins
+// granted, no binding removed from the head, and a single-use proof of the
+// form the home mints, which nothing here can derive. Its rows are the
+// version's ask under the decisions, which the digest binds: each has the
+// documented keys, and the one host row and the one folder row are narrowed to
+// exactly `domains` and `paths`.
+export const previewHeld = (answer, { digest, revision, origins, domains, paths }) => {
+  if (!isObject(answer) || !sameSet(Object.keys(answer), PREVIEW_KEYS) || !Array.isArray(answer.rows)) return false;
+  const egress = onlyRow(answer.rows, "egress");
+  const storage = onlyRow(answer.rows, "storage");
+  return answer.v === 1 && DIGEST.test(digest) && answer.commit_digest === digest &&
+    Number.isInteger(revision) && answer.expected_consent_revision === revision &&
+    Array.isArray(answer.origins) && sameSet(answer.origins, origins) &&
+    Array.isArray(answer.removed) && answer.removed.length === 0 &&
+    typeof answer.proof === "string" && PROOF.test(answer.proof) &&
+    answer.rows.length > 0 &&
+    answer.rows.every((row) => isObject(row) && sameSet(Object.keys(row), ROW_KEYS) && typeof row.kind === "string" &&
+      typeof row.node === "string" && isObject(row.values) && typeof row.narrowed === "boolean") &&
+    egress !== null && egress.narrowed === true && Array.isArray(egress.values.domains) &&
+    sameSet(egress.values.domains, domains) &&
+    storage !== null && storage.narrowed === true && Array.isArray(storage.values.paths) &&
+    sameSet(storage.values.paths, paths);
+};
+
+// Copies of a preview's answer, each of which its row must refuse: another
+// document version, another expected revision, an empty or malformed proof,
+// those three at once, another origin, a binding removed, a field added or
+// missing, the host or folder row widened, the host row not narrowed, no rows,
+// and its digest copies. A copy equal to the answer changes nothing, so none
+// is made.
+export const previewCopies = (answer, dropped) => {
+  if (!isObject(answer)) return [];
+  const { proof: _proof, ...withoutProof } = answer;
+  const rows = Array.isArray(answer.rows) ? answer.rows : [];
+  const rowsWith = (kind, change) => rows.map((row) => (isObject(row) && row.kind === kind ? change(row) : row));
+  const widened = (field, extra) => (row) =>
+    ({ ...row, values: { ...row.values, [field]: [...(row.values?.[field] ?? []), extra] } });
+  return [
+    { ...answer, v: 2 },
+    { ...answer, expected_consent_revision: 99 },
+    { ...answer, proof: "" },
+    { ...answer, proof: `${answer.proof}=` },
+    { ...answer, v: 2, expected_consent_revision: 99, proof: "" },
+    { ...answer, origins: [...(answer.origins ?? []), "programmatic"] },
+    { ...answer, removed: [{ need: "feed" }] },
+    { ...answer, also: true },
+    withoutProof,
+    { ...answer, rows: rowsWith("egress", widened("domains", dropped)) },
+    { ...answer, rows: rowsWith("storage", widened("paths", "data/probe/")) },
+    { ...answer, rows: rowsWith("egress", (row) => ({ ...row, narrowed: false })) },
+    { ...answer, rows: [] },
+    ...digestCopies(answer),
+  ].filter((copy) => !sameHead(copy, answer));
+};
 
 // The head a re-grant commits: `before`, the head it replaces, one revision
 // on, under a consent of its own, the shape the new version's plan asks and
