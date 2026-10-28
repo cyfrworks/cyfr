@@ -169,5 +169,31 @@ class GuardCounters(unittest.TestCase):
                          {"-A INPUT -j DROP": 1, "-A OUTPUT -j ACCEPT": 3})
 
 
+class ExecAnswering:
+    """An observer whose exec exits `status` with `stdout`, and records the user each command was run as."""
+
+    def __init__(self, status, stdout):
+        self.status = status
+        self.stdout = stdout
+        self.users = []
+
+    def exec(self, script, user=None):
+        self.users.append(user)
+        return subprocess.CompletedProcess([], self.status, self.stdout, "" if self.status == 0 else "daemon error")
+
+
+class BackendEnviron(unittest.TestCase):
+    """A backend's environment is read from a command that exits 0, run as the backend's own uid: a failed read is no answer."""
+
+    def test_a_failed_read_is_no_answer(self):
+        with self.assertRaises(SystemExit):
+            harness.backend_environ(ExecAnswering(1, ""), 4242, 30001)
+
+    def test_the_environment_that_was_read_is_the_control_run_as_the_backend(self):
+        observer = ExecAnswering(0, "PROBE_SECRET=x\nLOG_LEVEL=info\n")
+        self.assertEqual(harness.backend_environ(observer, 4242, 30001), "PROBE_SECRET=x\nLOG_LEVEL=info\n")
+        self.assertEqual(observer.users, ["30001"])
+
+
 if __name__ == "__main__":
     unittest.main()

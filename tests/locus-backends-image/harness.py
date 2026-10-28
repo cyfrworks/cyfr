@@ -566,6 +566,11 @@ def guard_counters(saved):
     return counters
 
 
+def backend_environ(stack, pid, uid):
+    """The environment of process `pid` as `NAME=value` lines, read as the backend's own uid, which runs the process."""
+    return read_output(stack.exec(f"tr '\\0' '\\n' < /proc/{pid}/environ", user=str(uid)), f"the environment of pid {pid}")
+
+
 # A probe of one connection per target, run by node under a backend's uid:
 # for each `host:port` after the argument `targets` (an IPv6 host in
 # brackets, a zone allowed), the code the kernel answers the connect with,

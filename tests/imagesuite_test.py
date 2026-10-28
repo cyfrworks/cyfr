@@ -423,8 +423,6 @@ DIRECT_READ_ROSTER = {
     ("builder-image/headroom.py", "setting"): (1, "pending"),
     ("builder-image/isolation.py", "test_process_model"): (1, "pending"),
     ("builder-image/memory.py", "test_keeper"): (1, "pending"),
-    ("locus-backends-image/e2e.py", "scripted_controller"): (1, "pending"),
-    ("locus-backends-image/e2e.py", "cyfr_controller"): (1, "pending"),
     ("locus-backends-image/isolation.py", "main"): (1, "pending"),
 }
 

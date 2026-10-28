@@ -62,7 +62,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness import (  # noqa: E402
     HERE, MCP_VERSION, POOL_FIRST, POOL_LAST, ROOT, ROUTES, STATUSES, Controller, Stack, eventually, expect,
-    owner_of, post, probe, require_docker, run, wire_json,
+    backend_environ, owner_of, post, probe, require_docker, run, wire_json,
 )
 import imagesuite  # noqa: E402
 
@@ -114,7 +114,7 @@ def scripted_controller(image):
         expect(server["name"] == "cyfr-locus", "every result names the service", server)
 
         who = c.tool(OWNER, "probe__whoami")
-        environ = stack.exec(f"tr '\\0' '\\n' < /proc/{who['pid']}/environ", user=str(who["uid"])).stdout
+        environ = backend_environ(stack, who["pid"], who["uid"])
         expect(f"PROBE_SECRET={SECRET}" in environ, "the sealed credential reaches the backend's environment")
 
         # Every way out of the service masks it.
@@ -355,8 +355,7 @@ def cyfr_controller(image):
 
         # The backend runs on the service under the owner cyfr synced.
         processes = eventually(lambda: stack.pool_processes(), "cyfr's owner to run its backend", timeout_s=60)
-        environ = stack.exec(f"tr '\\0' '\\n' < /proc/{processes[0]['pid']}/environ",
-                             user=str(processes[0]["uids"][0])).stdout
+        environ = backend_environ(stack, processes[0]["pid"], processes[0]["uids"][0])
         expect(f"PROBE_SECRET={canary}" in environ,
                "the canary reaches the backend's environment from the vault, through cyfr's seal")
 
