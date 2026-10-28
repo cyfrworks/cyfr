@@ -54,13 +54,15 @@ plugin, `openssl`, and a host that allows unprivileged user namespaces
    compose deployment's file.
 2. `scripts/dev-stack.sh` builds `cyfr-locus:dev` from the tree and starts it
    as the worker service `wrk_local` on `127.0.0.1:4200`, where CYFR
-   dispatches by default. Its first run adds a `CYFR_LOCUS_RUNTIME_ROOT` to
-   `.env`, and later runs keep it. The runtime's key is derived from that
-   root (`mix cyfr.locus.runtime_key wrk_local`) and reaches the container
-   through the environment alone. The script refuses a
+   dispatches by default. It reads `.env` and the environment through
+   `mix cyfr.locus.dev_stack`, as the mix boot reads them. When neither sets
+   `CYFR_LOCUS_RUNTIME_ROOT`, it makes `.env` mode 0600 and adds one; later
+   runs keep it. The runtime's key is derived from that root and reaches
+   the container through the environment alone. The script refuses a
    `CYFR_LOCUS_RUNTIME_WORKERS`, `CYFR_HOST_API_BIND` or `CYFR_HOST_API_URL`
-   that would send runs or the runtime's calls elsewhere. Run it again after
-   changing anything the Locus image holds.
+   that would send runs or the runtime's calls elsewhere, and a root the
+   environment sets empty. Run it again after changing anything the Locus
+   image holds.
 3. Start CYFR as the script prints:
    `CYFR_HOST_API_BIND=172.16.231.1 mix phx.server`. That address is the
    runtime network's gateway, the one address the container reaches the host
@@ -70,7 +72,9 @@ plugin, `openssl`, and a host that allows unprivileged user namespaces
    page. `CYFR_TOKEN=<key> scripts/dev-stack.sh check` runs
    `catalyst:local.files` through the server and the container: it writes a
    nonce, reads it back and deletes it, and fails naming the refusal or the
-   failed run. A session token from the dev CLI's `cyfr login` works too.
+   failed run, deleting the nonce's file first. The token travels in a
+   header file of its own, never on a command line. A session token from
+   the dev CLI's `cyfr login` works too.
 5. `scripts/dev-stack.sh down` removes the container and its network.
 
 AQUA answers in the chat once a model provider's key is in the vault, as on

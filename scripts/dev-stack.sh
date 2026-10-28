@@ -13,10 +13,12 @@
 #                               as a signed-in person and assert its answer
 #   scripts/dev-stack.sh down   stop and remove the runtime container
 #
-# `up` gives .env a CYFR_LOCUS_RUNTIME_ROOT when neither it nor the
-# environment holds one, and keeps one that is there. The runtime's key is
-# derived from it by `mix cyfr.locus.runtime_key` and handed to compose in
-# the environment alone; nothing here prints it.
+# Every setting comes from `mix cyfr.locus.dev_stack`, which reads .env and
+# the environment as a mix boot does; this script reads no .env itself.
+# Its one edit of .env is the runtime root `up` writes when none is set,
+# after making the file mode 0600. The runtime's key reaches compose in the
+# environment alone, and the check's bearer token in a header file of its
+# own; nothing here prints either.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -24,8 +26,11 @@ cd "$ROOT"
 
 # What docker-compose.dev.yml declares, which the mix boot must agree with.
 SERVICE_ID=wrk_local
-WORKERS=$SERVICE_ID=http://127.0.0.1:4200
+WORKER_URL=http://127.0.0.1:4200
 HOST_API_BIND=172.16.231.1
+
+PRIVATE=""
+trap '[ -z "$PRIVATE" ] || rm -rf "$PRIVATE"' EXIT
 
 die() {
   echo "dev-stack: $*" >&2
@@ -36,61 +41,52 @@ compose() {
   docker compose -f docker-compose.yml -f docker-compose.dev.yml "$@"
 }
 
-# NAME's value as a mix boot reads it: the environment's when set, else the
-# last assignment in .env, its quotes removed; empty when neither sets it.
-setting() {
-  local name="$1" value
-  value="${!name:-}"
-  if [ -z "$value" ] && [ -f .env ]; then
-    value="$(sed -nE "s/^[[:space:]]*(export[[:space:]]+)?$name=(.*)$/\2/p" .env | tail -n 1)"
-    value="$(printf '%s' "$value" | sed -E "s/^[[:space:]]*//; s/[[:space:]]*$//; s/^\"(.*)\"$/\1/; s/^'(.*)'$/\1/")"
-  fi
-  printf '%s' "$value"
+# The refusal in the task's output: its `** (Mix)` sentence, else its last
+# lines.
+refusal() {
+  local said
+  said="$(printf '%s\n' "$1" | sed -n 's/^\*\* (Mix) //p')"
+  printf '%s' "${said:-$(printf '%s\n' "$1" | grep -v '^LOCUS_RUNTIME_KEY=' | tail -n 3)}"
 }
 
-# A setting the mix boot reads that would send its runs, or the runtime's
-# host calls, somewhere this stack is not.
-agree() {
-  local name="$1" want="$2" have
-  have="$(setting "$name")"
-  if [ -n "$have" ] && [ "$have" != "$want" ]; then
-    die "$name is $have, and this stack needs $want. Unset it in .env and the environment, or set it to $want."
-  fi
+# The value of NAME=value in the task's output.
+line() { printf '%s\n' "$2" | sed -n "s/^$1=//p"; }
+
+# The runtime root `up` writes when none is set: the file made mode 0600
+# first, since it then holds a secret.
+provision() {
+  (umask 077 && touch .env) || die ".env could not be created here; check the checkout's permissions."
+  chmod 600 .env || die ".env could not be made mode 0600; make it yours (chown) and run again."
+  case "$(ls -ln .env)" in
+    -rw-------*) ;;
+    *) die ".env is not mode 0600 after chmod; put the checkout on a filesystem that keeps modes, or set CYFR_LOCUS_RUNTIME_ROOT yourself." ;;
+  esac
+  [ -z "$(tail -c 1 .env)" ] || echo >>.env
+  echo "CYFR_LOCUS_RUNTIME_ROOT=$(openssl rand -hex 32)" >>.env
+  echo "dev-stack: .env is mode 0600 and holds a new CYFR_LOCUS_RUNTIME_ROOT."
 }
 
 up() {
   command -v docker >/dev/null || die "docker is not on PATH."
   command -v openssl >/dev/null || die "openssl is not on PATH."
 
-  local port root out key
-  port="$(setting CYFR_HOST_API_PORT)"
-  port="${port:-4300}"
-  agree CYFR_LOCUS_RUNTIME_WORKERS "$WORKERS"
-  agree CYFR_HOST_API_BIND "$HOST_API_BIND"
-  agree CYFR_HOST_API_URL "http://$HOST_API_BIND:$port"
-
-  root="$(setting CYFR_LOCUS_RUNTIME_ROOT)"
-  if [ -z "$root" ]; then
-    root="$(openssl rand -hex 32)"
-    (umask 077 && touch .env)
-    [ -z "$(tail -c 1 .env)" ] || echo >>.env
-    echo "CYFR_LOCUS_RUNTIME_ROOT=$root" >>.env
-    echo "dev-stack: .env holds a new CYFR_LOCUS_RUNTIME_ROOT."
+  local out status key port
+  out="$(mix cyfr.locus.dev_stack key "$SERVICE_ID" "$WORKER_URL" "$HOST_API_BIND" 2>&1)" && status=0 || status=$?
+  if [ "$status" = 3 ]; then
+    provision
+    out="$(mix cyfr.locus.dev_stack key "$SERVICE_ID" "$WORKER_URL" "$HOST_API_BIND" 2>&1)" && status=0 || status=$?
   fi
+  [ "$status" = 0 ] || die "$(refusal "$out")"
+  key="$(line LOCUS_RUNTIME_KEY "$out")"
+  port="$(line CYFR_HOST_API_PORT "$out")"
+  [ -n "$key" ] && [ -n "$port" ] || die "mix cyfr.locus.dev_stack printed no key or no port."
 
-  # The one derivation of a worker service's key from the root.
-  if ! out="$(CYFR_LOCUS_RUNTIME_ROOT="$root" mix cyfr.locus.runtime_key "$SERVICE_ID" 2>&1)"; then
-    die "the runtime's key could not be derived: $(printf '%s\n' "$out" | grep -v '^LOCUS_RUNTIME_KEY=' | tail -n 3)"
-  fi
-  key="$(printf '%s\n' "$out" | sed -n 's/^LOCUS_RUNTIME_KEY=//p')"
-  [ -n "$key" ] || die "mix cyfr.locus.runtime_key printed no key."
-
-  LOCUS_RUNTIME_KEY="$key" compose up --detach --build --wait locus-runtime ||
+  LOCUS_RUNTIME_KEY="$key" CYFR_HOST_API_PORT="$port" compose up --detach --build --wait locus-runtime ||
     die "the runtime did not start; \`docker logs cyfr-dev-locus-runtime\` says why."
 
   cat <<EOF
 
-The runtime runs from this tree: cyfr-locus:dev as $SERVICE_ID on 127.0.0.1:4200.
+The runtime runs from this tree: cyfr-locus:dev as $SERVICE_ID on ${WORKER_URL#http://}.
 Start CYFR from the umbrella root, its host API on the runtime network's gateway:
 
   CYFR_HOST_API_BIND=$HOST_API_BIND mix phx.server
@@ -101,51 +97,77 @@ EOF
 }
 
 # files ACTION ARGUMENTS_JSON: one run of the shipped files catalyst
-# through the server's /mcp as the person CYFR_TOKEN signs in, its result
-# printed as JSON; a refusal or a failed run ends the check naming it.
+# through the server's /mcp as the person CYFR_TOKEN signs in. Prints the
+# run's result as JSON, or else the refusal or the failure and fails.
 files() {
   local body answer
   body="$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execution","arguments":{"action":"run","reference":"catalyst:local.files","input":{"action":"%s",%s}},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"dev-stack","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}' "$1" "$2")"
   answer="$(curl -sS -m 120 -X POST "$MCP" \
-    -H "authorization: Bearer $CYFR_TOKEN" -H 'content-type: application/json' \
+    -H @"$PRIVATE/authorization" -H 'content-type: application/json' \
     -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' \
-    -H 'mcp-method: tools/call' -H 'mcp-name: execution' -d "$body")" ||
-    die "$MCP did not answer: is \`mix phx.server\` running?"
+    -H 'mcp-method: tools/call' -H 'mcp-name: execution' -d "$body" 2>&1)" || {
+    echo "$1: $MCP did not answer ($answer): is \`mix phx.server\` running?"
+    return 1
+  }
   printf '%s' "$answer" | python3 -I -c '
 import json, sys
 action, raw = sys.argv[1], sys.stdin.read()
+def fail(message):
+    print("%s: %s" % (action, message))
+    sys.exit(1)
 try:
     reply = json.loads(raw)
 except ValueError:
-    sys.exit("%s: the server answered %r" % (action, raw[:300]))
+    fail("the server answered %r" % raw[:300])
 if "error" in reply:
-    sys.exit("%s: refused: %s" % (action, reply["error"].get("message")))
+    fail("refused: %s" % reply["error"].get("message"))
 result = reply["result"]
 text = result["content"][0]["text"]
 if result.get("isError"):
-    sys.exit("%s: the run failed: %s" % (action, text))
+    fail("the run failed: %s" % text)
 run = json.loads(text)
 print("%s: execution %s %s" % (action, run.get("execution_id"), run.get("status")), file=sys.stderr)
 if run.get("status") != "completed":
-    sys.exit("%s: the run ended %s: %s" % (action, run.get("status"), text))
+    fail("the run ended %s: %s" % (run.get("status"), text))
 print(json.dumps(run.get("result")))' "$1"
+}
+
+# discard PATH: the check's file deleted once after a failure; saying so
+# when that fails too.
+discard() {
+  local out
+  out="$(files delete "\"path\":\"$1\"")" ||
+    echo "dev-stack: $1 is left in the athanor's storage, since its delete failed too: $out" >&2
 }
 
 check() {
   [ -n "${CYFR_TOKEN:-}" ] ||
     die "CYFR_TOKEN is not set: the check runs a component as a signed-in person. Create an API key on Prism's API Keys page, or sign the dev CLI in with \`cyfr login\`, and pass the key or the session token as CYFR_TOKEN."
-  local port nonce path written read content
-  port="$(setting CYFR_PORT)"
-  MCP="http://127.0.0.1:${port:-4000}/mcp"
+  local out port nonce path read content
+  out="$(mix cyfr.locus.dev_stack endpoint 2>&1)" || die "$(refusal "$out")"
+  port="$(line CYFR_PORT "$out")"
+  [ -n "$port" ] || die "mix cyfr.locus.dev_stack printed no port."
+  MCP="http://127.0.0.1:$port/mcp"
+
+  PRIVATE="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-dev-stack.XXXXXX")"
+  chmod 700 "$PRIVATE"
+  (umask 077 && printf 'authorization: Bearer %s\n' "$CYFR_TOKEN" >"$PRIVATE/authorization")
+
   nonce="dev-stack-$(openssl rand -hex 8)"
   path="data/dev-stack-check-$nonce.txt"
 
-  written="$(files write_text "\"path\":\"$path\",\"content\":\"$nonce\"")" || exit 1
-  read="$(files read_text "\"path\":\"$path\"")" || exit 1
-  files delete "\"path\":\"$path\"" >/dev/null || exit 1
+  out="$(files write_text "\"path\":\"$path\",\"content\":\"$nonce\"")" || die "$out"
+  if ! read="$(files read_text "\"path\":\"$path\"")"; then
+    discard "$path"
+    die "$read"
+  fi
   content="$(printf '%s' "$read" | python3 -I -c 'import json, sys; print(json.load(sys.stdin).get("content"))')"
-  [ "$content" = "$nonce" ] ||
-    die "the runtime read back ${content@Q} from $path, not ${nonce@Q} (write answered $written)"
+  if [ "$content" != "$nonce" ]; then
+    discard "$path"
+    die "the runtime read back ${content@Q} from $path, not ${nonce@Q}."
+  fi
+  out="$(files delete "\"path\":\"$path\"")" ||
+    die "$path is left in the athanor's storage, since its delete failed: $out"
   echo "dev-stack: catalyst:local.files wrote, read back and deleted $nonce through $MCP and the runtime container."
 }
 
