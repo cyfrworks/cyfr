@@ -268,14 +268,14 @@ defmodule Sanctum.InstanceEntriesTest do
     :ok
   end
 
-  # A person's row as a sign-in leaves it, under a fresh id unless one is
-  # given.
+  # A person's row as an admission leaves it, under a fresh id unless one
+  # is given.
   defp user_row(id \\ Prima.UUID7.generate_id(Prima.PersonId.prefix())) do
     now = DateTime.utc_now()
 
     %{
       id: id,
-      provider: "github",
+      admission: "open",
       status: "active",
       security_generation: 1,
       first_seen_at: now,

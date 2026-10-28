@@ -9,58 +9,37 @@ defmodule Cyfr.RuntimeConfigTest do
   # Build a getenv reader over a plain map (blank/absent both read as nil-ish).
   defp env(map), do: fn key -> Map.get(map, key) end
 
-  describe "resolve_auth_provider/1 — set-or-default, fail loud" do
-    test "unset + no credentials => no auth (default)" do
-      assert {:ok, nil} = RuntimeConfig.resolve_auth_provider(env(%{}))
-    end
+  describe "oidc_config/1 — the OpenID Connect issuer, all three settings or none" do
+    @trio %{
+      "CYFR_OIDC_ISSUER" => "https://auth.example.com",
+      "CYFR_OIDC_CLIENT_ID" => "cid",
+      "CYFR_OIDC_CLIENT_SECRET" => "secret"
+    }
 
-    test "unset + github credentials => OAuth (auto-detect)" do
-      assert {:ok, Sanctum.Auth.OAuth} =
-               RuntimeConfig.resolve_auth_provider(env(%{"CYFR_GITHUB_CLIENT_ID" => "x"}))
-    end
+    test "none set, or set blank, is no issuer" do
+      assert {:ok, nil} = RuntimeConfig.oidc_config(env(%{}))
 
-    test "unset + google credentials => OAuth (auto-detect)" do
-      assert {:ok, Sanctum.Auth.OAuth} =
-               RuntimeConfig.resolve_auth_provider(env(%{"CYFR_GOOGLE_CLIENT_ID" => "x"}))
-    end
-
-    test "explicit oidc + full trio => OIDC" do
-      assert {:ok, Sanctum.Auth.OIDC} =
-               RuntimeConfig.resolve_auth_provider(
-                 env(%{
-                   "CYFR_AUTH_PROVIDER" => "oidc",
-                   "CYFR_OIDC_ISSUER" => "https://auth.example.com",
-                   "CYFR_OIDC_CLIENT_ID" => "cid",
-                   "CYFR_OIDC_CLIENT_SECRET" => "secret"
-                 })
-               )
-    end
-
-    test "explicit oidc missing issuer => error naming the missing var" do
-      assert {:error, msg} =
-               RuntimeConfig.resolve_auth_provider(
-                 env(%{
-                   "CYFR_AUTH_PROVIDER" => "oidc",
-                   "CYFR_OIDC_CLIENT_ID" => "cid",
-                   "CYFR_OIDC_CLIENT_SECRET" => "secret"
-                 })
-               )
-
-      assert msg =~ "CYFR_OIDC_ISSUER"
-    end
-
-    test "any value but oidc => error, rather than the no-sign-in default" do
-      for value <- ["saml", "oauth"] do
-        assert {:error, msg} =
-                 RuntimeConfig.resolve_auth_provider(env(%{"CYFR_AUTH_PROVIDER" => value}))
-
-        assert msg =~ ~s(Unknown CYFR_AUTH_PROVIDER="#{value}")
-      end
-    end
-
-    test "blank string is treated as unset" do
       assert {:ok, nil} =
-               RuntimeConfig.resolve_auth_provider(env(%{"CYFR_AUTH_PROVIDER" => "   "}))
+               RuntimeConfig.oidc_config(env(Map.new(@trio, fn {k, _} -> {k, "  "} end)))
+    end
+
+    test "all three set is the issuer" do
+      assert {:ok,
+              %{issuer: "https://auth.example.com", client_id: "cid", client_secret: "secret"}} =
+               RuntimeConfig.oidc_config(env(@trio))
+    end
+
+    test "a partly set issuer is refused, naming what is missing" do
+      for missing <- Map.keys(@trio) do
+        assert {:error, msg} = RuntimeConfig.oidc_config(env(Map.delete(@trio, missing)))
+        assert msg =~ missing
+      end
+
+      assert {:error, msg} =
+               RuntimeConfig.oidc_config(env(%{"CYFR_OIDC_ISSUER" => "https://auth.example.com"}))
+
+      assert msg =~ "CYFR_OIDC_CLIENT_ID"
+      assert msg =~ "CYFR_OIDC_CLIENT_SECRET"
     end
   end
 

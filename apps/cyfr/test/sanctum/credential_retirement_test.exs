@@ -34,7 +34,7 @@ defmodule Sanctum.CredentialRetirementTest do
     n = uniq()
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|#{label}-#{n}",
         provider: "github",
         email: "#{label}#{n}@example.com",
@@ -47,20 +47,7 @@ defmodule Sanctum.CredentialRetirementTest do
   # A person with their own athanor and a seat in it, as sign-in leaves them.
   defp owner!(label) do
     user = person!(label)
-    n = uniq()
-
-    {:ok, own} =
-      Athanors.create(%{
-        kind: "person",
-        name: "Own #{n}",
-        slug: "own-#{label}-#{n}",
-        owner_user_id: user.id,
-        created_by: user.id
-      })
-
-    {:ok, user} = Users.set_personal_athanor(user, own.id)
-    {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: own.id, added_by: "system")
-    {user, own}
+    {user, Sanctum.Test.People.athanor!(user)}
   end
 
   # What an admitted sign-in carries into session creation: the context the
@@ -431,7 +418,6 @@ defmodule Sanctum.CredentialRetirementLockTest do
   import Ecto.Query
 
   alias Sanctum.{Context, Session}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
 
   defp unboxed(fun), do: Ecto.Adapters.SQL.Sandbox.unboxed_run(Arca.Repo, fun)
   defp uniq, do: System.unique_integer([:positive])
@@ -446,24 +432,14 @@ defmodule Sanctum.CredentialRetirementLockTest do
     {user, _own, identity} =
       unboxed(fn ->
         {:ok, user} =
-          Users.upsert_from_provider(%{
+          Sanctum.Test.People.linked(%{
             id: "github|https://github.com|race-#{n}",
             provider: "github",
             email: "race#{n}@example.com",
             verified: true
           })
 
-        {:ok, own} =
-          Athanors.create(%{
-            kind: "person",
-            name: "Race #{n}",
-            slug: "race-#{n}",
-            owner_user_id: user.id,
-            created_by: user.id
-          })
-
-        {:ok, user} = Users.set_personal_athanor(user, own.id)
-        {:ok, _} = Members.ensure(user.id, scope: "athanor", athanor_id: own.id)
+        own = Sanctum.Test.People.athanor!(user)
 
         {:ok, identity} =
           Context.build(
@@ -534,7 +510,9 @@ defmodule Sanctum.CredentialRetirementLockTest do
         )
 
     athanor_ids =
-      Arca.Repo.all(from(a in Arca.Schemas.Athanor, where: a.slug == ^"race-#{n}", select: a.id))
+      Arca.Repo.all(
+        from(a in Arca.Schemas.Athanor, where: a.owner_user_id in ^user_ids, select: a.id)
+      )
 
     Arca.Repo.delete_all(where(Arca.Schemas.Membership, [m], m.user_id in ^user_ids))
     Arca.Repo.delete_all(where(Arca.Schemas.Membership, [m], m.athanor_id in ^athanor_ids))

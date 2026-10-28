@@ -29,61 +29,6 @@ defmodule Sanctum.Tenancy.MembersTest do
     )
   end
 
-  describe "revoke_platform/2" do
-    # A person this server knows: a session is issued only to one.
-    defp person_id do
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: "github|https://github.com|revoke-#{System.unique_integer([:positive])}",
-          provider: "github",
-          verified: true
-        })
-
-      user.id
-    end
-
-    defp session_for(user_id) do
-      {:ok, session} =
-        Sanctum.TestContext.create_session(
-          Sanctum.Context.build(
-            user_id: user_id,
-            athanor_id: Sanctum.TestContext.athanor_id(),
-            provider: "github",
-            permissions: [:*],
-            scope: :athanor,
-            auth_method: :oidc,
-            authenticated: true
-          )
-        )
-
-      session.token
-    end
-
-    test "takes the grant and every session together, then announces the revocation" do
-      uid = person_id()
-      {:ok, _} = Sanctum.TestContext.ensure_platform(uid)
-      token = session_for(uid)
-      Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
-
-      assert :ok = Members.revoke_platform(uid)
-
-      refute Sanctum.Tenancy.platform_admin?(uid)
-      assert {:error, _} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(token))
-      assert_receive %Cyfr.Bus.Session{kind: :revoked, user_id: ^uid}
-    end
-
-    test "an absent grant ends no session and announces nothing" do
-      uid = person_id()
-      token = session_for(uid)
-      Cyfr.Bus.subscribe_global(Cyfr.Bus.sessions())
-
-      assert :ok = Members.revoke_platform(uid)
-
-      assert {:ok, _} = Arca.SessionStorage.get_session(Sanctum.Session.token_hash(token))
-      refute_receive %Cyfr.Bus.Session{kind: :revoked, user_id: ^uid}, 100
-    end
-  end
-
   describe "create/1" do
     test "creates an athanor membership", %{athanor: athanor} do
       assert {:ok, mem} = Members.create(attrs(athanor.id))
@@ -92,11 +37,11 @@ defmodule Sanctum.Tenancy.MembersTest do
       assert String.starts_with?(mem.id, "mem_")
     end
 
-    test "creates a platform membership with no athanor" do
+    test "writes no platform grant: the installation's first person's admission is its one writer" do
       uid = "user_" <> Ecto.UUID.generate()
-      assert {:ok, mem} = Members.create(%{user_id: uid, scope: "platform"})
-      assert mem.scope == "platform"
-      assert mem.athanor_id == nil
+      assert {:error, :no_athanor} = Members.create(%{user_id: uid, scope: "platform"})
+      assert {:ok, []} = Members.list_by_user(uid)
+      refute Sanctum.Tenancy.platform_admin?(uid)
     end
 
     test "rejects an invalid scope", %{athanor: athanor} do
@@ -123,12 +68,19 @@ defmodule Sanctum.Tenancy.MembersTest do
   end
 
   describe "ensure/2" do
-    test "is idempotent — repeated calls return the same row" do
+    test "is idempotent — repeated calls return the same row", %{athanor: athanor} do
       uid = "user_" <> Ecto.UUID.generate()
-      assert {:ok, first} = Members.ensure(uid, scope: "platform")
-      assert {:ok, again} = Members.ensure(uid, scope: "platform")
+      assert {:ok, first} = Members.ensure(uid, scope: "athanor", athanor_id: athanor.id)
+      assert {:ok, again} = Members.ensure(uid, scope: "athanor", athanor_id: athanor.id)
       assert first.id == again.id
       assert [_one] = rows!(Members.list_by_user(uid))
+    end
+
+    test "grants no platform seat" do
+      uid = "user_" <> Ecto.UUID.generate()
+      assert {:error, :no_athanor} = Members.ensure(uid, scope: "platform")
+      assert {:ok, []} = Members.list_by_user(uid)
+      refute Sanctum.Tenancy.platform_admin?(uid)
     end
 
     test "athanor memberships key on the athanor", %{athanor: athanor} do
@@ -155,7 +107,7 @@ defmodule Sanctum.Tenancy.MembersTest do
     test "withdraws an invitation", %{athanor: athanor} do
       {:ok, invitation} =
         Members.create(%{
-          email: "withdrawn-#{System.unique_integer([:positive])}@example.com",
+          person_identifier: identifier(),
           scope: "athanor",
           athanor_id: athanor.id,
           status: "invited"
@@ -181,18 +133,20 @@ defmodule Sanctum.Tenancy.MembersTest do
 
     test "an invitation claimed since it was read is the claimant's seat: not found, and the seat stands",
          %{athanor: athanor} do
-      email = "claimed-#{System.unique_integer([:positive])}@example.com"
+      invited = identifier()
       user_id = "user_" <> Ecto.UUID.generate()
 
       {:ok, invitation} =
         Members.create(%{
-          email: email,
+          person_identifier: invited,
           scope: "athanor",
           athanor_id: athanor.id,
           status: "invited"
         })
 
-      {:ok, [_]} = Arca.Members.activate_invited(server(), user_id, email, DateTime.utc_now())
+      {:ok, [_]} =
+        Arca.Members.activate_invited_identifier(server(), user_id, invited, DateTime.utc_now())
+
       assert Members.member?(user_id, athanor.id)
 
       assert {:error, :not_found} = Members.remove(invitation)
@@ -206,36 +160,6 @@ defmodule Sanctum.Tenancy.MembersTest do
   # in place, so a withdrawal that read the invitation can meet the seat
   # at its delete. The claim is run between the two, in this process.
   describe "a withdrawal racing the invitee's first sign-in" do
-    test "an address claimed between the lookup and the delete: the seat stands and the withdraw is not found",
-         %{athanor: athanor} do
-      n = System.unique_integer([:positive])
-      email = "racing#{n}@example.com"
-      {:ok, :invited} = Members.add(athanor, [email: email], "system")
-      invitee = verified!("racing-#{n}", email)
-
-      claim_after_lookup!(fn ->
-        {:ok, 1} = Members.activate_invited(invitee)
-        # The claimant's first session, bound to the seat they just took.
-        session!(invitee.id, athanor.id)
-      end)
-
-      assert {:error, :not_found} = Members.remove_member(athanor, email: email)
-      assert_received {:claimed, session}
-
-      # Nothing is orphaned: the seat is the row the invitation became,
-      # and what the claimant was issued for it still stands beside it.
-      assert Members.member?(invitee.id, athanor.id)
-      assert session?(session)
-
-      assert [%{user_id: user_id, status: "active", email: ^email}] =
-               Enum.filter(
-                 rows!(Members.list_by_athanor(athanor.id)),
-                 &(&1.user_id == invitee.id or &1.email == email)
-               )
-
-      assert user_id == invitee.id
-    end
-
     test "an identifier claimed between the lookup and the delete: withdrawing the invitation is not found, and the holder stays",
          %{athanor: athanor} do
       id = identifier()
@@ -361,7 +285,7 @@ defmodule Sanctum.Tenancy.MembersTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|sharing-#{n}",
         provider: "github",
         email: "sharing#{n}@example.com",
@@ -432,7 +356,7 @@ defmodule Sanctum.Tenancy.MembersTest do
 
   defp person(n) do
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|mem-#{n}",
         provider: "github",
         email: "mem#{n}@example.com",
@@ -468,51 +392,11 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       n = System.unique_integer([:positive])
       # the group's creator is not seated by create/1 here, so two seats are free
-      assert {:ok, :invited} = Members.add(athanor, [email: "one-#{n}@example.com"], "system")
-      assert {:ok, :invited} = Members.add(athanor, [email: "two-#{n}@example.com"], "system")
+      assert {:ok, :invited} = Members.add(athanor, [identifier: identifier()], "system")
+      assert {:ok, :invited} = Members.add(athanor, [identifier: identifier()], "system")
 
       assert {:error, {:limit_reached, :max_members_per_group, 2}} =
                Members.add(athanor, [user_id: person(n).id], "system")
-    end
-  end
-
-  describe "add/3 by email" do
-    test "a proved address is seated, an unproven one is invited, a denied one is refused",
-         %{athanor: athanor} do
-      # Seating by email is a grant keyed on the address alone. `true` seats
-      # the known person; `nil` (an issuer that never asserts the claim)
-      # holds an invited row that a proving sign-in claims; `false` refuses.
-      for {claim, expected} <- [{true, :seated}, {nil, :invited}, {false, :refused}] do
-        n = System.unique_integer([:positive])
-        email = "claim#{n}@example.com"
-
-        {:ok, user} =
-          Sanctum.Tenancy.Users.upsert_from_provider(%{
-            id: "oidcc|https://idp.example|claim-#{n}",
-            provider: "oidcc",
-            email: email,
-            verified: claim
-          })
-
-        case expected do
-          :seated ->
-            assert {:ok, _} = Members.add(athanor, [email: email], "system")
-            assert Members.member?(user.id, athanor.id)
-
-          :invited ->
-            assert {:ok, :invited} = Members.add(athanor, [email: email], "system")
-            refute Members.member?(user.id, athanor.id)
-
-            assert Enum.any?(
-                     rows!(Members.list_by_athanor(athanor.id)),
-                     &(&1.status == "invited" and &1.email == email)
-                   )
-
-          :refused ->
-            assert {:error, :email_unverified} = Members.add(athanor, [email: email], "system")
-            refute Members.member?(user.id, athanor.id)
-        end
-      end
     end
   end
 
@@ -523,59 +407,36 @@ defmodule Sanctum.Tenancy.MembersTest do
 
       n = System.unique_integer([:positive])
       seated = person(n)
-      invited = "held-#{n}@example.com"
+      invited = identifier()
       held = identifier()
 
       assert {:ok, :added} = Members.add(athanor, [user_id: seated.id], "system")
-      assert {:ok, :invited} = Members.add(athanor, [email: invited], "system")
+      assert {:ok, :invited} = Members.add(athanor, [identifier: invited], "system")
       assert {:ok, :invited} = Members.add(athanor, [identifier: held], "system")
 
       full = {:error, {:limit_reached, :max_members_per_group, 3}}
       assert ^full = Members.add(athanor, [user_id: person(n + 1).id], "system")
-      assert ^full = Members.add(athanor, [email: "new-#{n}@example.com"], "system")
       assert ^full = Members.add(athanor, [identifier: identifier()], "system")
 
       # The cap is counted where a seat is written, and these write none.
       assert {:ok, :added} = Members.add(athanor, [user_id: seated.id], "system")
-      assert {:ok, :invited} = Members.add(athanor, [email: invited], "system")
+      assert {:ok, :invited} = Members.add(athanor, [identifier: invited], "system")
       assert {:ok, :invited} = Members.add(athanor, [identifier: held], "system")
 
       assert {:ok, 3} = Arca.Members.count_seats(Prima.Actor.in_athanor(athanor.id))
     end
 
-    test "the email arm answers its own refusals before the cap's", %{athanor: athanor} do
+    test "the identifier arm answers its own refusal before the cap's", %{athanor: athanor} do
       Cyfr.Test.Settings.put("max_members_per_group", 1)
 
       n = System.unique_integer([:positive])
       assert {:ok, :added} = Members.add(athanor, [user_id: person(n).id], "system")
 
-      shared = "shared-#{n}@example.com"
-
-      for i <- 1..2 do
-        {:ok, _} =
-          Sanctum.Tenancy.Users.upsert_from_provider(%{
-            id: "oidcc|https://idp.example|shared-#{n}-#{i}",
-            provider: "oidcc",
-            email: shared,
-            verified: true
-          })
-      end
-
-      unproven = "unproven-#{n}@example.com"
-
-      {:ok, _} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: "oidcc|https://idp.example|unproven-#{n}",
-          provider: "oidcc",
-          email: unproven,
-          verified: false
-        })
-
-      assert {:error, :ambiguous_email} = Members.add(athanor, [email: shared], "system")
-      assert {:error, :email_unverified} = Members.add(athanor, [email: unproven], "system")
+      assert {:error, :invalid_identifier} =
+               Members.add(athanor, [identifier: "per_not-an-identifier"], "system")
 
       assert {:error, {:limit_reached, :max_members_per_group, 1}} =
-               Members.add(athanor, [email: "stranger-#{n}@example.com"], "system")
+               Members.add(athanor, [identifier: identifier()], "system")
 
       assert {:ok, 1} = Arca.Members.count_seats(Prima.Actor.in_athanor(athanor.id))
     end
@@ -597,67 +458,17 @@ defmodule Sanctum.Tenancy.MembersTest do
   end
 
   describe "activate_invited/1" do
-    test "activates every invitation for the verified email in one pass and consumes the email",
-         %{athanor: athanor} do
-      n = System.unique_integer([:positive])
-      email = "invitee#{n}@example.com"
-      {:ok, :invited} = Members.add(athanor, [email: email], "system")
-
-      {:ok, other} =
-        Athanors.create(%{kind: "group", name: "Other", slug: "other-#{n}", created_by: "system"})
-
-      {:ok, :invited} = Members.add(other, [email: email], "system")
-
-      # Known to the server already, under another address: the upsert
-      # below moves that same identity onto the invited one.
-      _known = person(n)
-
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: "github|https://github.com|mem-#{n}",
-          provider: "github",
-          email: email,
-          verified: true
-        })
-
-      Cyfr.Bus.subscribe_global(Cyfr.Bus.memberships(user.id))
-      assert {:ok, 2} = Members.activate_invited(user)
-
-      assert Members.member?(user.id, athanor.id)
-      assert Members.member?(user.id, other.id)
-      assert_receive %Cyfr.Bus.Membership{change: :joined}
-
-      # the invitations are gone as invitations, and the seat carries no email
-      rows = rows!(Members.list_by_athanor(athanor.id))
-      refute Enum.any?(rows, &(&1.status == "invited"))
-      assert Enum.any?(rows, &(&1.user_id == user.id and &1.status == "active"))
-
-      # a second activation finds nothing to do
-      assert {:ok, 0} = Members.activate_invited(user)
-    end
-
     test "an invitation for an athanor the person already belongs to is dropped, not duplicated",
          %{athanor: athanor} do
-      n = System.unique_integer([:positive])
-      email = "dup#{n}@example.com"
-      # Known to the server already, under another address: the upsert
-      # below moves that same identity onto the invited one.
-      _known = person(n)
-
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: "github|https://github.com|mem-#{n}",
-          provider: "github",
-          email: email,
-          verified: true
-        })
-
+      id = identifier()
+      user = remote!(id)
       {:ok, :added} = Members.add(athanor, [user_id: user.id], "system")
 
-      # an invite written by email before anyone noticed the person is here
+      # an invitation written for the identifier before anyone noticed the
+      # person is here
       {:ok, _} =
         Members.create(%{
-          email: email,
+          person_identifier: id,
           scope: "athanor",
           status: "invited",
           athanor_id: athanor.id
@@ -668,48 +479,10 @@ defmodule Sanctum.Tenancy.MembersTest do
       rows =
         Enum.filter(
           rows!(Members.list_by_athanor(athanor.id)),
-          &(&1.user_id == user.id or &1.email == email)
+          &(&1.user_id == user.id or &1.person_identifier == id)
         )
 
       assert [%{status: "active"}] = rows
-    end
-
-    test "an unproven address claims no seat", %{athanor: athanor} do
-      # An invited row is email-keyed, so activating it on an address the
-      # provider never asserted hands the seat to whoever can get the IdP to
-      # claim it. The door already refuses an exact email allowlist entry on
-      # anything but `true`; a group seat is the same kind of grant.
-      n = System.unique_integer([:positive])
-      email = "unproven#{n}@example.com"
-      {:ok, :invited} = Members.add(athanor, [email: email], "system")
-
-      # Known to the server already, under a proven address of their own.
-      _known = person(n)
-
-      for claim <- [nil, false] do
-        {:ok, user} =
-          Sanctum.Tenancy.Users.upsert_from_provider(%{
-            id: "github|https://github.com|mem-#{n}",
-            provider: "oidcc",
-            email: email,
-            verified: claim
-          })
-
-        assert {:ok, 0} = Members.activate_invited(user)
-        refute Members.member?(user.id, athanor.id)
-      end
-
-      # The seat is still held, so proving the address later still claims it.
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: "github|https://github.com|mem-#{n}",
-          provider: "oidcc",
-          email: email,
-          verified: true
-        })
-
-      assert {:ok, 1} = Members.activate_invited(user)
-      assert Members.member?(user.id, athanor.id)
     end
   end
 
@@ -795,16 +568,9 @@ defmodule Sanctum.Tenancy.MembersTest do
       stranger = person(n)
       assert {:error, :not_found} = Members.remove_member(athanor, user_id: stranger.id)
 
-      {:ok, own} =
-        Athanors.create(%{
-          kind: "person",
-          name: "Own #{n}",
-          slug: "own-#{n}",
-          owner_user_id: stranger.id,
-          created_by: stranger.id
-        })
-
-      {:ok, _} = Members.ensure(stranger.id, scope: "athanor", athanor_id: own.id)
+      # Their own athanor, made with them by their admission.
+      {:ok, own_id} = Sanctum.Tenancy.Users.personal_athanor_id(stranger.id)
+      {:ok, own} = Athanors.get(own_id)
       assert {:error, :person_athanor} = Members.remove_member(own, user_id: stranger.id)
 
       # A caller's copy that misnames the kind is decided again on the
@@ -832,7 +598,7 @@ defmodule Sanctum.Tenancy.MembersTest do
       assert {:ok, :invited} = Members.add(athanor, [identifier: unknown], "system")
       assert {:ok, :invited} = Members.add(athanor, [identifier: unknown], "system")
 
-      assert [%{status: "invited", user_id: nil, email: nil}] =
+      assert [%{status: "invited", user_id: nil}] =
                Enum.filter(
                  rows!(Members.list_by_athanor(athanor.id)),
                  &(&1.person_identifier == unknown)
@@ -870,7 +636,7 @@ defmodule Sanctum.Tenancy.MembersTest do
             {"oidcc", "https://idp.example"}
           ] do
         {:ok, user} =
-          Sanctum.Tenancy.Users.upsert_from_provider(%{
+          Sanctum.Test.People.linked(%{
             id: "#{provider}|#{issuer}|#{identifier}",
             provider: provider,
             verified: :unknown
@@ -887,7 +653,7 @@ defmodule Sanctum.Tenancy.MembersTest do
                )
     end
 
-    test "the first cyfr sign-in claims every invitation its identifier holds, as an email invite is claimed",
+    test "the first cyfr sign-in claims every invitation its identifier holds",
          %{athanor: athanor} do
       n = System.unique_integer([:positive])
       id = identifier()
@@ -1034,13 +800,12 @@ defmodule Sanctum.Tenancy.MembersTest do
   # and its directory, and holds no key.
   defp remote!(identifier) do
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(
+      Sanctum.Test.People.remote(
         %{
           id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
-          provider: "cyfr",
-          verified: :unknown
+          provider: "cyfr"
         },
-        remote: %{identifier: identifier, directory_url: "https://dir.example"}
+        %{identifier: identifier, directory_url: "https://dir.example"}
       )
 
     user
@@ -1065,19 +830,6 @@ defmodule Sanctum.Tenancy.MembersTest do
   end
 
   defp session?(hash), do: match?({:ok, _}, Arca.SessionStorage.get_session(hash))
-
-  # A person whose provider proved `email`: the address claims what is held for it.
-  defp verified!(subject, email) do
-    {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: "github|https://github.com|#{subject}",
-        provider: "github",
-        email: email,
-        verified: true
-      })
-
-    user
-  end
 
   # Runs `claim` once, in this process, right after the first statement
   # that reads an invitation from the memberships table, and sends its
@@ -1231,7 +983,9 @@ defmodule Sanctum.Tenancy.MembersCapRaceTest do
   setup do
     n = System.unique_integer([:positive])
     athanor_id = "ath_members_race_#{n}"
-    emails = for i <- 1..(@seats + @extra), do: "race-#{n}-#{i}@example.com"
+
+    identifiers =
+      for i <- 1..(@seats + @extra), do: "per_" <> Prima.Digest.sha256_hex("race-#{n}-#{i}")
 
     unboxed(fn -> Arca.Test.Actor.ensure_athanor_row(athanor_id) end)
 
@@ -1240,7 +994,7 @@ defmodule Sanctum.Tenancy.MembersCapRaceTest do
     {:ok, _} =
       unboxed(fn ->
         Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{
-          email: "held-#{n}@example.com",
+          person_identifier: "per_" <> Prima.Digest.sha256_hex("held-#{n}"),
           status: "invited",
           added_by: "system"
         })
@@ -1270,7 +1024,7 @@ defmodule Sanctum.Tenancy.MembersCapRaceTest do
 
         Arca.Repo.delete_all(
           from(e in Arca.Schemas.ServerAllowlistEntry,
-            where: e.kind == "email" and e.value in ^emails
+            where: e.kind == "identifier" and e.value in ^identifiers
           )
         )
 
@@ -1280,10 +1034,11 @@ defmodule Sanctum.Tenancy.MembersCapRaceTest do
       Store.invalidate(@key)
     end)
 
-    {:ok, athanor_id: athanor_id, emails: emails}
+    {:ok, athanor_id: athanor_id, identifiers: identifiers}
   end
 
-  test "concurrent adds stop at the member cap", %{athanor_id: athanor_id, emails: emails} do
+  test "concurrent adds stop at the member cap",
+       %{athanor_id: athanor_id, identifiers: identifiers} do
     actor = Prima.Actor.in_athanor(athanor_id)
     {:ok, held} = unboxed(fn -> Arca.Members.count_seats(actor) end)
     cap = held + @seats
@@ -1297,11 +1052,11 @@ defmodule Sanctum.Tenancy.MembersCapRaceTest do
     {:ok, athanor} = unboxed(fn -> Sanctum.Tenancy.Athanors.get(athanor_id) end)
     test = self()
 
-    add = fn email ->
+    add = fn identifier ->
       Task.async(fn ->
         unboxed(fn ->
           if postgres?(), do: send(test, {:backend, backend_pid()})
-          Sanctum.Tenancy.Members.add(athanor, [email: email], "system")
+          Sanctum.Tenancy.Members.add(athanor, [identifier: identifier], "system")
         end)
       end)
     end
@@ -1315,7 +1070,7 @@ defmodule Sanctum.Tenancy.MembersCapRaceTest do
             |> Arca.Repo.one()
           end)
 
-        adders = Enum.map(emails, add)
+        adders = Enum.map(identifiers, add)
 
         for _ <- adders do
           assert_receive {:backend, backend}, 15_000
@@ -1325,7 +1080,7 @@ defmodule Sanctum.Tenancy.MembersCapRaceTest do
         release(holder)
         Enum.map(adders, &Task.await(&1, 30_000))
       else
-        emails |> Enum.map(add) |> Enum.map(&Task.await(&1, 30_000))
+        identifiers |> Enum.map(add) |> Enum.map(&Task.await(&1, 30_000))
       end
 
     assert Enum.count(answers, &(&1 == {:ok, :invited})) == @seats

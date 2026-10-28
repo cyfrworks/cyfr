@@ -164,7 +164,7 @@ defmodule Sanctum.Cipher.RotationTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|rotation#{n}",
         provider: "github",
         email: "rotation#{n}@example.com",

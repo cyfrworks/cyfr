@@ -2,29 +2,247 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Sanctum.DoorTest do
+  @moduledoc """
+  The door judges people (`Sanctum.Door`): a local person is admitted
+  unless a deny names them; a remote person, and a remote newcomer, by `*`
+  or an allow naming their identifier, unless a deny names them; an
+  unadmitted remote one leaves one request naming the identifier; a deny
+  naming the platform administrator is refused where it is written; and a
+  store that cannot answer admits no one and denies no one.
+  """
+
   use ExUnit.Case, async: false
 
   require Ecto.Query
 
   alias Sanctum.Door
   alias Sanctum.Door.Store
+  alias Sanctum.Test.People
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
-
-    original = Application.get_env(:sanctum, :platform_admin_emails, [])
-    Application.put_env(:sanctum, :platform_admin_emails, ["ops@example.com"])
-    on_exit(fn -> Application.put_env(:sanctum, :platform_admin_emails, original) end)
     :ok
   end
 
-  defp uid(n), do: "github|https://github.com|#{n}"
+  defp uid(n), do: "github|https://github.com|door#{n}"
+  defp identifier(n), do: "per_" <> Prima.Digest.sha256_hex("door-#{n}")
 
-  describe "writes racing one entry" do
-    test "concurrent requests and allows for one address leave one row, and nobody sees a conflict" do
+  # A person whose keys this server holds, with a sign-in method linked.
+  defp local!(n) do
+    {:ok, user} =
+      People.linked(%{
+        id: uid(n),
+        provider: "github",
+        email: "person#{n}@example.com",
+        verified: true
+      })
+
+    user
+  end
+
+  # A person whose keys another CYFR holds, named here by their identifier.
+  defp remote!(n) do
+    now = DateTime.utc_now()
+
+    {:ok, user} =
+      Arca.Test.People.mint(
+        Prima.Actor.system(),
+        %{
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          admission: "remote",
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        %{
+          key: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier(n)),
+          provider: "cyfr",
+          issuer: "https://dir.example",
+          subject: identifier(n),
+          first_seen_at: now,
+          last_seen_at: now
+        }
+      )
+
+    {:ok, _} =
+      Arca.PersonIdentities.create(Prima.Actor.system(), %{
+        user_id: user.id,
+        provenance: "remote",
+        identifier: identifier(n),
+        directory_url: "https://dir.example"
+      })
+
+    user
+  end
+
+  defp enrolled!(user, n) do
+    {1, _} =
+      Arca.Repo.update_all(
+        Ecto.Query.from(p in Arca.Schemas.PersonIdentity, where: p.user_id == ^user.id),
+        set: [identifier: identifier(n)]
+      )
+
+    :ok
+  end
+
+  defp session_for(user) do
+    ctx =
+      Sanctum.Context.build(
+        user_id: user.id,
+        email: user[:email],
+        provider: "github",
+        authenticated: true,
+        permissions: [:read]
+      )
+
+    {:ok, session} =
+      Sanctum.Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
+
+    session
+  end
+
+  describe "a local person" do
+    test "is admitted with no entry at all, and refused only by a deny naming them" do
+      alice = local!(1)
+      bob = local!(2)
+
+      assert Store.list() == []
+      assert {:ok, :allowed} = Door.admit_person(alice)
+
+      {:ok, _} = Store.deny("person", alice.id, "ops")
+      assert {:error, :denied} = Door.admit_person(alice)
+      assert {:ok, :allowed} = Door.admit_person(bob)
+
+      # `*` admits nobody past a deny.
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+      assert {:error, :denied} = Door.admit_person(alice)
+    end
+
+    test "is refused by a deny of the identifier they enrolled under" do
+      alice = local!(3)
+      enrolled!(alice, 3)
+
+      {:ok, _} = Store.deny("identifier", identifier(3), "ops")
+      assert {:error, :denied} = Door.admit_person(alice)
+    end
+
+    test "is never asked for an allow, and leaves no request when denied" do
+      alice = local!(4)
+      {:ok, _} = Store.deny("person", alice.id, "ops")
+
+      assert {:error, {:door, :denied}} = Door.sign_in(alice)
+      assert Store.requests() == []
+    end
+  end
+
+  describe "a remote person" do
+    test "is admitted by * or by an allow naming their identifier, and refused otherwise" do
+      carol = remote!(10)
+      assert {:error, :not_allowed} = Door.admit_person(carol)
+
+      {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
+      assert {:ok, :allowed} = Door.admit_person(carol)
+      :ok = Store.remove(wildcard.id)
+
+      {:ok, _} = Store.allow("identifier", identifier(10), "ops")
+      assert {:ok, :allowed} = Door.admit_person(carol)
+      assert {:error, :not_allowed} = Door.admit_person(remote!(11))
+    end
+
+    test "a deny of the person or of the identifier wins over * and over the allow" do
+      carol = remote!(12)
+      dave = remote!(13)
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+      {:ok, _} = Store.allow("identifier", identifier(13), "ops")
+
+      {:ok, _} = Store.deny("person", carol.id, "ops")
+      {:ok, _} = Store.deny("identifier", identifier(13), "ops")
+
+      assert {:error, :denied} = Door.admit_person(carol)
+      assert {:error, :denied} = Door.admit_person(dave)
+    end
+
+    test "an unadmitted one leaves one request naming the identifier, which resolve admits" do
+      carol = remote!(14)
+
+      assert {:error, {:door, :not_allowed}} = Door.sign_in(carol)
+      assert {:error, {:door, :not_allowed}} = Door.sign_in(carol)
+
+      assert [%{kind: "identifier", status: "requested"} = request] = Store.requests()
+      assert request.value == identifier(14)
+      assert {:error, :not_allowed} = Door.admit_person(carol)
+
+      {:ok, _} = Store.resolve(request.id, :allow, "ops")
+      assert {:ok, :allowed} = Door.sign_in(carol)
+    end
+
+    test "a denied one gets no request, and an admitted one writes nothing" do
+      carol = remote!(15)
+      dave = remote!(16)
+      {:ok, _} = Store.deny("identifier", identifier(15), "ops")
+      {:ok, _} = Store.allow("identifier", identifier(16), "ops")
+      before = Store.list()
+
+      assert {:error, {:door, :denied}} = Door.sign_in(carol)
+      assert {:ok, :allowed} = Door.sign_in(dave)
+      assert Store.list() == before
+    end
+  end
+
+  describe "a remote newcomer" do
+    test "is admitted by * or an allow of their identifier, and a refusal leaves one request" do
+      assert {:error, {:door, :not_allowed}} = Door.sign_in_identifier(identifier(20))
+      assert [%{kind: "identifier"} = request] = Store.requests()
+      assert request.value == identifier(20)
+      refute Door.identifier_admitted?(identifier(20))
+
+      {:ok, _} = Store.allow("identifier", identifier(21), "ops")
+      assert {:ok, :allowed} = Door.sign_in_identifier(identifier(21))
+      assert Door.identifier_admitted?(identifier(21))
+
+      {:ok, _} = Store.deny("identifier", identifier(22), "ops")
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+      assert {:ok, :allowed} = Door.admit_identifier(identifier(20))
+      assert {:error, {:door, :denied}} = Door.sign_in_identifier(identifier(22))
+    end
+  end
+
+  describe "the entries" do
+    test "an allow names an identifier or *, a deny a person or an identifier" do
+      alice = local!(30)
+
+      for {verb, kind, value} <- [
+            {:allow, "person", alice.id},
+            {:deny, "wildcard", "*"},
+            {:allow, "email", "a@example.com"},
+            {:deny, "user_id", uid(30)}
+          ] do
+        assert_raise FunctionClauseError, fn -> apply(Store, verb, [kind, value, "ops"]) end
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        apply(Store, :request, ["email", "a@example.com", "ops"])
+      end
+
+      assert Store.list() == []
+    end
+
+    test "a deny naming the platform administrator is refused, by person or by identifier" do
+      operator = local!(31)
+      enrolled!(operator, 31)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(operator.id)
+
+      assert {:error, :platform_admin} = Store.deny("person", operator.id, "ops")
+      assert {:error, :platform_admin} = Store.deny("identifier", identifier(31), "ops")
+      assert Store.list() == []
+      assert {:ok, :allowed} = Door.admit_person(operator)
+    end
+
+    test "concurrent requests and allows for one identifier leave one row each, and nobody sees a conflict" do
       requests =
         1..6
-        |> Task.async_stream(fn _ -> Store.request("email", "race@example.com", uid(1)) end,
+        |> Task.async_stream(fn _ -> Store.request("identifier", identifier(32), "ops") end,
           max_concurrency: 6,
           timeout: 10_000
         )
@@ -35,240 +253,63 @@ defmodule Sanctum.DoorTest do
 
       allows =
         1..4
-        |> Task.async_stream(fn _ -> Store.allow("email", "fresh@example.com", "ops") end,
+        |> Task.async_stream(fn _ -> Store.allow("identifier", identifier(33), "ops") end,
           max_concurrency: 4,
           timeout: 10_000
         )
         |> Enum.map(fn {:ok, result} -> result end)
 
       assert Enum.all?(allows, &match?({:ok, %{status: "allowed"}}, &1))
-
-      assert Enum.count(Store.list(), &(&1.value in ["race@example.com", "fresh@example.com"])) ==
-               2
-    end
-  end
-
-  describe "admit/3 — the order of the door" do
-    test "an empty list admits only the platform admins" do
-      assert {:ok, :admin} = Door.admit(uid(1), "ops@example.com", true)
-      assert {:ok, :admin} = Door.admit(uid(1), "OPS@example.com", :unknown)
-      # A provider that positively says the operator's address is unverified
-      # is a signal, not silence: the widest grant does not key on it.
-      assert {:error, :not_allowed} = Door.admit(uid(1), "ops@example.com", false)
-      assert {:error, :not_allowed} = Door.admit(uid(2), "bob@example.com", true)
-    end
-
-    test "an exact email entry admits only a verified email" do
-      {:ok, _} = Store.allow("email", "Bob@Example.com", "ops")
-      assert {:ok, :allowed} = Door.admit(uid(2), "bob@example.com", true)
-      assert {:error, :not_allowed} = Door.admit(uid(2), "bob@example.com", :unknown)
-      assert {:error, :not_allowed} = Door.admit(uid(2), "bob@example.com", false)
-    end
-
-    test "a user_id entry admits an issuer that proves nothing about the email" do
-      {:ok, _} = Store.allow("user_id", uid(3), "ops")
-      assert {:ok, :allowed} = Door.admit(uid(3), "carol@example.com", :unknown)
-      assert {:ok, :allowed} = Door.admit(uid(3), nil, :unknown)
-    end
-
-    test "* admits anyone the provider authenticates, unless the email is known unverified" do
-      {:ok, _} = Store.allow("wildcard", "*", "ops")
-      assert {:ok, :allowed} = Door.admit(uid(4), "dave@example.com", true)
-      assert {:ok, :allowed} = Door.admit(uid(4), "dave@example.com", :unknown)
-      assert {:error, :not_allowed} = Door.admit(uid(4), "dave@example.com", false)
-      # * grants no platform capability
-      refute match?({:ok, :admin}, Door.admit(uid(4), "dave@example.com", true))
-    end
-
-    test "a deny wins over *, over an exact entry, and is sticky until allowed again" do
-      {:ok, _} = Store.allow("wildcard", "*", "ops")
-      {:ok, _} = Store.allow("email", "eve@example.com", "ops")
-      {:ok, _} = Store.deny("email", "eve@example.com", "ops")
-      assert {:error, :denied} = Door.admit(uid(5), "eve@example.com", true)
-
-      {:ok, _} = Store.deny("user_id", uid(6), "ops")
-      assert {:error, :denied} = Door.admit(uid(6), "frank@example.com", true)
-
-      {:ok, _} = Store.allow("email", "eve@example.com", "ops")
-      assert {:ok, :allowed} = Door.admit(uid(5), "eve@example.com", true)
+      assert Enum.count(Store.list(), &(&1.value in [identifier(32), identifier(33)])) == 2
     end
 
     test "a deny row is honoured whatever its status column says" do
-      {:ok, entry} = Store.deny("email", "grace@example.com", "ops")
-
-      import Ecto.Query, only: [from: 2]
-      id = entry.id
+      carol = remote!(34)
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+      {:ok, deny} = Store.deny("identifier", identifier(34), "ops")
 
       {1, _} =
         Arca.Repo.update_all(
-          from(e in Arca.Schemas.ServerAllowlistEntry, where: e.id == ^id),
+          Ecto.Query.from(e in Arca.Schemas.ServerAllowlistEntry, where: e.id == ^deny.id),
           set: [status: "requested"]
         )
 
-      assert {:error, :denied} = Door.admit(uid(7), "grace@example.com", true)
-    end
-
-    test "a platform admin email cannot be denied" do
-      assert {:error, :platform_admin} = Store.deny("email", "ops@example.com", "ops")
-      assert {:error, :wildcard_cannot_be_denied} = Store.deny("wildcard", "*", "ops")
-    end
-
-    test "an operator cannot be denied by their IdP subject either" do
-      # The email guard alone left the same lockout one `kind` away: deny is
-      # evaluated before the platform-admin arm and `Users.deny/1` revokes
-      # sessions and keys, so an operator denied by subject could never sign
-      # in to remove the row. The store's invariant is that operators leave
-      # only by leaving the env list.
-      {:ok, _} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: uid(42),
-          provider: "github",
-          email: "ops@example.com",
-          verified: true
-        })
-
-      assert {:error, :platform_admin} = Store.deny("user_id", uid(42), "ops")
-      assert {:ok, :admin} = Door.admit(uid(42), "ops@example.com", true)
-    end
-
-    test "a deny that predates the operator's promotion does not lock them out" do
-      # Denied first, made an operator afterwards: the row is legitimate and
-      # stays, but the env list is what says who runs the server.
-      {:ok, _} = Store.deny("user_id", uid(43), "ops")
-      assert {:error, :denied} = Door.admit(uid(43), "bob@example.com", true)
-
-      Application.put_env(:sanctum, :platform_admin_emails, ["ops@example.com", "bob@example.com"])
-
-      assert {:ok, :admin} = Door.admit(uid(43), "bob@example.com", true)
-    end
-
-    test "a request admits nobody until resolved" do
-      {:ok, :created, req} = Store.request("email", "grace@example.com", uid(1))
-      assert req.status == "requested"
-      assert {:error, :not_allowed} = Door.admit(uid(7), "grace@example.com", true)
-      refute Door.email_admitted?("grace@example.com")
-
-      {:ok, entry} = Store.resolve(req.id, :allow, uid(1))
-      assert entry.status == "allowed"
-      assert {:ok, :allowed} = Door.admit(uid(7), "grace@example.com", true)
-      assert Door.email_admitted?("grace@example.com")
-
-      # requesting again for an address that already has its answer changes
-      # nothing, and says so — nobody new is waiting at the door
-      {:ok, :existing, same} = Store.request("email", "grace@example.com", uid(1))
-      assert same.id == entry.id
+      assert {:error, :denied} = Door.admit_person(carol)
     end
 
     test "rejecting a request removes it" do
-      {:ok, :created, req} = Store.request("email", "heidi@example.com", uid(1))
-      assert :ok = Store.resolve(req.id, :reject, uid(1))
-      assert Store.requests() == []
-    end
-  end
-
-  describe "the cyfr door's identities, judged by their identifier" do
-    defp identifier(n), do: "per_" <> Prima.Digest.sha256_hex("door-#{n}")
-
-    defp cyfr(n), do: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier(n))
-
-    test "an identifier entry admits the person it names, and only them" do
-      assert {:error, :not_allowed} = Door.admit(cyfr(1), nil, :unknown)
-
-      {:ok, _} = Store.allow("identifier", identifier(1), "ops")
-      assert {:ok, :allowed} = Door.admit(cyfr(1), nil, :unknown)
-      assert {:error, :not_allowed} = Door.admit(cyfr(2), nil, :unknown)
-
-      # An identifier entry names a person identifier, never an IdP subject.
-      assert {:error, :not_allowed} = Door.admit(uid(1), nil, :unknown)
-    end
-
-    test "a deny naming the identifier wins over * and over an exact entry" do
-      {:ok, _} = Store.allow("wildcard", "*", "ops")
-      assert {:ok, :allowed} = Door.admit(cyfr(3), nil, :unknown)
-
-      {:ok, _} = Store.deny("identifier", identifier(3), "ops")
-      assert {:error, :denied} = Door.admit(cyfr(3), nil, :unknown)
-      assert {:ok, :allowed} = Door.admit(cyfr(4), nil, :unknown)
-      assert {:ok, true} = Store.denied(nil, nil, identifier(3))
-    end
-
-    test "an unadmitted identifier waits as an identifier request, once, and resolve admits it" do
-      assert {:error, {:door, :not_allowed}} =
-               Door.admit_identity(cyfr(5), %{email: nil, verified: :unknown})
-
-      assert {:error, {:door, :not_allowed}} =
-               Door.admit_identity(cyfr(5), %{email: nil, verified: :unknown})
-
-      assert [request] = Enum.filter(Store.requests(), &(&1.value == identifier(5)))
-      assert request.kind == "identifier"
-      assert {:ok, _} = Store.resolve(request.id, :allow, "ops")
-      assert {:ok, :allowed} = Door.admit(cyfr(5), nil, :unknown)
-    end
-  end
-
-  describe "admit_identity/2" do
-    test "wraps the verdict for a provider and audits a refusal" do
-      handler = "door-test-#{System.unique_integer([:positive])}"
-      parent = self()
-
-      :telemetry.attach(
-        handler,
-        [:cyfr, :sanctum, :door, :refused],
-        fn _e, _m, meta, _c -> send(parent, {:refused, meta}) end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler) end)
-
-      assert {:error, {:door, :not_allowed}} =
-               Door.admit_identity(uid(9), %{email: "ivan@example.com", verified: true})
-
-      assert_receive {:refused, %{reason: :not_allowed, email: "ivan@example.com"}}
-
-      assert {:ok, :admin} = Door.admit_identity(uid(1), %{email: "ops@example.com"})
+      {:ok, :created, request} = Store.request("identifier", identifier(35), "ops")
+      assert :ok = Store.resolve(request.id, :reject, "ops")
+      assert Store.list() == []
     end
   end
 
   describe "reconcile/0 — the door outlives nothing" do
-    defp known_person(n, opts \\ []) do
-      {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: uid(n),
-          provider: "github",
-          email: Keyword.get(opts, :email, "person#{n}@example.com"),
-          verified: Keyword.get(opts, :verified, true),
-          name: nil
-        })
+    # A remote person's session records their head, read fresh from their
+    # directory: a scripted one here.
+    setup do
+      tls = Sanctum.Test.DirectoryServer.tls()
+      Sanctum.Test.DirectoryServer.listen!()
+      Sanctum.Test.DirectoryServer.seam!(tls)
+      %{directory: Sanctum.Test.DirectoryServer.start!(tls)}
+    end
 
+    defp remote_at!(directory, n) do
+      user = local!(n)
+      identity = Sanctum.Test.DirectoryServer.identity!(directory.dir, directory.url)
+      :ok = Sanctum.Test.DirectoryServer.remote_person!(user.id, identity)
       user
     end
 
-    defp session_for(user) do
-      ctx =
-        Sanctum.Context.build(
-          user_id: user.id,
-          email: user.email,
-          provider: "github",
-          authenticated: true,
-          permissions: [:read]
-        )
-
-      {:ok, session} =
-        Sanctum.Session.create(ctx, generation_snapshot: Sanctum.TestContext.snapshot!(ctx))
-
-      session
-    end
-
-    test "closing * ejects the strangers it admitted, and nobody else" do
+    test "closing * ejects the remote people it admitted, and never a local person", %{
+      directory: directory
+    } do
       {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
-      stranger = known_person(20)
-      operator = known_person(21, email: "ops@example.com")
+      stranger = remote_at!(directory, 40)
+      local = local!(41)
 
       stranger_session = session_for(stranger)
-      operator_session = session_for(operator)
-
-      assert {:ok, _} = Sanctum.Session.get(stranger_session.token)
-      assert {:ok, _} = Sanctum.Session.get(operator_session.token)
+      local_session = session_for(local)
 
       :ok = Store.remove(wildcard.id)
 
@@ -277,50 +318,17 @@ defmodule Sanctum.DoorTest do
       assert {:ok, 1} = Door.reconcile()
 
       assert {:error, :invalid_session} = Sanctum.Session.get(stranger_session.token)
-      assert {:ok, _} = Sanctum.Session.get(operator_session.token)
+      assert {:ok, _} = Sanctum.Session.get(local_session.token)
     end
 
-    test "the keys the door issued go with the sessions" do
+    test "ejecting is not denying: standing survives", %{directory: directory} do
       {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
-      stranger = known_person(24)
-
-      tenant = Sanctum.TestContext.local()
-      ctx = %{tenant | user_id: stranger.id, email: stranger.email}
-
-      {:ok, key} = Sanctum.TestContext.create_key(ctx, %{name: "stranger-key"})
-
-      assert Enum.any?(elem(Sanctum.ApiKey.list(ctx), 1), &(&1.name == "stranger-key"))
+      stranger = remote_at!(directory, 42)
+      session = session_for(stranger)
 
       :ok = Store.remove(wildcard.id)
       assert {:ok, 1} = Door.reconcile()
-
-      # A key minted while the door was open is a credential the door issued;
-      # it must not outlive the entry that admitted its holder.
-      assert {:error, _} = Sanctum.ApiKey.validate(key.api_key)
-    end
-
-    test "an issuer that proves nothing about the email keeps its user_id seat" do
-      {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
-      {:ok, _} = Store.allow("user_id", uid(22), "ops")
-
-      # `users.email_verified` is NULL when the issuer omitted the claim.
-      # Reading that as `false` rather than `:unknown` would eject them here.
-      silent = known_person(22, verified: nil)
-      assert silent.email_verified == nil
-
-      session = session_for(silent)
-      :ok = Store.remove(wildcard.id)
-
-      assert {:ok, 0} = Door.reconcile()
-      assert {:ok, _} = Sanctum.Session.get(session.token)
-    end
-
-    test "ejecting is not denying: standing survives" do
-      {:ok, wildcard} = Store.allow("wildcard", "*", "ops")
-      stranger = known_person(23)
-      :ok = Store.remove(wildcard.id)
-
-      assert {:ok, 1} = Door.reconcile()
+      assert {:error, :invalid_session} = Sanctum.Session.get(session.token)
 
       {:ok, after_eject} = Sanctum.Tenancy.Users.get(stranger.id)
       assert after_eject.status == "active"
@@ -333,7 +341,6 @@ defmodule Sanctum.DoorTest do
     # sign-in that moves them up the recency order while the walk reads the
     # first page must not let them through the walk.
     test "a refused person whose last sign-in moves between pages is still ejected" do
-      {:ok, _} = Store.allow("wildcard", "*", "ops")
       now = DateTime.utc_now()
 
       people =
@@ -344,7 +351,7 @@ defmodule Sanctum.DoorTest do
             id: "door-page-#{String.pad_leading(Integer.to_string(i), 4, "0")}",
             email: "page#{i}@example.com",
             email_verified: true,
-            provider: "github",
+            admission: "open",
             status: "active",
             security_generation: 1,
             first_seen_at: seen,
@@ -356,24 +363,14 @@ defmodule Sanctum.DoorTest do
 
       {600, _} = Arca.Repo.insert_all(Arca.Schemas.User, people)
 
-      {:ok, refused} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
-          id: uid(30),
-          provider: "github",
-          email: "late@example.com",
-          verified: true,
-          name: nil
-        })
-
+      refused = local!(50)
       session = session_for(refused)
       tenant = Sanctum.TestContext.local()
 
       {:ok, key} =
-        Sanctum.TestContext.create_key(%{tenant | user_id: refused.id, email: refused.email}, %{
-          name: "late"
-        })
+        Sanctum.TestContext.create_key(%{tenant | user_id: refused.id}, %{name: "late"})
 
-      {:ok, _} = Store.deny("user_id", uid(30), "ops")
+      {:ok, _} = Store.deny("person", refused.id, "ops")
 
       # Seen longest ago, so the most recently seen first puts them on the
       # second page; their id sorts after every filler's, so id order does.
@@ -423,51 +420,6 @@ defmodule Sanctum.DoorTest do
     :ok
   end
 
-  describe "admit_identity/2 — a refusal the operator can act on" do
-    test "records the subject of an unallowed sign-in, once, and resolve admits it" do
-      # The Okta case: the operator typed the address, but the issuer never
-      # asserts `email_verified`, so no email entry can match it.
-      {:ok, _} = Store.allow("email", "bob@company.com", "ops")
-      info = %{email: "bob@company.com", verified: :unknown}
-
-      assert {:error, {:door, :not_allowed}} = Door.admit_identity(uid(30), info)
-
-      [request] = Store.requests()
-      assert request.kind == "user_id"
-      assert request.value == uid(30)
-      assert request.status == "requested"
-      assert request.note =~ "bob@company.com"
-
-      # A request is not an allow.
-      assert {:error, :not_allowed} = Door.admit(uid(30), "bob@company.com", :unknown)
-
-      # And retrying does not pile up rows.
-      assert {:error, {:door, :not_allowed}} = Door.admit_identity(uid(30), info)
-      assert length(Store.requests()) == 1
-
-      {:ok, _} = Store.resolve(request.id, :allow, "ops")
-      assert {:ok, :allowed} = Door.admit(uid(30), "bob@company.com", :unknown)
-    end
-
-    test "a denied identity gets no request — that door has its answer" do
-      {:ok, _} = Store.deny("user_id", uid(31), "ops")
-
-      assert {:error, {:door, :denied}} =
-               Door.admit_identity(uid(31), %{email: "eve@example.com", verified: true})
-
-      assert Store.requests() == []
-    end
-
-    test "an admitted sign-in writes nothing" do
-      {:ok, _} = Store.allow("wildcard", "*", "ops")
-
-      assert {:ok, :allowed} =
-               Door.admit_identity(uid(32), %{email: "ok@example.com", verified: true})
-
-      assert Store.requests() == []
-    end
-  end
-
   describe "a door that cannot be read" do
     # Absent data, denied access and unavailable infrastructure are three
     # answers, and the door is where the difference decides who gets in.
@@ -479,19 +431,15 @@ defmodule Sanctum.DoorTest do
       Arca.Repo.query!("DROP TABLE server_allowlist")
     end
 
-    test "refuses as :unavailable — not as :denied, and not as :not_allowed" do
+    test "refuses a person as :unavailable — not as :denied, and not as :not_allowed" do
+      alice = local!(60)
       drop_door()
 
-      assert {:error, :unavailable} = Door.admit(uid(50), "stranger@example.com", true)
+      assert {:error, :unavailable} = Door.admit_person(alice)
     end
 
-    test "the operator list still admits, because it needs no store" do
-      drop_door()
-
-      assert {:ok, :admin} = Door.admit(uid(51), "ops@example.com", true)
-    end
-
-    test "a provider's refusal carries :unavailable and queues no request" do
+    test "a sign-in's refusal carries :unavailable and queues no request" do
+      carol = remote!(61)
       handler = "door-outage-#{System.unique_integer([:positive])}"
       parent = self()
 
@@ -506,8 +454,7 @@ defmodule Sanctum.DoorTest do
 
       drop_door()
 
-      assert {:error, {:door, :unavailable}} =
-               Door.admit_identity(uid(52), %{email: "stranger@example.com", verified: true})
+      assert {:error, {:door, :unavailable}} = Door.sign_in(carol)
 
       # Only `:not_allowed` queues a request. An outage is not an answer to
       # record, and writing one would be a write into the same dead store.
@@ -517,11 +464,11 @@ defmodule Sanctum.DoorTest do
     test "an invite is not admitted through an unreadable door" do
       drop_door()
 
-      refute Door.email_admitted?("stranger@example.com")
+      refute Door.identifier_admitted?(identifier(62))
     end
 
     test "reconcile ejects nobody it could not ask about" do
-      known_person(53)
+      local!(63)
       drop_door()
 
       # The walk reads the users rows first and the door per person, so the

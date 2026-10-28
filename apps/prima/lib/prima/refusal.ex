@@ -223,22 +223,6 @@ defmodule Prima.Refusal do
     :invalid_request
   ]
 
-  # The bootstrap's refusals of a member's boot, by sub-reason.
-  @bootstrap %{
-    slot_not_held: {:not_owner, "This server does not hold its slot in the cluster"},
-    busy: {:conflict, "Another server is starting against this database"},
-    malformed_configuration: {:invalid_argument, "The server configuration is malformed"},
-    slot_lost: {:not_owner, "This server lost its slot in the cluster while starting"},
-    claim_taken: {:conflict, "Another server took the start-up claim"},
-    claim_lapsed: {:timeout, "The start-up claim lapsed before start-up finished"},
-    missing_user: {:setup_required, "The configured first user does not exist"},
-    release_failed:
-      {:uncertain,
-       "Start-up could not confirm that it released its claim — check before starting again"},
-    database_error: {:unavailable, "The database could not answer during start-up"},
-    exception: {:internal, "Start-up failed unexpectedly"}
-  }
-
   # How the home is reached: the boot's and the access engine's refusals
   # that carry nothing but their code.
   @access %{
@@ -896,6 +880,26 @@ defmodule Prima.Refusal do
        "This installation is waiting for its owner to restore their identity; no one signs " <>
          "in here until that restore finishes or the operator ends it."}
 
+  # The setup token past its person's first sign-in method: it opens
+  # nothing, whoever presents it.
+  defp row(:setup_closed),
+    do:
+      {:forbidden,
+       "This CYFR is set up. Sign in with your passkey, a device you connected, or a " <>
+         "sign-in method you linked."}
+
+  # An admission other than setup or a restore onto a CYFR with no person:
+  # its first person is its administrator, made only by its setup.
+  defp row(:not_set_up),
+    do: {:setup_required, "This CYFR is not set up yet. Its operator opens the setup link first."}
+
+  # A linked sign-in method no person here holds: a method unlocks a person
+  # and never makes one.
+  defp row(:no_person),
+    do:
+      {:not_found,
+       "No one here signs in with this account. Sign in another way, then link it in Settings."}
+
   # A remote person's identity whose head this home could not confirm
   # fresh within its bound: their work here pauses and their session
   # stands, so it is no sign-out and no denial.
@@ -926,9 +930,6 @@ defmodule Prima.Refusal do
     do: {:invalid_argument, "The request body's length must be declared"}
 
   defp row(:internal_error), do: {:internal, "Internal error"}
-
-  defp row({:bootstrap_refused, sub}) when is_map_key(@bootstrap, sub),
-    do: Map.fetch!(@bootstrap, sub)
 
   defp row(:missing_grant),
     do: {:internal, "The execution's standing could not be read"}

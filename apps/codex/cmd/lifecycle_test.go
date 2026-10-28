@@ -56,34 +56,6 @@ func (f *envFile) assignments(key string) []int {
 	return found
 }
 
-// init's email question is answered in the .env it writes: an email is the
-// operators' setting, and no email leaves it unset. The template's
-// commented line that documents it stays as it is, and every other line of
-// the template is kept.
-func TestNewEnvAnswersTheEmailQuestion(t *testing.T) {
-	const tmpl = "CYFR_SECRET_KEY_BASE=\nCYFR_ACCESS=local\nCYFR_HOST=localhost\n# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"
-	path := writeTemp(t, ".env.example", tmpl)
-	for _, email := range []string{"me@example.com", ""} {
-		text, _, _, err := newEnv(path, email)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got := string(text)
-		admins, adminsSet := envValuesOf(got)[adminEmailVar]
-		if admins != email || adminsSet != (email != "") {
-			t.Errorf("for email %q the .env holds operators %q (%v):\n%s", email, admins, adminsSet, got)
-		}
-		for _, line := range []string{"CYFR_ACCESS=local\n", "# CYFR_PLATFORM_ADMIN_EMAILS=alice@example.com\nCYFR_PORT=4000\n"} {
-			if !strings.Contains(got, line) {
-				t.Errorf("for email %q the template's %q moved:\n%s", email, line, got)
-			}
-		}
-		if strings.Contains(got, "PORTA") {
-			t.Errorf("no porta variable belongs in .env:\n%s", got)
-		}
-	}
-}
-
 // A generated key is 32 random bytes as 64 lowercase hexadecimal digits,
 // the form cyfr, the worker and both Locus services all accept, and
 // never repeats.
@@ -169,34 +141,13 @@ func readShippedTemplate(t *testing.T) string {
 	return string(raw)
 }
 
-// The shipped template documents every setting init writes: the
-// operators' setting commented once and nowhere assigned, so the
-// assignment init appends is the only one, the
-// local head's keys assigned once each, no key of another mode's head
+// The shipped template documents every setting init writes: the local
+// head's keys assigned once each, no key of another mode's head
 // assigned. Each key stackKeys writes is
 // assigned there once, empty, or with the value init completes (the
 // builds URL), so the editor writes every one on its own line.
 func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 	text := readShippedTemplate(t)
-	lines := strings.Split(text, "\n")
-	count := func(prefix string) int {
-		n := 0
-		for _, line := range lines {
-			if strings.HasPrefix(line, prefix) {
-				n++
-			}
-		}
-		return n
-	}
-	for _, key := range []string{adminEmailVar} {
-		if n := count("# " + key + "="); n != 1 {
-			t.Errorf("the shipped template has %d lines beginning %q, want 1", n, "# "+key+"=")
-		}
-		if n := count(key + "="); n != 0 {
-			t.Errorf("the shipped template assigns %s on %d lines; init appends its one assignment", key, n)
-		}
-	}
-
 	f := parseEnvFile(text)
 	for key, want := range map[string]string{"CYFR_ACCESS": "local", "CYFR_HOST": "localhost", "CYFR_PORT": "4000"} {
 		if v, assigned := f.value(key); !assigned || v != want || len(f.assignments(key)) != 1 {
@@ -300,11 +251,11 @@ func TestEnvWritesKeepQuotedValuesWhole(t *testing.T) {
 	}
 }
 
-// newEnvFromTemplate is the .env init writes from the shipped template for
-// adminEmail: the keys minted, then the local head written.
-func newEnvFromTemplate(t *testing.T, adminEmail string) (string, []envChange) {
+// newEnvFromTemplate is the .env init writes from the shipped template: the
+// keys minted, then the local head written.
+func newEnvFromTemplate(t *testing.T) (string, []envChange) {
 	t.Helper()
-	text, changes, _, err := newEnv(writeTemp(t, ".env.example", readShippedTemplate(t)), adminEmail)
+	text, changes, _, err := newEnv(writeTemp(t, ".env.example", readShippedTemplate(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,17 +263,13 @@ func newEnvFromTemplate(t *testing.T, adminEmail string) (string, []envChange) {
 }
 
 // Every key init writes into the shipped .env.example lands on the line the
-// template assigns it on, and the operators' setting, which the template
-// documents on a commented line, is the one line appended; the result is
-// the pair-consistent .env, reached from this computer only, that the
+// template assigns it on, every other line kept, and nothing is appended;
+// the result is the pair-consistent .env, reached from this computer only, that the
 // stack boots from.
 func TestRenderEnvFileShippedTemplate(t *testing.T) {
 	raw := readShippedTemplate(t)
-	got, changes := newEnvFromTemplate(t, "me@example.com")
-	if !strings.HasSuffix(got, "\nCYFR_PLATFORM_ADMIN_EMAILS=me@example.com\n") || !strings.Contains(got, "\n# CYFR_PLATFORM_ADMIN_EMAILS=") {
-		t.Errorf("shipped template: the operators' setting is not appended beside its documented line:\n%s", got)
-	}
-	if strings.Count(got, "\n") != strings.Count(raw, "\n")+1 {
+	got, changes := newEnvFromTemplate(t)
+	if strings.Count(got, "\n") != strings.Count(raw, "\n") {
 		t.Errorf("keys were appended to the shipped template instead of set on its lines:\n%s", got)
 	}
 	var added []string
@@ -385,21 +332,6 @@ func TestInitWritesThePublicURLItsAddressImplies(t *testing.T) {
 	if url, assigned := parseEnvFile(string(got)).value("CYFR_PUBLIC_URL"); !assigned || url != "https://cyfr.example.com" {
 		t.Errorf("init for cyfr.example.com writes CYFR_PUBLIC_URL %q (assigned: %v), want https://cyfr.example.com", url, assigned)
 	}
-}
-
-// Given no email, init appends nothing for the operators: the template's
-// commented line documenting the setting stays, no administrator is
-// named, and the .env boots.
-func TestRenderEnvFileShippedTemplateWithoutAnEmail(t *testing.T) {
-	raw := readShippedTemplate(t)
-	got, _ := newEnvFromTemplate(t, "")
-	if admins, assigned := parseEnvFile(got).value(adminEmailVar); assigned {
-		t.Errorf("a home given no email names the operators %q", admins)
-	}
-	if !strings.Contains(got, "\n"+"# "+adminEmailVar+"=\n") || strings.Count(got, "\n") != strings.Count(raw, "\n") {
-		t.Errorf("the template's lines are not kept as they are:\n%s", got)
-	}
-	assertStackPairs(t, got, defaultServiceID)
 }
 
 // assertStackPairs checks what init promises of a .env: every key well

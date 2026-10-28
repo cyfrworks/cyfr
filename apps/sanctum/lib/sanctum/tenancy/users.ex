@@ -6,155 +6,77 @@ defmodule Sanctum.Tenancy.Users do
   The people this server knows: each person is the plain map
   `Arca.Users` answers for their row.
 
-  A row is written on the first admitted sign-in, together with the
-  person's key set on their identity row (`Sanctum.Person`), and touched on
-  every later one; the door, invited memberships and per-person
-  preferences key off it. The person's identifier is on that identity row,
+  A row is written only by an admission (`Sanctum.Newcomer`), together
+  with the person's identity row, and touched on every later sign-in
+  (`seen/2`); the door, invited memberships and per-person preferences key
+  off it. The person's identifier is on that identity row,
   never on the `users` row (`identifier/1`).
   `deny/1` and `allow/1` are the operator's eject and re-admit: a denied
   person loses their sessions and API keys, their own athanor is archived
   (nothing deleted), their group rows are removed and the invitations their
-  address was still holding are withdrawn; allowing them again reopens the
+  identifier was still holding are withdrawn; allowing them again reopens the
   door and the athanor, re-seats them in it, and leaves the revoked
   credentials revoked.
 
   ## What is decided here, and what is stored below
 
   The statements are `Arca.Users`'. What stays here is the deciding: which
-  provider claims are recorded and which are left as they stand, that a
-  person's id is minted with `Prima.PersonId.prefix/0` and that only an IdP
-  identity may sign in, what an eject costs the person, and what an
-  unanswerable read should read as. A person is not a row inside an
+  claims a sign-in method's provider makes are recorded on the contact
+  fields, what an eject costs the person, and what an unanswerable read
+  should read as. A person is not a row inside an
   athanor — they exist before any athanor does and sit in several at once
   — so every call runs as the server (`Prima.Actor.system/0`), which is
   what `Arca.Users` requires and says why.
   """
 
-  alias Sanctum.Auth.Identity
   alias Sanctum.Tenancy.{Athanors, Members}
 
   @typedoc "A person's row, as the plain map `Arca.Users` answers."
   @type user :: %{required(:id) => String.t(), optional(atom()) => term()}
 
   @typedoc """
-  What the door admitted: `id` is the IdP identity key
-  (`Sanctum.Auth.Identity.key/3`), never a person's own id.
+  What a linked sign-in method's provider said at an unlock: `id` is the
+  method's identity key (`Sanctum.Auth.Identity.key/3`), never a person's
+  own id.
   """
   @type provider_info :: %{
           required(:id) => String.t(),
-          required(:provider) => String.t() | atom(),
+          optional(:provider) => String.t() | atom(),
           optional(:email) => String.t() | nil,
           optional(:verified) => boolean() | :unknown,
           optional(:name) => String.t() | nil
         }
 
   @doc """
-  The person an admitted identity names: their row refreshed, or a new
-  person minted (an id of this server's, `Prima.PersonId.prefix/0`) with
-  the identity recorded as theirs.
-
-  `first_seen_at` is set once; `last_seen_at`, `email`, `email_verified`
-  and `display_name` follow what the provider asserted this time —
-  `email_verified` as the provider's own three answers, so "it never said"
-  is not recorded as "it said no".
-
-  An absent provider claim preserves the stored value, including name and email verification.
-
-  A new person is minted with their live and operational key set on a
-  `local` identity row (`Sanctum.Person.mint_keys/1`), unless `opts[:remote]`
-  names the identity another home holds the keys of, as the `cyfr` door
-  admits it: `%{identifier, directory_url, genesis_hash, head_hash}`. Then
-  their identity row is `remote` and holds no key. A person who already
-  exists keeps the provenance they were minted with, whichever door they
-  come through: `opts[:remote]` writes nothing for them.
+  Record a sign-in on the person's row: `last_seen_at`, and the contact
+  fields the method's provider asserted. An email is written, with
+  `email_verified: true`, only when the provider proved it (`verified:
+  true`); a screen name when one is given. An absent claim leaves the
+  stored value in place. The identity row the key names is touched as
+  last seen. `users.email` decides nothing: it is a contact field.
   """
-  @spec upsert_from_provider(provider_info(), keyword()) :: {:ok, user()} | {:error, term()}
-  def upsert_from_provider(info, opts \\ [])
-
-  def upsert_from_provider(%{id: key, provider: provider} = info, opts)
-      when is_binary(key) and is_list(opts) do
+  @spec seen(user(), provider_info()) :: {:ok, user()} | {:error, term()}
+  def seen(%{id: _} = user, %{id: key} = info) when is_binary(key) do
     now = DateTime.utc_now()
+    Arca.Users.touch_identity(server(), key, now)
 
-    seen =
-      %{
-        email_verified: verified_claim(Map.get(info, :verified)),
-        provider: to_string(provider),
-        last_seen_at: now,
-        updated_at: now
-      }
-      |> Prima.MapUtil.put_present(:email, Map.get(info, :email))
+    attrs =
+      %{last_seen_at: now}
       |> Prima.MapUtil.put_present(:display_name, Map.get(info, :name))
+      |> proved_email(Map.get(info, :email), Map.get(info, :verified))
 
-    case get_by_identity(key) do
-      {:ok, user} ->
-        Arca.Users.touch_identity(server(), key, now)
-        update(user, seen)
-
-      {:error, :not_found} ->
-        first_sign_in(key, seen, now, Keyword.get(opts, :remote))
-
-      {:error, _} = err ->
-        err
-    end
+    update(user, attrs)
   end
 
-  # The person, the identity that names them and their identity row,
-  # minted together: a local person's live and operational key set is
-  # written by `Sanctum.Person.mint_keys/1` inside the transaction that
-  # writes the person row, after the installation guard admitted it, so no
-  # local person exists without their keys and a key set that cannot be
-  # minted refuses the sign-in; a remote person's row names their
-  # identifier and directory and holds no key. A concurrent first sign-in
-  # of the same identity wins the unique index; the loser reads the person
-  # it minted.
-  defp first_sign_in(key, seen, now, remote) do
-    with {:ok, %{provider: provider, issuer: issuer, subject: subject}} <- Identity.parse(key) do
-      user_attrs =
-        Map.merge(seen, %{
-          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
-          first_seen_at: now,
-          created_at: now,
-          prefs: Jason.encode!(%{})
-        })
+  defp proved_email(attrs, email, true) when is_binary(email) and email != "",
+    do: Map.merge(attrs, %{email: email, email_verified: true})
 
-      Arca.Users.mint(
-        server(),
-        user_attrs,
-        %{
-          key: key,
-          provider: provider,
-          issuer: issuer,
-          subject: subject,
-          first_seen_at: now,
-          last_seen_at: now
-        },
-        also: identity_row(remote)
-      )
-    end
-  end
-
-  defp identity_row(nil), do: &Sanctum.Person.mint_keys/1
-
-  defp identity_row(%{identifier: identifier, directory_url: directory_url} = remote) do
-    fn %{id: user_id} ->
-      case Arca.PersonIdentities.create(server(), %{
-             user_id: user_id,
-             provenance: "remote",
-             identifier: identifier,
-             directory_url: directory_url,
-             genesis_hash: remote[:genesis_hash],
-             head_hash: remote[:head_hash]
-           }) do
-        {:ok, _row} -> :ok
-        {:error, reason} -> {:error, reason}
-      end
-    end
-  end
+  defp proved_email(attrs, _email, _unproved), do: attrs
 
   @doc """
   The person a person identifier names here, by their identity row
   (`Arca.PersonIdentities.lookup_identifier/2`): a person admitted through
-  the `cyfr` door, or a local person once enrolled.
+  the CYFR sign-in, or a local person once enrolled.
   """
   @spec get_by_identifier(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
   def get_by_identifier(identifier) when is_binary(identifier) do
@@ -179,11 +101,11 @@ defmodule Sanctum.Tenancy.Users do
          do: {:ok, row.identifier}
   end
 
-  @doc "The person an IdP identity key names, if any."
+  @doc "The person a linked sign-in method's identity key names, if any."
   @spec get_by_identity(String.t()) :: {:ok, user()} | {:error, :not_found | :database_error}
   def get_by_identity(key), do: Arca.Users.get_by_identity(server(), key)
 
-  @doc "Every IdP identity that names this person, oldest first."
+  @doc "Every sign-in method linked to this person, oldest first."
   @spec identities(String.t()) :: [map()]
   def identities(user_id) when is_binary(user_id) do
     # Deliberate default: a display read of how a person has signed in —
@@ -212,14 +134,6 @@ defmodule Sanctum.Tenancy.Users do
       {:ok, %{email: email}} when is_binary(email) and email != "" -> email
       _ -> user_id
     end
-  end
-
-  @doc "Every identity that signed in with this (lowercased) email."
-  @spec list_by_email(String.t()) :: [user()]
-  def list_by_email(email) when is_binary(email) do
-    # Deliberate default: an unanswerable read means "no identity known for
-    # this address" — callers then take the invite path, which grants nothing.
-    rows_or_empty(Arca.Users.list_by_email(server(), String.downcase(email)))
   end
 
   @doc """
@@ -353,7 +267,7 @@ defmodule Sanctum.Tenancy.Users do
   session and API key they created, archive their own athanor, every
   frozen athanor they sit in and every group they leave empty (revoking
   those athanors' keys), and remove their memberships, the invitations
-  their address still holds and their thread follows. Either all of it
+  their identifier still holds and their thread follows. Either all of it
   commits or none of it does, and a failure is answered, never reported
   as an eject. The door entry that keeps them out is written by the
   caller (`Sanctum.Door.Store.deny/4`).
@@ -423,13 +337,6 @@ defmodule Sanctum.Tenancy.Users do
         security_generation: committed.security_generation
     }
   end
-
-  # What the provider asserted about the address, kept as asserted: `true`
-  # proved, `false` refused, `nil` never claimed. An issuer that does not
-  # emit `email_verified` must not read as one that denied it.
-  defp verified_claim(true), do: true
-  defp verified_claim(false), do: false
-  defp verified_claim(_), do: nil
 
   # The row the person's id names is reread below and written as it
   # stands: nothing else the caller's map carries reaches the write.

@@ -216,7 +216,7 @@ defmodule Compendium.Providers.RegistryTest do
       n = System.unique_integer([:positive])
 
       {:ok, %{id: person_id}} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "github|https://github.com|claim-op-#{n}",
           provider: "github",
           email: "claim-op#{n}@example.com",

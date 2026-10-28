@@ -7,10 +7,37 @@ defmodule PrismWeb.AuthControllerTest do
 
   Tests cover:
   - request/2: Unknown provider handling
-  - callback/2: Success and failure cases
+  - callback/2: Success and failure cases. The OpenID Connect callback
+    unlocks the person who linked the identity it names
+    (`Sanctum.SignIn.unlock/1`) and never makes one.
   - device_complete/2: The device-flow ticket
   """
   use CyfrWeb.ConnCase
+
+  # The OpenID Connect issuer this CYFR is configured with, which offers
+  # the callback's sign-in; restored when the case ends.
+  defp issuer! do
+    previous = Application.fetch_env(:sanctum, :oidc_issuer)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:sanctum, :oidc_issuer, value)
+        :error -> Application.delete_env(:sanctum, :oidc_issuer)
+      end
+    end)
+
+    Application.put_env(:sanctum, :oidc_issuer, "https://idp.test")
+  end
+
+  # A person here with the issuer's identity `uid` linked.
+  defp linked!(uid, attrs \\ %{}) do
+    {:ok, user} =
+      Sanctum.Test.People.linked(
+        Map.merge(%{id: "oidcc|https://idp.test|#{uid}", provider: "oidcc"}, attrs)
+      )
+
+    user
+  end
 
   describe "request/2" do
     test "returns 404 for unknown provider", %{conn: conn} do
@@ -29,9 +56,8 @@ defmodule PrismWeb.AuthControllerTest do
 
   describe "callback/2" do
     setup do
-      original = Application.get_env(:sanctum, :auth_provider)
-      Application.put_env(:sanctum, :auth_provider, Sanctum.Test.AltAuthProvider)
-      # The door: these callbacks sign in whoever the provider authenticates.
+      issuer!()
+      # The door's `*`: a sign-in method still makes no one where it stands.
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
 
       # No sign-in speaks to the registry; it points at an address nothing
@@ -41,12 +67,6 @@ defmodule PrismWeb.AuthControllerTest do
       Application.put_env(:cyfr, :registry_url, "127.0.0.1:19")
 
       on_exit(fn ->
-        if original do
-          Application.put_env(:sanctum, :auth_provider, original)
-        else
-          Application.delete_env(:sanctum, :auth_provider)
-        end
-
         if original_registry,
           do: Application.put_env(:cyfr, :registry_url, original_registry),
           else: Application.delete_env(:cyfr, :registry_url)
@@ -81,10 +101,9 @@ defmodule PrismWeb.AuthControllerTest do
       assert html_response(conn, 401) =~ "Access denied"
     end
 
-    test "a callback for an identity the door refuses gets a 403 and no session", %{conn: conn} do
-      # Take the wildcard away: only the operators may sign in now.
-      [entry] = Sanctum.Door.Store.list()
-      :ok = Sanctum.Door.Store.remove(entry.id)
+    test "a callback for an identity no person here linked is refused, with no session, no person and no door request",
+         %{conn: conn} do
+      people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
 
       auth = %Ueberauth.Auth{
         uid: "99999",
@@ -105,14 +124,18 @@ defmodule PrismWeb.AuthControllerTest do
         |> PrismWeb.AuthController.callback(%{})
 
       assert conn.status == 403
-      assert conn.resp_body =~ "not allowed on this server"
+      assert conn.resp_body =~ "No one here signs in with this account"
+      assert conn.resp_body =~ ~s(href="/login")
       refute get_session(conn, :sanctum_session_token)
       user_id = "oidcc|https://idp.test|99999"
       assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identity(user_id)
+      assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
+      assert Sanctum.Door.Store.requests() == []
     end
 
-    test "a denied identity is refused even when the door is *", %{conn: conn} do
-      {:ok, _} = Sanctum.Door.Store.deny("email", "banned@example.com", "test")
+    test "a person a deny names is refused even when the door is *", %{conn: conn} do
+      user = linked!("77777", %{email: "banned@example.com", verified: true})
+      {:ok, _} = Sanctum.Door.Store.deny("person", user.id, "test")
 
       auth = %Ueberauth.Auth{
         uid: "77777",
@@ -133,6 +156,8 @@ defmodule PrismWeb.AuthControllerTest do
         |> PrismWeb.AuthController.callback(%{})
 
       assert conn.status == 403
+      assert conn.resp_body =~ "not allowed on this server"
+      refute get_session(conn, :sanctum_session_token)
     end
 
     defp oidcc_auth(uid, email) do
@@ -149,10 +174,10 @@ defmodule PrismWeb.AuthControllerTest do
       }
     end
 
-    test "a first-time person signs in on their own athanor even with cyfr.run unreachable",
+    test "a person signs in on their own athanor even with cyfr.run unreachable",
          %{conn: conn} do
       uid = "first-#{System.unique_integer([:positive])}"
-      user_id = "oidcc|https://idp.test|#{uid}"
+      user = linked!(uid)
 
       conn =
         conn
@@ -161,13 +186,16 @@ defmodule PrismWeb.AuthControllerTest do
         |> PrismWeb.AuthController.callback(%{})
 
       assert redirected_to(conn) == "/"
-      assert is_binary(Plug.Conn.get_session(conn, :sanctum_session_token))
+      token = Plug.Conn.get_session(conn, :sanctum_session_token)
+      assert is_binary(token)
 
       assert {:ok, %{namespace: nil, personal_athanor_id: pid}} =
-               Sanctum.Tenancy.Users.get(person_id(user_id))
+               Sanctum.Tenancy.Users.get(user.id)
 
       assert {:ok, %{kind: "person", owner_user_id: owner}} = Sanctum.Tenancy.Athanors.get(pid)
-      assert owner == person_id(user_id)
+      assert owner == user.id
+      assert {:ok, %{user_id: user_id, athanor_id: ^pid}} = Sanctum.Session.load(token)
+      assert user_id == user.id
     end
 
     test "a returning person signs in and lands in the chat even with cyfr.run unreachable",
@@ -176,7 +204,7 @@ defmodule PrismWeb.AuthControllerTest do
       user_id = "oidcc|https://idp.test|#{uid}"
 
       {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: user_id,
           provider: "oidcc",
           email: "back@example.com",
@@ -217,7 +245,7 @@ defmodule PrismWeb.AuthControllerTest do
       key = "oidcc|https://idp.test|#{uid}"
 
       {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: key,
           provider: "oidcc",
           verified: :unknown
@@ -265,8 +293,7 @@ defmodule PrismWeb.AuthControllerTest do
     alias Compendium.Registry.CredentialStore
 
     setup do
-      original_provider = Application.get_env(:sanctum, :auth_provider)
-      Application.put_env(:sanctum, :auth_provider, Sanctum.Test.AltAuthProvider)
+      issuer!()
       {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
 
       bypass = Bypass.open()
@@ -279,10 +306,6 @@ defmodule PrismWeb.AuthControllerTest do
       Application.put_env(:cyfr, :oci_registry_url, "registry.test")
 
       on_exit(fn ->
-        if original_provider,
-          do: Application.put_env(:sanctum, :auth_provider, original_provider),
-          else: Application.delete_env(:sanctum, :auth_provider)
-
         if original_url,
           do: Application.put_env(:cyfr, :registry_url, original_url),
           else: Application.delete_env(:cyfr, :registry_url)
@@ -326,10 +349,33 @@ defmodule PrismWeb.AuthControllerTest do
 
     defp session_of(conn), do: Plug.Conn.get_session(conn, :sanctum_session_token)
 
-    test "a first sign-in lands on the person's own athanor, asks the registry nothing and keeps no token",
+    # The identity `key` linked to the person `user_id`, as linking a
+    # sign-in method writes it.
+    defp link!(user_id, key) do
+      {:ok, %{provider: provider, issuer: issuer, subject: subject}} =
+        Sanctum.Auth.Identity.parse(key)
+
+      now = DateTime.utc_now()
+
+      %Arca.Schemas.ExternalIdentity{}
+      |> Arca.Schemas.ExternalIdentity.changeset(%{
+        id: Prima.UUID7.generate_id("ext"),
+        user_id: user_id,
+        key: key,
+        provider: provider,
+        issuer: issuer,
+        subject: subject,
+        first_seen_at: now,
+        last_seen_at: now
+      })
+      |> Arca.Repo.insert!()
+    end
+
+    test "a sign-in lands on the person's own athanor, asks the registry nothing and keeps no token",
          %{conn: conn} do
       uid = "auth_cb_first_#{System.unique_integer([:positive])}"
       user_id = "oidcc|https://idp.test|#{uid}"
+      linked!(uid)
 
       conn = callback(conn, verified_oidcc_auth(uid, token: "gho_never_sent"))
 
@@ -353,7 +399,7 @@ defmodule PrismWeb.AuthControllerTest do
       back = "auth_cb_back_#{n}"
 
       {:ok, user} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "oidcc|https://idp.test|#{back}",
           provider: "oidcc",
           email: "alice@example.com",
@@ -376,6 +422,7 @@ defmodule PrismWeb.AuthControllerTest do
       # exchange is still readable after.
       n = System.unique_integer([:positive])
       uid = "auth_cb_renew_#{n}"
+      linked!(uid)
 
       conn =
         conn
@@ -392,47 +439,45 @@ defmodule PrismWeb.AuthControllerTest do
       refute Plug.Conn.get_session(conn, "_csrf_token") == "pre-login-csrf"
     end
 
-    test "a full server turns a stranger away with a capacity answer and no session",
+    test "a full server still signs in a person who is here: the caps count admissions, not sign-ins",
          %{conn: conn} do
-      # Nothing is shared server-wide for a refused mint to fall back on, so
-      # admitting the person without an athanor would hand them a session
-      # with nowhere to work. The door says so instead.
+      n = System.unique_integer([:positive])
+      user = linked!("full_#{n}", %{email: "full#{n}@example.com", verified: true})
       Cyfr.Test.Settings.put("max_athanors", 1)
 
-      n = System.unique_integer([:positive])
       conn = callback(conn, verified_oidcc_auth("full_#{n}", email: "full#{n}@example.com"))
 
-      body = html_response(conn, 401)
-      assert body =~ "full"
-      refute body =~ "An error occurred during authentication"
-      refute session_of(conn)
+      assert redirected_to(conn) == "/"
+      assert {:ok, %{user_id: user_id}} = Sanctum.Session.load(session_of(conn))
+      assert user_id == user.id
     end
 
-    test "an operator's first sign-in lands in their own athanor",
+    test "the administrator's sign-in lands in their own athanor, with the capability",
          %{conn: conn} do
       n = System.unique_integer([:positive])
       uid = "auth_cb_ops_#{n}"
-      email = "ops#{n}@example.com"
-      prev = Application.get_env(:sanctum, :platform_admin_emails, [])
-      Application.put_env(:sanctum, :platform_admin_emails, [email])
-      on_exit(fn -> Application.put_env(:sanctum, :platform_admin_emails, prev) end)
+      Arca.Repo.delete_all(Arca.Schemas.User)
+      admin = Sanctum.Test.People.first!()
+      link!(admin.id, "oidcc|https://idp.test|#{uid}")
 
-      conn = callback(conn, verified_oidcc_auth(uid, email: email))
+      conn = callback(conn, verified_oidcc_auth(uid, email: "ops#{n}@example.com"))
 
       assert redirected_to(conn) == "/"
 
-      # Their own athanor is minted at admission and is what the session
-      # names; the operator bit is a platform row beside it, not a seat.
-      assert {:ok, %{id: personal_id}} =
-               Sanctum.Tenancy.Athanors.get_by_owner(person_id("oidcc|https://idp.test|#{uid}"))
+      # Their own athanor is minted at their admission and is what the
+      # session names; the grant is a platform row beside it, not a seat.
+      assert {:ok, %{id: personal_id}} = Sanctum.Tenancy.Athanors.get_by_owner(admin.id)
 
-      assert {:ok, %{athanor_id: ^personal_id, platform_admin: true}} =
+      assert {:ok, %{user_id: user_id, athanor_id: ^personal_id, platform_admin: true}} =
                Sanctum.Session.load(session_of(conn))
+
+      assert user_id == admin.id
     end
 
     test "no browser outcome is a JSON document, and no body carries a session token",
          %{conn: conn} do
       uid = "auth_cb_nojson_#{System.unique_integer([:positive])}"
+      linked!(uid)
 
       # With the provider's token and without one: a redirect each time.
       for auth <- [verified_oidcc_auth(uid), verified_oidcc_auth(uid, token: nil)] do
@@ -575,15 +620,7 @@ defmodule PrismWeb.AuthControllerTest do
 
   describe "linking an OpenID Connect door" do
     setup do
-      original = Application.get_env(:sanctum, :auth_provider)
-      Application.put_env(:sanctum, :auth_provider, Sanctum.Test.AltAuthProvider)
-      {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", "test")
-
-      on_exit(fn ->
-        if original,
-          do: Application.put_env(:sanctum, :auth_provider, original),
-          else: Application.delete_env(:sanctum, :auth_provider)
-      end)
+      issuer!()
 
       person = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
       {:ok, session} = Sanctum.Session.create(person)
@@ -677,7 +714,7 @@ defmodule PrismWeb.AuthControllerTest do
       assert user_id == person.user_id
     end
 
-    test "another session's, an expired or a refused intent links nothing, and signs no one in",
+    test "another session's, an expired intent, or a denied person's links nothing, and signs no one in",
          %{session: session, person: person} do
       other =
         Sanctum.TestContext.issuer!(%{
@@ -698,10 +735,12 @@ defmodule PrismWeb.AuthControllerTest do
         assert get_session(conn, :sanctum_session_token) == token
       end
 
-      [entry] = Enum.filter(Sanctum.Door.Store.list(), &(&1.kind == "wildcard"))
-      :ok = Sanctum.Door.Store.remove(entry.id)
+      # A person the door no longer admits holds no standing session to
+      # link a method to.
+      {:ok, row} = Sanctum.Tenancy.Users.get(person.user_id)
+      {:ok, _} = Sanctum.Tenancy.Users.deny(row)
       conn = linked_callback(session.token, intent(person, session), link_auth(uid))
-      assert conn.status == 403
+      assert conn.status == 401
       refute get_session(conn, "cyfr_link_ticket")
 
       assert {:error, :not_found} =
@@ -726,6 +765,15 @@ defmodule PrismWeb.AuthControllerTest do
       end)
 
       directory = DirectoryServer.start!(tls)
+
+      # An installation already set up: a remote newcomer is admitted only
+      # where a person exists (`Sanctum.Newcomer`).
+      {:ok, _} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|cyfr-door-installation",
+          provider: "github"
+        })
+
       identity = DirectoryServer.identity!(directory.dir, directory.url)
       %{fragment: fragment} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
       {:ok, held} = CyfrDoor.challenge(fragment)

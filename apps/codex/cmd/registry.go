@@ -124,8 +124,7 @@ namespace you are a member of, with a request your identity signs, and stores
 them on the server for ` + "`cyfr push`" + `. It waits for a fresh confirmation,
 given in Prism, before minting.
 
-Prints your personal namespace, your memberships, and under ` + "`unsynced`" + `
-any namespace whose token could not be stored. No token is ever printed.
+Prints your personal namespace and your memberships. No token is ever printed.
 Run it again after a token is revoked or a membership is added.`,
 	Args:    cobra.NoArgs,
 	Example: "  cyfr registry sync",

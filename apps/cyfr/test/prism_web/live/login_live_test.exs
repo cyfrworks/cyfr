@@ -41,7 +41,7 @@ defmodule PrismWeb.LoginLiveTest do
       github_id: Application.get_env(:sanctum, :github_client_id),
       google_id: Application.get_env(:sanctum, :google_client_id),
       google_secret: Application.get_env(:sanctum, :google_client_secret),
-      auth_provider: Application.get_env(:sanctum, :auth_provider),
+      oidc_issuer: Application.get_env(:sanctum, :oidc_issuer),
       device_flow: Application.get_env(:sanctum, :device_flow),
       poll_result: Application.get_env(:sanctum, :device_flow_poll_result)
     }
@@ -50,7 +50,7 @@ defmodule PrismWeb.LoginLiveTest do
       restore(:github_client_id, originals.github_id)
       restore(:google_client_id, originals.google_id)
       restore(:google_client_secret, originals.google_secret)
-      restore(:auth_provider, originals.auth_provider)
+      restore(:oidc_issuer, originals.oidc_issuer)
       restore(:device_flow, originals.device_flow)
       restore(:device_flow_poll_result, originals.poll_result)
     end)
@@ -72,32 +72,57 @@ defmodule PrismWeb.LoginLiveTest do
       Application.put_env(:sanctum, :github_client_id, "github-device-id")
       Application.put_env(:sanctum, :google_client_id, "google-device-id")
       Application.put_env(:sanctum, :google_client_secret, "google-device-secret")
-      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
+      Application.delete_env(:sanctum, :oidc_issuer)
 
       {:ok, view, html} = live(conn, ~p"/login")
 
       refute html =~ ~r{href="[^"]*/auth/github"}
       refute html =~ ~r{href="[^"]*/auth/google"}
+      refute html =~ ~r{href="[^"]*/auth/oidcc"}
       assert has_element?(view, "button[phx-click=start][phx-value-provider=github]")
       assert has_element?(view, "button[phx-click=start][phx-value-provider=google]")
       assert html =~ "Sign in with GitHub"
       assert html =~ "Sign in with Google"
     end
 
-    test "an OIDC deployment still kicks off through /auth/oidcc", %{conn: conn} do
-      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OIDC)
+    test "a configured OIDC issuer kicks off through /auth/oidcc", %{conn: conn} do
+      Application.delete_env(:sanctum, :github_client_id)
+      Application.delete_env(:sanctum, :google_client_id)
+      Application.put_env(:sanctum, :oidc_issuer, "https://idp.test")
 
       {:ok, _view, html} = live(conn, ~p"/login")
 
       assert html =~ ~r{href="[^"]*/auth/oidcc"}
       refute html =~ "Sign in with GitHub"
+      refute html =~ "Sign in with Google"
+    end
+
+    test "each configured method is offered, several at once, and an unconfigured one is not",
+         %{conn: conn} do
+      Application.put_env(:sanctum, :github_client_id, "github-device-id")
+      Application.delete_env(:sanctum, :google_client_id)
+      Application.put_env(:sanctum, :oidc_issuer, "https://idp.test")
+
+      {:ok, view, html} = live(conn, ~p"/login")
+
+      assert has_element?(view, "button[phx-click=start][phx-value-provider=github]")
+      assert html =~ ~r{href="[^"]*/auth/oidcc"}
+      refute html =~ "Sign in with Google"
+
+      # With none configured, no linked method is offered.
+      Application.delete_env(:sanctum, :github_client_id)
+      Application.delete_env(:sanctum, :oidc_issuer)
+
+      {:ok, view, html} = live(build_conn(), ~p"/login")
+
+      refute has_element?(view, "button[phx-click=start]")
+      refute html =~ ~r{href="[^"]*/auth/oidcc"}
     end
   end
 
   describe "device flow" do
     setup do
       Application.put_env(:sanctum, :github_client_id, "github-device-id")
-      Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
       Application.put_env(:sanctum, :device_flow, FakeDeviceFlow)
       :ok
     end
@@ -189,13 +214,15 @@ defmodule PrismWeb.LoginLiveTest do
          %{conn: conn} do
       key = "github|https://github.com|login_passkey_#{System.unique_integer([:positive])}"
 
+      # A local person: the door admits them unless a deny names them.
       {:ok, user} =
-        Sanctum.SignIn.admitted(
-          %{id: key, provider: "github", email: "passkey@example.com", verified: true},
-          :allowed
-        )
+        Sanctum.Test.People.linked(%{
+          id: key,
+          provider: "github",
+          email: "passkey@example.com",
+          verified: true
+        })
 
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "test")
       authenticator = Sanctum.TestContext.passkey!(user.id)
 
       # One browser start to finish: the ticket the page mints is bound to
@@ -293,6 +320,15 @@ defmodule PrismWeb.LoginLiveTest do
       end)
 
       directory = DirectoryServer.start!(tls)
+
+      # An installation already set up: a remote newcomer is admitted only
+      # where a person exists (`Sanctum.Newcomer`).
+      {:ok, _} =
+        Sanctum.Test.People.linked(%{
+          id: "github|https://github.com|cyfr-door-installation",
+          provider: "github"
+        })
+
       %{identity: DirectoryServer.identity!(directory.dir, directory.url)}
     end
 

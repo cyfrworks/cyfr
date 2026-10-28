@@ -566,8 +566,9 @@ if config_env() != :test do
   # http catalyst fetches.
   config :sanctum, :private_egress_targets, env_list.("CYFR_PRIVATE_EGRESS_TARGETS")
 
-  # GitHub and Google sign in by device flow (CLI and Prism). GitHub needs
-  # only a client ID; Google needs a client ID and secret.
+  # GitHub and Google sign in by device flow (CLI and Prism), each offered
+  # exactly when it is configured: GitHub needs only a client ID; Google
+  # needs a client ID and secret.
   github_id = env_str.("CYFR_GITHUB_CLIENT_ID", nil)
   google_id = env_str.("CYFR_GOOGLE_CLIENT_ID", nil)
   google_secret = env_str.("CYFR_GOOGLE_CLIENT_SECRET", nil)
@@ -643,48 +644,32 @@ if config_env() != :test do
     config :sanctum, :github_client_id, github_id
   end
 
-  # Platform-admin email allowlist. Addresses are normalized to lowercase before matching.
-  platform_admins =
-    "CYFR_PLATFORM_ADMIN_EMAILS" |> env_list.() |> Enum.map(&String.downcase/1)
-
-  config :sanctum, :platform_admin_emails, platform_admins
-
-  # Select the auth provider from explicit configuration, then OAuth
-  # credentials. Reject unsatisfied explicit settings. Without a provider,
-  # requests are anonymous and tenant-scoped routes are denied.
-  auth_provider =
-    case Cyfr.RuntimeConfig.resolve_auth_provider(getenv) do
-      {:ok, provider} -> provider
+  # The OpenID Connect issuer, offered exactly when all three of its
+  # settings are set; a partly set issuer refuses the boot. Its issuer is
+  # also pinned at `:sanctum, :oidc_issuer` — the single source both the
+  # boot reserved-host check (`Cyfr.Application.validate_oidc_issuer_config!/0`)
+  # and the login id builder (`Sanctum.Auth.OIDC.resolve_issuer/0`) read.
+  oidc =
+    case Cyfr.RuntimeConfig.oidc_config(getenv) do
+      {:ok, oidc} -> oidc
       {:error, message} -> raise message
     end
 
-  config :sanctum, :auth_provider, auth_provider
-
-  # A headless node has no browser page, and an external OIDC provider signs
-  # people in through one (the CLI's device flow is the built-in provider's):
-  # together they leave no way in. Refuse the pair rather than boot a box
-  # nobody can log in to.
-  if headless? and auth_provider == Sanctum.Auth.OIDC do
-    raise "CYFR_HEADLESS=on cannot be combined with CYFR_AUTH_PROVIDER=oidc: " <>
-            "an OIDC provider signs in through the browser page a headless node refuses"
+  # A headless node has no browser page, and the OIDC issuer signs people
+  # in through one: an issuer configured there could never be used.
+  if headless? and oidc do
+    raise "CYFR_HEADLESS=on cannot be combined with CYFR_OIDC_ISSUER: " <>
+            "an OIDC issuer signs in through the browser page a headless node refuses"
   end
 
-  # Generic OIDC, the one browser-callback sign-in. When selected, register
-  # the issuer for ueberauth_oidcc and its strategy. CYFR_OIDC_ISSUER is also
-  # pinned at `:sanctum, :oidc_issuer` — the single source both the boot
-  # reserved-host check (`Cyfr.Application.validate_oidc_issuer_config!/0`) and
-  # the login id builder (`Sanctum.Auth.OIDC.resolve_issuer/0`) read.
-  if auth_provider == Sanctum.Auth.OIDC do
-    {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
-
+  if oidc do
     config :sanctum, :oidc_issuer, oidc.issuer
     config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
 
     # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the
-    # generic-OIDC email-verification lane (`Sanctum.Auth.EmailVerification`)
-    # and the canonical `oidcc|<iss>|<sub>` id form. The callback is the
-    # home's own address (`Sanctum.origin/0`), named here so no request
-    # header chooses it: unnamed, Ueberauth builds it from the request's
+    # canonical `oidcc|<iss>|<sub>` id form. The callback is the home's own
+    # address (`Sanctum.origin/0`), named here so no request header
+    # chooses it: unnamed, Ueberauth builds it from the request's
     # X-Forwarded-Proto and X-Forwarded-Host, which any client can send.
     config :ueberauth, Ueberauth,
       providers: [

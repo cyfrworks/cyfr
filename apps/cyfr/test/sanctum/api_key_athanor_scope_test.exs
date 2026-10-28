@@ -11,7 +11,7 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.{Caller, Context, Gate, TestContext}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -21,7 +21,7 @@ defmodule Sanctum.ApiKeyAthanorScopeTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|keyscope-#{n}",
         provider: "github",
         email: "keyscope#{n}@example.com",

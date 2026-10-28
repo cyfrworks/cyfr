@@ -62,18 +62,18 @@ defmodule Emissary.MCP.RouterTenancyTest do
   end
 
   defp with_auth_provider(provider, fun) do
-    original = Application.get_env(:sanctum, :auth_provider)
+    original = Application.get_env(:sanctum, :bearer_provider)
 
     if provider,
-      do: Application.put_env(:sanctum, :auth_provider, provider),
-      else: Application.delete_env(:sanctum, :auth_provider)
+      do: Application.put_env(:sanctum, :bearer_provider, provider),
+      else: Application.delete_env(:sanctum, :bearer_provider)
 
     try do
       fun.()
     after
       if original,
-        do: Application.put_env(:sanctum, :auth_provider, original),
-        else: Application.delete_env(:sanctum, :auth_provider)
+        do: Application.put_env(:sanctum, :bearer_provider, original),
+        else: Application.delete_env(:sanctum, :bearer_provider)
     end
   end
 

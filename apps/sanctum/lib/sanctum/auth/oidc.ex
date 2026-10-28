@@ -12,7 +12,9 @@ defmodule Sanctum.Auth.OIDC do
 
   ## Configuration
 
-      export CYFR_AUTH_PROVIDER=oidc
+  Offered exactly when all three are set; a partly set issuer refuses the
+  boot:
+
       export CYFR_OIDC_ISSUER=https://auth.example.com
       export CYFR_OIDC_CLIENT_ID=xxx
       export CYFR_OIDC_CLIENT_SECRET=xxx
@@ -20,8 +22,9 @@ defmodule Sanctum.Auth.OIDC do
   ## Usage
 
   This provider proves an identity for `PrismWeb.AuthController.callback/2`,
-  which then asks the door (`Sanctum.Door.admit_identity/2`) and only on
-  admission mints the session. The provider itself never creates one.
+  which unlocks the person who linked it (`Sanctum.SignIn.unlock/1`) and
+  only then mints the session. The provider itself never creates a
+  session, and an identity proves nobody into existence.
 
   ## Re-authentication for one confirmation
 
@@ -169,34 +172,26 @@ defmodule Sanctum.Auth.OIDC do
     iss = resolve_issuer()
 
     email = get_email(auth)
-    extra = Map.get(auth, :extra) || %{}
 
-    case Sanctum.Auth.EmailVerification.verify(provider, email, extra) do
-      :ok ->
-        # Before the door the person is named by their IdP identity key;
-        # their own id, and their namespace, come with admission.
-        identity = Identity.key(provider, iss, to_string(auth.uid))
+    # Before the unlock the person is named by their IdP identity key;
+    # their own id, and their namespace, come with it.
+    identity = Identity.key(provider, iss, to_string(auth.uid))
 
-        # Athanor-less: the athanor is resolved after the door, by the one
-        # recipe, once the person is named by their own id.
-        ctx =
-          Context.build(
-            user_id: identity,
-            door: identity,
-            email: email,
-            provider: to_string(provider),
-            namespace: nil,
-            athanor_id: nil,
-            permissions: Context.person_permissions()
-          )
+    # Athanor-less: the athanor is resolved after the unlock, by the one
+    # recipe, once the person is named by their own id.
+    ctx =
+      Context.build(
+        user_id: identity,
+        door: identity,
+        email: email,
+        provider: to_string(provider),
+        namespace: nil,
+        athanor_id: nil,
+        permissions: Context.person_permissions()
+      )
 
-        Sanctum.Telemetry.auth_event(provider, :success)
-        {:ok, ctx}
-
-      {:error, reason} = err ->
-        Sanctum.Telemetry.auth_event(provider, :failure, %{reason: reason})
-        err
-    end
+    Sanctum.Telemetry.auth_event(provider, :success)
+    {:ok, ctx}
   end
 
   def authenticate(_params) do
@@ -221,6 +216,22 @@ defmodule Sanctum.Auth.OIDC do
   # claims and userinfo; nothing else of the auth names an address.
   defp get_email(%{info: %{email: email}}), do: email
   defp get_email(_auth), do: nil
+
+  @doc """
+  What the issuer said of the email on a `Ueberauth.Auth` struct: `true`
+  when it proved the address, `false` when it said the opposite,
+  `:unknown` when it said nothing. Read from `raw_info.userinfo`, then
+  `raw_info.claims`. Only a proved address is written to the person's
+  contact email (`Sanctum.Tenancy.Users.seen/2`).
+  """
+  @spec email_verified(map()) :: boolean() | :unknown
+  def email_verified(auth) do
+    case Map.get(auth, :extra) do
+      %{raw_info: %{userinfo: %{"email_verified" => claim}}} when is_boolean(claim) -> claim
+      %{raw_info: %{claims: %{"email_verified" => claim}}} when is_boolean(claim) -> claim
+      _none -> :unknown
+    end
+  end
 
   @doc """
   The operator-configured issuer (`:sanctum, :oidc_issuer`, pinned at boot

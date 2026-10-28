@@ -30,24 +30,13 @@ defmodule Aqua.Providers.NotesTest do
     n = System.unique_integer([:positive])
 
     {:ok, u} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{id: "local|idp|note-#{n}", provider: "local"})
+      Sanctum.Test.People.linked(%{id: "local|idp|note-#{n}", provider: "local"})
 
     user = u.id
 
-    {:ok, mine} =
-      Sanctum.Tenancy.Athanors.create(%{
-        kind: "person",
-        name: "Me",
-        slug: "me#{n}",
-        owner_user_id: user,
-        created_by: user
-      })
-
-    {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, mine.id)
-    # The owner's seat in their own athanor — production mints it in
-    # `ensure_personal_athanor/1`, and `Context.focus/2` (the "mine" read)
-    # checks it.
-    {:ok, _} = Sanctum.Tenancy.Members.create(%{user_id: user, athanor_id: mine.id})
+    # The person's own athanor and their seat there, which their admission
+    # made: `Context.focus/2` (the "mine" read) checks the seat.
+    mine = Sanctum.Test.People.athanor!(u)
     {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Trip #{n}")
 
     ctx = %{Sanctum.TestContext.local(:prism) | user_id: user, athanor_id: athanor.id}

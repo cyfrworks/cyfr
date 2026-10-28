@@ -1,6 +1,44 @@
 # SPDX-License-Identifier: FSL-1.1-Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 
+defmodule Sanctum.RecoveryTest.FillWatch do
+  @moduledoc """
+  The component-facts port as the suite installs it
+  (`Sanctum.Test.Components`), telling the process `watch!/1` names of
+  every fill asked for.
+  """
+
+  @behaviour Sanctum.Consent.Components
+
+  @doc "Install this port for the test, telling `observer` of each fill."
+  @spec watch!(pid()) :: :ok
+  def watch!(observer) do
+    real = Sanctum.Consent.Components.impl!()
+
+    ExUnit.Callbacks.on_exit(fn ->
+      Sanctum.Consent.Components.install!(real)
+      :persistent_term.erase({__MODULE__, :observer})
+    end)
+
+    :persistent_term.put({__MODULE__, :observer}, observer)
+    Sanctum.Consent.Components.install!(__MODULE__)
+    :ok
+  end
+
+  for {name, arity} <- Sanctum.Consent.Components.behaviour_info(:callbacks), name != :fill do
+    args = Macro.generate_arguments(arity, __MODULE__)
+    @impl true
+    def unquote(name)(unquote_splicing(args)),
+      do: Sanctum.Test.Components.unquote(name)(unquote_splicing(args))
+  end
+
+  @impl true
+  def fill(athanor, ctx, entry_kind) do
+    send(:persistent_term.get({__MODULE__, :observer}), {:fill, athanor.id, entry_kind})
+    Sanctum.Test.Components.fill(athanor, ctx, entry_kind)
+  end
+end
+
 defmodule Sanctum.RecoveryTest do
   @moduledoc """
   Recovery material and restore, against a scripted directory that speaks
@@ -98,13 +136,32 @@ defmodule Sanctum.RecoveryTest do
     }
   end
 
+  # Setup's mint of the installation's first person, which the guard
+  # decides (`Arca.InstallationClaims`).
+  defp setup_mint do
+    now = DateTime.utc_now()
+
+    Arca.Users.mint(
+      system(),
+      %{
+        id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+        first_seen_at: now,
+        last_seen_at: now,
+        created_at: now,
+        updated_at: now
+      },
+      nil,
+      admission: "setup"
+    )
+  end
+
   # A person seated in a group of their own, and the context their session
   # establishes there.
   defp seated! do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|recovery-#{n}",
         provider: "github",
         email: "recovery#{n}@example.com",
@@ -899,12 +956,14 @@ defmodule Sanctum.RecoveryTest do
       assert session.user_id == user_id
       assert session.provider == "restore"
 
-      # The door names the restored person, who holds no door yet and no
-      # platform administration.
-      assert {:ok, true} = Sanctum.Door.Store.allowed("user_id", user_id)
+      # The restored person is the installation's first, so its platform
+      # administrator; they hold no linked sign-in method yet, and the door
+      # admits them as a local person, with no entry naming them.
+      assert Sanctum.Door.Store.list() == []
+      assert {:ok, :allowed} = Sanctum.Door.admit_person(%{id: user_id})
       assert {:ok, []} = Arca.Users.identities(system(), user_id)
 
-      refute Arca.Repo.exists?(
+      assert Arca.Repo.exists?(
                from(m in Arca.Schemas.Membership,
                  where: m.user_id == ^user_id and m.scope == "platform"
                )
@@ -1000,15 +1059,10 @@ defmodule Sanctum.RecoveryTest do
           set: [state: "pending", outcome: nil, ended_at: nil]
         )
 
-      # Another kit under this token, or a first door, wins nothing.
+      # Another kit under this token, or setup, wins nothing.
       other = elsewhere!(context.directory)
       assert {:error, :token_claimed} = Recovery.restore(other.kit, @token, context.opts)
-
-      assert {:error, :restore_reserved} =
-               Sanctum.SignIn.admitted(
-                 %{id: "github|https://github.com|late", provider: :github, verified: true},
-                 :allowed
-               )
+      assert {:error, :restore_reserved} = setup_mint()
 
       assert {:ok, %{status: "completed", user_id: ^user_id, session_token: _}} =
                Recovery.restore(identity.kit, @token, context.opts)
@@ -1206,6 +1260,7 @@ defmodule Sanctum.RecoveryTest do
 
     test "superseded after its mint and before its session, it provisions and issues nothing, and its person stays",
          context do
+      :ok = Sanctum.RecoveryTest.FillWatch.watch!(self())
       reserved!()
       identity = elsewhere!(context.directory)
       _stopped = stopped_at_keys_active!(context, identity)
@@ -1220,13 +1275,17 @@ defmodule Sanctum.RecoveryTest do
         )
 
       assert answer == {:error, :superseded}
+      refute_received {:fill, _athanor_id, _entry_kind}
       assert [%{phase: "superseded", user_id: user_id}] = attempts("restore")
       assert is_binary(user_id)
       assert count(User) == 1
       assert sessions(user_id) == 0
-      assert Sanctum.Tenancy.Users.personal_athanor_id(user_id) == :none
 
-      refute Arca.Repo.exists?(from(m in Arca.Schemas.Membership, where: m.user_id == ^user_id))
+      # The admission wrote the person's athanor and their grant with them;
+      # superseded after it, the attempt asks for no fill and issues no
+      # session.
+      assert {:ok, _athanor} = Sanctum.Tenancy.Users.personal_athanor_id(user_id)
+      assert Sanctum.Tenancy.platform_admin?(user_id)
 
       assert {:ok, %{state: "ended", outcome: "superseded"}} = InstallationClaims.get(system())
 
@@ -1267,17 +1326,23 @@ defmodule Sanctum.RecoveryTest do
 
     test "stopped at minted, a directory that cannot answer leaves it there, and a retry issues the session",
          context do
+      :ok = Sanctum.RecoveryTest.FillWatch.watch!(self())
       reserved!()
       identity = elsewhere!(context.directory)
 
       {:ok, %{user_id: user_id} = restored} =
         Recovery.restore(identity.kit, @token, context.opts)
 
+      # The fill is asked for once the head still names the restored keys.
+      {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(user_id)
+      assert_received {:fill, ^athanor_id, "sign_in"}
+
       :ok = stopped_at_minted!(restored)
 
       assert {:error, :unavailable} =
                Recovery.restore(identity.kit, @token, unreachable(context.opts))
 
+      refute_received {:fill, _athanor_id, _entry_kind}
       assert [%{phase: "minted"}] = attempts("restore")
       assert sessions(user_id) == 0
       assert {:ok, %{state: "pending"}} = InstallationClaims.get(system())
@@ -1285,6 +1350,7 @@ defmodule Sanctum.RecoveryTest do
       assert {:ok, %{status: "completed", user_id: ^user_id, session_token: token}} =
                Recovery.restore(identity.kit, @token, context.opts)
 
+      assert_received {:fill, ^athanor_id, "sign_in"}
       assert {:ok, %{user_id: ^user_id}} = Sanctum.Session.get(token)
       assert [%{phase: "completed"}] = attempts("restore")
       assert count(User) == 1
@@ -1332,19 +1398,18 @@ defmodule Sanctum.RecoveryTest do
       assert count(User) == 0
     end
 
-    test "racing a first sign-in, the restore alone holds the installation", context do
+    test "racing setup, the restore alone holds the installation", context do
       reserved!()
       identity = elsewhere!(context.directory)
-      first = %{id: "github|https://github.com|first", provider: :github, verified: true}
 
-      assert {:error, :restore_reserved} = Sanctum.SignIn.admitted(first, :admin)
+      assert {:error, :restore_reserved} = setup_mint()
 
       Directory.next(context.directory.dir, identity.identifier, :drop)
       {:error, {:retry, _, _}} = Recovery.restore(identity.kit, @token, context.opts)
 
       # With the token unset, the claim made still reserves the node.
       InstallationClaims.install_mode!(:ordinary)
-      assert {:error, :restore_reserved} = Sanctum.SignIn.admitted(first, :admin)
+      assert {:error, :restore_reserved} = setup_mint()
       assert count(User) == 0
     end
   end
@@ -1379,7 +1444,7 @@ defmodule Sanctum.RecoveryTest do
       assert user_id == restored.user_id
     end
 
-    test "once the restore session ends, passkey sign-in admits them by their door entry",
+    test "once the restore session ends, passkey sign-in admits them as a local person",
          context do
       restored = restored!(context)
       {{:ok, _active}, auth} = first_passkey(restored.ctx)
@@ -1393,12 +1458,12 @@ defmodule Sanctum.RecoveryTest do
       assert {:ok, %{user_id: user_id}} = Sanctum.Session.get(token)
       assert user_id == restored.user_id
 
-      # The operator can still deny them.
-      {:ok, _} = Sanctum.Door.Store.deny("user_id", restored.user_id, "operator")
-      held = Passkeys.sign_in_challenge()
+      # They are the installation's administrator, whom no deny names.
+      assert {:error, :platform_admin} =
+               Sanctum.Door.Store.deny("person", restored.user_id, "operator")
 
-      assert {:error, {:door, :denied}} =
-               Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
+      held = Passkeys.sign_in_challenge()
+      assert {:ok, _} = Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
     end
 
     test "a closed window reopens only by the kit and the capability against a new challenge",

@@ -39,9 +39,10 @@ func vectorIdentifiers(t *testing.T) []string {
 	return identifiers
 }
 
-// An argument is read as the identifier, email or user id it is spelled
-// as; only the identifier grammar Prima.Identity holds makes an identifier.
-func TestMemberKeyReadsTheThreeForms(t *testing.T) {
+// An argument is read as the identifier or user id it is spelled as; only
+// the identifier grammar Prima.Identity holds makes an identifier, and an
+// email is no form at all: it is sent as the user id it is not.
+func TestMemberKeyReadsTheTwoForms(t *testing.T) {
 	for _, identifier := range vectorIdentifiers(t) {
 		if got := memberKey(identifier); got != "identifier" {
 			t.Errorf("memberKey(%q) = %q, want identifier", identifier, got)
@@ -50,14 +51,13 @@ func TestMemberKeyReadsTheThreeForms(t *testing.T) {
 
 	hex := strings.Repeat("ab", 32)
 	cases := map[string]string{
-		"someone@example.com":          "email",
-		"github|https://github.com|42": "user_id",
-		"usr_01a0f6f8-1629-79c3-9217":  "user_id",
-		"per_" + strings.ToUpper(hex):  "user_id",
-		"per_" + hex[:62]:              "user_id",
-		"per_" + hex + "0":             "user_id",
-		" per_" + hex:                  "user_id",
-		"per_x":                        "user_id",
+		"someone@example.com":         "user_id",
+		"usr_01a0f6f8-1629-79c3-9217": "user_id",
+		"per_" + strings.ToUpper(hex): "user_id",
+		"per_" + hex[:62]:             "user_id",
+		"per_" + hex + "0":            "user_id",
+		" per_" + hex:                 "user_id",
+		"per_x":                       "user_id",
 	}
 	for target, want := range cases {
 		if got := memberKey(target); got != want {
@@ -73,9 +73,8 @@ func TestMemberArgsSendTheOneFieldTheFormFills(t *testing.T) {
 	athanor := ops.Value("team")
 
 	for target, field := range map[string]string{
-		identifier:                     "identifier",
-		"someone@example.com":          "email",
-		"github|https://github.com|42": "user_id",
+		identifier:                    "identifier",
+		"usr_01a0f6f8-1629-79c3-9217": "user_id",
 	} {
 		for action, payload := range map[string]any{
 			"add":    memberAddArgs(athanor, target),
@@ -112,23 +111,29 @@ func TestMemberArgsSendTheOneFieldTheFormFills(t *testing.T) {
 	}
 }
 
-func TestMemberHelpNamesTheThreeForms(t *testing.T) {
+func TestMemberHelpNamesTheTwoForms(t *testing.T) {
 	for _, cmd := range []struct{ use, short string }{
 		{memberAddCmd.Use, memberAddCmd.Short},
 		{memberRemoveCmd.Use, memberRemoveCmd.Short},
 	} {
-		if !strings.Contains(cmd.use, "<email|user_id|identifier>") {
-			t.Errorf("usage %q does not name the three forms", cmd.use)
+		if !strings.Contains(cmd.use, "<user_id|identifier>") {
+			t.Errorf("usage %q does not name the two forms", cmd.use)
 		}
-		for _, form := range []string{"email", "user id", "person identifier"} {
+		for _, form := range []string{"user id", "person identifier"} {
 			if !strings.Contains(cmd.short, form) {
 				t.Errorf("help %q does not name %s", cmd.short, form)
 			}
 		}
+		if strings.Contains(strings.ToLower(cmd.use+cmd.short), "email") {
+			t.Errorf("help %q %q still names an email", cmd.use, cmd.short)
+		}
 	}
-	for _, form := range []string{"email", "user id", "person identifier"} {
+	for _, form := range []string{"user id", "person identifier"} {
 		if !strings.Contains(memberCmd.Long, form) {
 			t.Errorf("member help does not name %s", form)
 		}
+	}
+	if strings.Contains(strings.ToLower(memberCmd.Long), "email") {
+		t.Errorf("member help still names an email: %q", memberCmd.Long)
 	}
 }

@@ -287,10 +287,11 @@ defmodule Sanctum.Tenancy.CapsTest do
     uid = "github|https://github.com|seat-#{System.unique_integer([:positive])}"
     {:ok, group} = Athanors.create_group(uid, "Seats")
     # creator holds one seat; one invitation fills the second
-    assert {:ok, :invited} = Members.add(group, [email: "a-#{uid}@example.com"], uid)
+    invitee = fn name -> "per_" <> Prima.Digest.sha256_hex("#{name}-#{uid}") end
+    assert {:ok, :invited} = Members.add(group, [identifier: invitee.("a")], uid)
 
     assert {:error, {:limit_reached, :max_members_per_group, 2}} =
-             Members.add(group, [email: "b@example.com"], uid)
+             Members.add(group, [identifier: invitee.("b")], uid)
   end
 
   defp active_count do

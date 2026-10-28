@@ -34,7 +34,7 @@ defmodule Sanctum.IdentityFreshnessTest do
   alias Prima.Identity.{Entry, RecoverRequest}
   alias Sanctum.{Caller, Cipher, CipherAAD, Context, IdentityFreshness}
   alias Sanctum.Consent.Authz
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
   alias Sanctum.Test.DirectoryServer.{Resolver, Server}
 
   @host "dir-a.test"
@@ -230,7 +230,7 @@ defmodule Sanctum.IdentityFreshnessTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|freshness-#{n}",
         provider: "github",
         email: "freshness#{n}@example.com",

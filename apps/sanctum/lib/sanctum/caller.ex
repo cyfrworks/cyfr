@@ -375,7 +375,7 @@ defmodule Sanctum.Caller do
         Context.build(
           user_id: client.user_id,
           email: device.user.email,
-          provider: device.user.provider,
+          provider: "device",
           namespace: device.user.namespace,
           athanor_id: client.athanor_id,
           permissions: Context.person_permissions(),

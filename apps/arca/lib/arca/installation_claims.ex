@@ -33,12 +33,24 @@ defmodule Arca.InstallationClaims do
 
   ## The guard
 
-  `guard!/1` is the check every person mint runs inside its own
-  transaction (`Arca.Users.mint/4`). An ordinary mint is refused
-  `:restore_reserved` while a claim is pending, whatever the mode, and on
-  a node with no person while the mode is `:restore_reserved`. A restore's
-  mint names its claim, and is admitted only while that claim is pending,
-  exactly as bound, on a node with no person.
+  `guard!/2` is the check every person mint runs inside its own
+  transaction (`Arca.Users.mint/4`), naming the mint's admission. The
+  installation's first person is made only by `setup` or by a restore,
+  and is its platform administrator: every other admission needs an
+  existing person's act, so on a node with no person it is refused
+  `:not_set_up`.
+
+    * A restore's mint names its claim, and is admitted only while that
+      claim is pending, exactly as bound, on a node with no person.
+    * A `setup` mint is admitted on a node with no person. Once its person
+      exists, `setup` answers that person again while they hold no
+      sign-in method (no passkey or paired device ever, the first-method
+      mark on their identity row, and no linked sign-in method), read
+      under their lock, and is `:setup_closed` from the commit that gave
+      them one on, and on a node whose people setup did not make.
+    * Every other mint is refused `:restore_reserved` while a claim is
+      pending, whatever the mode, and on a node with no person while the
+      mode is `:restore_reserved`; `setup` is refused the same way.
 
   ## One order
 
@@ -54,7 +66,7 @@ defmodule Arca.InstallationClaims do
   import Ecto.Query
 
   alias Arca.QueryHelpers
-  alias Arca.Schemas.{InstallationClaim, ServerMeta, User}
+  alias Arca.Schemas.{ExternalIdentity, InstallationClaim, PersonIdentity, ServerMeta, User}
 
   defmodule NotInstalledError do
     @moduledoc """
@@ -127,34 +139,76 @@ defmodule Arca.InstallationClaims do
 
   def get(%Prima.Actor{}), do: {:error, :cross_tenant}
 
+  @typedoc """
+  What the guard admits: `:first`, the installation's first person, who
+  is its platform administrator; `:ok`, another person; `{:readmit,
+  user}`, the person setup made, answered again.
+  """
+  @type admitted :: :first | :ok | {:readmit, User.t()}
+
   @doc false
-  @spec guard!(claim_ref() | nil) :: :ok | {:error, :restore_reserved | :not_claimed | :not_empty}
+  @spec guard!(String.t(), claim_ref() | nil) ::
+          admitted()
+          | {:error, :restore_reserved | :not_claimed | :not_empty | :not_set_up | :setup_closed}
   # The first-person guard, inside the caller's locking transaction
-  # (`Arca.Users.mint/4`): `nil` for an ordinary mint, or the claim a
-  # restore's mint names. Answers `:ok` or the refusal the caller rolls
-  # back with. Reads the installed mode, which raises when none is.
+  # (`Arca.Users.mint/4`): the mint's admission, and the claim a restore's
+  # mint names. Answers what it admits or the refusal the caller rolls back
+  # with. Reads the installed mode, which raises when none is.
   # arca:db-raise-ok a transaction step: the mint that runs it rescues around its transaction.
-  def guard!(claim) do
-    mode = mode()
+  def guard!("restore", claim) do
+    _mode = mode()
     lock_order!()
 
     case claim do
-      nil ->
-        cond do
-          pending() != nil -> {:error, :restore_reserved}
-          mode == :restore_reserved and empty?() -> {:error, :restore_reserved}
-          true -> :ok
-        end
-
       %{request_id: request_id, token_digest: token_digest} ->
         cond do
           not bound?(pending(), request_id, token_digest) -> {:error, :not_claimed}
           not empty?() -> {:error, :not_empty}
-          true -> :ok
+          true -> :first
         end
 
       _malformed ->
         {:error, :not_claimed}
+    end
+  end
+
+  def guard!(admission, _claim) when is_binary(admission) do
+    mode = mode()
+    lock_order!()
+
+    cond do
+      pending() != nil -> {:error, :restore_reserved}
+      empty?() and mode == :restore_reserved -> {:error, :restore_reserved}
+      empty?() and admission == "setup" -> :first
+      empty?() -> {:error, :not_set_up}
+      admission == "setup" -> readmitted()
+      true -> :ok
+    end
+  end
+
+  # The person setup made, while they hold no sign-in method: read under
+  # their lock, which a passkey's first-method mark, a pairing's and a link
+  # each take before they write, so a method committed first is seen and
+  # one that starts later waits for this decision.
+  defp readmitted do
+    case Arca.Repo.one(from(u in User, where: u.admission == "setup", select: u.id)) do
+      nil ->
+        {:error, :setup_closed}
+
+      user_id ->
+        _locked = Arca.DirectoryHeads.lock_person!(user_id)
+        user = Arca.Repo.get!(User, user_id)
+
+        holds_method? =
+          Arca.Repo.exists?(
+            from(p in PersonIdentity,
+              where: p.user_id == ^user_id and not is_nil(p.first_method_at)
+            )
+          ) or Arca.Repo.exists?(from(i in ExternalIdentity, where: i.user_id == ^user_id))
+
+        if user.status == "active" and not holds_method?,
+          do: {:readmit, user},
+          else: {:error, :setup_closed}
     end
   end
 

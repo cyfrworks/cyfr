@@ -53,33 +53,25 @@ defmodule Cyfr.ApplicationTest do
     Cyfr.SeedOffer => 5_000
   }
 
-  # A wildcard CORS origin once authentication is configured must fail closed
-  # at boot in a real release, not merely warn. cors_enforcement/3 is the pure
-  # decision seam the boot guard uses (first arg: auth configured?).
-  describe "cors_enforcement/3" do
-    test "auth configured + wildcard + real release => raise" do
-      assert {:raise, msg} = Cyfr.Application.cors_enforcement(true, ["*"], true)
+  # A wildcard CORS origin must fail closed at boot in a real release, not
+  # merely warn: every CYFR signs people in. cors_enforcement/2 is the pure
+  # decision seam the boot guard uses.
+  describe "cors_enforcement/2" do
+    test "a wildcard in a real release => raise" do
+      assert {:raise, msg} = Cyfr.Application.cors_enforcement(["*"], true)
       assert msg =~ "FATAL"
-      assert msg =~ "authentication enabled"
       assert msg =~ "CYFR_CORS_ALLOWED_ORIGINS"
-
-      assert {:raise, _} =
-               Cyfr.Application.cors_enforcement(true, ["https://a.example", "*"], true)
+      assert {:raise, _} = Cyfr.Application.cors_enforcement(["https://a.example", "*"], true)
     end
 
-    test "auth configured + wildcard outside a release => warn (dev/test not blocked)" do
-      assert {:warn, msg} = Cyfr.Application.cors_enforcement(true, ["*"], false)
+    test "a wildcard outside a release => warn (dev/test not blocked)" do
+      assert {:warn, msg} = Cyfr.Application.cors_enforcement(["*"], false)
       assert msg =~ "suppressed outside a release"
     end
 
-    test "auth configured with an explicit allowlist => ok" do
-      assert :ok = Cyfr.Application.cors_enforcement(true, ["https://app.example"], true)
-      assert :ok = Cyfr.Application.cors_enforcement(true, [], true)
-    end
-
-    test "no auth configured is never blocked, even with a wildcard in a release" do
-      assert :ok = Cyfr.Application.cors_enforcement(false, ["*"], true)
-      assert :ok = Cyfr.Application.cors_enforcement(false, ["*"], false)
+    test "an explicit allowlist => ok" do
+      assert :ok = Cyfr.Application.cors_enforcement(["https://app.example"], true)
+      assert :ok = Cyfr.Application.cors_enforcement([], true)
     end
   end
 

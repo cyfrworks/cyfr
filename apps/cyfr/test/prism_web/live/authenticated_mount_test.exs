@@ -124,12 +124,18 @@ defmodule PrismWeb.AuthenticatedMountTest do
     user = test_user()
     conn = log_in_user(conn, user)
 
-    # Dev (the default): the full sidebar in the runtime's vocabulary.
+    # Lite is the default for a person who is not the administrator.
+    {_view, html} = mount_athanor(conn, "/settings")
+    refute html =~ "nav-executions"
+    assert html =~ "nav-chat"
+
+    # Dev: the full sidebar in the runtime's vocabulary.
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    {:ok, row} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
+
     {_view, html} = mount_athanor(conn, "/settings")
     assert html =~ "nav-executions"
     assert html =~ "Tinctures"
-
-    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
 
     {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "lite"})
 
@@ -145,6 +151,8 @@ defmodule PrismWeb.AuthenticatedMountTest do
        %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
 
     # Dev: the sidebar with every page (webhooks and enforcements included),
     # the live indicators, and the drawer for narrow screens.
@@ -155,7 +163,6 @@ defmodule PrismWeb.AuthenticatedMountTest do
     assert render(find_live_child(view, "topbar")) =~ ~s(id="live-indicators")
 
     {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
-
     {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "lite"})
 
     # Lite: no sidebar link at all, the drawer holds the lite pages, and the

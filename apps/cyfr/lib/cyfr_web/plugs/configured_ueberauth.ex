@@ -4,8 +4,9 @@
 defmodule CyfrWeb.Plugs.ConfiguredUeberauth do
   @moduledoc """
   Ueberauth, with its route table built from the providers this boot
-  configured — the generic OIDC strategy when `CYFR_AUTH_PROVIDER=oidc`, and
-  nothing otherwise (GitHub and Google sign in by device flow).
+  configured — the generic OIDC strategy when the three `CYFR_OIDC_*`
+  settings are set, and nothing otherwise (GitHub and Google sign in by
+  device flow).
 
   ## Why the routes are built per call
 

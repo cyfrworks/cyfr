@@ -99,7 +99,6 @@ func TestInitQuestionsEndOnAnInterrupt(t *testing.T) {
 		{"the machine name", []string{"1"}, false},
 		{"the domain", []string{"2"}, false},
 		{"the certificate email", []string{"2", "cyfr.example.com"}, false},
-		{"the admin email", []string{"3"}, false},
 		{"a release's access question, with --force", nil, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -218,7 +217,7 @@ func TestInitSaysAnAnsweredModeWasNotAppliedWithoutATemplate(t *testing.T) {
 	version.Version = "0.6.0-alpha.1"
 	downloadScaffold = func(string) error { return errors.New("the release is offline") }
 	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("1\n\n\n")
+	askInput = strings.NewReader("1\n\n")
 	var out bytes.Buffer
 	err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
 	if err == nil || err.Error() != "CYFR was not set up to be reached as answered (tailnet): there is no .env.example to write .env from" {

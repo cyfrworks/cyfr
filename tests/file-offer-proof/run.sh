@@ -130,14 +130,12 @@ browser_home "$CELL" home.test
 step "starting home.test on a fresh SQLite cell"
 server_start "$CELL"
 
-step "three people signed in, the sender an operator, who lets the other two in at the door"
+step "three people signed in, the sender the administrator, who opens the door to the other two"
 sender="$(offer_fixture person operator@example.com file-offer-sender "Sam Sender")"
 [ -n "$sender" ] || fail "the fixture signed the sender in nowhere"
 sender_token="$(field "$sender" token)"
-for email in recipient@example.com outsider@example.com; do
-  admitted="$(offer_fixture admit "$sender_token" "$email")"
-  printf '%s' "$admitted" | grep -q "\"allowed\":\"$email\"" || fail "$email was not let in: $admitted"
-done
+admitted="$(offer_fixture admit "$sender_token")"
+printf '%s' "$admitted" | grep -q '"allowed":"\*"' || fail "the door was not opened: $admitted"
 recipient="$(offer_fixture person recipient@example.com file-offer-recipient "Rae Recipient")"
 outsider="$(offer_fixture person outsider@example.com file-offer-outsider "Oli Outsider")"
 [ -n "$recipient" ] && [ -n "$outsider" ] || fail "the fixture signed the recipient or the outsider in nowhere"

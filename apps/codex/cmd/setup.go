@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/mail"
 	"os"
 	"slices"
 	"sync"
@@ -30,11 +29,11 @@ func init() {
 
 var setupCmd = &cobra.Command{
 	Use:     "setup",
-	Short:   "Set up CYFR from pages on this machine's screen: how it is reached, your email, then the start",
+	Short:   "Set up CYFR from pages on this machine's screen: how it is reached, then the start",
 	GroupID: "server",
 	Long: `Set up a new CYFR in the current directory from pages shown on this machine's own screen, the face of 'cyfr init' for a device with a touch screen and no keyboard. It serves the pages on 127.0.0.1, at a port of its own, before anything of the stack runs, prints their address and writes it to .cyfr/setup.url while it serves them, then, on a machine with a display, opens them in the default browser as 'cyfr open' does. --no-open leaves that to a device's launcher, which reads the address from .cyfr/setup.url; a Linux machine with neither DISPLAY nor WAYLAND_DISPLAY set has no display. Nothing off this machine reaches them: the address carries a token of this run, and every request must come from the pages themselves.
 
-The pages ask how CYFR is reached (your phone and laptop via Tailscale, the recommended choice; only this device; or, under Advanced, a public domain with an optional certificate email) and the email of CYFR's administrator, then start: they run what 'cyfr init' runs, the same steps in the same order, then what 'cyfr up' runs. For tailnet access, the join shows its approval link as a QR code and as text with a Copy button, under it the machine's name (cyfr unless changed there), and waits for the approval; a join that fails, expires or is cancelled leaves CYFR reached from this device only, and the pages offer to try the join again or to start CYFR on this device only. A start that fails shows why, and offers to try again or, for CYFR reached from other devices, to start it on this device only. Each refusal is the command line's own sentence.
+The pages ask how CYFR is reached (your phone and laptop via Tailscale, the recommended choice; only this device; or, under Advanced, a public domain with an optional certificate email), then start: they run what 'cyfr init' runs, the same steps in the same order, then what 'cyfr up' runs. For tailnet access, the join shows its approval link as a QR code and as text with a Copy button, under it the machine's name (cyfr unless changed there), and waits for the approval; a join that fails, expires or is cancelled leaves CYFR reached from this device only, and the pages offer to try the join again or to start CYFR on this device only. A start that fails shows why, and offers to try again or, for CYFR reached from other devices, to start it on this device only. Each refusal is the command line's own sentence.
 
 Once CYFR is up, the pages show its address, with a Copy button, and move the browser there, apart from a tailnet address, which a browser on this device reaches only through CYFR's SOCKS5 proxy on 127.0.0.1:1055; the program stops serving the pages once they have read that, or a minute after. Run in a project whose .env exists, it refuses as 'cyfr init' refuses to change how an existing CYFR is reached, serving nothing; 'cyfr access <mode>' changes that. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
 
@@ -173,17 +172,6 @@ func refuseExistingHome(path string) error {
 	return existingHomeRefusal("cyfr setup", current)
 }
 
-// checkAdminEmail refuses an administrator's email the pages do not take:
-// anything but one address, which init writes as the home's operators'
-// setting, a list where a comma would name a second administrator.
-func checkAdminEmail(email string) error {
-	addr, err := mail.ParseAddress(email)
-	if email == "" || err != nil || addr.Name != "" || addr.Address != email {
-		return errors.New("Type the one email you sign in with, such as you@example.com: it makes you this CYFR's administrator")
-	}
-	return nil
-}
-
 // stayLocal is a new home's mode left unapplied by its person's choice on
 // the pages, the home reached from this device only, err why.
 type stayLocal struct{ err error }
@@ -247,10 +235,9 @@ func (s *setupSession) result() error {
 	return s.err
 }
 
-// Check refuses answers the start would refuse, the email apart: a mode
-// outside the three, and a public home's domain or certificate email that
-// is not one.
-func (s *setupSession) Check(a setup.Answers) error {
+// check refuses answers the start would refuse: a mode outside the three,
+// and a public home's domain or certificate email that is not one.
+func (s *setupSession) check(a setup.Answers) error {
 	switch a.Mode {
 	case access.ModeLocal, access.ModeTailnet:
 		if a.Domain != "" || a.ACMEEmail != "" {
@@ -269,10 +256,7 @@ func (s *setupSession) Check(a setup.Answers) error {
 // Start begins the run with a, refusing what it would refuse before
 // anything is written, and a project whose .env exists by now.
 func (s *setupSession) Start(a setup.Answers) error {
-	if err := s.Check(a); err != nil {
-		return err
-	}
-	if err := checkAdminEmail(a.Email); err != nil {
+	if err := s.check(a); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -378,8 +362,8 @@ func (s *setupSession) run(a setup.Answers) {
 	// The settings step is init's writing of the new .env.
 	wroteEnv := false
 	err := initProject(s.ctx, initOptions{noPull: s.o.noPull}, initFace{
-		answers: func(context.Context) (accessChoice, string, error) {
-			return choice, a.Email, nil
+		answers: func(context.Context) (accessChoice, error) {
+			return choice, nil
 		},
 		apply: s.apply,
 		step: func(name string) {

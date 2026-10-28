@@ -8,7 +8,7 @@
 
 (() => {
   const token = location.hash.slice(1);
-  const answers = { mode: "", domain: "", acme_email: "", email: "" };
+  const answers = { mode: "", domain: "", acme_email: "" };
   const stepNames = {
     files: () => "Getting CYFR's files",
     settings: () => "Writing its settings",
@@ -83,8 +83,7 @@
   function go(name) {
     screen = name;
     if (phase === "answering") show(name);
-    const focus = { public: "#domain", email: "#email" }[name];
-    if (focus) $(focus).focus();
+    if (name === "public") $("#domain").focus();
   }
 
   function render(state) {
@@ -242,24 +241,18 @@
         answers.mode = b.dataset.mode;
         answers.domain = "";
         answers.acme_email = "";
-        go(answers.mode === "public" ? "public" : "email");
+        if (answers.mode === "public") {
+          go("public");
+        } else {
+          act("how", async () => render(await api("/api/start", answers)));
+        }
       });
     }
     const on = (action, fn) => $(`[data-action="${action}"]`).addEventListener("click", fn);
-    on("public-next", () =>
+    on("public-start", () =>
       act("public", async () => {
-        const domain = $("#domain").value.trim();
-        const acme = $("#acme-email").value.trim();
-        await api("/api/check", { mode: "public", domain, acme_email: acme });
-        answers.domain = domain;
-        answers.acme_email = acme;
-        go("email");
-      }),
-    );
-    on("email-back", () => go(answers.mode === "public" ? "public" : "how"));
-    on("start", () =>
-      act("email", async () => {
-        answers.email = $("#email").value.trim();
+        answers.domain = $("#domain").value.trim();
+        answers.acme_email = $("#acme-email").value.trim();
         render(await api("/api/start", answers));
       }),
     );
@@ -268,7 +261,7 @@
       setError("approval", "");
     });
     // A refusal shown under a field goes once the field is typed in again.
-    for (const [field, where] of [["#domain", "public"], ["#acme-email", "public"], ["#email", "email"]]) {
+    for (const [field, where] of [["#domain", "public"], ["#acme-email", "public"]]) {
       $(field).addEventListener("input", () => setError(where, ""));
     }
     on("rename", () =>

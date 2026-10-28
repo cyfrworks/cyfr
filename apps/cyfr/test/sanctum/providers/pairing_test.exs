@@ -30,7 +30,7 @@ defmodule Sanctum.Providers.PairingTest do
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Prima.Identity.Encoding
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -45,7 +45,7 @@ defmodule Sanctum.Providers.PairingTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|pairing-tool-#{n}",
         provider: "github",
         email: "pairing-tool#{n}@example.com",

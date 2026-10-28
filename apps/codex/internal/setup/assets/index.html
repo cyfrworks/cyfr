@@ -35,6 +35,7 @@
     <button type="button" class="choice" data-mode="public">
       <span class="label">Advanced: a public domain</span>
     </button>
+    <p class="sentence" role="alert" data-error="how"></p>
     <button type="button" class="back" data-go="welcome">Back</button>
   </section>
 
@@ -45,17 +46,8 @@
     <label for="acme-email">Email for the certificate authority's notices (optional)</label>
     <input id="acme-email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false">
     <p class="sentence" role="alert" data-error="public"></p>
-    <button type="button" class="primary" data-action="public-next">Next</button>
+    <button type="button" class="primary" data-action="public-start">Start</button>
     <button type="button" class="back" data-go="how">Back</button>
-  </section>
-
-  <section data-screen="email" hidden>
-    <h1>Your email</h1>
-    <label for="email">The email you sign in with. It makes you this CYFR's administrator.</label>
-    <input id="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" spellcheck="false" required placeholder="you@example.com">
-    <p class="sentence" role="alert" data-error="email"></p>
-    <button type="button" class="primary" data-action="start">Start</button>
-    <button type="button" class="back" data-action="email-back">Back</button>
   </section>
 
   <section data-screen="progress" hidden>

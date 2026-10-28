@@ -6,18 +6,20 @@ defmodule Sanctum.Providers.Door do
   The `door` tool: the server allowlist — who may sign in here. Platform
   admins only (`scope: :platform` on every action).
 
-  `allow` writes an entry (email, user_id, identifier, or `*`); an
-  `identifier` entry names a person identifier (`per_…`), by which the
-  door judges a person the `cyfr` door presents. `deny` writes a sticky
-  exclusion, ejects the person when they are already known
+  The entry's kind is read from its value (`kind_for/2`): `*` is the
+  wildcard, a person identifier (`per_…`) an identifier, and a person's
+  own id (`usr_…`) a person. `allow` writes an allow of an identifier or
+  `*`, by which the door admits a person the CYFR sign-in presents; a
+  local person is admitted unless denied, so a person is never allowed.
+  `deny` writes a sticky exclusion of a person or an identifier, ejects
+  the person when they are already known
   (`Sanctum.Tenancy.Users.deny/1`) and withdraws the group invitations the
-  address or identifier was holding either way; `remove` deletes an entry — and, when it was
-  an allow, ejects everyone the door would now refuse
-  (`Sanctum.Door.reconcile/0`), which is the only way `*` is covered, since
-  it names nobody;
-  `list` shows the door; `requests` what is waiting on the operator — an
-  address a member invited, or the subject or identifier of a sign-in the
-  door refused; `resolve` approves or drops one.
+  identifier was holding either way; `remove` deletes an entry — and,
+  when it was an allow, ejects everyone the door would now refuse
+  (`Sanctum.Door.reconcile/0`), which is the only way `*` is covered,
+  since it names nobody; `list` shows the door; `requests` what is
+  waiting on the operator — an identifier a member invited, or one whose
+  sign-in the door refused; `resolve` approves or drops one.
   """
 
   require Logger
@@ -52,11 +54,8 @@ defmodule Sanctum.Providers.Door do
           [
             Arg.new("value", :string,
               required: true,
-              description: "An email, an IdP subject, a person identifier, or * (allow, deny)"
-            ),
-            Arg.new("kind", :string,
-              description: "How to read value; inferred from its shape when absent",
-              enum: ["email", "user_id", "identifier"]
+              description:
+                "A person identifier (per_…) or * to allow; a person's id (usr_…) or a person identifier to deny (allow, deny)"
             ),
             Arg.new("note", :string, nullable: true, description: "Why (allow, deny)")
           ],
@@ -71,11 +70,8 @@ defmodule Sanctum.Providers.Door do
           [
             Arg.new("value", :string,
               required: true,
-              description: "An email, an IdP subject, a person identifier, or * (allow, deny)"
-            ),
-            Arg.new("kind", :string,
-              description: "How to read value; inferred from its shape when absent",
-              enum: ["email", "user_id", "identifier"]
+              description:
+                "A person identifier (per_…) or * to allow; a person's id (usr_…) or a person identifier to deny (allow, deny)"
             ),
             Arg.new("note", :string, nullable: true, description: "Why (allow, deny)")
           ],
@@ -111,7 +107,7 @@ defmodule Sanctum.Providers.Door do
         )
       ],
       description:
-        "Who may sign in to this server — platform admins only. Entries name an email, an IdP subject (user id), or `*` for anyone the configured provider authenticates. A deny is sticky and ejects the person; requests are invites members made for addresses the sign-in allowlist does not know.",
+        "Who may sign in to this server — platform admins only. A person made here signs in unless denied; a person whose keys another CYFR holds signs in when `*` or an allow names their identifier. A deny names a person or an identifier, is sticky and ejects the person; requests are identifiers members invited or whose sign-in the allowlist refused.",
       title: "Server Allowlist"
     )
   end
@@ -128,7 +124,7 @@ defmodule Sanctum.Providers.Door do
 
   def handle(%Context{} = ctx, %{"action" => "allow", "value" => value} = args)
       when is_binary(value) do
-    with {:ok, kind} <- kind_for(value, Map.get(args, "kind")) do
+    with {:ok, kind} <- kind_for(value, "allow") do
       case Store.allow(kind, value, ctx.user_id, Map.get(args, "note")) do
         {:ok, entry} ->
           # A person denied earlier may sign in again and their own athanor
@@ -148,16 +144,16 @@ defmodule Sanctum.Providers.Door do
 
   def handle(%Context{} = ctx, %{"action" => "deny", "value" => value} = args)
       when is_binary(value) do
-    with {:ok, kind} <- kind_for(value, Map.get(args, "kind")) do
+    with {:ok, kind} <- kind_for(value, "deny") do
       case Store.deny(kind, value, ctx.user_id, Map.get(args, "note")) do
         {:ok, entry} ->
           denied = known_users(kind, value)
           results = Enum.map(denied, &Users.deny/1)
           ejected = Enum.count(results, &match?({:ok, _}, &1))
 
-          # An address nobody has signed in with can still be holding group
+          # An identifier nobody here holds can still be holding group
           # seats. `Users.deny/1` withdraws them for a person it knows; for
-          # an address it does not, this is the whole eject.
+          # an identifier it does not, this is the whole eject.
           withdrawn = withdraw_pending(kind, value)
 
           rendered =
@@ -178,10 +174,7 @@ defmodule Sanctum.Providers.Door do
         {:error, :platform_admin} ->
           {:error,
            {:invalid_argument,
-            "That email is a platform admin (CYFR_PLATFORM_ADMIN_EMAILS); remove it there"}}
-
-        {:error, :wildcard_cannot_be_denied} ->
-          {:error, {:invalid_argument, "Remove the * entry instead of denying it"}}
+            "That is this server's platform administrator, who is never denied here"}}
 
         {:error, reason} ->
           Logger.error("[Sanctum.Providers.Door] door.deny failed: #{inspect(reason)}")
@@ -274,22 +267,16 @@ defmodule Sanctum.Providers.Door do
     })
   end
 
-  # Every invitation the address or identifier still holds, dropped once.
-  # `Users.deny/1` already did this for each person it names who has signed
-  # in, and the sweep is idempotent, so the count is what a *pending* seat
-  # cost.
-  defp withdraw_pending("email", value),
-    do: Sanctum.Tenancy.Members.withdraw_invites_for_email(value)
-
+  # Every invitation the identifier still holds, dropped once.
+  # `Users.deny/1` already did this for the person it names, and the sweep
+  # is idempotent, so the count is what a *pending* seat cost.
   defp withdraw_pending("identifier", value),
     do: Sanctum.Tenancy.Members.withdraw_invites_for_identifier(value)
 
   defp withdraw_pending(_kind, _value), do: 0
 
-  defp known_users("email", value), do: Users.list_by_email(value)
-
-  defp known_users("user_id", value) do
-    case Users.get_by_identity(value) do
+  defp known_users("person", value) do
+    case Users.get(value) do
       {:ok, user} -> [user]
       _ -> []
     end
@@ -307,47 +294,39 @@ defmodule Sanctum.Providers.Door do
   defp denied_users(kind, value),
     do: kind |> known_users(value) |> Enum.filter(&(&1.status == "denied"))
 
-  # `*` is the wildcard; an `@` makes an email; a person identifier's
-  # shape (`per_` and 64 hexadecimal digits) makes an identifier; anything
-  # else is an IdP identity key unless the caller said otherwise. The door
-  # speaks the provider's terms — it judges a person before any row of
-  # theirs exists — so a person's own id here is not an entry it can act
-  # on.
-  defp kind_for("*", _), do: {:ok, "wildcard"}
-  defp kind_for(value, kind) when kind in ["email", "user_id"], do: identity_kind(value, kind)
-  defp kind_for(value, "identifier"), do: identity_kind(value, "identifier")
+  # The value decides the kind: `*` is the wildcard, a person identifier's
+  # shape (`per_` and 64 hexadecimal digits) an identifier, and a person's
+  # own id a person. An allow names an identifier or `*`; a deny a person
+  # or an identifier.
+  defp kind_for(value, effect) do
+    kind =
+      cond do
+        value == "*" -> "wildcard"
+        Prima.Identity.Encoding.identifier?(value) -> "identifier"
+        Prima.PersonId.person?(value) -> "person"
+        true -> nil
+      end
 
-  defp kind_for(value, nil) do
     cond do
-      String.contains?(value, "@") -> identity_kind(value, "email")
-      Prima.Identity.Encoding.identifier?(value) -> identity_kind(value, "identifier")
-      true -> identity_kind(value, "user_id")
+      kind in Arca.Doors.kinds(effect) -> {:ok, kind}
+      is_nil(kind) -> {:error, {:invalid_argument, unread(effect)}}
+      true -> {:error, {:invalid_argument, refused_kind(kind, effect)}}
     end
   end
 
-  defp kind_for(_value, kind),
-    do: {:error, {:invalid_argument, "Invalid kind: #{kind} (email | user_id | identifier)"}}
+  defp unread("allow"),
+    do: "Allow names a person identifier (per_ and 64 hexadecimal digits) or *"
 
-  defp identity_kind(value, "user_id") do
-    if Sanctum.Auth.Identity.key?(value),
-      do: {:ok, "user_id"},
-      else:
-        {:error,
-         {:invalid_argument,
-          "A user_id entry names an IdP identity (provider|issuer|subject); " <>
-            "to act on a person, name their email"}}
-  end
+  defp unread("deny"),
+    do: "Deny names a person's id (usr_…) or a person identifier (per_ and 64 hexadecimal digits)"
 
-  defp identity_kind(value, "identifier") do
-    if Prima.Identity.Encoding.identifier?(value),
-      do: {:ok, "identifier"},
-      else:
-        {:error,
-         {:invalid_argument,
-          "An identifier entry names a person identifier: per_ and 64 hexadecimal digits"}}
-  end
+  defp refused_kind("person", "allow"),
+    do:
+      "A person made here signs in unless denied; allow names a person identifier or *, and " <>
+        "removing a deny lets a person back in"
 
-  defp identity_kind(_value, kind), do: {:ok, kind}
+  defp refused_kind("wildcard", "deny"),
+    do: "Remove the * entry instead of denying it"
 
   defp render(entry) do
     %{

@@ -451,7 +451,7 @@ defmodule Cyfr.Cluster.Fixtures do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|cluster-#{n}",
         provider: "github",
         email: "cluster#{n}@example.com",

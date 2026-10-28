@@ -19,7 +19,6 @@ defmodule Cyfr do
     deps: [Sanctum, Arca],
     exports: [
       Admission,
-      Bootstrap,
       Bus,
       Bus.ApiKeys,
       Bus.AthanorArchived,

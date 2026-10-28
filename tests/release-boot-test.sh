@@ -398,7 +398,7 @@ for key in CYFR_PUBLIC_URL CYFR_BIND_ADDRESS; do
 done
 for pair in CYFR_ACCESS=local CYFR_HOST=localhost CYFR_PORT=4399 CYFR_DATABASE=sqlite CYFR_AUTO_MIGRATE=on \
   CYFR_HOST_API_BIND=127.0.0.1 CYFR_HOST_API_PORT=4398 LOCUS_RUNTIME_SERVICE_ID=wrk_locus \
-  CYFR_PLATFORM_ADMIN_EMAILS=operator@example.com CYFR_SECRET_KEY_BASE=stub-key-base-0123456789abcdef; do
+  CYFR_SECRET_KEY_BASE=stub-key-base-0123456789abcdef; do
   [ "$(assigned local "${pair%%=*}")" = 1 ] && [ "$(value local "${pair%%=*}")" = "${pair#*=}" ] ||
     fail "the local cell's deployment file does not assign $pair once: $(grep "^${pair%%=*}=" "$scratch/cells/local/.env" | tr '\n' ' ')"
 done

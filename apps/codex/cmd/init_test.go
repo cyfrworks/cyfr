@@ -238,7 +238,7 @@ func TestInitLeavesTheHomeLocalWhenTheJoinFailsOrIsCancelled(t *testing.T) {
 			return access.Receipt{RequestID: r.ID, Op: "join", State: "completed", Outcome: "failed", Code: "tailnet_join_expired"}, nil
 		}
 		askTerminal = func() bool { return true }
-		askInput = strings.NewReader("1\n\n\n")
+		askInput = strings.NewReader("1\n\n")
 		var out bytes.Buffer
 		err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
 		expired := access.Refuse("tailnet_join_expired", nil).Message()
@@ -262,7 +262,7 @@ func TestInitLeavesTheHomeLocalWhenTheJoinFailsOrIsCancelled(t *testing.T) {
 			return access.Receipt{}, jctx.Err()
 		}
 		askTerminal = func() bool { return true }
-		askInput = strings.NewReader("1\nhome\n\n")
+		askInput = strings.NewReader("1\nhome\n")
 		var out bytes.Buffer
 		err := runInit(ctx, initOptions{noPull: true}, &out, &out)
 		cancelled := access.Refuse("tailnet_join_cancelled", nil).Message()
@@ -385,62 +385,22 @@ func TestInitTakesTheEndOfInputAsNoAnswer(t *testing.T) {
 	}
 }
 
-// Given no operator email, init names no administrator in .env and warns
-// that no one is authorized to use the home yet; given one, the operators'
-// line holds it and there is no warning.
-func TestInitWarnsThatNoOneIsAuthorizedWithoutAnEmail(t *testing.T) {
-	const warning = "⚠  CYFR_PLATFORM_ADMIN_EMAILS is unset in .env — no one is authorized to use this instance yet.\n" +
-		"   Set CYFR_PLATFORM_ADMIN_EMAILS=you@example.com in .env so you (the operator) can sign in.\n"
-	newInitProject(t)
-	useFakeEngine(t)
-	var out bytes.Buffer
-	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-		t.Fatalf("init: %v\n%s", err, out.String())
-	}
-	if admins, assigned := projectEnv(t).value(adminEmailVar); assigned {
-		t.Errorf("a home given no email names the administrators %q", admins)
-	}
-	if !strings.Contains(out.String(), "\n"+warning) {
-		t.Errorf("init does not warn that no one is authorized:\n%s", out.String())
-	}
-
-	newInitProject(t)
-	useFakeEngine(t)
-	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("3\nme@example.com\n")
-	out.Reset()
-	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-		t.Fatalf("init: %v\n%s", err, out.String())
-	}
-	if admins, _ := projectEnv(t).value(adminEmailVar); admins != "me@example.com" {
-		t.Errorf("the administrators are %q, want the email answered", admins)
-	}
-	text := out.String()
-	if !strings.Contains(text, "CYFR authorizes by membership — list your email as the platform admin so you can use this instance.\n") ||
-		!strings.Contains(text, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)") {
-		t.Errorf("init does not ask for the platform-admin email:\n%s", text)
-	}
-	if strings.Contains(text, "no one is authorized to use this instance yet") {
-		t.Errorf("init warns though it was given an email:\n%s", text)
-	}
-}
-
-// On a terminal the access question comes first, before the email; an
-// answer that is none of the three is asked again, and a public home's
-// domain is asked, an invalid one with the rule it breaks.
+// On a terminal the access question comes first; an answer that is none
+// of the three is asked again, and a public home's domain is asked, an
+// invalid one with the rule it breaks.
 func TestInitAsksTheAccessQuestionFirst(t *testing.T) {
 	newInitProject(t)
 	s := useFakeEngine(t)
 	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("9\n2\nlocalhost\ncyfr.example.com\nnot-an-email\nops@example.com\n\n")
+	askInput = strings.NewReader("9\n2\nlocalhost\ncyfr.example.com\nnot-an-email\nops@example.com\n")
 	var out bytes.Buffer
 	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
 		t.Fatalf("init: %v\n%s", err, out.String())
 	}
 	text := out.String()
-	question, again, email := strings.Index(text, "How will you reach CYFR?"), strings.Index(text, "Answer 1, 2 or 3."), strings.Index(text, "Your platform-admin email")
-	if question < 0 || again < question || email < again {
-		t.Errorf("the access question does not come first, asked again on a wrong answer, before the email:\n%s", text)
+	question, again := strings.Index(text, "How will you reach CYFR?"), strings.Index(text, "Answer 1, 2 or 3.")
+	if question < 0 || again < question {
+		t.Errorf("the access question does not come first, or is not asked again on a wrong answer:\n%s", text)
 	}
 	for _, want := range []string{"`localhost` is not a valid domain", "`not-an-email` is not a valid email address"} {
 		if !strings.Contains(text, want) {
@@ -512,7 +472,7 @@ func TestInitOpensTheJoinLinkOnADisplay(t *testing.T) {
 			s := useFakeEngine(t)
 			l := stubLauncher(t, c.display, nil)
 			askTerminal = func() bool { return true }
-			askInput = strings.NewReader("1\n\n\n")
+			askInput = strings.NewReader("1\n\n")
 			var out bytes.Buffer
 			if err := runInit(context.Background(), initOptions{noPull: true, accessOptions: accessOptions{noOpen: c.noOpen}}, &out, &out); err != nil {
 				t.Fatalf("init: %v\n%s", err, out.String())

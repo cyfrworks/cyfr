@@ -135,7 +135,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     ],
     Sanctum => [
       {~w(ApiKey Auth Auth.DeviceFlow Auth.EmailVerification Auth.Identity
-          Auth.OAuth Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller Cipher
+          Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller Cipher
           Cipher.Rotation CliSignIn ClientIp Consent.Loader Consent.Proof
           Consent.RegistrationBinding Consent.ShapeDerivation Consent.ShapeDiff Context
           Door Door.Store Egress ExecutionStanding Namespace Network Notify

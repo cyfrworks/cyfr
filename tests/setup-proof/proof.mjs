@@ -18,10 +18,7 @@ import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 const [kind, address, homePort] = process.argv.slice(2);
 const OUT = "/out";
 const pagesOrigin = new URL(address).origin;
-const record = { case: kind, checks: [], screens: {}, errors: [], refusals: [] };
-// The one refusal the case asks for on purpose, which Chromium logs as the
-// failed load of a 422: recorded apart, once.
-let refusalAsked = false;
+const record = { case: kind, checks: [], screens: {}, errors: [] };
 
 function check(what, holds, detail = {}) {
   record.checks.push({ what, holds, ...detail });
@@ -36,11 +33,6 @@ try {
   page = await context.newPage();
   page.on("console", (m) => {
     if (m.type() !== "error" || new URL(page.url()).origin !== pagesOrigin) return;
-    if (refusalAsked && m.text().includes("status of 422")) {
-      refusalAsked = false;
-      record.refusals.push(m.text());
-      return;
-    }
     record.errors.push(`console: ${m.text()}`);
   });
   page.on("pageerror", (e) => {
@@ -89,17 +81,8 @@ try {
   }
   await screen("how");
 
+  // Choosing how CYFR is reached starts it: setup asks for nothing more.
   await page.getByRole("button", { name: kind === "local" ? /Only this device/ : /My phone and laptop/ }).tap();
-  await heading("Your email").waitFor();
-  // The email is required: a start without one is refused with the
-  // program's sentence, and nothing begins.
-  refusalAsked = true;
-  await button("Start").tap();
-  await page.getByText("Type the one email you sign in with").waitFor();
-  check("a start without an email is refused on the page", await heading("Your email").isVisible());
-  await page.getByLabel("The email you sign in with. It makes you this CYFR's administrator.").fill("operator@example.com");
-  await screen("email");
-  await button("Start").tap();
   await heading("Setting up CYFR").waitFor();
   await screen("progress");
 

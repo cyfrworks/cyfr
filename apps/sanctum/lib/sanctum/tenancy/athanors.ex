@@ -6,8 +6,9 @@ defmodule Sanctum.Tenancy.Athanors do
   Athanor rows: create, find, rename, archive.
 
   An athanor is the unit everything is owned by — a person's or a group's.
-  Rows are created here (a person's on first authorized sign-in, a group's
-  when a member creates it) and archived, never deleted. Filling an athanor with components and consents is the caller's
+  Rows are created here (a person's inside their admission's transaction,
+  `Sanctum.Provisioning.mint_personal/1`; a group's when a member creates
+  it) and archived, never deleted. Filling an athanor with components and consents is the caller's
   job (`Sanctum.Provisioning`), not this module's: a row is a name,
   provisioning is what fills it.
 
@@ -54,18 +55,42 @@ defmodule Sanctum.Tenancy.Athanors do
   defp owner(_attrs), do: []
 
   @doc """
-  Mint an athanor for a person the server admits as its operator, exempt
-  from the server caps.
-
-  `CYFR_MINT_PER_HOUR` bounds how fast strangers arrive and
-  `CYFR_MAX_ATHANORS` how many athanors the server holds; an operator named
-  in `CYFR_PLATFORM_ADMIN_EMAILS` is neither a stranger nor optional — a
-  server at capacity must still admit the person who can act on it. Every
-  other mint goes through `create/1` and is capped.
+  Mint a person's own athanor, inside their admission's transaction
+  (`Sanctum.Provisioning.mint_personal/1`): the row, with the first slug of
+  `slugs` no person athanor holds, and its owner seated, in one
+  `Arca.Athanors.mint/2` under the census lock, so two admissions cannot
+  take one slug. It counts no cap: the admission counted the server-wide
+  cap before the person's row (`personal_place/0`), or is the
+  installation's administrator, minted past it.
   """
-  @spec create_for_operator(map()) :: {:ok, athanor()} | {:error, term()}
-  def create_for_operator(attrs) when is_map(attrs),
-    do: Arca.Athanors.insert(server(), Map.new(attrs))
+  @spec create_personal(map(), [String.t()]) :: {:ok, athanor()} | {:error, term()}
+  def create_personal(%{owner_user_id: user_id} = attrs, slugs)
+      when is_binary(user_id) and is_list(slugs) do
+    Arca.Athanors.mint(server(),
+      hold: [user_id],
+      slugs: slugs,
+      attrs: attrs,
+      also: fn athanor ->
+        case Sanctum.Tenancy.Members.create(%{
+               user_id: user_id,
+               scope: "athanor",
+               athanor_id: athanor.id
+             }) do
+          {:ok, _seat} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      end
+    )
+  end
+
+  @doc """
+  Inside an admission's transaction, before its person's row: the
+  server-wide cap on athanors, counted under the census lock, which holds
+  to the transaction's end so the place counted free stays free for the
+  person's athanor (`Arca.Athanors.within_caps/2`).
+  """
+  @spec personal_place() :: :ok | {:error, term()}
+  def personal_place, do: Arca.Athanors.within_caps(server(), [:max_athanors])
 
   @doc """
   Mint a group athanor for `creator_user_id`: the row, its slug (from the
@@ -709,7 +734,7 @@ defmodule Sanctum.Tenancy.Athanors do
   @doc """
   A free slug for a person's own athanor: `hint` (their cyfr.run namespace,
   when they have one) if it is valid and free, else one derived from
-  `name` with a numeric suffix. A person's athanor is minted at sign-in,
+  `name` with a numeric suffix. A person's athanor is minted at admission,
   before any namespace exists, so the slug is this server's — an address,
   not an identity — and a hint another person's athanor already holds is
   no refusal, it just is not the address.
@@ -719,6 +744,24 @@ defmodule Sanctum.Tenancy.Athanors do
     if is_binary(hint) and Sanctum.Slug.valid?(hint) and slug_free?("person", hint),
       do: {:ok, hint},
       else: derived_slug("person", name)
+  end
+
+  @doc """
+  The candidates for a person athanor's slug, in order of preference:
+  `hint` when it is a valid slug, then those derived from `name` with a
+  numeric suffix. The mint takes the first one free in its own
+  transaction (`create_personal/2`).
+  """
+  @spec person_slugs(String.t() | nil, String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  def person_slugs(hint, name) do
+    case Sanctum.Slug.from_name(name) do
+      nil ->
+        {:error, :invalid_name}
+
+      base ->
+        hinted = if is_binary(hint) and Sanctum.Slug.valid?(hint), do: [hint], else: []
+        {:ok, hinted ++ derived_candidates(base)}
+    end
   end
 
   defp derived_slug(kind, name) do

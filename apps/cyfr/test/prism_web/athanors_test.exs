@@ -7,14 +7,14 @@ defmodule PrismWeb.AthanorsTest do
   # any person-kind athanor.
   use ExUnit.Case, async: false
 
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "local|idp|alice-#{n}",
         provider: "local",
         name: "Alice",
@@ -23,17 +23,7 @@ defmodule PrismWeb.AthanorsTest do
 
     alice = user.id
 
-    {:ok, mine} =
-      Athanors.create(%{
-        kind: "person",
-        name: "Alice",
-        slug: "alice-#{n}",
-        owner_user_id: alice,
-        created_by: alice
-      })
-
-    {:ok, _} = Users.set_personal_athanor(user, mine.id)
-    {:ok, _} = Members.create(%{user_id: alice, scope: "athanor", athanor_id: mine.id})
+    mine = Sanctum.Test.People.athanor!(user)
     {:ok, alice: alice, mine: mine, n: n}
   end
 
@@ -58,7 +48,7 @@ defmodule PrismWeb.AthanorsTest do
     assert PrismWeb.Athanors.label(group, %{user_id: alice}) == "Trip #{n}"
 
     {:ok, %{id: bob}} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "local|idp|bob-#{n}",
         provider: "local",
         name: "Bob",

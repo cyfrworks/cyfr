@@ -172,12 +172,12 @@ defmodule Sanctum.Test.RegistryStub do
 
   # ---- the person ----------------------------------------------------------------
 
-  @doc "A first admitted sign-in's person, with the key set it mints."
+  @doc "A person with their key set, as an admission mints it (`Sanctum.Test.People.linked/1`)."
   def person! do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|registry#{n}",
         provider: "github",
         email: "registry#{n}@example.com",

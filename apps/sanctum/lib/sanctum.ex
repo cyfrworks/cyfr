@@ -10,30 +10,31 @@ defmodule Sanctum do
   - **Authorization**: What they're allowed to do (permissions)
   - **Context**: The execution context that flows through all services
 
-  ## Signing in
+  ## People and signing in
 
-  Every session is minted by `Sanctum.Session`, on one of these paths:
+  A person is made only by an admission (`Sanctum.Newcomer`): setup, an
+  open door, a verified CYFR sign-in, or a restore. Every session is
+  minted by `Sanctum.Session`, on one of these paths:
 
-  - the browser flow — `PrismWeb.AuthController.callback/2` asks the door
-    (`Sanctum.Door.admit_identity/2`) after the configured provider
-    (`Sanctum.Auth.provider/0`: `Sanctum.Auth.OAuth` or
-    `Sanctum.Auth.OIDC`) proves the identity;
-  - the CLI device flow — `Sanctum.Auth.DeviceFlow.poll_for_session/3`
-    behind the `session` MCP tool (`cyfr login`), which asks the door the
-    same way;
+  - an admission that brings its credential (`Sanctum.Newcomer`);
+  - the OpenID Connect browser flow — `PrismWeb.AuthController.callback/2`
+    unlocks the person who linked the identity `Sanctum.Auth.OIDC` proves
+    (`Sanctum.SignIn.unlock/1`, which asks the door about them);
+  - the GitHub and Google device flows —
+    `Sanctum.Auth.DeviceFlow.poll_for_session/4` behind the `session` MCP
+    tool (`cyfr login`) and the sign-in page, which unlock the same way;
   - a command line a signed-in person approves in Prism
     (`Sanctum.CliSignIn`);
-  - the `cyfr` door (`Sanctum.Auth.CyfrDoor`), which asks the door for
-    the person's identity, and a passkey (`Sanctum.Passkeys`), which asks
-    it for each door identity the person holds and their verified email;
+  - the CYFR sign-in (`Sanctum.Auth.CyfrDoor`), which unlocks a person
+    admitted before or admits a remote newcomer, and a passkey
+    (`Sanctum.Passkeys`), which asks the door about the person;
   - the installation-authorized restore (`Sanctum.Recovery`).
 
-  Providers prove who someone is; they never mint sessions themselves.
-
-  ## Configuration
-
-      config :sanctum,
-        auth_provider: Sanctum.Auth.OAuth  # or the configured auth provider
+  A sign-in method proves who someone is; it never makes a person and
+  never mints a session itself. The methods offered are the ones
+  configured (`Sanctum.Auth.DeviceFlow.configured_providers/0`,
+  `Sanctum.Auth.OIDC.issuer/0`); passkeys, paired devices and the CYFR
+  sign-in are always offered.
   """
 
   use Boundary,
@@ -47,7 +48,6 @@ defmodule Sanctum do
       Auth.DeviceFlow,
       Auth.EmailVerification,
       Auth.Identity,
-      Auth.OAuth,
       Auth.OIDC,
       Authority,
       Authority.BudgetCounter,
@@ -129,18 +129,6 @@ defmodule Sanctum do
     check: [aliases: true, apps: [:ecto, :ecto_sql, :postgrex, :exqlite, :ecto_sqlite3]]
 
   alias Sanctum.Context
-
-  @doc """
-  True when an auth provider is configured.
-
-  When false, requests run as the unauthenticated public context and the
-  instance is operated by a single trusted operator — so operator-only
-  conveniences (private-IP egress, host-filesystem artifact reads, broad
-  anonymous browsing) are safe. When true, untrusted signed-in users may be
-  present, so those are locked down.
-  """
-  @spec auth_configured?() :: boolean()
-  def auth_configured?, do: not is_nil(Sanctum.Auth.provider())
 
   @doc """
   The externally reachable base URL of this instance, without a trailing
@@ -266,69 +254,6 @@ defmodule Sanctum do
   """
   @spec restore_token?(term()) :: boolean()
   def restore_token?(value), do: is_binary(value) and Regex.match?(~r/\A[0-9a-f]{64}\z/, value)
-
-  @doc """
-  The boot's operator reconcile, under the `bootstrap` claim `claim`.
-
-  The operator list (`CYFR_PLATFORM_ADMIN_EMAILS`) is validated and
-  snapshotted here, once: a list of lowercased addresses, or
-  `{:error, :malformed_configuration}` before any row is read. Storage
-  then removes, in one transaction under the member slot and the claim,
-  every platform grant whose person that snapshot no longer names, with
-  all of that person's sessions (`Arca.Members.reconcile_platform/3`).
-  Only after that commit are the removed sessions' established contexts
-  dropped and their revocation announced.
-
-  `opts`: `:slot` (`Arca.ControlPlane.held/0`'s slot, or `:none` where no
-  member claims one) and `:lease_ms` (the claim lease the final renewal
-  extends). Answers the renewed claim the caller releases, or the
-  refusal; nothing is announced on a refusal, because nothing committed.
-  """
-  @spec reconcile_platform_admins(Arca.JobClaims.held(), keyword()) ::
-          {:ok, map()} | {:error, atom()}
-  def reconcile_platform_admins(%{kind: _, key: _, owner: _, fence: _} = claim, opts)
-      when is_list(opts) do
-    with {:ok, operators} <- operator_snapshot(),
-         {:ok, %{claim: renewed, revoked: revoked}} <-
-           Arca.Members.reconcile_platform(Prima.Actor.system(), claim,
-             slot: Keyword.fetch!(opts, :slot),
-             lease_ms: Keyword.fetch!(opts, :lease_ms),
-             operators: operators,
-             policy_digest: policy_digest(operators)
-           ) do
-      for %{user_id: user_id, session_hashes: hashes} <- revoked do
-        Sanctum.Session.announce_revoked(user_id, hashes)
-      end
-
-      {:ok, renewed}
-    end
-  end
-
-  # The configured list, read through the door that compares sign-ins
-  # against it (`Sanctum.Door.platform_admin_emails/0`), and accepted only
-  # in the shape the door assumes: a list of lowercased addresses with
-  # nothing around them. Anything else is a configuration the reconcile
-  # cannot read, and reading it loosely could keep an operator the list no
-  # longer names.
-  defp operator_snapshot do
-    case Sanctum.Door.platform_admin_emails() do
-      emails when is_list(emails) ->
-        if Enum.all?(emails, &operator_email?/1),
-          do: {:ok, emails |> Enum.uniq() |> Enum.sort()},
-          else: {:error, :malformed_configuration}
-
-      _malformed ->
-        {:error, :malformed_configuration}
-    end
-  end
-
-  defp operator_email?(email) when is_binary(email),
-    do: email != "" and email == email |> String.trim() |> String.downcase()
-
-  defp operator_email?(_email), do: false
-
-  defp policy_digest(operators),
-    do: Prima.Digest.sha256(Jason.encode!(%{version: 1, operators: operators}))
 
   @doc """
   Server-internal context for background/system operations — sweepers, health

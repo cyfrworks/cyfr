@@ -46,7 +46,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
     n = uniq()
 
     {:ok, user} =
-      Arca.Users.mint(
+      Arca.Test.People.mint(
         server(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
@@ -934,12 +934,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       # takes (`Arca.Members.seat/3`).
       identifier = "per_" <> String.duplicate("a", 64)
 
-      insert!(Schemas.Membership, invited(f.group.id, %{email: newcomer.email}))
       insert!(Schemas.Membership, invited(f.group.id, %{person_identifier: identifier}))
-
-      # Her own athanor is no group; an invitation there would activate.
-      assert {:ok, []} =
-               Arca.Members.activate_invited(server(), newcomer.id, newcomer.email, now())
 
       assert {:ok, []} =
                Arca.Members.activate_invited_identifier(server(), newcomer.id, identifier, now())
@@ -958,7 +953,7 @@ defmodule Arca.SecurityTransitionsRestoreTest do
       group = f.group.id
 
       assert {:ok, [^group]} =
-               Arca.Members.activate_invited(server(), newcomer.id, newcomer.email, now())
+               Arca.Members.activate_invited_identifier(server(), newcomer.id, identifier, now())
     end
 
     test "the checklist names what the person must re-enable, re-consent and rotate", %{

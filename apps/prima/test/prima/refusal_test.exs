@@ -308,19 +308,12 @@ defmodule Prima.RefusalTest do
     {:reauth_required, :unauthenticated},
     {:identity_stale, :unavailable},
     {:restore_reserved, :forbidden},
+    {:setup_closed, :forbidden},
+    {:not_set_up, :setup_required},
+    {:no_person, :not_found},
     {:execution_failed, :internal},
     {:invalid_session, :unauthenticated},
     {:missing_token, :unauthenticated},
-    {{:bootstrap_refused, :slot_not_held}, :not_owner},
-    {{:bootstrap_refused, :busy}, :conflict},
-    {{:bootstrap_refused, :malformed_configuration}, :invalid_argument},
-    {{:bootstrap_refused, :slot_lost}, :not_owner},
-    {{:bootstrap_refused, :claim_taken}, :conflict},
-    {{:bootstrap_refused, :claim_lapsed}, :timeout},
-    {{:bootstrap_refused, :missing_user}, :setup_required},
-    {{:bootstrap_refused, :release_failed}, :uncertain},
-    {{:bootstrap_refused, :database_error}, :unavailable},
-    {{:bootstrap_refused, :exception}, :internal},
     {:missing_generation, :unauthenticated},
     {:stale_generation, :unauthenticated},
     {:not_standing, :forbidden},
@@ -778,6 +771,21 @@ defmodule Prima.RefusalTest do
       assert message =~ "waiting for its owner to restore"
       refute message =~ "not admitted"
       assert Refusal.reason?(:restore_reserved)
+    end
+
+    test "a closed setup token and an unlinked sign-in method say what to do instead" do
+      assert %Refusal{class: :forbidden, message: closed} = Refusal.classify(:setup_closed)
+      assert closed =~ "is set up"
+
+      assert %Refusal{class: :setup_required, message: unset} = Refusal.classify(:not_set_up)
+      assert unset =~ "setup link"
+
+      assert %Refusal{class: :not_found, message: no_person} = Refusal.classify(:no_person)
+
+      assert no_person ==
+               "No one here signs in with this account. Sign in another way, then link it in Settings."
+
+      for reason <- [:setup_closed, :not_set_up, :no_person], do: assert(Refusal.reason?(reason))
     end
 
     test "an identity that could not be confirmed fresh pauses: retryable, no sign-out" do

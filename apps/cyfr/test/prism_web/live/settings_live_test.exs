@@ -60,23 +60,32 @@ defmodule PrismWeb.SettingsLiveTest do
     {admin_view, admin_html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
     assert admin_html =~ "Server allowlist"
 
-    email = "letin-#{System.unique_integer([:positive])}@example.com"
+    identifier = "per_" <> Prima.Digest.sha256_hex("letin-#{System.unique_integer([:positive])}")
 
     # The entry typed is what the Allow button carries; the click adds
     # nothing of its own.
     admin_view
     |> element(~s(form[phx-change="door_form_changed"]))
-    |> render_change(%{"value" => email})
+    |> render_change(%{"value" => identifier})
 
-    assert has_element?(admin_view, ~s(button[phx-click="door_allow"][phx-value-door="#{email}"]))
-    assert has_element?(admin_view, ~s(button[phx-click="door_deny"][phx-value-door="#{email}"]))
+    assert has_element?(
+             admin_view,
+             ~s(button[phx-click="door_allow"][phx-value-door="#{identifier}"])
+           )
+
+    assert has_element?(
+             admin_view,
+             ~s(button[phx-click="door_deny"][phx-value-door="#{identifier}"])
+           )
+
+    assert {:error, :not_allowed} = Sanctum.Door.admit_identifier(identifier)
 
     admin_view
     |> element("button[phx-click=door_allow]")
     |> render_click()
 
-    assert render(admin_view) =~ email
-    assert {:ok, :allowed} = Sanctum.Door.admit("github|https://github.com|x", email, true)
+    assert render(admin_view) =~ identifier
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(identifier)
   end
 
   test "the platform settings card is the operator's, saves against its revision, and shows a pin read-only",
@@ -1894,7 +1903,6 @@ defmodule PrismWeb.SettingsLiveTest do
       person = test_user()
       authenticator = Sanctum.TestContext.passkey!(person.user_id)
       key = "github|https://github.com|linked-#{System.unique_integer([:positive])}"
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "test")
       Application.put_env(:sanctum, :settings_link_identity, key)
 
       {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
@@ -1924,7 +1932,6 @@ defmodule PrismWeb.SettingsLiveTest do
       {:ok, ctx} = Sanctum.Caller.establish(get_session(conn, session_key()))
 
       key = "oidcc|https://issuer.example|sub-#{System.unique_integer([:positive])}"
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "test")
       {:ok, ticket} = Sanctum.SignIn.link_ticket(ctx, %{key: key, provider: "oidcc", email: nil})
 
       linked =

@@ -611,7 +611,7 @@ defmodule Sanctum.Providers.Session do
   defp session_expires_at(_ctx), do: nil
 
   # ============================================================================
-  # Auth-provider-gated helpers (shared across session handlers)
+  # Helpers shared across session handlers
   # ============================================================================
 
   # An archived athanor resolves like an open one, so `focus/2` decides
@@ -624,24 +624,13 @@ defmodule Sanctum.Providers.Session do
     end
   end
 
-  # Device-flow CLI auth requires the default OAuth provider. Deployments that
-  # pin `:auth_provider` to a configured OIDC provider use the web OIDC flow at
-  # `/auth/oidcc` — device_init/device_poll are gated off in that case.
-  # Installs with `:auth_provider = nil` are treated as the default (OAuth)
-  # for this check,
-  # so local dev without explicit config still works.
-  defp device_flow_enabled? do
-    case Sanctum.Auth.provider() do
-      nil -> true
-      Sanctum.Auth.OAuth -> true
-      _ -> false
-    end
-  end
+  # The device flow is offered exactly when GitHub or Google is
+  # configured (`Sanctum.Auth.DeviceFlow.configured_providers/0`).
+  defp device_flow_enabled?, do: Sanctum.Auth.DeviceFlow.configured_providers() != []
 
   defp device_flow_disabled_message do
-    "Device-flow CLI auth requires the GitHub/Google OAuth provider. " <>
-      "This deployment is configured with a different auth provider; " <>
-      "use the web flow at `/auth/oidcc` instead."
+    "This CYFR offers no GitHub or Google sign-in. Sign in with a passkey, a device you " <>
+      "connected, or `cyfr login` approved in the browser."
   end
 
   # The caller's permissions as the wire names them, sorted.

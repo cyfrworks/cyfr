@@ -19,7 +19,7 @@ defmodule Arca.SecurityTransitions.Fixtures do
     now = DateTime.utc_now()
 
     {:ok, user} =
-      Arca.Users.mint(
+      Arca.Test.People.mint(
         server(),
         Map.merge(
           %{
@@ -85,15 +85,51 @@ defmodule Arca.SecurityTransitions.Fixtures do
     row
   end
 
-  def invite!(athanor_id, email) do
-    {:ok, row} =
-      Arca.Members.seat(Prima.Actor.in_athanor(athanor_id), %{
-        email: email,
-        status: "invited",
-        added_by: "x"
-      })
+  # An invitation held for `identifier`, written as a row: an identifier
+  # invitation's own write is fenced by the member's slot, which these
+  # cases do not hold.
+  def invite!(athanor_id, identifier) do
+    now = DateTime.utc_now()
+    id = Prima.UUID7.generate_id("mem")
 
-    row
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.Membership, [
+        %{
+          id: id,
+          athanor_id: athanor_id,
+          person_identifier: identifier,
+          scope: "athanor",
+          status: "invited",
+          added_by: "x",
+          created_at: now,
+          updated_at: now
+        }
+      ])
+
+    Arca.Repo.get!(Arca.Schemas.Membership, id)
+  end
+
+  # The person's local identity row, enrolled under an identifier.
+  def enrolled!(user_id) do
+    now = DateTime.utc_now()
+    identifier = "per_" <> Prima.Digest.sha256_hex("st-local-#{uniq()}")
+
+    {1, _} =
+      Arca.Repo.insert_all(Arca.Schemas.PersonIdentity, [
+        %{
+          id: Prima.UUID7.generate_id("pid"),
+          user_id: user_id,
+          identifier: identifier,
+          provenance: "local",
+          enrollment: "enrolled",
+          directory_url: "https://dir.example",
+          revision: 1,
+          inserted_at: now,
+          updated_at: now
+        }
+      ])
+
+    identifier
   end
 
   # A session of the person, bound to `athanor_id` when one is named; a
@@ -651,7 +687,7 @@ defmodule Arca.SecurityTransitionsTest do
       for athanor <- [open, pair, shared], do: seat!(athanor.id, user.id)
       seat!(pair.id, peer.id)
       seat!(shared.id, peer.id)
-      invitation = invite!(shared.id, user.email)
+      invitation = invite!(shared.id, enrolled!(user.id))
 
       :ok =
         Arca.ThreadSubscriptionStorage.follow(Prima.Actor.in_athanor(open.id), "thr_1", user.id)
@@ -1633,7 +1669,7 @@ defmodule Arca.SecurityTransitionsTest do
       operator = person!()
       %{identifier: operator_id, epoch: operator_epoch} = remote!(operator.id)
       seat!(group.id, operator.id)
-      {:ok, _} = Arca.Members.grant_platform(server(), %{user_id: operator.id, added_by: "x"})
+      {:ok, :ok} = Arca.Repo.transaction(fn -> Arca.Members.grant_platform!(operator.id) end)
 
       # A local person: no identity row of provenance remote.
       local = person!()
@@ -1799,7 +1835,7 @@ defmodule Arca.SecurityTransitionsLockTest do
 
     unboxed(fn ->
       {:ok, _} =
-        Arca.Users.mint(
+        Arca.Test.People.mint(
           server(),
           %{
             id: user_id,
@@ -1922,7 +1958,7 @@ defmodule Arca.SecurityTransitionsLockTest do
 
     unboxed(fn ->
       {:ok, _} =
-        Arca.Users.mint(
+        Arca.Test.People.mint(
           server(),
           %{
             id: id,

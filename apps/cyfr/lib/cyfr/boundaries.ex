@@ -450,7 +450,7 @@ defmodule Cyfr.Boundaries do
       allow: ~w(
         Sanctum Sanctum.Attach Sanctum.Auth Sanctum.Authority Sanctum.Caller Sanctum.Carry
         Sanctum.Catalog Sanctum.Cipher Sanctum.Consent Sanctum.Context Sanctum.Decisions
-        Sanctum.Door Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries
+        Sanctum.ExecutionStanding Sanctum.Gate Sanctum.InstanceEntries
         Sanctum.Network Sanctum.Policy Sanctum.Provisioning Sanctum.Proxy Sanctum.Refusals
         Sanctum.Session Sanctum.Tenancy Sanctum.TinctureAccess Sanctum.VaultReader
       ),
@@ -459,8 +459,7 @@ defmodule Cyfr.Boundaries do
           "admission, the invoke budget, the vault edge a run is attached with, and " <>
           "the policy record of every admission. `Sanctum` bare is the domain's own " <>
           "entry point — `system_context/0` mints the context the server's own work " <>
-          "runs under, `auth_configured?/0` says whether this " <>
-          "deployment has sign-in, and `build_tincture_context/2` is a tincture " <>
+          "runs under, and `build_tincture_context/2` is a tincture " <>
           "invocation's. A call on the root is a reach like any other and is rostered " <>
           "like one. `Sanctum.Caller` is " <>
           "here for `drop_memo/1` alone: the identity domain announces that an " <>
@@ -559,7 +558,7 @@ defmodule Cyfr.Boundaries do
     %{
       from: ["apps/cyfr/lib/prism/**/*.ex", "apps/cyfr/lib/prism.ex"],
       into: "Sanctum",
-      allow: ~w(Sanctum Sanctum.Context Sanctum.Tenancy Sanctum.TinctureAuth),
+      allow: ~w(Sanctum.Context Sanctum.Tenancy Sanctum.TinctureAuth),
       reason:
         "console domain code: the tenancy carrier. The tray's messages arrive on " <>
           "`Cyfr.Bus` as its own structs, so the console names none of the identity " <>
@@ -1820,10 +1819,8 @@ defmodule Cyfr.Boundaries do
   # reported stale. Boundary checks modules, never functions.
   @sanctum_exports %{
     "Sanctum" => [
-      auth_configured?: 0,
       build_tincture_context: 2,
       origin: 0,
-      reconcile_platform_admins: 2,
       registry_base_url: 1,
       registry_host: 0,
       system_context: 0
@@ -1838,7 +1835,6 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.ApiKey" => [default_scopes: 1, looks_like_key?: 1, valid_scopes: 1],
     "Sanctum.Attach" => [resolve: 5],
-    "Sanctum.Auth" => [provider: 0],
     "Sanctum.Auth.CyfrDoor" => [
       callback: 2,
       carry_lifetime_ms: 0,
@@ -1847,9 +1843,14 @@ defmodule Cyfr.Boundaries do
       signing_home: 1
     ],
     "Sanctum.Auth.DeviceFlow" => [configured_providers: 0, impl: 0, provider?: 1],
-    "Sanctum.Auth.EmailVerification" => [verify_with_claim: 3],
     "Sanctum.Auth.Identity" => [reserved_issuer?: 1],
-    "Sanctum.Auth.OIDC" => [issuer: 0, reauth_callback: 1, reauth_decide: 3],
+    "Sanctum.Auth.OIDC" => [
+      authenticate: 1,
+      email_verified: 1,
+      issuer: 0,
+      reauth_callback: 1,
+      reauth_decide: 3
+    ],
     "Sanctum.Authority" => [guard_invoke: 1, release_invoke: 1, step: 3, take_over_invoke: 2],
     "Sanctum.Authority.BudgetCounter" => [release: 1],
     "Sanctum.BearerToken" => [read: 1],
@@ -1936,7 +1937,7 @@ defmodule Cyfr.Boundaries do
     ],
     "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 2],
     "Sanctum.Directory" => [append: 2, recover: 2, register: 1, resolve: 1],
-    "Sanctum.Door" => [admit_identity: 2, platform_admin_emails: 0, refusal_message: 0],
+    "Sanctum.Door" => [refusal_message: 0],
     "Sanctum.Door.Store" => [requests: 0],
     "Sanctum.Egress" => [pinned_request: 5],
     "Sanctum.ExecutionStanding" => [capture: 1, retired_attempts: 3, stamp_only: 1, verify: 1],
@@ -2000,10 +2001,10 @@ defmodule Cyfr.Boundaries do
     "Sanctum.RunningTasks" => [cancel: 1, cancel_handle: 1, release_handle: 1],
     "Sanctum.Session" => [cleanup: 0, create: 1, destroy: 1],
     "Sanctum.SignIn" => [
-      admitted: 2,
       link_ticket: 2,
       record_claim: 2,
-      record_namespace: 2
+      record_namespace: 2,
+      unlock: 1
     ],
     "Sanctum.Tenancy" => [
       channel_active?: 2,
@@ -2030,6 +2031,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Tenancy.Users" => [
       display_name: 1,
       get: 1,
+      list_by_id: 1,
       own_athanor?: 2,
       personal_athanor_id: 1,
       prefs: 1,
@@ -2392,6 +2394,10 @@ defmodule Cyfr.Boundaries do
   @config_key_classes %{
     # Test seams — see `Sanctum.Auth.DeviceFlow.impl/0` for the rule.
     allow_tenancy_resolver_override: :seam,
+    # The bearer a test signs in with (`Sanctum.Auth`'s `current_user/1`,
+    # read by `CyfrWeb.Plugs.Authenticate`): `CyfrWeb.ConnCase` sets it,
+    # a release never does.
+    bearer_provider: :seam,
     tenancy_resolver_override: :seam,
     tool_providers_lenient: :seam,
     thread_recovery: :seam,
@@ -2419,8 +2425,8 @@ defmodule Cyfr.Boundaries do
     # one; a release never sets it, so only the shipped presets are read.
     scripted_oauth_provider: :seam,
     # Compiled in by `config/test.exs` alone; with the runtime switch off it
-    # lets the sandboxed suite boot omit `Cyfr.Bootstrap`
-    # (`Cyfr.Application.bootstrap_skipped?/2`).
+    # lets the sandboxed suite boot omit the boot gate's children and the
+    # no-person notice (`Cyfr.Application.bootstrap_skipped?/2`).
     bootstrap_skip_permitted: :seam,
     # Compiled in by `config/test.exs` alone, shortening the transports'
     # retry backoff base (`Compendium.Transport.Retry`); never read at runtime.
@@ -2477,6 +2483,9 @@ defmodule Cyfr.Boundaries do
 
     # Operator-shaped, with nothing to set them from. Each has a sensible
     # in-code default, so this is a gap in reach, not a broken deployment.
+    # The setup token (`Sanctum.Newcomer`) has none: unset, setup opens
+    # nothing, and `CYFR_SETUP_TOKEN` is the lever the setup flow adds.
+    setup_token: :missing_lever,
     oci_max_blob_bytes: :missing_lever,
     webhook_max_body_bytes: :missing_lever,
     platform_ceiling: :missing_lever

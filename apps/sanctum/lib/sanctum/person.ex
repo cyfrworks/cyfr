@@ -10,10 +10,10 @@ defmodule Sanctum.Person do
 
   ## Where the keys are
 
-  Both are Ed25519 key pairs minted at the person's first admitted sign-in
-  (`mint_keys/1`, the `also:` closure `Sanctum.Tenancy.Users` hands
-  `Arca.Users.mint/4`), so the person row, their first door and their key
-  set commit in one transaction and no person exists without keys. The
+  Both are Ed25519 key pairs minted by the person's admission
+  (`mint_keys/1`, run by `Sanctum.Newcomer` inside `Arca.Users.mint/4`'s
+  transaction), so the person row and their key set commit in one
+  transaction and no local person exists without keys. The
   public halves and the sealed private halves are columns of the person's
   own identity row (`Arca.PersonIdentities`, provenance `local`), never an
   athanor's vault, since a person's keys outlive every athanor. Each
@@ -101,9 +101,9 @@ defmodule Sanctum.Person do
 
   @doc """
   Mint the person's live and operational key set and write it on their
-  identity row, provenance `local`, unenrolled: the `also:` closure a first
-  admitted sign-in hands `Arca.Users.mint/4`, run inside the transaction
-  that writes the person row, after the installation guard admitted it.
+  identity row, provenance `local`, unenrolled: run by a local admission
+  (`Sanctum.Newcomer`) inside the transaction that writes the person row,
+  after the installation guard admitted it.
 
   One key set per person: a person who holds one is refused `:conflict`
   and keeps theirs. `:unavailable` when a key cannot be sealed, and the

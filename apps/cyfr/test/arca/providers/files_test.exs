@@ -999,7 +999,7 @@ defmodule Arca.Providers.FilesTest do
       Arca.Repo.insert_all(Arca.Schemas.User, [
         %{
           id: id,
-          provider: "local",
+          admission: "open",
           namespace: namespace,
           status: "active",
           first_seen_at: now,

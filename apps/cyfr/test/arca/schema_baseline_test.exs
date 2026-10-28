@@ -109,11 +109,17 @@ defmodule Arca.SchemaBaselineTest do
     refute "scope" in Enum.map(columns("sessions"), & &1.name)
     user_names = Enum.map(columns("users"), & &1.name)
 
-    for col <- ~w(email email_verified namespace personal_athanor_id status prefs),
+    for col <- ~w(email email_verified namespace personal_athanor_id status prefs admission),
         do: assert(col in user_names)
 
+    # A person is made by an admission, recorded on their row; no provider
+    # names them.
+    refute "provider" in user_names
+
+    # A seat names a person or the identifier it waits for; no email does.
     membership_names = Enum.map(columns("memberships"), & &1.name)
-    for col <- ~w(email status added_by), do: assert(col in membership_names)
+    for col <- ~w(person_identifier status added_by), do: assert(col in membership_names)
+    refute "email" in membership_names
     refute Enum.find(columns("memberships"), &(&1.name == "user_id")).not_null?
   end
 
@@ -146,7 +152,7 @@ defmodule Arca.SchemaBaselineTest do
     person = fn generation ->
       %{
         id: "usr_gen_#{System.unique_integer([:positive])}",
-        provider: "github",
+        admission: "open",
         security_generation: generation,
         first_seen_at: now,
         last_seen_at: now,

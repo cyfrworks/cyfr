@@ -3,12 +3,13 @@
 
 defmodule PrismWeb.SignInTraceTest do
   @moduledoc """
-  Sign-in on the product path, end to end, once per way in. A browser opens
-  the sign-in page; the identity provider answers; the door admits; the
-  person's athanor is minted at once and the real shipped bundle fills it in
-  the background with no registry reachable; the session is a cookie; and
-  the console mounts on the athanor that fill left, its context established
-  from that cookie.
+  Sign-in on the product path, end to end, once per way in. A person whose
+  admission made them and their athanor, with the sign-in method linked,
+  opens the sign-in page; the identity provider answers; the method
+  unlocks them and the door admits them; the real shipped bundle fills
+  their athanor in the background with no registry reachable; the session
+  is a cookie; and the console mounts on the athanor that fill left, its
+  context established from that cookie.
 
     * Device flow: `/login` starts GitHub's device flow against a stand-in
       IdP, the page's own poll mints a ticket bound to this browser, and
@@ -39,9 +40,8 @@ defmodule PrismWeb.SignInTraceTest do
     File.cp_r!(Path.join(@repo_root, "seed/aqua"), Path.join(seed_dir, "aqua"))
 
     # The storage roots are the persistence layer's; the registry endpoints
-    # are the host's; the provider selection, the issuer, the client id,
-    # the flow's endpoints and the inline provisioning are the identity
-    # domain's. Restoring one under another application's name leaves a
+    # are the host's; the issuer, the client id, the flow's endpoints and
+    # the inline provisioning are the identity domain's. Restoring one under another application's name leaves a
     # provider set for every test that runs after this one.
     arca_env = [base_path: test_dir, seed_path: seed_dir]
 
@@ -61,7 +61,7 @@ defmodule PrismWeb.SignInTraceTest do
       restore_env(
         :sanctum,
         Keyword.keys(sanctum_env) ++
-          [:auth_provider, :oidc_issuer, :github_client_id, :device_flow_endpoints]
+          [:oidc_issuer, :github_client_id, :device_flow_endpoints]
       )
 
     prev_ueberauth = Application.get_env(:ueberauth, Ueberauth)
@@ -92,6 +92,10 @@ defmodule PrismWeb.SignInTraceTest do
   test "device flow: the sign-in page, the IdP, the ticket, the cookie, the filled athanor",
        %{conn: conn} do
     n = System.unique_integer([:positive])
+
+    {:ok, _} =
+      Sanctum.Test.People.linked(%{id: "github|https://github.com|#{n}", provider: "github"})
+
     polls = stand_in_idp(n)
 
     # The browser's first visit gives it the session the ticket is bound to.
@@ -116,7 +120,10 @@ defmodule PrismWeb.SignInTraceTest do
   test "OIDC: the issuer round trip through /auth/oidcc/callback, the cookie, the filled athanor",
        %{conn: conn} do
     n = System.unique_integer([:positive])
-    Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OIDC)
+
+    {:ok, _} =
+      Sanctum.Test.People.linked(%{id: "oidcc|https://idp.test|trace-#{n}", provider: "oidcc"})
+
     Application.put_env(:sanctum, :oidc_issuer, "https://idp.test")
     Application.put_env(:ueberauth, Ueberauth, providers: [oidcc: {Cyfr.Test.OidcStrategy, []}])
 
@@ -135,7 +142,7 @@ defmodule PrismWeb.SignInTraceTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  # The person the sign-in minted, the fill their athanor received with
+  # The person the sign-in unlocked, the fill their athanor received with
   # nothing here performing it, and the console mounted from the cookie.
   defp assert_console_on_filled_athanor(signed_in, identity) do
     {:ok, user} = Users.get_by_identity(identity)

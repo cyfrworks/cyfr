@@ -137,9 +137,9 @@ defmodule Cyfr.KeyringFingerprint do
 
   defmodule Check do
     @moduledoc false
-    # The boot step: `verify!/2` against the resolved keyring, then `:ignore`
-    # — like `Cyfr.Bootstrap`, so the supervisor only proceeds once the
-    # answer is in and no process lingers.
+    # The boot step: `verify!/2` against the resolved keyring, then
+    # `:ignore` — like the declared restore's gate step, so the supervisor
+    # only proceeds once the answer is in and no process lingers.
     use GenServer
 
     def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)

@@ -4,8 +4,8 @@
 defmodule PrismWeb.MembersLive do
   @moduledoc """
   Who is in the focused athanor: the members, the pending invites, and the
-  controls every member has — add by email or by person identifier
-  (`per_…`), remove, withdraw an invite, leave. Withdraw reaches only an
+  controls every member has — add by person identifier (`per_…`) or by
+  the person's id here (`usr_…`), remove, withdraw an invite, leave. Withdraw reaches only an
   invitation: one accepted since the page loaded stays a member. A
   person's own athanor has one member and no controls beyond the list.
   """
@@ -75,7 +75,7 @@ defmodule PrismWeb.MembersLive do
   # has claimed it, the row is their seat, and Withdraw must never remove a
   # member. The roster this page shows may be older than that claim.
   def handle_event("remove_invite", params, socket) do
-    args = params |> Map.take(["identifier", "email"]) |> Map.put("invitation", true)
+    args = params |> Map.take(["identifier"]) |> Map.put("invitation", true)
 
     case call_tool(socket, "member/remove", args) do
       {:ok, _} ->
@@ -105,7 +105,7 @@ defmodule PrismWeb.MembersLive do
   # Growing a DM is a NEW open group with the three of you — the pair's
   # door stays closed and its history stays where it was said. The partner
   # is seated by user id (an active seat at once); the new person arrives
-  # by email or identifier, the ordinary first contact on an open athanor.
+  # by identifier or user id, the ordinary first contact on an open athanor.
   def handle_event("add_third", %{"person" => person}, socket) do
     %{athanor: pair, members: members, context: ctx} = socket.assigns
 
@@ -218,16 +218,15 @@ defmodule PrismWeb.MembersLive do
   defp frozen?(%{roster: "frozen"}), do: true
   defp frozen?(_), do: false
 
-  # Who the add form names: a person identifier when it starts `per_` and
-  # holds no `@`, else an email, so an address such as
-  # `per_hansen@example.com` stays an address. A malformed identifier with
-  # no `@` is still sent as one, so the refusal names what was wrong with it.
+  # Who the add form names: a person identifier when it starts `per_`,
+  # else a person's id here. A malformed identifier is still sent as one,
+  # so the refusal names what was wrong with it.
   defp target(person) do
     person = String.trim(person)
 
-    if String.starts_with?(person, "per_") and not String.contains?(person, "@"),
+    if String.starts_with?(person, "per_"),
       do: %{"identifier" => person},
-      else: %{"email" => person}
+      else: %{"user_id" => person}
   end
 
   defp load(socket) do
@@ -300,8 +299,8 @@ defmodule PrismWeb.MembersLive do
           <div :if={@members == []} class="py-8"><.empty_state message="No members" /></div>
           <.table :if={@members != []} id="members" rows={@members}>
             <:col :let={m} label="Who">{PrismWeb.People.label(m, @context)}</:col>
-            <:col :let={m} label="Email or identifier">
-              {m[:email] || m[:identifier] || "-"}
+            <:col :let={m} label="Identifier">
+              {m[:identifier] || m[:email] || "-"}
             </:col>
             <:col :let={m} label="Status">
               <.badge color={if m[:status] == "active", do: "green", else: "yellow"}>
@@ -331,14 +330,6 @@ defmodule PrismWeb.MembersLive do
                 >
                   Withdraw
                 </.button>
-                <.button
-                  :if={m[:status] == "invited" && !m[:identifier]}
-                  variant="ghost"
-                  phx-click="remove_invite"
-                  phx-value-email={m[:email]}
-                >
-                  Withdraw
-                </.button>
               </div>
             </:col>
           </.table>
@@ -355,7 +346,7 @@ defmodule PrismWeb.MembersLive do
                 value={@new_person}
                 type="text"
                 required
-                placeholder="someone@example.com or per_…"
+                placeholder="per_… or usr_…"
               />
             </div>
             <.button type="submit">Add member</.button>
@@ -375,7 +366,7 @@ defmodule PrismWeb.MembersLive do
                 value={@new_person}
                 type="text"
                 required
-                placeholder="someone@example.com or per_…"
+                placeholder="per_… or usr_…"
               />
             </div>
             <.button type="submit">Add someone — starts a new group</.button>

@@ -45,7 +45,7 @@ defmodule Locus.Runtime.MemoryBoundTest do
     # An athanor of the test's own, so the runner its first run takes is the
     # only one idle for it.
     {:ok, athanor} =
-      Sanctum.Tenancy.Athanors.create_for_operator(%{
+      Arca.Athanors.insert(Prima.Actor.system(), %{
         kind: "group",
         name: "Memory bound #{unique}",
         slug: "memory-bound-#{unique}",

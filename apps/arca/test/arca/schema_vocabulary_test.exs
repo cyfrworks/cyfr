@@ -62,7 +62,9 @@ defmodule Arca.SchemaVocabularyTest do
       {"passkeys", "passkeys_state_known", "state", Arca.Schemas.Passkey.states()},
       # `Arca.CliSignIns` approves or cancels a command line's pending
       # sign-in, and nothing leaves either.
-      {"cli_sign_ins", "cli_sign_ins_state_known", "state", Arca.Schemas.CliSignIn.states()}
+      {"cli_sign_ins", "cli_sign_ins_state_known", "state", Arca.Schemas.CliSignIn.states()},
+      # How a person was made here (`Arca.Users.mint/4`), written once.
+      {"users", "users_admission_known", "admission", Arca.Schemas.User.admissions()}
     ]
   end
 
@@ -188,6 +190,45 @@ defmodule Arca.SchemaVocabularyTest do
     end
   end
 
+  describe "a person's admission" do
+    test "lands every admission, and refuses any other and none" do
+      for admission <- ~w(setup invitation open remote restore) do
+        assert {1, _} = insert!("users", person(admission))
+      end
+
+      refused!("users", person("github"), "users_admission_known")
+
+      refused!("users", person(nil), [
+        "users_admission_known",
+        "NOT NULL",
+        "not-null",
+        "null value"
+      ])
+    end
+  end
+
+  describe "a door entry's kind" do
+    test "an allow names an identifier or *, a deny a person or an identifier" do
+      for {kind, effect} <- [
+            {"identifier", "allow"},
+            {"wildcard", "allow"},
+            {"person", "deny"},
+            {"identifier", "deny"}
+          ] do
+        assert {1, _} = insert!("server_allowlist", door(kind, effect))
+      end
+
+      for {kind, effect} <- [
+            {"person", "allow"},
+            {"wildcard", "deny"},
+            {"email", "allow"},
+            {"user_id", "deny"}
+          ] do
+        refused!("server_allowlist", door(kind, effect), "server_allowlist_kind_known")
+      end
+    end
+  end
+
   describe "a pairing invitation's confirmer" do
     test "lands every kind with its id, or neither, and refuses another kind or one without the other",
          ctx do
@@ -224,7 +265,7 @@ defmodule Arca.SchemaVocabularyTest do
       {1, _} =
         insert!("users", %{
           id: user,
-          provider: "github",
+          admission: "open",
           email: "#{user}@example.com",
           first_seen_at: now(),
           last_seen_at: now(),
@@ -416,6 +457,33 @@ defmodule Arca.SchemaVocabularyTest do
   end
 
   defp id(prefix), do: "#{prefix}_#{System.unique_integer([:positive])}"
+
+  defp person(admission) do
+    user = id("usr")
+
+    %{
+      id: user,
+      admission: admission,
+      first_seen_at: now(),
+      last_seen_at: now(),
+      created_at: now(),
+      updated_at: now()
+    }
+  end
+
+  # The value is unique per row, so only the kind and the effect decide.
+  defp door(kind, effect) do
+    %{
+      id: id("door"),
+      kind: kind,
+      value: id("v"),
+      effect: effect,
+      status: "allowed",
+      created_at: now(),
+      updated_at: now()
+    }
+  end
+
   defp now, do: NaiveDateTime.utc_now()
 
   defp execution(%{athanor: athanor}, status) do
