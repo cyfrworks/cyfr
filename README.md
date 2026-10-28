@@ -621,6 +621,39 @@ made only by an admission at this CYFR: its setup, an invitation, signing
 up here while the allowlist admits everyone (`*`), or a verified CYFR
 sign-in.
 
+### Requiring a company sign-in
+
+A CYFR can require every person there to sign in with their company's
+account, as a condition of being there:
+
+```bash
+CYFR_COMPANY_LOGIN=renew          # off (the default), join or renew
+CYFR_COMPANY_LOGIN_DAYS=30        # with renew alone
+CYFR_WORKOS_CLIENT_ID=client_...
+CYFR_WORKOS_API_KEY=sk_...
+CYFR_WORKOS_ORGANIZATION=org_...
+```
+
+`join` asks for the company sign-in once, and `renew` asks again every
+`CYFR_COMPANY_LOGIN_DAYS` days. The company's issuer is WorkOS when its
+three settings are set, and the OIDC issuer above otherwise. Beside WorkOS,
+an OIDC issuer is a sign-in method only. Register
+`<CYFR address>/auth/company/callback` as a redirect URI at the company's
+issuer. The boot refuses `join` or `renew` with no issuer, and WorkOS set
+in part, set while the mode is `off`, or set on a headless server.
+
+The company sign-in never signs anyone in and never makes a person. A
+person still signs in with their passkey, a paired device, their CYFR
+identity or a linked sign-in method, and keeps each of them. Until their
+company sign-in stands, every page sends them to the company page
+(`/company-login`), and the API keys they made and the devices they paired
+are refused. [integration-guide.md](integration-guide.md#when-a-cyfr-requires-a-company-sign-in)
+shows what an API client sees. CYFR binds a company account to one person
+by the subject the issuer names, never by email. Moving to another OIDC issuer,
+OIDC client ID or WorkOS organization, or between OIDC and WorkOS, makes
+everyone sign in with their company again. Setting the mode back to `off`
+requires nothing more and keeps the bindings.
+
 ### Sign-in methods, and what a first sign-in needs
 
 A person signs in at a server with one of its sign-in methods: GitHub, Google or

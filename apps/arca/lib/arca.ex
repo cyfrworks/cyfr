@@ -146,6 +146,8 @@ defmodule Arca do
       CarryActions,
       CipherRotation,
       CliSignIns,
+      CompanyAuthorizations,
+      CompanyLoginAttempts,
       ComponentStorage,
       ConsumerReceipts,
       ConsentProofStorage,

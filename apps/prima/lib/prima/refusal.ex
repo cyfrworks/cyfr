@@ -927,6 +927,24 @@ defmodule Prima.Refusal do
        "That sign-in came from someone other than the handle you named, so nobody was " <>
          "signed in."}
 
+  # A person at a CYFR that requires a company sign-in, whose sign-in with
+  # it is missing, past its days, or given under another company
+  # configuration: everything else about their standing holds, and the
+  # company page is the one place open to them.
+  defp row(:company_login_required),
+    do:
+      {:forbidden,
+       "This CYFR requires you to sign in with your company's account. Sign in with it to " <>
+         "go on."}
+
+  # A company account another person here is bound to, or another account
+  # than the one this person is bound to, under the same configuration.
+  defp row(:company_subject_bound),
+    do:
+      {:conflict,
+       "That company account is bound to someone else here, or you are bound to another " <>
+         "one. Sign in with the company account that is yours here."}
+
   # A remote person's identity whose head this home could not confirm
   # fresh within its bound: their work here pauses and their session
   # stands, so it is no sign-out and no denial.

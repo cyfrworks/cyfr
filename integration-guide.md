@@ -367,7 +367,7 @@ on the wire.
 |------|------|---------|
 | -33001 | `auth_required` | Not authenticated — tool requires login (see [Public Tools](#public-tools-no-auth-required) for exceptions) |
 | -33002 | `auth_invalid` | Invalid API key or token |
-| -33004 | `insufficient_permissions` | Key scope doesn't cover this action, the caller is not a platform admin, or the IP is not in the allowlist |
+| -33004 | `insufficient_permissions` | Key scope doesn't cover this action, the caller is not a platform admin, the IP is not in the allowlist, or the person behind the credential has not given the company sign-in this CYFR requires ([When a CYFR Requires a Company Sign-in](#when-a-cyfr-requires-a-company-sign-in)) |
 | -33100 | `internal` | The call failed for a reason the server could not confirm — check before retrying |
 | -33101 | `conflict` | The state moved on — read it again and retry |
 | -33102 | `not_owner` | This server does not currently own its control plane — retry shortly |
@@ -398,6 +398,29 @@ Two protocol-level codes are also in play, both standard JSON-RPC:
 which carries the supported list in `error.data.supported`.
 
 > **MCP Tool Reference**: For a complete mapping of CLI commands to MCP tool/action pairs (useful when building HTTP integrations), see [CLI → MCP Tool Reference](component-guide.md#cli--mcp-tool-reference) in the Component Guide.
+
+### When a CYFR Requires a Company Sign-in
+
+A CYFR may require every person there to sign in with their company's
+account (`CYFR_COMPANY_LOGIN`, [README.md](README.md#requiring-a-company-sign-in)).
+While a person's company sign-in is missing, past its days, or given under
+another company configuration, CYFR refuses every request made with their
+credentials: an API key they made, their session token and their paired
+devices alike. The refusal, `company_login_required`, answers HTTP `403`
+with this message:
+
+> This CYFR requires you to sign in with your company's account. Sign in with it to go on.
+
+Over MCP it arrives as the JSON-RPC error `-33004`
+(`insufficient_permissions`). On an execution's event stream
+(`/api/executions/:id/events`) the body is
+`{"code": "forbidden", "message": "..."}`. A stream already open ends at
+its next revalidation.
+
+Retrying does not help, and no key or session needs to be made again. The
+person opens the CYFR in a browser, signs in, and chooses **Sign in with
+your company** on the page it sends them to. After that, the same API key
+and session token are admitted again.
 
 ### Public Tools (No Auth Required)
 

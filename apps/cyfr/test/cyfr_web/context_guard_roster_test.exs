@@ -31,8 +31,10 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   # invitation page are what an anonymous caller comes for; none holds a
   # session's context. The setup page's first step is sessionless too;
   # signed in, it mounts the guard itself (`CyfrWeb.ContextGuard.on_mount/4`),
-  # as a nested view does.
-  @public ~w(LoginLive PairLive RestoreLive SetupLive InviteLive)
+  # as a nested view does. Nor does the company page hold one: it reads
+  # the browser's session only as the owner of one refused for the company
+  # sign-in alone (`Sanctum.CompanyLogin.held/1`).
+  @public ~w(LoginLive PairLive RestoreLive SetupLive InviteLive CompanyLoginLive)
 
   # Rendered by the layout or a page with `live_render/3`; each mounts the guard itself.
   @nested ~w(TopbarLive AquaPanelLive ThreadPaneLive)

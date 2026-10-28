@@ -157,6 +157,10 @@ defmodule Arca.TenantTables do
   # `passkeys` are a person's own credentials at this home, revoked with
   # the person (`Arca.SecurityTransitions`), never with an athanor.
   #
+  # `company_authorizations` and `company_login_attempts` are a person's
+  # company sign-in and the sign-ins they have in flight: the person's,
+  # deleted with their `users` row, never with an athanor.
+  #
   # `restore_people` is a person's period after a declared restore. Its
   # owner is the person: each row references `users` and is deleted with
   # it, never with an athanor, and a person's denial leaves it.
@@ -189,6 +193,8 @@ defmodule Arca.TenantTables do
     "directory_heads",
     "carry_actions",
     "passkeys",
+    "company_authorizations",
+    "company_login_attempts",
     "restore_people",
     "device_certifications",
     "installation_claims",

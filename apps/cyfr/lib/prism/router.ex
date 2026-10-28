@@ -8,7 +8,8 @@ defmodule Prism.Router do
   legal-acceptance and attachment pipelines, browser sign-in and
   sign-out with their callbacks, linking an OpenID Connect door, passkey
   sign-in's completion, the `cyfr` door's start from a handle, its
-  challenge hop and callback, the
+  challenge hop and callback, the company sign-in's page, start and
+  callback, the
   OpenID Connect re-authentication's callback, the claim and legal pages, the
   attachment and file downloads and the `:athanor` LiveView session.
 
@@ -174,6 +175,26 @@ defmodule Prism.Router do
           get "/cyfr/start", AuthController, :cyfr_start, metadata: %{auth: :browser_oauth_flow}
         end
 
+        # A company sign-in, the standing condition a CYFR may require of
+        # every person (`Sanctum.CompanyLogin`): its start, a POST the
+        # browser pipeline's CSRF token guards from the company page,
+        # under the browser's own session refused for that condition
+        # alone, and the issuer's callback, which both company issuers
+        # share. Above `/:provider` so neither is read as a provider.
+        scope "/" do
+          pipe_through :oauth_start_throttle
+
+          post "/company", AuthController, :company_start,
+            metadata: %{auth: :browser_company_login}
+        end
+
+        scope "/" do
+          pipe_through :oauth_callback_throttle
+
+          get "/company/callback", AuthController, :company_callback,
+            metadata: %{auth: :browser_oauth_callback}
+        end
+
         scope "/" do
           pipe_through :oauth_start_throttle
 
@@ -206,7 +227,9 @@ defmodule Prism.Router do
       # session as every console page does (`PrismWeb.SetupLive`).
       # `/invite` is the page an invitation link opens: sessionless, the
       # code in its fragment, the newcomer's passkey made under it
-      # (`PrismWeb.InviteLive`).
+      # (`PrismWeb.InviteLive`). `/company-login` is the one page a
+      # session refused for the company sign-in alone opens
+      # (`PrismWeb.CompanyLoginLive`).
       scope "/", PrismWeb do
         pipe_through :browser
 
@@ -214,6 +237,8 @@ defmodule Prism.Router do
         live "/restore", RestoreLive, :restore, metadata: %{auth: :browser_public_login}
         live "/setup", SetupLive, :setup, metadata: %{auth: :browser_public_login}
         live "/invite", InviteLive, :invite, metadata: %{auth: :browser_public_login}
+
+        live "/company-login", CompanyLoginLive, :index, metadata: %{auth: :browser_company_login}
       end
 
       # The glass's page alone may reach other homes by `fetch`: a device
