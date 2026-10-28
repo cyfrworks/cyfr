@@ -776,7 +776,7 @@ class Stack(imagesuite.Stack):
             printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "${d#/proc/}" "$sid" "$uids" "$eff" "$prm" "$bnd" "$nnp" "$cmd"
           done"""
         out = []
-        for line in self.exec(script, target=target).stdout.splitlines():
+        for line in self.listing(self.exec(script, target=target), target or self.container, "the process listing").splitlines():
             pid, sid, uids, eff, prm, bnd, nnp, cmd = line.split("|", 7)
             if uids:
                 out.append({"pid": int(pid), "sid": int(sid or 0), "uids": [int(u) for u in uids.split(",")],
