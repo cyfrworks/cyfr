@@ -73,6 +73,16 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     )
   end
 
+  # A configured port is the one a listener binds. Configured 0 asks the OS for
+  # a port, so any positive port is right; a listener bound to 0 is never right.
+  defp assert_bound_port(configured, bound) do
+    if configured > 0 do
+      assert bound == configured, "bound to #{bound}, configured #{configured}"
+    else
+      assert bound > 0, "bound to #{bound}, configured #{configured}"
+    end
+  end
+
   describe "the prod branch evaluates" do
     test "with only the required secrets set" do
       with_env(%{"CYFR_DATABASE" => nil}, fn ->
@@ -1044,7 +1054,17 @@ defmodule Cyfr.RuntimeConfigWiringTest do
 
       configured = Cyfr.RuntimeConfig.host_api_port()
       bound = Opus.HostListener.port(listener)
-      assert bound == configured or (configured == 0 and bound > 0), "bound to #{bound}"
+      assert_bound_port(configured, bound)
+    end
+
+    # The check on the observations it can meet: a configured 0 leaves the port
+    # to the OS, and a configured port is the one bound. A listener bound to 0
+    # is refused under any configuration.
+    test "the bound-port check refuses a listener bound to nothing" do
+      assert_bound_port(0, 23001)
+      assert_bound_port(4300, 4300)
+      assert_raise ExUnit.AssertionError, fn -> assert_bound_port(4300, 4301) end
+      assert_raise ExUnit.AssertionError, fn -> assert_bound_port(0, 0) end
     end
 
     test "a malformed worker entry, address or port refuses the boot by name" do
