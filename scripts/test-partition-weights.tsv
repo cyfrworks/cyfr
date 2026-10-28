@@ -334,6 +334,7 @@
 0.1	apps/cyfr/test/cyfr/providers/settings_test.exs
 0.0	apps/cyfr/test/cyfr/rate_limiter_test.exs
 6.0	apps/cyfr/test/cyfr/refusal_rendering_seam_test.exs
+0.2	apps/cyfr/test/cyfr/release_fixture_test.exs
 0.2	apps/cyfr/test/cyfr/release_test.exs
 0.0	apps/cyfr/test/cyfr/retention_executions_age_test.exs
 3.4	apps/cyfr/test/cyfr/retention_scheduler_test.exs

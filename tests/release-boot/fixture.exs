@@ -18,9 +18,9 @@
 #       fixture puts for the call and takes away after), and so is its
 #       platform administrator; the command-line session setup mints is
 #       ended at once. Every later person is made with the rows an open
-#       admission writes (`Arca.Users.mint/4` under `open`, their keys,
-#       their athanor), once the door's `*` admits newcomers, which the
-#       proof opens as an administrator does (`door.allow`); a sign-in
+#       admission writes (`Arca.Users.mint/4` under `open`, its caps
+#       counted before the person's row, their keys, their athanor), once
+#       the door's `*` admits newcomers, which the proof opens as an administrator does (`door.allow`); a sign-in
 #       method is never an admission, so the identity is linked to the
 #       person made. Answers the person, the athanor the session is
 #       focused on, the route segment of that athanor and the session
@@ -164,9 +164,10 @@ fn args ->
                 person,
                 Map.merge(link, %{first_seen_at: now, last_seen_at: now}),
                 admission: "open",
+                verify: &Sanctum.Provisioning.personal_admissible/0,
                 also: fn person ->
                   with :ok <- Sanctum.Person.mint_keys(person),
-                       {:ok, _athanor} <- Sanctum.Provisioning.mint_personal(person, []),
+                       {:ok, _athanor} <- Sanctum.Provisioning.mint_personal(person),
                        do: :ok
                 end
               )
