@@ -43,6 +43,8 @@ defmodule PrismWeb.ConsentSheetComponentTest do
   # PrismWeb.ConnCase checks the sandbox out in shared mode.
   use PrismWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
   alias Sanctum.Context
 
   defp oidc_ctx do
@@ -160,6 +162,8 @@ defmodule PrismWeb.ConsentSheetComponentTest do
   # Each need's row
   # ---------------------------------------------------------------------------
 
+  # A candidate as the plan answers it: an entry for the need's host
+  # whose one field the need reads by its own name.
   defp own(id, name, over \\ %{}) do
     Map.merge(
       %{
@@ -169,7 +173,11 @@ defmodule PrismWeb.ConsentSheetComponentTest do
         kind: "api_key",
         provider: "service.example",
         destination: %{"hosts" => ["api.service.example"], "scheme" => "https"},
-        disclosed: false
+        disclosed: false,
+        fit: "exact",
+        label_match: true,
+        field_names: ["SERVICE_KEY"],
+        fields: %{"SERVICE_KEY" => "SERVICE_KEY"}
       },
       over
     )
@@ -183,7 +191,11 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       kind: "api_key",
       provider: "service.example",
       destination: %{"hosts" => ["api.service.example"], "scheme" => "https"},
-      disclosed: false
+      disclosed: false,
+      fit: "exact",
+      label_match: true,
+      field_names: ["SERVICE_KEY"],
+      fields: %{"SERVICE_KEY" => "SERVICE_KEY"}
     }
   end
 
@@ -195,16 +207,17 @@ defmodule PrismWeb.ConsentSheetComponentTest do
       kind: Keyword.get(opts, :kind, "api_key"),
       provider: Keyword.get(opts, :provider, "service.example"),
       reason: reason,
-      fields: ["SERVICE_KEY"],
+      fields: Keyword.get(opts, :fields, ["SERVICE_KEY"]),
       scopes: [],
       required: Keyword.get(opts, :required, true),
       disclose_only: Keyword.get(opts, :disclose_only, false),
       disclose: false,
-      hosts: Keyword.get(opts, :hosts),
+      hosts: Keyword.get(opts, :hosts, ["api.service.example"]),
       paths: nil,
       candidates: candidates,
       suggested: Keyword.get(opts, :suggested),
       choice_required: Keyword.get(opts, :choice_required, false),
+      attach_only_held: Keyword.get(opts, :attach_only_held, false),
       source: Keyword.get(opts, :source),
       newer_shipped: Keyword.get(opts, :newer_shipped)
     }
@@ -435,22 +448,15 @@ defmodule PrismWeb.ConsentSheetComponentTest do
     plan = %{
       source_ref: "catalyst:local.sheet-model",
       dependency_needs: [],
-      # The athanor's own entries: one of the model's provider, attach-only.
-      candidates: [
-        %{
-          id: "vlt_attach",
-          name: "Attach-only key",
-          kind: "api_key",
-          provider_hint: "model.example",
-          attach_only: true
-        }
-      ],
+      candidates: [],
       needs: [
         key_need("key", "to call the service", [], provider: "keyed.example"),
         key_need("mail", "to read mail", [], kind: "oauth", provider: "google"),
+        # The athanor's own entry for the model's host is attach-only.
         key_need("model", "to call the model", [],
           provider: "model.example",
           disclose_only: true,
+          attach_only_held: true,
           newer_shipped: "1.4.0"
         )
       ]
@@ -484,6 +490,379 @@ defmodule PrismWeb.ConsentSheetComponentTest do
              "/a/home/components?" <>
                URI.encode_query(%{"ref" => "catalyst:local.sheet-model", "setup" => "true"})
            ]
+  end
+
+  # ---------------------------------------------------------------------------
+  # The match and the map
+  # ---------------------------------------------------------------------------
+
+  # An entry for api.x.ai with no label whose one field is `API key`.
+  defp xai(id, name, over \\ %{}) do
+    own(
+      id,
+      name,
+      Map.merge(
+        %{
+          provider: "",
+          label_match: false,
+          destination: %{"hosts" => ["api.x.ai"], "scheme" => "https"},
+          field_names: ["API key"],
+          fields: %{"GROK_API_KEY" => "API key"}
+        },
+        over
+      )
+    )
+  end
+
+  defp texts(html, selector) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(selector)
+    |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
+  end
+
+  test "a suggested candidate reads `You already have an entry for` its hosts and name" do
+    grok = [hosts: ["api.x.ai"], fields: ["GROK_API_KEY"], provider: "x.ai"]
+
+    plan = %{
+      source_ref: "catalyst:local.sheet-grok",
+      candidates: [],
+      dependency_needs: [],
+      needs: [
+        key_need(
+          "api_key",
+          "to call Grok",
+          [xai("vlt_x", "My xAI key")],
+          grok ++ [suggested: %{entry_id: "vlt_x"}]
+        ),
+        # Optional, its suggestion a click away: still the entry it has.
+        key_need(
+          "optional",
+          "to call another model",
+          [xai("vlt_o", "Other key")],
+          [
+            hosts: ["api.x.ai", "api.example.ai"],
+            required: false,
+            suggested: %{entry_id: "vlt_o"}
+          ] ++ grok
+        ),
+        # Two to choose from, neither suggested: no entry is named yet.
+        key_need(
+          "pick",
+          "to choose a key",
+          [xai("vlt_a", "A key"), xai("vlt_b", "B key")],
+          grok ++ [choice_required: true]
+        ),
+        key_need("mail", "to read mail", [], kind: "oauth", hosts: ["gmail.googleapis.com"])
+      ]
+    }
+
+    html =
+      sheet(plan, decisions: %{"bindings" => [%{"need" => "api_key", "entry_id" => "vlt_x"}]})
+
+    grok_html = need_html(html, "api_key")
+
+    assert texts(grok_html, ~s([data-test="grant-held"])) == [
+             "You already have an entry for api.x.ai: My xAI key"
+           ]
+
+    assert texts(grok_html, ".consent-sheet__need-what") == ["api_key for api.x.ai, required"]
+
+    assert texts(need_html(html, "optional"), ~s([data-test="grant-held"])) == [
+             "You already have an entry for api.x.ai, api.example.ai: Other key"
+           ]
+
+    assert texts(need_html(html, "optional"), ".consent-sheet__need-what") == [
+             "api_key for api.x.ai, api.example.ai, optional"
+           ]
+
+    assert texts(need_html(html, "pick"), ~s([data-test="grant-held"])) == []
+
+    # Nothing can meet it: an entry for its hosts is what to add.
+    mail = need_html(html, "mail")
+    assert texts(mail, ~s([data-test="grant-held"])) == []
+
+    assert texts(mail, ".consent-sheet__empty") == [
+             "Add a vault entry for gmail.googleapis.com first."
+           ]
+
+    assert texts(mail, ".consent-sheet__need-what") == [
+             "oauth for gmail.googleapis.com, required"
+           ]
+
+    # The need's provider is no longer how the sheet names a need.
+    refute grok_html =~ "for x.ai"
+
+    # Chosen, another candidate is the one named.
+    chosen =
+      sheet(plan, decisions: %{"bindings" => [%{"need" => "pick", "entry_id" => "vlt_b"}]})
+
+    assert texts(need_html(chosen, "pick"), ~s([data-test="grant-held"])) == [
+             "You already have an entry for api.x.ai: B key"
+           ]
+  end
+
+  test "a map whose names differ is shown pair by pair" do
+    plan = %{
+      source_ref: "catalyst:local.sheet-pairs",
+      candidates: [],
+      dependency_needs: [],
+      needs: [
+        key_need("api_key", "to call Grok", [xai("vlt_x", "My xAI key")],
+          hosts: ["api.x.ai"],
+          fields: ["GROK_API_KEY"],
+          suggested: %{entry_id: "vlt_x"}
+        ),
+        key_need("same", "a key read by its own name", [own("vlt_s", "Same key")],
+          suggested: %{entry_id: "vlt_s"}
+        ),
+        key_need(
+          "bundle",
+          "two fields, mapped crosswise",
+          [
+            own("vlt_b", "Bundle", %{
+              kind: "bundle",
+              field_names: ["A", "B"],
+              fields: %{"A" => "A", "B" => "B"}
+            })
+          ],
+          kind: "bundle",
+          fields: ["A", "B"],
+          suggested: %{entry_id: "vlt_b"}
+        )
+      ]
+    }
+
+    html =
+      sheet(plan,
+        decisions: %{
+          "bindings" => [
+            %{"need" => "api_key", "entry_id" => "vlt_x"},
+            %{"need" => "same", "entry_id" => "vlt_s"},
+            # A map the head holds, re-sent, is the map shown.
+            %{"need" => "bundle", "entry_id" => "vlt_b", "fields" => %{"A" => "B", "B" => "A"}}
+          ]
+        }
+      )
+
+    assert texts(need_html(html, "api_key"), ~s([data-test="grant-map-pair"])) == [
+             "GROK_API_KEY comes from API key"
+           ]
+
+    assert texts(need_html(html, "same"), ~s([data-test="grant-map-pair"])) == []
+
+    assert texts(need_html(html, "bundle"), ~s([data-test="grant-map-pair"])) == [
+             "A comes from B",
+             "B comes from A"
+           ]
+
+    # An automatic map asks nothing.
+    refute html =~ ~s(data-test="grant-map-question")
+    refute html =~ ~s(data-test="grant-map-due")
+  end
+
+  test "a wildcard candidate shows its whole destination" do
+    wide = %{
+      "hosts" => ["*.x.ai", "*.grok.example"],
+      "scheme" => "https",
+      "methods" => ["POST"],
+      "paths" => ["/v1"]
+    }
+
+    plan = %{
+      source_ref: "catalyst:local.sheet-wide",
+      candidates: [],
+      dependency_needs: [],
+      needs: [
+        key_need(
+          "api_key",
+          "to call Grok",
+          [
+            xai("vlt_wide", "Wide key", %{fit: "wildcard", destination: wide}),
+            # A `*.` host beside the need's own: an exact fit says no breadth.
+            xai("vlt_exact", "Exact key", %{
+              destination: %{"hosts" => ["*.x.ai", "api.x.ai"], "scheme" => "https"}
+            })
+          ],
+          hosts: ["api.x.ai"],
+          fields: ["GROK_API_KEY"],
+          choice_required: true
+        )
+      ]
+    }
+
+    words = texts(sheet(plan), ~s([data-test="grant-pick"] .consent-sheet__fields))
+
+    assert words == [
+             "an entry of this athanor, sent only to https://*.x.ai, *.grok.example, " <>
+               "methods POST, paths /v1 (any name under x.ai) (any name under grok.example)",
+             "an entry of this athanor, sent only to https://*.x.ai, api.x.ai"
+           ]
+  end
+
+  describe "a candidate with no automatic map" do
+    setup %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      athanor = seated_athanor()
+      {:ok, view, _html} = live_isolated(conn, PrismWeb.ConsentSheetComponentTest.Host)
+      local = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: athanor.id}
+      name = "sheet-map-#{System.unique_integer([:positive])}"
+
+      # A need the component reads itself, of two fields: the entry holds
+      # one by the same name, and the other under a name of its own.
+      {:ok, _} =
+        Compendium.Registry.publish_bytes(local, Cyfr.Test.Guests.wasm(:catalyst), %{
+          name: name,
+          version: "0.1.0",
+          type: "catalyst",
+          description: "A component reading two fields",
+          manifest:
+            Jason.encode!(%{
+              "needs" => %{
+                "db" => %{
+                  "type" => "api_key:db.example",
+                  "reason" => "to reach the database",
+                  "fields" => ["DB_USER", "password"],
+                  "required" => true,
+                  "hosts" => ["db.sheet.example"]
+                }
+              },
+              "caps" => %{"egress" => %{"domains" => ["db.sheet.example"]}}
+            })
+        })
+
+      params = %{
+        name: "Database login",
+        kind: "api_key",
+        fields: %{"username" => "u", "password" => "p"},
+        destination: %{"hosts" => ["db.sheet.example"]},
+        disclose: true
+      }
+
+      entering =
+        Sanctum.TestContext.confirmed(local, :credential_entry, %{
+          operation: "vault.create",
+          arguments: params,
+          resource: params.name
+        })
+
+      {:ok, entry} = Sanctum.Vault.create(entering, params)
+
+      context = :sys.get_state(view.pid).socket.assigns.context
+      node = "catalyst:local.#{name}"
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(context, "g-map", node)
+      send(view.pid, {:prompt, grant})
+      render(view)
+      render(view)
+
+      %{view: view, node: node, entry: entry, athanor_id: athanor.id}
+    end
+
+    defp layer_subject(view) do
+      {by_cid, _ids, _next} = :sys.get_state(view.pid).components
+
+      Enum.find_value(by_cid, fn {_cid, entry} ->
+        if elem(entry, 0) == PrismWeb.SystemLayer, do: elem(entry, 2).current.subject
+      end)
+    end
+
+    defp answer(view, need_field, entry_field) do
+      view
+      |> form(~s([data-test="grant-map-question"][data-field="#{need_field}"]), %{
+        "entry_field" => entry_field
+      })
+      |> render_change()
+
+      render(view)
+    end
+
+    test "asks once and holds Grant until answered", %{view: view, node: node, entry: entry} do
+      question = fn field ->
+        ~s([data-test="grant-map-question"][data-field="#{field}"])
+      end
+
+      # One question per field the component reads, each over the entry's
+      # fields, the one of the same name preselected.
+      assert has_element?(
+               view,
+               question.("DB_USER"),
+               "Which of Database login's fields does #{node} read as DB_USER?"
+             )
+
+      assert has_element?(view, question.("password") <> ~s( option[value="password"][selected]))
+      assert has_element?(view, question.("DB_USER") <> ~s( option[value=""][selected]))
+
+      assert view
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(~s([data-test="grant-map-question"]))
+             |> Enum.count() == 2
+
+      # Until each has an entry field, nothing is decided or previewed, and
+      # Grant waits.
+      assert has_element?(
+               view,
+               ~s([data-test="grant-map-due"]),
+               "Choose a field for each name before granting."
+             )
+
+      assert has_element?(view, ~s(button[data-test="prompt-confirm"][disabled]))
+      assert %{preview: nil, decisions: %{"bindings" => []}} = layer_subject(view)
+
+      answer(view, "DB_USER", "username")
+
+      refute has_element?(view, ~s([data-test="grant-map-due"]))
+      refute has_element?(view, ~s(button[data-test="prompt-confirm"][disabled]))
+      map = %{"DB_USER" => "username", "password" => "password"}
+
+      assert %{decisions: %{"bindings" => [binding]}, preview: %{rows: rows}} =
+               layer_subject(view)
+
+      assert binding == %{
+               "need" => "db",
+               "entry_id" => entry.id,
+               "lifetime" => %{"kind" => "standing"},
+               "fields" => map
+             }
+
+      # The preview is of that map.
+      assert [%{"values" => %{"fields" => ^map}}] =
+               Enum.filter(rows, &(&1["kind"] == "credential"))
+
+      assert has_element?(
+               view,
+               ~s([data-row="credential"]),
+               "Fields: DB_USER from username, password from password"
+             )
+
+      # Answered, the question stays as answered and asks nothing more.
+      assert has_element?(view, question.("DB_USER") <> ~s( option[value="username"][selected]))
+    end
+
+    test "a preview refusing the map shows its sentence on the need and grants nothing",
+         %{view: view, entry: entry, athanor_id: athanor_id} do
+      # The entry no longer holds `username` once the plan has offered it.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.VaultEntry,
+            where: e.athanor_id == ^athanor_id and e.id == ^entry.id
+          ),
+          set: [field_names: ~s(["password"])]
+        )
+
+      answer(view, "DB_USER", "username")
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-need"][data-need="db"] [data-test="grant-refusal"]),
+               "The field map must name each field this need reads once, and only fields " <>
+                 "the entry holds."
+             )
+
+      assert has_element?(view, ~s(button[data-test="prompt-confirm"][disabled]))
+      assert %{preview: nil} = layer_subject(view)
+    end
   end
 
   test "\"This app asks for no credentials\" only when neither the app nor a dependency " <>

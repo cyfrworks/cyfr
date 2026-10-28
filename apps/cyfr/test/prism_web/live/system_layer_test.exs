@@ -1220,9 +1220,14 @@ defmodule PrismWeb.SystemLayerTest do
       assert [%{binding_key: ^key, consumed: true}] = grant.subject.plan.head_bindings
 
       # A re-grant opens on what the head binds, never wider: the once
-      # stays once, not the suggestion's standing.
+      # stays once, not the suggestion's standing, under the head's map.
       assert grant.subject.decisions["bindings"] == [
-               %{"need" => "api_key", "entry_id" => entry.id, "lifetime" => %{"kind" => "once"}}
+               %{
+                 "need" => "api_key",
+                 "entry_id" => entry.id,
+                 "lifetime" => %{"kind" => "once"},
+                 "fields" => %{"LAYER_API_KEY" => "LAYER_API_KEY"}
+               }
              ]
 
       prompt(view, grant)
@@ -1237,6 +1242,7 @@ defmodule PrismWeb.SystemLayerTest do
                  "need" => "api_key",
                  "entry_id" => entry.id,
                  "lifetime" => %{"kind" => "once"},
+                 "fields" => %{"LAYER_API_KEY" => "LAYER_API_KEY"},
                  "renew" => true
                }
              ]
@@ -1685,6 +1691,70 @@ defmodule PrismWeb.SystemLayerTest do
       assert outcome(id) == :dismissed
       assert open_prompt(view) == nil
       refute render(view) =~ "Connect your move.test account"
+    end
+
+    test "granting with a chosen map commits it", %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+
+      # A need of two fields the entry holds under names of its own: no
+      # automatic map, so the person chooses it.
+      name_ref =
+        publish_catalyst!(local, "layer-map-#{n}", %{
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:map.test",
+              "reason" => "to call the service with the key it reads",
+              "fields" => ["MAP_KEY", "MAP_ORG"],
+              "required" => true,
+              "hosts" => ["api.map.example"]
+            }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.map.example"]}}
+        })
+
+      entry =
+        entry!(local, %{
+          name: "My map key",
+          fields: %{"API key" => "sk-map", "Organisation" => "org-map"},
+          destination: %{"hosts" => ["api.map.example"]},
+          disclose: true
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-map", name_ref)
+      prompt(view, grant)
+
+      assert has_element?(view, ~s([data-test="grant-held"]), "api.map.example: My map key")
+      assert has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+
+      for {need_field, entry_field} <- [{"MAP_KEY", "API key"}, {"MAP_ORG", "Organisation"}] do
+        view
+        |> form(~s([data-test="grant-map-question"][data-field="#{need_field}"]), %{
+          "entry_field" => entry_field
+        })
+        |> render_change()
+
+        render(view)
+      end
+
+      refute has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+      map = %{"MAP_KEY" => "API key", "MAP_ORG" => "Organisation"}
+      %{current: %{subject: %{decisions: decisions, preview: preview}}} = layer_assigns(view)
+      assert [%{"entry_id" => bound, "fields" => ^map}] = decisions["bindings"]
+      assert bound == entry.id
+      assert [%{"values" => %{"fields" => ^map}}] = credential_rows(preview)
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-map") == :confirmed
+
+      {_profile_id, head} = head_rows(local, name_ref)
+      {:ok, blob} = Prima.Authority.Blob.parse(head.resolved_policy)
+      {:ok, %{vault: vault}} = Prima.Authority.Blob.ingress(blob, name_ref)
+      assert vault.projection == %{fields: map, scopes: []}
+
+      # Granted again, the head's map is what the grant opens with.
+      {:ok, again} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-map-2", name_ref)
+      assert [%{"entry_id" => ^bound, "fields" => ^map}] = again.subject.decisions["bindings"]
     end
 
     test "a need the component reads itself is connected with disclosure on; dismissed, " <>
