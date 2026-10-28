@@ -101,10 +101,11 @@ defmodule Cyfr.BoundaryDeclarationsTest do
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
       {~w(CarryActions CliSignIns DeviceCertificates DeviceCertifications DirectoryHeads
-          IdentityAttempts IdentityLog PairingInvitations Passkeys PendingConfirmations
-          PersonIdentities RequestRateWindows),
-       "the identity, device, passkey, confirmation, carry, command-line sign-in and " <>
-         "pre-authentication rate rows Sanctum reads; that no other layer reads them is " <>
+          IdentityAttempts IdentityLog Invitations PairingInvitations Passkeys
+          PendingConfirmations PersonIdentities RequestRateWindows),
+       "the identity, device, passkey, confirmation, carry, command-line sign-in, " <>
+         "admission invitation and pre-authentication rate rows Sanctum reads; that no " <>
+         "other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
       {~w(AgentRevisions AgentStorage BudgetReservations BuildRecords Cache Cache.Keys
           CipherRotation ComponentStorage ConsumerReceipts ControlPlane CredentialBindings
@@ -169,7 +170,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "driven by the host's suites through their handlers"},
       {~w(Consent.Accounts),
        "the assistant's read of which named accounts an app's own ingress binds and " <>
-         "which entry a name resolves to, never a value, never a write"}
+         "which entry a name resolves to, never a value, never a write"},
+      {~w(Invitations),
+       "the invitation page's read of who invited and to which athanor, before any " <>
+         "ceremony, rostered for it in `Cyfr.Boundaries`' surface rows"}
     ],
     Compendium => [
       {~w(AquaPath ComponentPath ConsentFacts),
