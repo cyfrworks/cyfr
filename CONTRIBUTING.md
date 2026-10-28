@@ -49,14 +49,15 @@ and a host that allows unprivileged user namespaces (`docker-compose.yml`'s
 
 On its first run it makes `.env` mode 0600 and writes into it what a `mix`
 boot needs and nothing sets: `CYFR_GITHUB_CLIENT_ID` from `.env.example`,
-`CYFR_PLATFORM_ADMIN_EMAILS` from `git config user.email` (with none set, it
-names the line to add), and the runtime root and the backends key, minted
-as `cyfr init` mints them. Later runs keep every value. The builds key,
-which a `mix` boot refuses without the builds URL only the stack sets, is
-minted for each run unless `.env` sets one. It then builds
-`cyfr-locus:dev`, starts the containers and runs `mix phx.server` in the
-foreground at http://localhost:4000, refusing, with the holder's name, when
-that address is taken. Prism and the server reload as their files
+and `CYFR_SETUP_TOKEN`, the runtime root and the backends key, minted as
+`cyfr init` mints them. Later runs keep every value. The builds key, which
+a `mix` boot refuses without the builds URL only the stack sets, is minted
+for each run unless `.env` sets one. It then builds `cyfr-locus:dev`, starts
+the containers and runs `mix phx.server` in the foreground at
+http://localhost:4000, refusing, with the holder's name, when that address
+is taken. The run that writes the setup token prints the setup link,
+`http://localhost:4000/setup#<token>`, as `cyfr init` does: it sets up
+CYFR's first person, who administers it, with a passkey. Prism and the server reload as their files
 change; a change under `apps/locus` or to the Locus image's other inputs
 takes effect at the next start. Ctrl-C stops the server and removes the
 containers; the image stays cached, so a start with nothing changed

@@ -27,23 +27,24 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   `CYFR_BIND_ADDRESS` other than Prism's, is refused by name: each would
   serve Prism, or send runs, calls or builds, somewhere the stack is not.
 
-      mix cyfr.locus.dev_stack settings DECLARATIONS [ADMIN_EMAIL]
+      mix cyfr.locus.dev_stack settings DECLARATIONS
 
   first writes into `.env`, made mode 0600 before it is written, each
   setting a mix boot needs that neither `.env` nor the environment sets:
-  `CYFR_GITHUB_CLIENT_ID` from `.env.example`, `CYFR_PLATFORM_ADMIN_EMAILS`
-  as ADMIN_EMAIL (refused when there is none), and `CYFR_LOCUS_RUNTIME_ROOT`
-  and `CYFR_LOCUS_BACKENDS_KEY` minted as `cyfr init` mints them, 32 random
-  bytes as 64 hexadecimal digits. `CYFR_LOCUS_BUILDS_KEY`, which a boot
-  refuses without its URL, is never written: unset, it is minted for the
-  run. A value already set is kept; one the environment sets empty over
-  the file, or a malformed key, is refused. Nothing is written when
-  anything is refused. It then prints `wrote NAME...` when it wrote, a
-  `server NAME=VALUE` line for each of CYFR's settings above and the
-  builds key, and `compose NAME=VALUE` lines for the three keys compose
-  hands the services: `LOCUS_RUNTIME_KEY`, the runtime's id's key derived
-  from the root (`Prima.WorkerAuth.worker_key/2`), and the backends and
-  builds keys.
+  `CYFR_GITHUB_CLIENT_ID` from `.env.example`, and `CYFR_SETUP_TOKEN`,
+  `CYFR_LOCUS_RUNTIME_ROOT` and `CYFR_LOCUS_BACKENDS_KEY` minted as
+  `cyfr init` mints them, 32 random bytes as 64 lowercase hexadecimal
+  digits. `CYFR_LOCUS_BUILDS_KEY`, which a boot refuses without its URL, is
+  never written: unset, it is minted for the run. A value already set is
+  kept; one the environment sets empty over the file, or one its reader
+  at boot refuses, is refused. Nothing is written when anything is
+  refused. It then prints `wrote NAME...` when it wrote, and `setup <link>`,
+  the setup link at Prism's address (`/setup#<token>`), when it wrote the
+  setup token, as `cyfr init` prints it; a `server NAME=VALUE` line for
+  each of CYFR's settings above and the builds key; and `compose
+  NAME=VALUE` lines for the three keys compose hands the services:
+  `LOCUS_RUNTIME_KEY`, the runtime's id's key derived from the root
+  (`Prima.WorkerAuth.worker_key/2`), and the backends and builds keys.
 
       mix cyfr.locus.dev_stack endpoint DECLARATIONS
 
@@ -76,13 +77,13 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   @backends_key "CYFR_LOCUS_BACKENDS_KEY"
   @builds_key "CYFR_LOCUS_BUILDS_KEY"
   @github "CYFR_GITHUB_CLIENT_ID"
-  @admins "CYFR_PLATFORM_ADMIN_EMAILS"
+  @setup "CYFR_SETUP_TOKEN"
   @host_api_url "CYFR_HOST_API_URL"
   @bind "CYFR_BIND_ADDRESS"
 
   # What a mix boot needs that the stack provisions when nothing sets it,
   # in the order the lines are written.
-  @provisioned [@github, @admins, @root, @backends_key]
+  @provisioned [@github, @setup, @root, @backends_key]
   @keys [@root, @backends_key, @builds_key]
 
   @impl Mix.Task
@@ -103,16 +104,20 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end
   end
 
-  defp answer(["settings", declarations | admin]) when length(admin) <= 1 do
+  defp answer(["settings", declarations]) do
     with {:ok, stack} <- declared(declarations),
          env = environment(),
          :ok <- agree(stack, env),
-         {:ok, lines} <- provision(env, admin),
+         {:ok, lines} <- provision(env),
          {:ok, builds_key} <- builds_key(env),
          :ok <- write(lines),
          env = environment(),
          {:ok, keys} <- keys(env, stack.service_id, builds_key) do
       if lines != [], do: info("wrote " <> Enum.map_join(lines, " ", &elem(&1, 0)))
+
+      for {@setup, token} <- lines,
+          do: info("setup http://localhost:#{stack.prism_port}/setup##{token}")
+
       for {name, value} <- stack.server, do: info("server #{name}=#{value}")
       info("server #{@builds_key}=#{builds_key}")
       for {name, value} <- keys, do: info("compose #{name}=#{value}")
@@ -144,7 +149,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   defp answer(_args) do
     {:error,
-     "usage: mix cyfr.locus.dev_stack settings DECLARATIONS [ADMIN_EMAIL] | " <>
+     "usage: mix cyfr.locus.dev_stack settings DECLARATIONS | " <>
        "endpoint DECLARATIONS | names DECLARATIONS"}
   end
 
@@ -321,9 +326,9 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   # The lines to write for what nothing sets, or the refusal of what is
   # set wrongly; nothing is written until every name has been read.
-  defp provision(env, admin) do
+  defp provision(env) do
     Enum.reduce_while(@provisioned, {:ok, []}, fn name, {:ok, lines} ->
-      case provided(name, env, admin) do
+      case provided(name, env) do
         :ok -> {:cont, {:ok, lines}}
         {:write, value} -> {:cont, {:ok, lines ++ [{name, value}]}}
         {:error, message} -> {:halt, {:error, message}}
@@ -331,16 +336,17 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end)
   end
 
-  defp provided(name, env, admin) do
+  defp provided(name, env) do
     cond do
       System.get_env(name) == "" -> empty_override(name)
       (have = set(env, name)) != nil -> held(name, have)
-      true -> minted(name, admin)
+      true -> minted(name)
     end
   end
 
   # A value held, checked by the reader the boot checks it with: the root
-  # decoded as it stands (`config/runtime.exs`), an island key through
+  # decoded as it stands (`config/runtime.exs`), the setup token trimmed and
+  # held to `Sanctum.setup_token?/1`, an island key through
   # `Prima.EnvValue.hex_key/2`, which trims it. Whitespace alone is
   # refused: it is a value of none of them.
   defp held(name, text) do
@@ -351,6 +357,16 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
       name == @root ->
         hex_key(name, Prima.MacEnvelope.decode_root(text))
+
+      name == @setup ->
+        {:ok, token} = Prima.EnvValue.text(fn _ -> text end, name)
+
+        if Sanctum.setup_token?(token),
+          do: :ok,
+          else:
+            {:error,
+             "#{name} is not 64 lowercase hexadecimal digits. Remove its line from .env and " <>
+               "scripts/dev-stack.sh writes one."}
 
       name in @keys ->
         hex_key(name, Prima.EnvValue.hex_key(fn _ -> text end, name))
@@ -379,12 +395,12 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
         with :ok <- held(@builds_key, have), do: {:ok, String.trim(have)}
 
       true ->
-        {:write, key} = minted(@builds_key, [])
+        {:write, key} = minted(@builds_key)
         {:ok, key}
     end
   end
 
-  defp minted(@github, _admin) do
+  defp minted(@github) do
     example = Path.join(File.cwd!(), ".env.example")
 
     with true <- File.regular?(example),
@@ -399,27 +415,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end
   end
 
-  defp minted(@admins, admin) do
-    case Enum.map(admin, &String.trim/1) do
-      [email] when email != "" ->
-        if Regex.match?(~r/\A[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\z/, email),
-          do: {:write, email},
-          else: no_admin(" `git config user.email` is #{inspect(email)}, not one address.")
-
-      _ ->
-        no_admin(" `git config user.email` is not set.")
-    end
-  end
-
-  defp minted(_key, _admin),
+  defp minted(_key),
     do: {:write, Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)}
-
-  defp no_admin(why) do
-    {:error,
-     "#{@admins} is set in neither .env nor the environment, and the dev stack signs you in " <>
-       "as its platform admin." <>
-       why <> " Add the line #{@admins}=<your email> to .env, or set `git config user.email`."}
-  end
 
   # The refusal of a key its reader did not decode.
   defp hex_key(name, read) do

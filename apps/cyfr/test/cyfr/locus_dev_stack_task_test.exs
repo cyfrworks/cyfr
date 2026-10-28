@@ -27,12 +27,13 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
   @server ~w(CYFR_PORT CYFR_LOCUS_RUNTIME_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT
              CYFR_LOCUS_BACKENDS_URL CYFR_PRIVATE_EGRESS_TARGETS CYFR_LOCUS_BUILDS_URL)
-  @provisioned ~w(CYFR_GITHUB_CLIENT_ID CYFR_PLATFORM_ADMIN_EMAILS CYFR_LOCUS_RUNTIME_ROOT
+  @provisioned ~w(CYFR_GITHUB_CLIENT_ID CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT
                   CYFR_LOCUS_BACKENDS_KEY CYFR_LOCUS_BUILDS_KEY)
   @names ["RELEASE_ROOT", "CYFR_HOST_API_URL", "CYFR_BIND_ADDRESS", "CYFR_ACCESS"] ++
            @server ++ @provisioned
 
   @client_id "Ov23example"
+  @setup_token String.duplicate("5e", 32)
   @backends_key String.duplicate("b1", 32)
   @builds_key String.duplicate("c2", 32)
 
@@ -125,7 +126,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   defp complete,
     do: """
     CYFR_GITHUB_CLIENT_ID=#{@client_id}
-    CYFR_PLATFORM_ADMIN_EMAILS=dev@example.test
+    CYFR_SETUP_TOKEN=#{@setup_token}
     CYFR_LOCUS_RUNTIME_ROOT=#{root()}
     CYFR_LOCUS_BACKENDS_KEY=#{@backends_key}
     CYFR_LOCUS_BUILDS_KEY=#{@builds_key}
@@ -143,7 +144,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       ]
   end
 
-  defp settings!(admin \\ []), do: DevStack.run(["settings", "stack.json" | admin])
+  defp settings!, do: DevStack.run(["settings", "stack.json"])
 
   defp answers do
     receive do
@@ -172,11 +173,12 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     end
 
     test "provisions every missing name into a new .env, mode 0600, as cyfr init mints keys" do
-      settings!(["dev@example.test"])
+      settings!()
 
       assert [
-               "wrote CYFR_GITHUB_CLIENT_ID CYFR_PLATFORM_ADMIN_EMAILS CYFR_LOCUS_RUNTIME_ROOT " <>
-                 "CYFR_LOCUS_BACKENDS_KEY"
+               "wrote CYFR_GITHUB_CLIENT_ID CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT " <>
+                 "CYFR_LOCUS_BACKENDS_KEY",
+               "setup http://localhost:4555/setup#" <> link_token
                | rest
              ] = answers()
 
@@ -184,7 +186,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
       assert [
                "CYFR_GITHUB_CLIENT_ID=" <> @client_id,
-               "CYFR_PLATFORM_ADMIN_EMAILS=dev@example.test",
+               "CYFR_SETUP_TOKEN=" <> setup_token,
                "CYFR_LOCUS_RUNTIME_ROOT=" <> minted_root,
                "CYFR_LOCUS_BACKENDS_KEY=" <> backends,
                ""
@@ -199,8 +201,15 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       # alone, the server's as the builder's.
       "server CYFR_LOCUS_BUILDS_KEY=" <> builds = Enum.at(rest, length(server_lines()))
 
-      for key <- [minted_root, backends, builds], do: assert(key =~ ~r/\A[0-9a-f]{64}\z/)
-      assert Enum.uniq([minted_root, backends, builds]) |> length() == 3
+      # The setup token as `cyfr init` mints it, which the boot accepts, in
+      # the link printed once, as `cyfr init` prints it.
+      assert link_token == setup_token
+      assert Sanctum.setup_token?(setup_token)
+
+      for key <- [setup_token, minted_root, backends, builds],
+          do: assert(key =~ ~r/\A[0-9a-f]{64}\z/)
+
+      assert Enum.uniq([setup_token, minted_root, backends, builds]) |> length() == 4
 
       {:ok, runtime_key} =
         Prima.WorkerAuth.worker_key(Base.decode16!(minted_root, case: :lower), service())
@@ -214,11 +223,12 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
                    "compose CYFR_LOCUS_BUILDS_KEY=" <> builds
                  ]
 
-      # A second run keeps every value it wrote and writes nothing; the
-      # builds key is minted afresh.
+      # A second run keeps every value it wrote, writes nothing and prints
+      # no link; the builds key is minted afresh.
       written = File.read!(".env")
-      settings!(["other@example.test"])
+      settings!()
       again = answers()
+      refute Enum.any?(again, &String.starts_with?(&1, "setup "))
       assert Enum.take(again, length(server_lines())) == server_lines()
       refute ("server CYFR_LOCUS_BUILDS_KEY=" <> builds) in again
       assert ("compose CYFR_LOCUS_BACKENDS_KEY=" <> backends) in again
@@ -229,7 +239,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       kept = "CYFR_LOCUS_RUNTIME_ROOT = #{root()} # the stack's root"
       File.write!(".env", "# mine\n" <> kept)
       File.chmod!(".env", 0o644)
-      System.put_env("CYFR_PLATFORM_ADMIN_EMAILS", "env@example.test")
+      System.put_env("CYFR_SETUP_TOKEN", " " <> @setup_token <> " ")
       settings!()
 
       assert hd(answers()) ==
@@ -261,31 +271,10 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       assert answers() == answered(String.duplicate("d3", 32), @builds_key)
     end
 
-    test "refuses, writing nothing, when no admin email is set or given" do
-      for admin <- [[], [""], ["  "]] do
-        refused(
-          "CYFR_PLATFORM_ADMIN_EMAILS is set in neither .env nor the environment, and the dev " <>
-            "stack signs you in as its platform admin. `git config user.email` is not set. Add " <>
-            "the line CYFR_PLATFORM_ADMIN_EMAILS=<your email> to .env",
-          fn -> settings!(admin) end
-        )
-
-        refute File.exists?(".env")
-      end
-    end
-
-    test "refuses an admin email that is not one address, writing nothing" do
-      for email <- [
-            "two words@example.test",
-            "a@example.test\nCYFR_ACCESS=public",
-            "a@b,c@d",
-            "x"
-          ] do
-        refused(
-          "`git config user.email` is #{inspect(email)}, not one address. Add the line " <>
-            "CYFR_PLATFORM_ADMIN_EMAILS=<your email> to .env",
-          fn -> settings!([email]) end
-        )
+    test "refuses a setup token the boot refuses, writing nothing" do
+      for bad <- [String.upcase(@setup_token), "abc"] do
+        File.write!(".env", complete() <> "CYFR_SETUP_TOKEN=#{bad}\n")
+        refused("CYFR_SETUP_TOKEN is not 64 lowercase hexadecimal digits.")
       end
     end
 
@@ -296,7 +285,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
         refused(
           "#{name} is set empty in the environment, which overrides .env. Unset it there",
-          fn -> settings!(["dev@example.test"]) end
+          fn -> settings!() end
         )
 
         System.delete_env(name)
@@ -327,7 +316,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
         refused(
           "#{name} holds only whitespace in .env or the environment. Remove it, or set a value.",
-          fn -> settings!(["dev@example.test"]) end
+          fn -> settings!() end
         )
 
         refute File.exists?(".env")
@@ -471,7 +460,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     File.write!(Path.join(dir, "release/.env"), complete())
 
     for release_root <- [Path.join(dir, "release"), ""],
-        args <- [["settings", "stack.json", "dev@example.test"], ["endpoint", "stack.json"], []] do
+        args <- [["settings", "stack.json"], ["endpoint", "stack.json"], []] do
       System.put_env("RELEASE_ROOT", release_root)
       error = assert_raise Mix.Error, fn -> DevStack.run(args) end
 

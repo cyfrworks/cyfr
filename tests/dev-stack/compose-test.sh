@@ -238,12 +238,6 @@ case " $* " in
 esac
 exit 0
 STUB
-cat >"$stubs/git" <<'STUB'
-#!/usr/bin/env bash
-[ "$*" = "config user.email" ] || { echo "the stub answers git config user.email alone" >&2; exit 99; }
-[ -n "${STUB_GIT_EMAIL:-}" ] || exit 1
-echo "$STUB_GIT_EMAIL"
-STUB
 cat >"$stubs/mix" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STUB_LOG/mix.calls"
@@ -328,15 +322,16 @@ json.dump(files, open(store, "w"))
 run = {"status": "completed", "execution_id": "exec_stub", "result": result}
 print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": json.dumps(run)}]}}))
 STUB
-chmod +x "$stubs/docker" "$stubs/git" "$stubs/mix" "$stubs/curl"
+chmod +x "$stubs/docker" "$stubs/mix" "$stubs/curl"
 
 run_dir=""
 token="dev-stack-test-token-$(openssl rand -hex 6)"
 root_a="$(printf 'ab%.0s' {1..32})"
+setup_a="$(printf '5e%.0s' {1..32})"
 key_b="$(printf 'b1%.0s' {1..32})"
 key_c="$(printf 'c2%.0s' {1..32})"
 complete="CYFR_GITHUB_CLIENT_ID=$example_id
-CYFR_PLATFORM_ADMIN_EMAILS=dev@example.test
+CYFR_SETUP_TOKEN=$setup_a
 CYFR_LOCUS_RUNTIME_ROOT=$root_a
 CYFR_LOCUS_BACKENDS_KEY=$key_b
 CYFR_LOCUS_BUILDS_KEY=$key_c
@@ -390,7 +385,7 @@ stack() {
 signalled() {
   prepare "$1" "$2" "$complete" 0600
   command=""
-  launch STUB_GIT_EMAIL=dev@example.test &
+  launch &
   local runner=$! pid i
   for i in $(seq 1 600); do
     [ -s "$case_dir/log/server.pid" ] && break
@@ -454,24 +449,28 @@ nothing_left() {
 
 # Each case prints why it fails, nothing when it holds.
 case_provision() {
-  stack "$1" provision "" none "" STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0
+  stack "$1" provision "" none "" STUB_SERVER_STATUS=0
   status_is 0
   [ "$(mode_of "$case_dir/.env")" = 0o600 ] || echo ".env is $(mode_of "$case_dir/.env"), not 0o600"
-  local root backends builds
+  local setup root backends builds
+  setup="$(sed -n 's/^CYFR_SETUP_TOKEN=//p' "$case_dir/.env")"
   root="$(sed -n 's/^CYFR_LOCUS_RUNTIME_ROOT=//p' "$case_dir/.env")"
   backends="$(sed -n 's/^CYFR_LOCUS_BACKENDS_KEY=//p' "$case_dir/.env")"
   # The builds key, which a boot refuses without its URL, is the run's
   # alone: the builder's and the server's, never .env's.
   builds="$(record docker.calls | sed -n 's/^.* up .*|CYFR_LOCUS_BUILDS_KEY=//p')"
   [ "$(cat "$case_dir/.env")" = "CYFR_GITHUB_CLIENT_ID=$example_id
-CYFR_PLATFORM_ADMIN_EMAILS=dev@example.test
+CYFR_SETUP_TOKEN=$setup
 CYFR_LOCUS_RUNTIME_ROOT=$root
 CYFR_LOCUS_BACKENDS_KEY=$backends" ] || echo ".env holds $(printf '%q' "$(cat "$case_dir/.env")")"
-  for key in "$root" "$backends" "$builds"; do
-    [[ "$key" =~ ^[0-9a-f]{64}$ ]] || echo "a minted key is $(printf '%q' "$key"), not 64 hexadecimal digits"
+  for key in "$setup" "$root" "$backends" "$builds"; do
+    [[ "$key" =~ ^[0-9a-f]{64}$ ]] || echo "a minted key is $(printf '%q' "$key"), not 64 lowercase hexadecimal digits"
   done
-  [ "$(printf '%s\n' "$root" "$backends" "$builds" | sort -u | wc -l)" = 3 ] || echo "the minted keys are not three"
-  grep -qxF "dev-stack: .env is mode 0600 and now sets CYFR_GITHUB_CLIENT_ID, CYFR_PLATFORM_ADMIN_EMAILS, CYFR_LOCUS_RUNTIME_ROOT, CYFR_LOCUS_BACKENDS_KEY." "$case_dir/out" ||
+  [ "$(printf '%s\n' "$setup" "$root" "$backends" "$builds" | sort -u | wc -l)" = 4 ] || echo "the minted keys are not four"
+  # The one secret printed: the setup link, as `cyfr init` prints it.
+  grep -qxF "dev-stack: set up its first person, who administers it, at http://localhost:$prism_port/setup#$setup" "$case_dir/out" ||
+    echo "the run did not print the setup link: $(cat "$case_dir/out")"
+  grep -qxF "dev-stack: .env is mode 0600 and now sets CYFR_GITHUB_CLIENT_ID, CYFR_SETUP_TOKEN, CYFR_LOCUS_RUNTIME_ROOT, CYFR_LOCUS_BACKENDS_KEY." "$case_dir/out" ||
     echo "the run did not say what it wrote: $(cat "$case_dir/out")"
   [ "$(calls)" = "$(full_run "$root" "$backends" "$builds")" ] || echo "docker was handed: $(calls)"
   [ "$(server_settings)" = "$(printf '%s\n' "$want_settings" "CYFR_LOCUS_BUILDS_KEY=$builds" | sort)" ] ||
@@ -489,36 +488,27 @@ case_retained() {
   local text
   for text in "$complete" "${complete/CYFR_LOCUS_RUNTIME_ROOT=/CYFR_LOCUS_RUNTIME_ROOT = }" \
     "${complete/$root_a/$root_a # the stack\'s root}"; do
-    stack "$1" retained "$text" 0644 "" STUB_GIT_EMAIL=other@example.test STUB_SERVER_STATUS=0
+    stack "$1" retained "$text" 0644 "" STUB_SERVER_STATUS=0
     status_is 0
     cmp -s "$case_dir/.env" "$case_dir/env.before" || echo ".env changed from $(printf '%q' "$text") to $(printf '%q' "$(cat "$case_dir/.env")")"
     [ "$(calls)" = "$(full_run "$root_a" "$key_b" "$key_c")" ] || echo "on $(printf '%q' "$text") docker was handed: $(calls)"
     if grep -qF "$(derived "$root_a")" "$case_dir/out" "$case_dir/err"; then echo "the key reached the output"; fi
+    if grep -qF "$setup_a" "$case_dir/out" "$case_dir/err"; then echo "a run that wrote no setup token printed it"; fi
   done
-}
-case_no_email() {
-  stack "$1" no-email "" none "" STUB_SERVER_STATUS=0
-  [ "$(cat "$case_dir/status")" != 0 ] || echo "the run went on with no admin email"
-  grep -qF "dev-stack: CYFR_PLATFORM_ADMIN_EMAILS is set in neither .env nor the environment" "$case_dir/err" &&
-    grep -qF "Add the line CYFR_PLATFORM_ADMIN_EMAILS=<your email> to .env" "$case_dir/err" ||
-    echo "the refusal does not name the line to add: $(cat "$case_dir/err")"
-  [ ! -s "$case_dir/.env" ] || echo ".env gained $(cat "$case_dir/.env") on the refusal"
-  [ "$(calls)" = "$resolve_call" ] || echo "docker was handed: $(calls)"
-  [ -z "$(record server.env)" ] || echo "the server started without an admin email"
 }
 case_refused() {
   local line name
   for line in "CYFR_LOCUS_RUNTIME_WORKERS = wrk_elsewhere=http://127.0.0.1:4999" "CYFR_HOST_API_BIND=0.0.0.0 # all of them" \
     "CYFR_HOST_API_URL=http://cyfr:4300" "CYFR_PORT=4000" "CYFR_LOCUS_BACKENDS_URL=http://locus-backends:4101"; do
     name="${line%%[ =]*}"
-    stack "$1" refused "$complete$line"$'\n' 0644 "" STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0
+    stack "$1" refused "$complete$line"$'\n' 0644 "" STUB_SERVER_STATUS=0
     [ "$(cat "$case_dir/status")" != 0 ] || echo "the run accepted $line"
     grep -qF "dev-stack: $name is " "$case_dir/err" || echo "the refusal does not name $name: $(cat "$case_dir/err")"
     [ "$(calls)" = "$resolve_call" ] || echo "docker ran past a disagreeing $name: $(calls)"
     [ -z "$(record server.env)" ] || echo "the server started though $name disagreed"
     cmp -s "$case_dir/.env" "$case_dir/env.before" || echo ".env changed on a refusal of $name"
   done
-  stack "$1" empty-override "$complete" 0644 "" STUB_GIT_EMAIL=dev@example.test CYFR_LOCUS_BACKENDS_KEY=
+  stack "$1" empty-override "$complete" 0644 "" CYFR_LOCUS_BACKENDS_KEY=
   grep -qF "CYFR_LOCUS_BACKENDS_KEY is set empty in the environment" "$case_dir/err" || echo "the empty override's refusal: $(cat "$case_dir/err")"
   [ "$(calls | cut -d'|' -f1)" = "compose -p $want_project config --format json $services" ] || echo "docker ran under an empty key override: $(calls)"
 }
@@ -528,8 +518,8 @@ case_release_root() {
   mkdir -p "$scratch/release"
   printf '%s' "$complete" >"$scratch/release/.env"
   for command in "" check; do
-    stack "$1" release-root $'CYFR_PLATFORM_ADMIN_EMAILS=dev@example.test\n' 0644 "$command" \
-      RELEASE_ROOT="$scratch/release" CYFR_TOKEN="$token" STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0
+    stack "$1" release-root "CYFR_SETUP_TOKEN=$setup_a"$'\n' 0644 "$command" \
+      RELEASE_ROOT="$scratch/release" CYFR_TOKEN="$token" STUB_SERVER_STATUS=0
     [ "$(cat "$case_dir/status")" != 0 ] || echo "${command:-the loop} exited 0 under RELEASE_ROOT"
     [ "$(tail -n 1 "$case_dir/err")" = "$sentence" ] || echo "${command:-the loop} did not end on the RELEASE_ROOT refusal: $(cat "$case_dir/err")"
     cmp -s "$case_dir/.env" "$case_dir/env.before" || echo "${command:-the loop} changed .env under RELEASE_ROOT: $(cat "$case_dir/.env")"
@@ -545,7 +535,7 @@ s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(120)' "$prism_po
   local holder=$!
   holders+=("$holder")
   for _ in $(seq 1 50); do ss -Hltn "sport = :$prism_port" | grep -q . && break; sleep 0.1; done
-  stack "$1" prism-held "$complete" 0600 "" STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0
+  stack "$1" prism-held "$complete" 0600 "" STUB_SERVER_STATUS=0
   kill "$holder" 2>/dev/null
   wait "$holder" 2>/dev/null
   [ "$(cat "$case_dir/status")" != 0 ] || echo "the run went on with Prism's address held"
@@ -555,7 +545,7 @@ s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(120)' "$prism_po
   [ -z "$(record server.env)" ] || echo "the server started with Prism's address held"
 }
 case_start_fails() {
-  stack "$1" start-fails "$complete" 0600 "" STUB_GIT_EMAIL=dev@example.test STUB_UP_STATUS=1 STUB_SERVER_STATUS=0
+  stack "$1" start-fails "$complete" 0600 "" STUB_UP_STATUS=1 STUB_SERVER_STATUS=0
   [ "$(cat "$case_dir/status")" != 0 ] || echo "the run exited 0 though the containers did not start"
   [ "$(calls)" = "$(printf '%s\n' "$resolve_call" "compose -p $want_project down --remove-orphans|$unset_keys" \
     "$(up_call "$root_a" "$key_b" "$key_c")" "compose -p $want_project logs --tail 30|$unset_keys" "compose -p $want_project down --remove-orphans|$unset_keys")" ] ||
@@ -566,7 +556,7 @@ case_start_fails() {
   nothing_left
 }
 case_server_ends() {
-  stack "$1" server-ends "$complete" 0600 "" STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=3
+  stack "$1" server-ends "$complete" 0600 "" STUB_SERVER_STATUS=3
   status_is 3
   [ "$(calls)" = "$(full_run "$root_a" "$key_b" "$key_c")" ] || echo "after the server ended docker was handed: $(calls)"
   nothing_left
@@ -618,7 +608,7 @@ case_failed_parse() {
   nothing_left
 }
 case_project_env() {
-  stack "$1" project-env "$complete" 0600 "" STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0 \
+  stack "$1" project-env "$complete" 0600 "" STUB_SERVER_STATUS=0 \
     COMPOSE_PROJECT_NAME=dev-stack-neighbour COMPOSE_FILE=neighbour.yml COMPOSE_PROFILES=public
   status_is 0
   [ "$(calls)" = "$(full_run "$root_a" "$key_b" "$key_c")" ] || echo "with a neighbour's COMPOSE_* docker was handed: $(calls)"
@@ -626,14 +616,14 @@ case_project_env() {
   nothing_left
 }
 case_server_child() {
-  stack "$1" server-child "$complete" 0600 "" STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=3 STUB_SERVER_CHILD=1
+  stack "$1" server-child "$complete" 0600 "" STUB_SERVER_STATUS=3 STUB_SERVER_CHILD=1
   status_is 3
   [ -s "$case_dir/log/watcher.pid" ] || echo "the server left no child to look for"
   [ "$(calls)" = "$(full_run "$root_a" "$key_b" "$key_c")" ] || echo "after the server ended docker was handed: $(calls)"
   nothing_left
 }
 case_blank_root() {
-  stack "$1" blank-root "" none "" STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0 CYFR_LOCUS_RUNTIME_ROOT=" "
+  stack "$1" blank-root "" none "" STUB_SERVER_STATUS=0 CYFR_LOCUS_RUNTIME_ROOT=" "
   [ "$(cat "$case_dir/status")" != 0 ] || echo "the run went on with a root of one space"
   grep -qF "dev-stack: CYFR_LOCUS_RUNTIME_ROOT holds only whitespace" "$case_dir/err" || echo "the refusal: $(cat "$case_dir/err")"
   [ ! -s "$case_dir/.env" ] || echo ".env gained $(cat "$case_dir/.env" | sed 's/=.*/=…/' | tr '\n' ' ') on the refusal"
@@ -649,7 +639,7 @@ case_locked() {
     holder=$!
     holders+=("$holder")
     for _ in $(seq 1 50); do flock -n "$lock" true || break; sleep 0.1; done
-    launch STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0
+    launch STUB_SERVER_STATUS=0
     echo "$?" >"$case_dir/status"
     kill "$holder" 2>/dev/null
     wait "$holder" 2>/dev/null
@@ -670,14 +660,14 @@ case_two_checkouts() {
   prepare "$1" two-first "$complete" 0600
   first="$case_dir"
   command=""
-  launch STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0 STUB_UP_HOLD=1 &
+  launch STUB_SERVER_STATUS=0 STUB_UP_HOLD=1 &
   runner=$!
   for _ in $(seq 1 600); do [ -e "$first/log/up.held" ] && break; kill -0 "$runner" 2>/dev/null || break; sleep 0.1; done
   [ -e "$first/log/up.held" ] || echo "the first checkout never reached its start"
   for command in "" down clean; do
     prepare "$1" two-second "$complete" 0600
     second="$case_dir"
-    launch STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0
+    launch STUB_SERVER_STATUS=0
     echo "$?" >"$second/status"
     [ "$(cat "$second/status")" != 0 ] || echo "${command:-the loop} from a second checkout went on while the first started"
     grep -qF "another run of the dev stack (pid " "$second/err" && grep -qF ", checkout $first) holds $run_dir/$want_project.dev-stack.lock" "$second/err" ||
@@ -736,7 +726,7 @@ case_clean() {
   [ "$(calls)" = "$(printf '%s\n' "$resolve_call" "compose -p $want_project down --remove-orphans|$unset_keys" \
     "image inspect $want_image|$unset_keys" "image rm $want_image|$unset_keys")" ] || echo "clean handed docker: $(calls)"
 }
-BOUNDARY_CASES="case_provision case_retained case_no_email case_refused case_release_root case_prism_held case_start_fails case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan case_clean"
+BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_prism_held case_start_fails case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan case_clean"
 
 # boundary SCRIPT [CASE...]: the failures of SCRIPT under each case.
 boundary() {
@@ -779,7 +769,7 @@ break_script nogroup "the server's process group left behind" "case_interrupted 
 break_script noprism "Prism's address not checked" case_prism_held '/^  free "\$port" "Prism.s address"$/d'
 break_script keysout "the keys in the server's environment" case_provision 's/^  \(exec \{LOCK_FD\}>&- && export "\$\{server\[@\]\}" &&$/  (exec {LOCK_FD}>\&- \&\& export "${server[@]}" "${keys[@]}" \&\&/'
 break_script persisted "the server's settings written into .env" case_provision 's/^  free "\$port" "Prism.s address"$/  printf "%s\\n" "${server[@]}" >>.env\n&/'
-break_script noemail "the admin email not handed on" case_provision 's/"\$\(git config user\.email 2>\/dev\/null \|\| true\)"/""/'
+break_script nolink "the setup link not printed" case_provision '/^  \[ -z "\$setup" \] \|\| echo /d'
 break_script nocompose "the caller's COMPOSE_* left to compose" case_project_env '/^  case "\$name" in COMPOSE_\*\) unset "\$name" ;; esac$/d'
 break_script forget "the server's group forgotten once it ends" case_server_child 's/^  wait "\$SERVER" && status=0 \|\| status=\$\?$/&\n  SERVER=""/'
 break_script endedgroup "an ended server's group left behind" case_server_child '/^    kill -KILL -- "-\$SERVER" 2>\/dev\/null \|\| true$/d'

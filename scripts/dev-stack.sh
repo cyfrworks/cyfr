@@ -34,7 +34,9 @@
 # itself. The task's one edit of .env adds what a mix boot needs and
 # nothing sets, after making the file mode 0600. The services' keys reach
 # compose, and CYFR's settings the server, in their environments alone;
-# nothing here prints a key or the check's bearer token.
+# nothing here prints a key or the check's bearer token. The one secret it
+# prints is the setup link, on the run that writes CYFR_SETUP_TOKEN, as
+# `cyfr init` prints it to the operator.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -216,13 +218,14 @@ run() {
   declarations
 
   echo "dev-stack: reading the settings; mix compiles the checkout first when it has changed."
-  local out status line wrote="" server=() keys=() port="" runtime_port="" host_api_port=""
-  out="$(task settings "$PRIVATE/stack.json" "$(git config user.email 2>/dev/null || true)" 2>&1)" &&
+  local out status line wrote="" setup="" server=() keys=() port="" runtime_port="" host_api_port=""
+  out="$(task settings "$PRIVATE/stack.json" 2>&1)" &&
     status=0 || status=$?
   [ "$status" = 0 ] || die "$(refusal "$out")"
   while IFS= read -r line; do
     case "$line" in
       "wrote "*) wrote="${line#wrote }" ;;
+      "setup "*) setup="${line#setup }" ;;
       "server "*) server+=("${line#server }") ;;
       "compose "*) keys+=("${line#compose }") ;;
     esac
@@ -260,10 +263,11 @@ run() {
     die "the containers did not start; their logs end above."
   fi
 
-  printf '\n%s\n%s\n%s\n\n' \
+  printf '\n%s\n%s\n' \
     "dev-stack: the runtime, backends and builds services run from this tree." \
-    "dev-stack: CYFR starts at http://localhost:$port and reloads as its files change." \
-    "dev-stack: Ctrl-C stops it and removes the containers."
+    "dev-stack: CYFR starts at http://localhost:$port and reloads as its files change."
+  [ -z "$setup" ] || echo "dev-stack: set up its first person, who administers it, at $setup"
+  printf '%s\n\n' "dev-stack: Ctrl-C stops it and removes the containers."
   # The server in a process group of its own, so the whole of it stops
   # with the run, and its settings in its environment alone. The run, not
   # the terminal, stops it: Ctrl-C reaches the script, whose exit stops
