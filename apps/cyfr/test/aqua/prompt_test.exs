@@ -104,24 +104,14 @@ defmodule Aqua.PromptTest do
       n = System.unique_integer([:positive])
 
       {:ok, u} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "local|idp|prompt-#{n}",
           provider: "local"
         })
 
       user = u.id
 
-      {:ok, mine} =
-        Sanctum.Tenancy.Athanors.create(%{
-          kind: "person",
-          name: "Me",
-          slug: "me#{n}",
-          owner_user_id: user,
-          created_by: user
-        })
-
-      {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, mine.id)
-      {:ok, _} = Sanctum.Tenancy.Members.create(%{user_id: user, athanor_id: mine.id})
+      mine = Sanctum.Test.People.athanor!(u)
       {:ok, athanor} = Sanctum.Tenancy.Athanors.create_group(user, "Trip #{n}")
       :ok = Sanctum.TestContext.shipped!(athanor.id)
       :ok = Sanctum.TestContext.shipped!(mine.id)

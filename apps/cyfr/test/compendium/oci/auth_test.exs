@@ -140,7 +140,7 @@ defmodule Compendium.OCI.AuthTest do
       assert %Prima.Refusal{class: :corrupt, message: message} = Prima.Refusal.classify(reason)
 
       assert message ==
-               "The stored registry credential is damaged; sign in to the registry again."
+               "The stored registry credential is damaged; run `cyfr registry sync` to replace it."
     end
 
     @tag :capture_log

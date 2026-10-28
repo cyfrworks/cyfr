@@ -170,7 +170,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
 
   defp person(n) do
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|arch-#{n}",
         provider: "github",
         email: "arch#{n}@example.com",
@@ -280,16 +280,7 @@ defmodule Sanctum.Tenancy.ArchiveTest do
     n = System.unique_integer([:positive])
     u = person(n)
 
-    {:ok, personal} =
-      Athanors.create(%{
-        kind: "person",
-        name: "P#{n}",
-        slug: "arch-p#{n}",
-        owner_user_id: u.id,
-        created_by: u.id
-      })
-
-    {:ok, u} = Users.set_personal_athanor(u, personal.id)
+    personal = Sanctum.Test.People.athanor!(u)
     {:ok, alone} = Athanors.create_group(u.id, "Alone #{n}")
     other = person(n + 100_000)
     {:ok, shared} = Athanors.create_group(other.id, "Shared #{n}")

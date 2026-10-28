@@ -23,6 +23,8 @@
 0.1	apps/arca/test/arca/canvas_versions_test.exs
 0.4	apps/arca/test/arca/carry_actions_test.exs
 0.0	apps/arca/test/arca/cipher_rotation_test.exs
+1.5	apps/arca/test/arca/company_authorizations_test.exs
+0.5	apps/arca/test/arca/company_login_attempts_test.exs
 0.3	apps/arca/test/arca/consent_storage_test.exs
 0.0	apps/arca/test/arca/consumer_receipts_lease_wait_test.exs
 3.7	apps/arca/test/arca/control_plane_test.exs
@@ -54,6 +56,7 @@
 1.1	apps/arca/test/arca/installation_claims_test.exs
 0.7	apps/arca/test/arca/instance_entries_test.exs
 0.0	apps/arca/test/arca/instance_entry_usage_test.exs
+2.0	apps/arca/test/arca/invitations_test.exs
 0.9	apps/arca/test/arca/job_claims_test.exs
 0.1	apps/arca/test/arca/layouts_test.exs
 0.0	apps/arca/test/arca/lock_wait_test.exs
@@ -281,7 +284,6 @@
 0.2	apps/cyfr/test/compendium/resolver_test.exs
 1.0	apps/cyfr/test/compendium/scaffold_test.exs
 0.0	apps/cyfr/test/compendium/semver_test.exs
-0.6	apps/cyfr/test/compendium/sign_in_sync_test.exs
 0.0	apps/cyfr/test/compendium/source_test.exs
 5.8	apps/cyfr/test/compendium/tincture/policy_writers_test.exs
 0.0	apps/cyfr/test/compendium/tincture/rules_test.exs
@@ -295,7 +297,6 @@
 0.0	apps/cyfr/test/cyfr/application_test.exs
 4.0	apps/cyfr/test/cyfr/approved_entry_writers_test.exs
 9.6	apps/cyfr/test/cyfr/async_env_guard_test.exs
-1.8	apps/cyfr/test/cyfr/bootstrap_test.exs
 25.2	apps/cyfr/test/cyfr/boundaries_test.exs
 12.3	apps/cyfr/test/cyfr/boundary_declarations_test.exs
 0.2	apps/cyfr/test/cyfr/bus_payload_test.exs
@@ -336,6 +337,7 @@
 0.1	apps/cyfr/test/cyfr/providers/settings_test.exs
 0.0	apps/cyfr/test/cyfr/rate_limiter_test.exs
 6.0	apps/cyfr/test/cyfr/refusal_rendering_seam_test.exs
+0.2	apps/cyfr/test/cyfr/release_fixture_test.exs
 0.2	apps/cyfr/test/cyfr/release_test.exs
 0.0	apps/cyfr/test/cyfr/retention_executions_age_test.exs
 3.4	apps/cyfr/test/cyfr/retention_scheduler_test.exs
@@ -367,6 +369,7 @@
 5.3	apps/cyfr/test/cyfr/vocabulary_drift_test.exs
 0.1	apps/cyfr/test/cyfr/wit_abi_drift_test.exs
 2.5	apps/cyfr/test/cyfr/with_else_scope_test.exs
+4.0	apps/cyfr/test/cyfr_web/company_login_standing_test.exs
 0.3	apps/cyfr/test/cyfr_web/context_guard_roster_test.exs
 3.7	apps/cyfr/test/cyfr_web/context_guard_test.exs
 0.0	apps/cyfr/test/cyfr_web/controllers/api_error_test.exs
@@ -376,7 +379,6 @@
 0.0	apps/cyfr/test/cyfr_web/endpoint_session_options_test.exs
 0.0	apps/cyfr/test/cyfr_web/endpoint_socket_test.exs
 0.0	apps/cyfr/test/cyfr_web/metrics_plug_test.exs
-0.1	apps/cyfr/test/cyfr_web/pending_probe_test.exs
 0.0	apps/cyfr/test/cyfr_web/plugs/auth_rate_limit_test.exs
 0.8	apps/cyfr/test/cyfr_web/plugs/authenticate_test.exs
 0.7	apps/cyfr/test/cyfr_web/plugs/browser_csp_test.exs
@@ -557,9 +559,8 @@
 0.0	apps/cyfr/test/prism_web/athanors_test.exs
 0.0	apps/cyfr/test/prism_web/components/aqua_approval_card_test.exs
 1.6	apps/cyfr/test/prism_web/controllers/auth_controller_test.exs
-0.5	apps/cyfr/test/prism_web/controllers/claim_namespace_controller_test.exs
+1.5	apps/cyfr/test/prism_web/controllers/company_login_controller_test.exs
 0.3	apps/cyfr/test/prism_web/controllers/download_outsider_test.exs
-0.6	apps/cyfr/test/prism_web/controllers/legal_accept_controller_test.exs
 0.1	apps/cyfr/test/prism_web/display_helpers_test.exs
 1.2	apps/cyfr/test/prism_web/focus_intent_test.exs
 1.9	apps/cyfr/test/prism_web/live/activities_live_test.exs
@@ -571,14 +572,15 @@
 3.3	apps/cyfr/test/prism_web/live/carry_live_test.exs
 65.8	apps/cyfr/test/prism_web/live/chat_live_test.exs
 0.3	apps/cyfr/test/prism_web/live/command_palette_test.exs
+1.5	apps/cyfr/test/prism_web/live/company_login_live_test.exs
 2.5	apps/cyfr/test/prism_web/live/components_live_test.exs
 1.1	apps/cyfr/test/prism_web/live/consent_sheet_component_test.exs
 0.6	apps/cyfr/test/prism_web/live/enforcements_live_test.exs
 2.0	apps/cyfr/test/prism_web/live/files_live_test.exs
+1.0	apps/cyfr/test/prism_web/live/invite_live_test.exs
 0.8	apps/cyfr/test/prism_web/live/login_live_test.exs
 1.7	apps/cyfr/test/prism_web/live/mcp_servers_live_test.exs
 1.3	apps/cyfr/test/prism_web/live/members_live_test.exs
-0.3	apps/cyfr/test/prism_web/live/operator_delist_live_test.exs
 0.5	apps/cyfr/test/prism_web/live/pair_live_test.exs
 0.1	apps/cyfr/test/prism_web/live/redirect_live_test.exs
 0.3	apps/cyfr/test/prism_web/live/registry_live_test.exs
@@ -686,6 +688,7 @@
 1.7	apps/cyfr/test/sanctum/providers/confirmation_test.exs
 0.3	apps/cyfr/test/sanctum/providers/decision_test.exs
 0.7	apps/cyfr/test/sanctum/providers/instance_entry_test.exs
+0.8	apps/cyfr/test/sanctum/providers/invitation_test.exs
 0.1	apps/cyfr/test/sanctum/providers/mcp_log_test.exs
 1.1	apps/cyfr/test/sanctum/providers/pairing_test.exs
 0.2	apps/cyfr/test/sanctum/providers/person_rotation_test.exs
@@ -882,10 +885,10 @@
 0.5	apps/sanctum/test/sanctum/attach_test.exs
 1.2	apps/sanctum/test/sanctum/auth/cyfr_door_test.exs
 0.4	apps/sanctum/test/sanctum/auth/device_flow_test.exs
-0.0	apps/sanctum/test/sanctum/auth/email_verification_test.exs
 0.0	apps/sanctum/test/sanctum/auth/identity_test.exs
-0.0	apps/sanctum/test/sanctum/auth/oauth_test.exs
+0.0	apps/sanctum/test/sanctum/auth/oidc_email_verified_test.exs
 0.0	apps/sanctum/test/sanctum/auth/oidc_test.exs
+2.0	apps/sanctum/test/sanctum/auth/workos_test.exs
 0.1	apps/sanctum/test/sanctum/auth_tenant_resolution_test.exs
 0.0	apps/sanctum/test/sanctum/authority/authority_test.exs
 0.0	apps/sanctum/test/sanctum/authority/blob_selection_wire_test.exs
@@ -909,6 +912,7 @@
 0.3	apps/sanctum/test/sanctum/cipher/rotation_test.exs
 0.0	apps/sanctum/test/sanctum/client_ip_proxy_trust_test.exs
 0.0	apps/sanctum/test/sanctum/client_ip_test.exs
+6.0	apps/sanctum/test/sanctum/company_login_test.exs
 1.7	apps/sanctum/test/sanctum/consent/authz_test.exs
 0.0	apps/sanctum/test/sanctum/consent/commit_digest_test.exs
 0.0	apps/sanctum/test/sanctum/consent/loader_decision_test.exs
@@ -930,9 +934,11 @@
 0.0	apps/sanctum/test/sanctum/execution_standing_test.exs
 1.0	apps/sanctum/test/sanctum/identity_freshness_test.exs
 1.3	apps/sanctum/test/sanctum/instance_entries_test.exs
+1.5	apps/sanctum/test/sanctum/invitations_test.exs
 1.8	apps/sanctum/test/sanctum/issuance_test.exs
 0.0	apps/sanctum/test/sanctum/network_private_policy_test.exs
 0.0	apps/sanctum/test/sanctum/network_test.exs
+0.3	apps/sanctum/test/sanctum/newcomer_test.exs
 0.8	apps/sanctum/test/sanctum/oauth/refresh_lock_test.exs
 3.7	apps/sanctum/test/sanctum/pairing_test.exs
 3.8	apps/sanctum/test/sanctum/passkeys_test.exs

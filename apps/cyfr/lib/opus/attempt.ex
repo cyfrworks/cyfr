@@ -1200,8 +1200,8 @@ defmodule Opus.Attempt do
   # only through the token dispense. Every other edge — a key or bundle
   # edge, an OAuth edge that also names fields, and an edge that names
   # nothing, which the vault reader refuses as corrupt — reads its fields.
-  defp reads_fields?(%{projection: %{scopes: [_ | _]} = projection}),
-    do: match?([_ | _], Map.get(projection, :fields))
+  defp reads_fields?(%{projection: %{scopes: [_ | _], fields: fields}}),
+    do: map_size(fields) > 0
 
   defp reads_fields?(_vault), do: true
 

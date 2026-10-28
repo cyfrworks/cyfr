@@ -95,7 +95,7 @@ defmodule Sanctum.Consent.CommitDigest do
           optional(:instance_entry_id) => String.t(),
           required(:binding_digest) => String.t(),
           optional(:name) => String.t() | nil,
-          optional(:fields) => [String.t()],
+          optional(:fields) => %{optional(String.t()) => String.t()},
           optional(:scopes) => [String.t()],
           optional(:lifetime) => lifetime(),
           optional(:renew) => boolean()
@@ -116,7 +116,7 @@ defmodule Sanctum.Consent.CommitDigest do
           optional(:need) => String.t(),
           optional(:name) => String.t() | nil,
           required(:binding_digest) => String.t(),
-          optional(:fields) => [String.t()],
+          optional(:fields) => %{optional(String.t()) => String.t()},
           optional(:lifetime) => lifetime(),
           optional(:renew) => boolean()
         }
@@ -293,7 +293,7 @@ defmodule Sanctum.Consent.CommitDigest do
          {:ok, entry} <- one_entry(binding, [:entry_id, :instance_entry_id], :bindings),
          {:ok, binding_digest} <- Normalize.required_string(binding, :binding_digest, tag),
          {:ok, name} <- Normalize.optional_string(binding, :name, tag),
-         {:ok, fields} <- Normalize.string_set(binding, :fields, tag),
+         {:ok, fields} <- Normalize.string_map(binding, :fields, tag),
          {:ok, scopes} <- Normalize.string_set(binding, :scopes, tag),
          {:ok, lifetime} <- lifetime(binding),
          {:ok, renew} <- renew(binding) do
@@ -367,8 +367,9 @@ defmodule Sanctum.Consent.CommitDigest do
 
   # One edge, one selection per account: the digest covers which labelled
   # profile of which dependency lends its entry to which lender, or which
-  # entry the edge binds under which name, at which binding digest,
-  # narrowed to which fields.
+  # entry the edge binds under which name, at which binding digest and
+  # under which field map; a label selection reads its lender's map and
+  # names none.
   defp selections(commit) do
     tag = :invalid_commit
 
@@ -407,7 +408,7 @@ defmodule Sanctum.Consent.CommitDigest do
          {:ok, need} <- Normalize.optional_string(selection, :need, tag),
          {:ok, name} <- Normalize.optional_string(selection, :name, tag),
          {:ok, binding_digest} <- Normalize.required_string(selection, :binding_digest, tag),
-         {:ok, fields} <- Normalize.string_set(selection, :fields, tag),
+         {:ok, fields} <- selection_fields(selection, lent, tag),
          {:ok, lifetime} <- lifetime(selection),
          {:ok, renew} <- renew(selection) do
       {:ok,
@@ -415,10 +416,10 @@ defmodule Sanctum.Consent.CommitDigest do
          "from" => from,
          "dep" => dep,
          "binding_digest" => binding_digest,
-         "fields" => fields,
          "lifetime" => lifetime,
          "renew" => renew
        })
+       |> Normalize.put_optional("fields", fields)
        |> Normalize.put_optional("need", need)
        |> Normalize.put_optional("name", name)}
     end
@@ -427,6 +428,14 @@ defmodule Sanctum.Consent.CommitDigest do
   defp normalize_selection(_other) do
     {:error, {:invalid_commit, :selections, "each selection must be a map"}}
   end
+
+  defp selection_fields(selection, %{"label" => _}, tag) do
+    if Map.has_key?(selection, :fields),
+      do: {:error, {tag, :fields, "a label selection names no field map"}},
+      else: {:ok, nil}
+  end
+
+  defp selection_fields(selection, _entry, tag), do: Normalize.string_map(selection, :fields, tag)
 
   # One edge, one credential per account: the default (no name) and each
   # named account once, a name a person would read as another (differing

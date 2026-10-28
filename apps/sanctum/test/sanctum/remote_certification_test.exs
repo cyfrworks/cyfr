@@ -25,7 +25,7 @@ defmodule Sanctum.RemoteCertificationTest do
   alias Prima.Identity
   alias Prima.Identity.{Encoding, Entry}
   alias Sanctum.{Context, Person, RemoteCertification, TestContext}
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   @directory "https://dir.example"
   @hub "https://hub.example"
@@ -47,7 +47,7 @@ defmodule Sanctum.RemoteCertificationTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|remote-cert-#{n}",
         provider: "github",
         email: "remote-cert#{n}@example.com",

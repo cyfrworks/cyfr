@@ -308,7 +308,7 @@ defmodule Emissary.Web.RestoreControllerTest do
       InstallationClaims.install_mode!(:ordinary)
 
       {:ok, _} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "github|https://github.com|resident",
           provider: "github"
         })
@@ -507,14 +507,22 @@ defmodule Emissary.Web.RestoreControllerTest do
   end
 
   describe "the restore attempt's rows" do
-    test "a node mid-restore refuses a first door", %{directory: directory} do
+    test "a node mid-restore refuses setup's first person", %{directory: directory} do
+      token = String.duplicate("5e", 32)
+      previous = Application.fetch_env(:sanctum, :setup_token)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)
+          :error -> Application.delete_env(:sanctum, :setup_token)
+        end
+      end)
+
+      Application.put_env(:sanctum, :setup_token, token)
       attempt!(directory, identity(directory), ["submitted"])
 
       assert {:error, :restore_reserved} =
-               Sanctum.SignIn.admitted(
-                 %{id: "github|https://github.com|early", provider: :github, verified: true},
-                 :admin
-               )
+               Sanctum.Newcomer.admit({:setup, token}, {:command_line, "laptop"})
 
       assert Arca.Repo.aggregate(User, :count) == 0
     end

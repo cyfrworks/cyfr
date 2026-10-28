@@ -82,6 +82,21 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  *     `public_key`), and answers it (`passkey_assertion`, `{credential}`)
  *     or says the ceremony did not finish (`passkey_error`). Such an
  *     element draws no prompt.
+ *   * On the setup page, an element with `data-webauthn="setup"` is the
+ *     first person's passkey, and on the invitation page one with
+ *     `data-webauthn="invite"` is the invited newcomer's; each names its
+ *     events by that mode (`setup_…`, `invite_…`). On mount it hands the
+ *     page the setup token or the invitation code the address carries in
+ *     its fragment (`<mode>_token`, `{token}`), which no server log
+ *     records, and a click on its `[data-webauthn-start]` asks the page for
+ *     creation options (`<mode>_start`, whose reply carries `public_key`
+ *     and `registration`), creates the passkey and answers it
+ *     (`<mode>_passkey`, `{credential}`), or says the ceremony did not
+ *     finish (`<mode>_error`). Such an element draws no prompt.
+ *   * On the sign-in page, an element with `data-webauthn="create"` is a
+ *     newcomer's passkey under an open admission: as the setup page's,
+ *     with no fragment read, through `create_start`, `create_passkey` and
+ *     `create_error`. Such an element draws no prompt.
  *
  * A change that waits on a fresh confirmation repeats once its record is
  * confirmed. A typed value is never held by the server meanwhile: the
@@ -261,9 +276,14 @@ function watchFrames(doc) {
   frameWatch.observe(doc.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["inert"]})
 }
 
+// The pages whose passkey makes a newcomer, by their `data-webauthn` mode.
+const NEWCOMER_MODES = new Set(["setup", "invite"])
+
 export default {
   mounted() {
     if (this.el.dataset.webauthn === "sign-in") return this.mountSignIn()
+    if (NEWCOMER_MODES.has(this.el.dataset.webauthn)) return this.mountNewcomer()
+    if (this.el.dataset.webauthn === "create") return this.mountRegistration("create")
     if (this.el.dataset.glass === "pair") return this.mountGlass()
     if (this.el.dataset.restore === "page") {
       this.restorePage = new RestorePage(this.el)
@@ -301,7 +321,7 @@ export default {
   },
 
   updated() {
-    if (this.el.dataset.webauthn === "sign-in" || this.el.dataset.glass === "pair") return
+    if (this.el.dataset.webauthn || this.el.dataset.glass === "pair") return
     if (this.el.dataset.restore === "page") return
     this.dialog = this.el.querySelector("dialog")
     this.sync()
@@ -349,6 +369,35 @@ export default {
         assertPasskey(reply.public_key, globalThis.navigator.credentials)
           .then((credential) => this.pushEvent("passkey_assertion", {credential}))
           .catch(() => this.pushEvent("passkey_error", {}))
+      })
+    }
+    this.el.addEventListener("click", this.onSignIn)
+  },
+
+  // A newcomer's passkey: the fragment's token to the page, then a
+  // registration under the options the page answers, once per click.
+  pushFragment() {
+    const hash = globalThis.location ? globalThis.location.hash : ""
+    this.pushEvent(`${this.el.dataset.webauthn}_token`, {token: hash.startsWith("#") ? hash.slice(1) : hash})
+  },
+
+  mountNewcomer() {
+    this.pushFragment()
+    this.mountRegistration(this.el.dataset.webauthn)
+  },
+
+  // A newcomer's passkey, once per click: `<mode>_start` for the creation
+  // options, then `<mode>_passkey` or `<mode>_error`.
+  mountRegistration(mode) {
+    this.onSignIn = (event) => {
+      const start = event.target && event.target.closest ? event.target.closest("[data-webauthn-start]") : null
+      if (!start) return
+      event.preventDefault()
+      this.pushEvent(`${mode}_start`, {}, (reply) => {
+        if (!reply || !reply.public_key) return
+        registerPasskey(reply.public_key, reply.registration, globalThis.navigator.credentials)
+          .then((credential) => this.pushEvent(`${mode}_passkey`, {credential}))
+          .catch(() => this.pushEvent(`${mode}_error`, {}))
       })
     }
     this.el.addEventListener("click", this.onSignIn)
@@ -468,6 +517,8 @@ export default {
   // on ended with the old one, so every form it typed for is emptied, and
   // the recovery material it held is forgotten.
   reconnected() {
+    // A newcomer page's new process holds no token: hand it over again.
+    if (this.el && NEWCOMER_MODES.has(this.el.dataset.webauthn)) return this.pushFragment()
     clearAllMarked(globalThis.document, this.marks)
     forgetAllRecovery(this)
   },

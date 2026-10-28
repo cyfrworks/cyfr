@@ -412,11 +412,11 @@ async function main(browser, proxy) {
   // A thief takes a copy of A as it stands.
   record.preserved = await ask({ op: "preserve_a" });
 
-  // C, configured for one restore: its first door is refused before any kit.
-  const reserved = await ask({ op: "c_first_sign_in" });
+  // C, configured for one restore: its setup is refused before any kit.
+  const reserved = await ask({ op: "c_setup" });
   record.reserved = reserved;
   if (!row("reserved", reserved.refused === "restore_reserved",
-    "C, an empty installation configured for restore, refuses its first door sign-in before any kit is presented", reserved)) return;
+    "C, an empty installation configured for restore, refuses its setup before any kit is presented", reserved)) return;
 
   // C's token and kit 2, handed to run.sh, which posts with them as the
   // browser does; neither stays in an ask or an answer.
@@ -432,9 +432,8 @@ async function main(browser, proxy) {
   if (!row("phases",
     phases.submitted.status === 503 && phases.submitted.phase === "submitted" &&
       phases.accepted.status === 503 && phases.accepted.phase === "accepted" &&
-      phases.minted.status === 503 && phases.minted.phase === "minted" &&
       phases.recoveries === 1,
-    "C killed at submitted (its reply lost), at accepted (its head unread) and at minted (its athanor refused) resumes each time under the same request, and the directory holds one recovery",
+    "C killed at submitted (its reply lost) and at accepted (its head unread) resumes each time under the same request, and the directory holds one recovery",
     phases)) return;
   if (!row("replay", phases.replay.entry_hash && phases.replay.entry_hash === phases.accepted.entry_hash,
     "the recovery's request sent again returns its recorded outcome, and nothing new is recorded", phases.replay)) return;

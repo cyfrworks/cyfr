@@ -3,20 +3,24 @@
 
 defmodule PrismWeb.MembersLiveTest do
   @moduledoc """
-  The members page of a group: any member adds by email or by person
-  identifier (a seat that waits when the person has never signed in),
-  removes, withdraws an invitation, and creates a group — all through the
-  same verbs Codex uses.
+  The members page of a group: any member adds by person identifier (a
+  seat that waits when the person has never signed in) or by the person's
+  id here, removes, withdraws an invitation, and creates a group — all
+  through the same verbs Codex uses. In an open group the invitation
+  links section creates a link, shows it once, lists the group's links
+  and revokes one.
   """
   use PrismWeb.ConnCase, async: false
 
   alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Test.RegistryStub
 
-  test "adding an email seats an invited row; removing an active member takes them out", %{
+  test "adding a person by their id seats them; removing an active member takes them out", %{
     conn: conn
   } do
     alice = test_user()
     bob = test_user()
+    carol = test_user()
     conn = log_in_user(conn, alice)
     {:ok, group} = Athanors.create_group(alice.user_id, "Team #{alice.namespace}")
     {:ok, :added} = Members.add(group, [user_id: bob.user_id], alice.user_id)
@@ -25,18 +29,12 @@ defmodule PrismWeb.MembersLiveTest do
     {view, html} = mount_athanor(conn, "/members", group)
     assert html =~ bob.email
 
-    stranger = "newcomer-#{System.unique_integer([:positive])}@example.com"
-
     view
-    |> form("form[phx-submit=add]", %{"person" => stranger})
+    |> form("form[phx-submit=add]", %{"person" => "  #{carol.user_id} "})
     |> render_submit()
 
-    assert render(view) =~ stranger
-
-    assert Enum.any?(
-             rows!(Members.list_by_athanor(group.id)),
-             &(&1.email == stranger and &1.status == "invited")
-           )
+    assert render(view) =~ carol.email
+    assert Members.member?(carol.user_id, group.id)
 
     view
     |> element("button[phx-click=remove][phx-value-user-id='#{bob.user_id}']")
@@ -56,9 +54,7 @@ defmodule PrismWeb.MembersLiveTest do
     {:ok, group} = Athanors.create_group(alice.user_id, "Claimed #{alice.namespace}")
     n = System.unique_integer([:positive])
     identifier = "per_" <> Prima.Digest.sha256_hex("members-live-claimed-#{n}")
-    email = "claimed-#{n}@example.com"
     {:ok, :invited} = Members.add(group, [identifier: identifier], alice.user_id)
-    {:ok, :invited} = Members.add(group, [email: email], alice.user_id)
 
     {view, _html} = mount_athanor(conn, "/members", group)
 
@@ -67,40 +63,24 @@ defmodule PrismWeb.MembersLiveTest do
              "button[phx-click=remove_invite][phx-value-identifier='#{identifier}']"
            )
 
-    assert has_element?(view, "button[phx-click=remove_invite][phx-value-email='#{email}']")
-
-    # Both invitees sign in for the first time while the page still shows
-    # their invitations.
+    # The invitee arrives while the page still shows their invitation.
     {:ok, by_identifier} =
-      Sanctum.Tenancy.Users.upsert_from_provider(
+      Sanctum.Test.People.remote(
         %{
           id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
-          provider: "cyfr",
-          verified: :unknown
+          provider: "cyfr"
         },
-        remote: %{identifier: identifier, directory_url: "https://dir.example"}
+        %{identifier: identifier, directory_url: "https://dir.example"}
       )
 
-    {:ok, by_email} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
-        id: "github|https://github.com|members-live-claimed-#{n}",
-        provider: "github",
-        email: email,
-        verified: true
-      })
-
     {:ok, 1} = Members.activate_invited(by_identifier)
-    {:ok, 1} = Members.activate_invited(by_email)
 
-    # The clicks the stale page sends: each withdraws only an invitation,
-    # and an invitation that is a seat now is not found.
-    for value <- [%{"identifier" => identifier}, %{"email" => email}] do
-      html = render_click(view, "remove_invite", value)
-      assert html =~ "already accepted"
-    end
+    # The click the stale page sends withdraws only an invitation, and an
+    # invitation that is a seat now is not found.
+    html = render_click(view, "remove_invite", %{"identifier" => identifier})
+    assert html =~ "already accepted"
 
     assert Members.member?(by_identifier.id, group.id)
-    assert Members.member?(by_email.id, group.id)
     refute has_element?(view, "button[phx-click=remove_invite]")
   end
 
@@ -119,7 +99,7 @@ defmodule PrismWeb.MembersLiveTest do
 
     assert render(view) =~ identifier
 
-    assert [%{status: "invited", email: nil}] =
+    assert [%{status: "invited", user_id: nil}] =
              Enum.filter(
                rows!(Members.list_by_athanor(group.id)),
                &(&1.person_identifier == identifier)
@@ -144,11 +124,61 @@ defmodule PrismWeb.MembersLiveTest do
            )
   end
 
-  test "an address that starts with per_ is an address, invited by email", %{conn: conn} do
+  test "a handle adds from the same form: a person here is seated, someone not here is invited, and a refusal says why",
+       %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice)
+    {:ok, group} = Athanors.create_group(alice.user_id, "Handles #{alice.namespace}")
+    n = System.unique_integer([:positive])
+    known = "per_" <> Prima.Digest.sha256_hex("members-live-handle-known-#{n}")
+    stranger = "per_" <> Prima.Digest.sha256_hex("members-live-handle-stranger-#{n}")
+
+    {:ok, here} =
+      Sanctum.Test.People.remote(
+        %{id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", known), provider: "cyfr"},
+        %{identifier: known, directory_url: "https://dir.example"}
+      )
+
+    RegistryStub.handles!(%{"known" => known, "stranger" => stranger, "down" => :close})
+
+    {view, html} = mount_athanor(conn, "/members", group)
+    assert html =~ "@handle"
+    assert has_element?(view, ~s([data-test="member-add-help"]), "handle (@name)")
+
+    view |> form("form[phx-submit=add]", %{"person" => " @known "}) |> render_submit()
+    assert Members.member?(here.id, group.id)
+
+    view |> form("form[phx-submit=add]", %{"person" => "@stranger"}) |> render_submit()
+    assert render(view) =~ stranger
+
+    assert [%{status: "invited", user_id: nil}] =
+             Enum.filter(
+               rows!(Members.list_by_athanor(group.id)),
+               &(&1.person_identifier == stranger)
+             )
+
+    seats = rows!(Members.list_by_athanor(group.id))
+
+    view |> form("form[phx-submit=add]", %{"person" => "@nobody"}) |> render_submit()
+    assert render(view) =~ "No one holds that handle at the registry."
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      view |> form("form[phx-submit=add]", %{"person" => "@down"}) |> render_submit()
+      assert render(view) =~ "The registry could not be reached just now"
+    end)
+
+    view |> form("form[phx-submit=add]", %{"person" => "@Not-A-Handle"}) |> render_submit()
+    assert render(view) =~ "not a handle"
+
+    assert rows!(Members.list_by_athanor(group.id)) == seats
+  end
+
+  test "an email address names no one here: it is refused, and nothing is held",
+       %{conn: conn} do
     alice = test_user()
     conn = log_in_user(conn, alice)
     {:ok, group} = Athanors.create_group(alice.user_id, "Per #{alice.namespace}")
-    address = "per_hansen-#{System.unique_integer([:positive])}@example.com"
+    address = "newcomer-#{System.unique_integer([:positive])}@example.com"
 
     {view, _html} = mount_athanor(conn, "/members", group)
 
@@ -156,12 +186,9 @@ defmodule PrismWeb.MembersLiveTest do
     |> form("form[phx-submit=add]", %{"person" => address})
     |> render_submit()
 
-    html = render(view)
-    assert html =~ address
-    refute html =~ "not a person identifier"
-
-    assert [%{status: "invited", person_identifier: nil}] =
-             Enum.filter(rows!(Members.list_by_athanor(group.id)), &(&1.email == address))
+    assert render(view) =~ "Could not add"
+    assert [%{user_id: user_id}] = rows!(Members.list_by_athanor(group.id))
+    assert user_id == alice.user_id
   end
 
   test "a group is created from the page and its creator is its only member", %{conn: conn} do
@@ -183,7 +210,7 @@ defmodule PrismWeb.MembersLiveTest do
     alice = test_user()
     bob = test_user()
     conn = log_in_user(conn, alice)
-    claim_namespace!(bob)
+    record_namespace!(bob)
     {:ok, pair} = Athanors.create_pair(alice.user_id, bob.user_id)
 
     {view, html} = mount_athanor(conn, "/members", pair)
@@ -194,6 +221,70 @@ defmodule PrismWeb.MembersLiveTest do
     assert has_element?(view, "td", "You")
     assert has_element?(view, "td", bob.email)
   end
+
+  describe "invitation links" do
+    test "a member creates a link shown once with a copy control, sees it pending, and revokes it",
+         %{conn: conn} do
+      alice = test_user()
+      conn = log_in_user(conn, alice)
+      {:ok, group} = Athanors.create_group(alice.user_id, "Links #{alice.namespace}")
+      {view, _html} = mount_athanor(conn, "/members", group)
+
+      refute has_element?(view, ~s([data-test="invitation-new"]))
+      view |> element(~s([data-test="invitation-create"])) |> render_click()
+
+      link = view |> element(~s([data-test="invitation-link"])) |> render() |> link_text()
+      assert String.starts_with?(link, Sanctum.Person.home() <> "/invite#")
+      code = link |> String.split("#") |> List.last()
+      assert {:ok, %{athanor: name}} = Sanctum.Invitations.lookup(code)
+      assert name == group.name
+      assert has_element?(view, ~s([data-test="invitation-copy"]))
+
+      [%{id: id}] = Arca.Repo.all(Arca.Schemas.Invitation)
+      assert has_element?(view, "#invitations button[phx-value-id='#{id}']", "Revoke")
+
+      # Shown once: the page read again lists the link and no longer shows it.
+      {again, html} = mount_athanor(conn, "/members", group)
+      refute has_element?(again, ~s([data-test="invitation-new"]))
+      refute html =~ code
+      assert has_element?(again, "#invitations", "pending")
+
+      again |> element("#invitations button[phx-value-id='#{id}']") |> render_click()
+      assert has_element?(again, "#invitations", "revoked")
+      refute has_element?(again, "#invitations button[phx-value-id='#{id}']")
+      assert %DateTime{} = Arca.Repo.get!(Arca.Schemas.Invitation, id).revoked_at
+      assert {:error, :invitation_invalid} = Sanctum.Invitations.lookup(code)
+    end
+
+    test "lists only this group's links", %{conn: conn} do
+      alice = test_user()
+      conn = log_in_user(conn, alice)
+      {:ok, here} = Athanors.create_group(alice.user_id, "Here #{alice.namespace}")
+      {:ok, there} = Athanors.create_group(alice.user_id, "There #{alice.namespace}")
+      ctx = Sanctum.TestContext.session!(alice.user_id)
+      {:ok, %{invitation: mine}} = Sanctum.Invitations.create(ctx, here.id)
+      {:ok, %{invitation: elsewhere}} = Sanctum.Invitations.create(ctx, there.id)
+
+      {view, _html} = mount_athanor(conn, "/members", here)
+      assert has_element?(view, "#invitations button[phx-value-id='#{mine.id}']")
+      refute has_element?(view, "#invitations button[phx-value-id='#{elsewhere.id}']")
+    end
+
+    test "a person's own athanor and a direct thread offer no links", %{conn: conn} do
+      alice = test_user()
+      bob = test_user()
+      conn = log_in_user(conn, alice)
+      {:ok, pair} = Athanors.create_pair(alice.user_id, bob.user_id)
+
+      {own, _html} = mount_athanor(conn, "/members")
+      refute has_element?(own, ~s([data-test="invitation-create"]))
+
+      {thread, _html} = mount_athanor(conn, "/members", pair)
+      refute has_element?(thread, ~s([data-test="invitation-create"]))
+    end
+  end
+
+  defp link_text(html), do: html |> LazyHTML.from_fragment() |> LazyHTML.text() |> String.trim()
 
   defp rows!({:ok, rows}), do: rows
 

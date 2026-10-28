@@ -18,10 +18,7 @@ import { HANDHELD, measure, unmet } from "../browser/handheld.mjs";
 const [kind, address, homePort] = process.argv.slice(2);
 const OUT = "/out";
 const pagesOrigin = new URL(address).origin;
-const record = { case: kind, checks: [], screens: {}, errors: [], refusals: [] };
-// The one refusal the case asks for on purpose, which Chromium logs as the
-// failed load of a 422: recorded apart, once.
-let refusalAsked = false;
+const record = { case: kind, checks: [], screens: {}, errors: [] };
 
 function check(what, holds, detail = {}) {
   record.checks.push({ what, holds, ...detail });
@@ -36,11 +33,6 @@ try {
   page = await context.newPage();
   page.on("console", (m) => {
     if (m.type() !== "error" || new URL(page.url()).origin !== pagesOrigin) return;
-    if (refusalAsked && m.text().includes("status of 422")) {
-      refusalAsked = false;
-      record.refusals.push(m.text());
-      return;
-    }
     record.errors.push(`console: ${m.text()}`);
   });
   page.on("pageerror", (e) => {
@@ -89,30 +81,57 @@ try {
   }
   await screen("how");
 
+  // Choosing how CYFR is reached starts it: setup asks for nothing more.
   await page.getByRole("button", { name: kind === "local" ? /Only this device/ : /My phone and laptop/ }).tap();
-  await heading("Your email").waitFor();
-  // The email is required: a start without one is refused with the
-  // program's sentence, and nothing begins.
-  refusalAsked = true;
-  await button("Start").tap();
-  await page.getByText("Type the one email you sign in with").waitFor();
-  check("a start without an email is refused on the page", await heading("Your email").isVisible());
-  await page.getByLabel("The email you sign in with. It makes you this CYFR's administrator.").fill("operator@example.com");
-  await screen("email");
-  await button("Start").tap();
   await heading("Setting up CYFR").waitFor();
   await screen("progress");
 
   if (kind === "local") {
     await heading("CYFR is ready").waitFor({ timeout: 600_000 });
-    const shown = await page.locator('[data-screen="done"] [data-address]').innerText();
-    check("the Done page names the home at localhost", shown === `http://localhost:${homePort}`, { shown });
+    const shown = await page.locator('[data-screen="done"] [data-setup-url]').innerText();
+    check("the Done page names the setup link at localhost, its token in the fragment", new RegExp(`^http://localhost:${homePort}/setup#[0-9a-f]{64}$`).test(shown), { shown: shown.replace(/#.*/, "#…") });
     check("the Done page says nothing more for a home on this device", !(await page.locator('[data-screen="done"] [data-tailnet]').isVisible()));
     await screen("done");
+
+    // The browser moves to the setup link, the token in its fragment, and
+    // a virtual authenticator holds the passkey the page asks for.
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("WebAuthn.enable");
+    const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
+      options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true }
+    });
     await page.waitForURL((url) => url.origin === `http://localhost:${homePort}`, { timeout: 30_000 });
-    await heading("Sign in to continue").waitFor({ timeout: 120_000 });
-    check("the pages moved the browser to the home's sign-in page", new URL(page.url()).pathname === "/login", { url: page.url() });
-    await page.screenshot({ path: `${OUT}/${kind}-home.png` });
+    const setupLink = page.url();
+    {
+      const url = new URL(setupLink);
+      check("the pages moved the browser to the setup link, its token in the fragment alone", url.pathname === "/setup" && /^#[0-9a-f]{64}$/.test(url.hash) && url.search === "", { path: url.pathname, query: url.search, fragment: url.hash.length });
+    }
+    await heading("Set up CYFR").waitFor({ timeout: 120_000 });
+    await button("Create a passkey").waitFor({ timeout: 60_000 });
+    await page.screenshot({ path: `${OUT}/${kind}-setup-passkey.png` });
+    await button("Create a passkey").tap();
+
+    await page.locator('[data-test="setup-done"]').waitFor({ timeout: 60_000 });
+    check("the passkey signed the first person in, back on the setup page", new URL(page.url()).pathname === "/setup", { url: page.url() });
+    const { credentials } = await cdp.send("WebAuthn.getCredentials", { authenticatorId });
+    check("the authenticator holds one passkey, for this CYFR", credentials.length === 1 && credentials[0].rpId === "localhost", { credentials: credentials.map((c) => c.rpId) });
+    check("the handle is offered, and not required", await page.locator('[data-test="identity-handle"]').isVisible());
+    await page.screenshot({ path: `${OUT}/${kind}-setup-handle.png` });
+
+    await page.locator('[data-test="setup-continue"]').tap();
+    await page.waitForURL((url) => url.pathname === "/chat" || url.pathname.startsWith("/a/"), { timeout: 60_000 });
+    await page.waitForLoadState("networkidle");
+    check("skipping the handle goes into CYFR, signed in", !["/login", "/setup"].includes(new URL(page.url()).pathname), { url: page.url() });
+    await page.screenshot({ path: `${OUT}/${kind}-chat.png` });
+
+    // The same link in another browser, once the person holds a passkey.
+    const fresh = await browser.newContext(HANDHELD);
+    const again = await fresh.newPage();
+    await again.goto(setupLink);
+    await again.locator('[data-test="setup-closed"]').waitFor({ timeout: 60_000 });
+    check("the link again, once setup is complete, says so and starts no ceremony", (await again.locator('[data-test="setup-create"]').count()) === 0);
+    await again.screenshot({ path: `${OUT}/${kind}-setup-closed.png` });
+    await fresh.close();
   } else {
     const link = page.locator("[data-link]");
     await link.waitFor({ state: "visible", timeout: 300_000 });
@@ -142,11 +161,11 @@ try {
     await page.getByText(`This machine is on your tailnet as ${approved.name}.`).waitFor({ timeout: 120_000 });
     await screen("joined");
     await heading("CYFR is ready").waitFor({ timeout: 600_000 });
-    const shown = await page.locator('[data-screen="done"] [data-address]').innerText();
-    check("the Done page names the home's ts.net address", shown === `https://${approved.name}`, { shown });
-    check("the Done page says where that address opens", await page.getByText("This address opens on your phone and laptop on your tailnet, and on this device in a browser that uses CYFR's proxy at 127.0.0.1:1055.").isVisible());
+    const shown = await page.locator('[data-screen="done"] [data-setup-url]').innerText();
+    check("the Done page names the setup link at the home's ts.net address", new RegExp(`^https://${approved.name.replace(/\./g, "\\.")}/setup#[0-9a-f]{64}$`).test(shown), { shown: shown.replace(/#.*/, "#…") });
+    check("the Done page says where that link opens", await page.getByText("This link opens on your phone and laptop on your tailnet, and on this device in a browser that uses CYFR's proxy at 127.0.0.1:1055.").isVisible());
     await screen("done");
-    check("Copy address puts the home's address on the clipboard", (await copied("Copy address")) === shown);
+    check("Copy link puts the setup link on the clipboard", (await copied("Copy link")) === shown);
     await page.waitForTimeout(4_000);
     check("the pages do not move the browser to a ts.net address", new URL(page.url()).origin === pagesOrigin, { url: page.url() });
     const served = await ask({ op: "served", name: approved.name }, { outDir: OUT, timeoutMs: 120_000, refuseError: true });

@@ -13,7 +13,7 @@ defmodule Sanctum.Gate.RequestLogAthanorTest do
   use ExUnit.Case, async: false
 
   alias Sanctum.{Context, Gate, RequestLog}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -32,28 +32,18 @@ defmodule Sanctum.Gate.RequestLogAthanorTest do
     Application.put_env(:arca, :base_path, test_path)
 
     n = System.unique_integer([:positive])
-    {:ok, u} = Users.upsert_from_provider(%{id: "local|idp|note-#{n}", provider: "local"})
+    {:ok, u} = Sanctum.Test.People.linked(%{id: "local|idp|note-#{n}", provider: "local"})
 
-    {:ok, mine} =
-      Athanors.create(%{
-        kind: "person",
-        name: "Me",
-        slug: "me#{n}",
-        owner_user_id: u.id,
-        created_by: u.id
-      })
-
-    {:ok, _} = Users.set_personal_athanor(u, mine.id)
-    # The owner's seat in their own athanor, as `ensure_personal_athanor/1`
-    # mints it in production.
-    {:ok, _} = Members.create(%{user_id: u.id, athanor_id: mine.id})
+    # The person's own athanor and their seat there, which their admission
+    # made.
+    mine = Sanctum.Test.People.athanor!(u)
     {:ok, group} = Athanors.create_group(u.id, "Trip #{n}")
 
     alice = %{Sanctum.TestContext.local(:prism) | user_id: u.id, athanor_id: group.id}
     {:ok, home} = Context.focus(alice, mine.id)
 
     {:ok, bob_user} =
-      Users.upsert_from_provider(%{id: "local|idp|bob-#{n}", provider: "local"})
+      Sanctum.Test.People.linked(%{id: "local|idp|bob-#{n}", provider: "local"})
 
     {:ok, _} = Members.create(%{user_id: bob_user.id, athanor_id: group.id})
 

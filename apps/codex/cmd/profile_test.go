@@ -106,6 +106,41 @@ func TestRenderPreview_ShowsEveryRowValue(t *testing.T) {
 	}
 }
 
+// A credential row's fields are drawn as each field the component reads
+// and the entry field that answers it, in the order of the component's
+// names: the instance row of the vectors reads its api_key from the
+// entry's "API key".
+func TestRenderPreview_DrawsACredentialsFieldMap(t *testing.T) {
+	v := loadPreviewVectors(t)
+	var instance map[string]any
+	for _, raw := range v.Preview["rows"].([]any) {
+		row := raw.(map[string]any)
+		if values := row["values"].(map[string]any); str(row["kind"]) == "credential" && values["source"] == "instance" {
+			instance = row
+		}
+	}
+	if instance == nil {
+		t.Fatal("the vectors' preview holds no instance credential row")
+	}
+	if lines := describeRow(instance); !slices.Contains(lines, "fields: api_key from API key") {
+		t.Errorf("the instance row does not draw its field map:\n%s", strings.Join(lines, "\n"))
+	}
+
+	for _, c := range []struct {
+		fields any
+		want   string
+	}{
+		{map[string]any{"url": "URL", "anon_key": "anon key"}, "anon_key from anon key, url from URL"},
+		{map[string]any{"token": "secret", "user": "secret"}, "token from secret, user from secret"},
+		{map[string]any{}, "none"},
+		{nil, "none"},
+	} {
+		if got := fieldMapOr(c.fields, "none"); got != c.want {
+			t.Errorf("fieldMapOr(%v) = %q, want %q", c.fields, got, c.want)
+		}
+	}
+}
+
 // Every exit of every node is drawn on its own lines, under its node, with
 // every class its flows let reach it: two exits of one node are two
 // entries, and an exit no flow names says nothing it reads may go there.
@@ -682,7 +717,7 @@ func TestCollectDecisions_AsksOnlyWhereAChoiceIsRequired(t *testing.T) {
 	raw := planWith(list(
 		need("api_key", "api_key", true, "", true, "vlt_a", "ine_b"),
 	), list(`{"from":"f:local.daily-report","dep":"reagent:local.db","candidates":[`+
-		`{"label":"work","entry_name":"work key","fields":["KEY"],"scopes":[]}],"needs":`+
+		`{"label":"work","entry_name":"work key","fields":{"KEY":"KEY"},"scopes":[]}],"needs":`+
 		list(need("db", "api_key", true, "vlt_db", false, "vlt_db"))+`}`), `[]`)
 	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
 		t.Fatal(err)
@@ -979,7 +1014,7 @@ func depJSON(dep, lenders string, needs ...string) string {
 		`,"needs":` + list(needs...) + `}`
 }
 
-const workLender = `[{"label":"work","entry_name":"work key","fields":["KEY"],"scopes":[]}]`
+const workLender = `[{"label":"work","entry_name":"work key","fields":{"KEY":"KEY"},"scopes":[]}]`
 
 // A re-grant no flag names reopens on what the head binds, never wider:
 // each binding of the app's own calls, a named account's included, and
@@ -1531,6 +1566,12 @@ func expected(row map[string]any, field string, value any) []string {
 		}
 		if port, ok := destination["port"]; ok {
 			wants = append(wants, "port "+num(port))
+		}
+		return wants
+	case field == "fields" && str(row["kind"]) == "credential":
+		var wants []string
+		for need, entry := range value.(map[string]any) {
+			wants = append(wants, need+" from "+str(entry))
 		}
 		return wants
 	case field == "lifetime":

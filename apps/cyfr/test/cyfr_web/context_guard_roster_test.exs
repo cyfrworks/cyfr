@@ -27,9 +27,14 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     SchedulesLive SettingsLive McpServersLive ShellLive LegalLive CarryLive CliLive
   )
 
-  # The sign-in page, the pairing page and the restore page are what an
-  # anonymous caller comes for; none holds a session's context.
-  @public ~w(LoginLive PairLive RestoreLive)
+  # The sign-in page, the pairing page, the restore page and the
+  # invitation page are what an anonymous caller comes for; none holds a
+  # session's context. The setup page's first step is sessionless too;
+  # signed in, it mounts the guard itself (`CyfrWeb.ContextGuard.on_mount/4`),
+  # as a nested view does. Nor does the company page hold one: it reads
+  # the browser's session only as the owner of one refused for the company
+  # sign-in alone (`Sanctum.CompanyLogin.held/1`).
+  @public ~w(LoginLive PairLive RestoreLive SetupLive InviteLive CompanyLoginLive)
 
   # Rendered by the layout or a page with `live_render/3`; each mounts the guard itself.
   @nested ~w(TopbarLive AquaPanelLive ThreadPaneLive)
@@ -38,7 +43,7 @@ defmodule CyfrWeb.ContextGuardRosterTest do
   @components ~w(
     AquaLive.AgentsComponent AquaLive.NotesComponent AquaLive.RestoreComponent
     AquaLive.ScrollsComponent ConsentSheetComponent ReportComponent
-    CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive
+    CommandPaletteLiveComponent AquaApprovalCard SystemLayer CanvasLive IdentityCard
   )
 
   # The tasks started from the console, by file, and the files that take
@@ -53,7 +58,10 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     "live/aqua_live/agents_component.ex" => {1, ["live/aqua_live.ex"]},
     # The system layer's listener on `confirmation.changes`, whose facts
     # the layer takes in the focus it was opened for.
-    "live/system_layer.ex" => {1, ["live/system_layer.ex"]}
+    "live/system_layer.ex" => {1, ["live/system_layer.ex"]},
+    # The identity card's two registry reads: a handle's live check and
+    # whether the registry publishes this CYFR's address with the handle.
+    "components/identity_card.ex" => {2, ["components/identity_card.ex"]}
   }
 
   @capture ~r/\bCyfrWeb\.ContextGuard\.capture\(/

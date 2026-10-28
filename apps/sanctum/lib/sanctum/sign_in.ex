@@ -3,54 +3,27 @@
 
 defmodule Sanctum.SignIn do
   @moduledoc """
-  What happens once, at sign-in, after the door admitted an identity — and
-  never per request.
+  What happens once, at sign-in, and never per request.
 
-  `admitted/2`: the person's `users` row is written or refreshed; an
-  operator (verdict `:admin`) gets the platform-admin membership, and a
-  person the env list no longer names loses it; every `invited` group row for the person's verified email becomes
-  their active membership; and the person's own athanor is minted and
-  provisioned (`Sanctum.Provisioning.after_sign_in/1`). Admission is
-  personhood: nothing here waits on a registry.
+  `unlock/1`: a linked sign-in method (GitHub, Google, an OpenID Connect
+  issuer, or the CYFR sign-in of a person admitted here before) unlocks
+  the person it names, and never makes one. The person the method's
+  identity key names (`Sanctum.Tenancy.Users.get_by_identity/1`) is asked
+  about by the door (`Sanctum.Door.sign_in/1`), their contact email is
+  refreshed from a claim the provider proved (`Sanctum.Tenancy.Users.seen/2`),
+  the identifier invitations their CYFR identity holds activate, and their
+  athanors' fills are asked for (`Sanctum.Provisioning.after_sign_in/1`).
+  An identity no person has linked is refused `:no_person` and leaves no
+  door request. A person is made only by an admission
+  (`Sanctum.Newcomer`). No sign-in speaks to the registry.
 
-  A first admitted sign-in mints the person with their live and
-  operational key set (`Sanctum.Person.mint_keys/1`) in the one
-  transaction that writes the person row and the door that admitted them,
-  after the installation guard (`Arca.InstallationClaims`) admitted a
-  first person at all. A key set that cannot be minted refuses the
-  sign-in, and so does an installation reserved for a restore, whatever
-  the door's verdict: nothing is written, and no session follows.
+  `record_claim/2` and `record_namespace/2`: the namespace lands on the
+  `users` row the moment the registry's answer to a claim or a token mint
+  names it, before, and regardless of, the push tokens. That row is what
+  every request reads (`Sanctum.Namespace`).
 
-  A person the `cyfr` door admits (`Sanctum.Auth.CyfrDoor`) holds their
-  keys at another home: their first sign-in, carrying `remote:` (their
-  identifier, directory and heads), mints the person row with a `remote`
-  identity row and no key, and no personal athanor is minted for them,
-  then or later: they hold here only what an invitation or a membership
-  gives them. Provenance is written once. A person keeps it whichever door
-  they later sign in through, a passkey registered here or a door linked
-  here included, and only a newly created local person is minted keys.
-
-  The platform grant or revoke answers to the identity facts this
-  assertion carried, checked under the person's lock, and a grant or
-  revoke that fails — or finds those facts overtaken by a later
-  assertion (`{:error, :stale_identity}`) — refuses the sign-in before
-  any session is created.
-
-  `t:report/0`: how cyfr.run answered the courtesy after the door, a
-  budgeted probe for the person's publisher namespace and push tokens,
-  which the browser callback runs (`Compendium.SignInSync.complete/4`)
-  and the CLI device flow reports `:skipped`. Whatever the registry
-  answers, the person proceeds. A namespace is a publishing credential,
-  claimed when the person first publishes (`/claim-namespace`), never a
-  gate on signing in.
-
-  `record_namespace/2`: the namespace lands on the `users` row the moment a
-  probe or a claim yields it — before, and regardless of, the push tokens.
-  That row is what every request reads (`Sanctum.Namespace`).
-
-  The sign-in paths (the browser callback, the device flow and the `cyfr`
-  door) call `admitted/2` between the door's verdict
-  (`Sanctum.Door.admit_identity/2`) and building the context.
+  The sign-in paths (the browser callback, the device flow and the CYFR
+  sign-in) call `unlock/1` before building the context.
   `Sanctum.Caller.establish/2` — which runs per request — only ever reads
   what this wrote.
 
@@ -59,12 +32,12 @@ defmodule Sanctum.SignIn do
   A sign-in can also prove control of a new door for a person already
   signed in, instead of signing anyone in. `link_ticket/2` is minted by the
   surface that completed that sign-in (the OpenID Connect callback in link
-  mode, or `Sanctum.Auth.DeviceFlow.poll_for_link/4`), only after the door
-  admits the identity and only for a standing, non-guest session: 32
+  mode, or `Sanctum.Auth.DeviceFlow.poll_for_link/4`), only for a
+  standing, non-guest session: 32
   random bytes, held in `Arca.Cache` under their SHA-256 for ten minutes
   on the node that minted them, bound to the person, their session's
   token hash, the identity (provider, issuer and subject) and the email
-  claim the door judged. The ticket travels in the browser's cookie
+  claim the provider made. The ticket travels in the browser's cookie
   session or to the page that polled, never in a URL.
 
   `link_door/3` (`person.link_door`) reads the ticket without taking it:
@@ -84,10 +57,8 @@ defmodule Sanctum.SignIn do
   `unlink_door/2` (`person.unlink_door`) removes one of the person's own
   identities under the same confirmation, consumed inside the delete, and
   refuses to remove the last one unless the person holds an active
-  passkey here and the door admits them without it: by their own id, an
-  email entry for their verified email, or `*`
-  (`Sanctum.Door.admit_person/1`). Either missing would leave no way to
-  sign in. The check runs again under the person's lock, where revoking a
+  passkey here and the door admits them (`Sanctum.Door.admit_person/1`).
+  Either missing would leave no way to sign in. The check runs again under the person's lock, where revoking a
   passkey takes the same lock (`Sanctum.Passkeys.revoke/2`).
   """
 
@@ -97,167 +68,113 @@ defmodule Sanctum.SignIn do
   alias Sanctum.Auth.Identity
   alias Sanctum.Consent.Authz
   alias Sanctum.Context
-  alias Sanctum.Slug
   alias Sanctum.Tenancy.{Members, Users}
+
+  @typedoc """
+  What a linked sign-in method's provider proved: the method's identity
+  key (`Sanctum.Auth.Identity.key/3`) as `id`, and what it said of the
+  person's contact fields (`t:Sanctum.Tenancy.Users.provider_info/0`).
+  """
+  @type method :: Users.provider_info()
 
   @linkable Prima.SignInProviders.all()
   @link_ticket_ms 600_000
   @link_refused "This sign-in link is not yours, has expired or was already used; sign in " <>
                   "with that sign-in method again"
 
-  @typedoc """
-  What a sign-in reports. The person always proceeds; `unsynced` names
-  namespaces whose push tokens could not be cached (a later probe re-mints
-  them) and `probe` says how the registry answered:
+  @doc """
+  Unlock the person a linked sign-in method names (the module doc), and
+  answer them as their row reads after the sign-in was recorded.
 
-  - `:ok` — answered; a namespace it named is recorded.
-  - `:skipped` — no IdP token to ask with, or no registry configured.
-  - `:failed` — no usable answer (down, 5xx, past the budget).
-  - `:invalid_token` — the IdP refused the token; the next sign-in asks again.
-  - `:legal_required` — cyfr.run wants its policy accepted before it says
-    more; publishing will ask.
-  - `:namespace_conflict` — the registry names a slug another identity on
-    this server holds; nothing was recorded, and someone must reconcile it.
+  Refusals: `:no_person` (no person here holds this method),
+  `{:door, reason}` (the door refuses the person, or they are not
+  active: `:denied`, `:not_allowed`, `:unavailable`), `:unavailable` (the
+  store could not answer). Nothing is written on a refusal.
   """
-  @type probe ::
-          :ok | :skipped | :failed | :invalid_token | :legal_required | :namespace_conflict
-  @type report :: %{unsynced: [String.t()], probe: probe()}
-  @type outcome :: {:proceed, Sanctum.Tenancy.Users.user(), report()}
+  @spec unlock(method()) ::
+          {:ok, Users.user()} | {:error, :no_person | {:door, atom()} | :unavailable}
+  def unlock(%{id: key} = method) when is_binary(key) do
+    case Users.get_by_identity(key) do
+      {:ok, %{status: "active"} = user} ->
+        with {:ok, :allowed} <- Sanctum.Door.sign_in(user),
+             {:ok, _seen} <- seen(user, method) do
+          unlocked(user.id)
+        end
+
+      {:ok, _not_active} ->
+        {:error, {:door, :denied}}
+
+      {:error, :not_found} ->
+        {:error, :no_person}
+
+      {:error, _unanswered} ->
+        {:error, :unavailable}
+    end
+  end
+
+  defp seen(user, method) do
+    case Users.seen(user, method) do
+      {:ok, seen} -> {:ok, seen}
+      {:error, _unwritten} -> {:error, :unavailable}
+    end
+  end
+
+  # Invitations activate and fills are asked for without refusing the
+  # sign-in: a pending invitation activates on the next one, and a fill's
+  # failure lands on its athanor's row.
+  defp unlocked(user_id) do
+    case Members.activate_invited(%{id: user_id}) do
+      {:ok, _n} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[Sanctum.SignIn] activate_invited failed for #{user_id}: #{inspect(reason)}"
+        )
+    end
+
+    :ok = Sanctum.Provisioning.after_sign_in(user_id)
+    Users.get(user_id) |> or_unavailable()
+  end
+
+  defp or_unavailable({:ok, user}), do: {:ok, user}
+  defp or_unavailable({:error, _unanswered}), do: {:error, :unavailable}
 
   @doc """
-  Record the admitted sign-in. `user_info` carries `id`, `provider`,
-  `email`, `verified` (`true | false | :unknown`) and `name`, and, for a
-  person the `cyfr` door admits, `remote`: their `identifier`,
-  `directory_url`, `genesis_hash` and `head_hash` (the module doc).
-  """
-  @spec admitted(map(), :admin | :allowed) ::
-          {:ok, Sanctum.Tenancy.Users.user()} | {:error, term()}
-  def admitted(%{id: _identity} = user_info, verdict) when verdict in [:admin, :allowed] do
-    with {:ok, user} <- identify(user_info, verdict),
-         {:ok, provenance} <- provenance(user.id) do
-      user_id = user.id
-
-      # Log invitation activation failures without refusing sign-in.
-      # Pending invitations can activate on the next sign-in.
-      case Members.activate_invited(user) do
-        {:ok, _n} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.error(
-            "[Sanctum.SignIn] activate_invited failed for #{user_id}: #{inspect(reason)}"
-          )
-      end
-
-      provisioned(user_id, provenance)
-    end
-  end
-
-  # Filling the athanor is a background job whose failure lands on the
-  # row and is retried; it never refuses the sign-in. Failing to MINT one
-  # does refuse it: the caps bound how fast strangers arrive and how many
-  # athanors the server holds, and a person admitted without an athanor
-  # would hold a session with nowhere to work. A remote person is minted
-  # none: their own athanor is at their own home, and here they hold what
-  # a membership gives them, or nothing.
-  defp provisioned(user_id, "remote"), do: Users.get(user_id)
-
-  defp provisioned(user_id, _local) do
-    case Sanctum.Provisioning.after_sign_in(user_id) do
-      {:error, reason} -> {:error, reason}
-      _ -> Users.get(user_id)
-    end
-  end
-
-  # The person's provenance, as their identity row records it: `remote` or
-  # `local`. The row is minted with the person row, so one missing is
-  # damage; a store that cannot answer refuses.
-  defp provenance(user_id) do
-    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
-      {:ok, %{provenance: provenance}} -> {:ok, provenance}
-      {:error, :not_found} -> {:error, {:corrupt, :person_identity}}
-      {:error, _unanswered} -> {:error, :unavailable}
-    end
-  end
-
-  # The identity half of `admitted/2`, which runs it first: the person's
-  # row written from this assertion, then the platform grant reconciled
-  # against exactly the facts this assertion carried — before the rest of
-  # the sign-in, and before any session.
-  #
-  # The facts are this assertion's, never another's: a concurrent first
-  # sign-in that lost the race to mint the person is answered the winner's
-  # row, and that row must not become what this sign-in expects. So the
-  # upsert's answer is checked against them too, and the grant or revoke
-  # checks them again under the person's lock. `{:error, :stale_identity}`
-  # is this assertion having been overtaken; the person signs in again.
-  defp identify(user_info, verdict) do
-    {remote, user_info} = Map.pop(user_info, :remote)
-
-    with {:ok, user} <- Users.upsert_from_provider(user_info, remote: remote) do
-      expected = expected_identity(user_info, user)
-
-      cond do
-        user.email != expected.email or user.email_verified != expected.email_verified ->
-          {:error, :stale_identity}
-
-        true ->
-          with :ok <- apply_platform(user.id, verdict, expected), do: {:ok, user}
-      end
-    end
-  end
-
-  @doc """
-  What one admitted assertion says about the person, as the `users` row
-  stores it: the supplied email lowercased — the row's own only when the
-  assertion carried none, since an absent claim leaves the stored one in
-  place — and the verification claim as `true`, `false`, or `nil` for
-  anything else. The facts a platform grant or revoke is reconciled
-  against (`Sanctum.Tenancy.Members.grant_platform/2`).
-  """
-  @spec expected_identity(map(), Sanctum.Tenancy.Users.user()) :: Arca.Members.identity()
-  def expected_identity(user_info, %{id: _} = user) do
-    email =
-      case Map.get(user_info, :email) do
-        email when is_binary(email) and email != "" -> String.downcase(email)
-        _absent -> user.email
-      end
-
-    verified =
-      case Map.get(user_info, :verified) do
-        claim when is_boolean(claim) -> claim
-        _unknown -> nil
-      end
-
-    %{email: email, email_verified: verified}
-  end
-
-  @doc """
-  Record a personal namespace a registry just answered for the caller,
-  only while the caller stands: their standing is read again first
+  Record the registry's answer to the caller's handle claim
+  (`%{"handle" => slug, "identifier" => identifier}`), only while the
+  caller stands: their standing is read again first
   (`Sanctum.Caller.revalidate_session/1`), so a session, key or device
-  revoked while the registry answered records nothing, then the slug is
-  recorded (`record_namespace/2`). Answers the context as it was read
-  again, for the writes that follow under it. A store that cannot
-  answer, or a remote person whose identity could not be confirmed
-  fresh, is `:unavailable` or `:identity_stale` and the session stands;
-  any other standing refusal is `:unauthenticated`.
+  revoked while the registry answered records nothing; the answer must
+  name the identifier the caller signed the claim under
+  (`:malformed_answer` otherwise: it answered for someone else); then the
+  slug is recorded (`record_namespace/2`). Answers the context as it was
+  read again, for the writes that follow under it. A store that cannot
+  answer, or a remote person whose identity could not be confirmed fresh,
+  is `:unavailable` or `:identity_stale` and the session stands; any
+  other standing refusal is `:unauthenticated`.
   """
-  @spec record_claim(Context.t(), String.t()) ::
+  @spec record_claim(Context.t(), map()) ::
           {:ok, Context.t()}
           | {:error,
              :unauthenticated
              | :unavailable
              | :identity_stale
+             | :malformed_answer
              | :not_found
              | :invalid_slug
              | :namespace_owned_by_another_identity
              | term()}
-  def record_claim(%Context{user_id: user_id} = ctx, slug)
-      when is_binary(user_id) and is_binary(slug) do
+  def record_claim(%Context{user_id: user_id} = ctx, %{
+        "handle" => slug,
+        "identifier" => identifier
+      })
+      when is_binary(user_id) and is_binary(slug) and is_binary(identifier) do
     case Sanctum.Caller.revalidate_session(ctx) do
       {:ok, fresh} ->
-        with {:ok, _user} <- record_namespace(user_id, slug), do: {:ok, fresh}
+        with :ok <- claimed_by(user_id, identifier),
+             {:ok, _user} <- record_namespace(user_id, slug),
+             do: {:ok, fresh}
 
       {:error, reason} when reason in [:unavailable, :identity_stale] ->
         {:error, reason}
@@ -267,9 +184,21 @@ defmodule Sanctum.SignIn do
     end
   end
 
+  def record_claim(%Context{}, _answer), do: {:error, :malformed_answer}
+
+  # The answer names the identifier the person's own identity row holds.
+  defp claimed_by(user_id, identifier) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, %{identifier: ^identifier}} -> :ok
+      {:ok, _another} -> {:error, :malformed_answer}
+      {:error, :not_found} -> {:error, :malformed_answer}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
   @doc """
-  Record the person's cyfr.run namespace: the durable copy on `users.namespace`
-  that every request reads. Their own athanor was minted at admission; this
+  Record the person's cyfr.run namespace, as a registry answer names it:
+  the durable copy on `users.namespace` that every request reads. Their own athanor was minted at admission; this
   only reruns the provisioning hook so a namespace-holding person's groups
   retry. Refuses a slug another identity on this server already holds; a
   row that already carries a *different* slug keeps it (logged — the
@@ -325,16 +254,6 @@ defmodule Sanctum.SignIn do
     end
   end
 
-  @doc """
-  The slug to suggest when a person claims a publisher namespace: their
-  screen name, else the address's local part, else a provider-flavoured
-  placeholder.
-  """
-  @spec suggested_slug(Sanctum.Tenancy.Users.user(), String.t() | atom()) :: String.t() | nil
-  def suggested_slug(%{display_name: name, email: email}, provider) do
-    Slug.from_name(name) || Slug.from_email(email) || Slug.from_name("user-#{provider}")
-  end
-
   # ---------------------------------------------------------------------------
   # Linking a door
   # ---------------------------------------------------------------------------
@@ -355,13 +274,11 @@ defmodule Sanctum.SignIn do
   Mint a link ticket (the module doc) for `identity`, the identity a
   sign-in just completed, bound to the person and session of `ctx`, a
   session context the surface established. The session must still stand
-  (`Sanctum.Caller.revalidate_session/1`) and be no guest's, the provider
-  linkable, and the door must admit the identity
-  (`Sanctum.Door.admit_identity/2`, which records a refusal the operator
-  can act on).
+  (`Sanctum.Caller.revalidate_session/1`) and be no guest's, and the
+  provider linkable.
 
   Refusals: `:unauthenticated` (no standing session), `:not_linkable`,
-  `{:door, reason}`, `:unavailable`.
+  `:unavailable`.
   """
   @spec link_ticket(Context.t(), link_identity()) :: {:ok, String.t()} | {:error, term()}
   def link_ticket(%Context{} = ctx, %{key: key, provider: provider} = identity)
@@ -369,12 +286,7 @@ defmodule Sanctum.SignIn do
     provider = to_string(provider)
 
     with {:ok, standing} <- linking_session(ctx),
-         {:ok, parts} <- linkable_key(key, provider),
-         {:ok, _verdict} <-
-           Sanctum.Door.admit_identity(key, %{
-             email: identity[:email],
-             verified: Map.get(identity, :verified, :unknown)
-           }) do
+         {:ok, parts} <- linkable_key(key, provider) do
       ticket = Encoding.b64(:crypto.strong_rand_bytes(32))
 
       Arca.Cache.put(
@@ -408,8 +320,8 @@ defmodule Sanctum.SignIn do
   _}` and the confirmation's other refusals (`Sanctum.Consent.Authz`),
   the addition refusal (`Sanctum.Pairing.addition_refusal/0`: a
   confirmation no passkey or paired client gave, once one ever existed),
-  `{:conflict, _}` (another person's identity), `{:door, reason}` (the door
-  no longer admits it), `:not_standing`, `:unavailable`.
+  `{:conflict, _}` (another person's identity), `:not_standing`,
+  `:unavailable`.
   """
   @spec link_door(Context.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def link_door(%Context{} = ctx, provider, ticket)
@@ -442,8 +354,7 @@ defmodule Sanctum.SignIn do
     change = link_change(provider, ticket, held)
 
     with :ok <- Authz.check(ctx, :sign_in_methods, change),
-         {:ok, held} <- taken_ticket(ctx, provider, ticket),
-         {:ok, _verdict} <- door_admits(held) do
+         {:ok, _held} <- taken_ticket(ctx, provider, ticket) do
       case Arca.Users.link_identity(
              Prima.Actor.system(),
              ctx.user_id,
@@ -550,11 +461,10 @@ defmodule Sanctum.SignIn do
   def unlink_door(%Context{}, _key),
     do: {:error, {:invalid_argument, "The sign-in method to unlink is named by its identity key"}}
 
-  # The last door goes only while the person keeps a way in without it: an
-  # active passkey here, and a door that admits them as a person with no
-  # linked door (`Sanctum.Door.admit_person/1`), which is what the passkey
-  # door asks of them once it is gone. An entry naming only this door's
-  # identity admits no one after it.
+  # The last linked method goes only while the person keeps a way in
+  # without it: an active passkey here, and a door that admits them
+  # (`Sanctum.Door.admit_person/1`), which is what a passkey sign-in asks
+  # of them once it is gone.
   defp keeps_a_door(_ctx, remaining) when remaining > 0, do: :ok
 
   defp keeps_a_door(%Context{user_id: user_id} = ctx, _none_left) do
@@ -590,8 +500,8 @@ defmodule Sanctum.SignIn do
           {:error, _refused} ->
             {:error,
              {:conflict,
-              "This server admits you only through this sign-in method; link another sign-in method first, or " <>
-                "ask the operator to allow your account, before you unlink it"}}
+              "This server does not admit you without this sign-in method; link another sign-in method " <>
+                "first, or ask the operator to allow you, before you unlink it"}}
         end
 
       {:error, :not_found} ->
@@ -693,85 +603,12 @@ defmodule Sanctum.SignIn do
        else: {:error, :mismatch}
   end
 
-  # The door is asked again as the link is written: an identity the
-  # operator closed the door on since the ticket was minted is not linked.
-  defp door_admits(held) do
-    case Sanctum.Door.admit(held.key, held.email, held.verified) do
-      {:ok, verdict} -> {:ok, verdict}
-      {:error, :unavailable} -> {:error, :unavailable}
-      {:error, reason} -> {:error, {:door, reason}}
-    end
-  end
-
   defp ticket_key(ticket), do: {:link_ticket, :crypto.hash(:sha256, ticket)}
 
   # The row as reread after a write, or the row the write returned when
   # the reread fails.
   defp or_user({:ok, user}, _fallback), do: {:ok, user}
   defp or_user(_, fallback), do: {:ok, fallback}
-
-  # An operator's first sign-in mints the platform row: the out-of-the-box
-  # install is one admin with one athanor, their own. Removing an email from
-  # CYFR_PLATFORM_ADMIN_EMAILS revokes the platform row on the next sign-in.
-  # A grant that cannot be written refuses the sign-in: the person would
-  # otherwise hold a session without the standing the door decided on.
-  defp apply_platform(user_id, :admin, expected) do
-    case Members.grant_platform(user_id, expected) do
-      {:ok, :granted} ->
-        emit_platform_bootstrap(user_id)
-        # A freshly granted operator bit reaches this person's already
-        # mounted views: their guard revalidates on membership_changed.
-        Members.broadcast_change(user_id, nil, :platform_granted)
-        :ok
-
-      {:ok, :held} ->
-        :ok
-
-      {:error, reason} = refusal ->
-        Logger.error(
-          "[Sanctum.SignIn] platform admin grant refused for #{user_id}: #{inspect(reason)}"
-        )
-
-        refusal
-    end
-  end
-
-  # An email dropped from CYFR_PLATFORM_ADMIN_EMAILS loses the operator bit
-  # here: the revoke removes the row and the person's sessions together, so
-  # no established context keeps the capability. A revoke that fails
-  # leaves an operator who should not be one — never silent, and the
-  # sign-in is refused rather than minting a session beside it.
-  defp apply_platform(user_id, :allowed, expected) do
-    case Members.revoke_platform(user_id, expected_identity: expected) do
-      :ok ->
-        :ok
-
-      {:error, reason} = refusal ->
-        Logger.error("[Sanctum.SignIn] platform revoke failed for #{user_id}: #{inspect(reason)}")
-
-        :telemetry.execute([:cyfr, :sanctum, :door, :revoke_failed], %{count: 1}, %{
-          user_id: user_id
-        })
-
-        refusal
-    end
-  end
-
-  # The widest grant in the system, and its only input is an email address —
-  # under a generic OIDC issuer `email_verified` may legitimately be absent,
-  # so the address is asserted rather than proven. Minting it is audited.
-  defp emit_platform_bootstrap(user_id) do
-    Logger.warning(
-      "[Sanctum.SignIn] minted platform-scope membership for #{user_id} " <>
-        "(matched CYFR_PLATFORM_ADMIN_EMAILS)"
-    )
-
-    :telemetry.execute(
-      [:cyfr, :sanctum, :tenancy, :platform_admin_bootstrap],
-      %{count: 1},
-      %{user_id: user_id}
-    )
-  end
 
   defp personal_slug(slug) do
     if Prima.ComponentRef.valid_personal_slug?(slug), do: :ok, else: {:error, :invalid_slug}

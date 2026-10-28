@@ -53,10 +53,11 @@ defmodule Sanctum.VaultReaderTest do
     {:ok, entry} = Arca.VaultStorage.put(actor(ctx), attrs)
     {:ok, digest} = VaultReader.binding_digest(entry)
 
-    # The edge a consent writes: its projection names the fields it reads
-    # and, for an OAuth grant, the scopes the entry was authorized for.
+    # The edge a consent writes: its projection maps each field it reads
+    # to the entry field of that name and, for an OAuth grant, names the
+    # scopes the entry was authorized for.
     scopes = if json = Map.get(over, :oauth_scopes), do: Jason.decode!(json), else: []
-    projection = %{fields: fields |> Map.keys() |> Enum.sort(), scopes: Enum.sort(scopes)}
+    projection = %{fields: Map.new(Map.keys(fields), &{&1, &1}), scopes: Enum.sort(scopes)}
     {entry, %{entry_id: entry.id, binding_digest: digest, projection: projection}}
   end
 
@@ -66,14 +67,39 @@ defmodule Sanctum.VaultReaderTest do
   end
 
   describe "fetch/3 — material" do
-    test "projects the sealed fields; nothing outside the projection leaves", %{ctx: ctx} do
+    test "a disclosed read answers each need field from the entry field its map names", %{
+      ctx: ctx
+    } do
       fields = %{"url" => "https://db.example", "anon_key" => "anon", "service_key" => "SECRET"}
       {_entry, resource} = mint_material_entry(ctx, fields)
-      resource = Map.put(resource, :projection, %{fields: ["url", "anon_key"], scopes: []})
+
+      # Two need fields may read one entry field.
+      map = %{"SUPABASE_URL" => "url", "SUPABASE_KEY" => "anon_key", "ANON" => "anon_key"}
+      resource = %{resource | projection: %{fields: map, scopes: []}}
 
       assert {:ok, resolved} = VaultReader.fetch(ctx, resource, @dispense)
-      assert resolved == %{"url" => "https://db.example", "anon_key" => "anon"}
-      refute Map.has_key?(resolved, "service_key")
+
+      assert resolved == %{
+               "SUPABASE_URL" => "https://db.example",
+               "SUPABASE_KEY" => "anon",
+               "ANON" => "anon"
+             }
+    end
+
+    test "a field outside the map is never answered", %{ctx: ctx} do
+      fields = %{"url" => "https://db.example", "anon_key" => "anon", "service_key" => "SECRET"}
+      {_entry, resource} = mint_material_entry(ctx, fields)
+
+      for {map, expected} <- [
+            {%{"url" => "url"}, %{"url" => "https://db.example"}},
+            {%{"KEY" => "anon_key"}, %{"KEY" => "anon"}}
+          ] do
+        resource = %{resource | projection: %{fields: map, scopes: []}}
+
+        # Neither an entry field the map does not name nor a mapped entry
+        # field under its own name leaves the reader.
+        assert {:ok, ^expected} = VaultReader.fetch(ctx, resource, @dispense)
+      end
     end
 
     test "an edge whose projection names no fields is corrupt and dispenses nothing",
@@ -87,10 +113,12 @@ defmodule Sanctum.VaultReaderTest do
         Map.delete(resource, :projection),
         %{resource | projection: nil},
         %{resource | projection: %{scopes: []}},
-        %{resource | projection: %{fields: [], scopes: []}},
+        %{resource | projection: %{fields: %{}, scopes: []}},
         %{resource | projection: %{fields: "a", scopes: []}},
-        %{resource | projection: %{fields: ["a", nil], scopes: []}},
-        %{resource | projection: %{fields: ["a", ""], scopes: []}}
+        %{resource | projection: %{fields: ["a"], scopes: []}},
+        %{resource | projection: %{fields: %{"" => "a"}, scopes: []}},
+        %{resource | projection: %{fields: %{"a" => nil}, scopes: []}},
+        %{resource | projection: %{fields: %{"a" => ""}, scopes: []}}
       ]
 
       for edge <- unnamed do
@@ -107,12 +135,15 @@ defmodule Sanctum.VaultReaderTest do
       assert last_used_at(ctx, entry) == before
     end
 
-    test "a projected field the entry lacks refuses the whole resolution", %{ctx: ctx} do
+    test "a mapped field the material lacks refuses the whole read", %{ctx: ctx} do
       {_entry, resource} = mint_material_entry(ctx, %{"url" => "https://db.example"})
-      resource = %{resource | projection: %{fields: ["url", "anon_key"], scopes: []}}
+      map = %{"SUPABASE_URL" => "url", "SUPABASE_KEY" => "anon_key"}
+      resource = %{resource | projection: %{fields: map, scopes: []}}
 
-      # Never the partial map with `url` alone, and never a silent skip.
-      assert {:error, {:missing_field, "anon_key"}} = VaultReader.fetch(ctx, resource, @dispense)
+      # Never the partial map with the url alone, and never a silent skip;
+      # the refusal names the component's field, not the entry's.
+      assert {:error, {:missing_field, "SUPABASE_KEY"}} =
+               VaultReader.fetch(ctx, resource, @dispense)
     end
 
     test "anonymous callers are refused before any load", %{ctx: ctx} do
@@ -189,7 +220,12 @@ defmodule Sanctum.VaultReaderTest do
         })
 
       {:ok, digest} = VaultReader.binding_digest(entry)
-      resource = %{entry_id: id, binding_digest: digest, projection: %{fields: ["k"], scopes: []}}
+
+      resource = %{
+        entry_id: id,
+        binding_digest: digest,
+        projection: %{fields: %{"k" => "k"}, scopes: []}
+      }
 
       assert {:error, {:invalid_payload, {:unknown_keys, ["extra"]}}} =
                VaultReader.fetch(ctx, resource, @dispense)
@@ -220,7 +256,7 @@ defmodule Sanctum.VaultReaderTest do
 
       assert {:error, :disclosure_refused} = VaultReader.fetch(ctx, resource, @dispense)
 
-      token_edge = %{resource | projection: %{fields: [], scopes: ["gmail.readonly"]}}
+      token_edge = %{resource | projection: %{fields: %{}, scopes: ["gmail.readonly"]}}
 
       assert {:error, :disclosure_refused} =
                VaultReader.oauth_token(ctx, token_edge, "google", @dispense)
@@ -246,7 +282,7 @@ defmodule Sanctum.VaultReaderTest do
       resource = %{
         entry_id: entry.id,
         binding_digest: digest,
-        projection: %{fields: ["k"], scopes: []}
+        projection: %{fields: %{"k" => "k"}, scopes: []}
       }
 
       assert {:ok, %{"k" => "v"}} = VaultReader.fetch(ctx, resource, @dispense)
@@ -642,7 +678,7 @@ defmodule Sanctum.VaultReaderTest do
         })
 
       resource =
-        Map.put(resource, :projection, %{fields: [], scopes: ["gmail.readonly", "gmail.send"]})
+        Map.put(resource, :projection, %{fields: %{}, scopes: ["gmail.readonly", "gmail.send"]})
 
       assert {:error, {:scope_projection_unsatisfiable, ["gmail.send"]}} =
                VaultReader.oauth_token(ctx, resource, "google", @dispense)
@@ -665,7 +701,7 @@ defmodule Sanctum.VaultReaderTest do
             oauth_scopes: Jason.encode!(["gmail.readonly", "gmail.send"])
           })
 
-        narrower = Map.put(resource, :projection, %{fields: [], scopes: ["gmail.readonly"]})
+        narrower = Map.put(resource, :projection, %{fields: %{}, scopes: ["gmail.readonly"]})
 
         assert {:error, :scope_not_attenuable} =
                  VaultReader.oauth_token(ctx, narrower, "google", @dispense)
@@ -694,7 +730,7 @@ defmodule Sanctum.VaultReaderTest do
         })
 
       reordered =
-        Map.put(resource, :projection, %{fields: [], scopes: ["gmail.send", "gmail.readonly"]})
+        Map.put(resource, :projection, %{fields: %{}, scopes: ["gmail.send", "gmail.readonly"]})
 
       assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, reordered, "google", @dispense)
     end
@@ -723,8 +759,8 @@ defmodule Sanctum.VaultReaderTest do
       for edge <- [
             Map.delete(resource, :projection),
             %{resource | projection: nil},
-            %{resource | projection: %{fields: [], scopes: []}},
-            %{resource | projection: %{fields: [], scopes: [""]}}
+            %{resource | projection: %{fields: %{}, scopes: []}},
+            %{resource | projection: %{fields: %{}, scopes: [""]}}
           ] do
         log =
           capture_log(fn ->
@@ -746,7 +782,7 @@ defmodule Sanctum.VaultReaderTest do
           oauth_scopes: @readonly
         })
 
-      key_edge = %{resource | projection: %{fields: ["k"], scopes: []}}
+      key_edge = %{resource | projection: %{fields: %{"k" => "k"}, scopes: []}}
       before = last_used_at(ctx, entry)
 
       assert {:error, :no_oauth_material} =

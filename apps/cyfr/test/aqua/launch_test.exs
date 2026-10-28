@@ -22,7 +22,7 @@ defmodule Aqua.LaunchTest do
   alias Aqua.{Approvals, Launch, Tape}
   alias Arca.ThreadStorage, as: Threads
   alias Sanctum.Consent.Bootstrap
-  alias Sanctum.Tenancy.{Members, Users}
+  alias Sanctum.Tenancy.Members
 
   @seed_root Path.expand("../../../../seed", __DIR__)
   @soul "agent:local.aqua"
@@ -81,7 +81,7 @@ defmodule Aqua.LaunchTest do
     n = System.unique_integer([:positive])
 
     {:ok, approver} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|launcher#{n}",
         provider: "github",
         email: "launcher#{n}@example.com",
@@ -294,7 +294,8 @@ defmodule Aqua.LaunchTest do
           "type" => "api_key:upstream.test",
           "reason" => "to call the upstream with your key",
           "fields" => ["KEY"],
-          "attach" => @rule
+          "attach" => @rule,
+          "hosts" => ["127.0.0.1"]
         }
       },
       "caps" => %{
@@ -349,7 +350,8 @@ defmodule Aqua.LaunchTest do
         "api_key" => %{
           "type" => "api_key:example.com",
           "reason" => "to call the example API",
-          "fields" => ["KEY"]
+          "fields" => ["KEY"],
+          "hosts" => ["api.example.com"]
         }
       },
       "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}

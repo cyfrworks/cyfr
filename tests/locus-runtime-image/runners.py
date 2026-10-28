@@ -177,7 +177,7 @@ ATTACHED_AUTHORITY = {
             "binding_key": "catalyst:local.attached-header-probe|@ingress|default",
             "destination": {"hosts": [ATTACHED_HOST], "scheme": "http"},
             "attach": ATTACHED_RULE,
-            "projection": {"fields": ["PROBE_KEY"], "scopes": []},
+            "projection": {"fields": {"PROBE_KEY": "PROBE_KEY"}, "scopes": []},
         },
     },
 }

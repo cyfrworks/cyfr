@@ -14,30 +14,59 @@ defmodule Sanctum.Tenancy.UsersTest do
     :ok
   end
 
-  defp person(n, overrides \\ %{}) do
-    {:ok, user} =
-      Users.upsert_from_provider(
-        Map.merge(
-          %{
-            id: "github|https://github.com|#{n}",
-            provider: "github",
-            email: "P#{n}@Example.com",
-            verified: true,
-            name: "Person #{n}"
-          },
-          overrides
-        )
-      )
+  defp info(n, overrides) do
+    Map.merge(
+      %{
+        id: "github|https://github.com|#{n}",
+        provider: "github",
+        email: "P#{n}@Example.com",
+        verified: true,
+        name: "Person #{n}"
+      },
+      overrides
+    )
+  end
 
+  defp person(n, overrides \\ %{}) do
+    {:ok, user} = Sanctum.Test.People.linked(info(n, overrides))
     user
   end
 
-  test "email is stored lowercased and is not unique — two identities may share one" do
+  # A person with no athanor of their own yet: the row and its linked
+  # sign-in method alone.
+  defp unhoused(n) do
+    now = DateTime.utc_now()
+
+    {:ok, %{id: user_id}} =
+      Arca.Test.People.mint(
+        Prima.Actor.system(),
+        %{
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        %{
+          key: "github|https://github.com|unhoused-#{n}",
+          provider: "github",
+          issuer: "https://github.com",
+          subject: "unhoused-#{n}",
+          first_seen_at: now,
+          last_seen_at: now
+        }
+      )
+
+    {:ok, user} = Users.get(user_id)
+    user
+  end
+
+  test "email is stored lowercased and is not unique — two people may share one" do
     a = person(1, %{email: "Same@Example.com"})
     b = person(2, %{id: "google|https://accounts.google.com|2", email: "same@example.com"})
     assert a.email == "same@example.com"
     assert b.email == "same@example.com"
-    assert length(Users.list_by_email("SAME@example.com")) == 2
+    refute a.id == b.id
   end
 
   # Missing provider fields must preserve previously recorded display data.
@@ -45,38 +74,35 @@ defmodule Sanctum.Tenancy.UsersTest do
     stored = person(41, %{email: "keep@example.com", name: "Keep Me"})
     assert stored.display_name == "Keep Me"
 
-    {:ok, refreshed} =
-      Users.upsert_from_provider(%{
-        id: "github|https://github.com|41",
-        provider: "github",
-        email: nil,
-        name: nil,
-        verified: true
-      })
+    {:ok, refreshed} = Users.seen(stored, info(41, %{email: nil, name: nil}))
 
     assert refreshed.id == stored.id
     assert refreshed.display_name == "Keep Me"
     assert refreshed.email == "keep@example.com"
   end
 
-  test "a sign-in that does assert them updates" do
-    stored = person(42, %{email: "old@example.com", name: "Old Name"})
+  test "a sign-in that does assert them updates, and an email only when the provider proved it" do
+    stored = person(42, %{email: "old@example.com", name: "Old Name", verified: false})
+    refute stored.email_verified
 
     {:ok, refreshed} =
-      Users.upsert_from_provider(%{
-        id: "github|https://github.com|42",
-        provider: "github",
-        email: "new@example.com",
-        name: "New Name",
-        verified: true
-      })
+      Users.seen(stored, info(42, %{email: "new@example.com", name: "New Name"}))
 
     assert refreshed.id == stored.id
     assert refreshed.display_name == "New Name"
     assert refreshed.email == "new@example.com"
+    assert refreshed.email_verified
+
+    for verified <- [false, :unknown] do
+      {:ok, unproved} =
+        Users.seen(refreshed, info(42, %{email: "unproved@example.com", verified: verified}))
+
+      assert unproved.email == "new@example.com"
+      assert unproved.email_verified
+    end
   end
 
-  test "a person is minted with an id of this server's, named by the identity that signed in" do
+  test "a person's id is this server's, and the method they linked unlocks them and no one else" do
     n = System.unique_integer([:positive])
     key = "github|https://github.com|minted-#{n}"
     user = person(n, %{id: key})
@@ -88,15 +114,23 @@ defmodule Sanctum.Tenancy.UsersTest do
     assert [%{key: ^key, provider: "github", subject: subject}] = Users.identities(user.id)
     assert subject == "minted-#{n}"
 
-    # The same identity signs in again: the same person, not a second one.
-    assert person(n, %{id: key}).id == user.id
-    assert {:error, :not_found} = Users.get_by_identity("github|https://github.com|nobody-#{n}")
+    # The same method signs in again: the same person, not a second one.
+    people = Arca.Repo.aggregate(Arca.Schemas.User, :count)
+    assert {:ok, %{id: ^same}} = Sanctum.SignIn.unlock(info(n, %{id: key}))
+
+    # A method no person here linked unlocks no one, and makes no one.
+    nobody = "github|https://github.com|nobody-#{n}"
+    assert {:error, :no_person} = Sanctum.SignIn.unlock(info(n, %{id: nobody}))
+    assert {:error, :not_found} = Users.get_by_identity(nobody)
+    assert Arca.Repo.aggregate(Arca.Schemas.User, :count) == people
   end
 
-  test "only an IdP identity signs in: synthetic principal ids and bare ids are refused" do
+  test "only an IdP identity is a sign-in method: synthetic principal ids and bare ids name no one" do
     for id <- ["system", "_seed", "_health_probe", "webhook:orders", "aqua", "no-pipes", "usr_x"] do
-      assert {:error, :not_an_identity} =
-               Users.upsert_from_provider(%{id: id, provider: "github", email: "x@example.com"})
+      refute Sanctum.Auth.Identity.key?(id)
+
+      assert {:error, :no_person} =
+               Sanctum.SignIn.unlock(%{id: id, provider: "github", email: "x@example.com"})
     end
 
     # A row's id is a person's, never a synthetic principal's.
@@ -123,7 +157,7 @@ defmodule Sanctum.Tenancy.UsersTest do
   end
 
   test "personal_athanor_id/1 and own_athanor?/2 are the one read of a person's own furnace" do
-    u = person(7)
+    u = unhoused(7)
 
     # Known, but no furnace minted yet — and an unknown id, and no id at all.
     assert :none = Users.personal_athanor_id(u.id)
@@ -151,17 +185,7 @@ defmodule Sanctum.Tenancy.UsersTest do
 
   test "deny ejects: sessions and keys revoked, own athanor archived, group rows gone" do
     u = person(4)
-
-    {:ok, personal} =
-      Athanors.create(%{
-        kind: "person",
-        name: "P4",
-        slug: "p4-#{System.unique_integer([:positive])}",
-        owner_user_id: u.id,
-        created_by: u.id
-      })
-
-    {:ok, u} = Users.set_personal_athanor(u, personal.id)
+    personal = Sanctum.Test.People.athanor!(u)
     {:ok, group} = Athanors.create_group("github|https://github.com|owner4", "G4")
     {:ok, :added} = Members.add(group, [user_id: u.id], "owner4")
 
@@ -231,30 +255,44 @@ defmodule Sanctum.Tenancy.UsersTest do
   defp restore_periods(user_id),
     do: Arca.Repo.aggregate(from(r in "restore_people", where: r.user_id == ^user_id), :count)
 
-  test "deny withdraws the group seats the address was still holding" do
-    u = person(41)
+  test "deny withdraws the group seats the identifier was still holding" do
+    n = System.unique_integer([:positive])
     {:ok, group} = Athanors.create_group("github|https://github.com|owner41", "G41")
 
-    # An invitation names an email and no person: the deny's sweep by user id
-    # cannot see it, so it has to be withdrawn by address.
-    {:ok, :invited} = Members.add(group, [email: "invitee41@example.com"], "owner41")
+    # An invitation names an identifier no person here holds: the deny's
+    # sweep by user id cannot see it, so it is withdrawn by identifier.
+    stranger = "per_" <> Prima.Digest.sha256_hex("invitee-#{n}")
+    {:ok, :invited} = Members.add(group, [identifier: stranger], "owner41")
     assert [_] = invited_rows(group.id)
 
-    assert 1 == Members.withdraw_invites_for_email("INVITEE41@example.com")
+    assert 1 == Members.withdraw_invites_for_identifier(stranger)
     assert invited_rows(group.id) == []
 
-    # and a seat left over for a person's own address goes with their deny
+    # and a seat left waiting on a person's own identifier goes with their
+    # deny
+    identifier = "per_" <> Prima.Digest.sha256_hex("held-#{n}")
+
+    {:ok, u} =
+      Sanctum.Test.People.remote(
+        %{
+          id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", identifier),
+          provider: "cyfr"
+        },
+        %{identifier: identifier, directory_url: "https://dir.example"}
+      )
+
     {:ok, group2} = Athanors.create_group("github|https://github.com|owner41", "G41b")
 
     {:ok, _} =
       Members.create(%{
-        email: String.downcase(u.email),
+        person_identifier: identifier,
         scope: "athanor",
         status: "invited",
         athanor_id: group2.id,
         added_by: "owner41"
       })
 
+    assert [_] = invited_rows(group2.id)
     assert {:ok, _} = Users.deny(u)
     assert invited_rows(group2.id) == []
   end

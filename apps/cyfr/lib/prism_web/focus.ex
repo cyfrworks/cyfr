@@ -52,6 +52,9 @@ defmodule PrismWeb.Focus do
       {:error, reason} when reason in [:unauthenticated, :not_standing] ->
         {:halt, redirect(socket, to: "/login")}
 
+      {:error, :company_login_required} ->
+        {:halt, redirect(socket, to: "/company-login")}
+
       {:error, _not_member} ->
         {:halt,
          socket

@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -48,6 +49,24 @@ func accessOf(t *testing.T) string {
 	t.Helper()
 	mode, _ := projectEnv(t).value("CYFR_ACCESS")
 	return mode
+}
+
+// setupTokenOf is the setup token the working directory's .env holds,
+// which must be 64 lowercase hexadecimal characters.
+func setupTokenOf(t *testing.T) string {
+	t.Helper()
+	token, _ := projectEnv(t).value(setupTokenVar)
+	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(token) {
+		t.Fatalf(".env's %s is %q, not 64 lowercase hexadecimal characters", setupTokenVar, token)
+	}
+	return token
+}
+
+// setupLinkLine is the line init prints the setup link of the CYFR at
+// address on, with the setup token the working directory's .env holds.
+func setupLinkLine(t *testing.T, address string) string {
+	t.Helper()
+	return "  Setup link:      " + address + "/setup#" + setupTokenOf(t) + "\n"
 }
 
 // nothingWritten fails unless the working directory holds exactly names.
@@ -182,8 +201,8 @@ func TestInitFollowsTheTemplatesPort(t *testing.T) {
 	if got := cfg.Contexts["local"].URL; got != "http://127.0.0.1:4123" {
 		t.Errorf("the local context is %s, want the home's loopback port", got)
 	}
-	if !strings.Contains(out.String(), "Prism:           http://localhost:4123/") {
-		t.Errorf("init does not print the home's address:\n%s", out.String())
+	if !strings.Contains(out.String(), setupLinkLine(t, "http://localhost:4123")) {
+		t.Errorf("init does not print the setup link at the home's address:\n%s", out.String())
 	}
 }
 
@@ -219,8 +238,8 @@ func TestInitJoinsATailnetHomeWithTheKeyFile(t *testing.T) {
 	if strings.Contains(string(env)+out.String(), key) {
 		t.Errorf("the auth key reached .env or the output")
 	}
-	if !strings.Contains(out.String(), "Prism:           https://cyfr.tail1234.ts.net/") {
-		t.Errorf("init does not print the home's address from its head:\n%s", out.String())
+	if !strings.Contains(out.String(), setupLinkLine(t, "https://cyfr.tail1234.ts.net")) {
+		t.Errorf("init does not print the setup link at the home's address from its head:\n%s", out.String())
 	}
 }
 
@@ -238,7 +257,7 @@ func TestInitLeavesTheHomeLocalWhenTheJoinFailsOrIsCancelled(t *testing.T) {
 			return access.Receipt{RequestID: r.ID, Op: "join", State: "completed", Outcome: "failed", Code: "tailnet_join_expired"}, nil
 		}
 		askTerminal = func() bool { return true }
-		askInput = strings.NewReader("1\n\n\n")
+		askInput = strings.NewReader("1\n\n")
 		var out bytes.Buffer
 		err := runInit(context.Background(), initOptions{noPull: true}, &out, &out)
 		expired := access.Refuse("tailnet_join_expired", nil).Message()
@@ -262,7 +281,7 @@ func TestInitLeavesTheHomeLocalWhenTheJoinFailsOrIsCancelled(t *testing.T) {
 			return access.Receipt{}, jctx.Err()
 		}
 		askTerminal = func() bool { return true }
-		askInput = strings.NewReader("1\nhome\n\n")
+		askInput = strings.NewReader("1\nhome\n")
 		var out bytes.Buffer
 		err := runInit(ctx, initOptions{noPull: true}, &out, &out)
 		cancelled := access.Refuse("tailnet_join_cancelled", nil).Message()
@@ -385,46 +404,6 @@ func TestInitTakesTheEndOfInputAsNoAnswer(t *testing.T) {
 	}
 }
 
-// Given no operator email, init names no administrator in .env and warns
-// that no one is authorized to use the home yet; given one, the operators'
-// line holds it and there is no warning.
-func TestInitWarnsThatNoOneIsAuthorizedWithoutAnEmail(t *testing.T) {
-	const warning = "⚠  CYFR_PLATFORM_ADMIN_EMAILS is unset in .env — no one is authorized to use this instance yet.\n" +
-		"   Set CYFR_PLATFORM_ADMIN_EMAILS=you@example.com in .env so you (the operator) can sign in.\n"
-	newInitProject(t)
-	useFakeEngine(t)
-	var out bytes.Buffer
-	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-		t.Fatalf("init: %v\n%s", err, out.String())
-	}
-	if admins, assigned := projectEnv(t).value(adminEmailVar); assigned {
-		t.Errorf("a home given no email names the administrators %q", admins)
-	}
-	if !strings.Contains(out.String(), "\n"+warning) {
-		t.Errorf("init does not warn that no one is authorized:\n%s", out.String())
-	}
-
-	newInitProject(t)
-	useFakeEngine(t)
-	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("3\nme@example.com\n")
-	out.Reset()
-	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
-		t.Fatalf("init: %v\n%s", err, out.String())
-	}
-	if admins, _ := projectEnv(t).value(adminEmailVar); admins != "me@example.com" {
-		t.Errorf("the administrators are %q, want the email answered", admins)
-	}
-	text := out.String()
-	if !strings.Contains(text, "CYFR authorizes by membership — list your email as the platform admin so you can use this instance.\n") ||
-		!strings.Contains(text, "Your platform-admin email (required to access this instance; blank = no one is authorized yet)") {
-		t.Errorf("init does not ask for the platform-admin email:\n%s", text)
-	}
-	if strings.Contains(text, "no one is authorized to use this instance yet") {
-		t.Errorf("init warns though it was given an email:\n%s", text)
-	}
-}
-
 // A dev build fetches no scaffold, and says where its files come from: a
 // repo checkout, or the checkout's own source development stack, never a
 // bare `mix phx.server`, which runs no component.
@@ -444,22 +423,22 @@ func TestInitOnADevBuildSaysWhereTheScaffoldComesFrom(t *testing.T) {
 	}
 }
 
-// On a terminal the access question comes first, before the email; an
-// answer that is none of the three is asked again, and a public home's
-// domain is asked, an invalid one with the rule it breaks.
+// On a terminal the access question comes first; an answer that is none
+// of the three is asked again, and a public home's domain is asked, an
+// invalid one with the rule it breaks.
 func TestInitAsksTheAccessQuestionFirst(t *testing.T) {
 	newInitProject(t)
 	s := useFakeEngine(t)
 	askTerminal = func() bool { return true }
-	askInput = strings.NewReader("9\n2\nlocalhost\ncyfr.example.com\nnot-an-email\nops@example.com\n\n")
+	askInput = strings.NewReader("9\n2\nlocalhost\ncyfr.example.com\nnot-an-email\nops@example.com\n")
 	var out bytes.Buffer
 	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
 		t.Fatalf("init: %v\n%s", err, out.String())
 	}
 	text := out.String()
-	question, again, email := strings.Index(text, "How will you reach CYFR?"), strings.Index(text, "Answer 1, 2 or 3."), strings.Index(text, "Your platform-admin email")
-	if question < 0 || again < question || email < again {
-		t.Errorf("the access question does not come first, asked again on a wrong answer, before the email:\n%s", text)
+	question, again := strings.Index(text, "How will you reach CYFR?"), strings.Index(text, "Answer 1, 2 or 3.")
+	if question < 0 || again < question {
+		t.Errorf("the access question does not come first, or is not asked again on a wrong answer:\n%s", text)
 	}
 	for _, want := range []string{"`localhost` is not a valid domain", "`not-an-email` is not a valid email address"} {
 		if !strings.Contains(text, want) {
@@ -475,8 +454,8 @@ func TestInitAsksTheAccessQuestionFirst(t *testing.T) {
 			t.Errorf(".env's %s is %q, want %q", k, got, want)
 		}
 	}
-	if !strings.Contains(text, "Prism:           https://cyfr.example.com/") || strings.Contains(text, "<your CYFR_HOST>") {
-		t.Errorf("init does not print the home's address from its head:\n%s", text)
+	if !strings.Contains(text, setupLinkLine(t, "https://cyfr.example.com")) || strings.Contains(text, "<your CYFR_HOST>") {
+		t.Errorf("init does not print the setup link at the home's address from its head:\n%s", text)
 	}
 }
 
@@ -515,7 +494,7 @@ func TestInitSwitchesThroughTheRealEngineAndHostDocker(t *testing.T) {
 // On a machine with a display init opens a tailnet join's approval link in
 // the default browser once it has printed it, and still waits for the
 // approval; with --no-open, or with no display, it prints the link alone.
-// Off a terminal the link and the home's address are plain text.
+// Off a terminal the link and the setup link are plain text.
 func TestInitOpensTheJoinLinkOnADisplay(t *testing.T) {
 	const link = "https://login.tailscale.com/a/approve-test"
 	for _, c := range []struct {
@@ -531,7 +510,7 @@ func TestInitOpensTheJoinLinkOnADisplay(t *testing.T) {
 			s := useFakeEngine(t)
 			l := stubLauncher(t, c.display, nil)
 			askTerminal = func() bool { return true }
-			askInput = strings.NewReader("1\n\n\n")
+			askInput = strings.NewReader("1\n\n")
 			var out bytes.Buffer
 			if err := runInit(context.Background(), initOptions{noPull: true, accessOptions: accessOptions{noOpen: c.noOpen}}, &out, &out); err != nil {
 				t.Fatalf("init: %v\n%s", err, out.String())
@@ -542,7 +521,7 @@ func TestInitOpensTheJoinLinkOnADisplay(t *testing.T) {
 				between = "Opened it in your browser.\n"
 			}
 			want := "To join this machine to your tailnet, open this link and approve the machine:\n  " + link + "\n" + between + "Waiting for the approval (Ctrl-C cancels the join)...\n"
-			if !strings.Contains(out.String(), want) || !strings.Contains(out.String(), "  Prism:           https://cyfr.tail1234.ts.net/\n") {
+			if !strings.Contains(out.String(), want) || !strings.Contains(out.String(), setupLinkLine(t, "https://cyfr.tail1234.ts.net")) {
 				t.Errorf("init printed:\n%s\nwant within it:\n%s", out.String(), want)
 			}
 			var handed []string
@@ -554,6 +533,69 @@ func TestInitOpensTheJoinLinkOnADisplay(t *testing.T) {
 			}
 			if len(s.switches) != 1 || accessOf(t) != access.ModeTailnet {
 				t.Errorf("the join did not go on to the switch: %+v", s.switches)
+			}
+		})
+	}
+}
+
+// A new .env gets a setup token of 32 random bytes in 64 lowercase
+// hexadecimal characters, on one line, and init prints the setup link at
+// the new CYFR's address in place of its bare address; init run again
+// keeps the token as it is.
+func TestInitWritesTheSetupTokenAndPrintsTheSetupLink(t *testing.T) {
+	newInitProject(t)
+	useFakeEngine(t)
+	var out bytes.Buffer
+	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+		t.Fatalf("init: %v\n%s", err, out.String())
+	}
+	line := setupLinkLine(t, "http://localhost:4000")
+	token := setupTokenOf(t)
+	if n := len(projectEnv(t).assignments(setupTokenVar)); n != 1 {
+		t.Errorf(".env assigns %s on %d lines, want one", setupTokenVar, n)
+	}
+	text := out.String()
+	if !strings.Contains(text, line+"  Once CYFR is up, the setup link sets up its first person, who administers it, with a passkey.\n") || strings.Contains(text, "Prism:") {
+		t.Errorf("init printed:\n%s\nwant the setup link %q and no bare address", text, line)
+	}
+
+	out.Reset()
+	if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+		t.Fatalf("init again: %v\n%s", err, out.String())
+	}
+	if again, _ := projectEnv(t).value(setupTokenVar); again != token {
+		t.Errorf("init run again changed the setup token from %q to %q", token, again)
+	}
+}
+
+// A new .env that makes CYFR headless, CYFR_HEADLESS read as the server
+// reads it, prints that the first person runs cyfr login --setup after
+// cyfr up, and no setup link, since a headless CYFR serves no page.
+func TestInitPrintsLoginSetupForAHeadlessCYFR(t *testing.T) {
+	const notice = "  CYFR is headless: after 'cyfr up', its first person runs 'cyfr login --setup' in this directory.\n"
+	for _, c := range []struct {
+		assignment string
+		headless   bool
+	}{
+		{"CYFR_HEADLESS=on", true},
+		{`CYFR_HEADLESS=" on "`, true},
+		{"CYFR_HEADLESS=off", false},
+		{"CYFR_HEADLESS=", false},
+	} {
+		t.Run(c.assignment, func(t *testing.T) {
+			newInitProject(t)
+			useFakeEngine(t)
+			if err := os.WriteFile(".env.example", []byte(read(t, ".env.example")+c.assignment+"\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			if err := runInit(context.Background(), initOptions{noPull: true}, &out, &out); err != nil {
+				t.Fatalf("init: %v\n%s", err, out.String())
+			}
+			text := out.String()
+			printsNotice, printsLink := strings.Contains(text, notice), strings.Contains(text, "Setup link:")
+			if printsNotice != c.headless || printsLink == c.headless {
+				t.Errorf("init printed the headless notice %v and the setup link %v, want the notice %v:\n%s", printsNotice, printsLink, c.headless, text)
 			}
 		})
 	}

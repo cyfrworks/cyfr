@@ -604,7 +604,7 @@ defmodule Sanctum.Test.DirectoryServer do
   @doc """
   The callback fragment the person's own home answers `person.assert` with
   for the challenge a relying home holds (`held`, the string keyed map
-  `Sanctum.Auth.CyfrDoor.challenge/1` answers): an assertion
+  `Sanctum.Auth.CyfrDoor.challenge/2` answers): an assertion
   (`Prima.PersonAssertion`) signed by the identity's live key, over the
   relying home `audience`, the held challenge and its carry. `opts`:
   `:audience`, `:challenge` (raw bytes), `:action_id`, `:key_epoch`,

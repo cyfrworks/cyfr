@@ -445,7 +445,8 @@ defmodule Sanctum.Consent.BlobBuilderTest do
         "entry_id" => "vlt_1",
         "binding_digest" => "sha256:b",
         "scope" => "athanor",
-        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"}
+        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
+        "projection" => %{"fields" => %{"KEY" => "KEY"}, "scopes" => []}
       }
 
       build = fn edge_vault ->
@@ -471,7 +472,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
 
       blob = build.(%{"via" => %{"label" => "default"}})
       {:ok, edge} = Blob.lookup_edge(blob, root, @dep, "")
-      assert edge.vault == %{via: %{label: "default", binding_digest: nil}, projection: nil}
+      assert edge.vault == %{via: %{label: "default", binding_digest: nil}}
     end
 
     test "keys one row per binding: an entry's names the entry, a selection's its label and pin",
@@ -484,7 +485,8 @@ defmodule Sanctum.Consent.BlobBuilderTest do
         "entry_id" => "vlt_1",
         "binding_digest" => "sha256:b",
         "scope" => "athanor",
-        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"}
+        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
+        "projection" => %{"fields" => %{"KEY" => "KEY"}, "scopes" => []}
       }
 
       refs = fn edge_vault ->
@@ -556,7 +558,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
             scope: "athanor",
             destination: %{"hosts" => ["api.example.com"], "scheme" => "https"},
             attach: %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
-            fields: ["KEY"],
+            fields: %{"KEY" => "KEY"},
             scopes: []
           },
           over
@@ -650,16 +652,19 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       "needs" => %{
         "database" => %{
           "type" => "api_key:supabase.co",
+          "hosts" => ["abc.supabase.co"],
           "reason" => "to reach the database",
           "fields" => ["anon_key"],
           "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
         },
         "signing" => %{
           "type" => "api_key:supabase.co",
+          "hosts" => ["abc.supabase.co"],
           "reason" => "to sign",
           "fields" => ["secret"]
         }
-      }
+      },
+      "caps" => %{"egress" => %{"domains" => ["abc.supabase.co"]}}
     }
 
     test "covers a need the dependency declares with an attach rule, and nothing else" do
@@ -976,7 +981,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
         scope: "athanor",
         destination: %{"hosts" => ["api.one.example"], "scheme" => "https"},
         attach: nil,
-        fields: ["api_key"],
+        fields: %{"api_key" => "api_key"},
         scopes: [],
         need: need
       })

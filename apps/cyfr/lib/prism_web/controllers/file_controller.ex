@@ -44,6 +44,7 @@ defmodule PrismWeb.FileController do
       |> serve(ctx, physical)
     else
       :sign_in -> redirect(conn, to: PrismWeb.AuthHelpers.sign_in_path())
+      :company_login -> redirect(conn, to: "/company-login")
       :unavailable -> send_resp(conn, 503, "Try again shortly")
       _ -> send_resp(conn, 404, "Not found")
     end

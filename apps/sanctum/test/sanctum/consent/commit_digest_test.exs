@@ -22,7 +22,7 @@ defmodule Sanctum.Consent.CommitDigestTest do
     need: "source",
     entry_id: "vault-1",
     binding_digest: "sha256:bind-1",
-    fields: ["url", "anon_key"]
+    fields: %{"url" => "url", "anon_key" => "anon key"}
   }
 
   @selection %{
@@ -88,11 +88,48 @@ defmodule Sanctum.Consent.CommitDigestTest do
                digest!(Map.put(@base, :bindings, [rebound]))
     end
 
-    test "a widened projection changes the digest" do
-      widened = %{@binding | fields: ["url", "anon_key", "service_key"]}
+    test "a change to the map alone changes the digest" do
+      for fields <- [
+            %{"url" => "url", "anon_key" => "service key"},
+            %{"url" => "url"},
+            %{"url" => "url", "anon_key" => "anon key", "service_key" => "service key"},
+            %{"URL" => "url", "anon_key" => "anon key"}
+          ] do
+        assert digest!(Map.put(@base, :bindings, [@binding])) !=
+                 digest!(Map.put(@base, :bindings, [%{@binding | fields: fields}])),
+               "#{inspect(fields)} did not affect the digest"
+      end
+    end
 
-      assert digest!(Map.put(@base, :bindings, [@binding])) !=
-               digest!(Map.put(@base, :bindings, [widened]))
+    test "a field map is canonical whatever the order its pairs are given in" do
+      pairs = [{"url", "url"}, {"anon_key", "anon key"}, {"b", "x"}, {"a", "y"}]
+      one = %{@binding | fields: Map.new(pairs)}
+      other = %{@binding | fields: Map.new(Enum.reverse(pairs))}
+
+      assert digest!(Map.put(@base, :bindings, [one])) ==
+               digest!(Map.put(@base, :bindings, [other]))
+
+      # The canonical bytes order the map's keys, as JCS orders every key.
+      {:ok, canonical} = CommitDigest.normalize(Map.put(@base, :bindings, [one]))
+      {:ok, bytes} = Prima.JCS.encode(canonical)
+
+      assert bytes =~
+               ~s("fields":{"a":"y","anon_key":"anon key","b":"x","url":"url"})
+    end
+
+    test "a binding's field map maps non-empty names to non-empty names" do
+      for fields <- [
+            ["url", "anon_key"],
+            "url",
+            %{"url" => ""},
+            %{"" => "url"},
+            %{"url" => nil},
+            %{"url" => ["url"]}
+          ] do
+        assert {:error, {:invalid_commit, :fields, _}} =
+                 CommitDigest.compute(Map.put(@base, :bindings, [%{@binding | fields: fields}])),
+               "#{inspect(fields)} was accepted"
+      end
     end
 
     test "a need may be bound exactly once" do
@@ -183,6 +220,47 @@ defmodule Sanctum.Consent.CommitDigestTest do
 
       assert {:error, {:invalid_commit, :renew, _}} =
                CommitDigest.compute(Map.put(@base, :bindings, [Map.put(@binding, :renew, "yes")]))
+    end
+
+    test "an entry selection's field map changes the digest, canonical whatever the order" do
+      entry =
+        @selection
+        |> Map.delete(:label)
+        |> Map.merge(%{entry_id: "vault-1", need: "api_key", fields: %{"API_KEY" => "API key"}})
+
+      digest = digest!(Map.put(@base, :selections, [entry]))
+
+      for fields <- [%{"API_KEY" => "token"}, %{"KEY" => "API key"}] do
+        assert digest != digest!(Map.put(@base, :selections, [%{entry | fields: fields}])),
+               "#{inspect(fields)} did not affect the digest"
+      end
+
+      pairs = [{"API_KEY", "API key"}, {"ORG", "org"}]
+
+      assert digest!(Map.put(@base, :selections, [%{entry | fields: Map.new(pairs)}])) ==
+               digest!(
+                 Map.put(@base, :selections, [%{entry | fields: Map.new(Enum.reverse(pairs))}])
+               )
+
+      {:ok, canonical} = CommitDigest.normalize(Map.put(@base, :selections, [entry]))
+      assert [%{"fields" => %{"API_KEY" => "API key"}}] = canonical["selections"]
+
+      assert {:error, {:invalid_commit, :fields, _}} =
+               CommitDigest.compute(Map.put(@base, :selections, [%{entry | fields: ["API_KEY"]}]))
+    end
+
+    test "a label selection naming fields is refused, and its digest input names none" do
+      for fields <- [%{"API_KEY" => "API key"}, %{}, ["API_KEY"]] do
+        assert {:error, {:invalid_commit, :fields, _}} =
+                 CommitDigest.compute(
+                   Map.put(@base, :selections, [Map.put(@selection, :fields, fields)])
+                 ),
+               "#{inspect(fields)} was accepted"
+      end
+
+      {:ok, canonical} = CommitDigest.normalize(Map.put(@base, :selections, [@selection]))
+      assert [selection] = canonical["selections"]
+      refute Map.has_key?(selection, "fields")
     end
 
     test "a selection's entry, need, lifetime and renew each change the digest" do
@@ -519,7 +597,7 @@ defmodule Sanctum.Consent.CommitDigestTest do
                %{
                  "need" => "source",
                  "entry_id" => "vault-1",
-                 "fields" => ["anon_key", "url"],
+                 "fields" => %{"anon_key" => "anon key", "url" => "url"},
                  "lifetime" => %{"kind" => "standing"},
                  "renew" => false
                } = binding

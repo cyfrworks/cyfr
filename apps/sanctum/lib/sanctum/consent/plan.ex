@@ -34,8 +34,9 @@ defmodule Sanctum.Consent.Plan do
   A plan for a profile with a head says what the head holds:
   `head_origins`, the origins it admits, so a re-grant starts from them
   rather than quietly dropping one; `head_bindings`, each binding the head
-  holds as `%{binding_key, lifetime: %{kind, until}, consumed}` and what
-  it binds (`entry_id`, `instance_entry_id` or a lending profile's
+  holds as `%{binding_key, lifetime: %{kind, until}, consumed}`, the
+  field map its blob holds at that key (`fields`, absent for a lent
+  binding and for one the blob does not hold), what it binds (`entry_id`, `instance_entry_id` or a lending profile's
   `label`) from its `consent_vault_refs` row (`consumed` when a root has
   used a `once` binding), placed as the commit reads it (`source`, `node`,
   `edge`, `dep`, `connection` and the `need` it was bound for,
@@ -69,24 +70,38 @@ defmodule Sanctum.Consent.Plan do
 
     * `candidates` — the athanor's active entries and the instance
       entries offered to the person (`Sanctum.InstanceEntries.offered/1`)
-      of the need's kind whose `provider_hint` is the need's qualifier,
-      each `%{source: "own" | "instance", entry_id | instance_entry_id,
-      name, kind, provider, destination, disclosed}`, an OAuth one
-      holding exactly the need's scopes, as above. An
+      of the need's kind whose destination covers the hosts and paths the
+      need declares (`entry_fit/2`), whatever their label, each
+      `%{source: "own" | "instance", entry_id | instance_entry_id, name,
+      kind, provider, destination, disclosed, fit, label_match,
+      field_names, fields}`, an OAuth one holding exactly the need's
+      scopes, as above, and one holding at least one field when the need
+      reads one. `provider` is the entry's label, `""` for none; `fit` is
+      `"exact"` when every need host is one of the entry's hosts as
+      written and `"wildcard"` when one is matched only by a `*.` pattern,
+      nil for the `@ingress` slot; `label_match` whether the label is the
+      need's qualifier. `field_names` are the
+      entry's, sorted, and `fields` the automatic map from each field the
+      need reads to the entry field that answers it (`field_map/2`), nil
+      when the person must choose it. An
       instance entry is a candidate only where its component policy
       admits the node the need is bound on (`admits?/3`, with the node's
       release digest in the closure). A need the component reads itself —
       a disclose-only need, which declares no `attach`, the `@ingress`
       slot of a manifest declaring no needs, and a `disclose: true` need —
       is met by a disclosed entry of the athanor alone, never by an
-      instance entry.
+      instance entry. Candidates are ranked: a label equal to the need's
+      qualifier first, then an exact fit before a wildcard one, then the
+      athanor's own entry before an instance entry, then by name and id.
     * `suggested` — `%{entry_id: id}` or `%{instance_entry_id: id}`: the
-      athanor's default of the need's provider (`Arca.VaultDefaults`) when
-      it is a candidate, else the only candidate, else the one instance
-      candidate when the athanor holds no active entry of that provider,
-      else nil. A default suggests; it never binds.
+      athanor's default of the need's qualifier (`Arca.VaultDefaults`)
+      when it is a candidate, else the only candidate, else nil. A
+      default suggests; it never binds.
     * `choice_required` — true only when several candidates match and
       none is suggested.
+    * `attach_only_held` — for a need the component reads itself, true
+      when it has no candidate and an attach-only entry of the athanor
+      fits it, which is why nothing can meet it; false otherwise.
     * `source` — `"provided"` for a dependency's need the node's
       `provides` covers, which shows that configuration's `destination`
       and takes no candidate; otherwise the suggested candidate's source,
@@ -100,11 +115,12 @@ defmodule Sanctum.Consent.Plan do
   type's qualifier), `disclose_only` (it declares no attach rule),
   `disclose` (true only where it declares `disclose: true`), and the
   `hosts` and `paths` it declares, nil where it declares none. A
-  dependency row's lenders (`candidates`) each name the `fields` and the
-  OAuth `scopes` the lending profile's binding projects, `[]` for none.
+  dependency row's lenders (`candidates`) each name the field map
+  (`fields`, `%{}` for none) and the OAuth `scopes` (`[]` for none) the
+  lending profile's binding projects.
 
   `warnings` names, for each required need nothing can meet, the need
-  and its provider, and for a disclose-only need that the component reads
+  and the hosts it calls, and for a disclose-only need that the component reads
   the value itself, with the newer shipped version when there is one; and
   each `provides` entry that provides nothing (a need its dependency does
   not declare, or declares with no attach rule) and each dependency the
@@ -177,6 +193,7 @@ defmodule Sanctum.Consent.Plan do
           required(:binding_key) => String.t(),
           required(:lifetime) => %{kind: String.t(), until: String.t() | nil},
           required(:consumed) => boolean(),
+          optional(:fields) => %{optional(String.t()) => String.t()},
           optional(:entry_id) => String.t(),
           optional(:instance_entry_id) => String.t(),
           optional(:label) => String.t(),
@@ -262,8 +279,8 @@ defmodule Sanctum.Consent.Plan do
            Sanctum.Consent.BlobBuilder.node_grant(source_ref, manifest),
          {:ok, {closure, closure_rows}} <- closure(ctx, component),
          {:ok, rows} <- ask_rows(closure, closure_rows),
-         {:ok, candidates} <- ctx |> candidates() |> read(:vault),
          {:ok, sources} <- ctx |> choice_sources() |> read(:vault),
+         candidates = sources.own,
          needs =
            need_rows(
              ctx,
@@ -535,12 +552,33 @@ defmodule Sanctum.Consent.Plan do
   end
 
   defp choice_row(_ctx, _sources, %{kind: kind}, _facts) when kind not in @credential_kinds,
-    do: %{candidates: [], suggested: nil, choice_required: false, source: nil}
+    do: %{
+      candidates: [],
+      suggested: nil,
+      choice_required: false,
+      attach_only_held: false,
+      source: nil
+    }
 
   defp choice_row(ctx, sources, need, facts) do
     choice = need_choice(ctx, sources, need, facts)
-    Map.put(choice, :source, suggested_source(choice))
+
+    Map.merge(choice, %{
+      source: suggested_source(choice),
+      attach_only_held: attach_only_held?(sources, need, choice.candidates)
+    })
   end
+
+  # Why a need the component reads itself has no candidate: an entry of
+  # the athanor fits it and is attach-only.
+  defp attach_only_held?(_sources, nil, _candidates), do: false
+
+  defp attach_only_held?(sources, need, []) do
+    reads_itself?(need) and
+      Enum.any?(sources.own, &(&1.attach_only and entry_fit(need, &1) != :none))
+  end
+
+  defp attach_only_held?(_sources, _need, _candidates), do: false
 
   defp suggested_source(%{suggested: %{entry_id: _}}), do: "own"
   defp suggested_source(%{suggested: %{instance_entry_id: _}}), do: "instance"
@@ -548,7 +586,7 @@ defmodule Sanctum.Consent.Plan do
 
   # A required credential need nothing can meet is satisfiable only after
   # the person creates an entry — say so up front, naming the need and
-  # its provider; a need the component reads itself says so, and names
+  # the hosts it calls; a need the component reads itself says so, and names
   # the newer version the media ships when there is one. Then what the
   # closure's `provides` blocks cannot provide.
   defp need_warnings(needs, provided_notes) do
@@ -565,14 +603,15 @@ defmodule Sanctum.Consent.Plan do
   end
 
   defp need_warning(need) do
-    "need '#{need.need}' wants #{kind_words(need)}, and none can yet — create one first"
+    "need '#{need.need}' wants #{kind_words(need)}, and none can yet. Create one first."
   end
 
   defp kind_words(%{kind: "oauth"} = need) do
-    "oauth entry for #{need.provider} granting #{Enum.join(scope_set(need.scopes), ", ")}"
+    "oauth entry for #{Enum.join(need.hosts, ", ")} granting " <>
+      Enum.join(scope_set(need.scopes), ", ")
   end
 
-  defp kind_words(need), do: "#{need.kind} entry for #{need.provider}"
+  defp kind_words(need), do: "#{need.kind} entry for #{Enum.join(need.hosts, ", ")}"
 
   defp newer_words(%{newer_shipped: version}) when is_binary(version),
     do: ", or update to version #{version}, which the release ships"
@@ -656,8 +695,9 @@ defmodule Sanctum.Consent.Plan do
         }
   def need_choice(ctx, sources, need, facts) do
     candidates =
-      Enum.flat_map(sources.own, &own_candidate(&1, need)) ++
-        Enum.flat_map(sources.offered, &instance_candidate(ctx, &1, need, facts))
+      (Enum.flat_map(sources.own, &own_candidate(&1, need)) ++
+         Enum.flat_map(sources.offered, &instance_candidate(ctx, &1, need, facts)))
+      |> Enum.sort_by(&rank/1)
 
     suggested = suggestion(candidates, sources, need)
 
@@ -685,8 +725,10 @@ defmodule Sanctum.Consent.Plan do
         destination: canonical_destination(entry.destination),
         disclosed: not entry.attach_only
       }
+      |> with_fields(entry.field_names, need)
+      |> with_fit(entry, need)
 
-    if matches?(candidate, entry.oauth_scopes, need) and
+    if meets?(candidate, entry.oauth_scopes, need) and mappable?(candidate, need) and
          (candidate.disclosed or not reads_itself?(need)),
        do: [candidate],
        else: []
@@ -705,20 +747,99 @@ defmodule Sanctum.Consent.Plan do
         destination: canonical_destination(entry.destination),
         disclosed: false
       }
+      |> with_fields(entry.field_names, need)
+      |> with_fit(entry, need)
 
-    if not reads_itself?(need) and matches?(candidate, [], need) and
+    if not reads_itself?(need) and meets?(candidate, [], need) and mappable?(candidate, need) and
          Sanctum.InstanceEntries.admits?(ctx, entry, facts),
        do: [candidate],
        else: []
   end
 
   # The `@ingress` slot of a manifest declaring no needs names no kind or
-  # provider: any disclosed entry may meet it.
-  defp matches?(_candidate, _scopes, nil), do: true
+  # destination: any disclosed entry may meet it.
+  defp meets?(_candidate, _scopes, nil), do: true
 
-  defp matches?(candidate, scopes, need) do
-    candidate.kind == need.kind and candidate.provider == need.qualifier and
-      scopes_met?(candidate, scopes, need)
+  defp meets?(candidate, scopes, need),
+    do: candidate.fit != nil and scopes_met?(candidate, scopes, need)
+
+  defp with_fit(candidate, _entry, nil), do: Map.merge(candidate, %{fit: nil, label_match: false})
+
+  defp with_fit(candidate, entry, need) do
+    fit =
+      case entry_fit(need, entry) do
+        :exact -> "exact"
+        :wildcard -> "wildcard"
+        :none -> nil
+      end
+
+    label_match = entry.provider_hint != "" and entry.provider_hint == need.qualifier
+    Map.merge(candidate, %{fit: fit, label_match: label_match})
+  end
+
+  # The offer's order: the need's own label first, an exact fit before a
+  # wildcard one, the athanor's entry before an instance entry, then name
+  # and id, so the order is total.
+  defp rank(candidate) do
+    {not candidate.label_match, candidate.fit == "wildcard", candidate.source != "own",
+     candidate.name, Map.get(candidate, :entry_id) || Map.get(candidate, :instance_entry_id)}
+  end
+
+  @doc """
+  How `entry` can serve the declared credential `need` by where it may
+  go: `Prima.Manifest.Needs.fit/2` of its destination, `:exact`,
+  `:wildcard` or `:none`. An entry of another kind, or whose destination
+  does not parse, is `:none`. `entry` names its `kind` and its
+  `destination`, a `Prima.Destination` or the map `Prima.Destination.to_map/1`
+  writes. The plan's candidates, the commit's bindings and selections
+  and the provisioning walk all decide by it.
+  """
+  @spec entry_fit(map(), map()) :: :exact | :wildcard | :none
+  def entry_fit(%{kind: kind} = need, %{kind: kind, destination: destination}) do
+    case destination do
+      %Prima.Destination{} ->
+        Prima.Manifest.Needs.fit(need, destination)
+
+      %{} = map ->
+        case Prima.Destination.from_map(map) do
+          {:ok, parsed} -> Prima.Manifest.Needs.fit(need, parsed)
+          {:error, _} -> :none
+        end
+
+      _absent ->
+        :none
+    end
+  end
+
+  def entry_fit(_need, _entry), do: :none
+
+  defp with_fields(candidate, field_names, need) do
+    names = field_names |> Enum.uniq() |> Enum.sort()
+    Map.merge(candidate, %{field_names: names, fields: field_map(need, names)})
+  end
+
+  # No map is total over an entry with no fields, so an entry holding none
+  # meets no need that reads a field.
+  defp mappable?(%{field_names: []}, %{fields: [_ | _]}), do: false
+  defp mappable?(_candidate, _need), do: true
+
+  @doc """
+  The automatic field map of `need` over an entry holding `field_names`:
+  each field the need reads to itself when the entry holds every one, or
+  the need's one field to the entry's one field, else nil, and the
+  person chooses the map. The `@ingress` slot of a manifest declaring no
+  needs (`need` nil) reads the entry's own fields, each as itself; an
+  OAuth need declaring no fields maps none.
+  """
+  @spec field_map(map() | nil, [String.t()]) :: %{optional(String.t()) => String.t()} | nil
+  def field_map(nil, field_names), do: Map.new(field_names, &{&1, &1})
+
+  def field_map(%{fields: need_fields}, field_names) do
+    cond do
+      Enum.all?(need_fields, &(&1 in field_names)) -> Map.new(need_fields, &{&1, &1})
+      match?({[_], [_]}, {need_fields, field_names}) -> %{hd(need_fields) => hd(field_names)}
+      true -> nil
+    end
   end
 
   # An OAuth candidate holds exactly the need's scopes: its token is
@@ -737,14 +858,11 @@ defmodule Sanctum.Consent.Plan do
 
   defp canonical_destination(_absent), do: nil
 
-  # The default of the need's provider when it is a candidate (the two
+  # The default of the need's qualifier when it is a candidate (the two
   # are separate reads, so a default naming none suggests nothing here),
-  # else the only candidate, else the one instance candidate when the
-  # athanor holds no active entry of the provider.
-  defp suggestion(candidates, sources, need) do
-    default_candidate(candidates, sources, need) || only(candidates) ||
-      offered_alone(candidates, sources, need)
-  end
+  # else the only candidate.
+  defp suggestion(candidates, sources, need),
+    do: default_candidate(candidates, sources, need) || only(candidates)
 
   defp default_candidate(_candidates, _sources, nil), do: nil
 
@@ -765,36 +883,43 @@ defmodule Sanctum.Consent.Plan do
   defp only([candidate]), do: identity(candidate)
   defp only(_none_or_several), do: nil
 
-  defp offered_alone(_candidates, _sources, nil), do: nil
-
-  defp offered_alone(candidates, sources, need) do
-    held? = Enum.any?(sources.own, &(&1.provider_hint == need.qualifier))
-
-    case Enum.filter(candidates, &(&1.source == "instance")) do
-      [instance] when not held? -> identity(instance)
-      _ -> nil
-    end
-  end
-
   defp identity(%{source: "own", entry_id: id}), do: %{entry_id: id}
   defp identity(%{source: "instance", instance_entry_id: id}), do: %{instance_entry_id: id}
-
-  # The athanor's active entries.
-  defp candidates(ctx) do
-    with {:ok, entries} <- Sanctum.Vault.list(ctx),
-         do: {:ok, Enum.filter(entries, &(&1.status == "active"))}
-  end
 
   # What the profile's head holds: the origins it admits and its bindings.
   # A first grant, or a profile with no head, holds none.
   defp head_facts(:none, _reads), do: %{origins: nil, bindings: []}
 
   defp head_facts({:ok, head, _profile_id}, reads) do
+    held = held_field_maps(head)
+
     %{
       origins: Prima.Origin.to_wire_list(head.admitted_origins),
-      bindings: Enum.map(head.vault_refs, &head_binding(&1, reads))
+      bindings: Enum.map(head.vault_refs, &head_binding(&1, held, reads))
     }
   end
+
+  # The field map each bound entry of the head's blob holds, by its
+  # binding key. A damaged head holds none here; the plan refuses it
+  # through its narrowing (`held_narrowing/3`).
+  defp held_field_maps(head) do
+    case Sanctum.Consent.Loader.head_blob(head) do
+      {:ok, blob} ->
+        for {_node, %{edges: edges}} <- blob.nodes,
+            {_key, %{vault: vault}} <- edges,
+            bound <- bound_with_named(vault),
+            into: %{},
+            do: {bound.binding_key, bound.projection.fields}
+
+      {:error, _damaged} ->
+        %{}
+    end
+  end
+
+  defp bound_with_named(%{entry_id: _} = vault),
+    do: [vault | vault |> Map.get(:named, %{}) |> Map.values()]
+
+  defp bound_with_named(_selected_provided_or_none), do: []
 
   # What changed against the head when the shape moved
   # (`Sanctum.Consent.ShapeDiff`): nothing for a first grant or an
@@ -1136,12 +1261,13 @@ defmodule Sanctum.Consent.Plan do
   # the commit reads the row (`Commit.head_place/2`), which of the three it
   # binds (`source`), where it sits and the need it was bound for. A row
   # whose key or binding cannot be read is placed nowhere.
-  defp head_binding(ref, reads) do
+  defp head_binding(ref, held, reads) do
     %{
       binding_key: ref.binding_key,
       lifetime: %{kind: ref.lifetime_kind, until: until_of(ref.expires_at)},
       consumed: is_binary(ref.consumed_by_root)
     }
+    |> Prima.MapUtil.put_present(:fields, if(is_nil(ref.via_label), do: held[ref.binding_key]))
     |> Prima.MapUtil.put_present(:entry_id, ref.vault_entry_id)
     |> Prima.MapUtil.put_present(:instance_entry_id, ref.instance_entry_id)
     |> Prima.MapUtil.put_present(:label, ref.via_label)
@@ -1531,8 +1657,8 @@ defmodule Sanctum.Consent.Plan do
                source: lent.source,
                entry_id: lent.id,
                entry_name: lent.name,
-               fields: projected(vault.projection, :fields),
-               scopes: projected(vault.projection, :scopes)
+               fields: vault.projection.fields,
+               scopes: vault.projection.scopes
              }
            ]}
 
@@ -1546,9 +1672,6 @@ defmodule Sanctum.Consent.Plan do
       _no_entry_on_ingress -> {:ok, []}
     end
   end
-
-  defp projected(%{} = projection, key), do: Map.get(projection, key) || []
-  defp projected(_none, _key), do: []
 
   # The entry a lender's binding names, usable by this person at the
   # digest the lender bound: the athanor's own, or an instance entry as it

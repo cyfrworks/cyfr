@@ -27,7 +27,7 @@ defmodule Sanctum.Providers.PersonRotationTest do
   alias Prima.Identity
   alias Prima.Identity.Entry
   alias Sanctum.{Cipher, CipherAAD, Context}
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   # A directory this home cannot reach: a loopback port nothing listens on.
   @unreachable "https://localhost:1"
@@ -45,7 +45,7 @@ defmodule Sanctum.Providers.PersonRotationTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|rotation-tool-#{n}",
         provider: "github",
         email: "rotation-tool#{n}@example.com",

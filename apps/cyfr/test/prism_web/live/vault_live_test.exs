@@ -3,21 +3,16 @@
 
 defmodule PrismWeb.VaultLiveTest do
   @moduledoc """
-  Tests sign-in gating, vault-entry server references, the provider a new
-  entry is made for, the destination and disclosure it names, and
-  management of operator OAuth client credentials on the Vault page.
+  Tests sign-in gating, vault-entry server references, the create form
+  and the entry it makes, the grants each row names, and management of
+  operator OAuth client credentials on the Vault page.
 
-  A new entry is made for a need one of the athanor's components names:
-  the form offers each `api_key` and `bundle` need the grant plan answers,
-  a dependency's at the version its dependent pins included, by provider
-  and kind, and the entry it makes is a candidate for that need. A choice
-  the needs no longer offer when the form is sent makes nothing. A
-  component list, or a component's plan, that cannot be read, and an
-  athanor whose components name none, offer no create; a component whose
-  plan is refused as damage, or for a class the page does not know, is
-  named beside the rest, one removed before its plan is read is left
-  out, a dependency a plan marks unresolved is named with the component
-  that needs it, and a list cut short says so.
+  The create form makes an entry of whatever the person names, with no
+  component installed: a kind it makes, an optional label the installed
+  components' providers suggest, fields under any name, and a destination.
+  A needs list that cannot be read suggests less and blocks nothing. Each
+  row names the grants that bind its entry, or says nothing uses it, and
+  says once when those grants cannot be read.
 
   Storing client credentials is a sensitive change: the page asks
   through its system layer, and nothing is stored until the person
@@ -31,9 +26,6 @@ defmodule PrismWeb.VaultLiveTest do
   import Prima.Test.Wait
 
   @wasm Cyfr.Test.Guests.wasm(:reagent)
-
-  # The need the shipped OpenAI catalyst names, as the create form offers it.
-  @openai "api_key:openai.com"
 
   # A component of the seated athanor naming `needs` (need name => type),
   # registered as an installed one is.
@@ -61,80 +53,30 @@ defmodule PrismWeb.VaultLiveTest do
     :ok
   end
 
-  # A manifest's needs block, each need's type as given; an OAuth need
+  # A manifest's needs block, each need's type as given and calling the
+  # host `api.<provider>`, which the manifest's egress names; an OAuth need
   # names the scopes it reads, as a grant plan requires of one.
   defp needs(needs) do
-    %{
-      "needs" =>
-        Map.new(needs, fn {need, type} ->
-          declared = %{"type" => type, "reason" => "to test the create form", "fields" => ["KEY"]}
+    declared =
+      Map.new(needs, fn {need, type} ->
+        [_kind, provider] = String.split(type, ":", parts: 2)
 
-          if String.starts_with?(type, "oauth:"),
-            do: {need, Map.put(declared, "scopes", ["read"])},
-            else: {need, declared}
-        end)
-    }
+        declared = %{
+          "type" => type,
+          "reason" => "to test the create form",
+          "fields" => ["KEY"],
+          "hosts" => ["api.#{provider}"]
+        }
+
+        if String.starts_with?(type, "oauth:"),
+          do: {need, Map.put(declared, "scopes", ["read"])},
+          else: {need, declared}
+      end)
+
+    hosts = declared |> Map.values() |> Enum.flat_map(& &1["hosts"]) |> Enum.uniq()
+    caps = if hosts == [], do: %{}, else: %{"caps" => %{"egress" => %{"domains" => hosts}}}
+    Map.put(caps, "needs", declared)
   end
-
-  # `count` later releases of one component, written as the registry
-  # holds a release row, each newer than every component registered
-  # before: the rows `component.list` answers first.
-  defp later_releases!(name, count, manifest \\ %{}) do
-    actor = Sanctum.Context.actor(seed_ctx())
-    base = DateTime.utc_now() |> DateTime.add(3600, :second) |> DateTime.truncate(:microsecond)
-
-    for i <- 1..count do
-      version = "2.0.#{i}"
-
-      manifest =
-        Map.merge(manifest, %{
-          "name" => name,
-          "type" => "reagent",
-          "version" => version,
-          "publisher" => "local"
-        })
-
-      digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name <> version), case: :lower)
-      {:ok, release_digest} = Compendium.ReleaseDigest.compute(digest, manifest)
-      at = DateTime.add(base, i, :microsecond)
-
-      {:ok, _} =
-        Arca.ComponentStorage.put_component(actor, %{
-          id: "cmp_#{name}_#{i}",
-          name: name,
-          version: version,
-          component_type: "reagent",
-          description: "a later release",
-          tags: "[]",
-          digest: digest,
-          release_digest: release_digest,
-          size: 100,
-          exports: "[]",
-          manifest: Jason.encode!(manifest),
-          publisher: "local",
-          publisher_id: "local|local|testns",
-          source: Compendium.Source.filesystem(),
-          signature_verified: false,
-          inserted_at: at,
-          updated_at: at
-        })
-    end
-
-    Arca.Cache.delete_match(:_)
-  end
-
-  # A registered component whose stored manifest no longer decodes.
-  defp damage_manifest!(name) do
-    Arca.Repo.query!("UPDATE components SET manifest = '{not json' WHERE name = '#{name}'")
-    Arca.Cache.delete_match(:_)
-  end
-
-  defp made(ctx) do
-    {:ok, entries} = Sanctum.Vault.list(ctx)
-    for entry <- entries, do: {entry.name, entry.kind, entry.provider_hint}
-  end
-
-  defp refused_line(ref), do: ~s([data-test="create-needs-refused"][data-ref="#{ref}"])
 
   # The text of each element `selector` finds, as a person reads it: its
   # words, one space apart.
@@ -146,47 +88,24 @@ defmodule PrismWeb.VaultLiveTest do
     |> Enum.map(&(&1 |> LazyHTML.text() |> String.replace(~r/\s+/, " ") |> String.trim()))
   end
 
-  # The plan's own sentence for `ref`, ended once, as the page names it.
-  defp plan_sentence(ctx, ref) do
-    {:error, reason} = PrismWeb.Ops.call_tool(ctx, "profile/plan", %{"ref" => ref})
-    String.trim_trailing(PrismWeb.Ops.error_message(reason), ".") <> "."
-  end
-
-  # The shipped OpenAI catalyst, at its newest shipped version and with
-  # its own manifest, registered in the seated athanor.
-  defp install_openai! do
-    unit = Cyfr.Test.SeedBundle.local_unit!("catalysts", "openai")
-    Cyfr.Test.SeedBundle.isolate!()
-
-    {:ok, _} =
-      Arca.Test.UnitFixtures.ship_and_register!(
-        seed_ctx(),
-        "catalyst",
-        "local",
-        "openai",
-        unit.version,
-        manifest: unit.manifest,
-        wasm: Cyfr.Test.Guests.wasm(:catalyst)
-      )
-
-    :ok
-  end
-
   defp seed_ctx,
     do:
       Sanctum.Context.internal(user_id: "_test", athanor_id: seated_athanor().id, scope: :athanor)
 
-  # The entries the shipped OpenAI need's plan names as its candidates.
-  defp openai_candidates(ctx) do
-    {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: "catalyst:local.openai"})
-    need = Enum.find(plan.needs, &(&1.need == "api_key"))
-    need.candidates |> Enum.map(& &1[:entry_id]) |> Enum.sort()
+  # The labels the create form suggests, as its list offers them.
+  defp label_options(view) do
+    view
+    |> element("datalist#vault-create-labels")
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("option")
+    |> Enum.map(&(&1 |> LazyHTML.attribute("value") |> hd()))
   end
 
-  # The create form's provider choice, as `{value, label}` per option.
-  defp need_options(view) do
+  # The create form's kinds, as `{value, words}` per option.
+  defp kind_options(view) do
     view
-    |> element(~s(#vault-create-form select[name="need"]))
+    |> element(~s(#vault-create-form select[name="kind"]))
     |> render()
     |> LazyHTML.from_fragment()
     |> LazyHTML.query("option")
@@ -196,14 +115,17 @@ defmodule PrismWeb.VaultLiveTest do
     end)
   end
 
-  @needs_unread "The keys your components need cannot be read right now — try again."
-  @no_need "No component here needs a key yet — install one first."
-  @not_offered "Choose the provider this key is for"
-  @no_longer_needed "That key is no longer needed here — choose again."
-  @unconfirmed "Whether that key is still needed could not be read, so nothing was made."
-  @cut "Only the 1000 newest component versions were read, so a key one of the others " <>
-         "needs may be missing here — make it with " <>
-         ~s(cyfr call vault '{"action":"create",…,"provider_hint":"…"}'.)
+  # The material an entry holds, unsealed as the vault reads it.
+  defp material!(ctx, id) do
+    {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), id)
+    aad = Sanctum.CipherAAD.vault_entry(ctx.athanor_id, id, row.provider_hint)
+    {:ok, plaintext} = Sanctum.Cipher.decrypt(row.sealed_payload, aad)
+    {:ok, %{"fields" => fields}} = Sanctum.Vault.Payload.decode(plaintext)
+    fields
+  end
+
+  @not_a_kind "Choose whether the entry is an API key or a bundle of fields"
+  @uses_unread "Which grants use these entries could not be read right now."
 
   describe "GET /vault (unauthenticated)" do
     test "redirects to login", %{conn: conn} do
@@ -291,33 +213,23 @@ defmodule PrismWeb.VaultLiveTest do
        %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    install_needs!("vault-form-keyed", %{"api_key" => "api_key:example.com"})
     {view, _html} = mount_athanor(conn, "/vault")
     render_click(view, "show_add", %{"mode" => "fields"})
 
-    # The page reads the needs for the provider choice alone, so the
-    # person types the destination: no host is offered, and a component
-    # reading the value is off until they turn it on.
+    # The person types the destination: no host is offered, and a
+    # component reading the value is off until they turn it on.
     hosts = ~s(#vault-create-form input[name="destination_hosts"])
     assert has_element?(view, hosts <> "[required]")
     refute view |> element(hosts) |> render() =~ ~r/value="[^"]+"/
     assert has_element?(view, ~s(#vault-create-form input[type="checkbox"][name="disclose"]))
     refute has_element?(view, ~s(#vault-create-form input[name="disclose"][checked]))
 
-    ctx =
-      Sanctum.Context.build(
-        user_id: user.user_id,
-        athanor_id: seated_athanor().id,
-        permissions: [:*],
-        scope: :athanor,
-        auth_method: :oidc,
-        authenticated: true
-      )
+    ctx = seated_ctx(user)
 
     attached =
       create_confirmed!(view, ctx, %{
         "name" => "routed-#{System.unique_integer([:positive])}",
-        "need" => "api_key:example.com",
+        "kind" => "api_key",
         "fields" => "TOKEN=t0k3n",
         "destination_hosts" => "API.example.com",
         "destination_paths" => "/v1/"
@@ -334,7 +246,7 @@ defmodule PrismWeb.VaultLiveTest do
     disclosed =
       create_confirmed!(view, ctx, %{
         "name" => "read-#{System.unique_integer([:positive])}",
-        "need" => "api_key:example.com",
+        "kind" => "api_key",
         "fields" => "TOKEN=t0k3n",
         "destination_hosts" => "db.example.com",
         "destination_port" => "8443",
@@ -372,151 +284,202 @@ defmodule PrismWeb.VaultLiveTest do
     Cyfr.Test.Sandbox.end_views()
   end
 
-  describe "the provider a new entry is made for" do
-    test "an entry made through the form is stored with the provider of the need it was " <>
-           "made for, and that need sees it",
-         %{conn: conn} do
+  describe "the create form" do
+    test "the form creates an entry with no component installed", %{conn: conn} do
+      Cyfr.Test.SeedBundle.isolate!()
       user = test_user()
       conn = log_in_user(conn, user)
-      install_openai!()
       ctx = seated_ctx(user)
+      assert {:ok, %{components: []}} = PrismWeb.Ops.call_tool(ctx, "component/list", %{})
+
       {view, _html} = mount_athanor(conn, "/vault")
       render_click(view, "show_add", %{"mode" => "fields"})
-      name = "openai-#{System.unique_integer([:positive])}"
 
-      typed = %{
-        "name" => name,
-        "fields" => "OPENAI_API_KEY=sk-first",
-        "destination_hosts" => "api.openai.com"
-      }
+      # Every input the form asks for, and nothing a need decides.
+      assert has_element?(view, ~s(#vault-create-form input[name="name"][required]))
+      assert has_element?(view, ~s(#vault-create-form select[name="kind"][required]))
+      assert kind_options(view) == [{"api_key", "API key"}, {"bundle", "Bundle of fields"}]
+      assert has_element?(view, ~s(#vault-create-form textarea[name="fields"][required]))
+      refute has_element?(view, ~s(#vault-create-form [name="need"]))
+      assert label_options(view) == []
 
-      # The choice rides beside what was typed rather than as a field the
-      # form must hold: what is held here is what the vault stored, read
-      # as its own list answers it, whatever the form drew.
-      chosen = %{"need" => @openai}
+      key =
+        create_confirmed!(view, ctx, %{
+          "name" => "free-#{System.unique_integer([:positive])}",
+          "kind" => "api_key",
+          "fields" => "KEY=k1",
+          "destination_hosts" => "api.example.com"
+        })
 
-      view |> form("#vault-create-form", typed) |> render_submit(chosen)
-      assert [%{ref: ref, operation: "vault.create"}] = open_records(ctx)
-      Sanctum.TestContext.prove!(ctx, ref)
-      assert_push_event(view, "system_layer:resubmit", %{form: "vault-create-form"}, 2_000)
-      view |> form("#vault-create-form", typed) |> render_submit(chosen)
+      bundle =
+        create_confirmed!(view, ctx, %{
+          "name" => "bundle-#{System.unique_integer([:positive])}",
+          "kind" => "bundle",
+          "fields" => "URL=https://x.example.com\nKEY=k2",
+          "destination_hosts" => "x.example.com"
+        })
 
-      {:ok, entries} = Sanctum.Vault.list(ctx)
-      stored = Enum.find(entries, &(&1.name == name))
+      assert Map.take(key, [:kind, :provider_hint, :field_names, :status]) ==
+               %{kind: "api_key", provider_hint: "", field_names: ["KEY"], status: "active"}
 
-      assert {Map.take(stored, [:kind, :provider_hint]), openai_candidates(ctx)} ==
-               {%{kind: "api_key", provider_hint: "openai.com"}, [stored.id]}
+      assert Map.take(bundle, [:kind, :provider_hint, :field_names, :status]) ==
+               %{kind: "bundle", provider_hint: "", field_names: ["KEY", "URL"], status: "active"}
+
+      assert render(view) =~ "Entry created."
     end
 
-    test "the form offers each api_key and bundle need once, by provider and kind, with no " <>
-           "free text; a second entry for one provider is a second candidate for its need",
+    test "the label is optional and suggests the installed components' providers",
          %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      install_openai!()
 
       install_needs!("vault-form-mixed", %{
-        "model" => @openai,
+        "model" => "api_key:openai.com",
         "store" => "bundle:supabase.com",
         "drive" => "oauth:google.com"
       })
 
+      install_needs!("vault-form-again", %{"model" => "api_key:openai.com"})
       ctx = seated_ctx(user)
       {view, _html} = mount_athanor(conn, "/vault")
       render_click(view, "show_add", %{"mode" => "fields"})
 
-      # One required choice: the OpenAI need two components name appears
-      # once, and the OAuth need is left to the OAuth form.
-      assert has_element?(view, ~s(#vault-create-form select[name="need"][required]))
+      # Each provider of a kind the form makes once, sorted; an OAuth need's
+      # is made through the OAuth form. The input takes them as suggestions
+      # and requires none.
+      assert label_options(view) == ["openai.com", "supabase.com"]
 
-      assert need_options(view) == [
-               {"", "Choose a provider"},
-               {@openai, "openai.com (api_key)"},
-               {"bundle:supabase.com", "supabase.com (bundle)"}
-             ]
+      assert has_element?(
+               view,
+               ~s(#vault-create-form input[name="provider_hint"][list="vault-create-labels"])
+             )
 
-      refute has_element?(view, ~s(#vault-create-form [name="kind"]))
-      refute has_element?(view, ~s(#vault-create-form [name="provider_hint"]))
-      refute has_element?(view, ~s(#vault-create-form input[name="need"]))
+      refute has_element?(view, ~s(#vault-create-form input[name="provider_hint"][required]))
 
-      typed = fn key ->
-        %{
-          "name" => "openai-#{System.unique_integer([:positive])}",
-          "need" => @openai,
-          "fields" => "OPENAI_API_KEY=#{key}",
+      labelled =
+        create_confirmed!(view, ctx, %{
+          "name" => "labelled-#{System.unique_integer([:positive])}",
+          "kind" => "api_key",
+          "provider_hint" => " openai.com ",
+          "fields" => "OPENAI_API_KEY=sk-1",
           "destination_hosts" => "api.openai.com"
-        }
+        })
+
+      unlabelled =
+        create_confirmed!(view, ctx, %{
+          "name" => "unlabelled-#{System.unique_integer([:positive])}",
+          "kind" => "api_key",
+          "provider_hint" => "",
+          "fields" => "OPENAI_API_KEY=sk-2",
+          "destination_hosts" => "api.openai.com"
+        })
+
+      assert {labelled.provider_hint, unlabelled.provider_hint} == {"openai.com", ""}
+
+      # The labelled entry is its label's default, as the first of a label
+      # is; the one with none is no provider's default.
+      assert Sanctum.Vault.defaults(ctx) ==
+               {:ok, %{"openai.com" => %{vault_entry_id: labelled.id}}}
+    end
+
+    test "a field named `API key` is stored as written", %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      ctx = seated_ctx(user)
+      {view, _html} = mount_athanor(conn, "/vault")
+      key = "xai-#{System.unique_integer([:positive])}"
+
+      entry =
+        create_confirmed!(view, ctx, %{
+          "name" => "My xAI key",
+          "kind" => "api_key",
+          "fields" => "API key=#{key}",
+          "destination_hosts" => "api.x.ai"
+        })
+
+      assert entry.field_names == ["API key"]
+      assert material!(ctx, entry.id) == %{"API key" => key}
+      assert has_element?(view, "td", "API key")
+    end
+
+    test "an unread needs list blocks nothing", %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      install_needs!("vault-form-store", %{"store" => "bundle:supabase.com"})
+      ctx = seated_ctx(user)
+      {view, _html} = mount_athanor(conn, "/vault")
+
+      # The component list cannot be read, then the plans meet a store that
+      # cannot answer: the form is drawn whole each time, suggesting nothing.
+      for table <- ~w(components vault_entries) do
+        {_html, _log} =
+          ExUnit.CaptureLog.with_log(fn ->
+            hide_table!(table)
+            html = render_click(view, "show_add", %{"mode" => "fields"})
+            restore_table!(table)
+            html
+          end)
+
+        assert has_element?(view, "#vault-create-form button[type=submit]", "Create entry"),
+               table
+
+        assert label_options(view) == [], table
+        render_click(view, "show_add", %{"mode" => "fields"})
       end
 
-      first = create_confirmed!(view, ctx, typed.("sk-first"))
-      assert {first.kind, first.provider_hint} == {"api_key", "openai.com"}
-      assert openai_candidates(ctx) == [first.id]
+      # An entry is made from the form drawn while nothing could be read.
+      hide_table!("components")
 
-      second = create_confirmed!(view, ctx, typed.("sk-second"))
-      assert {second.kind, second.provider_hint} == {"api_key", "openai.com"}
-      assert openai_candidates(ctx) == Enum.sort([first.id, second.id])
+      {_html, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          render_click(view, "show_add", %{"mode" => "fields"})
+        end)
 
-      bundle =
+      restore_table!("components")
+
+      made =
         create_confirmed!(view, ctx, %{
-          "name" => "supabase-#{System.unique_integer([:positive])}",
-          "need" => "bundle:supabase.com",
+          "name" => "unread-#{System.unique_integer([:positive])}",
+          "kind" => "bundle",
+          "provider_hint" => "supabase.com",
           "fields" => "SUPABASE_URL=https://x.supabase.co\nSUPABASE_KEY=k",
           "destination_hosts" => "x.supabase.co"
         })
 
-      assert {bundle.kind, bundle.provider_hint} == {"bundle", "supabase.com"}
+      assert {made.kind, made.provider_hint} == {"bundle", "supabase.com"}
+
+      # Read again once the store answers, the label is suggested.
+      render_click(view, "show_add", %{"mode" => "fields"})
+      assert label_options(view) == ["supabase.com"]
     end
 
-    test "a choice the page did not offer makes nothing: free text, a kind no need names, an " <>
-           "OAuth need, no choice, or the vault's own arguments typed",
-         %{conn: conn} do
+    test "a kind the form does not make is refused, and nothing is asked", %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      install_openai!()
-      install_needs!("vault-form-oauth", %{"drive" => "oauth:google.com"})
       ctx = seated_ctx(user)
       {view, _html} = mount_athanor(conn, "/vault")
       render_click(view, "show_add", %{"mode" => "fields"})
 
       typed = %{
         "name" => "forged-#{System.unique_integer([:positive])}",
-        "fields" => "OPENAI_API_KEY=sk-forged",
-        "destination_hosts" => "api.openai.com"
+        "fields" => "KEY=k",
+        "destination_hosts" => "api.example.com"
       }
 
-      for forged <- [
-            %{"need" => "api_key:evil.example"},
-            %{"need" => "openai.com"},
-            %{"need" => "bundle:openai.com"},
-            %{"need" => "oauth:google.com"},
-            %{"need" => ""},
-            %{},
-            %{"kind" => "api_key", "provider_hint" => "openai.com"}
-          ] do
+      for forged <- [%{"kind" => "oauth"}, %{"kind" => "API key"}, %{"kind" => ""}, %{}] do
         render_click(view, "lv:clear-flash", %{})
         html = render_submit(view, "create", Map.merge(typed, forged))
-        assert html =~ @not_offered, "#{inspect(forged)} was not refused"
+        assert html =~ @not_a_kind, "#{inspect(forged)} was not refused"
         assert open_records(ctx) == [], "#{inspect(forged)} was asked for"
       end
 
       assert {:ok, []} = Sanctum.Vault.list(ctx)
-
-      # A kind sent beside an offered choice is not read: the need's is.
-      with_kind = Map.merge(typed, %{"need" => @openai, "kind" => "bundle"})
-      render_submit(view, "create", with_kind)
-      assert [%{ref: ref, operation: "vault.create"}] = open_records(ctx)
-      Sanctum.TestContext.prove!(ctx, ref)
-      assert_push_event(view, "system_layer:resubmit", %{form: "vault-create-form"}, 2_000)
-      render_submit(view, "create", with_kind)
-
-      assert {:ok, [%{kind: "api_key", provider_hint: "openai.com"}]} = Sanctum.Vault.list(ctx)
     end
 
     test "a create still asks a fresh confirmation, and nothing is stored until it is given",
          %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      install_openai!()
       ctx = seated_ctx(user)
       {view, _html} = mount_athanor(conn, "/vault")
       render_click(view, "show_add", %{"mode" => "fields"})
@@ -524,7 +487,7 @@ defmodule PrismWeb.VaultLiveTest do
 
       typed = %{
         "name" => "confirmed-#{System.unique_integer([:positive])}",
-        "need" => @openai,
+        "kind" => "api_key",
         "fields" => "OPENAI_API_KEY=#{key}",
         "destination_hosts" => "api.openai.com"
       }
@@ -549,624 +512,156 @@ defmodule PrismWeb.VaultLiveTest do
       view |> form("#vault-create-form", typed) |> render_submit()
 
       assert {:ok, [entry]} = Sanctum.Vault.list(ctx)
-
-      assert {entry.name, entry.kind, entry.provider_hint} ==
-               {typed["name"], "api_key", "openai.com"}
-
+      assert {entry.name, entry.kind, entry.provider_hint} == {typed["name"], "api_key", ""}
       assert open_records(ctx) == []
       assert render(view) =~ "Entry created."
     end
-
-    test "a component list, or a component's plan, that cannot be read is said as such, " <>
-           "with no create, never as no need and never component by component",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      install_openai!()
-      install_needs!("vault-form-store", %{"store" => "bundle:supabase.com"})
-      {view, _html} = mount_athanor(conn, "/vault")
-
-      # The component list cannot be read.
-      hide_table!("components")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      restore_table!("components")
-      assert_needs_unread(view)
-      render_click(view, "show_add", %{"mode" => "fields"})
-
-      # The list reads, and the plans meet a store that cannot answer: an
-      # outage, read on its class, leaves the whole list unread.
-      for table <- ~w(vault_entries profiles) do
-        hide_table!(table)
-        render_click(view, "show_add", %{"mode" => "fields"})
-        restore_table!(table)
-
-        assert_needs_unread(view)
-        refute has_element?(view, ~s([data-test="create-needs-refused"])), table
-        render_click(view, "show_add", %{"mode" => "fields"})
-      end
-
-      # Read again once the store answers, the needs are offered.
-      render_click(view, "show_add", %{"mode" => "fields"})
-      refute has_element?(view, ~s([data-test="create-needs-refused"]))
-
-      assert need_options(view) == [
-               {"", "Choose a provider"},
-               {@openai, "openai.com (api_key)"},
-               {"bundle:supabase.com", "supabase.com (bundle)"}
-             ]
-    end
-
-    test "a component whose plan is refused is named with its plan's sentence, beside the " <>
-           "needs of the rest",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      install_openai!()
-      install_needs!("vault-form-damaged", %{"key" => "api_key:damaged.example"})
-      damage_manifest!("vault-form-damaged")
-      ctx = seated_ctx(user)
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      damaged = plan_sentence(ctx, "reagent:local.vault-form-damaged")
-
-      assert texts(view, ~s([data-test="create-needs-refused"])) == [
-               "The keys reagent:local.vault-form-damaged needs could not be read: #{damaged}"
-             ]
-
-      assert has_element?(view, refused_line("reagent:local.vault-form-damaged"))
-
-      assert need_options(view) == [{"", "Choose a provider"}, {@openai, "openai.com (api_key)"}]
-      refute render(view) =~ @needs_unread
-    end
-
-    test "a dependency stored damaged is named through its dependent's unresolved plan and " <>
-           "its own refused one",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      ctx = seated_ctx(user)
-      register!("reagent", "vault-form-dep", "1.0.0", needs(%{"key" => "api_key:dep.example"}))
-
-      register!("reagent", "vault-form-app", "1.0.0", %{
-        "dependencies" => %{"static" => [%{"ref" => "reagent:local.vault-form-dep:1.0.0"}]}
-      })
-
-      damage_manifest!("vault-form-dep")
-
-      # The dependent's plan names the damaged dependency unresolved.
-      assert {:ok, plan} =
-               PrismWeb.Ops.call_tool(ctx, "profile/plan", %{
-                 "ref" => "reagent:local.vault-form-app"
-               })
-
-      assert plan.unresolved == %{
-               reason: "corrupt_manifest",
-               missing: "reagent:local.vault-form-dep"
-             }
-
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      dep = plan_sentence(ctx, "reagent:local.vault-form-dep")
-
-      assert texts(view, ~s([data-test="create-needs-refused"])) == [
-               "The keys reagent:local.vault-form-app needs could not be read: its dependency " <>
-                 "reagent:local.vault-form-dep is stored damaged.",
-               "The keys reagent:local.vault-form-dep needs could not be read: #{dep}"
-             ]
-
-      # Nothing else names a key, so nothing is offered, and the page does
-      # not say no component needs one.
-      refute has_element?(view, "#vault-create-form")
-      refute render(view) =~ @no_need
-      refute render(view) =~ @needs_unread
-    end
-
-    # A dependency the plan marks unresolved is named with the component
-    # that needs it: its needs are not among the plan's, and are never left
-    # out unsaid.
-    test "a dependency whose pinned version is not installed is named through its " <>
-           "dependent's unresolved plan",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      register!("reagent", "vault-pin-dep", "2.0.0", needs(%{"key" => "api_key:pin.example"}))
-
-      register!("reagent", "vault-pin-app", "1.0.0", %{
-        "dependencies" => %{"static" => [%{"ref" => "reagent:local.vault-pin-dep:1.0.0"}]}
-      })
-
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-
-      assert texts(view, ~s([data-test="create-needs-refused"])) == [
-               "The keys reagent:local.vault-pin-app needs could not be read: its dependency " <>
-                 "reagent:local.vault-pin-dep is not installed, or its dependencies cannot be " <>
-                 "read."
-             ]
-
-      assert need_options(view) == [
-               {"", "Choose a provider"},
-               {"api_key:pin.example", "pin.example (api_key)"}
-             ]
-
-      refute render(view) =~ @needs_unread
-    end
-
-    test "an older pinned version stored damaged, its newest whole, is named through its " <>
-           "dependent's unresolved plan",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      register!("reagent", "vault-old-dep", "1.0.0", needs(%{"key" => "api_key:old.example"}))
-      register!("reagent", "vault-old-dep", "2.0.0", needs(%{"key" => "api_key:new.example"}))
-
-      register!("reagent", "vault-old-app", "1.0.0", %{
-        "dependencies" => %{"static" => [%{"ref" => "reagent:local.vault-old-dep:1.0.0"}]}
-      })
-
-      Arca.Repo.query!(
-        "UPDATE components SET manifest = '{not json' " <>
-          "WHERE name = 'vault-old-dep' AND version = '1.0.0'"
-      )
-
-      Arca.Cache.delete_match(:_)
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-
-      assert texts(view, ~s([data-test="create-needs-refused"])) == [
-               "The keys reagent:local.vault-old-app needs could not be read: its dependency " <>
-                 "reagent:local.vault-old-dep is stored damaged."
-             ]
-
-      # The newest version, whole, is listed on its own plan.
-      assert need_options(view) == [
-               {"", "Choose a provider"},
-               {"api_key:new.example", "new.example (api_key)"}
-             ]
-    end
-
-    # A component the athanor no longer holds by the time its plan is read
-    # needs nothing: it is left out, and nothing is said of it.
-    test "a component removed between the list and its plan is left out, unsaid",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      install_openai!()
-      register!("reagent", "vault-removed", "1.0.0", needs(%{"key" => "api_key:removed.example"}))
-      {view, _html} = mount_athanor(conn, "/vault")
-
-      remove_at_first_plan!("vault-removed")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      assert_received :removed
-
-      refute has_element?(view, ~s([data-test="create-needs-refused"]))
-      refute render(view) =~ @needs_unread
-      assert need_options(view) == [{"", "Choose a provider"}, {@openai, "openai.com (api_key)"}]
-    end
-
-    # A refusal of a class the page does not read for is the interim rule's:
-    # the component named with its plan's own sentence, the rest listed.
-    test "a plan refused for a class the page does not know names its component with the " <>
-           "plan's sentence",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      ctx = seated_ctx(user)
-      install_openai!()
-
-      # An OAuth need naming no scopes, which the grant plan refuses as an
-      # argument the manifest's author must fix.
-      register!("reagent", "vault-unknown", "1.0.0", %{
-        "needs" => %{
-          "drive" => %{"type" => "oauth:google.com", "reason" => "r", "fields" => ["KEY"]}
-        }
-      })
-
-      {:error, reason} =
-        PrismWeb.Ops.call_tool(ctx, "profile/plan", %{"ref" => "reagent:local.vault-unknown"})
-
-      refute Sanctum.Refusals.classify(reason).class in [:unavailable, :not_found, :corrupt]
-
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      sentence = plan_sentence(ctx, "reagent:local.vault-unknown")
-
-      assert texts(view, ~s([data-test="create-needs-refused"])) == [
-               "The keys reagent:local.vault-unknown needs could not be read: #{sentence}"
-             ]
-
-      assert need_options(view) == [{"", "Choose a provider"}, {@openai, "openai.com (api_key)"}]
-    end
-
-    test "a dependency's need at the version its dependent pins is offered, beside the need " <>
-           "of the dependency's newest version",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      ctx = seated_ctx(user)
-      register!("reagent", "probe-dep", "1.0.0", needs(%{"key" => "api_key:old.example"}))
-      register!("reagent", "probe-dep", "2.0.0", needs(%{"key" => "api_key:new.example"}))
-
-      register!("reagent", "probe-app", "1.0.0", %{
-        "dependencies" => %{"static" => [%{"ref" => "reagent:local.probe-dep:1.0.0"}]}
-      })
-
-      # The grant plan offers the pinned version's need, with nothing to
-      # meet it: the sheet's "Connect your old.example account".
-      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: "reagent:local.probe-app"})
-
-      assert [{"reagent:local.probe-dep", "api_key", "old.example", []}] ==
-               for(
-                 %{dep: dep, needs: rows} <- plan.dependency_needs,
-                 row <- rows,
-                 do: {dep, row.kind, row.provider, row.candidates}
-               )
-
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-
-      assert need_options(view) == [
-               {"", "Choose a provider"},
-               {"api_key:new.example", "new.example (api_key)"},
-               {"api_key:old.example", "old.example (api_key)"}
-             ]
-    end
-
-    test "a list cut at the most one read answers says so beside the needs it read, naming " <>
-           "the CLI for the rest",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      install_openai!()
-      later_releases!("probe-filler", 1000, needs(%{"key" => "api_key:filler.example"}))
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-
-      # The shipped OpenAI catalyst's row is past the cut, so its need is
-      # not listed, and the page says the list may be missing one.
-      assert texts(view, ~s([data-test="create-needs-cut"])) == [@cut]
-
-      assert need_options(view) == [
-               {"", "Choose a provider"},
-               {"api_key:filler.example", "filler.example (api_key)"}
-             ]
-
-      refute render(view) =~ @no_need
-    end
-
-    test "a need the grant plan offers behind the newest 1000 component rows is never read " <>
-           "as no need: the cut is said in place of installing one",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      ctx = seated_ctx(user)
-      install_openai!()
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      assert {@openai, "openai.com (api_key)"} in need_options(view)
-      render_click(view, "show_add", %{"mode" => "fields"})
-
-      later_releases!("probe-filler", 1000)
-
-      {:ok, %{components: rows}} =
-        PrismWeb.Ops.call_tool(ctx, "component/list", %{"limit" => 1000})
-
-      assert length(rows) == 1000
-      refute Enum.any?(rows, &(&1.name == "openai"))
-
-      # The grant plan still offers the need, with nothing to meet it: the
-      # sheet's "Connect your openai.com account".
-      {:ok, plan} = Sanctum.Consent.Plan.plan(ctx, %{ref: "catalyst:local.openai"})
-      need = Enum.find(plan.needs, &(&1.need == "api_key"))
-      assert {need.kind, need.provider, need.candidates} == {"api_key", "openai.com", []}
-
-      render_click(view, "show_add", %{"mode" => "fields"})
-
-      assert texts(view, ~s([data-test="create-needs-cut"])) == [@cut]
-      refute render(view) =~ @no_need
-      refute has_element?(view, "#vault-create-form")
-    end
-
-    test "a choice from a list that changed while the form was open makes nothing, and the " <>
-           "form is drawn again from the needs as they now read",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      ctx = seated_ctx(user)
-      register!("reagent", "probe-moved", "1.0.0", needs(%{"key" => "api_key:gone.example"}))
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      assert {"api_key:gone.example", "gone.example (api_key)"} in need_options(view)
-
-      # A newer version names another provider.
-      register!("reagent", "probe-moved", "2.0.0", needs(%{"key" => "api_key:other.example"}))
-
-      typed = %{
-        "name" => "stale-#{System.unique_integer([:positive])}",
-        "need" => "api_key:gone.example",
-        "fields" => "KEY=k",
-        "destination_hosts" => "api.gone.example"
-      }
-
-      view |> form("#vault-create-form", typed) |> render_submit()
-
-      assert open_records(ctx) == []
-      assert made(ctx) == []
-      assert texts(view, ~s([data-test="create-stale"])) == [@no_longer_needed]
-
-      assert need_options(view) == [
-               {"", "Choose a provider"},
-               {"api_key:other.example", "other.example (api_key)"}
-             ]
-    end
-
-    test "a choice for a component removed while the form was open makes nothing",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      ctx = seated_ctx(user)
-      install_openai!()
-      register!("reagent", "probe-gone", "1.0.0", needs(%{"key" => "api_key:gone.example"}))
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      assert {"api_key:gone.example", "gone.example (api_key)"} in need_options(view)
-
-      # The row ends as a removal ends it (the registry's own delete
-      # refuses a shipped unit, which is how the fixture registers).
-      Arca.ComponentStorage.delete_component(
-        Sanctum.Context.actor(seed_ctx()),
-        "probe-gone",
-        "1.0.0",
-        "local",
-        "reagent"
-      )
-
-      Arca.Cache.delete_match(:_)
-
-      typed = %{
-        "name" => "gone-#{System.unique_integer([:positive])}",
-        "need" => "api_key:gone.example",
-        "fields" => "KEY=k",
-        "destination_hosts" => "api.gone.example"
-      }
-
-      view |> form("#vault-create-form", typed) |> render_submit()
-
-      assert open_records(ctx) == []
-      assert made(ctx) == []
-      assert texts(view, ~s([data-test="create-stale"])) == [@no_longer_needed]
-      assert need_options(view) == [{"", "Choose a provider"}, {@openai, "openai.com (api_key)"}]
-    end
-
-    test "a confirmed choice the athanor no longer needs when the form is sent again makes " <>
-           "nothing, its confirmation let go, and the form is drawn again",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      ctx = seated_ctx(user)
-      register!("reagent", "probe-moved", "1.0.0", needs(%{"key" => "api_key:gone.example"}))
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-
-      typed = %{
-        "name" => "resent-#{System.unique_integer([:positive])}",
-        "need" => "api_key:gone.example",
-        "fields" => "KEY=k",
-        "destination_hosts" => "api.gone.example"
-      }
-
-      view |> form("#vault-create-form", typed) |> render_submit()
-      assert [%{ref: ref, operation: "vault.create"}] = open_records(ctx)
-
-      # The component changes while the confirmation waits.
-      register!("reagent", "probe-moved", "2.0.0", needs(%{"key" => "api_key:other.example"}))
-
-      Sanctum.TestContext.prove!(ctx, ref)
-      assert_push_event(view, "system_layer:resubmit", %{form: "vault-create-form"}, 2_000)
-      view |> form("#vault-create-form", typed) |> render_submit()
-
-      assert made(ctx) == []
-      assert record_state(ctx, ref) == "cancelled"
-
-      refute page_state(view) =~ "cnf_",
-             "the page still holds the secret of a change it will not make"
-
-      assert texts(view, ~s([data-test="create-stale"])) == [@no_longer_needed]
-
-      assert need_options(view) == [
-               {"", "Choose a provider"},
-               {"api_key:other.example", "other.example (api_key)"}
-             ]
-    end
-
-    # A need missing from the needs as they read at the send is no longer
-    # needed only when they read whole: with a plan that could not be read,
-    # a plan refused, a dependency unresolved, or the list cut, the need may
-    # sit in what was not read, so the page says so, and makes nothing
-    # either way.
-    test "a choice sent while a plan cannot be read is not called no longer needed: the " <>
-           "list is unread, and nothing is made",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      ctx = seated_ctx(user)
-      install_openai!()
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      assert {@openai, "openai.com (api_key)"} in need_options(view)
-
-      typed = %{
-        "name" => "refused-#{System.unique_integer([:positive])}",
-        "need" => @openai,
-        "fields" => "OPENAI_API_KEY=k",
-        "destination_hosts" => "api.openai.com"
-      }
-
-      hide_table!("profiles")
-      view |> form("#vault-create-form", typed) |> render_submit()
-      stale = texts(view, ~s([data-test="create-stale"]))
-      refused = texts(view, ~s([data-test="create-needs-refused"]))
-      restore_table!("profiles")
-
-      assert_needs_unread(view)
-      assert stale == []
-      assert refused == []
-      assert open_records(ctx) == []
-      assert made(ctx) == []
-      # Once the store answers, the grant plan still names the need, with
-      # no entry for it: it was never "no longer needed".
-      assert openai_candidates(ctx) == []
-    end
-
-    test "a choice whose dependency is stored damaged at the send is not called no longer " <>
-           "needed: the dependency is named, and nothing is made",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      ctx = seated_ctx(user)
-      register!("reagent", "vault-send-dep", "1.0.0", needs(%{"key" => "api_key:sent.example"}))
-
-      register!("reagent", "vault-send-app", "1.0.0", %{
-        "dependencies" => %{"static" => [%{"ref" => "reagent:local.vault-send-dep:1.0.0"}]}
-      })
-
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      assert {"api_key:sent.example", "sent.example (api_key)"} in need_options(view)
-
-      typed = %{
-        "name" => "damaged-dep-#{System.unique_integer([:positive])}",
-        "need" => "api_key:sent.example",
-        "fields" => "KEY=k",
-        "destination_hosts" => "api.sent.example"
-      }
-
-      damage_manifest!("vault-send-dep")
-      view |> form("#vault-create-form", typed) |> render_submit()
-
-      assert texts(view, ~s([data-test="create-stale"])) == [@unconfirmed]
-
-      assert texts(view, refused_line("reagent:local.vault-send-app")) == [
-               "The keys reagent:local.vault-send-app needs could not be read: its dependency " <>
-                 "reagent:local.vault-send-dep is stored damaged."
-             ]
-
-      assert open_records(ctx) == []
-      assert made(ctx) == []
-    end
-
-    test "a confirmed choice sent again while a plan cannot be read is not called no longer " <>
-           "needed; nothing is made and its confirmation is let go",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      ctx = seated_ctx(user)
-      install_openai!()
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-
-      typed = %{
-        "name" => "refused-resent-#{System.unique_integer([:positive])}",
-        "need" => @openai,
-        "fields" => "OPENAI_API_KEY=k",
-        "destination_hosts" => "api.openai.com"
-      }
-
-      view |> form("#vault-create-form", typed) |> render_submit()
-      assert [%{ref: ref, operation: "vault.create"}] = open_records(ctx)
-      Sanctum.TestContext.prove!(ctx, ref)
-      assert_push_event(view, "system_layer:resubmit", %{form: "vault-create-form"}, 2_000)
-
-      hide_table!("profiles")
-      view |> form("#vault-create-form", typed) |> render_submit()
-      stale = texts(view, ~s([data-test="create-stale"]))
-      restore_table!("profiles")
-
-      assert_needs_unread(view)
-      assert stale == []
-      assert made(ctx) == []
-      assert record_state(ctx, ref) == "cancelled"
-
-      refute page_state(view) =~ "cnf_",
-             "the page still holds the secret of a change it will not make"
-    end
-
-    test "a choice missing because the list is cut at the send is not called no longer " <>
-           "needed, and makes nothing",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      ctx = seated_ctx(user)
-      install_openai!()
-      {view, _html} = mount_athanor(conn, "/vault")
-      render_click(view, "show_add", %{"mode" => "fields"})
-      assert {@openai, "openai.com (api_key)"} in need_options(view)
-
-      later_releases!("probe-filler", 1000)
-
-      typed = %{
-        "name" => "cut-#{System.unique_integer([:positive])}",
-        "need" => @openai,
-        "fields" => "OPENAI_API_KEY=k",
-        "destination_hosts" => "api.openai.com"
-      }
-
-      view |> form("#vault-create-form", typed) |> render_submit()
-
-      assert texts(view, ~s([data-test="create-stale"])) == [@unconfirmed]
-      assert texts(view, ~s([data-test="create-needs-cut"])) == [@cut]
-      assert open_records(ctx) == []
-      assert made(ctx) == []
-    end
-
-    test "an athanor whose components name no api_key or bundle need is told to install one, " <>
-           "with no create",
-         %{conn: conn} do
-      user = test_user()
-      conn = log_in_user(conn, user)
-      install_needs!("vault-form-oauth-only", %{"drive" => "oauth:google.com"})
-      install_needs!("vault-form-none", %{})
-      {view, _html} = mount_athanor(conn, "/vault")
-      html = render_click(view, "show_add", %{"mode" => "fields"})
-
-      assert has_element?(view, ~s([data-test="create-no-need"]), @no_need)
-      refute html =~ @needs_unread
-      refute has_element?(view, "#vault-create-form")
-      refute has_element?(view, "button[type=submit]", "Create entry")
-    end
   end
 
-  defp assert_needs_unread(view) do
-    assert has_element?(view, ~s([data-test="create-needs-unread"]), @needs_unread)
-    refute render(view) =~ @no_need
-    refute has_element?(view, "#vault-create-form")
-    refute has_element?(view, "button[type=submit]", "Create entry")
-  end
+  describe "the grants that use an entry" do
+    # A grant of `source` under `label` whose head binds `entry`, in
+    # `status`.
+    defp grant!(ctx, entry, source, label, status \\ "active") do
+      {:ok, profile} =
+        Arca.Test.Writers.put_profile(%{
+          athanor_id: ctx.athanor_id,
+          source_ref: source,
+          kind: "owner",
+          label: label,
+          status: "active"
+        })
 
-  # `name`'s row ends, as a removal ends it, once the first grant plan the
-  # page asks is admitted: the component is listed, and gone when its plan
-  # is read. The test hears it.
-  defp remove_at_first_plan!(name) do
-    test = self()
-    handler = "vault-remove-#{System.unique_integer([:positive])}"
-    actor = Sanctum.Context.actor(seed_ctx())
+      {:ok, _consent} =
+        Arca.ConsentStorage.insert_revision(
+          %{
+            athanor_id: ctx.athanor_id,
+            profile_id: profile.id,
+            revision: 1,
+            scope: "versionless",
+            pinned_version: "",
+            invoke_mode: "open_inert",
+            shape_digest: "sha256:shape",
+            commit_digest: "sha256:commit",
+            blob_digest: Prima.Digest.sha256("{}"),
+            resolved_policy: "{}",
+            activation: "{}",
+            admitted_origins: [:interactive],
+            granted_by: "test",
+            granted_via: "interactive"
+          },
+          [
+            %{
+              binding_key: source <> "|@ingress|default",
+              scope: "athanor",
+              vault_entry_id: entry.id,
+              binding_digest: "sha256:bound"
+            }
+          ],
+          nil
+        )
 
-    :ok =
-      :telemetry.attach(
-        handler,
-        [:cyfr, :sanctum, :decision, :admitted],
-        fn _event, _measurements, meta, _config ->
-          if meta[:tool] == "profile" and meta[:action] == "plan" do
-            :telemetry.detach(handler)
-            Arca.ComponentStorage.delete_component(actor, name, "1.0.0", "local", "reagent")
-            Arca.Cache.delete_match(:_)
-            send(test, :removed)
-          end
-        end,
-        nil
-      )
+      if status != "active",
+        do:
+          :ok =
+            Arca.ProfileStorage.transition(Sanctum.Context.actor(ctx), profile.id, :any, status)
 
-    on_exit(fn -> :telemetry.detach(handler) end)
+      profile
+    end
+
+    # An entry of the athanor, made before the page opens.
+    defp entry!(ctx, name) do
+      {:ok, _} =
+        Sanctum.TestContext.confirming(
+          ctx,
+          &Sanctum.Gate.call_external("vault", &1, %{
+            "action" => "create",
+            "name" => name,
+            "kind" => "api_key",
+            "fields" => %{"API key" => "k"},
+            "destination" => %{"hosts" => ["api.x.ai"]}
+          })
+        )
+
+      {:ok, entries} = Sanctum.Vault.list(ctx)
+      Enum.find(entries, &(&1.name == name))
+    end
+
+    # The entry's name cell: its name, its id and the grants that use it.
+    defp row(entry), do: ~s([data-test="entry-name"][data-id="#{entry.id}"])
+
+    test "a row names each grant that binds it", %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      ctx = seated_ctx(user)
+      grok = entry!(ctx, "My xAI key")
+      other = entry!(ctx, "Spare xAI key")
+      grant!(ctx, grok, "catalyst:local.grok", "default")
+      grant!(ctx, grok, "catalyst:local.grok", "work")
+      grant!(ctx, grok, "reagent:local.chat", "default")
+      grant!(ctx, grok, "reagent:local.gone", "default", "revoked")
+      grant!(ctx, other, "reagent:local.waiting", "default", "needs_consent")
+
+      {view, _html} = mount_athanor(conn, "/vault")
+
+      assert texts(view, row(grok) <> ~s( [data-test="entry-use"])) == [
+               "Used by grok",
+               "Used by grok (work)",
+               "Used by chat"
+             ]
+
+      refute has_element?(view, row(grok) <> ~s( [data-test="entry-unused"]))
+
+      # A grant waiting on consent again, or revoked, is no use.
+      assert texts(view, row(other) <> ~s( [data-test="entry-use"])) == []
+
+      assert texts(view, row(other) <> ~s( [data-test="entry-unused"])) == [
+               "Nothing uses it yet."
+             ]
+
+      refute has_element?(view, ~s([data-test="entry-uses-unread"]))
+    end
+
+    test "a row nothing binds says so", %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      ctx = seated_ctx(user)
+      unused = entry!(ctx, "Unused key")
+
+      {view, _html} = mount_athanor(conn, "/vault")
+
+      assert texts(view, row(unused) <> ~s( [data-test="entry-unused"])) == [
+               "Nothing uses it yet."
+             ]
+
+      assert texts(view, row(unused) <> ~s( [data-test="entry-use"])) == []
+    end
+
+    test "grants that cannot be read are said once above the rows, never as nothing using one",
+         %{conn: conn} do
+      user = test_user()
+      conn = log_in_user(conn, user)
+      ctx = seated_ctx(user)
+      bound = entry!(ctx, "Bound key")
+      unused = entry!(ctx, "Unused key")
+      grant!(ctx, bound, "catalyst:local.grok", "default")
+      {view, _html} = mount_athanor(conn, "/vault")
+      assert texts(view, row(bound) <> ~s( [data-test="entry-use"])) == ["Used by grok"]
+
+      {_result, _log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          hide_table!("consent_vault_refs")
+          send(view.pid, :load)
+          html = render(view)
+          restore_table!("consent_vault_refs")
+          html
+        end)
+
+      assert texts(view, ~s([data-test="entry-uses-unread"])) == [@uses_unread]
+      refute has_element?(view, ~s([data-test="entry-use"]))
+      refute has_element?(view, ~s([data-test="entry-unused"]))
+      assert has_element?(view, row(bound), "Bound key")
+      assert has_element?(view, row(unused), "Unused key")
+    end
   end
 
   # A store that cannot answer for `table`, in the test's sandbox alone.
@@ -1318,9 +813,11 @@ defmodule PrismWeb.VaultLiveTest do
                     "in" => "header",
                     "name" => "Authorization",
                     "template" => "Bearer {value}"
-                  }
+                  },
+                  "hosts" => ["api.openai.com"]
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.openai.com"]}}
             },
             wasm: @wasm
           )
@@ -1409,14 +906,13 @@ defmodule PrismWeb.VaultLiveTest do
        %{conn: conn} do
     user = test_user()
     conn = log_in_user(conn, user)
-    install_openai!()
     {view, _html} = mount_athanor(conn, "/vault")
     render_click(view, "show_add", %{"mode" => "fields"})
 
     view
     |> form("#vault-create-form", %{
       "name" => "nowhere-#{System.unique_integer([:positive])}",
-      "need" => @openai,
+      "kind" => "api_key",
       "fields" => "TOKEN=t0k3n",
       "destination_hosts" => " "
     })
@@ -1641,14 +1137,13 @@ defmodule PrismWeb.VaultLiveTest do
          %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      install_openai!()
       {view, _html} = mount_athanor(conn, "/vault")
       ctx = seated_ctx(user)
       render_click(view, "show_add", %{"mode" => "fields"})
 
       typed = %{
         "name" => "resent-#{System.unique_integer([:positive])}",
-        "need" => @openai,
+        "kind" => "api_key",
         "fields" => "TOKEN=t0k3n",
         "destination_hosts" => "api.example.com"
       }
@@ -1688,19 +1183,18 @@ defmodule PrismWeb.VaultLiveTest do
       refute again == ref
     end
 
-    test "create: a choice the page did not offer, sent again, lets the proof go and makes " <>
+    test "create: a kind the form does not make, sent again, lets the proof go and makes " <>
            "nothing",
          %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      install_openai!()
       {view, _html} = mount_athanor(conn, "/vault")
       ctx = seated_ctx(user)
       render_click(view, "show_add", %{"mode" => "fields"})
 
       typed = %{
         "name" => "resent-#{System.unique_integer([:positive])}",
-        "need" => @openai,
+        "kind" => "api_key",
         "fields" => "OPENAI_API_KEY=sk-resent",
         "destination_hosts" => "api.openai.com"
       }
@@ -1710,9 +1204,9 @@ defmodule PrismWeb.VaultLiveTest do
       Sanctum.TestContext.prove!(ctx, ref)
       assert_push_event(view, "system_layer:resubmit", %{form: "vault-create-form"}, 2_000)
 
-      html = render_submit(view, "create", %{typed | "need" => "api_key:evil.example"})
+      html = render_submit(view, "create", %{typed | "kind" => "oauth"})
 
-      assert html =~ @not_offered
+      assert html =~ @not_a_kind
       assert record_state(ctx, ref) == "cancelled"
 
       refute page_state(view) =~ "cnf_",
@@ -1736,14 +1230,13 @@ defmodule PrismWeb.VaultLiveTest do
          %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      install_openai!()
       {view, _html} = mount_athanor(conn, "/vault")
       ctx = seated_ctx(user)
       render_click(view, "show_add", %{"mode" => "fields"})
 
       typed = %{
         "name" => "resent-#{System.unique_integer([:positive])}",
-        "need" => @openai,
+        "kind" => "api_key",
         "fields" => "TOKEN=t0k3n",
         "destination_hosts" => "api.example.com"
       }
@@ -1818,7 +1311,6 @@ defmodule PrismWeb.VaultLiveTest do
          %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      install_openai!()
       {view, _html} = mount_athanor(conn, "/vault")
       render_click(view, "show_add", %{"mode" => "fields"})
       pasted = "sk-pasted-#{System.unique_integer([:positive])}"
@@ -1827,7 +1319,7 @@ defmodule PrismWeb.VaultLiveTest do
         view
         |> form("#vault-create-form", %{
           "name" => "pasted-#{System.unique_integer([:positive])}",
-          "need" => @openai,
+          "kind" => "api_key",
           "fields" => "TOKEN=ok\n#{pasted}",
           "destination_hosts" => "api.example.com"
         })
@@ -1843,14 +1335,13 @@ defmodule PrismWeb.VaultLiveTest do
          %{conn: conn} do
       user = test_user()
       conn = log_in_user(conn, user)
-      install_openai!()
       {view, _html} = mount_athanor(conn, "/vault")
       ctx = seated_ctx(user)
 
       entry =
         create_confirmed!(view, ctx, %{
           "name" => "rotated-#{System.unique_integer([:positive])}",
-          "need" => @openai,
+          "kind" => "api_key",
           "fields" => "TOKEN=first",
           "destination_hosts" => "api.example.com"
         })

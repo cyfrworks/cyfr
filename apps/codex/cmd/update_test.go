@@ -358,6 +358,7 @@ if [ "$1" = compose ]; then
   esac
 fi
 case "$1" in
+  inspect) answer inspect ;;
   pull)
     if [ -f "$d/pull.fail" ] && [[ "$2" == *"$(cat "$d/pull.fail")"* ]]; then exit 1; fi
     answer pull ;;

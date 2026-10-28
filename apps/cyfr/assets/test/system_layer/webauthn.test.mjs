@@ -242,3 +242,180 @@ describe("the sign-in page's hook", () => {
     assert.deepEqual(pushed, [])
   })
 })
+
+for (const [mode, page] of [["setup", "the setup page"], ["invite", "the invitation page"]]) {
+  describe(`${page}'s hook`, () => {
+    let original, location
+
+    beforeEach(() => {
+      original = Object.getOwnPropertyDescriptor(globalThis.navigator, "credentials")
+      location = Object.getOwnPropertyDescriptor(globalThis, "location")
+      Object.defineProperty(globalThis, "location", {configurable: true, value: {hash: "#ab12"}})
+    })
+
+    afterEach(() => {
+      if (original) Object.defineProperty(globalThis.navigator, "credentials", original)
+      else delete globalThis.navigator.credentials
+      if (location) Object.defineProperty(globalThis, "location", location)
+      else delete globalThis.location
+    })
+
+    function newcomerHook(pushed) {
+      const el = new EventTarget()
+      el.dataset = {webauthn: mode}
+      const hook = Object.create(SystemLayer)
+      hook.el = el
+      hook.pushEvent = (event, payload, reply) => {
+        pushed.push({event, payload})
+        if (event === `${mode}_start` && reply)
+          reply({public_key: {challenge: "AQID", user: {id: "BAU", name: "a", displayName: "a"}}, registration: "token-1"})
+      }
+      hook.mounted()
+      return {hook, el}
+    }
+
+    function clickStart(el) {
+      const start = {closest: (selector) => (selector === "[data-webauthn-start]" ? start : null)}
+      const event = new Event("click")
+      Object.defineProperty(event, "target", {value: start})
+      el.dispatchEvent(event)
+    }
+
+    const settled = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+    test("hands the page the fragment's token, then registers under the options it answers, drawing no prompt", async () => {
+      Object.defineProperty(globalThis.navigator, "credentials", {
+        configurable: true,
+        value: {create: async () => created()}
+      })
+
+      const pushed = []
+      const {hook, el} = newcomerHook(pushed)
+      assert.equal(hook.dialog, undefined)
+      assert.deepEqual(pushed, [{event: `${mode}_token`, payload: {token: "ab12"}}])
+
+      clickStart(el)
+      await settled()
+
+      assert.deepEqual(
+        pushed.map((entry) => entry.event),
+        [`${mode}_token`, `${mode}_start`, `${mode}_passkey`]
+      )
+      assert.equal(pushed[2].payload.credential.registration, "token-1")
+
+      hook.updated()
+      hook.destroyed()
+    })
+
+    test("hands the token over again to the page process a reconnect starts", () => {
+      const pushed = []
+      const {hook} = newcomerHook(pushed)
+      hook.reconnected()
+      assert.deepEqual(
+        pushed.map((entry) => entry.event),
+        [`${mode}_token`, `${mode}_token`]
+      )
+    })
+
+    test("says the ceremony did not finish when the person cancels it", async () => {
+      Object.defineProperty(globalThis.navigator, "credentials", {
+        configurable: true,
+        value: {create: async () => Promise.reject(new Error("NotAllowedError"))}
+      })
+
+      const pushed = []
+      const {el} = newcomerHook(pushed)
+      clickStart(el)
+      await settled()
+
+      assert.deepEqual(
+        pushed.map((entry) => entry.event),
+        [`${mode}_token`, `${mode}_start`, `${mode}_error`]
+      )
+    })
+  })
+}
+
+describe("the sign-in page's newcomer hook", () => {
+  let original, location
+
+  beforeEach(() => {
+    original = Object.getOwnPropertyDescriptor(globalThis.navigator, "credentials")
+    location = Object.getOwnPropertyDescriptor(globalThis, "location")
+    // A carry's fragment, which this hook never reads.
+    Object.defineProperty(globalThis, "location", {configurable: true, value: {hash: "#carry=abc"}})
+  })
+
+  afterEach(() => {
+    if (original) Object.defineProperty(globalThis.navigator, "credentials", original)
+    else delete globalThis.navigator.credentials
+    if (location) Object.defineProperty(globalThis, "location", location)
+    else delete globalThis.location
+  })
+
+  function createHook(pushed) {
+    const el = new EventTarget()
+    el.dataset = {webauthn: "create"}
+    const hook = Object.create(SystemLayer)
+    hook.el = el
+    hook.pushEvent = (event, payload, reply) => {
+      pushed.push({event, payload})
+      if (event === "create_start" && reply)
+        reply({public_key: {challenge: "AQID", user: {id: "BAU", name: "a", displayName: "a"}}, registration: "token-2"})
+    }
+    hook.mounted()
+    return {hook, el}
+  }
+
+  function clickStart(el) {
+    const start = {closest: (selector) => (selector === "[data-webauthn-start]" ? start : null)}
+    const event = new Event("click")
+    Object.defineProperty(event, "target", {value: start})
+    el.dispatchEvent(event)
+  }
+
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  test("hands the page nothing of the address, then registers under the options it answers, drawing no prompt", async () => {
+    Object.defineProperty(globalThis.navigator, "credentials", {
+      configurable: true,
+      value: {create: async () => created()}
+    })
+
+    const pushed = []
+    const {hook, el} = createHook(pushed)
+    assert.equal(hook.dialog, undefined)
+    assert.deepEqual(pushed, [])
+
+    clickStart(el)
+    await settled()
+
+    assert.deepEqual(
+      pushed.map((entry) => entry.event),
+      ["create_start", "create_passkey"]
+    )
+    assert.equal(pushed[1].payload.credential.registration, "token-2")
+
+    hook.reconnected()
+    hook.updated()
+    hook.destroyed()
+    assert.equal(pushed.length, 2, "a reconnect hands nothing over")
+  })
+
+  test("says the ceremony did not finish when the person cancels it", async () => {
+    Object.defineProperty(globalThis.navigator, "credentials", {
+      configurable: true,
+      value: {create: async () => Promise.reject(new Error("NotAllowedError"))}
+    })
+
+    const pushed = []
+    const {el} = createHook(pushed)
+    clickStart(el)
+    await settled()
+
+    assert.deepEqual(
+      pushed.map((entry) => entry.event),
+      ["create_start", "create_error"]
+    )
+  })
+})

@@ -24,7 +24,10 @@ defmodule Prima.Authority.RootIngressTest do
                 "vault" =>
                   Fixtures.bound_vault(@catalyst, "@ingress", "vault-direct", "sha256:bind",
                     attach: Fixtures.attach_map(),
-                    projection: %{"fields" => ["url", "anon_key"]}
+                    projection: %{
+                      "fields" => %{"url" => "url", "anon_key" => "anon_key"},
+                      "scopes" => []
+                    }
                   ),
                 "egress" => %{"domains" => ["prod.supabase.co"]},
                 "tools" => ["storage.read"]

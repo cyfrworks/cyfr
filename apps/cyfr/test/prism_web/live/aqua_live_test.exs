@@ -59,23 +59,10 @@ defmodule PrismWeb.AquaLiveTest do
     user = test_user()
     n = System.unique_integer([:positive])
 
-    {:ok, mine} =
-      Sanctum.Tenancy.Athanors.create(%{
-        kind: "person",
-        name: "Me",
-        slug: "me-al#{n}",
-        owner_user_id: user.user_id,
-        created_by: user.user_id
-      })
+    mine = Sanctum.Test.People.athanor!(user.user_id)
 
     {:ok, group} = Sanctum.Tenancy.Athanors.create_group(user.user_id, "Acme #{n}")
     conn = log_in_user(conn, user, athanor_id: group.id)
-
-    {:ok, u} = Sanctum.Tenancy.Users.get(user.user_id)
-    {:ok, _} = Sanctum.Tenancy.Users.set_personal_athanor(u, mine.id)
-
-    {:ok, _} =
-      Sanctum.Tenancy.Members.ensure(user.user_id, scope: "athanor", athanor_id: mine.id)
 
     mine_ctx = %{Sanctum.TestContext.local() | user_id: user.user_id, athanor_id: mine.id}
     group_ctx = %{mine_ctx | athanor_id: group.id}
@@ -655,9 +642,11 @@ defmodule PrismWeb.AquaLiveTest do
                   "type" => "api_key:newmodel.test",
                   "reason" => "to call the model with your key",
                   "fields" => ["NEWMODEL_API_KEY"],
-                  "required" => true
+                  "required" => true,
+                  "hosts" => ["api.newmodel.example"]
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.newmodel.example"]}}
             })
         })
 
@@ -706,9 +695,11 @@ defmodule PrismWeb.AquaLiveTest do
                   "type" => "api_key:brokenmodel.test",
                   "reason" => "to call the model with your key",
                   "fields" => ["BROKENMODEL_API_KEY"],
-                  "required" => true
+                  "required" => true,
+                  "hosts" => ["api.brokenmodel.example"]
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.brokenmodel.example"]}}
             })
         })
 
@@ -781,9 +772,11 @@ defmodule PrismWeb.AquaLiveTest do
                   "type" => "api_key:keyed.test",
                   "reason" => "to call the model with your key",
                   "fields" => ["KEYED_API_KEY"],
-                  "required" => true
+                  "required" => true,
+                  "hosts" => ["api.keyed.example"]
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.keyed.example"]}}
             })
         })
 

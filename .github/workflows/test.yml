@@ -928,7 +928,8 @@ jobs:
           scripts/fetch-prebuilt-binaries.sh
       # The auth domain holds nothing of the domains and surfaces above it:
       # a checkout with only the lock, the contracts, Arca, Sanctum, the
-      # fetched deps and the CYFR_DATABASE parse compiles it with warnings
+      # fetched deps, the protocol vectors its registry tests answer from
+      # and the CYFR_DATABASE parse compiles it with warnings
       # as errors and runs its suite. Zero Ecto of its own — every row it
       # reads it reads through an Arca facade. What each island may declare
       # in the umbrella is a row of `Cyfr.Boundaries`, asserted against
@@ -937,10 +938,11 @@ jobs:
         run: |
           set -euo pipefail
           island="$RUNNER_TEMP/sanctum-island"
-          mkdir -p "$island/apps" "$island/config"
+          mkdir -p "$island/apps" "$island/config" "$island/tests"
           cp mix.lock "$island/"
           cp -R apps/prima apps/arca apps/sanctum "$island/apps/"
           cp -R deps wit "$island/"
+          cp -R tests/fixtures "$island/tests/"
           cp config/database_choice.exs "$island/config/"
           cd "$island/apps/sanctum"
           mix compile --warnings-as-errors
@@ -2031,7 +2033,8 @@ jobs:
             fi
           done
           # Check athanor_id constraints in every migration. Only the baseline's
-          # memberships, sessions and decision_logs columns may be nullable.
+          # memberships, sessions, decision_logs and invitations columns may be
+          # nullable; an administrator's invitation names no athanor.
           # `grep -c` exits 1 when the count is zero and the job's shell is
           # `bash -e`, so every count is guarded: an unguarded one on a
           # migration that adds no athanor_id column would end the job there,
@@ -2039,15 +2042,15 @@ jobs:
           m=apps/arca/priv/repo/migrations/20260815000000_baseline.exs
           nullable="$(grep -cE 'add :athanor_id' "$m" || true)"
           notnull="$(grep -cE 'add :athanor_id.*null: false' "$m" || true)"
-          if [ "$((nullable - notnull))" -ne 3 ]; then
-            echo "::error::exactly three nullable athanor_id columns are allowed (memberships, sessions, decision_logs); found $((nullable - notnull))"; fail=1
+          if [ "$((nullable - notnull))" -ne 4 ]; then
+            echo "::error::exactly four nullable athanor_id columns are allowed (memberships, sessions, decision_logs, invitations); found $((nullable - notnull))"; fail=1
           fi
           for other in apps/arca/priv/repo/migrations/*.exs; do
             [ "$other" = "$m" ] && continue
             n="$(grep -cE 'add :athanor_id' "$other" || true)"
             nn="$(grep -cE 'add :athanor_id.*null: false' "$other" || true)"
             if [ "$n" -ne "$nn" ]; then
-              echo "::error file=$other::athanor_id must be null: false outside the baseline (the three nullable fabrics are baseline-only)"; fail=1
+              echo "::error file=$other::athanor_id must be null: false outside the baseline (the four nullable fabrics are baseline-only)"; fail=1
             fi
           done
           if grep -nE 'add :athanor_id.*default:' apps/arca/priv/repo/migrations/*.exs; then

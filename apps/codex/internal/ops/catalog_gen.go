@@ -25,6 +25,7 @@ const (
 	Feed               = "feed"
 	File               = "file"
 	InstanceEntry      = "instance_entry"
+	Invitation         = "invitation"
 	Key                = "key"
 	Layout             = "layout"
 	McpLog             = "mcp_log"
@@ -158,6 +159,9 @@ const (
 	InstanceEntrySetCaps            = "set_caps"
 	InstanceEntrySetComponentPolicy = "set_component_policy"
 	InstanceEntryUsage              = "usage"
+	InvitationCreate                = "create"
+	InvitationList                  = "list"
+	InvitationRevoke                = "revoke"
 	KeyCreate                       = "create"
 	KeyGet                          = "get"
 	KeyList                         = "list"
@@ -248,8 +252,9 @@ const (
 	RegistryMembersList             = "members_list"
 	RegistryMembersRemove           = "members_remove"
 	RegistryMembersUpdate           = "members_update"
-	RegistryProbe                   = "probe"
+	RegistryPublishAddress          = "publish_address"
 	RegistryReport                  = "report"
+	RegistrySync                    = "sync"
 	RegistryTokensIssue             = "tokens_issue"
 	RegistryTokensList              = "tokens_list"
 	RegistryTokensRevoke            = "tokens_revoke"
@@ -277,6 +282,7 @@ const (
 	SessionDevicePoll               = "device_poll"
 	SessionLogout                   = "logout"
 	SessionReadResource             = "read_resource"
+	SessionSetup                    = "setup"
 	SessionUse                      = "use"
 	SessionWhoami                   = "whoami"
 	SettingsList                    = "list"
@@ -340,6 +346,7 @@ var Actions = map[string][]string{
 	"feed":                {"bind", "list", "press", "remove"},
 	"file":                {"accept", "decline", "delete", "list", "offer", "offers", "read", "withdraw", "write"},
 	"instance_entry":      {"create", "delete", "list", "offered", "people", "rebind", "revoke", "rotate", "set_audience", "set_caps", "set_component_policy", "usage"},
+	"invitation":          {"create", "list", "revoke"},
 	"key":                 {"create", "get", "list", "reenable", "revoke", "rotate"},
 	"layout":              {"edit", "get"},
 	"mcp_log":             {"correlate", "get", "list", "stats"},
@@ -353,11 +360,11 @@ var Actions = map[string][]string{
 	"policy_log":          {"correlate", "get", "list"},
 	"profile":             {"commit", "grant", "grants", "list", "plan", "preview", "publish", "revoke"},
 	"record":              {"get", "list", "payload"},
-	"registry":            {"appeal", "claim_personal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "probe", "report", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
+	"registry":            {"appeal", "claim_personal", "claim_publisher", "get_namespace", "legal_accept", "legal_page", "legal_version", "list_my_reports", "members_add", "members_list", "members_remove", "members_update", "publish_address", "report", "sync", "tokens_issue", "tokens_list", "tokens_revoke", "verify_publisher", "whoami"},
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "logout", "read_resource", "use", "whoami"},
+	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "logout", "read_resource", "setup", "use", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"system":              {"notify", "status"},
 	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "follow", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
@@ -1479,10 +1486,8 @@ func (args DecisionListGlobalArgs) MarshalJSON() ([]byte, error) {
 
 // DoorAllowArgs carries arguments for door.allow.
 type DoorAllowArgs struct {
-	// An email, an IdP subject, a person identifier, or * (allow, deny)
+	// A person identifier (per_…), a handle (@name) or * to allow; a person's id (usr_…), a person identifier or a handle to deny. A handle is resolved at the registry and its identifier written, labelled with the handle (allow, deny)
 	Value string `json:"value"`
-	// How to read value; inferred from its shape when absent
-	Kind Field[string] `json:"kind,omitzero"`
 	// Why (allow, deny)
 	Note Field[*string] `json:"note,omitzero"`
 }
@@ -1498,10 +1503,8 @@ func (args DoorAllowArgs) MarshalJSON() ([]byte, error) {
 
 // DoorDenyArgs carries arguments for door.deny.
 type DoorDenyArgs struct {
-	// An email, an IdP subject, a person identifier, or * (allow, deny)
+	// A person identifier (per_…), a handle (@name) or * to allow; a person's id (usr_…), a person identifier or a handle to deny. A handle is resolved at the registry and its identifier written, labelled with the handle (allow, deny)
 	Value string `json:"value"`
-	// How to read value; inferred from its shape when absent
-	Kind Field[string] `json:"kind,omitzero"`
 	// Why (allow, deny)
 	Note Field[*string] `json:"note,omitzero"`
 }
@@ -2255,6 +2258,49 @@ func (args InstanceEntryUsageArgs) MarshalJSON() ([]byte, error) {
 	}{Action: InstanceEntryUsage, fields: fields(args)})
 }
 
+// InvitationCreateArgs carries arguments for invitation.create.
+type InvitationCreateArgs struct {
+	// The group athanor the newcomer is seated in, which you hold a seat in. Left out, the invitation seats them in no group: the platform administrator's alone (create)
+	AthanorId Field[string] `json:"athanor_id,omitzero"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InvitationCreateArgs) MarshalJSON() ([]byte, error) {
+	type fields InvitationCreateArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InvitationCreate, fields: fields(args)})
+}
+
+// InvitationListArgs carries arguments for invitation.list.
+type InvitationListArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InvitationListArgs) MarshalJSON() ([]byte, error) {
+	type fields InvitationListArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InvitationList, fields: fields(args)})
+}
+
+// InvitationRevokeArgs carries arguments for invitation.revoke.
+type InvitationRevokeArgs struct {
+	// The invitation's id, as list answers it (revoke)
+	InvitationId string `json:"invitation_id"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args InvitationRevokeArgs) MarshalJSON() ([]byte, error) {
+	type fields InvitationRevokeArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: InvitationRevoke, fields: fields(args)})
+}
+
 // KeyCreateArgs carries arguments for key.create.
 type KeyCreateArgs struct {
 	// Human-readable name for the key
@@ -2699,12 +2745,12 @@ func (args *McpServersUpdateArgsConfigBackendsItem) UnmarshalJSON(data []byte) e
 type MemberAddArgs struct {
 	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
 	Athanor Field[string] `json:"athanor,omitzero"`
-	// The person's email (add, remove)
-	Email Field[string] `json:"email,omitzero"`
 	// The person's user id, when already on this server (add, remove)
 	UserId Field[string] `json:"user_id,omitzero"`
-	// The person's identifier (per_…), in place of an email or a user id (add, remove)
+	// The person's identifier (per_…), in place of a user id (add, remove)
 	Identifier Field[string] `json:"identifier,omitzero"`
+	// The person's handle at the registry (@name or name), in place of a user id or identifier: the identifier it names is added (add)
+	Handle Field[string] `json:"handle,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -2754,13 +2800,11 @@ func (args MemberListArgs) MarshalJSON() ([]byte, error) {
 type MemberRemoveArgs struct {
 	// The athanor to act on — an id, a group slug, or @<namespace>. Defaults to the athanor in focus.
 	Athanor Field[string] `json:"athanor,omitzero"`
-	// The person's email (add, remove)
-	Email Field[string] `json:"email,omitzero"`
 	// The person's user id, when already on this server (add, remove)
 	UserId Field[string] `json:"user_id,omitzero"`
-	// The person's identifier (per_…), in place of an email or a user id (add, remove)
+	// The person's identifier (per_…), in place of a user id (add, remove)
 	Identifier Field[string] `json:"identifier,omitzero"`
-	// With an email or an identifier: withdraw only its pending invitation, never a member, and answer not found once it has been accepted (remove)
+	// With an identifier: withdraw only its pending invitation, never a member, and answer not found once it has been accepted (remove)
 	Invitation Field[bool] `json:"invitation,omitzero"`
 }
 
@@ -3599,9 +3643,10 @@ type ProfileCommitArgsDecisionsBindingsItem struct {
 	// How long the binding lives; standing when absent
 	Lifetime Field[ProfileCommitArgsDecisionsBindingsItemLifetime] `json:"lifetime,omitzero"`
 	// true makes a consumed once binding consumable again; false by default
-	Renew  Field[bool]     `json:"renew,omitzero"`
-	Fields Field[[]string] `json:"fields,omitzero"`
-	Scopes Field[[]string] `json:"scopes,omitzero"`
+	Renew Field[bool] `json:"renew,omitzero"`
+	// Each field the need reads to the entry field that answers it; absent, the automatic map: equal names, or one field to one field
+	Fields Field[map[string]string] `json:"fields,omitzero"`
+	Scopes Field[[]string]          `json:"scopes,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3644,9 +3689,10 @@ type ProfileCommitArgsDecisionsSelectionsItem struct {
 	// The dependency's credential need the entry is for; required when it declares several, never with a label
 	Need Field[string] `json:"need,omitzero"`
 	// The account name of a named selection beside the edge's default entry; it names an entry, never a label; absent for the default
-	Name   Field[string]   `json:"name,omitzero"`
-	From   Field[string]   `json:"from,omitzero"`
-	Fields Field[[]string] `json:"fields,omitzero"`
+	Name Field[string] `json:"name,omitzero"`
+	From Field[string] `json:"from,omitzero"`
+	// For an entry: each field the need reads to the entry field that answers it, absent for the automatic map; never with a label, which lends its profile's map
+	Fields Field[map[string]string] `json:"fields,omitzero"`
 	// How long the binding lives; standing when absent
 	Lifetime Field[ProfileCommitArgsDecisionsSelectionsItemLifetime] `json:"lifetime,omitzero"`
 	// true makes a consumed once binding consumable again; false by default
@@ -3834,9 +3880,10 @@ type ProfileGrantArgsBindingsItem struct {
 	// How long the binding lives; standing when absent
 	Lifetime Field[ProfileGrantArgsBindingsItemLifetime] `json:"lifetime,omitzero"`
 	// true makes a consumed once binding consumable again; false by default
-	Renew  Field[bool]     `json:"renew,omitzero"`
-	Fields Field[[]string] `json:"fields,omitzero"`
-	Scopes Field[[]string] `json:"scopes,omitzero"`
+	Renew Field[bool] `json:"renew,omitzero"`
+	// Each field the need reads to the entry field that answers it; absent, the automatic map: equal names, or one field to one field
+	Fields Field[map[string]string] `json:"fields,omitzero"`
+	Scopes Field[[]string]          `json:"scopes,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3977,9 +4024,10 @@ type ProfilePreviewArgsDecisionsBindingsItem struct {
 	// How long the binding lives; standing when absent
 	Lifetime Field[ProfilePreviewArgsDecisionsBindingsItemLifetime] `json:"lifetime,omitzero"`
 	// true makes a consumed once binding consumable again; false by default
-	Renew  Field[bool]     `json:"renew,omitzero"`
-	Fields Field[[]string] `json:"fields,omitzero"`
-	Scopes Field[[]string] `json:"scopes,omitzero"`
+	Renew Field[bool] `json:"renew,omitzero"`
+	// Each field the need reads to the entry field that answers it; absent, the automatic map: equal names, or one field to one field
+	Fields Field[map[string]string] `json:"fields,omitzero"`
+	Scopes Field[[]string]          `json:"scopes,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -4022,9 +4070,10 @@ type ProfilePreviewArgsDecisionsSelectionsItem struct {
 	// The dependency's credential need the entry is for; required when it declares several, never with a label
 	Need Field[string] `json:"need,omitzero"`
 	// The account name of a named selection beside the edge's default entry; it names an entry, never a label; absent for the default
-	Name   Field[string]   `json:"name,omitzero"`
-	From   Field[string]   `json:"from,omitzero"`
-	Fields Field[[]string] `json:"fields,omitzero"`
+	Name Field[string] `json:"name,omitzero"`
+	From Field[string] `json:"from,omitzero"`
+	// For an entry: each field the need reads to the entry field that answers it, absent for the automatic map; never with a label, which lends its profile's map
+	Fields Field[map[string]string] `json:"fields,omitzero"`
 	// How long the binding lives; standing when absent
 	Lifetime Field[ProfilePreviewArgsDecisionsSelectionsItemLifetime] `json:"lifetime,omitzero"`
 	// true makes a consumed once binding consumable again; false by default
@@ -4273,17 +4322,11 @@ func (args RecordPayloadArgs) MarshalJSON() ([]byte, error) {
 
 // RegistryAppealArgs carries arguments for registry.appeal.
 type RegistryAppealArgs struct {
-	// Identity provider
-	Provider string `json:"provider"`
-	// IdP access token (for probe / claim_personal). Used once to prove provider identity.
-	AccessToken Field[string] `json:"access_token,omitzero"`
-	// OIDC id_token (for legal_accept / appeal when provider=oidcc)
-	IdToken Field[string] `json:"id_token,omitzero"`
 	// Appeal action_type (for appeal action)
 	ActionType string `json:"action_type"`
-	// Appeal action_ref — component UUID or '<provider>|<subject>' (for appeal action)
+	// Appeal action_ref — the component's id, or your identifier for a ban (for appeal action)
 	ActionRef string `json:"action_ref"`
-	// Appeal argument, ≤4000 chars (for appeal action)
+	// Appeal argument, ≤4000 bytes (for appeal action)
 	Argument string `json:"argument"`
 }
 
@@ -4298,14 +4341,8 @@ func (args RegistryAppealArgs) MarshalJSON() ([]byte, error) {
 
 // RegistryClaimPersonalArgs carries arguments for registry.claim_personal.
 type RegistryClaimPersonalArgs struct {
-	// Desired personal-namespace slug (for claim_personal)
-	Username string `json:"username"`
-	// The sign-in provider the claimant's identity is proven through (for claim_personal: any sign-in provider, an OpenID Connect one included)
-	Provider string `json:"provider"`
-	// IdP access token (for probe / claim_personal). Used once to prove provider identity.
-	AccessToken string `json:"access_token"`
-	// Human-readable label for the issued push token
-	Label Field[string] `json:"label,omitzero"`
+	// The handle to claim at the registry, your personal namespace
+	Handle string `json:"handle"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
@@ -4349,12 +4386,6 @@ func (args RegistryGetNamespaceArgs) MarshalJSON() ([]byte, error) {
 
 // RegistryLegalAcceptArgs carries arguments for registry.legal_accept.
 type RegistryLegalAcceptArgs struct {
-	// Identity provider
-	Provider string `json:"provider"`
-	// IdP access token (for probe / claim_personal). Used once to prove provider identity.
-	AccessToken Field[string] `json:"access_token,omitzero"`
-	// OIDC id_token (for legal_accept / appeal when provider=oidcc)
-	IdToken Field[string] `json:"id_token,omitzero"`
 	// Policy version string (for legal_accept; obtained via legal_version)
 	PolicyVersion string `json:"policy_version"`
 }
@@ -4483,23 +4514,19 @@ func (args RegistryMembersUpdateArgs) MarshalJSON() ([]byte, error) {
 	}{Action: RegistryMembersUpdate, fields: fields(args)})
 }
 
-// RegistryProbeArgs carries arguments for registry.probe.
-type RegistryProbeArgs struct {
-	// OAuth provider (for probe / claim_personal)
-	Provider string `json:"provider"`
-	// IdP access token (for probe / claim_personal). Used once to prove provider identity.
-	AccessToken string `json:"access_token"`
-	// Human-readable label for the issued push token
-	Label Field[string] `json:"label,omitzero"`
+// RegistryPublishAddressArgs carries arguments for registry.publish_address.
+type RegistryPublishAddressArgs struct {
+	// Whether the registry publishes this CYFR's address with your handle (true) or withdraws it (false)
+	Published bool `json:"published"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.
-func (args RegistryProbeArgs) MarshalJSON() ([]byte, error) {
-	type fields RegistryProbeArgs
+func (args RegistryPublishAddressArgs) MarshalJSON() ([]byte, error) {
+	type fields RegistryPublishAddressArgs
 	return json.Marshal(struct {
 		Action string `json:"action"`
 		fields
-	}{Action: RegistryProbe, fields: fields(args)})
+	}{Action: RegistryPublishAddress, fields: fields(args)})
 }
 
 // RegistryReportArgs carries arguments for registry.report.
@@ -4521,6 +4548,19 @@ func (args RegistryReportArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: RegistryReport, fields: fields(args)})
+}
+
+// RegistrySyncArgs carries arguments for registry.sync.
+type RegistrySyncArgs struct {
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args RegistrySyncArgs) MarshalJSON() ([]byte, error) {
+	type fields RegistrySyncArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: RegistrySync, fields: fields(args)})
 }
 
 // RegistryTokensIssueArgs carries arguments for registry.tokens_issue.
@@ -5016,6 +5056,23 @@ func (args SessionReadResourceArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SessionReadResource, fields: fields(args)})
+}
+
+// SessionSetupArgs carries arguments for session.setup.
+type SessionSetupArgs struct {
+	// setup: the installation's setup token, CYFR_SETUP_TOKEN in its .env
+	SetupToken *string `json:"setup_token"`
+	// setup: the command line's host name, which its session is listed by in Prism
+	Machine string `json:"machine"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionSetupArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionSetupArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionSetup, fields: fields(args)})
 }
 
 // SessionUseArgs carries arguments for session.use.
@@ -5660,7 +5717,7 @@ type VaultCreateArgs struct {
 	Kind string `json:"kind"`
 	// Secret material as name → value; names mirror field_names
 	Fields Field[map[string]string] `json:"fields,omitzero"`
-	// Immutable provider tag (e.g. 'google'); set at create only
+	// Optional label (e.g. 'openai.com'), set at create only: it ranks the entry first for a need of that provider, and an OAuth entry requires it
 	ProviderHint Field[string] `json:"provider_hint,omitzero"`
 	// Binding field: scopes this credential was authorized for
 	OauthScopes    Field[[]string]                      `json:"oauth_scopes,omitzero"`

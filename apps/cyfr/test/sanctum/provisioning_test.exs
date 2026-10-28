@@ -89,11 +89,19 @@ defmodule Sanctum.ProvisioningTest do
   defp maybe_deps(manifest, deps), do: Map.put(manifest, "dependencies", %{"static" => deps})
 
   defp maybe_needs(manifest, nil), do: manifest
-  defp maybe_needs(manifest, needs), do: Map.put(manifest, "needs", needs)
+
+  # The catalyst's egress names the hosts its needs call.
+  defp maybe_needs(manifest, needs) do
+    hosts = needs |> Map.values() |> Enum.flat_map(& &1["hosts"]) |> Enum.uniq()
+
+    manifest
+    |> Map.put("needs", needs)
+    |> put_in(["caps", "egress", "domains"], hosts)
+  end
 
   defp person(n) do
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|prov-#{n}",
         provider: "github",
         email: "prov#{n}@example.com",
@@ -142,30 +150,63 @@ defmodule Sanctum.ProvisioningTest do
     assert at == group.provisioned_at
   end
 
+  # A person with no athanor yet, as an admission holds them before its
+  # mint of their own (`Provisioning.mint_personal/1`).
+  defp unhoused(n) do
+    now = DateTime.utc_now()
+    subject = "prov-#{n}"
+
+    {:ok, %{id: user_id}} =
+      Arca.Test.People.mint(
+        Prima.Actor.system(),
+        %{
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          email: "prov#{n}@example.com",
+          email_verified: true,
+          display_name: "Prov #{n}",
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        %{
+          key: "github|https://github.com|" <> subject,
+          provider: "github",
+          issuer: "https://github.com",
+          subject: subject,
+          first_seen_at: now,
+          last_seen_at: now
+        }
+      )
+
+    {:ok, user} = Users.get(user_id)
+    user
+  end
+
   test "a person's own athanor is minted once, under their namespace when it is free, and recorded",
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
-    user = person(n)
-    {:ok, user} = Users.set_namespace(user, "prov#{n}")
+    {:ok, user} = Users.set_namespace(unhoused(n), "prov#{n}")
 
-    assert {:ok, personal} = Provisioning.ensure_personal_athanor(user)
+    assert {:ok, personal} = Provisioning.mint_personal(user)
     assert personal.kind == "person"
     assert personal.slug == "prov#{n}"
     assert personal.owner_user_id == user.id
     assert personal.name == "Prov #{n}"
-
-    # The mint answers with the row; filling it is background work, so the
-    # mark is on the row rather than on what the mint returned.
-    assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(personal.id)
     assert Members.member?(user.id, personal.id)
     assert {:ok, %{personal_athanor_id: pid}} = Users.get(user.id)
     assert pid == personal.id
 
-    # a second sign-in finds it
-    assert {:ok, %{id: same}} = Provisioning.after_sign_in(user.id)
-    assert same == personal.id
-    assert [_] = Enum.filter(Athanors.list_for_user(user.id), &(&1.kind == "person"))
+    # The mint fills nothing; the sign-in after it asks for the fill.
+    assert {:ok, %{provisioned_at: nil}} = Athanors.get(personal.id)
+    assert :ok = Provisioning.after_sign_in(user.id)
+    assert {:ok, %{provisioned_at: %DateTime{}}} = Athanors.get(personal.id)
+
+    # A person holds one: a second mint is refused, and a sign-in mints none.
+    assert {:error, _} = Provisioning.mint_personal(user)
+    assert :ok = Provisioning.after_sign_in(user.id)
+    assert [%{id: ^pid}] = Enum.filter(Athanors.list_for_user(user.id), &(&1.kind == "person"))
   end
 
   test "a person without a namespace is minted one under a slug of their own", %{
@@ -173,9 +214,9 @@ defmodule Sanctum.ProvisioningTest do
   } do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
-    user = person(n)
+    user = unhoused(n)
 
-    assert {:ok, personal} = Provisioning.after_sign_in(user.id)
+    assert {:ok, personal} = Provisioning.mint_personal(user)
     assert personal.kind == "person"
     assert personal.slug == "prov-#{n}"
     assert personal.owner_user_id == user.id
@@ -184,7 +225,8 @@ defmodule Sanctum.ProvisioningTest do
 
     # A namespace recorded later is a credential, not a new address.
     {:ok, user} = Users.set_namespace(user, "late#{n}")
-    assert {:ok, %{id: same, slug: slug}} = Provisioning.ensure_personal_athanor(user)
+    assert :ok = Provisioning.after_sign_in(user.id)
+    assert {:ok, %{id: same, slug: slug}} = Athanors.get_by_owner(user.id)
     assert same == personal.id
     assert slug == "prov-#{n}"
   end
@@ -193,14 +235,12 @@ defmodule Sanctum.ProvisioningTest do
        %{bundle_dir: bundle_dir} do
     write_bundle!(bundle_dir)
     n = System.unique_integer([:positive])
-    first = person(n)
-    assert {:ok, %{slug: taken}} = Provisioning.ensure_personal_athanor(first)
+    assert {:ok, %{slug: taken}} = Provisioning.mint_personal(unhoused(n))
     assert taken == "prov-#{n}"
 
     # The second person's namespace is the first person's address here.
-    second = person(n + 1)
-    {:ok, second} = Users.set_namespace(second, "prov-#{n}")
-    assert {:ok, other} = Provisioning.ensure_personal_athanor(second)
+    {:ok, second} = Users.set_namespace(unhoused(n + 1), "prov-#{n}")
+    assert {:ok, other} = Provisioning.mint_personal(second)
     assert other.owner_user_id == second.id
     assert other.slug == "prov-#{n + 1}"
   end
@@ -498,6 +538,7 @@ defmodule Sanctum.ProvisioningTest do
     @needs %{
       "api_key" => %{
         "type" => "api_key:openai.com",
+        "hosts" => ["api.openai.com"],
         "reason" => "to call the model",
         "fields" => ["OPENAI_API_KEY"],
         "attach" => %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
@@ -554,10 +595,11 @@ defmodule Sanctum.ProvisioningTest do
       {first, log} = with_log(fn -> Provisioning.after_sign_in(user.id) end)
       back!("instance_entries")
 
-      # The athanor is minted and its fill stopped at the consent mint,
-      # with nothing minted for the catalyst; the row, the claim and the
-      # log name the source and the refusal's own sentence.
-      assert {:ok, %{id: athanor_id}} = first
+      # The athanor the admission minted had its fill stopped at the
+      # consent mint, with nothing minted for the catalyst; the row, the
+      # claim and the log name the source and the refusal's own sentence.
+      assert :ok = first
+      athanor_id = Sanctum.Test.People.athanor!(user).id
       {:ok, failed} = Athanors.get(athanor_id)
       refute failed.provisioned_at
 
@@ -575,7 +617,7 @@ defmodule Sanctum.ProvisioningTest do
 
       # The next sign-in tries the fill again at once, and with the store
       # answering the catalyst is minted bound to the entry.
-      assert {:ok, %{id: ^athanor_id}} = Provisioning.after_sign_in(user.id)
+      assert :ok = Provisioning.after_sign_in(user.id)
       {:ok, filled} = Athanors.get(athanor_id)
       assert %DateTime{} = filled.provisioned_at
       refute Athanors.provisioning_failure(filled)
@@ -610,7 +652,8 @@ defmodule Sanctum.ProvisioningTest do
       write_bundle!(bundle_dir, needs: @needs)
       entry = offer!()
       user = person(System.unique_integer([:positive]))
-      assert {:ok, %{id: athanor_id}} = Provisioning.after_sign_in(user.id)
+      assert :ok = Provisioning.after_sign_in(user.id)
+      athanor_id = Sanctum.Test.People.athanor!(user).id
       {:ok, %{provisioned_at: %DateTime{} = filled_at}} = Athanors.get(athanor_id)
       {_head, [%{instance_entry_id: bound}]} = held = foo_head(athanor_id)
       assert bound == entry.id

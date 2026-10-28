@@ -973,8 +973,9 @@ defmodule Sanctum.Consent.Authz do
   @doc """
   The confirmation vocabulary's word for a revalidation's refusal
   (`Sanctum.Caller.revalidate_session/1`): `:unauthenticated` is
-  `:not_authenticated`, `:not_standing` and `:not_member` are
-  `:not_standing`, a person whose remote identity could not be read fresh
+  `:not_authenticated`, `:not_standing`, `:not_member` and a person who
+  stands but for the company sign-in this CYFR requires
+  (`:company_login_required`) are `:not_standing`, a person whose remote identity could not be read fresh
   is `:identity_stale`, and a refusal this vocabulary does not know is
   `:unavailable`, logged, never a crash, so a refusal revalidation learns
   later still refuses.
@@ -982,7 +983,11 @@ defmodule Sanctum.Consent.Authz do
   @spec standing_refusal(term()) ::
           :not_authenticated | :not_standing | :identity_stale | :unavailable
   def standing_refusal(:unauthenticated), do: :not_authenticated
-  def standing_refusal(reason) when reason in [:not_standing, :not_member], do: :not_standing
+
+  def standing_refusal(reason)
+      when reason in [:not_standing, :not_member, :company_login_required],
+      do: :not_standing
+
   def standing_refusal(:identity_stale), do: :identity_stale
   def standing_refusal(:unavailable), do: :unavailable
 

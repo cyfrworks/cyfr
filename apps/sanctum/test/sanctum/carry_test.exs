@@ -23,7 +23,7 @@ defmodule Sanctum.CarryTest do
   alias Prima.Identity
   alias Prima.Identity.{Entry, RecoverRequest}
   alias Sanctum.{Caller, Cipher, CipherAAD, Context}
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   @destination "https://hub.example"
 
@@ -43,7 +43,7 @@ defmodule Sanctum.CarryTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|carry-#{n}",
         provider: "github",
         email: "carry#{n}@example.com",

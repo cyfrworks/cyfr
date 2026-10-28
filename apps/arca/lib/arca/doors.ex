@@ -41,7 +41,7 @@ defmodule Arca.Doors do
 
   ## What crosses
 
-  Plain maps with the row's ten fields, and typed errors. No schema
+  Plain maps with the row's eleven fields, and typed errors. No schema
   struct and no changeset leaves this module: `{:error, :already_exists}`
   is a lost race for the unique `[kind, value]` pair, and
   `{:error, {:invalid, errors}}` carries a map of field to rendered
@@ -61,6 +61,7 @@ defmodule Arca.Doors do
     :requested_by,
     :added_by,
     :note,
+    :label,
     :created_at,
     :updated_at
   ]
@@ -75,6 +76,7 @@ defmodule Arca.Doors do
           requested_by: String.t() | nil,
           added_by: String.t() | nil,
           note: String.t() | nil,
+          label: String.t() | nil,
           created_at: DateTime.t(),
           updated_at: DateTime.t()
         }
@@ -84,6 +86,10 @@ defmodule Arca.Doors do
   @doc "The kinds a door row may name, as the rows themselves define them."
   @spec kinds() :: [String.t()]
   def kinds, do: Entry.kinds()
+
+  @doc "The kinds an entry of `effect` (`\"allow\"` or `\"deny\"`) may name."
+  @spec kinds(String.t()) :: [String.t()]
+  def kinds(effect), do: Entry.kinds(effect)
 
   @doc "Every entry, allowed and requested, newest first."
   @spec list(Prima.Actor.t()) :: {:ok, [entry()]} | refusal()

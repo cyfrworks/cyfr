@@ -37,7 +37,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
   alias Sanctum.Context
   alias Sanctum.TestContext
   alias Sanctum.TestContext.{Authenticator, MailSink}
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -52,7 +52,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|confirmation-#{n}",
         provider: "github",
         email: "confirmation#{n}@example.com",
@@ -369,7 +369,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
       n = System.unique_integer([:positive])
 
       {:ok, user} =
-        Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: Sanctum.Auth.Identity.key(:oidcc, issuer, "sub-#{n}"),
           provider: "oidcc",
           email: "confirmation-oidc#{n}@example.com",
@@ -516,7 +516,7 @@ defmodule Sanctum.Providers.ConfirmationTest do
       n = System.unique_integer([:positive])
 
       {:ok, user} =
-        Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: Sanctum.Auth.Identity.key(:oidcc, issuer, "addition-#{n}"),
           provider: "oidcc",
           email: "confirmation-addition#{n}@example.com",

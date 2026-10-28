@@ -20,7 +20,7 @@ defmodule Sanctum.Providers.AssertionTest do
   alias Prima.Identity
   alias Prima.Identity.{Encoding, Entry}
   alias Sanctum.{Cipher, CipherAAD, Context, TestContext}
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   @directory "https://dir.example"
   @hub "https://hub.example"
@@ -38,7 +38,7 @@ defmodule Sanctum.Providers.AssertionTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|assert-#{n}",
         provider: "github",
         email: "assert#{n}@example.com",

@@ -399,12 +399,20 @@ defmodule PrismWeb.ThreadPaneLiveTest do
            )
   end
 
+  defp dev!(user) do
+    {:ok, row} = Sanctum.Tenancy.Users.get(user.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(row, %{"mode" => "dev"})
+    :ok
+  end
+
   test "what the pane pushes names the pane it is for", %{
     conn: conn,
     user: user,
     room: room,
     thread: thread
   } do
+    # The pages these navigate to are dev's, which a person chooses.
+    dev!(user)
     pane = room_pane(conn, room, thread)
     pane_id = "pane-" <> room.id <> "-pane"
     intents = [%{kind: "copy_clipboard", text: "friday"}, %{kind: "navigate", to: "/activities"}]
@@ -440,6 +448,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
     room: room,
     thread: thread
   } do
+    # The pages these navigate to are dev's, which a person chooses.
+    dev!(user)
     pane = room_pane(conn, room, thread)
 
     intents = [
@@ -730,7 +740,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           "type" => "api_key:example.com",
           "reason" => "to call the example API",
           "required" => true,
-          "fields" => ["KEY"]
+          "fields" => ["KEY"],
+          "hosts" => ["api.example.com"]
         }
       },
       "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
@@ -967,9 +978,11 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                   "type" => "api_key:anthropic.com",
                   "reason" => "to call the model with your key",
                   "fields" => ["ANTHROPIC_API_KEY"],
-                  "required" => true
+                  "required" => true,
+                  "hosts" => ["api.anthropic.com"]
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.anthropic.com"]}}
             })
         })
 

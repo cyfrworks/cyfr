@@ -527,7 +527,7 @@ defmodule Cyfr.RetentionSchedulerTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|carry-sweep-#{n}",
         provider: "github",
         email: "carry-sweep#{n}@example.com",

@@ -478,10 +478,11 @@ defmodule Opus.Host.AttachedFetchTest do
   end
 
   # A catalyst whose manifest declares the need `api_key` attached by
-  # `:rule` and asks for `:egress`; an attach-only entry of its provider to
-  # `:destination`, bound to the need through the consent walk with
-  # `:lifetime`; and an attempt of the catalyst under the authority that
-  # consent grants, with `:limits` and `:timeout_ms` when a case names them.
+  # `:rule`, calling `:hosts` (the default egress domains), and asks for
+  # `:egress`; an attach-only entry of its provider to `:destination`,
+  # bound to the need through the consent walk with `:lifetime`; and an
+  # attempt of the catalyst under the authority that consent grants, with
+  # `:limits` and `:timeout_ms` when a case names them.
   defp scenario!(ctx, port, opts \\ []) do
     name = "attached-#{System.unique_integer([:positive])}"
     ref = "catalyst:local." <> name
@@ -495,7 +496,8 @@ defmodule Opus.Host.AttachedFetchTest do
           "type" => "api_key:upstream.test",
           "reason" => "to call the upstream with your key",
           "fields" => ["KEY"],
-          "attach" => Keyword.get(opts, :rule, @header_rule)
+          "attach" => Keyword.get(opts, :rule, @header_rule),
+          "hosts" => Keyword.get(opts, :hosts, ["127.0.0.1", "upstream.test"])
         }
       },
       "caps" => %{"egress" => Keyword.get(opts, :egress, egress())}
@@ -712,6 +714,7 @@ defmodule Opus.Host.AttachedFetchTest do
       port,
       [
         egress: egress(%{"schemes" => ["https"]}),
+        hosts: ["upstream.test"],
         destination: %{
           "hosts" => ["upstream.test"],
           "scheme" => "https",
@@ -1463,7 +1466,8 @@ defmodule Opus.Host.AttachedFetchTest do
       ctx: ctx,
       port: port
     } do
-      %{fixture: fixture} = scenario!(ctx, port, egress: egress(%{"domains" => ["127.0.0.1"]}))
+      %{fixture: fixture} =
+        scenario!(ctx, port, egress: egress(%{"domains" => ["127.0.0.1"]}), hosts: ["127.0.0.1"])
 
       message =
         fixture
@@ -1581,11 +1585,13 @@ defmodule Opus.Host.AttachedFetchTest do
       [listed] = Enum.filter(vector["refusals"], &(&1["answer"] =~ "domain_blocked"))
 
       # The vector's request goes to an https destination the entry names,
-      # under a grant whose domains leave its host out.
+      # under a grant whose domains leave its host out; the need calls the
+      # entry's other host.
       %{fixture: fixture} =
         scenario!(ctx, port,
           egress: egress(%{"schemes" => ["https"], "methods" => ["POST"]}),
-          destination: %{"hosts" => ["api.example.com"], "scheme" => "https"}
+          hosts: ["upstream.test"],
+          destination: %{"hosts" => ["api.example.com", "upstream.test"], "scheme" => "https"}
         )
 
       body = :attached_fetch |> WorkerWire.request_body(args) |> Jason.encode!()

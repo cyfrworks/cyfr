@@ -36,7 +36,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
 
   alias Sanctum.Auth.OIDC
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   @issuer "https://idp.example.com"
 
@@ -131,7 +131,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: Sanctum.Auth.Identity.key(:oidcc, @issuer, subject),
         provider: "oidcc",
         email: "reauth#{n}@example.com",
@@ -291,7 +291,7 @@ defmodule Sanctum.Auth.OIDCReauthTest do
       n = System.unique_integer([:positive])
 
       {:ok, user} =
-        Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "github|https://github.com|reauth-#{n}",
           provider: "github",
           email: "reauth-gh#{n}@example.com",

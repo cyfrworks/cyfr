@@ -72,10 +72,12 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:example.com",
+          "hosts" => ["api.example.com"],
           "reason" => reason,
           "fields" => ["EXAMPLE_API_KEY"]
         }
-      }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
     }
   end
 
@@ -563,6 +565,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:anthropic.com",
+          "hosts" => ["api.anthropic.com"],
           "reason" => "to call the API with your key",
           "fields" => ["ANTHROPIC_API_KEY"]
         }
@@ -653,29 +656,32 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert before_digest == after_digest
     end
 
-    # A manifest declaring none of a need's attach rule, hosts, paths or
-    # disclosure, and no provides block: its digest is the one it had
-    # before they joined the shape.
+    # A fixed manifest, whose need declares the hosts every credential need
+    # must and none of an attach rule, paths or disclosure, and which has no
+    # provides block. Its egress names `eu.anthropic.com` beside the need's
+    # host, the host the next case adds to the need; both the
+    # hosts and that domain are inputs of the pinned digest.
     @pinned_manifest %{
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:anthropic.com",
+          "hosts" => ["api.anthropic.com"],
           "reason" => "to call the API with your key",
           "fields" => ["ANTHROPIC_API_KEY"]
         }
       },
       "caps" => %{
-        "egress" => %{"domains" => ["api.anthropic.com"]},
+        "egress" => %{"domains" => ["api.anthropic.com", "eu.anthropic.com"]},
         "limits" => %{"timeout" => "2m"}
       }
     }
 
-    # The pinned digest is the shape's since flows and connect origins are
-    # in every shape, empty or not.
-    test "a manifest that declares none of what attaching added keeps its digest", %{ctx: ctx} do
+    # A change to how a shape is derived that moves a fixed manifest's
+    # digest asks every consent of it again, so the digest is pinned.
+    test "a fixed manifest's shape digest is stable", %{ctx: ctx} do
       publish!(ctx, "shape-pinned", "1.0.0", %{manifest: Jason.encode!(@pinned_manifest)})
 
-      assert {:ok, "sha256:e7ef02f63635370d827a19e5cfed0093748c290ef0c423233819df67075a2ecf"} =
+      assert {:ok, "sha256:792297ccae30588d31120c93482205249371145d0ba9de38ce7cbfb5ced81f10"} =
                ShapeDerivation.live_digest(ctx, "reagent:local.shape-pinned")
     end
 
@@ -687,11 +693,13 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
           "needs" => %{
             "database" => %{
               "type" => "api_key:supabase.co",
+              "hosts" => ["*.supabase.co"],
               "reason" => "to reach the database",
               "fields" => ["anon_key"],
               "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["*.supabase.co"]}}
         }
       })
 
@@ -709,7 +717,7 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
           "name" => "x-api-key",
           "template" => "{value}"
         }),
-        put_in(with_dep, need ++ ["hosts"], ["api.anthropic.com"]),
+        put_in(with_dep, need ++ ["hosts"], ["api.anthropic.com", "eu.anthropic.com"]),
         put_in(with_dep, need ++ ["paths"], ["/v1/"]),
         put_in(with_dep, need ++ ["disclose"], true),
         Map.put(with_dep, "provides", %{
@@ -959,9 +967,18 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
 
   describe "a vault need names its projection" do
     defp fieldless(need_type, fields) do
-      need = %{"type" => need_type, "reason" => "to call the API with your key"}
+      need = %{
+        "type" => need_type,
+        "hosts" => ["api.example.com"],
+        "reason" => "to call the API with your key"
+      }
+
       need = if fields == :absent, do: need, else: Map.put(need, "fields", fields)
-      %{"needs" => %{"api_key" => need}}
+
+      %{
+        "needs" => %{"api_key" => need},
+        "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
+      }
     end
 
     test "a need without its list, or with an empty one, is refused as a manifest error",
@@ -1021,10 +1038,12 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
         "needs" => %{
           "api_key" => %{
             "type" => "api_key:example.com",
+            "hosts" => ["api.example.com"],
             "reason" => "to call the API with your key",
             "fields" => ["ORG", "KEY"]
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
       }
 
       publish!(ctx, "shape-fields", "1.0.0", %{manifest: Jason.encode!(manifest)})

@@ -43,10 +43,6 @@ defmodule Arca.DbRescueSeamTest do
     # constant the helper returns. DB errors only: a structurally-bad
     # queued item must crash, never be dropped with :ok.
     "apps/arca/lib/arca/record_sink.ex" => 2,
-    # run/1: the security reconcile is fail-closed, and a raised database
-    # error refuses the boot as `:database_error`, a class of its own and
-    # distinct from any other raise (`:exception`). Nothing is tolerated.
-    "apps/cyfr/lib/cyfr/bootstrap.ex" => 1,
     # the budgeted append and finish: the answer is a typed audit failure
     # that tells a timeout from an outage (a `DBConnection.ConnectionError`
     # past the deadline, or SQLite's lock wait, is `:timeout`; the rest are

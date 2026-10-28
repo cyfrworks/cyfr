@@ -12,18 +12,13 @@ defmodule PrismWeb.SettingsLive do
   that needs a fresh confirmation is asked through the page's system
   layer (`PrismWeb.SystemLayer.call/5`) and made again once confirmed.
 
-    * **Identity** — whether this home holds the person's keys, their
-      identifier, the directory this home pins and the head their row
-      names; enrolling, a kit not yet saved, another printed kit and the
-      live key's rotation (`person.rotate`). Enrollment and every kit
-      render only in the system layer's recovery prompts
-      (`PrismWeb.SystemLayer.Recovery`): this page never holds a seed or a
-      kit line. With no directory pinned, enrollment names the setting the
-      operator owes, and everything else here works as before. An
-      enrollment still waiting for the directory whose seed no prompt here
-      holds (the browser that began it lost it) is abandoned and begun
-      again under a new kit (`person.enroll_abandon`). A person whose keys
-      another home holds is told to change them there.
+    * **Identity** — the identity card (`PrismWeb.IdentityCard`): the
+      person's identifier and the directory this CYFR pins, their handle,
+      the enrollment that claims it and its kit; beside it, for an
+      enrolled person, another printed kit and the live key's rotation
+      (`person.rotate`). Every kit renders only in the system layer's
+      recovery prompts (`PrismWeb.SystemLayer.Recovery`): this page never
+      holds a seed or a kit line.
     * **Doors** — each linked door, unlinked through `person.unlink_door`;
       a GitHub or Google door linked through a device flow that answers a
       link ticket (`Sanctum.Auth.DeviceFlow`'s `poll_for_link/4`), and an
@@ -70,12 +65,8 @@ defmodule PrismWeb.SettingsLive do
   The refusals each change can meet, the last door and the last passkey
   among them, are shown as the refusal's own sentence.
 
-  The identity controls carry `data-test` names: `identity` (with
-  `data-provenance` and `data-enrollment`), `identity-identifier`,
-  `identity-directory`, `identity-no-directory`, `identity-remote`,
-  `identity-enroll`, `identity-abandon`, `identity-kit` (with
-  `data-attempt`),
-  `identity-kit-show`, `identity-add-kit`, `identity-rotate`,
+  The identity card's controls carry its own `data-test` names, and this
+  page's beside it `identity-add-kit`, `identity-rotate` and
   `identity-rotation`; `doors`, `door` (with `data-key`), `door-unlink`,
   `door-link-github`, `door-link-google`, `door-link-oidcc`,
   `door-link-flow`, `door-link-code`, `door-link-cancel`; `passkeys`,
@@ -92,7 +83,7 @@ defmodule PrismWeb.SettingsLive do
 
   require Logger
 
-  alias PrismWeb.SystemLayer
+  alias PrismWeb.{IdentityCard, SystemLayer}
   alias PrismWeb.SystemLayer.{Prompt, Recovery}
   alias Sanctum.Auth.DeviceFlow
 
@@ -161,7 +152,6 @@ defmodule PrismWeb.SettingsLive do
       |> assign(:loading, true)
       |> assign(:identity, nil)
       |> assign(:identity_error, nil)
-      |> assign(:enrolling, nil)
       |> assign(:passkeys, nil)
       |> assign(:passkeys_error, nil)
       |> assign(:link_flow, nil)
@@ -236,26 +226,6 @@ defmodule PrismWeb.SettingsLive do
   end
 
   # ---- identity --------------------------------------------------------------
-
-  def handle_event("enroll", _params, socket), do: enroll(socket)
-
-  # An enrollment whose seed no prompt here holds: abandoned, then begun
-  # again under a new kit.
-  def handle_event("abandon_enrollment", _params, socket) do
-    case call_tool(socket, "person/enroll_abandon", %{}) do
-      {:ok, _abandoned} ->
-        socket
-        |> load_identity()
-        |> put_flash(:info, "The unfinished enrollment was abandoned.")
-        |> enroll()
-
-      {:error, reason} ->
-        {:noreply, socket |> load_identity() |> put_flash(:error, error_message(reason))}
-    end
-  end
-
-  def handle_event("show_kit", %{"attempt" => attempt_id}, socket),
-    do: show_recovery(socket, &Recovery.kit(&1, attempt_id))
 
   def handle_event("add_kit", _params, socket), do: show_recovery(socket, &Recovery.holder/1)
 
@@ -423,15 +393,20 @@ defmodule PrismWeb.SettingsLive do
   def handle_event("instance_delete", %{"id" => id}, socket),
     do: instance_call(socket, "instance_entry/delete", %{"entry_id" => id}, "Entry deleted.")
 
-  # A recovery prompt that ended leaves the identity to be read again; an
-  # instance prompt that saved a key reads the entries again.
+  # A recovery prompt that ended leaves the identity to be read again, the
+  # identity card's by the card; an instance prompt that saved a key reads
+  # the entries again.
   @impl PrismWeb.SystemLayer.Hook
   def system_layer_report(prompt_id, outcome, socket) do
     report = {:system_layer, prompt_id, outcome}
 
     cond do
+      IdentityCard.prompt?(prompt_id) ->
+        send_update(IdentityCard, id: IdentityCard.id(), report: {prompt_id, outcome})
+        {:noreply, load_identity(socket)}
+
       recovery_prompt?(prompt_id) ->
-        {:noreply, socket |> recovery_ended(report) |> load_identity()}
+        {:noreply, socket |> load_identity() |> reload_card()}
 
       instance_prompt?(prompt_id) ->
         {:noreply, instance_prompt_ended(socket, report)}
@@ -571,7 +546,8 @@ defmodule PrismWeb.SettingsLive do
          |> put_flash(:info, ok_message)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Sign-in method: #{error_message(reason)}")}
+        {:noreply,
+         put_flash(socket, :error, "Could not change the allowlist: #{error_message(reason)}")}
     end
   end
 
@@ -714,9 +690,9 @@ defmodule PrismWeb.SettingsLive do
   defp put_prefill(need, acc),
     do: Map.put_new(acc, need.qualifier, %{hosts: need.hosts, paths: need.paths})
 
-  # The create form as typed: choosing a provider whose shipped need
-  # declares a destination fills in its hosts and, where declared, its
-  # paths, and leaves everything else as the administrator typed it.
+  # The create form as typed: choosing a provider fills in its shipped
+  # need's hosts and, where declared, its paths, and leaves everything
+  # else as the administrator typed it.
   defp draft(socket, params) do
     previous = socket.assigns.instance_draft
 
@@ -1149,27 +1125,21 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  # The enrollment prompt, at the directory this home pins. Until it ends,
-  # its seed is held there, so no abandonment is offered beside it.
-  defp enroll(socket) do
-    case socket.assigns.identity do
-      %{directory_url: url} when is_binary(url) ->
-        show_recovery(socket, &Recovery.enrollment(&1, url), :enrolling)
-
-      _no_directory ->
-        {:noreply, put_flash(socket, :error, no_directory_sentence())}
-    end
+  # The identity card reads where the person stands again, after a change
+  # this page made beside it.
+  defp reload_card(socket) do
+    send_update(IdentityCard, id: IdentityCard.id(), reload: true)
+    socket
   end
 
-  # A recovery prompt, under an id of this page's own, in the page's layer;
-  # `remember` names the assign that holds its id while it is open.
-  defp show_recovery(socket, build, remember \\ nil) do
+  # A recovery prompt, under an id of this page's own, in the page's layer.
+  defp show_recovery(socket, build) do
     prompt_id = "recovery-" <> Integer.to_string(System.unique_integer([:positive]))
 
     case build.(prompt_id) do
       {:ok, prompt} ->
         SystemLayer.show(SystemLayer.layer_id(), prompt)
-        {:noreply, if(remember, do: assign(socket, remember, prompt_id), else: socket)}
+        {:noreply, socket}
 
       {:error, :invalid_prompt} ->
         {:noreply, put_flash(socket, :error, "That cannot be shown here.")}
@@ -1179,27 +1149,17 @@ defmodule PrismWeb.SettingsLive do
   defp recovery_prompt?("recovery-" <> _rest), do: true
   defp recovery_prompt?(_prompt_id), do: false
 
-  # A refused prompt stays open; a confirmed or dismissed one has ended,
-  # and with it whatever seed it held.
-  defp recovery_ended(socket, {:system_layer, _id, {:refused, _reason}}), do: socket
-
-  defp recovery_ended(%{assigns: %{enrolling: id}} = socket, {:system_layer, id, _ended}),
-    do: assign(socket, :enrolling, nil)
-
-  defp recovery_ended(socket, _report), do: socket
-
   defp new_request_id(prefix),
     do: prefix <> "_" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-
-  defp no_directory_sentence,
-    do:
-      "This CYFR names no identity directory, so nobody enrolls here yet: its operator sets " <>
-        "CYFR_DIRECTORY_URL. Everything else, local pairing included, works without it."
 
   defp rotate(socket, request_id) do
     case SystemLayer.call(socket, :rotate, "person/rotate", %{"request_id" => request_id}) do
       {:ok, %{phase: "completed"}, socket} ->
-        {:noreply, socket |> load_identity() |> put_flash(:info, "Your live key was rotated.")}
+        {:noreply,
+         socket
+         |> load_identity()
+         |> reload_card()
+         |> put_flash(:info, "Your live key was rotated.")}
 
       {:ok, %{phase: phase}, socket} ->
         {:noreply,
@@ -1381,8 +1341,6 @@ defmodule PrismWeb.SettingsLive do
     end
   end
 
-  defp short(hash) when is_binary(hash), do: String.slice(hash, 0, 16) <> "…"
-
   defp services_map(nil), do: %{}
   defp services_map(services) when is_map(services), do: services
   defp services_map(_), do: %{}
@@ -1445,12 +1403,18 @@ defmodule PrismWeb.SettingsLive do
       <div :if={@loading} class="text-center text-gray-500 py-12">Loading...</div>
 
       <div :if={!@loading} class="space-y-6">
-        <.identity_card
-          identity={@identity}
-          error={@identity_error}
-          remote={remote?(@identity)}
-          enrolling={@enrolling}
-        />
+        <.card>
+          <.live_component
+            module={IdentityCard}
+            id={IdentityCard.id()}
+            context={@context}
+            offer="settings"
+          >
+            <:enrolled :let={status}>
+              <.enrolled_actions status={status} />
+            </:enrolled>
+          </.live_component>
+        </.card>
 
         <.doors_card
           identity={@identity}
@@ -1529,14 +1493,18 @@ defmodule PrismWeb.SettingsLive do
         <.card :if={@context.platform_admin}>
           <h3 class="text-sm font-medium text-gray-400 mb-1">Server allowlist</h3>
           <p class="text-xs text-gray-500 mb-4">
-            Who may sign in here. An email, an IdP subject, or <code>*</code>
-            for anyone the provider authenticates. A deny is sticky and ejects the person.
+            Who may sign in here. A person made here signs in unless denied. A person
+            whose keys another CYFR holds signs in when <code>*</code>
+            or an allow names their identifier (<code>per_…</code>). A deny names a person
+            (<code>usr_…</code>) or an identifier, is sticky and ejects the person. Allow
+            or deny someone by their handle (<code>@name</code>) and the entry keeps the
+            identifier the handle names now, with the handle shown beside it.
           </p>
 
           <div :if={@door_requests != []} class="mb-4">
             <h4 class="text-xs text-gray-500 uppercase mb-2">Requests</h4>
             <.table id="door-requests" rows={@door_requests}>
-              <:col :let={r} label="Email">{r.value}</:col>
+              <:col :let={r} label="Identifier">{r.value}</:col>
               <:col :let={r} label="Asked by">{r.requested_by || "-"}</:col>
               <:col :let={r} label="Actions">
                 <div class="flex gap-2">
@@ -1562,10 +1530,15 @@ defmodule PrismWeb.SettingsLive do
           </div>
 
           <div :if={@door_entries == []} class="py-4">
-            <.empty_state message="Only the platform admins can sign in — the list is empty" />
+            <.empty_state message="No entries: everyone made here signs in, and no one from another CYFR" />
           </div>
           <.table :if={@door_entries != []} id="door-entries" rows={@door_entries}>
-            <:col :let={e} label="Entry">{e.value}</:col>
+            <:col :let={e} label="Entry">
+              {e.value}
+              <span :if={e[:label]} class="text-gray-400 ml-1" data-test="door-entry-label">
+                @{e[:label]}
+              </span>
+            </:col>
             <:col :let={e} label="Kind">{e.kind}</:col>
             <:col :let={e} label="Effect">
               <.badge color={if e.effect == "allow", do: "green", else: "red"}>{e.effect}</.badge>
@@ -1581,7 +1554,12 @@ defmodule PrismWeb.SettingsLive do
           <form id="door-entry-form" phx-change="door_form_changed" class="mt-4 space-y-2">
             <div class="flex gap-2 items-end">
               <div class="flex-1">
-                <.input name="value" value={@door_value} required placeholder="email, subject, or *" />
+                <.input
+                  name="value"
+                  value={@door_value}
+                  required
+                  placeholder="per_…, @handle, usr_…, or *"
+                />
               </div>
               <div class="flex-1">
                 <.input name="note" value={@door_note} placeholder="note (optional)" />
@@ -1738,146 +1716,35 @@ defmodule PrismWeb.SettingsLive do
     """
   end
 
-  defp remote?(%{provenance: "remote"}), do: true
-  defp remote?(_identity), do: false
+  attr :status, :map, required: true
 
-  attr :identity, :map, default: nil
-  attr :error, :string, default: nil
-  attr :remote, :boolean, required: true
-  attr :enrolling, :string, default: nil
-
-  # The person's identity: who holds their keys, the identifier and the
-  # directory, the kits not yet saved, and what they can do here.
-  defp identity_card(assigns) do
+  # Beside the identity card, for an enrolled person: another printed kit
+  # and the live key's rotation.
+  defp enrolled_actions(assigns) do
     ~H"""
-    <.card>
-      <section
-        data-test="identity"
-        data-provenance={@identity && @identity.provenance}
-        data-enrollment={@identity && @identity.enrollment}
-        class="space-y-3"
-      >
-        <h3 class="text-sm font-medium text-gray-400">Your identity</h3>
-
-        <p :if={@error} role="alert" class="text-sm">{@error}</p>
-        <p :if={is_nil(@identity) and is_nil(@error)} class="text-sm text-gray-400">
-          Reading your identity.
-        </p>
-
-        <div :if={@identity} class="space-y-3">
-          <dl class="grid grid-cols-3 gap-2 text-sm">
-            <dt class="text-xs text-gray-500 uppercase">Identifier</dt>
-            <dd class="col-span-2 font-mono break-all" data-test="identity-identifier">
-              {@identity.identifier || "not enrolled"}
-            </dd>
-            <dt class="text-xs text-gray-500 uppercase">Directory</dt>
-            <dd class="col-span-2 break-all" data-test="identity-directory">
-              {@identity.directory_url || "none pinned"}
-            </dd>
-            <dt :if={@identity.key_epoch} class="text-xs text-gray-500 uppercase">Key epoch</dt>
-            <dd :if={@identity.key_epoch} class="col-span-2 font-mono" title={@identity.key_epoch}>
-              {short(@identity.key_epoch)}
-            </dd>
-          </dl>
-
-          <p :if={@remote} class="text-sm" data-test="identity-remote">
-            Your keys are held at another CYFR, so your identity is enrolled, rotated and recovered there.
-          </p>
-
-          <div :if={not @remote} class="space-y-3">
-            <p
-              :if={@identity.enrollment == "none" and is_nil(@identity.directory_url)}
-              class="text-sm"
-              data-test="identity-no-directory"
-            >
-              {no_directory_sentence()}
-            </p>
-
-            <div
-              :if={@identity.enrollment == "none" and is_binary(@identity.directory_url)}
-              class="space-y-2"
-            >
-              <p class="text-sm text-gray-300">
-                You hold keys at this CYFR but no identifier yet. Enrolling registers one at this CYFR's directory and prints the kit that recovers it.
-              </p>
-              <.button phx-click="enroll" data-test="identity-enroll">Enroll</.button>
-            </div>
-
-            <div :if={@identity.enrollment == "pending"} class="space-y-2">
-              <p class="text-sm text-gray-300">
-                Your enrollment is waiting for the directory's answer.
-              </p>
-              <div :if={is_nil(@enrolling)} class="space-y-2">
-                <p class="text-sm text-gray-300">
-                  Only the browser that began it holds its kit. If that browser lost it, abandon it and enroll again with a new kit; a registration the directory may already hold stays there unused.
-                </p>
-                <.button
-                  variant="ghost"
-                  phx-click="abandon_enrollment"
-                  data-test="identity-abandon"
-                >
-                  Abandon and start again
-                </.button>
-              </div>
-            </div>
-
-            <ul :if={@identity.kits != []} class="space-y-2">
-              <li
-                :for={kit <- @identity.kits}
-                class="flex items-center justify-between gap-2 text-sm"
-                data-test="identity-kit"
-                data-attempt={kit.attempt_id}
-                data-phase={kit.phase}
-              >
-                <span :if={kit.deliverable}>
-                  A printed kit ({kit_kind(kit)}) waits for you to say it is saved.
-                </span>
-                <span :if={not kit.deliverable}>
-                  A printed kit ({kit_kind(kit)}) is at {kit.phase}; finish it in the prompt that began it.
-                </span>
-                <.button
-                  :if={kit.deliverable}
-                  variant="ghost"
-                  phx-click="show_kit"
-                  phx-value-attempt={kit.attempt_id}
-                  data-test="identity-kit-show"
-                >
-                  Show kit
-                </.button>
-              </li>
-            </ul>
-
-            <div :if={@identity.enrollment == "enrolled"} class="space-y-2">
-              <p class="text-sm text-gray-300">
-                A printed kit recovers your identity on a fresh installation. A printed kit is the one recovery holder here; no device holds one. Add another before you rely on one: if every kit is lost, nothing can add one.
-              </p>
-              <p :if={@identity.rotation} class="text-sm" data-test="identity-rotation">
-                A rotation of your live key stands at {@identity.rotation.phase}.
-              </p>
-              <div class="flex flex-wrap gap-2">
-                <.button
-                  :if={not Enum.any?(@identity.kits, &(&1.kind == "holder"))}
-                  variant="ghost"
-                  phx-click="add_kit"
-                  data-test="identity-add-kit"
-                >
-                  Add another printed kit
-                </.button>
-                <.button variant="ghost" phx-click="rotate" data-test="identity-rotate">
-                  {if @identity.rotation, do: "Finish the rotation", else: "Rotate the live key"}
-                </.button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-    </.card>
+    <div class="space-y-2">
+      <p class="text-sm text-gray-300">
+        A printed kit recovers your identity on a fresh installation. A printed kit is the one recovery holder here; no device holds one. Add another before you rely on one: if every kit is lost, nothing can add one.
+      </p>
+      <p :if={@status.rotation} class="text-sm" data-test="identity-rotation">
+        A rotation of your live key stands at {@status.rotation.phase}.
+      </p>
+      <div class="flex flex-wrap gap-2">
+        <.button
+          :if={not Enum.any?(@status.kits, &(&1.kind == "holder"))}
+          variant="ghost"
+          phx-click="add_kit"
+          data-test="identity-add-kit"
+        >
+          Add another printed kit
+        </.button>
+        <.button variant="ghost" phx-click="rotate" data-test="identity-rotate">
+          {if @status.rotation, do: "Finish the rotation", else: "Rotate the live key"}
+        </.button>
+      </div>
+    </div>
     """
   end
-
-  defp kit_kind(%{kind: "enrollment"}), do: "your first"
-  defp kit_kind(%{kind: "holder"}), do: "an added one"
-  defp kit_kind(_kit), do: "a kit"
 
   attr :identity, :map, default: nil
   attr :link_flow, :map, default: nil

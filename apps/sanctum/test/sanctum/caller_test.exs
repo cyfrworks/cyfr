@@ -29,7 +29,7 @@ defmodule Sanctum.CallerTest do
   # The identity signs in: from then on the person is named by their own id.
   defp claim!(user) do
     {:ok, row} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: user.user_id,
         provider: "github",
         email: user.email,
@@ -44,7 +44,7 @@ defmodule Sanctum.CallerTest do
   # no membership.
   defp known!(user) do
     {:ok, row} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: user.user_id,
         provider: "github",
         email: user.email,
@@ -75,9 +75,17 @@ defmodule Sanctum.CallerTest do
     session
   end
 
-  # A group of this person's own: no athanor is shared server-wide, so a
-  # test that needs a seat mints one.
+  # The person's own athanor, which their admission made with their seat
+  # there: the one a session of theirs resolves to.
   defp member!(user) do
+    {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(user.user_id)
+    {:ok, athanor} = Sanctum.Tenancy.Athanors.get(athanor_id)
+    {user, athanor}
+  end
+
+  # A group of this person's own, with their seat: an athanor a plain
+  # removal can take them out of.
+  defp group_member!(user) do
     {:ok, athanor} =
       Sanctum.Tenancy.Athanors.create_group(
         user.user_id,
@@ -111,13 +119,12 @@ defmodule Sanctum.CallerTest do
 
       assert focused == home.id
 
-      {other, other_home} = {new_user() |> claim!(), nil}
-      _ = other_home
+      other = new_user() |> claim!()
       other_session = session_for(Map.put(other, :namespace, other.slug))
 
-      # The other user holds no membership in the `home` fixture athanor.
-      assert {:error, reason} = Caller.establish(other_session.token, focus: home.id)
-      assert reason in [:not_member, :no_athanor]
+      # The other person holds no seat in `home`: an outsider is told what
+      # a missing athanor tells them.
+      assert {:error, :not_found} = Caller.establish(other_session.token, focus: home.id)
 
       assert {:error, :not_found} =
                Caller.establish(session.token, focus: "ath_does_not_exist")
@@ -183,20 +190,6 @@ defmodule Sanctum.CallerTest do
     end
   end
 
-  describe "peek/1" do
-    test "answers the identity fields without establishing" do
-      user = known!(new_user())
-      session = session_for(user, namespace: nil)
-
-      assert {:ok, %{user_id: user_id, provider: "github", namespace: nil}} =
-               Caller.peek(session.token)
-
-      assert user_id == user.user_id
-      assert {:error, :unauthenticated} = Caller.peek(nil)
-      assert {:error, :unauthenticated} = Caller.peek("cyfr_sess_bogus")
-    end
-  end
-
   describe "the establish memo" do
     setup do
       original = Application.get_env(:sanctum, :caller_memo_ttl_ms)
@@ -255,14 +248,15 @@ defmodule Sanctum.CallerTest do
 
     test "a plain member removal drops the memo like the door's revocations do" do
       # Warm the context memo with a nonzero TTL before checking immediate membership revocation.
-      {user, home} = new_user() |> claim!() |> member!()
+      {user, group} = new_user() |> claim!() |> group_member!()
       user = Map.put(user, :namespace, user.slug)
-      session = session_for(user)
+      session = session_for(user, athanor_id: group.id)
 
-      assert {:ok, _ctx} = Caller.establish(session.token)
+      assert {:ok, %Context{athanor_id: focused}} = Caller.establish(session.token)
+      assert focused == group.id
       refute Arca.Cache.match({:established, :_, :_}) == []
 
-      :ok = Sanctum.Tenancy.Members.remove_member(home, user_id: user.user_id)
+      :ok = Sanctum.Tenancy.Members.remove_member(group, user_id: user.user_id)
 
       assert Arca.Cache.match({:established, :_, :_}) == [],
              "the removed member's cached context survived the removal"

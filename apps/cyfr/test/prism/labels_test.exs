@@ -2,31 +2,13 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Prism.LabelsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias Prism.Labels
 
-  setup do
-    prev = Application.get_env(:sanctum, :auth_provider)
-
-    on_exit(fn ->
-      if prev,
-        do: Application.put_env(:sanctum, :auth_provider, prev),
-        else: Application.delete_env(:sanctum, :auth_provider)
-    end)
-
-    :ok
-  end
-
-  test "on a private box everyone lands in dev" do
-    Application.delete_env(:sanctum, :auth_provider)
-    assert Labels.default(%{platform_admin: false}) == "dev"
-    assert Labels.mode(nil, %{platform_admin: false}) == "dev"
-  end
-
-  test "behind a door a person lands in lite and the operator in dev; a saved preference wins" do
-    Application.put_env(:sanctum, :auth_provider, Sanctum.Auth.OAuth)
+  test "a person lands in lite and the administrator in dev; a saved preference wins" do
     assert Labels.default(%{platform_admin: false}) == "lite"
+    assert Labels.default(nil) == "lite"
     assert Labels.default(%{platform_admin: true}) == "dev"
     assert Labels.mode(nil, %{platform_admin: false}) == "lite"
     assert Labels.mode("dev", %{platform_admin: false}) == "dev"

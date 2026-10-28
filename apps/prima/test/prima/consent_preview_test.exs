@@ -237,6 +237,28 @@ defmodule Prima.ConsentPreviewTest do
     assert ConsentPreview.decode("rows") == {:error, {:invalid_field, "preview"}}
   end
 
+  test "a credential row's fields map each field the component reads to the entry field that answers it" do
+    {:ok, %ConsentPreview{rows: rows}} = ConsentPreview.decode(vectors()["preview"])
+    credentials = for %Row{kind: :credential, values: values} <- rows, do: values
+
+    for values <- credentials, do: assert(is_map(values["fields"]), inspect(values["fields"]))
+
+    assert [%{"fields" => %{"api_key" => "API key"}}] =
+             Enum.filter(credentials, &(&1["source"] == "instance"))
+  end
+
+  test "a credential whose fields are a list, or whose map names an empty field, is refused on its fields" do
+    refusals = Map.new(vectors()["refusals"], &{&1["name"], &1["preview"]})
+
+    for name <- [
+          "a credential whose fields are a list",
+          "a credential whose field map names an empty field"
+        ] do
+      assert %{^name => preview} = refusals
+      assert ConsentPreview.decode(preview) == {:error, {:invalid_field, "fields"}}, name
+    end
+  end
+
   test "a credential row names its source, destination, lifetime and the rest" do
     {:ok, %ConsentPreview{rows: rows}} = ConsentPreview.decode(vectors()["preview"])
     credentials = for %Row{kind: :credential, values: values} <- rows, do: values

@@ -100,11 +100,13 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           WebhookStorage),
        "the security rows, which Sanctum reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
-      {~w(CarryActions CliSignIns DeviceCertificates DeviceCertifications DirectoryHeads
-          IdentityAttempts IdentityLog PairingInvitations Passkeys PendingConfirmations
-          PersonIdentities RequestRateWindows),
-       "the identity, device, passkey, confirmation, carry, command-line sign-in and " <>
-         "pre-authentication rate rows Sanctum reads; that no other layer reads them is " <>
+      {~w(CarryActions CliSignIns CompanyAuthorizations CompanyLoginAttempts
+          DeviceCertificates DeviceCertifications DirectoryHeads IdentityAttempts IdentityLog
+          Invitations PairingInvitations Passkeys PendingConfirmations PersonIdentities
+          RequestRateWindows),
+       "the identity, device, passkey, confirmation, carry, command-line sign-in, " <>
+         "admission invitation, company sign-in and pre-authentication rate rows Sanctum " <>
+         "reads; that no other layer reads them is " <>
          "`Cyfr.Boundaries`' security row"},
       {~w(AgentRevisions AgentStorage BudgetReservations BuildRecords Cache Cache.Keys
           CipherRotation ComponentStorage ConsumerReceipts ControlPlane CredentialBindings
@@ -135,8 +137,8 @@ defmodule Cyfr.BoundaryDeclarationsTest do
     ],
     Sanctum => [
       {~w(ApiKey Auth Auth.DeviceFlow Auth.EmailVerification Auth.Identity
-          Auth.OAuth Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller Cipher
-          Cipher.Rotation CliSignIn ClientIp Consent.Loader Consent.Proof
+          Auth.OIDC Authority Authority.BudgetCounter BearerToken Caller Cipher
+          Cipher.Rotation CliSignIn ClientIp CompanyLogin Consent.Loader Consent.Proof
           Consent.RegistrationBinding Consent.ShapeDerivation Consent.ShapeDiff Context
           Door Door.Store Egress ExecutionStanding Namespace Network Notify
           Policy.Enforcement PolicyLog Provisioning Session SignIn Tenancy Tenancy.Athanors
@@ -144,6 +146,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
           UnauthorizedError Vault Vault.OAuthGrant VaultReader),
        "the identity, authority, consent and vault entries the layers above call " <>
          "downward, each rostered for its callers in `Cyfr.Boundaries`' surface rows"},
+      {~w(Handle Newcomer),
+       "the setup page's first-person admission (`Newcomer`) and the identity card's " <>
+         "live handle check (`Handle`), each rostered for its callers in `Cyfr.Boundaries`' " <>
+         "surface rows"},
       {~w(Consent.Components Proxy Tenancy.Caps),
        "the ports the composition root installs: component facts, proxied tool " <>
          "resolution and the storage cap"},
@@ -165,7 +171,10 @@ defmodule Cyfr.BoundaryDeclarationsTest do
          "driven by the host's suites through their handlers"},
       {~w(Consent.Accounts),
        "the assistant's read of which named accounts an app's own ingress binds and " <>
-         "which entry a name resolves to, never a value, never a write"}
+         "which entry a name resolves to, never a value, never a write"},
+      {~w(Invitations),
+       "the invitation page's read of who invited and to which athanor, before any " <>
+         "ceremony, rostered for it in `Cyfr.Boundaries`' surface rows"}
     ],
     Compendium => [
       {~w(AquaPath ComponentPath ConsentFacts),

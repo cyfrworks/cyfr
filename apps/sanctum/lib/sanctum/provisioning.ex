@@ -6,16 +6,18 @@ defmodule Sanctum.Provisioning do
   An athanor's half of being filled: who may hold it while it is filled,
   what it is allowed to run once it is, and what the row says went wrong.
 
-  A person's own athanor is minted at admission (`after_sign_in/1`): a
-  person needs no registry, no namespace and no claim to have one, and its
-  slug is their namespace only when that is already known and free. A
+  A person's own athanor is minted inside their admission's transaction
+  (`mint_personal/1`, called by `Sanctum.Newcomer`): a person needs no
+  registry, no namespace and no claim to have one, and a cap that refuses
+  it refuses the admission before the person's row
+  (`personal_admissible/0`), so no person is made without the athanor. A
   group is minted as a bare row (`Sanctum.Tenancy.Athanors.create_group/3`)
   and filled the first time something reads its bundle
   (`start_provisioning/1`). Provisioning is idempotent — `provisioned_at`
   marks completion and every step tolerates being repeated — and loud: a
   failure leaves the row unprovisioned with its step and reason on the row
   (`provisioning_failure`), and the next read of the bundle or the next
-  sign-in tries again.
+  sign-in tries again (`after_sign_in/1`).
 
   ## What this module does, and what it does not
 
@@ -41,7 +43,7 @@ defmodule Sanctum.Provisioning do
   held:
 
     * `after_sign_in/1`'s personal fill (`sign_in`): the row and the seat
-      are written on the sign-in; the fill is asked for and runs in the
+      were written by the admission; the fill is asked for and runs in the
       background under its own claim. A held claim means someone is
       filling already, and the sign-in adds nothing. The group retries are
       asked for the same way. No backoff.
@@ -101,7 +103,7 @@ defmodule Sanctum.Provisioning do
 
   alias Arca.ProvisioningClaims, as: Claims
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Users}
 
   # How long a claim stands without its keeper renewing it, and how often
   # the keeper does. A claim nobody renews is takeable one lease after the
@@ -126,9 +128,6 @@ defmodule Sanctum.Provisioning do
   # `mint_per_hour_range/0` hands it to the roster's validator, and a
   # stored value outside it refuses every mint.
   @mint_per_hour_range 1..1_000_000
-  # How many times a first sign-in mints past another person's concurrent
-  # mint of the same derived slug before the refusal stands.
-  @personal_mint_attempts 3
 
   @typedoc """
   The claim an attempt holds while it fills an athanor: the claim row as
@@ -142,52 +141,74 @@ defmodule Sanctum.Provisioning do
         }
 
   @doc """
-  Called once the person is admitted, and again whenever their namespace
-  is recorded (`Sanctum.SignIn.record_namespace/2`): mints their own
-  athanor if they have none, and asks for a retry of any group of theirs
-  whose provisioning failed earlier. Admission is enough — a person needs
-  no registry, no namespace and no claim to have a furnace of their own.
+  Called after an admission commits, at every later sign-in, and whenever
+  the person's namespace is recorded (`Sanctum.SignIn.record_namespace/2`):
+  asks for the fill of their own athanor while it is unfilled, and for a
+  retry of any group of theirs whose provisioning failed earlier. Mints
+  nothing: a person's athanor is their admission's (`mint_personal/1`).
   """
-  @spec after_sign_in(String.t()) ::
-          {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()} | :pending
+  @spec after_sign_in(String.t()) :: :ok
   def after_sign_in(user_id) when is_binary(user_id) do
-    case Users.get(user_id) do
-      {:ok, user} ->
-        retry_groups(user_id)
-        ensure_personal_athanor(user)
+    retry_groups(user_id)
 
-      {:error, :not_found} ->
-        :pending
+    case Athanors.get_by_owner(user_id) do
+      {:ok, %{status: "active"} = athanor} ->
+        fill_after_sign_in(athanor, person_ctx(user_id, athanor.id))
 
-      {:error, _} = err ->
-        err
+      _none ->
+        :ok
     end
+
+    :ok
   end
 
+  defp fill_after_sign_in(%{provisioned_at: %DateTime{}}, _ctx), do: :ok
+  defp fill_after_sign_in(athanor, ctx), do: request_fill(athanor, ctx, "sign_in")
+
   @doc """
-  The person's own athanor: the one their `users` row records, else a
-  fresh one (kind person, a slug of this server's — their namespace when
-  they have one and it is free, otherwise derived from their name — the
-  person its only member), asked to be filled if not yet filled, and
-  recorded on the row. Idempotent.
+  Mint the person's own athanor inside their admission's transaction
+  (`Sanctum.Newcomer`): kind person, a slug of this server's — their
+  namespace when they have one and it is free, otherwise derived from
+  their name — the person its only member, recorded on their row. Writes
+  only through Arca and makes no network call; its refusal rolls the
+  admission back.
+
+  It counts no cap: the admission asked `personal_admissible/0` before
+  the person's row, or made the installation's administrator.
   """
-  @spec ensure_personal_athanor(Sanctum.Tenancy.Users.user()) ::
+  @spec mint_personal(Sanctum.Tenancy.Users.user()) ::
           {:ok, Sanctum.Tenancy.Athanors.athanor()} | {:error, term()}
-  def ensure_personal_athanor(%{id: user_id} = user) do
-    with {:ok, athanor} <- find_or_create_personal(user),
-         {:ok, _} <- Members.ensure(user_id, scope: "athanor", athanor_id: athanor.id),
-         {:ok, _} <- record_personal(user, athanor) do
-      # The row and its seat are the sign-in's business and are written
-      # here; filling it is not, and a sign-in must not wait on a
-      # registry. A failure lands on the row and the next read retries.
-      fill_after_sign_in(athanor, person_ctx(user_id, athanor.id))
+  def mint_personal(%{id: user_id} = user) do
+    name = personal_name(user)
+
+    with {:ok, slugs} <- Athanors.person_slugs(user[:namespace], name),
+         {:ok, athanor} <-
+           Athanors.create_personal(
+             %{kind: "person", name: name, owner_user_id: user_id, created_by: user_id},
+             slugs
+           ),
+         {:ok, _user} <- Users.set_personal_athanor(user, athanor.id) do
       {:ok, athanor}
     end
   end
 
-  defp fill_after_sign_in(%{provisioned_at: %DateTime{}}, _ctx), do: :ok
+  @doc """
+  Whether a person may be admitted with an athanor of their own, asked
+  inside their admission's transaction before their row is written
+  (`Sanctum.Newcomer`, `Arca.Users.mint/4`'s `verify:`), so a refused
+  admission writes no row: the mint rate, then the server cap, counted
+  under the census lock the transaction then holds to its end
+  (`Sanctum.Tenancy.Athanors.personal_place/0`). `CYFR_MINT_PER_HOUR` bounds how fast
+  people may arrive, and this is its only enforcement.
 
-  defp fill_after_sign_in(athanor, ctx), do: request_fill(athanor, ctx, "sign_in")
+  The installation's first person, its administrator, is not asked: a
+  server at capacity, or holding a mint rate it cannot use, must still be
+  set up by the person who can act on it.
+  """
+  @spec personal_admissible() :: :ok | {:error, term()}
+  def personal_admissible do
+    with :ok <- mint_allowed(), do: Athanors.personal_place()
+  end
 
   @doc """
   Whether the context's athanor has been filled.
@@ -1021,97 +1042,23 @@ defmodule Sanctum.Provisioning do
     :ok
   end
 
-  # One personal athanor per owner is the store's invariant, so the owner
-  # is the lookup; a person with none yet is minted one. A mint the owner
-  # index refuses lost to a concurrent sign-in of the same person, whose
-  # athanor is the one. The slug is an address on this server, never an
-  # identity: the namespace is only a hint for it.
-  defp find_or_create_personal(%{id: user_id} = user) do
-    case Athanors.get_by_owner(user_id) do
-      {:ok, athanor} -> {:ok, athanor}
-      {:error, :not_found} -> mint_or_adopt(user, @personal_mint_attempts)
-      {:error, _} = err -> err
-    end
-  end
-
-  # Two first sign-ins of one person race to mint: the unique indexes admit
-  # one row, and the one on the slug is checked before the one on the
-  # owner, so the loser is refused by either. Each refusal is answered by
-  # reading the winner's row back. A slug refused with no row of this
-  # person's is another person's concurrent mint of the same derived slug,
-  # which the next attempt's slug check sees; what is still refused after
-  # the attempts is the refusal.
-  defp mint_or_adopt(user, attempts) do
-    case mint_personal(user) do
-      {:error, :slug_taken} -> adopt(user, :slug_taken, attempts)
-      {:error, {:invalid, %{owner_user_id: _taken}} = reason} -> adopt(user, reason, attempts)
-      minted -> minted
-    end
-  end
-
-  defp adopt(%{id: user_id} = user, reason, attempts) do
-    case Athanors.get_by_owner(user_id) do
-      {:ok, athanor} ->
-        {:ok, athanor}
-
-      {:error, :not_found} when reason == :slug_taken and attempts > 1 ->
-        mint_or_adopt(user, attempts - 1)
-
-      {:error, :not_found} ->
-        {:error, reason}
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
-  # An operator's own athanor is minted past the server caps and the mint
-  # rate (`Athanors.create_for_operator/1`): they are named in
-  # `CYFR_PLATFORM_ADMIN_EMAILS` rather than arriving, and a server at
-  # capacity, or holding a mint rate it cannot use, must still admit the
-  # person who can act on it. Everyone else is a stranger arriving, held to
-  # the caps and to the mint rate — `CYFR_MINT_PER_HOUR` bounds how fast
-  # strangers may arrive, and `mint_allowed/0` is its only enforcement, so
-  # a refusal here must reach the door rather than being swallowed.
-  defp mint_personal(%{id: user_id} = user) do
-    name = personal_name(user)
-
-    attrs_for = fn slug ->
-      %{kind: "person", name: name, slug: slug, owner_user_id: user_id, created_by: user_id}
-    end
-
-    if Sanctum.Tenancy.platform_admin?(user_id) do
-      with {:ok, slug} <- Athanors.person_slug(user.namespace, name) do
-        Athanors.create_for_operator(attrs_for.(slug))
-      end
-    else
-      with :ok <- mint_allowed(),
-           {:ok, slug} <- Athanors.person_slug(user.namespace, name) do
-        Athanors.create(attrs_for.(slug))
-      end
-    end
-  end
-
   # What the athanor is called: the person's screen name, else the
   # address's local part, else the namespace, else a plain word.
   defp personal_name(user) do
     cond do
-      is_binary(user.display_name) and String.trim(user.display_name) != "" ->
-        String.trim(user.display_name)
+      is_binary(user[:display_name]) and String.trim(user[:display_name]) != "" ->
+        String.trim(user[:display_name])
 
-      is_binary(user.email) and String.contains?(user.email, "@") ->
-        user.email |> String.split("@") |> hd()
+      is_binary(user[:email]) and String.contains?(user[:email], "@") ->
+        user[:email] |> String.split("@") |> hd()
 
-      is_binary(user.namespace) ->
-        user.namespace
+      is_binary(user[:namespace]) ->
+        user[:namespace]
 
       true ->
         "Me"
     end
   end
-
-  defp record_personal(%{personal_athanor_id: id} = user, %{id: id}), do: {:ok, user}
-  defp record_personal(user, athanor), do: Users.set_personal_athanor(user, athanor.id)
 
   @doc """
   The bounds a mint rate (`CYFR_MINT_PER_HOUR`, the `mint_per_hour`

@@ -71,8 +71,8 @@ defmodule Sanctum.InstanceEntries do
   their own daily cap, and no other person's.
   `binding/2` answers one of them as a consent binds
   it, with the digest it stands at and nothing unsealed or claimed.
-  `binding_facts/1` answers an entry's kind, provider, status and digest
-  to a boot's revision that has no person, so it carries a binding only
+  `binding_facts/1` answers an entry's kind, provider, field names,
+  status and digest to a boot's revision that has no person, so it carries a binding only
   while those still hold.
   `resolve/4` is the attach path's read
   (`Sanctum.Attach`): in order, the context's person is active (their own
@@ -142,12 +142,17 @@ defmodule Sanctum.InstanceEntries do
           updated_at: DateTime.t() | nil
         }
 
-  @typedoc "An entry offered to a person: what it reaches and for whom, never material."
+  @typedoc """
+  An entry offered to a person: what it reaches, for whom and the names
+  of its fields, never material. `field_names` is sorted, and a column
+  that does not decode reads as none.
+  """
   @type offer_view :: %{
           id: String.t(),
           name: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
+          field_names: [String.t()],
           destination: %{String.t() => term()} | nil,
           component_policy: String.t()
         }
@@ -163,6 +168,7 @@ defmodule Sanctum.InstanceEntries do
           name: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
+          field_names: [String.t()],
           destination: %{String.t() => term()} | nil,
           component_policy: String.t(),
           used_today: non_neg_integer(),
@@ -185,15 +191,20 @@ defmodule Sanctum.InstanceEntries do
           name: String.t(),
           kind: String.t(),
           provider_hint: String.t(),
+          field_names: [String.t()],
           destination: %{String.t() => term()} | nil,
           component_policy: String.t(),
           binding_digest: String.t() | nil
         }
 
-  @typedoc "What a carried binding is held to: the entry's kind, provider, status and digest."
+  @typedoc """
+  What a carried binding is held to: the entry's kind, provider, field
+  names, status and digest.
+  """
   @type binding_facts :: %{
           kind: String.t(),
           provider_hint: String.t(),
+          field_names: [String.t()],
           status: String.t(),
           binding_digest: String.t() | nil
         }
@@ -359,7 +370,8 @@ defmodule Sanctum.InstanceEntries do
   @doc """
   The facts a boot's revision with no person holds a carried instance
   binding to (`Sanctum.Consent.Bootstrap`, its only caller): the entry's
-  `kind`, `provider_hint`, `status` and stored `binding_digest`, read
+  `kind`, `provider_hint`, `field_names`, `status` and stored
+  `binding_digest`, read
   under the platform's actor, `{:error, :not_found}`, or
   `{:error, :corrupt}` for a damaged row. Metadata only:
   it unseals nothing, offers nothing and names no person, so it decides
@@ -370,7 +382,10 @@ defmodule Sanctum.InstanceEntries do
   def binding_facts(entry_id) when is_binary(entry_id) do
     with {:ok, entry} <- Store.get(actor(), entry_id),
          :ok <- held_kind(entry) do
-      {:ok, Map.take(entry, [:kind, :provider_hint, :status, :binding_digest])}
+      {:ok,
+       entry
+       |> Map.take([:kind, :provider_hint, :status, :binding_digest])
+       |> Map.put(:field_names, decode_list(entry.field_names))}
     end
   end
 
@@ -1231,6 +1246,7 @@ defmodule Sanctum.InstanceEntries do
       name: entry.name,
       kind: entry.kind,
       provider_hint: entry.provider_hint,
+      field_names: decode_list(entry.field_names),
       destination: decode_destination(entry.destination),
       component_policy: entry.component_policy
     }

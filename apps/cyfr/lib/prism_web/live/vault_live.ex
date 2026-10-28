@@ -13,45 +13,35 @@ defmodule PrismWeb.VaultLive do
   callback completes it server-side and the vault PubSub topic refreshes
   this view when the entry lands.
 
-  An entry the create form makes is for a key one of the athanor's
-  components needs. The form's one required choice lists, each kind and
-  provider pair once and labelled "<provider> (<kind>)", the `api_key`
-  and `bundle` need rows the grant plan answers for each installed
-  component (`profile.plan` on its name-level ref, as the grant prompt
-  asks it): the component's own needs and its dependencies' at the
-  versions it pins, whose providers are the ones "Connect your
-  <provider> account" names on the consent sheet. The choice sets both
-  the entry's kind and its provider (`provider_hint`), so the entry is a
-  candidate for that need; there is no free text, a choice the page did
-  not offer makes nothing, and an OAuth need is met through the OAuth
-  form.
-
-  The needs are read when the form opens, and again on each submit,
-  first and resent, just before `vault.create`: a choice no longer
-  offered makes nothing, lets a held confirmation go, and the form is
-  drawn again with the list as it now reads. A component list, or any one
-  component's plan, that cannot be read (the plan's refusal read on its
-  class, `unavailable`) is said as such and offers no create, never as
-  no need. A component whose plan is refused as damage, or for a class
-  the page does not know, is named with its plan's own sentence, and the
-  rest are listed; one the athanor no longer holds by the time its plan
-  is read is left out. A dependency a plan marks unresolved, not installed
-  or stored damaged, is named with the component that needs it, never
-  left out, and a choice it would have offered is never said to be no
-  longer needed. A component list the read may have cut short says so
-  and names the CLI for a key it left out. Only a list read whole that
-  names no such need tells the person to install one.
+  The create form makes an entry of whatever the person names, whether
+  or not a component is installed: a name, its kind (`API key` or `Bundle
+  of fields`; an OAuth entry is made through the OAuth form), an optional
+  label, its fields as `FIELD=value` lines under any name the person
+  types, and where its material may go. What a need is offered is decided
+  by its hosts against the entry's destination; the label only ranks an
+  entry for a need of that provider and names the default an entry
+  becomes. The label input suggests the providers the installed
+  components' `api_key` and `bundle` needs name, read when the form opens
+  from each component's grant plan (`profile.plan` on its name-level
+  ref): its own needs and its dependencies' at the versions it pins. A
+  component list or plan that cannot be read, or a list cut at the most
+  one read answers, suggests fewer and blocks nothing.
 
   Every new entry names where its material may go — the destination's
   hosts, and optionally its scheme, port, methods and paths — and whether
-  a component may read it. The page reads the needs for the provider
-  choice alone and still prefills neither: the person types the
+  a component may read it. Neither is prefilled: the person types the
   destination, and disclosure is off until they turn it on
   (`PrismWeb.SystemLayer.destination_params/1`). Each entry's row shows
   where it goes and whether components may read it: an attach-only
   entry's value is never handed to a component, and CYFR attaches it to
   requests bound for the entry's destination. Each entry the athanor uses
-  by default for its provider (`vault.list`'s `defaults`) says so.
+  by default for its provider (`vault.list`'s `defaults`) says so. Each
+  row names the grants that use it, `Used by <component>` for each active
+  grant whose head binds it (`vault.list`'s `used_by`), with the grant's
+  label when it is not `default`, or `Nothing uses it yet.`; when those
+  grants cannot be read the page says so once above the rows and says
+  neither. The MCP servers that read an entry through a `vault:` header
+  are named on its row too.
 
   "Provided by this instance" lists the instance entries offered to the
   person (`instance_entry.offered`): each one's provider, destination and
@@ -83,10 +73,6 @@ defmodule PrismWeb.VaultLive do
   alias PrismWeb.SystemLayer
   require Logger
 
-  @needs_unread "The keys your components need cannot be read right now — try again."
-  @no_longer_needed "That key is no longer needed here — choose again."
-  @unconfirmed "Whether that key is still needed could not be read, so nothing was made."
-
   @impl true
   def mount(_params, _session, socket) do
     # Subscribe once, at mount — handle_params re-fires on every patch,
@@ -108,9 +94,7 @@ defmodule PrismWeb.VaultLive do
       |> assign(:used_by, %{})
       |> assign(:clients, [])
       |> assign(:show_add, nil)
-      |> assign(:key_needs, nil)
-      |> assign(:stale_choice, false)
-      |> assign(:create_redraw, false)
+      |> assign(:labels, [])
       |> assign(:pending_grant, nil)
       |> assign(:rotating, nil)
       |> assign(:loading, true)
@@ -129,15 +113,13 @@ defmodule PrismWeb.VaultLive do
   # Events — create
   # ---------------------------------------------------------------------------
 
-  # The create form reads the needs it offers each time it opens, so a
-  # component installed since is offered and one removed is not.
+  # The create form reads the labels it suggests each time it opens, so a
+  # component installed since is suggested and one removed is not.
   @impl true
   def handle_event("show_add", %{"mode" => mode}, socket) do
     shown = if socket.assigns.show_add == mode, do: nil, else: mode
-    socket = assign(socket, show_add: shown, stale_choice: false)
-
-    {:noreply,
-     if(shown == "fields", do: fetch_key_needs(socket), else: assign(socket, :key_needs, nil))}
+    socket = assign(socket, :show_add, shown)
+    {:noreply, if(shown == "fields", do: fetch_labels(socket), else: assign(socket, :labels, []))}
   end
 
   # The operator's OAuth app for a provider — the client id/secret an
@@ -180,33 +162,27 @@ defmodule PrismWeb.VaultLive do
     end
   end
 
-  # The entry's kind and provider are the chosen need's. The needs are
-  # read again here, on the first submit and on the one the browser sends
-  # once the change is confirmed, just before `vault.create`: a choice the
-  # page never offered, a kind included, makes nothing, and so does one it
-  # offered that the athanor no longer needs. What still separates this
-  # read from the create is the time between them; no lock spans the two.
+  # The entry is what the form names: its kind one the form makes, its
+  # label the one typed, none when left empty.
   def handle_event("create", %{"name" => name, "fields" => fields_text} = params, socket) do
-    offered = socket.assigns.key_needs
-    socket = socket |> assign(:stale_choice, false) |> fetch_key_needs()
-
-    with {:ok, need} <- chosen_need(offered, socket.assigns.key_needs, params["need"]),
+    with {:ok, kind} <- form_kind(params["kind"]),
          {:ok, fields} <- parse_fields(fields_text) do
-      args = %{
-        "name" => name,
-        "kind" => need.kind,
-        "provider_hint" => need.provider,
-        "fields" => fields,
-        "destination" => SystemLayer.destination_params(params),
-        "disclose" => SystemLayer.disclose_param(params)
-      }
+      args =
+        %{
+          "name" => name,
+          "kind" => kind,
+          "fields" => fields,
+          "destination" => SystemLayer.destination_params(params),
+          "disclose" => SystemLayer.disclose_param(params)
+        }
+        |> Prima.MapUtil.put_present("provider_hint", String.trim(params["provider_hint"] || ""))
 
       case SystemLayer.call(socket, :create, "vault/create", args, form: create_form()) do
         {:ok, _, socket} ->
           {:noreply,
            socket
            |> fetch_entries()
-           |> assign(show_add: nil, key_needs: nil)
+           |> assign(show_add: nil, labels: [])
            |> put_flash(:info, "Entry created.")}
 
         {:asked, socket} ->
@@ -216,17 +192,13 @@ defmodule PrismWeb.VaultLive do
           {:noreply, put_flash(socket, :error, "Create failed: #{fmt(reason)}")}
       end
     else
-      :no_longer_needed ->
-        {:noreply, stale_choice(socket, :no_longer_needed)}
-
-      :unconfirmed ->
-        {:noreply, stale_choice(socket, :unconfirmed)}
-
-      :unread ->
-        {:noreply, release_create(socket, @needs_unread)}
-
-      :not_offered ->
-        {:noreply, unreadable(socket, :create, "Choose the provider this key is for")}
+      :not_a_kind ->
+        {:noreply,
+         unreadable(
+           socket,
+           :create,
+           "Choose whether the entry is an API key or a bundle of fields"
+         )}
 
       {:error, number} ->
         {:noreply, unreadable(socket, :create, bad_line(number))}
@@ -382,11 +354,6 @@ defmodule PrismWeb.VaultLive do
     {:noreply, socket |> fetch_offered() |> fetch_entries()}
   end
 
-  # The create form comes back, drawn from the needs as they now read
-  # (`stale_choice/2`).
-  def handle_info(:redraw_create_form, socket),
-    do: {:noreply, assign(socket, :create_redraw, false)}
-
   def handle_info(msg, socket) do
     Prima.LoggerContext.unexpected(__MODULE__, msg, :debug)
     {:noreply, socket}
@@ -440,38 +407,6 @@ defmodule PrismWeb.VaultLive do
     end
   end
 
-  # A create that is not made because the needs no longer offer its
-  # choice, or no longer read: the proof held for it, if any, is let go
-  # with the sentence the page shows, as `unreadable/3` lets one go.
-  defp release_create(socket, sentence) do
-    case SystemLayer.release(socket, :create, sentence) do
-      {:cancel_failed, socket} ->
-        put_flash(socket, :error, "The approval could not be withdrawn; it ends when it expires.")
-
-      {_released_or_none, socket} ->
-        socket
-    end
-  end
-
-  # A choice the open form offered that the needs as they now read do not
-  # name: no longer needed when they read whole, and not known either way
-  # when a plan was refused or the list was cut, since the need may sit in
-  # what was not read. Nothing is made either way. The create form keeps
-  # what was typed in the browser (`phx-update="ignore"`), its options with
-  # it, so showing the needs as they now read takes the form away for one
-  # render and draws it fresh in the next; what was typed goes with it, as
-  # it goes when a confirmation's prompt ends.
-  defp stale_choice(socket, why) do
-    send(self(), :redraw_create_form)
-
-    socket
-    |> release_create(stale_sentence(why))
-    |> assign(stale_choice: why, create_redraw: true)
-  end
-
-  defp stale_sentence(:no_longer_needed), do: @no_longer_needed
-  defp stale_sentence(:unconfirmed), do: @unconfirmed
-
   # A line that does not read is named by its number, never its content: a
   # value pasted without its FIELD= would otherwise be shown back.
   defp bad_line(number), do: "Each line must be FIELD=value (line #{number} is not)"
@@ -510,201 +445,89 @@ defmodule PrismWeb.VaultLive do
     end
   end
 
-  # The kinds of entry the create form makes. An OAuth entry is made by
-  # its own form, through a grant.
-  @form_kinds Prima.CredentialKinds.all() -- ["oauth"]
+  # The kinds of entry the create form makes, each with the words it is
+  # offered under. An OAuth entry is made by its own form, through a grant.
+  @form_kinds [{"api_key", "API key"}, {"bundle", "Bundle of fields"}]
+
+  defp form_kind(kind) do
+    if List.keymember?(@form_kinds, kind, 0), do: {:ok, kind}, else: :not_a_kind
+  end
+
+  defp form_kinds, do: @form_kinds
 
   # The most component rows one `component.list` answers.
   @list_limit 1000
 
-  # The needs the create form offers, read where the consent sheet's
-  # "Connect your <provider> account" reads a need's provider: the grant
-  # plan (`profile.plan`) of each installed component, by its name-level
-  # ref as the grant prompt asks it. Its need rows are the component's own
-  # and, under `dependency_needs`, each dependency's at the version the
-  # component pins; each `api_key` and `bundle` row is offered as
-  # `%{kind, provider}`, each pair once.
-  #
-  # `key_needs` is `%{needs, refused, cut}`, or `:unread` when the
-  # component list, or any one component's plan, could not be read: an
-  # outage, read on its class (`unavailable`), leaves the list unread
-  # whole, never short of what the unread plan needed. A plan refused as
-  # damage (`corrupt`), or for a class this page does not know, is in
-  # `refused` with its plan's own sentence, so its needs are never left
-  # out unsaid; a component the athanor no longer holds when its plan is
-  # read (`not_found`) is left out, since it no longer needs anything. A
-  # plan whose closure is unresolved, a dependency missing or stored
-  # damaged, keeps its other needs and is in `refused` too, naming that
-  # dependency: its needs are not among the plan's. No refusal is read for
-  # its words. `cut` is a list as long as the most one call answers, which
-  # may have left components out.
-  defp fetch_key_needs(socket) do
-    case read_key_needs(socket) do
-      {:ok, read} ->
-        assign(socket, :key_needs, read)
+  # The labels the create form suggests: the provider of each `api_key`
+  # and `bundle` need the grant plan (`profile.plan`) of each installed
+  # component answers, by its name-level ref as the grant prompt asks it,
+  # its own needs and, under `dependency_needs`, each dependency's at the
+  # version the component pins. Each label once, sorted. A list or a plan
+  # that cannot be read suggests what the rest name, and blocks nothing:
+  # a label is never required.
+  defp fetch_labels(socket) do
+    labels =
+      case fetch_list(socket, "component/list", :components, %{"limit" => @list_limit}) do
+        {:ok, rows} ->
+          rows
+          |> name_refs()
+          |> Enum.flat_map(&plan_labels(socket, &1))
+          |> Enum.uniq()
+          |> Enum.sort()
 
-      {:error, message} ->
-        Logger.warning("[VaultLive] the keys the components need could not be read: #{message}")
-        assign(socket, :key_needs, :unread)
-    end
-  end
-
-  defp read_key_needs(socket) do
-    with {:ok, rows} <-
-           fetch_list(socket, "component/list", :components, %{"limit" => @list_limit}),
-         {:ok, refs} <- name_refs(rows),
-         {:ok, needs, refused} <- plans_needs(socket, refs) do
-      {:ok,
-       %{
-         needs: needs |> Enum.uniq() |> Enum.sort_by(&{&1.provider, &1.kind}),
-         refused: Enum.sort_by(refused, & &1.ref),
-         cut: length(rows) >= @list_limit
-       }}
-    end
-  end
-
-  defp plans_needs(socket, refs) do
-    Enum.reduce_while(refs, {:ok, [], []}, fn ref, {:ok, needs, refused} = read ->
-      case plan_needs(socket, ref) do
-        {:needs, own, unresolved} -> {:cont, {:ok, own ++ needs, unresolved ++ refused}}
-        {:refused, entry} -> {:cont, {:ok, needs, [entry | refused]}}
-        :removed -> {:cont, read}
-        {:unread, message} -> {:halt, {:error, message}}
+        {:error, message} ->
+          Logger.warning("[VaultLive] the installed components could not be read: #{message}")
+          []
       end
-    end)
+
+    assign(socket, :labels, labels)
   end
 
   # Each component once, by its name-level ref.
   defp name_refs(rows) do
-    Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, refs} ->
+    rows
+    |> Enum.flat_map(fn row ->
       with ref when is_binary(ref) <- row[:component_ref],
            {:ok, name_ref} <- Prima.ComponentRef.to_name_ref(ref) do
-        {:cont, {:ok, [name_ref | refs]}}
+        [name_ref]
       else
-        _unnamed -> {:halt, {:error, fmt({:unexpected_shape, row})}}
+        _unnamed -> []
       end
     end)
-    |> case do
-      {:ok, refs} -> {:ok, refs |> Enum.reverse() |> Enum.uniq()}
-      refused -> refused
-    end
+    |> Enum.uniq()
   end
 
-  # One component's plan, read on its refusal's class
-  # (`Sanctum.Refusals.classify/1`), never its words.
-  defp plan_needs(socket, ref) do
+  defp plan_labels(socket, ref) do
     case call_tool(socket, "profile/plan", %{"ref" => ref}) do
       {:ok, %{} = plan} ->
-        {:needs, form_needs(plan), unresolved_dependency(ref, plan)}
+        form_labels(plan)
 
       {:ok, other} ->
-        {:refused, unread_plan(ref, {:unexpected_shape, other})}
+        Logger.warning(
+          "[VaultLive] the plan of #{ref} could not be read: #{fmt({:unexpected_shape, other})}"
+        )
+
+        []
 
       {:error, reason} ->
-        case Sanctum.Refusals.classify(reason).class do
-          :unavailable -> {:unread, "#{ref}: #{fmt(reason)}"}
-          :not_found -> :removed
-          _damaged_or_unknown -> {:refused, unread_plan(ref, reason)}
-        end
+        Logger.warning("[VaultLive] the plan of #{ref} could not be read: #{fmt(reason)}")
+        []
     end
   end
 
-  defp unread_plan(ref, reason) do
-    sentence = fmt(reason)
-    Logger.warning("[VaultLive] the keys #{ref} needs could not be read: #{sentence}")
-    %{ref: ref, sentence: sentence}
-  end
-
-  # A dependency the plan could not resolve (`plan.unresolved`): its needs
-  # are not among the plan's, so the component is named with that
-  # dependency, never left out, and a choice it would have offered is not
-  # read as one no longer needed.
-  defp unresolved_dependency(ref, %{unresolved: %{} = unresolved}) do
-    sentence = unresolved_sentence(unresolved)
-    Logger.warning("[VaultLive] the keys #{ref} needs could not all be read: #{sentence}")
-    [%{ref: ref, sentence: sentence}]
-  end
-
-  defp unresolved_dependency(_ref, _plan), do: []
-
-  defp unresolved_sentence(%{reason: "corrupt_manifest", missing: dep}) when is_binary(dep),
-    do: "its dependency #{dep} is stored damaged"
-
-  defp unresolved_sentence(%{reason: "unresolvable_dependency", missing: dep})
-       when is_binary(dep),
-       do: "its dependency #{dep} is not installed, or its dependencies cannot be read"
-
-  defp unresolved_sentence(%{reason: reason, missing: dep}) when is_binary(dep),
-    do: "its dependency #{dep} cannot be resolved (#{reason})"
-
-  defp unresolved_sentence(%{reason: reason}),
-    do: "its dependencies cannot be resolved (#{reason})"
-
-  # The plan's need rows of the kinds this form makes: the component's own
-  # and its dependencies'. The `@ingress` row of a manifest declaring no
-  # needs names no kind, so it offers nothing.
-  defp form_needs(plan) do
+  # The providers of the plan's need rows of the kinds this form makes:
+  # the component's own and its dependencies'. The `@ingress` row of a
+  # manifest declaring no needs names no kind, so it suggests nothing.
+  defp form_labels(plan) do
     own = List.wrap(plan[:needs])
 
     dependencies =
       for %{needs: rows} <- List.wrap(plan[:dependency_needs]), row <- rows, do: row
 
     for %{kind: kind, provider: provider} <- own ++ dependencies,
-        kind in @form_kinds and is_binary(provider) and provider != "",
-        do: %{kind: kind, provider: provider}
+        List.keymember?(@form_kinds, kind, 0) and is_binary(provider) and provider != "",
+        do: provider
   end
-
-  # The need a submitted value names, in the needs as they now read
-  # (`fresh`); one the open form offered (`offered`) that they no longer
-  # name is no longer needed if they read whole, and unconfirmed if a plan
-  # was refused or the list was cut; any other was never offered.
-  defp chosen_need(offered, fresh, value) when is_binary(value) do
-    case find_need(fresh, value) do
-      %{} = need -> {:ok, need}
-      nil -> unchosen(offered, fresh, value)
-    end
-  end
-
-  defp chosen_need(_offered, _fresh, _value), do: :not_offered
-
-  defp unchosen(_offered, :unread, _value), do: :unread
-
-  defp unchosen(offered, fresh, value) do
-    cond do
-      is_nil(find_need(offered, value)) -> :not_offered
-      refused_of(fresh) != [] or cut?(fresh) -> :unconfirmed
-      true -> :no_longer_needed
-    end
-  end
-
-  defp find_need(%{needs: needs}, value), do: Enum.find(needs, &(need_value(&1) == value))
-  defp find_need(_unread_or_closed, _value), do: nil
-
-  # An option's value: the need's type as a manifest spells it.
-  defp need_value(%{kind: kind, provider: provider}), do: kind <> ":" <> provider
-
-  defp needs_of(%{needs: needs}), do: needs
-  defp needs_of(_unread), do: []
-
-  defp refused_of(%{refused: refused}), do: refused
-  defp refused_of(_unread), do: []
-
-  defp cut?(%{cut: cut}), do: cut
-  defp cut?(_unread), do: false
-
-  # Needs read whole that name none of the kinds this form makes.
-  defp no_need?(%{needs: [], refused: [], cut: false}), do: true
-  defp no_need?(_key_needs), do: false
-
-  # A refused plan's sentence, ended once.
-  defp ended(sentence), do: String.trim_trailing(sentence, ".") <> "."
-
-  # The CLI's create, with the provider it is for: `cyfr call` sends the
-  # operation's arguments as given, and on a terminal waits for the fresh
-  # confirmation the create asks for, given in Prism, then repeats it.
-  defp cli_create, do: ~s(cyfr call vault '{"action":"create",…,"provider_hint":"…"}')
-
-  defp list_limit, do: @list_limit
 
   # Which MCP servers draw on each entry (headers referencing it) —
   # shown on the row, so revoking one is done knowing what it breaks.
@@ -738,19 +561,23 @@ defmodule PrismWeb.VaultLive do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(s) when is_binary(s), do: if(String.trim(s) == "", do: nil, else: s)
 
-  @entry_keys ~w(id name kind provider_hint status field_names oauth_scopes destination attach_only payload_rev last_used_at)a
+  @entry_keys ~w(id name kind provider_hint status field_names oauth_scopes destination attach_only payload_rev last_used_at used_by)a
 
   defp normalize_entry(entry) do
     Map.new(@entry_keys, fn key -> {key, entry[key]} end)
   end
 
+  # Each line `FIELD=value`, split at its first `=`: a field's name is
+  # whatever precedes it, spaces inside included, and is never empty.
   defp parse_fields(text) when is_binary(text) do
     text
     |> split_lines()
     |> Enum.with_index(1)
     |> Enum.reduce_while({:ok, %{}}, fn {line, number}, {:ok, acc} ->
-      case String.split(line, "=", parts: 2) do
-        [key, value] when key != "" -> {:cont, {:ok, Map.put(acc, String.trim(key), value)}}
+      with [key, value] <- String.split(line, "=", parts: 2),
+           key when key != "" <- String.trim(key) do
+        {:cont, {:ok, Map.put(acc, key, value)}}
+      else
         _ -> {:halt, {:error, number}}
       end
     end)
@@ -849,37 +676,12 @@ defmodule PrismWeb.VaultLive do
         </div>
       </.card>
 
-      <!-- Add: sealed fields, for a key a component here needs -->
+      <!-- Add: sealed fields -->
       <.card :if={@show_add == "fields"}>
-        <p
-          :if={not is_map(@key_needs)}
-          role="alert"
-          class="text-sm text-red-400"
-          data-test="create-needs-unread"
-        >
-          The keys your components need cannot be read right now — try again.
-        </p>
-        <p
-          :for={refused <- refused_of(@key_needs)}
-          role="alert"
-          class="text-sm text-red-400"
-          data-test="create-needs-refused"
-          data-ref={refused.ref}
-        >
-          The keys {refused.ref} needs could not be read: {ended(refused.sentence)}
-        </p>
-        <p :if={cut?(@key_needs)} class="text-sm text-amber-400" data-test="create-needs-cut">
-          Only the {list_limit()} newest component versions were read, so a key one of the
-          others needs may be missing here — make it with <code class="font-mono">{cli_create()}</code>.
-        </p>
-        <p :if={no_need?(@key_needs)} class="text-sm text-gray-500" data-test="create-no-need">
-          No component here needs a key yet — install one first.
-        </p>
-        <p :if={@stale_choice} role="alert" class="text-sm text-red-400" data-test="create-stale">
-          {stale_sentence(@stale_choice)}
-        </p>
+        <datalist id="vault-create-labels">
+          <option :for={label <- @labels} value={label}></option>
+        </datalist>
         <form
-          :if={needs_of(@key_needs) != [] and not @create_redraw}
           id={create_form()}
           phx-update="ignore"
           phx-submit="create"
@@ -888,21 +690,28 @@ defmodule PrismWeb.VaultLive do
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>
-              <.input name="name" required placeholder="My Supabase" />
+              <.input name="name" required placeholder="My xAI key" />
             </div>
             <div>
-              <label class="block text-xs text-gray-500 uppercase mb-1">Provider</label>
+              <label class="block text-xs text-gray-500 uppercase mb-1">Kind</label>
               <select
-                name="need"
+                name="kind"
                 required
                 class="w-full rounded-md border-gray-600 bg-transparent text-sm"
               >
-                <option value="">Choose a provider</option>
-                <option :for={need <- needs_of(@key_needs)} value={need_value(need)}>
-                  {need.provider} ({need.kind})
-                </option>
+                <option :for={{kind, words} <- form_kinds()} value={kind}>{words}</option>
               </select>
             </div>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 uppercase mb-1">Label (optional)</label>
+            <input
+              type="text"
+              name="provider_hint"
+              list="vault-create-labels"
+              placeholder="x.ai"
+              class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            />
           </div>
           <div>
             <label class="block text-xs text-gray-500 uppercase mb-1">
@@ -912,7 +721,7 @@ defmodule PrismWeb.VaultLive do
               name="fields"
               rows="4"
               required
-              placeholder="SUPABASE_URL=https://…\nSUPABASE_ANON_KEY=…"
+              placeholder="API key=…"
               class="w-full rounded-md border-gray-600 bg-transparent font-mono text-sm"
             ></textarea>
           </div>
@@ -973,11 +782,29 @@ defmodule PrismWeb.VaultLive do
         <div :if={!@loading && @entries == []} class="py-8">
           <.empty_state message="No vault entries yet" />
         </div>
+        <p
+          :if={!@loading && uses_unread?(@entries)}
+          role="alert"
+          class="mb-2 text-sm text-amber-400"
+          data-test="entry-uses-unread"
+        >
+          Which grants use these entries could not be read right now.
+        </p>
         <.table :if={!@loading && @entries != []} id="vault-entries" rows={@entries}>
           <:col :let={entry} label="Name">
-            <div class="space-y-1">
+            <div class="space-y-1" data-test="entry-name" data-id={entry.id}>
               <span class="font-medium">{entry.name}</span>
               <div class="text-xs text-gray-500 font-mono">{entry.id}</div>
+              <div
+                :for={use <- entry.used_by || []}
+                class="text-xs text-gray-400"
+                data-test="entry-use"
+              >
+                Used by {use_words(use)}
+              </div>
+              <div :if={entry.used_by == []} class="text-xs text-gray-500" data-test="entry-unused">
+                Nothing uses it yet.
+              </div>
               <div :if={Map.get(@used_by, entry.name, []) != []} class="text-xs text-amber-400/90">
                 {used_by_line(@used_by[entry.name])}
               </div>
@@ -1281,6 +1108,24 @@ defmodule PrismWeb.VaultLive do
     </fieldset>
     """
   end
+
+  # A grant that binds an entry: the component it is for, by name, and
+  # its label when it is not the default one.
+  defp use_words(use) do
+    component =
+      case Prima.ComponentRef.parse(use[:source_ref] || "") do
+        {:ok, %{name: name}} when is_binary(name) -> name
+        _unparsed -> use[:source_ref]
+      end
+
+    case use[:label] do
+      label when label in [nil, "", "default"] -> component
+      label -> "#{component} (#{label})"
+    end
+  end
+
+  # Grants that could not be read leave every entry's `used_by` nil.
+  defp uses_unread?(entries), do: Enum.any?(entries, &is_nil(&1.used_by))
 
   defp used_by_line([server]), do: "used by MCP server #{server}"
   defp used_by_line(servers), do: "used by MCP servers #{Enum.join(Enum.sort(servers), ", ")}"

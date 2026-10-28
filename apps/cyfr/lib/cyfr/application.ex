@@ -121,22 +121,21 @@ defmodule Cyfr.Application do
       OpentelemetryPhoenix.setup(adapter: :bandit)
     end
 
-    # A deployment with authentication configured names the cross-origin
+    # Every deployment signs people in, so it names the cross-origin
     # callers it admits: no wildcard CORS allowlist.
-    enforce_cors_not_wildcard_with_auth()
+    enforce_cors_not_wildcard()
 
-    # OIDC issuer reserved-host check — only when OIDC is the configured
-    # auth provider. A misconfigured generic-OIDC issuer would otherwise
-    # only surface as a 500 at the user's login callback.
+    # OIDC issuer reserved-host check — only when the OIDC issuer is
+    # configured. A misconfigured generic-OIDC issuer would otherwise only
+    # surface as a 500 at the user's login callback.
     validate_oidc_issuer_config!()
 
     # A webhook's body cap above a host call's body would read more than
     # an unauthenticated caller may send; refused here, not clamped.
     validate_webhook_max_body_bytes!()
 
-    # Warn (don't block) if auth is configured but no platform admin is
-    # declared — no user could access the system until one is seeded.
-    warn_if_no_platform_admin()
+    # Say (don't block) how a CYFR with no person yet is set up.
+    notice_if_no_person()
 
     # Attach OTEL tenant handler if OpenTelemetry is enabled
     if Application.get_env(:cyfr, :opentelemetry_enabled, false) do
@@ -567,8 +566,8 @@ defmodule Cyfr.Application do
     ]
   end
 
-  # Before the gate: only what the security reconcile needs, what must
-  # hear its announcements, and the settings every later child reads. None
+  # Before the gate: only what a declared restore's transition needs, what
+  # must hear its announcements, and the settings every later child reads. None
   # of these runs tenant work, projects a credential, dispatches to a
   # provider, starts a backend or recovers anything; each only answers
   # once something else calls it, but for the settings process's own node
@@ -587,8 +586,8 @@ defmodule Cyfr.Application do
       # failure `Cyfr.Cell`'s refusals exist to stop.
       cluster_supervisor(),
       # This member's slot in the cell — claimed before anything that
-      # assumes it is the only one holding this database, and the slot the
-      # security reconcile runs under.
+      # assumes it is the only one holding this database, and the slot a
+      # declared restore's transition runs under.
       cell_claim(),
       # The audit roster is the catalog's, read here and handed down: an
       # event is audited exactly when `Cyfr.Telemetry.Catalog` names
@@ -608,7 +607,7 @@ defmodule Cyfr.Application do
       # anything that establishes a caller. 5 s: its stop, which holds no
       # work in flight.
       Supervisor.child_spec(Cyfr.StandingWatch, shutdown: 5_000),
-      # The host's telemetry-to-bus bridge, attached before the reconcile
+      # The host's telemetry-to-bus bridge, attached before the gate
       # announces a revocation, so the announcement reaches mounted views.
       # 5 s: its stop, which holds no work in flight.
       Supervisor.child_spec(Cyfr.TelemetryBridge, shutdown: 5_000),
@@ -621,23 +620,18 @@ defmodule Cyfr.Application do
     ]
   end
 
-  # The gate: synchronous, and a checked success or no boot. Its `init/1`
-  # returns only after the reconcile committed, its claim was released
-  # and this member's slot re-verified; a refusal stops the supervisor's
-  # start, so nothing after it ever starts. Only the sandboxed test boot
-  # omits it, where no process may write before a test checks out the
-  # sandbox — see `bootstrap_skipped?/2`.
-  #
-  # A declared restore's transition runs right before it, under this
-  # member's slot (`declared_restore/0`), so the reconcile and every child
-  # after it read the store the transition left. Between the two, the
-  # storage reserve derives its latch (`Cyfr.StorageReserve`), so a home
-  # below the reserve's mark, or one restarted while depleted, admits
-  # nothing but reads and authority-reducing changes from its first
-  # request; the transition and the reconcile take authority away and
-  # write rows, which the latch never refuses. A reserve directory the
-  # boot cannot use stops its start, and the boot. The sandboxed test boot
-  # omits all three.
+  # The gate: synchronous, and a checked success or no boot. A declared
+  # restore's transition runs first, under this member's slot
+  # (`declared_restore/0`), so every child after it reads the store the
+  # transition left; a refusal stops the supervisor's start, so nothing
+  # after it ever starts. Then the storage reserve derives its latch
+  # (`Cyfr.StorageReserve`), so a home below the reserve's mark, or one
+  # restarted while depleted, admits nothing but reads and
+  # authority-reducing changes from its first request; the transition takes
+  # authority away and writes rows, which the latch never refuses. A
+  # reserve directory the boot cannot use stops its start, and the boot.
+  # Only the sandboxed test boot omits both, where no process may write
+  # before a test checks out the sandbox — see `bootstrap_skipped?/2`.
   defp gate do
     if bootstrap_skipped?(@bootstrap_skip_permitted, boot_work_enabled?()),
       do: [],
@@ -649,8 +643,7 @@ defmodule Cyfr.Application do
           type: :worker
         },
         # 5 s: its stop, which holds no work in flight.
-        Supervisor.child_spec(Cyfr.StorageReserve, shutdown: 5_000),
-        Supervisor.child_spec(Cyfr.Bootstrap, restart: :transient)
+        Supervisor.child_spec(Cyfr.StorageReserve, shutdown: 5_000)
       ]
   end
 
@@ -967,14 +960,12 @@ defmodule Cyfr.Application do
     )
   end
 
-  # Once authentication is configured the CORS allowlist must be an explicit
-  # one, never the wildcard. Fail closed at boot in a real release (gated on
-  # RELEASE_ROOT, so dev/test are never blocked); warn loudly otherwise. A
-  # no-auth deployment may configure the wildcard.
-  defp enforce_cors_not_wildcard_with_auth do
+  # The CORS allowlist is an explicit one, never the wildcard. Fail closed
+  # at boot in a real release (gated on RELEASE_ROOT, so dev/test are never
+  # blocked); warn loudly otherwise.
+  defp enforce_cors_not_wildcard do
     decision =
       cors_enforcement(
-        Sanctum.auth_configured?(),
         Cyfr.RuntimeConfig.cors_allowed_origins(),
         Cyfr.RuntimeConfig.release?()
       )
@@ -987,22 +978,19 @@ defmodule Cyfr.Application do
   end
 
   @doc """
-  The boot's decision on the CORS allowlist: a deployment that has
-  authentication configured must name its CORS origins in an explicit
-  allowlist, never the wildcard. With the wildcard, a release
-  (`real_release?`, a `RELEASE_ROOT` boot) answers `{:raise, message}`
-  and any other boot `{:warn, message}`; every other configuration
-  answers `:ok`.
+  The boot's decision on the CORS allowlist: a deployment names its CORS
+  origins in an explicit allowlist, never the wildcard, since every one
+  signs people in. With the wildcard, a release (`real_release?`, a
+  `RELEASE_ROOT` boot) answers `{:raise, message}` and any other boot
+  `{:warn, message}`; every other configuration answers `:ok`.
   """
-  @spec cors_enforcement(boolean(), term(), boolean()) ::
-          :ok | {:raise, String.t()} | {:warn, String.t()}
-  def cors_enforcement(auth_configured?, origins, real_release?) do
-    if auth_configured? and "*" in List.wrap(origins) do
+  @spec cors_enforcement(term(), boolean()) :: :ok | {:raise, String.t()} | {:warn, String.t()}
+  def cors_enforcement(origins, real_release?) do
+    if "*" in List.wrap(origins) do
       message =
-        "[Cyfr] FATAL: CORS wildcard \"*\" is configured in a deployment with " <>
-          "authentication enabled, which admits only the origins it names. Set " <>
-          "CYFR_CORS_ALLOWED_ORIGINS (comma-separated origins) — or :cyfr, " <>
-          ":cors_allowed_origins in config — to an explicit origin allowlist."
+        "[Cyfr] FATAL: CORS wildcard \"*\" is configured, and CYFR admits only the " <>
+          "origins it names. Set CYFR_CORS_ALLOWED_ORIGINS (comma-separated origins) — or " <>
+          ":cyfr, :cors_allowed_origins in config — to an explicit origin allowlist."
 
       if real_release? do
         {:raise, message}
@@ -1014,21 +1002,45 @@ defmodule Cyfr.Application do
     end
   end
 
-  # When auth is configured but no platform admin is declared, no user can be
-  # admitted until a membership row is seeded (authentication succeeds but the
-  # tenant gate yields no_athanor). Warn at boot — both under `mix phx.server` and in
-  # releases — so the operator knows to set CYFR_PLATFORM_ADMIN_EMAILS. Stays
-  # quiet in test, where no auth provider is configured.
-  defp warn_if_no_platform_admin do
-    auth_configured? = Sanctum.auth_configured?()
-    no_admins? = Sanctum.Door.platform_admin_emails() == []
+  # A CYFR with no person yet is set up by its first person, its
+  # administrator: through the setup link `cyfr init` and `cyfr setup`
+  # print, or, on a headless CYFR, which serves no page, `cyfr login
+  # --setup`. Said at boot, under `mix phx.server` and in releases alike,
+  # after `not_set_up_marker/0`, which `cyfr up` reads from the log; never
+  # with the token. The sandboxed test boot, which holds no database
+  # connection here, skips it, and a store that cannot answer says
+  # nothing rather than blocking the boot.
+  defp notice_if_no_person do
+    unless bootstrap_skipped?(@bootstrap_skip_permitted, boot_work_enabled?()) do
+      case Sanctum.Tenancy.Users.list_by_id(limit: 1) do
+        {:ok, []} -> Logger.warning(not_set_up_marker() <> " " <> not_set_up_notice())
+        _people_or_unanswered -> :ok
+      end
+    end
+  end
 
-    if auth_configured? and no_admins? do
-      Logger.warning(
-        "[Cyfr] WARNING: :auth_provider is configured but CYFR_PLATFORM_ADMIN_EMAILS " <>
-          "is empty — no user can access the system. Set CYFR_PLATFORM_ADMIN_EMAILS=" <>
-          "<your_email> or seed a membership row manually."
-      )
+  @doc """
+  What the boot's notice for a CYFR with no person yet begins with: the
+  line `cyfr up` looks for in the service's log.
+  """
+  @spec not_set_up_marker() :: String.t()
+  def not_set_up_marker, do: "[Cyfr] Not set up:"
+
+  @doc false
+  @spec not_set_up_notice() :: String.t()
+  def not_set_up_notice do
+    cond do
+      is_nil(Application.get_env(:sanctum, :setup_token)) ->
+        "no one is set up on this CYFR yet, and CYFR_SETUP_TOKEN is unset, so no one can " <>
+          "set it up: `cyfr init` writes one into .env."
+
+      Cyfr.RuntimeConfig.headless?() ->
+        "no one is set up on this CYFR yet. Its first person, who administers it, runs " <>
+          "`cyfr login --setup` in its directory."
+
+      true ->
+        "no one is set up on this CYFR yet. Its first person, who administers it, opens " <>
+          "the setup link `cyfr init` or `cyfr setup` printed (#{Sanctum.origin()}/setup#…)."
     end
   end
 
@@ -1104,11 +1116,15 @@ defmodule Cyfr.Application do
   # produce cross-deployment colliding user ids and silently break login.
   # Surface it at boot so a deploy fails loudly instead of every login.
   defp validate_oidc_issuer_config! do
-    if Sanctum.Auth.provider() == Sanctum.Auth.OIDC do
-      case check_oidc_issuer(Sanctum.Auth.OIDC.issuer()) do
-        :ok -> :ok
-        {:error, message} -> raise "[Cyfr] FATAL: #{message}"
-      end
+    case Sanctum.Auth.OIDC.issuer() do
+      nil ->
+        :ok
+
+      issuer ->
+        case check_oidc_issuer(issuer) do
+          :ok -> :ok
+          {:error, message} -> raise "[Cyfr] FATAL: #{message}"
+        end
     end
   end
 
@@ -1129,8 +1145,8 @@ defmodule Cyfr.Application do
   defp check_oidc_issuer(_),
     do:
       {:error,
-       "CYFR_AUTH_PROVIDER=oidc is selected but :sanctum, :oidc_issuer is absent or blank. " <>
-         "Set CYFR_OIDC_ISSUER to your identity provider's issuer URL."}
+       ":sanctum, :oidc_issuer is blank. Set CYFR_OIDC_ISSUER to your identity provider's " <>
+         "issuer URL, or leave all three CYFR_OIDC_* settings unset."}
 
   # Resolve and pin :sanctum, :crypto_keyring — the key the identity
   # domain seals rows with, resolved here from the deployment's own

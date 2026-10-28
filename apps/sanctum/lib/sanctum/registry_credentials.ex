@@ -34,7 +34,8 @@ defmodule Sanctum.RegistryCredentials do
   A push token outlives the session that asks for it, so issuing one at
   the registry for a namespace the caller holds is a sensitive change
   (`credential_issuance`, `ARCHITECTURE.md` §9.3), decided by
-  `confirm_issuance/4` before the registry is asked.
+  `confirm_issuance/4` before the registry is asked. A token the registry
+  refused is removed with `delete_push_token/4`.
   """
 
   require Logger
@@ -62,12 +63,14 @@ defmodule Sanctum.RegistryCredentials do
   @doc """
   Seal and store a push token for the caller, replacing the one the same
   `(registry, namespace_slug)` held. A non-binary slug, or a token that
-  is not a non-empty string, stores nothing and answers `:skipped`.
+  is not a non-empty string, stores nothing and answers `:skipped`. A
+  member whose slot was taken is refused `:not_owner`
+  (`Arca.RegistryTokenStorage.put/1`).
 
   `opts`: `:label`, the name of the device the token was issued to.
   """
   @spec put_push_token(Context.t(), String.t(), term(), term(), String.t(), keyword()) ::
-          :ok | :skipped | {:error, :unavailable | :forbidden}
+          :ok | :skipped | {:error, :unavailable | :forbidden | :not_owner}
   def put_push_token(ctx, registry, namespace_slug, token, role, opts \\ [])
 
   def put_push_token(%Context{} = ctx, registry, namespace_slug, token, role, opts)
@@ -117,6 +120,50 @@ defmodule Sanctum.RegistryCredentials do
   end
 
   @doc """
+  Remove the caller's stored push token for `(registry, namespace_slug)`
+  when it is still `token`, the one the registry refused: a token a sync
+  stored meanwhile is kept. A row that no longer opens is removed too,
+  since nothing can use it. Answers `:ok` whether or not one was removed.
+  """
+  @spec delete_push_token(Context.t(), String.t(), String.t(), String.t()) ::
+          :ok | {:error, :unavailable | :forbidden | :not_owner}
+  def delete_push_token(%Context{} = ctx, registry, namespace_slug, token)
+      when is_binary(registry) and is_binary(namespace_slug) and is_binary(token) do
+    with {:ok, user_id} <- person(ctx) do
+      case Arca.RegistryTokenStorage.get(user_id, registry, namespace_slug) do
+        {:ok, row} ->
+          if refused_token?(row, token) do
+            case Arca.RegistryTokenStorage.delete_if_unchanged(
+                   user_id,
+                   registry,
+                   namespace_slug,
+                   row.credential_ciphertext
+                 ) do
+              :ok -> :ok
+              {:error, :not_owner} -> {:error, :not_owner}
+              {:error, _unreadable} -> {:error, :unavailable}
+            end
+          else
+            :ok
+          end
+
+        {:error, :not_found} ->
+          :ok
+
+        {:error, _unreadable} ->
+          {:error, :unavailable}
+      end
+    end
+  end
+
+  defp refused_token?(row, token) do
+    case unseal(row) do
+      {:ok, %{token: stored}} -> Plug.Crypto.secure_compare(stored, token)
+      :corrupt -> true
+    end
+  end
+
+  @doc """
   Every credential the caller holds for a registry, personal and reserved
   namespaces first, then publisher namespaces, alphabetical within each.
 
@@ -146,26 +193,31 @@ defmodule Sanctum.RegistryCredentials do
   end
 
   @doc """
-  Decide the caller's issuing of another push token for `namespace_slug`
-  at `registry`, labelled `label`: a credential that outlives the
-  session, so the fresh confirmation `credential_issuance` needs
-  (`Sanctum.Consent.Authz.confirm/3`), consumed at once, since the
-  issuance is one call to the registry that follows. The preview names
-  the namespace, the registry and the label; neither the bearer the
-  registry is asked with nor the token it issues is an argument.
+  Decide the caller's asking `registry` for a push token: `operation` is
+  the registry operation that mints it (`registry.tokens_issue`,
+  `registry.sync` or `registry.verify_publisher`) and `arguments` what it
+  is asked with, as text (a `"slug"` and a `"label"`, as it has them). A
+  credential that outlives the session, so the fresh confirmation
+  `credential_issuance` needs (`Sanctum.Consent.Authz.confirm/3`),
+  consumed at once, since the issuance is one call to the registry that
+  follows. The preview names the operation, the registry, the namespace
+  when there is one and the label; neither what the registry is asked with
+  nor the token it issues is an argument.
 
   Answers `:ok`, the consent signal `{:error, {:confirmation_required,
   ...}}`, or the confirmation's own refusal (`Sanctum.Consent.Authz`).
   """
-  @spec confirm_issuance(Context.t(), String.t(), String.t(), String.t()) ::
+  @spec confirm_issuance(Context.t(), String.t(), String.t(), %{String.t() => String.t()}) ::
           :ok | {:error, term()}
-  def confirm_issuance(%Context{} = ctx, registry, namespace_slug, label)
-      when is_binary(registry) and is_binary(namespace_slug) and is_binary(label) do
+  def confirm_issuance(%Context{} = ctx, operation, registry, arguments)
+      when is_binary(operation) and is_binary(registry) and is_map(arguments) do
+    arguments = Map.put(arguments, "registry", registry)
+
     Sanctum.Consent.Authz.confirm(ctx, :credential_issuance, %{
-      operation: "registry.tokens_issue",
-      arguments: %{"registry" => registry, "slug" => namespace_slug, "label" => label},
-      resource: namespace_slug,
-      details: %{"registry" => registry, "label" => label}
+      operation: operation,
+      arguments: arguments,
+      resource: Map.get(arguments, "slug", registry),
+      details: Map.delete(arguments, "slug")
     })
   end
 
@@ -195,6 +247,7 @@ defmodule Sanctum.RegistryCredentials do
            issued_at: issued_at
          }) do
       :ok -> :ok
+      {:error, :not_owner} -> {:error, :not_owner}
       {:error, _unreadable} -> {:error, :unavailable}
     end
   rescue

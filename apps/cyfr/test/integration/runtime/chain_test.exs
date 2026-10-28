@@ -438,7 +438,7 @@ defmodule Locus.Runtime.ChainTest do
               "scope" => "athanor",
               "binding_key" => Blob.binding_key(@root_node, @target_node, nil),
               "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
-              "projection" => %{"fields" => ["api_key"]}
+              "projection" => %{"fields" => %{"api_key" => "api_key"}, "scopes" => []}
             }
           }
         })

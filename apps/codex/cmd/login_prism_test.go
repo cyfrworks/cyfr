@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -37,8 +38,12 @@ type stubHome struct {
 	calls     []stubCall
 	polls     []string
 	expiresIn float64
-	// failing names the actions the home answers 502 to.
-	failing map[string]bool
+	// requests counts every request that reached it, discovery included.
+	requests int
+	// failing names the actions the home answers 502 to, and refusing
+	// the actions it refuses with a tool error carrying the sentence.
+	failing  map[string]bool
+	refusing map[string]string
 	// onAction, when set, runs as each action arrives, before its answer.
 	onAction func(action string)
 }
@@ -51,7 +56,7 @@ type stubCall struct {
 
 func newStubHome(t *testing.T, polls ...string) *stubHome {
 	t.Helper()
-	h := &stubHome{polls: polls, expiresIn: 30, failing: map[string]bool{}}
+	h := &stubHome{polls: polls, expiresIn: 30, failing: map[string]bool{}, refusing: map[string]string{}}
 	version := protocolVersionFromVectors(t)
 	h.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -63,6 +68,9 @@ func newStubHome(t *testing.T, polls ...string) *stubHome {
 			t.Errorf("unreadable request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
+		h.mu.Lock()
+		h.requests++
+		h.mu.Unlock()
 		if req.Method == "server/discover" {
 			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1,
 				"result": map[string]any{"supportedVersions": []string{version}}})
@@ -78,11 +86,16 @@ func newStubHome(t *testing.T, polls ...string) *stubHome {
 		h.calls = append(h.calls, stubCall{action: action, arguments: args,
 			authorization: r.Header.Get("Authorization")})
 		answer := h.answer(action)
-		fail := h.failing[action]
+		fail, refusal := h.failing[action], h.refusing[action]
 		h.mu.Unlock()
 
 		if fail {
 			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		if refusal != "" {
+			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1,
+				"result": map[string]any{"content": []map[string]any{{"type": "text", "text": refusal}}, "isError": true}})
 			return
 		}
 		text, _ := json.Marshal(answer)
@@ -119,8 +132,25 @@ func (h *stubHome) answer(action string) map[string]any {
 			"user": map[string]any{"email": "alice@example.com"}}
 	case "logout":
 		return map[string]any{"message": "Logged out successfully"}
+	case "setup":
+		// The first setup makes the person; each later one signs them in
+		// again, with a session of its own.
+		n := 0
+		for _, c := range h.calls {
+			if c.action == "setup" {
+				n++
+			}
+		}
+		return map[string]any{"session_token": fmt.Sprintf("setup-session-%d", n), "user_id": "per_first",
+			"readmitted": n > 1}
 	}
 	return map[string]any{}
+}
+
+func (h *stubHome) reached() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.requests
 }
 
 func (h *stubHome) actions() []string {
@@ -192,7 +222,7 @@ func runLogin(t *testing.T, ctx context.Context, args ...string) (string, error)
 	// here is a process of its own.
 	reset := func() {
 		flagJSON, flagURL, flagContext, flagNoInteractive, flagToken = false, "", "", false, ""
-		flagLoginProvider = ""
+		flagLoginProvider, flagLoginSetup = "", false
 		rootCmd.SetArgs(nil)
 	}
 	reset()

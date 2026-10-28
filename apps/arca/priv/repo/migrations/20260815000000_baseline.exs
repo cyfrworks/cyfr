@@ -17,15 +17,18 @@ defmodule Arca.Repo.Migrations.Baseline do
   silently truncates on SQLite, so every composite is a two-column pair and
   its parent carries a unique `(id, athanor_id)` index created first.
 
-  The three nullable `athanor_id` columns are `memberships` (a platform
+  The four nullable `athanor_id` columns are `memberships` (a platform
   assignment has no athanor), `sessions` (a session exists before its
-  athanor is resolved) and `decision_logs` (a call refused before any
-  tenant was resolved is the host's record, not a tenant's). `server_meta`, `registry_tokens`,
+  athanor is resolved), `decision_logs` (a call refused before any
+  tenant was resolved is the host's record, not a tenant's) and
+  `invitations` (an administrator's invitation may seat its newcomer in
+  no group). `server_meta`, `registry_tokens`,
   `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
   and `settings_pins` are not athanor-scoped: the first three are the
   server's own facts and the rest the cell's, and a cell has no athanor.
-  A person's identity, keys, identity attempts, carries, passkeys and
-  post-restore period, the directory's log, the cached heads of other
+  A person's identity, keys, identity attempts, carries, passkeys,
+  post-restore period, company sign-in and company sign-in attempts, the
+  directory's log, the cached heads of other
   people's logs, the installation claim and the pre-authentication rate
   windows are not an athanor's either (`people/0`), and neither is a
   command line's pending sign-in (`identity/0`), which no one owns until
@@ -92,6 +95,20 @@ defmodule Arca.Repo.Migrations.Baseline do
       expr: "security_generation > 0"
     }
 
+    # How a person was made here (`Arca.Users.mint/4`): the admission that
+    # wrote their row, and nothing else ever writes it.
+    user_admission =
+      known("users_admission_known", "admission", ~w(setup invitation open remote restore))
+
+    # The door's entries: an allow names a person identifier or the
+    # wildcard, a deny names a person of this server or a person identifier.
+    allowlist_kind = %{
+      name: "server_allowlist_kind_known",
+      expr:
+        "(effect = 'allow' AND kind IN ('identifier', 'wildcard')) OR " <>
+          "(effect = 'deny' AND kind IN ('person', 'identifier'))"
+    }
+
     create table(:athanors, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :kind, :string, null: false
@@ -150,7 +167,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       # Tri-state on purpose: true when the provider proved the address,
       # false when it said the opposite, NULL when it said nothing.
       add :email_verified, :boolean
-      add :provider, :string, null: false
+      add :admission, :string, null: false, check: if(sqlite?, do: user_admission)
       add :display_name, :string
       # The cyfr.run publisher namespace, once linked. Not identity.
       add :namespace, :string
@@ -174,6 +191,8 @@ defmodule Arca.Repo.Migrations.Baseline do
       create constraint(:users, user_generation.name, check: user_generation.expr)
     end
 
+    checked(sqlite?, :users, [user_admission])
+
     create index(:users, [:email])
     create index(:users, [:status])
     create unique_index(:users, [:namespace], where: "namespace IS NOT NULL")
@@ -196,36 +215,39 @@ defmodule Arca.Repo.Migrations.Baseline do
     create unique_index(:external_identities, [:key])
     create index(:external_identities, [:user_id])
 
-    # The door: who may sign in to this server. Entries name an email, an
-    # IdP subject, or the wildcard `*`; a deny wins over everything.
-    # `requested` rows are allow entries a member asked for by inviting an
-    # email the door does not know — they take effect when a platform admin
-    # resolves them.
+    # The door: who may sign in to this server. An allow names a person
+    # identifier or the wildcard `*`; a deny names a person of this server
+    # or a person identifier, and wins over every allow. `requested` rows
+    # are identifier allows a sign-in or an invitation asked for — they
+    # take effect when a platform admin resolves them. `label` is the
+    # handle an identifier entry was made from: shown beside the
+    # identifier, never read to decide who is admitted.
     create table(:server_allowlist, primary_key: false) do
       add :id, :string, primary_key: true, null: false
-      add :kind, :string, null: false
+      add :kind, :string, null: false, check: if(sqlite?, do: allowlist_kind)
       add :value, :string, null: false
       add :effect, :string, null: false, default: "allow"
       add :status, :string, null: false, default: "allowed"
       add :requested_by, :string
       add :added_by, :string
       add :note, :text
+      add :label, :string
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end
 
+    checked(sqlite?, :server_allowlist, [allowlist_kind])
     create unique_index(:server_allowlist, [:kind, :value])
     create index(:server_allowlist, [:status])
 
     # Presence-only assignments: a row means "user X is a member of athanor A"
     # (or, with no athanor, a platform admin). No roles. An `invited` row is
-    # keyed by exactly one of an email or a person identifier (`per_…`)
-    # before the person has signed in and carries no user_id; it activates,
-    # atomically, on their first admitted sign-in.
+    # keyed by a person identifier (`per_…`) before the person has signed in
+    # and carries no user_id; it activates, atomically, on their first
+    # admitted sign-in.
     create table(:memberships, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :user_id, :string
-      add :email, :string
       add :person_identifier, :string
       add :scope, :string, null: false, default: "athanor"
       add :status, :string, null: false, default: "active"
@@ -236,20 +258,63 @@ defmodule Arca.Repo.Migrations.Baseline do
     end
 
     create index(:memberships, [:user_id])
-    create index(:memberships, [:email])
     create index(:memberships, [:person_identifier])
     create index(:memberships, [:athanor_id])
 
     # Raw SQL because the uniqueness has to treat a NULL as a value — a
     # platform assignment carries no athanor, an invited row no user, an
-    # active row no email and no identifier — and two rows agreeing on all
-    # five are the same assignment. COALESCE in an index expression is not
-    # something `unique_index/3` can express.
+    # active row no identifier — and two rows agreeing on all four are the
+    # same assignment. COALESCE in an index expression is not something
+    # `unique_index/3` can express.
     execute """
     CREATE UNIQUE INDEX memberships_assignment_index
-    ON memberships (scope, COALESCE(athanor_id, ''), COALESCE(user_id, ''), COALESCE(email, ''),
+    ON memberships (scope, COALESCE(athanor_id, ''), COALESCE(user_id, ''),
                     COALESCE(person_identifier, ''))
     """
+
+    invitation_ends = [
+      %{
+        name: "invitations_redeemed_whole",
+        expr: "(redeemed_by IS NULL) = (redeemed_at IS NULL)"
+      },
+      %{name: "invitations_one_end", expr: "redeemed_at IS NULL OR revoked_at IS NULL"}
+    ]
+
+    invitation_generation = %{
+      name: "invitations_issuer_generation_positive",
+      expr: "issuer_generation > 0"
+    }
+
+    # An invitation to become a person here (`Arca.Invitations`): the hash
+    # of its code (the lowercase hex SHA-256 of its 32 bytes, never the
+    # code), the person who issued it and their `security_generation` when
+    # they did, the group athanor it seats its newcomer in or none, and its
+    # expiry. It ends once, redeemed by the person it made or revoked, each
+    # by a conditional write on an open row, and the two ends exclude each
+    # other. No default generation: an invitation is bound to the standing
+    # it was issued under, which a raise of it retires.
+    create table(:invitations, primary_key: false) do
+      add :id, :string, primary_key: true, null: false
+      add :code_hash, :string, null: false
+      add :issued_by, :string, null: false
+
+      add :issuer_generation, :bigint,
+        null: false,
+        check: if(sqlite?, do: invitation_generation)
+
+      add :athanor_id, :string
+      add :expires_at, :utc_datetime_usec, null: false
+      add :redeemed_by, :string, check: if(sqlite?, do: Enum.at(invitation_ends, 0))
+      add :redeemed_at, :utc_datetime_usec
+      add :revoked_at, :utc_datetime_usec, check: if(sqlite?, do: Enum.at(invitation_ends, 1))
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :invitations, [invitation_generation | invitation_ends])
+    create unique_index(:invitations, [:code_hash])
+    create index(:invitations, [:issued_by])
+    create index(:invitations, [:athanor_id])
   end
 
   # ==========================================================================
@@ -820,6 +885,45 @@ defmodule Arca.Repo.Migrations.Baseline do
 
     checked(sqlite?, :restore_people, [restore_open])
     create index(:restore_people, [:user_id, :open])
+
+    # A person's company sign-in (`Arca.CompanyAuthorizations`): the
+    # company configuration it was given under (the OpenID Connect issuer
+    # and client id, or the WorkOS organization and connection), the
+    # subject that company's issuer names them by, and when they last
+    # signed in with it. One per person, and one person per subject under
+    # a configuration: the unique index decides two bindings of one
+    # subject at once. It goes with the person's `users` row.
+    create table(:company_authorizations, primary_key: false) do
+      add :user_id, references(:users, type: :string, on_delete: :delete_all),
+        primary_key: true,
+        null: false
+
+      add :configuration, :text, null: false
+      add :subject, :text, null: false
+      add :authorized_at, :utc_datetime_usec, null: false
+    end
+
+    create unique_index(:company_authorizations, [:configuration, :subject])
+
+    # One company sign-in in flight (`Arca.CompanyLoginAttempts`): its
+    # person and the session that opened it, the hash of its state (never
+    # the state), the OpenID Connect nonce and PKCE verifier, and its
+    # expiry. Its callback consumes it once, by a conditional write on an
+    # unconsumed, unexpired row.
+    create table(:company_login_attempts, primary_key: false) do
+      add :id, :string, primary_key: true, null: false
+      add :user_id, references(:users, type: :string, on_delete: :delete_all), null: false
+      add :session_hash, :binary, null: false
+      add :state_hash, :binary, null: false
+      add :nonce, :string
+      add :pkce_verifier, :string
+      add :expires_at, :utc_datetime_usec, null: false
+      add :consumed_at, :utc_datetime_usec
+    end
+
+    create unique_index(:company_login_attempts, [:state_hash])
+    create index(:company_login_attempts, [:user_id])
+    create index(:company_login_attempts, [:expires_at])
 
     claim_state = known("installation_claims_state_known", "state", ~w(pending ended))
 

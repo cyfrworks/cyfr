@@ -95,7 +95,7 @@ defmodule Sanctum.SessionTest do
       user_id = "github|https://github.com|sess-#{n}"
 
       {:ok, row} =
-        Sanctum.Tenancy.Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: user_id,
           provider: "github",
           email: "sess#{n}@example.com",
@@ -494,11 +494,14 @@ defmodule Sanctum.SessionTest do
     end
 
     test "no external identity arrives under it" do
-      assert {:error, :not_an_identity} =
-               Sanctum.Tenancy.Users.upsert_from_provider(%{
-                 id: "restore|https://idp.test|someone",
-                 provider: "restore"
-               })
+      key = "restore|https://idp.test|someone"
+      assert {:error, :not_an_identity} = Sanctum.Auth.Identity.parse(key)
+      refute Sanctum.Auth.Identity.key?(key)
+
+      # So no person here is named by one, and a sign-in under it unlocks
+      # no one.
+      assert {:error, :no_person} =
+               Sanctum.SignIn.unlock(%{id: key, provider: "restore", verified: :unknown})
     end
   end
 end

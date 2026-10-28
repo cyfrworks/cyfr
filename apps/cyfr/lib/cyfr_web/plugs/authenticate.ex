@@ -20,7 +20,10 @@ defmodule CyfrWeb.Plugs.Authenticate do
   closed with 503; it never degrades to unauthenticated. So does a session
   of a remote person whose identity could not be confirmed fresh
   (`:identity_stale`): it answers 503 with that refusal's class and
-  sentence, and the session stands.
+  sentence, and the session stands. A person who stands but for the
+  company sign-in this CYFR requires (`:company_login_required`), by a
+  session or by an API key they made, is answered 403 with that
+  refusal's sentence: they sign in with their company in a browser.
 
   Every context this plug assigns carries the origin `programmatic`
   (`Prima.Origin`): the HTTP API and MCP are programmatic surfaces,
@@ -113,14 +116,15 @@ defmodule CyfrWeb.Plugs.Authenticate do
     errors.halt(conn, 503, :auth_provider_error, "Authentication service unavailable")
   end
 
+  # A bearer the test harness's provider issues (`Sanctum.Auth`'s
+  # `current_user/1`, `:sanctum, :bearer_provider`); a release sets none,
+  # and a request with no session or key reaches the public surface as an
+  # unauthenticated context (no permissions, no resolved athanor), its
+  # tenant-scoped routes rejected downstream.
   defp get_context(conn) do
-    auth_provider = Sanctum.Auth.provider()
+    auth_provider = Application.get_env(:sanctum, :bearer_provider)
 
     if is_nil(auth_provider) do
-      # No auth configured — the operator runs without sign-in. Requests reach
-      # the public surface as an unauthenticated context (no permissions, no
-      # resolved athanor); tenant-scoped routes are rejected downstream.
-      Logger.debug("[Authenticate] No auth_provider configured")
       unauthenticated_context()
     else
       try do
@@ -280,6 +284,9 @@ defmodule CyfrWeb.Plugs.Authenticate do
         # "expired" nor a denial.
         {:error, :identity_stale}
 
+      {:error, :company_login_required} ->
+        {:error, :company_login_required}
+
       {:error, :unauthenticated} ->
         # Not a session token this server issued — but not necessarily invalid.
         # A configured auth provider may accept bearer tokens of its own (an
@@ -296,7 +303,8 @@ defmodule CyfrWeb.Plugs.Authenticate do
         {:ok, fresh} ->
           {:ok, fresh}
 
-        {:error, reason} when reason in [:unavailable, :identity_stale] ->
+        {:error, reason}
+        when reason in [:unavailable, :identity_stale, :company_login_required] ->
           {:error, reason}
 
         # The memo named an athanor the session no longer reaches: this
@@ -333,6 +341,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
       {:error, :revoked} -> {:error, :api_key_revoked}
       {:error, :ip_not_allowed} -> {:error, :ip_not_allowed}
       {:error, :unavailable} -> {:error, :auth_provider_error}
+      {:error, :company_login_required} -> {:error, :company_login_required}
     end
   end
 
@@ -353,4 +362,7 @@ defmodule CyfrWeb.Plugs.Authenticate do
   # retryable, never a 401 that reads as a dead credential.
   defp error_response(conn, :identity_stale, errors),
     do: errors.halt(conn, 503, :identity_stale, nil)
+
+  defp error_response(conn, :company_login_required, errors),
+    do: errors.halt(conn, 403, :company_login_required, nil)
 end

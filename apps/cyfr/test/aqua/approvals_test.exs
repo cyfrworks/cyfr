@@ -637,7 +637,7 @@ defmodule Aqua.ApprovalsTest do
     n = System.unique_integer([:positive])
 
     {:ok, approver} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|approver#{n}",
         provider: "github",
         email: "approver#{n}@example.com",
@@ -895,7 +895,8 @@ defmodule Aqua.ApprovalsTest do
         "api_key" => %{
           "type" => "api_key:example.com",
           "reason" => "to call the example API",
-          "fields" => ["KEY"]
+          "fields" => ["KEY"],
+          "hosts" => ["api.example.com"]
         }
       },
       "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}

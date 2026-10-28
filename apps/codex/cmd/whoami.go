@@ -78,7 +78,7 @@ func composeWhoami(session, registry map[string]any, registryErr error) map[stri
 //
 //   - claimed:       `moonmoon`
 //   - unclaimed:     `(no personal namespace claimed)`
-//   - reg. unauth:   `(not logged in to cyfr.run)`
+//   - no tokens:     `(no cyfr.run push tokens)`
 //   - reg. offline:  `(registry.cyfr.run unreachable)`
 //   - signed out:    skipped; output is just `Not signed in.`
 //
@@ -110,10 +110,10 @@ func renderWhoami(composed map[string]any, registryErr error) {
 		cyfrUser = personal
 	case hasRegistry && authenticated:
 		cyfrUser = "(no personal namespace claimed)"
-		hint = "Run `cyfr login` to claim your personal namespace."
+		hint = "Run `cyfr registry claim <handle>` to claim your personal namespace."
 	case hasRegistry:
-		cyfrUser = "(not logged in to cyfr.run)"
-		hint = "Run `cyfr login` to claim a personal namespace and provision push tokens."
+		cyfrUser = "(no cyfr.run push tokens)"
+		hint = "Run `cyfr registry claim <handle>` to claim a personal namespace, then `cyfr registry sync` to provision push tokens."
 	default:
 		cyfrUser = "(registry.cyfr.run unreachable)"
 	}

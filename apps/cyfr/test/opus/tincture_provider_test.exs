@@ -249,7 +249,7 @@ defmodule Opus.Providers.TinctureTest do
   describe "an anonymous caller over /mcp" do
     setup do
       Arca.Cache.init()
-      Application.put_env(:sanctum, :auth_provider, AnonymousAuthProvider)
+      Application.put_env(:sanctum, :bearer_provider, AnonymousAuthProvider)
 
       base = Path.join(System.tmp_dir!(), "tincture_mcp_#{System.unique_integer([:positive])}")
       keys = [cyfr: :locus_runtime_workers, arca: :base_path]

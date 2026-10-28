@@ -58,4 +58,25 @@ defmodule Arca.RegistryTokenStorageTest do
     assert {:ok, rows} = RegistryTokenStorage.list(@user, @reg)
     assert Enum.map(rows, & &1.namespace_slug) == ["alice", "stripe.com"]
   end
+
+  test "delete_if_unchanged removes the row only while it holds the ciphertext read" do
+    put!(@user, @reg, "alice", "refused")
+    put!(@user2, @reg, "alice", "refused")
+
+    # A token stored since the read is kept.
+    put!(@user, @reg, "alice", "fresh")
+    assert :ok = RegistryTokenStorage.delete_if_unchanged(@user, @reg, "alice", "refused")
+
+    assert {:ok, %{credential_ciphertext: "fresh"}} =
+             RegistryTokenStorage.get(@user, @reg, "alice")
+
+    assert :ok = RegistryTokenStorage.delete_if_unchanged(@user, @reg, "alice", "fresh")
+    assert {:error, :not_found} = RegistryTokenStorage.get(@user, @reg, "alice")
+
+    # Another person's row of the same namespace is theirs.
+    assert {:ok, %{credential_ciphertext: "refused"}} =
+             RegistryTokenStorage.get(@user2, @reg, "alice")
+
+    assert :ok = RegistryTokenStorage.delete_if_unchanged(@user, @reg, "alice", "fresh")
+  end
 end

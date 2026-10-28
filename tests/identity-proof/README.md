@@ -13,7 +13,7 @@ WebCrypto key need a secure origin:
 | the directory | `dir.test` | `CYFR_DIRECTORY_SERVE=writer`: the one writer of the identity's log |
 | A | `a.test` | the person's home; `CYFR_DIRECTORY_URL=https://dir.test` |
 | B | `b.test` | a relying home holding only a directory cache; `CYFR_IDENTITY_FRESHNESS_SECONDS` short (20, `IDENTITY_PROOF_FRESHNESS`) |
-| C | `c.test` | empty, `CYFR_RESTORE_TOKEN` of its own, `CYFR_REAUTH_SECONDS` short (20, `IDENTITY_PROOF_REAUTH`), and at first `CYFR_MAX_ATHANORS=1` over one athanor no person owns |
+| C | `c.test` | empty, `CYFR_RESTORE_TOKEN` of its own, `CYFR_REAUTH_SECONDS` short (20, `IDENTITY_PROOF_REAUTH`) |
 | C2, C3 | `c2.test`, `c3.test` | empty, each with a `CYFR_RESTORE_TOKEN` of its own |
 | the thief | `thief.test` | a copy of A's whole cell, taken while A was stopped: no home of the browsers |
 
@@ -82,9 +82,9 @@ the proof stops at the first row a later one rests on.
 | `second_kit` | another kit, signed by the first one's secret typed into the prompt, drawn in the browser, for the same identifier |
 | `rotate` | the live key rotated under a fresh confirmation: A's head and live key move; the glass's certificate signed under the replaced key, presented with a proof of its device key, is refused `4408`; the glass reconnects, renews by its device key and stands under a new certificate |
 | `cache` | B, which holds nothing of the person's, reads the identity at its directory from its genesis and caches A's head |
-| `reserved` | C refuses its first door sign-in, the operator's own address included, before any kit is presented: `restore_reserved` |
+| `reserved` | C refuses its setup, the admission that makes any other installation's first person, before any kit is presented: `restore_reserved` |
 | `claims` | C's own token alone opens it: C2's token is refused `401`, an identity the directory never saw `422`, a seed that is no kit of the identity `422`, and no attempt is opened |
-| `phases` | C killed (its node signalled, no stop of its own) at `submitted` (the recovery's reply dropped by the front), at `accepted` (the head it must read again unread) and at `minted` (its athanor refused by the cap), and started again each time, resumes under the same request; the directory holds one recovery |
+| `phases` | C killed (its node signalled, no stop of its own) at `submitted` (the recovery's reply dropped by the front) and at `accepted` (the head it must read again unread), and started again each time, resumes under the same request; the directory holds one recovery |
 | `replay` | the recovery's request sent again by C answers its recorded outcome, the entry C records once it resumes |
 | `thief` | a thief rotating on the copy of A at the same moment as the recovery loses: the recovery's keys hold, and a rotation after it is refused |
 | `restore` | the person restores on C in a fresh browser profile from the second kit's three lines and C's token; the form forgets both |

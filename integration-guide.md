@@ -48,7 +48,7 @@ API keys are the primary way applications authenticate with CYFR. There are thre
 |------|--------|----------|------------------------|
 | **Application** | `cyfr_pk_` | Frontend apps, client-side code | Safe to embed in browser code. Can execute and search, but cannot read the vault or perform admin operations by default. |
 | **Service** | `cyfr_sk_` | Backend services | Never expose client-side. Keep in environment variables. Can list the metadata of stored OAuth client credentials. |
-| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, changing a registry namespace, its tokens or members, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead. |
+| **Admin** | `cyfr_ak_` | CI/CD, automation, infrastructure | Use with IP allowlist. Every permission, including key management. A person's interactive acts — vault writes, consent grants, defining or changing an MCP server, pushing a component, claiming a handle, minting push tokens, changing a registry namespace, its tokens or members, publishing an address, accepting the registry's policies, filing a report or an appeal — take a signed-in session instead; each registry request among them is signed by the person's live key. |
 
 API keys are generated as cryptographically random tokens. CYFR only stores a SHA-256 hash — the raw key is shown once at creation time and cannot be retrieved later.
 
@@ -134,7 +134,7 @@ Scopes control what operations an API key can perform. Each scope maps to a cate
 | `execute` | Run components, manage schedules, compile builds |
 | `vault_read` | `oauth.list`: the names of the OAuth providers the athanor has client credentials for, who stored them and when; never the secret |
 | `component_read` | Get component blobs, discover components |
-| `component_manage` | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim and verify publishers, manage registry tokens and members; change Aqua souls, roles, guides and scrolls and their skills |
+| `component_manage` | Pull, push, register, create, fork, delete, reset, deprecate and yank components; claim a handle, claim and verify publishers, mint and manage registry push tokens and members, publish an address; change Aqua souls, roles, guides and scrolls and their skills |
 | `storage_read` | View execution records, MCP logs, enforcement logs, retention config |
 | `storage_write` | Set retention policies; write, edit and delete component source; write, delete, offer, accept, decline and withdraw files |
 | `admin` | API key management, retention cleanup, operating saved MCP servers (get, test, refresh, restart, enable, disable, delete) |
@@ -367,7 +367,7 @@ on the wire.
 |------|------|---------|
 | -33001 | `auth_required` | Not authenticated — tool requires login (see [Public Tools](#public-tools-no-auth-required) for exceptions) |
 | -33002 | `auth_invalid` | Invalid API key or token |
-| -33004 | `insufficient_permissions` | Key scope doesn't cover this action, the caller is not a platform admin, or the IP is not in the allowlist |
+| -33004 | `insufficient_permissions` | Key scope doesn't cover this action, the caller is not a platform admin, the IP is not in the allowlist, or the person behind the credential has not given the company sign-in this CYFR requires ([When a CYFR Requires a Company Sign-in](#when-a-cyfr-requires-a-company-sign-in)) |
 | -33100 | `internal` | The call failed for a reason the server could not confirm — check before retrying |
 | -33101 | `conflict` | The state moved on — read it again and retry |
 | -33102 | `not_owner` | This server does not currently own its control plane — retry shortly |
@@ -399,6 +399,29 @@ which carries the supported list in `error.data.supported`.
 
 > **MCP Tool Reference**: For a complete mapping of CLI commands to MCP tool/action pairs (useful when building HTTP integrations), see [CLI → MCP Tool Reference](component-guide.md#cli--mcp-tool-reference) in the Component Guide.
 
+### When a CYFR Requires a Company Sign-in
+
+A CYFR may require every person there to sign in with their company's
+account (`CYFR_COMPANY_LOGIN`, [README.md](README.md#requiring-a-company-sign-in)).
+While a person's company sign-in is missing, past its days, or given under
+another company configuration, CYFR refuses every request made with their
+credentials: an API key they made, their session token and their paired
+devices alike. The refusal, `company_login_required`, answers HTTP `403`
+with this message:
+
+> This CYFR requires you to sign in with your company's account. Sign in with it to go on.
+
+Over MCP it arrives as the JSON-RPC error `-33004`
+(`insufficient_permissions`). On an execution's event stream
+(`/api/executions/:id/events`) the body is
+`{"code": "forbidden", "message": "..."}`. A stream already open ends at
+its next revalidation.
+
+Retrying does not help, and no key or session needs to be made again. The
+person opens the CYFR in a browser, signs in, and chooses **Sign in with
+your company** on the page it sends them to. After that, the same API key
+and session token are admitted again.
+
 ### Public Tools (No Auth Required)
 
 Almost every tool call requires authentication. An uncredentialed caller
@@ -410,7 +433,7 @@ one annotation. It is short:
 |------|---------|------------|
 | `pairing` | `complete` | A new device holds neither a session nor a certificate: the short-lived, single-use pairing code a signed-in person's `pairing.begin` issued names the person and athanor, the device proves its key, and a session cookie the browser holds never chooses the person |
 | `person` | `renew_certificate` | A device paired at another CYFR renews the certificate this CYFR issued it, holding no session here: it proves the device key the certification names over a single-use challenge this CYFR issued, and only a certification still standing under the person's current keys is extended |
-| `session` | `logout`, `whoami`, `device_init`, `device_poll`, `cli_begin`, `cli_poll`, `cli_cancel`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions. `cli_begin` is `cyfr login` asking for a sign-in its person approves in Prism; `cli_poll` and `cli_cancel` name only the session token `cli_begin` answered, which no session holds until the person approves under a fresh confirmation ([devices-guide.md](devices-guide.md)) |
+| `session` | `logout`, `whoami`, `device_init`, `device_poll`, `cli_begin`, `setup`, `cli_poll`, `cli_cancel`, `read_resource` | Needed to authenticate in the first place; `read_resource` tells a caller only its own identity and permissions. `setup` is `cyfr login --setup` presenting the installation's setup token, which makes the first person or signs them in again until they hold a passkey, a paired device or a linked sign-in method; any other token, or a null one, answers `setup_closed`. `cli_begin` is `cyfr login` asking for a sign-in its person approves in Prism; `cli_poll` and `cli_cancel` name only the session token `cli_begin` answered, which no session holds until the person approves under a fresh confirmation ([devices-guide.md](devices-guide.md)) |
 | `system` | `status` | Health checks |
 | `tincture` | `invoke_public` | A published tincture is public by definition: named by its public address (`athanor`, the URL's `@namespace` or group slug, with `publisher` and `tincture_name`), the call runs one of its declared dependencies under its active public profile, as its public page does; the address confers no authority, and one with no active public profile answers `not_found` |
 
@@ -436,9 +459,11 @@ params); and any other refusal the code of its class in the table above.
 
 A second tier sits between public and fully authenticated: actions
 annotated `auth: :signed_in` serve a caller holding a live session that
-has not yet claimed a namespace, which is how the first-login flow
-(`registry.probe`, `registry.claim_personal`) completes. Those are not
-public — they need the session — but they do not need a claimed identity.
+has not yet claimed a namespace: `registry.claim_personal` and the
+registry's policy reads and acceptance (`registry.legal_version`,
+`registry.legal_page`, `registry.legal_accept`), so a person can claim a
+handle before anything else. Those are not public — they need the
+session — but they do not need a claimed identity.
 
 Everything else — `execution.*`, `build.*`, `schedule.*`, `vault.*`, `oauth.*`, `key.*`, `webhook.*`, `profile.*`, `record.*`, `mcp_log.*`, `policy_log.*`, `decision.*`, `retention.*`, `component.register`, `component.push`, `component.pull`, `component.create`, `component.delete`, `component.get_blob`, `component.discover`, `component.read_resource`, `resource.read`, `system.notify` — returns error code `-33001` (`auth_required`) if the session is not authenticated.
 
@@ -948,7 +973,7 @@ Beside `list`, `read`, `write` and `delete`, the `file` tool sends a person a co
 |--------|----------|--------------|
 | `offer` | `paths` (one to ten files under `data/`), `to` (a person id, `usr_…`) | Copy the files and offer them to a person you share an athanor with — never yourself. The copy counts against your storage until the offer ends. Answers the `offer_id` and its `expires_at` (after `file_offer_days`, a retention setting, 7 by default) |
 | `offers` | — | `inbox` (offers sent to you, with `sender` and `folder`, the folder `accept` lands them in when you name none), `outbox` (offers you sent from this athanor, with `recipient`), each file with its `status`, `filename`, `size` and `expires_at`; and `receipts`, the files you accepted here that have not landed yet (`status` `received`) or never will (`failed`) |
-| `accept` | `offer_id`, optional `folder` (under `data/`) | Take the copy into your focused athanor, where you must hold a seat. It needs twice the files' size free until they land. Answers the `folder` they land in: `<folder>/<offer_id>/`, under `data/inbox/<sender>/` by default (the sender's namespace, or their person id), with `-2` and onward when that folder already holds files — nothing of yours is overwritten |
+| `accept` | `offer_id`, optional `folder` (under `data/`) | Take the copy into your focused athanor, where you must hold a seat. It needs twice the files' size free until they land. Answers the `folder` they land in: `<folder>/<offer_id>/`, under `data/inbox/<sender>/` by default (the sender's personal namespace, which is their handle, or their person id), with `-2` and onward when that folder already holds files — nothing of yours is overwritten |
 | `decline` | `offer_id` | Refuse an offer sent to you |
 | `withdraw` | `offer_id` | Take back an offer you sent, while it is not yet accepted. An accepted copy is the recipient's |
 
@@ -968,10 +993,10 @@ A vault entry holds credential material — sealed at rest, never returned by an
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
-| `list` | — | Enumerate entries (names, status, destination and disclosure, never material) and the athanor's default per provider |
+| `list` | — | Enumerate entries (names, status, destination and disclosure, never material), each with the grants that bind it (`used_by`: each active profile whose head binds it, by `profile_id`, `source_ref` and `label`; `null` when they cannot be read), and the athanor's default per provider |
 | `status` | — | Each living entry's name, kind, status, created and updated times and whether a consent binds it — never material or a field; on both planes, under no consent class, so a tincture that declares it and an in-chain call may read it |
-| `set_default` | `provider_hint`, and exactly one of `entry_id` and `instance_entry_id` | Make an active entry of that provider, or an instance entry offered to you, the athanor's default for it — the one a consent suggests when several entries of the provider meet a need. It binds nothing, and moving it moves no consent; the first entry of a provider is its default until you move it |
-| `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields`, `destination` (+ `disclose`) | Mint an entry with sealed material, bound to where it may go |
+| `set_default` | `provider_hint`, and exactly one of `entry_id` and `instance_entry_id` | Make an active entry labelled with that provider, or an instance entry offered to you, the athanor's default for it — the one a consent suggests when several entries meet a need whose type names that provider. It binds nothing, and moving it moves no consent; the first entry of a provider is its default until you move it |
+| `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields`, `destination` (+ `provider_hint`, `disclose`) | Mint an entry with sealed material, bound to where it may go. Field names are any non-empty names. `provider_hint` is an optional label, fixed once created: it ranks the entry first for a need of that provider and makes it that provider's default when it has none; an OAuth entry requires it |
 | `rename` | `id`, `name` | Relabel an entry — a label is unique among the athanor's living entries |
 | `rotate` | `id`, `fields`, `expected_payload_rev` | Replace material, same field schema — CAS-guarded, **no re-consent needed** |
 | `rebind` | `id` + binding fields (`field_names`, `destination`, `disclose`) | Change what the credential *talks to* — dependent consents stop being ready until re-approved. A widening rebind (a destination not within the stored one, disclosure turned on, or a disclosed field added) needs a fresh confirmation; a narrowing one the session alone. Scopes change only by re-authorizing; endpoints never change |
@@ -1028,7 +1053,7 @@ An instance entry is a credential the platform admin enters once for the whole i
 | `delete` | `entry_id` | Erase the material; every profile that binds it stops being ready |
 | `list` | — | Every living entry with its audience, policy and caps, never material |
 | `usage` | `entry_id`, `days` (1–35) | Requests by person and day, and the day totals |
-| `offered` | — | The active entries offered to you: provider, destination and component policy, `used_today`, the requests you made through each today (never another person's), and `cap_reached`, whether that reached your own daily cap (the entry's `person_daily`, or the platform's `instance_entry_person_daily`; a `0` cap is reached), which resets at midnight UTC |
+| `offered` | — | The active entries offered to you: provider, field names, destination and component policy, `used_today`, the requests you made through each today (never another person's), and `cap_reached`, whether that reached your own daily cap (the entry's `person_daily`, or the platform's `instance_entry_person_daily`; a `0` cap is reached), which resets at midnight UTC |
 | `people` | — | Everyone who has signed in to this instance and stands active, each as an `id` and a `display_name`: the people an audience may list. Someone who has not signed in yet has no id here and cannot be listed |
 
 A change that widens is decided against what is stored, and written only while it still is: an audience or a policy that moved in between answers a conflict with nothing written; read it again and ask anew. Use is counted in requests at each attach, under the entry's own caps or, when unset, the `instance_entry_person_daily` and `instance_entry_total_daily` platform settings; a request past a cap is refused until the next UTC day.
@@ -1048,11 +1073,11 @@ commit   {decisions, plan_token, proof,
           expected_consent_revision}      → an immutable consent revision
 ```
 
-`preview` exists so the approval proof binds the exact commit digest that was rendered — a decision changed after approval cannot ride on the old approval. `commit` CAS-checks the head revision, so concurrent grants conflict instead of clobbering. Decisions carry the bindings (`[{need, entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}]`), the selections that fill a dependency's need (`[{dep, from, label | entry_id | instance_entry_id, need, name, fields, lifetime, renew}]`), the scope (`versionless` covers every release of the line — the default; `pinned` names one), a `subset` that narrows the ask per component and resource kind (exact domains, methods, schemes, private ranges, storage paths and actions, tools, and limits under the ask and the ceiling; a superset is refused), and the `origins` the grant admits.
+`preview` exists so the approval proof binds the exact commit digest that was rendered — a decision changed after approval cannot ride on the old approval. `commit` CAS-checks the head revision, so concurrent grants conflict instead of clobbering. Decisions carry the bindings (`[{need, entry_id | instance_entry_id, name, lifetime, renew, fields, scopes}]`), the selections that fill a dependency's need (`[{dep, from, label | entry_id | instance_entry_id, need, name, fields, lifetime, renew}]`), the scope (`versionless` covers every release of the line — the default; `pinned` names one), a `subset` that narrows the ask per component and resource kind (exact domains, methods, schemes, private ranges, storage paths and actions, tools, and limits under the ask and the ceiling; a superset is refused), and the `origins` the grant admits. A binding's or an entry selection's `fields` is its field map, an object from each field the need reads to the entry field that answers it: absent, it is the automatic map (each name to itself when the entry holds every one, or the need's one field to the entry's one field), and a binding with none is refused `fields_unmapped`; a map that misses or adds a need field, or names a field the entry lacks, is refused `invalid_field_map`. A label selection names no `fields`: the dependency reads under the lending profile's own map. The preview's credential rows show each map and the commit digest covers it.
 
-**Each need's choice.** In the plan, every need and every need of a dependency lists its `candidates`: your active entries and the instance entries offered to you of the need's kind whose provider is the need's (`api_key:openai.com` is met by an `api_key` entry of `openai.com` and nothing else), each with its `source` (`own` or `instance`), destination and whether it is disclosed. A need the component reads itself — one that declares no `attach` rule, or `disclose: true` — is met by a disclosed entry of yours alone, never by an instance entry, and the plan names the newer shipped version (`newer_shipped`) where an update would attach it instead. An instance entry is a candidate only where its component policy admits the component. `suggested` is the athanor's default of the provider when it is a candidate (`vault/set_default`), else the only candidate, else the one instance entry offered when you hold none of the provider; `choice_required` is true only when several match and none is suggested, and only then is the person asked. A dependency's need the app's own `provides` covers answers `source: "provided"` with its destination and no candidates. Each declared need, the app's and a dependency's, also names its `kind` and `provider`, `disclose_only` (it declares no `attach` rule), `disclose` (it declares `disclose: true`), and the `hosts` and `paths` it declares (`null` where it declares none), which a surface prefills a new entry from. A dependency's lending profiles (its row's `candidates`) each name the `fields` and the OAuth `scopes` their binding lends (`[]` for none). A plan for a profile with a head names `head_bindings`: each binding's `binding_key`, what it binds (its `entry_id`, `instance_entry_id` or a lending profile's `label`, and which of them as `source`: `own`, `instance` or `label`), where it sits (the `node` and `edge` its key names, the `dep` a dependency's edge reaches and the account's `connection`, as a preview's `removed` names them), the `need` it was bound for (absent when that cannot be told), its `lifetime` and whether a root has `consumed` it, so a consumed `once` binding can be granted again with `renew`; a binding whose key cannot be read names none of `source`, `node`, `edge`, `dep`, `connection` and `need`. `head_narrowing` names the head's narrowing per component in the decisions' `subset` shape, clamped to the current ask. A re-grant opens from that narrowing: a method newly asked for, or a newly added dependency, opens off. When the shape moved, `shape_diff` compares every component of the narrowed head with the current ask; each difference names its component (`node`) and marks a new or dropped dependency (`new`, `dropped`).
+**Each need's choice.** In the plan, every need and every need of a dependency lists its `candidates`: your active entries and the instance entries offered to you of the need's kind whose destination covers the hosts the need declares, and each path it declares, whatever the entry's name or label (an `api_key` need for `api.openai.com` is met by an `api_key` entry whose hosts are `api.openai.com` or `*.openai.com`), each with its `source` (`own` or `instance`), destination, `fit` (`exact` when every need host is one of the entry's hosts as written, `wildcard` when one is matched only by a `*.` host), `label_match` (its label is the need type's qualifier), whether it is disclosed, its `field_names` and `fields`, the automatic map, `null` when the person must choose one. An entry holding no field is no candidate for a need that reads one. A need the component reads itself — one that declares no `attach` rule, or `disclose: true` — is met by a disclosed entry of yours alone, never by an instance entry, and the plan names the newer shipped version (`newer_shipped`) where an update would attach it instead. An instance entry is a candidate only where its component policy admits the component. Candidates come ranked: a label equal to the need type's qualifier first, then an exact fit before a wildcard one, your own entries before instance entries, then by name. `suggested` is the athanor's default for the need type's qualifier when it is a candidate (`vault/set_default`), else the only candidate; `choice_required` is true only when several match and none is suggested, and only then is the person asked. A dependency's need the app's own `provides` covers answers `source: "provided"` with its destination and no candidates. Each declared need, the app's and a dependency's, also names its `kind` and `provider`, `disclose_only` (it declares no `attach` rule), `disclose` (it declares `disclose: true`), and the `hosts` and `paths` it declares (`null` for paths it declares none of), which a surface prefills a new entry from. A need the component reads itself names `attach_only_held`, true when it has no candidate because the entries of yours that fit it are attach-only. A dependency's lending profiles (its row's `candidates`) each name the field map (`fields`, `{}` for none) and the OAuth `scopes` (`[]` for none) their binding lends. A plan for a profile with a head names `head_bindings`: each binding's `binding_key`, the field map the head holds for it (`fields`, absent for a lent binding), what it binds (its `entry_id`, `instance_entry_id` or a lending profile's `label`, and which of them as `source`: `own`, `instance` or `label`), where it sits (the `node` and `edge` its key names, the `dep` a dependency's edge reaches and the account's `connection`, as a preview's `removed` names them), the `need` it was bound for (absent when that cannot be told), its `lifetime` and whether a root has `consumed` it, so a consumed `once` binding can be granted again with `renew`; a binding whose key cannot be read names none of `source`, `node`, `edge`, `dep`, `connection` and `need`. `head_narrowing` names the head's narrowing per component in the decisions' `subset` shape, clamped to the current ask. A re-grant opens from that narrowing: a method newly asked for, or a newly added dependency, opens off. When the shape moved, `shape_diff` compares every component of the narrowed head with the current ask; each difference names its component (`node`) and marks a new or dropped dependency (`new`, `dropped`).
 
-**Binding.** A binding names exactly one of `entry_id` and `instance_entry_id`; an entry of another provider is refused `provider_mismatch`, an attach-only entry bound where the component reads the value `disclosure_refused`, an instance entry not offered to you `not_offered`, and one whose policy does not admit the component `component_not_admitted`, each naming the need. A grant's bindings fill one need: one names no `name` and is the default, and each other names its account (`name`) and rides beside it, so a call can name one. Each binding, and each selection, carries its `lifetime` — `{"kind": "standing"}` (the default), `{"kind": "until", "until": "<RFC 3339 UTC, at most 24 hours ahead>"}` or `{"kind": "once"}` (one root run) — and `renew: true` makes a consumed `once` binding usable again; both are part of what the commit digest binds. A selection names a lender profile by `label`, or binds an entry to the dependency's edge directly (`entry_id` or `instance_entry_id`, with `need` when the dependency declares several); a need the app provides takes no selection. A dependency's edge may bind named accounts as the app's own calls do: one selection of the edge names no `name` and is its default, an entry chosen here, and each other names its account (`name`, 1 to 128 bytes of text without a `|` or a control character) and an entry (never a `label`) for the default's need, checked as the default is and with a lifetime of its own, so a call through that edge can name one. A name used twice on one edge, compared by Unicode's full lowercase mapping, accounts beside no default or beside a key a lending profile lends, and accounts for another need than the default's are each refused as `invalid_argument`, naming the dependency; `profile/grant` re-issues the head's named accounts as they stand, and `publish` refuses an edge it would keep that carries them. On the command line, `--entry 'api_key|Work=vlt_abc:1h'` and `--selection 'reagent:local.db|Work=vlt_def'` name an account after the need or dependency: the value splits at its last `=`, and what precedes it at its first `|`. A flag names its slot alone, the default or one account, and a slot no flag names takes what it would take with no flags: the grant's own binding, else the plan's suggestion for a required need.
+**Binding.** A binding names exactly one of `entry_id` and `instance_entry_id`; an entry of another kind, or whose destination does not cover the hosts and paths the need declares, is refused `entry_mismatch`, an attach-only entry bound where the component reads the value `disclosure_refused`, an instance entry not offered to you `not_offered`, one whose policy does not admit the component `component_not_admitted`, a binding with no field map and none automatic `fields_unmapped`, and a map that is not total over the need's fields or names a field the entry lacks `invalid_field_map`, each naming the need. A grant's bindings fill one need: one names no `name` and is the default, and each other names its account (`name`) and rides beside it, so a call can name one. Each binding, and each selection, carries its `lifetime` — `{"kind": "standing"}` (the default), `{"kind": "until", "until": "<RFC 3339 UTC, at most 24 hours ahead>"}` or `{"kind": "once"}` (one root run) — and `renew: true` makes a consumed `once` binding usable again; both are part of what the commit digest binds. A selection names a lender profile by `label`, or binds an entry to the dependency's edge directly (`entry_id` or `instance_entry_id`, with `need` when the dependency declares several); a need the app provides takes no selection. A dependency's edge may bind named accounts as the app's own calls do: one selection of the edge names no `name` and is its default, an entry chosen here, and each other names its account (`name`, 1 to 128 bytes of text without a `|` or a control character) and an entry (never a `label`) for the default's need, checked as the default is and with a lifetime of its own, so a call through that edge can name one. A name used twice on one edge, compared by Unicode's full lowercase mapping, accounts beside no default or beside a key a lending profile lends, and accounts for another need than the default's are each refused as `invalid_argument`, naming the dependency; `profile/grant` re-issues the head's named accounts as they stand, and `publish` refuses an edge it would keep that carries them. On the command line, `--entry 'api_key|Work=vlt_abc:1h'` and `--selection 'reagent:local.db|Work=vlt_def'` name an account after the need or dependency: the value splits at its last `=`, and what precedes it at its first `|`. A flag names its slot alone, the default or one account, and a slot no flag names takes what it would take with no flags: the grant's own binding, else the plan's suggestion for a required need.
 
 **Naming an account on a call.** A formula's child call, spawn or stream names the account it asks its dependency's edge for as `connection`, beside `reference` and `input`: `{"tool": "execution", "action": "run", "args": {"reference": "c:local.mailer:1.0.0", "input": {...}, "connection": "Work"}}`. The child holds that account's binding where it would hold the edge's default, and a call naming none holds the default. Names compare by Unicode's full lowercase mapping, as a grant compares them, so a call naming `work` holds the account bound as `Work`. CYFR decides which names are one account, by its own Unicode tables: a command line built on other tables may send two spellings of one account in a grant, and CYFR then refuses that grant as `invalid_argument`, naming both spellings. An account the edge does not bind is refused `connection_not_granted`, a grant to make, and no default is used in its place. A run started outside a chain (`execution.run` over MCP, the API or the command line) names the account its own calls use the same way: its root holds the binding its profile binds under that name for the app's own calls, in place of the default, and that binding's lifetime is the one checked and, for `once`, consumed. A name the profile does not bind is refused `connection_not_granted` before anything runs, never run under the default. `execution.run_stream` declares no `connection`, and one naming it is refused as an unknown argument.
 
@@ -1206,22 +1231,23 @@ themselves.
 CYFR is one product: deploy it as-is (sqlite, local FS) or configure OIDC /
 Postgres / a custom registry.
 
-Once authentication is configured, two lists do two jobs. `CYFR_PLATFORM_ADMIN_EMAILS`
-names the server's operators (platform admins): always let in, minted their
-own athanor past the server caps, and able to run the operator verbs
-(`door.*`, `instance_entry.*` but `offered`, `execution.force_release`,
-`athanor.purge`, `athanor.destroy`).
+The installation's first person, made by its setup (or by a restore onto it
+empty), is its platform administrator, and no other grant exists: minted
+their own athanor past the server caps, never denied by the allowlist, and able
+to run the operator verbs (`door.*`, `instance_entry.*` but `offered`,
+`execution.force_release`, `athanor.purge`, `athanor.destroy`).
 The capability is over the instance, not a seat: an operator works inside one
 athanor at a time like everyone else, and only in one they are a member of.
 They enter no other athanor — opening one they hold no seat in is refused like
 anyone's, and a session that names one they have left falls back to their own
 — and there is no cross-athanor reach. The **server allowlist** (`cyfr admin allow
-<email|user_id|identifier|*>`, `cyfr admin deny …`, or the Settings page) is who else may
-sign in at all: a match on first sign-in lets them in, no match is a 403, and
-`*` lets in anyone the configured provider authenticates. Groups never widen the
-allowlist: adding an unknown email to a group leaves an invitation that activates on
-that person's first admitted sign-in and, when the allowlist would refuse them, a
-request for the operator.
+<identifier|*>`, `cyfr admin deny <person|identifier>`, or the Settings page) judges
+people: a person made here signs in unless a deny names them, and a person whose
+keys another CYFR holds signs in when `*` or an allow naming their identifier
+(`per_…`) admits them. `*` also lets anyone make a person here with a passkey.
+Groups never widen the allowlist: adding an unknown identifier to a group leaves an
+invitation that activates on that person's first admitted CYFR sign-in and, when the
+allowlist would refuse them, a request for the operator.
 
 On **Settings**, the operator offers instance entries to everyone or listed people, with request caps per person and in total. Creation defaults to `component_policy: any`; the optional `shipped` policy admits only an unmodified shipped component. Both require destination methods and path prefixes. Entering or rotating the material needs fresh confirmation; widening the audience or changing `shipped` to `any` needs fresh `credential_sharing` confirmation. Members grant an offered entry through the same consent walk as their own entries; no policy bypasses consent, egress or caps, discloses the key, or lets an MCP definition name it.
 
@@ -1249,15 +1275,12 @@ all denied keeps no member to unarchive it — allowing them on the allowlist ag
 reopens only their own athanors — so it can be purged or destroyed, and
 reopened by no one.
 
-With no auth configured, the deployment runs without sign-in: requests reach the
-public read-only surface as an unauthenticated context, and tenant-scoped
-operations are rejected.
-
 ### OIDC (federated identity)
 
-Set `CYFR_AUTH_PROVIDER=oidc` to federate against a generic OIDC issuer. All
-three variables, `CYFR_OIDC_ISSUER`, `CYFR_OIDC_CLIENT_ID` and `CYFR_OIDC_CLIENT_SECRET`, are required when oidc is selected — the server refuses to boot
-otherwise rather than silently degrading to no authentication. The issuer must
+Setting `CYFR_OIDC_ISSUER`, `CYFR_OIDC_CLIENT_ID` and `CYFR_OIDC_CLIENT_SECRET`
+offers a generic OIDC issuer as a sign-in method a person links; it unlocks the
+person who linked it and never makes one. Any of the three set without the others
+refuses the boot rather than silently offering no OIDC sign-in. The issuer must
 not be `github.com`/`accounts.google.com` (use GitHub/Google OAuth directly).
 
 ### Several servers on one database (a cluster)

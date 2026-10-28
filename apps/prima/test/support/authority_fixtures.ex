@@ -40,7 +40,8 @@ defmodule Prima.Test.AuthorityFixtures do
   an athanor entry with its binding key for that place, the default slot
   unless `:name` names an account. Options: `:name`, `:scope`,
   `:destination`, `:attach` (absent: disclose-only), `:projection`,
-  `:lender`, `:named`.
+  `:lender`, `:named`. A bound entry parses only with a `:projection`;
+  without one the map is the damaged form a parse refuses.
   """
   def bound_vault(node_ref, edge_key, entry_id, digest, opts \\ []) do
     %{
@@ -95,7 +96,10 @@ defmodule Prima.Test.AuthorityFixtures do
               "vault" =>
                 bound_vault(@formula, "#{@catalyst}|source", "vault-source", "sha256:bind-source",
                   attach: attach_map(),
-                  projection: %{"fields" => ["url", "anon_key"]}
+                  projection: %{
+                    "fields" => %{"url" => "url", "anon_key" => "anon key"},
+                    "scopes" => []
+                  }
                 ),
               "egress" => %{"domains" => ["prod.supabase.co"], "schemes" => ["https"]},
               "tools" => ["storage.read", "storage.write"]
@@ -103,7 +107,10 @@ defmodule Prima.Test.AuthorityFixtures do
             "#{@catalyst}|dest" => %{
               "vault" =>
                 bound_vault(@formula, "#{@catalyst}|dest", "vault-dest", "sha256:bind-dest",
-                  projection: %{"fields" => ["url", "service_key"]}
+                  projection: %{
+                    "fields" => %{"url" => "url", "service_key" => "service_key"},
+                    "scopes" => []
+                  }
                 )
             },
             @reagent => %{}

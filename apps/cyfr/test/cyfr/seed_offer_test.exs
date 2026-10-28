@@ -22,7 +22,7 @@ defmodule Cyfr.SeedOfferTest do
   alias Cyfr.SeedOffer
   alias Prima.Test.Wait
   alias Sanctum.Provisioning
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   @events [[:cyfr, :seed_offer, :completed], [:cyfr, :seed_offer, :aborted]]
 
@@ -111,16 +111,18 @@ defmodule Cyfr.SeedOfferTest do
     end
   end
 
-  test "after a successful security reconcile, a failing offer still leaves the boot standing",
+  test "after the gate's declared-restore step answers, a failing offer still leaves the boot standing",
        %{key: key} do
-    prev = Application.get_env(:sanctum, :platform_admin_emails, [])
-    on_exit(fn -> Application.put_env(:sanctum, :platform_admin_emails, prev) end)
-    Application.put_env(:sanctum, :platform_admin_emails, [])
-
     {:ok, supervisor} =
       Supervisor.start_link(
         [
-          Supervisor.child_spec({Cyfr.Bootstrap, key: key}, restart: :temporary),
+          # The gate's step as the boot starts it: it answers and leaves no
+          # process, so the offer after it starts.
+          %{
+            id: :declared_restore,
+            start: {Cyfr.Application, :declared_restore, []},
+            restart: :temporary
+          },
           Supervisor.child_spec({SeedOffer, key: key, sync: fn -> raise "boom" end},
             restart: :temporary
           ),
@@ -305,7 +307,7 @@ defmodule Cyfr.SeedOfferTest do
       n = System.unique_integer([:positive])
 
       {:ok, user} =
-        Users.upsert_from_provider(%{
+        Sanctum.Test.People.linked(%{
           id: "github|https://github.com|seed-offer-#{n}",
           provider: "github",
           email: "seed-offer-#{n}@example.com",
@@ -313,14 +315,10 @@ defmodule Cyfr.SeedOfferTest do
           name: "Seed Offer #{n}"
         })
 
-      {:ok, athanor} =
-        Athanors.create(%{
-          kind: "person",
-          name: "Seed Offer #{n}",
-          slug: "seed-offer-#{n}",
-          owner_user_id: user.id,
-          created_by: user.id
-        })
+      # The person's own athanor, which their admission made unfilled.
+      {:ok, athanor_id} = Sanctum.Tenancy.Users.personal_athanor_id(user.id)
+      {:ok, athanor} = Athanors.get(athanor_id)
+      refute athanor.provisioned_at
 
       actor = %Prima.Actor{athanor_id: athanor.id}
       assert Arca.ControlPlane.held?(), "a member without the slot fills nothing at sign-in"
@@ -344,8 +342,7 @@ defmodule Cyfr.SeedOfferTest do
       assert {:ok, pid} = started
 
       began = System.monotonic_time(:millisecond)
-      assert {:ok, %{id: id}} = Provisioning.after_sign_in(user.id)
-      assert id == athanor.id
+      assert :ok = Provisioning.after_sign_in(user.id)
       assert System.monotonic_time(:millisecond) - began < 2_000
 
       # The fill found the sync's claim and did nothing: the claim is the
@@ -368,7 +365,7 @@ defmodule Cyfr.SeedOfferTest do
       # Once the sync has let go, the next sign-in's fill runs: the skip was
       # the held claim and nothing else. This seed tree ships no bundle, so
       # the fill fails at its first step, which it records.
-      assert {:ok, _} = Provisioning.after_sign_in(user.id)
+      assert :ok = Provisioning.after_sign_in(user.id)
 
       assert {:ok, %{entry_kind: "sign_in", fence: later}} = ProvisioningClaims.current(actor)
       assert later > fence

@@ -53,8 +53,6 @@ defmodule Arca.OneFenceTest do
       "a removal under the writer's slot inside the publication step, with its declared refusals (`:stale`, `:budget`)",
     {"arca/file_offers.ex", "commit_acceptance/5"} =>
       "an acceptance's second step, under the slot its first step read, beside the offer's own turn",
-    {"arca/members.ex", "reconcile_platform/3"} =>
-      "a platform reconcile under a job claim: the slot checked before and after the claim is renewed, refused as `:slot_lost`",
     {"arca/pairing_invitations.ex", "consume/5"} =>
       "a consumption inside `Arca.SecurityTransitions.Issuance.run/3`, after the standing order's locks",
     {"arca/pairing_invitations.ex", "open/3"} =>

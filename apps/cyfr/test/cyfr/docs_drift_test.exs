@@ -1274,7 +1274,7 @@ defmodule Cyfr.DocsDriftTest do
     CYFR_SECRET_KEY_BASE CYFR_ACCESS CYFR_HOST CYFR_PORT
     CYFR_CORS_ALLOWED_ORIGINS CYFR_PRIVATE_EGRESS_TARGETS CYFR_GITHUB_CLIENT_ID
     CYFR_GOOGLE_CLIENT_ID CYFR_LOCUS_RUNTIME_ROOT LOCUS_RUNTIME_KEY CYFR_LOCUS_BACKENDS_KEY
-    CYFR_LOCUS_BUILDS_URL CYFR_LOCUS_BUILDS_KEY
+    CYFR_LOCUS_BUILDS_URL CYFR_LOCUS_BUILDS_KEY CYFR_SETUP_TOKEN
   )
 
   test "the deployment file assigns init's lines, keeps its anchor and holds no platform setting" do
@@ -1287,10 +1287,9 @@ defmodule Cyfr.DocsDriftTest do
     assert Enum.sort(assigned) == Enum.sort(@deployment_file_assignments),
            ".env.example assigns #{inspect(assigned)}"
 
-    # `cyfr init` writes the operators' line over its commented anchor,
-    # matched by prefix, so the template carries the anchor once.
-    assert length(Regex.scan(~r/^# CYFR_PLATFORM_ADMIN_EMAILS=$/m, text)) == 1
-    refute text =~ ~r/^#?\s*CYFR_PLATFORM_ADMIN_EMAILS=.+$/m
+    # No line names an operator or a sign-in provider: the installation's
+    # administrator is the first person setup makes, and a sign-in method
+    # is offered exactly when its credentials are set.
 
     settings = MapSet.new(Roster.variables())
 

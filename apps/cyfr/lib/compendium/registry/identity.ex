@@ -12,7 +12,7 @@ defmodule Compendium.Registry.Identity do
     Distribution gateway where `/v2/*` push/pull runs. CredentialStore keys
     use this host because tokens were minted for it.
   - `:cyfr, :registry_url` (default `"cyfr.run"`) — the REST API host where
-    `/v1/*` endpoints (probe, namespaces, members, tokens) live. This
+    `/v1/*` endpoints (namespaces, members, tokens, signed requests) live. This
     module's `confirm_namespace/2` call targets that host.
 
   Return shape:
@@ -133,12 +133,12 @@ defmodule Compendium.Registry.Identity do
 
   defp list_user_credentials(_ctx, _oci_host), do: {[], []}
 
-  # Best-effort per-token probe. Transient errors keep the entry with nil
+  # Best-effort per-token check. Transient errors keep the entry with nil
   # `last_used_at`; 401/403 drops it (token revoked or namespace ownership
   # lost). Goes through `Registry.Transport` for the same SSRF and
   # DNS-rebinding protection every other outbound call gets — with retry off,
   # because the caller already bounds this at `@whoami_timeout_ms` and a
-  # best-effort probe that retries would blow that budget.
+  # best-effort check that retries would blow that budget.
   defp confirm_namespace(rest_host, %{token: token, namespace: slug})
        when is_binary(token) and is_binary(slug) do
     url =

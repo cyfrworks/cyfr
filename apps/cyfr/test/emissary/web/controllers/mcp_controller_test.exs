@@ -1291,7 +1291,7 @@ defmodule Emissary.Web.MCPControllerTest do
     test "an install with no auth provider still refuses an uncredentialed caller", %{conn: conn} do
       # The operator authenticates with an API key on these installs too, so
       # a request carrying nothing is a stranger here as well.
-      Application.delete_env(:sanctum, :auth_provider)
+      Application.delete_env(:sanctum, :bearer_provider)
 
       conn =
         conn

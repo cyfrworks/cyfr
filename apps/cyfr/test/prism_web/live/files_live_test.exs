@@ -348,7 +348,7 @@ defmodule PrismWeb.FilesLiveTest do
         Members.create(%{
           scope: "athanor",
           athanor_id: second.id,
-          email: "invited-#{bob.namespace}@example.com",
+          person_identifier: "per_" <> Prima.Digest.sha256_hex("invited-#{bob.namespace}"),
           status: "invited",
           added_by: me
         })

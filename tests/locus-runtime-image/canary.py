@@ -177,7 +177,7 @@ def authority(attached):
         "scope": "athanor",
         "binding_key": "catalyst:local.credential-canary|@ingress|default",
         "destination": {"hosts": [HOST], "scheme": "http"},
-        "projection": {"fields": [FIELD], "scopes": []},
+        "projection": {"fields": {FIELD: FIELD}, "scopes": []},
     }
     if attached:
         vault["attach"] = RULE

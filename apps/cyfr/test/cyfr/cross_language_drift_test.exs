@@ -438,6 +438,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-runtime-image/worker_auth.py",
        ~w(version auth_header routes retries timeouts_ms window_ms standing keys calls pre_body_refusals body_refusals report retry_identity connection_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases framing_headers override_headers override_prefixes credential_headers)}
     ],
+    # cyfr.run reads its vendored copy too (internal/identity/log_test.go,
+    # beside internal/identity/testdata/SOURCE, which names this file's
+    # SHA-256), outside this roster's reach.
     "identity.json" => [
       {"apps/codex/cmd/member_test.go", ~w(identifiers)},
       {"apps/prima/test/prima/identity_test.exs",
@@ -511,6 +514,14 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/cyfr/test/cyfr/runtime_config_test.exs", ~w(derive boot profiles names)},
       {"tests/compose-proof/run.sh", ~w(refusals boot)},
       {"tests/release-boot/boot.sh", ~w(boot)}
+    ],
+    # cyfr.run reads its vendored copy too (internal/identity/request_test.go
+    # and handle_test.go, beside internal/identity/testdata/SOURCE, which
+    # names this file's SHA-256), outside this roster's reach.
+    "registry_wire.json" => [
+      {"apps/prima/test/prima/handle_answer_test.exs", ~w(answers identity slugs)},
+      {"apps/prima/test/prima/registry_request_test.exs",
+       ~w(answers codes envelopes identity keys refusals requests slugs verify)}
     ],
     "release_manifest.json" => [
       {"apps/codex/cmd/lifecycle_test.go", ~w(valid signature)},

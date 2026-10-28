@@ -531,7 +531,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     # Ueberauth then builds from it).
     test "the OpenID Connect callback is the home's own address", %{tmp_dir: dir} do
       oidc = %{
-        "CYFR_AUTH_PROVIDER" => "oidc",
         "CYFR_OIDC_ISSUER" => "https://auth.example.com",
         "CYFR_OIDC_CLIENT_ID" => "cyfr",
         "CYFR_OIDC_CLIENT_SECRET" => "secret"
@@ -554,6 +553,104 @@ defmodule Cyfr.RuntimeConfigWiringTest do
             read_prod_config!()[:ueberauth][Ueberauth][:providers][:oidcc]
 
           assert options[:callback_url] == origin <> "/auth/oidcc/callback"
+        end)
+      end
+    end
+  end
+
+  # ==========================================================================
+  # The company sign-in
+  # ==========================================================================
+
+  describe "the company sign-in" do
+    @company_unset %{
+      "CYFR_COMPANY_LOGIN" => nil,
+      "CYFR_COMPANY_LOGIN_DAYS" => nil,
+      "CYFR_WORKOS_CLIENT_ID" => nil,
+      "CYFR_WORKOS_API_KEY" => nil,
+      "CYFR_WORKOS_ORGANIZATION" => nil,
+      "CYFR_OIDC_ISSUER" => nil,
+      "CYFR_OIDC_CLIENT_ID" => nil,
+      "CYFR_OIDC_CLIENT_SECRET" => nil,
+      "CYFR_HEADLESS" => nil
+    }
+    @company_oidc %{
+      "CYFR_OIDC_ISSUER" => "https://auth.example.com",
+      "CYFR_OIDC_CLIENT_ID" => "cyfr",
+      "CYFR_OIDC_CLIENT_SECRET" => "secret"
+    }
+    @company_workos %{
+      "CYFR_WORKOS_CLIENT_ID" => "client_01HQCOMPANY",
+      "CYFR_WORKOS_API_KEY" => "sk_test_company_api_key",
+      "CYFR_WORKOS_ORGANIZATION" => "org_01HQCOMPANY"
+    }
+
+    defp company_env(overrides), do: Map.merge(@company_unset, overrides)
+
+    test "unset, Sanctum requires none and holds no WorkOS settings" do
+      with_env(@company_unset, fn ->
+        sanctum = read_prod_config!()[:sanctum]
+        assert Keyword.fetch!(sanctum, :company_login) == %{mode: :off, days: nil, issuer: nil}
+        assert Keyword.fetch!(sanctum, :workos) == nil
+      end)
+    end
+
+    test "accepted, Sanctum holds the mode, the days and the issuer, and WorkOS's settings apart" do
+      renew = %{"CYFR_COMPANY_LOGIN" => "renew", "CYFR_COMPANY_LOGIN_DAYS" => "30"}
+
+      with_env(company_env(Map.merge(@company_workos, renew)), fn ->
+        sanctum = read_prod_config!()[:sanctum]
+
+        assert Keyword.fetch!(sanctum, :company_login) == %{
+                 mode: :renew,
+                 days: 30,
+                 issuer: :workos
+               }
+
+        assert Keyword.fetch!(sanctum, :workos) == %{
+                 client_id: "client_01HQCOMPANY",
+                 api_key: "sk_test_company_api_key",
+                 organization: "org_01HQCOMPANY"
+               }
+      end)
+
+      with_env(company_env(Map.put(@company_oidc, "CYFR_COMPANY_LOGIN", "join")), fn ->
+        sanctum = read_prod_config!()[:sanctum]
+        assert Keyword.fetch!(sanctum, :company_login) == %{mode: :join, days: nil, issuer: :oidc}
+        assert Keyword.fetch!(sanctum, :workos) == nil
+        assert Keyword.fetch!(sanctum, :oidc_issuer) == "https://auth.example.com"
+      end)
+    end
+
+    # The boot raises the resolver's own sentence for the same settings, so
+    # nothing else refuses first and nothing rewords it; none carries the key.
+    test "each refusal refuses the boot with the resolver's sentence, never WorkOS's API key" do
+      join = %{"CYFR_COMPANY_LOGIN" => "join"}
+
+      for overrides <- [
+            %{"CYFR_COMPANY_LOGIN" => "always"},
+            Map.put(@company_oidc, "CYFR_COMPANY_LOGIN", "renew"),
+            Map.merge(@company_oidc, %{
+              "CYFR_COMPANY_LOGIN" => "renew",
+              "CYFR_COMPANY_LOGIN_DAYS" => "0"
+            }),
+            Map.merge(@company_oidc, %{"CYFR_COMPANY_LOGIN_DAYS" => "30"}),
+            Map.merge(join, Map.delete(@company_workos, "CYFR_WORKOS_ORGANIZATION")),
+            @company_workos,
+            Map.merge(join, Map.put(@company_workos, "CYFR_HEADLESS", "on")),
+            join
+          ] do
+        env = company_env(overrides)
+        getenv = &Map.get(env, &1)
+        {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
+
+        {:error, sentence} =
+          Cyfr.RuntimeConfig.company_login_config(getenv, oidc, env["CYFR_HEADLESS"] == "on")
+
+        with_env(env, fn ->
+          error = assert_raise RuntimeError, &read_prod_config!/0
+          assert Exception.message(error) == sentence, inspect(overrides)
+          refute Exception.message(error) =~ "sk_test_company_api_key"
         end)
       end
     end

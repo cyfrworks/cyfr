@@ -5,10 +5,11 @@ reaches another person only by an offer they accept (`ARCHITECTURE.md`
 §5.1), as a snapshot taken when it was offered, and that the storage counts
 move as the offer's lifecycle states (`Arca.FileOffers` holds both). The home is one
 `cyfr` release on a SQLite cell, `home.test`, behind the harness's HTTPS
-front (`browser_home`). `fixture.exs` signs three people in, as the release
-fixture's door does (`tests/release-boot/fixture.exs` `person`): the
-sender, an operator by the deployment's own list, who lets the other two
-in at the door (`door.allow`); the recipient, seated with the sender in a
+front (`browser_home`). `fixture.exs` signs three people in through the
+release fixture (`tests/release-boot/fixture.exs` `person`): the sender,
+the installation's first person and so its administrator, made by setup,
+who opens the door to newcomers (`door.allow` of `*`), which admits the
+other two; the recipient, seated with the sender in a
 group the sender creates (`athanor.create`, `member.add`); and the
 outsider, who sits in no athanor but their own. It writes the sender's
 three files under `data/reports/` (`file.write`), each call through the

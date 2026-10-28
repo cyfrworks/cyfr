@@ -47,6 +47,7 @@ defmodule PrismWeb.SettingsLiveTest do
   alias Prima.Identity
   alias Prima.Identity.Entry
   alias Sanctum.{Cipher, CipherAAD}
+  alias Sanctum.Test.RegistryStub
   alias Sanctum.TestContext.Authenticator
 
   test "the door section is shown to a platform admin and to nobody else", %{conn: conn} do
@@ -60,23 +61,71 @@ defmodule PrismWeb.SettingsLiveTest do
     {admin_view, admin_html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
     assert admin_html =~ "Server allowlist"
 
-    email = "letin-#{System.unique_integer([:positive])}@example.com"
+    identifier = "per_" <> Prima.Digest.sha256_hex("letin-#{System.unique_integer([:positive])}")
 
     # The entry typed is what the Allow button carries; the click adds
     # nothing of its own.
     admin_view
     |> element(~s(form[phx-change="door_form_changed"]))
-    |> render_change(%{"value" => email})
+    |> render_change(%{"value" => identifier})
 
-    assert has_element?(admin_view, ~s(button[phx-click="door_allow"][phx-value-door="#{email}"]))
-    assert has_element?(admin_view, ~s(button[phx-click="door_deny"][phx-value-door="#{email}"]))
+    assert has_element?(
+             admin_view,
+             ~s(button[phx-click="door_allow"][phx-value-door="#{identifier}"])
+           )
+
+    assert has_element?(
+             admin_view,
+             ~s(button[phx-click="door_deny"][phx-value-door="#{identifier}"])
+           )
+
+    assert {:error, :not_allowed} = Sanctum.Door.admit_identifier(identifier)
 
     admin_view
     |> element("button[phx-click=door_allow]")
     |> render_click()
 
-    assert render(admin_view) =~ email
-    assert {:ok, :allowed} = Sanctum.Door.admit("github|https://github.com|x", email, true)
+    assert render(admin_view) =~ identifier
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(identifier)
+  end
+
+  test "the allowlist allows and denies by handle, shows the handle beside the identifier, and says why a handle is refused",
+       %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+    n = System.unique_integer([:positive])
+    alice = "per_" <> Prima.Digest.sha256_hex("handle-allow-#{n}")
+    bob = "per_" <> Prima.Digest.sha256_hex("handle-deny-#{n}")
+
+    registry(nil, %{
+      "alice" => {:held, alice, nil},
+      "bob" => {:held, bob, nil},
+      "down" => :close
+    })
+
+    {view, html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
+    assert html =~ "@handle"
+    assert html =~ "by their handle"
+
+    door_entry(view, "door_allow", "@alice")
+    assert has_element?(view, "td", alice)
+    assert has_element?(view, ~s(td [data-test="door-entry-label"]), "@alice")
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(alice)
+
+    door_entry(view, "door_deny", "@bob")
+    assert has_element?(view, "td", bob)
+    assert has_element?(view, ~s(td [data-test="door-entry-label"]), "@bob")
+    assert {:error, :denied} = Sanctum.Door.admit_identifier(bob)
+
+    door_entry(view, "door_allow", "@nobody")
+    assert render(view) =~ "No one holds that handle at the registry."
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      door_entry(view, "door_allow", "@down")
+      assert render(view) =~ "The registry could not be reached just now"
+    end)
+
+    assert [_, _] = Sanctum.Door.Store.list()
   end
 
   test "the platform settings card is the operator's, saves against its revision, and shows a pin read-only",
@@ -668,7 +717,7 @@ defmodule PrismWeb.SettingsLiveTest do
       seed_ctx =
         Sanctum.Context.internal(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
 
-      ship = fn name, version, provider, need ->
+      ship = fn name, version, provider, hosts, paths ->
         {:ok, _} =
           Arca.Test.UnitFixtures.ship_and_register!(seed_ctx, "catalyst", "local", name, version,
             manifest: %{
@@ -687,9 +736,10 @@ defmodule PrismWeb.SettingsLiveTest do
                         "in" => "header",
                         "name" => "Authorization",
                         "template" => "Bearer {value}"
-                      }
+                      },
+                      "hosts" => hosts
                     },
-                    need
+                    paths
                   )
               },
               "caps" => %{"egress" => %{"domains" => ["api.example.com", "old.example.com"]}}
@@ -698,17 +748,13 @@ defmodule PrismWeb.SettingsLiveTest do
           )
       end
 
-      ship.("prefill-model", "1.0.0", "example.com", %{
-        "hosts" => ["old.example.com"],
-        "paths" => ["/v0/"]
-      })
+      ship.("prefill-model", "1.0.0", "example.com", ["old.example.com"], %{"paths" => ["/v0/"]})
 
-      ship.("prefill-model", "1.1.0", "example.com", %{
-        "hosts" => ["api.example.com"],
+      ship.("prefill-model", "1.1.0", "example.com", ["api.example.com"], %{
         "paths" => ["/v1/chat/completions"]
       })
 
-      ship.("prefill-hosts", "1.0.0", "hosts-only.example", %{"hosts" => ["api.example.com"]})
+      ship.("prefill-hosts", "1.0.0", "hosts-only.example", ["api.example.com"], %{})
 
       {view, _html} = mount_athanor(conn, "/settings")
       assert has_element?(view, ~s(#instance-providers option[value="example.com"]))
@@ -1709,52 +1755,171 @@ defmodule PrismWeb.SettingsLiveTest do
     {Plug.Test.init_test_session(conn, %{session_key() => token}), identifier}
   end
 
+  # The registry: `handles` answers a handle's resolution by name (`:free`
+  # for none, `:taken` for one held), the policy version is current, and
+  # every signed request is verified under `state` and handed to
+  # `answer`.
+  defp registry(state, handles, answer \\ fn _request -> flunk("no signed request expected") end) do
+    RegistryStub.start!(fn
+      %{method: "GET", path: "/v1/legal/version"} ->
+        {200, RegistryStub.answer(%{"policy_version" => "2026-09", "policies" => []})}
+
+      %{method: "GET", path: "/v1/handles/" <> handle} ->
+        case Map.get(handles, handle, :free) do
+          :free -> RegistryStub.refusal(:handle_not_found)
+          :taken -> {200, handle_answer(handle, "per_" <> String.duplicate("a", 64), nil)}
+          {:held, identifier, address} -> {200, handle_answer(handle, identifier, address)}
+          :close -> :close
+        end
+
+      %{body: body} = request ->
+        case RegistryStub.verify(body, state) do
+          {:ok, signed} -> answer.(Map.put(request, :signed, signed))
+          {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
+        end
+    end)
+  end
+
+  # An allowlist entry typed into the panel's form, then its button clicked.
+  defp door_entry(view, button, value) do
+    view
+    |> element(~s(form[phx-change="door_form_changed"]))
+    |> render_change(%{"value" => value})
+
+    view |> element("button[phx-click=#{button}]") |> render_click()
+  end
+
+  defp handle_answer(handle, identifier, address) do
+    %{
+      "protocol" => Prima.HandleAnswer.protocol(),
+      "registry" => RegistryStub.host(),
+      "handle" => handle,
+      "identifier" => identifier,
+      "directory" => RegistryStub.directory()
+    }
+    |> then(&if(address, do: Map.put(&1, "address", address), else: &1))
+    |> RegistryStub.answer()
+  end
+
+  defp type_handle(view, handle) do
+    view
+    |> element(~s([data-test="identity-handle"]))
+    |> render_change(%{"handle" => handle})
+
+    wait_until(fn -> not has_element?(view, ~s([data-check="checking"])) end)
+  end
+
+  # Signed in, holding `handle` as their claimed one, or none: the login
+  # helper records a namespace for every person it signs in.
+  defp signed_in(conn, person, handle \\ nil) do
+    conn = log_in_user(conn, person)
+
+    Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^person.user_id),
+      set: [namespace: handle]
+    )
+
+    conn
+  end
+
+  defp wanted(person) do
+    {:ok, user} = Sanctum.Tenancy.Users.get(person.user_id)
+    Sanctum.Tenancy.Users.prefs(user)["handle_wanted"]
+  end
+
+  defp want!(person, handle) do
+    {:ok, user} = Sanctum.Tenancy.Users.get(person.user_id)
+    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(user, %{"handle_wanted" => handle})
+  end
+
+  # Enrolled at the directory, the kit acknowledged.
+  defp acknowledged!(person) do
+    state = RegistryStub.enroll!(person.user_id)
+    as = %Prima.Actor{user_id: person.user_id}
+
+    [attempt] =
+      Arca.Repo.all(from(a in Arca.Schemas.IdentityAttempt, where: a.user_id == ^person.user_id))
+
+    {:ok, _} = Arca.IdentityAttempts.acknowledge_kit(as, attempt.id)
+    state
+  end
+
+  defp prompt_id(view) do
+    [_, id] = Regex.run(~r/data-prompt-id="(identity-recovery-\d+)"/, render(view))
+    id
+  end
+
   describe "your identity" do
     setup do
       keep_env(:sanctum, [:directory_url])
+      Application.put_env(:sanctum, :directory_url, @directory)
       :ok
     end
 
-    test "with no directory pinned, enrolling names the setting the operator owes, and the rest stands",
+    test "a free handle is chosen, kept as wanted, and begins the enrollment at the pinned directory",
          %{conn: conn} do
-      Application.delete_env(:sanctum, :directory_url)
       person = test_user()
-      {view, html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+      registry(nil, %{"alice" => :taken})
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
 
-      assert has_element?(view, ~s([data-test="identity"][data-provenance="local"]))
-      assert has_element?(view, ~s([data-test="identity"][data-enrollment="none"]))
-      assert has_element?(view, ~s([data-test="identity-no-directory"]), "CYFR_DIRECTORY_URL")
-      refute has_element?(view, ~s([data-test="identity-enroll"]))
-      assert html =~ "local pairing included"
+      assert has_element?(view, ~s([data-test="identity"][data-state="choose"]))
+      assert has_element?(view, ~s([data-test="identity-directory"]), @directory)
 
-      # The doors and passkeys stand without a directory.
-      assert has_element?(view, ~s([data-test="door"][data-key="#{person.identity}"]))
-      assert has_element?(view, ~s([data-test="passkey-register"]))
+      type_handle(view, "alice")
+      assert has_element?(view, ~s([data-test="identity-handle-check"][data-check="taken"]))
+      assert has_element?(view, ~s([data-test="identity-choose"][disabled]))
+
+      type_handle(view, "Not A Handle")
+      assert has_element?(view, ~s([data-check="invalid"]))
+
+      type_handle(view, "alicia")
+      assert has_element?(view, ~s([data-check="free"]))
+
+      view |> element(~s([data-test="identity-handle"])) |> render_submit(%{"handle" => "alicia"})
+      render(view)
+
+      assert wanted(person) == "alicia"
+      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
+      assert has_element?(view, ~s(#system-layer [data-test="recovery-directory"]), @directory)
     end
 
-    test "Enroll opens the enrollment prompt in the page's layer, naming the pinned directory",
+    test "with the registry not answering, no handle is chosen and nothing is written",
          %{conn: conn} do
-      Application.put_env(:sanctum, :directory_url, @directory)
       person = test_user()
-      {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+      registry(nil, %{"alice" => :close})
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
 
-      assert has_element?(view, ~s([data-test="identity-directory"]), @directory)
+      type_handle(view, "alice")
+      assert has_element?(view, ~s([data-check="unavailable"]))
+
+      view |> element(~s([data-test="identity-handle"])) |> render_submit(%{"handle" => "alice"})
+      assert wanted(person) == nil
+      refute has_element?(view, ~s(#system-layer [data-test="recovery"]))
+    end
+
+    test "with the registry not answering, the person still enrolls on their own, for an identifier and its kit",
+         %{conn: conn} do
+      person = test_user()
+      registry(nil, %{"alice" => :close})
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+
+      type_handle(view, "alice")
+      assert has_element?(view, ~s([data-check="unavailable"]))
+
       view |> element(~s([data-test="identity-enroll"])) |> render_click()
       render(view)
 
       assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
       assert has_element?(view, ~s(#system-layer [data-test="recovery-directory"]), @directory)
-      assert has_element?(view, ~s(#system-layer form[data-recovery="enrollment"]))
+      assert wanted(person) == nil
     end
 
     test "a kit not yet saved is offered again; another kit and the rotation are offered once enrolled",
          %{conn: conn} do
-      Application.put_env(:sanctum, :directory_url, @directory)
       person = test_user()
       enrolled = enrolled!(person)
-      {view, html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+      {view, html} = conn |> signed_in(person) |> mount_athanor("/settings")
 
-      assert has_element?(view, ~s([data-test="identity"][data-enrollment="enrolled"]))
+      assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
       assert has_element?(view, ~s([data-test="identity-identifier"]), enrolled.identifier)
       refute html =~ "sealed-kit-seed"
 
@@ -1777,12 +1942,10 @@ defmodule PrismWeb.SettingsLiveTest do
       render(view)
       assert has_element?(view, ~s(#system-layer [data-test="confirmation"][data-own="true"]))
 
-      ctx = %{Sanctum.TestContext.local() | user_id: person.user_id}
-
       assert [%{action: "key_rotation", state: "pending"}] =
                Arca.Repo.all(
                  from(c in "pending_confirmations",
-                   where: c.user_id == ^ctx.user_id,
+                   where: c.user_id == ^person.user_id,
                    select: %{action: c.action, state: c.state}
                  )
                )
@@ -1796,13 +1959,12 @@ defmodule PrismWeb.SettingsLiveTest do
 
     test "an enrollment no prompt here holds is abandoned and begun again under a new kit",
          %{conn: conn} do
-      Application.put_env(:sanctum, :directory_url, @directory)
       person = test_user()
       pending = pending!(person)
-      {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
 
-      assert has_element?(view, ~s([data-test="identity"][data-enrollment="pending"]))
-      refute has_element?(view, ~s([data-test="identity-enroll"]))
+      assert has_element?(view, ~s([data-test="identity"][data-state="pending"]))
+      refute has_element?(view, ~s([data-test="identity-handle"]))
 
       # No confirmation is asked: it discards an unfinished attempt and
       # mints nothing.
@@ -1819,32 +1981,35 @@ defmodule PrismWeb.SettingsLiveTest do
                )
              ) == []
 
-      assert has_element?(view, ~s([data-test="identity"][data-enrollment="none"]))
-      assert render(view) =~ "The unfinished enrollment was abandoned."
-
       # Begun again: the enrollment prompt is open in the layer, its seed
       # the browser's to draw.
       assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
       assert has_element?(view, ~s(#system-layer form[data-recovery="enrollment"]))
     end
 
-    test "no abandonment is offered while the page's own enrollment prompt holds its seed",
+    test "no abandonment is offered while the card's own enrollment prompt holds its seed",
          %{conn: conn} do
-      Application.put_env(:sanctum, :directory_url, @directory)
       person = test_user()
-      {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
+      registry(nil, %{})
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
 
-      view |> element(~s([data-test="identity-enroll"])) |> render_click()
+      type_handle(view, "alicia")
+      view |> element(~s([data-test="identity-handle"])) |> render_submit(%{"handle" => "alicia"})
       render(view)
       assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
 
       # The prompt's submission stands at the directory, unanswered, and
-      # the page reads the identity again with the prompt still open.
+      # the card reads the identity again with the prompt still open.
       _pending = pending!(person)
-      send(view.pid, :load)
+
+      Phoenix.LiveView.send_update(view.pid, PrismWeb.IdentityCard,
+        id: PrismWeb.IdentityCard.id(),
+        reload: true
+      )
+
       render(view)
 
-      assert has_element?(view, ~s([data-test="identity"][data-enrollment="pending"]))
+      assert has_element?(view, ~s([data-test="identity"][data-state="pending"]))
       refute has_element?(view, ~s([data-test="identity-abandon"]))
 
       # Dismissed, the prompt and the seed it held are gone.
@@ -1853,9 +2018,170 @@ defmodule PrismWeb.SettingsLiveTest do
       assert has_element?(view, ~s([data-test="identity-abandon"]))
     end
 
-    test "a person whose keys another home holds is told to change them there, and offered nothing",
+    test "the card's own enrollment claims the wanted handle once its kit is acknowledged",
          %{conn: conn} do
-      Application.put_env(:sanctum, :directory_url, @directory)
+      person = test_user()
+      parent = self()
+      registry(nil, %{})
+
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+      type_handle(view, "alicia")
+      view |> element(~s([data-test="identity-handle"])) |> render_submit(%{"handle" => "alicia"})
+      id = prompt_id(view)
+
+      # The ceremony ran in the prompt and its kit was acknowledged.
+      state = acknowledged!(person)
+
+      registry(state, %{}, fn %{path: path, signed: signed} ->
+        send(parent, {:signed, path, signed.operation})
+
+        case signed.operation do
+          "policy.accept" ->
+            {200, RegistryStub.answer(%{"accepted" => true})}
+
+          "handle.claim" ->
+            {201, RegistryStub.answer(%{"handle" => "alicia", "identifier" => state.identifier})}
+        end
+      end)
+
+      send(view.pid, {:system_layer, id, :confirmed})
+      wait_until(fn -> has_element?(view, ~s([data-test="identity-claimed"])) end)
+
+      assert_received {:signed, "/v1/legal/accept", "policy.accept"}
+      assert_received {:signed, "/v1/namespaces/personal/claim", "handle.claim"}
+      assert has_element?(view, ~s([data-test="identity-claimed"]), "@alicia")
+      assert wanted(person) == nil
+    end
+
+    test "an acknowledged kit with a wanted handle offers Claim @name; a lost answer's repeat claims",
+         %{conn: conn} do
+      person = test_user()
+      state = acknowledged!(person)
+      want!(person, "alicia")
+      {:ok, answering} = Agent.start_link(fn -> false end)
+
+      registry(state, %{"alicia" => {:held, state.identifier, nil}}, fn %{signed: signed} ->
+        case signed.operation do
+          "policy.accept" ->
+            {200, RegistryStub.answer(%{"accepted" => true})}
+
+          "handle.claim" ->
+            if Agent.get(answering, & &1),
+              do:
+                {200,
+                 RegistryStub.answer(%{"handle" => "alicia", "identifier" => state.identifier})},
+              else: :close
+        end
+      end)
+
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+      assert has_element?(view, ~s([data-test="identity"][data-state="claim"]))
+
+      view |> element(~s([data-test="identity-claim"])) |> render_click()
+      assert has_element?(view, ~s([data-test="identity-claim-error"]))
+      assert has_element?(view, ~s([data-test="identity-claim"]), "Claim @alicia")
+      assert wanted(person) == "alicia"
+
+      Agent.update(answering, fn _ -> true end)
+      view |> element(~s([data-test="identity-claim"])) |> render_click()
+      assert has_element?(view, ~s([data-test="identity-claimed"]), "@alicia")
+      assert wanted(person) == nil
+
+      wait_until(fn ->
+        has_element?(view, ~s([data-test="identity-publish"][data-published="false"]))
+      end)
+    end
+
+    test "a claim sent before the enrollment's kit is acknowledged claims nothing, and sends the registry nothing",
+         %{conn: conn} do
+      person = test_user()
+      parent = self()
+      state = RegistryStub.enroll!(person.user_id)
+      want!(person, "alicia")
+
+      registry(state, %{}, fn %{signed: signed} ->
+        send(parent, {:signed, signed.operation})
+        {200, RegistryStub.answer(%{"accepted" => true})}
+      end)
+
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+      assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
+
+      # The event, not the hidden button: the component holds the order.
+      view |> with_target("#identity-card") |> render_click("claim", %{})
+      render(view)
+
+      refute_received {:signed, _operation}
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(person.user_id)
+      assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
+    end
+
+    test "a handle chosen while the enrollment's kit is unacknowledged is kept, and claimed only after it",
+         %{conn: conn} do
+      person = test_user()
+      parent = self()
+      state = RegistryStub.enroll!(person.user_id)
+
+      registry(state, %{}, fn %{signed: signed} ->
+        send(parent, {:signed, signed.operation})
+        {200, RegistryStub.answer(%{"accepted" => true})}
+      end)
+
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+      assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
+
+      card = with_target(view, "#identity-card")
+      render_change(card, "check", %{"handle" => "alicia"})
+      wait_until(fn -> not has_element?(view, ~s([data-check="checking"])) end)
+      render_submit(card, "choose", %{"handle" => "alicia"})
+      render(view)
+
+      refute_received {:signed, _operation}
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(person.user_id)
+    end
+
+    test "a taken handle at the claim asks for another, and the enrollment stands",
+         %{conn: conn} do
+      person = test_user()
+      state = acknowledged!(person)
+      want!(person, "alice")
+
+      registry(state, %{"alice" => :taken}, fn %{signed: signed} ->
+        case signed.operation do
+          "policy.accept" -> {200, RegistryStub.answer(%{"accepted" => true})}
+          "handle.claim" -> RegistryStub.refusal(:handle_taken)
+        end
+      end)
+
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+      view |> element(~s([data-test="identity-claim"])) |> render_click()
+
+      assert has_element?(
+               view,
+               ~s([data-test="identity"][data-state="choose"][data-enrollment="enrolled"])
+             )
+
+      assert has_element?(view, ~s([data-test="identity-claim-error"]))
+      assert has_element?(view, ~s([data-test="identity-handle"]), "Choose another handle")
+      assert has_element?(view, ~s([data-test="identity-identifier"]), state.identifier)
+    end
+
+    test "a claimed handle shows whether the registry publishes this CYFR's address with it",
+         %{conn: conn} do
+      person = test_user()
+      state = acknowledged!(person)
+      registry(state, %{"alicia" => {:held, state.identifier, "https://alicia.example"}})
+
+      {view, _html} = conn |> signed_in(person, "alicia") |> mount_athanor("/settings")
+      assert has_element?(view, ~s([data-test="identity-claimed"]), "@alicia")
+
+      wait_until(fn ->
+        has_element?(view, ~s([data-test="identity-publish"][data-published="true"]))
+      end)
+    end
+
+    test "a person whose keys another CYFR holds is told to change them there, and offered nothing",
+         %{conn: conn} do
       person = test_user()
       {conn, identifier} = remote!(conn, person)
       {view, _html} = mount_athanor(conn, "/settings")
@@ -1865,7 +2191,7 @@ defmodule PrismWeb.SettingsLiveTest do
       assert has_element?(view, ~s([data-test="identity-identifier"]), identifier)
 
       for control <-
-            ~w(identity-enroll identity-abandon identity-no-directory identity-kit identity-add-kit identity-rotate) do
+            ~w(identity-handle identity-abandon identity-kit identity-claim identity-add-kit identity-rotate) do
         refute has_element?(view, ~s([data-test="#{control}"])), control
       end
     end
@@ -1894,7 +2220,6 @@ defmodule PrismWeb.SettingsLiveTest do
       person = test_user()
       authenticator = Sanctum.TestContext.passkey!(person.user_id)
       key = "github|https://github.com|linked-#{System.unique_integer([:positive])}"
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "test")
       Application.put_env(:sanctum, :settings_link_identity, key)
 
       {view, _html} = conn |> log_in_user(person) |> mount_athanor("/settings")
@@ -1924,7 +2249,6 @@ defmodule PrismWeb.SettingsLiveTest do
       {:ok, ctx} = Sanctum.Caller.establish(get_session(conn, session_key()))
 
       key = "oidcc|https://issuer.example|sub-#{System.unique_integer([:positive])}"
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "test")
       {:ok, ticket} = Sanctum.SignIn.link_ticket(ctx, %{key: key, provider: "oidcc", email: nil})
 
       linked =

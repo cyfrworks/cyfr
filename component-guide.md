@@ -542,12 +542,12 @@ Named roles the component asks the operator to satisfy with **vault entries**. T
 | (key) | string | Yes | The need name — the slot the operator binds a vault entry to. Lowercase, matching `^[a-z][a-z0-9_-]{0,31}$` |
 | `type` | string | Yes | `kind:qualifier` — kind is a credential kind (`api_key`, `oauth`, `bundle`) or a component type (`catalyst`, `reagent`, `formula`) |
 | `reason` | string | Yes | Prose the operator sees on the consent sheet instead of your key names |
-| `fields` | string[] | No | The bound entry's field names: exactly one for an attached API key or bundle, which CYFR attaches; for a disclosed need, the names your binary passes to `cyfr:vault/read.get` |
+| `fields` | string[] | No | The names your component reads the credential under: exactly one for an attached API key or bundle, which CYFR attaches; for a disclosed need, the names your binary passes to `cyfr:vault/read.get`. The person's entry need not use these names: the grant maps each to one of the entry's fields, by itself when the names are equal or both sides hold one field, otherwise as the person chooses |
 | `scopes` | string[] | OAuth only | OAuth scopes the grant must cover. Only valid on `oauth:*` types |
 | `required` | bool | No | Default `true`. Optional needs may be left unbound |
 | `attach` | object | No | How CYFR attaches the value: `in` (`header` or `query`), `name`, and `template` with `{value}` exactly once. An OAuth rule without a template uses `Authorization: Bearer {value}` |
-| `hosts` | string[] | No | Destination hosts, exact or `*.` plus a hostname, within `caps.egress.domains`; used to prefill an entry's destination |
-| `paths` | string[] | No | Destination path prefixes beginning with `/`, used to prefill an entry's destination |
+| `hosts` | string[] | Credential needs | The hosts the credential is sent to, exact or `*.` plus a hostname, within `caps.egress.domains`. Required on an `api_key`, `oauth` or `bundle` need. They decide which vault entries are offered for the need: an entry of its kind whose destination covers every host (and every path the need declares), whatever its name or label. They also prefill a new entry's destination |
+| `paths` | string[] | No | Destination path prefixes beginning with `/`. An entry is offered when each falls under one of its paths; they also prefill a new entry's destination |
 | `disclose` | bool | No | Default `false`; `true` asks to read the material as well. A need without `attach` is disclose-only and takes a disclosed entry alone |
 
 ```json
@@ -563,7 +563,7 @@ Named roles the component asks the operator to satisfy with **vault entries**. T
 }
 ```
 
-An OAuth need declares only the provider and scopes (`"type": "oauth:google"`, `"scopes": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & the Vault](#needs--the-vault).
+An OAuth need declares the provider, its scopes and the hosts the token is sent to (`"type": "oauth:google"`, `"scopes": [...]`, `"hosts": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & the Vault](#needs--the-vault).
 
 ### `caps` Section
 
@@ -688,6 +688,8 @@ Shapes nest at most 8 deep, and a manifest whose `results` does not hold this gr
       "type": "api_key:example.com",
       "reason": "to call the Example API with your key",
       "fields": ["MY_API_KEY"],
+      "attach": {"in": "header", "name": "Authorization", "template": "Bearer {value}"},
+      "hosts": ["api.example.com"],
       "required": true
     }
   },
@@ -872,7 +874,7 @@ streaming::close(handle);
 | `response_too_large` | Cumulative data exceeds `max_response_size` |
 
 ### `cyfr:vault/read` — `get(name) -> result<string, string>`
-Returns `Ok(value)` or `Err("access-denied: {name}")`. Requires a granted profile whose projection includes `name`. Private vault material is served from an entry that permits disclosure, projected to the `fields` the need declared; an attach-only entry refuses the read. Public `provides` values are also readable through this interface without a vault entry.
+Returns `Ok(value)` or `Err("access-denied: {name}")`. Requires a granted profile whose projection includes `name`. Private vault material is served from an entry that permits disclosure, projected to the `fields` the need declared: each name answers the value of the entry field the grant maps it to. An attach-only entry refuses the read. Public `provides` values are also readable through this interface without a vault entry.
 
 ### `cyfr:emit/events` — `emit(json-event) -> string`
 Push one event (a JSON object) to the execution's event stream before `run` answers — what a caller subscribed to the execution sees as it happens. Answers `{"ok": true, "sequence": "N.n"}`, `{"ok": true}` when streamed text is held back to mask a credential across events, or `{"error": {...}}` (too large for the component's `max_request_size`, over the execution's budget of 3000 a minute, not an object). A refused event never stops the run. Model catalysts emit the `model/chat@1` stream events (see [Model catalysts](#model-catalysts-the-modelchat1-contract)).
@@ -1138,11 +1140,11 @@ A **vault entry** is a credential the operator owns — an API key, an OAuth gra
 
 For attachment, declare `attach` and the destination `hosts` (and optionally `paths`). An API key or bundle names the one field to attach in `fields`; an OAuth need names its token's `scopes`. Name the need as `"connection": "<need>"` on the `cyfr:http` request with no credential header of your own. CYFR pins the request once under the component's egress, attaches the value in the host within the entry's destination, and masks it from the answer. The component, runner and worker service receive no attached credential. The need's hosts must also fit its egress ask; the entry's destination and the granted egress are independent bounds.
 
-A need without `attach`, or with `disclose: true`, asks to read the material itself: `cyfr:vault/read.get("ANTHROPIC_API_KEY")` returns only the `fields` its consent names, and only from an entry created or rebound with `disclose: true`. A need may both attach and disclose. An attach-only entry refuses a read as `disclosure_refused`; a disclosed need takes no instance entry. Code that reads a field reads it under an explicitly disclosed grant.
+A need without `attach`, or with `disclose: true`, asks to read the material itself: `cyfr:vault/read.get("ANTHROPIC_API_KEY")` returns only the `fields` its consent maps, each from the entry field the grant names for it, and only from an entry created or rebound with `disclose: true`. A need may both attach and disclose. An attach-only entry refuses a read as `disclosure_refused`; a disclosed need takes no instance entry. Code that reads a field reads it under an explicitly disclosed grant.
 
 An app may supply a dependency's public configuration in `provides`, keyed by the exact `dependencies.static` reference and then its need name. The dependency must declare a credential need with an `attach` rule. Each provided entry contains a `destination` and a string `values` map. Its value names and string values together span at most 4 KiB; the destination is validated separately. The preview shows the destination and that the publisher supplies it; no vault entry is picked. Provided values are public, attached and read alike, and changing their values or destination changes the consent's shape.
 
-**A key stays with the component it is for.** When a formula runs a catalyst as a child, CYFR attaches the key bound on the catalyst's *own* profile to each request that names its `api_key` connection — the formula's consent edge to it **selects** that profile (by label, `default` unless the person picked another) rather than carrying a copy. Bind the Anthropic key once on `catalyst:local.claude`; the shipped assistant, and every formula whose consent selects that profile, runs it with that key; revoke or rebind it there and every one of them follows at its next turn. A person's own formula picks the lender on its consent sheet: the `dependency_needs` rows of `profile plan` list each dependency that needs a credential and the profiles of it that bind one, and a `selections` decision (`from` defaulting to the source, `dep`, `label`, optional `fields` to narrow) records the choice under the commit digest. The plan lists one row per dependency edge, so two roles can run one catalyst with two keys under one consent. A selection that no longer resolves — the lender revoked, rebound to a differently shaped credential, or holding no key yet — refuses the child run as `setup_required` rather than lending anything else.
+**A key stays with the component it is for.** When a formula runs a catalyst as a child, CYFR attaches the key bound on the catalyst's *own* profile to each request that names its `api_key` connection — the formula's consent edge to it **selects** that profile (by label, `default` unless the person picked another) rather than carrying a copy. Bind the Anthropic key once on `catalyst:local.claude`; the shipped assistant, and every formula whose consent selects that profile, runs it with that key; revoke or rebind it there and every one of them follows at its next turn. A person's own formula picks the lender on its consent sheet: the `dependency_needs` rows of `profile plan` list each dependency that needs a credential and the profiles of it that bind one, and a `selections` decision (`from` defaulting to the source, `dep`, `label`) records the choice under the commit digest. The child reads under the lending profile's own field map. The plan lists one row per dependency edge, so two roles can run one catalyst with two keys under one consent. A selection that no longer resolves — the lender revoked, rebound to a differently shaped credential, or holding no key yet — refuses the child run as `setup_required` rather than lending anything else.
 
 **The credential rule**: use attachment for a private credential a request needs, and explicit disclosure only when the component must hold it. Public-by-design configuration (URLs, anon keys) may travel in call arguments or a dependency's `provides`; owning both ends does not make a private key public.
 
@@ -1355,7 +1357,7 @@ For the full tincture reference (architecture, manifest, SDK, sandbox constraint
 | `consent_required` | The component has no granted capabilities | Grant it: `cyfr profile grant <type>:<ref>` |
 | `domain_blocked` | HTTP to a domain outside the consent | Declare it in `caps.egress.domains` and re-grant |
 | `rate_limited` | Too many requests in window | Wait for reset, or re-grant with a higher `limits.rate_limit` |
-| `secret_denied` | Name outside the vault-entry projection | Declare the name in the need's `fields`; operator re-grants |
+| `secret_denied` | Name outside the vault-entry projection (its field map) | Declare the name in the need's `fields`; operator re-grants |
 | `authorization_required` | OAuth vault entry has no live grant | Re-authorize the entry (console Vault page) |
 | `corrupt` | The binary changed since it was registered | `cyfr register` then re-run |
 | `invalid_argument` (reserved path) | A `file` write or delete named `components/.staging/` or `aqua/.staging/`, the server's store of unit revisions: "This folder holds the server's stored unit revisions and only the server changes it — edit or remove a unit at its own path, one unit at a time" | Edit the unit's own file, or remove the unit at its own path (`cyfr remove <ref>`, the AQUA page) |
@@ -1392,7 +1394,7 @@ Errors returned by `invoke::call`/`invoke::spawn` as `{"error": {"type": "...", 
 
 - [ ] `wasm-tools validate` passes with the refused features off (correct exports, no forbidden imports, no async, GC or exceptions)
 - [ ] `cyfr-manifest.json` complete: `name`, `type`, `version`, `publisher`, `description`, `schema`, `needs`, `caps`
-- [ ] For an attached key or bundle, `needs.fields` names exactly the field CYFR attaches and requests name the need as `connection`; for a disclosed need, the fields match the names the binary passes to `cyfr:vault/read.get`
+- [ ] For an attached key or bundle, `needs.fields` names exactly one field and requests name the need as `connection`; for a disclosed need, the fields match the names the binary passes to `cyfr:vault/read.get`. The person's entry may name its fields otherwise; the grant maps them
 - [ ] Tested with `cyfr run` using representative input
 - [ ] Catalysts: every egress domain declared in `caps.egress.domains`, component granted (`cyfr profile grant c:<ref>`)
 - [ ] OAuth catalysts: need of type `oauth:<provider>` declares every scope your operations use

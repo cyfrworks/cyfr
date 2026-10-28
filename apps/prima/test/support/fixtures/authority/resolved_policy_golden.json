@@ -26,7 +26,7 @@
               "paths": ["/rest/v1"]
             },
             "attach": { "in": "header", "name": "apikey", "template": "{value}" },
-            "projection": { "fields": ["url", "anon_key"] }
+            "projection": { "fields": { "anon_key": "anon key", "url": "url" }, "scopes": [] }
           },
           "egress": {
             "domains": ["prod.supabase.co"],
@@ -45,7 +45,7 @@
             "scope": "athanor",
             "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|dest|default",
             "destination": { "hosts": ["warehouse.supabase.co"], "scheme": "https" },
-            "projection": { "fields": ["url", "service_key"] },
+            "projection": { "fields": { "service_key": "service_key", "url": "url" }, "scopes": [] },
             "named": {
               "Archive": {
                 "entry_id": "vault-entry-archive",
@@ -59,7 +59,8 @@
                   "methods": ["GET"],
                   "paths": ["/rest/v1"]
                 },
-                "attach": { "in": "header", "name": "Authorization", "template": "Bearer {value}" }
+                "attach": { "in": "header", "name": "Authorization", "template": "Bearer {value}" },
+                "projection": { "fields": { "service_key": "service_key" }, "scopes": [] }
               }
             }
           },
@@ -78,6 +79,7 @@
             "binding_key": "formula:local.daily-report|catalyst:supabase.com.database|lent|default",
             "destination": { "hosts": ["*.supabase.co"], "scheme": "https" },
             "attach": { "in": "query", "name": "apikey", "template": "{value}" },
+            "projection": { "fields": { "anon_key": "anon key" }, "scopes": [] },
             "lender": {
               "profile_id": "prof-supabase",
               "consent_id": "consent-supabase-3",

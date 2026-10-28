@@ -64,7 +64,7 @@ defmodule Sanctum.PasskeysTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  # A person admitted through a local door, with their own athanor and a
+  # A local person with a sign-in method linked, their own athanor and a
   # group, and the context a new session of theirs establishes there. Their
   # email is unverified unless `verified: true`: a verified one is a fresh
   # method wherever a code transport is configured. The door is GitHub
@@ -75,16 +75,13 @@ defmodule Sanctum.PasskeysTest do
     key = Keyword.get(opts, :key, "github|https://github.com|passkeys-#{n}")
 
     {:ok, user} =
-      Sanctum.SignIn.admitted(
-        %{
-          id: key,
-          provider: provider,
-          email: "passkeys#{n}@example.com",
-          verified: Keyword.get(opts, :verified, false),
-          name: "Passkeys #{n}"
-        },
-        :allowed
-      )
+      Sanctum.Test.People.linked(%{
+        id: key,
+        provider: provider,
+        email: "passkeys#{n}@example.com",
+        verified: Keyword.get(opts, :verified, false),
+        name: "Passkeys #{n}"
+      })
 
     {:ok, athanor} = Athanors.create_group(user.id, "Passkeys #{n}")
     %{user: user, athanor: athanor, key: key, ctx: session_ctx(user, athanor, opts)}
@@ -473,8 +470,7 @@ defmodule Sanctum.PasskeysTest do
     end
 
     test "a denial committing between the first-method check and the write keeps no passkey" do
-      %{ctx: ctx, user: user, key: key} = person!()
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "ops")
+      %{ctx: ctx, user: user} = person!()
       auth = authenticator()
       answer = credential(ctx, auth)
 
@@ -739,18 +735,36 @@ defmodule Sanctum.PasskeysTest do
       # identifier, with a group to work in here and no athanor of their own.
       {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "ops")
 
+      now = DateTime.utc_now()
+
       {:ok, user} =
-        Sanctum.SignIn.admitted(
+        Arca.Test.People.mint(
+          Prima.Actor.system(),
           %{
-            id: key,
-            provider: "cyfr",
-            email: nil,
-            verified: :unknown,
-            name: nil,
-            remote: %{identifier: identity.identifier, directory_url: identity.url}
+            id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+            admission: "remote",
+            first_seen_at: now,
+            last_seen_at: now,
+            created_at: now,
+            updated_at: now
           },
-          :allowed
+          %{
+            key: key,
+            provider: "cyfr",
+            issuer: identity.url,
+            subject: identity.identifier,
+            first_seen_at: now,
+            last_seen_at: now
+          }
         )
+
+      {:ok, _} =
+        Arca.PersonIdentities.create(Prima.Actor.system(), %{
+          user_id: user.id,
+          provenance: "remote",
+          identifier: identity.identifier,
+          directory_url: identity.url
+        })
 
       # Their head cached, as the door caches it when it admits them.
       DirectoryServer.cached!(identity)
@@ -921,7 +935,7 @@ defmodule Sanctum.PasskeysTest do
     end
 
     # Run `move` once, in the sign-in's own process, at the door's read of
-    # the person's linked identities: after their passkey was verified
+    # its entries about the person: after their passkey was verified
     # against a fresh head, and before their session is minted. Its answer
     # is kept under `:moved_in_window`. Answers the handler's id, to
     # detach once the sign-in answered.
@@ -933,7 +947,7 @@ defmodule Sanctum.PasskeysTest do
         id,
         [:arca, :repo, :query],
         fn _event, _measurements, meta, _ ->
-          if self() == test and meta[:source] == "external_identities" and
+          if self() == test and meta[:source] == "server_allowlist" and
                Process.get(:moved_in_window) == nil do
             Process.put(:moved_in_window, move.())
           end
@@ -1524,15 +1538,13 @@ defmodule Sanctum.PasskeysTest do
     # the door admits them by, and a second passkey of the first.
     setup do
       code_transport!()
-      %{ctx: ctx, user: user, athanor: athanor, key: key} = person!(verified: true)
+      %{ctx: ctx, user: user, athanor: athanor} = person!(verified: true)
       {auth, passkey} = registered_by_code!(ctx)
       second_auth = authenticator()
       answer = credential(ctx, second_auth)
 
       {:ok, %{passkey: second}} =
         confirming(ctx, auth, &Passkeys.register(&1, %{credential: answer}))
-
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "ops")
 
       %{ctx: other_ctx, user: other} = person!(verified: true)
       {_other_auth, _other_passkey} = registered_by_code!(other_ctx)
@@ -1713,14 +1725,13 @@ defmodule Sanctum.PasskeysTest do
       # A local person admitted by a door this home does not re-authenticate,
       # with no verified email: their passkey is their one fresh method.
       %{ctx: ctx, user: user} = person!()
-      {:ok, _} = Sanctum.Tenancy.Members.ensure(user.id, scope: "platform")
+      {:ok, _} = Sanctum.TestContext.ensure_platform(user.id)
       {auth, passkey} = registered!(ctx)
 
-      # Their last door removed while they keep the passkey, and the
-      # operator admitting them by their own id.
+      # Their last door removed while they keep the passkey: a local
+      # person, admitted unless denied.
       Arca.Repo.delete_all(from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user.id))
 
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", user.id, "ops")
       held = Passkeys.sign_in_challenge()
       assert {:ok, _} = Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
 
@@ -1754,7 +1765,7 @@ defmodule Sanctum.PasskeysTest do
       # needs a session they cannot get.
       assert {:ok, []} = Arca.Passkeys.list(system, user.id, state: :pending)
       %{ctx: other_admin, user: other} = person!()
-      {:ok, _} = Sanctum.Tenancy.Members.ensure(other.id, scope: "platform")
+      {:ok, _} = Sanctum.TestContext.ensure_platform(other.id)
 
       assert Passkeys.recover_admin(%{other_admin | platform_admin: true}, %{
                user_id: user.id,
@@ -1780,8 +1791,8 @@ defmodule Sanctum.PasskeysTest do
   # ---------------------------------------------------------------------------
 
   describe "sign-in" do
-    # A person with a verified email, which the door may admit them by: a
-    # fresh method here, so their first passkey is confirmed by its code.
+    # A person with a verified email: a fresh method here, so their first
+    # passkey is confirmed by its code.
     setup do
       code_transport!()
       %{ctx: ctx} = fixture = person!(verified: true)
@@ -1789,15 +1800,14 @@ defmodule Sanctum.PasskeysTest do
       Map.merge(fixture, %{auth: auth, passkey: passkey})
     end
 
-    test "an active passkey signs its person in, when a door of theirs still admits them",
-         %{user: user, key: key, auth: auth} do
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "ops")
+    test "an active passkey signs its person in, while the door admits them",
+         %{user: user, auth: auth} do
       held = Passkeys.sign_in_challenge()
 
       assert held.public_key["userVerification"] == "required"
       assert held.public_key["rpId"] == Passkeys.rp_id()
 
-      assert {:ok, %{session_token: token, outcome: {:proceed, _report}}} =
+      assert {:ok, %{session_token: token}} =
                Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
 
       assert {:ok, %{user_id: user_id, provider: "passkey"}} = Sanctum.Session.get(token)
@@ -1805,8 +1815,7 @@ defmodule Sanctum.PasskeysTest do
     end
 
     test "a local person's passkey stands on no head: the sign-in binds no key epoch, and the session records none",
-         %{user: user, key: key, auth: auth} do
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "ops")
+         %{user: user, auth: auth} do
       held = Passkeys.sign_in_challenge()
 
       assert {:ok, %{session_token: token}} =
@@ -1818,33 +1827,22 @@ defmodule Sanctum.PasskeysTest do
       assert user_id == user.id
     end
 
-    test "the verified email still admitted admits them too", %{user: user, auth: auth} do
-      {:ok, _} = Sanctum.Door.Store.allow("email", user.email, "ops")
+    test "a person a deny names is refused, and a local person needs no entry" do
+      %{ctx: ctx, user: user} = person!()
+      {auth, _passkey} = registered!(ctx)
       held = Passkeys.sign_in_challenge()
       assert {:ok, _} = Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
-    end
 
-    test "a person the door no longer admits is refused, as a denied one is",
-         %{user: user, key: key, auth: auth} do
-      held = Passkeys.sign_in_challenge()
-
-      assert Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge)) ==
-               {:error, {:door, :not_allowed}}
-
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "ops")
-      {:ok, _} = Sanctum.Door.Store.deny("email", user.email, "ops")
+      {:ok, _} = Sanctum.Door.Store.deny("person", user.id, "ops")
       held = Passkeys.sign_in_challenge()
 
       assert Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge)) ==
                {:error, {:door, :denied}}
     end
 
-    test "a person with no linked door is asked about by their own id, as a restore names them" do
-      # No verified email, so before this rule nothing asked about them at
-      # all once their last door was gone.
+    test "a person with no linked sign-in method is asked about as a person" do
       %{ctx: ctx, user: user} = person!()
       {auth, _passkey} = registered!(ctx)
-      assert {:ok, %{email_verified: false}} = Sanctum.Tenancy.Users.get(user.id)
 
       Arca.Repo.delete_all(
         Ecto.Query.from(i in Arca.Schemas.ExternalIdentity, where: i.user_id == ^user.id)
@@ -1853,16 +1851,10 @@ defmodule Sanctum.PasskeysTest do
       assert {:ok, []} = Arca.Users.identities(Prima.Actor.system(), user.id)
 
       held = Passkeys.sign_in_challenge()
-
-      assert Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge)) ==
-               {:error, {:door, :not_allowed}}
-
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", user.id, "restored")
-      held = Passkeys.sign_in_challenge()
       assert {:ok, _} = Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge))
 
       # The operator's deny still wins.
-      {:ok, _} = Sanctum.Door.Store.deny("user_id", user.id, "ops")
+      {:ok, _} = Sanctum.Door.Store.deny("person", user.id, "ops")
       held = Passkeys.sign_in_challenge()
 
       assert Passkeys.sign_in(held, Authenticator.assertion(auth, held.challenge)) ==
@@ -1870,8 +1862,7 @@ defmodule Sanctum.PasskeysTest do
     end
 
     test "another challenge, an expired one, or no user verification signs no one in",
-         %{key: key, auth: auth} do
-      {:ok, _} = Sanctum.Door.Store.allow("user_id", key, "ops")
+         %{auth: auth} do
       held = Passkeys.sign_in_challenge()
 
       assert Passkeys.sign_in(held, Authenticator.assertion(auth, :crypto.strong_rand_bytes(32))) ==

@@ -396,8 +396,8 @@ defmodule Emissary.Web.MCPController do
   # The listen request answered with the refusal its credential now earns:
   # retryable when the store could not answer or a remote person's identity
   # could not be confirmed fresh, a sign-in otherwise.
-  defp refuse_stream(conn, id, :identity_stale),
-    do: refuse_stream(conn, id, Sanctum.Refusals.classify(:identity_stale))
+  defp refuse_stream(conn, id, reason) when reason in [:identity_stale, :company_login_required],
+    do: refuse_stream(conn, id, Sanctum.Refusals.classify(reason))
 
   defp refuse_stream(conn, id, :unavailable) do
     refusal = Sanctum.Refusals.classify(:auth_provider_error)

@@ -41,7 +41,10 @@ defmodule Prima.Authority.BlobTest do
               "vault" =>
                 Fixtures.bound_vault(@formula, "#{@catalyst}|source", "vault-1", "sha256:aaa",
                   attach: Fixtures.attach_map(),
-                  projection: %{"fields" => ["url", "anon_key"]}
+                  projection: %{
+                    "fields" => %{"url" => "url", "anon_key" => "anon key"},
+                    "scopes" => []
+                  }
                 ),
               "egress" => %{
                 "domains" => ["prod.supabase.co"],
@@ -62,7 +65,10 @@ defmodule Prima.Authority.BlobTest do
             "#{@catalyst}|dest" => %{
               "vault" =>
                 Fixtures.bound_vault(@formula, "#{@catalyst}|dest", "vault-2", "sha256:bbb",
-                  projection: %{"fields" => ["url", "service_key"]}
+                  projection: %{
+                    "fields" => %{"url" => "url", "service_key" => "service_key"},
+                    "scopes" => []
+                  }
                 )
             }
           }
@@ -112,7 +118,7 @@ defmodule Prima.Authority.BlobTest do
                    "formula:local.daily-report|catalyst:supabase.com.database|source|default",
                  destination: %Destination{hosts: ["prod.supabase.co"], scheme: "https"},
                  attach: %{in: "header", name: "Authorization", template: "Bearer {value}"},
-                 projection: %{fields: ["url", "anon_key"], scopes: []}
+                 projection: %{fields: %{"url" => "url", "anon_key" => "anon key"}, scopes: []}
                },
                egress: %{domains: ["prod.supabase.co"], methods: ["GET", "POST"]},
                storage: %{paths: [], actions: []},
@@ -133,6 +139,24 @@ defmodule Prima.Authority.BlobTest do
       assert dest.vault.attach == nil
       assert dest.egress == nil
       assert dest.tools == []
+    end
+
+    test "a projection's field map, keyed by the component's names, round-trips" do
+      blob = parse!(golden())
+      {:ok, source} = Blob.lookup_edge(blob, @formula, @catalyst, "source")
+
+      assert source.vault.projection == %{
+               fields: %{"url" => "url", "anon_key" => "anon key"},
+               scopes: []
+             }
+
+      assert Blob.vault_to_map(source.vault)["projection"] == %{
+               "fields" => %{"url" => "url", "anon_key" => "anon key"},
+               "scopes" => []
+             }
+
+      assert Blob.parse(Blob.to_map(blob)) == {:ok, blob}
+      assert blob |> Blob.to_map() |> Jason.encode!() |> Blob.parse() == {:ok, blob}
     end
 
     test "the ingress edge is an ordinary empty Edge" do
@@ -157,7 +181,7 @@ defmodule Prima.Authority.BlobTest do
         |> put_in(
           ["nodes", @formula, "edges", "#{@catalyst}|dest", "vault"],
           Fixtures.bound_vault(@formula, "#{@catalyst}|dest", "vault-1", "sha256:other",
-            projection: %{"fields" => ["url"]}
+            projection: %{"fields" => %{"url" => "url"}, "scopes" => []}
           )
         )
         |> parse!()
@@ -168,7 +192,8 @@ defmodule Prima.Authority.BlobTest do
     test "a named binding's entry counts as the default's does" do
       named =
         Fixtures.bound_vault(@formula, "#{@catalyst}|dest", "vault-1", "sha256:other",
-          name: "Second"
+          name: "Second",
+          projection: %{"fields" => %{"url" => "url"}, "scopes" => []}
         )
 
       conflicted =
@@ -353,7 +378,7 @@ defmodule Prima.Authority.BlobTest do
                golden()
                |> put_in(
                  ["nodes", @formula, "edges", "#{@catalyst}|source", "vault", "projection"],
-                 %{"fields" => ["url"], "rows" => ["*"]}
+                 %{"fields" => %{"url" => "url"}, "scopes" => [], "rows" => ["*"]}
                )
                |> Blob.parse()
 
@@ -397,12 +422,30 @@ defmodule Prima.Authority.BlobTest do
 
   defp with_vault(edge_key, vault), do: put_in(golden(), vault_path(edge_key), vault)
 
+  @dest_projection %{
+    "fields" => %{"url" => "url", "service_key" => "service_key"},
+    "scopes" => []
+  }
+
   defp named(name, entry_id \\ "vault-named", opts \\ []) do
-    Fixtures.bound_vault(@formula, @dest_key, entry_id, "sha256:named", [name: name] ++ opts)
+    Fixtures.bound_vault(
+      @formula,
+      @dest_key,
+      entry_id,
+      "sha256:named",
+      [name: name] ++ Keyword.put_new(opts, :projection, @dest_projection)
+    )
   end
 
   defp dest_vault(opts \\ []),
-    do: Fixtures.bound_vault(@formula, @dest_key, "vault-2", "sha256:bbb", opts)
+    do:
+      Fixtures.bound_vault(
+        @formula,
+        @dest_key,
+        "vault-2",
+        "sha256:bbb",
+        Keyword.put_new(opts, :projection, @dest_projection)
+      )
 
   defp refused?(map), do: match?({:error, {:invalid_resource, _, _, :vault, _}}, Blob.parse(map))
 
@@ -410,6 +453,24 @@ defmodule Prima.Authority.BlobTest do
     test "a vault key that is no string is refused" do
       refute refused?(with_vault(@dest_key, dest_vault()))
       assert refused?(with_vault(@dest_key, Map.put(dest_vault(), nil, 1)))
+    end
+
+    test "a bound entry or a named account without a projection, or with a null one, is refused" do
+      refused =
+        {:error, {:invalid_resource, @formula, @dest_key, :vault, "projection must be an object"}}
+
+      for damaged <- [&Map.delete(&1, "projection"), &Map.put(&1, "projection", nil)] do
+        assert Blob.parse(with_vault(@dest_key, damaged.(dest_vault()))) == refused
+
+        named = %{"Archive" => damaged.(named("Archive"))}
+        assert Blob.parse(with_vault(@dest_key, dest_vault(named: named))) == refused
+      end
+
+      # The same named account with its projection parses.
+      assert {:ok, _blob} =
+               Blob.parse(
+                 with_vault(@dest_key, dest_vault(named: %{"Archive" => named("Archive")}))
+               )
     end
 
     test "the golden blob holds a bound, a named, a resolved and a provided edge, and round-trips" do
@@ -420,8 +481,18 @@ defmodule Prima.Authority.BlobTest do
       assert source.vault.attach == %{in: "header", name: "apikey", template: "{value}"}
       assert source.vault.destination.paths == ["/rest/v1"]
 
+      assert source.vault.projection == %{
+               fields: %{"anon_key" => "anon key", "url" => "url"},
+               scopes: []
+             }
+
       {:ok, dest} = Blob.lookup_edge(blob, @formula, @catalyst, "dest")
       assert dest.vault.attach == nil
+
+      assert dest.vault.projection == %{
+               fields: %{"service_key" => "service_key", "url" => "url"},
+               scopes: []
+             }
 
       assert %{"Archive" => %{scope: "instance", entry_id: "vault-entry-archive"}} =
                dest.vault.named
@@ -471,6 +542,70 @@ defmodule Prima.Authority.BlobTest do
 
       assert back.resources.vault == lent.vault
       assert back.policy == root.policy
+    end
+
+    test "a list projection is refused" do
+      refute refused?(
+               with_vault(
+                 @dest_key,
+                 dest_vault(projection: %{"fields" => %{"url" => "url"}, "scopes" => []})
+               )
+             )
+
+      for fields <- [["url"], [], ["url", "service_key"]] do
+        assert refused?(
+                 with_vault(
+                   @dest_key,
+                   dest_vault(projection: %{"fields" => fields, "scopes" => []})
+                 )
+               ),
+               inspect(fields)
+      end
+    end
+
+    test "a map with a non-string value is refused" do
+      for fields <- [
+            %{"url" => 1},
+            %{"url" => nil},
+            %{"url" => ["url"]},
+            %{"url" => %{"url" => "url"}},
+            %{1 => "url"}
+          ] do
+        assert refused?(
+                 with_vault(
+                   @dest_key,
+                   dest_vault(projection: %{"fields" => fields, "scopes" => []})
+                 )
+               ),
+               inspect(fields)
+      end
+    end
+
+    test "a field map naming an empty field, or a projection without fields or scopes, is refused" do
+      for projection <- [
+            %{"fields" => %{"" => "url"}, "scopes" => []},
+            %{"fields" => %{"url" => ""}, "scopes" => []},
+            %{"scopes" => []},
+            %{"fields" => %{"url" => "url"}},
+            %{"fields" => %{"url" => "url"}, "scopes" => "none"}
+          ] do
+        assert refused?(with_vault(@dest_key, dest_vault(projection: projection))),
+               inspect(projection)
+      end
+
+      # Two of the component's names may read one entry field.
+      assert {:ok, _blob} =
+               Blob.parse(
+                 with_vault(
+                   @dest_key,
+                   dest_vault(
+                     projection: %{
+                       "fields" => %{"url" => "url", "service_key" => "url"},
+                       "scopes" => []
+                     }
+                   )
+                 )
+               )
     end
 
     test "a disclose-only binding writes no rule and reads an absent or a null one as none" do
@@ -627,7 +762,7 @@ defmodule Prima.Authority.BlobTest do
         assert Blob.bound_vault?(edge.vault), need
       end
 
-      refute Blob.bound_vault?(%{via: %{label: "x", binding_digest: nil}, projection: nil})
+      refute Blob.bound_vault?(%{via: %{label: "x", binding_digest: nil}})
       refute Blob.bound_vault?(nil)
     end
   end
@@ -696,8 +831,16 @@ defmodule Prima.Authority.BlobTest do
 
     test "a blob naming one account twice, in two cases, is refused" do
       named = %{
-        "Work" => Fixtures.bound_vault(@formula, "@ingress", "vault-2", "sha256:b", name: "Work"),
-        "WORK" => Fixtures.bound_vault(@formula, "@ingress", "vault-3", "sha256:c", name: "WORK")
+        "Work" =>
+          Fixtures.bound_vault(@formula, "@ingress", "vault-2", "sha256:b",
+            name: "Work",
+            projection: @dest_projection
+          ),
+        "WORK" =>
+          Fixtures.bound_vault(@formula, "@ingress", "vault-3", "sha256:c",
+            name: "WORK",
+            projection: @dest_projection
+          )
       }
 
       assert {:error, _reason} =
@@ -710,7 +853,8 @@ defmodule Prima.Authority.BlobTest do
                        "@ingress" => %{
                          "vault" =>
                            Fixtures.bound_vault(@formula, "@ingress", "vault-1", "sha256:a",
-                             named: named
+                             named: named,
+                             projection: @dest_projection
                            )
                        }
                      }

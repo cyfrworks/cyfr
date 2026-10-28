@@ -123,7 +123,7 @@ defmodule Arca.CredentialBindingsLockTest do
 
     unboxed(fn ->
       {:ok, _} =
-        Arca.Users.mint(
+        Arca.Test.People.mint(
           server(),
           %{
             id: user_id,

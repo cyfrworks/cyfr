@@ -3,45 +3,36 @@
 
 defmodule Sanctum.Door do
   @moduledoc """
-  The door: who may sign in to this server at all.
+  The door: which people may sign in to this server.
 
-  Every auth provider asks here **before** it creates a session, and before
-  anything is said to cyfr.run about the identity. Two lists, two jobs:
-  `CYFR_PLATFORM_ADMIN_EMAILS` names the operators — always admitted, and
-  admitted as platform admins; the server allowlist (`Sanctum.Door.Store`)
-  names everyone else, by email, by IdP subject, by person identifier
-  (`per_…`), or as `*` (any identity the configured provider, or the
-  `cyfr` door, authenticates). A specific deny wins over everything a
-  stored row can grant — `*` included — so a public door still has an eject;
-  allowing that identity again is an explicit operator act. The one thing it
-  does not outrank is the env list: an operator is admitted whatever rows
-  exist, and `Sanctum.Door.Store.deny/4` refuses to write one naming them (by
-  address, or by the subject of an identity that signed in with it). The
-  server's operators change by changing `CYFR_PLATFORM_ADMIN_EMAILS`, never
-  by a door entry that would leave nobody able to sign in and remove it.
+  The door judges people, never a sign-in method, an email or a provider
+  subject. A person is made only by an admission (`Sanctum.Newcomer`), and
+  a sign-in method only unlocks a person who exists (`Sanctum.SignIn`), so
+  what the door asks at every sign-in is about the person:
 
-  Emails admit only what the provider proved: an exact email entry needs
-  `verified == true` (a provider that does not assert verification is
-  matched by a `user_id` entry instead), and `*` admits any identity whose
-  email is not known to be unverified. The operator's own list is trusted as
-  typed — an absent claim admits (audited by `Sanctum.SignIn`), a provider
-  that positively says the address is unverified does not. Refusals carry no
-  detail a stranger could use to enumerate the list.
+    * A local person — one whose keys this server holds — is admitted
+      unless a deny names them: their admission was the admitting act.
+    * A remote person — one whose keys another CYFR holds, admitted
+      through the CYFR sign-in — is admitted by `*` or by an allow naming
+      their identifier (`per_…`), unless a deny names them.
 
-  A refusal the operator can undo leaves a trace: `admit_identity/2` records
-  the IdP subject as a pending request, so an issuer that never asserts
-  `email_verified` — which no email entry can match — can be admitted by
-  `user_id` without the operator having to find that subject some other way.
+  The server allowlist (`Sanctum.Door.Store`) holds allows of an
+  identifier or `*`, and denies of a person (their `usr_…` id) or an
+  identifier. A deny wins over every allow, so a public door still has an
+  eject; allowing that person again is an explicit operator act. A deny
+  naming a platform administrator is refused where it is written
+  (`Sanctum.Door.Store.deny/4`).
 
-  ## The `cyfr` door
+  A refusal the operator can undo leaves a trace: a remote person, or a
+  remote newcomer, the door does not admit is recorded as a pending
+  request naming their identifier, which `door.requests` lists and
+  `door.resolve` turns into an allow. A deny already has its answer, so
+  it leaves none. Refusals carry no detail a stranger could use to
+  enumerate the list.
 
-  A person another home holds the keys of presents a `cyfr` identity
-  (`Sanctum.Auth.Identity.cyfr_key/2`), which carries no email. The door
-  judges it by its identifier as it judges a provider identity by its
-  subject: a deny naming the identifier refuses it, an allow naming the
-  identifier admits it, and an unadmitted one is recorded as a pending
-  request naming the identifier, never a `user_id` an operator would have
-  to decode.
+  `{:error, :unavailable}` is the store failing to answer, which is
+  neither a deny nor "not allowed": the door refuses on it without
+  claiming either.
   """
 
   require Logger
@@ -51,122 +42,83 @@ defmodule Sanctum.Door do
   # The page the users walk takes; `Users.list/1` caps at 500 either way.
   @page 500
 
-  @type verdict :: {:ok, :admin | :allowed} | {:error, :denied | :not_allowed | :unavailable}
+  @type verdict :: {:ok, :allowed} | {:error, :denied | :not_allowed | :unavailable}
 
   @doc """
-  Decide whether the identity may sign in.
-
-  `verified` is what the provider asserted about `email`: `true`, `false`,
-  or `:unknown` when it said nothing.
-
-  Three refusals, and they mean different things. `:denied` is a deny
-  entry, `:not_allowed` is no entry that admits, and `:unavailable` is the
-  store failing to answer — which is neither of the other two, because
-  "not denied" and "not allowed" are both claims this function must not
-  make without having looked.
+  Whether the person `user` (their `users` row, as a map) may sign in now
+  (the module doc). No side effect: a sign-in path that acts on the answer
+  asks `sign_in/1`.
   """
-  @spec admit(String.t(), String.t() | nil, boolean() | :unknown) :: verdict()
-  def admit(user_id, email, verified) when is_binary(user_id) do
-    email = normalize_email(email)
+  @spec admit_person(%{required(:id) => String.t(), optional(atom()) => term()}) :: verdict()
+  def admit_person(%{id: user_id}) when is_binary(user_id) do
+    case identity(user_id) do
+      {:ok, %{provenance: "remote", identifier: identifier}} when is_binary(identifier) ->
+        with :no <- deny_arm(user_id, identifier), :no <- remote_arms(identifier) do
+          {:error, :not_allowed}
+        end
 
-    # The operator arm sits above the deny on purpose: who runs this server
-    # is the env list's answer, and a stored row must not be able to
-    # contradict it. `Store.deny/4` already refuses to name an operator, so
-    # a row that reaches here predates the promotion; it stays on the list
-    # (demote them and it bites again) but it does not lock the box. It is
-    # also the one arm that needs no store, so an operator signs in through
-    # an outage.
-    if platform_admin_email?(email) and verified != false do
-      {:ok, :admin}
-    else
-      stored_verdict(user_id, email, verified)
+      {:ok, identity} ->
+        with :no <- deny_arm(user_id, identity[:identifier]), do: {:ok, :allowed}
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
     end
   end
 
-  # The stored door, in the order the entries outrank each other: a deny
-  # beats `*`, `*` beats an exact entry. A lookup the store could not
-  # answer stops the walk there rather than falling through to the next
-  # arm, which would read an outage as "nothing admits you".
-  defp stored_verdict(user_id, email, verified) do
-    identifier = identifier(user_id)
-
-    with :no <- deny_arm(user_id, email, identifier),
-         :no <- wildcard_arm(verified),
-         :no <- allow_arm("user_id", user_id),
-         :no <- identifier_arm(identifier),
-         :no <- email_arm(email, verified) do
+  @doc """
+  Whether a remote newcomer, no person here yet, named by the identifier
+  their CYFR sign-in verified, may be admitted: no deny names the
+  identifier, and `*` or an allow names it. No side effect.
+  """
+  @spec admit_identifier(String.t()) :: verdict()
+  def admit_identifier(identifier) when is_binary(identifier) do
+    with :no <- deny_arm(nil, identifier), :no <- remote_arms(identifier) do
       {:error, :not_allowed}
     end
   end
 
-  # The person identifier a `cyfr` identity names; nil for any other door.
-  defp identifier(user_id) do
-    case Sanctum.Auth.Identity.cyfr_identifier(user_id) do
-      {:ok, identifier} -> identifier
-      :error -> nil
-    end
-  end
-
-  defp identifier_arm(nil), do: :no
-  defp identifier_arm(identifier), do: allow_arm("identifier", identifier)
-
-  defp deny_arm(user_id, email, identifier \\ nil) do
-    case Store.denied(user_id, email, identifier) do
-      {:ok, true} -> {:error, :denied}
-      {:ok, false} -> :no
-      {:error, :unavailable} -> {:error, :unavailable}
-    end
-  end
-
-  defp wildcard_arm(false), do: :no
-  defp wildcard_arm(_verified), do: admits(Store.wildcard())
-
-  defp allow_arm(kind, value), do: admits(Store.allowed(kind, value))
-
-  defp email_arm(email, true), do: allow_arm("email", email)
-  defp email_arm(_email, _verified), do: :no
-
-  defp admits({:ok, true}), do: {:ok, :allowed}
-  defp admits({:ok, false}), do: :no
-  defp admits({:error, :unavailable}), do: {:error, :unavailable}
-
   @doc """
-  `admit/3` for a person asked about without a door identity: by their
-  own id, with the email and verified claim their row holds. Whatever
-  admits them is an entry naming that id, an email entry for an address
-  their row holds verified, `*`, or the operator list; an entry naming
-  only an identity they no longer hold does not. The passkey door asks
-  this of a person with no linked door, so a person's last door is
-  unlinked only while it admits them (`Sanctum.SignIn.unlink_door/2`).
+  `admit_person/1` at a sign-in: a refusal is audited, a remote person
+  the door does not admit leaves a request naming their identifier, and
+  the refusal travels as `{:error, {:door, reason}}`.
   """
-  @spec admit_person(%{required(:id) => String.t(), optional(atom()) => term()}) :: verdict()
-  def admit_person(%{id: user_id} = user) when is_binary(user_id),
-    do: admit(user_id, user[:email], verified_claim(user))
-
-  @doc """
-  `admit/3` for an auth provider: takes the extracted user info (`email`,
-  `verified`), audits a refusal and returns it as `{:error, {:door, reason}}`
-  so it can travel through the provider's `authenticate/1` contract.
-  """
-  @spec admit_identity(String.t(), map()) :: {:ok, :admin | :allowed} | {:error, {:door, atom()}}
-  def admit_identity(user_id, user_info) when is_binary(user_id) and is_map(user_info) do
-    email = Map.get(user_info, :email)
-
-    case admit(user_id, email, Map.get(user_info, :verified, :unknown)) do
-      {:ok, _} = ok ->
-        ok
+  @spec sign_in(%{required(:id) => String.t(), optional(atom()) => term()}) ::
+          {:ok, :allowed} | {:error, {:door, atom()}}
+  def sign_in(%{id: user_id} = user) when is_binary(user_id) do
+    case admit_person(user) do
+      {:ok, :allowed} ->
+        {:ok, :allowed}
 
       {:error, reason} ->
-        :telemetry.execute([:cyfr, :sanctum, :door, :refused], %{count: 1}, %{
-          user_id: user_id,
-          email: email,
-          reason: reason
-        })
+        identifier =
+          case identity(user_id) do
+            {:ok, %{provenance: "remote", identifier: identifier}} -> identifier
+            _local -> nil
+          end
 
-        record_request(reason, user_id, email)
-        {:error, {:door, reason}}
+        refused(reason, user_id, identifier)
     end
   end
+
+  @doc "`admit_identifier/1` at a remote newcomer's sign-in, refusing as `sign_in/1` does."
+  @spec sign_in_identifier(String.t()) :: {:ok, :allowed} | {:error, {:door, atom()}}
+  def sign_in_identifier(identifier) when is_binary(identifier) do
+    case admit_identifier(identifier) do
+      {:ok, :allowed} -> {:ok, :allowed}
+      {:error, reason} -> refused(reason, nil, identifier)
+    end
+  end
+
+  @doc """
+  Would an invite of the person identifier `identifier` (`per_…`) admit
+  that person on their first CYFR sign-in? `admit_identifier/1`'s answer,
+  with an identifier the store could not be asked about not admitted, so
+  the invite queues a request the operator can resolve rather than going
+  out as if the door were open.
+  """
+  @spec identifier_admitted?(String.t()) :: boolean()
+  def identifier_admitted?(identifier) when is_binary(identifier),
+    do: match?({:ok, :allowed}, admit_identifier(identifier))
 
   @doc """
   Ask the door about everyone it has already let in, and eject whoever it
@@ -174,9 +126,10 @@ defmodule Sanctum.Door do
 
   Removing an allow entry — `*` most of all — closes the door, but the
   sessions and keys it issued outlive it by up to their whole TTL. Rather
-  than work out which entry admitted whom, this re-asks `admit/3` for every
-  person the server knows: it is the same decision, made by the same
-  function, so the door cannot mean one thing at sign-in and another here.
+  than work out which entry admitted whom, this re-asks `admit_person/1`
+  for every person the server knows: it is the same decision, made by the
+  same function, so the door cannot mean one thing at sign-in and another
+  here.
 
   What it takes is what the door issued: sessions and API keys. What it
   leaves is standing — nothing is archived and no membership is touched.
@@ -220,24 +173,16 @@ defmodule Sanctum.Door do
     end
   end
 
-  # The door judges an IdP identity, so a person is asked about by each of
-  # theirs and stays admitted while any one of them is.
   defp eject_if_refused(user) do
-    verdicts =
-      case Sanctum.Tenancy.Users.identities(user.id) do
-        [] -> [admit_person(user)]
-        identities -> Enum.map(identities, &admit(&1.key, user.email, verified_claim(user)))
-      end
-
-    cond do
-      Enum.any?(verdicts, &match?({:ok, _}, &1)) ->
+    case admit_person(user) do
+      {:ok, :allowed} ->
         false
 
       # An outage is not a refusal. Ejecting on one would take every
       # session and key on the server the first time the store blinked,
       # and nothing here would say why. The walk leaves them and the next
       # reconcile asks again.
-      Enum.any?(verdicts, &match?({:error, :unavailable}, &1)) ->
+      {:error, :unavailable} ->
         Logger.warning(
           "[Sanctum.Door] #{user.id} could not be asked about (the door store did not " <>
             "answer) — leaving them admitted"
@@ -245,8 +190,7 @@ defmodule Sanctum.Door do
 
         false
 
-      true ->
-        {:error, reason} = hd(verdicts)
+      {:error, reason} ->
         Logger.info("[Sanctum.Door] #{user.id} no longer admitted (#{reason}) — ejecting")
         Sanctum.Session.revoke_all_for_user(user.id)
         Sanctum.ApiKey.revoke_all_created_by(user.id)
@@ -254,133 +198,60 @@ defmodule Sanctum.Door do
     end
   end
 
-  # `users.email_verified` is a nullable boolean: NULL is the provider that
-  # said nothing, which is `admit/3`'s `:unknown`, not `false`. Reading it as
-  # `false` here would eject everyone whose issuer omits the claim.
-  defp verified_claim(%{email_verified: true}), do: true
-  defp verified_claim(%{email_verified: false}), do: false
-  defp verified_claim(_user), do: :unknown
-
-  # A refusal the operator can act on. An email entry admits only a proved
-  # address, so an issuer that omits `email_verified` is refused even when
-  # the operator typed that exact address, and the refusal alone does not
-  # tell the operator the IdP subject to allow instead. So the sign-in
-  # leaves a request, keyed by the subject, which `door.requests` lists and
-  # `door.resolve` turns into a real entry.
-  #
-  # Only `:not_allowed`. A `:denied` refusal already has its answer, and
-  # writing a request for it would offer to undo a deny by approving it.
-  #
-  # A `cyfr` identity is recorded by its identifier, the kind the operator
-  # allows or denies it under.
-  defp record_request(:not_allowed, user_id, email) do
-    note = if email, do: "refused at sign-in (#{email})", else: "refused at sign-in"
-
-    {kind, value} =
-      case identifier(user_id) do
-        nil -> {"user_id", user_id}
-        identifier -> {"identifier", identifier}
-      end
-
-    case Store.request(kind, value, value, note) do
-      {:ok, :created, _} -> Sanctum.Notify.allowlist_request(email || value)
-      _ -> :ok
-    end
-  end
-
-  defp record_request(_reason, _user_id, _email), do: :ok
-
-  @doc """
-  The operator list named in `CYFR_PLATFORM_ADMIN_EMAILS`, as configured:
-  runtime configuration parses it into a list of lowercased addresses, but
-  this reads the value unchecked, so a reader that acts on it — the boot's
-  reconcile (`Sanctum.reconcile_platform_admins/2`) — validates its shape
-  and refuses anything else.
-  """
-  @spec platform_admin_emails() :: term()
-  def platform_admin_emails, do: Application.get_env(:sanctum, :platform_admin_emails, [])
-
-  @doc "Is this email one of the operators named in `CYFR_PLATFORM_ADMIN_EMAILS`?"
-  @spec platform_admin_email?(String.t() | nil) :: boolean()
-  def platform_admin_email?(email) when is_binary(email) do
-    case platform_admin_emails() do
-      emails when is_list(emails) -> String.downcase(email) in emails
-      _malformed -> false
-    end
-  end
-
-  def platform_admin_email?(_), do: false
-
-  @doc """
-  Would an invite of `email` admit that person on their first sign-in? True
-  when the door is `*` or names the address; a request is queued otherwise
-  (`Sanctum.Door.Store.request/4`).
-
-  An address the store could not be asked about is not admitted, so the
-  invite queues a request the operator can resolve rather than going out
-  as if the door were open.
-  """
-  @spec email_admitted?(String.t()) :: boolean()
-  def email_admitted?(email) when is_binary(email) do
-    email = normalize_email(email)
-
-    case admit_email(email) do
-      {:ok, :admin} -> true
-      {:ok, :allowed} -> true
-      {:error, _reason} -> false
-    end
-  end
-
-  # The same arms as `admit/3` without the identity ones: an invite names
-  # an address and nothing else about whoever will answer it. The deny
-  # sits above the operator arm here, where `admit/3` has it below: this
-  # asks whether an invite would land, not who runs the server, and an
-  # invite to a denied address is not one to send.
-  defp admit_email(email) do
-    with :no <- deny_arm(nil, email),
-         :no <- operator_arm(email),
-         :no <- wildcard_arm(:unknown),
-         :no <- allow_arm("email", email) do
-      {:error, :not_allowed}
-    end
-  end
-
-  defp operator_arm(email) do
-    if platform_admin_email?(email), do: {:ok, :admin}, else: :no
-  end
-
-  @doc """
-  Would an invite of the person identifier `identifier` (`per_…`) admit
-  that person on their first `cyfr` sign-in? True when no deny names the
-  identifier and the door is `*` or names it; a request is queued
-  otherwise (`Sanctum.Door.Store.request/4`). The arms of `admit/3` a
-  `cyfr` identity meets, in the same order: an identifier carries no
-  email, so neither the operator list nor an email entry is asked.
-
-  An identifier the store could not be asked about is not admitted, as
-  `email_admitted?/1` answers for an address.
-  """
-  @spec identifier_admitted?(String.t()) :: boolean()
-  def identifier_admitted?(identifier) when is_binary(identifier) do
-    case admit_identifier(identifier) do
-      {:ok, :allowed} -> true
-      {:error, _reason} -> false
-    end
-  end
-
-  defp admit_identifier(identifier) do
-    with :no <- deny_arm(nil, nil, identifier),
-         :no <- wildcard_arm(:unknown),
-         :no <- identifier_arm(identifier) do
-      {:error, :not_allowed}
-    end
-  end
-
   @doc "The one refusal a stranger sees, whichever branch refused."
   @spec refusal_message() :: String.t()
   def refusal_message, do: "not allowed on this server — ask the operator"
 
-  defp normalize_email(nil), do: nil
-  defp normalize_email(""), do: nil
-  defp normalize_email(email) when is_binary(email), do: String.downcase(email)
+  # The person's identity row: provenance and identifier. A person with no
+  # row is judged as a local person by their own id.
+  defp identity(user_id) do
+    case Arca.PersonIdentities.get(Prima.Actor.system(), user_id) do
+      {:ok, identity} -> {:ok, identity}
+      {:error, :not_found} -> {:ok, %{provenance: "local", identifier: nil}}
+      {:error, _unanswered} -> {:error, :unavailable}
+    end
+  end
+
+  # The stored door, in the order the entries outrank each other: a deny
+  # beats `*`, `*` beats an identifier allow. A lookup the store could not
+  # answer stops the walk there rather than falling through to the next
+  # arm, which would read an outage as "nothing admits you".
+  defp deny_arm(user_id, identifier) do
+    case Store.denied(user_id, identifier) do
+      {:ok, true} -> {:error, :denied}
+      {:ok, false} -> :no
+      {:error, :unavailable} -> {:error, :unavailable}
+    end
+  end
+
+  defp remote_arms(identifier) do
+    with :no <- admits(Store.wildcard()), do: admits(Store.allowed("identifier", identifier))
+  end
+
+  defp admits({:ok, true}), do: {:ok, :allowed}
+  defp admits({:ok, false}), do: :no
+  defp admits({:error, :unavailable}), do: {:error, :unavailable}
+
+  defp refused(reason, user_id, identifier) do
+    :telemetry.execute([:cyfr, :sanctum, :door, :refused], %{count: 1}, %{
+      user_id: user_id,
+      identifier: identifier,
+      reason: reason
+    })
+
+    record_request(reason, identifier)
+    {:error, {:door, reason}}
+  end
+
+  # A refusal the operator can act on: only `:not_allowed` of an identifier.
+  # A `:denied` refusal already has its answer, and writing a request for
+  # it would offer to undo a deny by approving it.
+  defp record_request(:not_allowed, identifier) when is_binary(identifier) do
+    case Store.request("identifier", identifier, identifier, "refused at sign-in") do
+      {:ok, :created, _} -> Sanctum.Notify.allowlist_request(identifier)
+      _ -> :ok
+    end
+  end
+
+  defp record_request(_reason, _identifier), do: :ok
 end

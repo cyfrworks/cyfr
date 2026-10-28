@@ -47,11 +47,10 @@ defmodule Sanctum.MemberFreezeRaceTest do
         subject = "freeze-race-" <> id
 
         assert {:ok, _} =
-                 Arca.Users.mint(
+                 Arca.Test.People.mint(
                    Prima.Actor.system(),
                    %{
                      id: id,
-                     provider: "github",
                      first_seen_at: now,
                      last_seen_at: now,
                      created_at: now,

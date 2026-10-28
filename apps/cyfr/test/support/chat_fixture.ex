@@ -40,7 +40,7 @@ defmodule Cyfr.Test.ChatFixture do
     any table, a file under the base path, or a term the caller passes.
   """
 
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
 
   @wasm Path.expand("test_wasm/chat_fixture/chat_fixture.wasm", __DIR__)
   @readme Path.expand("test_wasm/chat_fixture/README.md", __DIR__)
@@ -55,6 +55,8 @@ defmodule Cyfr.Test.ChatFixture do
   @attach_rule %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
   @upstream_host "127.0.0.1"
   @upstream_paths ["/v1/"]
+  # Disclosed mode: the host the need names, which the fixture never calls.
+  @disclosed_host "api.chat-fixture.test"
   # The upstream reads at most this much of a request, and answers 413 past it.
   @upstream_max_body 1_048_576
 
@@ -111,7 +113,8 @@ defmodule Cyfr.Test.ChatFixture do
     {need, caps} =
       case Keyword.fetch!(opts, :mode) do
         :disclosed ->
-          {%{"reason" => "to read a key as a model catalyst does"}, %{"limits" => limits}}
+          {%{"reason" => "to read a key as a model catalyst does", "hosts" => [@disclosed_host]},
+           %{"egress" => %{"domains" => [@disclosed_host]}, "limits" => limits}}
 
         :attach ->
           {%{
@@ -176,7 +179,7 @@ defmodule Cyfr.Test.ChatFixture do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|chat-fixture-#{n}",
         provider: "github",
         email: "chat-fixture-#{n}@example.com",

@@ -51,17 +51,39 @@ defmodule Compendium.Registry.CredentialStore do
   end
 
   @doc """
+  The label a token-minting request carries (`tokens.mint`,
+  `publisher.verify`), derived from `device_label/0` to the registry
+  protocol's grammar (`Prima.RegistryRequest`: 1 to 64 printable ASCII
+  characters): every printable ASCII character of the configured label
+  kept, in order, and the rest dropped, then cut to 64. A label with none
+  left falls back to the machine's hostname, derived the same way, and
+  then to `cyfr`. The setting itself keeps what the operator wrote; only
+  the wire sees this form.
+  """
+  @spec wire_label() :: String.t()
+  def wire_label do
+    {:ok, host} = :inet.gethostname()
+
+    Enum.find_value([device_label(), to_string(host)], "cyfr", fn label ->
+      case label |> String.replace(~r/[^\x20-\x7E]/u, "") |> String.slice(0, 64) do
+        "" -> nil
+        printable -> printable
+      end
+    end)
+  end
+
+  @doc """
   Store a push token for the caller under this device's label,
   best-effort.
 
-  Shared by the OAuth callback, the claim flow and the CLI's re-probe —
-  all cache the same push-token shape after the identity probe. A failed
-  write degrades to `{:error, reason}` rather than crashing the caller,
+  Shared by the operations that mint push tokens (`registry.sync`,
+  `registry.verify_publisher`), which cache the same push-token shape. A
+  failed write degrades to `{:error, reason}` rather than crashing the caller,
   which then decides whether to re-auth. A non-binary slug, or a token
   that is not a non-empty string, yields `:skipped`.
   """
   @spec put_push_token(Context.t(), String.t(), term(), term(), String.t()) ::
-          :ok | :skipped | {:error, :unavailable | :forbidden}
+          :ok | :skipped | {:error, :unavailable | :forbidden | :not_owner}
   def put_push_token(%Context{} = ctx, registry, slug, token, role) do
     case RegistryCredentials.put_push_token(ctx, registry, slug, token, role,
            label: device_label()
@@ -91,7 +113,7 @@ defmodule Compendium.Registry.CredentialStore do
   Every credential the caller holds for a registry, one per namespace,
   personal first then publisher-alphabetical. Used by:
   - `Compendium.Registry.Client` to pick a bearer for non-namespace-scoped
-    calls (e.g. `/v1/identity/probe`).
+    calls (e.g. `/v1/components`).
   - Registry `whoami` to present personal + membership identity.
   """
   @spec list_for_user(Context.t(), String.t()) ::

@@ -16,7 +16,7 @@ defmodule Arca.CarryActionsTest do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Arca.{CarryActions, Users}
+  alias Arca.CarryActions
   alias Arca.Schemas.{CarryAction, CellLease}
 
   setup tags do
@@ -64,7 +64,7 @@ defmodule Arca.CarryActionsTest do
     now = DateTime.utc_now()
 
     {:ok, person} =
-      Users.mint(
+      Arca.Test.People.mint(
         server(),
         %{
           id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
@@ -476,7 +476,7 @@ defmodule Arca.CarryActionsRaceTest do
   import Ecto.Query
   import Arca.Test.Adapter, only: [postgres?: 0]
 
-  alias Arca.{CarryActions, ControlPlane, Users}
+  alias Arca.{CarryActions, ControlPlane}
   alias Arca.Schemas.{CarryAction, CellLease, ExternalIdentity, User}
   alias Arca.Test.LockWait
   alias Ecto.Adapters.SQL.Sandbox
@@ -507,7 +507,7 @@ defmodule Arca.CarryActionsRaceTest do
 
     unboxed(fn ->
       {:ok, _} =
-        Users.mint(
+        Arca.Test.People.mint(
           server(),
           %{
             id: user_id,

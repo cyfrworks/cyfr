@@ -101,10 +101,8 @@ identity_directory dir.test 127.77.0.1
 identity_env "$DIR" CYFR_DIRECTORY_SERVE writer
 identity_reaches_directory "$A" dir.test
 identity_reaches_directory "$B" dir.test "CYFR_IDENTITY_FRESHNESS_SECONDS=$FRESH"
-# C holds one athanor no person owns under a cap of one, so the restored
-# person's own is refused until the cap goes: the restore stops at minted.
 identity_reaches_directory "$C" dir.test "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-c")" \
-  "CYFR_REAUTH_SECONDS=$REAUTH" "CYFR_MAX_ATHANORS=1"
+  "CYFR_REAUTH_SECONDS=$REAUTH"
 identity_reaches_directory "$C2" dir.test "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-c2")"
 identity_reaches_directory "$C3" dir.test "CYFR_RESTORE_TOKEN=$(cat "$SECRETS/token-c3")"
 
@@ -112,9 +110,8 @@ step "starting the directory, its front, and the homes"
 server_start "$DIR"
 identity_front_start "$DIR"
 for cell in "$A" "$B" "$C" "$C2" "$C3"; do identity_start "$cell"; done
-identity_fixture "$C" placeholder_athanor >/dev/null
 
-step "the person at a.test, signed in by the release fixture's door"
+step "the person at a.test, signed in by the release fixture"
 person="$(server_fixture "$A" person operator@example.com identity-proof)"
 [ -n "$person" ] || fail "the fixture signed nobody in"
 USER_A="$(field "$person" user_id)"
@@ -202,9 +199,9 @@ answer_ask() {
       identity_start "$THIEF"
       ANSWER="$(json '{"preserved": True}')"
       ;;
-    c_first_sign_in)
-      # The operator's own address: a door that would admit them first anywhere else.
-      ANSWER="$(identity_fixture "$C" first_sign_in operator@example.com first-door)"
+    c_setup)
+      # Setup: the admission that would make anywhere else's first person.
+      ANSWER="$(identity_fixture "$C" setup)"
       ;;
     token)
       ANSWER="$(python3 -c "import json, sys; print(json.dumps({'token': open(sys.argv[1]).read().strip()}))" "$SECRETS/token-$(asked "$ask" cell)")"
@@ -254,19 +251,13 @@ PY
       accepted_entry="$(last_restore "$C" entry_hash)"
       identity_kill "$C"
       identity_start "$C"
-      # minted: the person minted, their athanor refused by the cap.
-      minted="$(post_restore "$C" "$kit")"
-      minted_phase="$(last_restore "$C" phase)"
-      identity_kill "$C"
-      identity_env "$C" CYFR_MAX_ATHANORS
-      identity_start "$C"
       log="$(identity_fixture "$DIR" log "$IDENTIFIER")"
       final_head="$(field "$log" head)"
       ANSWER="$(python3 - "$submitted" "$submitted_phase" "$accepted" "$accepted_phase" "$accepted_entry" \
-        "$minted" "$minted_phase" "$replay" "$log" "$WORK/thief-1.json" "$thief_2" "$final_head" \
+        "$replay" "$log" "$WORK/thief-1.json" "$thief_2" "$final_head" \
         "$log_before" <<'PY'
 import json, sys
-(submitted, submitted_phase, accepted, accepted_phase, accepted_entry, minted, minted_phase,
+(submitted, submitted_phase, accepted, accepted_phase, accepted_entry,
  replay, log, thief_file, thief_2, final_head, log_before) = sys.argv[1:]
 def at(answer, phase, **more):
     answer = json.loads(answer)
@@ -284,7 +275,6 @@ thief_2 = json.loads(thief_2)
 print(json.dumps({
     "submitted": at(submitted, submitted_phase),
     "accepted": at(accepted, accepted_phase, entry_hash=accepted_entry),
-    "minted": at(minted, minted_phase),
     "replay": replay,
     # The recoveries this restore added to the log: the added kit's entry
     # before it is a recovery too.

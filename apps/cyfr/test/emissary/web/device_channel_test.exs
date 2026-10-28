@@ -60,7 +60,7 @@ defmodule Emissary.Web.DeviceChannelTest do
   alias Prima.{Device, DeviceCert}
   alias Prima.DeviceCert.{Challenge, Proof}
   alias Sanctum.Context
-  alias Sanctum.Tenancy.{Athanors, Members, Users}
+  alias Sanctum.Tenancy.{Athanors, Members}
 
   @vectors Path.expand("../../../../../tests/fixtures/device.json", __DIR__)
   @external_resource @vectors
@@ -1949,7 +1949,7 @@ defmodule Emissary.Web.DeviceChannelTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|channel-#{n}",
         provider: "github",
         email: "channel#{n}@example.com",

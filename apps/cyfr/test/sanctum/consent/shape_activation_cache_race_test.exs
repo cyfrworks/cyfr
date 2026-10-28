@@ -82,8 +82,14 @@ defmodule Sanctum.Consent.ShapeActivationCacheRaceTest do
     # activation waits to write the graph it already read.
     publish!(ctx, "reagent", leaf, "1.0.1", %{
       "needs" => %{
-        "key" => %{"type" => "api_key:example.com", "reason" => "new need", "fields" => ["TOKEN"]}
-      }
+        "key" => %{
+          "type" => "api_key:example.com",
+          "hosts" => ["api.example.com"],
+          "reason" => "new need",
+          "fields" => ["TOKEN"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
     })
 
     # Read the new world before the old resolver resumes. shape_input does

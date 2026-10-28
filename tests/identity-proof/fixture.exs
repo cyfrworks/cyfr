@@ -8,10 +8,12 @@
 # read from that file, so a credential never rides a command line. No
 # command answers a seed, a kit line, a token or a private key.
 #
-#   first_sign_in EMAIL SUB
-#       A GitHub identity's first sign-in through the door, as the device
-#       flow's completion makes it: `{admitted: user_id}` or `{refused:
-#       reason}`. On a restore-reserved installation it is refused.
+#   setup
+#       The installation's setup admission (`Sanctum.Newcomer.admit/2`),
+#       the one admission besides a restore that makes a first person,
+#       under a setup token put for the call and taken away after:
+#       `{admitted: user_id}` or `{refused: reason}`. On a restore-reserved
+#       installation it is refused.
 #
 #   genesis USER_ID
 #       The person's identifier and the genesis their identity rests on
@@ -51,9 +53,6 @@
 #       directory again unchanged: the directory's answer, its recorded
 #       outcome.
 #
-#   placeholder_athanor
-#       An athanor no person owns, so a cap of one athanor refuses the next.
-#
 #   people
 #       The person rows this installation holds, and for each its paired
 #       clients and passkeys.
@@ -64,10 +63,10 @@
 #   link_ticket @COOKIE_FILE KEY
 #       The browser session the cookie in COOKIE_FILE holds, given a link
 #       ticket for the GitHub identity KEY as a completed sign-in with that
-#       door leaves one (`Sanctum.SignIn.link_ticket/2`, after the door
-#       admits KEY), in its cookie session under the key the settings page
-#       reads (`PrismWeb.AuthController.link_ticket_key/0`): `{cookie}`,
-#       the new cookie value.
+#       door leaves one (`Sanctum.SignIn.link_ticket/2`), in its cookie
+#       session under the key the settings page reads
+#       (`PrismWeb.AuthController.link_ticket_key/0`): `{cookie}`, the new
+#       cookie value.
 
 fn args ->
   answer = fn map -> "FIXTURE=" <> Jason.encode!(map) end
@@ -91,14 +90,23 @@ fn args ->
   end
 
   case Enum.map(args, read) do
-    ["first_sign_in", email, sub] ->
-      identity = Sanctum.Auth.Identity.builtin_key(:github, sub)
-      info = %{id: identity, provider: :github, email: email, verified: true, name: "Identity proof"}
+    ["setup"] ->
+      token = Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)
+      configured = Application.fetch_env(:sanctum, :setup_token)
+      Application.put_env(:sanctum, :setup_token, token)
 
-      with {:ok, verdict} <- Sanctum.Door.admit_identity(identity, info),
-           {:ok, user} <- Sanctum.SignIn.admitted(info, verdict) do
-        answer.(%{admitted: user.id})
-      else
+      admitted =
+        try do
+          Sanctum.Newcomer.admit({:setup, token}, {:command_line, "identity-proof"})
+        after
+          case configured do
+            {:ok, value} -> Application.put_env(:sanctum, :setup_token, value)
+            :error -> Application.delete_env(:sanctum, :setup_token)
+          end
+        end
+
+      case admitted do
+        {:ok, %{person: person}} -> answer.(%{admitted: person.id})
         {:error, reason} -> answer.(%{refused: refusal.(reason)})
       end
 
@@ -206,17 +214,6 @@ fn args ->
           answer.(%{refused: refusal.(reason), recorded: attempt.entry_hash})
       end
 
-    ["placeholder_athanor"] ->
-      {:ok, athanor} =
-        Sanctum.Tenancy.Athanors.create_for_operator(%{
-          kind: "group",
-          name: "Placeholder",
-          slug: "placeholder-#{System.unique_integer([:positive])}",
-          created_by: "identity-proof"
-        })
-
-      answer.(%{athanor_id: athanor.id})
-
     ["people"] ->
       import Ecto.Query, only: [from: 2]
       {:ok, users} = Arca.Users.list(system, limit: 100)
@@ -233,7 +230,7 @@ fn args ->
 
           %{
             user_id: user.id,
-            provider: user.provider,
+            admission: user.admission,
             paired_clients: clients,
             passkeys: Enum.map(passkeys, & &1.state)
           }
@@ -258,7 +255,6 @@ fn args ->
         |> Plug.Conn.fetch_session()
 
       {:ok, ctx} = Sanctum.Caller.establish(Plug.Conn.get_session(held, session_key))
-      {:ok, _entry} = Sanctum.Door.Store.allow("user_id", key, "identity-proof")
 
       {:ok, ticket} =
         Sanctum.SignIn.link_ticket(ctx, %{key: key, provider: "github", email: nil})

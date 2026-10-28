@@ -149,7 +149,8 @@ defmodule Locus.Runtime.AttachedFetchTest do
           "type" => "api_key:upstream.test",
           "reason" => "to call the upstream with your key",
           "fields" => ["KEY"],
-          "attach" => @rule
+          "attach" => @rule,
+          "hosts" => ["127.0.0.1"]
         }
       },
       "caps" => %{"egress" => egress()}

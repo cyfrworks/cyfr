@@ -1446,7 +1446,8 @@ defmodule Aqua.LoopTest do
         "api_key" => %{
           "type" => "api_key:example.com",
           "reason" => "to call the example API",
-          "fields" => ["KEY"]
+          "fields" => ["KEY"],
+          "hosts" => ["api.example.com"]
         }
       },
       "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
@@ -1502,7 +1503,7 @@ defmodule Aqua.LoopTest do
     n = System.unique_integer([:positive])
 
     {:ok, approver} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|launch-approver#{n}",
         provider: "github",
         email: "launch-approver#{n}@example.com",

@@ -314,7 +314,7 @@ defmodule Opus.AttemptMaskingTest do
               binding_key: "catalyst:local.attempt-fixture|@ingress|default",
               destination: destination,
               attach: rule,
-              projection: %{fields: ["API_KEY"], scopes: []}
+              projection: %{fields: %{"API_KEY" => "API_KEY"}, scopes: []}
             }
           }
       }

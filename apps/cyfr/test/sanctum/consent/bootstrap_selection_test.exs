@@ -94,7 +94,7 @@ defmodule Sanctum.Consent.BootstrapSelectionTest do
     end
 
     edge = edge!(aqua_head.resolved_policy, @aqua, @claude)
-    assert edge.vault == %{via: %{label: "default", binding_digest: nil}, projection: nil}
+    assert edge.vault == %{via: %{label: "default", binding_digest: nil}}
 
     # A dependency without a credential need is not selected.
     assert edge!(aqua_head.resolved_policy, @aqua, "catalyst:local.files").vault == nil

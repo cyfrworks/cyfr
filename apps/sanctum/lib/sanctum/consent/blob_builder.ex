@@ -123,7 +123,9 @@ defmodule Sanctum.Consent.BlobBuilder do
   @typedoc """
   A binding as the commit or the bootstrap decided it, which
   `vault_resource/1` writes: the entry and the digest it is bound at, its
-  scope, destination, attach rule and projection, its lifetime and
+  scope, destination, attach rule and projection (its field map from each
+  field the need reads to the entry field that answers it, and its
+  scopes), its lifetime and
   `renew`, and, on the default binding, the named ones beside it.
   """
   @type binding :: %{
@@ -132,7 +134,7 @@ defmodule Sanctum.Consent.BlobBuilder do
           required(:scope) => String.t(),
           required(:destination) => map(),
           required(:attach) => map() | nil,
-          required(:fields) => [String.t()],
+          required(:fields) => %{optional(String.t()) => String.t()},
           required(:scopes) => [String.t()],
           optional(:lifetime) => lifetime(),
           optional(:renew) => boolean(),
@@ -506,12 +508,13 @@ defmodule Sanctum.Consent.BlobBuilder do
 
     * a bound entry (`binding/0`): its `entry_id`, `binding_digest`,
       `scope` (`athanor` or `instance`), `destination` and `attach`
-      rule (absent for a disclose-only need), the `projection` it names,
-      and under `named` each named account's own resource by its name.
+      rule (absent for a disclose-only need), the `projection` it names
+      (`{"fields": {need field: entry field}, "scopes": [...]}`), and
+      under `named` each named account's own resource by its name.
       `encode/1` gives each its `binding_key` where it sits.
-    * a selection (`%{via: label, binding_digest, fields}`): the label of
-      the profile it borrows from, the digest it pinned and the fields it
-      narrows to.
+    * a selection (`%{via: label, binding_digest}`): the label of the
+      profile it borrows from and the digest it pinned. It names no
+      projection: it reads under its lender's.
     * provided configuration (`%{provided: %{destination, values,
       attach}}`): the publisher's public values and the rule they are
       attached by.
@@ -543,7 +546,6 @@ defmodule Sanctum.Consent.BlobBuilder do
       |> Prima.MapUtil.put_present("binding_digest", selection[:binding_digest])
 
     %{"via" => via}
-    |> put_projection_map(projection_map(selection[:fields] || [], []))
     |> Map.put(@decision, decision(selection))
   end
 
@@ -567,7 +569,10 @@ defmodule Sanctum.Consent.BlobBuilder do
       "destination" => binding.destination
     }
     |> Prima.MapUtil.put_present("attach", binding.attach)
-    |> put_projection_map(projection_map(binding.fields, binding.scopes))
+    |> Map.put("projection", %{
+      "fields" => binding.fields,
+      "scopes" => binding.scopes |> Enum.uniq() |> Enum.sort()
+    })
     |> Map.put(@decision, decision(binding))
   end
 
@@ -580,18 +585,6 @@ defmodule Sanctum.Consent.BlobBuilder do
       need: Map.get(binding, :need)
     }
   end
-
-  defp projection_map(fields, scopes) do
-    %{}
-    |> put_list("fields", fields)
-    |> put_list("scopes", scopes)
-  end
-
-  defp put_list(map, _key, []), do: map
-  defp put_list(map, key, values), do: Map.put(map, key, values |> Enum.uniq() |> Enum.sort())
-
-  defp put_projection_map(resource, projection) when projection == %{}, do: resource
-  defp put_projection_map(resource, projection), do: Map.put(resource, "projection", projection)
 
   @doc """
   What `from_manifest` provides for the dependency `dep` (its

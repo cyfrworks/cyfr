@@ -518,8 +518,9 @@ if config_env() != :test do
   # http catalyst fetches.
   config :sanctum, :private_egress_targets, env_list.("CYFR_PRIVATE_EGRESS_TARGETS")
 
-  # GitHub and Google sign in by device flow (CLI and Prism). GitHub needs
-  # only a client ID; Google needs a client ID and secret.
+  # GitHub and Google sign in by device flow (CLI and Prism), each offered
+  # exactly when it is configured: GitHub needs only a client ID; Google
+  # needs a client ID and secret.
   github_id = env_str.("CYFR_GITHUB_CLIENT_ID", nil)
   google_id = env_str.("CYFR_GOOGLE_CLIENT_ID", nil)
   google_secret = env_str.("CYFR_GOOGLE_CLIENT_SECRET", nil)
@@ -541,23 +542,26 @@ if config_env() != :test do
   # `"registry.#{registry_url}"`. Self-hosted deployments may override both
   # independently for co-host or split topologies.
   #
-  # cyfr.run issues per-user push tokens automatically via
-  # `/v1/identity/probe` after login, so there is no static
-  # username/password to configure at deploy time.
-  # `none` means no registry: an appliance that runs only what it ships.
-  # Sign-in never needs one (`Sanctum.SignIn`); pulls and publishing refuse
-  # with a typed error (`Compendium.RegistryHost`).
+  # A person's push tokens are minted by a request their identity signs
+  # (`registry.sync`), so there is no static username/password to
+  # configure at deploy time. `none` means no registry: an appliance that
+  # runs only what it ships. Sign-in never needs one (`Sanctum.SignIn`);
+  # pulls, publishing and a person's registry requests refuse with a typed
+  # error (`Compendium.RegistryHost`, `Sanctum.registry_host/0`). One parse
+  # sets both applications' copies.
   registry_url_config = env_str.("CYFR_REGISTRY_URL", "cyfr.run")
   config :cyfr, :registry_url, registry_url_config
+  config :sanctum, :registry_url, registry_url_config
 
   # The directory this deployment enrolls its local people at: an https
-  # directory URL, with no default, so an unset one leaves local operation
-  # and local pairing working and enrollment refused. Nothing reads a
-  # directory from a request. An enrollment's confirmation preview names
-  # the directory, so it is no longer than a preview's text.
+  # directory URL, `https://cyfr.run` (the directory cyfr.run hosts) when
+  # unset. Nothing reads a directory from a request. An enrollment's
+  # confirmation preview names the directory, so it is no longer than a
+  # preview's text.
   {:ok, directory_url} = Prima.EnvValue.text(getenv, "CYFR_DIRECTORY_URL")
+  directory_url = directory_url || "https://cyfr.run"
 
-  unless is_nil(directory_url) or Sanctum.enrollment_directory?(directory_url) do
+  unless Sanctum.enrollment_directory?(directory_url) do
     raise "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be an https directory URL: an origin " <>
             "and an optional path, with no user, query or fragment, at most " <>
             "#{Prima.Confirmation.Preview.max_text()} bytes long."
@@ -579,6 +583,19 @@ if config_env() != :test do
 
   config :sanctum, :restore_token, restore_token
 
+  # The installation's setup token (`cyfr init` writes it), in the restore
+  # token's form and optional: it admits the installation's first person
+  # (`Sanctum.Newcomer`), and unset, setup opens nothing. A malformed
+  # value refuses the boot naming the variable, never the value.
+  {:ok, setup_token} = Prima.EnvValue.text(getenv, "CYFR_SETUP_TOKEN")
+
+  unless is_nil(setup_token) or Sanctum.setup_token?(setup_token) do
+    raise "[Cyfr] FATAL: CYFR_SETUP_TOKEN must be exactly 64 lowercase hexadecimal " <>
+            "characters (32 random bytes)."
+  end
+
+  config :sanctum, :setup_token, setup_token
+
   oci_registry_url_config =
     env_str.(
       "CYFR_OCI_REGISTRY_URL",
@@ -592,48 +609,32 @@ if config_env() != :test do
     config :sanctum, :github_client_id, github_id
   end
 
-  # Platform-admin email allowlist. Addresses are normalized to lowercase before matching.
-  platform_admins =
-    "CYFR_PLATFORM_ADMIN_EMAILS" |> env_list.() |> Enum.map(&String.downcase/1)
-
-  config :sanctum, :platform_admin_emails, platform_admins
-
-  # Select the auth provider from explicit configuration, then OAuth
-  # credentials. Reject unsatisfied explicit settings. Without a provider,
-  # requests are anonymous and tenant-scoped routes are denied.
-  auth_provider =
-    case Cyfr.RuntimeConfig.resolve_auth_provider(getenv) do
-      {:ok, provider} -> provider
+  # The OpenID Connect issuer, offered exactly when all three of its
+  # settings are set; a partly set issuer refuses the boot. Its issuer is
+  # also pinned at `:sanctum, :oidc_issuer` — the single source both the
+  # boot reserved-host check (`Cyfr.Application.validate_oidc_issuer_config!/0`)
+  # and the login id builder (`Sanctum.Auth.OIDC.resolve_issuer/0`) read.
+  oidc =
+    case Cyfr.RuntimeConfig.oidc_config(getenv) do
+      {:ok, oidc} -> oidc
       {:error, message} -> raise message
     end
 
-  config :sanctum, :auth_provider, auth_provider
-
-  # A headless node has no browser page, and an external OIDC provider signs
-  # people in through one (the CLI's device flow is the built-in provider's):
-  # together they leave no way in. Refuse the pair rather than boot a box
-  # nobody can log in to.
-  if headless? and auth_provider == Sanctum.Auth.OIDC do
-    raise "CYFR_HEADLESS=on cannot be combined with CYFR_AUTH_PROVIDER=oidc: " <>
-            "an OIDC provider signs in through the browser page a headless node refuses"
+  # A headless node has no browser page, and the OIDC issuer signs people
+  # in through one: an issuer configured there could never be used.
+  if headless? and oidc do
+    raise "CYFR_HEADLESS=on cannot be combined with CYFR_OIDC_ISSUER: " <>
+            "an OIDC issuer signs in through the browser page a headless node refuses"
   end
 
-  # Generic OIDC, the one browser-callback sign-in. When selected, register
-  # the issuer for ueberauth_oidcc and its strategy. CYFR_OIDC_ISSUER is also
-  # pinned at `:sanctum, :oidc_issuer` — the single source both the boot
-  # reserved-host check (`Cyfr.Application.validate_oidc_issuer_config!/0`) and
-  # the login id builder (`Sanctum.Auth.OIDC.resolve_issuer/0`) read.
-  if auth_provider == Sanctum.Auth.OIDC do
-    {:ok, oidc} = Cyfr.RuntimeConfig.oidc_config(getenv)
-
+  if oidc do
     config :sanctum, :oidc_issuer, oidc.issuer
     config :ueberauth_oidcc, :issuers, [%{name: :cyfr_oidc, issuer: oidc.issuer}]
 
     # Provider key `:oidcc` (not `:oidc`) so `auth.provider` matches the
-    # generic-OIDC email-verification lane (`Sanctum.Auth.EmailVerification`)
-    # and the canonical `oidcc|<iss>|<sub>` id form. The callback is the
-    # home's own address (`Sanctum.origin/0`), named here so no request
-    # header chooses it: unnamed, Ueberauth builds it from the request's
+    # canonical `oidcc|<iss>|<sub>` id form. The callback is the home's own
+    # address (`Sanctum.origin/0`), named here so no request header
+    # chooses it: unnamed, Ueberauth builds it from the request's
     # X-Forwarded-Proto and X-Forwarded-Host, which any client can send.
     config :ueberauth, Ueberauth,
       providers: [
@@ -645,6 +646,20 @@ if config_env() != :test do
            callback_url: access.origin <> "/auth/oidcc/callback"}
       ]
   end
+
+  # The company sign-in this CYFR may require of every person
+  # (`Sanctum.CompanyLogin`), its issuer WorkOS or the OpenID Connect
+  # issuer above. Every refusal names its setting
+  # (`Cyfr.RuntimeConfig.company_login_config/3`); WorkOS's API key is a
+  # secret, never logged.
+  company_login =
+    case Cyfr.RuntimeConfig.company_login_config(getenv, oidc, headless?) do
+      {:ok, company_login} -> company_login
+      {:error, message} -> raise message
+    end
+
+  config :sanctum, :company_login, Map.delete(company_login, :workos)
+  config :sanctum, :workos, company_login.workos
 
   # Storage backend. Unset/`local` keeps the filesystem default from config.exs;
   # `s3` flips the adapter and requires the S3 credentials (fail loud if partial).

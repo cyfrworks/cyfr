@@ -291,6 +291,18 @@ defmodule Sanctum.Providers.InstanceEntryTest do
 
       assert {:ok, %{entries: []}} = call(member, %{"action" => "offered"})
     end
+
+    test "offered names each entry's field names, sorted", %{admin: admin, member: member} do
+      key = create!(admin)
+      bundle = create!(admin, %{"fields" => %{"secret" => "s", "key id" => "k"}})
+
+      assert {:ok, %{entries: offers}} = call(member, %{"action" => "offered"})
+
+      assert Map.new(offers, &{&1.id, &1.field_names}) == %{
+               key.id => ["API_KEY"],
+               bundle.id => ["key id", "secret"]
+             }
+    end
   end
 
   describe "the refusals" do

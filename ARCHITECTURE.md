@@ -180,7 +180,7 @@ The person decides; Sanctum validates, records and checks; and the place that re
 
 - The athanor is the one tenancy unit, a person's or a group's, and every active member holds the same authority.
 - Tenant identity comes from the authenticated actor, never from a guest's argument, and ownership travels with rows, blobs, events and cache keys.
-- A platform administrator holds a capability over the instance, not a seat: what the instance holds for them is its own, such as the host's decisions and archived athanors, never an athanor's decisions.
+- A platform administrator holds a capability over the instance, not a seat: what the instance holds for them is its own, such as the host's decisions and archived athanors, never an athanor's decisions. The installation's first person, made by its setup or by a restore onto it empty, is its platform administrator, and no other grant exists.
 - Outsiders learn nothing of an athanor: anyone without a current seat gets the answer a missing athanor gets.
 - Nothing lands in an athanor its members did not accept.
 
@@ -222,7 +222,7 @@ Each control-plane member owns its slot through a database lease with a generati
 
 ### 6.2 Boot and standing transitions
 
-No admission path opens before the platform administrators' security reconciliation succeeds under the live lease. A standing transition retires everything it ends in the same transaction.
+No admission path opens before a declared restore's transition commits under the live lease. A standing transition retires everything it ends in the same transaction.
 
 ### 6.3 Publication
 
@@ -279,7 +279,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 - A home is the one installation that decides for an athanor. Home, glass, hub, cell, node and door are this document's words: what a person reads, the setup pages, the command line, Prism, the README and the guides, says CYFR for the installation and Aqua for the assistant, device or browser for the glass, the CYFR you join for a hub, cluster for a cell and server for a member of it, machine or server or CYFR for a node by its sense, and sign-in method for a door, and never these words.
 - Every athanor has exactly one home; a cell is several members acting as that one home on one database (§6.1). *Not built yet:* replicas and their journal, and home transfer; a node is the home of every athanor its store holds.
 - The glass is the client: display, input and device keys it never exports, bound to each home separately. *Not built yet:* an application that hosts Prism, a client shell with its own home switcher, listening without a page, notices and their read state across homes, and push delivery.
-- A hub is the always-on home of shared athanors and an instance that offers entries to its people. *Not built yet:* the hub as a model provider and as a standby, the governance floor, which shows every member of a group a consent that exports their contributions and lets each withhold what they authored, and a join that requires a company's single sign-on beside the person's own identity.
+- A hub is the always-on home of shared athanors and an instance that offers entries to its people. Any home may require a company's sign-in of every person there: a standing condition, checked last wherever a person's standing is read, and never a door or the person's identity (`Sanctum.CompanyLogin`). *Not built yet:* the hub as a model provider and as a standby, and the governance floor, which shows every member of a group a consent that exports their contributions and lets each withhold what they authored.
 - Every wire between homes names its version, and CYFR has no relay.
 
 **Why.** A decision about an athanor is made in one place, so no node acts for a home because a lease looks expired or a clock says it is lost.
@@ -288,11 +288,11 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 
 ### 9.1 Identity
 
-An enrolled person is an identifier, the hash of the genesis of a log their own keys extend, ordered by one directory (`Sanctum.Directory`); a person who never enrolls keeps their keys, home and local devices without one. A live key at their home signs for them, an operational key rotates it, and recovery keys in a printed kit replace both (`Sanctum.Recovery`). A home reads a remote person's head fresh within a bound (`Sanctum.IdentityFreshness`); doors are sign-in methods at a relying home; restore is an entry path, not an operation. *Not built yet:* memberships and attribution by identifier, delegated work, the email door, and the mail transport it and an emailed confirmation code need.
+A person is made only by an admission at the CYFR that holds them: its setup, an invitation, an open door, a verified CYFR sign-in, or a restore (`Sanctum.Newcomer`); a sign-in method unlocks a person and never creates or recovers one. An enrolled person is an identifier, the hash of the genesis of a log their own keys extend, ordered by one directory (`Sanctum.Directory`), cyfr.run's by default; a person who never enrolls keeps their keys, home and local devices without one. A handle at the registry names an identifier and is claimed by a request the person's live key signs; a home resolves a handle to that identifier and reads its keys from the directory (`Sanctum.Handle`). A live key at their home signs for them, an operational key rotates it, and recovery keys in a printed kit replace both (`Sanctum.Recovery`). A home reads a remote person's head fresh within a bound (`Sanctum.IdentityFreshness`); doors are sign-in methods at a relying home; restore is an entry path, not an operation. *Not built yet:* memberships and attribution by identifier, delegated work, the email door, and the mail transport it and an emailed confirmation code need.
 
 ### 9.2 Joining a home that is not your own
 
-A person signs in at another home through the CYFR door (`Sanctum.Auth.CyfrDoor`) with an assertion their own home signs after a fresh confirmation, carried by the browser (`Sanctum.Carry`); their devices there are certified by their own home (`Sanctum.RemoteCertification`), and each home admits under its own rules.
+A person signs in at another home through the CYFR door (`Sanctum.Auth.CyfrDoor`) with an assertion their own home signs after a fresh confirmation, carried by the browser (`Sanctum.Carry`); their devices there are certified by their own home (`Sanctum.RemoteCertification`), and each home admits under its own rules. A home knows a person by identifier: a handle is resolved to its identifier when an allowlist entry, a membership or a sign-in names it, and is never stored as the key, so a handle the registry later reassigns moves no access. A published address is navigation only: a sign-in begun from a handle keeps the identifier the handle named for the attempt, and the CYFR door refuses a carry of any other identity (`Sanctum.Auth.CyfrDoor.challenge/2`).
 
 ### 9.3 Devices and fresh confirmation
 

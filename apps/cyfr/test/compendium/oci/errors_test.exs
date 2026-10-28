@@ -42,19 +42,6 @@ defmodule Compendium.OCI.ErrorsTest do
       assert err.detail.required_version == "v3"
     end
 
-    test "412 with POLICY_VERSION_MISMATCH code maps to :policy_version_mismatch" do
-      body =
-        Jason.encode!(%{
-          "errors" => [%{"code" => "POLICY_VERSION_MISMATCH"}],
-          "required_version" => "v4"
-        })
-
-      err = Errors.from_response(412, body, "cyfr.run")
-
-      assert err.reason == :policy_version_mismatch
-      assert err.detail.required_version == "v4"
-    end
-
     test "412 without a recognized code falls back to :manifest_invalid" do
       body = Jason.encode!(%{"errors" => [%{"code" => "UNKNOWN"}]})
       err = Errors.from_response(412, body, "cyfr.run")
@@ -107,21 +94,21 @@ defmodule Compendium.OCI.ErrorsTest do
 
   describe "required_version/1" do
     @mismatch Jason.encode!(%{
-                "errors" => [%{"code" => "POLICY_VERSION_MISMATCH"}],
+                "errors" => [%{"code" => "POLICY_ACCEPTANCE_REQUIRED"}],
                 "required_version" => "2026-08-01"
               })
 
     test "reads the version a 412 names" do
       err = Errors.from_response(412, @mismatch, "cyfr.run")
 
-      assert err.reason == :policy_version_mismatch
+      assert err.reason == :policy_acceptance_required
       assert Errors.required_version(err) == "2026-08-01"
     end
 
     test "reads it through the wrapper from_api_response/3 adds" do
       # The API builder replaces `detail` with %{operation:, original_detail:},
       # so a flat read of detail[:required_version] finds nothing here.
-      err = Errors.from_api_response(412, @mismatch, "accept_policies")
+      err = Errors.from_api_response(412, @mismatch, "push")
 
       refute err.detail[:required_version]
       assert Errors.required_version(err) == "2026-08-01"

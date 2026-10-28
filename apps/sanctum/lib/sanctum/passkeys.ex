@@ -19,6 +19,11 @@ defmodule Sanctum.Passkeys do
 
   ## Registration
 
+  A newcomer's first passkey is registered by their admission
+  (`Sanctum.Newcomer`): `newcomer_options/0`, `verify_newcomer/1` with no
+  transaction open, and `write_newcomer/2` inside the admission's
+  transaction. A person who exists registers through `register/2`.
+
   `register/2` without a credential answers the creation options: user
   verification and a discoverable credential required, attestation
   `none`, the person's passkeys here excluded, and an opaque registration
@@ -80,13 +85,10 @@ defmodule Sanctum.Passkeys do
 
   ## Sign-in
 
-  `sign_in_challenge/0` and `sign_in/2` are the passkey door: an active
-  passkey (never a suspended one) of an active person, whose linked door
-  identities (a remote
-  person's `cyfr` identity among them, judged by its identifier) or
-  verified email still pass `Sanctum.Door.admit/3` (or, for a person with
-  no linked door, their own id, as a restore's door entry names it),
-  mints a session with provider `passkey`. A remote person's head is read
+  `sign_in_challenge/0` and `sign_in/2` sign a person in by passkey: an
+  active passkey (never a suspended one) of an active person the door
+  still admits (`Sanctum.Door.sign_in/1`, which judges the person, never a
+  sign-in method) mints a session with provider `passkey`. A remote person's head is read
   fresh first, which retires a passkey a recovery replaced, and their
   session is minted only under that head's `key_epoch`
   (`Sanctum.Session.create/2`'s `key_epoch:`): a rotation or a recovery
@@ -230,12 +232,17 @@ defmodule Sanctum.Passkeys do
   defp local?(_identity), do: false
 
   defp options(ctx, user_id) do
-    with {:ok, seconds} <- Authz.confirmation_seconds(),
-         {:ok, excluded} <- live_credentials(ctx, user_id) do
+    with {:ok, excluded} <- live_credentials(ctx, user_id),
+         do: creation_options(user_id, names(user_id), excluded, %{})
+  end
+
+  # The creation options and the registration token for `user_id`; a
+  # newcomer's token also names the person id it was drawn for (`token/3`).
+  defp creation_options(user_id, {name, display}, excluded, token_fields) do
+    with {:ok, seconds} <- Authz.confirmation_seconds() do
       nonce = :crypto.strong_rand_bytes(@nonce_bytes)
       expires_at = now_ms() + seconds * 1000
       challenge = registration_challenge(user_id, nonce, expires_at)
-      {name, display} = names(user_id)
 
       public_key = %{
         "rp" => %{"id" => rp_id(), "name" => rp_id()},
@@ -260,9 +267,71 @@ defmodule Sanctum.Passkeys do
       {:ok,
        %{
          public_key: public_key,
-         registration: token(nonce, expires_at),
+         registration: token(nonce, expires_at, token_fields),
          expires_at: DateTime.from_unix!(expires_at, :millisecond)
        }}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # A newcomer's first passkey
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  The creation options for a newcomer's first passkey: a person who does
+  not exist yet, made by the admission the registration is presented with
+  (`Sanctum.Newcomer.admit/2`). A person id is drawn for them now
+  (`Prima.PersonId.prefix/0`), and the registration token names it beside
+  its nonce and expiry, so the ceremony's challenge is bound to that id as
+  a signed-in person's is to theirs. Answers what `register/2` answers
+  without a credential.
+  """
+  @spec newcomer_options() :: {:ok, map()} | {:error, term()}
+  def newcomer_options do
+    user_id = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+    creation_options(user_id, {"Me", "Me"}, [], %{"user" => user_id})
+  end
+
+  @doc """
+  Verify a newcomer's registration (`newcomer_options/0`), with no
+  transaction open: the ceremony, the token's expiry and the challenge
+  bound to the person id the token names. Answers that id and the
+  verified credential `write_newcomer/2` stores. `:registration_refused`
+  for anything that does not verify.
+  """
+  @spec verify_newcomer(map()) ::
+          {:ok, %{user_id: String.t(), verified: map()}} | {:error, term()}
+  def verify_newcomer(%{"registration" => token} = credential) do
+    with {:ok, user_id} <- token_person(token),
+         {:ok, verified} <- verify_registration(user_id, credential) do
+      {:ok, %{user_id: user_id, verified: verified}}
+    end
+  end
+
+  def verify_newcomer(_credential), do: {:error, :registration_refused}
+
+  @doc """
+  Store a newcomer's verified credential, active, for the person
+  `user_id`, inside their admission's transaction: the token's nonce
+  claimed, and the first-method mark on their identity row set under
+  their lock (`Arca.Passkeys.register/3`), so a failed admission leaves
+  neither the person nor the passkey.
+  """
+  @spec write_newcomer(String.t(), map()) :: :ok | {:error, term()}
+  def write_newcomer(user_id, verified) when is_binary(user_id) do
+    case store(user_id, verified, "active", first_method: true) do
+      {:ok, _row} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp token_person(token) do
+    with {:ok, json} <- b64(token),
+         {:ok, %{"user" => user_id}} when is_binary(user_id) <- Jason.decode(json),
+         true <- Prima.PersonId.person?(user_id) do
+      {:ok, user_id}
+    else
+      _malformed -> {:error, :registration_refused}
     end
   end
 
@@ -547,8 +616,13 @@ defmodule Sanctum.Passkeys do
     )
   end
 
-  defp token(nonce, expires_at),
-    do: Encoding.b64(Encoding.jcs!(%{"nonce" => Encoding.b64(nonce), "expires_at" => expires_at}))
+  defp token(nonce, expires_at, fields),
+    do:
+      Encoding.b64(
+        Encoding.jcs!(
+          Map.merge(fields, %{"nonce" => Encoding.b64(nonce), "expires_at" => expires_at})
+        )
+      )
 
   defp read_token(token) when is_binary(token) and byte_size(token) <= 256 do
     with {:ok, json} <- b64(token),
@@ -848,13 +922,12 @@ defmodule Sanctum.Passkeys do
   @doc """
   Sign in by passkey: the WebAuthn `assertion` over the challenge the
   sign-in page held. The passkey must be active here and its person
-  active, and one of their linked door identities, or their verified
-  email, must still pass `Sanctum.Door.admit/3`, so removing someone from
-  the allowlist closes this door too. A remote person's head is read
+  active, and the door must still admit the person
+  (`Sanctum.Door.sign_in/1`), so a deny closes this way in too. A remote person's head is read
   fresh first, and their passkey must be of its current `recovery_epoch`:
   one a recovery replaced is retired by that read and signs no one in.
-  Mints a session with provider `passkey` and answers its token and the
-  sign-in outcome, as the device flow does; a remote person's session
+  Mints a session with provider `passkey` and answers its token, as the
+  device flow does; a remote person's session
   records the `key_epoch` of the head their passkey was verified against,
   and is minted only while that head is still current.
 
@@ -864,7 +937,7 @@ defmodule Sanctum.Passkeys do
   verifies against the new head), `:unavailable`.
   """
   @spec sign_in(sign_in_challenge() | map(), map()) ::
-          {:ok, %{session_token: String.t(), outcome: term()}} | {:error, term()}
+          {:ok, %{session_token: String.t()}} | {:error, term()}
   def sign_in(%{challenge: challenge, expires_at: expires_at}, assertion)
       when is_binary(challenge) and is_map(assertion) do
     with true <- expires_at > now_ms() or {:error, :expired},
@@ -912,40 +985,11 @@ defmodule Sanctum.Passkeys do
     end
   end
 
-  # The door, asked for every door identity the person holds and for
-  # their verified email: one admission suffices, a store that cannot
-  # answer admits nothing. A person who holds no door identity (a restored
-  # person before they link one, or one who unlinked their last door while
-  # holding a passkey) is asked about by their own id
-  # (`Sanctum.Door.admit_person/1`), as the door's reconciliation asks
-  # about them and as unlinking a last door checks first.
   defp door(user) do
-    verified =
-      case user[:email_verified] do
-        claim when is_boolean(claim) -> claim
-        _unknown -> :unknown
-      end
-
-    with {:ok, identities} <- door_identities(user.id) do
-      verdicts =
-        case identities do
-          [] ->
-            [Sanctum.Door.admit_person(user)]
-
-          identities ->
-            asks =
-              Enum.map(identities, &{&1.key, user[:email], verified}) ++
-                if(verified == true, do: [{user.id, user[:email], true}], else: [])
-
-            Enum.map(asks, fn {key, email, claim} -> Sanctum.Door.admit(key, email, claim) end)
-        end
-
-      cond do
-        Enum.any?(verdicts, &match?({:ok, _admitted}, &1)) -> :ok
-        Enum.member?(verdicts, {:error, :unavailable}) -> {:error, :unavailable}
-        Enum.member?(verdicts, {:error, :denied}) -> {:error, {:door, :denied}}
-        true -> {:error, {:door, :not_allowed}}
-      end
+    case Sanctum.Door.sign_in(user) do
+      {:ok, :allowed} -> :ok
+      {:error, {:door, :unavailable}} -> {:error, :unavailable}
+      {:error, {:door, _reason}} = refused -> refused
     end
   end
 
@@ -976,8 +1020,7 @@ defmodule Sanctum.Passkeys do
     with {:ok, ctx} <-
            Sanctum.Tenancy.resolve_status(%{ctx | namespace: user[:namespace]}, force: true),
          {:ok, session} <- Sanctum.Session.create(ctx, key_epoch: head && head.key_epoch) do
-      {:ok,
-       %{session_token: session.token, outcome: {:proceed, %{unsynced: [], probe: :skipped}}}}
+      {:ok, %{session_token: session.token}}
     else
       {:error, :identity_stale} -> {:error, :identity_stale}
       {:error, :stale_key_epoch} -> {:error, :identity_stale}

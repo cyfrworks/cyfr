@@ -22,9 +22,16 @@ defmodule Sanctum.Consent.Commit do
 
   A binding (`:bindings`) binds a need of the source to exactly one of the
   athanor's entries (`entry_id`) and an instance entry offered to the
-  person (`instance_entry_id`), under the need's projection or the
-  `fields` and `scopes` it names. The entry must be of the need's kind and
-  provider (`{:provider_mismatch, need}`); a need the component reads
+  person (`instance_entry_id`), under the need's scopes or the `scopes`
+  it names, and a field map from each field the need reads to the entry
+  field that answers it: the `fields` it names, held to name each of the
+  need's fields once and only fields the entry holds
+  (`{:invalid_field_map, need}`), or the automatic one
+  (`Sanctum.Consent.Plan.field_map/2`), and none is refused
+  `{:fields_unmapped, need}`. The entry must be of the need's kind, and
+  its destination must cover the hosts and paths the need declares,
+  whatever its label (`Sanctum.Consent.Plan.entry_fit/2`,
+  `{:entry_mismatch, need}`); a need the component reads
   itself — disclose-only, `disclose: true`, or the `@ingress` slot of a
   manifest declaring no needs — takes a disclosed entry of the athanor
   alone (`{:disclosure_refused, need}`); and an instance entry must be
@@ -339,7 +346,7 @@ defmodule Sanctum.Consent.Commit do
 
   # The selections the head carries, re-decided as they stand: the same
   # lender, or the same entry for the same need under the same account
-  # name, the same fields, the digest pinned again from the live entry,
+  # name and field map, the digest pinned again from the live entry,
   # and the lifetime its row holds, renewing nothing — so a consumed
   # `once` carries and nothing widens, and an `until` that has passed
   # refuses the grant as a commit would. An entry on an edge into the
@@ -360,17 +367,8 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # A selection that named no fields lends the lender's again.
-  defp head_selection(%{"via" => %{"label" => label}} = vault, from, dep, _source_ref) do
-    [
-      {nil,
-       Prima.MapUtil.put_present(
-         %{from: from, dep: dep, label: label},
-         :fields,
-         get_in(vault, ["projection", "fields"])
-       )}
-    ]
-  end
+  defp head_selection(%{"via" => %{"label" => label}}, from, dep, _source_ref),
+    do: [{nil, %{from: from, dep: dep, label: label}}]
 
   # An entry bound on a dependency's edge, for the need of the
   # dependency's whose attach rule it carries, and each account named
@@ -391,7 +389,7 @@ defmodule Sanctum.Consent.Commit do
 
     %{from: from, dep: dep}
     |> Map.put(entry_key, id)
-    |> Prima.MapUtil.put_present(:fields, get_in(bound, ["projection", "fields"]))
+    |> Prima.MapUtil.put_present(:fields, held_fields(bound))
     |> Map.put(:head_attach, Map.get(bound, "attach"))
   end
 
@@ -905,9 +903,10 @@ defmodule Sanctum.Consent.Commit do
         {:label, label} ->
           with :ok <- named_by_entry(name, dep),
                :ok <- no_need(raw, dep, label),
+               :ok <- no_field_map(raw, dep, label),
                :ok <-
                  not_provided(Map.get(provided, {from, dep}), dep, nil, "its #{label} profile"),
-               {:ok, selection} <- lender_selection(ctx, raw, {from, dep, place}, label) do
+               {:ok, selection} <- lender_selection(ctx, {from, dep, place}, label) do
             {:ok, Map.merge(selection, %{lifetime: lifetime, renew: renew}), %{}}
           end
 
@@ -1047,6 +1046,17 @@ defmodule Sanctum.Consent.Commit do
             "lends what that profile binds and names none"}}
   end
 
+  # A label selection reads under its lender's field map: it names none.
+  defp no_field_map(raw, dep, label) do
+    if Map.has_key?(raw, :fields),
+      do:
+        {:error,
+         {:invalid_argument,
+          "The selection of #{dep} by its #{label} profile names fields; a label selection " <>
+            "reads under the field map that profile binds"}},
+      else: :ok
+  end
+
   # A dependency's edge holds one credential: a need the calling node
   # provides takes no selection, and a selection beside configuration
   # provided for another need would fill the edge twice.
@@ -1060,12 +1070,11 @@ defmodule Sanctum.Consent.Commit do
   defp not_provided(%{need: provided}, dep, _need, what),
     do: {:error, one_credential(dep, provided, what)}
 
-  defp lender_selection(ctx, raw, {from, dep, %{graph: graph, rows: rows}}, label) do
+  defp lender_selection(ctx, {from, dep, %{graph: graph, rows: rows}}, label) do
     with {:ok, profile} <- lender_profile(ctx, dep, label),
          {:ok, bound} <- lender_binding(ctx, profile),
          {:ok, entry} <- lent_entry(ctx, bound, {dep, profile.label}, {graph, rows}),
-         {:ok, lent} <- lent_fields(bound, dep, profile.label),
-         {:ok, fields} <- selected_fields(raw, lent, dep) do
+         {:ok, lent} <- lent_projection(bound, dep, profile.label) do
       {:ok,
        %{
          kind: :via,
@@ -1082,10 +1091,10 @@ defmodule Sanctum.Consent.Commit do
          # lender's entry's, read from its row.
          destination: entry.destination,
          disclosed: entry.disclosed,
-         fields: fields,
-         lent_fields: lent,
-         # The selection names no scopes, so the lender's reach the edge.
-         lent_scopes: Map.get(bound.projection, :scopes) || [],
+         # The selection names no projection: the lender's map and scopes
+         # reach the edge whole.
+         lent_fields: lent.fields,
+         lent_scopes: lent.scopes,
          # The need the lent entry fills, when the dependency declares one
          # credential need to name.
          declared_need: single_credential_need(rows, dep)
@@ -1163,22 +1172,22 @@ defmodule Sanctum.Consent.Commit do
 
   # An entry chosen for one of the dependency's credential needs, bound on
   # the edge as a binding of that need is on the source: the need's kind
-  # and provider, its disclosure, the offer and the component policy read
-  # against the dependency, under the need's projection narrowed by the
-  # selection's fields.
+  # and destination, its disclosure, the offer and the component policy read
+  # against the dependency, under the need's scopes and the selection's
+  # field map.
   defp entry_selection(ctx, raw, {from, dep, place}, target, decided) do
     with {:ok, _row, dep_manifest} <- node_row_manifest(place.rows, dep),
          {:ok, need, declared_need} <- selected_need(raw, dep, dep_manifest),
          :ok <- not_provided(decided.provided, dep, need, "#{need}"),
-         {:ok, fields} <- binding_list(raw, :fields, declared_need, need),
          {:ok, scopes} <- binding_list(%{}, :scopes, declared_need, need),
          {:ok, bound} <- fetch_bound(ctx, target, need),
-         :ok <- check_match(bound, declared_need, need),
+         {:ok, destination} <- bound_destination(bound),
+         :ok <- check_fit(bound, destination, declared_need, need),
          :ok <- check_disclosure(bound, declared_need, need),
          :ok <- check_admission(ctx, bound, need, Plan.node_facts(dep, place.graph, place.rows)),
-         {:ok, fields, scopes} <- named_projection(declared_need, fields, scopes, bound, need),
-         :ok <- check_scope_projection(bound, scopes),
-         {:ok, destination} <- bound_destination(bound) do
+         {:ok, fields} <- field_map(raw, declared_need, bound, need),
+         {:ok, scopes} <- named_projection(declared_need, fields, scopes, bound, need),
+         :ok <- check_scope_projection(bound, scopes) do
       selection = %{
         kind: :entry,
         from: from,
@@ -1362,38 +1371,18 @@ defmodule Sanctum.Consent.Commit do
       else: {:error, {:selection_unbound, dep, label}}
   end
 
-  # A lender lends the projection its own edge names: the fields of a key
-  # or a bundle, or the scopes of an OAuth binding, which name no field and
-  # reach the borrower's edge whole. An edge that names neither lends
-  # nothing.
-  defp lent_fields(%{projection: %{} = projection}, dep, label) do
-    case {Map.get(projection, :fields) || [], Map.get(projection, :scopes) || []} do
-      {[], []} -> {:error, {:selection_unbound, dep, label}}
-      {fields, _scopes} -> {:ok, fields}
-    end
-  end
+  # A lender lends the projection its own edge names whole: the field map
+  # of a key or a bundle, or the scopes of an OAuth binding. An edge that
+  # names neither lends nothing.
+  defp lent_projection(
+         %{projection: %{fields: fields, scopes: scopes} = projection},
+         _dep,
+         _label
+       )
+       when map_size(fields) > 0 or scopes != [],
+       do: {:ok, projection}
 
-  defp lent_fields(_unprojected, dep, label), do: {:error, {:selection_unbound, dep, label}}
-
-  # The selection may narrow the lender's fields, never widen them. Naming
-  # none lends every field the lender names (the selection writes no
-  # projection of its own and the loader takes the lender's); an explicit
-  # empty list names nothing and is refused.
-  defp selected_fields(raw, lent, dep) do
-    case Map.fetch(raw, :fields) do
-      :error ->
-        {:ok, []}
-
-      {:ok, [_ | _] = fields} ->
-        case Enum.reject(fields, &(&1 in lent)) do
-          [] -> {:ok, Enum.sort(fields)}
-          missing -> {:error, {:selection_fields_unavailable, dep, missing}}
-        end
-
-      {:ok, _empty} ->
-        {:error, empty_projection(dep, :fields)}
-    end
-  end
+  defp lent_projection(_unprojected, dep, label), do: {:error, {:selection_unbound, dep, label}}
 
   defp declared_needs(component, source_ref) do
     with {:ok, manifest} <- manifest(component, source_ref),
@@ -1592,7 +1581,7 @@ defmodule Sanctum.Consent.Commit do
           scope: vault["scope"],
           destination: vault["destination"],
           attach: vault["attach"],
-          fields: get_in(vault, ["projection", "fields"]) || [],
+          fields: held_fields(vault) || %{},
           scopes: get_in(vault, ["projection", "scopes"]) || []
         }
 
@@ -1676,12 +1665,12 @@ defmodule Sanctum.Consent.Commit do
          {:ok, name} <- binding_name(raw, need),
          {:ok, lifetime} <- decided_lifetime(raw, subject, place.now),
          {:ok, renew} <- decided_renew(raw, subject),
-         {:ok, fields} <- binding_list(raw, :fields, declared_need, need),
          {:ok, scopes} <- binding_list(raw, :scopes, declared_need, need),
          :ok <- check_token_grant(declared_need, scopes, need),
          {:ok, target} <- binding_target(raw, need),
          {:ok, bound} <- fetch_bound(ctx, target, need),
-         :ok <- check_match(bound, declared_need, need),
+         {:ok, destination} <- bound_destination(bound),
+         :ok <- check_fit(bound, destination, declared_need, need),
          :ok <- check_disclosure(bound, declared_need, need),
          :ok <-
            check_admission(
@@ -1690,9 +1679,9 @@ defmodule Sanctum.Consent.Commit do
              need,
              Plan.node_facts(place.source_ref, place.graph, place.rows)
            ),
-         {:ok, fields, scopes} <- named_projection(declared_need, fields, scopes, bound, need),
-         :ok <- check_scope_projection(bound, scopes),
-         {:ok, destination} <- bound_destination(bound) do
+         {:ok, fields} <- field_map(raw, declared_need, bound, need),
+         {:ok, scopes} <- named_projection(declared_need, fields, scopes, bound, need),
+         :ok <- check_scope_projection(bound, scopes) do
       binding = %{
         need: need,
         declared_need: declared_need,
@@ -1934,7 +1923,7 @@ defmodule Sanctum.Consent.Commit do
            provider: view.provider_hint,
            disclosed: false,
            policy: view,
-           field_names: [],
+           field_names: view.field_names,
            oauth_scopes: [],
            destination: view.destination
          }}
@@ -1950,15 +1939,16 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # An entry meets a declared need of its kind whose qualifier is the
-  # entry's provider. The `@ingress` slot of a manifest declaring no needs
-  # names neither.
-  defp check_match(_bound, nil, _need), do: :ok
+  # An entry meets a declared need of its kind whose destination covers
+  # the hosts and paths the need declares (`Plan.entry_fit/2`), whatever
+  # its label. The `@ingress` slot of a manifest declaring no needs
+  # declares neither.
+  defp check_fit(_bound, _destination, nil, _need), do: :ok
 
-  defp check_match(bound, declared_need, need) do
-    if bound.kind == declared_need.kind and bound.provider == declared_need.qualifier,
-      do: :ok,
-      else: {:error, {:provider_mismatch, need}}
+  defp check_fit(bound, destination, declared_need, need) do
+    if Plan.entry_fit(declared_need, %{kind: bound.kind, destination: destination}) == :none,
+      do: {:error, {:entry_mismatch, need}},
+      else: :ok
   end
 
   # A need the component reads itself takes a disclosed entry of the
@@ -2022,11 +2012,10 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # A binding's projection is its need's: the declared fields of a key or
-  # bundle need, the declared scopes of an OAuth need, which the shape has
-  # already refused to leave empty. The caller may name its own list in
-  # their place; an explicit empty list names nothing and is refused rather
-  # than read as everything the entry holds.
+  # A binding's scopes are its need's, the declared scopes of an OAuth
+  # need, which the shape has already refused to leave empty. The caller
+  # may name its own list in their place; an explicit empty list names
+  # nothing and is refused rather than read as everything the entry holds.
   defp binding_list(raw, key, declared_need, need) do
     case Map.fetch(raw, key) do
       :error -> {:ok, declared_list(declared_need, key)}
@@ -2049,24 +2038,51 @@ defmodule Sanctum.Consent.Commit do
 
   defp check_token_grant(_declared_need, _scopes, _need), do: :ok
 
-  # An `@ingress` binding on a manifest that declares no need has no list to
-  # inherit. When its caller names none, it names what the entry holds at
-  # consent time — its field names and, for an OAuth entry, its authorized
-  # scopes — so the edge still references its entry under a projection the
-  # preview shows. Those are the entry's binding fields: a change to them
-  # moves the binding digest and asks again. An entry that holds neither
-  # has nothing to project and is refused.
-  defp named_projection(nil, [], [], bound, need) do
-    fields = bound.field_names
-    scopes = if bound.kind == "oauth", do: bound.oauth_scopes, else: []
+  # A binding's field map: the one its decision names, held to name each
+  # field the need reads once and only fields the entry holds, or else the
+  # automatic one (`Plan.field_map/2`). The `@ingress` slot of a manifest
+  # that declares no needs reads the entry's own fields.
+  defp field_map(raw, declared_need, bound, need) do
+    case Map.fetch(raw, :fields) do
+      :error ->
+        case Plan.field_map(declared_need, bound.field_names) do
+          nil -> {:error, {:fields_unmapped, need}}
+          fields -> {:ok, fields}
+        end
 
-    if fields == [] and scopes == [],
-      do: {:error, empty_projection(need, :fields)},
-      else: {:ok, fields, scopes}
+      {:ok, fields} ->
+        if total_map?(fields, need_fields(declared_need, bound), bound.field_names),
+          do: {:ok, fields},
+          else: {:error, {:invalid_field_map, need}}
+    end
   end
 
-  defp named_projection(_declared_need, fields, scopes, _bound, _need),
-    do: {:ok, fields, scopes}
+  defp need_fields(nil, bound), do: bound.field_names
+  defp need_fields(declared_need, _bound), do: declared_need.fields
+
+  defp total_map?(fields, need_fields, field_names) when is_map(fields) do
+    Enum.sort(Map.keys(fields)) == Enum.sort(Enum.uniq(need_fields)) and
+      Enum.all?(fields, fn {_need_field, entry_field} -> entry_field in field_names end)
+  end
+
+  defp total_map?(_fields, _need_fields, _field_names), do: false
+
+  # An `@ingress` binding on a manifest that declares no need has no
+  # scopes to inherit. When its caller names none, an OAuth entry's are
+  # those it holds at consent time, so the edge still references its entry
+  # under a projection the preview shows. Its fields and scopes are the
+  # entry's binding fields: a change to them moves the binding digest and
+  # asks again. An entry that holds neither has nothing to project and is
+  # refused.
+  defp named_projection(nil, fields, [], bound, need) do
+    scopes = if bound.kind == "oauth", do: bound.oauth_scopes, else: []
+
+    if fields == %{} and scopes == [],
+      do: {:error, empty_projection(need, :fields)},
+      else: {:ok, scopes}
+  end
+
+  defp named_projection(_declared_need, _fields, scopes, _bound, _need), do: {:ok, scopes}
 
   # An OAuth projection is held to what its entry can dispense, here and
   # not first at a run: scopes the entry lacks are refused as the reader
@@ -2162,11 +2178,11 @@ defmodule Sanctum.Consent.Commit do
   end
 
   # A label selection names its label, an entry selection the entry, the
-  # need it is chosen for and the account it rides under, if any; both
-  # their projection and lifetime.
+  # need it is chosen for, the account it rides under, if any, and its
+  # field map; both their lifetime.
   defp digest_selection(%{kind: :via} = selection) do
     selection
-    |> Map.take([:from, :dep, :label, :binding_digest, :fields, :renew])
+    |> Map.take([:from, :dep, :label, :binding_digest, :renew])
     |> Map.put(:lifetime, digest_lifetime(Map.get(selection, :lifetime)))
   end
 
@@ -2702,7 +2718,6 @@ defmodule Sanctum.Consent.Commit do
     BlobBuilder.vault_resource(%{
       via: selection.label,
       binding_digest: selection.binding_digest,
-      fields: selection.fields,
       lifetime: selection.lifetime,
       renew: selection.renew,
       need: selection_need(selection)
@@ -2930,18 +2945,12 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  defp credential_row(reads, prep, {from, key, target}, %{"via" => %{"label" => label}} = vault) do
+  defp credential_row(reads, prep, {from, key, target}, %{"via" => %{"label" => label}}) do
     case Enum.find(prep.selections, &(&1[:kind] == :via and &1.from == from and &1.dep == target)) do
       nil ->
         [{:error, {:preview_unrepresentable, :credential}}]
 
       selection ->
-        fields =
-          case projection(vault, "fields") do
-            [] -> Enum.sort(selection.lent_fields)
-            fields -> fields
-          end
-
         identity =
           if selection.source == "instance",
             do: %{instance_entry_id: selection.entry_id},
@@ -2964,7 +2973,7 @@ defmodule Sanctum.Consent.Commit do
                "name" => selection.entry_name,
                "edge" => key,
                "label" => label,
-               "fields" => fields,
+               "fields" => selection.lent_fields,
                "scopes" => Enum.sort(Enum.uniq(selection.lent_scopes)),
                "destination" => selection.destination,
                "source" => selection.source,
@@ -2995,7 +3004,7 @@ defmodule Sanctum.Consent.Commit do
          %{
            "name" => provided_need(prep, from, target),
            "edge" => key,
-           "fields" => provided["values"] |> Map.keys() |> Enum.sort(),
+           "fields" => Map.new(provided["values"], fn {field, _value} -> {field, field} end),
            "scopes" => [],
            "destination" => provided["destination"],
            "source" => "provided",
@@ -3028,7 +3037,7 @@ defmodule Sanctum.Consent.Commit do
          %{
            "name" => entry.name,
            "edge" => key,
-           "fields" => projection(bound, "fields"),
+           "fields" => held_fields(bound) || %{},
            "scopes" => projection(bound, "scopes"),
            "destination" => bound["destination"],
            "source" => if(instance?, do: "instance", else: "own"),
@@ -3119,6 +3128,10 @@ defmodule Sanctum.Consent.Commit do
 
   defp projection(vault, key),
     do: (get_in(vault, ["projection", key]) || []) |> Enum.uniq() |> Enum.sort()
+
+  # The field map a bound entry of a stored blob holds, nil when it holds
+  # none.
+  defp held_fields(bound), do: get_in(bound, ["projection", "fields"])
 
   defp tool_server_rows(prep, nodes) do
     nodes

@@ -96,22 +96,23 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
   test "a sign-in's own fill asks for the claim like any other" do
     # Every filler asks for the claim, not only the readers. Pinned on the
-    # athanor the sign-in actually fills: mint it first, hold ITS claim, then
-    # sign in again. A sign-in that filled unclaimed would fill it anyway.
+    # athanor the sign-in actually fills: the one the admission minted; hold
+    # ITS claim, then sign in. A sign-in that filled unclaimed would fill it
+    # anyway.
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|claimed-#{n}",
         provider: "github",
         email: "claimed#{n}@example.com",
         verified: true
       })
 
-    assert {:ok, own} = Sanctum.Provisioning.ensure_personal_athanor(user)
+    own = Sanctum.Test.People.athanor!(user)
 
-    # The fill that just ran failed (this suite ships no bundle), so clear
-    # the record: what is under test is the claim, not the backoff.
+    # Clear any record a fill left: what is under test is the claim, not the
+    # backoff.
     {:ok, own} = Sanctum.TestContext.mark_provisioned(own)
     {:ok, own} = Arca.Athanors.update(Prima.Actor.in_athanor(own.id), %{provisioned_at: nil})
 
@@ -119,7 +120,7 @@ defmodule Sanctum.ProvisioningReadinessTest do
 
     held = held_elsewhere!(own.id)
 
-    assert {:ok, _} = Sanctum.Provisioning.ensure_personal_athanor(user)
+    assert :ok = Sanctum.Provisioning.after_sign_in(user.id)
     assert {:ok, %{provisioned_at: nil}} = Athanors.get(own.id)
     assert Athanors.provisioning_failure(Athanors.get(own.id) |> elem(1)) == nil
     assert {:ok, %{fence: fence, outcome: nil}} = Claims.current(%Prima.Actor{athanor_id: own.id})
@@ -130,14 +131,15 @@ defmodule Sanctum.ProvisioningReadinessTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Sanctum.Tenancy.Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|signin-claim-#{n}",
         provider: "github",
         email: "signinclaim#{n}@example.com",
         verified: true
       })
 
-    assert {:ok, own} = Sanctum.Provisioning.after_sign_in(user.id)
+    own = Sanctum.Test.People.athanor!(user)
+    assert :ok = Sanctum.Provisioning.after_sign_in(user.id)
 
     # This suite ships no bundle, so the fill failed — under the sign-in's
     # own claim, which says so and no longer stands.

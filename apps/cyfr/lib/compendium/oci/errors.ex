@@ -19,19 +19,24 @@ defmodule Compendium.OCI.Errors do
           | :parse_error
           | :ssrf_blocked
           | :policy_acceptance_required
-          | :policy_version_mismatch
           | :taken_down
           | :registry_host_mismatch
 
+  @typedoc """
+  `credential` is set on a 401 the OCI transport answers: the key of the
+  credential that request carried (`Compendium.OCI.Auth.credential_key/1`
+  of its authorization header, or `"anonymous"`), never the credential.
+  """
   @type t :: %__MODULE__{
           reason: error_reason(),
           message: String.t(),
           registry: String.t() | nil,
           status: integer() | nil,
-          detail: term()
+          detail: term(),
+          credential: String.t() | nil
         }
 
-  defstruct [:reason, :message, :registry, :status, :detail]
+  defstruct [:reason, :message, :registry, :status, :detail, :credential]
 
   @doc "Build an error from an HTTP response status and body."
   @spec from_response(integer(), binary(), String.t()) :: t()
@@ -91,12 +96,10 @@ defmodule Compendium.OCI.Errors do
     }
   end
 
-  # 412 Precondition Failed comes back from POST /v1/legal/accept (when the
-  # client posts a stale policy_version) and from the namespace-claim
-  # handlers (when the identity hasn't accepted the current bundled
-  # version). The body's `required_version` field is lifted into `detail`
-  # so callers can route the user to the clickwrap UI for the right
-  # version without re-parsing the JSON.
+  # 412 Precondition Failed: the identity has not accepted the registry's
+  # current policy version. The body's `required_version` field is lifted
+  # into `detail` so a caller can name the version to accept without
+  # re-parsing the JSON.
   def from_response(412, body, registry) do
     parsed = parse_errors(body)
 
@@ -112,7 +115,6 @@ defmodule Compendium.OCI.Errors do
     reason =
       case code do
         "POLICY_ACCEPTANCE_REQUIRED" -> :policy_acceptance_required
-        "POLICY_VERSION_MISMATCH" -> :policy_version_mismatch
         _ -> :manifest_invalid
       end
 
@@ -221,7 +223,7 @@ defmodule Compendium.OCI.Errors do
   end
 
   @doc """
-  The `required_version` a `:policy_version_mismatch` (412) names, or `nil`.
+  The `required_version` a `:policy_acceptance_required` (412) names, or `nil`.
 
   It sits at one of two depths and under either key style: `from_response/3`
   puts it straight into `detail`, while `from_api_response/3` wraps that under
@@ -285,7 +287,8 @@ defmodule Compendium.OCI.Errors do
 
   @doc "Returns user-facing guidance based on error reason."
   @spec actionable_hint(t()) :: String.t()
-  def actionable_hint(%__MODULE__{reason: :unauthorized}), do: "Run `cyfr login` to authenticate."
+  def actionable_hint(%__MODULE__{reason: :unauthorized}),
+    do: "Run `cyfr registry sync` to mint your push tokens."
 
   def actionable_hint(%__MODULE__{reason: :registry_unavailable}),
     do: "Check your network connection and verify the registry is reachable."

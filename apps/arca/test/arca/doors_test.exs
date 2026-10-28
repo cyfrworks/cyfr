@@ -17,6 +17,8 @@ defmodule Arca.DoorsTest do
     {:ok, actor: Prima.Actor.system()}
   end
 
+  defp ident(seed), do: "per_" <> Prima.Digest.sha256_hex("door-" <> seed)
+
   defp entry(actor, kind, value, over \\ %{}) do
     {:ok, entry} =
       Doors.insert(
@@ -49,8 +51,11 @@ defmodule Arca.DoorsTest do
       assert {:error, :not_platform} = Doors.list(tenant)
       assert {:error, :not_platform} = Doors.requests(tenant)
       assert {:error, :not_platform} = Doors.get(tenant, "door_x")
-      assert {:error, :not_platform} = Doors.find(tenant, "email", "a@example.com")
-      assert {:error, :not_platform} = Doors.insert(tenant, %{kind: "email", value: "a@b.c"})
+      assert {:error, :not_platform} = Doors.find(tenant, "identifier", ident("a"))
+
+      assert {:error, :not_platform} =
+               Doors.insert(tenant, %{kind: "identifier", value: ident("a")})
+
       assert {:error, :not_platform} = Doors.update(tenant, "door_x", %{note: "no"})
       assert {:error, :not_platform} = Doors.delete(tenant, "door_x")
       refute_received :queried
@@ -71,7 +76,7 @@ defmodule Arca.DoorsTest do
       assert_raise FunctionClauseError, fn -> apply(Doors, :list, [map]) end
 
       assert_raise FunctionClauseError, fn ->
-        apply(Doors, :find, [map, "email", "a@example.com"])
+        apply(Doors, :find, [map, "identifier", ident("a")])
       end
 
       assert_raise FunctionClauseError, fn -> apply(Doors, :get, ["ath_1", "door_x"]) end
@@ -85,12 +90,12 @@ defmodule Arca.DoorsTest do
 
   describe "what crosses" do
     test "a plain map, never a schema struct or a changeset", %{actor: actor} do
-      row = entry(actor, "email", "plain@example.com")
+      row = entry(actor, "identifier", ident("plain"))
 
       refute is_struct(row)
 
       assert Map.keys(row) |> Enum.sort() ==
-               ~w(added_by created_at effect id kind note requested_by status updated_at value)a
+               ~w(added_by created_at effect id kind label note requested_by status updated_at value)a
 
       {:ok, [listed]} = Doors.list(actor)
       refute is_struct(listed)
@@ -99,8 +104,61 @@ defmodule Arca.DoorsTest do
                Doors.insert(actor, %{kind: "nonsense", value: "x", effect: "allow"})
     end
 
+    test "an allow names an identifier or *, and a deny a person or an identifier", %{
+      actor: actor
+    } do
+      person = Prima.UUID7.generate_id(Prima.PersonId.prefix())
+
+      assert Doors.kinds("allow") == ["identifier", "wildcard"]
+      assert Doors.kinds("deny") == ["person", "identifier"]
+
+      assert {:ok, %{kind: "person"}} =
+               Doors.insert(actor, %{kind: "person", value: person, effect: "deny"})
+
+      assert {:ok, %{kind: "identifier"}} =
+               Doors.insert(actor, %{kind: "identifier", value: ident("deny"), effect: "deny"})
+
+      for {kind, value, effect} <- [
+            {"person", Prima.UUID7.generate_id(Prima.PersonId.prefix()), "allow"},
+            {"wildcard", "*", "deny"},
+            {"email", "a@example.com", "allow"},
+            {"user_id", "github|https://github.com|1", "allow"}
+          ] do
+        assert {:error, {:invalid, %{kind: _}}} =
+                 Doors.insert(actor, %{kind: kind, value: value, effect: effect})
+      end
+
+      assert {:error, {:invalid, %{value: _}}} =
+               Doors.insert(actor, %{kind: "person", value: "github|x|y", effect: "deny"})
+
+      assert {:error, {:invalid, %{value: _}}} =
+               Doors.insert(actor, %{kind: "identifier", value: "per_short", effect: "allow"})
+    end
+
+    test "a label is the handle an identifier entry was made from, and no other entry has one",
+         %{actor: actor} do
+      assert {:ok, %{label: "alice"} = labelled} =
+               Doors.insert(actor, %{kind: "identifier", value: ident("label"), label: "alice"})
+
+      assert {:ok, %{label: "alice"}} = Doors.find(actor, "identifier", ident("label"))
+      assert {:ok, %{label: nil}} = Doors.update(actor, labelled.id, %{label: nil})
+
+      for attrs <- [
+            %{kind: "wildcard", value: "*", label: "alice"},
+            %{
+              kind: "person",
+              value: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+              effect: "deny",
+              label: "alice"
+            },
+            %{kind: "identifier", value: ident("label-spelling"), label: "@alice"}
+          ] do
+        assert {:error, {:invalid, %{label: _}}} = Doors.insert(actor, attrs)
+      end
+    end
+
     test "insert mints the id and both stamps", %{actor: actor} do
-      row = entry(actor, "user_id", "github|https://github.com|1")
+      row = entry(actor, "identifier", ident("one"))
 
       assert "door_" <> _ = row.id
       assert %DateTime{} = row.created_at
@@ -111,34 +169,35 @@ defmodule Arca.DoorsTest do
   describe "the three answers" do
     @tag :capture_log
     test "not_found is not database_error", %{actor: actor} do
-      entry(actor, "email", "here@example.com")
+      entry(actor, "identifier", ident("here"))
 
-      assert {:ok, %{value: "here@example.com"}} = Doors.find(actor, "email", "here@example.com")
-      assert {:error, :not_found} = Doors.find(actor, "email", "gone@example.com")
+      here = ident("here")
+      assert {:ok, %{value: ^here}} = Doors.find(actor, "identifier", here)
+      assert {:error, :not_found} = Doors.find(actor, "identifier", ident("gone"))
 
       # An unreadable store answers neither "there is one" nor "there is
       # none" — the door is where that difference decides who gets in.
       Arca.Repo.query!("DROP TABLE server_allowlist")
 
-      assert {:error, :database_error} = Doors.find(actor, "email", "here@example.com")
+      assert {:error, :database_error} = Doors.find(actor, "identifier", ident("here"))
     end
   end
 
   describe "writes" do
     test "the unique kind/value pair is the arbiter of a race", %{actor: actor} do
-      entry(actor, "email", "one@example.com")
+      entry(actor, "identifier", ident("one"))
 
       assert {:error, :already_exists} =
                Doors.insert(actor, %{
-                 kind: "email",
-                 value: "one@example.com",
+                 kind: "identifier",
+                 value: ident("one"),
                  effect: "deny",
                  status: "allowed"
                })
     end
 
     test "update stamps updated_at and leaves created_at alone", %{actor: actor} do
-      row = entry(actor, "email", "up@example.com", %{status: "requested"})
+      row = entry(actor, "identifier", ident("up"), %{status: "requested"})
 
       assert {:ok, changed} = Doors.update(actor, row.id, %{status: "allowed", added_by: "ops"})
       assert changed.status == "allowed"
@@ -148,7 +207,7 @@ defmodule Arca.DoorsTest do
     end
 
     test "a write into the gap left by a delete says it lost", %{actor: actor} do
-      row = entry(actor, "email", "gap@example.com")
+      row = entry(actor, "identifier", ident("gap"))
 
       assert :ok = Doors.delete(actor, row.id)
       assert {:error, :not_found} = Doors.delete(actor, row.id)
@@ -159,8 +218,8 @@ defmodule Arca.DoorsTest do
 
   describe "reads" do
     test "list is newest first and requests is oldest first, requested only", %{actor: actor} do
-      old = entry(actor, "email", "old@example.com", %{status: "requested"})
-      new = entry(actor, "email", "new@example.com", %{status: "requested"})
+      old = entry(actor, "identifier", ident("old"), %{status: "requested"})
+      new = entry(actor, "identifier", ident("new"), %{status: "requested"})
       settled = entry(actor, "wildcard", "*")
 
       {:ok, listed} = Doors.list(actor)

@@ -50,7 +50,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
   }
 
   alias Sanctum.Consent.Authz
-  alias Sanctum.Tenancy.{Athanors, Users}
+  alias Sanctum.Tenancy.Athanors
   alias Sanctum.Test.DirectoryServer, as: Directory
   alias Sanctum.TestContext.Authenticator
   alias Sanctum.Vault.OAuthGrant
@@ -76,7 +76,7 @@ defmodule Sanctum.DeviceWriteWindowTest do
     n = System.unique_integer([:positive])
 
     {:ok, user} =
-      Users.upsert_from_provider(%{
+      Sanctum.Test.People.linked(%{
         id: "github|https://github.com|glass-write-#{n}",
         provider: "github",
         email: "glass-write#{n}@example.com",

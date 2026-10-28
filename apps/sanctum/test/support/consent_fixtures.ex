@@ -118,20 +118,21 @@ defmodule Sanctum.Test.ConsentFixtures do
   person ticks them; absent, the commit admits `interactive` alone.
 
   The component reads the key itself, so the entry is created disclosed
-  (`disclose: true`), to `opts[:destination]` or the fixture's own
-  destination (`fixture_destination/0`), for the provider the
-  component's `api_key` need names, as a consent matches an entry to a
-  need. Answers the entry.
+  (`disclose: true`), to `opts[:destination]` or the hosts the
+  component's `api_key` need calls, as a consent matches an entry to a
+  need, and labelled with the provider that need names. Answers the
+  entry.
   """
   def bind_key!(%Context{} = ctx, ref, fields, opts \\ []) when is_map(fields) do
     label = Keyword.get(opts, :label, "default")
+    need = declared_need!(ctx, ref, "api_key")
 
     params = %{
       name: Keyword.get(opts, :name, "key #{System.unique_integer([:positive])}"),
       kind: "api_key",
-      provider_hint: need_provider!(ctx, ref, "api_key"),
+      provider_hint: need.qualifier,
       fields: fields,
-      destination: Keyword.get(opts, :destination, @fixture_destination),
+      destination: Keyword.get(opts, :destination, %{"hosts" => need.hosts, "scheme" => "https"}),
       disclose: true
     }
 
@@ -166,17 +167,13 @@ defmodule Sanctum.Test.ConsentFixtures do
     entry
   end
 
-  # The provider `ref`'s credential need `need` is for: the qualifier of
-  # its type, read from the component's manifest as a consent reads it.
-  defp need_provider!(ctx, ref, need) do
+  # `ref`'s credential need `need`, read from the component's manifest as
+  # a consent reads it.
+  defp declared_need!(ctx, ref, need) do
     {:ok, cref} = Prima.ComponentRef.parse(ref)
     {:ok, row} = Sanctum.Consent.Components.get_latest(ctx, cref.name, cref.namespace, cref.type)
     {:ok, manifest} = Prima.Manifest.decode_strict(Map.get(row, :manifest))
-
-    %{qualifier: qualifier} =
-      Enum.find(Prima.Manifest.Needs.from_manifest(manifest), &(&1.name == need))
-
-    qualifier
+    Enum.find(Prima.Manifest.Needs.from_manifest(manifest), &(&1.name == need))
   end
 
   @doc """
