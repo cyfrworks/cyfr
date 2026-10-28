@@ -10,8 +10,9 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   `docker-compose.dev.yml` declares and checked against the checkout's
   `.env` and the environment, read by the reader and in the order
   `config/runtime.exs` reads them (`Cyfr.EnvFiles`, the environment over
-  the file, an empty value unset). The script reads no `.env` and no
-  declaration of its own.
+  the file, an empty value unset and every other value literal, trimmed
+  only by the resolver that owns the setting). The script reads no `.env`
+  and no declaration of its own.
 
   DECLARATIONS is the path of `docker-compose.dev.yml` resolved over
   `docker-compose.yml` as JSON (`docker compose config --format json`).
@@ -49,6 +50,13 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   writes nothing and prints `CYFR_PORT=<port>`, Prism's port, where
   `scripts/dev-stack.sh check` reaches the server, after the same refusals.
 
+      mix cyfr.locus.dev_stack names DECLARATIONS
+
+  reads nothing else and prints `project <name>`, the compose project
+  every compose call of the script names, and `image <tag>`, the one
+  image the stack's services run, which `scripts/dev-stack.sh clean`
+  removes.
+
   Both refuse a `RELEASE_ROOT`: the stack is a mix boot from the checkout,
   never a release.
 
@@ -76,7 +84,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   # What a mix boot needs that the stack provisions when nothing sets it,
   # in the order the lines are written.
   @provisioned [@github, @admins, @root, @backends_key]
-  @keys [@root, @backends_key]
+  @keys [@root, @backends_key, @builds_key]
 
   @impl Mix.Task
   def run(args) do
@@ -120,17 +128,32 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end
   end
 
+  defp answer(["names", declarations]) do
+    with {:ok, json} <- resolution(declarations) do
+      images = json |> Map.get("services", %{}) |> Map.values() |> Enum.map(& &1["image"])
+
+      case {json["name"], Enum.uniq(images)} do
+        {project, [image]} when is_binary(project) and project != "" and is_binary(image) ->
+          info("project " <> project)
+          info("image " <> image)
+
+        _ ->
+          undeclared("a project name and one image for every service")
+      end
+    end
+  end
+
   defp answer(_args) do
     {:error,
-     "usage: mix cyfr.locus.dev_stack settings DECLARATIONS [ADMIN_EMAIL] | endpoint DECLARATIONS"}
+     "usage: mix cyfr.locus.dev_stack settings DECLARATIONS [ADMIN_EMAIL] | " <>
+       "endpoint DECLARATIONS | names DECLARATIONS"}
   end
 
   defp info(line), do: Mix.shell().info(line)
 
   # The stack docker-compose.dev.yml declares, as compose resolved it.
   defp declared(path) do
-    with {:ok, text} <- File.read(path),
-         {:ok, json} <- Jason.decode(text),
+    with {:ok, json} <- resolution(path),
          {:ok, prism_port} <- prism(json["x-prism"]),
          {:ok, runtime} <- runtime(get_in(json, ["services", "locus-runtime"])),
          {:ok, backends} <- island(json, "locus-backends"),
@@ -151,8 +174,15 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
            {"CYFR_LOCUS_BUILDS_URL", "http://#{builds.address}:#{builds.port}"}
          ]
        }}
+    end
+  end
+
+  # The resolved compose configuration the script wrote.
+  defp resolution(path) do
+    with {:ok, text} <- File.read(path),
+         {:ok, json} when is_map(json) <- Jason.decode(text) do
+      {:ok, json}
     else
-      {:error, message} when is_binary(message) -> {:error, message}
       _ -> {:error, "#{path} holds no compose configuration as JSON."}
     end
   end
@@ -220,51 +250,75 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     if File.regular?(env_path()), do: [env_path()], else: []
   end
 
-  # config/runtime.exs's reading: an empty value is unset, and the
-  # resolvers trim what they are handed.
+  # config/runtime.exs's reading (`env!(name, :string?, nil)`): an empty
+  # value is unset and every other value is literal. Only the resolver
+  # that owns a setting trims it, and a key has none.
   defp set(env, name) do
-    case String.trim(Map.get(env, name) || "") do
+    case Map.get(env, name) do
       "" -> nil
-      text -> text
+      value -> value
     end
   end
 
+  # Each setting .env or the environment holds, read by the resolver the
+  # boot reads it with, against the stack's value read the same way.
   defp agree(stack, env) do
     stack.server
     |> Enum.concat([{@host_api_url, stack.host_api_url}, {@bind, stack.prism_address}])
     |> Enum.find_value(:ok, fn {name, want} ->
-      have = set(env, name)
-
-      if have == nil or agrees?(name, have, want) do
+      with have when have != nil <- set(env, name),
+           {:ok, value} <- resolved(name, have),
+           {:ok, ^value} <- resolved(name, want) do
         nil
       else
-        {:error,
-         "#{name} is #{have}, and the dev stack needs #{want}. Unset it in .env and the " <>
-           "environment, or set it to #{want}."}
+        nil ->
+          nil
+
+        {:error, message} ->
+          {:error, message}
+
+        {:ok, _other} ->
+          have = set(env, name)
+
+          {:error,
+           "#{name} is #{have}, and the dev stack needs #{want}. Unset it in .env and the " <>
+             "environment, or set it to #{want}."}
       end
     end)
   end
 
-  defp agrees?(name, have, want) when name in ["CYFR_PORT", "CYFR_HOST_API_PORT"],
-    do: Integer.parse(have) == {String.to_integer(want), ""}
+  defp resolved(name, text) do
+    getenv = fn key -> if key == name, do: text end
 
-  defp agrees?(name, have, want) when name in ["CYFR_HOST_API_BIND", @bind],
-    do: :inet.parse_address(String.to_charlist(have)) == :inet.parse_address(~c"#{want}")
+    case name do
+      "CYFR_LOCUS_RUNTIME_WORKERS" ->
+        Cyfr.RuntimeConfig.resolve_workers(getenv)
 
-  defp agrees?("CYFR_PRIVATE_EGRESS_TARGETS", have, want),
-    do:
-      have |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == "")) == [want]
+      "CYFR_HOST_API_" <> field ->
+        with {:ok, host_api} <- Cyfr.RuntimeConfig.resolve_host_api(getenv) do
+          {:ok, Map.fetch!(host_api, String.to_existing_atom(String.downcase(field)))}
+        end
 
-  defp agrees?("CYFR_LOCUS_RUNTIME_WORKERS", have, want) do
-    [id, url] = String.split(want, "=", parts: 2)
+      "CYFR_PRIVATE_EGRESS_TARGETS" ->
+        {:ok, text |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))}
 
-    match?(
-      {:ok, [%{id: ^id, url: ^url}]},
-      Cyfr.RuntimeConfig.resolve_workers(fn _ -> have end)
-    )
+      access when access in ["CYFR_PORT", @bind] ->
+        case Cyfr.RuntimeConfig.resolve_access(%{
+               file: nil,
+               process: %{name => text},
+               release?: false
+             }) do
+          {:ok, %{listeners: %{loopback: {address, port}}}} ->
+            {:ok, if(access == "CYFR_PORT", do: port, else: :inet.parse_address(~c"#{address}"))}
+
+          {:error, %{code: code, payload: payload}} ->
+            {:error, Prima.Refusal.message({code, payload})}
+        end
+
+      _url ->
+        Prima.EnvValue.url(getenv, name)
+    end
   end
-
-  defp agrees?(_url, have, want), do: Prima.WorkerWire.base_url(have) == {:ok, want}
 
   # The lines to write for what nothing sets, or the refusal of what is
   # set wrongly; nothing is written until every name has been read.
@@ -281,8 +335,25 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   defp provided(name, env, admin) do
     cond do
       System.get_env(name) == "" -> empty_override(name)
-      (have = set(env, name)) != nil -> if name in @keys, do: hex_key(name, have), else: :ok
+      (have = set(env, name)) != nil -> held(name, have)
       true -> minted(name, admin)
+    end
+  end
+
+  # A value held as the boot reads it: blank text is a value there, so it
+  # is refused here, and a key must decode as it stands.
+  defp held(name, text) do
+    cond do
+      String.trim(text) == "" ->
+        {:error,
+         "#{name} holds only whitespace in .env or the environment, which the boot reads " <>
+           "as a value, not as unset. Remove it, or set a value."}
+
+      name in @keys ->
+        hex_key(name, text)
+
+      true ->
+        :ok
     end
   end
 
@@ -302,7 +373,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
         empty_override(@builds_key)
 
       (have = set(env, @builds_key)) != nil ->
-        with :ok <- hex_key(@builds_key, have), do: {:ok, have}
+        with :ok <- held(@builds_key, have), do: {:ok, have}
 
       true ->
         {:write, key} = minted(@builds_key, [])

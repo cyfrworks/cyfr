@@ -59,8 +59,11 @@ foreground at http://localhost:4000, refusing, with the holder's name, when
 that address is taken. Prism and the server reload as their files
 change; a change under `apps/locus` or to the Locus image's other inputs
 takes effect at the next start. Ctrl-C stops the server and removes the
-containers; the image stays cached, and `scripts/dev-stack.sh down` removes
-what a killed run left.
+containers; the image stays cached, so a start with nothing changed
+rebuilds nothing. `scripts/dev-stack.sh down` stops the server and removes
+the containers a killed run left, and `scripts/dev-stack.sh clean` does
+the same and then removes the `cyfr-locus:dev` image, and nothing else of
+the host's images or build cache.
 
 `docker-compose.dev.yml` names every resource the stack holds, and its own
 ports, networks and names are none that a test suite, the gate, a proof or
@@ -69,7 +72,8 @@ API key from Prism's API Keys page, `CYFR_TOKEN=<key> scripts/dev-stack.sh
 check` runs a component through the running stack and asserts its answer.
 
 AQUA answers in the chat once a model provider's key is in the vault, as on
-any install. One checkout's stack runs on a host at a time: a second one
+any install. One stack runs on a host at a time: a second start from the
+same checkout refuses while the first runs, and one from another checkout
 finds Prism's address taken.
 
 ## Before opening a PR

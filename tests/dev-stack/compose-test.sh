@@ -203,6 +203,9 @@ project "$scratch/variant" "$variant"
 resolve "$scratch/variant" docker-compose.yml docker-compose.dev.yml >"$scratch/variant/dev.json"
 want_settings="$(python3 -I "$SHAPE" settings "$scratch/variant/dev.json" | sort)"
 want_id="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["services"]["locus-runtime"]["environment"]["LOCUS_RUNTIME_SERVICE_ID"])' "$scratch/variant/dev.json")"
+read -r want_project want_image < <(python3 -I -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+print(d["name"], d["services"]["locus-runtime"]["image"])' "$scratch/variant/dev.json")
 derived() { printf 'cyfr-locus/v1/runtime\n%s' "$want_id" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$1" 2>/dev/null | sed 's/^.*= //'; }
 example_id="$(sed -n 's/^CYFR_GITHUB_CLIENT_ID=//p' "$ROOT/.env.example")"
 
@@ -218,10 +221,13 @@ cat >"$stubs/docker" <<'STUB'
 #!/usr/bin/env bash
 printf '%s|LOCUS_RUNTIME_KEY=%s|CYFR_LOCUS_BACKENDS_KEY=%s|CYFR_LOCUS_BUILDS_KEY=%s\n' "$*" \
   "${LOCUS_RUNTIME_KEY-unset}" "${CYFR_LOCUS_BACKENDS_KEY-unset}" "${CYFR_LOCUS_BUILDS_KEY-unset}" >>"$STUB_LOG/docker.calls"
+env | sed -n 's/^\(COMPOSE_[A-Z_]*\)=.*/\1/p' | sort | tr '\n' ' ' >>"$STUB_LOG/docker.env"
+echo >>"$STUB_LOG/docker.env"
 case " $* " in
   *" config --format json "*) exec "$REAL_DOCKER" "$@" ;;
   *" up "*) exit "${STUB_UP_STATUS:-0}" ;;
   *" logs "*) echo "stub: the runtime's last log line" ;;
+  " image inspect "*) exit "${STUB_IMAGE_STATUS:-0}" ;;
 esac
 exit 0
 STUB
@@ -241,9 +247,16 @@ case "${1:-}" in
     # an asset watcher in its process group that ignores TERM; or ending
     # at once with STUB_SERVER_STATUS.
     env | sort >"$STUB_LOG/server.env"
+    if [ -n "${STUB_SERVER_CHILD:-}" ]; then
+      # A child listener in the server's group, which TERM does not stop.
+      python3 -I -c 'import signal, socket, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(); time.sleep(300)' &
+      echo "$!" >"$STUB_LOG/watcher.pid"
+    fi
     [ -z "${STUB_SERVER_STATUS:-}" ] || exit "$STUB_SERVER_STATUS"
     (trap '' TERM; exec sleep 300) &
-    echo "$!" >"$STUB_LOG/watcher.pid"
+    echo "$!" >>"$STUB_LOG/watcher.pid"
     trap 'echo stopped >>"$STUB_LOG/server.events"; exit 0' TERM
     echo "$$" >"$STUB_LOG/server.pid"
     echo started >>"$STUB_LOG/server.events"
@@ -394,13 +407,22 @@ signalled() {
 record() { cat "$case_dir/log/$1" 2>/dev/null; }
 mode_of() { python3 -I -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
 status_is() { [ "$(cat "$case_dir/status")" = "$1" ] || echo "the run exited $(cat "$case_dir/status"), not $1: $(tail -n 3 "$case_dir/err")"; }
-calls() { record docker.calls | while IFS= read -r line; do printf '%s\n' "${line/#"$compose_prefix" /compose }"; done; }
-up_call() { echo "compose up --detach --build --wait $services|LOCUS_RUNTIME_KEY=$(derived "$1")|CYFR_LOCUS_BACKENDS_KEY=$2|CYFR_LOCUS_BUILDS_KEY=$3"; }
+# The stack's compose calls as `compose [-p PROJECT] ARGS`: the
+# resolution, which reads the project from the override, and every other
+# call, which names it.
+acting_prefix="compose --env-file /dev/null -p $want_project --profile locus-builds -f docker-compose.yml -f docker-compose.dev.yml"
+calls() {
+  record docker.calls | while IFS= read -r line; do
+    line="${line/#"$compose_prefix" /compose }"
+    printf '%s\n' "${line/#"$acting_prefix" /compose -p $want_project }"
+  done
+}
+up_call() { echo "compose -p $want_project up --detach --build --wait $services|LOCUS_RUNTIME_KEY=$(derived "$1")|CYFR_LOCUS_BACKENDS_KEY=$2|CYFR_LOCUS_BUILDS_KEY=$3"; }
 # The whole run of docker: the resolution, the leftovers removed, the
 # start with the keys, and the removal on the way out.
 full_run() {
-  printf '%s\n' "compose config --format json $services|$unset_keys" "compose down --remove-orphans|$unset_keys" \
-    "$(up_call "$1" "$2" "$3")" "compose down --remove-orphans|$unset_keys"
+  printf '%s\n' "compose config --format json $services|$unset_keys" "compose -p $want_project down --remove-orphans|$unset_keys" \
+    "$(up_call "$1" "$2" "$3")" "compose -p $want_project down --remove-orphans|$unset_keys"
 }
 server_settings() { record server.env | grep -E '^(CYFR|LOCUS)_' | sort; }
 # Nothing of the run is left: no server, no watcher, no private directory.
@@ -516,8 +538,8 @@ s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(120)' "$prism_po
 case_start_fails() {
   stack "$1" start-fails "$complete" 0600 "" STUB_GIT_EMAIL=dev@example.test STUB_UP_STATUS=1 STUB_SERVER_STATUS=0
   [ "$(cat "$case_dir/status")" != 0 ] || echo "the run exited 0 though the containers did not start"
-  [ "$(calls)" = "$(printf '%s\n' "compose config --format json $services|$unset_keys" "compose down --remove-orphans|$unset_keys" \
-    "$(up_call "$root_a" "$key_b" "$key_c")" "compose logs --tail 30|$unset_keys" "compose down --remove-orphans|$unset_keys")" ] ||
+  [ "$(calls)" = "$(printf '%s\n' "compose config --format json $services|$unset_keys" "compose -p $want_project down --remove-orphans|$unset_keys" \
+    "$(up_call "$root_a" "$key_b" "$key_c")" "compose -p $want_project logs --tail 30|$unset_keys" "compose -p $want_project down --remove-orphans|$unset_keys")" ] ||
     echo "after a failed start docker was handed: $(calls)"
   grep -qF "stub: the runtime's last log line" "$case_dir/err" || echo "the failed start did not show the containers' logs: $(cat "$case_dir/err")"
   [ -z "$(record server.env)" ] || echo "the server started though the containers did not"
@@ -576,7 +598,92 @@ case_failed_parse() {
   [ "$(cat "$case_dir/log/store.json")" = "{}" ] || echo "a read with no content left its file: $(cat "$case_dir/log/store.json")"
   nothing_left
 }
-BOUNDARY_CASES="case_provision case_retained case_no_email case_refused case_release_root case_prism_held case_start_fails case_server_ends case_interrupted case_check case_failed_read case_failed_parse"
+case_project_env() {
+  stack "$1" project-env "$complete" 0600 "" STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0 \
+    COMPOSE_PROJECT_NAME=dev-stack-neighbour COMPOSE_FILE=neighbour.yml COMPOSE_PROFILES=public
+  status_is 0
+  [ "$(calls)" = "$(full_run "$root_a" "$key_b" "$key_c")" ] || echo "with a neighbour's COMPOSE_* docker was handed: $(calls)"
+  [ -z "$(record docker.env | tr -d ' \n')" ] || echo "docker saw the caller's $(record docker.env | sort -u | tr '\n' ' ')"
+  nothing_left
+}
+case_server_child() {
+  stack "$1" server-child "$complete" 0600 "" STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=3 STUB_SERVER_CHILD=1
+  status_is 3
+  [ -s "$case_dir/log/watcher.pid" ] || echo "the server left no child to look for"
+  [ "$(calls)" = "$(full_run "$root_a" "$key_b" "$key_c")" ] || echo "after the server ended docker was handed: $(calls)"
+  nothing_left
+}
+case_blank_root() {
+  stack "$1" blank-root "" none "" STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0 CYFR_LOCUS_RUNTIME_ROOT=" "
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the run went on with a root of one space"
+  grep -qF "dev-stack: CYFR_LOCUS_RUNTIME_ROOT holds only whitespace" "$case_dir/err" || echo "the refusal: $(cat "$case_dir/err")"
+  [ ! -s "$case_dir/.env" ] || echo ".env gained $(cat "$case_dir/.env" | sed 's/=.*/=…/' | tr '\n' ' ') on the refusal"
+  [ "$(calls)" = "compose config --format json $services|$unset_keys" ] || echo "docker ran past a blank root: $(calls)"
+}
+case_locked() {
+  local command holder
+  for command in "" down clean; do
+    prepare "$1" locked "$complete" 0600
+    mkdir -p "$case_dir/data"
+    printf 'pid 4242\n' >"$case_dir/data/dev-stack.lock"
+    flock "$case_dir/data/dev-stack.lock" sleep 60 &
+    holder=$!
+    holders+=("$holder")
+    for _ in $(seq 1 50); do flock -n "$case_dir/data/dev-stack.lock" true || break; sleep 0.1; done
+    launch STUB_GIT_EMAIL=dev@example.test STUB_SERVER_STATUS=0
+    echo "$?" >"$case_dir/status"
+    kill "$holder" 2>/dev/null
+    wait "$holder" 2>/dev/null
+    [ "$(cat "$case_dir/status")" != 0 ] || echo "${command:-the loop} went on while another run held the stack"
+    [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: another run of the dev stack (pid 4242) holds data/dev-stack.lock; stop it, or wait for it to end." ] ||
+      echo "${command:-the loop} did not name the holder: $(cat "$case_dir/err")"
+    [ -z "$(record docker.calls)" ] || echo "${command:-the loop} ran docker while another run held the stack: $(calls)"
+  done
+}
+# recorded_server [START]: a process group of its own standing for a
+# killed run's server, recorded in the lock as the run records its server,
+# with START as its start time (its own by default). Sets $orphan.
+recorded_server() {
+  python3 -I -c 'import os, time; os.setpgid(0, 0); time.sleep(120)' >/dev/null 2>&1 &
+  orphan=$!
+  disown "$orphan"
+  holders+=("$orphan")
+  sleep 0.2
+  mkdir -p "$case_dir/data"
+  printf 'pid 4242\nserver %s %s\n' "$orphan" "${1:-$(ps -o lstart= -p "$orphan")}" >"$case_dir/data/dev-stack.lock"
+}
+case_down_orphan() {
+  local pid
+  prepare "$1" down-orphan "$complete" 0600
+  recorded_server
+  pid="$orphan"
+  command=down
+  launch
+  echo "$?" >"$case_dir/status"
+  status_is 0
+  sleep 0.2
+  if kill -0 "$pid" 2>/dev/null; then echo "down left the killed run's server $pid running"; kill -KILL "$pid"; fi
+  [ "$(calls)" = "$(printf '%s\n' "compose config --format json $services|$unset_keys" "compose -p $want_project down --remove-orphans|$unset_keys")" ] ||
+    echo "down handed docker: $(calls)"
+  [ ! -s "$case_dir/data/dev-stack.lock" ] || echo "down left the record: $(cat "$case_dir/data/dev-stack.lock")"
+
+  # A record whose group is now some other process's stops nothing.
+  prepare "$1" down-stale "$complete" 0600
+  recorded_server "Thu Jan  1 00:00:00 1970"
+  pid="$orphan"
+  launch
+  echo "$?" >"$case_dir/status"
+  status_is 0
+  kill -0 "$pid" 2>/dev/null || echo "down stopped process group $pid, which the record's start time does not match"
+  kill -KILL "$pid" 2>/dev/null
+}
+case_clean() {
+  stack "$1" clean "$complete" 0600 clean
+  status_is 0
+  [ "$(calls)" = "$(printf '%s\n' "compose config --format json $services|$unset_keys" "compose -p $want_project down --remove-orphans|$unset_keys" \
+    "image inspect $want_image|$unset_keys" "image rm $want_image|$unset_keys")" ] || echo "clean handed docker: $(calls)"
+}
+BOUNDARY_CASES="case_provision case_retained case_no_email case_refused case_release_root case_prism_held case_start_fails case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_down_orphan case_clean"
 
 # boundary SCRIPT [CASE...]: the failures of SCRIPT under each case.
 boundary() {
@@ -591,14 +698,15 @@ for c in $BOUNDARY_CASES; do
   if [ -z "$out" ]; then pass "scripts/dev-stack.sh: ${c#case_}"; else failed "scripts/dev-stack.sh: ${c#case_}" "$out"; fi
 done
 
-# respell NAME WHAT SED_EXPRESSION: an equivalent spelling, which holds.
+# respell NAME WHAT CASES SED_EXPRESSION: an equivalent spelling, which
+# CASES, the ones that run the respelled lines, hold to.
 respell() {
-  sed -E "$3" "$script" >"$scratch/r-$1.sh"
+  sed -E "$4" "$script" >"$scratch/r-$1.sh"
   if cmp -s "$script" "$scratch/r-$1.sh"; then failed "$2 (the edit changed nothing)"; return; fi
-  out="$(boundary "$scratch/r-$1.sh")"
+  out="$(boundary "$scratch/r-$1.sh" "$3")"
   if [ -z "$out" ]; then pass "$2 holds"; else failed "$2 fails" "$out"; fi
 }
-respell spelled "the signals spelled by name" 's/kill -TERM "\$SERVER"/kill -s TERM "$SERVER"/; s/^trap .exit 130. INT$/trap "exit 130" SIGINT/'
+respell spelled "the signals spelled by name" "case_interrupted case_server_child case_down_orphan" 's/kill -TERM "\$1"/kill -s TERM "$1"/; s/^trap .exit 130. INT$/trap "exit 130" SIGINT/'
 # break NAME WHAT CASES SED_EXPRESSION: the script broken, which CASES catch.
 break_script() {
   sed -E "$4" "$script" >"$scratch/b-$1.sh"
@@ -613,12 +721,19 @@ break_script() {
 }
 break_script nodown "the containers left on the way out" "case_start_fails case_server_ends case_interrupted" '/^    compose down --remove-orphans >\/dev\/null 2>&1 \|\|$/,/^      echo "dev-stack: the containers could not be removed/d'
 break_script noexit "no cleanup on the way out" "case_start_fails case_server_ends case_interrupted" '/^trap finish EXIT$/d'
-break_script noterm "the server left running" case_interrupted 's/^    kill -TERM "\$SERVER" 2>\/dev\/null \|\| true$/    true/'
-break_script nogroup "the server's process group left behind" "case_interrupted case_server_ends" '/kill -KILL -- "-\$SERVER"/d'
+break_script noterm "the server left running" case_interrupted 's/^  kill -TERM "\$1" 2>\/dev\/null \|\| true$/  true/'
+break_script nogroup "the server's process group left behind" "case_interrupted case_server_child" '/kill -KILL -- "-\$1"/d'
 break_script noprism "Prism's address not checked" case_prism_held '/^  free "\$port" "Prism.s address"$/d'
-break_script keysout "the keys in the server's environment" case_provision 's/^  \(export "\$\{server\[@\]\}" &&$/  (export "${server[@]}" "${keys[@]}" \&\&/'
+break_script keysout "the keys in the server's environment" case_provision 's/^  \(exec \{LOCK_FD\}>&- && export "\$\{server\[@\]\}" &&$/  (exec {LOCK_FD}>\&- \&\& export "${server[@]}" "${keys[@]}" \&\&/'
 break_script persisted "the server's settings written into .env" case_provision 's/^  free "\$port" "Prism.s address"$/  printf "%s\\n" "${server[@]}" >>.env\n&/'
 break_script noemail "the admin email not handed on" case_provision 's/"\$\(git config user\.email 2>\/dev\/null \|\| true\)"/""/'
+break_script nocompose "the caller's COMPOSE_* left to compose" case_project_env '/^  case "\$name" in COMPOSE_\*\) unset "\$name" ;; esac$/d'
+break_script forget "the server's group forgotten once it ends" case_server_child 's/^  wait "\$SERVER" && status=0 \|\| status=\$\?$/&\n  SERVER=""/'
+break_script endedgroup "an ended server's group left behind" case_server_child '/^    kill -KILL -- "-\$SERVER" 2>\/dev\/null \|\| true$/d'
+break_script nolock "a run that takes no lock" case_locked '/^  lock$/d'
+break_script noorphan "down leaving a killed run's server" case_down_orphan '/^    stop "\$left"$/d'
+break_script anygroup "a recorded group stopped whatever process holds it now" case_down_orphan 's/^  \[ "\$\(ps -o lstart= -p "\$pgid".* = "\$started" \] && echo "\$pgid"$/  echo "$pgid"/'
+break_script prune "clean pruning the host's images" case_clean 's/^    docker image rm "\$IMAGE"$/&\n    docker image prune --force/'
 break_script argv "the bearer on curl's command line" case_check 's|-H @"\$PRIVATE/authorization"|-H "authorization: Bearer $CYFR_TOKEN"|'
 break_script discard "no delete after a failed read" "case_failed_read case_failed_parse" '/^    discard "\$path"$/d'
 break_script keep "the private directory kept" "case_check case_provision" 's/^  \[ -z "\$PRIVATE" \] \|\| rm -rf "\$PRIVATE"$/  true/'

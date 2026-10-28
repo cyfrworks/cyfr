@@ -36,13 +36,23 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   @backends_key String.duplicate("b1", 32)
   @builds_key String.duplicate("c2", 32)
 
-  setup %{tmp_dir: dir} do
+  # A directory of the test's own under the partition's TMPDIR: ExUnit's
+  # tmp_dir is the checkout's tmp/<module>/<test>, which two adapters run
+  # in one checkout would share and delete under each other.
+  setup do
     shell = Mix.shell()
     cwd = File.cwd!()
     saved = Map.new(@names, &{&1, System.get_env(&1)})
 
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "dev_stack_task_#{System.pid()}_#{System.unique_integer([:positive])}"
+      )
+
     on_exit(fn ->
       File.cd!(cwd)
+      File.rm_rf!(dir)
       Mix.shell(shell)
 
       for {name, value} <- saved,
@@ -51,10 +61,11 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
     Mix.shell(Mix.Shell.Process)
     Enum.each(@names, &System.delete_env/1)
+    File.mkdir_p!(dir)
     File.cd!(dir)
     File.write!(".env.example", "CYFR_PORT=4000\nCYFR_GITHUB_CLIENT_ID=#{@client_id}\n")
     File.write!("stack.json", Jason.encode!(declarations()))
-    :ok
+    {:ok, dir: dir}
   end
 
   # docker-compose.dev.yml as `docker compose config --format json`
@@ -153,8 +164,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   defp mode(path), do: File.stat!(path).mode &&& 0o777
 
   describe "settings" do
-    @describetag :tmp_dir
-
     test "derives CYFR's settings from the declarations and answers each service's key" do
       File.write!(".env", complete())
       settings!()
@@ -302,6 +311,31 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       end
     end
 
+    test "reads a key as the boot does: literal, never trimmed" do
+      # A root the boot cannot decode, which trimming would have hidden.
+      File.write!(".env", complete())
+      System.put_env("CYFR_LOCUS_RUNTIME_ROOT", " " <> root() <> " ")
+      refused("CYFR_LOCUS_RUNTIME_ROOT is not 64 hexadecimal digits")
+      assert :error = Prima.MacEnvelope.decode_root(" " <> root() <> " ")
+
+      # Whitespace alone is a value the boot reads, refused before anything
+      # is written: here, nothing else is set either.
+      File.rm!(".env")
+
+      for name <- @provisioned do
+        System.put_env(name, " ")
+
+        refused(
+          "#{name} holds only whitespace in .env or the environment, which the boot reads as a " <>
+            "value, not as unset.",
+          fn -> settings!(["dev@example.test"]) end
+        )
+
+        refute File.exists?(".env")
+        System.delete_env(name)
+      end
+    end
+
     test "accepts each server setting .env or the environment sets as the declarations do" do
       File.write!(".env", """
       #{complete()}CYFR_PORT = 4555 # Prism
@@ -332,7 +366,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
             {"CYFR_LOCUS_BACKENDS_URL", "http://locus-backends:4101"},
             {"CYFR_PRIVATE_EGRESS_TARGETS", "172.16.251.2,127.0.0.1"},
             {"CYFR_LOCUS_BUILDS_URL", "http://locus-builds:4100"},
-            {"CYFR_BIND_ADDRESS", "0.0.0.0"}
+            {"CYFR_BIND_ADDRESS", "::1"}
           ] do
         File.write!(".env", complete() <> "#{name} = #{value} # a note\n")
         refused("#{name} is #{value}, and the dev stack needs ")
@@ -341,6 +375,14 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
         refused("#{name} is #{value}, and the dev stack needs ")
         System.delete_env(name)
       end
+    end
+
+    test "refuses a setting its own resolver refuses with the boot's sentence" do
+      File.write!(".env", complete() <> "CYFR_BIND_ADDRESS=0.0.0.0\n")
+      refused("CYFR_BIND_ADDRESS `0.0.0.0` is not a loopback address")
+
+      File.write!(".env", complete() <> "CYFR_HOST_API_PORT=65536\n")
+      refused("CYFR_HOST_API_PORT=\"65536\" is not a port from 1 to 65535.")
     end
 
     test "refuses declarations it cannot read, naming what is missing" do
@@ -366,9 +408,37 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     end
   end
 
-  describe "endpoint" do
-    @describetag :tmp_dir
+  describe "names" do
+    test "answers the project and the one image every service runs, reading nothing else" do
+      File.write!(
+        "stack.json",
+        declarations()
+        |> put_in(["services", "locus-backends"], %{"image" => "cyfr-locus:dev"})
+        |> Jason.encode!()
+      )
 
+      DevStack.run(["names", "stack.json"])
+      assert answers() == ["project cyfr-dev", "image cyfr-locus:dev"]
+      refute File.exists?(".env")
+    end
+
+    test "refuses services on two images, or no project" do
+      for edit <- [
+            &put_in(&1, ["services", "locus-backends"], %{
+              "image" => "ghcr.io/cyfrworks/cyfr-locus:latest"
+            }),
+            &Map.delete(&1, "name")
+          ] do
+        File.write!("stack.json", Jason.encode!(edit.(declarations())))
+
+        refused("does not declare a project name and one image for every service", fn ->
+          DevStack.run(["names", "stack.json"])
+        end)
+      end
+    end
+  end
+
+  describe "endpoint" do
     test "answers Prism's declared port and writes nothing" do
       DevStack.run(["endpoint", "stack.json"])
       assert answers() == ["CYFR_PORT=4555"]
@@ -385,8 +455,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   # A release reads the .env at RELEASE_ROOT, the stack's mix boot the
   # checkout's: with it set the two would read two files, so nothing is
   # read or written, and nothing is answered.
-  @tag :tmp_dir
-  test "RELEASE_ROOT set refuses every command before anything is read", %{tmp_dir: dir} do
+  test "RELEASE_ROOT set refuses every command before anything is read", %{dir: dir} do
     File.mkdir_p!(Path.join(dir, "release"))
     File.write!(Path.join(dir, "release/.env"), complete())
 
@@ -405,7 +474,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     end
   end
 
-  @tag :tmp_dir
   test "any other arguments are refused with the usage" do
     for args <- [[], ["settings"], ["settings", "stack.json", "a", "b"], ["endpoint"], ["key"]] do
       error = assert_raise Mix.Error, fn -> DevStack.run(args) end

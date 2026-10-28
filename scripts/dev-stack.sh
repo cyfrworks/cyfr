@@ -13,7 +13,16 @@
 #                               removing the containers on every exit
 #   scripts/dev-stack.sh check  run a component through the running server
 #                               as a signed-in person and assert its answer
-#   scripts/dev-stack.sh down   remove the stack's containers and networks
+#   scripts/dev-stack.sh down   stop the server a killed run left, and
+#                               remove the stack's containers and networks
+#   scripts/dev-stack.sh clean  do what down does, then remove the stack's
+#                               image
+#
+# One run holds data/dev-stack.lock (git- and docker-ignored) for its
+# whole life and records its server's process group there, so a second
+# run, `down` or `clean` refuses while it runs, and `down` finds a server
+# whose run was killed. The stack's compose project is the one
+# docker-compose.dev.yml names, whatever the caller's COMPOSE_* say.
 #
 # Every setting comes from `mix cyfr.locus.dev_stack`, which derives
 # CYFR's from docker-compose.dev.yml as compose resolves it and reads .env
@@ -27,8 +36,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# Compose reads no setting of the caller's: the project, the files and the
+# profiles are this script's.
+for name in $(compgen -e); do
+  case "$name" in COMPOSE_*) unset "$name" ;; esac
+done
+
+LOCK=data/dev-stack.lock
+LOCK_FD=""
 PRIVATE=""
+PROJECT=""
+IMAGE=""
 SERVER=""
+SERVER_ENDED=""
 STARTED=""
 
 die() {
@@ -38,9 +58,53 @@ die() {
 
 # Every service of the stack, builds included, with nothing interpolated
 # from .env: what the services need from it arrives from the task in the
-# environment.
+# environment. Once the declarations are read, every call names their
+# project.
 compose() {
-  docker compose --env-file /dev/null --profile locus-builds -f docker-compose.yml -f docker-compose.dev.yml "$@"
+  local project=()
+  [ -z "$PROJECT" ] || project=(-p "$PROJECT")
+  docker compose --env-file /dev/null "${project[@]}" --profile locus-builds \
+    -f docker-compose.yml -f docker-compose.dev.yml "$@"
+}
+
+# lock: the stack's lock for the rest of this process, or a refusal naming
+# the run that holds it. The server never inherits it.
+lock() {
+  command -v flock >/dev/null || die "flock is not on PATH (util-linux; brew install flock)."
+  mkdir -p data
+  exec {LOCK_FD}>>"$LOCK"
+  if ! flock -n "$LOCK_FD"; then
+    local holder
+    holder="$(sed -n 's/^pid //p' "$LOCK" 2>/dev/null | head -n 1)"
+    LOCK_FD=""
+    die "another run of the dev stack (pid ${holder:-unknown}) holds $LOCK; stop it, or wait for it to end."
+  fi
+  # This run's pid, beside the server a killed run recorded, which `down`
+  # and a start still read; the file stays the one the lock is on.
+  local recorded
+  recorded="$(sed -n '/^server /p' "$LOCK")"
+  printf 'pid %s\n%s' "$$" "${recorded:+$recorded$'\n'}" >"$LOCK"
+}
+
+# orphan: the process group of the server a killed run recorded, when its
+# leader is still the process the run started; nothing otherwise.
+orphan() {
+  local pgid started
+  read -r pgid started < <(sed -n 's/^server //p' "$LOCK" 2>/dev/null) || return 0
+  [ -n "${pgid:-}" ] && [ -n "${started:-}" ] || return 0
+  [ "$(ps -o lstart= -p "$pgid" 2>/dev/null | sed 's/^ *//; s/ *$//')" = "$started" ] && echo "$pgid"
+  return 0
+}
+
+# stop GROUP: the server's process group, its leader given 30 seconds to
+# stop before the whole group is killed.
+stop() {
+  kill -TERM "$1" 2>/dev/null || true
+  for _ in $(seq 1 300); do
+    kill -0 "$1" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -KILL -- "-$1" 2>/dev/null || true
 }
 
 # Ends every run, a signal's included: the server first, then every
@@ -49,15 +113,13 @@ compose() {
 finish() {
   local status=$?
   trap '' INT TERM HUP
-  if [ -n "$SERVER" ]; then
-    kill -TERM "$SERVER" 2>/dev/null || true
-    for _ in $(seq 1 300); do
-      kill -0 "$SERVER" 2>/dev/null || break
-      sleep 0.1
-    done
-    # Whatever is left of the server's process group: an asset watcher,
-    # or a server that outlived its 30 seconds.
+  # The server's whole process group, whether the server still runs or
+  # has ended: what it started outlives it otherwise. An ended server's
+  # pid is no longer its own, so only its group is signalled.
+  if [ -n "$SERVER_ENDED" ]; then
     kill -KILL -- "-$SERVER" 2>/dev/null || true
+  elif [ -n "$SERVER" ]; then
+    stop "$SERVER"
     wait "$SERVER" 2>/dev/null || true
   fi
   if [ -n "$STARTED" ]; then
@@ -65,6 +127,7 @@ finish() {
     compose down --remove-orphans >/dev/null 2>&1 ||
       echo "dev-stack: the containers could not be removed; \`scripts/dev-stack.sh down\` removes them." >&2
   fi
+  [ -z "$LOCK_FD" ] || : >"$LOCK"
   [ -z "$PRIVATE" ] || rm -rf "$PRIVATE"
   exit "$status"
 }
@@ -86,6 +149,11 @@ declarations() {
   [ -e .env ] || (umask 077 && : >.env) || die ".env could not be created here; check the checkout's permissions."
   compose config --format json locus-runtime locus-backends locus-builds >"$PRIVATE/stack.json" ||
     die "docker compose could not resolve docker-compose.dev.yml over docker-compose.yml."
+  local out
+  out="$(task names "$PRIVATE/stack.json" 2>&1)" || die "$(refusal "$out")"
+  PROJECT="$(printf '%s\n' "$out" | sed -n 's/^project //p')"
+  IMAGE="$(printf '%s\n' "$out" | sed -n 's/^image //p')"
+  [ -n "$PROJECT" ] && [ -n "$IMAGE" ] || die "mix cyfr.locus.dev_stack printed no project or image."
 }
 
 # The settings task, which Ctrl-C ends at once (`+Bd`: no break menu)
@@ -129,6 +197,7 @@ free() {
 run() {
   command -v docker >/dev/null || die "docker is not on PATH."
   command -v python3 >/dev/null || die "python3 is not on PATH."
+  lock
   private
   declarations
 
@@ -155,6 +224,11 @@ run() {
     die "mix cyfr.locus.dev_stack printed no settings."
   [ -z "$wrote" ] || echo "dev-stack: .env is mode 0600 and now sets ${wrote// /, }."
 
+  local left who
+  left="$(orphan)"
+  if [ -n "$left" ] && who="$(held "$port")"; then
+    die "127.0.0.1:$port, Prism's address, is held by $who, the server a killed run left; \`scripts/dev-stack.sh down\` stops it."
+  fi
   free "$port" "Prism's address"
   # What an earlier run left when it ended without its cleanup is this
   # stack's: with Prism's address free, no run of it is serving.
@@ -176,11 +250,12 @@ run() {
   # with the run, and its settings in its environment alone. The run, not
   # the terminal, stops it: Ctrl-C reaches the script, whose exit stops
   # the server and then the containers.
-  (export "${server[@]}" &&
+  (exec {LOCK_FD}>&- && export "${server[@]}" &&
     exec python3 -I -c 'import os, sys; os.setpgid(0, 0); os.execvp(sys.argv[1], sys.argv[1:])' mix phx.server </dev/null) &
   SERVER=$!
+  printf 'pid %s\nserver %s %s\n' "$$" "$SERVER" "$(ps -o lstart= -p "$SERVER")" >"$LOCK"
   wait "$SERVER" && status=0 || status=$?
-  SERVER=""
+  SERVER_ENDED=1
   echo "dev-stack: CYFR exited with status $status." >&2
   exit "$status"
 }
@@ -276,17 +351,35 @@ check() {
 }
 
 down() {
+  lock
   private
   declarations
+  local left
+  left="$(orphan)"
+  if [ -n "$left" ]; then
+    echo "dev-stack: stopping the server a killed run left (process group $left)."
+    stop "$left"
+  fi
   compose down --remove-orphans
+}
+
+# clean: down, then the stack's image and nothing else of the host's.
+clean() {
+  down
+  if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    docker image rm "$IMAGE"
+  else
+    echo "dev-stack: $IMAGE is not on this host."
+  fi
 }
 
 case "${1:-}" in
   "") run ;;
   check) check ;;
   down) down ;;
+  clean) clean ;;
   *)
-    echo "usage: scripts/dev-stack.sh [check | down]" >&2
+    echo "usage: scripts/dev-stack.sh [check | down | clean]" >&2
     exit 2
     ;;
 esac
