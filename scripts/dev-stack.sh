@@ -164,7 +164,7 @@ check() {
   [ -n "$port" ] || die "mix cyfr.locus.dev_stack printed no port."
   MCP="http://127.0.0.1:$port/mcp"
 
-  PRIVATE="$(mktemp -d "${TMPDIR:-/tmp}/cyfr-dev-stack.XXXXXX")"
+  PRIVATE="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-dev-stack.XXXXXX")"
   chmod 700 "$PRIVATE"
   (umask 077 && printf 'authorization: Bearer %s\n' "$CYFR_TOKEN" >"$PRIVATE/authorization")
 
