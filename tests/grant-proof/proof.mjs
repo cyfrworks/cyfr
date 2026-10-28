@@ -68,6 +68,13 @@ function row(step, held, what, detail) {
   return !!held;
 }
 
+// Two heads hold the same fields: arrays as sets, so an extra or a missing
+// flow, domain or path differs, and every other field exactly.
+const sameSet = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+const sameHead = (a, b) =>
+  [...new Set([...Object.keys(a), ...Object.keys(b)])].every((k) =>
+    Array.isArray(a[k]) && Array.isArray(b[k]) ? sameSet(a[k], b[k]) : a[k] === b[k]);
+
 const ask = (request, options) => askRunSh(request, { outDir, ...options });
 
 // The grant prompt for the tincture, opened from its Components row.
@@ -260,11 +267,21 @@ async function main() {
     const still = await ask({ op: "admit" });
     const unchanged = await ask({ op: "head" });
     record.reworded = { reworded, still, unchanged };
+    // The head after rewording is the head before it, every field held. The
+    // copies are heads a permission change would leave behind: the predicate
+    // must refuse each one.
+    const rewordedCopies = [
+      { ...unchanged, revision: unchanged.revision + 1 },
+      { ...unchanged, domains: [...unchanged.domains, DROPPED] },
+      { ...unchanged, flows: [...unchanged.flows, `outside to ${DROPPED}`] },
+    ];
     if (!row("reworded",
       reworded.shape_digest === regranted.shape_digest && still.admitted === true &&
-        still.consent_id === regranted.consent_id && unchanged.revision === 2,
-      "a reworded reason changes no shape digest and asks nothing",
-      { shape: reworded.shape_digest === regranted.shape_digest, still, revision: unchanged.revision })) return;
+        still.consent_id === regranted.consent_id && sameHead(unchanged, regranted) &&
+        rewordedCopies.every((copy) => !sameHead(copy, regranted)),
+      "a reworded reason changes no shape digest and asks nothing; the head holds every field it held, and a copy with another revision, domain or flow is refused",
+      { shape: reworded.shape_digest === regranted.shape_digest, still, head: unchanged,
+        same_head: sameHead(unchanged, regranted) })) return;
 
     // -----------------------------------------------------------------------
     // flows
@@ -286,14 +303,28 @@ async function main() {
     const flowHead = await ask({ op: "head" });
     const flowAdmitted = await ask({ op: "admit" });
     record.flows = { flowed, flowAsking, flowSheet, flowHead, flowAdmitted };
+    // The head after the flows grant moves in revision, consent, digest and
+    // shape, and its flows are exactly the two granted; every other field is
+    // the head before it. The consent and digest are new, so they are checked
+    // as changed and then set aside.
+    const flowsHeld = (head) =>
+      head.consent_id !== regranted.consent_id && head.commit_digest !== regranted.commit_digest &&
+      sameHead({ ...head, consent_id: regranted.consent_id, commit_digest: regranted.commit_digest },
+        { ...regranted, revision: regranted.revision + 1, shape_digest: flowed.shape_digest,
+          flows: [`files_by_grant to ${KEPT}`, `outside to ${KEPT}`] });
+    const flowsCopies = [
+      { ...flowHead, flows: [...flowHead.flows, `outside to ${DROPPED}`] },
+      { ...flowHead, domains: [...flowHead.domains, DROPPED] },
+      { ...flowHead, revision: flowHead.revision + 1 },
+    ];
     if (!row("flows",
       flowed.shape_digest !== reworded.shape_digest &&
         flowAsking.admitted === false && flowAsking.refusal === "consent_required" &&
         exitShown(flowSheet, KEPT, "outside") && exitShown(flowSheet, KEPT, "files_by_grant") &&
-        openedOff && ticked && flowHead.revision === 3 && flowHead.flows.includes(`outside to ${KEPT}`) &&
+        openedOff && ticked && flowsHeld(flowHead) && flowsCopies.every((copy) => !flowsHeld(copy)) &&
         flowAdmitted.admitted === true && flowAdmitted.consent_id === flowHead.consent_id,
-      "a version letting one more class reach a host is asked again with that exit shown, the new flow unticked; ticked and granted, the head holds it",
-      { asking: flowAsking, opened_off: openedOff, ticked, flows: flowHead.flows, revision: flowHead.revision })) return;
+      "a version letting one more class reach a host is asked again with that exit shown, the new flow unticked; ticked and granted, the head holds exactly its granted flows and every other field, and copies with an extra flow, an added domain or another revision are refused",
+      { asking: flowAsking, opened_off: openedOff, ticked, head: flowHead, held: flowsHeld(flowHead) })) return;
 
     // -----------------------------------------------------------------------
     // revocation
