@@ -11,7 +11,7 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 boot="$root/tests/release-boot/boot.sh"
-scratch=$(mktemp -d /tmp/cyfr-boot-names-test.XXXXXX)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-boot-names-test.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 

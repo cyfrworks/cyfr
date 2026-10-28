@@ -16,13 +16,18 @@
 # (tests/browser/lib.mjs `redact`) against a case of every pattern it
 # hides, run by node; and the browser harness's socket lifetimes against
 # peer resets (tests/browser/lib-test.mjs), without launching a browser.
+# The old proof ports are held while release cells and browser homes bind
+# their own listeners. This check needs the verification host exclusively.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-scratch=$(mktemp -d /tmp/cyfr-release-boot-test.XXXXXX)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-release-boot-test.XXXXXX")
 servers=()
 cleanup() {
   local pid
-  for pid in ${servers[@]+"${servers[@]}"}; do kill "$pid" 2>/dev/null || :; done
+  for pid in ${servers[@]+"${servers[@]}"}; do
+    kill "$pid" 2>/dev/null || :
+    wait "$pid" 2>/dev/null || :
+  done
   [ ! -f "$scratch/own.pid" ] || kill "$(cat "$scratch/own.pid")" 2>/dev/null || :
   [ ! -f "$scratch/cell/stub.pid" ] || kill "$(cat "$scratch/cell/stub.pid")" 2>/dev/null || :
   rm -rf "$scratch"
@@ -33,6 +38,28 @@ pass() { echo "ok: $*"; }
 status_of() { local s=0; "$@" >"$scratch/out" 2>&1 || s=$?; echo "$s"; }
 has() { grep -qF -- "$1" "$scratch/out" || { cat "$scratch/out" >&2; fail "$2"; }; }
 free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+free_port_range() {
+  python3 -I - "$1" <<'PY'
+import random, socket, sys
+count = int(sys.argv[1])
+for port in random.sample(range(20000, 30001 - count), 50):
+    held = []
+    try:
+        for offset in range(count):
+            listener = socket.socket()
+            held.append(listener)
+            listener.bind(("127.0.0.1", port + offset))
+        print(port)
+        break
+    except OSError:
+        continue
+    finally:
+        for listener in held:
+            listener.close()
+else:
+    raise SystemExit(f"no free {count}-port range for the explicit override")
+PY
+}
 # A bounded wait on an observable condition: `until_true 10 cmd...`.
 until_true() {
   local limit=$(($1 * 10)) n=0
@@ -378,7 +405,7 @@ fi
 exit 0
 SH
 chmod +x "$scratch/bin/cyfr"
-cell() { DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" COMPOSE_PROFILES=public CYFR_LEFTOVER=1 bash "$scratch/drive.sh" cell "$@"; }
+cell() { DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" RELEASE_BOOT_PORT=4399 RELEASE_BOOT_HOST_API_PORT=4398 COMPOSE_PROFILES=public CYFR_LEFTOVER=1 bash "$scratch/drive.sh" cell "$@"; }
 calls() { sed -n "s/^$1=//p" "$scratch/calls.log"; }
 assigned() { grep -c "^$2=" "$scratch/cells/$1/.env"; }
 value() { sed -n "s/^$2=//p" "$scratch/cells/$1/.env"; }
@@ -412,7 +439,7 @@ pass "a local cell is init's deployment file with the test's settings beside it,
 [ "$(status_of cell cell_new "$scratch/cells/named" "" cyfr.example.com)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_new failed for a named cell"; }
 [ "$(calls args)" = "init --no-interactive --no-pull --access public --domain cyfr.example.com" ] ||
   fail "cell_new ran cyfr $(calls args) for a named cell"
-[ "$(status_of cell cell_hostname "$scratch/cells/named" cyfr.example.com 4500)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_hostname failed"; }
+[ "$(status_of cell cell_hostname "$scratch/cells/named" cyfr.example.com 4500 4501 4502)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_hostname failed"; }
 [ "$(grep -c '^args=' "$scratch/calls.log")" = 1 ] || fail "cell_hostname ran the command line again on a cell init made public at its name: $(calls args)"
 for pair in CYFR_ACCESS=public CYFR_HOST=cyfr.example.com CYFR_PUBLIC_URL=https://cyfr.example.com CYFR_PORT=4500 CYFR_HOST_API_PORT=4501 CYFR_PROXY_PORT=4502; do
   [ "$(assigned named "${pair%%=*}")" = 1 ] && [ "$(value named "${pair%%=*}")" = "${pair#*=}" ] ||
@@ -464,6 +491,205 @@ for line in 'INLINE=x # comment' 'OPEN="x' 'ESCAPED="a\nb"' 'not an assignment';
   has "cannot read as the release does" "the refusal of '$line' says why"
 done
 pass "a deployment file's lines are read as a dotenv reader reads them, and a line that cannot be is refused"
+
+cat >"$scratch/ports.py" <<'PY'
+import http.server, pathlib, socket, sys, threading
+held = []
+for port in map(int, filter(None, sys.argv[2:])):
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind(("127.0.0.1", port))
+    except OSError as error:
+        raise SystemExit(f"cannot hold 127.0.0.1:{port}: {error}")
+    listener.listen()
+    held.append(listener)
+pathlib.Path(sys.argv[1]).touch()
+class Answer(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"{}")
+    def log_message(self, *args):
+        pass
+for listener in held:
+    server = http.server.HTTPServer(listener.getsockname(), Answer, bind_and_activate=False)
+    server.socket.close()
+    server.socket = listener
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+threading.Event().wait()
+PY
+python3 -I "$scratch/ports.py" "$scratch/ports-held" 4398 4399 {4409..4428} {4480..4482} &
+servers+=("$!")
+until_true 10 test -f "$scratch/ports-held" || fail "the old proof ports could not be held"
+
+cat >"$scratch/build/rel/cyfr/bin/cyfr" <<SH
+#!/usr/bin/env bash
+case "\$1" in
+  start)
+    echo \$\$ >"\$PWD/stub.pid"
+    exec python3 -I "$scratch/ports.py" "\$PWD/listening" "\$CYFR_PORT" "\$CYFR_HOST_API_PORT" "\${CYFR_PROXY_PORT:-}"
+    ;;
+  stop) kill "\$(cat "\$PWD/stub.pid")" 2>/dev/null; exit 0 ;;
+esac
+SH
+cat >"$scratch/ports.sh" <<'SH'
+set -euo pipefail
+ADAPTER=sqlite
+WORK="$DRIVE_SCRATCH/ports-$1"
+mkdir -p "$WORK"
+source "$DRIVE_CHECKOUT/tests/release-boot/release.sh"
+source "$DRIVE_CHECKOUT/tests/browser/harness.sh"
+ROOT="$DRIVE_SCRATCH/checkout"
+REL="$DRIVE_SCRATCH/build/rel/cyfr"
+CELL_CLI="$DRIVE_SCRATCH/bin/cyfr"
+READY_TIMEOUT=5
+trap 'server_stop' EXIT
+unique_ports() {
+  python3 -I - "$@" <<'PY'
+import pathlib, sys
+seen = {}
+for cell in map(pathlib.Path, sys.argv[1:]):
+    for line in (cell / ".env").read_text().splitlines():
+        key, _, value = line.partition("=")
+        if key not in ("CYFR_PORT", "CYFR_HOST_API_PORT", "CYFR_PROXY_PORT"):
+            continue
+        value = int(value)
+        owner = f"{cell.name}/{key}"
+        if value in seen:
+            raise SystemExit(f"listener {owner} repeats {seen[value]} on {value}")
+        seen[value] = owner
+print("distinct listeners: " + ", ".join(f"{owner}={port}" for port, owner in seen.items()))
+PY
+}
+case "$1" in
+  release|busy|race)
+    cell_new "$WORK/cell"
+    if [ "$1" = race ]; then
+      python3 -I "$DRIVE_SCRATCH/ports.py" "$WORK/held" "$(cell_port "$WORK/cell")" &
+      holder=$!
+      trap 'kill "$holder" 2>/dev/null || :; wait "$holder" 2>/dev/null || :; server_stop' EXIT
+      n=0
+      until [ -f "$WORK/held" ] || [ "$n" = 100 ]; do n=$((n + 1)); sleep 0.1; done
+      [ -f "$WORK/held" ] || fail "the picked port could not be held"
+    fi
+    echo "chosen listener $(cell_port "$WORK/cell")"
+    server_start "$WORK/cell"
+    ;;
+  address)
+    ADDRESS="$WORK/cell"
+    cell_new "$ADDRESS" "" cyfr.example.com
+    source "$DRIVE_SCRATCH/address-call.sh"
+    server_start "$ADDRESS"
+    ;;
+  host-api-override|host-api-leading-zero-override|cell-host-api-override)
+    cell_new "$WORK/cell"
+    if [ "$1" = cell-host-api-override ]; then
+      cell_hostname "$WORK/cell" cell.test "" "$FORCE_PORT"
+    fi
+    [ "$(cell_value "$WORK/cell" CYFR_HOST_API_PORT)" -eq "$FORCE_PORT" ] || fail "the host API override changed"
+    unique_ports "$WORK/cell"
+    server_start "$WORK/cell"
+    ;;
+  thief-first-override|thief-last-override)
+    source "$DRIVE_CHECKOUT/tests/identity-proof/cells.sh"
+    browser_authority
+    source "$DRIVE_SCRATCH/identity-homes.sh"
+    identity_preserved "$A" "$THIEF" thief.test "$THIEF_PORT"
+    unique_ports "$DIR" "$A" "$B" "$C" "$C2" "$C3" "$THIEF"
+    for cell in "$DIR" "$A" "$B" "$C" "$C2" "$C3" "$THIEF"; do server_start "$cell"; done
+    ;;
+  browser|override)
+    browser_authority
+    browser_home "$WORK/a" a.test
+    browser_home "$WORK/b" b.test
+    if [ "$1" = override ]; then
+      for key in CYFR_PORT CYFR_HOST_API_PORT CYFR_PROXY_PORT; do
+        case "$key" in CYFR_PORT) offset=0 ;; CYFR_HOST_API_PORT) offset=1 ;; CYFR_PROXY_PORT) offset=2 ;; esac
+        [ "$(cell_value "$WORK/a" "$key")" = "$((BROWSER_HOMES_PORT + offset))" ] || fail "the first home lost the explicit $key"
+        [ "$(cell_value "$WORK/b" "$key")" = "$((BROWSER_HOMES_PORT + 3 + offset))" ] || fail "the second home lost the explicit $key"
+      done
+    fi
+    server_start "$WORK/a"
+    server_start "$WORK/b"
+    ;;
+esac
+SH
+sed -n '/^cell_hostname "\$ADDRESS" /p' "$root/tests/release-boot/boot.sh" >"$scratch/address-call.sh"
+[ "$(wc -l <"$scratch/address-call.sh")" = 1 ] || fail "boot.sh names no single address-cell port call"
+awk '/^DIR="\$WORK\/dir"/ { copying = 1 } /^for cell in c c2 c3; do/ { copying = 0 } copying' \
+  "$root/tests/identity-proof/run.sh" >"$scratch/identity-homes.sh"
+grep -q '^cell_pick_port THIEF_PORT$' "$scratch/identity-homes.sh" || fail "identity's homes name no thief port pick"
+mkdir "$scratch/force-bin"
+cat >"$scratch/force-bin/python3" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$#" = 6 ] && [ "$1" = -I ] && [ "$2" = -c ] && [[ "$3" == *'import random, socket, sys'* ]]; then
+  if [ ! -e "$FORCE_PORT_STATE" ]; then
+    : >"$FORCE_PORT_STATE"
+    printf '%s\n' "$FORCE_PORT"
+    exit 0
+  fi
+fi
+SH
+printf 'exec %q "$@"\n' "$(command -v python3)" >>"$scratch/force-bin/python3"
+chmod +x "$scratch/force-bin/python3"
+override_base=$(free_port_range 18)
+override_failures=0
+for scenario in host-api-override host-api-leading-zero-override cell-host-api-override thief-first-override thief-last-override; do
+  forced=$override_base
+  release_port=10001
+  release_host_api=10002
+  browser_port=$override_base
+  case "$scenario" in
+    host-api-override) release_port=""; release_host_api=$forced; browser_port="" ;;
+    host-api-leading-zero-override) release_port=""; release_host_api="0$forced"; browser_port="" ;;
+    cell-host-api-override) browser_port="" ;;
+    thief-last-override) forced=$((override_base + 17)) ;;
+  esac
+  status=$(status_of env RELEASE_BOOT_PORT="$release_port" RELEASE_BOOT_HOST_API_PORT="$release_host_api" \
+    BROWSER_HOMES_PORT="$browser_port" FORCE_PORT="$forced" FORCE_PORT_STATE="$scratch/forced-$scenario" \
+    PATH="$scratch/force-bin:$PATH" DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" "$scenario")
+  [ -f "$scratch/forced-$scenario" ] || fail "$scenario did not force an automatic port choice"
+  if [ "$status" != 0 ]; then
+    cat "$scratch/out" >&2
+    echo "FAIL: $scenario collided with the forced automatic choice" >&2
+    override_failures=$((override_failures + 1))
+  else
+    pass "$scenario boots with its override reserved before the forced automatic choice"
+  fi
+done
+[ "$override_failures" = 0 ] || fail "$override_failures override reservation regressions"
+ports() { env -u RELEASE_BOOT_PORT -u RELEASE_BOOT_HOST_API_PORT -u BROWSER_HOMES_PORT \
+  DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" "$@"; }
+port_failures=0
+for scenario in release address browser; do
+  if [ "$scenario" = address ]; then
+    status=$(status_of env -u BROWSER_HOMES_PORT RELEASE_BOOT_PORT=4399 RELEASE_BOOT_HOST_API_PORT=4398 \
+      DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" "$scenario")
+  else
+    status=$(status_of ports "$scenario")
+  fi
+  if [ "$status" != 0 ]; then
+    cat "$scratch/out" >&2
+    echo "FAIL: $scenario cannot boot beside listeners on the old proof ports" >&2
+    port_failures=$((port_failures + 1))
+  else
+    pass "$scenario boots beside listeners on the old proof ports"
+  fi
+done
+[ "$port_failures" = 0 ] || fail "$port_failures free-port regressions"
+[ "$(status_of env RELEASE_BOOT_PORT=4399 RELEASE_BOOT_HOST_API_PORT=4398 \
+  DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" busy)" = 1 ] || fail "an explicit busy port was accepted"
+has "something already answers on 127.0.0.1:4399" "the guard names the explicit busy port"
+[ "$(status_of ports race)" = 1 ] || fail "a port taken after selection was accepted"
+chosen=$(sed -n 's/^chosen listener //p' "$scratch/out")
+has "something already answers on 127.0.0.1:$chosen" "the guard names the picked port taken before binding"
+pass "an explicit busy port and a picked port taken before binding are refused by the port guard"
+home_port=$(free_port_range 6)
+[ "$(status_of env BROWSER_HOMES_PORT="$home_port" DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" \
+  bash "$scratch/ports.sh" override)" = 0 ] || { cat "$scratch/out" >&2; fail "the explicit browser port ranges did not boot"; }
+pass "BROWSER_HOMES_PORT keeps both homes' explicit consecutive port ranges"
 
 # --- the identity front's readiness -----------------------------------------
 
