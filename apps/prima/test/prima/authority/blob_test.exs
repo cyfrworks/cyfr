@@ -192,7 +192,8 @@ defmodule Prima.Authority.BlobTest do
     test "a named binding's entry counts as the default's does" do
       named =
         Fixtures.bound_vault(@formula, "#{@catalyst}|dest", "vault-1", "sha256:other",
-          name: "Second"
+          name: "Second",
+          projection: %{"fields" => %{"url" => "url"}, "scopes" => []}
         )
 
       conflicted =
@@ -421,12 +422,30 @@ defmodule Prima.Authority.BlobTest do
 
   defp with_vault(edge_key, vault), do: put_in(golden(), vault_path(edge_key), vault)
 
+  @dest_projection %{
+    "fields" => %{"url" => "url", "service_key" => "service_key"},
+    "scopes" => []
+  }
+
   defp named(name, entry_id \\ "vault-named", opts \\ []) do
-    Fixtures.bound_vault(@formula, @dest_key, entry_id, "sha256:named", [name: name] ++ opts)
+    Fixtures.bound_vault(
+      @formula,
+      @dest_key,
+      entry_id,
+      "sha256:named",
+      [name: name] ++ Keyword.put_new(opts, :projection, @dest_projection)
+    )
   end
 
   defp dest_vault(opts \\ []),
-    do: Fixtures.bound_vault(@formula, @dest_key, "vault-2", "sha256:bbb", opts)
+    do:
+      Fixtures.bound_vault(
+        @formula,
+        @dest_key,
+        "vault-2",
+        "sha256:bbb",
+        Keyword.put_new(opts, :projection, @dest_projection)
+      )
 
   defp refused?(map), do: match?({:error, {:invalid_resource, _, _, :vault, _}}, Blob.parse(map))
 
@@ -434,6 +453,24 @@ defmodule Prima.Authority.BlobTest do
     test "a vault key that is no string is refused" do
       refute refused?(with_vault(@dest_key, dest_vault()))
       assert refused?(with_vault(@dest_key, Map.put(dest_vault(), nil, 1)))
+    end
+
+    test "a bound entry or a named account without a projection, or with a null one, is refused" do
+      refused =
+        {:error, {:invalid_resource, @formula, @dest_key, :vault, "projection must be an object"}}
+
+      for damaged <- [&Map.delete(&1, "projection"), &Map.put(&1, "projection", nil)] do
+        assert Blob.parse(with_vault(@dest_key, damaged.(dest_vault()))) == refused
+
+        named = %{"Archive" => damaged.(named("Archive"))}
+        assert Blob.parse(with_vault(@dest_key, dest_vault(named: named))) == refused
+      end
+
+      # The same named account with its projection parses.
+      assert {:ok, _blob} =
+               Blob.parse(
+                 with_vault(@dest_key, dest_vault(named: %{"Archive" => named("Archive")}))
+               )
     end
 
     test "the golden blob holds a bound, a named, a resolved and a provided edge, and round-trips" do
@@ -794,8 +831,16 @@ defmodule Prima.Authority.BlobTest do
 
     test "a blob naming one account twice, in two cases, is refused" do
       named = %{
-        "Work" => Fixtures.bound_vault(@formula, "@ingress", "vault-2", "sha256:b", name: "Work"),
-        "WORK" => Fixtures.bound_vault(@formula, "@ingress", "vault-3", "sha256:c", name: "WORK")
+        "Work" =>
+          Fixtures.bound_vault(@formula, "@ingress", "vault-2", "sha256:b",
+            name: "Work",
+            projection: @dest_projection
+          ),
+        "WORK" =>
+          Fixtures.bound_vault(@formula, "@ingress", "vault-3", "sha256:c",
+            name: "WORK",
+            projection: @dest_projection
+          )
       }
 
       assert {:error, _reason} =
@@ -808,7 +853,8 @@ defmodule Prima.Authority.BlobTest do
                        "@ingress" => %{
                          "vault" =>
                            Fixtures.bound_vault(@formula, "@ingress", "vault-1", "sha256:a",
-                             named: named
+                             named: named,
+                             projection: @dest_projection
                            )
                        }
                      }

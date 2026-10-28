@@ -922,7 +922,7 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
-  defp bound_with_named(%{entry_id: _, projection: %{}} = vault),
+  defp bound_with_named(%{entry_id: _} = vault),
     do: [vault | vault |> Map.get(:named, %{}) |> Map.values()]
 
   defp bound_with_named(_selected_provided_or_none), do: []
@@ -1663,8 +1663,8 @@ defmodule Sanctum.Consent.Plan do
                source: lent.source,
                entry_id: lent.id,
                entry_name: lent.name,
-               fields: lent_projection(vault.projection).fields,
-               scopes: lent_projection(vault.projection).scopes
+               fields: vault.projection.fields,
+               scopes: vault.projection.scopes
              }
            ]}
 
@@ -1678,9 +1678,6 @@ defmodule Sanctum.Consent.Plan do
       _no_entry_on_ingress -> {:ok, []}
     end
   end
-
-  defp lent_projection(%{} = projection), do: projection
-  defp lent_projection(nil), do: %{fields: %{}, scopes: []}
 
   # The entry a lender's binding names, usable by this person at the
   # digest the lender bound: the athanor's own, or an instance entry as it

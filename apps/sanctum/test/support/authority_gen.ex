@@ -77,7 +77,8 @@ defmodule Sanctum.Test.AuthorityGen do
           "entry_id" => "vault-" <> entry,
           "binding_digest" => "sha256:bind-" <> entry,
           "scope" => "athanor",
-          "destination" => %{"hosts" => ["a.example"], "scheme" => "https"}
+          "destination" => %{"hosts" => ["a.example"], "scheme" => "https"},
+          "projection" => %{"fields" => %{"value" => "value"}, "scopes" => []}
         }
 
         attach = %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}

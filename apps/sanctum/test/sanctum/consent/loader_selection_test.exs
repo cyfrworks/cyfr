@@ -399,10 +399,10 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
 
     assert %{projection: %{fields: ^lent, scopes: []}} = child.resources.vault
 
-    # A lender that binds with no projection lends none: the selection
-    # names no projection of its own to fall back to.
+    # A lender whose head binds with no projection is damage, refusing the
+    # run: the selection names no projection of its own to fall back to.
     put_catalyst!(ctx, vault: Map.delete(@key_vault, "projection"))
-    assert %{entry_id: "vault-anthropic", projection: nil} = edge_vault(load!(ctx, profile))
+    assert {:error, {:lender_corrupt, @catalyst, "prof-claude"}} = load(ctx, profile)
 
     # A selection carrying a projection of its own does not parse, so its
     # head is damage rather than a narrower lend.

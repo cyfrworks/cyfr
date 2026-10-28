@@ -119,7 +119,8 @@ defmodule Prima.Authority.TransitionInvokeTest do
     archive =
       Fixtures.bound_vault(@formula, source, "vault-archive", "sha256:bind-archive",
         name: "Archive",
-        attach: Fixtures.attach_map()
+        attach: Fixtures.attach_map(),
+        projection: %{"fields" => %{"url" => "url", "anon_key" => "anon key"}, "scopes" => []}
       )
 
     {:ok, blob} =

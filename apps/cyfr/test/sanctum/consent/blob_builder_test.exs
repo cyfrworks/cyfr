@@ -445,7 +445,8 @@ defmodule Sanctum.Consent.BlobBuilderTest do
         "entry_id" => "vlt_1",
         "binding_digest" => "sha256:b",
         "scope" => "athanor",
-        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"}
+        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
+        "projection" => %{"fields" => %{"KEY" => "KEY"}, "scopes" => []}
       }
 
       build = fn edge_vault ->
@@ -484,7 +485,8 @@ defmodule Sanctum.Consent.BlobBuilderTest do
         "entry_id" => "vlt_1",
         "binding_digest" => "sha256:b",
         "scope" => "athanor",
-        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"}
+        "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
+        "projection" => %{"fields" => %{"KEY" => "KEY"}, "scopes" => []}
       }
 
       refs = fn edge_vault ->

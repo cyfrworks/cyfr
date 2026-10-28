@@ -1547,6 +1547,63 @@ defmodule Sanctum.Consent.PlanTest do
       assert %{consumed: false} = Enum.find(plan.head_bindings, &(&1.binding_key == until_key))
     end
 
+    # Every bound entry carries its projection, so a named account's that
+    # is missing or null is a head that does not parse: the plan refuses
+    # it as damaged.
+    for projection <- [:missing, :null] do
+      @tag projection: projection
+      test "a head whose named account's projection is #{projection} is refused as damaged",
+           %{ctx: ctx, projection: projection} do
+        ref = "reagent:local.plan-keyed"
+        publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
+
+        {:ok, entry} =
+          Sanctum.TestContext.create_vault(ctx, %{
+            name: "two keys",
+            kind: "api_key",
+            provider_hint: "openai.com",
+            fields: %{"primary" => "sk-primary", "secondary" => "sk-secondary"},
+            destination: %{"hosts" => ["api.openai.com"]}
+          })
+
+        commit!(ctx, ref, %{
+          bindings: [
+            %{need: "api_key", entry_id: entry.id, fields: %{"OPENAI_API_KEY" => "secondary"}},
+            %{
+              need: "api_key",
+              entry_id: entry.id,
+              name: "spare",
+              fields: %{"OPENAI_API_KEY" => "primary"}
+            }
+          ]
+        })
+
+        {:ok, [%{id: profile_id}]} = Sanctum.Consent.profiles(ctx, ref)
+        {:ok, head} = Sanctum.Consent.head_consent(ctx, profile_id)
+
+        policy =
+          head.resolved_policy
+          |> Jason.decode!()
+          |> update_in(["nodes", ref, "edges", "@ingress", "vault", "named", "spare"], fn bound ->
+            case projection do
+              :missing -> Map.delete(bound, "projection")
+              :null -> Map.put(bound, "projection", nil)
+            end
+          end)
+          |> Jason.encode!()
+
+        :ok =
+          ConsentFixtures.hand_edit_head!(ctx, profile_id,
+            resolved_policy: policy,
+            blob_digest: Prima.Digest.sha256(policy)
+          )
+
+        {:ok, damaged} = Sanctum.Consent.head_consent(ctx, profile_id)
+        assert {:error, _unparsed} = Sanctum.Consent.Loader.head_blob(damaged)
+        assert Plan.plan(ctx, %{ref: ref}) == {:error, {:corrupt, {:profile, profile_id}}}
+      end
+    end
+
     test "head bindings carry the map the head holds", %{ctx: ctx} do
       ref = "reagent:local.plan-keyed"
       publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())

@@ -40,7 +40,8 @@ defmodule Prima.Test.AuthorityFixtures do
   an athanor entry with its binding key for that place, the default slot
   unless `:name` names an account. Options: `:name`, `:scope`,
   `:destination`, `:attach` (absent: disclose-only), `:projection`,
-  `:lender`, `:named`.
+  `:lender`, `:named`. A bound entry parses only with a `:projection`;
+  without one the map is the damaged form a parse refuses.
   """
   def bound_vault(node_ref, edge_key, entry_id, digest, opts \\ []) do
     %{

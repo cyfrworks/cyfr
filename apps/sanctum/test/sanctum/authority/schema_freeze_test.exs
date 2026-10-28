@@ -199,7 +199,7 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
                              name: "Authorization",
                              template: "Bearer {value}"
                            },
-                           projection: nil
+                           projection: %{fields: %{"service_key" => "service_key"}, scopes: []}
                          }
                        }
                      },
@@ -213,7 +213,7 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
                        binding_key: key.("lent", nil),
                        destination: destination.(["*.supabase.co"], []),
                        attach: %{in: "query", name: "apikey", template: "{value}"},
-                       projection: nil,
+                       projection: %{fields: %{"anon_key" => "anon key"}, scopes: []},
                        lender: %{
                          profile_id: "prof-supabase",
                          consent_id: "consent-supabase-3",

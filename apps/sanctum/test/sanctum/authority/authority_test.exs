@@ -39,7 +39,8 @@ defmodule Sanctum.AuthorityTest do
                     @formula,
                     "#{@catalyst}|source",
                     "vault-1",
-                    "sha256:aaa"
+                    "sha256:aaa",
+                    projection: %{"fields" => %{"url" => "url"}, "scopes" => []}
                   ),
                 "egress" => %{"domains" => ["prod.supabase.co"]}
               }

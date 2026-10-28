@@ -64,10 +64,12 @@ defmodule Prima.Authority.Blob do
     @typedoc """
     What a bound entry hands its component: `fields`, each field the
     need reads mapped to the entry field that answers it, and the
-    OAuth `scopes` the token is dispensed for.
+    OAuth `scopes` the token is dispensed for. Every bound entry, the
+    default and each named account, carries one: a binding without it
+    does not parse.
     """
     @type projection ::
-            %{fields: %{optional(String.t()) => String.t()}, scopes: [String.t()]} | nil
+            %{fields: %{optional(String.t()) => String.t()}, scopes: [String.t()]}
 
     @type lender :: %{profile_id: String.t(), consent_id: String.t(), binding_key: String.t()}
 
@@ -313,7 +315,7 @@ defmodule Prima.Authority.Blob do
       "destination" => Destination.to_map(vault.destination)
     }
     |> put_resource("attach", vault.attach && Needs.attach_to_map(vault.attach))
-    |> put_resource("projection", vault.projection && projection_to_map(vault.projection))
+    |> Map.put("projection", projection_to_map(vault.projection))
     |> put_resource("lender", lender_to_map(Map.get(vault, :lender)))
     |> put_resource("named", named_to_map(Map.get(vault, :named)))
   end
@@ -990,8 +992,6 @@ defmodule Prima.Authority.Blob do
       bad -> {:error, "invalid tool patterns: #{Enum.join(bad, ", ")}"}
     end
   end
-
-  defp validate_projection(nil), do: {:ok, nil}
 
   defp validate_projection(raw) when is_map(raw) do
     with :ok <- keys_or_reason(raw, ["fields", "scopes"]),
