@@ -919,7 +919,9 @@ defmodule Sanctum.Consent.PlanTest do
                    "paths" => ["/v1/"],
                    "scheme" => "https"
                  },
-                 disclosed: false
+                 disclosed: false,
+                 field_names: ["OPENAI_API_KEY"],
+                 fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}
                },
                %{
                  source: "own",
@@ -928,7 +930,9 @@ defmodule Sanctum.Consent.PlanTest do
                  kind: "api_key",
                  provider: "openai.com",
                  destination: %{"hosts" => ["api.openai.com"], "scheme" => "https"},
-                 disclosed: false
+                 disclosed: false,
+                 field_names: ["OPENAI_API_KEY"],
+                 fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}
                }
              ]
 
@@ -938,6 +942,56 @@ defmodule Sanctum.Consent.PlanTest do
       assert row.choice_required == false
       assert row.source == "own"
       assert row.newer_shipped == nil
+    end
+
+    test "a candidate names its field names and its automatic map, nil when the person must " <>
+           "choose",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-keyed", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      equal = own!(ctx, "openai.com", %{fields: %{"OPENAI_API_KEY" => "sk", "ORG" => "o"}})
+      single = own!(ctx, "openai.com", %{fields: %{"API key" => "sk"}})
+      unnamed = own!(ctx, "openai.com", %{fields: %{"secret" => "sk", "org" => "o"}})
+      offered_single = instance!(%{field_names: ~s(["API key"])})
+      offered_pair = instance!(%{field_names: ~s(["secret","org"])})
+      # No map is total over an entry holding no field: no candidate.
+      _offered_none = instance!(%{field_names: ~s([])})
+
+      {_plan, row} = need_row!(ctx, @keyed, "api_key")
+
+      by_id =
+        Map.new(row.candidates, fn candidate ->
+          {candidate[:entry_id] || candidate[:instance_entry_id],
+           {candidate.field_names, candidate.fields}}
+        end)
+
+      assert by_id == %{
+               equal.id => {["OPENAI_API_KEY", "ORG"], %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}},
+               single.id => {["API key"], %{"OPENAI_API_KEY" => "API key"}},
+               unnamed.id => {["org", "secret"], nil},
+               offered_single.id => {["API key"], %{"OPENAI_API_KEY" => "API key"}},
+               offered_pair.id => {["org", "secret"], nil}
+             }
+
+      # A need of two fields the component reads itself maps by equal
+      # names alone: an entry holding one of them, or one field of its
+      # own, leaves the map to the person.
+      publish!(ctx, "plan-paired", "1.0.0", %{
+        "needs" => %{"pair" => Map.delete(keyed_need(%{"fields" => ["KEY", "ORG"]}), "attach")}
+      })
+
+      disclosed = fn fields -> own!(ctx, "openai.com", %{fields: fields, disclose: true}) end
+      both = disclosed.(%{"KEY" => "k", "ORG" => "o", "EXTRA" => "x"})
+      half = disclosed.(%{"KEY" => "k"})
+      solo = disclosed.(%{"API key" => "k"})
+
+      {_plan, row} = need_row!(ctx, "reagent:local.plan-paired", "pair")
+      by_id = Map.new(row.candidates, &{&1.entry_id, &1.fields})
+
+      assert by_id == %{
+               both.id => %{"KEY" => "KEY", "ORG" => "ORG"},
+               half.id => nil,
+               solo.id => nil
+             }
     end
 
     test "with no default, several candidates ask the person to choose", %{ctx: ctx} do
@@ -1244,6 +1298,7 @@ defmodule Sanctum.Consent.PlanTest do
                    %{
                      binding_key: once_key,
                      entry_id: entry.id,
+                     fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"},
                      lifetime: %{kind: "once", until: nil},
                      consumed: false,
                      source: "own",
@@ -1254,6 +1309,7 @@ defmodule Sanctum.Consent.PlanTest do
                    %{
                      binding_key: until_key,
                      entry_id: entry.id,
+                     fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"},
                      lifetime: %{kind: "until", until: DateTime.to_iso8601(until)},
                      consumed: false,
                      source: "own",
@@ -1280,6 +1336,70 @@ defmodule Sanctum.Consent.PlanTest do
       assert %{consumed: false} = Enum.find(plan.head_bindings, &(&1.binding_key == until_key))
     end
 
+    test "head bindings carry the map the head holds", %{ctx: ctx} do
+      ref = "reagent:local.plan-keyed"
+      publish!(ctx, "plan-keyed", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+
+      # Two fields, neither the need's: the person chose each map, and the
+      # default and the named account chose differently.
+      {:ok, entry} =
+        Sanctum.TestContext.create_vault(ctx, %{
+          name: "chosen-#{System.unique_integer([:positive])}",
+          kind: "api_key",
+          provider_hint: "openai.com",
+          fields: %{"primary" => "sk-primary", "secondary" => "sk-secondary"},
+          destination: %{"hosts" => ["api.openai.com"]}
+        })
+
+      commit!(ctx, ref, %{
+        bindings: [
+          %{need: "api_key", entry_id: entry.id, fields: %{"OPENAI_API_KEY" => "secondary"}},
+          %{
+            need: "api_key",
+            entry_id: entry.id,
+            name: "spare",
+            fields: %{"OPENAI_API_KEY" => "primary"}
+          }
+        ]
+      })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+
+      assert plan.head_bindings
+             |> Enum.map(&{&1.binding_key, &1.fields})
+             |> Enum.sort() == [
+               {"#{ref}|@ingress|default", %{"OPENAI_API_KEY" => "secondary"}},
+               {"#{ref}|@ingress|name:spare", %{"OPENAI_API_KEY" => "primary"}}
+             ]
+
+      # A re-grant must name the map again, since this entry has no
+      # automatic one; re-sent as the head holds it, it commits, and the
+      # head keeps it.
+      assert Sanctum.Consent.Commit.grant(ctx, %{
+               profile_id: plan.profile_id,
+               expected_consent_revision: plan.expected_consent_revision,
+               bindings: [%{need: "api_key", entry_id: entry.id}]
+             }) == {:error, {:fields_unmapped, "api_key"}}
+
+      {:ok, %{revision: 2}} =
+        Sanctum.Consent.Commit.grant(ctx, %{
+          profile_id: plan.profile_id,
+          expected_consent_revision: plan.expected_consent_revision,
+          bindings:
+            for binding <- plan.head_bindings do
+              %{need: binding.need, entry_id: binding.entry_id, fields: binding.fields}
+              |> Prima.MapUtil.put_present(:name, binding[:connection])
+            end
+        })
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+
+      assert plan.head_bindings |> Enum.map(&{&1.binding_key, &1.fields}) |> Enum.sort() == [
+               {"#{ref}|@ingress|default", %{"OPENAI_API_KEY" => "secondary"}},
+               {"#{ref}|@ingress|name:spare", %{"OPENAI_API_KEY" => "primary"}}
+             ]
+    end
+
     test "a head binding of an instance entry names that entry, and an edge a lending " <>
            "profile fills names the profile's label, never an entry",
          %{ctx: ctx} do
@@ -1297,6 +1417,7 @@ defmodule Sanctum.Consent.PlanTest do
                %{
                  binding_key: "#{ref}|@ingress|default",
                  instance_entry_id: offered.id,
+                 fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"},
                  lifetime: %{kind: "standing", until: nil},
                  consumed: false,
                  source: "instance",
@@ -1335,7 +1456,7 @@ defmodule Sanctum.Consent.PlanTest do
              ]
     end
 
-    test "a lender names the fields and the scopes its binding lends", %{ctx: ctx} do
+    test "a lender names the field map and the scopes its binding lends", %{ctx: ctx} do
       publish!(ctx, "plan-lend-dep", "1.0.0", %{
         "needs" => %{
           "mail" => %{
@@ -1360,10 +1481,11 @@ defmodule Sanctum.Consent.PlanTest do
       {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-lend-app"})
       assert [%{candidates: [lender]}] = plan.dependency_needs
 
-      assert %{label: "default", entry_id: id, fields: [], scopes: ["gmail.readonly"]} = lender
+      assert %{label: "default", entry_id: id, fields: %{}, scopes: ["gmail.readonly"]} = lender
       assert id == mail.id
 
-      # A key's lender lends its fields and no scope.
+      # A key's lender lends its field map and no scope: here the automatic
+      # map of the need's one field to the entry's one field.
       publish!(ctx, "plan-lend-key", "1.0.0", %{
         "needs" => %{
           "api_key" => %{
@@ -1384,7 +1506,7 @@ defmodule Sanctum.Consent.PlanTest do
           name: "lent-key-#{System.unique_integer([:positive])}",
           kind: "api_key",
           provider_hint: "openai.com",
-          fields: %{"OPENAI_API_KEY" => "sk-lent"},
+          fields: %{"API key" => "sk-lent"},
           destination: %{"hosts" => ["api.openai.com"]}
         })
 
@@ -1394,7 +1516,7 @@ defmodule Sanctum.Consent.PlanTest do
 
       {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-lend-key-app"})
       assert [%{candidates: [key_lender]}] = plan.dependency_needs
-      assert %{fields: ["OPENAI_API_KEY"], scopes: []} = key_lender
+      assert %{fields: %{"OPENAI_API_KEY" => "API key"}, scopes: []} = key_lender
     end
   end
 

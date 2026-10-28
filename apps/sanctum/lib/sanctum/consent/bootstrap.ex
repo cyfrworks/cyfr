@@ -44,13 +44,19 @@ defmodule Sanctum.Consent.Bootstrap do
   the walk binds a need that admits an instance entry — one that declares
   `attach` and not `disclose` — when exactly one offered active instance
   entry is of the need's kind and provider and its component policy
-  admits the shipped catalyst, in the default slot, standing. A catalyst
+  admits the shipped catalyst, in the default slot, standing, under the
+  automatic field map (`Sanctum.Consent.Plan.field_map/2`), since no one
+  is there to choose one: where the entry's fields leave the need
+  unmapped, the walk binds nothing for it, logs
+  `{:fields_unmapped, need}` and still mints the consent. A catalyst
   with several such needs binds none, since its ingress edge carries one
   need's bindings. A server-side mint (`auth_method: :system`) has no
   person and binds nothing. A revision of a bootstrap-only head under a
   person keeps the head's instance binding while the person is still
   offered it at the same digest and the policy still admits the node,
-  and binds none otherwise. A revision with no person — a boot's seed
+  and binds none otherwise; either revision takes the automatic map
+  again, from the need of the release it revises to. A revision with no
+  person — a boot's seed
   sync — chooses nothing: it carries the head's instance binding as the
   head holds it (entry, digest, key and lifetime) onto the need that
   admits an instance entry, so a shipped catalyst's new release does not
@@ -437,23 +443,23 @@ defmodule Sanctum.Consent.Bootstrap do
              entry.kind == need.kind and entry.provider_hint == need.qualifier and
                Sanctum.InstanceEntries.admits?(ctx, entry, facts)
            end),
-         {:ok, view} <- entry_binding(ctx, entry.id, source_ref) do
-      {:ok, instance_binding(view, need)}
+         {:ok, view} <- entry_binding(ctx, entry.id, source_ref),
+         {:ok, binding} <- instance_binding(view, need) do
+      {:ok, binding}
     else
-      {:skip, _unread_or_damaged} = skip ->
-        skip
-
-      {:refused, reason} ->
-        Logger.warning(
-          "[Sanctum.Consent.Bootstrap] no instance entry bound for #{source_ref}: " <>
-            "#{inspect(reason)}"
-        )
-
-        {:ok, nil}
-
-      _nothing_offered ->
-        {:ok, nil}
+      {:skip, _unread_or_damaged} = skip -> skip
+      {:refused, reason} -> unbound(source_ref, reason)
+      _nothing_offered -> {:ok, nil}
     end
+  end
+
+  defp unbound(source_ref, reason) do
+    Logger.warning(
+      "[Sanctum.Consent.Bootstrap] no instance entry bound for #{source_ref}: " <>
+        "#{inspect(reason)}"
+    )
+
+    {:ok, nil}
   end
 
   # The entries offered to the walk's person, read as
@@ -490,24 +496,38 @@ defmodule Sanctum.Consent.Bootstrap do
     {:skip, {:unavailable, "Instance entries"}}
   end
 
+  # Provisioning has no person to ask for a field map, so it binds only
+  # under the automatic one (`Sanctum.Consent.Plan.field_map/2`), computed
+  # from the need it binds and the entry's field names, and refuses
+  # `{:fields_unmapped, need}` where there is none.
   defp instance_binding(view, need) do
     with %{} = map <- view.destination,
          {:ok, destination} <- Prima.Destination.from_map(map),
-         digest when is_binary(digest) <- view.binding_digest do
-      %{
-        need: need.name,
-        entry_id: view.id,
-        binding_digest: digest,
-        scope: "instance",
-        destination: Prima.Destination.to_map(destination),
-        attach: Prima.Manifest.Needs.attach_to_map(need.attach),
-        fields: need.fields,
-        scopes: need.scopes,
-        lifetime: %{kind: "standing", until: nil},
-        renew: false
-      }
+         digest when is_binary(digest) <- view.binding_digest,
+         {:ok, fields} <- automatic_map(need, view.field_names) do
+      {:ok,
+       %{
+         need: need.name,
+         entry_id: view.id,
+         binding_digest: digest,
+         scope: "instance",
+         destination: Prima.Destination.to_map(destination),
+         attach: Prima.Manifest.Needs.attach_to_map(need.attach),
+         fields: fields,
+         scopes: need.scopes,
+         lifetime: %{kind: "standing", until: nil},
+         renew: false
+       }}
     else
-      _ -> nil
+      {:refused, _unmapped} = refused -> refused
+      _ -> {:ok, nil}
+    end
+  end
+
+  defp automatic_map(need, field_names) do
+    case Sanctum.Consent.Plan.field_map(need, field_names) do
+      nil -> {:refused, {:fields_unmapped, need.name}}
+      fields -> {:ok, fields}
     end
   end
 
@@ -539,10 +559,12 @@ defmodule Sanctum.Consent.Bootstrap do
              ctx,
              view,
              Sanctum.Consent.Plan.node_facts(source_ref, graph, %{source_ref => component})
-           ) do
-      {:ok, instance_binding(view, need)}
+           ),
+         {:ok, binding} <- instance_binding(view, need) do
+      {:ok, binding}
     else
       {:skip, _unread_or_damaged} = skip -> skip
+      {:refused, {:fields_unmapped, _need} = reason} -> unbound(source_ref, reason)
       _ -> {:ok, nil}
     end
   end
@@ -573,7 +595,8 @@ defmodule Sanctum.Consent.Bootstrap do
          {:ok, row} <- carried_row(profile_id, refs, key, id),
          %{} = need <- instance_need(component, source_ref),
          {:ok, facts} <- entry_facts(id),
-         true <- still_holds?(facts, need, vault.binding_digest) do
+         true <- still_holds?(facts, need, vault.binding_digest),
+         {:ok, fields} <- automatic_map(need, facts.field_names) do
       {:ok,
        %{
          need: need.name,
@@ -582,7 +605,7 @@ defmodule Sanctum.Consent.Bootstrap do
          scope: "instance",
          destination: Prima.Destination.to_map(vault.destination),
          attach: Prima.Manifest.Needs.attach_to_map(need.attach),
-         fields: need.fields,
+         fields: fields,
          scopes: need.scopes,
          lifetime: %{kind: row.lifetime_kind, until: row.expires_at},
          renew: false
@@ -590,6 +613,7 @@ defmodule Sanctum.Consent.Bootstrap do
     else
       {:skip, _damaged} = skip -> skip
       {:unanswered, reason} -> {:error, reason}
+      {:refused, reason} -> unbound(source_ref, reason)
       _ -> {:ok, nil}
     end
   end

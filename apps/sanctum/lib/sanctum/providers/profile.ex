@@ -76,7 +76,11 @@ defmodule Sanctum.Providers.Profile do
               ),
               lifetime_arg,
               renew_arg,
-              Arg.new("fields", {:array, Arg.new(nil, :string)}),
+              Arg.new("fields", {:map, Arg.new(nil, :string)},
+                description:
+                  "Each field the need reads to the entry field that answers it; absent, " <>
+                    "the automatic map: equal names, or one field to one field"
+              ),
               Arg.new("scopes", {:array, Arg.new(nil, :string)})
             ]}
          )},
@@ -126,7 +130,12 @@ defmodule Sanctum.Providers.Profile do
                          "entry; it names an entry, never a label; absent for the default"
                    ),
                    Arg.new("from", :string),
-                   Arg.new("fields", {:array, Arg.new(nil, :string)}),
+                   Arg.new("fields", {:map, Arg.new(nil, :string)},
+                     description:
+                       "For an entry: each field the need reads to the entry field that " <>
+                         "answers it, absent for the automatic map; never with a label, " <>
+                         "which lends its profile's map"
+                   ),
                    lifetime_arg,
                    renew_arg
                  ]}
@@ -911,9 +920,9 @@ defmodule Sanctum.Providers.Profile do
 
   defp decode_tool_servers(_), do: {:error, "tool_servers must be a list"}
 
-  # Preserve absent projection keys so Consent.Commit applies the need's
-  # declared fields and scopes. An explicit list is passed as given, and
-  # Consent.Commit refuses an empty one: a projection names what it reads.
+  # Preserve absent projection keys so Consent.Commit applies the
+  # automatic field map and the need's declared scopes. What is given is
+  # passed as given, and Consent.Commit holds it to the need and the entry.
   defp decode_bindings(list) when is_list(list) do
     decoded =
       Enum.map(list, fn binding ->
@@ -957,7 +966,7 @@ defmodule Sanctum.Providers.Profile do
   # one of its profiles by label (the default one when it names nothing),
   # or an entry or instance entry for one of its needs, under an account
   # name beside the edge's default when it names one. `from` defaults to
-  # the source at commit. The fields, when given, narrow what is lent.
+  # the source at commit. The field map, when given, is an entry's.
   defp decode_selections(list) when is_list(list) do
     decoded =
       Enum.map(list, fn selection ->
@@ -1081,9 +1090,6 @@ defmodule Sanctum.Providers.Profile do
     do:
       "selection_unbound: the '#{label}' profile of #{dep} binds no usable entry — connect a key there first"
 
-  defp fmt({:selection_fields_unavailable, dep, fields}),
-    do: "selection_fields_unavailable: #{dep}'s profile does not lend #{Enum.join(fields, ", ")}"
-
   defp fmt({:entry_unavailable, id, status}),
     do: "entry_unavailable: #{id} is #{inspect(status)}"
 
@@ -1095,6 +1101,16 @@ defmodule Sanctum.Providers.Profile do
   # A binding's refusals name the need and never the entry's material.
   defp fmt({:provider_mismatch, need}) when is_binary(need),
     do: "provider_mismatch: #{inspect(need)} takes an entry of its own kind and provider"
+
+  defp fmt({:fields_unmapped, need}) when is_binary(need),
+    do:
+      "fields_unmapped: #{inspect(need)}: Choose which of the entry's fields answers each " <>
+        "field this need reads."
+
+  defp fmt({:invalid_field_map, need}) when is_binary(need),
+    do:
+      "invalid_field_map: #{inspect(need)}: The field map must name each field this need " <>
+        "reads once, and only fields the entry holds."
 
   defp fmt({:disclosure_refused, need}) when is_binary(need),
     do:

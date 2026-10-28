@@ -471,7 +471,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
 
       blob = build.(%{"via" => %{"label" => "default"}})
       {:ok, edge} = Blob.lookup_edge(blob, root, @dep, "")
-      assert edge.vault == %{via: %{label: "default", binding_digest: nil}, projection: nil}
+      assert edge.vault == %{via: %{label: "default", binding_digest: nil}}
     end
 
     test "keys one row per binding: an entry's names the entry, a selection's its label and pin",
@@ -556,7 +556,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
             scope: "athanor",
             destination: %{"hosts" => ["api.example.com"], "scheme" => "https"},
             attach: %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
-            fields: ["KEY"],
+            fields: %{"KEY" => "KEY"},
             scopes: []
           },
           over
@@ -976,7 +976,7 @@ defmodule Sanctum.Consent.BlobBuilderTest do
         scope: "athanor",
         destination: %{"hosts" => ["api.one.example"], "scheme" => "https"},
         attach: nil,
-        fields: ["api_key"],
+        fields: %{"api_key" => "api_key"},
         scopes: [],
         need: need
       })

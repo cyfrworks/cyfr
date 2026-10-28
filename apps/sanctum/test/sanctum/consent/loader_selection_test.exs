@@ -5,12 +5,13 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
   @moduledoc """
   A selected vault resolves at root load to the entry the named profile
   binds on its own ingress — and only then: an inactive profile, a
-  profile of another source, a moved binding or a projection the ingress
-  cannot satisfy leave the selection in place, which no run can unseal,
-  while a lending head whose bytes fail their digest or do not parse is
-  damage, refusing the run. A resolved selection carries both
-  identities: the borrower's binding key where the selection sits, and
-  the lender's profile, consent and binding key. Read row by row
+  profile of another source or a moved binding leave the selection in
+  place, which no run can unseal, while a lending head whose bytes fail
+  their digest or do not parse is damage, refusing the run. A resolved
+  selection reads under the lender's projection whole, as the lender's
+  head holds it at that load, and carries both identities: the
+  borrower's binding key where the selection sits, and the lender's
+  profile, consent and binding key. Read row by row
   (`row_binding/3`), a lending profile or head that is absent, damaged or
   unanswered by the store says which.
   """
@@ -37,7 +38,10 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
     "scope" => "athanor",
     "destination" => %{"hosts" => ["api.anthropic.com"], "scheme" => "https"},
     "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
-    "projection" => %{"fields" => ["ANTHROPIC_API_KEY", "ANTHROPIC_ORG"]}
+    "projection" => %{
+      "fields" => %{"ANTHROPIC_API_KEY" => "API key", "ANTHROPIC_ORG" => "organization"},
+      "scopes" => []
+    }
   }
 
   setup tags do
@@ -249,7 +253,10 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
              binding_key: "#{@formula}|#{@catalyst}|default",
              destination: %Prima.Destination{hosts: ["api.anthropic.com"], scheme: "https"},
              attach: %{in: "header", name: "x-api-key", template: "{value}"},
-             projection: %{fields: ["ANTHROPIC_API_KEY", "ANTHROPIC_ORG"], scopes: []},
+             projection: %{
+               fields: %{"ANTHROPIC_API_KEY" => "API key", "ANTHROPIC_ORG" => "organization"},
+               scopes: []
+             },
              # And the lender's: its profile, its consent and its own binding.
              lender: %{
                profile_id: "prof-claude",
@@ -377,34 +384,59 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
              load(ctx, profile)
   end
 
-  test "a projection narrows to what both allow, and never widens", %{ctx: ctx} do
+  test "a label selection reads under its lender's map", %{ctx: ctx} do
+    lent = %{"ANTHROPIC_API_KEY" => "API key", "ANTHROPIC_ORG" => "organization"}
+    put_catalyst!(ctx)
+    profile = put_formula!(ctx, %{"via" => %{"label" => "default"}})
+    authority = load!(ctx, profile)
+
+    assert %{projection: %{fields: ^lent, scopes: []}} = edge_vault(authority)
+
+    # The child the formula calls is handed the lender's map, so it reads
+    # its own field names from the lender's entry fields.
+    {:child, child} =
+      Transition.step(authority, :call, Fixtures.invoke(@catalyst, need: nil, declared_needs: []))
+
+    assert %{projection: %{fields: ^lent, scopes: []}} = child.resources.vault
+
+    # A lender that binds with no projection lends none: the selection
+    # names no projection of its own to fall back to.
+    put_catalyst!(ctx, vault: Map.delete(@key_vault, "projection"))
+    assert %{entry_id: "vault-anthropic", projection: nil} = edge_vault(load!(ctx, profile))
+
+    # A selection carrying a projection of its own does not parse, so its
+    # head is damage rather than a narrower lend.
     put_catalyst!(ctx)
 
-    selection = %{
-      "via" => %{"label" => "default"},
-      "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]}
-    }
-
-    profile = put_formula!(ctx, selection)
-
-    assert %{projection: %{fields: ["ANTHROPIC_API_KEY"], scopes: []}} =
-             edge_vault(load!(ctx, profile))
-
-    # A selection asking for a field the ingress does not grant resolves
-    # to nothing at all.
-    profile =
+    narrowing =
       put_formula!(ctx, %{
         "via" => %{"label" => "default"},
-        "projection" => %{"fields" => ["SOMETHING_ELSE"]}
+        "projection" => %{"fields" => %{"ANTHROPIC_API_KEY" => "API key"}, "scopes" => []}
       })
 
-    assert %{via: _} = edge_vault(load!(ctx, profile))
+    assert {:error, {:invalid_blob, _}} = load(ctx, narrowing)
+  end
 
-    # An ingress with no projection lends the selection's own.
-    put_catalyst!(ctx, vault: Map.delete(@key_vault, "projection"))
-    profile = put_formula!(ctx, selection)
+  test "a lender that re-grants under another map is followed at the next run", %{ctx: ctx} do
+    put_catalyst!(ctx)
 
-    assert %{projection: %{fields: ["ANTHROPIC_API_KEY"], scopes: []}} =
+    # Pinned to the lender's binding digest: the entry is the same, and a
+    # map is no part of that digest.
+    profile =
+      put_formula!(ctx, %{
+        "via" => %{"label" => "default", "binding_digest" => "sha256:anthropic"}
+      })
+
+    assert %{projection: %{fields: lent}} = edge_vault(load!(ctx, profile))
+    assert lent == @key_vault["projection"]["fields"]
+
+    regranted = %{"ANTHROPIC_API_KEY" => "secret key", "ANTHROPIC_ORG" => "organization"}
+
+    put_catalyst!(ctx,
+      vault: Map.put(@key_vault, "projection", %{"fields" => regranted, "scopes" => []})
+    )
+
+    assert %{entry_id: "vault-anthropic", projection: %{fields: ^regranted, scopes: []}} =
              edge_vault(load!(ctx, profile))
   end
 
@@ -448,7 +480,10 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
       vault:
         @key_vault
         |> Map.put("binding_digest", "sha256:other")
-        |> Map.put("projection", %{"fields" => ["ANTHROPIC_API_KEY"]})
+        |> Map.put("projection", %{
+          "fields" => %{"ANTHROPIC_API_KEY" => "API key"},
+          "scopes" => []
+        })
     )
 
     profile = %{
@@ -470,7 +505,10 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
               @catalyst => %{
                 "vault" =>
                   @key_vault
-                  |> Map.put("projection", %{"fields" => ["ANTHROPIC_API_KEY"]})
+                  |> Map.put("projection", %{
+                    "fields" => %{"ANTHROPIC_API_KEY" => "API key"},
+                    "scopes" => []
+                  })
                   |> Map.put("binding_key", Blob.binding_key(@formula, @catalyst, nil))
               }
             }
@@ -479,10 +517,7 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
             "limits" => Fixtures.limits_map(),
             "edges" => %{
               @catalyst => %{
-                "vault" => %{
-                  "via" => %{"label" => "default"},
-                  "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]}
-                }
+                "vault" => %{"via" => %{"label" => "default"}}
               }
             }
           },
@@ -783,16 +818,6 @@ defmodule Sanctum.Consent.LoaderSelectionTest do
 
     assert {:selection, "default", {:error, :binding_moved}} = row_binding.(pinned)
     assert %{via: _} = edge_vault(load!(ctx, pinned))
-
-    # A projection the lender's ingress cannot narrow to.
-    narrow =
-      put_formula!(ctx, %{
-        "via" => %{"label" => "default"},
-        "projection" => %{"fields" => ["SOMETHING_ELSE"]}
-      })
-
-    assert {:selection, "default", {:error, :projection_unsatisfiable}} = row_binding.(narrow)
-    assert %{via: _} = edge_vault(load!(ctx, narrow))
   end
 
   test "a lender whose grant does not admit the run's origin refuses the whole load, naming it",

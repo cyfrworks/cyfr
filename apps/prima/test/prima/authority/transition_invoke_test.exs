@@ -28,7 +28,12 @@ defmodule Prima.Authority.TransitionInvokeTest do
 
       assert child.cursor == {:bound, @catalyst}
       assert child.resources.vault.entry_id == "vault-source"
-      assert child.resources.vault.projection.fields == ["url", "anon_key"]
+
+      assert child.resources.vault.projection.fields == %{
+               "url" => "url",
+               "anon_key" => "anon key"
+             }
+
       assert child.resources.egress.domains == ["prod.supabase.co"]
       assert child.chain == [@formula, @catalyst]
       assert child.depth == 1

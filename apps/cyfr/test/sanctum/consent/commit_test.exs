@@ -349,6 +349,265 @@ defmodule Sanctum.Consent.CommitTest do
     end
   end
 
+  describe "a binding's field map" do
+    # A need the component reads itself, of two fields, and an entry of the
+    # need's provider holding neither name.
+    defp paired!(ctx, name) do
+      publish!(ctx, name, "1.0.0", %{
+        "needs" => %{
+          "api_key" => %{
+            "type" => "api_key:openai.com",
+            "reason" => "to call the model",
+            "fields" => ["KEY", "ORG"]
+          }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.openai.com"], "methods" => ["POST"]}}
+      })
+
+      entry = entry!(ctx, %{"token" => "t", "org" => "o"}, %{provider_hint: "openai.com"})
+      {"reagent:local.#{name}", entry}
+    end
+
+    defp bound_projection(ctx, profile_id, ref) do
+      {:ok, blob} = Prima.Authority.Blob.parse(head!(ctx, profile_id).resolved_policy)
+      {:ok, %{vault: vault}} = Prima.Authority.Blob.ingress(blob, ref)
+      vault.projection
+    end
+
+    defp credential_fields(preview),
+      do: for(%{"kind" => "credential", "values" => values} <- preview.rows, do: values["fields"])
+
+    test "a single-field need binds a single-field entry of another field name with the " <>
+           "automatic map",
+         %{ctx: ctx} do
+      publish!(ctx, "commit-map-single", "1.0.0", keyed_manifest())
+      ref = "reagent:local.commit-map-single"
+      entry = key!(ctx, %{fields: %{"API key" => "sk-single"}})
+      decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: entry.id}]}
+
+      {:ok, preview} = Commit.preview(ctx, decisions)
+      assert credential_fields(preview) == [%{"OPENAI_API_KEY" => "API key"}]
+
+      {:ok, %{profile_id: profile_id}} = walk!(ctx, ref, %{bindings: decisions.bindings})
+
+      assert bound_projection(ctx, profile_id, ref) == %{
+               fields: %{"OPENAI_API_KEY" => "API key"},
+               scopes: []
+             }
+    end
+
+    test "a need whose fields the entry does not hold is refused `fields_unmapped` without a map",
+         %{ctx: ctx} do
+      {ref, entry} = paired!(ctx, "commit-map-unmapped")
+      binding = %{need: "api_key", entry_id: entry.id}
+
+      assert {:error, {:fields_unmapped, "api_key"}} =
+               Commit.preview(ctx, %{ref: ref, bindings: [binding]})
+
+      # A single-field need over an entry of two fields, neither its name,
+      # has no automatic map either.
+      publish!(
+        ctx,
+        "commit-map-one-of-two",
+        "1.0.0",
+        update_in(keyed_manifest(), ["needs", "api_key"], &Map.delete(&1, "attach"))
+      )
+
+      assert {:error, {:fields_unmapped, "api_key"}} =
+               Commit.preview(ctx, %{
+                 ref: "reagent:local.commit-map-one-of-two",
+                 bindings: [binding]
+               })
+
+      # The refusal reaches a caller in its own words, and nothing is written.
+      assert {:error, sentence} =
+               Profile.handle(ctx, %{
+                 "action" => "preview",
+                 "decisions" => %{
+                   "ref" => ref,
+                   "bindings" => [%{"need" => "api_key", "entry_id" => entry.id}]
+                 }
+               })
+
+      assert sentence ==
+               ~s(fields_unmapped: "api_key": Choose which of the entry's fields answers each ) <>
+                 "field this need reads."
+
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+
+      # The person's map commits, and the head holds it.
+      map = %{"KEY" => "token", "ORG" => "org"}
+
+      {:ok, %{profile_id: profile_id}} =
+        walk!(ctx, ref, %{bindings: [Map.put(binding, :fields, map)]})
+
+      assert bound_projection(ctx, profile_id, ref) == %{fields: map, scopes: []}
+    end
+
+    test "a map with an unknown key, a missing key or a value the entry lacks is refused " <>
+           "`invalid_field_map`",
+         %{ctx: ctx} do
+      {ref, entry} = paired!(ctx, "commit-map-invalid")
+      preview = &Commit.preview(ctx, %{ref: ref, bindings: [Map.put(&1, :entry_id, entry.id)]})
+
+      for fields <- [
+            %{"KEY" => "token"},
+            %{"KEY" => "token", "ORG" => "org", "EXTRA" => "org"},
+            %{"KEY" => "token", "ORG" => "nope"},
+            %{"KEY" => "token", "ORG" => ""},
+            %{"KEY" => "token", "ORG" => 1},
+            %{},
+            ["KEY", "ORG"]
+          ] do
+        assert preview.(%{need: "api_key", fields: fields}) ==
+                 {:error, {:invalid_field_map, "api_key"}},
+               inspect(fields)
+      end
+
+      # Two of the need's fields may read one entry field.
+      assert {:ok, _} =
+               preview.(%{need: "api_key", fields: %{"KEY" => "token", "ORG" => "token"}})
+
+      assert {:error, sentence} =
+               Profile.handle(ctx, %{
+                 "action" => "preview",
+                 "decisions" => %{
+                   "ref" => ref,
+                   "bindings" => [
+                     %{"need" => "api_key", "entry_id" => entry.id, "fields" => %{"KEY" => "org"}}
+                   ]
+                 }
+               })
+
+      assert sentence ==
+               ~s(invalid_field_map: "api_key": The field map must name each field this need ) <>
+                 "reads once, and only fields the entry holds."
+
+      # The slot of a manifest declaring no needs reads the entry's own
+      # fields, so its map's keys are the entry's names.
+      publish!(ctx, "commit-map-ingress")
+      ingress = "reagent:local.commit-map-ingress"
+      slot = entry!(ctx)
+
+      assert {:error, {:invalid_field_map, "@ingress"}} =
+               Commit.preview(ctx, %{
+                 ref: ingress,
+                 bindings: [%{need: "@ingress", entry_id: slot.id, fields: %{"url" => "url"}}]
+               })
+
+      assert {:ok, _} =
+               Commit.preview(ctx, %{
+                 ref: ingress,
+                 bindings: [
+                   %{
+                     need: "@ingress",
+                     entry_id: slot.id,
+                     fields: %{"url" => "anon_key", "anon_key" => "anon_key"}
+                   }
+                 ]
+               })
+    end
+
+    test "an instance entry's map is checked against its field names", %{ctx: ctx} do
+      {person, _user} = Sanctum.TestContext.person!(ctx)
+      ref = custom!(person, "commit-map-instance")
+      single = instance!(%{field_names: ~s(["API key"])})
+      pair = instance!(%{field_names: ~s(["primary","secondary"])})
+      none = instance!(%{field_names: ~s([])})
+
+      bind = fn entry, over ->
+        Commit.preview(person, %{
+          ref: ref,
+          bindings: [Map.merge(%{need: "api_key", instance_entry_id: entry.id}, over)]
+        })
+      end
+
+      # The automatic map, from the instance entry's one field.
+      assert {:ok, preview} = bind.(single, %{})
+      assert credential_fields(preview) == [%{"OPENAI_API_KEY" => "API key"}]
+
+      # A name the instance entry does not hold, though the need reads it.
+      assert bind.(single, %{fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}}) ==
+               {:error, {:invalid_field_map, "api_key"}}
+
+      assert bind.(pair, %{}) == {:error, {:fields_unmapped, "api_key"}}
+      assert {:ok, preview} = bind.(pair, %{fields: %{"OPENAI_API_KEY" => "secondary"}})
+      assert credential_fields(preview) == [%{"OPENAI_API_KEY" => "secondary"}]
+
+      # An instance entry holding no field meets no map.
+      assert bind.(none, %{}) == {:error, {:fields_unmapped, "api_key"}}
+
+      assert bind.(none, %{fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}}) ==
+               {:error, {:invalid_field_map, "api_key"}}
+
+      {:ok, %{profile_id: profile_id}} =
+        walk!(person, ref, %{
+          bindings: [
+            %{
+              need: "api_key",
+              instance_entry_id: pair.id,
+              fields: %{"OPENAI_API_KEY" => "secondary"}
+            }
+          ]
+        })
+
+      assert %{fields: %{"OPENAI_API_KEY" => "secondary"}, scopes: []} =
+               bound_projection(person, profile_id, ref)
+    end
+
+    test "a change to the map alone changes the commit digest, and a proof minted before it " <>
+           "is refused",
+         %{ctx: ctx} do
+      {ref, entry} = paired!(ctx, "commit-map-digest")
+
+      decisions = fn fields ->
+        %{ref: ref, bindings: [%{need: "api_key", entry_id: entry.id, fields: fields}]}
+      end
+
+      before = decisions.(%{"KEY" => "token", "ORG" => "org"})
+      changed = decisions.(%{"KEY" => "org", "ORG" => "token"})
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      {:ok, before_preview} = Commit.preview(ctx, before)
+      {:ok, changed_preview} = Commit.preview(ctx, changed)
+
+      # The same map, previewed again, is the same digest; only the map
+      # moved between the two.
+      assert {:ok, %{commit_digest: digest}} = Commit.preview(ctx, before)
+      assert digest == before_preview.commit_digest
+      refute changed_preview.commit_digest == before_preview.commit_digest
+
+      assert {:error, {:consent_conflict, %{cause: :digest_changed}}} =
+               Commit.commit(ctx, %{
+                 decisions: changed,
+                 plan_token: plan.plan_token,
+                 proof: before_preview.proof,
+                 commit_digest: changed_preview.commit_digest,
+                 expected_consent_revision: plan.expected_consent_revision
+               })
+
+      assert {:ok, []} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
+
+      # The changed decisions under their own proof commit that map.
+      {:ok, plan} = Plan.plan(ctx, %{ref: ref})
+      {:ok, changed_preview} = Commit.preview(ctx, changed)
+
+      {:ok, %{profile_id: profile_id}} =
+        Commit.commit(ctx, %{
+          decisions: changed,
+          plan_token: plan.plan_token,
+          proof: changed_preview.proof,
+          commit_digest: changed_preview.commit_digest,
+          expected_consent_revision: plan.expected_consent_revision
+        })
+
+      assert bound_projection(ctx, profile_id, ref) == %{
+               fields: %{"KEY" => "org", "ORG" => "token"},
+               scopes: []
+             }
+    end
+  end
+
   describe "the preview" do
     test "answers a ConsentPreview with the commit digest, and no summary", %{ctx: ctx} do
       publish!(ctx, "commit-preview")
@@ -358,7 +617,7 @@ defmodule Sanctum.Consent.CommitTest do
       {:ok, preview} =
         Commit.preview(ctx, %{
           ref: ref,
-          bindings: [%{need: "@ingress", entry_id: entry.id, fields: ["url"]}]
+          bindings: [%{need: "@ingress", entry_id: entry.id}]
         })
 
       assert {:ok, %ConsentPreview{} = decoded} = ConsentPreview.decode(document(preview))
@@ -386,7 +645,7 @@ defmodule Sanctum.Consent.CommitTest do
                %{
                  "name" => entry.name,
                  "edge" => "@ingress",
-                 "fields" => ["url"],
+                 "fields" => %{"anon_key" => "anon_key", "url" => "url"},
                  "scopes" => [],
                  "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
                  "disclosed" => true,
@@ -2232,8 +2491,11 @@ defmodule Sanctum.Consent.CommitTest do
       {:ok, edge} =
         Prima.Authority.Blob.lookup_edge(blob, two, "reagent:local.commit-dep-a", "")
 
-      assert %{entry_id: id, scope: "athanor", projection: %{fields: ["OPENAI_API_KEY"]}} =
-               edge.vault
+      assert %{
+               entry_id: id,
+               scope: "athanor",
+               projection: %{fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}}
+             } = edge.vault
 
       assert id == key.id
       assert Prima.Manifest.Needs.attach_to_map(edge.vault.attach) == @attach
@@ -2348,7 +2610,7 @@ defmodule Sanctum.Consent.CommitTest do
       assert values == %{
                "name" => "database",
                "edge" => "reagent:local.commit-db",
-               "fields" => ["anon_key"],
+               "fields" => %{"anon_key" => "anon_key"},
                "scopes" => [],
                "destination" => %{"hosts" => ["abc.supabase.co"], "scheme" => "https"},
                "source" => "provided",

@@ -95,7 +95,10 @@ defmodule Prima.Test.AuthorityFixtures do
               "vault" =>
                 bound_vault(@formula, "#{@catalyst}|source", "vault-source", "sha256:bind-source",
                   attach: attach_map(),
-                  projection: %{"fields" => ["url", "anon_key"]}
+                  projection: %{
+                    "fields" => %{"url" => "url", "anon_key" => "anon key"},
+                    "scopes" => []
+                  }
                 ),
               "egress" => %{"domains" => ["prod.supabase.co"], "schemes" => ["https"]},
               "tools" => ["storage.read", "storage.write"]
@@ -103,7 +106,10 @@ defmodule Prima.Test.AuthorityFixtures do
             "#{@catalyst}|dest" => %{
               "vault" =>
                 bound_vault(@formula, "#{@catalyst}|dest", "vault-dest", "sha256:bind-dest",
-                  projection: %{"fields" => ["url", "service_key"]}
+                  projection: %{
+                    "fields" => %{"url" => "url", "service_key" => "service_key"},
+                    "scopes" => []
+                  }
                 )
             },
             @reagent => %{}

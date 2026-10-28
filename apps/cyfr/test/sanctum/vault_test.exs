@@ -108,7 +108,7 @@ defmodule Sanctum.VaultTest do
   defp resource_for(ctx, id) do
     {:ok, entry} = Arca.VaultStorage.get(actor(ctx), id)
     {:ok, digest} = VaultReader.binding_digest(entry)
-    fields = entry.field_names |> Jason.decode!() |> Enum.sort()
+    fields = entry.field_names |> Jason.decode!() |> Map.new(&{&1, &1})
     %{entry_id: id, binding_digest: digest, projection: %{fields: fields, scopes: []}}
   end
 
@@ -847,7 +847,7 @@ defmodule Sanctum.VaultTest do
       narrower = %{
         entry_id: view.id,
         binding_digest: after_row.binding_digest,
-        projection: %{fields: [], scopes: ["gmail.readonly"]}
+        projection: %{fields: %{}, scopes: ["gmail.readonly"]}
       }
 
       assert {:error, :scope_not_attenuable} =
@@ -1177,7 +1177,7 @@ defmodule Sanctum.VaultTest do
       resource = %{
         entry_id: view.id,
         binding_digest: digest,
-        projection: %{fields: [], scopes: ["gmail.readonly"]}
+        projection: %{fields: %{}, scopes: ["gmail.readonly"]}
       }
 
       assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, resource, "google", @dispense)

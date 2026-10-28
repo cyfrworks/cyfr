@@ -116,10 +116,14 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     {result, preview}
   end
 
-  # The dependency's profiles: "default" bound to one key, "work" to another.
+  # The dependency's profiles: "default" bound to one key under the
+  # automatic map, "work" to another whose fields are named otherwise,
+  # under the map the person chose.
+  @work_map %{"KEY" => "token", "ORG" => "org"}
+
   defp lenders!(ctx) do
     home = entry!(ctx, "home key", %{"KEY" => "k-home", "ORG" => "o-home"})
-    work = entry!(ctx, "work key", %{"KEY" => "k-work", "ORG" => "o-work"})
+    work = entry!(ctx, "work key", %{"token" => "k-work", "org" => "o-work"})
 
     {{:ok, %{profile_id: default}}, _} =
       walk!(ctx, @dep, %{bindings: [%{need: "api_key", entry_id: home.id}]})
@@ -127,7 +131,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     {{:ok, %{profile_id: work_profile}}, _} =
       walk!(ctx, @dep, %{
         label: "work",
-        bindings: [%{need: "api_key", entry_id: work.id, fields: ["KEY"]}]
+        bindings: [%{need: "api_key", entry_id: work.id, fields: @work_map}]
       })
 
     %{default: default, work: work_profile, home_entry: home, work_entry: work}
@@ -168,7 +172,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
                source: "own",
                entry_id: lenders.home_entry.id,
                entry_name: "home key",
-               fields: ["KEY", "ORG"],
+               fields: %{"KEY" => "KEY", "ORG" => "ORG"},
                scopes: []
              },
              %{
@@ -177,7 +181,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
                source: "own",
                entry_id: lenders.work_entry.id,
                entry_name: "work key",
-               fields: ["KEY"],
+               fields: @work_map,
                scopes: []
              }
            ]
@@ -377,31 +381,27 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
     selections = [%{dep: @oauth_dep, label: "default"}]
 
-    # Naming a field the lender does not lend widens it, and an explicit
-    # empty list names nothing: both are refused.
-    assert {:error, {:selection_fields_unavailable, @oauth_dep, ["KEY"]}} =
-             Commit.preview(person, %{
-               ref: @oauth_source,
-               selections: [%{dep: @oauth_dep, label: "default", fields: ["KEY"]}]
-             })
-
-    assert {:error, {:invalid_argument, _}} =
-             Commit.preview(person, %{
-               ref: @oauth_source,
-               selections: [%{dep: @oauth_dep, label: "default", fields: []}]
-             })
+    # A label selection reads under its lender's projection and names no
+    # field map of its own, an empty one included.
+    for fields <- [%{"KEY" => "KEY"}, %{}] do
+      assert {:error, {:invalid_argument, _}} =
+               Commit.preview(person, %{
+                 ref: @oauth_source,
+                 selections: [%{dep: @oauth_dep, label: "default", fields: fields}]
+               })
+    end
 
     {{:ok, %{profile_id: profile_id}}, preview} =
       walk!(person, @oauth_source, %{selections: selections})
 
     assert [%{"values" => values}] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
-    assert values["scopes"] == ["gmail.readonly"] and values["fields"] == []
+    assert values["scopes"] == ["gmail.readonly"] and values["fields"] == %{}
 
     {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(person), profile_id)
     assert [%{via_label: "default"}] = head.vault_refs
 
     # Loaded, the borrowed edge carries the lender's scopes whole.
-    assert %{projection: %{scopes: ["gmail.readonly"], fields: []}, lender: %{}} =
+    assert %{projection: %{scopes: ["gmail.readonly"], fields: %{}}, lender: %{}} =
              edge_vault_of(person, @oauth_source, @oauth_dep)
 
     values
@@ -431,9 +431,9 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     edge.vault
   end
 
-  test "two sources select two profiles of one dependency and run it with two keys", %{
-    ctx: ctx
-  } do
+  test "two sources select two profiles of one dependency and run it with two keys, each " <>
+         "read under its lender's field map",
+       %{ctx: ctx} do
     lenders = lenders!(ctx)
 
     {{:ok, %{profile_id: _}}, preview} =
@@ -454,7 +454,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
                  "name" => "home key",
                  "edge" => @dep,
                  "label" => "default",
-                 "fields" => ["KEY", "ORG"],
+                 "fields" => %{"KEY" => "KEY", "ORG" => "ORG"},
                  "scopes" => [],
                  # The borrower's own binding, standing, chosen by the
                  # person: the lent entry is the athanor's default for the
@@ -470,7 +470,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
 
     {{:ok, _}, _} =
       walk!(ctx, "reagent:local.sel-source-two", %{
-        selections: [%{dep: @dep, label: "work", fields: ["KEY"]}]
+        selections: [%{dep: @dep, label: "work"}]
       })
 
     {:ok, home_row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), lenders.home_entry.id)
@@ -482,7 +482,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert %{
              entry_id: ^home_id,
              binding_digest: ^home_digest,
-             projection: %{fields: ["KEY", "ORG"]},
+             projection: %{fields: %{"KEY" => "KEY", "ORG" => "ORG"}},
              binding_key: ^borrower_key,
              lender: %{binding_key: lender_key}
            } =
@@ -492,8 +492,18 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     # on the dependency's own ingress.
     assert lender_key == "#{@dep}|@ingress|default"
 
-    assert %{entry_id: ^work_id, projection: %{fields: ["KEY"], scopes: []}} =
-             edge_vault(ctx, "reagent:local.sel-source-two")
+    work_map = @work_map
+
+    assert %{entry_id: ^work_id, projection: %{fields: ^work_map, scopes: []}} =
+             work_vault = edge_vault(ctx, "reagent:local.sel-source-two")
+
+    # The borrower reads the dependency's own field names, each answered
+    # from the entry field the lender's map names.
+    assert Sanctum.VaultReader.fetch(
+             ctx,
+             work_vault,
+             edge_use(ctx, "reagent:local.sel-source-two")
+           ) == {:ok, %{"KEY" => "k-work", "ORG" => "o-work"}}
 
     # The stored blob carries the selection, pinned, and references no entry
     # of its own: its row is the borrower's binding, naming the label it
@@ -539,7 +549,8 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert selected.commit_digest != other.commit_digest
   end
 
-  test "a selection names a dependency, an active owner profile of it that binds a key, and fields it lends",
+  test "a selection names a dependency and an active owner profile of it that binds a key, " <>
+         "and no field map of its own",
        %{ctx: ctx} do
     lenders = lenders!(ctx)
     ref = "reagent:local.sel-source"
@@ -559,18 +570,17 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert {:error, {:selection_unbound, @dep, "empty"}} =
              Commit.preview(ctx, %{ref: ref, selections: [%{dep: @dep, label: "empty"}]})
 
-    assert {:error, {:selection_fields_unavailable, @dep, ["ORG"]}} =
-             Commit.preview(ctx, %{
-               ref: ref,
-               selections: [%{dep: @dep, label: "work", fields: ["ORG"]}]
-             })
+    # A label selection lends its lender's map whole: one naming a map of
+    # its own, the lender's own map or an empty one, is refused.
+    for fields <- [%{"KEY" => "token"}, @work_map, %{}] do
+      assert {:error, {:invalid_argument, message}} =
+               Commit.preview(ctx, %{
+                 ref: ref,
+                 selections: [%{dep: @dep, label: "work", fields: fields}]
+               })
 
-    # An explicit empty list names nothing: refused, never "every field".
-    assert {:error, {:invalid_argument, _message}} =
-             Commit.preview(ctx, %{
-               ref: ref,
-               selections: [%{dep: @dep, label: "work", fields: []}]
-             })
+      assert message =~ "names fields"
+    end
 
     # A revoked lender is not offered and not accepted.
     :ok =
@@ -1253,10 +1263,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     ref = "reagent:local.sel-source"
     {:ok, plan} = Profile.handle(ctx, %{"action" => "plan", "ref" => ref})
 
-    decisions = %{
-      "ref" => ref,
-      "selections" => [%{"dep" => @dep, "fields" => ["KEY"]}]
-    }
+    decisions = %{"ref" => ref, "selections" => [%{"dep" => @dep}]}
 
     {:ok, preview} =
       Profile.handle(ctx, %{"action" => "preview", "decisions" => decisions})
@@ -1271,7 +1278,8 @@ defmodule Sanctum.Consent.SelectionFlowTest do
         "expected_consent_revision" => plan.expected_consent_revision
       })
 
-    assert %{projection: %{fields: ["KEY"]}} = edge_vault(ctx, ref)
+    # Naming no label borrows the default profile, under its map.
+    assert %{projection: %{fields: %{"KEY" => "KEY", "ORG" => "ORG"}}} = edge_vault(ctx, ref)
 
     {:ok, with_from} =
       Profile.handle(ctx, %{
@@ -1294,6 +1302,20 @@ defmodule Sanctum.Consent.SelectionFlowTest do
              })
 
     assert msg =~ "selection_profile_unavailable"
+
+    # A label selection on the wire names no field map.
+    assert {:error, refused} =
+             Profile.handle(ctx, %{
+               "action" => "preview",
+               "decisions" => %{
+                 "ref" => ref,
+                 "selections" => [
+                   %{"dep" => @dep, "label" => "work", "fields" => %{"KEY" => "token"}}
+                 ]
+               }
+             })
+
+    assert refused =~ "names fields"
   end
 
   test "a dependency's need offers its own choice, and a selection naming an entry binds " <>
@@ -1320,7 +1342,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
         %{
           "dep" => @dep,
           "entry_id" => lenders.work_entry.id,
-          "fields" => ["KEY"],
+          "fields" => %{"KEY" => "token", "ORG" => "token"},
           "lifetime" => %{"kind" => "once"}
         }
       ]
@@ -1331,7 +1353,24 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     assert [%{"values" => values}] = Enum.filter(preview.rows, &(&1["kind"] == "credential"))
     assert values["lifetime"] == %{"kind" => "once", "until" => nil}
     assert values["suggested"] == false
+    assert values["fields"] == %{"KEY" => "token", "ORG" => "token"}
     refute Map.has_key?(values, "label")
+
+    # An entry selection names its own map: the work key's fields are named
+    # otherwise than the need's, so it has no automatic one.
+    assert {:error, {:fields_unmapped, "api_key"}} =
+             Commit.preview(ctx, %{
+               ref: ref,
+               selections: [%{dep: @dep, entry_id: lenders.work_entry.id}]
+             })
+
+    assert {:error, {:invalid_field_map, "api_key"}} =
+             Commit.preview(ctx, %{
+               ref: ref,
+               selections: [
+                 %{dep: @dep, entry_id: lenders.work_entry.id, fields: %{"KEY" => "token"}}
+               ]
+             })
 
     {:ok, %{status: "committed", profile_id: profile_id}} =
       Profile.handle(ctx, %{
@@ -1356,9 +1395,11 @@ defmodule Sanctum.Consent.SelectionFlowTest do
              }
            ] = head.vault_refs
 
-    # The edge binds the entry itself, under the need's projection as the
-    # selection narrowed it: no lender stands behind it.
-    assert %{entry_id: ^work_id, projection: %{fields: ["KEY"]}} = vault = edge_vault(ctx, ref)
+    # The edge binds the entry itself, under the selection's own map: no
+    # lender stands behind it.
+    assert %{entry_id: ^work_id, projection: %{fields: %{"KEY" => "token", "ORG" => "token"}}} =
+             vault = edge_vault(ctx, ref)
+
     refute Map.has_key?(vault, :lender)
   end
 
@@ -1492,21 +1533,27 @@ defmodule Sanctum.Consent.SelectionFlowTest do
   test "one key may ride two edges under two projections", %{ctx: ctx} do
     lenders = lenders!(ctx)
     tree!(ctx)
+    home_id = lenders.home_entry.id
 
+    # Lent under the lender's map on one edge, and chosen with a map of its
+    # own on the other.
     {{:ok, _}, _} =
       walk!(ctx, @root, %{
         selections: [
-          %{from: @role_a, dep: @dep, label: "default", fields: ["KEY"]},
-          %{from: @role_b, dep: @dep, label: "default", fields: ["KEY", "ORG"]}
+          %{from: @role_a, dep: @dep, label: "default"},
+          %{
+            from: @role_b,
+            dep: @dep,
+            entry_id: home_id,
+            fields: %{"KEY" => "KEY", "ORG" => "KEY"}
+          }
         ]
       })
 
-    home_id = lenders.home_entry.id
-
-    assert %{entry_id: ^home_id, projection: %{fields: ["KEY"]}} =
+    assert %{entry_id: ^home_id, projection: %{fields: %{"KEY" => "KEY", "ORG" => "ORG"}}} =
              root_edge_vault(ctx, @role_a)
 
-    assert %{entry_id: ^home_id, projection: %{fields: ["KEY", "ORG"]}} =
+    assert %{entry_id: ^home_id, projection: %{fields: %{"KEY" => "KEY", "ORG" => "KEY"}}} =
              root_edge_vault(ctx, @role_b)
   end
 
@@ -1526,7 +1573,15 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     })
 
     {{:ok, _}, _} =
-      walk!(ctx, dep_two, %{bindings: [%{need: "api_key", entry_id: lenders.home_entry.id}]})
+      walk!(ctx, dep_two, %{
+        bindings: [
+          %{
+            need: "api_key",
+            entry_id: lenders.home_entry.id,
+            fields: %{"KEY" => "KEY", "ORG" => "KEY"}
+          }
+        ]
+      })
 
     publish!(ctx, "sel-source-both", %{
       "dependencies" => %{"static" => [%{"ref" => @dep}, %{"ref" => dep_two}]}
@@ -1537,7 +1592,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
     {{:ok, _}, preview} =
       walk!(ctx, "reagent:local.sel-source-both", %{
         selections: [
-          %{dep: @dep, label: "default", fields: ["KEY"]},
+          %{dep: @dep, label: "default"},
           %{dep: dep_two, label: "default"}
         ]
       })
@@ -1548,8 +1603,16 @@ defmodule Sanctum.Consent.SelectionFlowTest do
           do: row["values"]
 
     assert [
-             %{"name" => "home key", "edge" => @dep, "fields" => ["KEY"]},
-             %{"name" => "home key", "edge" => ^dep_two, "fields" => ["KEY", "ORG"]}
+             %{
+               "name" => "home key",
+               "edge" => @dep,
+               "fields" => %{"KEY" => "KEY", "ORG" => "ORG"}
+             },
+             %{
+               "name" => "home key",
+               "edge" => ^dep_two,
+               "fields" => %{"KEY" => "KEY", "ORG" => "KEY"}
+             }
            ] = Enum.sort_by(credentials, & &1["edge"])
   end
 

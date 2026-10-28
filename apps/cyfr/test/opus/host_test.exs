@@ -1388,7 +1388,7 @@ defmodule Opus.HostTest do
         target,
         entry_id,
         "sha256:bind-" <> entry_id,
-        [projection: %{"scopes" => ["fixture.scope"]}] ++ opts
+        [projection: %{"fields" => %{}, "scopes" => ["fixture.scope"]}] ++ opts
       )
     end
 

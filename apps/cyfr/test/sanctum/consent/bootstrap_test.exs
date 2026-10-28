@@ -183,11 +183,11 @@ defmodule Sanctum.Consent.BootstrapTest do
       entry
     end
 
-    defp model_head!(ctx) do
-      {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @model)
+    defp model_head!(ctx, ref \\ @model) do
+      {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
       {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
       {:ok, blob} = Blob.parse(head.resolved_policy)
-      {:ok, ingress} = Blob.ingress(blob, @model)
+      {:ok, ingress} = Blob.ingress(blob, ref)
       {head, ingress.vault}
     end
 
@@ -919,6 +919,85 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert {:ok, %{revised: [@model]}} = Bootstrap.run(seed(ctx))
       {head, vault} = model_head!(person)
       assert head.revision == 2
+      assert vault == nil and head.vault_refs == []
+    end
+
+    @grok "catalyst:local.grok"
+    @grok_unit Path.expand("../../../../../seed/components/catalysts/local/grok", __DIR__)
+    @xai ~s({"hosts":["api.x.ai"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+
+    # The newest Grok catalyst the seed ships: its need and its caps,
+    # released at `version` with `limits` over its own.
+    defp ship_grok!(ctx, version \\ nil, limits \\ %{}) do
+      newest = @grok_unit |> File.ls!() |> Compendium.Semver.sort_desc() |> hd()
+
+      shipped =
+        Path.join([@grok_unit, newest, "cyfr-manifest.json"]) |> File.read!() |> Jason.decode!()
+
+      version = version || newest
+
+      {:ok, component} =
+        Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "grok", version,
+          manifest:
+            shipped
+            |> Map.take(~w(name type publisher description needs caps))
+            |> Map.put("version", version)
+            |> update_in(["caps", "limits"], &Map.merge(&1, limits)),
+          wasm: Cyfr.Test.Guests.wasm(:catalyst)
+        )
+
+      {component, shipped}
+    end
+
+    # An entry of x.ai's offered to everyone, holding `field_names` and
+    # admitting POST under /v1/ on api.x.ai.
+    defp offer_xai!(field_names) do
+      offer!(%{provider_hint: "x.ai", field_names: Jason.encode!(field_names), destination: @xai})
+    end
+
+    test "provisioning binds that entry at first sign-in with the automatic map, and a boot's " <>
+           "revision to a new release keeps it",
+         %{ctx: ctx, person: person} do
+      {first_release, shipped} = ship_grok!(person)
+      assert %{"api_key" => %{"fields" => ["GROK_API_KEY"]}} = shipped["needs"]
+      offered = offer_xai!(["API key"])
+
+      # The need's one field and the entry's one field: the automatic map.
+      assert {:ok, %{minted: minted}} = Bootstrap.run(person)
+      assert @grok in minted
+      {first, bound} = model_head!(person, @grok)
+      assert first.revision == 1
+      assert bound.entry_id == offered.id
+      assert bound.projection == %{fields: %{"GROK_API_KEY" => "API key"}, scopes: []}
+
+      # A new release whose limits differ moves the shape, so a boot's seed
+      # sync, with no person, revises the bootstrap-only head rather than
+      # skipping it as already bootstrapped.
+      refute shipped["caps"]["limits"]["timeout"] == "7m"
+      new_version = Version.parse!(first_release.version) |> Map.update!(:patch, &(&1 + 1))
+      ship_grok!(person, to_string(new_version), %{"timeout" => "7m"})
+
+      assert {:ok, %{revised: [@grok]}} = Bootstrap.run(seed(ctx))
+      {revised, kept} = model_head!(person, @grok)
+      assert revised.revision == 2
+      refute revised.shape_digest == first.shape_digest
+      assert {kept.entry_id, kept.binding_digest} == {offered.id, offered.binding_digest}
+      assert kept.projection == %{fields: %{"GROK_API_KEY" => "API key"}, scopes: []}
+    end
+
+    test "provisioning binds nothing where the entry's fields leave the need unmapped, and " <>
+           "still mints the consent",
+         %{person: person} do
+      ship_grok!(person)
+      offer_xai!(["key id", "secret"])
+
+      {answer, log} = with_log(fn -> Bootstrap.run(person) end)
+
+      assert {:ok, %{minted: minted, skipped: []}} = answer
+      assert @grok in minted
+      assert log =~ ~s(no instance entry bound for #{@grok}: {:fields_unmapped, "api_key"})
+      {head, vault} = model_head!(person, @grok)
+      assert head.revision == 1
       assert vault == nil and head.vault_refs == []
     end
 

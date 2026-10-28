@@ -34,8 +34,9 @@ defmodule Sanctum.Consent.Plan do
   A plan for a profile with a head says what the head holds:
   `head_origins`, the origins it admits, so a re-grant starts from them
   rather than quietly dropping one; `head_bindings`, each binding the head
-  holds as `%{binding_key, lifetime: %{kind, until}, consumed}` and what
-  it binds (`entry_id`, `instance_entry_id` or a lending profile's
+  holds as `%{binding_key, lifetime: %{kind, until}, consumed}`, the
+  field map its blob holds at that key (`fields`, absent for a lent
+  binding and for one the blob does not hold), what it binds (`entry_id`, `instance_entry_id` or a lending profile's
   `label`) from its `consent_vault_refs` row (`consumed` when a root has
   used a `once` binding), placed as the commit reads it (`source`, `node`,
   `edge`, `dep`, `connection` and the `need` it was bound for,
@@ -71,8 +72,12 @@ defmodule Sanctum.Consent.Plan do
       entries offered to the person (`Sanctum.InstanceEntries.offered/1`)
       of the need's kind whose `provider_hint` is the need's qualifier,
       each `%{source: "own" | "instance", entry_id | instance_entry_id,
-      name, kind, provider, destination, disclosed}`, an OAuth one
-      holding exactly the need's scopes, as above. An
+      name, kind, provider, destination, disclosed, field_names, fields}`,
+      an OAuth one holding exactly the need's scopes, as above, and one
+      holding at least one field when the need reads one. `field_names` are the
+      entry's, sorted, and `fields` the automatic map from each field the
+      need reads to the entry field that answers it (`field_map/2`), nil
+      when the person must choose it. An
       instance entry is a candidate only where its component policy
       admits the node the need is bound on (`admits?/3`, with the node's
       release digest in the closure). A need the component reads itself —
@@ -100,8 +105,9 @@ defmodule Sanctum.Consent.Plan do
   type's qualifier), `disclose_only` (it declares no attach rule),
   `disclose` (true only where it declares `disclose: true`), and the
   `hosts` and `paths` it declares, nil where it declares none. A
-  dependency row's lenders (`candidates`) each name the `fields` and the
-  OAuth `scopes` the lending profile's binding projects, `[]` for none.
+  dependency row's lenders (`candidates`) each name the field map
+  (`fields`, `%{}` for none) and the OAuth `scopes` (`[]` for none) the
+  lending profile's binding projects.
 
   `warnings` names, for each required need nothing can meet, the need
   and its provider, and for a disclose-only need that the component reads
@@ -177,6 +183,7 @@ defmodule Sanctum.Consent.Plan do
           required(:binding_key) => String.t(),
           required(:lifetime) => %{kind: String.t(), until: String.t() | nil},
           required(:consumed) => boolean(),
+          optional(:fields) => %{optional(String.t()) => String.t()},
           optional(:entry_id) => String.t(),
           optional(:instance_entry_id) => String.t(),
           optional(:label) => String.t(),
@@ -685,8 +692,9 @@ defmodule Sanctum.Consent.Plan do
         destination: canonical_destination(entry.destination),
         disclosed: not entry.attach_only
       }
+      |> with_fields(entry.field_names, need)
 
-    if matches?(candidate, entry.oauth_scopes, need) and
+    if matches?(candidate, entry.oauth_scopes, need) and mappable?(candidate, need) and
          (candidate.disclosed or not reads_itself?(need)),
        do: [candidate],
        else: []
@@ -705,8 +713,9 @@ defmodule Sanctum.Consent.Plan do
         destination: canonical_destination(entry.destination),
         disclosed: false
       }
+      |> with_fields(entry.field_names, need)
 
-    if not reads_itself?(need) and matches?(candidate, [], need) and
+    if not reads_itself?(need) and matches?(candidate, [], need) and mappable?(candidate, need) and
          Sanctum.InstanceEntries.admits?(ctx, entry, facts),
        do: [candidate],
        else: []
@@ -719,6 +728,35 @@ defmodule Sanctum.Consent.Plan do
   defp matches?(candidate, scopes, need) do
     candidate.kind == need.kind and candidate.provider == need.qualifier and
       scopes_met?(candidate, scopes, need)
+  end
+
+  defp with_fields(candidate, field_names, need) do
+    names = field_names |> Enum.uniq() |> Enum.sort()
+    Map.merge(candidate, %{field_names: names, fields: field_map(need, names)})
+  end
+
+  # No map is total over an entry with no fields, so an entry holding none
+  # meets no need that reads a field.
+  defp mappable?(%{field_names: []}, %{fields: [_ | _]}), do: false
+  defp mappable?(_candidate, _need), do: true
+
+  @doc """
+  The automatic field map of `need` over an entry holding `field_names`:
+  each field the need reads to itself when the entry holds every one, or
+  the need's one field to the entry's one field, else nil, and the
+  person chooses the map. The `@ingress` slot of a manifest declaring no
+  needs (`need` nil) reads the entry's own fields, each as itself; an
+  OAuth need declaring no fields maps none.
+  """
+  @spec field_map(map() | nil, [String.t()]) :: %{optional(String.t()) => String.t()} | nil
+  def field_map(nil, field_names), do: Map.new(field_names, &{&1, &1})
+
+  def field_map(%{fields: need_fields}, field_names) do
+    cond do
+      Enum.all?(need_fields, &(&1 in field_names)) -> Map.new(need_fields, &{&1, &1})
+      match?({[_], [_]}, {need_fields, field_names}) -> %{hd(need_fields) => hd(field_names)}
+      true -> nil
+    end
   end
 
   # An OAuth candidate holds exactly the need's scopes: its token is
@@ -790,11 +828,35 @@ defmodule Sanctum.Consent.Plan do
   defp head_facts(:none, _reads), do: %{origins: nil, bindings: []}
 
   defp head_facts({:ok, head, _profile_id}, reads) do
+    held = held_field_maps(head)
+
     %{
       origins: Prima.Origin.to_wire_list(head.admitted_origins),
-      bindings: Enum.map(head.vault_refs, &head_binding(&1, reads))
+      bindings: Enum.map(head.vault_refs, &head_binding(&1, held, reads))
     }
   end
+
+  # The field map each bound entry of the head's blob holds, by its
+  # binding key. A damaged head holds none here; the plan refuses it
+  # through its narrowing (`held_narrowing/3`).
+  defp held_field_maps(head) do
+    case Sanctum.Consent.Loader.head_blob(head) do
+      {:ok, blob} ->
+        for {_node, %{edges: edges}} <- blob.nodes,
+            {_key, %{vault: vault}} <- edges,
+            bound <- bound_with_named(vault),
+            into: %{},
+            do: {bound.binding_key, bound.projection.fields}
+
+      {:error, _damaged} ->
+        %{}
+    end
+  end
+
+  defp bound_with_named(%{entry_id: _, projection: %{}} = vault),
+    do: [vault | vault |> Map.get(:named, %{}) |> Map.values()]
+
+  defp bound_with_named(_selected_provided_or_none), do: []
 
   # What changed against the head when the shape moved
   # (`Sanctum.Consent.ShapeDiff`): nothing for a first grant or an
@@ -1136,12 +1198,13 @@ defmodule Sanctum.Consent.Plan do
   # the commit reads the row (`Commit.head_place/2`), which of the three it
   # binds (`source`), where it sits and the need it was bound for. A row
   # whose key or binding cannot be read is placed nowhere.
-  defp head_binding(ref, reads) do
+  defp head_binding(ref, held, reads) do
     %{
       binding_key: ref.binding_key,
       lifetime: %{kind: ref.lifetime_kind, until: until_of(ref.expires_at)},
       consumed: is_binary(ref.consumed_by_root)
     }
+    |> Prima.MapUtil.put_present(:fields, if(is_nil(ref.via_label), do: held[ref.binding_key]))
     |> Prima.MapUtil.put_present(:entry_id, ref.vault_entry_id)
     |> Prima.MapUtil.put_present(:instance_entry_id, ref.instance_entry_id)
     |> Prima.MapUtil.put_present(:label, ref.via_label)
@@ -1531,8 +1594,8 @@ defmodule Sanctum.Consent.Plan do
                source: lent.source,
                entry_id: lent.id,
                entry_name: lent.name,
-               fields: projected(vault.projection, :fields),
-               scopes: projected(vault.projection, :scopes)
+               fields: lent_projection(vault.projection).fields,
+               scopes: lent_projection(vault.projection).scopes
              }
            ]}
 
@@ -1547,8 +1610,8 @@ defmodule Sanctum.Consent.Plan do
     end
   end
 
-  defp projected(%{} = projection, key), do: Map.get(projection, key) || []
-  defp projected(_none, _key), do: []
+  defp lent_projection(%{} = projection), do: projection
+  defp lent_projection(nil), do: %{fields: %{}, scopes: []}
 
   # The entry a lender's binding names, usable by this person at the
   # digest the lender bound: the athanor's own, or an instance entry as it

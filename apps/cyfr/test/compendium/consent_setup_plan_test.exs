@@ -846,7 +846,7 @@ defmodule Compendium.ConsentSetupPlanTest do
       "scope" => "athanor",
       "binding_key" => key,
       "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
-      "projection" => %{"fields" => ["k"]}
+      "projection" => %{"fields" => %{"k" => "k"}, "scopes" => []}
     }
 
     :ok =

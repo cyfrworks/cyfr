@@ -91,6 +91,23 @@ defmodule Sanctum.Consent.Normalize do
   end
 
   @doc false
+  # A field map: non-empty names to non-empty names, absent read as none.
+  # Its canonical bytes are JCS's, which order the keys.
+  def string_map(map, key, tag) do
+    case Map.get(map, key, %{}) do
+      fields when is_map(fields) ->
+        if Enum.all?(fields, fn {from, to} -> non_empty?(from) and non_empty?(to) end),
+          do: {:ok, fields},
+          else: {:error, {tag, key, "must map non-empty strings to non-empty strings"}}
+
+      _other ->
+        {:error, {tag, key, "must be a map"}}
+    end
+  end
+
+  defp non_empty?(value), do: is_binary(value) and value != ""
+
+  @doc false
   # Expanded tool.action pairs. A bare tool name or a glob would be a group
   # by another name, so both are refused.
   def tool_actions(map, key, tag) do

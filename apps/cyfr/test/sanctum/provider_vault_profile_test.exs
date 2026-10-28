@@ -76,7 +76,11 @@ defmodule Sanctum.ProviderVaultProfileTest do
     decisions = %{
       "ref" => "reagent:local.mcp-walk",
       "bindings" => [
-        %{"need" => "@ingress", "entry_id" => entry.id, "fields" => ["url", "anon_key"]}
+        %{
+          "need" => "@ingress",
+          "entry_id" => entry.id,
+          "fields" => %{"url" => "url", "anon_key" => "anon_key"}
+        }
       ]
     }
 

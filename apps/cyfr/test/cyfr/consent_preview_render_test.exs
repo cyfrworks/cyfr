@@ -137,6 +137,10 @@ defmodule Cyfr.ConsentPreviewRenderTest do
         end
 
         if row["narrowed"], do: assert(text =~ "narrowed by you")
+
+        # The instance entry's field is named apart from the need's.
+        if row["values"]["source"] == "instance",
+          do: assert(text =~ "Fields: api_key from API key", text)
       end
     end
 
@@ -190,6 +194,7 @@ defmodule Cyfr.ConsentPreviewRenderTest do
     end
 
     assert Enum.any?(credentials, &(&1["values"]["disclosed"] != true))
+    assert Enum.any?(credentials, &(&1["values"]["source"] == "instance"))
 
     # No control claims more than its methods, and no row says the
     # component never holds a value without saying CYFR attaches it.
@@ -255,6 +260,19 @@ defmodule Cyfr.ConsentPreviewRenderTest do
   defp expected(_row, field, false) when field in ["suggested", "choice_required"], do: []
   defp expected(_row, "connection", connection), do: ["as the account '#{connection}'"]
   defp expected(_row, "binding_key", key), do: ["Binding: #{key}"]
+
+  # A credential's field map: each field the component reads, from the
+  # entry field that answers it, sorted by the component's field.
+  defp expected(_row, "fields", fields) when map_size(fields) == 0, do: ["Fields: none"]
+
+  defp expected(_row, "fields", %{} = fields) do
+    pairs =
+      fields
+      |> Enum.sort()
+      |> Enum.map_join(", ", fn {need, entry} -> "#{need} from #{entry}" end)
+
+    ["Fields: #{pairs}"]
+  end
 
   defp expected(_row, _field, values) when is_list(values), do: values
   defp expected(_row, _field, value), do: [to_string(value)]

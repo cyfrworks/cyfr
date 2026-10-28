@@ -33,18 +33,12 @@ defmodule Prima.Authority.BlobSelectionTest do
   end
 
   test "a selected vault parses, encodes and reads as unbound" do
-    selected = %{
-      "via" => %{"label" => "default", "binding_digest" => "sha256:key"},
-      "projection" => %{"fields" => ["ANTHROPIC_API_KEY"]}
-    }
+    selected = %{"via" => %{"label" => "default", "binding_digest" => "sha256:key"}}
 
     assert {:ok, blob} = Blob.parse(graph(selected))
     assert {:ok, edge} = Blob.lookup_edge(blob, @formula, @catalyst, "")
-
-    assert edge.vault == %{
-             via: %{label: "default", binding_digest: "sha256:key"},
-             projection: %{fields: ["ANTHROPIC_API_KEY"], scopes: []}
-           }
+    assert edge.vault == %{via: %{label: "default", binding_digest: "sha256:key"}}
+    assert Blob.edge_to_map(edge)["vault"] == selected
 
     refute Blob.bound_vault?(edge.vault)
     assert Blob.bound_vault?(%{entry_id: "e", binding_digest: "d", projection: nil})
@@ -57,12 +51,23 @@ defmodule Prima.Authority.BlobSelectionTest do
     assert {:ok, blob} = Blob.parse(graph(unpinned))
     assert {:ok, edge} = Blob.lookup_edge(blob, @formula, @catalyst, "")
 
-    assert edge.vault == %{
-             via: %{label: "default", binding_digest: nil},
-             projection: nil
-           }
-
+    assert edge.vault == %{via: %{label: "default", binding_digest: nil}}
     assert Blob.edge_to_map(edge)["vault"] == unpinned
+  end
+
+  # A selection reads under its lender's projection, so it carries none.
+  test "a label selection carrying a projection is refused" do
+    for projection <- [
+          %{"fields" => %{"ANTHROPIC_API_KEY" => "ANTHROPIC_API_KEY"}, "scopes" => []},
+          %{"fields" => ["ANTHROPIC_API_KEY"]},
+          nil
+        ] do
+      selected = %{"via" => %{"label" => "default"}, "projection" => projection}
+
+      assert {:error, {:invalid_resource, @formula, @catalyst, :vault, _}} =
+               Blob.parse(graph(selected)),
+             inspect(projection)
+    end
   end
 
   test "a resolved selection carries the borrower's key where it sits and the lender's three fields" do
@@ -76,7 +81,10 @@ defmodule Prima.Authority.BlobSelectionTest do
       Fixtures.bound_vault(@formula, @catalyst, "vault-anthropic", "sha256:key",
         attach: %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
         destination: Fixtures.destination_map(["api.anthropic.com"]),
-        projection: %{"fields" => ["ANTHROPIC_API_KEY"], "scopes" => []},
+        projection: %{
+          "fields" => %{"ANTHROPIC_API_KEY" => "ANTHROPIC_API_KEY"},
+          "scopes" => []
+        },
         lender: lender
       )
 

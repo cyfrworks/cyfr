@@ -1913,7 +1913,7 @@ defmodule PrismWeb.ConsentSheetComponent do
       <div>Lifetime: {lifetime_label(@row["values"]["lifetime"])}</div>
       <div :if={@row["values"]["suggested"] == true}>Suggested</div>
       <div :if={@row["values"]["choice_required"] == true}>Choose which entry to use</div>
-      <div>Fields: {list_label(@row["values"]["fields"], "none")}</div>
+      <div>Fields: {field_map_label(@row["values"]["fields"], "none")}</div>
       <div>Scopes: {list_label(@row["values"]["scopes"], "none")}</div>
       <div class="font-mono text-xs">Binding: {@row["values"]["binding_key"]}</div>
 
@@ -2447,12 +2447,12 @@ defmodule PrismWeb.ConsentSheetComponent do
 
   defp lender_words(dep, lender) do
     scopes = List.wrap(field(lender, :scopes))
-    fields = List.wrap(field(lender, :fields))
+    fields = field(lender, :fields)
 
     lends =
       cond do
         scopes != [] -> "scopes #{Enum.join(scopes, ", ")}"
-        fields != [] -> Enum.join(fields, ", ")
+        is_map(fields) and fields != %{} -> field_map_label(fields, "")
         true -> "its key"
       end
 
@@ -2552,6 +2552,15 @@ defmodule PrismWeb.ConsentSheetComponent do
   defp capability_label("storage." <> field), do: "Files #{field}:"
   defp capability_label("policy." <> mode), do: "Agent policy #{mode}:"
   defp capability_label(capability), do: "#{capability}:"
+
+  # Each field the component reads and the entry field that answers it.
+  defp field_map_label(fields, _none) when is_map(fields) and map_size(fields) > 0 do
+    fields
+    |> Enum.sort()
+    |> Enum.map_join(", ", fn {need_field, entry_field} -> "#{need_field} from #{entry_field}" end)
+  end
+
+  defp field_map_label(_fields, none), do: none
 
   defp list_label([], none), do: none
   defp list_label(values, _none) when is_list(values), do: Enum.join(values, ", ")
