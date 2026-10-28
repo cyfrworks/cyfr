@@ -12,6 +12,18 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   """
   use ExUnit.Case, async: false
 
+  # Each test's scratch directory is under System.tmp_dir!(), which the runner
+  # keys per partition, so two runs in one checkout never share one. Its
+  # removal is registered before it is made.
+  setup do
+    dir =
+      Path.join(System.tmp_dir!(), "runtime_config_wiring_#{System.unique_integer([:positive])}")
+
+    on_exit(fn -> File.rm_rf!(dir) end)
+    File.mkdir_p!(dir)
+    {:ok, tmp_dir: dir}
+  end
+
   @root Path.expand("../../../..", __DIR__)
 
   # Every setting the access resolver reads, so a case clears the ones it does not
@@ -119,8 +131,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
     # The file reads its .env files from RELEASE_ROOT, so each test points
     # that at a directory of its own: no ambient file supplies the key the
     # environment lacks.
-    @describetag :tmp_dir
-
     # An empty value is unset, as for every other setting this file reads,
     # so both refuse the boot by name before anything derives from it.
     for {label, value} <- [{"missing", nil}, {"empty", ""}] do
@@ -384,8 +394,6 @@ defmodule Cyfr.RuntimeConfigWiringTest do
   defp trust(%{"hops" => hops}), do: {:hops, hops}
 
   describe "access" do
-    @describetag :tmp_dir
-
     test "every refused boot vector refuses the boot with its sentence", %{tmp_dir: dir} do
       refused =
         for %{"refusal" => refusal} = vector <- @access_vectors["boot"], do: {vector, refusal}
