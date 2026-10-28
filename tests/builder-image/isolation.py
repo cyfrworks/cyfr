@@ -235,6 +235,12 @@ def fields(text):
     return dict(line.split("=", 1) for line in (text or "").splitlines() if "=" in line)
 
 
+def listening_addresses(stack):
+    """The local address of each listening TCP socket of the container, in hex, from its own tables."""
+    return imagesuite.read_output(stack.exec("awk '$4 == \"0A\" {print $2}' /proc/net/tcp /proc/net/tcp6"),
+                                  "the container's TCP tables").split()
+
+
 def test_process_model(stack, image):
     procs = stack.processes()
     keeper = [p for p in procs if p["cmd"].startswith("cyfr-locus serve")]
@@ -247,7 +253,7 @@ def test_process_model(stack, image):
            "the release starts no Erlang distribution", release)
     # Docker's embedded DNS resolver listens on 127.0.0.11 (0B00007F) in every
     # container on a user-defined network.
-    listening = stack.exec("cat /proc/net/tcp /proc/net/tcp6 | awk '$4 == \"0A\" {print $2}'").stdout.split()
+    listening = listening_addresses(stack)
     ports = sorted({int(address.rsplit(":", 1)[1], 16) for address in listening if not address.startswith("0B00007F:")})
     expect(ports == [PORT], f"besides Docker's resolver, the builder's only listening TCP port is {PORT}", listening)
 

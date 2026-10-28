@@ -221,7 +221,7 @@ class Stack(imagesuite.Stack):
         """The address the container reaches this machine at, compose's host
         gateway (`host.docker.internal`), as the IPv4 literal a pin names; the
         engine resolves nothing itself."""
-        out = self.exec("getent ahostsv4 host.docker.internal").stdout.split()
+        out = read_output(self.exec("getent ahostsv4 host.docker.internal"), "the container's host gateway lookup").split()
         return out[0] if out else None
 
     def exec(self, script, user=None):
