@@ -388,6 +388,9 @@ class SuiteObservations(unittest.TestCase):
     def test_backends_residue_reads(self):
         self.run_entry("locus-backends-image", "residue_test.py")
 
+    def test_builder_isolation_ipc_tables(self):
+        self.run_entry("builder-image", "isolation_test.py")
+
 
 class ObservationAnswers(unittest.TestCase):
     """What a probe's output or a container's state may answer: a word from a successful exec, and no process in a stopped container."""
