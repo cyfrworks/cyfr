@@ -75,6 +75,24 @@ vulnerabilities:
       - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
     statement: npm's bundled undici; no npm release ships the fix.
 
+  # undici 6.28.0: a certificate validation bypass via TLS options dropped
+  # by an Agent (CVE-2026-109383) and a denial of service through TLS
+  # renegotiation with a mismatched certificate (CVE-2026-87018). Both
+  # fixed at 6.29.1, which no npm release bundles (12.2.1 carries 6.29.0).
+  # Lift once the npm the image's Node bundles carries 6.29.1 or later.
+  - id: CVE-2026-109383
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
+    statement: npm's bundled undici; no npm release ships the fix.
+  - id: CVE-2026-87018
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
+    statement: npm's bundled undici; no npm release ships the fix.
+
 misconfigurations:
   # No USER line: both images start as root on purpose. The server's
   # entrypoint re-chowns bind-mounted data and then drops to `app` with
