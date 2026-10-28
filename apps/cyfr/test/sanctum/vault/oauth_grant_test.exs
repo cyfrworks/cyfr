@@ -1368,7 +1368,7 @@ defmodule Sanctum.Vault.OAuthGrantTest do
     do: %{
       entry_id: entry.id,
       binding_digest: entry.binding_digest,
-      projection: %{fields: [], scopes: scopes}
+      projection: %{fields: %{}, scopes: scopes}
     }
 
   # A refresh of the entry in flight: something leads its lock until

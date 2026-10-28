@@ -91,6 +91,23 @@ defmodule Sanctum.Consent.Normalize do
   end
 
   @doc false
+  # A field map: non-empty names to non-empty names, absent read as none.
+  # Its canonical bytes are JCS's, which order the keys.
+  def string_map(map, key, tag) do
+    case Map.get(map, key, %{}) do
+      fields when is_map(fields) ->
+        if Enum.all?(fields, fn {from, to} -> non_empty?(from) and non_empty?(to) end),
+          do: {:ok, fields},
+          else: {:error, {tag, key, "must map non-empty strings to non-empty strings"}}
+
+      _other ->
+        {:error, {tag, key, "must be a map"}}
+    end
+  end
+
+  defp non_empty?(value), do: is_binary(value) and value != ""
+
+  @doc false
   # Expanded tool.action pairs. A bare tool name or a glob would be a group
   # by another name, so both are refused.
   def tool_actions(map, key, tag) do
@@ -117,8 +134,8 @@ defmodule Sanctum.Consent.Normalize do
 
   @doc false
   # Declared needs: name + type, both required, with the projection they
-  # read, and, each only when the need declares it, the attach rule, the
-  # hosts and paths it speaks to, and `disclose` when true — a field the
+  # read, the hosts a credential need calls, and, each only when the need
+  # declares it, the attach rule, the paths it speaks to, and `disclose` when true — a field the
   # need does not declare is absent, never null or empty. The reason text is deliberately excluded — it is prose shown to the
   # operator, and editing it must not invalidate a consent.
   def needs(map, key, tag) do
@@ -149,6 +166,7 @@ defmodule Sanctum.Consent.Normalize do
          {:ok, scopes} <- string_set(need, :scopes, tag),
          {:ok, attach} <- attach_rule(need, tag),
          {:ok, hosts} <- declared_set(need, :hosts, tag),
+         :ok <- credential_hosts(type, hosts, tag),
          {:ok, paths} <- declared_set(need, :paths, tag),
          {:ok, disclose} <- declared_disclose(need, tag) do
       {:ok,
@@ -189,6 +207,15 @@ defmodule Sanctum.Consent.Normalize do
       other -> other
     end
   end
+
+  # A credential need names the hosts it calls (`Prima.Manifest.Needs`).
+  defp credential_hosts(type, nil, tag) do
+    if hd(String.split(type, ":", parts: 2)) in Prima.CredentialKinds.all(),
+      do: {:error, {tag, :hosts, "a credential need names the hosts it calls"}},
+      else: :ok
+  end
+
+  defp credential_hosts(_type, _hosts, _tag), do: :ok
 
   # `disclose` enters only when true: a need that never says it and one
   # that says false are the same input.

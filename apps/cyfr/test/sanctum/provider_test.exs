@@ -611,6 +611,7 @@ defmodule Sanctum.ProviderTest do
         "needs" => %{
           "api_key" => %{
             "type" => "api_key:openai.com",
+            "hosts" => ["api.openai.com"],
             "reason" => "to call the model with a key",
             "fields" => ["OPENAI_API_KEY"],
             "attach" => %{
@@ -619,7 +620,8 @@ defmodule Sanctum.ProviderTest do
               "template" => "Bearer {value}"
             }
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.openai.com"]}}
       })
 
       ship_plan_component!(ctx, "mcp-plan-app", %{

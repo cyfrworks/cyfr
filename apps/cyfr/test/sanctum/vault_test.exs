@@ -108,7 +108,7 @@ defmodule Sanctum.VaultTest do
   defp resource_for(ctx, id) do
     {:ok, entry} = Arca.VaultStorage.get(actor(ctx), id)
     {:ok, digest} = VaultReader.binding_digest(entry)
-    fields = entry.field_names |> Jason.decode!() |> Enum.sort()
+    fields = entry.field_names |> Jason.decode!() |> Map.new(&{&1, &1})
     %{entry_id: id, binding_digest: digest, projection: %{fields: fields, scopes: []}}
   end
 
@@ -294,6 +294,38 @@ defmodule Sanctum.VaultTest do
       # The material actually resolves through the reader.
       assert {:ok, %{"url" => "https://db.example", "anon_key" => "anon"}} =
                VaultReader.fetch(ctx, resource_for(ctx, view.id), @dispense)
+    end
+
+    test "`list/1` names each entry's uses", %{ctx: ctx} do
+      bound = create!(ctx)
+      unbound = create!(ctx)
+      digest = resource_for(ctx, bound.id).binding_digest
+      first = mint_profile_with_ref(ctx, bound.id, digest)
+      second = mint_profile_with_ref(ctx, bound.id, digest)
+      use_of = &%{profile_id: &1.id, source_ref: &1.source_ref, label: "default"}
+
+      used_by = fn ->
+        {:ok, listed} = Vault.list(ctx)
+        Map.new(listed, &{&1.id, &1.used_by})
+      end
+
+      assert used_by.() == %{
+               bound.id => Enum.sort_by([use_of.(first), use_of.(second)], & &1.source_ref),
+               unbound.id => []
+             }
+
+      # A grant revoked is no longer a use.
+      :ok = Arca.ProfileStorage.transition(actor(ctx), first.id, :any, "revoked")
+      assert used_by.() == %{bound.id => [use_of.(second)], unbound.id => []}
+
+      # Grants that cannot be read leave every entry's uses unknown, never
+      # none, and the entries are still listed.
+      Arca.Repo.query!("ALTER TABLE consent_vault_refs RENAME TO consent_vault_refs_unavailable")
+
+      {unread, _log} = ExUnit.CaptureLog.with_log(used_by)
+      Arca.Repo.query!("ALTER TABLE consent_vault_refs_unavailable RENAME TO consent_vault_refs")
+
+      assert unread == %{bound.id => nil, unbound.id => nil}
     end
 
     test "a living name cannot be reused", %{ctx: ctx} do
@@ -847,7 +879,7 @@ defmodule Sanctum.VaultTest do
       narrower = %{
         entry_id: view.id,
         binding_digest: after_row.binding_digest,
-        projection: %{fields: [], scopes: ["gmail.readonly"]}
+        projection: %{fields: %{}, scopes: ["gmail.readonly"]}
       }
 
       assert {:error, :scope_not_attenuable} =
@@ -1177,7 +1209,7 @@ defmodule Sanctum.VaultTest do
       resource = %{
         entry_id: view.id,
         binding_digest: digest,
-        projection: %{fields: [], scopes: ["gmail.readonly"]}
+        projection: %{fields: %{}, scopes: ["gmail.readonly"]}
       }
 
       assert {:ok, "tok-live"} = VaultReader.oauth_token(ctx, resource, "google", @dispense)

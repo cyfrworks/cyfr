@@ -145,15 +145,16 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
   end
 
   # A tincture version in the athanor's tree and its component row,
-  # declaring `needs`.
-  defp tincture!(ctx, name, needs) do
+  # declaring `needs` and `caps`.
+  defp tincture!(ctx, name, needs, caps) do
     manifest = %{
       "name" => name,
       "type" => "tincture",
       "version" => "1.0.0",
       "publisher" => "local",
       "tincture" => %{"entry" => "index.html"},
-      "needs" => needs
+      "needs" => needs,
+      "caps" => caps
     }
 
     Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, "1.0.0",
@@ -246,13 +247,19 @@ defmodule PrismWeb.ShellLiveTest.GrantTest do
        %{conn: conn, ctx: ctx} do
     name = "keyed-dash"
 
-    tincture!(ctx, name, %{
-      "api_key" => %{
-        "type" => "api_key:dash.test",
-        "reason" => "to read the dashboard's feed with your key",
-        "fields" => ["DASH_KEY"]
-      }
-    })
+    tincture!(
+      ctx,
+      name,
+      %{
+        "api_key" => %{
+          "type" => "api_key:dash.test",
+          "reason" => "to read the dashboard's feed with your key",
+          "fields" => ["DASH_KEY"],
+          "hosts" => ["api.dash.example"]
+        }
+      },
+      %{"egress" => %{"domains" => ["api.dash.example"]}}
+    )
 
     blocked!(ctx, name)
 

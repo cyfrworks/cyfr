@@ -486,13 +486,15 @@ defmodule Compendium.ConsentSetupPlanTest do
           "reason" => "to call the example API",
           "required" => true,
           "fields" => ["KEY"],
+          "hosts" => ["api.example.com"],
           "attach" => %{
             "in" => "header",
             "name" => "Authorization",
             "template" => "Bearer {value}"
           }
         }
-      }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
     })
 
     publish_manifest!(ctx, "plan-lent-instance-app", %{
@@ -569,9 +571,11 @@ defmodule Compendium.ConsentSetupPlanTest do
             "type" => "api_key:example.com",
             "reason" => "to call the example API",
             "required" => true,
-            "fields" => ["KEY"]
+            "fields" => ["KEY"],
+            "hosts" => ["api.example.com"]
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
       })
 
       for name <- ~w(plan-borrower plan-loose) do
@@ -846,7 +850,7 @@ defmodule Compendium.ConsentSetupPlanTest do
       "scope" => "athanor",
       "binding_key" => key,
       "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
-      "projection" => %{"fields" => ["k"]}
+      "projection" => %{"fields" => %{"k" => "k"}, "scopes" => []}
     }
 
     :ok =
@@ -896,9 +900,11 @@ defmodule Compendium.ConsentSetupPlanTest do
           "reason" => "to reach the database",
           "required" => true,
           "fields" => ["anon_key"],
+          "hosts" => ["abc.supabase.co"],
           "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
         }
-      }
+      },
+      "caps" => %{"egress" => %{"domains" => ["abc.supabase.co"]}}
     })
 
     publish_manifest!(ctx, "plan-app", %{

@@ -329,7 +329,11 @@ fn args ->
           need.kind in ~w(api_key oauth bundle) and is_map(need.attach) and need.disclose != true
         end)
 
-      # The binding the first sign-in commits for the requested entry.
+      # The binding the first sign-in commits for the requested entry, under
+      # the automatic map of the need over the entry's one field, as
+      # provisioning takes it.
+      fields = Sanctum.Consent.Plan.field_map(need, [field])
+
       binding = %{
         need: need.name,
         entry_id: entry_id,
@@ -337,7 +341,7 @@ fn args ->
         scope: "instance",
         destination: Prima.Destination.to_map(parsed),
         attach: Prima.Manifest.Needs.attach_to_map(need.attach),
-        fields: need.fields,
+        fields: fields,
         scopes: need.scopes,
         lifetime: %{kind: "standing", until: nil},
         renew: false
@@ -371,7 +375,7 @@ fn args ->
               need: need.name,
               instance_entry_id: entry_id,
               binding_digest: digest,
-              fields: need.fields,
+              fields: fields,
               scopes: need.scopes,
               lifetime: %{kind: "standing"},
               renew: false

@@ -668,7 +668,7 @@ defmodule PrismWeb.SettingsLiveTest do
       seed_ctx =
         Sanctum.Context.internal(user_id: "_test", athanor_id: athanor_id, scope: :athanor)
 
-      ship = fn name, version, provider, need ->
+      ship = fn name, version, provider, hosts, paths ->
         {:ok, _} =
           Arca.Test.UnitFixtures.ship_and_register!(seed_ctx, "catalyst", "local", name, version,
             manifest: %{
@@ -687,9 +687,10 @@ defmodule PrismWeb.SettingsLiveTest do
                         "in" => "header",
                         "name" => "Authorization",
                         "template" => "Bearer {value}"
-                      }
+                      },
+                      "hosts" => hosts
                     },
-                    need
+                    paths
                   )
               },
               "caps" => %{"egress" => %{"domains" => ["api.example.com", "old.example.com"]}}
@@ -698,17 +699,13 @@ defmodule PrismWeb.SettingsLiveTest do
           )
       end
 
-      ship.("prefill-model", "1.0.0", "example.com", %{
-        "hosts" => ["old.example.com"],
-        "paths" => ["/v0/"]
-      })
+      ship.("prefill-model", "1.0.0", "example.com", ["old.example.com"], %{"paths" => ["/v0/"]})
 
-      ship.("prefill-model", "1.1.0", "example.com", %{
-        "hosts" => ["api.example.com"],
+      ship.("prefill-model", "1.1.0", "example.com", ["api.example.com"], %{
         "paths" => ["/v1/chat/completions"]
       })
 
-      ship.("prefill-hosts", "1.0.0", "hosts-only.example", %{"hosts" => ["api.example.com"]})
+      ship.("prefill-hosts", "1.0.0", "hosts-only.example", ["api.example.com"], %{})
 
       {view, _html} = mount_athanor(conn, "/settings")
       assert has_element?(view, ~s(#instance-providers option[value="example.com"]))

@@ -829,6 +829,58 @@ defmodule Arca.ConsentStorage do
 
   def head_referenced_entries(%Prima.Actor{}), do: {:error, :no_athanor}
 
+  @typedoc """
+  One grant that binds an entry: the entry's id (an athanor's own entry
+  or an instance entry), and the profile whose head binds it, by id,
+  source and label.
+  """
+  @type entry_use :: %{
+          entry_id: String.t(),
+          profile_id: String.t(),
+          source_ref: String.t(),
+          label: String.t()
+        }
+
+  @doc """
+  Every entry the **head** revision of an `active` profile in the actor's
+  athanor binds, with that profile (`t:entry_use/0`): each pair of entry
+  and profile once however many of the head's bindings name it, ordered
+  by entry, source, label and profile id. A selection's row names no entry
+  and is no use, and a profile that is not active is not read. An actor
+  whose athanor is nil or the empty string is `{:error, :no_athanor}`
+  before any query.
+  """
+  @spec entry_uses(Prima.Actor.t()) :: {:ok, [entry_use()]} | {:error, term()}
+  def entry_uses(%Prima.Actor{athanor_id: athanor_id})
+      when is_binary(athanor_id) and athanor_id != "" do
+    Arca.Repo.Errors.with_db_rescue("Arca.ConsentStorage.entry_uses", fn ->
+      uses =
+        from(r in ConsentVaultRef,
+          join: c in Consent,
+          on: c.id == r.consent_id and c.athanor_id == r.athanor_id,
+          join: p in Arca.Schemas.Profile,
+          on: p.head_consent_id == c.id and p.athanor_id == c.athanor_id,
+          where: p.status == "active",
+          where: not is_nil(r.vault_entry_id) or not is_nil(r.instance_entry_id),
+          select: %{
+            entry_id: coalesce(r.vault_entry_id, r.instance_entry_id),
+            profile_id: p.id,
+            source_ref: p.source_ref,
+            label: p.label
+          }
+        )
+        |> Arca.QueryHelpers.where_athanor(athanor_id)
+        |> Arca.Repo.all()
+        |> Enum.uniq()
+        |> Enum.sort_by(&{&1.entry_id, &1.source_ref, &1.label, &1.profile_id})
+
+      {:ok, uses}
+    end)
+    |> Arca.Data.project()
+  end
+
+  def entry_uses(%Prima.Actor{}), do: {:error, :no_athanor}
+
   @typedoc "An active profile and its head revision, as `active_heads/2` answers them."
   @type active_head :: %{
           profile: Prima.Authority.RootSelect.profile_summary(),

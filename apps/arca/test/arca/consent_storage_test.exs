@@ -1077,6 +1077,148 @@ defmodule Arca.ConsentStorageTest do
     end
   end
 
+  describe "entry_uses/1" do
+    # A profile of `source` under `label`, in `status`, whose first
+    # revision binds `refs`.
+    defp using!(athanor, id, source, label, refs, status \\ "active") do
+      {:ok, _profile} =
+        Writers.put_profile(%{
+          id: id,
+          athanor_id: athanor,
+          source_ref: source,
+          kind: "owner",
+          label: label,
+          status: "active"
+        })
+
+      {:ok, consent} = ConsentStorage.insert_revision(consent_attrs(athanor, id, 1), refs, nil)
+
+      if status != "active",
+        do: :ok = ProfileStorage.transition(actor(athanor), id, :any, status)
+
+      consent
+    end
+
+    defp used(entry_id, profile_id, source, label),
+      do: %{entry_id: entry_id, profile_id: profile_id, source_ref: source, label: label}
+
+    test "`entry_uses/1` names the active heads binding each entry", %{athanor: athanor} do
+      [first, second] = Enum.sort_by([entry!(athanor), entry!(athanor)], & &1.id)
+      dropped = entry!(athanor)
+      instance = instance_entry!()
+
+      # One head binding `first` under two keys, an instance entry, and a
+      # selection, which names no entry.
+      using!(athanor, "prof_uses_a", "catalyst:local.grok", "default", [
+        ref(first.id),
+        ref(first.id, %{binding_key: @second_key}),
+        ref(nil, %{
+          binding_key: @standing_key,
+          scope: "instance",
+          instance_entry_id: instance.id
+        }),
+        ref(nil, %{
+          binding_key: "reagent:local.storage-test|reagent:local.via|default",
+          via_label: "default",
+          binding_digest: nil
+        })
+      ])
+
+      using!(athanor, "prof_uses_b", "catalyst:local.grok", "work", [ref(first.id)])
+      using!(athanor, "prof_uses_c", "reagent:local.other", "default", [ref(second.id)])
+
+      # A head that no longer binds what an earlier revision did.
+      earlier =
+        using!(athanor, "prof_uses_d", "reagent:local.moved", "default", [ref(dropped.id)])
+
+      {:ok, _} =
+        ConsentStorage.insert_revision(
+          consent_attrs(athanor, "prof_uses_d", 2),
+          [ref(second.id)],
+          earlier.id
+        )
+
+      # A profile with no head binds nothing.
+      _headless = profile!(athanor, "prof_uses_e")
+
+      assert ConsentStorage.entry_uses(actor(athanor)) ==
+               {:ok,
+                Enum.sort_by(
+                  [
+                    used(first.id, "prof_uses_a", "catalyst:local.grok", "default"),
+                    used(first.id, "prof_uses_b", "catalyst:local.grok", "work"),
+                    used(instance.id, "prof_uses_a", "catalyst:local.grok", "default"),
+                    used(second.id, "prof_uses_c", "reagent:local.other", "default"),
+                    used(second.id, "prof_uses_d", "reagent:local.moved", "default")
+                  ],
+                  &{&1.entry_id, &1.source_ref, &1.label, &1.profile_id}
+                )}
+    end
+
+    test "a revoked profile's head is not a use", %{athanor: athanor} do
+      entry = entry!(athanor)
+      using!(athanor, "prof_uses_live", "reagent:local.live", "default", [ref(entry.id)])
+
+      using!(
+        athanor,
+        "prof_uses_revoked",
+        "reagent:local.revoked",
+        "default",
+        [ref(entry.id)],
+        "revoked"
+      )
+
+      using!(
+        athanor,
+        "prof_uses_waiting",
+        "reagent:local.waiting",
+        "default",
+        [ref(entry.id)],
+        "needs_consent"
+      )
+
+      assert ConsentStorage.entry_uses(actor(athanor)) ==
+               {:ok, [used(entry.id, "prof_uses_live", "reagent:local.live", "default")]}
+    end
+
+    test "another athanor's heads are never read", %{athanor: athanor} do
+      other = Arca.Test.Actor.athanor!("ath_other").id
+      mine = entry!(athanor)
+      theirs = entry!(other)
+      using!(athanor, "prof_uses_mine", "reagent:local.mine", "default", [ref(mine.id)])
+      using!(other, "prof_uses_theirs", "reagent:local.theirs", "default", [ref(theirs.id)])
+
+      assert ConsentStorage.entry_uses(actor(athanor)) ==
+               {:ok, [used(mine.id, "prof_uses_mine", "reagent:local.mine", "default")]}
+
+      assert ConsentStorage.entry_uses(actor(other)) ==
+               {:ok, [used(theirs.id, "prof_uses_theirs", "reagent:local.theirs", "default")]}
+
+      # An actor with no athanor is refused before any query.
+      test = self()
+      handler = "entry-uses-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:arca, :repo, :query],
+          fn _event, _measurements, _meta, _config ->
+            if self() == test, do: send(test, :queried)
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      for nobody <- [%Prima.Actor{}, %Prima.Actor{athanor_id: ""}] do
+        assert {:error, :no_athanor} = ConsentStorage.entry_uses(nobody)
+      end
+
+      :telemetry.detach(handler)
+      refute_received :queried
+    end
+  end
+
   describe "consume_once/5" do
     setup %{athanor: athanor} do
       profile = profile!(athanor, "prof_once_#{System.unique_integer([:positive])}")

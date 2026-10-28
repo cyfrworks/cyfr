@@ -655,9 +655,11 @@ defmodule PrismWeb.AquaLiveTest do
                   "type" => "api_key:newmodel.test",
                   "reason" => "to call the model with your key",
                   "fields" => ["NEWMODEL_API_KEY"],
-                  "required" => true
+                  "required" => true,
+                  "hosts" => ["api.newmodel.example"]
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.newmodel.example"]}}
             })
         })
 
@@ -706,9 +708,11 @@ defmodule PrismWeb.AquaLiveTest do
                   "type" => "api_key:brokenmodel.test",
                   "reason" => "to call the model with your key",
                   "fields" => ["BROKENMODEL_API_KEY"],
-                  "required" => true
+                  "required" => true,
+                  "hosts" => ["api.brokenmodel.example"]
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.brokenmodel.example"]}}
             })
         })
 
@@ -781,9 +785,11 @@ defmodule PrismWeb.AquaLiveTest do
                   "type" => "api_key:keyed.test",
                   "reason" => "to call the model with your key",
                   "fields" => ["KEYED_API_KEY"],
-                  "required" => true
+                  "required" => true,
+                  "hosts" => ["api.keyed.example"]
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.keyed.example"]}}
             })
         })
 

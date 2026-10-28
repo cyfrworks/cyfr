@@ -16,13 +16,18 @@ defmodule Prima.Manifest.Needs do
       "needs": {
         "api_key": { "type": "api_key:anthropic.com",
                      "reason": "to call the Anthropic API with your key",
-                     "fields": ["ANTHROPIC_API_KEY"], "required": true }
+                     "fields": ["ANTHROPIC_API_KEY"], "required": true,
+                     "hosts": ["api.anthropic.com"],
+                     "attach": { "in": "header", "name": "x-api-key",
+                                 "template": "{value}" } }
       }
 
   The need name is the slot key (`ref|need` in blob edge keys), so the
   edge-key grammar constrains it: lowercase, no `@` prefix, no `|`.
   `type` is `kind:qualifier` — a credential kind (`api_key`, `oauth`,
-  `bundle`) or a component type for component-typed needs. `reason` is
+  `bundle`) or a component type for component-typed needs; a credential
+  type's qualifier is the provider label an entry ranks by, never what
+  decides whether it can serve the need. `reason` is
   the prose the operator sees instead of the developer's key names.
   `fields` are the guest-visible read keys, served from the bound entry's
   material as the projection — the names the binary already passes to
@@ -48,8 +53,10 @@ defmodule Prima.Manifest.Needs do
     * `hosts` and `paths` — the destination the need speaks to, in
       `Prima.Destination`'s host and path grammar and at most
       `Prima.Destination.max_entries/0` distinct entries each, as a
-      destination names; a surface prefills a new entry's destination
-      from them. `Prima.Manifest.Caps` holds the
+      destination names. `hosts` is required: a credential need without
+      it is refused `{:hosts_required, name}`. They decide which vault
+      entries can serve the need (`fit/2`), and a surface prefills a new
+      entry's destination from them. `Prima.Manifest.Caps` holds the
       hosts within the manifest's egress domains.
     * `disclose` — `true` when the component must hold the material
       itself (`cyfr:vault/read`, `cyfr:oauth/token`); `false` by default.
@@ -147,6 +154,41 @@ defmodule Prima.Manifest.Needs do
   def from_manifest(_manifest), do: nil
 
   @doc """
+  How an entry whose destination is `outer` can serve the normalized
+  credential need `need` (`from_manifest/1`'s) by where it may go:
+  `:exact` when every need host is one of the entry's hosts as written,
+  `:wildcard` when every need host is matched and at least one only by a
+  `*.` pattern, and `:none` otherwise.
+
+  It compares what the need declares and nothing more. The need's side
+  takes the entry's scheme, port and methods, and the entry's paths
+  when the need declares none, so only two tests remain: every need host
+  is matched by an entry host pattern (`Prima.Network.domain_allowed?/2`,
+  so `api.x.ai` fits `*.x.ai` and `x.ai` does not), and every path the
+  need declares has an entry path that is a segment prefix of it
+  (`Prima.Destination.within?/2`). The entry's own scheme, port, methods
+  and paths still bound every request it is attached to.
+  """
+  @spec fit(map(), Prima.Destination.t()) :: :exact | :wildcard | :none
+  def fit(%{hosts: [_ | _] = hosts, paths: paths}, %Prima.Destination{} = outer) do
+    inner = %Prima.Destination{
+      hosts: hosts,
+      paths: if(paths == [], do: outer.paths, else: paths),
+      scheme: outer.scheme,
+      port: outer.port,
+      methods: outer.methods
+    }
+
+    cond do
+      not Prima.Destination.within?(inner, outer) -> :none
+      Enum.all?(hosts, &(&1 in outer.hosts)) -> :exact
+      true -> :wildcard
+    end
+  end
+
+  def fit(_need, _outer), do: :none
+
+  @doc """
   Whether a normalized need (`from_manifest/1`'s) is disclose-only: it
   declares no attach rule, so only a disclosed entry satisfies it.
   """
@@ -201,7 +243,7 @@ defmodule Prima.Manifest.Needs do
              :ok <- validate_required(name, entry),
              :ok <- credential_only(name, entry),
              {:ok, _attach} <- attach_of(name, kind_of(entry), entry),
-             :ok <- validate_hosts(name, entry["hosts"]),
+             :ok <- validate_hosts(name, kind_of(entry), entry["hosts"]),
              :ok <- validate_paths(name, entry["paths"]),
              :ok <- validate_disclose(name, entry) do
           :ok
@@ -295,18 +337,24 @@ defmodule Prima.Manifest.Needs do
 
   defp valid_template?(_template), do: false
 
-  defp validate_hosts(_name, nil), do: :ok
+  # A credential need names the hosts it calls; `credential_only/2` has
+  # already refused hosts on a component-typed need.
+  defp validate_hosts(name, kind, nil) when kind in @credential_kinds,
+    do: {:error, {:invalid_needs, {:hosts_required, name}}}
+
+  defp validate_hosts(_name, _kind, nil), do: :ok
 
   # The index of the first member the grammar refuses, never the member
   # itself: a nil member is refused as itself, not read as "none refused".
-  defp validate_hosts(name, hosts) when is_list(hosts) and hosts != [] do
+  defp validate_hosts(name, _kind, hosts) when is_list(hosts) and hosts != [] do
     case Enum.find_index(hosts, &(not (is_binary(&1) and Prima.Destination.valid_host?(&1)))) do
       nil -> bounded(name, :hosts, hosts)
       index -> {:error, {:invalid_needs, {:invalid_host, name, Enum.at(hosts, index)}}}
     end
   end
 
-  defp validate_hosts(name, _hosts), do: {:error, {:invalid_needs, {:invalid_list, name, :hosts}}}
+  defp validate_hosts(name, _kind, _hosts),
+    do: {:error, {:invalid_needs, {:invalid_list, name, :hosts}}}
 
   defp validate_paths(_name, nil), do: :ok
 

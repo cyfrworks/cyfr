@@ -297,7 +297,8 @@ defmodule CyfrWeb.WebhookFlowIntegrationTest do
           "type" => "api_key:upstream.test",
           "reason" => "to call the upstream with your key",
           "fields" => ["KEY"],
-          "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+          "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+          "hosts" => ["127.0.0.1"]
         }
       },
       "caps" => %{

@@ -38,12 +38,14 @@ defmodule Compendium.ManifestNeedsCapsTest do
         "type" => "api_key:anthropic.com",
         "reason" => "to call the Anthropic API with your key",
         "fields" => ["ANTHROPIC_API_KEY"],
-        "required" => true
+        "required" => true,
+        "hosts" => ["api.anthropic.com"]
       },
       "google" => %{
         "type" => "oauth:google",
         "reason" => "to read your Gmail inbox",
-        "scopes" => ["https://www.googleapis.com/auth/gmail.readonly"]
+        "scopes" => ["https://www.googleapis.com/auth/gmail.readonly"],
+        "hosts" => ["gmail.googleapis.com"]
       }
     }
   }
@@ -51,7 +53,7 @@ defmodule Compendium.ManifestNeedsCapsTest do
   @good_caps %{
     "caps" => %{
       "egress" => %{
-        "domains" => ["api.anthropic.com"],
+        "domains" => ["api.anthropic.com", "gmail.googleapis.com"],
         "methods" => ["GET", "POST"],
         "schemes" => ["https"],
         "private_ips" => []
@@ -75,7 +77,10 @@ defmodule Compendium.ManifestNeedsCapsTest do
 
     test "the name is the slot key, so the edge-key grammar constrains it" do
       for bad <- ["@ingress", "has|pipe", "Upper", "", "0start", String.duplicate("a", 33)] do
-        manifest = %{"needs" => %{bad => %{"type" => "api_key:x.com", "reason" => "r"}}}
+        manifest = %{
+          "needs" => %{bad => %{"type" => "api_key:x.com", "reason" => "r", "hosts" => ["x.com"]}}
+        }
+
         assert {:error, {:invalid_needs, {:invalid_name, ^bad}}} = Needs.validate(manifest)
       end
     end
@@ -86,15 +91,24 @@ defmodule Compendium.ManifestNeedsCapsTest do
         assert {:error, {:invalid_needs, {:invalid_type, "n", _}}} = Needs.validate(manifest)
       end
 
-      for good <- ["api_key:anthropic.com", "oauth:google", "bundle:supabase.com", "catalyst:db"] do
-        manifest = %{"needs" => %{"n" => %{"type" => good, "reason" => "r"}}}
+      # A credential need names its hosts; a component-typed one takes none.
+      for {good, extra} <- [
+            {"api_key:anthropic.com", %{"hosts" => ["api.anthropic.com"]}},
+            {"oauth:google", %{"hosts" => ["gmail.googleapis.com"]}},
+            {"bundle:supabase.com", %{"hosts" => ["*.supabase.co"]}},
+            {"catalyst:db", %{}}
+          ] do
+        manifest = %{"needs" => %{"n" => Map.merge(%{"type" => good, "reason" => "r"}, extra)}}
         assert :ok = Needs.validate(manifest)
       end
     end
 
     test "reason is required prose — the operator sees it instead of key names" do
       for bad <- [nil, "", "   "] do
-        manifest = %{"needs" => %{"n" => %{"type" => "api_key:x.com", "reason" => bad}}}
+        manifest = %{
+          "needs" => %{"n" => %{"type" => "api_key:x.com", "reason" => bad, "hosts" => ["x.com"]}}
+        }
+
         assert {:error, {:invalid_needs, {:reason_required, "n"}}} = Needs.validate(manifest)
       end
     end
@@ -102,7 +116,12 @@ defmodule Compendium.ManifestNeedsCapsTest do
     test "scopes only make sense on oauth kinds" do
       manifest = %{
         "needs" => %{
-          "n" => %{"type" => "api_key:x.com", "reason" => "r", "scopes" => ["a"]}
+          "n" => %{
+            "type" => "api_key:x.com",
+            "reason" => "r",
+            "scopes" => ["a"],
+            "hosts" => ["x.com"]
+          }
         }
       }
 
@@ -112,7 +131,12 @@ defmodule Compendium.ManifestNeedsCapsTest do
     test "unknown keys are rejected" do
       manifest = %{
         "needs" => %{
-          "n" => %{"type" => "api_key:x.com", "reason" => "r", "secret_name" => "LEAK"}
+          "n" => %{
+            "type" => "api_key:x.com",
+            "reason" => "r",
+            "hosts" => ["x.com"],
+            "secret_name" => "LEAK"
+          }
         }
       }
 
@@ -245,7 +269,9 @@ defmodule Compendium.ManifestNeedsCapsTest do
           "name" => "bad-needs",
           "version" => "1.0.0",
           "type" => "reagent",
-          "needs" => %{"@ingress" => %{"type" => "api_key:x.com", "reason" => "r"}}
+          "needs" => %{
+            "@ingress" => %{"type" => "api_key:x.com", "reason" => "r", "hosts" => ["x.com"]}
+          }
         })
 
       assert {:error, {:invalid_needs, _}} =

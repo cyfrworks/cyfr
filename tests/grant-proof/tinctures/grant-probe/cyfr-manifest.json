@@ -9,7 +9,8 @@
       "type": "api_key:grant.test",
       "fields": ["TOKEN"],
       "reason": "to read the probe's feed",
-      "required": false
+      "required": false,
+      "hosts": ["alpha.grant.test"]
     }
   },
   "caps": {

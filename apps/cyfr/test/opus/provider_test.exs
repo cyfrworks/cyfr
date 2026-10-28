@@ -939,7 +939,7 @@ defmodule Opus.ProviderTest do
                   "scope" => "athanor",
                   "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
                   "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
-                  "projection" => %{"fields" => ["KEY"]},
+                  "projection" => %{"fields" => %{"KEY" => "KEY"}, "scopes" => []},
                   "binding_key" => lender_key
                 }
               }
@@ -1053,7 +1053,7 @@ defmodule Opus.ProviderTest do
         "scope" => "athanor",
         "destination" => %{"hosts" => ["api.example.com"], "scheme" => "https"},
         "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
-        "projection" => %{"fields" => ["KEY"]},
+        "projection" => %{"fields" => %{"KEY" => "KEY"}, "scopes" => []},
         "binding_key" => binding_key
       }
     end
@@ -2047,7 +2047,8 @@ defmodule Opus.ProviderTest do
         "api_key" => %{
           "type" => "api_key:example.com",
           "reason" => "to call the example API",
-          "fields" => ["KEY"]
+          "fields" => ["KEY"],
+          "hosts" => ["api.example.com"]
         }
       },
       "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}

@@ -91,8 +91,14 @@ defmodule Sanctum.Consent.VersionShapeCacheRaceTest do
     # A real publish runs the registry's invalidation before answering.
     publish!(ctx, "reagent", leaf, "1.0.1", %{
       "needs" => %{
-        "key" => %{"type" => "api_key:example.com", "reason" => "new need", "fields" => ["TOKEN"]}
-      }
+        "key" => %{
+          "type" => "api_key:example.com",
+          "hosts" => ["api.example.com"],
+          "reason" => "new need",
+          "fields" => ["TOKEN"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
     })
 
     send(parked, :release_shape)

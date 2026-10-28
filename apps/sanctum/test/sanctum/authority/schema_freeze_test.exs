@@ -160,7 +160,10 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
                            paths: ["/rest/v1"]
                          ),
                        attach: %{in: "header", name: "apikey", template: "{value}"},
-                       projection: %{fields: ["url", "anon_key"], scopes: []}
+                       projection: %{
+                         fields: %{"anon_key" => "anon key", "url" => "url"},
+                         scopes: []
+                       }
                      },
                      egress: egress.("prod.supabase.co"),
                      storage: %{paths: [], actions: []},
@@ -175,7 +178,10 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
                        binding_key: key.("dest", nil),
                        destination: destination.(["warehouse.supabase.co"], []),
                        attach: nil,
-                       projection: %{fields: ["url", "service_key"], scopes: []},
+                       projection: %{
+                         fields: %{"service_key" => "service_key", "url" => "url"},
+                         scopes: []
+                       },
                        named: %{
                          "Archive" => %{
                            entry_id: "vault-entry-archive",
@@ -193,7 +199,7 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
                              name: "Authorization",
                              template: "Bearer {value}"
                            },
-                           projection: nil
+                           projection: %{fields: %{"service_key" => "service_key"}, scopes: []}
                          }
                        }
                      },
@@ -207,7 +213,7 @@ defmodule Sanctum.Authority.SchemaFreezeTest do
                        binding_key: key.("lent", nil),
                        destination: destination.(["*.supabase.co"], []),
                        attach: %{in: "query", name: "apikey", template: "{value}"},
-                       projection: nil,
+                       projection: %{fields: %{"anon_key" => "anon key"}, scopes: []},
                        lender: %{
                          profile_id: "prof-supabase",
                          consent_id: "consent-supabase-3",

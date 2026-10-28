@@ -33,7 +33,9 @@ defmodule Prima.Authority.ChildNeverLoadsProfileTest do
             "edges" => %{
               "@ingress" => %{
                 "vault" =>
-                  Fixtures.bound_vault(@catalyst, "@ingress", "vault-admin", "sha256:admin"),
+                  Fixtures.bound_vault(@catalyst, "@ingress", "vault-admin", "sha256:admin",
+                    projection: %{"fields" => %{"url" => "url"}, "scopes" => []}
+                  ),
                 "tools" => ["storage.read", "storage.write", "component.search"]
               }
             }

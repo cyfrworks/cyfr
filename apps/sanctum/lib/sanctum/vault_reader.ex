@@ -10,7 +10,9 @@ defmodule Sanctum.VaultReader do
   1. the caller is not anonymous (a public invocation must never reach
      operator credentials, whatever its edges say)
   2. the edge's projection names what it reads: a key or bundle edge its
-     non-empty `fields` (`fetch/3`), an OAuth edge its non-empty `scopes`
+     non-empty `fields` map, from each field the component reads to the
+     entry field that answers it (`fetch/3`), an OAuth edge its non-empty
+     `scopes`
      (`oauth_token/4`). An edge without one is corrupt and dispenses
      nothing; consenting to the component again writes a named projection
   3. the entry exists in the caller's tenant and is `active`
@@ -28,9 +30,11 @@ defmodule Sanctum.VaultReader do
      a root, before anything is unsealed
   7. the payload unseals under the entry's AEAD (a tampered pointer fails
      decrypt)
-  8. every projected field is present in the entry's material, and
-     nothing outside `projection.fields` leaves this module: a field the
-     entry lacks refuses the whole resolution, never a partial projection
+  8. every mapped entry field is present in the entry's material, and
+     nothing outside `projection.fields` leaves this module: each field
+     the component reads answers the value of the entry field the map
+     names, and an entry field the material lacks refuses the whole
+     resolution, never a partial projection
 
   ## By name
 
@@ -69,7 +73,8 @@ defmodule Sanctum.VaultReader do
   @type vault_resource :: %{
           required(:entry_id) => String.t(),
           required(:binding_digest) => String.t(),
-          optional(:projection) => %{fields: [String.t()], scopes: [String.t()]} | nil,
+          optional(:projection) =>
+            %{fields: %{optional(String.t()) => String.t()}, scopes: [String.t()]} | nil,
           optional(atom()) => term()
         }
 
@@ -109,12 +114,12 @@ defmodule Sanctum.VaultReader do
 
   @doc """
   Resolve the entry's secret material as a name → value map, projected,
-  for `use` (`t:use/0`).
+  for `use` (`t:use/0`), keyed by the fields the component reads.
 
   The edge's `projection.fields` is required: an edge without a non-empty
-  field list answers `{:error, :corrupt}` before the entry is read, and a
-  projected field the entry's material lacks answers
-  `{:error, {:missing_field, name}}`. An attach-only entry answers
+  field map answers `{:error, :corrupt}` before the entry is read, and a
+  mapped entry field the material lacks answers
+  `{:error, {:missing_field, name}}`, naming the component's field. An attach-only entry answers
   `{:error, :disclosure_refused}` before it is unsealed. A resource
   carrying a `binding_key` is then held to its binding's lifetime under
   `use` (`Sanctum.Attach.lifetime/3`): an expired one, or a `once` another
@@ -486,12 +491,15 @@ defmodule Sanctum.VaultReader do
   # Secret material
   # ---------------------------------------------------------------------------
 
-  # Every projected field must be in the material: a partial projection
+  # Every mapped entry field must be in the material: a partial projection
   # would hand the guest less than the operator consented to without saying
-  # so, so the first absent field (in sorted order) refuses the whole read.
+  # so, so the first absent one (by the component's field, in sorted order)
+  # refuses the whole read.
   defp resolve_secrets(_ctx, _entry, %{"fields" => material}, fields) do
-    Enum.reduce_while(fields, {:ok, %{}}, fn name, {:ok, acc} ->
-      case Map.fetch(material, name) do
+    fields
+    |> Enum.sort()
+    |> Enum.reduce_while({:ok, %{}}, fn {name, entry_field}, {:ok, acc} ->
+      case Map.fetch(material, entry_field) do
         {:ok, value} -> {:cont, {:ok, Map.put(acc, name, value)}}
         :error -> {:halt, {:error, {:missing_field, name}}}
       end
@@ -520,7 +528,9 @@ defmodule Sanctum.VaultReader do
       else: corrupt_projection(resource)
   end
 
-  defp oauth_projection(%{projection: %{fields: [_ | _]}}), do: {:error, :no_oauth_material}
+  defp oauth_projection(%{projection: %{fields: fields}}) when map_size(fields) > 0,
+    do: {:error, :no_oauth_material}
+
   defp oauth_projection(resource), do: corrupt_projection(resource)
 
   # A projection asking for scopes the entry was never authorized for is
@@ -555,16 +565,20 @@ defmodule Sanctum.VaultReader do
   # Helpers
   # ---------------------------------------------------------------------------
 
-  # A key or bundle projection names its fields. An absent projection, an
-  # absent or non-list field list, an empty one or a non-string name is a
-  # corrupt edge — never "every field" — and the refusal names its remedy.
-  defp projection_fields(%{projection: %{fields: [_ | _] = fields}} = resource) do
-    if Enum.all?(fields, &(is_binary(&1) and &1 != "")),
-      do: {:ok, fields |> Enum.uniq() |> Enum.sort()},
+  # A key or bundle projection maps its fields. An absent projection, an
+  # absent or empty field map, or a name that is not a non-empty string is
+  # a corrupt edge — never "every field" — and the refusal names its
+  # remedy.
+  defp projection_fields(%{projection: %{fields: fields}} = resource)
+       when is_map(fields) and map_size(fields) > 0 do
+    if Enum.all?(fields, fn {name, entry_field} -> name?(name) and name?(entry_field) end),
+      do: {:ok, fields},
       else: corrupt_projection(resource)
   end
 
   defp projection_fields(resource), do: corrupt_projection(resource)
+
+  defp name?(value), do: is_binary(value) and value != ""
 
   defp corrupt_projection(resource) do
     Logger.warning(

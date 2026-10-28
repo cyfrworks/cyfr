@@ -3599,9 +3599,10 @@ type ProfileCommitArgsDecisionsBindingsItem struct {
 	// How long the binding lives; standing when absent
 	Lifetime Field[ProfileCommitArgsDecisionsBindingsItemLifetime] `json:"lifetime,omitzero"`
 	// true makes a consumed once binding consumable again; false by default
-	Renew  Field[bool]     `json:"renew,omitzero"`
-	Fields Field[[]string] `json:"fields,omitzero"`
-	Scopes Field[[]string] `json:"scopes,omitzero"`
+	Renew Field[bool] `json:"renew,omitzero"`
+	// Each field the need reads to the entry field that answers it; absent, the automatic map: equal names, or one field to one field
+	Fields Field[map[string]string] `json:"fields,omitzero"`
+	Scopes Field[[]string]          `json:"scopes,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3644,9 +3645,10 @@ type ProfileCommitArgsDecisionsSelectionsItem struct {
 	// The dependency's credential need the entry is for; required when it declares several, never with a label
 	Need Field[string] `json:"need,omitzero"`
 	// The account name of a named selection beside the edge's default entry; it names an entry, never a label; absent for the default
-	Name   Field[string]   `json:"name,omitzero"`
-	From   Field[string]   `json:"from,omitzero"`
-	Fields Field[[]string] `json:"fields,omitzero"`
+	Name Field[string] `json:"name,omitzero"`
+	From Field[string] `json:"from,omitzero"`
+	// For an entry: each field the need reads to the entry field that answers it, absent for the automatic map; never with a label, which lends its profile's map
+	Fields Field[map[string]string] `json:"fields,omitzero"`
 	// How long the binding lives; standing when absent
 	Lifetime Field[ProfileCommitArgsDecisionsSelectionsItemLifetime] `json:"lifetime,omitzero"`
 	// true makes a consumed once binding consumable again; false by default
@@ -3834,9 +3836,10 @@ type ProfileGrantArgsBindingsItem struct {
 	// How long the binding lives; standing when absent
 	Lifetime Field[ProfileGrantArgsBindingsItemLifetime] `json:"lifetime,omitzero"`
 	// true makes a consumed once binding consumable again; false by default
-	Renew  Field[bool]     `json:"renew,omitzero"`
-	Fields Field[[]string] `json:"fields,omitzero"`
-	Scopes Field[[]string] `json:"scopes,omitzero"`
+	Renew Field[bool] `json:"renew,omitzero"`
+	// Each field the need reads to the entry field that answers it; absent, the automatic map: equal names, or one field to one field
+	Fields Field[map[string]string] `json:"fields,omitzero"`
+	Scopes Field[[]string]          `json:"scopes,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -3977,9 +3980,10 @@ type ProfilePreviewArgsDecisionsBindingsItem struct {
 	// How long the binding lives; standing when absent
 	Lifetime Field[ProfilePreviewArgsDecisionsBindingsItemLifetime] `json:"lifetime,omitzero"`
 	// true makes a consumed once binding consumable again; false by default
-	Renew  Field[bool]     `json:"renew,omitzero"`
-	Fields Field[[]string] `json:"fields,omitzero"`
-	Scopes Field[[]string] `json:"scopes,omitzero"`
+	Renew Field[bool] `json:"renew,omitzero"`
+	// Each field the need reads to the entry field that answers it; absent, the automatic map: equal names, or one field to one field
+	Fields Field[map[string]string] `json:"fields,omitzero"`
+	Scopes Field[[]string]          `json:"scopes,omitzero"`
 }
 
 // UnmarshalJSON refuses unknown fields and preserves required presence.
@@ -4022,9 +4026,10 @@ type ProfilePreviewArgsDecisionsSelectionsItem struct {
 	// The dependency's credential need the entry is for; required when it declares several, never with a label
 	Need Field[string] `json:"need,omitzero"`
 	// The account name of a named selection beside the edge's default entry; it names an entry, never a label; absent for the default
-	Name   Field[string]   `json:"name,omitzero"`
-	From   Field[string]   `json:"from,omitzero"`
-	Fields Field[[]string] `json:"fields,omitzero"`
+	Name Field[string] `json:"name,omitzero"`
+	From Field[string] `json:"from,omitzero"`
+	// For an entry: each field the need reads to the entry field that answers it, absent for the automatic map; never with a label, which lends its profile's map
+	Fields Field[map[string]string] `json:"fields,omitzero"`
 	// How long the binding lives; standing when absent
 	Lifetime Field[ProfilePreviewArgsDecisionsSelectionsItemLifetime] `json:"lifetime,omitzero"`
 	// true makes a consumed once binding consumable again; false by default
@@ -5660,7 +5665,7 @@ type VaultCreateArgs struct {
 	Kind string `json:"kind"`
 	// Secret material as name → value; names mirror field_names
 	Fields Field[map[string]string] `json:"fields,omitzero"`
-	// Immutable provider tag (e.g. 'google'); set at create only
+	// Optional label (e.g. 'openai.com'), set at create only: it ranks the entry first for a need of that provider, and an OAuth entry requires it
 	ProviderHint Field[string] `json:"provider_hint,omitzero"`
 	// Binding field: scopes this credential was authorized for
 	OauthScopes    Field[[]string]                      `json:"oauth_scopes,omitzero"`

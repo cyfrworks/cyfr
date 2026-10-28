@@ -5,10 +5,12 @@ defmodule Prima.Manifest.NeedsTest do
   @moduledoc """
   A credential need names how its value is attached (`attach`), where it
   is sent (`hosts`, `paths`) and whether the component reads it itself
-  (`disclose`). A need without `attach` is disclose-only, OAuth included;
-  an OAuth need whose rule names no template takes the bearer header; a
-  rule's template holds `{value}` once and its header name is a token; a
-  component-typed need takes none of the four.
+  (`disclose`). A credential need names its hosts; a need without
+  `attach` is disclose-only, OAuth included; an OAuth need whose rule
+  names no template takes the bearer header; a rule's template holds
+  `{value}` once and its header name is a token; a component-typed need
+  takes none of the four. `fit/2` reads whether an entry's destination
+  covers what a need declares.
   """
 
   use ExUnit.Case, async: true
@@ -18,11 +20,27 @@ defmodule Prima.Manifest.NeedsTest do
   defp manifest(entry), do: %{"needs" => %{"api_key" => entry}}
 
   defp need(extra \\ %{}),
-    do: Map.merge(%{"type" => "api_key:openai.com", "reason" => "to call OpenAI"}, extra)
+    do:
+      Map.merge(
+        %{
+          "type" => "api_key:openai.com",
+          "reason" => "to call OpenAI",
+          "hosts" => ["api.openai.com"]
+        },
+        extra
+      )
 
   defp normalized(entry) do
     [need] = Needs.from_manifest(manifest(entry))
     need
+  end
+
+  # The fit of a need declaring `hosts` (and `paths` when given) to an
+  # entry whose destination `destination` spells.
+  defp fit(hosts, paths \\ nil, destination) do
+    declared = if paths, do: %{"hosts" => hosts, "paths" => paths}, else: %{"hosts" => hosts}
+    {:ok, outer} = Prima.Destination.from_map(destination)
+    Needs.fit(normalized(need(declared)), outer)
   end
 
   defp refused(entry) do
@@ -49,7 +67,14 @@ defmodule Prima.Manifest.NeedsTest do
       assert plain.attach == nil and Needs.disclose_only?(plain)
       assert plain.disclose == false
 
-      oauth = normalized(%{"type" => "oauth:google", "reason" => "r", "scopes" => ["a"]})
+      oauth =
+        normalized(%{
+          "type" => "oauth:google",
+          "reason" => "r",
+          "scopes" => ["a"],
+          "hosts" => ["www.googleapis.com"]
+        })
+
       assert oauth.attach == nil and Needs.disclose_only?(oauth)
 
       assert normalized(need(%{"attach" => nil})).attach == nil
@@ -57,7 +82,7 @@ defmodule Prima.Manifest.NeedsTest do
 
     test "an OAuth need's rule without a template takes the bearer header" do
       bearer = %{in: "header", name: "Authorization", template: "Bearer {value}"}
-      oauth = %{"type" => "oauth:google", "reason" => "r"}
+      oauth = %{"type" => "oauth:google", "reason" => "r", "hosts" => ["www.googleapis.com"]}
 
       assert normalized(Map.put(oauth, "attach", %{})).attach == bearer
 
@@ -204,7 +229,23 @@ defmodule Prima.Manifest.NeedsTest do
       assert read.hosts == ["*.example.com", "b.example.com"]
       assert read.paths == ["/v1/a", "/v1/b"]
       assert read.disclose
-      assert normalized(need()).hosts == [] and normalized(need()).paths == []
+      assert normalized(need()).paths == []
+    end
+
+    test "a credential need without hosts is refused" do
+      for type <- ["api_key:openai.com", "oauth:google", "bundle:acme.example"] do
+        entry = %{"type" => type, "reason" => "r"}
+        assert {:hosts_required, "api_key"} = refused(entry), type
+        assert {:hosts_required, "api_key"} = refused(Map.put(entry, "paths", ["/v1"])), type
+        assert Needs.from_manifest(manifest(entry)) == nil
+      end
+
+      # A component-typed need still takes no hosts.
+      component = %{"type" => "catalyst:local.files", "reason" => "r"}
+      assert [%{hosts: []}] = Needs.from_manifest(manifest(component))
+
+      assert {:not_a_credential, "api_key", ["hosts"]} =
+               refused(Map.put(component, "hosts", ["api.openai.com"]))
     end
 
     test "a host or a path outside the destination grammar is refused" do
@@ -288,6 +329,65 @@ defmodule Prima.Manifest.NeedsTest do
       for key <- ["attach", "hosts", "paths", "disclose"] do
         entry = %{"type" => "catalyst:local.files", "reason" => "r", key => nil}
         assert {:not_a_credential, "api_key", [^key]} = refused(entry)
+      end
+    end
+  end
+
+  describe "fit/2" do
+    test "an exact host fits exactly" do
+      assert fit(["api.x.ai"], %{"hosts" => ["api.x.ai"]}) == :exact
+      # An entry naming more hosts than the need still fits.
+      assert fit(["api.x.ai"], %{"hosts" => ["api.x.ai", "other.example.com"]}) == :exact
+    end
+
+    test "`api.x.ai` fits `*.x.ai` as wildcard" do
+      assert fit(["api.x.ai"], %{"hosts" => ["*.x.ai"]}) == :wildcard
+      # One host matched only by a pattern makes the whole fit wildcard.
+      assert fit(["api.x.ai", "x.ai"], %{"hosts" => ["*.x.ai", "x.ai"]}) == :wildcard
+    end
+
+    test "`x.ai` does not fit `*.x.ai`" do
+      assert fit(["x.ai"], %{"hosts" => ["*.x.ai"]}) == :none
+    end
+
+    test "a need's `*.a.example.com` fits `*.example.com`" do
+      assert fit(["*.a.example.com"], %{"hosts" => ["*.example.com"]}) == :wildcard
+      assert fit(["*.example.com"], %{"hosts" => ["*.example.com"]}) == :exact
+      assert fit(["*.example.com"], %{"hosts" => ["a.example.com"]}) == :none
+    end
+
+    test "every host must fit" do
+      assert fit(["api.x.ai", "api.openai.com"], %{"hosts" => ["api.x.ai"]}) == :none
+      assert fit(["api.x.ai", "api.openai.com"], %{"hosts" => ["*.x.ai"]}) == :none
+
+      assert fit(["api.x.ai", "api.openai.com"], %{"hosts" => ["api.openai.com", "api.x.ai"]}) ==
+               :exact
+    end
+
+    test "a need without paths fits an entry with paths" do
+      assert fit(["api.x.ai"], %{"hosts" => ["api.x.ai"], "paths" => ["/v1"]}) == :exact
+      assert fit(["api.x.ai"], %{"hosts" => ["*.x.ai"], "paths" => ["/v1/chat"]}) == :wildcard
+    end
+
+    test "`/v1/chat` fits `/v1` and `/v1x` does not fit `/v1`" do
+      entry = %{"hosts" => ["api.x.ai"], "paths" => ["/v1"]}
+      assert fit(["api.x.ai"], ["/v1/chat"], entry) == :exact
+      assert fit(["api.x.ai"], ["/v1x"], entry) == :none
+      # Every declared path needs a covering entry path.
+      assert fit(["api.x.ai"], ["/v1/chat", "/v2"], entry) == :none
+      # An entry with no paths admits every path.
+      assert fit(["api.x.ai"], ["/v1/chat"], %{"hosts" => ["api.x.ai"]}) == :exact
+    end
+
+    test "an entry's methods, scheme and port do not decide the fit" do
+      for destination <- [
+            %{"hosts" => ["api.x.ai"], "methods" => ["POST"]},
+            %{"hosts" => ["api.x.ai"], "scheme" => "http"},
+            %{"hosts" => ["api.x.ai"], "port" => 8443},
+            %{"hosts" => ["api.x.ai"], "scheme" => "http", "port" => 8080, "methods" => ["GET"]}
+          ] do
+        assert fit(["api.x.ai"], destination) == :exact, inspect(destination)
+        assert fit(["api.x.ai"], ["/v1"], destination) == :exact, inspect(destination)
       end
     end
   end

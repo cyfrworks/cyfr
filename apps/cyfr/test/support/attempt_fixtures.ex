@@ -382,8 +382,8 @@ defmodule Cyfr.Test.AttemptFixtures do
   @spec vault_authority!(Sanctum.Context.t(), map(), Authority.t()) ::
           {Authority.t(), Arca.Schemas.VaultEntry.t()}
   def vault_authority!(ctx, attrs, authority \\ Authority.zero()) do
-    # The edge names what a consent would: the entry's fields, and for an
-    # OAuth entry its scopes (a fixture scope when the attrs name none).
+    # The edge names what a consent would: the entry's fields, each read as
+    # itself, and for an OAuth entry its scopes (a fixture scope when the attrs name none).
     # `:projection` in `attrs` replaces it whole. An OAuth entry names the
     # provider it dispenses for: `google`, as the fixtures' dispenses ask,
     # whose preset holds its endpoints, when the attrs name none.
@@ -402,7 +402,7 @@ defmodule Cyfr.Test.AttemptFixtures do
       case explicit do
         :derived ->
           %{
-            fields: attrs |> Map.get(:fields, %{}) |> Map.keys() |> Enum.sort(),
+            fields: attrs |> Map.get(:fields, %{}) |> Map.new(fn {name, _} -> {name, name} end),
             scopes: attrs |> Map.get(:oauth_scopes, []) |> Enum.sort()
           }
 

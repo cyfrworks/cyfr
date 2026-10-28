@@ -635,9 +635,11 @@ defmodule PrismWeb.SystemLayerTest do
                 "type" => "api_key:layer.test",
                 "reason" => "to call the service with your key",
                 "fields" => ["LAYER_API_KEY"],
-                "required" => true
+                "required" => true,
+                "hosts" => ["api.example.com"]
               }
-            }
+            },
+            "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
           })
       })
 
@@ -1152,6 +1154,94 @@ defmodule PrismWeb.SystemLayerTest do
   describe "each credential's lifetime" do
     setup [:signed_in, :needing_key]
 
+    # A walk that has not previewed yet draws a need's lifetime refusal
+    # where it is seen: once a lifetime is chosen the pending block is gone,
+    # and there is no preview row to carry it.
+    test "a lifetime refused before any preview is said beside the choice, and Grant waits",
+         %{view: view, local: local} do
+      app =
+        asking_methods!(local, "life-refused-#{System.unique_integer([:positive])}", "0.1.0", [
+          "GET"
+        ])
+
+      a = regrant_key!(local)
+
+      b =
+        entry!(local, %{
+          name: "Named key",
+          provider_hint: "regrant.test",
+          fields: %{"old" => "sk-old"},
+          destination: %{"hosts" => ["api.regrant.example"]}
+        })
+
+      ahead = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [
+            %{
+              need: "api_key",
+              entry_id: a.id,
+              lifetime: %{kind: "until", until: DateTime.to_iso8601(ahead)}
+            },
+            %{need: "api_key", entry_id: b.id, name: "Work", fields: %{"REGRANT_KEY" => "old"}}
+          ]
+        })
+
+      # The default's hour has gone by, and the account's entry was rebound
+      # to fields of other names: the walk opens with a lifetime to choose
+      # and a map to answer, and nothing previewed.
+      {_profile, head} = head_rows(local, app)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.ConsentVaultRef,
+            where:
+              r.athanor_id == ^local.athanor_id and r.consent_id == ^head.id and
+                r.vault_entry_id == ^a.id
+          ),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -60)]
+        )
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.VaultEntry,
+            where: e.athanor_id == ^local.athanor_id and e.id == ^b.id
+          ),
+          set: [field_names: Jason.encode!(["extra", "new"])]
+        )
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-life-refused", app)
+      prompt(view, grant)
+      assert has_element?(view, ~s([data-test="grant-lifetime-pending"]))
+
+      # The account's entry is revoked, then its map answered: the first
+      # preview is refused.
+      {:ok, _} = Sanctum.Vault.revoke(local, b.id)
+
+      view
+      |> form(
+        ~s([data-test="grant-account"][data-account="Work"] [data-test="grant-map-question"]),
+        %{"entry_field" => "new"}
+      )
+      |> render_change()
+
+      render(view)
+      assert has_element?(view, ~s([data-test="grant-refusal"]))
+
+      # Choosing the default's lifetime is refused again, and said.
+      click(view, ~s([data-test="grant-lifetime-pending"] [data-lifetime="standing"]))
+      refute has_element?(view, ~s([data-test="grant-lifetime-pending"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-need"][data-need="api_key"] [data-test="grant-refusal"]),
+               "entry_unavailable"
+             )
+
+      assert has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+    end
+
     test "a lifetime chosen is previewed and committed on its binding's row; this session " <>
            "is the earlier of the session's end and a day on",
          %{view: view, ref: ref, name_ref: name_ref, local: local} do
@@ -1218,9 +1308,14 @@ defmodule PrismWeb.SystemLayerTest do
       assert [%{binding_key: ^key, consumed: true}] = grant.subject.plan.head_bindings
 
       # A re-grant opens on what the head binds, never wider: the once
-      # stays once, not the suggestion's standing.
+      # stays once, not the suggestion's standing, under the head's map.
       assert grant.subject.decisions["bindings"] == [
-               %{"need" => "api_key", "entry_id" => entry.id, "lifetime" => %{"kind" => "once"}}
+               %{
+                 "need" => "api_key",
+                 "entry_id" => entry.id,
+                 "lifetime" => %{"kind" => "once"},
+                 "fields" => %{"LAYER_API_KEY" => "LAYER_API_KEY"}
+               }
              ]
 
       prompt(view, grant)
@@ -1235,6 +1330,7 @@ defmodule PrismWeb.SystemLayerTest do
                  "need" => "api_key",
                  "entry_id" => entry.id,
                  "lifetime" => %{"kind" => "once"},
+                 "fields" => %{"LAYER_API_KEY" => "LAYER_API_KEY"},
                  "renew" => true
                }
              ]
@@ -1328,9 +1424,11 @@ defmodule PrismWeb.SystemLayerTest do
               "type" => "api_key:optional.test",
               "reason" => "to call the service, if you like",
               "fields" => ["OPTIONAL_KEY"],
-              "required" => false
+              "required" => false,
+              "hosts" => ["api.optional.example"]
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.optional.example"]}}
         })
 
       entry =
@@ -1365,7 +1463,8 @@ defmodule PrismWeb.SystemLayerTest do
               "type" => "api_key:dep.test",
               "reason" => "to reach the dependency's service",
               "fields" => ["DEP_KEY"],
-              "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+              "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+              "hosts" => ["api.dep.example"]
             }
           },
           "caps" => %{"egress" => %{"domains" => ["api.dep.example"]}}
@@ -1557,9 +1656,11 @@ defmodule PrismWeb.SystemLayerTest do
               "type" => "api_key:back-dep.test",
               "reason" => "to reach the dependency's service",
               "fields" => ["DEP_KEY"],
-              "attach" => attach
+              "attach" => attach,
+              "hosts" => ["api.back-dep.example"]
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.back-dep.example"]}}
         })
 
       app =
@@ -1570,9 +1671,11 @@ defmodule PrismWeb.SystemLayerTest do
               "type" => "api_key:back.test",
               "reason" => "to call the app's service",
               "fields" => ["APP_KEY"],
-              "attach" => attach
+              "attach" => attach,
+              "hosts" => ["api.back.example"]
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.back.example"]}}
         })
 
       entry =
@@ -1678,6 +1781,169 @@ defmodule PrismWeb.SystemLayerTest do
       refute render(view) =~ "Connect your move.test account"
     end
 
+    # The entry now holds every field the need reads by name, so it has an
+    # automatic map, and the head's map names fields it no longer holds.
+    for {variant, names, kept, asked} <- [
+          {"one", ["MAP_KEY", "MAP_ORG", "Organisation"], %{"MAP_ORG" => "Organisation"},
+           ["MAP_KEY"]},
+          {"every", ["MAP_KEY", "MAP_ORG", "token"], %{}, ["MAP_KEY", "MAP_ORG"]}
+        ] do
+      @tag names: names, kept: kept, asked: asked
+      test "a re-grant whose held map names #{variant} field the entry no longer holds asks " <>
+             "for it again on the sheet, keeps the answers it can and holds Grant",
+           %{view: view, ctx: ctx, names: names, kept: kept, asked: asked} do
+        local = local_of(ctx)
+        n = System.unique_integer([:positive])
+
+        name_ref =
+          publish_catalyst!(local, "layer-stale-map-#{n}", %{
+            "needs" => %{
+              "api_key" => %{
+                "type" => "api_key:map.test",
+                "reason" => "to call the service with the key it reads",
+                "fields" => ["MAP_KEY", "MAP_ORG"],
+                "required" => true,
+                "hosts" => ["api.map.example"]
+              }
+            },
+            "caps" => %{"egress" => %{"domains" => ["api.map.example"]}}
+          })
+
+        entry =
+          entry!(local, %{
+            name: "My map key",
+            fields: %{"API key" => "sk-map", "Organisation" => "org-map"},
+            destination: %{"hosts" => ["api.map.example"]},
+            disclose: true
+          })
+
+        {:ok, _} =
+          commit_with!(local, name_ref, %{
+            bindings: [
+              %{
+                need: "api_key",
+                entry_id: entry.id,
+                fields: %{"MAP_KEY" => "API key", "MAP_ORG" => "Organisation"}
+              }
+            ]
+          })
+
+        {1, _} =
+          Arca.Repo.update_all(
+            from(e in Arca.Schemas.VaultEntry,
+              where: e.athanor_id == ^local.athanor_id and e.id == ^entry.id
+            ),
+            set: [field_names: Jason.encode!(names)]
+          )
+
+        {:ok, grant} =
+          PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-stale-map", name_ref)
+
+        assert grant.subject.decisions["bindings"] == []
+        prompt(view, grant)
+
+        question = &~s([data-test="grant-map-question"][data-field="#{&1}"])
+
+        for need_field <- asked do
+          assert has_element?(view, question.(need_field) <> ~s( option[value=""][selected]))
+        end
+
+        for {need_field, entry_field} <- kept do
+          assert has_element?(
+                   view,
+                   question.(need_field) <> ~s( option[value="#{entry_field}"][selected])
+                 )
+        end
+
+        assert has_element?(
+                 view,
+                 ~s([data-test="grant-map-due"]),
+                 "Choose a field for each name before granting."
+               )
+
+        assert has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+        assert decisions_now(view)["bindings"] == []
+
+        for need_field <- asked do
+          view
+          |> form(question.(need_field), %{"entry_field" => need_field})
+          |> render_change()
+        end
+
+        render(view)
+        refute has_element?(view, ~s([data-test="grant-map-due"]))
+        refute has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+
+        assert [%{"entry_id" => bound, "fields" => fields}] = decisions_now(view)["bindings"]
+        assert bound == entry.id
+        assert fields == Map.merge(Map.new(asked, &{&1, &1}), kept)
+      end
+    end
+
+    test "granting with a chosen map commits it", %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+      n = System.unique_integer([:positive])
+
+      # A need of two fields the entry holds under names of its own: no
+      # automatic map, so the person chooses it.
+      name_ref =
+        publish_catalyst!(local, "layer-map-#{n}", %{
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:map.test",
+              "reason" => "to call the service with the key it reads",
+              "fields" => ["MAP_KEY", "MAP_ORG"],
+              "required" => true,
+              "hosts" => ["api.map.example"]
+            }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.map.example"]}}
+        })
+
+      entry =
+        entry!(local, %{
+          name: "My map key",
+          fields: %{"API key" => "sk-map", "Organisation" => "org-map"},
+          destination: %{"hosts" => ["api.map.example"]},
+          disclose: true
+        })
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-map", name_ref)
+      prompt(view, grant)
+
+      assert has_element?(view, ~s([data-test="grant-held"]), "api.map.example: My map key")
+      assert has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+
+      for {need_field, entry_field} <- [{"MAP_KEY", "API key"}, {"MAP_ORG", "Organisation"}] do
+        view
+        |> form(~s([data-test="grant-map-question"][data-field="#{need_field}"]), %{
+          "entry_field" => entry_field
+        })
+        |> render_change()
+
+        render(view)
+      end
+
+      refute has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+      map = %{"MAP_KEY" => "API key", "MAP_ORG" => "Organisation"}
+      %{current: %{subject: %{decisions: decisions, preview: preview}}} = layer_assigns(view)
+      assert [%{"entry_id" => bound, "fields" => ^map}] = decisions["bindings"]
+      assert bound == entry.id
+      assert [%{"values" => %{"fields" => ^map}}] = credential_rows(preview)
+
+      view |> element(~s(button[phx-click="confirm"])) |> render_click()
+      assert outcome("g-map") == :confirmed
+
+      {_profile_id, head} = head_rows(local, name_ref)
+      {:ok, blob} = Prima.Authority.Blob.parse(head.resolved_policy)
+      {:ok, %{vault: vault}} = Prima.Authority.Blob.ingress(blob, name_ref)
+      assert vault.projection == %{fields: map, scopes: []}
+
+      # Granted again, the head's map is what the grant opens with.
+      {:ok, again} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-map-2", name_ref)
+      assert [%{"entry_id" => ^bound, "fields" => ^map}] = again.subject.decisions["bindings"]
+    end
+
     test "a need the component reads itself is connected with disclosure on; dismissed, " <>
            "the grant comes back as it was",
          %{view: view, ctx: ctx} do
@@ -1689,12 +1955,14 @@ defmodule PrismWeb.SystemLayerTest do
             "api_key" => %{
               "type" => "api_key:reads.test",
               "reason" => "to call the service with the key it reads",
-              "fields" => ["READS_KEY", "READS_ORG"]
+              "fields" => ["READS_KEY", "READS_ORG"],
+              "hosts" => ["api.reads.example"]
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.reads.example"]}}
         })
 
-      # An attach-only entry of the provider, which the need cannot take.
+      # An attach-only entry for the need's host, which the need cannot take.
       _attached =
         entry!(local, %{
           provider_hint: "reads.test",
@@ -1718,7 +1986,7 @@ defmodule PrismWeb.SystemLayerTest do
              )
 
       assert has_element?(view, ~s(input[name="disclose"][checked]))
-      refute has_element?(view, ~s(input[name="destination_hosts"][value]))
+      assert has_element?(view, ~s(input[name="destination_hosts"][value="api.reads.example"]))
 
       view |> element(~s(button[phx-click="dismiss"])) |> render_click()
       assert outcome(id) == :dismissed
@@ -1749,7 +2017,8 @@ defmodule PrismWeb.SystemLayerTest do
             "reason" => "to reach the named service",
             "fields" => ["NAMED_KEY"],
             "required" => required,
-            "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+            "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+            "hosts" => ["api.named.example"]
           }
         }
       end
@@ -1911,12 +2180,37 @@ defmodule PrismWeb.SystemLayerTest do
     end
 
     test "adding an account beside a lent default first switches the default to the entry " <>
-           "its lender lends",
+           "its lender lends, under the lender's field map",
          %{view: view, ctx: ctx} do
-      %{local: local, caller: caller, dep: dep, keys: {first, second, _third}} = named_world(ctx)
+      %{local: local, caller: caller, dep: dep, keys: {first, _second, _third}} = named_world(ctx)
 
-      {:ok, _} = commit_with!(local, dep, %{bindings: [%{need: "api_key", entry_id: second.id}]})
+      # The lender binds its key under a map that renames the field, which
+      # the switched default keeps.
+      lent =
+        entry!(local, %{
+          name: "named key renamed",
+          provider_hint: "named.test",
+          fields: %{"NAMED_KEY" => "sk-named", "ALT_KEY" => "sk-alt"},
+          destination: %{"hosts" => ["api.named.example"]}
+        })
+
+      {:ok, _} =
+        commit_with!(local, dep, %{
+          bindings: [%{need: "api_key", entry_id: lent.id, fields: %{"NAMED_KEY" => "ALT_KEY"}}]
+        })
+
       {:ok, _} = commit_with!(local, caller, %{selections: [%{dep: dep, label: "default"}]})
+
+      # Opened for an account, the default is switched before the prompt shows.
+      {:ok, for_account} =
+        PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-lent-account", caller,
+          account: %{name: "Home", dep: dep}
+        )
+
+      assert %{"entry_id" => lent_id, "fields" => %{"NAMED_KEY" => "ALT_KEY"}} =
+               Enum.find(for_account.subject.decisions["selections"], &is_nil(&1["name"]))
+
+      assert lent_id == lent.id
 
       {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-lent", caller)
       assert [%{"label" => "default"}] = grant.subject.decisions["selections"]
@@ -1924,8 +2218,11 @@ defmodule PrismWeb.SystemLayerTest do
 
       click(view, ~s([data-test="grant-add-account"][data-edge="#{dep}"]))
 
-      assert [%{"dep" => ^dep, "entry_id" => lent}] = decisions_now(view)["selections"]
-      assert lent == second.id
+      assert [%{"dep" => ^dep, "entry_id" => lent_id, "fields" => fields}] =
+               decisions_now(view)["selections"]
+
+      assert lent_id == lent.id
+      assert fields == %{"NAMED_KEY" => "ALT_KEY"}
 
       assert has_element?(
                view,
@@ -1947,7 +2244,7 @@ defmodule PrismWeb.SystemLayerTest do
 
       {_profile, head} = head_rows(local, caller)
 
-      assert %{"#{caller}|#{dep}|default" => second.id, "#{caller}|#{dep}|name:Home" => first.id} ==
+      assert %{"#{caller}|#{dep}|default" => lent.id, "#{caller}|#{dep}|name:Home" => first.id} ==
                Map.new(head.vault_refs, &{&1.binding_key, &1.vault_entry_id})
     end
 
@@ -2172,7 +2469,8 @@ defmodule PrismWeb.SystemLayerTest do
           "egress" => %{"domains" => domains, "methods" => methods}
         })
 
-    # The same catalyst asking for `caps`, its manifest naming `extra` too.
+    # The same catalyst asking for `caps`, its manifest naming `extra` too;
+    # its key is for the hosts of `caps`' egress domains.
     defp asking_caps!(local, name, version, caps, extra \\ %{}) do
       {:ok, _} =
         Compendium.Registry.publish_bytes(local, Cyfr.Test.Guests.wasm(:catalyst), %{
@@ -2194,7 +2492,8 @@ defmodule PrismWeb.SystemLayerTest do
                         "in" => "header",
                         "name" => "x-api-key",
                         "template" => "{value}"
-                      }
+                      },
+                      "hosts" => caps["egress"]["domains"]
                     }
                   },
                   "caps" => caps
@@ -2796,7 +3095,8 @@ defmodule PrismWeb.SystemLayerTest do
                       "reason" => "to reach the regrant service",
                       "fields" => ["REGRANT_KEY"],
                       "required" => true,
-                      "attach" => attach.("x-api-key")
+                      "attach" => attach.("x-api-key"),
+                      "hosts" => ["api.regrant.example"]
                     },
                     "other_key" => %{
                       "type" => "api_key:other3.test",
@@ -3041,6 +3341,52 @@ defmodule PrismWeb.SystemLayerTest do
       answer = outcome(id)
       render(view)
       answer
+    end
+
+    test "a choice refused after a failed re-plan says only its own refusal",
+         %{view: view, ctx: ctx} do
+      local = local_of(ctx)
+
+      app =
+        asking_methods!(local, "h-error-#{System.unique_integer([:positive])}", "0.1.0", ["GET"])
+
+      [a, b, c] = for _ <- 1..3, do: regrant_key!(local)
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: a.id}]})
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-h-error", app)
+      prompt(view, grant)
+
+      # Another client grants B and revokes it: the re-plan the refused
+      # confirm asks for fails on B.
+      {:ok, _} = commit_with!(local, app, %{bindings: [%{need: "api_key", entry_id: b.id}]})
+      {:ok, _} = Sanctum.Vault.revoke(local, b.id)
+      assert {:refused, _} = confirm_now(view, "g-h-error")
+      assert has_element?(view, ".consent-sheet__error", "entry_unavailable")
+
+      # C, still offered from the sheet's plan, has moved off the need's
+      # host: choosing it is refused, and that refusal alone is said.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.VaultEntry,
+            where: e.athanor_id == ^local.athanor_id and e.id == ^c.id
+          ),
+          set: [
+            destination:
+              Jason.encode!(%{"hosts" => ["other.regrant.example"], "scheme" => "https"})
+          ]
+        )
+
+      click(view, ~s([data-test="grant-change"]))
+      click(view, ~s([data-test="grant-pick"][phx-value-entry_id="#{c.id}"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-need"][data-need="api_key"] [data-test="grant-refusal"]),
+               "entry_mismatch"
+             )
+
+      refute has_element?(view, ".consent-sheet__error")
+      refute render(view) =~ "entry_unavailable"
+      assert has_element?(view, ~s(button[phx-click="confirm"][disabled]))
     end
 
     test "a refused commit replans over a head narrowed elsewhere, same ask",

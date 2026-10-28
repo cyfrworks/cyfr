@@ -83,20 +83,55 @@ defmodule Sanctum.Vault do
           destination: %{String.t() => term()} | nil,
           attach_only: boolean(),
           payload_rev: non_neg_integer(),
-          last_used_at: DateTime.t() | nil
+          last_used_at: DateTime.t() | nil,
+          used_by: [use_view()] | nil
         }
+
+  @typedoc """
+  One grant that binds an entry: the profile whose head revision binds it,
+  by id, the component it is for (`source_ref`) and its label.
+  """
+  @type use_view :: %{profile_id: String.t(), source_ref: String.t(), label: String.t()}
 
   # ---------------------------------------------------------------------------
   # Read
   # ---------------------------------------------------------------------------
 
-  @doc "Living entries in the caller's athanor, metadata only."
+  @doc """
+  Living entries in the caller's athanor, metadata only. Each entry's
+  `used_by` names the grants that bind it now: every active profile whose
+  head revision binds the entry (`Arca.ConsentStorage.entry_uses/1`), by
+  source and label, `[]` when none does. When those grants cannot be read
+  every entry's `used_by` is `nil`, never `[]`, and the entries are still
+  answered.
+  """
   @spec list(Context.t()) :: {:ok, [entry_view()]} | {:error, term()}
   def list(%Context{} = ctx) do
-    with {:ok, rows} <- Arca.VaultStorage.list(Context.actor(ctx)) do
-      {:ok, Enum.map(rows, &view/1)}
+    actor = Context.actor(ctx)
+
+    with {:ok, rows} <- Arca.VaultStorage.list(actor) do
+      uses = entry_uses(actor)
+      {:ok, Enum.map(rows, &view(&1, uses_of(uses, &1.id)))}
     end
   end
+
+  defp entry_uses(actor) do
+    case Arca.ConsentStorage.entry_uses(actor) do
+      {:ok, uses} ->
+        Enum.group_by(uses, & &1.entry_id, &Map.take(&1, [:profile_id, :source_ref, :label]))
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Sanctum.Vault] the grants using the vault's entries could not be read: " <>
+            Prima.LoggerContext.shape(reason)
+        )
+
+        :unread
+    end
+  end
+
+  defp uses_of(:unread, _id), do: nil
+  defp uses_of(uses, id), do: Map.get(uses, id, [])
 
   @typedoc """
   The caller's athanor's default entry per provider, keyed by provider
@@ -338,7 +373,7 @@ defmodule Sanctum.Vault do
                hold
              ) do
         broadcast(ctx, id, :create, %{name: entry.name})
-        {:ok, view(entry)}
+        {:ok, view(entry, [])}
       end
     end
   end
@@ -675,7 +710,7 @@ defmodule Sanctum.Vault do
   # Internal
   # ---------------------------------------------------------------------------
 
-  defp view(entry) do
+  defp view(entry, used_by) do
     %{
       id: entry.id,
       name: entry.name,
@@ -687,7 +722,8 @@ defmodule Sanctum.Vault do
       destination: decode_destination(entry.destination),
       attach_only: entry.attach_only,
       payload_rev: entry.payload_rev,
-      last_used_at: entry.last_used_at
+      last_used_at: entry.last_used_at,
+      used_by: used_by
     }
   end
 

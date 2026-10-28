@@ -263,7 +263,7 @@ defmodule Sanctum.Providers.InstanceEntry do
           "instance_entry",
           "offered",
           "Offered instance entries: each active entry offered to you, with its provider, " <>
-            "destination and component policy, how many requests you made through it " <>
+            "field names, destination and component policy, how many requests you made through it " <>
             "today (used_today), and whether that reached your own daily cap (cap_reached, " <>
             "until midnight UTC); never another person's use",
           [],

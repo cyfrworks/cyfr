@@ -465,7 +465,9 @@ defmodule Opus.Host.AttachedFetch do
 
   defp field(%{provided: %{values: values}}, _connection), do: values |> Map.keys() |> hd()
   defp field(%{projection: %{scopes: [_ | _]}}, connection), do: connection
-  defp field(%{projection: %{fields: [field]}}, _connection), do: field
+
+  defp field(%{projection: %{fields: fields}}, _connection) when map_size(fields) == 1,
+    do: fields |> Map.keys() |> hd()
 
   # The value joins the attempt's masking set before the request is made,
   # so a failure message is masked against it as well.

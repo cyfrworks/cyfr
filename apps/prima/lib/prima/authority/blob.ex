@@ -61,7 +61,15 @@ defmodule Prima.Authority.Blob do
         rule they are attached by.
     """
 
-    @type projection :: %{fields: [String.t()], scopes: [String.t()]} | nil
+    @typedoc """
+    What a bound entry hands its component: `fields`, each field the
+    need reads mapped to the entry field that answers it, and the
+    OAuth `scopes` the token is dispensed for. Every bound entry, the
+    default and each named account, carries one: a binding without it
+    does not parse.
+    """
+    @type projection ::
+            %{fields: %{optional(String.t()) => String.t()}, scopes: [String.t()]}
 
     @type lender :: %{profile_id: String.t(), consent_id: String.t(), binding_key: String.t()}
 
@@ -79,10 +87,7 @@ defmodule Prima.Authority.Blob do
             optional(:named) => %{optional(String.t()) => bound_vault()}
           }
 
-    @type selected_vault :: %{
-            via: %{label: String.t(), binding_digest: String.t() | nil},
-            projection: projection()
-          }
+    @type selected_vault :: %{via: %{label: String.t(), binding_digest: String.t() | nil}}
 
     @type provided_vault :: %{
             provided: %{
@@ -310,16 +315,13 @@ defmodule Prima.Authority.Blob do
       "destination" => Destination.to_map(vault.destination)
     }
     |> put_resource("attach", vault.attach && Needs.attach_to_map(vault.attach))
-    |> put_resource("projection", vault.projection && string_lists_to_map(vault.projection))
+    |> Map.put("projection", projection_to_map(vault.projection))
     |> put_resource("lender", lender_to_map(Map.get(vault, :lender)))
     |> put_resource("named", named_to_map(Map.get(vault, :named)))
   end
 
-  def vault_to_map(%{via: %{label: label, binding_digest: digest}, projection: projection}) do
-    via = %{"label" => label} |> put_resource("binding_digest", digest)
-
-    %{"via" => via}
-    |> put_resource("projection", projection && string_lists_to_map(projection))
+  def vault_to_map(%{via: %{label: label, binding_digest: digest}}) do
+    %{"via" => %{"label" => label} |> put_resource("binding_digest", digest)}
   end
 
   def vault_to_map(%{provided: %{destination: destination, values: values, attach: attach}}) do
@@ -341,6 +343,9 @@ defmodule Prima.Authority.Blob do
 
   defp named_to_map(named),
     do: Map.new(named, fn {name, vault} -> {name, vault_to_map(vault)} end)
+
+  defp projection_to_map(%{fields: fields, scopes: scopes}),
+    do: %{"fields" => fields, "scopes" => scopes}
 
   # `%{domains: [...], methods: [...]}` → `%{"domains" => [...], ...}`,
   # dropping nil lists (an absent key on the way in).
@@ -723,17 +728,17 @@ defmodule Prima.Authority.Blob do
   defp place(:unplaced, _node_ref, _edge_key), do: :unplaced
 
   # A selection binds the lender's entry when it resolves; it names no
-  # account of its own and carries no binding key until the loader
-  # resolves it where it sits.
+  # account of its own, carries no binding key until the loader resolves
+  # it where it sits, and no projection, since it reads under the
+  # lender's.
   defp validate_vault(%{"via" => via} = raw, _place) do
     with :ok <- refuse_named(raw, "a selection binds no named accounts"),
-         :ok <- keys_or_reason(raw, ["via", "projection"]),
+         :ok <- keys_or_reason(raw, ["via"]),
          {:ok, via_map} <- as_object(via, "via"),
          :ok <- keys_or_reason(via_map, ["label", "binding_digest"]),
          {:ok, label} <- required_string(via_map, "label"),
-         {:ok, digest} <- optional_string(via_map, "binding_digest"),
-         {:ok, projection} <- validate_projection(Map.get(raw, "projection")) do
-      {:ok, %{via: %{label: label, binding_digest: digest}, projection: projection}}
+         {:ok, digest} <- optional_string(via_map, "binding_digest") do
+      {:ok, %{via: %{label: label, binding_digest: digest}}}
     end
   end
 
@@ -988,17 +993,27 @@ defmodule Prima.Authority.Blob do
     end
   end
 
-  defp validate_projection(nil), do: {:ok, nil}
-
   defp validate_projection(raw) when is_map(raw) do
     with :ok <- keys_or_reason(raw, ["fields", "scopes"]),
-         {:ok, fields} <- optional_string_list(raw, "fields"),
-         {:ok, scopes} <- optional_string_list(raw, "scopes") do
+         {:ok, fields} <- field_map(Map.get(raw, "fields")),
+         {:ok, scopes} <- required_string_list(raw, "scopes") do
       {:ok, %{fields: fields, scopes: scopes}}
     end
   end
 
   defp validate_projection(_raw), do: {:error, "projection must be an object"}
+
+  defp field_map(fields) when is_map(fields) do
+    if Enum.all?(fields, fn {need_field, entry_field} ->
+         non_empty_string?(need_field) and non_empty_string?(entry_field)
+       end),
+       do: {:ok, fields},
+       else: {:error, "fields must map non-empty names to non-empty names"}
+  end
+
+  defp field_map(_fields), do: {:error, "fields must be an object"}
+
+  defp non_empty_string?(value), do: is_binary(value) and value != ""
 
   defp string_list_resource(raw, keys) do
     with :ok <- keys_or_reason(raw, Enum.map(keys, &elem(&1, 0))) do

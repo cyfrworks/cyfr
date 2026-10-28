@@ -105,8 +105,14 @@ defmodule Sanctum.Consent.ShapeCachePublicationWindowTest do
     # finished before the old reader is allowed to store anything.
     publish!(ctx, "reagent", leaf, "1.0.1", %{
       "needs" => %{
-        "key" => %{"type" => "api_key:example.com", "reason" => "new need", "fields" => ["TOKEN"]}
-      }
+        "key" => %{
+          "type" => "api_key:example.com",
+          "hosts" => ["api.example.com"],
+          "reason" => "new need",
+          "fields" => ["TOKEN"]
+        }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
     })
 
     {:ok, fresh_input} = ShapeDerivation.shape_input(ctx, source, "1.0.0")

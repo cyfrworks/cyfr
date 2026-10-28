@@ -128,10 +128,12 @@ defmodule Sanctum.Consent.BootstrapTest do
   describe "the instance's entry at first sign-in" do
     @model "catalyst:local.boot-model"
     @inference ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+    @anthropic_inference ~s({"hosts":["api.anthropic.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
 
-    # A shipped catalyst whose one need attaches a key of `provider`, an
-    # openai.com one unless a release says otherwise.
-    defp ship_model!(ctx, version \\ "1.0.0", caps \\ %{}, provider \\ "openai.com") do
+    # A shipped catalyst whose one need attaches an openai.com key calling
+    # `hosts`, api.openai.com unless a release says otherwise, which its
+    # caps reach.
+    defp ship_model!(ctx, version \\ "1.0.0", caps \\ %{}, hosts \\ ["api.openai.com"]) do
       {:ok, component} =
         Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "boot-model", version,
           manifest: %{
@@ -141,9 +143,10 @@ defmodule Sanctum.Consent.BootstrapTest do
             "publisher" => "local",
             "needs" => %{
               "api_key" => %{
-                "type" => "api_key:#{provider}",
+                "type" => "api_key:openai.com",
                 "reason" => "to call the model",
                 "fields" => ["OPENAI_API_KEY"],
+                "hosts" => hosts,
                 "attach" => %{
                   "in" => "header",
                   "name" => "Authorization",
@@ -151,7 +154,7 @@ defmodule Sanctum.Consent.BootstrapTest do
                 }
               }
             },
-            "caps" => caps
+            "caps" => Map.put(caps, "egress", %{"domains" => hosts})
           },
           wasm: Cyfr.Test.Guests.wasm(:catalyst)
         )
@@ -183,11 +186,11 @@ defmodule Sanctum.Consent.BootstrapTest do
       entry
     end
 
-    defp model_head!(ctx) do
-      {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), @model)
+    defp model_head!(ctx, ref \\ @model) do
+      {:ok, [profile]} = Arca.ConsentStorage.profiles(Sanctum.Context.actor(ctx), ref)
       {:ok, head} = Arca.ConsentStorage.head_consent(Sanctum.Context.actor(ctx), profile.id)
       {:ok, blob} = Blob.parse(head.resolved_policy)
-      {:ok, ingress} = Blob.ingress(blob, @model)
+      {:ok, ingress} = Blob.ingress(blob, ref)
       {head, ingress.vault}
     end
 
@@ -315,10 +318,12 @@ defmodule Sanctum.Consent.BootstrapTest do
       {:ok, person: person}
     end
 
-    test "a newly provisioned athanor binds its sole offered provider entry", %{person: person} do
+    test "a newly provisioned athanor binds its sole offered entry whose destination fits, " <>
+           "whatever its label",
+         %{person: person} do
       ship_model!(person)
-      offered = offer!()
-      _other_provider = offer!(%{provider_hint: "anthropic.com"})
+      offered = offer!(%{provider_hint: "x.ai"})
+      _elsewhere = offer!(%{destination: @anthropic_inference})
 
       assert {:ok, %{minted: minted}} = Bootstrap.run(person)
       assert @model in minted
@@ -342,12 +347,12 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert row.granted_via == "bootstrap"
     end
 
-    test "two offered entries of the provider bind none; the next grant suggests", %{
-      person: person
-    } do
+    test "two offered entries whose destination fits bind none, whatever their labels; the " <>
+           "next grant asks the person to choose",
+         %{person: person} do
       ship_model!(person)
       offer!()
-      offer!()
+      offer!(%{provider_hint: ""})
 
       assert {:ok, %{minted: minted}} = Bootstrap.run(person)
       assert @model in minted
@@ -455,6 +460,31 @@ defmodule Sanctum.Consent.BootstrapTest do
 
       assert answer == {:ok, %{minted: [@model], revised: [], skipped: []}}
       assert log =~ ~s(no instance entry bound for #{@model}: {:entry_unavailable, "revoked"})
+      assert {head, nil} = model_head!(person)
+      assert head.vault_refs == []
+    end
+
+    # The binding read is the one bound, so its destination is the one the
+    # fit is held to: a rebind between the offer's read and the binding's
+    # to a destination the need does not call binds nothing.
+    test "a chosen entry rebound off the need's hosts between the reads mints the catalyst " <>
+           "without it",
+         %{person: person} do
+      ship_model!(person)
+      offered = offer!()
+
+      after_read!("instance_entries", fn ->
+        {:ok, _moved} =
+          Arca.InstanceEntries.move_binding(
+            Arca.Test.Actor.platform(),
+            offered.id,
+            offered.binding_digest,
+            %{destination: @anthropic_inference, binding_digest: "sha256:moved-elsewhere"},
+            "needs_consent"
+          )
+      end)
+
+      assert Bootstrap.run(person) == {:ok, %{minted: [@model], revised: [], skipped: []}}
       assert {head, nil} = model_head!(person)
       assert head.vault_refs == []
     end
@@ -875,7 +905,8 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert vault == nil and unbound.vault_refs == []
     end
 
-    test "a boot's revision carries nothing to a release whose need names another provider",
+    test "a boot's revision carries nothing to a release whose need calls a host the entry " <>
+           "misses",
          %{ctx: ctx, person: person} do
       ship_model!(person)
       offered = offer!()
@@ -883,9 +914,9 @@ defmodule Sanctum.Consent.BootstrapTest do
       {_first, bound} = model_head!(person)
       assert bound.entry_id == offered.id
 
-      # The same need, now of anthropic.com: the openai.com entry meets it no
-      # longer, and the revision binds none.
-      ship_model!(person, "1.1.0", %{}, "anthropic.com")
+      # The same need, now calling api.anthropic.com: the entry bound for
+      # api.openai.com meets it no longer, and the revision binds none.
+      ship_model!(person, "1.1.0", %{}, ["api.anthropic.com"])
       assert {:ok, %{revised: [@model]}} = Bootstrap.run(seed(ctx))
       {head, vault} = model_head!(person)
       assert head.revision == 2
@@ -913,12 +944,91 @@ defmodule Sanctum.Consent.BootstrapTest do
           "needs_consent"
         )
 
-      # Still active and still of the need's provider, but no longer at the
-      # digest the head bound: the revision binds none.
+      # Still active and its destination still covering the need, but no
+      # longer at the digest the head bound: the revision binds none.
       ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
       assert {:ok, %{revised: [@model]}} = Bootstrap.run(seed(ctx))
       {head, vault} = model_head!(person)
       assert head.revision == 2
+      assert vault == nil and head.vault_refs == []
+    end
+
+    @grok "catalyst:local.grok"
+    @grok_unit Path.expand("../../../../../seed/components/catalysts/local/grok", __DIR__)
+    @xai ~s({"hosts":["api.x.ai"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+
+    # The newest Grok catalyst the seed ships: its need and its caps,
+    # released at `version` with `limits` over its own.
+    defp ship_grok!(ctx, version \\ nil, limits \\ %{}) do
+      newest = @grok_unit |> File.ls!() |> Compendium.Semver.sort_desc() |> hd()
+
+      shipped =
+        Path.join([@grok_unit, newest, "cyfr-manifest.json"]) |> File.read!() |> Jason.decode!()
+
+      version = version || newest
+
+      {:ok, component} =
+        Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "grok", version,
+          manifest:
+            shipped
+            |> Map.take(~w(name type publisher description needs caps))
+            |> Map.put("version", version)
+            |> update_in(["caps", "limits"], &Map.merge(&1, limits)),
+          wasm: Cyfr.Test.Guests.wasm(:catalyst)
+        )
+
+      {component, shipped}
+    end
+
+    # An entry with no label offered to everyone, holding `field_names` and
+    # admitting POST under /v1/ on api.x.ai.
+    defp offer_xai!(field_names) do
+      offer!(%{provider_hint: "", field_names: Jason.encode!(field_names), destination: @xai})
+    end
+
+    test "provisioning binds that entry at first sign-in with the automatic map, and a boot's " <>
+           "revision to a new release keeps it",
+         %{ctx: ctx, person: person} do
+      {first_release, shipped} = ship_grok!(person)
+      assert %{"api_key" => %{"fields" => ["GROK_API_KEY"]}} = shipped["needs"]
+      offered = offer_xai!(["API key"])
+
+      # The need's one field and the entry's one field: the automatic map.
+      assert {:ok, %{minted: minted}} = Bootstrap.run(person)
+      assert @grok in minted
+      {first, bound} = model_head!(person, @grok)
+      assert first.revision == 1
+      assert bound.entry_id == offered.id
+      assert bound.projection == %{fields: %{"GROK_API_KEY" => "API key"}, scopes: []}
+
+      # A new release whose limits differ moves the shape, so a boot's seed
+      # sync, with no person, revises the bootstrap-only head rather than
+      # skipping it as already bootstrapped.
+      refute shipped["caps"]["limits"]["timeout"] == "7m"
+      new_version = Version.parse!(first_release.version) |> Map.update!(:patch, &(&1 + 1))
+      ship_grok!(person, to_string(new_version), %{"timeout" => "7m"})
+
+      assert {:ok, %{revised: [@grok]}} = Bootstrap.run(seed(ctx))
+      {revised, kept} = model_head!(person, @grok)
+      assert revised.revision == 2
+      refute revised.shape_digest == first.shape_digest
+      assert {kept.entry_id, kept.binding_digest} == {offered.id, offered.binding_digest}
+      assert kept.projection == %{fields: %{"GROK_API_KEY" => "API key"}, scopes: []}
+    end
+
+    test "provisioning binds nothing where the entry's fields leave the need unmapped, and " <>
+           "still mints the consent",
+         %{person: person} do
+      ship_grok!(person)
+      offer_xai!(["key id", "secret"])
+
+      {answer, log} = with_log(fn -> Bootstrap.run(person) end)
+
+      assert {:ok, %{minted: minted, skipped: []}} = answer
+      assert @grok in minted
+      assert log =~ ~s(no instance entry bound for #{@grok}: {:fields_unmapped, "api_key"})
+      {head, vault} = model_head!(person, @grok)
+      assert head.revision == 1
       assert vault == nil and head.vault_refs == []
     end
 

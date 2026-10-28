@@ -247,9 +247,9 @@ defmodule Sanctum.Consent.Loader do
   profile row of the target refuses a selection by label, since its label
   cannot be read. A lender that does not exist, has no head, is not
   active or lends nothing (its head holds no ingress for the target, binds
-  nothing there, no longer binds the digest the selection pinned, or
-  cannot narrow to the selection's projection) leaves the selection in
-  place.
+  nothing there, or no longer binds the digest the selection pinned)
+  leaves the selection in place. A resolved selection reads under its
+  lender's projection whole, field map and scopes.
   """
   @spec admitted_blob(Context.t(), map(), map()) :: {:ok, Blob.t()} | {:error, load_error()}
   def admitted_blob(%Context{} = ctx, profile, consent)
@@ -478,10 +478,10 @@ defmodule Sanctum.Consent.Loader do
 
   defp resolve_edge(ctx, actor, node_ref, key, edge) do
     case {edge.vault, Blob.edge_target(key)} do
-      {%{via: via, projection: projection}, {:ok, target}} ->
+      {%{via: via}, {:ok, target}} ->
         borrower_key = Blob.binding_key(node_ref, key, nil)
 
-        case resolve_selection(ctx, actor, target, via, projection, borrower_key) do
+        case resolve_selection(ctx, actor, target, via, borrower_key) do
           {:ok, vault} ->
             {:ok, %{edge | vault: vault}}
 
@@ -508,20 +508,18 @@ defmodule Sanctum.Consent.Loader do
     end
   end
 
-  defp resolve_selection(ctx, actor, target, via, projection, borrower_key) do
+  defp resolve_selection(ctx, actor, target, via, borrower_key) do
     with {:ok, profile} <- selected_profile(actor, target, via.label),
          {:ok, consent} <- lender_head(actor, target, profile),
          :ok <- check_origin(ctx, profile, consent),
          {:ok, target_blob} <- lender_blob(consent, target, profile),
          {:ok, ingress} <- ingress_edge(target_blob, target),
          {:ok, bound} <- bound_ingress_vault(ingress),
-         :ok <- check_pinned_digest(via, bound),
-         {:ok, narrowed} <- narrow_projection(projection, bound.projection) do
+         :ok <- check_pinned_digest(via, bound) do
       {:ok,
        bound
        |> Map.delete(:named)
        |> Map.merge(%{
-         projection: narrowed,
          binding_key: borrower_key,
          lender: %{profile_id: profile.id, consent_id: consent.id, binding_key: bound.binding_key}
        })}
@@ -644,7 +642,7 @@ defmodule Sanctum.Consent.Loader do
          {:ok, edge_key, vault} <- selection_at(nodes, key),
          {:ok, target} <- Blob.edge_target(edge_key) do
       ctx
-      |> resolve_selection(Context.actor(ctx), target, vault.via, vault.projection, key)
+      |> resolve_selection(Context.actor(ctx), target, vault.via, key)
       |> live_lent(ctx)
     else
       :ingress -> {:error, :selection_missing}
@@ -776,30 +774,6 @@ defmodule Sanctum.Consent.Loader do
 
   defp check_pinned_digest(%{binding_digest: pinned}, %{binding_digest: bound}) do
     if Plug.Crypto.secure_compare(pinned, bound), do: :ok, else: {:error, :binding_moved}
-  end
-
-  # A projection narrows: the selection's fields and scopes intersect the
-  # ingress's, an empty list on either side meaning "all of the other's".
-  # A selection that asks for fields the ingress does not grant resolves
-  # to nothing rather than to a wider set.
-  defp narrow_projection(nil, bound), do: {:ok, bound}
-  defp narrow_projection(selected, nil), do: {:ok, selected}
-
-  defp narrow_projection(selected, bound) do
-    with {:ok, fields} <- narrow_list(selected.fields, bound.fields),
-         {:ok, scopes} <- narrow_list(selected.scopes, bound.scopes) do
-      {:ok, %{fields: fields, scopes: scopes}}
-    end
-  end
-
-  defp narrow_list([], bound), do: {:ok, bound}
-  defp narrow_list(selected, []), do: {:ok, selected}
-
-  defp narrow_list(selected, bound) do
-    case Enum.filter(selected, &(&1 in bound)) do
-      [] -> {:error, :projection_unsatisfiable}
-      common -> {:ok, common}
-    end
   end
 
   defp evaluate_activation(_ctx, profile, consent, opts) do
