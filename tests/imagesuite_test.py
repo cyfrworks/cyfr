@@ -377,6 +377,9 @@ class SuiteObservations(unittest.TestCase):
     def test_builder_stack_observations(self):
         self.run_entry("builder-image", "stack_test.py")
 
+    def test_namespace_runner_kills(self):
+        self.run_entry("locus-runtime-image", "namespace_test.py")
+
 
 class ObservationAnswers(unittest.TestCase):
     """What a probe's output or a container's state may answer: a word from a successful exec, and no process in a stopped container."""
