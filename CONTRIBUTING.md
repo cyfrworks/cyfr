@@ -103,24 +103,57 @@ it.
   outside the checkout, where `rust-toolchain.toml` does not choose the
   toolchain. `scripts/commit-gate.sh` looks for it in
   `${CARGO_HOME:-~/.cargo}/bin` and on `PATH`, and refuses to run without it.
-- Before a commit, run `scripts/heavy-check.sh -- scripts/commit-gate.sh`.
-  A change's check is its pull request's run on GitHub, which runs every
-  check in parallel, and a release tag is cut on a tree that run proved
-  green: `scripts/release.sh` reads HEAD's check runs through `gh` before it
-  tags HEAD, or HEAD plus a bump commit holding the version lines alone,
-  which the tag's own workflow checks again before it publishes; it runs
-  the gate's close here only with `--gate`. Right before it tags it runs
-  the dependency audits again (`scripts/dependency-audit.sh`, the same
-  ones CI runs), because the advisory feeds they read change
-  independently of the tree, and a tag whose own run fails them publishes
-  nothing. The close,
-  `scripts/heavy-check.sh -t 10800 -- scripts/commit-gate.sh --close`, holds
-  the host for over an hour and is a tool for working offline or for
-  reproducing a failing CI job here, not a requirement. The gate's header
-  lists what each runs and which of CI's checks stay CI's alone. Besides `cargo-component` it needs `go` at the version both
-  `go.mod` files name and a running Docker daemon, and it refuses to run
-  without them; it installs `govulncheck` and the close's `trivy` itself,
-  at the versions CI pins.
+- Checks run in stages. `scripts/stages.tsv` names what each stage runs,
+  and `scripts/stage.sh STAGE` runs it, queuing each check through
+  `scripts/heavy-check.sh` in the lane the table names:
+  - `save`, after an edit: the format and credo checks, an incremental
+    compile with warnings as errors, and the touched tests on SQLite;
+  - `handoff`, before you report a change ready: the format and credo
+    checks, a forced compile on both adapters, the generated files'
+    checks, the touched tests on both adapters (all of `apps/arca/test`
+    when Arca changed), `mix dialyzer` when a `lib` file changed, and the
+    self-test of every harness script you touched;
+  - `pull-request`: the pull request's run on GitHub is the check, and it
+    runs every check in parallel. `scripts/stage.sh pull-request` runs
+    `scripts/commit-gate.sh`, CI's checks on this host, for working
+    offline or reproducing a failing CI job;
+  - `release`: the gate's close, which holds the host for over an hour;
+  - `nightly`, once a day from a worktree of its own, queued like any
+    other check: each adapter's whole suite twice, the tests that failed
+    in one run and passed in the other, the partition weights
+    regenerated into the run's report, and `scripts/janitor.sh`.
+
+  The touched tests are the changed test files and, for each changed or
+  deleted `apps/<app>/lib/<path>.ex`, `apps/<app>/test/<path>_test.exs`
+  where it exists; name others after `--`. `scripts/stage.sh -n STAGE`
+  lists what it would run.
+- A release tag is cut on a tree its pull request's run proved green:
+  `scripts/release.sh` reads HEAD's check runs through `gh` before it tags
+  HEAD, or HEAD plus a bump commit holding the version lines alone, which
+  the tag's own workflow checks again before it publishes; with `--gate`
+  it runs the release stage here first. Right before it tags it runs the
+  dependency audits again (`scripts/dependency-audit.sh`, the same ones CI
+  runs), because the advisory feeds they read change independently of the
+  tree, and a tag whose own run fails them publishes nothing. The gate's
+  header lists what it runs and which of CI's checks stay CI's alone.
+  Besides `cargo-component` it needs `go` at the version both `go.mod`
+  files name and a running Docker daemon, and it refuses to run without
+  them; it installs `govulncheck` and the close's `trivy` itself, at the
+  versions CI pins.
+- `scripts/heavy-check.sh` queues the checks of everyone sharing a host
+  in three lanes: an exclusive check (the default) runs alone, a proof
+  (`-p`: a proof, an image suite, an image build or a release boot) runs
+  one at a time beside at most `PROOF_SCOPED` scoped checks (a number the
+  script sets from a measured load test), and a scoped check (`-s`: named
+  test paths in one partition, a compile or dialyzer) runs up to three
+  side by side, on a third of the cores each. Checks start in the order
+  they queued, and `scripts/heavy-check.sh --status` shows who holds the
+  host and who waits.
+- Local runs take the Locus and app images from `scripts/image.sh locus`
+  and `scripts/image.sh app`, which tag each by a hash of its inputs, so
+  every checkout at the same inputs shares one build.
+  `scripts/janitor.sh --dry-run` lists what the nightly janitor would
+  remove.
 - Run the tests for what you touched as operating-system partitions:
   `scripts/test-partitioned.sh <test paths>` on SQLite, and
   `scripts/test-partitioned.sh -a postgres <test paths>` on PostgreSQL.
