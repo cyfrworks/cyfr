@@ -1084,7 +1084,10 @@ defmodule Locus.Runtime.FormulaHandlerTest do
 
   describe "emit integration" do
     test "emit returns ok with sequence number", %{ctx: ctx} do
-      host = host!(ctx, Authority.zero(), stream_id: "exec_emit_test")
+      # A stream id of its own: the sequence a stream starts at belongs to the
+      # VM, so the expected first sequence holds only for an id no other test takes.
+      stream = "exec_emit_test_#{System.unique_integer([:positive])}"
+      host = host!(ctx, Authority.zero(), stream_id: stream)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))
@@ -1101,7 +1104,8 @@ defmodule Locus.Runtime.FormulaHandlerTest do
     end
 
     test "emit sequence increments across calls", %{ctx: ctx} do
-      host = host!(ctx, Authority.zero(), stream_id: "exec_emit_seq")
+      stream = "exec_emit_seq_#{System.unique_integer([:positive])}"
+      host = host!(ctx, Authority.zero(), stream_id: stream)
 
       {imports, tracker_pid} =
         FormulaHandler.build_formula_imports(host, limits: Prima.Limits.defaults(:formula))

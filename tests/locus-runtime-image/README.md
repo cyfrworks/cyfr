@@ -33,12 +33,17 @@ records.
 ## Running
 
 ```sh
-docker build -f Dockerfile.locus -t cyfr-locus:test .
-python3 tests/locus-runtime-image/runners.py cyfr-locus:test
-python3 tests/locus-runtime-image/canary.py cyfr-locus:test
-python3 -I tests/locus-runtime-image/namespace.py cyfr-locus:test
-python3 tests/locus-runtime-image/memory.py cyfr-locus:test --measure
+tag=$(scripts/image.sh locus)
+python3 tests/locus-runtime-image/runners.py "$tag"
+python3 tests/locus-runtime-image/canary.py "$tag"
+python3 -I tests/locus-runtime-image/namespace.py "$tag"
+python3 tests/locus-runtime-image/memory.py "$tag" --measure
 ```
+
+`scripts/image.sh locus` builds the Locus image from this checkout's tree,
+or reuses the build of any worktree at the same inputs, and prints its
+tag; its header says what the tag hashes, and `scripts/janitor.sh`'s when
+the image goes.
 
 On the verification host each runs alone, through `scripts/heavy-check.sh`.
 `PROOF_RUN_PREFIX` prefixes every compose project, container and

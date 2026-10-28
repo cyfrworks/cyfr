@@ -79,10 +79,12 @@ for, is `https://HOST` (`CYFR_PUBLIC_URL`), both as the command line wrote
 them. It runs behind a TLS-terminating front that forwards to its proxy
 listener (`CYFR_PROXY_PORT`), the one listener that trusts forwarded
 headers, as a public deployment runs behind the stack's Caddy. Each home
-has its own listeners, from port 4410 (`BROWSER_HOMES_PORT`) three at a
-time (its loopback listener, its host API and its proxy listener), and its
-own node name, so any number run at once; `server_stop` stops one cell or
-all of them.
+has its own node name and free listener ports picked by
+`scripts/lib/run-names.sh`'s `run_names_free_port`. Read the chosen ports
+from the cell with `cell_port`, `cell_value CELL CYFR_HOST_API_PORT`, and
+`cell_proxy_port`. An explicit `BROWSER_HOMES_PORT` keeps consecutive
+three-port ranges for the homes, starting with that port. `server_stop`
+stops one cell or all of them.
 
 **Hostnames.** A home's name is a `.test` name, resolved by nothing: the
 browsers reach every name through the harness's proxy, which routes each

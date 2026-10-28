@@ -117,11 +117,11 @@ def mib(count):
 
 
 def read(stack, path):
-    return stack.exec(f"cat /sys/fs/cgroup/{path}").stdout.strip()
+    return imagesuite.read_output(stack.exec(f"cat /sys/fs/cgroup/{path}"), f"the cgroup file {path}").strip()
 
 
 def events(stack, path):
-    return {name: int(count) for name, count in (line.split() for line in read(stack, path).splitlines())}
+    return imagesuite.read_counters(stack.exec(f"cat /sys/fs/cgroup/{path}"), ("oom", "oom_kill"), f"the cgroup events of {path}")
 
 
 def setting(stack, accessor):
@@ -193,7 +193,7 @@ def main(image, settings):
                    f"a build holding {hold_mib} MiB beside a sibling doing the same answers its largest result intact", brief(answer))
 
         keeper = int(read(stack, "keeper/memory.peak"))
-        container = int(read(stack, "memory.peak") or 0)
+        container = int(read(stack, "memory.peak"))
         container_events, keeper_events = events(stack, "memory.events"), events(stack, "keeper/memory.events")
         peaks = sorted(sampler.groups.values(), reverse=True)[:concurrent]
         print(f"{concurrent} largest results together: the keeper group's peak {mib(keeper)} (sampled at most {mib(sampler.keeper)}, "
@@ -206,7 +206,7 @@ def main(image, settings):
 
         expect(len(peaks) == concurrent and all(CLOSE * bound <= peak <= bound for peak in peaks),
                f"each holding build's group came within {1 - CLOSE:.0%} of its bound and never passed it", sampler.groups)
-        expect(container_events.get("oom", 0) == 0 and container_events.get("oom_kill", 0) == 0,
+        expect(imagesuite.no_kills(container_events),
                "the kernel killed nothing for the container's limit", container_events)
         expect(release and [p["pid"] for p in stack.processes() if "beam.smp" in p["cmd"]] == release
                and not json.loads(subprocess.run(["docker", "inspect", stack.container], capture_output=True, text=True).stdout)[0]["State"]["OOMKilled"],

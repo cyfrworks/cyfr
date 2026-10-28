@@ -23,7 +23,8 @@
 //   flows        a version that lets one more class reach the host it keeps:
 //                the person's run is asked to grant again, the sheet shows
 //                that exit with the class unticked; ticked and granted, the
-//                head holds the flow
+//                head holds the flow, under the digest the command line
+//                previews for the same decisions
 //   revocation   the profile revoked in the console: the next admission is
 //                refused, timed from the revocation's answer
 //
@@ -39,6 +40,7 @@ import { join } from "node:path";
 import {
   ask as askRunSh, launchBrowser, pageTokens, readHomes, recordText, redact, redactFrames, signedIn, startProxy, waitFor,
 } from "../browser/lib.mjs";
+import { flowsHeld, sameHead } from "./heads.mjs";
 
 const [homesFile, segment, cookie, outDir] = process.argv.slice(2);
 if (!homesFile || !segment || !cookie || !outDir) {
@@ -67,6 +69,12 @@ function row(step, held, what, detail) {
   console.log(`${held ? "held  " : "FAILED"} ${step}: ${what} — ${JSON.stringify(detail).slice(0, 2000)}`);
   return !!held;
 }
+
+// What the record keeps of a preview's answer: its commit digest, or, for an
+// error, the error and the answer's key names, never its values. The answer
+// carries a single-use proof.
+const previewShown = (answer) =>
+  answer.commit_digest || { error: answer.error ?? null, keys: Object.keys(answer).sort() };
 
 const ask = (request, options) => askRunSh(request, { outDir, ...options });
 
@@ -221,10 +229,7 @@ async function main() {
     const subset = { egress: { domains: [KEPT] }, storage: { paths: [PICKED] } };
     const decisions = { ref: REF, subset: { [REF]: subset }, origins: ["interactive"] };
     const cli = await ask({ op: "cli_preview", decisions });
-    // The preview's answer carries its single-use proof, so the record keeps
-    // only the commit digest it compares, or, for an error, the error and the
-    // answer's key names, never its values.
-    const cliShown = cli.commit_digest || { error: cli.error ?? null, keys: Object.keys(cli).sort() };
+    const cliShown = previewShown(cli);
     record.cli_digest = { decisions, cli: cliShown, head_digest: head.commit_digest };
     row("cli_digest", cli.commit_digest && cli.commit_digest === head.commit_digest,
       "the command line's preview of the same decisions answers the head's commit digest",
@@ -260,11 +265,21 @@ async function main() {
     const still = await ask({ op: "admit" });
     const unchanged = await ask({ op: "head" });
     record.reworded = { reworded, still, unchanged };
+    // The head after rewording is the head before it, every field held. The
+    // copies are heads a permission change would leave behind: the predicate
+    // must refuse each one.
+    const rewordedCopies = [
+      { ...unchanged, revision: unchanged.revision + 1 },
+      { ...unchanged, domains: [...unchanged.domains, DROPPED] },
+      { ...unchanged, flows: [...unchanged.flows, `outside to ${DROPPED}`] },
+    ];
     if (!row("reworded",
       reworded.shape_digest === regranted.shape_digest && still.admitted === true &&
-        still.consent_id === regranted.consent_id && unchanged.revision === 2,
-      "a reworded reason changes no shape digest and asks nothing",
-      { shape: reworded.shape_digest === regranted.shape_digest, still, revision: unchanged.revision })) return;
+        still.consent_id === regranted.consent_id && sameHead(unchanged, regranted) &&
+        rewordedCopies.every((copy) => !sameHead(copy, regranted)),
+      "a reworded reason changes no shape digest and asks nothing; the head holds every field it held, and a copy with another revision, domain or flow is refused",
+      { shape: reworded.shape_digest === regranted.shape_digest, still, head: unchanged,
+        same_head: sameHead(unchanged, regranted) })) return;
 
     // -----------------------------------------------------------------------
     // flows
@@ -282,18 +297,47 @@ async function main() {
     const openedOff = !(await newFlow.isChecked());
     await newFlow.click();
     const ticked = await waitFor(async () => newFlow.isChecked(), { what: "the new flow ticked" }).catch(() => false);
+    // The sheet records its narrowing of the flows as explicit exits whenever
+    // the flows it keeps are not every flow the version asks; the commit digest
+    // covers that narrowing, so the decisions name the two kept flows, which is
+    // the preview the person approved.
+    const keptFlows = [{ from: "files_by_grant", to: KEPT }, { from: "outside", to: KEPT }];
+    const flowsDecisions = { ref: REF, subset: { [REF]: { ...subset, exits: keptFlows } }, origins: ["interactive"] };
+    const flowsShown = await ask({ op: "cli_preview", decisions: flowsDecisions });
+    // Diagnostic: the same decisions without the named exits; its digest is not the head's.
+    const flowsUnnarrowed = await ask({ op: "cli_preview", decisions });
     await confirm(page);
     const flowHead = await ask({ op: "head" });
     const flowAdmitted = await ask({ op: "admit" });
-    record.flows = { flowed, flowAsking, flowSheet, flowHead, flowAdmitted };
+    const flowsGrant = { regranted, shape: flowed.shape_digest, kept: KEPT, digest: flowsShown.commit_digest };
+    record.flows = {
+      flowed, flowAsking, flowSheet, flowHead, flowAdmitted,
+      flowsShown: previewShown(flowsShown), flowsUnnarrowed: previewShown(flowsUnnarrowed),
+    };
+    // The head after the flows grant moves in revision, consent, digest and
+    // shape, its flows are exactly the two granted, and its digest is the one
+    // the preview answers (`flowsHeld` in heads.mjs). Every other field is the
+    // head before it.
+    const flowsCopies = [
+      { ...flowHead, flows: [...flowHead.flows, `outside to ${DROPPED}`] },
+      { ...flowHead, domains: [...flowHead.domains, DROPPED] },
+      { ...flowHead, revision: flowHead.revision + 1 },
+      // The digest copies: none, empty, malformed, a well-formed digest that is
+      // not the preview's, and the digest the head held before the grant.
+      ...[null, "", "sha256:wrong", `sha256:${"0".repeat(64)}`, regranted.commit_digest]
+        .map((commit_digest) => ({ ...flowHead, commit_digest })),
+    ];
     if (!row("flows",
       flowed.shape_digest !== reworded.shape_digest &&
         flowAsking.admitted === false && flowAsking.refusal === "consent_required" &&
         exitShown(flowSheet, KEPT, "outside") && exitShown(flowSheet, KEPT, "files_by_grant") &&
-        openedOff && ticked && flowHead.revision === 3 && flowHead.flows.includes(`outside to ${KEPT}`) &&
+        openedOff && ticked && flowsHeld(flowHead, flowsGrant) &&
+        flowsCopies.every((copy) => !flowsHeld(copy, flowsGrant)) &&
         flowAdmitted.admitted === true && flowAdmitted.consent_id === flowHead.consent_id,
-      "a version letting one more class reach a host is asked again with that exit shown, the new flow unticked; ticked and granted, the head holds it",
-      { asking: flowAsking, opened_off: openedOff, ticked, flows: flowHead.flows, revision: flowHead.revision })) return;
+      "a version letting one more class reach a host is asked again with that exit shown, the new flow unticked; ticked and granted, the head holds exactly its granted flows and every other field, under the digest the command line previews for the same decisions; copies with an extra flow, an added domain, another revision or another digest are refused",
+      { asking: flowAsking, opened_off: openedOff, ticked, head: flowHead, digest: previewShown(flowsShown),
+        unnarrowed: previewShown(flowsUnnarrowed),
+        held: flowsHeld(flowHead, flowsGrant), copies_refused: flowsCopies.map((copy) => !flowsHeld(copy, flowsGrant)) })) return;
 
     // -----------------------------------------------------------------------
     // revocation

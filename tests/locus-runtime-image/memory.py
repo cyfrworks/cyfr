@@ -68,6 +68,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from control_plane import ControlPlane  # noqa: E402
 from stack import HERE, POOL_FIRST, POOL_LAST, ROOT, SERVICE, Stack, StatusSampler, expect, run, wait_until  # noqa: E402
+import imagesuite  # noqa: E402
 
 MIB = 1 << 20
 # A runner is a VM booting from nothing: its first attach takes seconds.
@@ -115,24 +116,39 @@ def group(uid):
 
 
 def read_group(stack, uid):
-    """The group of the spawn running under `uid` as the kernel accounts it, or None when there is none."""
-    out = stack.exec(
-        f"g={group(uid)}; [ -d $g ] || exit 3; "
-        "printf '%s|%s|%s|%s|%s|%s\\n' \"$(cat $g/memory.max)\" \"$(cat $g/memory.swap.max)\" "
-        "\"$(cat $g/memory.oom.group)\" \"$(cat $g/memory.peak)\" \"$(cat $g/memory.current)\" "
-        "\"$(tr '\\n' ' ' < $g/memory.events)\"")
-    if out.returncode != 0 or out.stdout.count("|") != 5:
+    """The group of the spawn running under `uid` as the kernel accounts it, or None when there is none.
+
+    Absence is the word `absent` from a command that exits 0. The fields are
+    read whole, and the events must carry both OOM counters.
+    """
+    # Each field is read by its own command, chained so that any failed read ends the script with its status:
+    # a command substitution inside printf's arguments would hide the failure from the status.
+    out = imagesuite.read_output(stack.exec(
+        f"g={group(uid)}; if [ -d $g ]; then "
+        "m=$(cat $g/memory.max) && s=$(cat $g/memory.swap.max) && o=$(cat $g/memory.oom.group) && "
+        "p=$(cat $g/memory.peak) && c=$(cat $g/memory.current) && e=$(tr '\\n' ' ' < $g/memory.events) && "
+        "printf 'present|%s|%s|%s|%s|%s|%s\\n' \"$m\" \"$s\" \"$o\" \"$p\" \"$c\" \"$e\"; else echo absent; fi"),
+        f"the group of uid {uid}").strip()
+    if out == "absent":
         return None
-    limit, swap, oom_group, peak, current, events = out.stdout.strip().split("|")
+    word, limit, swap, oom_group, peak, current, events = out.split("|")
+    if word != "present":
+        sys.exit(f"FAIL: the group of uid {uid} answered {word!r}")
+    pairs = events.split()
+    counters = imagesuite.parse_counters("\n".join(f"{name} {count}" for name, count in zip(pairs[::2], pairs[1::2])),
+                                         ("oom", "oom_kill"), f"the events of the group of uid {uid}")
     return {"max": limit, "swap_max": swap, "oom_group": oom_group, "peak": int(peak), "current": int(current),
-            "events": dict(zip(events.split()[::2], map(int, events.split()[1::2])))}
+            "events": counters}
 
 
 def container_memory(stack):
     """The container's own cgroup: its limit, current use, and the events of its own limit alone."""
-    out = stack.exec("cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current; cat /sys/fs/cgroup/memory.events.local")
-    lines = out.stdout.split("\n")
-    events = dict((line.split()[0], int(line.split()[1])) for line in lines[2:] if len(line.split()) == 2)
+    out = imagesuite.read_output(
+        stack.exec("cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.current; cat /sys/fs/cgroup/memory.events.local"),
+        "the container's own memory files")
+    lines = out.split("\n")
+    events = imagesuite.parse_counters("\n".join(line for line in lines[2:] if line), ("oom", "oom_kill"),
+                                       "the container's own events")
     return {"max": lines[0].strip(), "current": int(lines[1]), "events_local": events}
 
 
@@ -149,8 +165,11 @@ def brief_stat(stat):
 
 def keeper_group(stack):
     """The keeper's group (cyfr-locus, the service and every spawn without a bound): its peak and current use."""
-    out = stack.exec("cat /sys/fs/cgroup/keeper/memory.peak /sys/fs/cgroup/keeper/memory.current").stdout.split()
-    return {"peak": int(out[0]), "current": int(out[1])} if len(out) == 2 else None
+    out = imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/keeper/memory.peak /sys/fs/cgroup/keeper/memory.current"),
+                                 "the keeper group").split()
+    if len(out) != 2:
+        sys.exit(f"FAIL: the keeper group answered {out!r}")
+    return {"peak": int(out[0]), "current": int(out[1])}
 
 
 def oom_killed_flag(stack):
@@ -161,7 +180,11 @@ def oom_killed_flag(stack):
 def release_identity(stack):
     """The service's VM as its pid and the kernel's start time for it: a restarted release changes it."""
     pid = stack.service_beam_pid()
-    started = stack.exec(f"cut -d' ' -f22 /proc/{pid}/stat").stdout.strip() if pid else None
+    if pid is None:
+        sys.exit("FAIL: no service VM is listed, so its identity cannot be read")
+    started = imagesuite.read_output(stack.exec(f"cut -d' ' -f22 /proc/{pid}/stat"), "the service VM's start time").strip()
+    if not started:
+        sys.exit(f"FAIL: the service VM {pid} has no start time")
     return (pid, started)
 
 
@@ -172,6 +195,15 @@ def mib(count):
 def wasm(path):
     with open(path, "rb") as f:
         return f.read()
+
+
+def process_alive(container, pid):
+    """Whether process `pid` runs in `container`: the word its probe prints in a command that exits 0."""
+    probe = (f"if [ -d /proc/{pid} ] && ! grep -q '^State:.*Z' /proc/{pid}/status; "
+             "then echo alive; else echo dead; fi")
+    word = imagesuite.read_word(run("docker", "exec", container, "sh", "-c", probe, check=False), ("alive", "dead"),
+                                f"whether process {pid} runs")
+    return word == "alive"
 
 
 class GroupSampler(threading.Thread):
@@ -233,8 +265,7 @@ class GroupSampler(threading.Thread):
         self.process.kill()
         self.process.wait()
         self.join(5)
-        alive = f"[ -d /proc/{self.pid} ] && ! grep -q '^State:.*Z' /proc/{self.pid}/status && echo alive"
-        wait_until(lambda: self.pid and "alive" not in run("docker", "exec", self.container, "sh", "-c", alive, check=False).stdout,
+        wait_until(lambda: self.pid and not process_alive(self.container, self.pid),
                    5, f"the sampler's loop (pid {self.pid}) to end in the container")
 
     def group_peak(self):
@@ -480,8 +511,8 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
            "detection: neither the formula nor any child completed or trapped: the engine refused none of them anything, so "
            "the engine did not end them", closes)
     after = container_memory(stack)
-    expect(after["events_local"].get("oom_kill", 0) == before["events_local"].get("oom_kill", 0)
-           and after["events_local"].get("oom", 0) == before["events_local"].get("oom", 0),
+    expect(after["events_local"]["oom_kill"] == before["events_local"]["oom_kill"]
+           and after["events_local"]["oom"] == before["events_local"]["oom"],
            f"detection: the container's own limit was not what ended it (its local oom events {before['events_local']} -> {after['events_local']})",
            [before, after])
     # The keeper reads the group's counters once the runner is reaped and
@@ -547,7 +578,7 @@ def bound_case(stack, plane, bound, sibling, release_sibling, sibling_runner, fo
     reused = reuse_uid(stack, plane, runner)
     expect(reused["runner"] != runner["runner"] and reused["home"] != runner["home"],
            f"the uid {runner['uid']} was given to a new runner ({reused['runner']}) with a home of its own", [runner, reused])
-    expect(reused["group"]["max"] == str(bound) and reused["group"]["peak"] < bound // 2 and not reused["group"]["events"].get("oom_kill"),
+    expect(reused["group"]["max"] == str(bound) and reused["group"]["peak"] < bound // 2 and reused["group"]["events"]["oom_kill"] == 0,
            f"its group is its own: bound {reused['group']['max']}, peak {mib(reused['group']['peak'])}, no kill counted",
            reused["group"])
     expect([r for r in plane.seen() if r.get("runner") == runner["runner"] and r["at"] > gone] == []

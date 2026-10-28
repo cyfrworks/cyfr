@@ -12,7 +12,9 @@ and a port compose publishes late, and fails within its bound where either
 never comes, a guard's failure is read from its inspect record whether the
 guard has exited or is between one exit and its next start, and no entry
 script writes bytecode for anything under tests/, whatever cache is already
-there.
+there. What a container holds and what a probe answers are read as
+imagesuite.py defines them, and each suite's stub test of its observations
+(tests/<suite>/*_test.py) runs here as its own entry script.
 
 Usage: python3 -I tests/imagesuite_test.py
 """
@@ -361,6 +363,100 @@ class RuntimeRestart(unittest.TestCase):
         self.assertIn(f"compose never published port {self.module.PORT}", message)
         self.assertIn(f"no port {self.module.PORT}/tcp for container test-1", message)
         self.assertIn("the service's log", message)
+
+
+class SuiteObservations(unittest.TestCase):
+    """The image suites' stub tests of what their observations read (tests/<suite>/*_test.py), each run as its own entry script."""
+
+    def run_entry(self, suite, name):
+        script = os.path.join(TESTS, suite, name)
+        result = subprocess.run([sys.executable, "-I", "-B", script], capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_runtime_stack_observations(self):
+        self.run_entry("locus-runtime-image", "stack_test.py")
+
+    def test_builder_stack_observations(self):
+        self.run_entry("builder-image", "stack_test.py")
+
+    def test_namespace_runner_kills(self):
+        self.run_entry("locus-runtime-image", "namespace_test.py")
+
+    def test_backends_listing_and_home_probe(self):
+        self.run_entry("locus-backends-image", "harness_test.py")
+
+    def test_backends_residue_reads(self):
+        self.run_entry("locus-backends-image", "residue_test.py")
+
+    def test_builder_isolation_ipc_tables(self):
+        self.run_entry("builder-image", "isolation_test.py")
+
+    def test_builder_memory_keeper_groups(self):
+        self.run_entry("builder-image", "memory_test.py")
+
+    def test_builder_headroom_cgroup_reads(self):
+        self.run_entry("builder-image", "headroom_test.py")
+
+    def test_runtime_memory_cgroup_reads(self):
+        self.run_entry("locus-runtime-image", "memory_test.py")
+
+
+class ObservationAnswers(unittest.TestCase):
+    """What a probe's output or a container's state may answer: a word from a successful exec, and no process in a stopped container."""
+
+    def probe(self, returncode, stdout):
+        return subprocess.CompletedProcess([], returncode, stdout, "daemon error")
+
+    def test_the_word_of_a_successful_probe_is_read(self):
+        self.assertEqual(imagesuite.read_word(self.probe(0, "present\n"), ("present", "absent"), "the probe"), "present")
+
+    def test_a_failed_probe_is_no_answer_whatever_it_printed(self):
+        for returncode, stdout in ((1, "absent\n"), (125, "")):
+            with self.subTest(returncode=returncode, stdout=stdout):
+                with self.assertRaises(SystemExit):
+                    imagesuite.read_word(self.probe(returncode, stdout), ("present", "absent"), "the probe")
+
+    def test_output_of_neither_word_is_no_answer(self):
+        with self.assertRaises(SystemExit):
+            imagesuite.read_word(self.probe(0, ""), ("present", "absent"), "the probe")
+
+    def test_a_call_refused_as_not_running_or_restarting_lists_nothing(self):
+        for refusal in ("container e1 is not running",
+                        "Container e1 is restarting, wait until the container is running"):
+            with self.subTest(refusal=refusal):
+                done = subprocess.CompletedProcess([], 1, "", f"Error response from daemon: {refusal}")
+                self.assertEqual(imagesuite.listing(done, "the listing"), "")
+
+    def test_any_other_failed_call_fails_the_listing(self):
+        for stderr in ("Error response from daemon: Container e1 is paused, unpause the container before exec",
+                       "OCI runtime exec failed"):
+            with self.subTest(stderr=stderr):
+                with self.assertRaises(SystemExit):
+                    imagesuite.listing(subprocess.CompletedProcess([], 1, "", stderr), "the listing")
+
+    def test_a_successful_call_lists_its_output(self):
+        self.assertEqual(imagesuite.listing(subprocess.CompletedProcess([], 0, "a\n", ""), "the listing"), "a\n")
+
+    def test_a_listing_in_word_form_is_read_from_a_command_that_exits_zero(self):
+        self.assertEqual(imagesuite.read_listing(self.probe(0, "present\n/a: 1\n"), "the listing"), ["/a: 1"])
+        self.assertEqual(imagesuite.read_listing(self.probe(0, "absent\n"), "the listing"), [])
+
+    def test_a_failed_or_wordless_listing_is_no_answer(self):
+        for returncode, stdout in ((1, "absent\n"), (125, ""), (0, ""), (0, "present\n"), (0, "absent\n/a: 1\n")):
+            with self.subTest(returncode=returncode, stdout=stdout):
+                with self.assertRaises(SystemExit):
+                    imagesuite.read_listing(self.probe(returncode, stdout), "the listing")
+
+    def test_a_counter_that_is_not_read_is_refused_not_read_as_zero(self):
+        self.assertEqual(imagesuite.parse_counters("oom 0\noom_kill 1\n", ("oom", "oom_kill"), "the events"),
+                         {"oom": 0, "oom_kill": 1})
+        with self.assertRaises(SystemExit):
+            imagesuite.parse_counters("oom 0\n", ("oom", "oom_kill"), "the events")
+
+    def test_a_table_is_read_only_from_a_command_that_exits_zero(self):
+        self.assertEqual(imagesuite.read_output(self.probe(0, "table\n"), "the table"), "table\n")
+        with self.assertRaises(SystemExit):
+            imagesuite.read_output(self.probe(1, "table\n"), "the table")
 
 
 # A suite's one-off containers as its functions start them, each call to

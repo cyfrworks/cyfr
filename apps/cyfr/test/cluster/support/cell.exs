@@ -72,10 +72,39 @@ defmodule Cyfr.Cluster.Cell do
   @name __MODULE__
   @host ~c"127.0.0.1"
 
-  # Each member's node name, by its id, with the host above: a node name is
-  # an atom, so this spells each rather than minting one.
-  @node_names %{a: :cyfr_cell_a, b: :cyfr_cell_b}
-  @nodes %{a: :"cyfr_cell_a@127.0.0.1", b: :"cyfr_cell_b@127.0.0.1"}
+  # Each member's node name, by its id, for this run: the names carry the
+  # run's digest (D5a's node-name rule), so two runs in one checkout never
+  # name a node the same. Read at run time, since the run root is set per run.
+  defp node_names do
+    h = run_digest()
+    %{a: :"cyfr_cell_a_#{h}", b: :"cyfr_cell_b_#{h}"}
+  end
+
+  # The first ten hex digits of the SHA-256 of the run root: the root the
+  # partition runner sets, or, for a direct `mix test`, the checkout with this
+  # VM's pid and a random token minted once per VM.
+  defp run_digest do
+    root =
+      case System.get_env("CYFR_TEST_RUN_ROOT") do
+        r when is_binary(r) and r != "" -> r
+        _ -> direct_root()
+      end
+
+    :sha256 |> :crypto.hash(root) |> Base.encode16(case: :lower) |> binary_part(0, 10)
+  end
+
+  defp direct_root do
+    case :persistent_term.get({__MODULE__, :direct_root}, nil) do
+      nil ->
+        token = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+        root = "#{File.cwd!()}:#{:os.getpid()}:#{token}"
+        :persistent_term.put({__MODULE__, :direct_root}, root)
+        root
+
+      root ->
+        root
+    end
+  end
 
   # Long enough for the whole application to come up on a cold VM under a
   # loaded machine, and short enough that a member that will never boot is
@@ -415,7 +444,7 @@ defmodule Cyfr.Cluster.Cell do
   defp boot(member) do
     {:ok, peer, node} =
       :peer.start(%{
-        name: Map.fetch!(@node_names, member.id),
+        name: Map.fetch!(node_names(), member.id),
         host: @host,
         longnames: true,
         connection: :standard_io,
@@ -674,7 +703,7 @@ defmodule Cyfr.Cluster.Cell do
   defp put_member(state, member),
     do: %{state | members: Enum.map(state.members, &if(&1.id == member.id, do: member, else: &1))}
 
-  defp node_name(id), do: Map.fetch!(@nodes, id)
+  defp node_name(id), do: :"#{Map.fetch!(node_names(), id)}@127.0.0.1"
 
   # A loopback port nothing holds, for a member to bind and to advertise.
   # The socket is closed before the member starts, which is the usual

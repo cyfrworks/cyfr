@@ -109,15 +109,4 @@ defmodule Locus.Runtime.ResourceLimitsTest do
       assert Enum.any?(records, &(&1.status == :failed))
     end
   end
-
-  # ============================================================================
-  # Default Values
-  # ============================================================================
-
-  describe "default limit values" do
-    test "default memory limit is 64MB" do
-      default_mb = 64 * 1024 * 1024
-      assert default_mb == 67_108_864
-    end
-  end
 end

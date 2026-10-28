@@ -90,7 +90,7 @@ defmodule Arca.McpLogTest do
       {:ok, _} = seed(log_attrs(%{id: "req_fu2", user_id: "bob"}))
 
       {:ok, logs} = McpLog.list(Prima.Actor.in_athanor("ath_test"), user_id: "alice")
-      assert Enum.all?(logs, &(&1.user_id == "alice"))
+      assert Enum.map(logs, & &1.id) == ["req_fu1"]
     end
 
     test "filters by status" do

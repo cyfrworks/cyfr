@@ -40,7 +40,7 @@ if os.path.join(ROOT, "tests") not in sys.path:
 
 import imagesuite  # noqa: E402
 import worker_auth as auth  # noqa: E402
-from imagesuite import run  # noqa: E402
+from imagesuite import listing, read_output, run  # noqa: E402
 
 imagesuite.stop_on_signals()
 # The keeper's seccomp profile and the name the locus-runtime service reads it by.
@@ -186,7 +186,7 @@ class Stack(imagesuite.Stack):
         )
 
     def logs(self):
-        return self.compose("logs", "--no-color", COMPOSE_SERVICE, check=False).stdout
+        return read_output(self.compose("logs", "--no-color", COMPOSE_SERVICE, check=False), "the runtime service's log")
 
     # ------------------------------------------------------------------
     # The service's requests
@@ -238,10 +238,8 @@ class Stack(imagesuite.Stack):
             cmd="$(tr '\0\n|' '   ' < "$d/cmdline" 2>/dev/null)"
             printf '%s|%s|%s|%s\n' "${d#/proc/}" "$uids" "$eff" "$cmd"
           done"""
-        # A container that is not running (between the keeper's exit and
-        # compose's restart) holds no process: exec fails and lists none.
         out = []
-        for line in self.exec(script).stdout.splitlines():
+        for line in listing(self.exec(script), "the process listing").splitlines():
             if line.count("|") < 3:
                 continue
             pid, uids, eff, cmd = line.split("|", 3)
@@ -261,7 +259,8 @@ class Stack(imagesuite.Stack):
         across a restart lists them here. A container that is not running
         holds no process."""
         out = []
-        for line in run("docker", "top", self.container, "-eo", "pid,ruid,euid,suid,fsuid,args", check=False).stdout.splitlines()[1:]:
+        top = run("docker", "top", self.container, "-eo", "pid,ruid,euid,suid,fsuid,args", check=False)
+        for line in listing(top, "docker top").splitlines()[1:]:
             fields = line.split(None, 5)
             if len(fields) >= 5 and all(f.isdigit() for f in fields[:5]):
                 out.append({"pid": int(fields[0]), "uids": [int(u) for u in fields[1:5]], "cmd": fields[5] if len(fields) > 5 else ""})
@@ -293,7 +292,7 @@ class Stack(imagesuite.Stack):
             printf '%s|%s|%s|%s\n' "${d#/proc/}" "$uid" "$runner" "$home"
           done""".replace("FIRST", str(POOL_FIRST)).replace("LAST", str(POOL_LAST))
         out = []
-        for line in self.observe(script).stdout.splitlines():
+        for line in listing(self.observe(script), "the runner listing").splitlines():
             if line.count("|") < 3:
                 continue
             pid, uid, runner, home = line.split("|", 3)
@@ -312,11 +311,12 @@ class Stack(imagesuite.Stack):
 
     def homes(self):
         """The entries of the home root, read as root inside the container."""
-        return self.exec(f"ls -A {HOME_ROOT}").stdout.split()
+        return listing(self.exec(f"ls -A {HOME_ROOT}"), "the home root's listing").split()
 
     def cpu_usec(self):
-        """The container's CPU time from its cgroup, in microseconds."""
-        out = self.exec("awk '/^usage_usec/ {print $2}' /sys/fs/cgroup/cpu.stat").stdout.strip()
+        """The container's CPU time from its cgroup, in microseconds, read from a command that exits 0."""
+        out = read_output(self.exec("awk '/^usage_usec/ {print $2}' /sys/fs/cgroup/cpu.stat"),
+                          "the container's CPU time").strip()
         return int(out)
 
     def cpu_share(self, window_s):

@@ -38,10 +38,9 @@ BROWSER_HOME="$ROOT/tests/browser"
 # directory of the keys it and the stranger sign with, which nothing mounts.
 BROWSER_AUTHORITY=""
 BROWSER_AUTHORITY_KEYS=""
-# The first home's listener port; each home takes three (its loopback
-# listener, its host API and its proxy listener), the next home the next
-# three.
-BROWSER_HOMES_PORT="${BROWSER_HOMES_PORT:-4410}"
+# An explicit first listener keeps the consecutive three-port ranges.
+# Unset, every listener is picked free independently.
+BROWSER_HOMES_PORT="${BROWSER_HOMES_PORT:-}"
 # The run's homes and unsigned names, as `name host port certificate`
 # rows, where port is that of the proxy listener the front forwards to,
 # which /authority/homes.json lists, and whether the attacker's name has
@@ -168,7 +167,7 @@ browser_certificate() {
 
 # A home: a new cell at `$1` (release.sh's `cell_new`, `$3` the PostgreSQL
 # URL of its database), the public home `cyfr init` makes for the hostname
-# `$2` (`cell_hostname`), on the next three listener ports, with a
+# `$2` (`cell_hostname`), on listener ports picked free, with a
 # certificate for `$2` from the run's authority. Its name is the cell's
 # directory name.
 browser_home() {
@@ -178,9 +177,13 @@ browser_home() {
   [[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]] ||
     fail "a home's cell is named in lowercase letters, digits and dashes, not '$name'"
   [[ "$host" == *.test ]] || fail "a home's hostname is a .test name, not '$host'"
-  port=$((BROWSER_HOMES_PORT + 3 * ${#BROWSER_HOMES[@]}))
   cell_new "$cell" "$url" "$host"
-  cell_hostname "$cell" "$host" "$port"
+  if [ -n "$BROWSER_HOMES_PORT" ]; then
+    port=$((BROWSER_HOMES_PORT + 3 * ${#BROWSER_HOMES[@]}))
+    cell_hostname "$cell" "$host" "$port" "$((port + 1))" "$((port + 2))"
+  else
+    cell_hostname "$cell" "$host"
+  fi
   browser_certificate "$host"
   BROWSER_HOMES+=("$name $host $(cell_proxy_port "$cell") $host")
   browser_homes_file

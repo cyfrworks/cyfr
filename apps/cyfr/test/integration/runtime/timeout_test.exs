@@ -5,8 +5,14 @@ defmodule Locus.Runtime.TimeoutTest do
   use ExUnit.Case, async: false
 
   alias Opus.{Dispatch, Provider}
+  alias Prima.Authority
+  alias Prima.Authority.Blob
 
   @test_ref "reagent:local.test-math:0.1.0"
+  @spin_node "reagent:local.spin"
+  @spin_ref "reagent:local.spin:0.1.0"
+  # A reagent whose compute never returns: only the run's own timeout ends it.
+  @spin_wasm Path.expand("../../../../locus/test/support/runtime/test_wasm/spin.wasm", __DIR__)
 
   setup tags do
     # Use a test-specific base path to avoid state leaking between tests
@@ -34,6 +40,14 @@ defmodule Locus.Runtime.TimeoutTest do
         description: "Test math component"
       })
 
+    {:ok, _spin} =
+      Arca.Test.UnitFixtures.ship_bytes!(ctx, File.read!(@spin_wasm), %{
+        name: "spin",
+        version: "0.1.0",
+        type: "reagent",
+        description: "A reagent that never returns"
+      })
+
     {:ok, _} = Sanctum.Consent.Bootstrap.run(ctx)
 
     on_exit(fn ->
@@ -48,6 +62,43 @@ defmodule Locus.Runtime.TimeoutTest do
     {:ok, ctx: ctx, test_path: test_path, ref: @test_ref}
   end
 
+  # The spin reagent under a consent whose node limit is `timeout`, built as
+  # resource_limits_test.exs builds its own.
+  defp spin_authority(timeout) do
+    {:ok, blob} =
+      Blob.parse(%{
+        "canonical" => "jcs-1",
+        "nodes" => %{
+          @spin_node => %{
+            "limits" => %{
+              "timeout" => timeout,
+              "max_memory_bytes" => 64 * 1024 * 1024,
+              "max_request_size" => 1_048_576,
+              "max_response_size" => 5_242_880,
+              "rate_limit" => %{"requests" => 100, "window" => "1m"},
+              "max_concurrent_tasks" => 5,
+              "batch_timeout" => "1m"
+            },
+            "edges" => %{"@ingress" => %{}}
+          }
+        }
+      })
+
+    profile = %{
+      profile_id: "prof-spin",
+      consent_id: "consent-spin",
+      source_ref: @spin_node,
+      kind: :owner,
+      invoke_mode: :open_inert,
+      activation: %{@spin_node => "sha256:act-spin"}
+    }
+
+    {:ok, auth} =
+      Authority.root(profile, blob, ceiling: Sanctum.Policy.Ceiling.platform_ceiling())
+
+    auth
+  end
+
   describe "timeout enforcement" do
     test "a dispatched run accepts the timeout_ms option", %{ctx: ctx, ref: ref} do
       {:ok, authority} = Opus.authority_for(ctx, :default, ref)
@@ -59,41 +110,25 @@ defmodule Locus.Runtime.TimeoutTest do
                )
     end
 
-    test "default timeout applied when not specified", %{ctx: ctx, ref: ref} do
-      # Execution creates a record with the policy timeout even on failure
-      _result =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => ref,
-          "input" => %{"a" => 1, "b" => 2}
-        })
+    test "a run past its consented timeout is ended at it and recorded as failed", %{ctx: ctx} do
+      auth = spin_authority("1s")
+      assert Authority.limits(auth).timeout == "1s"
 
-      # Retrieve execution record to verify policy was applied
-      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
-      assert list_result.count >= 1
-    end
+      {micros, result} =
+        :timer.tc(fn ->
+          Dispatch.run(ctx, @spin_ref, %{"a" => 1, "b" => 2}, type: "reagent", authority: auth)
+        end)
 
-    test "timeout error is properly returned", %{ctx: _ctx} do
-      # Verify the timeout mechanism exists
-      assert Code.ensure_loaded?(Task)
+      assert {:error, _reason} = result
+      # The 1 s limit ends the run; the bound leaves room for a loaded host.
+      assert micros < 5_000_000
 
-      # Dispatch is loaded and exports run/3 and run/4 (with optional opts)
-      assert Code.ensure_loaded?(Dispatch)
-      assert function_exported?(Dispatch, :run, 3) or function_exported?(Dispatch, :run, 4)
-    end
+      {:ok, records} = Opus.Record.list(ctx)
 
-    test "policy-derived timeout is used when available", %{ctx: ctx, ref: ref} do
-      # Execute — policy is applied regardless of whether WASM execution succeeds
-      _result =
-        Provider.handle("execution", ctx, %{
-          "action" => "run",
-          "reference" => ref,
-          "input" => %{"a" => 1, "b" => 1}
-        })
+      assert [%{status: :failed, error: error}] =
+               Enum.filter(records, &(&1.reference == @spin_ref))
 
-      # Verify a record was created (policy was applied during execution setup)
-      {:ok, list_result} = Provider.handle("execution", ctx, %{"action" => "list"})
-      assert list_result.count >= 1
+      assert error =~ "timeout"
     end
   end
 

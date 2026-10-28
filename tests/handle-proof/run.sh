@@ -84,10 +84,6 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-free_port() {
-  python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
-}
-
 # A JSON string of `$1`.
 jstr() { python3 -I -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"; }
 
@@ -165,7 +161,7 @@ identity_env "$A" CYFR_SETUP_TOKEN "$(cat "$SECRETS/setup-a")"
 identity_env "$B" CYFR_SETUP_TOKEN "$(cat "$SECRETS/setup-b")"
 
 step "the registry's database, the registry, and its front at $REGISTRY_HOST"
-PG_PORT="$(free_port)"
+cell_pick_port PG_PORT
 openssl rand -hex 16 | tr -d '\n' >"$SECRETS/pg"
 docker volume create "$PG_VOLUME" >/dev/null || fail "the registry's database volume was not made"
 docker run -d --name "$PG" -p "127.0.0.1:$PG_PORT:5432" -v "$PG_VOLUME:/var/lib/postgresql/data" \
@@ -176,7 +172,7 @@ until docker exec "$PG" pg_isready -U cyfrrun -d cyfrrun >/dev/null 2>&1; do
   [ "$SECONDS" -lt "$closes" ] || fail "the registry's database did not answer within 60 s"
   sleep 1
 done
-REGISTRY_PORT="$(free_port)"
+cell_pick_port REGISTRY_PORT
 openssl rand -hex 32 | tr -d '\n' >"$SECRETS/admin-token"
 (
   umask 077

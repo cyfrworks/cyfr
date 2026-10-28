@@ -64,6 +64,7 @@ from harness import (  # noqa: E402
     HERE, MCP_VERSION, POOL_FIRST, POOL_LAST, ROOT, ROUTES, STATUSES, Controller, Stack, eventually, expect,
     owner_of, post, probe, require_docker, run, wire_json,
 )
+import imagesuite  # noqa: E402
 
 SECRET = "e2e-backend-secret-0123456789"
 LITERAL = "debug-literal-kept"
@@ -243,7 +244,7 @@ class CyfrStack(Stack):
                    "cyfr to answer /api/health/ready", timeout_s=180)
 
     def cyfr_logs(self):
-        return self.compose("logs", "--no-color", "cyfr", check=False).stdout
+        return imagesuite.read_output(self.compose("logs", "--no-color", "cyfr", check=False), "the cyfr app's log")
 
     def rpc(self, expression):
         """Evaluates `expression` in the running cyfr release (`bin/cyfr rpc`) and answers its output."""
