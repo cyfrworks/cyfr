@@ -228,23 +228,6 @@ class Stack(imagesuite.Stack):
         user_args = ["-u", user] if user else []
         return run("docker", "exec", *user_args, self.container, "sh", "-c", script, check=False)
 
-    def listing(self, done, what):
-        """The stdout of `done`, a docker call on the container made with check=False, as a listing.
-
-        A failed call answers nothing about what the container holds, so it
-        fails the observation. The one state that holds nothing is a container
-        whose main process has exited: not running, or restarting, which Docker
-        reports as running with Restarting set between the keeper's exit and
-        compose's restart. Docker refuses to read such a container, and every
-        process in it went with its main process, so its listing is empty.
-        """
-        if done.returncode == 0:
-            return done.stdout
-        state = self.container_state()
-        if not state["running"] or state["restarting"]:
-            return ""
-        sys.exit(f"FAIL: {what} of {self.container} exited {done.returncode}\n{done.stderr.strip()}")
-
     def processes(self):
         """Every process in the container as pid, uids, effective capabilities and command line."""
         script = r"""
@@ -256,7 +239,7 @@ class Stack(imagesuite.Stack):
             printf '%s|%s|%s|%s\n' "${d#/proc/}" "$uids" "$eff" "$cmd"
           done"""
         out = []
-        for line in self.listing(self.exec(script), "the process listing").splitlines():
+        for line in self.listing(self.exec(script), self.container, "the process listing").splitlines():
             if line.count("|") < 3:
                 continue
             pid, uids, eff, cmd = line.split("|", 3)
@@ -277,7 +260,7 @@ class Stack(imagesuite.Stack):
         holds no process."""
         out = []
         top = run("docker", "top", self.container, "-eo", "pid,ruid,euid,suid,fsuid,args", check=False)
-        for line in self.listing(top, "docker top").splitlines()[1:]:
+        for line in self.listing(top, self.container, "docker top").splitlines()[1:]:
             fields = line.split(None, 5)
             if len(fields) >= 5 and all(f.isdigit() for f in fields[:5]):
                 out.append({"pid": int(fields[0]), "uids": [int(u) for u in fields[1:5]], "cmd": fields[5] if len(fields) > 5 else ""})
@@ -309,7 +292,7 @@ class Stack(imagesuite.Stack):
             printf '%s|%s|%s|%s\n' "${d#/proc/}" "$uid" "$runner" "$home"
           done""".replace("FIRST", str(POOL_FIRST)).replace("LAST", str(POOL_LAST))
         out = []
-        for line in self.listing(self.observe(script), "the runner listing").splitlines():
+        for line in self.listing(self.observe(script), self.container, "the runner listing").splitlines():
             if line.count("|") < 3:
                 continue
             pid, uid, runner, home = line.split("|", 3)
@@ -328,7 +311,7 @@ class Stack(imagesuite.Stack):
 
     def homes(self):
         """The entries of the home root, read as root inside the container."""
-        return self.listing(self.exec(f"ls -A {HOME_ROOT}"), "the home root's listing").split()
+        return self.listing(self.exec(f"ls -A {HOME_ROOT}"), self.container, "the home root's listing").split()
 
     def cpu_usec(self):
         """The container's CPU time from its cgroup, in microseconds."""

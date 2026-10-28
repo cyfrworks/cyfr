@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import runners  # noqa: E402
 import stack  # noqa: E402
+import imagesuite  # noqa: E402
 
 CONTAINER = "cyfr-locus-runtime-1"
 UID = 1001
@@ -59,9 +60,11 @@ def docker(container_state, status=0, stdout="", inspect_status=0):
 
 class Observations(unittest.TestCase):
     def container(self, container_state, status=0, stdout="", inspect_status=0):
-        patch = mock.patch.object(stack, "run", docker(container_state, status, stdout, inspect_status))
-        patch.start()
-        self.addCleanup(patch.stop)
+        fake = docker(container_state, status, stdout, inspect_status)
+        for module in (stack, imagesuite):
+            patch = mock.patch.object(module, "run", fake)
+            patch.start()
+            self.addCleanup(patch.stop)
         observed = stack.Stack.__new__(stack.Stack)
         observed.container = CONTAINER
         return observed

@@ -18,6 +18,7 @@ step imports the runtime harness on every commit.
 """
 
 import atexit
+import json
 import os
 import shutil
 import signal
@@ -141,6 +142,29 @@ def guard_failed(inspected):
     return state.get("Health", {}).get("Status") != "healthy" and (state.get("ExitCode") == 1 or inspected["RestartCount"] >= 1)
 
 
+def holds_no_process(state):
+    """Whether a container whose `docker inspect` State is `state` holds no process: its main process has exited.
+
+    Docker reports a stopped container as not running, and a container
+    between one exit of its main process and the next start as running with
+    Restarting set. Its processes went with the main process.
+    """
+    return not state["Running"] or state["Restarting"]
+
+
+def read_word(done, words, what):
+    """The word a probe printed in a successful exec, which must be one of `words`; anything else fails.
+
+    A probe such as `test -e PATH && echo present || echo absent` answers in
+    its output, so a failed exec is no answer whatever its status, and output
+    of neither word is none either.
+    """
+    answer = done.stdout.strip()
+    if done.returncode != 0 or answer not in words:
+        sys.exit(f"FAIL: {what} answered {answer!r} with status {done.returncode}\n{done.stderr.strip()}")
+    return answer
+
+
 class Stack:
     """A compose project of the suite's own: its name, its project directory and its teardown.
 
@@ -191,6 +215,21 @@ class Stack:
         print(message, file=sys.stderr, flush=True)
         if not _exiting and sys.exc_info()[0] is None:
             sys.exit(message)
+
+    def listing(self, done, container, what):
+        """The stdout of `done`, a docker call on `container` made with check=False, read as what the container holds.
+
+        A failed call answers nothing about the container's processes or home
+        root, so it fails the observation, unless the container holds no
+        process (`holds_no_process`): then the listing is empty. Each role's
+        home root is a tmpfs mount, which goes with the container's processes.
+        """
+        if done.returncode == 0:
+            return done.stdout
+        state = json.loads(run("docker", "inspect", container).stdout)[0]["State"]
+        if holds_no_process(state):
+            return ""
+        sys.exit(f"FAIL: {what} of {container} exited {done.returncode}\n{done.stderr.strip()}")
 
 
 @atexit.register

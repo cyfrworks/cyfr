@@ -363,13 +363,43 @@ class RuntimeRestart(unittest.TestCase):
         self.assertIn("the service's log", message)
 
 
-class RuntimeObservations(unittest.TestCase):
-    """tests/locus-runtime-image/stack_test.py, the runtime stack's observations with docker stubbed, as its own entry script."""
+class SuiteObservations(unittest.TestCase):
+    """The image suites' stub tests of what their observations read (tests/<suite>/*_test.py), each run as its own entry script."""
 
-    def test_a_failed_observation_is_never_read_as_absence(self):
-        script = os.path.join(TESTS, "locus-runtime-image", "stack_test.py")
+    def run_entry(self, suite, name):
+        script = os.path.join(TESTS, suite, name)
         result = subprocess.run([sys.executable, "-I", "-B", script], capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_runtime_stack_observations(self):
+        self.run_entry("locus-runtime-image", "stack_test.py")
+
+
+class ObservationAnswers(unittest.TestCase):
+    """What a probe's output or a container's state may answer: a word from a successful exec, and no process in a stopped container."""
+
+    def probe(self, returncode, stdout):
+        return subprocess.CompletedProcess([], returncode, stdout, "daemon error")
+
+    def test_the_word_of_a_successful_probe_is_read(self):
+        self.assertEqual(imagesuite.read_word(self.probe(0, "present\n"), ("present", "absent"), "the probe"), "present")
+
+    def test_a_failed_probe_is_no_answer_whatever_it_printed(self):
+        for returncode, stdout in ((1, "absent\n"), (125, "")):
+            with self.subTest(returncode=returncode, stdout=stdout):
+                with self.assertRaises(SystemExit):
+                    imagesuite.read_word(self.probe(returncode, stdout), ("present", "absent"), "the probe")
+
+    def test_output_of_neither_word_is_no_answer(self):
+        with self.assertRaises(SystemExit):
+            imagesuite.read_word(self.probe(0, ""), ("present", "absent"), "the probe")
+
+    def test_a_stopped_or_restarting_container_holds_no_process(self):
+        self.assertTrue(imagesuite.holds_no_process({"Running": False, "Restarting": False}))
+        self.assertTrue(imagesuite.holds_no_process({"Running": True, "Restarting": True}))
+
+    def test_a_running_container_may_hold_processes(self):
+        self.assertFalse(imagesuite.holds_no_process({"Running": True, "Restarting": False}))
 
 
 # A suite's one-off containers as its functions start them, each call to
