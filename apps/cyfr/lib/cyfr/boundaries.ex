@@ -610,14 +610,20 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Newcomer` is the setup page's admission of the installation's first " <>
           "person: whether the setup link's token opens setup now (`setup_open/1`), " <>
           "before any ceremony, and the setup admission its passkey brings (`admit/2`), " <>
-          "which decides in its own transaction; `Sanctum.Handle` is the identity card's " <>
-          "live check of a handle against the registry's answer (`resolve/1`), " <>
+          "which decides in its own transaction; it is also the sign-in page's open " <>
+          "admission, offered while the door's `*` admits " <>
+          "(`Sanctum.Door.Store.wildcard/0`, which only shows the offer: the admission " <>
+          "asks the door again). `Sanctum.Handle` is the identity card's " <>
+          "live check of a handle against the registry's answer, and the sign-in page's " <>
+          "reading of the identifier and published address a handle names (`resolve/1`), " <>
           "navigation that grants nothing. " <>
           "`Sanctum.Passkeys` is the sign-in page's passkey sign-in method: the challenge it holds " <>
           "and the answer it verifies into a session, as the device flow's poll is " <>
           "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` sign-in method's: " <>
-          "the CYFR that holds the person's identity, where the sign-in page sends them (`signing_home/1`), the " <>
-          "challenge it mints for the carry they bring back (`challenge/1`), where the " <>
+          "the CYFR that holds the person's identity, where the sign-in page sends them (`signing_home/1`), " <>
+          "the hosted CYFR it offers (`hosted/0`), the " <>
+          "challenge it mints for the carry they bring back, held to the identifier a " <>
+          "handle requested (`challenge/2`), where the " <>
           "callback's hop returns them (`redirect_url/1`), the assertion the callback " <>
           "admits into a session, through the sign-in method (`callback/2`), and the carry's " <>
           "lifetime the sign-in and `/carry` pages hand their script " <>
@@ -1862,7 +1868,8 @@ defmodule Cyfr.Boundaries do
     "Sanctum.Auth.CyfrDoor" => [
       callback: 2,
       carry_lifetime_ms: 0,
-      challenge: 1,
+      challenge: 2,
+      hosted: 0,
       redirect_url: 1,
       signing_home: 1
     ],
@@ -1962,7 +1969,7 @@ defmodule Cyfr.Boundaries do
     "Sanctum.DeviceCerts" => [verify_connect: 3, verify_request: 2],
     "Sanctum.Directory" => [append: 2, recover: 2, register: 1, resolve: 1],
     "Sanctum.Door" => [refusal_message: 0],
-    "Sanctum.Door.Store" => [requests: 0],
+    "Sanctum.Door.Store" => [requests: 0, wildcard: 0],
     "Sanctum.Egress" => [pinned_request: 5],
     "Sanctum.ExecutionStanding" => [capture: 1, retired_attempts: 3, stamp_only: 1, verify: 1],
     "Sanctum.Gate" => [
@@ -2879,6 +2886,12 @@ defmodule Cyfr.Boundaries do
     %{
       module: Module.concat(["PrismWeb", "AuthController"]),
       site: :request,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "AuthController"]),
+      site: :cyfr_start,
       plane: :external,
       origin: :none
     },

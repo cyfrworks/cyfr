@@ -306,12 +306,14 @@ export const flashed = (page, text, timeout = 30_000) =>
 // The sign-in carry, hop by hop
 // ---------------------------------------------------------------------------
 
-// At H's sign-in page, the person names their home.
+// At H's sign-in page, the person names their home: "I run my own CYFR",
+// then its address.
 export async function nameHome(page, home) {
   await page.goto(`${H}/login`);
   await connected(page);
-  await page.locator("#cyfr-home").fill(home);
-  await page.locator('#cyfr-sign-in button[type="submit"]').click();
+  await page.locator("#cyfr-own-open").click();
+  await page.locator("#cyfr-own-entry").fill(home);
+  await page.locator('#cyfr-own button[type="submit"]').click();
 }
 
 // At the home's sign-in page the carry's fragment waits for the person:

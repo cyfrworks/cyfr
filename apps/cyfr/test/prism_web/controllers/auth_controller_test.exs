@@ -11,6 +11,8 @@ defmodule PrismWeb.AuthControllerTest do
     unlocks the person who linked the identity it names
     (`Sanctum.SignIn.unlock/1`) and never makes one.
   - device_complete/2: The device-flow ticket
+  - cyfr_start/2: A `cyfr` sign-in begun from a handle, whose request the
+    browser's session keeps until the callback admits
   """
   use CyfrWeb.ConnCase
 
@@ -776,7 +778,7 @@ defmodule PrismWeb.AuthControllerTest do
 
       identity = DirectoryServer.identity!(directory.dir, directory.url)
       %{fragment: fragment} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
-      {:ok, held} = CyfrDoor.challenge(fragment)
+      {:ok, held} = CyfrDoor.challenge(fragment, :none)
       %{directory: directory, identity: identity, held: held}
     end
 
@@ -844,11 +846,23 @@ defmodule PrismWeb.AuthControllerTest do
       {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
       fragment = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
 
-      signed_in = callback(conn, held, fragment)
+      # A sign-in begun from a handle: its request is in the session too.
+      request = %{
+        "identifier" => identity.identifier,
+        "home" => "https://a.example",
+        "expires_at" => System.os_time(:millisecond) + 60_000
+      }
+
+      signed_in =
+        conn
+        |> Plug.Test.init_test_session(%{"cyfr_challenge" => held, "cyfr_request" => request})
+        |> post(~p"/auth/cyfr/callback", %{"fragment" => fragment})
+
       assert redirected_to(signed_in, 303) == carry_return(held, :admitted)
       token = get_session(signed_in, :sanctum_session_token)
       assert token == CyfrDoor.session_token(held)
       refute get_session(signed_in, "cyfr_challenge")
+      refute get_session(signed_in, "cyfr_request")
 
       # Admitted to nothing here: no athanor of their own is minted, and the
       # page they land on tells them so.
@@ -970,6 +984,84 @@ defmodule PrismWeb.AuthControllerTest do
       assert body =~ "Try again shortly"
       refute body =~ "Back to Aqua"
       refute get_session(paused, :sanctum_session_token)
+    end
+  end
+
+  describe "cyfr_start/2 — a cyfr sign-in begun from a handle" do
+    @start_browser "cyfr-start-test-browser"
+    @identifier "per_" <> String.duplicate("a", 52)
+
+    setup do
+      Arca.Cache.init()
+      :ok
+    end
+
+    # The ticket the sign-in page mints for a resolved handle.
+    defp start_ticket(binding \\ @start_browser) do
+      ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+      {:ok, to} = Sanctum.Auth.CyfrDoor.signing_home("https://alice.example")
+
+      Arca.Cache.put(
+        {:login_cyfr_start, ticket},
+        %{
+          identifier: @identifier,
+          home: "https://alice.example",
+          to: to,
+          browser_binding: binding
+        },
+        60_000
+      )
+
+      {ticket, to}
+    end
+
+    defp start(conn, query, binding \\ @start_browser) do
+      conn
+      |> Plug.Test.init_test_session(%{"_csrf_token" => binding})
+      |> get("/auth/cyfr/start" <> query)
+    end
+
+    test "keeps the handle's request in this browser's session for the carry's lifetime and answers 303 to the published address's /carry",
+         %{conn: conn} do
+      {ticket, to} = start_ticket()
+      before = System.os_time(:millisecond)
+
+      started = start(conn, "?" <> URI.encode_query(%{ticket: ticket}))
+
+      assert started.status == 303
+      assert get_resp_header(started, "location") == [to]
+
+      assert to ==
+               "https://alice.example/carry#" <>
+                 URI.encode_query(%{"destination" => Sanctum.Person.home()})
+
+      assert %{"identifier" => @identifier, "home" => "https://alice.example", "expires_at" => at} =
+               get_session(started, "cyfr_request")
+
+      lifetime = Sanctum.Auth.CyfrDoor.carry_lifetime_ms()
+      assert at >= before + lifetime and at <= System.os_time(:millisecond) + lifetime
+      assert Arca.Cache.get({:login_cyfr_start, ticket}) == :miss
+
+      # Spent: the same ticket again keeps nothing.
+      again = start(build_conn(), "?" <> URI.encode_query(%{ticket: ticket}))
+      assert redirected_to(again) == "/login"
+      refute get_session(again, "cyfr_request")
+    end
+
+    test "a ticket another browser presents is spent and keeps nothing; a missing one too",
+         %{conn: conn} do
+      {ticket, _to} = start_ticket()
+
+      wrong = start(conn, "?" <> URI.encode_query(%{ticket: ticket}), "another-browser")
+      assert redirected_to(wrong) == "/login"
+      refute get_session(wrong, "cyfr_request")
+      assert Arca.Cache.get({:login_cyfr_start, ticket}) == :miss
+
+      for query <- ["?ticket=nothing", ""] do
+        refused = start(build_conn(), query)
+        assert redirected_to(refused) == "/login"
+        refute get_session(refused, "cyfr_request")
+      end
     end
   end
 end

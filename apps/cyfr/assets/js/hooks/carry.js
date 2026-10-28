@@ -28,11 +28,14 @@
  * for the carry's lifetime:
  *
  *   * `cyfr:carry:expect` at B: `{home, at}`, written when the person
- *     names their home in B's entry, just before going there. A carry is
- *     handed to B's page only while this expectation is fresh, once, and
- *     names that home as the source B must find in the carry: a carry the
- *     person did not ask for here signs nobody in. It is cleared when it
- *     is used, or found expired.
+ *     names their home in B's entry, just before going there, with
+ *     `identifier` beside them when they named a handle that resolved to
+ *     that identifier. A carry is handed to B's page only while this
+ *     expectation is fresh, once, and names that home as the source B
+ *     must find in the carry, and the identifier, when there is one, as
+ *     the identity B holds the carry to (`requested_identifier`, an absent
+ *     key when there is none): a carry the person did not ask for here
+ *     signs nobody in. It is cleared when it is used, or found expired.
  *   * `cyfr:carry:source` at A: the actions this tab began, each with its
  *     destination, `key_epoch` and time, and the transport fragment (a
  *     destination, a challenge, a return or a device to certify, meant for
@@ -168,20 +171,26 @@ function remove(storage, key) {
 
 const fresh = (at, now, lifetimeMs) => typeof at === "number" && now >= at && now - at < lifetimeMs
 
-/** B's expectation: the person named `home` in this page's entry, now. */
-export function expectHome(storage, home, now) {
-  write(storage, EXPECT_KEY, {home, at: now})
+/**
+ * B's expectation: the person named `home` in this page's entry, now, or
+ * a handle that resolved to `identifier` there.
+ */
+export function expectHome(storage, home, now, identifier) {
+  write(storage, EXPECT_KEY, typeof identifier === "string" ? {home, identifier, at: now} : {home, at: now})
 }
 
 /**
- * The home B's entry named, while that expectation is fresh; it is taken
- * either way, so it is used once at most, and an expired one is gone.
+ * What B's entry named, `{home}` or `{home, identifier}`, while that
+ * expectation is fresh; it is taken either way, so it is used once at
+ * most, and an expired one is gone. An identifier that is no string makes
+ * it no expectation.
  */
 export function takeExpectation(storage, now, lifetimeMs) {
   const held = read(storage, EXPECT_KEY)
   remove(storage, EXPECT_KEY)
   if (!held || typeof held.home !== "string" || !fresh(held.at, now, lifetimeMs)) return null
-  return held.home
+  if (!("identifier" in held)) return {home: held.home}
+  return typeof held.identifier === "string" ? {home: held.home, identifier: held.identifier} : null
 }
 
 /** A's state: `{actions: {id: {destination, key_epoch, at}}, transport: {fragment, at, ttl} | null}`. */
@@ -287,7 +296,7 @@ const Carry = {
     const fragment = takeFragment(this.win)
 
     if (this.el.dataset.carry === "login") {
-      this.handleEvent("cyfr:expect", ({home, to}) => this.expect(home, to))
+      this.handleEvent("cyfr:expect", ({home, to, identifier}) => this.expect(home, to, identifier))
       // A resumed exchange: back to its home, keeping no expectation, since
       // what comes back is its assertion and never a carry.
       this.handleEvent("cyfr:go", ({to}) => this.go(to))
@@ -311,9 +320,16 @@ const Carry = {
 
     switch (found.kind) {
       case "carry": {
-        const home = takeExpectation(this.storage, now, this.lifetimeMs)
-        if (home) this.pushEvent("cyfr_carry", {fragment: found.value, expected_source: home})
-        else this.pushEvent("cyfr_unsolicited", {})
+        const expected = takeExpectation(this.storage, now, this.lifetimeMs)
+        if (!expected) this.pushEvent("cyfr_unsolicited", {})
+        else if (expected.identifier === undefined)
+          this.pushEvent("cyfr_carry", {fragment: found.value, expected_source: expected.home})
+        else
+          this.pushEvent("cyfr_carry", {
+            fragment: found.value,
+            expected_source: expected.home,
+            requested_identifier: expected.identifier
+          })
         return
       }
       case "assertion":
@@ -364,10 +380,12 @@ const Carry = {
     }
   },
 
-  // B's entry named a home: expect a carry from it, then go there.
-  expect(home, to) {
+  // B's entry named a home, or a handle that resolved to `identifier`:
+  // expect a carry from that home, then go there.
+  expect(home, to, identifier) {
     if (typeof home !== "string" || typeof to !== "string") return
-    expectHome(this.storage, home, this.now())
+    if (identifier !== undefined && typeof identifier !== "string") return
+    expectHome(this.storage, home, this.now(), identifier)
     this.win.location.assign(to)
   },
 

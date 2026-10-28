@@ -8,8 +8,10 @@ defmodule Sanctum.Auth.CyfrDoorTest do
   home played by the test with their live key.
 
   A carry is verified under the head read fresh from the directory the
-  person's genesis names, before which a carry for another home or a
-  genesis that does not hash to its identifier makes no request; the
+  person's genesis names, before which a carry for another home, a
+  genesis that does not hash to its identifier, a carry of another
+  identity than the handle the sign-in began from named, and a sign-in
+  whose request the browser lost make no request; the
   challenge is held in the browser's cookie and the browser goes back to
   the carry's signed return URL; the assertion is verified under the
   current live key, for this home, this challenge and this carry, and the
@@ -73,7 +75,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
 
   defp challenge!(identity, home, opts \\ []) do
     %{fragment: fragment} = carry(identity, home, opts)
-    {:ok, held} = CyfrDoor.challenge(fragment)
+    {:ok, held} = CyfrDoor.challenge(fragment, :none)
     held
   end
 
@@ -144,6 +146,15 @@ defmodule Sanctum.Auth.CyfrDoorTest do
   # The signing home
   # ---------------------------------------------------------------------------
 
+  describe "hosted/0" do
+    test "is the hosted CYFR's address, an origin signing_home/1 reads as it is" do
+      assert CyfrDoor.hosted() == "https://my.cyfr.run"
+
+      assert {:ok, "https://my.cyfr.run/carry#" <> _} =
+               CyfrDoor.signing_home(CyfrDoor.hosted())
+    end
+  end
+
   describe "signing_home/1" do
     test "sends the person to their home's /carry, naming this home in the fragment",
          %{home: home} do
@@ -170,12 +181,12 @@ defmodule Sanctum.Auth.CyfrDoorTest do
   # The challenge
   # ---------------------------------------------------------------------------
 
-  describe "challenge/1" do
+  describe "challenge/2" do
     test "verifies the carry under the fresh head and holds a challenge for it", context do
       identity = identity!(context)
       %{fragment: fragment, action_id: action_id} = carry(identity, context.home)
 
-      assert {:ok, held} = CyfrDoor.challenge(fragment)
+      assert {:ok, held} = CyfrDoor.challenge(fragment, :none)
       assert held["action_id"] == action_id
       assert held["identifier"] == identity.identifier
       assert held["source"] == "https://a.example"
@@ -205,14 +216,14 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       identity = identity!(context)
       other = identity!(context)
       %{fragment: fragment} = carry(identity, "https://elsewhere.example")
-      assert {:error, :wrong_destination} = CyfrDoor.challenge(fragment)
+      assert {:error, :wrong_destination} = CyfrDoor.challenge(fragment, :none)
 
       %{fragment: forged} =
         carry(identity, context.home, payload: %{"genesis" => DirectoryServer.genesis_map(other)})
 
-      assert {:error, :invalid_carry} = CyfrDoor.challenge(forged)
-      assert {:error, :invalid_carry} = CyfrDoor.challenge("not a fragment")
-      assert {:error, :invalid_carry} = CyfrDoor.challenge(String.duplicate("A", 20_000))
+      assert {:error, :invalid_carry} = CyfrDoor.challenge(forged, :none)
+      assert {:error, :invalid_carry} = CyfrDoor.challenge("not a fragment", :none)
+      assert {:error, :invalid_carry} = CyfrDoor.challenge(String.duplicate("A", 20_000), :none)
 
       assert drain() == []
       refute_received {:resolved, _}
@@ -222,23 +233,76 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       assert installation_window() == nil
     end
 
+    test "a sign-in begun from a handle is answered by the identity it named: another identity is refused before any directory read",
+         context do
+      named = identity!(context)
+      other = identity!(context)
+      allow!(other)
+      %{fragment: fragment} = carry(other, context.home)
+      watch_sources!()
+
+      # The handle's published address served someone else.
+      assert {:error, :wrong_identity} =
+               CyfrDoor.challenge(fragment, {:identifier, named.identifier})
+
+      # Nothing read a directory or counted against the installation's
+      # bound, and nothing here was asked of the store.
+      assert drain() == []
+      refute_received :connected
+      assert sources() == []
+      assert installation_window() == nil
+
+      # No challenge was held, so no assertion can be admitted under one,
+      # and no person or session was made.
+      refute person_of(other.identifier)
+      refute person_of(named.identifier)
+
+      # The identity the handle named is answered as an address's is.
+      %{fragment: own} = carry(named, context.home)
+      assert {:ok, held} = CyfrDoor.challenge(own, {:identifier, named.identifier})
+      assert held["identifier"] == named.identifier
+    end
+
+    test "a sign-in whose handle request the browser lost is refused before anything else",
+         context do
+      identity = identity!(context)
+      %{fragment: fragment} = carry(identity, context.home)
+      watch_sources!()
+
+      assert {:error, :no_request} = CyfrDoor.challenge(fragment, :lost)
+      # Before the carry is even read.
+      assert {:error, :no_request} = CyfrDoor.challenge("not a fragment", :lost)
+
+      assert drain() == []
+      assert sources() == []
+      assert installation_window() == nil
+    end
+
+    test "an address requests no identifier: a carry of any identity proceeds", context do
+      for identity <- [identity!(context), identity!(context)] do
+        %{fragment: fragment} = carry(identity, context.home)
+        assert {:ok, held} = CyfrDoor.challenge(fragment, :none)
+        assert held["identifier"] == identity.identifier
+      end
+    end
+
     test "an envelope the directory's head does not vouch for is refused", context do
       identity = identity!(context)
       {_public, forger} = :crypto.generate_key(:eddsa, :ed25519)
 
       %{fragment: forged} = carry(identity, context.home, live: forger)
-      assert {:error, {:refused, :bad_signature}} = CyfrDoor.challenge(forged)
+      assert {:error, {:refused, :bad_signature}} = CyfrDoor.challenge(forged, :none)
 
       # Signed under the key a rotation since replaced.
       %{fragment: old} = carry(identity, context.home)
       rotated = DirectoryServer.rotate!(context.directory.dir, identity)
-      assert {:error, {:refused, :stale_key_epoch}} = CyfrDoor.challenge(old)
+      assert {:error, {:refused, :stale_key_epoch}} = CyfrDoor.challenge(old, :none)
 
       # Issued long before it arrived.
       %{fragment: stale} =
         carry(rotated, context.home, issued_at: System.os_time(:millisecond) - 3_600_000)
 
-      assert {:error, {:refused, :stale}} = CyfrDoor.challenge(stale)
+      assert {:error, {:refused, :stale}} = CyfrDoor.challenge(stale, :none)
     end
 
     test "a directory that cannot be read admits nothing from a cache", context do
@@ -248,18 +312,18 @@ defmodule Sanctum.Auth.CyfrDoorTest do
 
       %{fragment: fragment} = carry(identity, context.home)
 
-      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment)
+      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, :none)
     end
 
     test "a genesis naming a metadata or unlisted loopback directory reaches no address",
          context do
       metadata = DirectoryServer.identity!(context.directory.dir, "https://metadata.test")
       %{fragment: fragment} = carry(metadata, context.home)
-      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment)
+      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, :none)
 
       loopback = DirectoryServer.identity!(context.directory.dir, "https://loopback.test")
       %{fragment: fragment} = carry(loopback, context.home)
-      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment)
+      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, :none)
 
       refute_received :connected
       assert drain() == []
@@ -282,7 +346,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
         )
 
       %{fragment: fragment} = carry(identity, context.home)
-      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment)
+      assert {:error, :identity_stale} = CyfrDoor.challenge(fragment, :none)
 
       # It asked the one directory once, and never the address it named.
       assert [_one] = drain()
@@ -302,17 +366,17 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       # Every other member counted all but one of the minute's carries.
       spend!(199)
       %{fragment: last} = carry(identity, context.home)
-      assert {:ok, _held} = CyfrDoor.challenge(last)
+      assert {:ok, _held} = CyfrDoor.challenge(last, :none)
       assert [_read] = drain()
 
       %{fragment: past} = carry(identity, context.home)
-      assert {:error, {:rate_limited, retry_after_ms}} = CyfrDoor.challenge(past)
+      assert {:error, {:rate_limited, retry_after_ms}} = CyfrDoor.challenge(past, :none)
       assert retry_after_ms in 1..60_000
       assert drain() == []
 
       # Another member: its own count is fresh, the cell's is not.
       Prima.Test.RateLimiter.reset!()
-      assert {:error, {:rate_limited, _}} = CyfrDoor.challenge(past)
+      assert {:error, {:rate_limited, _}} = CyfrDoor.challenge(past, :none)
       assert drain() == []
 
       # Nothing was counted past the cap.
@@ -326,10 +390,10 @@ defmodule Sanctum.Auth.CyfrDoorTest do
       %{fragment: fragment} = carry(identity, context.home)
 
       # Refused by the cell's count, each still counted on this member.
-      for _ <- 1..200, do: {:error, {:rate_limited, _}} = CyfrDoor.challenge(fragment)
+      for _ <- 1..200, do: {:error, {:rate_limited, _}} = CyfrDoor.challenge(fragment, :none)
 
       watch_sources!()
-      assert {:error, {:rate_limited, retry_after_ms}} = CyfrDoor.challenge(fragment)
+      assert {:error, {:rate_limited, retry_after_ms}} = CyfrDoor.challenge(fragment, :none)
       assert retry_after_ms in 1..60_000
       assert sources() == []
       assert drain() == []
@@ -344,7 +408,7 @@ defmodule Sanctum.Auth.CyfrDoorTest do
 
       spend!(199)
       %{fragment: past} = carry(identity, context.home)
-      assert {:error, {:rate_limited, _}} = CyfrDoor.challenge(past)
+      assert {:error, {:rate_limited, _}} = CyfrDoor.challenge(past, :none)
 
       assert {:ok, %{resumed: false}} =
                CyfrDoor.callback(assertion(identity, held, context.home), held)

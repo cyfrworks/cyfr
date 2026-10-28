@@ -91,6 +91,10 @@ import {assert as assertPasskey, register as registerPasskey, supported as passk
  *     `registration`), creates the passkey and answers it
  *     (`setup_passkey`, `{credential}`), or says the ceremony did not
  *     finish (`setup_error`). Such an element draws no prompt.
+ *   * On the sign-in page, an element with `data-webauthn="create"` is a
+ *     newcomer's passkey under an open admission: as the setup page's,
+ *     with no token, through `create_start`, `create_passkey` and
+ *     `create_error`. Such an element draws no prompt.
  *
  * A change that waits on a fresh confirmation repeats once its record is
  * confirmed. A typed value is never held by the server meanwhile: the
@@ -274,6 +278,7 @@ export default {
   mounted() {
     if (this.el.dataset.webauthn === "sign-in") return this.mountSignIn()
     if (this.el.dataset.webauthn === "setup") return this.mountSetup()
+    if (this.el.dataset.webauthn === "create") return this.mountRegistration("create")
     if (this.el.dataset.glass === "pair") return this.mountGlass()
     if (this.el.dataset.restore === "page") {
       this.restorePage = new RestorePage(this.el)
@@ -373,15 +378,21 @@ export default {
 
   mountSetup() {
     this.pushSetupToken()
+    this.mountRegistration("setup")
+  },
+
+  // A newcomer's passkey, once per click: `<events>_start` for the
+  // creation options, then `<events>_passkey` or `<events>_error`.
+  mountRegistration(events) {
     this.onSignIn = (event) => {
       const start = event.target && event.target.closest ? event.target.closest("[data-webauthn-start]") : null
       if (!start) return
       event.preventDefault()
-      this.pushEvent("setup_start", {}, (reply) => {
+      this.pushEvent(`${events}_start`, {}, (reply) => {
         if (!reply || !reply.public_key) return
         registerPasskey(reply.public_key, reply.registration, globalThis.navigator.credentials)
-          .then((credential) => this.pushEvent("setup_passkey", {credential}))
-          .catch(() => this.pushEvent("setup_error", {}))
+          .then((credential) => this.pushEvent(`${events}_passkey`, {credential}))
+          .catch(() => this.pushEvent(`${events}_error`, {}))
       })
     }
     this.el.addEventListener("click", this.onSignIn)

@@ -102,6 +102,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
     {CyfrWeb.Plugs.AuthRateLimit, :call} => :restore_rate_limited,
     {PrismWeb.AuthController, :link_start} => :sign_in_link_unsigned,
     {PrismWeb.AuthController, :request} => :sign_in_cyfr_hop_expired,
+    {PrismWeb.AuthController, :cyfr_start} => :sign_in_cyfr_start_expired,
     {PrismWeb.AuthController, :device_complete} => :sign_in_device_ticket_unknown,
     {PrismWeb.AuthController, :cyfr_callback} => :sign_in_cyfr_callback_expired,
     {PrismWeb.AuthController, :callback} => :sign_in_callback_empty,
@@ -591,6 +592,9 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
 
   def sign_in_cyfr_hop_expired(_conn, _ctx),
     do: build_conn() |> get("/auth/cyfr") |> sign_in_refused(302, "not_found")
+
+  def sign_in_cyfr_start_expired(_conn, _ctx),
+    do: build_conn() |> get("/auth/cyfr/start") |> sign_in_refused(302, "not_found")
 
   def sign_in_device_ticket_unknown(_conn, _ctx),
     do: build_conn() |> get("/auth/device/complete/nope") |> sign_in_refused(302, "not_found")

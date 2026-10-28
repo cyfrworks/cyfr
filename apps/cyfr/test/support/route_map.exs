@@ -666,6 +666,15 @@
         },
         %{
           verb: "GET",
+          path: "/auth/cyfr/start",
+          plug: "PrismWeb.AuthController",
+          plug_opts: ":cyfr_start",
+          auth: "browser_oauth_flow",
+          live_view: nil,
+          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
+        },
+        %{
+          verb: "GET",
           path: "/auth/device/complete/:ticket",
           plug: "PrismWeb.AuthController",
           plug_opts: ":device_complete",

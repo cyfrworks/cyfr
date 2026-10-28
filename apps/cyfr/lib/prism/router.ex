@@ -7,7 +7,8 @@ defmodule Prism.Router do
   layout, the browser sign-in pipelines and their throttles, the claim,
   legal-acceptance and attachment pipelines, browser sign-in and
   sign-out with their callbacks, linking an OpenID Connect door, passkey
-  sign-in's completion, the `cyfr` door's challenge hop and callback, the
+  sign-in's completion, the `cyfr` door's start from a handle, its
+  challenge hop and callback, the
   OpenID Connect re-authentication's callback, the claim and legal pages, the
   attachment and file downloads and the `:athanor` LiveView session.
 
@@ -160,6 +161,17 @@ defmodule Prism.Router do
           pipe_through :oauth_start_throttle
 
           post "/link/oidcc", AuthController, :link_start, metadata: %{auth: :browser_session}
+        end
+
+        # A `cyfr` sign-in begun from a handle: the sign-in page's one-time
+        # ticket, bound to this browser, which keeps the handle's
+        # identifier in the browser's session and sends it to the address
+        # the handle published. Above `/:provider`, under the starts'
+        # throttle.
+        scope "/" do
+          pipe_through :oauth_start_throttle
+
+          get "/cyfr/start", AuthController, :cyfr_start, metadata: %{auth: :browser_oauth_flow}
         end
 
         scope "/" do
