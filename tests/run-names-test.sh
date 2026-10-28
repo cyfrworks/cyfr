@@ -39,12 +39,46 @@ until_true() {
   done
 }
 
-# The seed the contract names, computed here on its own: the first ten hex
-# digits of the SHA-256 of the directory's physical path.
+# The seed the contract names, computed here on its own, through Python
+# rather than either tool the library reads: the first ten hex digits of
+# the SHA-256 of the directory's physical path.
 expected_seed() {
   local physical
   physical=$(cd "$1" && pwd -P)
-  printf '%s' "$physical" | sha256sum | cut -c1-10
+  python3 -I -c 'import hashlib, os, sys; print(hashlib.sha256(os.fsencode(sys.argv[1])).hexdigest()[:10])' "$physical"
+}
+
+# A directory holding only the named tools, as links to the host's, for a
+# PATH that hides every other.
+only_tools() {
+  local dir=$1 tool
+  shift
+  mkdir -p "$dir"
+  for tool in "$@"; do ln -sf "$(command -v "$tool")" "$dir/$tool"; done
+}
+
+# A python3 for run_names_free_port's bind check that counts every bind it
+# is asked for, one port per line in $COUNTING_LOG, and refuses each one
+# as a held port would. Any other use runs the host's python3.
+counting_python() {
+  mkdir -p "$S/counting"
+  cat >"$S/counting/python3" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = -I ] && [ "$2" = -c ]; then
+  code=$3; shift 3
+  exec "$COUNTING_REAL" -I -c "import errno, os, socket
+def bind(self, address):
+    with open(os.environ['COUNTING_LOG'], 'a') as log:
+        log.write('%d\n' % address[1])
+    raise OSError(errno.EADDRINUSE, 'held')
+socket.socket.bind = bind
+$code" "$@"
+fi
+exec "$COUNTING_REAL" "$@"
+EOF
+  chmod +x "$S/counting/python3"
+  COUNTING_REAL=$(command -v python3) COUNTING_LOG="$S/binds"
+  export COUNTING_REAL COUNTING_LOG
 }
 
 # A listener on 127.0.0.1:PORT until the test ends, ready once its file
@@ -91,6 +125,16 @@ seed=$(run_names_seed "$S/wt1")
 [ "$(run_names_seed "$S/link")" = "$seed" ] || fail 'a symlink to the worktree gave another seed'
 [ "$(run_names_seed "$S/link/sub/dir")" = "$seed" ] || fail 'a subdirectory through the symlink gave another seed'
 [ "$(cd "$S/link/sub" && run_names_seed)" = "$seed" ] || fail 'the working directory, reached through the symlink, gave another seed'
+
+begin 'without sha256sum the seed is the same, through shasum'
+command -v shasum >/dev/null 2>&1 || fail 'shasum is not installed, so its fallback cannot be shown'
+only_tools "$S/shasum-only" git shasum
+if (PATH="$S/shasum-only"; command -v sha256sum) >/dev/null 2>&1; then fail 'sha256sum is still on the narrowed PATH'; fi
+[ "$(PATH="$S/shasum-only"; run_names_seed "$S/wt1")" = "$seed" ] || fail 'shasum gave another seed than sha256sum'
+only_tools "$S/git-only" git
+status=0; (PATH="$S/git-only"; run_names_seed "$S/wt1") >/dev/null 2>"$S/err" || status=$?
+[ "$status" = 69 ] || fail "with neither tool the seed returned $status, not 69"
+grep -qF 'sha256sum or shasum is required' "$S/err" || fail "the refusal does not name the tools: $(cat "$S/err")"
 
 begin 'two worktrees of one repository get distinct seeds'
 [ "$(run_names_seed "$S/wt2")" = "$(expected_seed "$S/wt2")" ] || fail 'the second worktree seed is not its path digest'
@@ -143,10 +187,10 @@ second=$((first + 1))
 
 begin 'a held port is skipped'
 RUN_NAMES_PORT_FIRST=$first RUN_NAMES_PORT_LAST=$second
-seen=
-for _ in $(seq 20); do seen="$seen $(run_names_free_port)"; done
-case " $seen " in *" $first "*) ;; *) fail "with both free, $first never came back:$seen" ;; esac
-case " $seen " in *" $second "*) ;; *) fail "with both free, $second never came back:$seen" ;; esac
+for _ in 1 2 3 4 5; do
+  port=$(run_names_free_port)
+  [ "$port" = "$first" ] || [ "$port" = "$second" ] || fail "with both free it returned $port, outside $first-$second"
+done
 hold "$first"
 if bindable "$first"; then fail "the holder does not hold $first"; fi
 for _ in $(seq 20); do
@@ -160,6 +204,22 @@ status=0; out=$(run_names_free_port 2>"$S/err") || status=$?
 [ "$status" = 1 ] || fail "returned $status, not 1"
 [ -z "$out" ] || fail "printed $out"
 grep -qF "no free port in $first-$second after 2 tries" "$S/err" || fail "the refusal does not name the range: $(cat "$S/err")"
+
+begin 'the free port tries at most 50 ports, each once'
+counting_python
+RUN_NAMES_PORT_FIRST=20000 RUN_NAMES_PORT_LAST=20059
+: >"$S/binds"
+status=0; (PATH="$S/counting:$PATH"; run_names_free_port) >/dev/null 2>"$S/err" || status=$?
+[ "$status" = 1 ] || fail "with all 60 ports refused it returned $status, not 1"
+[ "$(wc -l <"$S/binds")" = 50 ] || fail "it tried $(wc -l <"$S/binds") ports of 60, not 50"
+[ "$(sort -u "$S/binds" | wc -l)" = 50 ] || fail 'it tried a port twice'
+grep -qF 'no free port in 20000-20059 after 50 tries' "$S/err" || fail "the refusal does not name the range: $(cat "$S/err")"
+RUN_NAMES_PORT_LAST=20029
+: >"$S/binds"
+(PATH="$S/counting:$PATH"; run_names_free_port) >/dev/null 2>&1 || :
+[ "$(sort -u "$S/binds" | wc -l)" = 30 ] && [ "$(wc -l <"$S/binds")" = 30 ] ||
+  fail "in a range of 30 it tried $(wc -l <"$S/binds") binds over $(sort -u "$S/binds" | wc -l) ports, not each of the 30 once"
+if awk '$1 < 20000 || $1 > 20029' "$S/binds" | grep -q .; then fail 'it tried a port outside the range'; fi
 
 begin 'without python3 the free port returns 69'
 mkdir -p "$S/empty-path"
