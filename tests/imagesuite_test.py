@@ -445,15 +445,22 @@ def direct_stdout_reads(path):
     return reads
 
 
-def scan_direct_reads(tests=TESTS):
-    """Every direct read in the three suites' entry scripts under `tests`, keyed by (file, function) to its lines."""
-    reads = {}
+def suite_sources(tests=TESTS):
+    """Each Python file below a suite's directory under `tests`, at any depth, in order; `__pycache__` is the only directory skipped."""
     for suite in SUITES:
-        for path in sorted(glob.glob(os.path.join(tests, suite, "*.py"))):
-            if path.endswith("_test.py"):
-                continue
-            for scope, line in direct_stdout_reads(path):
-                reads.setdefault((os.path.relpath(path, tests), scope), []).append(line)
+        for dirpath, dirnames, filenames in os.walk(os.path.join(tests, suite)):
+            dirnames[:] = sorted(name for name in dirnames if name != "__pycache__")
+            for name in sorted(filenames):
+                if name.endswith(".py"):
+                    yield os.path.join(dirpath, name)
+
+
+def scan_direct_reads(tests=TESTS):
+    """Every direct read in the Python files below the three suites under `tests`, keyed by (file, function) to its lines."""
+    reads = {}
+    for path in suite_sources(tests):
+        for scope, line in direct_stdout_reads(path):
+            reads.setdefault((os.path.relpath(path, tests), scope), []).append(line)
     return reads
 
 
@@ -475,14 +482,18 @@ def roster_failures(roster, reads):
 class DirectStdoutReads(unittest.TestCase):
     """The suites' direct `.stdout` reads are the roster's, exactly: an unlisted read, a wrong count and a stale entry each fail."""
 
-    def tree(self, appended=None, replaced=None):
-        """A copy of the suites' entry scripts, with `appended` text added to some and `replaced` (old, new) pairs made in others."""
+    def tree(self, appended=None, replaced=None, created=None):
+        """A copy of the suites' Python files below their directories, with `created` files, `appended` text and `replaced` pairs."""
         root = tempfile.mkdtemp(prefix="imagesuite-test-reads-")
         self.addCleanup(shutil.rmtree, root, True)
-        for suite in SUITES:
-            os.makedirs(os.path.join(root, suite))
-            for path in glob.glob(os.path.join(TESTS, suite, "*.py")):
-                shutil.copy(path, os.path.join(root, suite))
+        for path in suite_sources(TESTS):
+            target = os.path.join(root, os.path.relpath(path, TESTS))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.copy(path, target)
+        for relative, text in (created or {}).items():
+            os.makedirs(os.path.dirname(os.path.join(root, relative)), exist_ok=True)
+            with open(os.path.join(root, relative), "w") as target:
+                target.write(text)
         for relative, text in (appended or {}).items():
             with open(os.path.join(root, relative), "a") as target:
                 target.write(text)
@@ -533,6 +544,21 @@ class DirectStdoutReads(unittest.TestCase):
         failures = roster_failures(roster, scan_direct_reads())
         self.assertEqual(len(failures), 1, failures)
         self.assertTrue(failures[0].startswith("builder-image/headroom.py read:") and "(stale)" in failures[0], failures)
+
+    def test_a_direct_read_in_a_file_below_a_suite_directory_is_refused(self):
+        # A helper below a suite's directory, imported by one of its entry scripts: the scan reads every Python file below the suite.
+        root = self.tree(
+            created={"builder-image/helpers/direct_read.py": 'def observation(stack):\n    return stack.exec("id").stdout\n'},
+            appended={"builder-image/isolation.py": "\nfrom helpers.direct_read import observation as planted_read\n\n\n"
+                                                    "def planted_nested(stack):\n    return planted_read(stack)\n"})
+        self.assertEqual(direct_stdout_reads(os.path.join(root, "builder-image", "helpers", "direct_read.py")), [("observation", 2)])
+        failures = roster_failures(DIRECT_READ_ROSTER, scan_direct_reads(root))
+        self.assertEqual(len(failures), 1, failures)
+        self.assertTrue(failures[0].startswith("builder-image/helpers/direct_read.py observation:"), failures)
+
+    def test_a_file_in_a_pycache_directory_is_not_scanned(self):
+        root = self.tree(created={"builder-image/__pycache__/cached.py": 'def cached(stack):\n    return stack.exec("id").stdout\n'})
+        self.assertEqual(roster_failures(DIRECT_READ_ROSTER, scan_direct_reads(root)), [])
 
 
 class ObservationAnswers(unittest.TestCase):
