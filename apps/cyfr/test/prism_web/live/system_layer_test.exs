@@ -1693,6 +1693,105 @@ defmodule PrismWeb.SystemLayerTest do
       refute render(view) =~ "Connect your move.test account"
     end
 
+    # The entry now holds every field the need reads by name, so it has an
+    # automatic map, and the head's map names fields it no longer holds.
+    for {variant, names, kept, asked} <- [
+          {"one", ["MAP_KEY", "MAP_ORG", "Organisation"], %{"MAP_ORG" => "Organisation"},
+           ["MAP_KEY"]},
+          {"every", ["MAP_KEY", "MAP_ORG", "token"], %{}, ["MAP_KEY", "MAP_ORG"]}
+        ] do
+      @tag names: names, kept: kept, asked: asked
+      test "a re-grant whose held map names #{variant} field the entry no longer holds asks " <>
+             "for it again on the sheet, keeps the answers it can and holds Grant",
+           %{view: view, ctx: ctx, names: names, kept: kept, asked: asked} do
+        local = local_of(ctx)
+        n = System.unique_integer([:positive])
+
+        name_ref =
+          publish_catalyst!(local, "layer-stale-map-#{n}", %{
+            "needs" => %{
+              "api_key" => %{
+                "type" => "api_key:map.test",
+                "reason" => "to call the service with the key it reads",
+                "fields" => ["MAP_KEY", "MAP_ORG"],
+                "required" => true,
+                "hosts" => ["api.map.example"]
+              }
+            },
+            "caps" => %{"egress" => %{"domains" => ["api.map.example"]}}
+          })
+
+        entry =
+          entry!(local, %{
+            name: "My map key",
+            fields: %{"API key" => "sk-map", "Organisation" => "org-map"},
+            destination: %{"hosts" => ["api.map.example"]},
+            disclose: true
+          })
+
+        {:ok, _} =
+          commit_with!(local, name_ref, %{
+            bindings: [
+              %{
+                need: "api_key",
+                entry_id: entry.id,
+                fields: %{"MAP_KEY" => "API key", "MAP_ORG" => "Organisation"}
+              }
+            ]
+          })
+
+        {1, _} =
+          Arca.Repo.update_all(
+            from(e in Arca.Schemas.VaultEntry,
+              where: e.athanor_id == ^local.athanor_id and e.id == ^entry.id
+            ),
+            set: [field_names: Jason.encode!(names)]
+          )
+
+        {:ok, grant} =
+          PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-stale-map", name_ref)
+
+        assert grant.subject.decisions["bindings"] == []
+        prompt(view, grant)
+
+        question = &~s([data-test="grant-map-question"][data-field="#{&1}"])
+
+        for need_field <- asked do
+          assert has_element?(view, question.(need_field) <> ~s( option[value=""][selected]))
+        end
+
+        for {need_field, entry_field} <- kept do
+          assert has_element?(
+                   view,
+                   question.(need_field) <> ~s( option[value="#{entry_field}"][selected])
+                 )
+        end
+
+        assert has_element?(
+                 view,
+                 ~s([data-test="grant-map-due"]),
+                 "Choose a field for each name before granting."
+               )
+
+        assert has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+        assert decisions_now(view)["bindings"] == []
+
+        for need_field <- asked do
+          view
+          |> form(question.(need_field), %{"entry_field" => need_field})
+          |> render_change()
+        end
+
+        render(view)
+        refute has_element?(view, ~s([data-test="grant-map-due"]))
+        refute has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+
+        assert [%{"entry_id" => bound, "fields" => fields}] = decisions_now(view)["bindings"]
+        assert bound == entry.id
+        assert fields == Map.merge(Map.new(asked, &{&1, &1}), kept)
+      end
+    end
+
     test "granting with a chosen map commits it", %{view: view, ctx: ctx} do
       local = local_of(ctx)
       n = System.unique_integer([:positive])

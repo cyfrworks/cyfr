@@ -667,7 +667,9 @@ defmodule Prism.ConsentChoices do
   preselected to the entry field of its own name where the entry holds
   one, and the rest, a held answer naming a field the entry no longer
   holds among them, are `unmapped`, so a stale map is asked again whatever
-  the candidate's automatic map. A lending profile's label, and the slot of a
+  the candidate's automatic map. A choice already waiting on the person
+  keeps waiting on the same fields however often it is held to the plan
+  again, with the answers the entry still holds. A lending profile's label, and the slot of a
   manifest declaring no needs, whose map is the entry's own field names,
   carry none. A choice whose entry or need the plan does not name keeps
   a whole map it holds, drops a half-answered one and asks nothing, for
@@ -686,9 +688,20 @@ defmodule Prism.ConsentChoices do
         held = Map.get(choice, :fields)
 
         cond do
-          not map_pending?(choice) and total_map?(held, need_fields, names) -> choice
-          held in [nil, %{}] and is_map(field(candidate, :fields)) -> unmap(choice)
-          true -> settle(choice, need_fields, preselected(held, need_fields, names))
+          # A choice waiting on the person keeps what it waits for: its
+          # answers the entry still holds, and nothing guessed for the rest,
+          # however often the choices are held to the plan.
+          map_pending?(choice) ->
+            settle(choice, need_fields, held_answers(held, need_fields, names))
+
+          total_map?(held, need_fields, names) ->
+            choice
+
+          held in [nil, %{}] and is_map(field(candidate, :fields)) ->
+            unmap(choice)
+
+          true ->
+            settle(choice, need_fields, preselected(held, need_fields, names))
         end
 
       :no_map ->
@@ -803,6 +816,14 @@ defmodule Prism.ConsentChoices do
         into: %{},
         do: {need_field, answer}
   end
+
+  defp held_answers(held, need_fields, names) when is_map(held),
+    do:
+      Map.filter(held, fn {need_field, entry_field} ->
+        need_field in need_fields and entry_field in names
+      end)
+
+  defp held_answers(_held, _need_fields, _names), do: %{}
 
   defp settle(choice, need_fields, fields) do
     case Enum.reject(need_fields, &Map.has_key?(fields, &1)) do
