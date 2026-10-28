@@ -279,8 +279,8 @@ defmodule Sanctum.Consent.Plan do
            Sanctum.Consent.BlobBuilder.node_grant(source_ref, manifest),
          {:ok, {closure, closure_rows}} <- closure(ctx, component),
          {:ok, rows} <- ask_rows(closure, closure_rows),
-         {:ok, candidates} <- ctx |> candidates() |> read(:vault),
          {:ok, sources} <- ctx |> choice_sources() |> read(:vault),
+         candidates = sources.own,
          needs =
            need_rows(
              ctx,
@@ -885,12 +885,6 @@ defmodule Sanctum.Consent.Plan do
 
   defp identity(%{source: "own", entry_id: id}), do: %{entry_id: id}
   defp identity(%{source: "instance", instance_entry_id: id}), do: %{instance_entry_id: id}
-
-  # The athanor's active entries.
-  defp candidates(ctx) do
-    with {:ok, entries} <- Sanctum.Vault.list(ctx),
-         do: {:ok, Enum.filter(entries, &(&1.status == "active"))}
-  end
 
   # What the profile's head holds: the origins it admits and its bindings.
   # A first grant, or a profile with no head, holds none.
