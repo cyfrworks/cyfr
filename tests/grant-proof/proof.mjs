@@ -29,7 +29,8 @@
 //                head holds the flow, under the digest the command line
 //                previews for the same decisions
 //   revocation   the profile revoked in the console: the next admission is
-//                refused, timed from the revocation's answer
+//                refused for want of a profile, timed from the revocation's
+//                answer, and the answer is held whole
 //
 // The server's part of a step — publishing a version, reading the head and
 // the plan, an admission, the revocation and the command line's preview —
@@ -43,7 +44,9 @@ import { join } from "node:path";
 import {
   ask as askRunSh, launchBrowser, pageTokens, readHomes, recordText, redact, redactFrames, signedIn, startProxy, waitFor,
 } from "../browser/lib.mjs";
-import { changedCopies, digestCopies, flowsHeld, grantedHeld, regrantHeld, sameHead } from "./heads.mjs";
+import {
+  changedCopies, digestCopies, flowsHeld, grantedHeld, regrantHeld, revokedHeld, sameHead,
+} from "./heads.mjs";
 
 const [homesFile, segment, cookie, outDir] = process.argv.slice(2);
 if (!homesFile || !segment || !cookie || !outDir) {
@@ -60,6 +63,13 @@ const PICKED = "data/probe/notes/";
 // The first words of the grant prompt's own description
 // (`PrismWeb.SystemLayer`), which its dialog is described by.
 const GRANT_DESCRIBED = "Approve what this app may use and reach";
+// What the loader answers once the person's one owner profile is revoked:
+// no profile to admit under (fixture.exs `admit`).
+const REVOKED = ":no_profile";
+// A bound on the time from the revocation's answer to its refusal, not a
+// measure of it: one admission on a loaded host. The single attempt is what
+// shows the next admission refused.
+const REVOKE_BOUND_US = 5_000_000;
 const { homes } = readHomes(homesFile);
 const base = homes[0].origin;
 const components = `${base}/a/${encodeURIComponent(segment)}/components`;
@@ -350,10 +360,22 @@ async function main() {
     // -----------------------------------------------------------------------
     const revoked = await ask({ op: "revoke", profile_id: regranted.profile_id });
     record.revocation = revoked;
+    // The answer held whole (`revokedHeld` in heads.mjs): admitted before under
+    // the flows head's consent, refused at the first admission after, and each
+    // copy with one field changed or added refused.
+    const revocation = { consent: flowHead.consent_id, refusal: REVOKED, boundUs: REVOKE_BOUND_US };
+    const revokedCopies = [
+      { ...revoked, attempts: 2 },
+      { ...revoked, before: { admitted: true, consent_id: regranted.consent_id } },
+      { ...revoked, refused: { admitted: false, refusal: "consent_required" } },
+      { ...revoked, refused_after_us: REVOKE_BOUND_US + 1 },
+      { ...revoked, also: true },
+    ];
     row("revocation",
-      revoked.before && revoked.before.admitted === true && revoked.refused && revoked.attempts === 1,
-      "a revocation refuses the next admission on the member that committed it",
-      { refused: revoked.refused, attempts: revoked.attempts, refused_after_us: revoked.refused_after_us });
+      revokedHeld(revoked, revocation) && revokedCopies.every((copy) => !revokedHeld(copy, revocation)),
+      "a revocation refuses the next admission on the member that committed it, for want of a profile; the answer is held whole, and a copy with a second attempt, another consent before it, another refusal, a time past its bound or another field is refused",
+      { answer: revoked, held: revokedHeld(revoked, revocation),
+        copies_refused: revokedCopies.map((copy) => !revokedHeld(copy, revocation)) });
   } finally {
     await browser.close();
     await proxy.close();

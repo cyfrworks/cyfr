@@ -81,7 +81,7 @@ grant_fixture() {
 }
 
 step "the head predicates, on heads alone"
-node --test "$HERE/heads-test.mjs" || fail "the head predicates refused the flows head or held a head under another digest"
+node --test "$HERE/heads-test.mjs" || fail "the head predicates failed their own tests (heads-test.mjs)"
 
 release_build
 

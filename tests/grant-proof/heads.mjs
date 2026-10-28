@@ -2,20 +2,24 @@
 // Copyright 2026 CYFR Works Inc.
 //
 // The head predicates of the grant proof (proof.mjs): what two heads hold in
-// common, what the head the first grant commits holds, and what the head a
-// re-grant commits holds, with the copies of a head each must refuse. They are
+// common, what the head the first grant commits holds, what the head a
+// re-grant commits holds, and what a revocation answers, with the copies of a
+// head each must refuse. They are
 // kept apart from the proof so heads-test.mjs can run them on heads without a
 // browser.
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const PROFILE = /^prof_[0-9a-f-]{36}$/;
 const CONSENT = /^cons_[0-9a-f-]{36}$/;
+const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 // Arrays as sets, so an extra or a missing flow, domain or path differs.
 export const sameSet = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
 
 // Two heads hold the same fields, arrays as sets and every other field exactly.
+// Anything but an object holds no head.
 export const sameHead = (a, b) =>
+  isObject(a) && isObject(b) &&
   [...new Set([...Object.keys(a), ...Object.keys(b)])].every((k) =>
     Array.isArray(a[k]) && Array.isArray(b[k]) ? sameSet(a[k], b[k]) : a[k] === b[k]);
 
@@ -67,3 +71,14 @@ export const flowsHeld = (head, { regranted, shape, kept, digest }) =>
   regrantHeld(head, {
     before: regranted, shape, digest, changes: { flows: [`files_by_grant to ${kept}`, `outside to ${kept}`] },
   });
+
+// The revocation's answer, whole: the admission asked before it, admitted
+// under `consent`; the first admission asked after it, refused with
+// `refusal`; one attempt; and the time from the revocation's answer to that
+// refusal, a whole number of microseconds within `boundUs`.
+export const revokedHeld = (answer, { consent, refusal, boundUs }) =>
+  isObject(answer) && sameSet(Object.keys(answer), ["attempts", "before", "refused", "refused_after_us"]) &&
+  sameHead(answer.before, { admitted: true, consent_id: consent }) &&
+  sameHead(answer.refused, { admitted: false, refusal }) &&
+  answer.attempts === 1 && Number.isInteger(answer.refused_after_us) &&
+  answer.refused_after_us >= 0 && answer.refused_after_us <= boundUs;

@@ -10,7 +10,9 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { changedCopies, digestCopies, flowsHeld, grantedHeld, regrantHeld, sameHead } from "./heads.mjs";
+import {
+  changedCopies, digestCopies, flowsHeld, grantedHeld, regrantHeld, revokedHeld, sameHead,
+} from "./heads.mjs";
 
 const KEPT = "alpha.grant.test";
 const DROPPED = "beta.grant.test";
@@ -149,4 +151,39 @@ test("two heads hold the same fields, arrays as sets", () => {
   assert.equal(sameHead({ ...regranted, domains: [KEPT, DROPPED] }, { ...regranted, domains: [DROPPED, KEPT] }), true);
   assert.equal(sameHead({ ...regranted, domains: [KEPT, DROPPED] }, regranted), false);
   assert.equal(sameHead({ ...regranted, paths: [] }, regranted), false);
+});
+
+const revokedAnswer = {
+  before: { admitted: true, consent_id: flowHead.consent_id }, refused: { admitted: false, refusal: ":no_profile" },
+  attempts: 1, refused_after_us: 95,
+};
+const revocation = { consent: flowHead.consent_id, refusal: ":no_profile", boundUs: 5_000_000 };
+
+test("a revocation's answer is held whole: admitted before under the last consent, refused next for want of a profile, one attempt, within the bound", () => {
+  for (const refused_after_us of [95, 0, 5_000_000]) {
+    assert.equal(revokedHeld({ ...revokedAnswer, refused_after_us }, revocation), true, `${refused_after_us} us`);
+  }
+});
+
+test("a revocation's answer with a field changed, missing or added is refused", () => {
+  const { attempts: _attempts, ...withoutAttempts } = revokedAnswer;
+  const copies = [
+    { ...revokedAnswer, attempts: 2 },
+    { ...revokedAnswer, attempts: 0 },
+    withoutAttempts,
+    { ...revokedAnswer, before: { admitted: true, consent_id: regranted.consent_id } },
+    { ...revokedAnswer, before: { admitted: false, refusal: ":no_profile" } },
+    { ...revokedAnswer, before: null },
+    { ...revokedAnswer, refused: { admitted: false, refusal: "consent_required" } },
+    { ...revokedAnswer, refused: { admitted: true, consent_id: flowHead.consent_id } },
+    { ...revokedAnswer, refused: { admitted: false, refusal: ":no_profile", reason: "revoked" } },
+    { ...revokedAnswer, refused: null },
+    { ...revokedAnswer, refused_after_us: 5_000_001 },
+    { ...revokedAnswer, refused_after_us: -1 },
+    { ...revokedAnswer, refused_after_us: 1.5 },
+    { ...revokedAnswer, refused_after_us: "95" },
+    { ...revokedAnswer, also: true },
+  ];
+  for (const copy of copies) assert.equal(revokedHeld(copy, revocation), false, JSON.stringify(copy));
+  for (const answer of [null, undefined, [], "revoked"]) assert.equal(revokedHeld(answer, revocation), false);
 });
