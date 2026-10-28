@@ -131,7 +131,7 @@ defmodule Locus.ConfigTest do
                )
 
       # The runtime's reader asks for the runtime's rows and nothing else.
-      assert {:ok, [_ | _]} = Config.runtime_from_env(recording(environment), [])
+      assert {:ok, [_ | _]} = Config.runtime_from_env(recording(environment))
       assert asked() == Enum.sort(Config.variables(:runtime))
     end
 
@@ -578,16 +578,13 @@ defmodule Locus.ConfigTest do
     assert Locus.Backends.port() == Config.backends_port()
   end
 
-  describe "runtime_from_env/2" do
+  describe "runtime_from_env/1" do
     test "without the runtime's key, nothing: the node serves no runtime" do
-      assert {:ok, nil} = Config.runtime_from_env(env(%{}), [])
+      assert {:ok, nil} = Config.runtime_from_env(env(%{}))
 
-      assert {:ok, nil} =
-               Config.runtime_from_env(env(%{"LOCUS_RUNTIME_PORT" => "4200"}),
-                 host_url: "http://h"
-               )
+      assert {:ok, nil} = Config.runtime_from_env(env(%{"LOCUS_RUNTIME_PORT" => "4200"}))
 
-      assert {:ok, nil} = Config.runtime_from_env(env(%{"LOCUS_RUNTIME_KEY" => "  "}), [])
+      assert {:ok, nil} = Config.runtime_from_env(env(%{"LOCUS_RUNTIME_KEY" => "  "}))
     end
 
     test "the service's settings from LOCUS_RUNTIME_*, in the shape the credentials and the pool read" do
@@ -605,7 +602,7 @@ defmodule Locus.ConfigTest do
         "LOCUS_RUNTIME_ATTACH_DIR" => "/run/locus"
       }
 
-      assert {:ok, runtime} = Config.runtime_from_env(env(environment), [])
+      assert {:ok, runtime} = Config.runtime_from_env(env(environment))
 
       assert runtime == [
                service_id: "wrk_locus",
@@ -627,10 +624,13 @@ defmodule Locus.ConfigTest do
       assert {:ok, %{pool_size: 6, keeper: :channel}} = Locus.Runtime.Settings.pool(runtime, %{})
     end
 
-    test "unset, a setting is the fallback's, else the service's default; the pool's stay unset" do
+    test "unset, a setting is the service's default; the pool's stay unset" do
       assert {:ok, runtime} =
-               Config.runtime_from_env(env(%{"LOCUS_RUNTIME_KEY" => @runtime_key_hex}),
-                 host_url: "http://h:1"
+               Config.runtime_from_env(
+                 env(%{
+                   "LOCUS_RUNTIME_KEY" => @runtime_key_hex,
+                   "LOCUS_RUNTIME_HOST_API_URL" => "http://h:1"
+                 })
                )
 
       assert runtime == [
@@ -640,19 +640,6 @@ defmodule Locus.ConfigTest do
                bind: "127.0.0.1",
                port: 4200
              ]
-
-      # The fallback's key serves where the variable is unset; the
-      # variable wins where it is set.
-      fallback_key = String.duplicate("cd", 32)
-
-      assert {:ok, [{:service_id, "wrk_local"}, {:service_key, ^fallback_key} | _]} =
-               Config.runtime_from_env(env(%{}), service_key: fallback_key, host_url: "http://h")
-
-      assert {:ok, [{:service_id, "wrk_local"}, {:service_key, @runtime_key_hex} | _]} =
-               Config.runtime_from_env(env(%{"LOCUS_RUNTIME_KEY" => @runtime_key_hex}),
-                 service_key: fallback_key,
-                 host_url: "http://h"
-               )
     end
 
     test "a missing or malformed value refuses, naming its variable and never echoing the key" do
@@ -678,7 +665,7 @@ defmodule Locus.ConfigTest do
           ] do
         environment = base |> Map.merge(overrides) |> Map.reject(fn {_k, v} -> is_nil(v) end)
 
-        assert {:error, refusal} = Config.runtime_from_env(env(environment), []),
+        assert {:error, refusal} = Config.runtime_from_env(env(environment)),
                inspect(overrides)
 
         assert refusal =~ message, refusal
@@ -692,18 +679,18 @@ defmodule Locus.ConfigTest do
         "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
       }
 
-      assert {:ok, runtime} = Config.runtime_from_env(env(base), [])
+      assert {:ok, runtime} = Config.runtime_from_env(env(base))
       refute Keyword.has_key?(runtime, :runner_memory_bytes)
 
       for bytes <- ["16777216", "402653184", "1099511627776"] do
         environment = Map.put(base, "LOCUS_RUNTIME_MEMORY_BYTES", bytes)
-        assert {:ok, runtime} = Config.runtime_from_env(env(environment), [])
+        assert {:ok, runtime} = Config.runtime_from_env(env(environment))
         assert runtime[:runner_memory_bytes] == String.to_integer(bytes)
       end
 
       for bad <- ["16777215", "1099511627777", "384M", "402653184.5", "-1", "none"] do
         environment = Map.put(base, "LOCUS_RUNTIME_MEMORY_BYTES", bad)
-        assert {:error, refusal} = Config.runtime_from_env(env(environment), [])
+        assert {:error, refusal} = Config.runtime_from_env(env(environment))
         assert refusal =~ "LOCUS_RUNTIME_MEMORY_BYTES"
         assert refusal =~ "bytes from 16777216 to 1099511627776"
       end
@@ -715,7 +702,7 @@ defmodule Locus.ConfigTest do
         "LOCUS_RUNTIME_HOST_API_URL" => "http://cyfr:4300"
       }
 
-      assert {:ok, runtime} = Config.runtime_from_env(env(environment), [])
+      assert {:ok, runtime} = Config.runtime_from_env(env(environment))
       refute Keyword.has_key?(runtime, :keeper)
       assert {:ok, %{keeper: :channel}} = Locus.Runtime.Settings.pool(runtime, %{})
     end

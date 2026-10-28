@@ -52,13 +52,6 @@ if config_env() != :test do
     end
   end
 
-  # The release this file configures: `cyfr`, or nil for a `mix` boot. A
-  # `mix` boot from the umbrella root runs CYFR and, in the same VM, the
-  # runtime role of Locus; the `cyfr` release runs CYFR alone. The `locus`
-  # release, every role of the island, is configured by
-  # `config/locus_runtime.exs` alone and never evaluates this file.
-  release_name = env_str.("RELEASE_NAME", nil)
-
   # The log format: `json` for structured logging (Datadog, Splunk, ELK,
   # Loki), unset for plain text; any other value refuses the boot.
   case env_str.("CYFR_LOG_FORMAT", nil) do
@@ -85,15 +78,14 @@ if config_env() != :test do
   # The root the runtime's keys derive from (`Prima.WorkerAuth`): 32
   # random bytes as 64 hexadecimal digits (`openssl rand -hex 32`), the one
   # secret `mix cyfr.locus.runtime_key <service_id>` derives a worker
-  # service's key from. A malformed root refuses the boot. Unset, a `mix`
-  # boot, which runs the runtime beside CYFR, mints one here, so both sides
-  # derive from it; a `cyfr` release without one can authenticate no worker
-  # service, so no component runs, and it says so.
+  # service's key from. A malformed root refuses the boot. Unset, no worker
+  # service can authenticate to this server, so no component runs, and the
+  # boot says so. A `mix` boot is no exception: it runs CYFR alone, and its
+  # runtime is a container holding a key derived from this root
+  # (CONTRIBUTING.md, "Running from source"). This file never evaluates
+  # for the `locus` release, which `config/locus_runtime.exs` configures.
   worker_root =
     case env_str.("CYFR_LOCUS_RUNTIME_ROOT", nil) do
-      nil when release_name == nil ->
-        :crypto.strong_rand_bytes(32)
-
       nil ->
         IO.puts(
           :stderr,
@@ -126,47 +118,6 @@ if config_env() != :test do
       {:ok, host_api} -> host_api
       {:error, message} -> raise "[Cyfr] FATAL: #{message}"
     end
-
-  # The runtime a `mix` boot runs beside CYFR, `config :locus, :runtime`,
-  # read from the environment this file reads by the release's reader of
-  # the runtime's rows (`Locus.Config.runtime_from_env/2`; `Locus.Config`
-  # lists every `LOCUS_RUNTIME_*` variable with its accepted values and
-  # default): its stable id (default `wrk_local`), its key (unset, the key
-  # derived from the root above for that id), the base URL of CYFR's host
-  # API (unset, this boot's own listener), the address and port its
-  # listener binds, and its runner pool, of which only the set settings
-  # are configured so the code's defaults stand for the rest. A malformed
-  # value, or a `LOCUS_RUNTIME_*` name the runtime does not read, refuses
-  # the boot naming it; the container limits compose interpolates from the
-  # project .env are the roster's compose-only names, not stray ones.
-  if release_name == nil do
-    runtime_service_id = env_str.("LOCUS_RUNTIME_SERVICE_ID", "wrk_local")
-
-    runtime_key =
-      case Prima.WorkerAuth.worker_key(worker_root, runtime_service_id) do
-        {:ok, key} ->
-          Base.encode16(key, case: :lower)
-
-        {:error, _invalid} ->
-          raise "[Cyfr] FATAL: LOCUS_RUNTIME_SERVICE_ID must be " <>
-                  Locus.Runtime.Credentials.expected(:service_id)
-      end
-
-    stray =
-      sourced
-      |> Map.keys()
-      |> Kernel.--(Cyfr.Platform.Settings.Roster.compose_only())
-      |> Locus.Config.unknown_names(:runtime)
-
-    if stray != [], do: raise("[Cyfr] FATAL: " <> Locus.Config.unknown(stray))
-
-    fallback = [service_key: runtime_key, host_url: "http://127.0.0.1:#{host_api.port}"]
-
-    case Locus.Config.runtime_from_env(getenv, fallback) do
-      {:ok, runtime} -> config :locus, :runtime, runtime
-      {:error, message} -> raise "[Cyfr] FATAL: #{message}"
-    end
-  end
 
   # Every name this boot reads is declared once (`Cyfr.Platform.Settings.Roster`):
   # a platform setting, a deployment variable, or a name compose reads and
@@ -310,8 +261,9 @@ if config_env() != :test do
   # The worker services runs are dispatched to (`Opus.Dispatch`):
   # `CYFR_LOCUS_RUNTIME_WORKERS`, comma-separated `<service_id>=<url>` entries, each the
   # configured id of a worker service and the base URL of its listener,
-  # tried in order. Default the runtime of a local boot; a malformed
-  # entry or a repeated id refuses the boot.
+  # tried in order. Default `wrk_local` on this host's loopback, where a
+  # source checkout's runtime container listens (docker-compose.dev.yml); a
+  # malformed entry or a repeated id refuses the boot.
   case Cyfr.RuntimeConfig.resolve_workers(getenv) do
     {:ok, workers} -> config :cyfr, :locus_runtime_workers, workers
     {:error, message} -> raise "[Cyfr] FATAL: #{message}"

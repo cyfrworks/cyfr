@@ -16,10 +16,8 @@ defmodule Locus.Config do
   reads the `LOCUS_BUILDS_*` rows, the backends service (`Locus.Backends`)
   the `LOCUS_BACKENDS_*` rows, and every role the `LOCUS_LOG_*` rows. The
   runtime role's `LOCUS_RUNTIME_*` rows are read into one keyword, written
-  under the `:runtime` key (`runtime_from_env/2`), which
-  `Locus.Runtime.Credentials` and `Locus.Runtime.Settings` read; a `mix`
-  boot that runs the runtime beside CYFR reads them through the same
-  function (`config/runtime.exs`).
+  under the `:runtime` key (`runtime_from_env/1`), which
+  `Locus.Runtime.Credentials` and `Locus.Runtime.Settings` read.
 
   | Variable | Setting | Accepted | Default |
   |---|---|---|---|
@@ -52,10 +50,9 @@ defmodule Locus.Config do
   | `LOCUS_RUNTIME_MEMORY_BYTES` | `:runtime`, `:runner_memory_bytes` | 16777216..1099511627776 (16 MiB to 1 TiB) | 402653184 (384 MiB) |
   | `LOCUS_RUNTIME_ATTACH_DIR` | `:runtime`, `:attach_dir` | a clean absolute directory path | `/run/locus` |
 
-  An unset runtime identity or listener row takes what the caller passes
-  (a `mix` boot passes the key it derives and its own host API), else
-  the default above; a pool row is written only when its variable is set,
-  so `Locus.Runtime.Settings`' defaults stand for the rest.
+  An unset runtime identity or listener row takes the default above; a
+  pool row is written only when its variable is set, so
+  `Locus.Runtime.Settings`' defaults stand for the rest.
 
   A runner is no node: it reads the `RUNTIME_*` rows (`runner/1`), which
   its service writes for it outside every prefix the keeper refuses in a
@@ -256,7 +253,7 @@ defmodule Locus.Config do
   the variable. `names` is every name that environment assigns, the
   process environment's by default: a `LOCUS_*` one the roster lacks
   refuses too. The runtime role's settings are present under `:runtime`
-  only when the runtime's key is set (`runtime_from_env/2`).
+  only when the runtime's key is set (`runtime_from_env/1`).
   """
   @spec from_env(EnvValue.getenv(), [String.t()]) :: {:ok, settings()} | {:error, String.t()}
   def from_env(getenv, names \\ Map.keys(System.get_env()))
@@ -265,7 +262,7 @@ defmodule Locus.Config do
          :ok <- no_unknown(names),
          {:ok, builds} <- builds(getenv),
          {:ok, backends} <- backends(getenv),
-         {:ok, runtime} <- runtime_from_env(getenv, []),
+         {:ok, runtime} <- runtime_from_env(getenv),
          :ok <- some_key(builds, backends, runtime),
          {:ok, log_level} <- log_level(getenv),
          {:ok, log_format} <- log_format(getenv) do
@@ -371,33 +368,29 @@ defmodule Locus.Config do
 
   @doc """
   The runtime role's `config :locus, :runtime` the environment `getenv`
-  spells over `fallback`, or `{:ok, nil}` when no service key is held:
-  `LOCUS_RUNTIME_KEY` is unset and `fallback` names no `:service_key`, so
-  the node serves no runtime.
+  spells, or `{:ok, nil}` when `LOCUS_RUNTIME_KEY` is unset, so the node
+  serves no runtime.
 
-  A setting is the variable's value when set, else `fallback`'s, else the
-  service's default (`wrk_local`, `127.0.0.1`, port 4200); a pool setting
+  A setting is the variable's value when set, else the service's default
+  (`wrk_local`, `127.0.0.1`, port 4200); a pool setting
   is present only where its variable is set, so the code's defaults stand
   for the rest. The answer is in the shape `Locus.Runtime.Credentials` and
   `Locus.Runtime.Settings.pool/2` read: the key as hexadecimal text, the
   bind as a string, the port an integer. A value either refuses answers
   `{:error, message}` naming its variable; no message echoes the key.
   """
-  @spec runtime_from_env(EnvValue.getenv(), keyword()) ::
-          {:ok, keyword() | nil} | {:error, String.t()}
-  def runtime_from_env(getenv, fallback) when is_function(getenv, 1) and is_list(fallback) do
-    {:ok, key} = EnvValue.text(getenv, variable(:runtime, :service_key))
-
-    case key || Keyword.get(fallback, :service_key) do
-      nil -> {:ok, nil}
-      key -> runtime_service(getenv, fallback, key)
+  @spec runtime_from_env(EnvValue.getenv()) :: {:ok, keyword() | nil} | {:error, String.t()}
+  def runtime_from_env(getenv) when is_function(getenv, 1) do
+    case EnvValue.text(getenv, variable(:runtime, :service_key)) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, key} -> runtime_service(getenv, key)
     end
   end
 
-  defp runtime_service(getenv, fallback, key) do
+  defp runtime_service(getenv, key) do
     setting = fn name ->
       {:ok, text} = EnvValue.text(getenv, variable(:runtime, name))
-      text || Keyword.get(fallback, name) || Keyword.get(@runtime_defaults, name)
+      text || Keyword.get(@runtime_defaults, name)
     end
 
     with {:ok, port} <- runtime_port(setting.(:port)),

@@ -8,10 +8,9 @@ defmodule Locus.Runtime.Settings do
   service reads from `config :locus, :runtime`, and the environment it
   hands each runner. It reads no variable by name. `Locus.Config`
   declares and reads every variable of the release: the service's
-  `LOCUS_RUNTIME_*` names (`Locus.Config.runtime_from_env/2`), which
+  `LOCUS_RUNTIME_*` names (`Locus.Config.runtime_from_env/1`), which
   `config/locus_runtime.exs` turns into `config :locus, :runtime` on a
-  node boot and `config/runtime.exs` on a `mix` boot that runs the
-  runtime beside CYFR, and a runner's `RUNTIME_*` names
+  node boot, and a runner's `RUNTIME_*` names
   (`Locus.Config.runner/1`).
 
   ## The pool
