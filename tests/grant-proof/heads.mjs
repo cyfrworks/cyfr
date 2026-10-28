@@ -152,6 +152,11 @@ export const flowsHeld = (head, { regranted, shape, kept, digest }) =>
     before: regranted, shape, digest, changes: { flows: [`files_by_grant to ${kept}`, `outside to ${kept}`] },
   });
 
+// A bound on the time from a revocation's answer to its refusal, not a
+// measure of it: one admission on a loaded host. The single attempt is what
+// shows the next admission refused.
+export const REVOKE_BOUND_US = 5_000_000;
+
 // The revocation's answer, whole: the admission asked before it, admitted
 // under `consent`; the first admission asked after it, refused with
 // `refusal`; one attempt; and the time from the revocation's answer to that

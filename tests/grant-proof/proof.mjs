@@ -45,7 +45,8 @@ import {
   ask as askRunSh, launchBrowser, pageTokens, readHomes, recordText, redact, redactFrames, signedIn, startProxy, waitFor,
 } from "../browser/lib.mjs";
 import {
-  changedCopies, digestCopies, flowsHeld, grantedHeld, previewCopies, previewHeld, regrantHeld, revokedHeld, sameHead,
+  REVOKE_BOUND_US, changedCopies, digestCopies, flowsHeld, grantedHeld, previewCopies, previewHeld, regrantHeld,
+  revokedHeld, sameHead, sameSet,
 } from "./heads.mjs";
 
 const [homesFile, segment, cookie, outDir] = process.argv.slice(2);
@@ -66,10 +67,6 @@ const GRANT_DESCRIBED = "Approve what this app may use and reach";
 // What the loader answers once the person's one owner profile is revoked:
 // no profile to admit under (fixture.exs `admit`).
 const REVOKED = ":no_profile";
-// A bound on the time from the revocation's answer to its refusal, not a
-// measure of it: one admission on a loaded host. The single attempt is what
-// shows the next admission refused.
-const REVOKE_BOUND_US = 5_000_000;
 const { homes } = readHomes(homesFile);
 const base = homes[0].origin;
 const components = `${base}/a/${encodeURIComponent(segment)}/components`;
@@ -310,12 +307,13 @@ async function main() {
       sameHead(plan, { shape_digest: plan.shape_digest, background: true }) && plan.shape_digest !== head.shape_digest &&
         sameHead(asking, { admitted: false, refusal: "consent_required" }) &&
         frame && /background/.test(frame.text) &&
+        Array.isArray(again.origins) && sameSet(again.origins, regranted.admitted_origins) &&
         regrantHeld(regranted, backgroundGrant) &&
         backgroundCopies.every((copy) => !regrantHeld(copy, backgroundGrant)) &&
         backgroundPreviewHeld(backgroundShown) &&
         backgroundPreviewCopies.every((copy) => !backgroundPreviewHeld(copy)) &&
         sameHead(admitted, { admitted: true, consent_id: regranted.consent_id }),
-      "a version asking to run in the background is shown and asked again; granted, the head is the first head one revision on, under a new consent, the version's shape and the digest the command line previews for what the re-grant commits, every other field held, and it runs; a copy with another revision, a host or flow added or removed, or another digest is refused, and the preview is held whole as cli_digest's is",
+      "a version asking to run in the background is shown and asked again, its sheet starting from the origins the head admits; granted, the head is the first head one revision on, under a new consent, the version's shape and the digest the command line previews for what the re-grant commits, every other field held, and it runs; a copy with another revision, a host or flow added or removed, or another digest is refused, and the preview is held whole as cli_digest's is",
       { asking, frame: frame && frame.text, origins_kept: again.origins, head: regranted,
         digest: previewShown(backgroundShown), unnarrowed: previewShown(backgroundUnnarrowed),
         held: regrantHeld(regranted, backgroundGrant),

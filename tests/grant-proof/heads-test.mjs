@@ -1,17 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 //
-// The grant proof's head predicates (heads.mjs), on heads shaped as the proof
-// records them. The head the flows grant commits is held under the digest the
-// command line previews for its decisions, and refused under any other digest,
-// or with a flow, a domain, a revision or a consent the grant does not hold.
+// The grant proof's predicates (heads.mjs), on heads and answers shaped as the
+// proof records them: two heads the same (`sameHead`, arrays as sets); the
+// head the first grant commits (`grantedHeld`); the command line's preview of
+// a grant, whole (`previewHeld`); the head a re-grant commits, and the flows
+// grant's as one (`regrantHeld`, `flowsHeld`); and the revocation's answer
+// (`revokedHeld`). Each holds its object and refuses every copy that changes
+// it (`changedCopies`, `digestCopies`, `previewCopies`, which make no copy
+// equal to its object).
 //
 // Usage: node --test tests/grant-proof/heads-test.mjs
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  changedCopies, digestCopies, flowsHeld, grantedHeld, previewCopies, previewHeld, regrantHeld, revokedHeld, sameHead,
+  REVOKE_BOUND_US, changedCopies, digestCopies, flowsHeld, grantedHeld, previewCopies, previewHeld, regrantHeld,
+  revokedHeld, sameHead,
 } from "./heads.mjs";
 
 const KEPT = "alpha.grant.test";
@@ -262,10 +267,10 @@ const revokedAnswer = {
   before: { admitted: true, consent_id: flowHead.consent_id }, refused: { admitted: false, refusal: ":no_profile" },
   attempts: 1, refused_after_us: 95,
 };
-const revocation = { consent: flowHead.consent_id, refusal: ":no_profile", boundUs: 5_000_000 };
+const revocation = { consent: flowHead.consent_id, refusal: ":no_profile", boundUs: REVOKE_BOUND_US };
 
 test("a revocation's answer is held whole: admitted before under the last consent, refused next for want of a profile, one attempt, within the bound", () => {
-  for (const refused_after_us of [95, 0, 5_000_000]) {
+  for (const refused_after_us of [95, 0, REVOKE_BOUND_US]) {
     assert.equal(revokedHeld({ ...revokedAnswer, refused_after_us }, revocation), true, `${refused_after_us} us`);
   }
 });
@@ -283,7 +288,7 @@ test("a revocation's answer with a field changed, missing or added is refused", 
     { ...revokedAnswer, refused: { admitted: true, consent_id: flowHead.consent_id } },
     { ...revokedAnswer, refused: { admitted: false, refusal: ":no_profile", reason: "revoked" } },
     { ...revokedAnswer, refused: null },
-    { ...revokedAnswer, refused_after_us: 5_000_001 },
+    { ...revokedAnswer, refused_after_us: REVOKE_BOUND_US + 1 },
     { ...revokedAnswer, refused_after_us: -1 },
     { ...revokedAnswer, refused_after_us: 1.5 },
     { ...revokedAnswer, refused_after_us: "95" },

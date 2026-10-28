@@ -9,8 +9,10 @@
 # the console's Components page, narrowed and admitting interactive alone;
 # the command line previews the same decisions; a version asking to run
 # in the background is shown and asked again; a version that only rewords
-# its need's reason asks nothing; and a revocation is measured at
-# admission.
+# its need's reason asks nothing; a version that lets one more class reach
+# the host the person kept is asked again, the new flow ticked and granted
+# under the digest the command line previews; and a revocation is measured
+# at admission.
 #
 # The proof asks the server for its part through the output directory
 # (`ask-N.json`), and this script answers each (`answer-N.json`) through
