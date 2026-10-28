@@ -51,6 +51,12 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   Both refuse a `RELEASE_ROOT`: the stack is a mix boot from the checkout,
   never a release.
+
+  ## arca:bypass-ok=B — entire module
+
+  Every file it touches is the operator's, read or written before any
+  boot, with no Arca configured: the checkout's `.env` and `.env.example`,
+  and the declarations the script resolved into its private directory.
   """
 
   use Boundary, classify_to: Cyfr
@@ -123,8 +129,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   # The stack docker-compose.dev.yml declares, as compose resolved it.
   defp declared(path) do
-    # arca:bypass-ok=B — the dev stack's compose declarations, resolved by
-    # the script into its private directory, read with no Arca configured.
     with {:ok, text} <- File.read(path),
          {:ok, json} <- Jason.decode(text),
          {:ok, prism_port} <- prism(json["x-prism"]),
@@ -213,8 +217,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   defp env_path, do: Path.join(File.cwd!(), ".env")
 
   defp env_files do
-    # arca:bypass-ok=B — the operator's .env file at the project root, read
-    # as the boot's runtime configuration reads it, with no Arca configured.
     if File.regular?(env_path()), do: [env_path()], else: []
   end
 
@@ -309,8 +311,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   end
 
   defp minted(@github, _admin) do
-    # arca:bypass-ok=B — the checkout's .env.example, read as an operator's
-    # .env is read, with no Arca configured.
     example = Path.join(File.cwd!(), ".env.example")
 
     with true <- File.regular?(example),
@@ -366,8 +366,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   defp write(lines) do
     path = env_path()
 
-    # arca:bypass-ok=B — the operator's .env file at the project root,
-    # written before the boot reads it, with no Arca configured.
     with :ok <- if(File.exists?(path), do: :ok, else: File.write(path, "")),
          :ok <- File.chmod(path, 0o600),
          {:ok, %File.Stat{mode: mode}} when (mode &&& 0o777) == 0o600 <- File.stat(path),
