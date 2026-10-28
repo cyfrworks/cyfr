@@ -366,6 +366,13 @@ def own_limit_writable(stack):
     return "not writable from inside: " + (result.stderr.strip().rsplit(": ", 1)[-1] or "refused")
 
 
+def keeper_groups(stack):
+    """The keeper cgroup groups the container holds, read in word form: `absent` alone from a command that exits 0."""
+    script = ('if groups="$(ls -d /sys/fs/cgroup/keeper-* 2>/dev/null)" && [ -n "$groups" ]; '
+              'then echo present; echo "$groups"; else echo absent; fi')
+    return imagesuite.read_listing(stack.exec(script), "the keeper cgroups the container holds")
+
+
 def test_keeper(stack, limit, canary):
     user = stack.exec(f"getent passwd {RELEASE_UID} | cut -d: -f1").stdout.strip()
     expect(user, "the release's user has a name cyfr-locus can start a client under", user)
@@ -450,7 +457,7 @@ def test_keeper(stack, limit, canary):
     left = stack.pool_processes()
     expect(left == [], "no process of any spawn's uid is left, the daemon included", left)
     expect(stack.homes() == [], "no home is left", stack.homes())
-    groups = stack.exec("ls -d /sys/fs/cgroup/keeper-* 2>/dev/null").stdout.split()
+    groups = keeper_groups(stack)
     expect(groups == [], "no spawn's cgroup is left", groups)
     expect(not again and after["release"] == before["release"] and after["release"],
            "the release and the container were not touched", {"before": before, "after": after})
