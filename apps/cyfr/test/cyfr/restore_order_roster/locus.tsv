@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+apps/locus/test/locus/application_test.exs	5	pending
+apps/locus/test/locus/backends/auth_test.exs	1	pending
+apps/locus/test/locus/builder_env_test.exs	2	pending
+apps/locus/test/locus/builder_service_test.exs	3	pending
+apps/locus/test/locus/builder_test.exs	4	pending
+apps/locus/test/locus/builds_vectors_test.exs	2	pending
+apps/locus/test/locus/config_test.exs	12	pending
+apps/locus/test/locus/direct_launcher_path_test.exs	2	pending
+apps/locus/test/locus/direct_launcher_test.exs	1	pending
+apps/locus/test/locus/executor_test.exs	2	pending
+apps/locus/test/locus/keeper_env_test.exs	3	pending
+apps/locus/test/locus/listener_test.exs	2	pending
+apps/locus/test/locus/log_filter_boot_test.exs	1	pending
+apps/locus/test/locus/runtime/application_test.exs	4	pending
+apps/locus/test/locus/runtime/credentials_test.exs	1	pending
+apps/locus/test/locus/runtime/settings_test.exs	1	pending
+apps/locus/test/support/runtime/env.ex	2	pending
+apps/locus/test/support/wire.ex	1	pending
