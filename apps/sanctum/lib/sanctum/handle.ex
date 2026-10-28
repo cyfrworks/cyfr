@@ -53,6 +53,45 @@ defmodule Sanctum.Handle do
 
   def resolve(_handle), do: {:error, :invalid_handle}
 
+  @doc """
+  The identifier `handle` names, for a write that keeps the identifier and
+  never the handle (an allowlist entry, a membership): `resolve/1`, its
+  refusals as the writer answers them. A spelling the slug grammar refuses
+  is an invalid argument that says what a handle is; no one holding the
+  handle is `:handle_not_found`; an unreadable answer is
+  `:registry_unavailable`, as an unreachable registry is. It writes
+  nothing, so a caller that resolves first and writes after leaves no row
+  when it stops between the two.
+  """
+  @spec identifier(String.t()) ::
+          {:ok, String.t()}
+          | {:error,
+             {:invalid_argument, String.t()}
+             | :no_registry
+             | :handle_not_found
+             | :registry_unavailable}
+  def identifier(handle) do
+    case resolve(handle) do
+      {:ok, %HandleAnswer{identifier: identifier}} ->
+        {:ok, identifier}
+
+      {:error, :invalid_handle} ->
+        {:error,
+         {:invalid_argument,
+          "That is not a handle: a handle is lowercase letters, digits and single hyphens, " <>
+            "at most 39 characters"}}
+
+      {:error, :not_found} ->
+        {:error, :handle_not_found}
+
+      {:error, :malformed_answer} ->
+        {:error, :registry_unavailable}
+
+      {:error, reason} when reason in [:no_registry, :registry_unavailable] ->
+        {:error, reason}
+    end
+  end
+
   defp spelled(handle) do
     if Prima.ComponentRef.valid_personal_slug?(handle),
       do: :ok,

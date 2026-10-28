@@ -900,6 +900,33 @@ defmodule Prima.Refusal do
       {:not_found,
        "No one here signs in with this account. Sign in another way, then link it in Settings."}
 
+  # An invitation code that admits no one: unknown, expired, redeemed,
+  # revoked, or issued by someone who has since lost the seat or the
+  # standing it was issued under. One answer for all of them.
+  defp row(:invitation_invalid),
+    do:
+      {:not_found,
+       "This invitation can no longer be used. Ask whoever invited you for a new one."}
+
+  # A handle the registry answers no one for, a reserved one included.
+  defp row(:handle_not_found), do: {:not_found, "No one holds that handle at the registry."}
+
+  # A handle whose owner publishes no address: their CYFR is reached by
+  # the address they give.
+  defp row(:address_not_published),
+    do:
+      {:not_found,
+       "That handle has no published address. Enter the address of the CYFR that holds " <>
+         "those keys instead."}
+
+  # A CYFR sign-in begun from a handle, answered by a carry of another
+  # identity: the address the handle published serves someone else.
+  defp row(:wrong_identity),
+    do:
+      {:forbidden,
+       "That sign-in came from someone other than the handle you named, so nobody was " <>
+         "signed in."}
+
   # A remote person's identity whose head this home could not confirm
   # fresh within its bound: their work here pauses and their session
   # stands, so it is no sign-out and no denial.

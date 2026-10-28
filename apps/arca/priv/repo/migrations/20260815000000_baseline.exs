@@ -17,10 +17,12 @@ defmodule Arca.Repo.Migrations.Baseline do
   silently truncates on SQLite, so every composite is a two-column pair and
   its parent carries a unique `(id, athanor_id)` index created first.
 
-  The three nullable `athanor_id` columns are `memberships` (a platform
+  The four nullable `athanor_id` columns are `memberships` (a platform
   assignment has no athanor), `sessions` (a session exists before its
-  athanor is resolved) and `decision_logs` (a call refused before any
-  tenant was resolved is the host's record, not a tenant's). `server_meta`, `registry_tokens`,
+  athanor is resolved), `decision_logs` (a call refused before any
+  tenant was resolved is the host's record, not a tenant's) and
+  `invitations` (an administrator's invitation may seat its newcomer in
+  no group). `server_meta`, `registry_tokens`,
   `external_identities`, `cell_leases`, `job_claims`, `platform_settings`
   and `settings_pins` are not athanor-scoped: the first three are the
   server's own facts and the rest the cell's, and a cell has no athanor.
@@ -216,7 +218,9 @@ defmodule Arca.Repo.Migrations.Baseline do
     # identifier or the wildcard `*`; a deny names a person of this server
     # or a person identifier, and wins over every allow. `requested` rows
     # are identifier allows a sign-in or an invitation asked for — they
-    # take effect when a platform admin resolves them.
+    # take effect when a platform admin resolves them. `label` is the
+    # handle an identifier entry was made from: shown beside the
+    # identifier, never read to decide who is admitted.
     create table(:server_allowlist, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :kind, :string, null: false, check: if(sqlite?, do: allowlist_kind)
@@ -226,6 +230,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :requested_by, :string
       add :added_by, :string
       add :note, :text
+      add :label, :string
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end
@@ -265,6 +270,50 @@ defmodule Arca.Repo.Migrations.Baseline do
     ON memberships (scope, COALESCE(athanor_id, ''), COALESCE(user_id, ''),
                     COALESCE(person_identifier, ''))
     """
+
+    invitation_ends = [
+      %{
+        name: "invitations_redeemed_whole",
+        expr: "(redeemed_by IS NULL) = (redeemed_at IS NULL)"
+      },
+      %{name: "invitations_one_end", expr: "redeemed_at IS NULL OR revoked_at IS NULL"}
+    ]
+
+    invitation_generation = %{
+      name: "invitations_issuer_generation_positive",
+      expr: "issuer_generation > 0"
+    }
+
+    # An invitation to become a person here (`Arca.Invitations`): the hash
+    # of its code (the lowercase hex SHA-256 of its 32 bytes, never the
+    # code), the person who issued it and their `security_generation` when
+    # they did, the group athanor it seats its newcomer in or none, and its
+    # expiry. It ends once, redeemed by the person it made or revoked, each
+    # by a conditional write on an open row, and the two ends exclude each
+    # other. No default generation: an invitation is bound to the standing
+    # it was issued under, which a raise of it retires.
+    create table(:invitations, primary_key: false) do
+      add :id, :string, primary_key: true, null: false
+      add :code_hash, :string, null: false
+      add :issued_by, :string, null: false
+
+      add :issuer_generation, :bigint,
+        null: false,
+        check: if(sqlite?, do: invitation_generation)
+
+      add :athanor_id, :string
+      add :expires_at, :utc_datetime_usec, null: false
+      add :redeemed_by, :string, check: if(sqlite?, do: Enum.at(invitation_ends, 0))
+      add :redeemed_at, :utc_datetime_usec
+      add :revoked_at, :utc_datetime_usec, check: if(sqlite?, do: Enum.at(invitation_ends, 1))
+
+      timestamps(type: :utc_datetime_usec)
+    end
+
+    checked(sqlite?, :invitations, [invitation_generation | invitation_ends])
+    create unique_index(:invitations, [:code_hash])
+    create index(:invitations, [:issued_by])
+    create index(:invitations, [:athanor_id])
   end
 
   # ==========================================================================

@@ -226,12 +226,13 @@ defmodule Sanctum.TenancyMCPTest do
                })
     end
 
-    test "a target that is neither a user id nor an identifier is refused, and an email names no one",
+    test "a target that is neither a user id, an identifier nor a handle is refused, and an email names no one",
          %{ctx: ctx} do
       created = group!(ctx)
 
       for args <- [%{}, %{"email" => "Newcomer@Example.com"}] do
-        assert {:error, {:invalid_argument, "Missing required argument: user_id or identifier"}} =
+        assert {:error,
+                {:invalid_argument, "Missing required argument: user_id, identifier or handle"}} =
                  Provider.handle(
                    "member",
                    ctx,

@@ -546,7 +546,8 @@ defmodule PrismWeb.SettingsLive do
          |> put_flash(:info, ok_message)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Sign-in method: #{error_message(reason)}")}
+        {:noreply,
+         put_flash(socket, :error, "Could not change the allowlist: #{error_message(reason)}")}
     end
   end
 
@@ -1495,7 +1496,9 @@ defmodule PrismWeb.SettingsLive do
             Who may sign in here. A person made here signs in unless denied. A person
             whose keys another CYFR holds signs in when <code>*</code>
             or an allow names their identifier (<code>per_…</code>). A deny names a person
-            (<code>usr_…</code>) or an identifier, is sticky and ejects the person.
+            (<code>usr_…</code>) or an identifier, is sticky and ejects the person. Allow
+            or deny someone by their handle (<code>@name</code>) and the entry keeps the
+            identifier the handle names now, with the handle shown beside it.
           </p>
 
           <div :if={@door_requests != []} class="mb-4">
@@ -1530,7 +1533,12 @@ defmodule PrismWeb.SettingsLive do
             <.empty_state message="No entries: everyone made here signs in, and no one from another CYFR" />
           </div>
           <.table :if={@door_entries != []} id="door-entries" rows={@door_entries}>
-            <:col :let={e} label="Entry">{e.value}</:col>
+            <:col :let={e} label="Entry">
+              {e.value}
+              <span :if={e[:label]} class="text-gray-400 ml-1" data-test="door-entry-label">
+                @{e[:label]}
+              </span>
+            </:col>
             <:col :let={e} label="Kind">{e.kind}</:col>
             <:col :let={e} label="Effect">
               <.badge color={if e.effect == "allow", do: "green", else: "red"}>{e.effect}</.badge>
@@ -1550,7 +1558,7 @@ defmodule PrismWeb.SettingsLive do
                   name="value"
                   value={@door_value}
                   required
-                  placeholder="per_…, usr_…, or *"
+                  placeholder="per_…, @handle, usr_…, or *"
                 />
               </div>
               <div class="flex-1">

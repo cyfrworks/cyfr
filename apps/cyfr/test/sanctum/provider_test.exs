@@ -33,9 +33,9 @@ defmodule Sanctum.ProviderTest do
   # ============================================================================
 
   describe "tools/0" do
-    test "returns 15 action-based tools" do
+    test "returns 16 action-based tools" do
       tools = Provider.tools()
-      assert length(tools) == 15
+      assert length(tools) == 16
 
       tool_names = Enum.map(tools, & &1.name)
       assert "session" in tool_names
@@ -54,6 +54,7 @@ defmodule Sanctum.ProviderTest do
       assert "webhook" in tool_names
       # The instance's own credentials, beside the athanor's vault.
       assert "instance_entry" in tool_names
+      assert "invitation" in tool_names
     end
 
     test "each tool has required schema fields" do

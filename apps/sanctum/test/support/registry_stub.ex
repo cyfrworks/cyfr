@@ -14,7 +14,8 @@ defmodule Sanctum.Test.RegistryStub do
   `start!/1` points both applications' copies of the registry
   (`:sanctum, :registry_url` and `:cyfr, :registry_url`) at it, so the
   canonical host a request is signed for is `127.0.0.1`, and restores
-  them and stops the listener on exit.
+  them and stops the listener on exit; `handles!/1` is one that answers
+  handles alone.
 
   `person!/0` and `enroll!/1` make an enrolled local person whose head
   `state/1` reads back; `verify/2` checks a request as the registry does
@@ -55,6 +56,34 @@ defmodule Sanctum.Test.RegistryStub do
 
     for {app, key, _} <- previous, do: Application.put_env(app, key, "#{@host}:#{port}")
     %{port: port}
+  end
+
+  @doc """
+  A registry that answers handles alone (`start!/1`): each handle of
+  `handles` with the answer naming its identifier and no address, `:close`
+  for one whose connection drops unanswered, and every other handle as
+  one no one holds.
+  """
+  def handles!(handles) when is_map(handles) do
+    start!(fn %{method: "GET", path: "/v1/handles/" <> handle} ->
+      case Map.get(handles, handle) do
+        nil ->
+          refusal(:handle_not_found)
+
+        :close ->
+          :close
+
+        identifier ->
+          {200,
+           answer(%{
+             "protocol" => Prima.HandleAnswer.protocol(),
+             "registry" => @host,
+             "handle" => handle,
+             "identifier" => identifier,
+             "directory" => @directory
+           })}
+      end
+    end)
   end
 
   @doc """

@@ -3,8 +3,9 @@
 
 defmodule Sanctum.Providers.Member do
   @moduledoc """
-  The `member` tool: who is in an athanor — list, add (by user id or by a
-  person identifier), remove (likewise), leave.
+  The `member` tool: who is in an athanor — list, add (by user id, by a
+  person identifier or by a handle), remove (by user id or person
+  identifier), leave.
 
   Any member may add or remove; there are no roles. Adding a person
   identifier (`per_…`) the server does not know leaves an invited row that
@@ -18,8 +19,12 @@ defmodule Sanctum.Providers.Member do
   `invitation: true`, removing by identifier withdraws only a pending
   invitation and answers not found once it has been accepted, so a
   withdrawal that loses the race with the invitee's first sign-in leaves
-  them seated. An identifier stands alone, never beside a user id.
-  Mutations are a person's act; an API-key context is refused.
+  them seated. A handle (`@name` or `name`) is resolved at the registry
+  to the identifier it names before anything is written
+  (`Sanctum.Tenancy.Members.add/3`), and that identifier is added. An
+  identifier or a handle stands alone, never beside another way of naming
+  the person. Mutations are a person's act; an API-key context is
+  refused.
 
   A group is frozen while a member of it recovers from a declared restore
   (`Arca.SecurityTransitions.restore_frozen?/1`): until every member's
@@ -77,6 +82,10 @@ defmodule Sanctum.Providers.Member do
             ),
             Arg.new("identifier", :string,
               description: "The person's identifier (per_…), in place of a user id (add, remove)"
+            ),
+            Arg.new("handle", :string,
+              description:
+                "The person's handle at the registry (@name or name), in place of a user id or identifier: the identifier it names is added (add)"
             )
           ],
           kind: :write,
@@ -122,7 +131,7 @@ defmodule Sanctum.Providers.Member do
         )
       ],
       description:
-        "Who is in an athanor. Any member may add (by user id or person identifier), remove, or leave — there are no roles. Adding an identifier the server has not seen leaves an invitation that activates on that person's first sign-in.",
+        "Who is in an athanor. Any member may add (by user id, person identifier or handle), remove, or leave — there are no roles. Adding an identifier the server has not seen, or the handle of one, leaves an invitation that activates on that person's first sign-in.",
       title: "Members"
     )
   end
@@ -149,7 +158,7 @@ defmodule Sanctum.Providers.Member do
 
   def handle(%Context{} = ctx, %{"action" => "add"} = args) do
     # The person named is checked for its shape before the athanor is read.
-    with {:ok, target} <- target(args),
+    with {:ok, target} <- add_target(args),
          {:ok, athanor, _focused} <- Athanor.resolve(ctx, args),
          :ok <- not_recovering(athanor) do
       case Members.add(athanor, target, ctx.user_id) do
@@ -175,6 +184,14 @@ defmodule Sanctum.Providers.Member do
 
         {:error, {:limit_reached, key, cap}} ->
           {:error, {:invalid_argument, "Limit reached: #{key} = #{cap}"}}
+
+        # A handle the registry did not resolve (`Sanctum.Handle.identifier/1`).
+        {:error, {:invalid_argument, _sentence} = misspelled} ->
+          {:error, misspelled}
+
+        {:error, reason}
+        when reason in [:handle_not_found, :no_registry, :registry_unavailable] ->
+          {:error, reason}
 
         {:error, reason} ->
           Logger.error("[Sanctum.Providers.Member] member.add failed: #{inspect(reason)}")
@@ -259,21 +276,37 @@ defmodule Sanctum.Providers.Member do
     end
   end
 
+  # A handle names a person through the registry, and stands alone like an
+  # identifier. It is the add's alone: a removal names someone this server
+  # already holds a row for.
+  defp add_target(%{"handle" => handle} = args) when is_binary(handle) and handle != "" do
+    if Map.has_key?(args, "user_id") or Map.has_key?(args, "identifier"),
+      do: {:error, {:invalid_argument, "Name one of user_id, identifier or handle, not two"}},
+      else: {:ok, [handle: unprefixed(String.trim(handle))]}
+  end
+
+  defp add_target(args), do: target(args, "user_id, identifier or handle")
+
+  defp unprefixed("@" <> handle), do: handle
+  defp unprefixed(handle), do: handle
+
   # An identifier names a person by their identity, and stands alone:
   # beside a user id, which of them meant the person is not the handler's
   # to guess.
-  defp target(%{"identifier" => identifier} = args)
+  defp target(args, missing \\ "user_id or identifier")
+
+  defp target(%{"identifier" => identifier} = args, _missing)
        when is_binary(identifier) and identifier != "" do
     if Map.has_key?(args, "user_id"),
       do: {:error, {:invalid_argument, "Name one of user_id or identifier, not both"}},
       else: {:ok, [identifier: String.trim(identifier)]}
   end
 
-  defp target(%{"user_id" => user_id}) when is_binary(user_id) and user_id != "",
+  defp target(%{"user_id" => user_id}, _missing) when is_binary(user_id) and user_id != "",
     do: {:ok, [user_id: user_id]}
 
-  defp target(_),
-    do: {:error, {:invalid_argument, "Missing required argument: user_id or identifier"}}
+  defp target(_args, missing),
+    do: {:error, {:invalid_argument, "Missing required argument: " <> missing}}
 
   # `invitation: true` withdraws a pending invitation and never reaches a
   # seat. Only an identifier holds one; a user id names a person already
@@ -286,6 +319,7 @@ defmodule Sanctum.Providers.Member do
 
   defp shown(user_id: user_id), do: %{user_id: user_id}
   defp shown(identifier: identifier), do: %{identifier: identifier}
+  defp shown(handle: handle), do: %{handle: handle}
 
   # The person the caller named, for a refusal that has to say which one.
   # Only ever what the caller already sent back to them.

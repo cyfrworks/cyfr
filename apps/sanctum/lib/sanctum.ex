@@ -13,7 +13,8 @@ defmodule Sanctum do
   ## People and signing in
 
   A person is made only by an admission (`Sanctum.Newcomer`): setup, an
-  open door, a verified CYFR sign-in, or a restore. Every session is
+  invitation (`Sanctum.Invitations`), an open door, a verified CYFR
+  sign-in, or a restore. Every session is
   minted by `Sanctum.Session`, on one of these paths:
 
   - an admission that brings its credential (`Sanctum.Newcomer`);
@@ -82,6 +83,7 @@ defmodule Sanctum do
       Handle,
       IdentityFreshness,
       InstanceEntries,
+      Invitations,
       Namespace,
       Network,
       Newcomer,

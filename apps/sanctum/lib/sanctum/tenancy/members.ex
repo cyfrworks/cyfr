@@ -178,16 +178,23 @@ defmodule Sanctum.Tenancy.Members do
   directory is not asked, since only the person's own sign-in carries
   their genesis. A stranger's identifier and a known one answer alike, so
   it cannot be used to learn who is on the server. A malformed one is
-  `:invalid_identifier`. The per-group member cap bounds every seat this
-  writes, counted under the athanor's lock in the transaction that writes
-  it; a person already seated, or an identifier already invited, writes no
-  seat and so is answered `:added` or `:invited` even at the cap. A
-  person's own athanor has exactly one member — its owner — on every
-  path, not only in the UI.
+  `:invalid_identifier`.
+
+  A `handle:` (the name, without `@`) is asked of the registry
+  (`Sanctum.Handle.identifier/1`) before anything is written, and the
+  identifier it names is added as an `identifier:` is; the row keeps the
+  identifier, never the handle, and the registry's refusals are answered
+  as that function answers them.
+
+  The per-group member cap bounds every seat this writes, counted under
+  the athanor's lock in the transaction that writes it; a person already
+  seated, or an identifier already invited, writes no seat and so is
+  answered `:added` or `:invited` even at the cap. A person's own athanor
+  has exactly one member — its owner — on every path, not only in the UI.
   """
   @spec add(
           Sanctum.Tenancy.Athanors.athanor(),
-          [user_id: String.t()] | [identifier: String.t()],
+          [user_id: String.t()] | [identifier: String.t()] | [handle: String.t()],
           String.t()
         ) ::
           {:ok, :added | :invited} | {:error, term()}
@@ -242,6 +249,14 @@ defmodule Sanctum.Tenancy.Members do
     end
   end
 
+  # The registry is asked only once the athanor would take a seat, and
+  # nothing is written until it has answered.
+  def add(%{id: _athanor_id, status: "active"} = athanor, [handle: handle], added_by)
+      when is_binary(handle) do
+    with {:ok, identifier} <- Sanctum.Handle.identifier(handle),
+         do: add(athanor, [identifier: identifier], added_by)
+  end
+
   def add(_athanor, _target, _added_by), do: {:error, :athanor_archived}
 
   # The invitation an identifier holds, and the operator's request when
@@ -284,11 +299,17 @@ defmodule Sanctum.Tenancy.Members do
     end
   end
 
-  # Every seat the athanor has handed out — active members and pending
-  # invitations — is what the cap bounds; an invitation is a seat someone
-  # will take. It runs as `Arca.Members.seat/3`'s `reserve:`, with the
-  # athanor's row locked, so two adds cannot both take the last seat.
-  defp member_cap(athanor_id) do
+  @doc """
+  The per-group member cap, as a seat's `reserve:` (`create/2`) counts
+  it: every seat the athanor has handed out, active members and the
+  `invited` rows identifiers hold, since such a row is a seat someone will
+  take. Run as
+  `Arca.Members.seat/3`'s `reserve:`, with the athanor's row locked, so two
+  seats cannot both take the last place. `add/3` passes it, and so does an
+  invitation's admission (`Sanctum.Newcomer`).
+  """
+  @spec member_cap(String.t()) :: :ok | {:error, term()}
+  def member_cap(athanor_id) do
     Caps.check_counted(:max_members_per_group, fn ->
       Arca.Members.count_seats(in_athanor(athanor_id))
     end)

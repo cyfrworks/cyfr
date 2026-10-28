@@ -18,6 +18,7 @@ defmodule Sanctum.DoorTest do
   alias Sanctum.Door
   alias Sanctum.Door.Store
   alias Sanctum.Test.People
+  alias Sanctum.Test.RegistryStub
 
   setup tags do
     Arca.Test.Sandbox.setup!(tags)
@@ -281,6 +282,120 @@ defmodule Sanctum.DoorTest do
       {:ok, :created, request} = Store.request("identifier", identifier(35), "ops")
       assert :ok = Store.resolve(request.id, :reject, "ops")
       assert Store.list() == []
+    end
+  end
+
+  describe "an entry made from a handle" do
+    defp door(action, value, note \\ nil) do
+      operator = Sanctum.Context.build(user_id: "usr_operator", authenticated: true)
+      args = %{"action" => action, "value" => value}
+      args = if note, do: Map.put(args, "note", note), else: args
+      Sanctum.Provider.handle("door", operator, args)
+    end
+
+    test "a handle reassigned after an allow was made from it moves no access" do
+      first = remote!(40)
+      second = remote!(41)
+
+      RegistryStub.handles!(%{"alice" => identifier(40)})
+      assert {:ok, allowed} = door("allow", "@alice")
+      assert %{kind: "identifier", label: "alice"} = allowed
+      assert allowed.value == identifier(40)
+
+      # The registry gives the handle to someone else.
+      RegistryStub.handles!(%{"alice" => identifier(41)})
+      assert {:ok, identifier(41)} == Sanctum.Handle.identifier("alice")
+
+      assert [%{kind: "identifier", effect: "allow", label: "alice"} = entry] = Store.list()
+      assert entry.value == identifier(40)
+      assert {:ok, :allowed} = Door.admit_person(first)
+      assert {:error, :not_allowed} = Door.admit_person(second)
+      assert {:error, :not_allowed} = Door.admit_identifier(identifier(41))
+    end
+
+    test "a deny by handle writes the identifier the handle names, and a platform administrator's is refused" do
+      carol = remote!(42)
+      operator = local!(43)
+      enrolled!(operator, 43)
+      {:ok, _} = Sanctum.TestContext.ensure_platform(operator.id)
+      {:ok, _} = Store.allow("wildcard", "*", "ops")
+
+      RegistryStub.handles!(%{"carol" => identifier(42), "ops" => identifier(43)})
+      assert {:ok, %{effect: "deny", label: "carol", ejected: 1}} = door("deny", "@carol")
+      assert {:error, :denied} = Door.admit_person(carol)
+
+      assert {:error, {:invalid_argument, _}} = door("deny", "@ops")
+      refute Enum.any?(Store.list(), &(&1.value == identifier(43)))
+    end
+
+    test "each write states the label anew: another handle relabels, the identifier clears it" do
+      {:ok, entry} = Store.allow("identifier", identifier(44), "ops", label: "alice")
+      assert entry.label == "alice"
+
+      {:ok, entry} = Store.deny("identifier", identifier(44), "ops", label: "alicia")
+      assert %{effect: "deny", label: "alicia"} = entry
+
+      {:ok, entry} = Store.allow("identifier", identifier(44), "ops", note: "back")
+      assert %{effect: "allow", label: nil, note: "back"} = entry
+      assert [%{label: nil}] = Store.list()
+
+      # Only an identifier entry is made from a handle, spelled as one.
+      assert {:error, {:invalid, %{label: _}}} =
+               Store.allow("wildcard", "*", "ops", label: "alice")
+
+      assert {:error, {:invalid, %{label: _}}} =
+               Store.allow("identifier", identifier(45), "ops", label: "Not A Handle")
+
+      # Through the operation: by handle, then by the identifier itself.
+      RegistryStub.handles!(%{"alice" => identifier(44)})
+      assert {:ok, %{label: "alice"}} = door("allow", "@alice")
+      assert {:ok, shown} = door("allow", identifier(44))
+      refute Map.has_key?(shown, :label)
+    end
+
+    test "with the registry down, no registry, or a handle no one holds, nothing is written" do
+      RegistryStub.handles!(%{"alice" => :close})
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, :registry_unavailable} = door("allow", "@alice")
+        assert {:error, :registry_unavailable} = door("deny", "@alice")
+      end)
+
+      RegistryStub.handles!(%{})
+      assert {:error, :handle_not_found} = door("allow", "@nobody")
+      assert {:error, :handle_not_found} = door("deny", "@nobody")
+
+      Application.put_env(:sanctum, :registry_url, "none")
+      assert {:error, :no_registry} = door("allow", "@alice")
+      assert {:error, :no_registry} = door("deny", "@alice")
+
+      assert Store.list() == []
+      assert Store.requests() == []
+    end
+
+    test "a misspelled handle is an invalid argument, and the registry is not asked" do
+      RegistryStub.start!(fn _ -> flunk("no request is sent") end)
+
+      for value <- ["@Alice", "@", "@a/b", "@-alice"] do
+        assert {:error, {:invalid_argument, sentence}} = door("allow", value)
+        assert sentence =~ "not a handle"
+      end
+
+      refute_received {:registry_request, _}
+      assert Store.list() == []
+    end
+
+    test "the resolution writes nothing: no entry exists until the write" do
+      RegistryStub.handles!(%{"alice" => identifier(46)})
+
+      assert {:ok, identifier(46)} == Sanctum.Handle.identifier("alice")
+      assert_received {:registry_request, %{path: "/v1/handles/alice"}}
+      assert Store.list() == []
+      assert {:error, :not_allowed} = Door.admit_identifier(identifier(46))
+
+      assert {:ok, _} = door("allow", "@alice")
+      assert [%{label: "alice"} = entry] = Store.list()
+      assert entry.value == identifier(46)
     end
   end
 

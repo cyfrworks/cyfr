@@ -666,6 +666,15 @@
         },
         %{
           verb: "GET",
+          path: "/auth/cyfr/start",
+          plug: "PrismWeb.AuthController",
+          plug_opts: ":cyfr_start",
+          auth: "browser_oauth_flow",
+          live_view: nil,
+          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
+        },
+        %{
+          verb: "GET",
           path: "/auth/device/complete/:ticket",
           plug: "PrismWeb.AuthController",
           plug_opts: ":device_complete",
@@ -743,6 +752,15 @@
           plug_opts: ":index",
           auth: "browser_authenticated",
           live_view: "PrismWeb.CliLive",
+          pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
+          path: "/invite",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":invite",
+          auth: "browser_public_login",
+          live_view: "PrismWeb.InviteLive",
           pipe_through: ["browser"]
         },
         %{

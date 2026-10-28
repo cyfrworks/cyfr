@@ -311,6 +311,10 @@ defmodule Prima.RefusalTest do
     {:setup_closed, :forbidden},
     {:not_set_up, :setup_required},
     {:no_person, :not_found},
+    {:invitation_invalid, :not_found},
+    {:handle_not_found, :not_found},
+    {:address_not_published, :not_found},
+    {:wrong_identity, :forbidden},
     {:execution_failed, :internal},
     {:invalid_session, :unauthenticated},
     {:missing_token, :unauthenticated},
@@ -786,6 +790,31 @@ defmodule Prima.RefusalTest do
                "No one here signs in with this account. Sign in another way, then link it in Settings."
 
       for reason <- [:setup_closed, :not_set_up, :no_person], do: assert(Refusal.reason?(reason))
+    end
+
+    test "an invitation, a handle and a handle's sign-in each say what went wrong" do
+      assert %Refusal{class: :not_found, message: invitation} =
+               Refusal.classify(:invitation_invalid)
+
+      assert invitation =~ "Ask whoever invited you"
+
+      assert %Refusal{class: :not_found} = Refusal.classify(:handle_not_found)
+
+      assert %Refusal{class: :not_found, message: unpublished} =
+               Refusal.classify(:address_not_published)
+
+      assert unpublished =~ "Enter the address"
+
+      assert %Refusal{class: :forbidden, message: wrong} = Refusal.classify(:wrong_identity)
+      assert wrong =~ "nobody was signed in"
+
+      for reason <- [
+            :invitation_invalid,
+            :handle_not_found,
+            :address_not_published,
+            :wrong_identity
+          ],
+          do: assert(Refusal.reason?(reason))
     end
 
     test "an identity that could not be confirmed fresh pauses: retryable, no sign-out" do

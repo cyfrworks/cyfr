@@ -7,7 +7,8 @@ defmodule Prism.Router do
   layout, the browser sign-in pipelines and their throttles, the claim,
   legal-acceptance and attachment pipelines, browser sign-in and
   sign-out with their callbacks, linking an OpenID Connect door, passkey
-  sign-in's completion, the `cyfr` door's challenge hop and callback, the
+  sign-in's completion, the `cyfr` door's start from a handle, its
+  challenge hop and callback, the
   OpenID Connect re-authentication's callback, the claim and legal pages, the
   attachment and file downloads and the `:athanor` LiveView session.
 
@@ -162,6 +163,17 @@ defmodule Prism.Router do
           post "/link/oidcc", AuthController, :link_start, metadata: %{auth: :browser_session}
         end
 
+        # The start of a `cyfr` sign-in: the sign-in page's one-time
+        # ticket, bound to this browser, which keeps the attempt (its home,
+        # and the identifier a handle named) in the browser's session and
+        # sends it to that home's `/carry`. Above `/:provider`, under the
+        # starts' throttle.
+        scope "/" do
+          pipe_through :oauth_start_throttle
+
+          get "/cyfr/start", AuthController, :cyfr_start, metadata: %{auth: :browser_oauth_flow}
+        end
+
         scope "/" do
           pipe_through :oauth_start_throttle
 
@@ -192,12 +204,16 @@ defmodule Prism.Router do
       # first person's passkey under the setup token in its fragment, is
       # sessionless, and once that person is signed in it guards their
       # session as every console page does (`PrismWeb.SetupLive`).
+      # `/invite` is the page an invitation link opens: sessionless, the
+      # code in its fragment, the newcomer's passkey made under it
+      # (`PrismWeb.InviteLive`).
       scope "/", PrismWeb do
         pipe_through :browser
 
         live "/login", LoginLive, :login, metadata: %{auth: :browser_public_login}
         live "/restore", RestoreLive, :restore, metadata: %{auth: :browser_public_login}
         live "/setup", SetupLive, :setup, metadata: %{auth: :browser_public_login}
+        live "/invite", InviteLive, :invite, metadata: %{auth: :browser_public_login}
       end
 
       # The glass's page alone may reach other homes by `fetch`: a device

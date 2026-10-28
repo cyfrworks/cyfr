@@ -174,6 +174,7 @@ defmodule Arca do
       InstallationClaims,
       InstanceEntries,
       InstanceEntryUsage,
+      Invitations,
       JobClaims,
       Layouts,
       McpLog,

@@ -21,6 +21,7 @@ defmodule PrismWeb.AuthController do
   - `POST /auth/logout` - Browser sign-out (cookie session, forgery-guarded)
   - `POST /auth/link/oidcc` - Begins linking an OpenID Connect door to the
     person signed in
+  - `GET /auth/cyfr/start?ticket=…` - The start of a `cyfr` sign-in
   - `GET /auth/cyfr?ticket=…` - The `cyfr` door's challenge hop
   - `POST /auth/cyfr/callback` - The `cyfr` door's callback
 
@@ -30,8 +31,21 @@ defmodule PrismWeb.AuthController do
   ## The `cyfr` door
 
   A person whose keys another home holds signs in with an assertion their
-  home signs (`Sanctum.Auth.CyfrDoor`). The sign-in page verifies the
-  carry their browser brought, mints this home's challenge and hands it
+  home signs (`Sanctum.Auth.CyfrDoor`). Every such sign-in starts here:
+  the sign-in page hands the attempt over by a one-time ticket bound to
+  the browser's CSRF token (`GET /auth/cyfr/start?ticket=…`), which holds
+  the home's origin and its `/carry` (`Sanctum.Auth.CyfrDoor.signing_home/1`)
+  and, for an attempt begun from a handle the page resolved
+  (`Sanctum.Handle`), the identifier the handle named. This action keeps
+  the request, `{home, expires_at}` with the identifier when there is one,
+  for the carry's lifetime, in the browser's own session cookie
+  (`cyfr_request_key/0`), drops any challenge an earlier attempt left
+  there, and answers `303` to that `/carry`. The request is the attempt:
+  the sign-in page judges the carry that returns against it, never
+  against what the browser says, and the callback admits only under a
+  challenge that answers it (`:no_request` otherwise), then drops it.
+  The sign-in page verifies the carry their browser brought, mints this
+  home's challenge and hands it
   here by a one-time ticket bound to the browser's CSRF token
   (`GET /auth/cyfr?ticket=…`). This action keeps the challenge in the
   browser's own session cookie (`cyfr_challenge_key/0`) and answers
@@ -83,6 +97,7 @@ defmodule PrismWeb.AuthController do
   @link_ticket "cyfr_link_ticket"
   @link_intent_ms 600_000
   @cyfr_challenge "cyfr_challenge"
+  @cyfr_request "cyfr_request"
 
   @doc """
   The cookie session key the `cyfr` door's challenge is held under between
@@ -90,6 +105,14 @@ defmodule PrismWeb.AuthController do
   """
   @spec cyfr_challenge_key() :: String.t()
   def cyfr_challenge_key, do: @cyfr_challenge
+
+  @doc """
+  The cookie session key a `cyfr` sign-in keeps its request under,
+  `%{"home", "expires_at"}` (Unix milliseconds) with `"identifier"` when
+  a handle began it, between its start and its callback (the module doc).
+  """
+  @spec cyfr_request_key() :: String.t()
+  def cyfr_request_key, do: @cyfr_request
 
   @doc """
   The cookie session key the link ticket an OpenID Connect sign-in minted
@@ -174,6 +197,59 @@ defmodule PrismWeb.AuthController do
   end
 
   @doc """
+  The start of a `cyfr` sign-in (the module doc): the request the ticket
+  holds is kept in this browser's session in place of any earlier one,
+  whose challenge goes with it, and the browser goes to the home's
+  `/carry`.
+  """
+  def cyfr_start(conn, %{"ticket" => ticket})
+      when is_binary(ticket) and byte_size(ticket) > 0 and byte_size(ticket) <= 64 do
+    # Taken in one operation and consumed whichever way the check goes, as
+    # the challenge hop's ticket is.
+    case Arca.Cache.take({:login_cyfr_start, ticket}) do
+      {:ok, %{home: home, to: to} = payload} ->
+        if same_browser?(conn, payload) do
+          request =
+            %{
+              "home" => home,
+              "expires_at" =>
+                System.os_time(:millisecond) + Sanctum.Auth.CyfrDoor.carry_lifetime_ms()
+            }
+            |> requested(payload)
+
+          # A later start replaces the earlier attempt whole: its challenge
+          # can no longer complete.
+          conn
+          |> delete_session(@cyfr_challenge)
+          |> put_session(@cyfr_request, request)
+          |> put_status(303)
+          |> redirect(external: to)
+        else
+          Logger.warning(
+            "[AuthController] cyfr sign-in start presented by a different browser than the " <>
+              "one that started it — refusing"
+          )
+
+          to_login(
+            conn,
+            403,
+            "That sign-in was started in a different browser. Please sign in again."
+          )
+        end
+
+      _miss ->
+        cyfr_expired(conn)
+    end
+  end
+
+  def cyfr_start(conn, _params), do: cyfr_expired(conn)
+
+  defp requested(request, %{identifier: identifier}) when is_binary(identifier),
+    do: Map.put(request, "identifier", identifier)
+
+  defp requested(request, _payload), do: request
+
+  @doc """
   Finishes GitHub/Google device-flow sign-in: the LiveView minted a
   one-time ticket after `DeviceFlow.poll_for_session/3` created the
   Sanctum session; this sets the cookie and routes the same way the
@@ -213,17 +289,45 @@ defmodule PrismWeb.AuthController do
   @doc """
   The `cyfr` door's callback (the module doc): the assertion the sign-in
   page posts, admitted, or resumed, under the challenge this browser's
-  session cookie holds. An admitted sign-in sets the session as every
-  sign-in does, then goes back to the person's home with `admitted`; a
-  refused one's page links back there with `refused` (the module doc).
+  session cookie holds, when that challenge answers the request the
+  session holds. An admitted sign-in drops the challenge and the
+  request, sets the session as every sign-in does, then
+  goes back to the person's home with `admitted`; a refused one's page
+  links back there with `refused` (the module doc).
   """
   def cyfr_callback(conn, %{"fragment" => fragment}) when is_binary(fragment) do
     held = get_session(conn, @cyfr_challenge)
 
+    case answering(held, get_session(conn, @cyfr_request)) do
+      :ok -> admit_callback(conn, fragment, held)
+      {:error, reason} -> refused_callback(conn, reason, held)
+    end
+  end
+
+  def cyfr_callback(conn, _params), do: cyfr_expired(conn)
+
+  # The challenge answers the attempt this browser's session holds: of the
+  # home it named and, when a handle began it, of that identity. A later
+  # start drops the earlier challenge; this holds even against one kept
+  # past it.
+  defp answering(%{"source" => home} = held, %{"home" => home} = request) do
+    case request do
+      %{"identifier" => identifier} ->
+        if held["identifier"] == identifier, do: :ok, else: {:error, :no_request}
+
+      _address ->
+        :ok
+    end
+  end
+
+  defp answering(_held, _request), do: {:error, :no_request}
+
+  defp admit_callback(conn, fragment, held) do
     case Sanctum.Auth.CyfrDoor.callback(fragment, held) do
       {:ok, %{session_token: token}} ->
         conn
         |> delete_session(@cyfr_challenge)
+        |> delete_session(@cyfr_request)
         |> SignInResponse.respond(:proceed,
           session: {:token, token},
           to: carry_return(held, :admitted)
@@ -248,21 +352,23 @@ defmodule PrismWeb.AuthController do
         )
 
       {:error, reason} ->
-        Logger.info(
-          "[AuthController] a cyfr sign-in was refused: " <> Prima.LoggerContext.shape(reason)
-        )
-
-        page(
-          conn,
-          401,
-          "Sign-in failed",
-          "<p>That sign-in could not be completed here. Begin it again from your CYFR.</p>" <>
-            refused_return(reason, held) <> "<p><a href=\"/login\">Back to sign-in</a></p>"
-        )
+        refused_callback(conn, reason, held)
     end
   end
 
-  def cyfr_callback(conn, _params), do: cyfr_expired(conn)
+  defp refused_callback(conn, reason, held) do
+    Logger.info(
+      "[AuthController] a cyfr sign-in was refused: " <> Prima.LoggerContext.shape(reason)
+    )
+
+    page(
+      conn,
+      401,
+      "Sign-in failed",
+      "<p>That sign-in could not be completed here. Begin it again from your CYFR.</p>" <>
+        refused_return(reason, held) <> "<p><a href=\"/login\">Back to sign-in</a></p>"
+    )
+  end
 
   # A retried login whose session has since ended, or another browser's or
   # another assertion's under a challenge already admitted, was admitted
@@ -272,7 +378,7 @@ defmodule PrismWeb.AuthController do
 
   # Where the person's browser reports how this sign-in ended: the fixed
   # return URL (`Prima.Carry.return_url/1`) of the source the carry's
-  # envelope signed, which `Sanctum.Auth.CyfrDoor.challenge/1` verified
+  # envelope signed, which `Sanctum.Auth.CyfrDoor.challenge/2` verified
   # before this home held the challenge, with the outcome in its fragment.
   # Never a URL the request carries; nil for a browser holding no
   # challenge.

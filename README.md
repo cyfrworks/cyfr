@@ -630,7 +630,36 @@ CYFR** on the sign-in page; [identity-guide.md](identity-guide.md)). The
 server allowlist judges people, never a sign-in method: a person made here
 signs in unless a deny names them, and a person whose keys another CYFR
 holds by `*` or an allow naming their identifier, `per_…` (`cyfr admin allow
-<identifier|*>`, `cyfr admin deny <person|identifier>`).
+<identifier|@handle|*>`, `cyfr admin deny <person|identifier|@handle>`). An
+entry made by handle keeps the identifier the registry names for that handle
+when the entry is written, shown with the handle, so a handle that later
+passes to someone else moves no access.
+
+The sign-in page offers, top to bottom: **Sign in with a passkey**; **Sign
+in with your CYFR**, with a button for the hosted CYFR, `https://my.cyfr.run`,
+and **I run my own CYFR**, which takes a handle (`@name`) or the address of
+the CYFR that holds your keys; **Create your identity here**, shown only
+while `*` admits; and **Other ways to sign in**, each linked method this
+server is configured for, which signs in a person who already linked it and
+never makes one. A handle is resolved at the registry to the identifier it
+names and the address its owner published; one with no published address
+asks for the address instead, and the sign-in is refused when the CYFR at
+that address signs in someone other than the handle's owner. With no person
+yet the page offers none of these: it says the CYFR is not set up and points
+to the link `cyfr init` or `cyfr setup` printed.
+
+An invitation makes a person here without opening sign-in to everyone. A
+member creates an invitation link for a group they sit in, on **Members**
+(or `cyfr call invitation '{"action":"create","athanor_id":"ath_…"}'`); the
+platform administrator may also create one that names no group. The link is
+`<CYFR address>/invite#<code>`: it is shown once, works once and expires
+after seven days, and this CYFR keeps only the code's hash. Its page names
+who invited and to which group, and **Create your identity here** makes a
+passkey, the person, their keys, their athanor and the seat in the group.
+The issuer or the administrator revokes a link; a link whose issuer has
+since left the group or been denied, or whose issuer's standing has changed
+since it was made (a restore from backup changes everyone's), admits no one. Someone who already has a
+CYFR identity is added by handle instead.
 
 The first person of a CYFR is made by its setup, or by a restore onto an
 empty installation, and is its platform administrator; nothing else makes
@@ -650,8 +679,8 @@ person holds a passkey, a paired device or a linked sign-in method, the
 token signs them in again, so a lost answer or an expired command-line
 session never locks them out; from then on, and for any other token, the
 link says it is not valid or setup is complete. A local admission at this
-server (setup, an open admission or a restore) makes the person with their
-own keys and their own athanor; a remote admission, of a person whose keys
+server (setup, an invitation, an open admission or a restore) makes the person with their
+own keys and their own athanor, and an invitation adds the seat it names; a remote admission, of a person whose keys
 another CYFR holds, makes neither. The athanor is seeded and baseline-consented
 (the bundled `catalyst:local.http`
 is granted `egress.domains ["*"]` for public hosts, GET/POST/HEAD, 60/min;
@@ -715,15 +744,19 @@ signs in there with one of its sign-in methods, as on any server; someone with a
 CYFR of their own joins from it, where their keys and their own
 athanor stay:
 
-- **Letting them in.** The platform admin of the group's CYFR allows their person
-  identifier, `per_…`, which their own CYFR's **Settings → Your identity**
-  shows (`cyfr admin allow per_…`), and a member adds them to a group by
-  the same identifier (**Members**, or `cyfr member add per_…`). An
-  identifier the group's CYFR has not seen yet leaves an invitation that activates
-  at their first sign-in.
-- **Signing in.** On the sign-in page of the group's CYFR they choose **Sign in
-  with your CYFR** and name their own CYFR's address; they confirm there, and
-  both show the same short code. The group's CYFR reads their identity at the
+- **Letting them in.** The platform admin of the group's CYFR allows their
+  handle (`cyfr admin allow @name`) or their person identifier, `per_…`,
+  which their own CYFR's **Settings → Your identity** shows (`cyfr admin
+  allow per_…`), and a member adds them to a group the same way
+  (**Members**, or `cyfr member add @name`). Either keeps the identifier, so
+  a handle that later changes hands moves no access. An identifier the
+  group's CYFR has not seen yet leaves an invitation that activates at their
+  first sign-in.
+- **Signing in.** On the sign-in page of the group's CYFR they choose **I run
+  my own CYFR** and give their handle, when they publish their address with
+  it, or their own CYFR's address; they confirm there, and both show the
+  same short code. A sign-in begun from a handle admits only the identity
+  that handle names. The group's CYFR reads their identity at the
   directory it names, which need not be its own, and mints them no
   keys and no athanor.
 - **Confirming at the group's CYFR.** Signing in with their CYFR identity is
@@ -972,6 +1005,7 @@ person re-enables them from the system layer's checklist under a fresh
 sign-in with one of their sign-in methods, an emailed code or their kit (`/restore`, **Recover after a
 restore**); every component grant asks for consent again; standing
 approvals, unused once-bindings and pending confirmations are dropped;
+every invitation link still open is revoked;
 every stored credential is unusable until it is rotated where it came from
 and entered again; runs open at the backup end uncertain and none resumes;
 and a group admits no new member until each of its members who held a passkey or device has recovered, or a platform administrator ends that member's recovery (`person.close_recovery`).
@@ -1033,7 +1067,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 | `cyfr whoami` | Show current identity |
 | `cyfr status` | Check system health (includes CLI version) |
 | `cyfr athanor list/get/use/create/rename/settings/provision/archive/unarchive` | Your athanors, your own and your groups: list and show them, point this session at one, create, rename or archive a group, merge settings, retry a provisioning that failed |
-| `cyfr member list/add/remove/leave` | Who is in an athanor: add or remove someone by user id (`usr_…`) or person identifier (`per_…`), or leave a group |
+| `cyfr member list/add/remove/leave` | Who is in an athanor: add someone by user id (`usr_…`), person identifier (`per_…`) or handle (`@name`), remove someone by user id or person identifier, or leave a group |
 
 ### Components
 
@@ -1093,7 +1127,7 @@ Commands marked with `[i]` support interactive selection when run without argume
 
 | Command | Description |
 |---------|-------------|
-| `cyfr admin list/allow/deny/remove/requests/resolve` | The sign-in allowlist: allows of a person identifier (`per_…`) or `*`, denies of a person (`usr_…`) or a person identifier, and the pending requests to approve or drop (platform admins) |
+| `cyfr admin list/allow/deny/remove/requests/resolve` | The sign-in allowlist: allows of a person identifier (`per_…`), a handle (`@name`, kept as the identifier it names) or `*`, denies of a person (`usr_…`), a person identifier or a handle, and the pending requests to approve or drop (platform admins) |
 | `cyfr settings list/set/reset` | The platform settings: limits, windows and the log level, and where each value comes from (platform admins; [configuration-guide.md](configuration-guide.md)) |
 | `cyfr log list/get/correlate` | View and inspect MCP request logs |
 | `cyfr decision list/get/correlate` | View admission decisions, and cross-reference a request's decisions with its logs and executions |
