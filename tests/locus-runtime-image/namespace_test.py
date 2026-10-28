@@ -23,7 +23,8 @@ import stack  # noqa: E402
 import imagesuite  # noqa: E402
 
 CONTAINER = "cyfr-locus-runtime-1"
-RUNNER = {"pid": 4242, "uid": 30101, "home": os.path.join(stack.HOME_ROOT, "runner-a1"), "runner": "a1"}
+UID = stack.POOL_FIRST
+RUNNER = {"pid": 4242, "uid": UID, "home": os.path.join(stack.HOME_ROOT, "runner-a1"), "runner": "a1"}
 
 
 def docker(group, status=0):
@@ -99,12 +100,12 @@ class RunnerFacts(unittest.TestCase):
 
     def test_a_failed_observer_fails_the_runner_facts(self):
         with self.assertRaises(SystemExit):
-            namespace.runner_facts(self.observed(1, ""), {"pid": 4242, "uid": 30101})
+            namespace.runner_facts(self.observed(1, ""), {"pid": 4242, "uid": UID})
 
     def test_the_facts_that_were_read_are_the_control(self):
-        facts = namespace.runner_facts(self.observed(0, "uid_map=30101 30101 1\nfd=3 socket:[9]\n"),
-                                       {"pid": 4242, "uid": 30101})
-        self.assertEqual(facts["uid_map"], "30101 30101 1")
+        facts = namespace.runner_facts(self.observed(0, f"uid_map={UID} {UID} 1\nfd=3 socket:[9]\n"),
+                                       {"pid": 4242, "uid": UID})
+        self.assertEqual(facts["uid_map"], f"{UID} {UID} 1")
         self.assertEqual(facts["fds"], {3: "socket:[9]"})
 
 

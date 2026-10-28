@@ -26,7 +26,8 @@ import stack  # noqa: E402
 import imagesuite  # noqa: E402
 
 CONTAINER = "cyfr-locus-builds-1"
-GROUPS = ["/sys/fs/cgroup/keeper-30001", "/sys/fs/cgroup/keeper-30002"]
+# The builds pool's first two uids, from the suite's own constants, which read the role table.
+GROUPS = [f"/sys/fs/cgroup/keeper-{stack.POOL_FIRST}", f"/sys/fs/cgroup/keeper-{stack.POOL_FIRST + 1}"]
 
 
 def docker(state, status=1):
@@ -108,8 +109,7 @@ class KeeperListShell(unittest.TestCase):
         self.assertEqual(self.groups("exit 0"), [])
 
     def test_an_enumeration_that_finds_groups_lists_them(self):
-        self.assertEqual(self.groups("echo /sys/fs/cgroup/keeper-30001; exit 0"),
-                         ["/sys/fs/cgroup/keeper-30001"])
+        self.assertEqual(self.groups(f"echo {GROUPS[0]}; exit 0"), [GROUPS[0]])
 
 
 class ContainerState(unittest.TestCase):

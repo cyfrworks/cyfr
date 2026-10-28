@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import stack  # noqa: E402
 import memory  # noqa: E402
 
-UID = 30101
+UID = stack.POOL_FIRST
 
 
 def answer(returncode, stdout):

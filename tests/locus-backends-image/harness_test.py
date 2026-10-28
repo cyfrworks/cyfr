@@ -28,7 +28,7 @@ import imagesuite  # noqa: E402
 CONTAINER = "cyfr-locus-backends-1"
 PROCESS_LINE = ("4242|4000|1001,1001,1001,1001|00000000000000e0|00000000000000e0|00000000000000e0|0|"
                 "beam.smp -- backend\n")
-HOME = "/var/lib/locus/homes/backend-a1"
+HOME = os.path.join(harness.HOME_ROOT, "backend-a1")
 
 OTHER = "OCI runtime exec failed: unable to start container process"
 NOT_RUNNING = f"container {CONTAINER} is not running"
