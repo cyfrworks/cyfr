@@ -12,7 +12,9 @@ and a port compose publishes late, and fails within its bound where either
 never comes, a guard's failure is read from its inspect record whether the
 guard has exited or is between one exit and its next start, and no entry
 script writes bytecode for anything under tests/, whatever cache is already
-there.
+there. What a container holds and what a probe answers are read as
+imagesuite.py defines them, and each suite's stub test of its observations
+(tests/<suite>/*_test.py) runs here as its own entry script.
 
 Usage: python3 -I tests/imagesuite_test.py
 """
