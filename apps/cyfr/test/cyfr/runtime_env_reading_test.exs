@@ -60,9 +60,22 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     })
   end
 
-  defp with_env(overrides, fun) do
+  # Public so the process-death probe at the end of this file can run it in a
+  # child VM. A test killed mid-body runs no `after`, but its on_exit does: the
+  # restore is registered before the change, and the `after` is the fast path
+  # that puts the variables back before the test goes on.
+  def with_env(overrides, fun) do
     env = Map.merge(base_env(), overrides)
     previous = Map.new(env, fn {k, _} -> {k, System.get_env(k)} end)
+
+    restore = fn ->
+      Enum.each(previous, fn
+        {k, nil} -> System.delete_env(k)
+        {k, v} -> System.put_env(k, v)
+      end)
+    end
+
+    on_exit(restore)
 
     try do
       Enum.each(env, fn
@@ -72,10 +85,7 @@ defmodule Cyfr.RuntimeEnvReadingTest do
 
       fun.()
     after
-      Enum.each(previous, fn
-        {k, nil} -> System.delete_env(k)
-        {k, v} -> System.put_env(k, v)
-      end)
+      restore.()
     end
   end
 
@@ -86,7 +96,9 @@ defmodule Cyfr.RuntimeEnvReadingTest do
   # A directory of the test's own under the runner's TMPDIR, so no .env file
   # the checkout holds supplies a setting; removed after the test.
   defp scratch_dir do
-    dir = Path.join(System.tmp_dir!(), "runtime_env_reading_#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(System.tmp_dir!(), "runtime_env_reading_#{System.unique_integer([:positive])}")
+
     on_exit(fn -> File.rm_rf!(dir) end)
     File.mkdir_p!(dir)
     dir
@@ -241,5 +253,43 @@ defmodule Cyfr.RuntimeEnvReadingTest do
   test "Dotenvy's :string? type reads a blank as absent, and :string as the value" do
     assert Dotenvy.Transformer.to!("", :string?) == nil
     assert Dotenvy.Transformer.to!("", :string) == ""
+  end
+
+  # A test killed mid-body runs no `after`, so the helper's restore has to come
+  # from its on_exit. A killed test takes a VM of its own: the probe runs one in
+  # a child VM and reports how many tests ran, how many failed, and whether the
+  # environment changed.
+  @tag timeout: 120_000
+  test "a test killed mid-body leaves the environment as its helper found it" do
+    probe = ~S"""
+    ExUnit.start(autorun: false, exclude: [:test], include: [death: true])
+    {:ok, _} = Application.ensure_all_started(:crypto)
+    System.put_env("CYFR_CLUSTER", "off")
+    before = System.get_env()
+    Code.require_file(System.fetch_env!("CYFR_RUNTIME_ENV_READING_TEST"))
+
+    defmodule DeathProbe do
+      use ExUnit.Case, async: false
+
+      @tag :death
+      test "killed mid-body" do
+        Cyfr.RuntimeEnvReadingTest.with_env(%{"CYFR_CLUSTER" => "on"}, fn ->
+          Process.exit(self(), :kill)
+        end)
+      end
+    end
+
+    result = ExUnit.run()
+    IO.puts("ran=#{result.total - result.excluded} failures=#{result.failures} leaked=#{System.get_env() != before}")
+    """
+
+    {output, _status} =
+      System.cmd("mix", ["run", "--no-start", "-e", probe],
+        cd: Path.expand("../../../..", __DIR__),
+        env: [{"MIX_ENV", "test"}, {"CYFR_RUNTIME_ENV_READING_TEST", __ENV__.file}],
+        stderr_to_stdout: true
+      )
+
+    assert output =~ "ran=1 failures=1 leaked=false", output
   end
 end
