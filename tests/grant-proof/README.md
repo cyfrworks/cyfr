@@ -36,7 +36,7 @@ the first row a later one rests on.
 | `cli_digest` | the command line's preview of exactly the decisions the sheet sent answers the commit digest the head was committed under |
 | `background` | version 1.1.0 asks to keep running when hidden: the plan's shape digest moves, the loader asks the person's run to grant again (`consent_required`), and the prompt shows the background row, starting from the origins the head admits; granted, the head is revision 2 and the run is admitted under it |
 | `reworded` | version 1.2.0 only rewords its need's reason: the shape digest is the head's, the run is admitted under revision 2, and nothing is asked |
-| `flows` | version 1.3.0 lets outside material reach the host the person kept: the plan's shape digest moves, the loader asks the person's run to grant again (`consent_required`), and the prompt's exits row for that host names `outside` beside `files_by_grant`, the new flow unticked since a re-grant opens from the head's narrowing; ticked and granted, the head is revision 3, holds the flow and admits the run |
+| `flows` | version 1.3.0 lets outside material reach the host the person kept: the plan's shape digest moves, the loader asks the person's run to grant again (`consent_required`), and the prompt's exits row for that host names `outside` beside `files_by_grant`, the new flow unticked since a re-grant opens from the head's narrowing; ticked and granted, the head is revision 3, holds the flow under the digest the command line previews for the same decisions, and admits the run |
 | `revocation` | the profile revoked in the console: the first admission asked after the revocation's answer is refused, on the member that committed it |
 
 ## Shown in the suite
