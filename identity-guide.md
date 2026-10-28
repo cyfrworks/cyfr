@@ -144,6 +144,14 @@ At the CYFR you join, signing in with your CYFR identity is not a fresh proof. R
 
 Someone with no CYFR identity of their own joins by an invitation link instead. A member creates one for a group they sit in, on **Members**; the platform administrator may also create one that names no group. The link is `<CYFR address>/invite#<code>`: it is shown once, works once, expires after seven days, and the CYFR keeps only the code's hash. Its page names who invited you and to which group, and **Create your identity here** makes your passkey, you, your keys and your own athanor at that CYFR, with your seat in the group. A link that has expired, been used or been revoked, whose issuer has since left the group or been denied (it stays dead if they are let back in), or that was made before the CYFR was restored from a backup, says it can no longer be used. The identity made this way is held by that CYFR, as one made by its setup is.
 
+### When a CYFR Requires Your Company's Sign-in
+
+A CYFR run for a company may require each person there to sign in with their company's account as well: once, or again every set number of days. That sign-in is a condition of being there. It is not a way to sign in, and it is not your identity. You still sign in with your passkey, a paired device, your CYFR identity or a linked sign-in method, and you keep each of them.
+
+While your company sign-in is missing or past its days, every page of that CYFR sends you to its company page. **Sign in with your company** takes you to your company's sign-in and back, and **Sign out** ends your session. Nothing else there opens until your company sign-in stands, and the API keys you made and the devices you paired there are refused. Your session, API keys, devices and memberships all stay, and work again once you sign in with your company.
+
+The CYFR binds your company account to you by the subject your company's sign-in names for it, never by an email address. A company account already bound to someone else there is refused, and once one is bound to you, another is refused too. No CYFR merges two people because their email addresses match, and a company sign-in never makes or unlocks a person. When the CYFR moves to another company configuration (another issuer, client or organization), everyone there signs in with their company again, and the new sign-in replaces the old binding.
+
 ### Where joining is proven
 
 The join proof (`tests/join-proof/`) runs every step in Chromium on the desktop, and a paired device's steps again in Chromium at a 720×720 touch viewport; in Firefox and WebKit it runs the sign-in at the group's CYFR, the carry between the person's own CYFR and the group's, and a second browser profile, each fresh confirmation those need given on a device paired in Chromium. Steps that use a passkey run in Chromium alone, whose virtual authenticator the proof drives. In-app browsers and mail clients that rewrite links are not covered.

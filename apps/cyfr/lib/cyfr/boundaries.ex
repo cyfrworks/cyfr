@@ -340,7 +340,7 @@ defmodule Cyfr.Boundaries do
     Arca.PersonIdentities Arca.IdentityAttempts Arca.IdentityLog
     Arca.DirectoryHeads Arca.DeviceCertificates Arca.DeviceCertifications
     Arca.PairingInvitations Arca.Passkeys Arca.PendingConfirmations Arca.CarryActions Arca.InstallationClaims
-    Arca.CliSignIns Arca.Invitations
+    Arca.CliSignIns Arca.Invitations Arca.CompanyAuthorizations Arca.CompanyLoginAttempts
     Arca.RequestRateWindows Arca.InstanceEntries Arca.InstanceEntryUsage
     Arca.DecisionLog Arca.McpLog Arca.PolicyLog Arca.SecurityTransitions
   )
@@ -581,8 +581,8 @@ defmodule Cyfr.Boundaries do
       into: "Sanctum",
       allow: ~w(
         Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
-        Sanctum.Catalog Sanctum.CliSignIn Sanctum.ClientIp Sanctum.Consent Sanctum.Context
-        Sanctum.Decisions
+        Sanctum.Catalog Sanctum.CliSignIn Sanctum.ClientIp Sanctum.CompanyLogin Sanctum.Consent
+        Sanctum.Context Sanctum.Decisions
         Sanctum.Door Sanctum.Gate Sanctum.Handle Sanctum.Invitations Sanctum.Newcomer
         Sanctum.Pairing
         Sanctum.Passkeys Sanctum.PolicyLog
@@ -622,6 +622,10 @@ defmodule Cyfr.Boundaries do
           "live check of a handle against the registry's answer, and the sign-in page's " <>
           "reading of the identifier and published address a handle names (`resolve/1`), " <>
           "navigation that grants nothing. " <>
+          "`Sanctum.CompanyLogin` is the company page's: whether the browser's session is " <>
+          "refused for the company sign-in alone (`held/1`), the sign-in it begins for that " <>
+          "session (`start/1`) and the issuer's callback it finishes (`complete/2`), which " <>
+          "binds only in its own transaction and unlocks no one. " <>
           "`Sanctum.Passkeys` is the sign-in page's passkey sign-in method: the challenge it holds " <>
           "and the answer it verifies into a session, as the device flow's poll is " <>
           "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` sign-in method's: " <>
@@ -1186,7 +1190,8 @@ defmodule Cyfr.Boundaries do
           "pairing invitations and device certificates, registry push tokens, " <>
           "provider credentials, webhooks, " <>
           "the identities, memberships, athanors and sign-in permissions that decide standing, " <>
-          "the invitations that admit a person and seat them, a " <>
+          "the invitations that admit a person and seat them, a person's company sign-in " <>
+          "and the company sign-ins in flight, a " <>
           "person's identity row, keys, attempts and carries, the directory's logs " <>
           "and cached heads, passkeys, pending confirmations, the installation claim, " <>
           "the pre-authentication rate windows, the instance's own entries and " <>
@@ -1956,6 +1961,7 @@ defmodule Cyfr.Boundaries do
     # definition, the family and the refusal each member answers. The
     # tincture data routes read a frame's grant, for the flows its
     # tincture's ingress declares, as the loader reads a stored head.
+    "Sanctum.CompanyLogin" => [complete: 2, held: 1, start: 1],
     "Sanctum.Consent.Loader" => [
       admitted_blob: 3,
       damage?: 1,
@@ -2332,6 +2338,14 @@ defmodule Cyfr.Boundaries do
           "and no CSRF token, since no cross-site form sets the header and no CORS answer " <>
           "admits one"
     },
+    browser_company_login: %{
+      admits: :session,
+      why:
+        "the browser's own cookie session, admitted only while it is refused for the " <>
+          "company sign-in a CYFR requires and nothing else (`Sanctum.CompanyLogin.held/1`): " <>
+          "the company page and its start, a POST under the browser pipeline's CSRF token; " <>
+          "every other route refuses that session"
+    },
     browser_session: %{
       admits: :session,
       why:
@@ -2465,10 +2479,14 @@ defmodule Cyfr.Boundaries do
     device_flow_endpoints: :seam,
     provisioning_inline: :seam,
     record_sink_inline: :seam,
-    # The issuer's side of an OpenID Connect re-authentication
-    # (`Sanctum.Auth.OIDC`): a test stands in its own for the token
+    # The issuer's side of an OpenID Connect re-authentication or company
+    # sign-in (`Sanctum.Auth.OIDC`): a test stands in its own for the token
     # exchange, as `device_flow` does for the device flow's.
     oidc_reauth_client: :seam,
+    # WorkOS's API base URL (`Sanctum.Auth.WorkOS`), which a suite points at
+    # its scripted WorkOS on loopback; a release never sets it, so the
+    # company sign-in reaches https://api.workos.com.
+    workos_api_url: :seam,
     # The directory client's resolver and trusted certificates
     # (`Sanctum.Directory.Client`), which a suite sets to reach its
     # scripted directory through paths that pass no options; a caller's
@@ -2739,6 +2757,13 @@ defmodule Cyfr.Boundaries do
       reason:
         "declared and implemented inside Sanctum (`auth/oauth.ex`, `auth/oidc.ex`) and " <>
           "selected by configuration. An internal strategy behaviour, not a port."
+    },
+    %{
+      behaviour: "Sanctum.CompanyLogin.Issuer",
+      reason:
+        "a company's issuer, declared and implemented inside Sanctum (`auth/oidc.ex`, " <>
+          "`auth/workos.ex`) and selected by `CYFR_COMPANY_LOGIN`'s configuration. An " <>
+          "internal strategy behaviour, not a port."
     }
   ]
 
@@ -2898,7 +2923,8 @@ defmodule Cyfr.Boundaries do
     # The browser's sign-in, re-authentication and policy acceptance, which
     # establish a person's sign-in, prove it fresh or complete it rather
     # than act under a context the gate admitted: a sign-in's start,
-    # its tickets, callbacks and door link, a fresh sign-in's proof of a
+    # its tickets, callbacks and door link, a company sign-in's start and
+    # callback, a fresh sign-in's proof of a
     # confirmation and the answer to it, and the registry policy a sign-in
     # accepts. The browser's sign-out decides nothing and is no entry.
     # Cyfr's boundary does not depend on PrismWeb, so these rows name their
@@ -2918,6 +2944,18 @@ defmodule Cyfr.Boundaries do
     %{
       module: Module.concat(["PrismWeb", "AuthController"]),
       site: :cyfr_start,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "AuthController"]),
+      site: :company_start,
+      plane: :external,
+      origin: :none
+    },
+    %{
+      module: Module.concat(["PrismWeb", "AuthController"]),
+      site: :company_callback,
       plane: :external,
       origin: :none
     },

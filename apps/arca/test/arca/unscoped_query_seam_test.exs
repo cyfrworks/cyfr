@@ -436,6 +436,12 @@ defmodule Arca.UnscopedQuerySeamTest do
     "Arca.Schemas.RequestRateWindow" =>
       "a pre-authentication limit, keyed by bucket and hashed key; no session, and so no " <>
         "athanor, stands behind the requests it bounds",
+    "Arca.Schemas.CompanyAuthorization" =>
+      "a person's company sign-in, keyed by the person; deleted with their users row, " <>
+        "never with an athanor",
+    "Arca.Schemas.CompanyLoginAttempt" =>
+      "a company sign-in in flight, keyed by its id and the hash of its state, owned by " <>
+        "the person and the session that opened it; deleted with the person",
     "Arca.Schemas.CliSignIn" =>
       "a command line's pending sign-in, keyed by the hashes of its approval secret and " <>
         "its session token; no person or athanor owns it until its approval mints a " <>

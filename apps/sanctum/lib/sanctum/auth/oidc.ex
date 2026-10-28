@@ -65,6 +65,24 @@ defmodule Sanctum.Auth.OIDC do
       while its client stands, as a passkey assertion or an email code
       given there is (`Sanctum.Pairing`, adding a method or a device).
 
+  ## A company's sign-in
+
+  When this CYFR requires a company sign-in and WorkOS is not configured,
+  the issuer is the company's (`Sanctum.CompanyLogin.Issuer`), on the
+  same client:
+
+    * `authorize_url/2` asks the issuer for an ordinary login, neither
+      `prompt=login` nor `max_age=0`, carrying the attempt's state, nonce
+      and PKCE challenge, with the redirect URI
+      `<origin>/auth/company/callback`, which the issuer lists beside the
+      other two;
+    * `complete/2` redeems the code for the ID token `Oidcc` validates,
+      and answers its `sub` under the configured issuer and client id
+      once the token's issuer is this one and its nonce the attempt's.
+
+  It is not a sign-in and not a fresh confirmation: it unlocks no person
+  and confirms nothing.
+
   The exchange with the issuer is `Sanctum.Auth.OIDC.Oidcc`'s. A test
   stands in its own issuer through `:sanctum, :oidc_reauth_client`, a
   seam deliberately undeclared in config, as the device flow's is: every
@@ -72,6 +90,7 @@ defmodule Sanctum.Auth.OIDC do
   """
 
   @behaviour Sanctum.Auth
+  @behaviour Sanctum.CompanyLogin.Issuer
 
   alias Prima.Identity.Encoding
   alias Sanctum.Auth.Identity
@@ -85,14 +104,15 @@ defmodule Sanctum.Auth.OIDC do
 
   defmodule Oidcc do
     @moduledoc """
-    The exchange a re-authentication makes with the issuer, over `Oidcc`,
-    against the `:cyfr_oidc` provider configuration worker
-    `ueberauth_oidcc` starts from the issuer `runtime.exs` configures, with
-    the client id and secret of the `oidcc` Ueberauth provider:
+    The exchange a re-authentication or a company sign-in makes with the
+    issuer, over `Oidcc`, against the `:cyfr_oidc` provider configuration
+    worker `ueberauth_oidcc` starts from the issuer `runtime.exs`
+    configures, with the client id and secret of the `oidcc` Ueberauth
+    provider:
 
-      * `authorize_url/1` — the issuer's authorization URL for a login
-        forced fresh, for a request's `redirect_uri`, `nonce`, `state` and
-        `pkce_verifier`;
+      * `authorize_url/1` — the issuer's authorization URL, for a request's
+        `redirect_uri`, `nonce`, `state` and `pkce_verifier`: a login
+        forced fresh unless the request says `fresh: false`;
       * `redeem/2` — the claims of the ID token a code redeems for,
         validated for signature, audience, expiry and the request's nonce.
 
@@ -100,7 +120,7 @@ defmodule Sanctum.Auth.OIDC do
     two functions.
     """
 
-    @doc "The issuer's authorization URL for a login forced fresh."
+    @doc "The issuer's authorization URL, for a login forced fresh unless `fresh: false`."
     @spec authorize_url(map()) :: {:ok, String.t()} | {:error, :unavailable}
     def authorize_url(request) do
       with {:ok, {client_id, client_secret}} <- Sanctum.Auth.OIDC.client_credentials() do
@@ -110,7 +130,7 @@ defmodule Sanctum.Auth.OIDC do
                state: request.state,
                pkce_verifier: request.pkce_verifier,
                scopes: ["openid"],
-               url_extension: [{"prompt", "login"}, {"max_age", "0"}]
+               url_extension: fresh(request)
              }) do
           {:ok, url} -> {:ok, IO.iodata_to_binary(url)}
           {:error, _reason} -> {:error, :unavailable}
@@ -133,6 +153,9 @@ defmodule Sanctum.Auth.OIDC do
       end
     end
 
+    defp fresh(%{fresh: false}), do: []
+    defp fresh(_request), do: [{"prompt", "login"}, {"max_age", "0"}]
+
     # An answer with no ID token carries no `nonce` or `auth_time`, so it
     # proves nothing. `Oidcc.Token`'s type omits that case, which `oidcc`
     # answers with the atom `none`, so the field is read, not matched.
@@ -144,7 +167,7 @@ defmodule Sanctum.Auth.OIDC do
     end
   end
 
-  @impl true
+  @impl Sanctum.Auth
   @doc """
   Authenticate from Ueberauth.Auth struct.
 
@@ -199,7 +222,49 @@ defmodule Sanctum.Auth.OIDC do
     {:error, :invalid_credentials}
   end
 
-  @impl true
+  @impl Sanctum.CompanyLogin.Issuer
+  def authorize_url(attempt, state) do
+    client().authorize_url(%{
+      redirect_uri: attempt.redirect_uri,
+      nonce: attempt.nonce,
+      state: state,
+      pkce_verifier: attempt.pkce_verifier,
+      fresh: false
+    })
+  end
+
+  @impl Sanctum.CompanyLogin.Issuer
+  def complete(code, %{nonce: nonce} = attempt) when is_binary(nonce) do
+    request = %{
+      redirect_uri: attempt.redirect_uri,
+      nonce: nonce,
+      pkce_verifier: attempt.pkce_verifier
+    }
+
+    with {:ok, {client_id, _secret}} <- client_credentials(),
+         {:ok, claims} <- client().redeem(code, request) do
+      company_subject(claims, nonce, client_id)
+    else
+      {:error, :unavailable} -> {:error, :unavailable}
+      {:error, _refused} -> {:error, :issuer_refused}
+    end
+  end
+
+  def complete(_code, _attempt), do: {:error, :issuer_refused}
+
+  # The token is this issuer's, for this attempt; its subject is the one
+  # the issuer names the person by, never an email.
+  defp company_subject(%{"iss" => iss, "sub" => sub, "nonce" => nonce}, nonce, client_id)
+       when is_binary(sub) and sub != "" do
+    case issuer() do
+      ^iss -> {:ok, %{configuration: {:oidc, iss, client_id}, subject: sub}}
+      _another -> {:error, :issuer_refused}
+    end
+  end
+
+  defp company_subject(_claims, _nonce, _client_id), do: {:error, :issuer_refused}
+
+  @impl Sanctum.Auth
   @doc """
   This provider issues no bearer credential of its own: a session token or
   an API key on a request is established by the one recipe

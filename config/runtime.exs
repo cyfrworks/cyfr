@@ -695,6 +695,20 @@ if config_env() != :test do
       ]
   end
 
+  # The company sign-in this CYFR may require of every person
+  # (`Sanctum.CompanyLogin`), its issuer WorkOS or the OpenID Connect
+  # issuer above. Every refusal names its setting
+  # (`Cyfr.RuntimeConfig.company_login_config/3`); WorkOS's API key is a
+  # secret, never logged.
+  company_login =
+    case Cyfr.RuntimeConfig.company_login_config(getenv, oidc, headless?) do
+      {:ok, company_login} -> company_login
+      {:error, message} -> raise message
+    end
+
+  config :sanctum, :company_login, Map.delete(company_login, :workos)
+  config :sanctum, :workos, company_login.workos
+
   # Storage backend. Unset/`local` keeps the filesystem default from config.exs;
   # `s3` flips the adapter and requires the S3 credentials (fail loud if partial).
   case Cyfr.RuntimeConfig.resolve_storage(getenv) do

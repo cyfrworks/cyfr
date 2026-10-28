@@ -931,6 +931,10 @@ defmodule Emissary.Web.DeviceChannel do
        when reason in [:expired, :certificate_expired, :bad_signature],
        do: @renew
 
+  # A person who stands but for the company sign-in keeps their pairing:
+  # the device tries again once they gave it in a browser.
+  defp close_code(%Prima.Refusal{reason: :company_login_required}), do: @try_again
+
   defp close_code(%Prima.Refusal{class: :forbidden}), do: @standing_ended
 
   defp close_code(%Prima.Refusal{class: class})
@@ -960,7 +964,9 @@ defmodule Emissary.Web.DeviceChannel do
     }
   end
 
-  defp class(reason) when reason in [:revoked, :not_standing], do: :forbidden
+  defp class(reason) when reason in [:revoked, :not_standing, :company_login_required],
+    do: :forbidden
+
   # A remote person's identity that could not be confirmed fresh is a
   # pause, as a store that could not answer is: never a sign-out.
   defp class(reason) when reason in [:unavailable, :identity_stale], do: :unavailable
@@ -1005,6 +1011,8 @@ defmodule Emissary.Web.DeviceChannel do
 
   defp sentence(:not_standing),
     do: "The person behind this device no longer stands in this athanor"
+
+  defp sentence(:company_login_required), do: Prima.Refusal.message(:company_login_required)
 
   defp sentence(:unavailable), do: "This CYFR could not check the device now; retry shortly"
 

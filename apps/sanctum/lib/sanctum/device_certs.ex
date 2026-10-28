@@ -168,6 +168,9 @@ defmodule Sanctum.DeviceCerts do
       denied, the athanor archived or the person no longer seated in it.
     * `:identity_stale` — a remote person's directory could not confirm
       their head fresh: the request pauses.
+    * `:company_login_required` — the person stands but for the company
+      sign-in this CYFR requires (`Sanctum.CompanyLogin`): the device
+      reaches nothing until they give it in a browser.
     * `:remote_identity_unavailable` — a renewal for a remote person's
       client, which their own home renews.
     * `{:rate_limited, retry_after_ms}` — the source address's or the
@@ -213,6 +216,7 @@ defmodule Sanctum.DeviceCerts do
           | :revoked
           | :not_standing
           | :identity_stale
+          | :company_login_required
           | :remote_identity_unavailable
           | {:rate_limited, non_neg_integer()}
           | {:device_rate_limited, non_neg_integer()}
@@ -816,9 +820,11 @@ defmodule Sanctum.DeviceCerts do
     }
 
     # The rows were read as standing just now; establish refusing them is
-    # a standing that no longer reads as one.
+    # a standing that no longer reads as one, but for the company sign-in,
+    # which the person gives and the pairing outlives.
     case Sanctum.Caller.establish_device(device, carried) do
       {:ok, ctx} -> {:ok, ctx}
+      {:error, :company_login_required} -> {:error, :company_login_required}
       {:error, _refused} -> {:error, :not_standing}
     end
   end

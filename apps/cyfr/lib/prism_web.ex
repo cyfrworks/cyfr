@@ -37,6 +37,7 @@ defmodule PrismWeb do
       ChatLive,
       ChatRedirectLive,
       CliLive,
+      CompanyLoginLive,
       ComponentDetailLive,
       ComponentsLive,
       EnforcementsLive,

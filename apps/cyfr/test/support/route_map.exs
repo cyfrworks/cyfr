@@ -657,6 +657,24 @@
         },
         %{
           verb: "POST",
+          path: "/auth/company",
+          plug: "PrismWeb.AuthController",
+          plug_opts: ":company_start",
+          auth: "browser_company_login",
+          live_view: nil,
+          pipe_through: ["sign_in_identity", "auth_browser", "oauth_start_throttle"]
+        },
+        %{
+          verb: "GET",
+          path: "/auth/company/callback",
+          plug: "PrismWeb.AuthController",
+          plug_opts: ":company_callback",
+          auth: "browser_oauth_callback",
+          live_view: nil,
+          pipe_through: ["sign_in_identity", "auth_browser", "oauth_callback_throttle"]
+        },
+        %{
+          verb: "POST",
           path: "/auth/cyfr/callback",
           plug: "PrismWeb.AuthController",
           plug_opts: ":cyfr_callback",
@@ -752,6 +770,15 @@
           plug_opts: ":index",
           auth: "browser_authenticated",
           live_view: "PrismWeb.CliLive",
+          pipe_through: ["browser"]
+        },
+        %{
+          verb: "GET",
+          path: "/company-login",
+          plug: "Phoenix.LiveView.Plug",
+          plug_opts: ":index",
+          auth: "browser_company_login",
+          live_view: "PrismWeb.CompanyLoginLive",
           pipe_through: ["browser"]
         },
         %{

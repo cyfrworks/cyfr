@@ -24,6 +24,8 @@ defmodule PrismWeb.AuthController do
   - `GET /auth/cyfr/start?ticket=…` - The start of a `cyfr` sign-in
   - `GET /auth/cyfr?ticket=…` - The `cyfr` door's challenge hop
   - `POST /auth/cyfr/callback` - The `cyfr` door's callback
+  - `POST /auth/company` - Begins the company sign-in a CYFR requires
+  - `GET /auth/company/callback` - The company issuer's callback
 
   An API caller's sign-out and session read, by bearer token, are the
   HTTP API's, not the browser's.
@@ -67,6 +69,19 @@ defmodule PrismWeb.AuthController do
   when the challenge was issued), never one the request names. A paused
   sign-in (the directory could not be read) reports nothing: it may still
   be admitted on a retry.
+
+  ## The company sign-in
+
+  A CYFR that requires a company sign-in (`Sanctum.CompanyLogin`) refuses
+  a person's session for it until they give it, and the company page
+  (`PrismWeb.CompanyLoginLive`) posts here, with the browser pipeline's
+  CSRF token, under that session (`POST /auth/company`): this action opens
+  the attempt and answers `303` to the company's issuer. The issuer
+  returns the browser to `GET /auth/company/callback`, which finishes the
+  sign-in under the same session and sends the browser to `/` once the
+  binding stands, or back to the company page with what went wrong
+  (`?error=`). A session that stands goes to `/`, and one refused for
+  anything else to the sign-in page. Neither action signs anyone in.
 
   ## Linking a door
 
@@ -144,6 +159,60 @@ defmodule PrismWeb.AuthController do
 
       {:error, _no_session} ->
         to_login(conn, 401, "Sign in, then link the sign-in method again.")
+    end
+  end
+
+  @doc """
+  Begin the company sign-in for the browser's session (the module doc).
+  """
+  def company_start(conn, _params) do
+    case Sanctum.CompanyLogin.start(get_session(conn, SignInResponse.session_key())) do
+      {:ok, url} ->
+        conn
+        |> put_status(303)
+        |> redirect(external: url)
+
+      {:error, reason} when reason in [:standing, :not_required] ->
+        redirect(conn, to: "/")
+
+      {:error, reason} when reason in [:unavailable, :identity_stale] ->
+        to_company(conn, 503, "unavailable")
+
+      {:error, _refused} ->
+        to_login(conn, 401, "Sign in, then sign in with your company.")
+    end
+  end
+
+  @doc """
+  The company issuer's callback (the module doc): the attempt is spent
+  whatever follows, and nothing is bound on a refusal.
+  """
+  def company_callback(conn, params) do
+    case Sanctum.CompanyLogin.complete(params, get_session(conn, SignInResponse.session_key())) do
+      {:ok, _bound_or_refreshed} ->
+        redirect(conn, to: "/")
+
+      {:error, :not_required} ->
+        redirect(conn, to: "/")
+
+      {:error, :session_ended} ->
+        to_login(
+          conn,
+          401,
+          "Your session ended before the company sign-in finished. Sign in again."
+        )
+
+      {:error, :company_subject_bound} ->
+        to_company(conn, 409, "subject_bound")
+
+      {:error, :wrong_organization} ->
+        to_company(conn, 403, "wrong_organization")
+
+      {:error, :unavailable} ->
+        to_company(conn, 503, "unavailable")
+
+      {:error, _refused} ->
+        to_company(conn, 403, "refused")
     end
   end
 
@@ -653,6 +722,14 @@ defmodule PrismWeb.AuthController do
     conn
     |> CallIdentity.refused(status, title)
     |> CyfrWeb.MinimalPage.send_page(status, title, inner)
+  end
+
+  # Back to the company page, which says what went wrong
+  # (`PrismWeb.CompanyLoginLive.sentence/1`).
+  defp to_company(conn, status, error) do
+    conn
+    |> CallIdentity.refused(status, PrismWeb.CompanyLoginLive.sentence(error))
+    |> redirect(to: "/company-login?error=" <> error)
   end
 
   defp to_login(conn, status, message) do

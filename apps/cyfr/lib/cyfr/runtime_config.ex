@@ -77,6 +77,120 @@ defmodule Cyfr.RuntimeConfig do
   end
 
   @doc """
+  Resolve the company sign-in every person here may be held to
+  (`Sanctum.CompanyLogin`) from `CYFR_COMPANY_LOGIN`,
+  `CYFR_COMPANY_LOGIN_DAYS` and WorkOS's three settings, given the OpenID
+  Connect issuer `oidc_config/1` resolved and whether the node is headless.
+
+  Answers `{:ok, %{mode:, days:, issuer:, workos:}}`: the mode `:off`
+  (unset or empty), `:join` or `:renew`; the days, a positive whole number
+  with `:renew` alone; the issuer, `:workos` when its three settings are
+  set, `:oidc` when an OpenID Connect issuer is configured beside none,
+  nil otherwise; and WorkOS's `%{client_id:, api_key:, organization:}` or
+  nil. Refused, naming the setting: another mode; days missing with
+  `renew`, set with any other mode, or not a positive whole number; WorkOS
+  set in part, set while the mode is `off`, or set on a headless CYFR,
+  which has no page to sign in on; and `join` or `renew` with no company
+  issuer.
+  """
+  @spec company_login_config(getenv, map() | nil, boolean()) ::
+          {:ok,
+           %{
+             mode: :off | :join | :renew,
+             days: pos_integer() | nil,
+             issuer: :oidc | :workos | nil,
+             workos: %{client_id: String.t(), api_key: String.t(), organization: String.t()} | nil
+           }}
+          | {:error, String.t()}
+  def company_login_config(getenv, oidc, headless?)
+      when is_function(getenv, 1) and is_boolean(headless?) do
+    with {:ok, mode} <- company_mode(blank_to_nil(getenv.("CYFR_COMPANY_LOGIN"))),
+         {:ok, days} <- company_days(mode, blank_to_nil(getenv.("CYFR_COMPANY_LOGIN_DAYS"))),
+         {:ok, workos} <- workos_config(getenv),
+         :ok <- workos_allowed(workos, mode, headless?) do
+      issuer =
+        cond do
+          workos -> :workos
+          oidc -> :oidc
+          true -> nil
+        end
+
+      if mode != :off and is_nil(issuer) do
+        {:error,
+         "CYFR_COMPANY_LOGIN=#{mode} needs a company issuer: set WorkOS's three settings " <>
+           "(CYFR_WORKOS_CLIENT_ID, CYFR_WORKOS_API_KEY, CYFR_WORKOS_ORGANIZATION) or an " <>
+           "OpenID Connect issuer (CYFR_OIDC_ISSUER, CYFR_OIDC_CLIENT_ID, " <>
+           "CYFR_OIDC_CLIENT_SECRET)."}
+      else
+        {:ok, %{mode: mode, days: days, issuer: issuer, workos: workos}}
+      end
+    end
+  end
+
+  defp company_mode(nil), do: {:ok, :off}
+  defp company_mode("off"), do: {:ok, :off}
+  defp company_mode("join"), do: {:ok, :join}
+  defp company_mode("renew"), do: {:ok, :renew}
+
+  defp company_mode(_other),
+    do: {:error, "CYFR_COMPANY_LOGIN must be off, join or renew."}
+
+  defp company_days(:renew, nil),
+    do:
+      {:error, "CYFR_COMPANY_LOGIN=renew needs CYFR_COMPANY_LOGIN_DAYS, a positive whole number."}
+
+  defp company_days(:renew, days) do
+    if days =~ ~r/\A[1-9][0-9]*\z/,
+      do: {:ok, String.to_integer(days)},
+      else: {:error, "CYFR_COMPANY_LOGIN_DAYS must be a positive whole number of days."}
+  end
+
+  defp company_days(_mode, nil), do: {:ok, nil}
+
+  defp company_days(_mode, _days),
+    do: {:error, "CYFR_COMPANY_LOGIN_DAYS is set only with CYFR_COMPANY_LOGIN=renew."}
+
+  defp workos_config(getenv) do
+    fields = [
+      {"CYFR_WORKOS_CLIENT_ID", :client_id},
+      {"CYFR_WORKOS_API_KEY", :api_key},
+      {"CYFR_WORKOS_ORGANIZATION", :organization}
+    ]
+
+    resolved = for {var, key} <- fields, into: %{}, do: {key, blank_to_nil(getenv.(var))}
+    missing = for {var, key} <- fields, is_nil(resolved[key]), do: var
+
+    cond do
+      missing == [] ->
+        {:ok, resolved}
+
+      length(missing) == length(fields) ->
+        {:ok, nil}
+
+      true ->
+        {:error,
+         "WorkOS needs all of CYFR_WORKOS_CLIENT_ID, CYFR_WORKOS_API_KEY and " <>
+           "CYFR_WORKOS_ORGANIZATION; #{Enum.join(missing, ", ")} is not set."}
+    end
+  end
+
+  defp workos_allowed(nil, _mode, _headless?), do: :ok
+
+  defp workos_allowed(_workos, _mode, true),
+    do:
+      {:error,
+       "CYFR_HEADLESS=on cannot be combined with WorkOS: a company sign-in runs in the " <>
+         "browser page a headless CYFR does not serve."}
+
+  defp workos_allowed(_workos, :off, false),
+    do:
+      {:error,
+       "WorkOS is the company sign-in's issuer: set CYFR_COMPANY_LOGIN to join or renew, " <>
+         "or unset CYFR_WORKOS_CLIENT_ID, CYFR_WORKOS_API_KEY and CYFR_WORKOS_ORGANIZATION."}
+
+  defp workos_allowed(_workos, _mode, false), do: :ok
+
+  @doc """
   Browser cross-origin allowlist: `config/config.exs` configures the empty
   one, which admits no cross-origin browser caller, and
   `CYFR_CORS_ALLOWED_ORIGINS` replaces it. Read by both the CORS plug

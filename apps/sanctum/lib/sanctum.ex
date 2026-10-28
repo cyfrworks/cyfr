@@ -36,6 +36,10 @@ defmodule Sanctum do
   configured (`Sanctum.Auth.DeviceFlow.configured_providers/0`,
   `Sanctum.Auth.OIDC.issuer/0`); passkeys, paired devices and the CYFR
   sign-in are always offered.
+
+  A CYFR may also require a company sign-in of every person here
+  (`Sanctum.CompanyLogin`): a standing condition, never a sign-in method,
+  which `Sanctum.Caller` checks last wherever a person's standing is read.
   """
 
   use Boundary,
@@ -61,6 +65,7 @@ defmodule Sanctum do
       Cipher.Rotation,
       CliSignIn,
       ClientIp,
+      CompanyLogin,
       Consent,
       Consent.Accounts,
       Consent.Components,
