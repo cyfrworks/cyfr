@@ -261,8 +261,8 @@ if config_env() != :test do
   # The worker services runs are dispatched to (`Opus.Dispatch`):
   # `CYFR_LOCUS_RUNTIME_WORKERS`, comma-separated `<service_id>=<url>` entries, each the
   # configured id of a worker service and the base URL of its listener,
-  # tried in order. Default `wrk_local` on this host's loopback, where a
-  # source checkout's runtime container listens (docker-compose.dev.yml); a
+  # tried in order. Default `wrk_local` at http://127.0.0.1:4200; the
+  # source development stack names its own (scripts/dev-stack.sh). A
   # malformed entry or a repeated id refuses the boot.
   case Cyfr.RuntimeConfig.resolve_workers(getenv) do
     {:ok, workers} -> config :cyfr, :locus_runtime_workers, workers

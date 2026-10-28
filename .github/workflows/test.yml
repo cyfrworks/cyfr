@@ -310,11 +310,12 @@ jobs:
       # that no longer matches it fails here.
       - name: The configuration guide is the roster's
         run: mix cyfr.gen.configuration_guide --check
-      # The source development stack's compose override as compose
-      # resolves it over the shipped file: the runtime built from the tree
-      # under a local tag, published on loopback alone, calling back to its
-      # network's gateway, every other setting the shipped service's, and
-      # no part of the scaffold.
+      # The source development stack: its compose override as compose
+      # resolves it over the shipped file, the Locus services built from
+      # the tree with every other setting the shipped ones', its ports,
+      # subnets and names apart from what the checks reserve, and
+      # scripts/dev-stack.sh at its command boundary; no part of the
+      # scaffold.
       - name: The dev stack's compose override
         run: bash tests/dev-stack/compose-test.sh
       # The tincture SDK is built from apps/cyfr/assets/js/sdk into

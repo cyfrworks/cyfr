@@ -2,44 +2,73 @@
 # Copyright 2026 CYFR Works Inc.
 
 defmodule Mix.Tasks.Cyfr.Locus.DevStack do
-  @shortdoc "What the source development stack's runtime needs, read as a mix boot reads it"
+  @shortdoc "The source development stack's settings, read as a mix boot reads them"
 
   @moduledoc """
-  The settings `scripts/dev-stack.sh` starts the source development
-  stack's runtime with (CONTRIBUTING.md, "Running from source"), read
-  from the checkout's `.env` and the environment by the reader and in the
-  order `config/runtime.exs` reads them (`Cyfr.EnvFiles`, the environment
-  over the file), so the stack and the mix boot beside it agree on every
-  value. The script reads no `.env` of its own.
+  The settings `scripts/dev-stack.sh` starts the source development stack
+  with (CONTRIBUTING.md, "Running from source"), derived from what
+  `docker-compose.dev.yml` declares and checked against the checkout's
+  `.env` and the environment, read by the reader and in the order
+  `config/runtime.exs` reads them (`Cyfr.EnvFiles`, the environment over
+  the file, an empty value unset). The script reads no `.env` and no
+  declaration of its own.
 
-      mix cyfr.locus.dev_stack key SERVICE_ID WORKER_URL HOST_API_BIND
+  DECLARATIONS is the path of `docker-compose.dev.yml` resolved over
+  `docker-compose.yml` as JSON (`docker compose config --format json`).
+  From it come CYFR's settings for the stack: `CYFR_PORT` from Prism's
+  address (`x-prism`), `CYFR_LOCUS_RUNTIME_WORKERS` from the runtime's id
+  and published listener, `CYFR_HOST_API_BIND` and `CYFR_HOST_API_PORT`
+  from the runtime's callback address, `CYFR_LOCUS_BACKENDS_URL` and
+  `CYFR_LOCUS_BUILDS_URL` from each island guard's fixed address and
+  port, and `CYFR_PRIVATE_EGRESS_TARGETS`, the backends guard's address.
+  A value `.env` or the environment sets for one of them, a
+  `CYFR_HOST_API_URL` other than the callback address, or a
+  `CYFR_BIND_ADDRESS` other than Prism's, is refused by name: each would
+  serve Prism, or send runs, calls or builds, somewhere the stack is not.
 
-  prints `LOCUS_RUNTIME_KEY=<64 hex>`, the key of SERVICE_ID derived from
-  `CYFR_LOCUS_RUNTIME_ROOT` (`Prima.WorkerAuth.worker_key/2`), and
-  `CYFR_HOST_API_PORT=<port>`, the port the boot's host API listens on.
-  It refuses, naming the variable and its fix, a `RELEASE_ROOT` (the
-  stack is a mix boot from the checkout, never a release), a malformed
-  root, a root the environment sets empty over the file, a
-  `CYFR_LOCUS_RUNTIME_WORKERS` other than `SERVICE_ID=WORKER_URL`, a
-  `CYFR_HOST_API_BIND` other than HOST_API_BIND and a `CYFR_HOST_API_URL`
-  other than the host API at HOST_API_BIND: each would send runs, or the runtime's calls, somewhere
-  the stack is not. A root set nowhere is refused with exit status 3, the
-  one refusal the script answers by writing a root into `.env`.
+      mix cyfr.locus.dev_stack settings DECLARATIONS [ADMIN_EMAIL]
 
-      mix cyfr.locus.dev_stack endpoint
+  first writes into `.env`, made mode 0600 before it is written, each
+  setting a mix boot needs that neither `.env` nor the environment sets:
+  `CYFR_GITHUB_CLIENT_ID` from `.env.example`, `CYFR_PLATFORM_ADMIN_EMAILS`
+  as ADMIN_EMAIL (refused when there is none), and `CYFR_LOCUS_RUNTIME_ROOT`,
+  `CYFR_LOCUS_BACKENDS_KEY` and `CYFR_LOCUS_BUILDS_KEY` minted as `cyfr init`
+  mints them, 32 random bytes as 64 hexadecimal digits. A value already
+  set is kept; one the environment sets empty over the file, or a
+  malformed key, is refused. Nothing is written when anything is refused.
+  It then prints `wrote NAME...` when it wrote, a `server NAME=VALUE`
+  line for each of CYFR's settings above, and `compose NAME=VALUE` lines
+  for the three keys compose hands the services: `LOCUS_RUNTIME_KEY`,
+  the runtime's id's key derived from the root
+  (`Prima.WorkerAuth.worker_key/2`), and the backends and builds keys.
 
-  prints `CYFR_PORT=<port>`, the port the boot's loopback listener
-  serves, where `scripts/dev-stack.sh check` reaches the server.
+      mix cyfr.locus.dev_stack endpoint DECLARATIONS
+
+  writes nothing and prints `CYFR_PORT=<port>`, Prism's port, where
+  `scripts/dev-stack.sh check` reaches the server, after the same refusals.
+
+  Both refuse a `RELEASE_ROOT`: the stack is a mix boot from the checkout,
+  never a release.
   """
 
   use Boundary, classify_to: Cyfr
 
   use Mix.Task
 
+  import Bitwise
+
   @root "CYFR_LOCUS_RUNTIME_ROOT"
-  @workers "CYFR_LOCUS_RUNTIME_WORKERS"
-  @bind "CYFR_HOST_API_BIND"
-  @url "CYFR_HOST_API_URL"
+  @backends_key "CYFR_LOCUS_BACKENDS_KEY"
+  @builds_key "CYFR_LOCUS_BUILDS_KEY"
+  @github "CYFR_GITHUB_CLIENT_ID"
+  @admins "CYFR_PLATFORM_ADMIN_EMAILS"
+  @host_api_url "CYFR_HOST_API_URL"
+  @bind "CYFR_BIND_ADDRESS"
+
+  # What a mix boot needs that the stack provisions when nothing sets it,
+  # in the order the lines are written.
+  @provisioned [@github, @admins, @root, @backends_key, @builds_key]
+  @keys [@root, @backends_key, @builds_key]
 
   @impl Mix.Task
   def run(args) do
@@ -53,48 +82,123 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
       )
     end
 
-    answer(args)
-  end
-
-  defp answer(["key", service_id, worker_url, host_api_bind]) do
-    env = environment()
-    # config/runtime.exs's reader: an empty value is unset. The resolvers
-    # it hands values to trim them first, and so do the checks below.
-    getenv = fn name -> if Map.get(env, name) == "", do: nil, else: Map.get(env, name) end
-
-    with {:ok, host_api} <- Cyfr.RuntimeConfig.resolve_host_api(getenv),
-         :ok <- workers(getenv, service_id, worker_url),
-         :ok <- bind(getenv, host_api_bind),
-         :ok <- url(getenv, "http://#{host_api_bind}:#{host_api.port}"),
-         {:ok, key} <- key(getenv.(@root), service_id) do
-      Mix.shell().info("LOCUS_RUNTIME_KEY=" <> Base.encode16(key, case: :lower))
-      Mix.shell().info("CYFR_HOST_API_PORT=#{host_api.port}")
-    else
+    case answer(args) do
+      :ok -> :ok
       {:error, message} -> Mix.raise(message)
-      {:error, message, status} -> Mix.raise(message, exit_status: status)
     end
   end
 
-  defp answer(["endpoint"]) do
-    env = environment()
+  defp answer(["settings", declarations | admin]) when length(admin) <= 1 do
+    with {:ok, stack} <- declared(declarations),
+         env = environment(),
+         :ok <- agree(stack, env),
+         {:ok, lines} <- provision(env, admin),
+         :ok <- write(lines),
+         env = environment(),
+         {:ok, keys} <- keys(env, stack.service_id) do
+      if lines != [], do: info("wrote " <> Enum.map_join(lines, " ", &elem(&1, 0)))
+      for {name, value} <- stack.server, do: info("server #{name}=#{value}")
+      for {name, value} <- keys, do: info("compose #{name}=#{value}")
+      :ok
+    end
+  end
 
-    case Cyfr.RuntimeConfig.resolve_access(%{
-           file: file_env(),
-           process: env,
-           release?: Cyfr.RuntimeConfig.release?()
-         }) do
-      {:ok, %{listeners: %{loopback: {_address, port}}}} ->
-        Mix.shell().info("CYFR_PORT=#{port}")
-
-      {:error, %{code: code, payload: payload}} ->
-        Mix.raise(Prima.Refusal.message({code, payload}))
+  defp answer(["endpoint", declarations]) do
+    with {:ok, stack} <- declared(declarations),
+         :ok <- agree(stack, environment()) do
+      info("CYFR_PORT=" <> stack.prism_port)
     end
   end
 
   defp answer(_args) do
-    Mix.raise(
-      "usage: mix cyfr.locus.dev_stack key SERVICE_ID WORKER_URL HOST_API_BIND | endpoint"
-    )
+    {:error,
+     "usage: mix cyfr.locus.dev_stack settings DECLARATIONS [ADMIN_EMAIL] | endpoint DECLARATIONS"}
+  end
+
+  defp info(line), do: Mix.shell().info(line)
+
+  # The stack docker-compose.dev.yml declares, as compose resolved it.
+  defp declared(path) do
+    # arca:bypass-ok=B — the dev stack's compose declarations, resolved by
+    # the script into its private directory, read with no Arca configured.
+    with {:ok, text} <- File.read(path),
+         {:ok, json} <- Jason.decode(text),
+         {:ok, prism_port} <- prism(json["x-prism"]),
+         {:ok, runtime} <- runtime(get_in(json, ["services", "locus-runtime"])),
+         {:ok, backends} <- island(json, "locus-backends"),
+         {:ok, builds} <- island(json, "locus-builds") do
+      {:ok,
+       %{
+         service_id: runtime.service_id,
+         prism_port: prism_port,
+         prism_address: "127.0.0.1",
+         host_api_url: "http://#{runtime.host_api_bind}:#{runtime.host_api_port}",
+         server: [
+           {"CYFR_PORT", prism_port},
+           {"CYFR_LOCUS_RUNTIME_WORKERS", "#{runtime.service_id}=#{runtime.url}"},
+           {"CYFR_HOST_API_BIND", runtime.host_api_bind},
+           {"CYFR_HOST_API_PORT", runtime.host_api_port},
+           {"CYFR_LOCUS_BACKENDS_URL", "http://#{backends.address}:#{backends.port}"},
+           {"CYFR_PRIVATE_EGRESS_TARGETS", backends.address},
+           {"CYFR_LOCUS_BUILDS_URL", "http://#{builds.address}:#{builds.port}"}
+         ]
+       }}
+    else
+      {:error, message} when is_binary(message) -> {:error, message}
+      _ -> {:error, "#{path} holds no compose configuration as JSON."}
+    end
+  end
+
+  defp prism("127.0.0.1:" <> port) do
+    if port?(port), do: {:ok, port}, else: undeclared("x-prism as 127.0.0.1:<port>")
+  end
+
+  defp prism(_), do: undeclared("x-prism as 127.0.0.1:<port>")
+
+  defp runtime(%{
+         "environment" => %{
+           "LOCUS_RUNTIME_SERVICE_ID" => service_id,
+           "LOCUS_RUNTIME_HOST_API_URL" => callback
+         },
+         "ports" => [%{"host_ip" => "127.0.0.1", "published" => published, "target" => 4200}]
+       }) do
+    case URI.parse(callback) do
+      %URI{scheme: "http", host: bind, port: port, path: nil} when is_binary(bind) ->
+        {:ok,
+         %{
+           service_id: service_id,
+           url: "http://127.0.0.1:#{published}",
+           host_api_bind: bind,
+           host_api_port: Integer.to_string(port)
+         }}
+
+      _ ->
+        undeclared("the runtime's callback as http://<gateway>:<port>")
+    end
+  end
+
+  defp runtime(_),
+    do: undeclared("the runtime's id, callback address and one port on 127.0.0.1")
+
+  # An island's service is reached at its guard's fixed address on the
+  # island's network, on the port the guard exposes for it.
+  defp island(json, name) do
+    case get_in(json, ["services", name <> "-guard"]) do
+      %{"expose" => [port], "networks" => %{^name => %{"ipv4_address" => address}}} ->
+        {:ok, %{address: address, port: port}}
+
+      _ ->
+        undeclared("#{name}-guard with one exposed port and a fixed address on #{name}")
+    end
+  end
+
+  defp undeclared(what), do: {:error, "docker-compose.dev.yml does not declare #{what}."}
+
+  defp port?(text) do
+    case Integer.parse(text) do
+      {port, ""} -> port in 1..65_535
+      _ -> false
+    end
   end
 
   # The names and values a mix boot reads: the .env file at the project
@@ -102,108 +206,188 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   defp environment,
     do: Cyfr.EnvFiles.source!(env_files() ++ [System.get_env()], side_effect: false)
 
-  defp file_env do
-    case env_files() do
-      [] -> nil
-      files -> Cyfr.EnvFiles.source!(files, side_effect: false)
-    end
-  end
+  defp env_path, do: Path.join(File.cwd!(), ".env")
 
   defp env_files do
     # arca:bypass-ok=B — the operator's .env file at the project root, read
     # as the boot's runtime configuration reads it, with no Arca configured.
-    path = Path.join(File.cwd!(), ".env")
-    if File.regular?(path), do: [path], else: []
+    if File.regular?(env_path()), do: [env_path()], else: []
   end
 
-  defp workers(getenv, service_id, worker_url) do
-    want = "#{service_id}=#{worker_url}"
-
-    case blank_to_nil(getenv.(@workers)) do
-      nil ->
-        :ok
-
-      text ->
-        case Cyfr.RuntimeConfig.resolve_workers(getenv) do
-          {:ok, [%{id: ^service_id, url: ^worker_url}]} -> :ok
-          {:ok, _elsewhere} -> disagrees(@workers, text, want)
-          {:error, message} -> {:error, message}
-        end
+  # config/runtime.exs's reading: an empty value is unset, and the
+  # resolvers trim what they are handed.
+  defp set(env, name) do
+    case String.trim(Map.get(env, name) || "") do
+      "" -> nil
+      text -> text
     end
   end
 
-  defp bind(getenv, host_api_bind) do
-    case blank_to_nil(getenv.(@bind)) do
-      nil ->
-        :ok
+  defp agree(stack, env) do
+    stack.server
+    |> Enum.concat([{@host_api_url, stack.host_api_url}, {@bind, stack.prism_address}])
+    |> Enum.find_value(:ok, fn {name, want} ->
+      have = set(env, name)
 
-      text ->
-        if :inet.parse_address(String.to_charlist(text)) ==
-             :inet.parse_address(String.to_charlist(host_api_bind)),
-           do: :ok,
-           else: disagrees(@bind, text, host_api_bind)
+      if have == nil or agrees?(name, have, want) do
+        nil
+      else
+        {:error,
+         "#{name} is #{have}, and the dev stack needs #{want}. Unset it in .env and the " <>
+           "environment, or set it to #{want}."}
+      end
+    end)
+  end
+
+  defp agrees?(name, have, want) when name in ["CYFR_PORT", "CYFR_HOST_API_PORT"],
+    do: Integer.parse(have) == {String.to_integer(want), ""}
+
+  defp agrees?(name, have, want) when name in ["CYFR_HOST_API_BIND", @bind],
+    do: :inet.parse_address(String.to_charlist(have)) == :inet.parse_address(~c"#{want}")
+
+  defp agrees?("CYFR_PRIVATE_EGRESS_TARGETS", have, want),
+    do:
+      have |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == "")) == [want]
+
+  defp agrees?("CYFR_LOCUS_RUNTIME_WORKERS", have, want) do
+    [id, url] = String.split(want, "=", parts: 2)
+
+    match?(
+      {:ok, [%{id: ^id, url: ^url}]},
+      Cyfr.RuntimeConfig.resolve_workers(fn _ -> have end)
+    )
+  end
+
+  defp agrees?(_url, have, want), do: Prima.WorkerWire.base_url(have) == {:ok, want}
+
+  # The lines to write for what nothing sets, or the refusal of what is
+  # set wrongly; nothing is written until every name has been read.
+  defp provision(env, admin) do
+    Enum.reduce_while(@provisioned, {:ok, []}, fn name, {:ok, lines} ->
+      case provided(name, env, admin) do
+        :ok -> {:cont, {:ok, lines}}
+        {:write, value} -> {:cont, {:ok, lines ++ [{name, value}]}}
+        {:error, message} -> {:halt, {:error, message}}
+      end
+    end)
+  end
+
+  defp provided(name, env, admin) do
+    cond do
+      System.get_env(name) == "" ->
+        {:error,
+         "#{name} is set empty in the environment, which overrides .env. Unset it there, " <>
+           "so the value .env holds is the one the stack uses."}
+
+      (have = set(env, name)) != nil ->
+        if name in @keys, do: hex_key(name, have), else: :ok
+
+      true ->
+        minted(name, admin)
     end
   end
 
-  defp url(getenv, want) do
-    case blank_to_nil(getenv.(@url)) do
-      nil ->
-        :ok
+  defp minted(@github, _admin) do
+    # arca:bypass-ok=B — the checkout's .env.example, read as an operator's
+    # .env is read, with no Arca configured.
+    example = Path.join(File.cwd!(), ".env.example")
 
-      text ->
-        if Prima.WorkerWire.base_url(text) == {:ok, want},
-          do: :ok,
-          else: disagrees(@url, text, want)
+    with true <- File.regular?(example),
+         id when is_binary(id) and id != "" <-
+           Map.get(Cyfr.EnvFiles.source!([example], side_effect: false), @github) do
+      {:write, id}
+    else
+      _ ->
+        {:error,
+         "#{@github} is set in neither .env nor the environment, and .env.example names " <>
+           "none to copy. Add the line #{@github}=<your GitHub OAuth app's client id> to .env."}
     end
   end
 
-  defp disagrees(name, have, want) do
+  defp minted(@admins, admin) do
+    case Enum.map(admin, &String.trim/1) do
+      [email] when email != "" ->
+        if Regex.match?(~r/\A[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\z/, email),
+          do: {:write, email},
+          else: no_admin(" `git config user.email` is #{inspect(email)}, not one address.")
+
+      _ ->
+        no_admin(" `git config user.email` is not set.")
+    end
+  end
+
+  defp minted(_key, _admin),
+    do: {:write, Base.encode16(:crypto.strong_rand_bytes(32), case: :lower)}
+
+  defp no_admin(why) do
     {:error,
-     "#{name} is #{have}, and the dev stack needs #{want}. Unset it in .env and the " <>
-       "environment, or set it to #{want}."}
+     "#{@admins} is set in neither .env nor the environment, and the dev stack signs you in " <>
+       "as its platform admin." <>
+       why <> " Add the line #{@admins}=<your email> to .env, or set `git config user.email`."}
   end
 
-  defp key(nil, _service_id) do
-    if System.get_env(@root) == nil do
-      {:error, "#{@root} is set in neither .env nor the environment.", 3}
-    else
-      {:error,
-       "#{@root} is set empty in the environment, which overrides .env. Unset it there, " <>
-         "so the root .env holds is the one CYFR and the runtime share."}
-    end
-  end
-
-  defp key(text, service_id) do
-    with {:ok, root} <- root(text),
-         {:ok, key} <- Prima.WorkerAuth.worker_key(root, service_id) do
-      {:ok, key}
-    else
-      {:error, {:invalid_field, :service}} ->
-        {:error, "#{inspect(service_id)} is not a service id"}
-
-      {:error, message} ->
-        {:error, message}
-    end
-  end
-
-  defp root(text) do
+  defp hex_key(name, text) do
     case Prima.MacEnvelope.decode_root(text) do
-      {:ok, root} ->
-        {:ok, root}
+      {:ok, _bytes} ->
+        :ok
 
       :error ->
         {:error,
-         "#{@root} is not 64 hexadecimal digits. Generate one with `openssl rand -hex 32`, " <>
+         "#{name} is not 64 hexadecimal digits. Generate one with `openssl rand -hex 32`, " <>
            "or remove its line from .env and scripts/dev-stack.sh writes one."}
     end
   end
 
-  defp blank_to_nil(nil), do: nil
+  # The lines appended to .env, which is made mode 0600 first, since it
+  # then holds a secret; each must read back as it was written.
+  defp write([]), do: :ok
 
-  defp blank_to_nil(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
+  defp write(lines) do
+    path = env_path()
+
+    # arca:bypass-ok=B — the operator's .env file at the project root,
+    # written before the boot reads it, with no Arca configured.
+    with :ok <- if(File.exists?(path), do: :ok, else: File.write(path, "")),
+         :ok <- File.chmod(path, 0o600),
+         {:ok, %File.Stat{mode: mode}} when (mode &&& 0o777) == 0o600 <- File.stat(path),
+         {:ok, text} <- File.read(path),
+         lead = if(text == "" or String.ends_with?(text, "\n"), do: "", else: "\n"),
+         :ok <-
+           File.write(path, lead <> Enum.map_join(lines, &"#{elem(&1, 0)}=#{elem(&1, 1)}\n"), [
+             :append
+           ]) do
+      read_back(lines)
+    else
+      _ ->
+        {:error,
+         ".env could not be made mode 0600 and written; make it yours (chown) on a " <>
+           "filesystem that keeps modes, and run again."}
+    end
+  end
+
+  defp read_back(lines) do
+    env = environment()
+
+    case Enum.find(lines, fn {name, value} -> Map.get(env, name) != value end) do
+      nil -> :ok
+      {name, _} -> {:error, "#{name} does not read back from .env as it was written."}
+    end
+  end
+
+  defp keys(env, service_id) do
+    {:ok, root} = Prima.MacEnvelope.decode_root(set(env, @root))
+
+    case Prima.WorkerAuth.worker_key(root, service_id) do
+      {:ok, key} ->
+        {:ok,
+         [
+           {"LOCUS_RUNTIME_KEY", Base.encode16(key, case: :lower)},
+           {@backends_key, set(env, @backends_key)},
+           {@builds_key, set(env, @builds_key)}
+         ]}
+
+      {:error, _} ->
+        {:error, "#{inspect(service_id)}, the runtime's id, is not a service id."}
     end
   end
 end
