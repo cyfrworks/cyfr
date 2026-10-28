@@ -711,20 +711,19 @@ async function vaultIds(page) {
   return Object.fromEntries(listed);
 }
 
-// An entry made on the Vault page's form: its name, the provider choice
-// that names the need it meets, its one field as FIELD=value and its host,
-// the save confirmed with the passkey.
+// An entry made on the Vault page's form: its name, the kind "API key",
+// its provider as the label, its one field as FIELD=value and its host,
+// the save confirmed with the passkey. The labels the form suggests, the
+// installed components' providers, are recorded beside it.
 async function createOnVault(page, spec) {
   await open(page, pagePath("/vault"));
   await page.locator('button[phx-click="show_add"][phx-value-mode="fields"]').click({ timeout: 30_000 });
   const form = page.locator("#vault-create-form");
   await form.waitFor({ timeout: 30_000 });
-  // The form's one provider choice, each need of the athanor's components
-  // labelled "<provider> (<kind>)".
-  const choice = `${spec.provider} (api_key)`;
-  const select = form.locator('select[name="need"]');
-  const offered = (await select.locator("option").allInnerTexts().catch(() => [])).map((t) => t.trim());
-  await select.selectOption({ label: choice });
+  const suggested = await page.locator("datalist#vault-create-labels option")
+    .evaluateAll((options) => options.map((o) => o.value)).catch(() => []);
+  await form.locator('select[name="kind"]').selectOption({ label: "API key" });
+  await form.locator('input[name="provider_hint"]').fill(spec.provider);
   await form.locator('input[name="name"]').fill(spec.name);
   secretOnPage = true;
   await form.locator('textarea[name="fields"]').fill(`${spec.field}=${spec.key}`);
@@ -738,7 +737,7 @@ async function createOnVault(page, spec) {
   const created = await told(page, "Entry created.");
   const cleared = await typedAway(page);
   return {
-    offered, choice, sent, created, cleared, confirmation: confirmation.replace(/\s+/g, " "),
+    suggested, label: spec.provider, sent, created, cleared, confirmation: confirmation.replace(/\s+/g, " "),
   };
 }
 

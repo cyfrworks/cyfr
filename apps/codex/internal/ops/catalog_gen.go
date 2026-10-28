@@ -5665,7 +5665,7 @@ type VaultCreateArgs struct {
 	Kind string `json:"kind"`
 	// Secret material as name → value; names mirror field_names
 	Fields Field[map[string]string] `json:"fields,omitzero"`
-	// Immutable provider tag (e.g. 'google'); set at create only
+	// Optional label (e.g. 'openai.com'), set at create only: it ranks the entry first for a need of that provider, and an OAuth entry requires it
 	ProviderHint Field[string] `json:"provider_hint,omitzero"`
 	// Binding field: scopes this credential was authorized for
 	OauthScopes    Field[[]string]                      `json:"oauth_scopes,omitzero"`

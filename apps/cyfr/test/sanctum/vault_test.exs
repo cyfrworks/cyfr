@@ -296,6 +296,38 @@ defmodule Sanctum.VaultTest do
                VaultReader.fetch(ctx, resource_for(ctx, view.id), @dispense)
     end
 
+    test "`list/1` names each entry's uses", %{ctx: ctx} do
+      bound = create!(ctx)
+      unbound = create!(ctx)
+      digest = resource_for(ctx, bound.id).binding_digest
+      first = mint_profile_with_ref(ctx, bound.id, digest)
+      second = mint_profile_with_ref(ctx, bound.id, digest)
+      use_of = &%{profile_id: &1.id, source_ref: &1.source_ref, label: "default"}
+
+      used_by = fn ->
+        {:ok, listed} = Vault.list(ctx)
+        Map.new(listed, &{&1.id, &1.used_by})
+      end
+
+      assert used_by.() == %{
+               bound.id => Enum.sort_by([use_of.(first), use_of.(second)], & &1.source_ref),
+               unbound.id => []
+             }
+
+      # A grant revoked is no longer a use.
+      :ok = Arca.ProfileStorage.transition(actor(ctx), first.id, :any, "revoked")
+      assert used_by.() == %{bound.id => [use_of.(second)], unbound.id => []}
+
+      # Grants that cannot be read leave every entry's uses unknown, never
+      # none, and the entries are still listed.
+      Arca.Repo.query!("ALTER TABLE consent_vault_refs RENAME TO consent_vault_refs_unavailable")
+
+      {unread, _log} = ExUnit.CaptureLog.with_log(used_by)
+      Arca.Repo.query!("ALTER TABLE consent_vault_refs_unavailable RENAME TO consent_vault_refs")
+
+      assert unread == %{bound.id => nil, unbound.id => nil}
+    end
+
     test "a living name cannot be reused", %{ctx: ctx} do
       create!(ctx, %{name: "taken"})
 

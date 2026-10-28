@@ -968,10 +968,10 @@ A vault entry holds credential material — sealed at rest, never returned by an
 
 | Action | Key args | What it does |
 |--------|----------|--------------|
-| `list` | — | Enumerate entries (names, status, destination and disclosure, never material) and the athanor's default per provider |
+| `list` | — | Enumerate entries (names, status, destination and disclosure, never material), each with the grants that bind it (`used_by`: each active profile whose head binds it, by `profile_id`, `source_ref` and `label`; `null` when they cannot be read), and the athanor's default per provider |
 | `status` | — | Each living entry's name, kind, status, created and updated times and whether a consent binds it — never material or a field; on both planes, under no consent class, so a tincture that declares it and an in-chain call may read it |
 | `set_default` | `provider_hint`, and exactly one of `entry_id` and `instance_entry_id` | Make an active entry labelled with that provider, or an instance entry offered to you, the athanor's default for it — the one a consent suggests when several entries meet a need whose type names that provider. It binds nothing, and moving it moves no consent; the first entry of a provider is its default until you move it |
-| `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields`, `destination` (+ `disclose`) | Mint an entry with sealed material, bound to where it may go |
+| `create` | `name`, `kind` (`api_key` \| `oauth` \| `bundle`), `fields`, `destination` (+ `provider_hint`, `disclose`) | Mint an entry with sealed material, bound to where it may go. Field names are any non-empty names. `provider_hint` is an optional label, fixed once created: it ranks the entry first for a need of that provider and makes it that provider's default when it has none; an OAuth entry requires it |
 | `rename` | `id`, `name` | Relabel an entry — a label is unique among the athanor's living entries |
 | `rotate` | `id`, `fields`, `expected_payload_rev` | Replace material, same field schema — CAS-guarded, **no re-consent needed** |
 | `rebind` | `id` + binding fields (`field_names`, `destination`, `disclose`) | Change what the credential *talks to* — dependent consents stop being ready until re-approved. A widening rebind (a destination not within the stored one, disclosure turned on, or a disclosed field added) needs a fresh confirmation; a narrowing one the session alone. Scopes change only by re-authorizing; endpoints never change |

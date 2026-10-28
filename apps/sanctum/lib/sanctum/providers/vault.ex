@@ -6,8 +6,10 @@ defmodule Sanctum.Providers.Vault do
   Vault tool handlers for the Sanctum MCP provider — thin argument
   mapping over `Sanctum.Vault`, which owns every rule. External plane
   only: guests have no enumeration API and no vault verbs. `list`
-  answers the living entries beside the athanor's default per provider,
-  an object keyed by provider hint naming one entry by id, and
+  answers the living entries, each with the grants that bind it
+  (`used_by`, `null` when they cannot be read), beside the athanor's
+  default per provider, an object keyed by provider hint naming one entry
+  by id, and
   `set_default` makes one of the athanor's entries, or an instance entry
   offered to the caller, a provider's default: what a consent suggests,
   binding nothing. `status`
@@ -134,7 +136,9 @@ defmodule Sanctum.Providers.Vault do
               description: "Secret material as name → value; names mirror field_names"
             ),
             Arg.new("provider_hint", :string,
-              description: "Immutable provider tag (e.g. 'google'); set at create only"
+              description:
+                "Optional label (e.g. 'openai.com'), set at create only: it ranks the " <>
+                  "entry first for a need of that provider, and an OAuth entry requires it"
             ),
             Arg.new("oauth_scopes", {:array, Arg.new(nil, :string)},
               description: "Binding field: scopes this credential was authorized for"
