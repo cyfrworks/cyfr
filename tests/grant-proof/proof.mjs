@@ -40,7 +40,7 @@ import { join } from "node:path";
 import {
   ask as askRunSh, launchBrowser, pageTokens, readHomes, recordText, redact, redactFrames, signedIn, startProxy, waitFor,
 } from "../browser/lib.mjs";
-import { flowsHeld, sameHead } from "./heads.mjs";
+import { changedCopies, digestCopies, flowsHeld, sameHead } from "./heads.mjs";
 
 const [homesFile, segment, cookie, outDir] = process.argv.slice(2);
 if (!homesFile || !segment || !cookie || !outDir) {
@@ -268,18 +268,15 @@ async function main() {
     // The head after rewording is the head before it, every field held. The
     // copies are heads a permission change would leave behind: the predicate
     // must refuse each one.
-    const rewordedCopies = [
-      { ...unchanged, revision: unchanged.revision + 1 },
-      { ...unchanged, domains: [...unchanged.domains, DROPPED] },
-      { ...unchanged, flows: [...unchanged.flows, `outside to ${DROPPED}`] },
-    ];
+    const rewordedCopies = changedCopies(unchanged, DROPPED);
     if (!row("reworded",
       reworded.shape_digest === regranted.shape_digest && still.admitted === true &&
         still.consent_id === regranted.consent_id && sameHead(unchanged, regranted) &&
         rewordedCopies.every((copy) => !sameHead(copy, regranted)),
-      "a reworded reason changes no shape digest and asks nothing; the head holds every field it held, and a copy with another revision, domain or flow is refused",
+      "a reworded reason changes no shape digest and asks nothing; the head holds every field it held, and a copy with another revision, or a host or flow added or removed, is refused",
       { shape: reworded.shape_digest === regranted.shape_digest, still, head: unchanged,
-        same_head: sameHead(unchanged, regranted) })) return;
+        same_head: sameHead(unchanged, regranted),
+        copies_refused: rewordedCopies.map((copy) => !sameHead(copy, regranted)) })) return;
 
     // -----------------------------------------------------------------------
     // flows
@@ -318,15 +315,7 @@ async function main() {
     // shape, its flows are exactly the two granted, and its digest is the one
     // the preview answers (`flowsHeld` in heads.mjs). Every other field is the
     // head before it.
-    const flowsCopies = [
-      { ...flowHead, flows: [...flowHead.flows, `outside to ${DROPPED}`] },
-      { ...flowHead, domains: [...flowHead.domains, DROPPED] },
-      { ...flowHead, revision: flowHead.revision + 1 },
-      // The digest copies: none, empty, malformed, a well-formed digest that is
-      // not the preview's, and the digest the head held before the grant.
-      ...[null, "", "sha256:wrong", `sha256:${"0".repeat(64)}`, regranted.commit_digest]
-        .map((commit_digest) => ({ ...flowHead, commit_digest })),
-    ];
+    const flowsCopies = [...changedCopies(flowHead, DROPPED), ...digestCopies(flowHead, regranted.commit_digest)];
     if (!row("flows",
       flowed.shape_digest !== reworded.shape_digest &&
         flowAsking.admitted === false && flowAsking.refusal === "consent_required" &&
@@ -334,7 +323,7 @@ async function main() {
         openedOff && ticked && flowsHeld(flowHead, flowsGrant) &&
         flowsCopies.every((copy) => !flowsHeld(copy, flowsGrant)) &&
         flowAdmitted.admitted === true && flowAdmitted.consent_id === flowHead.consent_id,
-      "a version letting one more class reach a host is asked again with that exit shown, the new flow unticked; ticked and granted, the head holds exactly its granted flows and every other field, under the digest the command line previews for the same decisions; copies with an extra flow, an added domain, another revision or another digest are refused",
+      "a version letting one more class reach a host is asked again with that exit shown, the new flow unticked; ticked and granted, the head holds exactly its granted flows and every other field, under the digest the command line previews for the same decisions; copies with another revision, a host or flow added or removed, or another digest are refused",
       { asking: flowAsking, opened_off: openedOff, ticked, head: flowHead, digest: previewShown(flowsShown),
         unnarrowed: previewShown(flowsUnnarrowed),
         held: flowsHeld(flowHead, flowsGrant), copies_refused: flowsCopies.map((copy) => !flowsHeld(copy, flowsGrant)) })) return;

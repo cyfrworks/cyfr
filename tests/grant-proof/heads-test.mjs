@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { flowsHeld, sameHead } from "./heads.mjs";
+import { changedCopies, digestCopies, flowsHeld, sameHead } from "./heads.mjs";
 
 const KEPT = "alpha.grant.test";
 const DROPPED = "beta.grant.test";
@@ -57,6 +57,24 @@ test("a head with an extra flow, an added domain or another revision is refused"
     { ...flowHead, revision: flowHead.revision + 1 },
   ];
   for (const copy of copies) assert.equal(flowsHeld(copy, grant), false);
+});
+
+test("a head with a host or a flow removed is refused, beside one with a host or a flow added", () => {
+  const removed = [{ ...flowHead, domains: [] }, { ...flowHead, flows: [`outside to ${KEPT}`] }];
+  for (const copy of removed) assert.equal(flowsHeld(copy, grant), false, JSON.stringify(copy));
+  for (const copy of changedCopies(flowHead, DROPPED)) assert.equal(flowsHeld(copy, grant), false, JSON.stringify(copy));
+  for (const copy of changedCopies(regranted, DROPPED)) assert.equal(sameHead(copy, regranted), false, JSON.stringify(copy));
+});
+
+test("the changed copies are another revision and a host and a flow each added and removed", () => {
+  const [revision, hostAdded, hostRemoved, flowAdded, flowRemoved] = changedCopies(flowHead, DROPPED);
+  assert.equal(revision.revision, flowHead.revision + 1);
+  assert.deepEqual(hostAdded.domains, [KEPT, DROPPED]);
+  assert.deepEqual(hostRemoved.domains, []);
+  assert.deepEqual(flowAdded.flows, [...flowHead.flows, `outside to ${DROPPED}`]);
+  assert.deepEqual(flowRemoved.flows, [`outside to ${KEPT}`]);
+  assert.deepEqual(digestCopies(flowHead, regranted.commit_digest).map((copy) => copy.commit_digest),
+    [null, "", "sha256:wrong", digest("0"), regranted.commit_digest]);
 });
 
 test("a head that keeps the regranted head's consent is refused", () => {

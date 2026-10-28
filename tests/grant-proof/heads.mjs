@@ -15,6 +15,23 @@ export const sameHead = (a, b) =>
   [...new Set([...Object.keys(a), ...Object.keys(b)])].every((k) =>
     Array.isArray(a[k]) && Array.isArray(b[k]) ? sameSet(a[k], b[k]) : a[k] === b[k]);
 
+// Copies of a head a change of permission would leave behind, each of which
+// a row's predicate must refuse: another revision, a host added or removed,
+// and a flow added or removed.
+export const changedCopies = (head, dropped) => [
+  { ...head, revision: head.revision + 1 },
+  { ...head, domains: [...head.domains, dropped] },
+  { ...head, domains: head.domains.slice(1) },
+  { ...head, flows: [...head.flows, `outside to ${dropped}`] },
+  { ...head, flows: head.flows.slice(1) },
+];
+
+// Copies of a head committed under no digest, an empty or malformed one, a
+// well-formed digest no preview answered, and `previous`, the digest the head
+// before it held.
+export const digestCopies = (head, previous) =>
+  [null, "", "sha256:wrong", `sha256:${"0".repeat(64)}`, previous].map((commit_digest) => ({ ...head, commit_digest }));
+
 // The head after the flows grant: one revision on from the regranted head, its
 // consent new and its digest the one `digest` names, the command line's preview
 // of the decisions the grant committed. Its flows are exactly the two granted
