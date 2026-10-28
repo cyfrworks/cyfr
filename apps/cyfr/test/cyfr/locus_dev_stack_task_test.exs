@@ -120,12 +120,16 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     CYFR_LOCUS_BUILDS_KEY=#{@builds_key}
     """
 
-  defp compose_lines(backends \\ @backends_key, builds \\ @builds_key) do
-    [
-      "compose LOCUS_RUNTIME_KEY=" <> @vectors["keys"]["worker_hex"],
-      "compose CYFR_LOCUS_BACKENDS_KEY=" <> backends,
-      "compose CYFR_LOCUS_BUILDS_KEY=" <> builds
-    ]
+  # The server's settings and the services' keys, the builds key the
+  # server's too.
+  defp answered(backends \\ @backends_key, builds \\ @builds_key) do
+    server_lines() ++
+      [
+        "server CYFR_LOCUS_BUILDS_KEY=" <> builds,
+        "compose LOCUS_RUNTIME_KEY=" <> @vectors["keys"]["worker_hex"],
+        "compose CYFR_LOCUS_BACKENDS_KEY=" <> backends,
+        "compose CYFR_LOCUS_BUILDS_KEY=" <> builds
+      ]
   end
 
   defp settings!(admin \\ []), do: DevStack.run(["settings", "stack.json" | admin])
@@ -154,7 +158,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     test "derives CYFR's settings from the declarations and answers each service's key" do
       File.write!(".env", complete())
       settings!()
-      assert answers() == server_lines() ++ compose_lines()
+      assert answers() == answered()
       assert File.read!(".env") == complete()
     end
 
@@ -163,7 +167,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
       assert [
                "wrote CYFR_GITHUB_CLIENT_ID CYFR_PLATFORM_ADMIN_EMAILS CYFR_LOCUS_RUNTIME_ROOT " <>
-                 "CYFR_LOCUS_BACKENDS_KEY CYFR_LOCUS_BUILDS_KEY"
+                 "CYFR_LOCUS_BACKENDS_KEY"
                | rest
              ] = answers()
 
@@ -174,9 +178,17 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
                "CYFR_PLATFORM_ADMIN_EMAILS=dev@example.test",
                "CYFR_LOCUS_RUNTIME_ROOT=" <> minted_root,
                "CYFR_LOCUS_BACKENDS_KEY=" <> backends,
-               "CYFR_LOCUS_BUILDS_KEY=" <> builds,
                ""
              ] = String.split(File.read!(".env"), "\n")
+
+      # Every other mix boot of the checkout reads this .env alone, and
+      # accepts it: no builds key without its URL.
+      file = Cyfr.EnvFiles.source!([".env"], side_effect: false)
+      assert {:ok, nil} = Cyfr.RuntimeConfig.resolve_locus_builds(&Map.get(file, &1))
+
+      # The builds key, which a boot refuses without its URL, is the run's
+      # alone, the server's as the builder's.
+      "server CYFR_LOCUS_BUILDS_KEY=" <> builds = Enum.at(rest, length(server_lines()))
 
       for key <- [minted_root, backends, builds], do: assert(key =~ ~r/\A[0-9a-f]{64}\z/)
       assert Enum.uniq([minted_root, backends, builds]) |> length() == 3
@@ -187,15 +199,20 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       assert rest ==
                server_lines() ++
                  [
+                   "server CYFR_LOCUS_BUILDS_KEY=" <> builds,
                    "compose LOCUS_RUNTIME_KEY=" <> Base.encode16(runtime_key, case: :lower),
                    "compose CYFR_LOCUS_BACKENDS_KEY=" <> backends,
                    "compose CYFR_LOCUS_BUILDS_KEY=" <> builds
                  ]
 
-      # A second run keeps every value and writes nothing.
+      # A second run keeps every value it wrote and writes nothing; the
+      # builds key is minted afresh.
       written = File.read!(".env")
       settings!(["other@example.test"])
-      assert hd(answers()) == hd(server_lines())
+      again = answers()
+      assert Enum.take(again, length(server_lines())) == server_lines()
+      refute ("server CYFR_LOCUS_BUILDS_KEY=" <> builds) in again
+      assert ("compose CYFR_LOCUS_BACKENDS_KEY=" <> backends) in again
       assert File.read!(".env") == written
     end
 
@@ -207,7 +224,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       settings!()
 
       assert hd(answers()) ==
-               "wrote CYFR_GITHUB_CLIENT_ID CYFR_LOCUS_BACKENDS_KEY CYFR_LOCUS_BUILDS_KEY"
+               "wrote CYFR_GITHUB_CLIENT_ID CYFR_LOCUS_BACKENDS_KEY"
 
       assert mode(".env") == 0o600
 
@@ -216,7 +233,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
                ^kept,
                "CYFR_GITHUB_CLIENT_ID=" <> @client_id,
                "CYFR_LOCUS_BACKENDS_KEY=" <> _,
-               "CYFR_LOCUS_BUILDS_KEY=" <> _,
                ""
              ] = String.split(File.read!(".env"), "\n")
 
@@ -233,7 +249,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
       System.put_env("CYFR_LOCUS_BACKENDS_KEY", String.duplicate("d3", 32))
       settings!()
-      assert answers() == server_lines() ++ compose_lines(String.duplicate("d3", 32), @builds_key)
+      assert answers() == answered(String.duplicate("d3", 32), @builds_key)
     end
 
     test "refuses, writing nothing, when no admin email is set or given" do
@@ -300,7 +316,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
       System.put_env("CYFR_HOST_API_PORT", "4566")
       System.put_env("CYFR_LOCUS_BUILDS_URL", "http://172.16.252.2:4100")
       settings!()
-      assert answers() == server_lines() ++ compose_lines()
+      assert answers() == answered()
     end
 
     test "refuses, by name, a server setting from .env or the environment that disagrees" do

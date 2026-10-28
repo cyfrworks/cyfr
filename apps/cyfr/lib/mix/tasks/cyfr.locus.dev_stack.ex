@@ -31,16 +31,18 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   first writes into `.env`, made mode 0600 before it is written, each
   setting a mix boot needs that neither `.env` nor the environment sets:
   `CYFR_GITHUB_CLIENT_ID` from `.env.example`, `CYFR_PLATFORM_ADMIN_EMAILS`
-  as ADMIN_EMAIL (refused when there is none), and `CYFR_LOCUS_RUNTIME_ROOT`,
-  `CYFR_LOCUS_BACKENDS_KEY` and `CYFR_LOCUS_BUILDS_KEY` minted as `cyfr init`
-  mints them, 32 random bytes as 64 hexadecimal digits. A value already
-  set is kept; one the environment sets empty over the file, or a
-  malformed key, is refused. Nothing is written when anything is refused.
-  It then prints `wrote NAME...` when it wrote, a `server NAME=VALUE`
-  line for each of CYFR's settings above, and `compose NAME=VALUE` lines
-  for the three keys compose hands the services: `LOCUS_RUNTIME_KEY`,
-  the runtime's id's key derived from the root
-  (`Prima.WorkerAuth.worker_key/2`), and the backends and builds keys.
+  as ADMIN_EMAIL (refused when there is none), and `CYFR_LOCUS_RUNTIME_ROOT`
+  and `CYFR_LOCUS_BACKENDS_KEY` minted as `cyfr init` mints them, 32 random
+  bytes as 64 hexadecimal digits. `CYFR_LOCUS_BUILDS_KEY`, which a boot
+  refuses without its URL, is never written: unset, it is minted for the
+  run. A value already set is kept; one the environment sets empty over
+  the file, or a malformed key, is refused. Nothing is written when
+  anything is refused. It then prints `wrote NAME...` when it wrote, a
+  `server NAME=VALUE` line for each of CYFR's settings above and the
+  builds key, and `compose NAME=VALUE` lines for the three keys compose
+  hands the services: `LOCUS_RUNTIME_KEY`, the runtime's id's key derived
+  from the root (`Prima.WorkerAuth.worker_key/2`), and the backends and
+  builds keys.
 
       mix cyfr.locus.dev_stack endpoint DECLARATIONS
 
@@ -67,8 +69,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   # What a mix boot needs that the stack provisions when nothing sets it,
   # in the order the lines are written.
-  @provisioned [@github, @admins, @root, @backends_key, @builds_key]
-  @keys [@root, @backends_key, @builds_key]
+  @provisioned [@github, @admins, @root, @backends_key]
+  @keys [@root, @backends_key]
 
   @impl Mix.Task
   def run(args) do
@@ -93,11 +95,13 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
          env = environment(),
          :ok <- agree(stack, env),
          {:ok, lines} <- provision(env, admin),
+         {:ok, builds_key} <- builds_key(env),
          :ok <- write(lines),
          env = environment(),
-         {:ok, keys} <- keys(env, stack.service_id) do
+         {:ok, keys} <- keys(env, stack.service_id, builds_key) do
       if lines != [], do: info("wrote " <> Enum.map_join(lines, " ", &elem(&1, 0)))
       for {name, value} <- stack.server, do: info("server #{name}=#{value}")
+      info("server #{@builds_key}=#{builds_key}")
       for {name, value} <- keys, do: info("compose #{name}=#{value}")
       :ok
     end
@@ -274,16 +278,33 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   defp provided(name, env, admin) do
     cond do
-      System.get_env(name) == "" ->
-        {:error,
-         "#{name} is set empty in the environment, which overrides .env. Unset it there, " <>
-           "so the value .env holds is the one the stack uses."}
+      System.get_env(name) == "" -> empty_override(name)
+      (have = set(env, name)) != nil -> if name in @keys, do: hex_key(name, have), else: :ok
+      true -> minted(name, admin)
+    end
+  end
 
-      (have = set(env, name)) != nil ->
-        if name in @keys, do: hex_key(name, have), else: :ok
+  defp empty_override(name) do
+    {:error,
+     "#{name} is set empty in the environment, which overrides .env. Unset it there, " <>
+       "so the value .env holds is the one the stack uses."}
+  end
+
+  # The builds key pairs with CYFR_LOCUS_BUILDS_URL, which the stack hands
+  # the server and never writes: in .env without it, every other mix boot
+  # of the checkout would refuse to start. The builder holds no state, so
+  # a key .env or the environment does not set is minted for each run.
+  defp builds_key(env) do
+    cond do
+      System.get_env(@builds_key) == "" ->
+        empty_override(@builds_key)
+
+      (have = set(env, @builds_key)) != nil ->
+        with :ok <- hex_key(@builds_key, have), do: {:ok, have}
 
       true ->
-        minted(name, admin)
+        {:write, key} = minted(@builds_key, [])
+        {:ok, key}
     end
   end
 
@@ -374,7 +395,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end
   end
 
-  defp keys(env, service_id) do
+  defp keys(env, service_id, builds_key) do
     {:ok, root} = Prima.MacEnvelope.decode_root(set(env, @root))
 
     case Prima.WorkerAuth.worker_key(root, service_id) do
@@ -383,7 +404,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
          [
            {"LOCUS_RUNTIME_KEY", Base.encode16(key, case: :lower)},
            {@backends_key, set(env, @backends_key)},
-           {@builds_key, set(env, @builds_key)}
+           {@builds_key, builds_key}
          ]}
 
       {:error, _} ->

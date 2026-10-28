@@ -420,21 +420,23 @@ case_provision() {
   local root backends builds
   root="$(sed -n 's/^CYFR_LOCUS_RUNTIME_ROOT=//p' "$case_dir/.env")"
   backends="$(sed -n 's/^CYFR_LOCUS_BACKENDS_KEY=//p' "$case_dir/.env")"
-  builds="$(sed -n 's/^CYFR_LOCUS_BUILDS_KEY=//p' "$case_dir/.env")"
+  # The builds key, which a boot refuses without its URL, is the run's
+  # alone: the builder's and the server's, never .env's.
+  builds="$(record docker.calls | sed -n 's/^.* up .*|CYFR_LOCUS_BUILDS_KEY=//p')"
   [ "$(cat "$case_dir/.env")" = "CYFR_GITHUB_CLIENT_ID=$example_id
 CYFR_PLATFORM_ADMIN_EMAILS=dev@example.test
 CYFR_LOCUS_RUNTIME_ROOT=$root
-CYFR_LOCUS_BACKENDS_KEY=$backends
-CYFR_LOCUS_BUILDS_KEY=$builds" ] || echo ".env holds $(printf '%q' "$(cat "$case_dir/.env")")"
+CYFR_LOCUS_BACKENDS_KEY=$backends" ] || echo ".env holds $(printf '%q' "$(cat "$case_dir/.env")")"
   for key in "$root" "$backends" "$builds"; do
     [[ "$key" =~ ^[0-9a-f]{64}$ ]] || echo "a minted key is $(printf '%q' "$key"), not 64 hexadecimal digits"
   done
   [ "$(printf '%s\n' "$root" "$backends" "$builds" | sort -u | wc -l)" = 3 ] || echo "the minted keys are not three"
-  grep -qxF "dev-stack: .env is mode 0600 and now sets CYFR_GITHUB_CLIENT_ID, CYFR_PLATFORM_ADMIN_EMAILS, CYFR_LOCUS_RUNTIME_ROOT, CYFR_LOCUS_BACKENDS_KEY, CYFR_LOCUS_BUILDS_KEY." "$case_dir/out" ||
+  grep -qxF "dev-stack: .env is mode 0600 and now sets CYFR_GITHUB_CLIENT_ID, CYFR_PLATFORM_ADMIN_EMAILS, CYFR_LOCUS_RUNTIME_ROOT, CYFR_LOCUS_BACKENDS_KEY." "$case_dir/out" ||
     echo "the run did not say what it wrote: $(cat "$case_dir/out")"
   [ "$(calls)" = "$(full_run "$root" "$backends" "$builds")" ] || echo "docker was handed: $(calls)"
-  [ "$(server_settings)" = "$want_settings" ] || echo "the server's settings: $(server_settings)"
-  record server.env | grep -qE "^(LOCUS_RUNTIME_KEY|CYFR_LOCUS_(RUNTIME_ROOT|BACKENDS_KEY|BUILDS_KEY))=" &&
+  [ "$(server_settings)" = "$(printf '%s\n' "$want_settings" "CYFR_LOCUS_BUILDS_KEY=$builds" | sort)" ] ||
+    echo "the server's settings: $(server_settings)"
+  record server.env | grep -qE "^(LOCUS_RUNTIME_KEY|CYFR_LOCUS_(RUNTIME_ROOT|BACKENDS_KEY))=" &&
     echo "a key reached the server's environment"
   grep -qxF "dev-stack: CYFR starts at http://localhost:$prism_port and reloads as its files change." "$case_dir/out" ||
     echo "the run did not print Prism's address: $(cat "$case_dir/out")"
