@@ -1217,10 +1217,18 @@ defmodule PrismWeb.ConsentSheetComponent do
           {at, nil} ->
             socket
             |> assign(preview: nil, error: nil)
-            |> refuse(at, Ops.error_message(reason))
+            |> refuse(unpreviewed_at(at), Ops.error_message(reason))
         end
     end
   end
+
+  # A need's or a dependency's lifetime refusal is drawn on its preview
+  # row, or on the need while its lifetime is still to be chosen. With no
+  # preview and a lifetime chosen there is neither, so it is drawn beside
+  # the choice; an account's row draws its own.
+  defp unpreviewed_at({:lifetime, {:account, _edge, _ref}} = at), do: at
+  defp unpreviewed_at({:lifetime, slot}), do: slot_refusal(slot)
+  defp unpreviewed_at(at), do: at
 
   # The layer holds what its confirmation commits: told each walk, the
   # preview of exactly these decisions or none.

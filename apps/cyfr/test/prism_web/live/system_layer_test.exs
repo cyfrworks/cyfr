@@ -1154,6 +1154,94 @@ defmodule PrismWeb.SystemLayerTest do
   describe "each credential's lifetime" do
     setup [:signed_in, :needing_key]
 
+    # A walk that has not previewed yet draws a need's lifetime refusal
+    # where it is seen: once a lifetime is chosen the pending block is gone,
+    # and there is no preview row to carry it.
+    test "a lifetime refused before any preview is said beside the choice, and Grant waits",
+         %{view: view, local: local} do
+      app =
+        asking_methods!(local, "life-refused-#{System.unique_integer([:positive])}", "0.1.0", [
+          "GET"
+        ])
+
+      a = regrant_key!(local)
+
+      b =
+        entry!(local, %{
+          name: "Named key",
+          provider_hint: "regrant.test",
+          fields: %{"old" => "sk-old"},
+          destination: %{"hosts" => ["api.regrant.example"]}
+        })
+
+      ahead = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+
+      {:ok, _} =
+        commit_with!(local, app, %{
+          bindings: [
+            %{
+              need: "api_key",
+              entry_id: a.id,
+              lifetime: %{kind: "until", until: DateTime.to_iso8601(ahead)}
+            },
+            %{need: "api_key", entry_id: b.id, name: "Work", fields: %{"REGRANT_KEY" => "old"}}
+          ]
+        })
+
+      # The default's hour has gone by, and the account's entry was rebound
+      # to fields of other names: the walk opens with a lifetime to choose
+      # and a map to answer, and nothing previewed.
+      {_profile, head} = head_rows(local, app)
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(r in Arca.Schemas.ConsentVaultRef,
+            where:
+              r.athanor_id == ^local.athanor_id and r.consent_id == ^head.id and
+                r.vault_entry_id == ^a.id
+          ),
+          set: [expires_at: DateTime.add(DateTime.utc_now(), -60)]
+        )
+
+      {1, _} =
+        Arca.Repo.update_all(
+          from(e in Arca.Schemas.VaultEntry,
+            where: e.athanor_id == ^local.athanor_id and e.id == ^b.id
+          ),
+          set: [field_names: Jason.encode!(["extra", "new"])]
+        )
+
+      {:ok, grant} = PrismWeb.SystemLayer.grant_prompt(view_context(view), "g-life-refused", app)
+      prompt(view, grant)
+      assert has_element?(view, ~s([data-test="grant-lifetime-pending"]))
+
+      # The account's entry is revoked, then its map answered: the first
+      # preview is refused.
+      {:ok, _} = Sanctum.Vault.revoke(local, b.id)
+
+      view
+      |> form(
+        ~s([data-test="grant-account"][data-account="Work"] [data-test="grant-map-question"]),
+        %{"entry_field" => "new"}
+      )
+      |> render_change()
+
+      render(view)
+      assert has_element?(view, ~s([data-test="grant-refusal"]))
+
+      # Choosing the default's lifetime is refused again, and said.
+      click(view, ~s([data-test="grant-lifetime-pending"] [data-lifetime="standing"]))
+      refute has_element?(view, ~s([data-test="grant-lifetime-pending"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="grant-need"][data-need="api_key"] [data-test="grant-refusal"]),
+               "entry_unavailable"
+             )
+
+      assert has_element?(view, ~s(button[phx-click="confirm"][disabled]))
+    end
+
     test "a lifetime chosen is previewed and committed on its binding's row; this session " <>
            "is the earlier of the session's end and a day on",
          %{view: view, ref: ref, name_ref: name_ref, local: local} do
