@@ -93,9 +93,9 @@ defmodule Sanctum.Auth.CyfrDoor do
     * `:invalid_carry` — a fragment, envelope, payload or genesis that does
       not read, is too large, or does not hash to its identifier.
     * `:wrong_destination` — a carry for another home.
-    * `:no_request` — an attempt begun from a handle whose request this
-      browser's session no longer holds (`:lost`): expired, cleared, or
-      made for another home.
+    * `:no_request` — an attempt whose request this browser's session
+      no longer holds (`:lost`): expired, cleared, replaced by a later
+      start, or made for another home.
     * `:wrong_identity` — a carry of another identity than the one the
       handle named.
     * `{:refused, reason}` — an envelope or assertion that does not verify
@@ -144,8 +144,7 @@ defmodule Sanctum.Auth.CyfrDoor do
   What a sign-in attempt requested of the carry that answers it: `:none`
   (begun from an address, the hosted CYFR's included), `{:identifier,
   identifier}` (begun from a handle that resolved to it), or `:lost`
-  (begun from a handle whose request this browser's session no longer
-  holds).
+  (an attempt whose request this browser's session no longer holds).
   """
   @type requested :: :none | {:identifier, String.t()} | :lost
 

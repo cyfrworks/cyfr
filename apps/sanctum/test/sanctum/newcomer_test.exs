@@ -15,7 +15,9 @@ defmodule Sanctum.NewcomerTest do
   its transaction leaves no person, no athanor and no passkey. An
   invitation admits without the door, under its own checks and the same
   caps, and seats its person in the group it names in the transaction
-  that redeems it, so a refusal leaves no person and the code unredeemed.
+  that redeems it, so a refusal leaves no person and the code unredeemed;
+  one whose issuer's standing moved since it was issued, a declared
+  restore's raise among them, admits no one.
   A remote
   newcomer is admitted by the door's verdict on their identifier, with no
   keys and no athanor, and a directory that cannot be read writes no row.
@@ -477,6 +479,13 @@ defmodule Sanctum.NewcomerTest do
 
     defp invitation_row(id), do: Arca.Repo.get!(Invitation, id)
 
+    defp raise_generation!(user_id) do
+      {1, _} =
+        Arca.Repo.update_all(from(u in User, where: u.id == ^user_id),
+          inc: [security_generation: 1]
+        )
+    end
+
     test "makes a local person with keys, an athanor, a passkey and the seat it names, redeemed by them, without the door",
          %{issuer: issuer, group: group} do
       {id, code} = invite!(issuer, group.id)
@@ -563,6 +572,72 @@ defmodule Sanctum.NewcomerTest do
 
       assert {people(), passkeys()} == before
       for id <- [left, denied], do: assert(%{redeemed_by: nil} = invitation_row(id))
+    end
+
+    test "an invitation issued before a declared restore admits no one after it, " <>
+           "even one the restore's revocation missed: no person, no passkey, no seat",
+         %{admin: admin, issuer: issuer, group: group} do
+      {admin_invitation, admin_code} = invite!(admin, nil)
+      {group_invitation, group_code} = invite!(issuer, group.id)
+      ids = [admin_invitation, group_invitation]
+
+      {:ok, _} = Arca.SecurityTransitions.mark_restore(Prima.Actor.system())
+      assert {:ok, %{restore_id: _}} = Arca.SecurityTransitions.restore(slot: :none)
+      before = {people(), passkeys(), Members.count_by_athanor(group.id)}
+      watch_person_inserts!()
+
+      for code <- [admin_code, group_code] do
+        assert {:error, :invitation_invalid} =
+                 Newcomer.admit({:invitation, code}, {:passkey, registration()})
+      end
+
+      # A row the restore's revocation missed is retired still: the
+      # restore raised its issuer's standing past the one it recorded.
+      {2, _} =
+        Arca.Repo.update_all(from(i in Invitation, where: i.id in ^ids), set: [revoked_at: nil])
+
+      for code <- [admin_code, group_code] do
+        assert {:error, :invitation_invalid} = Sanctum.Invitations.lookup(code)
+
+        assert {:error, :invitation_invalid} =
+                 Newcomer.admit({:invitation, code}, {:passkey, registration()})
+      end
+
+      refute_received :person_inserted
+      assert {people(), passkeys(), Members.count_by_athanor(group.id)} == before
+      for id <- ids, do: assert(%{redeemed_by: nil} = invitation_row(id))
+    end
+
+    test "an issuer whose standing moved since issue admits no one, though every other check holds",
+         %{admin: admin, issuer: issuer, group: group} do
+      {admin_invitation, admin_code} = invite!(admin, nil)
+      {group_invitation, group_code} = invite!(issuer, group.id)
+
+      for code <- [admin_code, group_code],
+          do: assert({:ok, _shown} = Sanctum.Invitations.lookup(code))
+
+      # Each issuer stays active, the administrator still administers and
+      # the member is still seated: only the generation moves.
+      for person <- [admin, issuer], do: raise_generation!(person.id)
+      before = {people(), passkeys(), Members.count_by_athanor(group.id)}
+      watch_person_inserts!()
+
+      for code <- [admin_code, group_code] do
+        assert {:error, :invitation_invalid} = Sanctum.Invitations.lookup(code)
+
+        assert {:error, :invitation_invalid} =
+                 Newcomer.admit({:invitation, code}, {:passkey, registration()})
+      end
+
+      refute_received :person_inserted
+      assert {people(), passkeys(), Members.count_by_athanor(group.id)} == before
+
+      for id <- [admin_invitation, group_invitation],
+          do: assert(%{redeemed_by: nil, revoked_at: nil} = invitation_row(id))
+
+      # One issued at the standing they hold now admits.
+      {_id, code} = invite!(issuer, group.id)
+      assert {:ok, _} = Newcomer.admit({:invitation, code}, {:passkey, registration()})
     end
 
     test "the group's member cap refused leaves no person, no passkey and the code unredeemed",

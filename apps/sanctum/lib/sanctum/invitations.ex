@@ -33,17 +33,20 @@ defmodule Sanctum.Invitations do
 
   `redeemable/1` is the check: the code's invitation exists and is
   unexpired, unredeemed and unrevoked; its issuer is still an active
-  person here (a door deny marks them denied); one naming an athanor needs
-  the issuer still seated there and the athanor still an active group
-  with an open roster, and one naming none needs the issuer still the
-  platform administrator. Any failure is `:invitation_invalid`, one answer
-  for all, so a code reveals nothing of why. `lookup/1` makes exactly that
-  check for the invitation page, and reads only. `redeem/2` marks the
-  invitation redeemed by the person, by one conditional write that lands
-  only while the row is open and unexpired, inside the admission's
-  transaction after the check. The seat an invitation naming a group
-  makes reads its issuer's standing there once more, under the group's
-  lock (`issuer_seated/1`).
+  person here (a door deny marks them denied) at the standing they issued
+  it under, their `security_generation` still the one the invitation
+  recorded (`Arca.Invitations`), so a denial, an allow or a declared
+  restore since retires it and restored authority never redeems; one
+  naming an athanor needs the issuer still seated there and the athanor
+  still an active group with an open roster, and one naming none needs
+  the issuer still the platform administrator. Any failure is
+  `:invitation_invalid`, one answer for all, so a code reveals nothing of
+  why. `lookup/1` makes exactly that check for the invitation page, and
+  reads only. `redeem/2` marks the invitation redeemed by the person, by
+  one conditional write that lands only while the row is open and
+  unexpired, inside the admission's transaction after the check. The seat
+  an invitation naming a group makes reads its issuer's standing and seat
+  there once more, under the group's lock (`issuer_seated/1`).
   """
 
   alias Sanctum.Context
@@ -180,14 +183,16 @@ defmodule Sanctum.Invitations do
 
   @doc """
   Whether the issuer of `invitation`, which names a group athanor, is
-  still an active person seated there: asked again by the seat's
-  `reserve:` under that athanor's lock (`Arca.Members.seat/3`), which a
-  leave and a deny of the issuer take too, so the seat and a removal of
-  the issuer decide in one order. `:invitation_invalid` otherwise.
+  still an active person at the standing they issued it under, seated
+  there: asked again by the seat's `reserve:` under that athanor's lock
+  (`Arca.Members.seat/3`), which a leave and a deny of the issuer take
+  too, so the seat and a removal of the issuer decide in one order.
+  `:invitation_invalid` otherwise.
   """
   @spec issuer_seated(map()) :: :ok | {:error, :invitation_invalid | :unavailable}
-  def issuer_seated(%{issued_by: issuer, athanor_id: athanor_id}) when is_binary(athanor_id) do
-    with {:ok, _user} <- issuer(issuer), do: seated(issuer, athanor_id)
+  def issuer_seated(%{issued_by: issuer, athanor_id: athanor_id} = invitation)
+      when is_binary(athanor_id) do
+    with {:ok, _user} <- issuer(invitation), do: seated(issuer, athanor_id)
   end
 
   @doc """
@@ -321,7 +326,7 @@ defmodule Sanctum.Invitations do
     with {:ok, code_hash} <- code_hash(code),
          {:ok, row} <- invitation(code_hash),
          :ok <- open(row),
-         {:ok, issuer} <- issuer(row.issued_by),
+         {:ok, issuer} <- issuer(row),
          {:ok, athanor} <- named_place(row) do
       {:ok, %{row: row, issuer: issuer, athanor: athanor}}
     end
@@ -348,11 +353,12 @@ defmodule Sanctum.Invitations do
 
   defp open(row), do: if(state(row, DateTime.utc_now()) == "pending", do: :ok, else: invalid())
 
-  # The issuer, still an active person here.
-  defp issuer(user_id) do
+  # The issuer, still an active person here at the generation the
+  # invitation recorded: any change of their standing since raised it.
+  defp issuer(%{issued_by: user_id, issuer_generation: generation}) do
     case Users.get(user_id) do
-      {:ok, %{status: "active"} = user} -> {:ok, user}
-      {:ok, _denied} -> invalid()
+      {:ok, %{status: "active", security_generation: ^generation} = user} -> {:ok, user}
+      {:ok, _moved} -> invalid()
       {:error, :not_found} -> invalid()
       {:error, reason} -> {:error, unavailable(reason)}
     end

@@ -657,7 +657,8 @@ after seven days, and this CYFR keeps only the code's hash. Its page names
 who invited and to which group, and **Create your identity here** makes a
 passkey, the person, their keys, their athanor and the seat in the group.
 The issuer or the administrator revokes a link; a link whose issuer has
-since left the group or been denied admits no one. Someone who already has a
+since left the group or been denied, or whose issuer's standing has changed
+since it was made (a restore from backup changes everyone's), admits no one. Someone who already has a
 CYFR identity is added by handle instead.
 
 The first person of a CYFR is made by its setup, or by a restore onto an
@@ -1004,6 +1005,7 @@ person re-enables them from the system layer's checklist under a fresh
 sign-in with one of their sign-in methods, an emailed code or their kit (`/restore`, **Recover after a
 restore**); every component grant asks for consent again; standing
 approvals, unused once-bindings and pending confirmations are dropped;
+every invitation link still open is revoked;
 every stored credential is unusable until it is rotated where it came from
 and entered again; runs open at the backup end uncertain and none resumes;
 and a group admits no new member until each of its members who held a passkey or device has recovered, or a platform administrator ends that member's recovery (`person.close_recovery`).

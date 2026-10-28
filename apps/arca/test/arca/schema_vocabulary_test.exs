@@ -20,8 +20,9 @@ defmodule Arca.SchemaVocabularyTest do
   nullable column still takes NULL. The schedule's missed-run columns are
   held the same way, NULL and zero limits among the refused rows, and so
   is a pairing invitation's confirmer, whose kind and id are set together
-  or not at all, and an invitation's end, whose redeemer and time are set
-  together and never beside a revocation.
+  or not at all, an invitation's end, whose redeemer and time are set
+  together and never beside a revocation, and an invitation's issuer
+  generation, which is positive.
   """
 
   use ExUnit.Case, async: false
@@ -276,6 +277,14 @@ defmodule Arca.SchemaVocabularyTest do
         "invitations",
         invitation(ctx, %{redeemed_by: id("usr"), redeemed_at: at, revoked_at: at}),
         "invitations_one_end"
+      )
+    end
+
+    test "records a positive issuer generation, and refuses zero", ctx do
+      refused!(
+        "invitations",
+        invitation(ctx, %{issuer_generation: 0}),
+        "invitations_issuer_generation_positive"
       )
     end
   end
@@ -682,6 +691,7 @@ defmodule Arca.SchemaVocabularyTest do
         id: id("inv"),
         code_hash: id("hash"),
         issued_by: id("usr"),
+        issuer_generation: 1,
         athanor_id: athanor,
         expires_at: now(),
         inserted_at: now(),

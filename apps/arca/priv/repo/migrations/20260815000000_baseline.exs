@@ -279,16 +279,28 @@ defmodule Arca.Repo.Migrations.Baseline do
       %{name: "invitations_one_end", expr: "redeemed_at IS NULL OR revoked_at IS NULL"}
     ]
 
+    invitation_generation = %{
+      name: "invitations_issuer_generation_positive",
+      expr: "issuer_generation > 0"
+    }
+
     # An invitation to become a person here (`Arca.Invitations`): the hash
     # of its code (the lowercase hex SHA-256 of its 32 bytes, never the
-    # code), the person who issued it, the group athanor it seats its
-    # newcomer in or none, and its expiry. It ends once, redeemed by the
-    # person it made or revoked, each by a conditional write on an open
-    # row, and the two ends exclude each other.
+    # code), the person who issued it and their `security_generation` when
+    # they did, the group athanor it seats its newcomer in or none, and its
+    # expiry. It ends once, redeemed by the person it made or revoked, each
+    # by a conditional write on an open row, and the two ends exclude each
+    # other. No default generation: an invitation is bound to the standing
+    # it was issued under, which a raise of it retires.
     create table(:invitations, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :code_hash, :string, null: false
       add :issued_by, :string, null: false
+
+      add :issuer_generation, :bigint,
+        null: false,
+        check: if(sqlite?, do: invitation_generation)
+
       add :athanor_id, :string
       add :expires_at, :utc_datetime_usec, null: false
       add :redeemed_by, :string, check: if(sqlite?, do: Enum.at(invitation_ends, 0))
@@ -298,7 +310,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       timestamps(type: :utc_datetime_usec)
     end
 
-    checked(sqlite?, :invitations, invitation_ends)
+    checked(sqlite?, :invitations, [invitation_generation | invitation_ends])
     create unique_index(:invitations, [:code_hash])
     create index(:invitations, [:issued_by])
     create index(:invitations, [:athanor_id])

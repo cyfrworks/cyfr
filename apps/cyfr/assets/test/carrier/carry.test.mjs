@@ -216,58 +216,6 @@ describe("at the destination's sign-in page", () => {
     assert.deepEqual(win.assigned, ["https://a.example/carry#destination=x"])
   })
 
-  test("naming a handle keeps the identifier it resolved to beside the home, then goes to the start", () => {
-    const win = fakeWindow("/login")
-    const {handlers} = mount(win, "login", 5_000)
-
-    handlers["cyfr:expect"]({home: "https://a.example", identifier: "per_alice", to: "/auth/cyfr/start?ticket=t"})
-
-    assert.deepEqual(JSON.parse(win.sessionStorage.getItem(EXPECT_KEY)), {
-      home: "https://a.example",
-      identifier: "per_alice",
-      at: 5_000
-    })
-    assert.deepEqual(win.assigned, ["/auth/cyfr/start?ticket=t"])
-  })
-
-  test("an identifier that is no string keeps no expectation and goes nowhere", () => {
-    for (const identifier of [null, 5, {}]) {
-      const win = fakeWindow("/login")
-      const {handlers} = mount(win, "login", 5_000)
-      handlers["cyfr:expect"]({home: "https://a.example", identifier, to: "/auth/cyfr/start?ticket=t"})
-      assert.equal(win.sessionStorage.getItem(EXPECT_KEY), null, JSON.stringify(identifier))
-      assert.deepEqual(win.assigned, [], JSON.stringify(identifier))
-    }
-  })
-
-  test("a carry after a handle names the identifier it requested; after an address no requested_identifier key at all", () => {
-    const storage = memoryStorage()
-    storage.setItem(EXPECT_KEY, JSON.stringify({home: "https://a.example", identifier: "per_alice", at: 1_000_000}))
-    const {pushed} = mount(fakeWindow("/login", "#" + carry, storage), "login")
-
-    assert.deepEqual(pushed, [
-      {
-        event: "cyfr_carry",
-        payload: {fragment: carry.slice(6), expected_source: "https://a.example", requested_identifier: "per_alice"}
-      }
-    ])
-    assert.equal(storage.getItem(EXPECT_KEY), null, "the expectation is used once")
-
-    storage.setItem(EXPECT_KEY, JSON.stringify({home: "https://a.example", at: 1_000_000}))
-    const address = mount(fakeWindow("/login", "#" + carry, storage), "login")
-    assert.equal(address.pushed.length, 1)
-    assert.ok(!("requested_identifier" in address.pushed[0].payload))
-  })
-
-  test("a kept expectation whose identifier is no string is no expectation", () => {
-    for (const identifier of [null, 5]) {
-      const storage = memoryStorage()
-      storage.setItem(EXPECT_KEY, JSON.stringify({home: "https://a.example", identifier, at: 1_000_000}))
-      const {pushed} = mount(fakeWindow("/login", "#" + carry, storage), "login")
-      assert.deepEqual(events(pushed), ["cyfr_unsolicited"], JSON.stringify(identifier))
-    }
-  })
-
   test("a carry after the person named their home is handed on once, naming that home, and cleared from the address", () => {
     const storage = memoryStorage()
     storage.setItem(EXPECT_KEY, JSON.stringify({home: "https://a.example", at: 1_000_000 - 1_000}))

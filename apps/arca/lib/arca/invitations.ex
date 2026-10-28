@@ -9,6 +9,13 @@ defmodule Arca.Invitations do
   it, the group athanor it seats its newcomer in or none, and its expiry.
   Who may issue, revoke or redeem one is `Sanctum.Invitations`'.
 
+  An invitation is bound to its issuer's standing when it was issued:
+  `issuer_generation` is their `security_generation` as their row stood
+  when it was written, read in the insert's transaction under a shared
+  lock on that row and never taken from an argument. A transition that
+  raises it and committed first is read there; one that starts later
+  waits for the invitation, then raises it past the recorded value.
+
   ## The first argument
 
   `insert/2` writes in the actor's athanor: an athanor-scoped actor's
@@ -23,7 +30,8 @@ defmodule Arca.Invitations do
   ## Ends
 
   An invitation ends once. `revoke/2` sets `revoked_at` on an open row,
-  one neither redeemed nor revoked. `redeem/3` marks a row redeemed by the
+  one neither redeemed nor revoked, and a declared restore sets it on
+  every open row (`revoke_all!/0`). `redeem/3` marks a row redeemed by the
   person only while it is unredeemed, unrevoked and unexpired on the
   database's clock. Each is one conditional write whose row count is its
   answer, so of two redemptions racing for one code one marks it and the
@@ -32,13 +40,15 @@ defmodule Arca.Invitations do
 
   A row crosses as a plain map (`Arca.Data`). A refusal is `:not_found`,
   `:redeemed`, `:conflict` (the code's hash is taken),
-  `{:invalid, %{field => [message]}}`, `:no_athanor`, `:cross_tenant`,
-  `:not_owner` or `:database_error`.
+  `{:invalid, %{field => [message]}}` (an issuer naming no person here
+  among them), `:no_athanor`, `:cross_tenant`, `:not_owner` or
+  `:database_error`.
   """
 
   import Ecto.Query
 
-  alias Arca.Schemas.Invitation
+  alias Arca.QueryHelpers
+  alias Arca.Schemas.{Invitation, User}
 
   @typedoc "An invitation row, as a plain map."
   @type row :: map()
@@ -47,6 +57,7 @@ defmodule Arca.Invitations do
   Write an invitation in the actor's athanor (the module doc): `attrs`
   names its `:code_hash`, the person it is `:issued_by` and its
   `:lifetime_ms`, from which its expiry is set on the database's clock.
+  The issuer's generation is read from their row (the module doc).
 
   An invitation widens who reaches this CYFR, so it is written only by
   the member holding the control plane's slot (`Arca.Repo.owned/2`).
@@ -58,21 +69,24 @@ defmodule Arca.Invitations do
     with {:ok, athanor_id} <- athanor(actor),
          {:ok, fields} <- fields(Map.new(attrs)) do
       Arca.Repo.owned("Arca.Invitations.insert", fn ->
-        now = Arca.ServerMetaStorage.now!()
+        with {:ok, generation} <- issuer_generation(fields.issued_by) do
+          now = Arca.ServerMetaStorage.now!()
 
-        row = %{
-          id: Prima.UUID7.generate_id("inv"),
-          code_hash: fields.code_hash,
-          issued_by: fields.issued_by,
-          athanor_id: athanor_id,
-          expires_at: DateTime.add(now, fields.lifetime_ms, :millisecond),
-          inserted_at: now,
-          updated_at: now
-        }
+          row = %{
+            id: Prima.UUID7.generate_id("inv"),
+            code_hash: fields.code_hash,
+            issued_by: fields.issued_by,
+            issuer_generation: generation,
+            athanor_id: athanor_id,
+            expires_at: DateTime.add(now, fields.lifetime_ms, :millisecond),
+            inserted_at: now,
+            updated_at: now
+          }
 
-        case Arca.Repo.insert_all(Invitation, [row], on_conflict: :nothing) do
-          {1, _} -> {:ok, Arca.Repo.get!(Invitation, row.id)}
-          {0, _} -> {:error, :conflict}
+          case Arca.Repo.insert_all(Invitation, [row], on_conflict: :nothing) do
+            {1, _} -> {:ok, Arca.Repo.get!(Invitation, row.id)}
+            {0, _} -> {:error, :conflict}
+          end
         end
       end)
     end
@@ -202,7 +216,43 @@ defmodule Arca.Invitations do
 
   def redeem(%Prima.Actor{}, _code_hash, _user_id), do: {:error, :cross_tenant}
 
+  @doc false
+  @spec revoke_all!() :: [String.t()]
+  # A declared restore's revocation, in its transaction
+  # (`Arca.SecurityTransitions.restore/1`): every open invitation, expired
+  # or not, is revoked, so no invitation issued before the backup was taken
+  # admits a person after it. Answers the ids revoked, sorted.
+  # arca:unscoped-ok a declared restore revokes every open invitation of the server.
+  # arca:db-raise-ok a transaction step: its caller rescues around the transaction.
+  def revoke_all! do
+    now = Arca.ServerMetaStorage.now!()
+
+    {_count, ids} =
+      Arca.Repo.update_all(
+        from(i in Invitation,
+          where: is_nil(i.redeemed_at) and is_nil(i.revoked_at),
+          select: i.id
+        ),
+        set: [revoked_at: now, updated_at: now]
+      )
+
+    Enum.sort(ids || [])
+  end
+
   # ---- internals -------------------------------------------------------------
+
+  # The issuer's generation as their row stands, under a shared lock on it
+  # (the module doc). A person is locked before their invitations, as
+  # every standing transition takes them (`Arca.SecurityTransitions`).
+  defp issuer_generation(user_id) do
+    from(u in User, where: u.id == ^user_id, select: u.security_generation)
+    |> QueryHelpers.for_share()
+    |> Arca.Repo.one()
+    |> case do
+      generation when is_integer(generation) -> {:ok, generation}
+      nil -> {:error, {:invalid, %{issued_by: ["names no person here"]}}}
+    end
+  end
 
   defp athanor(%Prima.Actor{scope: :platform, athanor_id: nil}), do: {:ok, nil}
   defp athanor(%Prima.Actor{athanor_id: id}) when is_binary(id) and id != "", do: {:ok, id}

@@ -13,11 +13,12 @@ defmodule PrismWeb.LoginLiveTest do
   GitHub and Google sign in by device flow on this page; they have no
   browser callback. A deployment on its own issuer links to
   `/auth/oidcc`. A person whose keys another CYFR holds signs in with
-  their CYFR: the page sends them to it, by an address or by the address
-  a handle published, checks the carry they bring back (of the handle's
-  identity, when they began from a handle), carries this CYFR's challenge
-  through the browser's session and posts their CYFR's assertion to the
-  callback.
+  their CYFR: the page sends them to it through the start, which keeps
+  the attempt in the browser's session, by an address or by the address
+  a handle published, checks the carry they bring back against that
+  attempt (of the handle's identity, when they began from a handle),
+  carries this CYFR's challenge through the browser's session and posts
+  their CYFR's assertion to the callback.
   """
   use PrismWeb.ConnCase, async: false
 
@@ -510,15 +511,42 @@ defmodule PrismWeb.LoginLiveTest do
       Application.put_env(:sanctum, :registry_url, "none")
     end
 
-    # The request a handle's start keeps in the browser's session.
-    defp request(identifier, home \\ "https://a.example", ttl_ms \\ 60_000),
-      do: %{
-        "identifier" => identifier,
-        "home" => home,
-        "expires_at" => System.os_time(:millisecond) + ttl_ms
-      }
+    # The request the start keeps in the browser's session: an address's,
+    # or a handle's, which names the identifier the handle resolved to.
+    defp request(identifier \\ nil, home \\ "https://a.example", ttl_ms \\ 60_000)
+
+    defp request(nil, home, ttl_ms),
+      do: %{"home" => home, "expires_at" => System.os_time(:millisecond) + ttl_ms}
+
+    defp request(identifier, home, ttl_ms),
+      do: Map.put(request(nil, home, ttl_ms), "identifier", identifier)
 
     defp holding(session), do: build_conn() |> Plug.Test.init_test_session(session)
+
+    # What the page pushed for an attempt it began: the CYFR's origin and
+    # the start to go through, never its `/carry` and never an identifier.
+    defp expected!(view, home) do
+      assert_push_event(view, "cyfr:expect", payload)
+      assert %{home: ^home, to: "/auth/cyfr/start?ticket=" <> _ = to} = payload
+      assert map_size(payload) == 2
+      to
+    end
+
+    # The script following the expectation to the start, which answers 303
+    # to the CYFR's `/carry`, this CYFR the destination in its fragment.
+    defp follow_start(browser, to, home) do
+      started = get(browser, to)
+      assert started.status == 303
+
+      assert get_resp_header(started, "location") == [
+               home <> "/carry#" <> URI.encode_query(%{"destination" => Sanctum.Person.home()})
+             ]
+
+      started
+    end
+
+    # The request the start kept, its expiry aside.
+    defp kept(started), do: started |> get_session("cyfr_request") |> Map.delete("expires_at")
 
     setup do
       tls = DirectoryServer.tls()
@@ -547,40 +575,32 @@ defmodule PrismWeb.LoginLiveTest do
       }
     end
 
-    test "an address has the script keep the expectation, naming no identifier, then sends the person to their own CYFR's /carry, naming this CYFR in the fragment",
+    test "an address goes through the start, which keeps its request, naming no identifier, in this browser's session and sends the person to their own CYFR's /carry, naming this CYFR in the fragment",
          %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/login")
+      browser = get(conn, ~p"/login")
+      {:ok, view, html} = live(browser, ~p"/login")
       assert html =~ "Sign in with your CYFR"
       assert html =~ ~s(data-carry="login")
       assert html =~ ~s(data-lifetime-ms="#{Arca.CarryActions.lifetime_ms()}")
 
       enter(view, "a.example")
 
-      assert_push_event(view, "cyfr:expect", payload)
-
-      assert payload == %{
-               home: "https://a.example",
-               to:
-                 "https://a.example/carry#" <>
-                   URI.encode_query(%{"destination" => Sanctum.Person.home()})
-             }
+      started = follow_start(browser, expected!(view, "https://a.example"), "https://a.example")
+      assert kept(started) == %{"home" => "https://a.example"}
     end
 
-    test "the hosted CYFR's button goes there as an address does, naming no identifier",
+    test "the hosted CYFR's button goes there through the start as an address does, naming no identifier",
          %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/login")
+      browser = get(conn, ~p"/login")
+      {:ok, view, html} = live(browser, ~p"/login")
       assert html =~ "my.cyfr.run"
 
       view |> element("#cyfr-hosted") |> render_click()
 
-      assert_push_event(view, "cyfr:expect", payload)
+      started =
+        follow_start(browser, expected!(view, "https://my.cyfr.run"), "https://my.cyfr.run")
 
-      assert payload == %{
-               home: "https://my.cyfr.run",
-               to:
-                 "https://my.cyfr.run/carry#" <>
-                   URI.encode_query(%{"destination" => Sanctum.Person.home()})
-             }
+      assert kept(started) == %{"home" => "https://my.cyfr.run"}
     end
 
     test "the hosted CYFR itself offers no button for itself", %{conn: conn} do
@@ -601,7 +621,7 @@ defmodule PrismWeb.LoginLiveTest do
       assert render_click(view, "cyfr_hosted", %{}) =~ "I run my own CYFR"
     end
 
-    test "a handle with a published address goes there through the start, which keeps the handle's identifier in this browser's session",
+    test "a handle with a published address goes there through the start, which keeps the handle's identifier in this browser's session; the expectation names none",
          %{conn: conn, identity: identity} do
       registry!("alice", identity.identifier, "https://a.example")
       browser = get(conn, ~p"/login")
@@ -612,25 +632,12 @@ defmodule PrismWeb.LoginLiveTest do
 
       assert_received {:registry_request, %{method: "GET", path: "/v1/handles/alice"}}
 
-      assert_push_event(view, "cyfr:expect", %{
-        home: "https://a.example",
-        identifier: identifier,
-        to: to
-      })
+      started = follow_start(browser, expected!(view, "https://a.example"), "https://a.example")
 
-      assert identifier == identity.identifier
-      assert String.starts_with?(to, "/auth/cyfr/start?ticket=")
-
-      started = get(browser, to)
-      assert started.status == 303
-
-      assert get_resp_header(started, "location") == [
-               "https://a.example/carry#" <>
-                 URI.encode_query(%{"destination" => Sanctum.Person.home()})
-             ]
-
-      assert %{"identifier" => ^identifier, "home" => "https://a.example"} =
-               get_session(started, "cyfr_request")
+      assert kept(started) == %{
+               "identifier" => identity.identifier,
+               "home" => "https://a.example"
+             }
     end
 
     test "a handle the page cannot follow says why, and the field keeps what was typed",
@@ -668,19 +675,17 @@ defmodule PrismWeb.LoginLiveTest do
       browser = get(conn, ~p"/login")
       {:ok, view, _html} = live(browser, ~p"/login")
       enter(view, "@alice")
-      assert_push_event(view, "cyfr:expect", %{identifier: identifier, to: to})
-      started = get(browser, to)
+      started = follow_start(browser, expected!(view, "https://a.example"), "https://a.example")
 
-      # Back from their CYFR with its carry: the script names the
-      # identifier the handle requested.
+      # Back from their CYFR with its carry: the script names only the
+      # CYFR it expects, and the request the start kept is the attempt.
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
       back = recycle(started)
       {:ok, view, _html} = live(back, ~p"/login")
 
       render_hook(view, "cyfr_carry", %{
         "fragment" => carry,
-        "expected_source" => "https://a.example",
-        "requested_identifier" => identifier
+        "expected_source" => "https://a.example"
       })
 
       assert has_element?(view, "#cyfr-code")
@@ -691,7 +696,7 @@ defmodule PrismWeb.LoginLiveTest do
       hop = get(back, path)
       held = get_session(hop, "cyfr_challenge")
       assert held["identifier"] == identity.identifier
-      assert get_session(hop, "cyfr_request")["identifier"] == identifier
+      assert get_session(hop, "cyfr_request")["identifier"] == identity.identifier
 
       assertion = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
       again = recycle(hop)
@@ -703,7 +708,7 @@ defmodule PrismWeb.LoginLiveTest do
       refute get_session(signed_in, "cyfr_request")
     end
 
-    test "a handle whose published address serves another person: the carry is refused before any directory is read, and no session is made",
+    test "a handle whose published address serves another person: the carry, though the browser names no identifier, is refused before any directory is read, and no session is made",
          %{conn: conn, identity: identity, directory: directory} do
       # The handle names someone; the address it published serves
       # `identity`, whom the door would even admit.
@@ -714,19 +719,21 @@ defmodule PrismWeb.LoginLiveTest do
       browser = get(conn, ~p"/login")
       {:ok, view, _html} = live(browser, ~p"/login")
       enter(view, "@alice")
-      assert_push_event(view, "cyfr:expect", %{identifier: identifier, to: to})
-      assert identifier == named.identifier
-      back = recycle(get(browser, to))
+      started = follow_start(browser, expected!(view, "https://a.example"), "https://a.example")
+      assert get_session(started, "cyfr_request")["identifier"] == named.identifier
+      back = recycle(started)
 
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
       {:ok, view, _html} = live(back, ~p"/login")
       _ = DirectoryServer.requests()
 
+      # The script raises the carry naming only the CYFR it expects: the
+      # identifier the start kept, not anything the browser sends, is
+      # what the carry must prove.
       html =
         render_hook(view, "cyfr_carry", %{
           "fragment" => carry,
-          "expected_source" => "https://a.example",
-          "requested_identifier" => identifier
+          "expected_source" => "https://a.example"
         })
 
       assert html =~ Prima.Refusal.message(:wrong_identity)
@@ -740,64 +747,109 @@ defmodule PrismWeb.LoginLiveTest do
           do: assert({:error, :not_found} = Sanctum.Tenancy.Users.get_by_identifier(id))
     end
 
-    test "a carry naming a handle's identifier this browser's session no longer holds is refused before anything is read, and the person is told to begin again",
-         %{identity: identity} do
-      %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
-      live_request = request(identity.identifier)
+    test "the session's request governs the carry, whatever the browser sends: a handle's admits its identity alone, an address's any, and with none or a lapsed one the person begins again",
+         %{identity: identity, directory: directory} do
+      other = DirectoryServer.identity!(directory.dir, directory.url)
+      %{fragment: own} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+      %{fragment: another} = DirectoryServer.carry_fragment(other, Sanctum.Person.home())
 
-      for {why, session} <- [
-            {"cleared", %{}},
-            {"expired",
-             %{"cyfr_request" => request(identity.identifier, "https://a.example", -1)}},
-            {"for another CYFR",
-             %{"cyfr_request" => request(identity.identifier, "https://b.example")}},
-            {"replaced by another handle's", %{"cyfr_request" => request("per_another")}}
-          ] do
+      # The carry raised on a page whose session holds `session`, with
+      # whatever else the browser sends.
+      carried = fn session, fragment, sent ->
         browser = session |> holding() |> get(~p"/login")
         {:ok, view, _html} = live(browser, ~p"/login")
         _ = DirectoryServer.requests()
 
-        html =
-          render_hook(view, "cyfr_carry", %{
-            "fragment" => carry,
-            "expected_source" => "https://a.example",
-            "requested_identifier" => identity.identifier
-          })
+        params = %{"fragment" => fragment, "expected_source" => "https://a.example"}
+        html = render_hook(view, "cyfr_carry", Map.merge(params, sent))
+        {view, html}
+      end
 
-        assert html =~ "no longer holds the sign-in you began from a handle", why
+      # A handle's request for `identity`: another identity's carry is
+      # refused before any directory is read, whether the browser names no
+      # identifier or names the carried one.
+      handle = %{"cyfr_request" => request(identity.identifier)}
+
+      for sent <- [%{}, %{"requested_identifier" => other.identifier}] do
+        {view, html} = carried.(handle, another, sent)
+        assert html =~ Prima.Refusal.message(:wrong_identity), inspect(sent)
+        refute has_element?(view, "#cyfr-code"), inspect(sent)
+        assert DirectoryServer.requests() == [], inspect(sent)
+      end
+
+      {view, _html} = carried.(handle, own, %{})
+      assert has_element?(view, "#cyfr-code")
+
+      # An address's request: a carry of any identity proceeds.
+      for fragment <- [own, another] do
+        {view, _html} = carried.(%{"cyfr_request" => request()}, fragment, %{})
+        assert has_element?(view, "#cyfr-code")
+      end
+
+      # No live request for the CYFR the carry is from: lost, whatever the
+      # browser names.
+      lost = [
+        {"none", %{}},
+        {"an address's, expired", %{"cyfr_request" => request(nil, "https://a.example", -1)}},
+        {"a handle's, expired",
+         %{"cyfr_request" => request(identity.identifier, "https://a.example", -1)}},
+        {"another CYFR's address", %{"cyfr_request" => request(nil, "https://b.example")}},
+        {"another CYFR's handle",
+         %{"cyfr_request" => request(identity.identifier, "https://b.example")}}
+      ]
+
+      for {why, session} <- lost,
+          sent <- [%{}, %{"requested_identifier" => identity.identifier}] do
+        {view, html} = carried.(session, own, sent)
         assert html =~ "Begin again", why
         refute has_element?(view, "#cyfr-code"), why
         assert DirectoryServer.requests() == [], why
       end
 
-      # The live request itself is answered.
-      browser = %{"cyfr_request" => live_request} |> holding() |> get(~p"/login")
-      {:ok, view, _html} = live(browser, ~p"/login")
+      # Naming another CYFR as the one expected escapes nothing: that CYFR
+      # has no request here either.
+      %{fragment: elsewhere} =
+        DirectoryServer.carry_fragment(other, Sanctum.Person.home(), source: "https://b.example")
 
-      render_hook(view, "cyfr_carry", %{
-        "fragment" => carry,
-        "expected_source" => "https://a.example",
-        "requested_identifier" => identity.identifier
-      })
-
-      assert has_element?(view, "#cyfr-code")
+      {view, html} = carried.(handle, elsewhere, %{"expected_source" => "https://b.example"})
+      assert html =~ "Begin again"
+      refute has_element?(view, "#cyfr-code")
+      assert DirectoryServer.requests() == []
     end
 
-    test "a carry that names no requested identifier proceeds as an address's does, whatever request the session holds",
-         %{identity: identity} do
+    test "a later handle start prevents an earlier held assertion from signing in: the start drops the challenge, and the callback refuses",
+         %{identity: identity, directory: directory} do
+      other = DirectoryServer.identity!(directory.dir, directory.url)
+      {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
+
+      # An earlier attempt at the address, whose challenge this browser
+      # holds.
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
+      {:ok, held} = CyfrDoor.challenge(carry, :none)
 
-      for session <- [%{}, %{"cyfr_request" => request("per_another")}] do
-        browser = session |> holding() |> get(~p"/login")
-        {:ok, view, _html} = live(browser, ~p"/login")
+      browser =
+        %{"cyfr_challenge" => held, "cyfr_request" => request()}
+        |> holding()
+        |> get(~p"/login")
 
-        render_hook(view, "cyfr_carry", %{
-          "fragment" => carry,
-          "expected_source" => "https://a.example"
-        })
+      # Another identity's handle at the same address begins anew.
+      registry!("bob", other.identifier, "https://a.example")
+      {:ok, view, _html} = live(browser, ~p"/login")
+      enter(view, "@bob")
+      started = follow_start(browser, expected!(view, "https://a.example"), "https://a.example")
+      assert kept(started) == %{"identifier" => other.identifier, "home" => "https://a.example"}
+      refute get_session(started, "cyfr_challenge")
 
-        assert has_element?(view, "#cyfr-code")
-      end
+      # The earlier exchange's assertion arrives after all.
+      assertion = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
+      again = recycle(started)
+      {:ok, view, _html} = live(again, ~p"/login")
+      render_hook(view, "cyfr_assertion", %{"fragment" => assertion})
+      refused = follow_trigger_action(element(view, "#cyfr-callback"), again)
+
+      assert html_response(refused, 401) =~ "Sign-in failed"
+      refute get_session(refused, :sanctum_session_token)
+      assert {:error, :not_found} = Sanctum.Tenancy.Users.get_by_identifier(identity.identifier)
     end
 
     test "a handle resumes the exchange this browser holds a challenge of only when that challenge is the handle's identity's",
@@ -817,9 +869,11 @@ defmodule PrismWeb.LoginLiveTest do
       registry!("bob", other.identifier, "https://a.example")
       {:ok, view, _html} = live(browser, ~p"/login")
       enter(view, "@bob")
-      assert_push_event(view, "cyfr:expect", %{identifier: identifier})
-      assert identifier == other.identifier
+      to = expected!(view, "https://a.example")
       refute_push_event(view, "cyfr:go", %{})
+
+      started = follow_start(browser, to, "https://a.example")
+      assert kept(started) == %{"identifier" => other.identifier, "home" => "https://a.example"}
     end
 
     test "naming the home whose challenge this browser holds resumes that exchange: the same challenge goes back, and no expectation is kept",
@@ -845,14 +899,14 @@ defmodule PrismWeb.LoginLiveTest do
       assert get_resp_header(hop, "location") == [CyfrDoor.redirect_url(held)]
       assert get_session(hop, "cyfr_challenge") == held
 
-      # Another home's name begins a new exchange there instead.
+      # Another home's name begins a new exchange there instead, whose
+      # start drops the challenge held.
       {:ok, view, _} = live(browser, ~p"/login")
       enter(view, "b.example")
 
-      assert_push_event(view, "cyfr:expect", %{
-        home: "https://b.example",
-        to: "https://b.example/carry#" <> _
-      })
+      started = follow_start(browser, expected!(view, "https://b.example"), "https://b.example")
+      assert kept(started) == %{"home" => "https://b.example"}
+      refute get_session(started, "cyfr_challenge")
     end
 
     test "a held challenge past its expiry resumes nothing: naming its home begins a new exchange there",
@@ -867,9 +921,11 @@ defmodule PrismWeb.LoginLiveTest do
       {:ok, view, _} = live(browser, ~p"/login")
       enter(view, "https://a.example")
 
-      assert_push_event(view, "cyfr:expect", %{home: "https://a.example", to: to})
-      assert String.starts_with?(to, "https://a.example/carry#")
+      to = expected!(view, "https://a.example")
       refute_push_event(view, "cyfr:go", %{})
+
+      started = follow_start(browser, to, "https://a.example")
+      refute get_session(started, "cyfr_challenge")
     end
 
     test "the browser secret a held challenge binds is never in what the page's assigns print",
@@ -878,7 +934,9 @@ defmodule PrismWeb.LoginLiveTest do
       {:ok, held} = CyfrDoor.challenge(carry, :none)
 
       browser =
-        conn |> Plug.Test.init_test_session(%{"cyfr_challenge" => held}) |> get(~p"/login")
+        conn
+        |> Plug.Test.init_test_session(%{"cyfr_challenge" => held, "cyfr_request" => request()})
+        |> get(~p"/login")
 
       {:ok, view, _} = live(browser, ~p"/login")
 
@@ -924,9 +982,15 @@ defmodule PrismWeb.LoginLiveTest do
       {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
 
-      # One browser start to finish: the ticket is bound to it.
+      # One browser start to finish: the tickets are bound to it.
       browser = get(conn, ~p"/login")
       {:ok, view, _} = live(browser, ~p"/login")
+      enter(view, "a.example")
+      started = follow_start(browser, expected!(view, "https://a.example"), "https://a.example")
+
+      # Back from their CYFR with its carry.
+      back = recycle(started)
+      {:ok, view, _} = live(back, ~p"/login")
 
       html =
         render_hook(view, "cyfr_carry", %{
@@ -944,7 +1008,7 @@ defmodule PrismWeb.LoginLiveTest do
 
       assert String.starts_with?(path, "/auth/cyfr?ticket=")
 
-      hop = get(browser, path)
+      hop = get(back, path)
       assert hop.status == 303
       held = get_session(hop, "cyfr_challenge")
       assert [location] = get_resp_header(hop, "location")
@@ -955,13 +1019,14 @@ defmodule PrismWeb.LoginLiveTest do
 
       # The person's home answers with the assertion, back to this page.
       assertion = DirectoryServer.assertion_fragment(identity, held, Sanctum.Person.home())
-      back = recycle(hop)
-      {:ok, view, _} = live(back, ~p"/login")
+      again = recycle(hop)
+      {:ok, view, _} = live(again, ~p"/login")
       render_hook(view, "cyfr_assertion", %{"fragment" => assertion})
 
       # Signed in, the browser goes back to the person's home to say so,
-      # at the return URL the carry's envelope signed.
-      signed_in = follow_trigger_action(element(view, "#cyfr-callback"), back)
+      # at the return URL the carry's envelope signed, and the attempt is
+      # spent.
+      signed_in = follow_trigger_action(element(view, "#cyfr-callback"), again)
       {:ok, admitted} = Prima.Carry.Return.new(held["action_id"], :admitted)
 
       assert redirected_to(signed_in, 303) ==
@@ -969,13 +1034,23 @@ defmodule PrismWeb.LoginLiveTest do
 
       assert get_session(signed_in, :sanctum_session_token) ==
                CyfrDoor.session_token(held)
+
+      refute get_session(signed_in, "cyfr_challenge")
+      refute get_session(signed_in, "cyfr_request")
     end
 
     test "a carry from another home than the one the person named is refused before any directory is read, and nobody is signed in",
          %{conn: conn, identity: identity} do
       {:ok, _} = Sanctum.Door.Store.allow("identifier", identity.identifier, "test")
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
-      browser = get(conn, ~p"/login")
+
+      browser =
+        conn
+        |> Plug.Test.init_test_session(%{
+          "cyfr_request" => request(nil, "https://other.example")
+        })
+        |> get(~p"/login")
+
       {:ok, view, _} = live(browser, ~p"/login")
       _ = DirectoryServer.requests()
 
@@ -1022,6 +1097,7 @@ defmodule PrismWeb.LoginLiveTest do
 
         {:ok, view, _} =
           conn
+          |> Plug.Test.init_test_session(%{"cyfr_request" => request()})
           |> Plug.Test.put_peer_data(%{address: address, port: 40_000, ssl_cert: nil})
           |> live(~p"/login")
 
@@ -1054,7 +1130,9 @@ defmodule PrismWeb.LoginLiveTest do
     test "cancelling at the code leaves nothing pending; a code past its challenge's expiry goes nowhere",
          %{conn: conn, identity: identity} do
       %{fragment: carry} = DirectoryServer.carry_fragment(identity, Sanctum.Person.home())
-      {:ok, view, _} = live(conn, ~p"/login")
+
+      {:ok, view, _} =
+        conn |> Plug.Test.init_test_session(%{"cyfr_request" => request()}) |> live(~p"/login")
 
       render_hook(view, "cyfr_carry", %{
         "fragment" => carry,
@@ -1082,7 +1160,8 @@ defmodule PrismWeb.LoginLiveTest do
 
     test "a carry that does not verify leaves the person here, told to begin again; nothing is posted",
          %{conn: conn, identity: identity} do
-      {:ok, view, _} = live(conn, ~p"/login")
+      {:ok, view, _} =
+        conn |> Plug.Test.init_test_session(%{"cyfr_request" => request()}) |> live(~p"/login")
 
       html =
         render_hook(view, "cyfr_carry", %{

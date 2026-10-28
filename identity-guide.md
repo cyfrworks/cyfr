@@ -142,7 +142,7 @@ At the CYFR you join, signing in with your CYFR identity is not a fresh proof. R
 
 ### Joining by an invitation link
 
-Someone with no CYFR identity of their own joins by an invitation link instead. A member creates one for a group they sit in, on **Members**; the platform administrator may also create one that names no group. The link is `<CYFR address>/invite#<code>`: it is shown once, works once, expires after seven days, and the CYFR keeps only the code's hash. Its page names who invited you and to which group, and **Create your identity here** makes your passkey, you, your keys and your own athanor at that CYFR, with your seat in the group. A link that has expired, been used or been revoked, or whose issuer has since left the group or been denied, says it can no longer be used. The identity made this way is held by that CYFR, as one made by its setup is.
+Someone with no CYFR identity of their own joins by an invitation link instead. A member creates one for a group they sit in, on **Members**; the platform administrator may also create one that names no group. The link is `<CYFR address>/invite#<code>`: it is shown once, works once, expires after seven days, and the CYFR keeps only the code's hash. Its page names who invited you and to which group, and **Create your identity here** makes your passkey, you, your keys and your own athanor at that CYFR, with your seat in the group. A link that has expired, been used or been revoked, whose issuer has since left the group or been denied (it stays dead if they are let back in), or that was made before the CYFR was restored from a backup, says it can no longer be used. The identity made this way is held by that CYFR, as one made by its setup is.
 
 ### Where joining is proven
 

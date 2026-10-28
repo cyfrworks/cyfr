@@ -5,7 +5,8 @@ defmodule Arca.InvitationsTest do
   @moduledoc """
   Invitations to become a person here: written in the actor's athanor, or
   in none under the platform scope, by the hash of their code with an
-  expiry on the database's clock; found by that hash and listed across
+  expiry on the database's clock and the issuer's generation as their row
+  stands; found by that hash and listed across
   athanors only under the platform scope; ended once, revoked while open
   or redeemed while open and unexpired, each by one conditional write. An
   athanor's erasure takes the invitations that name it and leaves the
@@ -31,7 +32,27 @@ defmodule Arca.InvitationsTest do
   defp person, do: "usr_inv_#{System.unique_integer([:positive])}"
   defp code_hash, do: Prima.Digest.sha256_hex(:crypto.strong_rand_bytes(32))
 
-  defp issued!(actor, issuer \\ person()) do
+  # A person's row, as an invitation's issuer has one.
+  defp issuer! do
+    now = DateTime.utc_now()
+
+    {:ok, user} =
+      Arca.Test.People.mint(
+        server(),
+        %{
+          id: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+          first_seen_at: now,
+          last_seen_at: now,
+          created_at: now,
+          updated_at: now
+        },
+        nil
+      )
+
+    user.id
+  end
+
+  defp issued!(actor, issuer \\ issuer!()) do
     hash = code_hash()
 
     {:ok, row} =
@@ -50,7 +71,7 @@ defmodule Arca.InvitationsTest do
   describe "insert/2" do
     test "names the actor's athanor, or none under the platform scope, and sets the expiry from the lifetime",
          %{actor: actor, athanor: athanor} do
-      issuer = person()
+      issuer = issuer!()
       before = DateTime.utc_now()
       {row, hash} = issued!(actor, issuer)
 
@@ -76,7 +97,7 @@ defmodule Arca.InvitationsTest do
       {:ok, row} =
         Invitations.insert(actor, %{
           code_hash: code_hash(),
-          issued_by: person(),
+          issued_by: issuer!(),
           lifetime_ms: @day_ms,
           athanor_id: "ath_elsewhere"
         })
@@ -86,7 +107,7 @@ defmodule Arca.InvitationsTest do
       assert {:error, :no_athanor} =
                Invitations.insert(%Prima.Actor{scope: :athanor}, %{
                  code_hash: code_hash(),
-                 issued_by: person(),
+                 issued_by: issuer!(),
                  lifetime_ms: @day_ms
                })
     end
@@ -104,16 +125,43 @@ defmodule Arca.InvitationsTest do
       {_row, hash} = issued!(actor)
 
       assert {:error, :conflict} =
-               Invitations.insert(actor, %{code_hash: hash, issued_by: person(), lifetime_ms: 1})
+               Invitations.insert(actor, %{code_hash: hash, issued_by: issuer!(), lifetime_ms: 1})
 
       assert Arca.Repo.aggregate(from(i in Invitation, where: i.code_hash == ^hash), :count) == 1
+    end
+
+    test "records the issuer's generation as their row stands, and refuses an issuer naming no person here",
+         %{actor: actor} do
+      issuer = issuer!()
+      {first, _hash} = issued!(actor, issuer)
+      assert first.issuer_generation == 1
+
+      {1, _} =
+        Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^issuer),
+          inc: [security_generation: 1]
+        )
+
+      {second, _hash} = issued!(server(), issuer)
+      assert second.issuer_generation == 2
+      assert {:ok, %{issuer_generation: 1}} = Invitations.get(server(), first.id)
+
+      before = Arca.Repo.aggregate(Invitation, :count)
+
+      assert {:error, {:invalid, %{issued_by: _}}} =
+               Invitations.insert(actor, %{
+                 code_hash: code_hash(),
+                 issued_by: person(),
+                 lifetime_ms: @day_ms
+               })
+
+      assert Arca.Repo.aggregate(Invitation, :count) == before
     end
   end
 
   describe "the reads" do
     test "find an invitation by id and by code hash, and list all or an issuer's, newest first",
          %{actor: actor} do
-      issuer = person()
+      issuer = issuer!()
       {first, first_hash} = issued!(actor, issuer)
       {second, _} = issued!(server(), issuer)
       {other, _} = issued!(actor)

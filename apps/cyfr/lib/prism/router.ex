@@ -163,11 +163,11 @@ defmodule Prism.Router do
           post "/link/oidcc", AuthController, :link_start, metadata: %{auth: :browser_session}
         end
 
-        # A `cyfr` sign-in begun from a handle: the sign-in page's one-time
-        # ticket, bound to this browser, which keeps the handle's
-        # identifier in the browser's session and sends it to the address
-        # the handle published. Above `/:provider`, under the starts'
-        # throttle.
+        # The start of a `cyfr` sign-in: the sign-in page's one-time
+        # ticket, bound to this browser, which keeps the attempt (its home,
+        # and the identifier a handle named) in the browser's session and
+        # sends it to that home's `/carry`. Above `/:provider`, under the
+        # starts' throttle.
         scope "/" do
           pipe_through :oauth_start_throttle
 

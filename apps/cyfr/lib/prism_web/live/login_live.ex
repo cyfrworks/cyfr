@@ -41,21 +41,19 @@ defmodule PrismWeb.LoginLive do
   sign-in method (`Sanctum.Auth.CyfrDoor`), and the page's script
   (`hooks/carry.js`) carries the exchange between the two CYFRs:
 
-    * **The entry.** An address, the hosted CYFR's included, requests no
-      identifier. The page answers `cyfr:expect` with that CYFR's origin
-      and where to go: its `/carry`, this CYFR as the destination in the
-      fragment, where the person begins the sign-in themselves. A handle
-      is resolved first (`Sanctum.Handle.resolve/1`): no registry, a
-      registry that cannot answer, a handle no one holds and a handle
-      with no published address are each said, and the field stays open
-      with what was typed. A handle with a published address mints a
-      one-time ticket bound to this browser, holding the identifier the
-      handle names, the address's origin and its `/carry`
-      (`Sanctum.Auth.CyfrDoor.signing_home/1`), and `cyfr:expect` names
-      that identifier too and goes through `GET /auth/cyfr/start`, which
-      keeps the request in the browser's session for the carry's
-      lifetime before it sends the browser on. The script keeps `{home,
-      at}`, with the identifier when a handle named one, in this tab's
+    * **The entry.** The person names their CYFR by an address, the
+      hosted CYFR's included, or by a handle. A handle is resolved first
+      (`Sanctum.Handle.resolve/1`): no registry, a registry that cannot
+      answer, a handle no one holds and a handle with no published
+      address are each said, and the field stays open with what was
+      typed. Every attempt then mints a one-time ticket bound to this
+      browser, holding the CYFR's origin and its `/carry`
+      (`Sanctum.Auth.CyfrDoor.signing_home/1`) and, for a handle, the
+      identifier it names, and the page answers `cyfr:expect` with that
+      origin and `GET /auth/cyfr/start` as where to go. The start keeps
+      the request in the browser's session for the carry's lifetime, in
+      place of any earlier attempt and its challenge, before it sends the
+      browser on, and the script keeps `{home, at}` in this tab's
       `sessionStorage` before it goes. When this browser's session
       already holds an unexpired challenge of that CYFR's carry (of the
       handle's identifier, for a handle), the same challenge goes back
@@ -67,22 +65,22 @@ defmodule PrismWeb.LoginLive do
     * **The carry.** Their CYFR sends the browser back here with the
       carry in the fragment (`#carry=`). The script reads and clears it,
       and raises `cyfr_carry` only while the expectation that entry left
-      is fresh, once, naming the CYFR as `expected_source` and, for a
-      handle, the identifier as `requested_identifier`: a carry no
+      is fresh, once, naming the CYFR as `expected_source`: a carry no
       gesture here asked for signs nobody in, so another CYFR cannot sign
       this browser in as someone else. The page refuses a carry whose
       envelope's `source` is not that CYFR before anything reads a
-      directory. It reads the request `/auth/cyfr/start` kept in the
-      session at mount, and asks the door for the challenge
-      (`Sanctum.Auth.CyfrDoor.challenge/2`) with no identifier when the
-      carry names none, with the identifier when it names the one a live
-      request for that CYFR holds, and as lost otherwise (expired,
-      cleared, or a request for another CYFR), which refuses before
-      anything else: the person is told to begin again. A carry of
-      another identity than the handle's is refused before any directory
-      is read, so a handle whose published address serves someone else
-      signs nobody in. Otherwise it is verified against the person's
-      directory and this CYFR's challenge is minted.
+      directory. The attempt is the request the start kept, read from
+      the session at mount, never anything the browser sends with the
+      carry: the page asks the door for the challenge
+      (`Sanctum.Auth.CyfrDoor.challenge/2`) with the request's identifier
+      when a handle began it, with none for an address, and as lost when
+      the session holds no live request for that CYFR (expired, cleared,
+      or another's), which refuses before anything else: the person is
+      told to begin again. A carry of another identity than the handle's
+      is refused before any directory is read, so a handle whose
+      published address serves someone else signs nobody in. Otherwise
+      it is verified against the person's directory and this CYFR's
+      challenge is minted.
     * **The code.** The page shows the challenge's comparison code
       (`Prima.PersonAssertion.comparison_code/1`), which their CYFR's
       confirmation names too, and Continue mints the one-time ticket bound
@@ -142,8 +140,8 @@ defmodule PrismWeb.LoginLive do
                   "signed in. Name your CYFR below and begin again."
   @unsolicited "A sign-in arrived that this page did not ask for, so nobody was signed in. " <>
                  "To sign in with your CYFR, choose it below."
-  @lost "This browser no longer holds the sign-in you began from a handle, so nobody was " <>
-          "signed in. Begin again: enter the handle below."
+  @lost "This browser no longer holds the sign-in you began here, or a newer one replaced " <>
+          "it, so nobody was signed in. Begin again below."
   @oversized "That sign-in is larger than this CYFR accepts."
   @unread_entry "That is not a handle or a CYFR's address. A handle looks like @name, and an " <>
                   "address like https://cyfr.example."
@@ -191,8 +189,8 @@ defmodule PrismWeb.LoginLive do
      # The challenge this browser's session holds from an earlier hop,
      # which an entry naming its CYFR resumes. Server-side only.
      |> assign(:cyfr_held, held_challenge(session))
-     # The request a handle's start kept in this browser's session, which
-     # a returning carry that names its identifier is held to.
+     # The request the start kept in this browser's session: the attempt
+     # a returning carry is judged against.
      |> assign(:cyfr_request, held_request(session))
      # A verified carry's challenge, waiting for the person's Continue.
      |> assign(:cyfr_pending, nil)
@@ -222,12 +220,12 @@ defmodule PrismWeb.LoginLive do
   end
 
   # The carry the person's CYFR sent back with them, raised only after the
-  # entry above named that CYFR (`expected_source`), and, for a handle, the
-  # identifier it named (`requested_identifier`): this CYFR's challenge
-  # for it, shown as its comparison code until the person continues.
+  # entry above named that CYFR (`expected_source`), and judged against the
+  # request the start kept: this CYFR's challenge for it, shown as its
+  # comparison code until the person continues.
   def handle_event(
         "cyfr_carry",
-        %{"fragment" => fragment, "expected_source" => expected} = params,
+        %{"fragment" => fragment, "expected_source" => expected},
         socket
       )
       when is_binary(fragment) and is_binary(expected) do
@@ -236,7 +234,7 @@ defmodule PrismWeb.LoginLive do
       # person named here, or it signs nobody in.
       case unexpected_source(fragment, expected) do
         nil ->
-          requested = requested(socket.assigns.cyfr_request, expected, params)
+          requested = requested(socket.assigns.cyfr_request, expected)
           {:noreply, challenge_carry(socket, fragment, expected, requested)}
 
         refusal ->
@@ -588,7 +586,7 @@ defmodule PrismWeb.LoginLive do
         # assertion, never a carry.
         case resumable(socket.assigns.cyfr_held, home) do
           {:ok, held} -> resume(socket, held)
-          :none -> push_event(socket, "cyfr:expect", %{home: home, to: url})
+          :none -> start(socket, %{home: home, to: url})
         end
 
       {:error, :this_home} ->
@@ -635,14 +633,7 @@ defmodule PrismWeb.LoginLive do
             resume(socket, held)
 
           :none ->
-            request = %{identifier: identifier, home: home, to: url}
-            ticket = mint_ticket({:login_cyfr_start, request}, socket.assigns.browser_binding)
-
-            push_event(socket, "cyfr:expect", %{
-              home: home,
-              identifier: identifier,
-              to: "/auth/cyfr/start?" <> URI.encode_query(%{ticket: ticket})
-            })
+            start(socket, %{identifier: identifier, home: home, to: url})
         end
 
       {:error, :this_home} ->
@@ -664,24 +655,36 @@ defmodule PrismWeb.LoginLive do
   defp unresolved(reason) when reason in [:registry_unavailable, :malformed_answer],
     do: Prima.Refusal.message(:registry_unavailable)
 
+  # Every attempt goes through the start, which records it in this
+  # browser's session: the home, and the identifier when a handle named
+  # one. That record, never a field the browser sends back, is what the
+  # carry is judged against.
+  defp start(socket, %{home: home} = request) do
+    ticket = mint_ticket({:login_cyfr_start, request}, socket.assigns.browser_binding)
+
+    push_event(socket, "cyfr:expect", %{
+      home: home,
+      to: "/auth/cyfr/start?" <> URI.encode_query(%{ticket: ticket})
+    })
+  end
+
   defp resume(socket, held),
     do: push_event(socket, "cyfr:go", %{to: challenge_hop(held, socket.assigns.browser_binding)})
 
-  # What the attempt the carry answers requested: no identifier when the
-  # carry names none; the identifier it names when a live request this
-  # browser's session holds for the expected CYFR names it too; and lost
-  # otherwise, which the door refuses before anything else.
-  defp requested(request, expected, %{"requested_identifier" => identifier}) do
-    case request do
-      %{"identifier" => ^identifier, "home" => ^expected, "expires_at" => at} ->
-        if at > System.os_time(:millisecond), do: {:identifier, identifier}, else: :lost
-
-      _none_or_another ->
-        :lost
+  # What the attempt the carry answers requested, read from the live
+  # request this browser's session holds for the expected CYFR alone: its
+  # identifier when a handle began it, none for an address; lost when the
+  # session holds no live request for that CYFR (expired, cleared, or
+  # another's), which the door refuses before anything else.
+  defp requested(%{"home" => expected, "expires_at" => at} = request, expected) do
+    cond do
+      at <= System.os_time(:millisecond) -> :lost
+      is_binary(request["identifier"]) -> {:identifier, request["identifier"]}
+      true -> :none
     end
   end
 
-  defp requested(_request, _expected, _params), do: :none
+  defp requested(_request, _expected), do: :lost
 
   defp challenge_carry(socket, fragment, expected, requested) do
     if Prima.RateLimiter.check(
@@ -739,12 +742,11 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  # The request a handle's start left in this browser's session
+  # The request the start left in this browser's session
   # (`PrismWeb.AuthController.cyfr_request_key/0`), if any.
   defp held_request(session) do
     case session[PrismWeb.AuthController.cyfr_request_key()] do
-      %{"identifier" => identifier, "home" => home, "expires_at" => at} = request
-      when is_binary(identifier) and is_binary(home) and is_integer(at) ->
+      %{"home" => home, "expires_at" => at} = request when is_binary(home) and is_integer(at) ->
         request
 
       _none ->
@@ -782,7 +784,7 @@ defmodule PrismWeb.LoginLive do
     url |> String.split("#", parts: 2) |> hd() |> String.replace_suffix("/carry", "")
   end
 
-  # A handle's request, for the start that keeps it in this browser's
+  # An attempt's request, for the start that keeps it in this browser's
   # session: bound to the browser as the other tickets are.
   defp mint_ticket({:login_cyfr_start, request}, browser_binding) do
     ticket = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
