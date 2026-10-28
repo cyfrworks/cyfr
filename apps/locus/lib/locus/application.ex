@@ -21,7 +21,8 @@ defmodule Locus.Application do
   runners have no network, never shares a node, a key or a network with
   a role that has open egress. A node whose environment was never read
   serves none, or the runtime alone where the configuration gives it a
-  key (a `mix` boot, the test suite).
+  key (the test suite). A `mix` boot from the umbrella root is given none:
+  it runs CYFR alone, beside a runtime container.
 
   A node that serves runs every runner, build and backend through
   cyfr-locus, each under a uid and a memory bound of its own, so serving
@@ -106,7 +107,7 @@ defmodule Locus.Application do
   # `:log_level` and it writes it on every boot it lets through, so the key
   # is set exactly when this is a release boot. A `mix` boot or the test
   # suite never reads that file and keeps the logger its config files set,
-  # its in-VM runtime included. A runner never comes here
+  # the test suite's in-VM runtime included. A runner never comes here
   # (`Locus.Runtime.start_runner/0`).
   @spec release_logging(roles()) :: :ok
   def release_logging(roles) do

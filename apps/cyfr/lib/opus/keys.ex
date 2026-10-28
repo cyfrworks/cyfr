@@ -8,10 +8,10 @@ defmodule Opus.Keys do
 
   The worker root is `config :cyfr, :locus_runtime_root` (`CYFR_LOCUS_RUNTIME_ROOT`, 32
   bytes). Without one, the root is 32 random bytes minted when the
-  application starts and held only in this BEAM, which serves only a
-  worker service running in this BEAM; a restart then retires every
-  assignment, worker and attempt key the previous boot issued. Every other
-  key is derived from the root.
+  application starts and held only in this BEAM, from which no worker
+  service holds a key, so no component runs (`config/runtime.exs` warns
+  at boot); a restart would retire every assignment, worker and attempt
+  key the previous boot issued. Every other key is derived from the root.
 
   `generation/0` is the control-plane generation assignments are issued
   under and host calls are checked against: the generation of the claim

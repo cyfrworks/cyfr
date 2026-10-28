@@ -106,19 +106,6 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     end
   end
 
-  # A `mix` boot runs the runtime beside CYFR, and configures it here
-  # through the release's own reader of the runtime's rows; the `cyfr`
-  # release runs none. A runner never reads this file: it is started as a
-  # plain VM, or as the `locus` release, whose runtime file configures
-  # nothing for it.
-  test "a mix boot alone configures the runtime, through the release's own reader" do
-    src = source()
-
-    assert src =~ ~S|if release_name == nil do|
-    assert src =~ ~S|Locus.Config.runtime_from_env(getenv, fallback)|
-    assert src =~ ~S|{:ok, runtime} -> config :locus, :runtime, runtime|
-  end
-
   # Two releases, two runtime files: the `locus` release is configured by
   # `config/locus_runtime.exs` alone, so this file configures CYFR for
   # every boot that reads it and names no release.
@@ -145,28 +132,6 @@ defmodule Cyfr.RuntimeEnvReadingTest do
     assert src =~ ~S|config :cyfr, :locus_builds_url, locus_builds && locus_builds.url|
     assert src =~ ~S|config :cyfr, :locus_builds_key, locus_builds && locus_builds.key|
     refute src =~ ~S|env_str.("CYFR_LOCUS_BUILDS|
-  end
-
-  # The runtime's settings are read by the release's strict reader
-  # (`Locus.Config.runtime_from_env/2`), so this file spells none of its
-  # pool's variables, and a set value that does not parse refuses the boot
-  # by name there.
-  test "the runtime's settings are read by the release's reader, and its stray names refused" do
-    src = source()
-
-    for name <- ~w(LOCUS_RUNTIME_KEY LOCUS_RUNTIME_HOST_API_URL LOCUS_RUNTIME_BIND
-                   LOCUS_RUNTIME_PORT LOCUS_RUNTIME_POOL_SIZE LOCUS_RUNTIME_IDLE_TTL_MS
-                   LOCUS_RUNTIME_WATCHDOG_GRACE_MS LOCUS_RUNTIME_RELEASE_GRACE_MS
-                   LOCUS_RUNTIME_MEMORY_BYTES LOCUS_RUNTIME_ATTACH_DIR) do
-      refute src =~ ~s|"#{name}"|, "config/runtime.exs spells the runtime's #{name} itself"
-    end
-
-    # The names are checked against everything this file reads, so a
-    # stray `LOCUS_RUNTIME_*` name is refused from an .env file as from the
-    # process; the container limits compose reads are the roster's.
-    assert src =~ ~S|Locus.Config.unknown_names(:runtime)|
-    assert src =~ ~S|Kernel.--(Cyfr.Platform.Settings.Roster.compose_only())|
-    assert src =~ ~S|Locus.Config.unknown(stray)|
   end
 
   # Every platform setting is read through its roster entry
