@@ -70,11 +70,17 @@ defmodule Sanctum.Consent.Plan do
 
     * `candidates` — the athanor's active entries and the instance
       entries offered to the person (`Sanctum.InstanceEntries.offered/1`)
-      of the need's kind whose `provider_hint` is the need's qualifier,
-      each `%{source: "own" | "instance", entry_id | instance_entry_id,
-      name, kind, provider, destination, disclosed, field_names, fields}`,
-      an OAuth one holding exactly the need's scopes, as above, and one
-      holding at least one field when the need reads one. `field_names` are the
+      of the need's kind whose destination covers the hosts and paths the
+      need declares (`entry_fit/2`), whatever their label, each
+      `%{source: "own" | "instance", entry_id | instance_entry_id, name,
+      kind, provider, destination, disclosed, fit, label_match,
+      field_names, fields}`, an OAuth one holding exactly the need's
+      scopes, as above, and one holding at least one field when the need
+      reads one. `provider` is the entry's label, `""` for none; `fit` is
+      `"exact"` when every need host is one of the entry's hosts as
+      written and `"wildcard"` when one is matched only by a `*.` pattern,
+      nil for the `@ingress` slot; `label_match` whether the label is the
+      need's qualifier. `field_names` are the
       entry's, sorted, and `fields` the automatic map from each field the
       need reads to the entry field that answers it (`field_map/2`), nil
       when the person must choose it. An
@@ -84,14 +90,18 @@ defmodule Sanctum.Consent.Plan do
       a disclose-only need, which declares no `attach`, the `@ingress`
       slot of a manifest declaring no needs, and a `disclose: true` need —
       is met by a disclosed entry of the athanor alone, never by an
-      instance entry.
+      instance entry. Candidates are ranked: a label equal to the need's
+      qualifier first, then an exact fit before a wildcard one, then the
+      athanor's own entry before an instance entry, then by name and id.
     * `suggested` — `%{entry_id: id}` or `%{instance_entry_id: id}`: the
-      athanor's default of the need's provider (`Arca.VaultDefaults`) when
-      it is a candidate, else the only candidate, else the one instance
-      candidate when the athanor holds no active entry of that provider,
-      else nil. A default suggests; it never binds.
+      athanor's default of the need's qualifier (`Arca.VaultDefaults`)
+      when it is a candidate, else the only candidate, else nil. A
+      default suggests; it never binds.
     * `choice_required` — true only when several candidates match and
       none is suggested.
+    * `attach_only_held` — for a need the component reads itself, true
+      when it has no candidate and an attach-only entry of the athanor
+      fits it, which is why nothing can meet it; false otherwise.
     * `source` — `"provided"` for a dependency's need the node's
       `provides` covers, which shows that configuration's `destination`
       and takes no candidate; otherwise the suggested candidate's source,
@@ -110,7 +120,7 @@ defmodule Sanctum.Consent.Plan do
   lending profile's binding projects.
 
   `warnings` names, for each required need nothing can meet, the need
-  and its provider, and for a disclose-only need that the component reads
+  and the hosts it calls, and for a disclose-only need that the component reads
   the value itself, with the newer shipped version when there is one; and
   each `provides` entry that provides nothing (a need its dependency does
   not declare, or declares with no attach rule) and each dependency the
@@ -542,12 +552,33 @@ defmodule Sanctum.Consent.Plan do
   end
 
   defp choice_row(_ctx, _sources, %{kind: kind}, _facts) when kind not in @credential_kinds,
-    do: %{candidates: [], suggested: nil, choice_required: false, source: nil}
+    do: %{
+      candidates: [],
+      suggested: nil,
+      choice_required: false,
+      attach_only_held: false,
+      source: nil
+    }
 
   defp choice_row(ctx, sources, need, facts) do
     choice = need_choice(ctx, sources, need, facts)
-    Map.put(choice, :source, suggested_source(choice))
+
+    Map.merge(choice, %{
+      source: suggested_source(choice),
+      attach_only_held: attach_only_held?(sources, need, choice.candidates)
+    })
   end
+
+  # Why a need the component reads itself has no candidate: an entry of
+  # the athanor fits it and is attach-only.
+  defp attach_only_held?(_sources, nil, _candidates), do: false
+
+  defp attach_only_held?(sources, need, []) do
+    reads_itself?(need) and
+      Enum.any?(sources.own, &(&1.attach_only and entry_fit(need, &1) != :none))
+  end
+
+  defp attach_only_held?(_sources, _need, _candidates), do: false
 
   defp suggested_source(%{suggested: %{entry_id: _}}), do: "own"
   defp suggested_source(%{suggested: %{instance_entry_id: _}}), do: "instance"
@@ -555,7 +586,7 @@ defmodule Sanctum.Consent.Plan do
 
   # A required credential need nothing can meet is satisfiable only after
   # the person creates an entry — say so up front, naming the need and
-  # its provider; a need the component reads itself says so, and names
+  # the hosts it calls; a need the component reads itself says so, and names
   # the newer version the media ships when there is one. Then what the
   # closure's `provides` blocks cannot provide.
   defp need_warnings(needs, provided_notes) do
@@ -572,14 +603,15 @@ defmodule Sanctum.Consent.Plan do
   end
 
   defp need_warning(need) do
-    "need '#{need.need}' wants #{kind_words(need)}, and none can yet — create one first"
+    "need '#{need.need}' wants #{kind_words(need)}, and none can yet. Create one first."
   end
 
   defp kind_words(%{kind: "oauth"} = need) do
-    "oauth entry for #{need.provider} granting #{Enum.join(scope_set(need.scopes), ", ")}"
+    "oauth entry for #{Enum.join(need.hosts, ", ")} granting " <>
+      Enum.join(scope_set(need.scopes), ", ")
   end
 
-  defp kind_words(need), do: "#{need.kind} entry for #{need.provider}"
+  defp kind_words(need), do: "#{need.kind} entry for #{Enum.join(need.hosts, ", ")}"
 
   defp newer_words(%{newer_shipped: version}) when is_binary(version),
     do: ", or update to version #{version}, which the release ships"
@@ -663,8 +695,9 @@ defmodule Sanctum.Consent.Plan do
         }
   def need_choice(ctx, sources, need, facts) do
     candidates =
-      Enum.flat_map(sources.own, &own_candidate(&1, need)) ++
-        Enum.flat_map(sources.offered, &instance_candidate(ctx, &1, need, facts))
+      (Enum.flat_map(sources.own, &own_candidate(&1, need)) ++
+         Enum.flat_map(sources.offered, &instance_candidate(ctx, &1, need, facts)))
+      |> Enum.sort_by(&rank/1)
 
     suggested = suggestion(candidates, sources, need)
 
@@ -693,8 +726,9 @@ defmodule Sanctum.Consent.Plan do
         disclosed: not entry.attach_only
       }
       |> with_fields(entry.field_names, need)
+      |> with_fit(entry, need)
 
-    if matches?(candidate, entry.oauth_scopes, need) and mappable?(candidate, need) and
+    if meets?(candidate, entry.oauth_scopes, need) and mappable?(candidate, need) and
          (candidate.disclosed or not reads_itself?(need)),
        do: [candidate],
        else: []
@@ -714,21 +748,70 @@ defmodule Sanctum.Consent.Plan do
         disclosed: false
       }
       |> with_fields(entry.field_names, need)
+      |> with_fit(entry, need)
 
-    if not reads_itself?(need) and matches?(candidate, [], need) and mappable?(candidate, need) and
+    if not reads_itself?(need) and meets?(candidate, [], need) and mappable?(candidate, need) and
          Sanctum.InstanceEntries.admits?(ctx, entry, facts),
        do: [candidate],
        else: []
   end
 
   # The `@ingress` slot of a manifest declaring no needs names no kind or
-  # provider: any disclosed entry may meet it.
-  defp matches?(_candidate, _scopes, nil), do: true
+  # destination: any disclosed entry may meet it.
+  defp meets?(_candidate, _scopes, nil), do: true
 
-  defp matches?(candidate, scopes, need) do
-    candidate.kind == need.kind and candidate.provider == need.qualifier and
-      scopes_met?(candidate, scopes, need)
+  defp meets?(candidate, scopes, need),
+    do: candidate.fit != nil and scopes_met?(candidate, scopes, need)
+
+  defp with_fit(candidate, _entry, nil), do: Map.merge(candidate, %{fit: nil, label_match: false})
+
+  defp with_fit(candidate, entry, need) do
+    fit =
+      case entry_fit(need, entry) do
+        :exact -> "exact"
+        :wildcard -> "wildcard"
+        :none -> nil
+      end
+
+    label_match = entry.provider_hint != "" and entry.provider_hint == need.qualifier
+    Map.merge(candidate, %{fit: fit, label_match: label_match})
   end
+
+  # The offer's order: the need's own label first, an exact fit before a
+  # wildcard one, the athanor's entry before an instance entry, then name
+  # and id, so the order is total.
+  defp rank(candidate) do
+    {not candidate.label_match, candidate.fit == "wildcard", candidate.source != "own",
+     candidate.name, Map.get(candidate, :entry_id) || Map.get(candidate, :instance_entry_id)}
+  end
+
+  @doc """
+  How `entry` can serve the declared credential `need` by where it may
+  go: `Prima.Manifest.Needs.fit/2` of its destination, `:exact`,
+  `:wildcard` or `:none`. An entry of another kind, or whose destination
+  does not parse, is `:none`. `entry` names its `kind` and its
+  `destination`, a `Prima.Destination` or the map `Prima.Destination.to_map/1`
+  writes. The plan's candidates, the commit's bindings and selections
+  and the provisioning walk all decide by it.
+  """
+  @spec entry_fit(map(), map()) :: :exact | :wildcard | :none
+  def entry_fit(%{kind: kind} = need, %{kind: kind, destination: destination}) do
+    case destination do
+      %Prima.Destination{} ->
+        Prima.Manifest.Needs.fit(need, destination)
+
+      %{} = map ->
+        case Prima.Destination.from_map(map) do
+          {:ok, parsed} -> Prima.Manifest.Needs.fit(need, parsed)
+          {:error, _} -> :none
+        end
+
+      _absent ->
+        :none
+    end
+  end
+
+  def entry_fit(_need, _entry), do: :none
 
   defp with_fields(candidate, field_names, need) do
     names = field_names |> Enum.uniq() |> Enum.sort()
@@ -775,14 +858,11 @@ defmodule Sanctum.Consent.Plan do
 
   defp canonical_destination(_absent), do: nil
 
-  # The default of the need's provider when it is a candidate (the two
+  # The default of the need's qualifier when it is a candidate (the two
   # are separate reads, so a default naming none suggests nothing here),
-  # else the only candidate, else the one instance candidate when the
-  # athanor holds no active entry of the provider.
-  defp suggestion(candidates, sources, need) do
-    default_candidate(candidates, sources, need) || only(candidates) ||
-      offered_alone(candidates, sources, need)
-  end
+  # else the only candidate.
+  defp suggestion(candidates, sources, need),
+    do: default_candidate(candidates, sources, need) || only(candidates)
 
   defp default_candidate(_candidates, _sources, nil), do: nil
 
@@ -802,17 +882,6 @@ defmodule Sanctum.Consent.Plan do
 
   defp only([candidate]), do: identity(candidate)
   defp only(_none_or_several), do: nil
-
-  defp offered_alone(_candidates, _sources, nil), do: nil
-
-  defp offered_alone(candidates, sources, need) do
-    held? = Enum.any?(sources.own, &(&1.provider_hint == need.qualifier))
-
-    case Enum.filter(candidates, &(&1.source == "instance")) do
-      [instance] when not held? -> identity(instance)
-      _ -> nil
-    end
-  end
 
   defp identity(%{source: "own", entry_id: id}), do: %{entry_id: id}
   defp identity(%{source: "instance", instance_entry_id: id}), do: %{instance_entry_id: id}

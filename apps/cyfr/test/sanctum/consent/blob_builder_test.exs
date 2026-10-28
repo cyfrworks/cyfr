@@ -650,16 +650,19 @@ defmodule Sanctum.Consent.BlobBuilderTest do
       "needs" => %{
         "database" => %{
           "type" => "api_key:supabase.co",
+          "hosts" => ["abc.supabase.co"],
           "reason" => "to reach the database",
           "fields" => ["anon_key"],
           "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
         },
         "signing" => %{
           "type" => "api_key:supabase.co",
+          "hosts" => ["abc.supabase.co"],
           "reason" => "to sign",
           "fields" => ["secret"]
         }
-      }
+      },
+      "caps" => %{"egress" => %{"domains" => ["abc.supabase.co"]}}
     }
 
     test "covers a need the dependency declares with an attach rule, and nothing else" do

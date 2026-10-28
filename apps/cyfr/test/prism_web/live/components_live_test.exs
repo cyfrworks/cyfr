@@ -138,9 +138,11 @@ defmodule PrismWeb.ComponentsLiveTest do
           "api_key" => %{
             "type" => "api_key:shelf.example",
             "reason" => "to call the shelf's model",
-            "fields" => ["SHELF_KEY"]
+            "fields" => ["SHELF_KEY"],
+            "hosts" => ["api.shelf.example"]
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.shelf.example"]}}
       }
     end
 
@@ -393,9 +395,11 @@ defmodule PrismWeb.ComponentsLiveTest do
               "in" => "header",
               "name" => "Authorization",
               "template" => "Bearer {value}"
-            }
+            },
+            "hosts" => ["api.example.com"]
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
       })
 
       ship_component!(ctx, "shelf-borrower", %{
@@ -460,9 +464,11 @@ defmodule PrismWeb.ComponentsLiveTest do
               "in" => "header",
               "name" => "Authorization",
               "template" => "Bearer {value}"
-            }
+            },
+            "hosts" => ["api.example.com"]
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
       })
 
       ship_component!(ctx, "shelf-damaged-app", %{

@@ -43,7 +43,9 @@ defmodule Sanctum.Consent.Bootstrap do
   context). At the first mint of a shipped catalyst's default profile,
   the walk binds a need that admits an instance entry — one that declares
   `attach` and not `disclose` — when exactly one offered active instance
-  entry is of the need's kind and provider and its component policy
+  entry is of the need's kind, its destination covers the hosts and
+  paths the need declares (`Sanctum.Consent.Plan.entry_fit/2`), and its
+  component policy
   admits the shipped catalyst, in the default slot, standing, under the
   automatic field map (`Sanctum.Consent.Plan.field_map/2`), since no one
   is there to choose one: where the entry's fields leave the need
@@ -60,8 +62,9 @@ defmodule Sanctum.Consent.Bootstrap do
   sync — chooses nothing: it carries the head's instance binding as the
   head holds it (entry, digest, key and lifetime) onto the need that
   admits an instance entry, so a shipped catalyst's new release does not
-  silently drop it, while the entry is still of that need's kind and
-  provider, active, and at the digest the head bound
+  silently drop it, while the entry is still of that need's kind, the
+  destination it was bound at still covers the need, and it is active
+  and at the digest the head bound
   (`Sanctum.InstanceEntries.binding_facts/1`); otherwise it binds none,
   and a store that cannot answer skips the source that boot with its
   head kept. A revoke landing after that read meets the revision's
@@ -426,7 +429,8 @@ defmodule Sanctum.Consent.Bootstrap do
 
   # The instance entry a newly provisioned athanor's catalyst binds:
   # exactly one active entry offered to the walk's person of the need's
-  # kind and provider, holding its scopes as a consent holds them, whose
+  # kind whose destination covers the need, holding its scopes as a
+  # consent holds them, whose
   # component policy admits the shipped catalyst at its release digest.
   # `{:ok, nil}` when nothing is offered: no person, no such entry,
   # several, or a chosen entry the binding read answers is not usable.
@@ -440,7 +444,7 @@ defmodule Sanctum.Consent.Bootstrap do
          facts = Sanctum.Consent.Plan.node_facts(source_ref, graph, %{source_ref => component}),
          [entry] <-
            Enum.filter(offered, fn entry ->
-             entry.kind == need.kind and entry.provider_hint == need.qualifier and
+             Sanctum.Consent.Plan.entry_fit(need, entry) != :none and
                Sanctum.InstanceEntries.admits?(ctx, entry, facts)
            end),
          {:ok, view} <- entry_binding(ctx, entry.id, source_ref),
@@ -553,7 +557,7 @@ defmodule Sanctum.Consent.Bootstrap do
          %{} = need <- instance_need(component, source_ref),
          {:ok, view} <- entry_binding(ctx, id, source_ref),
          true <- is_binary(view.binding_digest) and view.binding_digest == digest,
-         true <- view.kind == need.kind and view.provider_hint == need.qualifier,
+         true <- Sanctum.Consent.Plan.entry_fit(need, view) != :none,
          true <-
            Sanctum.InstanceEntries.admits?(
              ctx,
@@ -574,9 +578,10 @@ defmodule Sanctum.Consent.Bootstrap do
   # holds it — the entry, the digest, the key and the lifetime — with the
   # destination it was bound at, onto the need that admits an instance
   # entry now (a need the component reads itself is never met by one),
-  # while the entry is still of that need's kind and provider, holds an
-  # OAuth need's scopes as a first binding must, is active, and is at the
-  # digest the head bound (`Sanctum.InstanceEntries.binding_facts/1`).
+  # while the entry is still of that need's kind, the destination the head
+  # bound it at (pinned by the equal binding digest) covers the need, it
+  # holds an OAuth need's scopes as a first binding must, is active, and is
+  # at the digest the head bound (`Sanctum.InstanceEntries.binding_facts/1`).
   # Any fact moved, or the entry is gone, and the revision binds none. A
   # store that cannot answer decides nothing: the source is skipped this
   # boot with the head kept, rather than revised without its binding, as
@@ -595,7 +600,7 @@ defmodule Sanctum.Consent.Bootstrap do
          {:ok, row} <- carried_row(profile_id, refs, key, id),
          %{} = need <- instance_need(component, source_ref),
          {:ok, facts} <- entry_facts(id),
-         true <- still_holds?(facts, need, vault.binding_digest),
+         true <- still_holds?(facts, need, vault),
          {:ok, fields} <- automatic_map(need, facts.field_names) do
       {:ok,
        %{
@@ -640,8 +645,8 @@ defmodule Sanctum.Consent.Bootstrap do
     end
   end
 
-  defp still_holds?(facts, need, digest) do
-    facts.kind == need.kind and facts.provider_hint == need.qualifier and
+  defp still_holds?(facts, need, %{binding_digest: digest, destination: destination}) do
+    Sanctum.Consent.Plan.entry_fit(need, %{kind: facts.kind, destination: destination}) != :none and
       facts.status == "active" and is_binary(digest) and facts.binding_digest == digest
   end
 

@@ -180,7 +180,8 @@ defmodule Locus.Runtime.BootstrapFirstRunTest do
         "api_key" => %{
           "type" => "api_key:anthropic.com",
           "reason" => "to call the Anthropic API with your key",
-          "fields" => ["ANTHROPIC_API_KEY"]
+          "fields" => ["ANTHROPIC_API_KEY"],
+          "hosts" => ["api.anthropic.com"]
         }
       },
       "caps" => %{

@@ -1099,8 +1099,10 @@ defmodule Sanctum.Providers.Profile do
     do: "entry_unavailable: an entry this consent binds is now #{inspect(status)}"
 
   # A binding's refusals name the need and never the entry's material.
-  defp fmt({:provider_mismatch, need}) when is_binary(need),
-    do: "provider_mismatch: #{inspect(need)} takes an entry of its own kind and provider"
+  defp fmt({:entry_mismatch, need}) when is_binary(need),
+    do:
+      "entry_mismatch: #{inspect(need)}: The entry is of another kind, or its destination " <>
+        "does not cover the hosts this need calls."
 
   defp fmt({:fields_unmapped, need}) when is_binary(need),
     do:

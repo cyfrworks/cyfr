@@ -277,6 +277,7 @@ defmodule Sanctum.Consent.CommitTest do
         "needs" => %{
           "api_key" => %{
             "type" => "api_key:one.example",
+            "hosts" => ["api.one.example"],
             "reason" => "to call the example API",
             "fields" => ["EXAMPLE_API_KEY"],
             "attach" => attach
@@ -289,7 +290,11 @@ defmodule Sanctum.Consent.CommitTest do
       publish!(ctx, "commit-binding", "1.0.0", manifest)
 
       entry =
-        entry!(ctx, %{"EXAMPLE_API_KEY" => "k"}, %{provider_hint: "one.example", disclose: false})
+        entry!(ctx, %{"EXAMPLE_API_KEY" => "k"}, %{
+          provider_hint: "one.example",
+          destination: %{"hosts" => ["api.one.example"]},
+          disclose: false
+        })
 
       {:ok, row} = Arca.VaultStorage.get(Sanctum.Context.actor(ctx), entry.id)
       {:ok, destination} = Sanctum.Consent.BlobBuilder.entry_destination(row)
@@ -357,6 +362,7 @@ defmodule Sanctum.Consent.CommitTest do
         "needs" => %{
           "api_key" => %{
             "type" => "api_key:openai.com",
+            "hosts" => ["api.openai.com"],
             "reason" => "to call the model",
             "fields" => ["KEY", "ORG"]
           }
@@ -364,7 +370,12 @@ defmodule Sanctum.Consent.CommitTest do
         "caps" => %{"egress" => %{"domains" => ["api.openai.com"], "methods" => ["POST"]}}
       })
 
-      entry = entry!(ctx, %{"token" => "t", "org" => "o"}, %{provider_hint: "openai.com"})
+      entry =
+        entry!(ctx, %{"token" => "t", "org" => "o"}, %{
+          provider_hint: "openai.com",
+          destination: %{"hosts" => ["api.openai.com"]}
+        })
+
       {"reagent:local.#{name}", entry}
     end
 
@@ -703,6 +714,7 @@ defmodule Sanctum.Consent.CommitTest do
           "needs" => %{
             "api_key" => %{
               "type" => "api_key:example.com",
+              "hosts" => ["api.one.example"],
               "reason" => reason,
               "fields" => ["EXAMPLE_API_KEY"]
             }
@@ -713,7 +725,13 @@ defmodule Sanctum.Consent.CommitTest do
 
       ref = "reagent:local.commit-reason"
       publish!(ctx, "commit-reason", "1.0.0", needs.("to call the example API"))
-      entry = entry!(ctx, %{"EXAMPLE_API_KEY" => "k"}, %{provider_hint: "example.com"})
+
+      entry =
+        entry!(ctx, %{"EXAMPLE_API_KEY" => "k"}, %{
+          provider_hint: "example.com",
+          destination: %{"hosts" => ["api.one.example"]}
+        })
+
       decisions = %{ref: ref, bindings: [%{need: "api_key", entry_id: entry.id}]}
       {:ok, before} = Commit.preview(ctx, decisions)
 
@@ -1082,12 +1100,13 @@ defmodule Sanctum.Consent.CommitTest do
       "needs" => %{
         "mail" => %{
           "type" => "oauth:google",
+          "hosts" => ["gmail.googleapis.com"],
           "reason" => "to read your mail",
           "required" => true,
           "scopes" => ["gmail.readonly"]
         }
       },
-      "caps" => @caps
+      "caps" => %{"egress" => %{"domains" => ["gmail.googleapis.com"]}}
     }
 
     defp oauth_entry!(ctx, scopes) do
@@ -1416,6 +1435,7 @@ defmodule Sanctum.Consent.CommitTest do
           Map.merge(
             %{
               "type" => "api_key:openai.com",
+              "hosts" => ["api.openai.com"],
               "reason" => "to call the model",
               "fields" => ["OPENAI_API_KEY"],
               "attach" => @attach
@@ -1432,7 +1452,14 @@ defmodule Sanctum.Consent.CommitTest do
     entry!(
       ctx,
       %{"OPENAI_API_KEY" => "sk-#{System.unique_integer([:positive])}"},
-      Map.merge(%{provider_hint: "openai.com", disclose: false}, over)
+      Map.merge(
+        %{
+          provider_hint: "openai.com",
+          destination: %{"hosts" => ["api.openai.com"]},
+          disclose: false
+        },
+        over
+      )
     )
   end
 
@@ -1541,6 +1568,29 @@ defmodule Sanctum.Consent.CommitTest do
   end
 
   describe "matching and lifetimes" do
+    test "an entry of another label whose destination fits commits", %{ctx: ctx} do
+      ref = "reagent:local.commit-relabelled"
+      publish!(ctx, "commit-relabelled", "1.0.0", keyed_manifest())
+      unlabelled = key!(ctx, %{provider_hint: ""})
+      other_label = key!(ctx, %{provider_hint: "anthropic.com"})
+
+      bindings = [
+        %{need: "api_key", entry_id: unlabelled.id},
+        %{need: "api_key", entry_id: other_label.id, name: "Other"}
+      ]
+
+      assert {:ok, %{profile_id: profile_id}} = walk!(ctx, ref, %{bindings: bindings})
+
+      rows = rows_by_key(ctx, profile_id)
+      assert rows["#{ref}|@ingress|default"].vault_entry_id == unlabelled.id
+      assert rows["#{ref}|@ingress|name:Other"].vault_entry_id == other_label.id
+
+      {:ok, blob} = Prima.Authority.Blob.parse(head!(ctx, profile_id).resolved_policy)
+      {:ok, ingress} = Prima.Authority.Blob.ingress(blob, ref)
+      assert ingress.vault.entry_id == unlabelled.id
+      assert ingress.vault.named["Other"].entry_id == other_label.id
+    end
+
     test "matching and binding lifetimes are committed per edge without implicit disclosure",
          %{ctx: ctx} do
       ref = "reagent:local.commit-matched"
@@ -1548,13 +1598,14 @@ defmodule Sanctum.Consent.CommitTest do
       default = key!(ctx)
       first = key!(ctx)
       second = key!(ctx)
-      other_provider = key!(ctx, %{provider_hint: "anthropic.com"})
+      elsewhere = key!(ctx, %{destination: %{"hosts" => ["api.anthropic.com"]}})
 
-      # An entry of another provider meets no need of openai.com.
-      assert {:error, {:provider_mismatch, "api_key"}} =
+      # An entry of the need's provider whose destination misses the host
+      # the need calls meets no need there.
+      assert {:error, {:entry_mismatch, "api_key"}} =
                Commit.preview(ctx, %{
                  ref: ref,
-                 bindings: [%{need: "api_key", entry_id: other_provider.id}]
+                 bindings: [%{need: "api_key", entry_id: elsewhere.id}]
                })
 
       # The need attaches: an attach-only entry meets it, and stays
@@ -1642,10 +1693,12 @@ defmodule Sanctum.Consent.CommitTest do
         "needs" => %{
           "api_key" => %{
             "type" => "api_key:openai.com",
+            "hosts" => ["api.openai.com"],
             "reason" => "to read the key",
             "fields" => ["OPENAI_API_KEY"]
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.openai.com"]}}
       })
 
       assert {:error, {:disclosure_refused, "api_key"}} =
@@ -1924,12 +1977,18 @@ defmodule Sanctum.Consent.CommitTest do
         do: keyed_manifest()["needs"]["api_key"],
         else: %{
           "type" => "api_key:anthropic.com",
+          "hosts" => ["api.anthropic.com"],
           "reason" => "to call the other model",
           "fields" => ["ANTHROPIC_API_KEY"],
           "attach" => @attach
         }
 
-    publish!(ctx, name, "1.0.0", put_in(keyed_manifest(), ["needs", "other_key"], other))
+    manifest =
+      keyed_manifest()
+      |> put_in(["needs", "other_key"], other)
+      |> put_in(["caps", "egress", "domains"], ["api.anthropic.com", "api.openai.com"])
+
+    publish!(ctx, name, "1.0.0", manifest)
     "reagent:local.#{name}"
   end
 
@@ -1937,7 +1996,11 @@ defmodule Sanctum.Consent.CommitTest do
     entry!(
       ctx,
       %{"ANTHROPIC_API_KEY" => "sk-ant-#{System.unique_integer([:positive])}"},
-      %{provider_hint: "anthropic.com", disclose: false}
+      %{
+        provider_hint: "anthropic.com",
+        destination: %{"hosts" => ["api.anthropic.com"]},
+        disclose: false
+      }
     )
   end
 
@@ -2387,8 +2450,8 @@ defmodule Sanctum.Consent.CommitTest do
                })
     end
 
-    test "an entry not offered to the person, not active, of another provider, or bound " <>
-           "where the component reads the value, is refused",
+    test "an entry not offered to the person, not active, whose destination misses the need, " <>
+           "or bound where the component reads the value, is refused",
          %{person: person} do
       ref = custom!(person, "commit-refusals")
 
@@ -2403,8 +2466,13 @@ defmodule Sanctum.Consent.CommitTest do
       assert {:error, {:entry_unavailable, id, "revoked"}} = bind_instance(person, ref, revoked)
       assert id == revoked.id
 
-      other = instance!(%{provider_hint: "anthropic.com"})
-      assert {:error, {:provider_mismatch, "api_key"}} = bind_instance(person, ref, other)
+      elsewhere =
+        instance!(%{
+          destination:
+            ~s({"hosts":["api.anthropic.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+        })
+
+      assert {:error, {:entry_mismatch, "api_key"}} = bind_instance(person, ref, elsewhere)
 
       publish!(person, "commit-instance-reads", "1.0.0", keyed_manifest(%{"disclose" => true}))
 
@@ -2451,15 +2519,15 @@ defmodule Sanctum.Consent.CommitTest do
     test "an entry chosen for a dependency's need is held to that need", %{ctx: ctx} do
       two = two_deps!(ctx)
 
-      # Another provider's entry, a need it does not declare, and a
-      # label beside an entry are refused.
-      assert {:error, {:provider_mismatch, "api_key"}} =
+      # An entry whose destination misses the need, a need it does not
+      # declare, and a label beside an entry are refused.
+      assert {:error, {:entry_mismatch, "api_key"}} =
                Commit.preview(ctx, %{
                  ref: two,
                  selections: [
                    %{
                      dep: "reagent:local.commit-dep-a",
-                     entry_id: key!(ctx, %{provider_hint: "anthropic.com"}).id
+                     entry_id: key!(ctx, %{destination: %{"hosts" => ["api.anthropic.com"]}}).id
                    }
                  ]
                })
@@ -2548,17 +2616,20 @@ defmodule Sanctum.Consent.CommitTest do
         "needs" => %{
           "database" => %{
             "type" => "api_key:supabase.co",
+            "hosts" => ["abc.supabase.co"],
             "reason" => "to reach the database",
             "fields" => ["anon_key"],
             "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
           },
           "admin" => %{
             "type" => "api_key:supabase.co",
+            "hosts" => ["abc.supabase.co"],
             "reason" => "to administer it",
             "fields" => ["service_key"],
             "attach" => %{"in" => "header", "name" => "x-admin", "template" => "{value}"}
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["abc.supabase.co"]}}
       })
 
       provided = %{
@@ -2715,11 +2786,13 @@ defmodule Sanctum.Consent.CommitTest do
           "needs" => %{
             "database" => %{
               "type" => "api_key:supabase.co",
+              "hosts" => ["abc.supabase.co"],
               "reason" => "to reach the database",
               "fields" => ["anon_key"],
               "attach" => %{"in" => "header", "name" => header, "template" => "{value}"}
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["abc.supabase.co"]}}
         })
       end
 
@@ -2762,11 +2835,13 @@ defmodule Sanctum.Consent.CommitTest do
         "needs" => %{
           "database" => %{
             "type" => "api_key:supabase.co",
+            "hosts" => ["abc.supabase.co"],
             "reason" => "to reach the database",
             "fields" => ["anon_key"],
             "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["abc.supabase.co"]}}
       })
 
       publish!(ctx, "pin-gone", "2.0.0", %{})
@@ -2805,17 +2880,20 @@ defmodule Sanctum.Consent.CommitTest do
         "needs" => %{
           "database" => %{
             "type" => "api_key:supabase.co",
+            "hosts" => ["abc.supabase.co"],
             "reason" => "to reach the database",
             "fields" => ["anon_key"],
             "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
           },
           "admin" => %{
             "type" => "api_key:supabase.co",
+            "hosts" => ["abc.supabase.co"],
             "reason" => "to administer it",
             "fields" => ["service_key"],
             "attach" => %{"in" => "header", "name" => "x-admin", "template" => "{value}"}
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["abc.supabase.co"]}}
       })
 
       publish!(ctx, "commit-named-app", "1.0.0", %{
@@ -2829,6 +2907,7 @@ defmodule Sanctum.Consent.CommitTest do
       do:
         entry!(ctx, %{field => "k-#{System.unique_integer([:positive])}"}, %{
           provider_hint: "supabase.co",
+          destination: %{"hosts" => ["abc.supabase.co"]},
           disclose: false
         })
 
@@ -2966,18 +3045,20 @@ defmodule Sanctum.Consent.CommitTest do
                  "database; an edge carries one need's credentials"
     end
 
-    test "a named selection is held to its need: a provided need, another provider, an " <>
+    test "a named selection is held to its need: a provided need, a destination it misses, an " <>
            "instance entry not offered",
          %{ctx: ctx} do
       publish!(ctx, "commit-named-provided-db", "1.0.0", %{
         "needs" => %{
           "database" => %{
             "type" => "api_key:supabase.co",
+            "hosts" => ["abc.supabase.co"],
             "reason" => "to reach the database",
             "fields" => ["anon_key"],
             "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["abc.supabase.co"]}}
       })
 
       db = "reagent:local.commit-named-provided-db"
@@ -3013,20 +3094,20 @@ defmodule Sanctum.Consent.CommitTest do
             do: {account, values["source"]}
       end
 
-      assert {:error, {:provider_mismatch, "api_key"}} =
+      assert {:error, {:entry_mismatch, "api_key"}} =
                Commit.preview(ctx, %{
                  ref: two,
                  selections: [
                    default,
                    %{
                      dep: @dep_a,
-                     entry_id: key!(ctx, %{provider_hint: "anthropic.com"}).id,
+                     entry_id: key!(ctx, %{destination: %{"hosts" => ["api.anthropic.com"]}}).id,
                      name: "Work"
                    }
                  ]
                })
 
-      # An entry of the need's provider is taken as the account.
+      # An entry whose destination covers the need is taken as the account.
       {:ok, preview} =
         Commit.preview(ctx, %{
           ref: two,
@@ -3226,6 +3307,7 @@ defmodule Sanctum.Consent.CommitRebindRaceTest do
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:openai.com",
+          "hosts" => ["api.openai.com"],
           "reason" => "to call the model",
           "fields" => ["OPENAI_API_KEY"],
           "attach" => @attach

@@ -55,12 +55,12 @@ defmodule Sanctum.Consent.FlowTest do
           %{
             name: "conn-#{System.unique_integer([:positive])}",
             kind: "api_key",
-            # The provider the cases' declared need names; a slot of a
-            # manifest declaring none names no provider to match.
+            # The label and the host the cases' declared need names; a slot
+            # of a manifest declaring none matches neither.
             provider_hint: "anthropic.com",
             fields: %{"url" => "https://db.example", "anon_key" => "anon"},
             # A case reads what the attach answers, so the entry is disclosed.
-            destination: %{"hosts" => ["db.example"]},
+            destination: %{"hosts" => ["api.anthropic.com"]},
             disclose: true
           },
           over
@@ -702,6 +702,7 @@ defmodule Sanctum.Consent.FlowTest do
     "needs" => %{
       "api_key" => %{
         "type" => "api_key:anthropic.com",
+        "hosts" => ["api.anthropic.com"],
         "reason" => "to call the API with your key",
         "fields" => ["ANTHROPIC_API_KEY"]
       }
@@ -997,7 +998,8 @@ defmodule Sanctum.Consent.FlowTest do
             "needs" => %{
               "api_key" => @needs_manifest["needs"]["api_key"],
               "other_key" => @needs_manifest["needs"]["api_key"]
-            }
+            },
+            "caps" => @needs_manifest["caps"]
           })
       })
 

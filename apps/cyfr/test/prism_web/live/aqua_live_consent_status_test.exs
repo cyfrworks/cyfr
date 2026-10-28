@@ -136,9 +136,11 @@ defmodule PrismWeb.AquaLiveConsentStatusTest.GrantTest do
                 "type" => "api_key:status.test",
                 "reason" => "to call the model with your key",
                 "fields" => ["STATUS_API_KEY"],
-                "required" => true
+                "required" => true,
+                "hosts" => ["api.status.example"]
               }
-            }
+            },
+            "caps" => %{"egress" => %{"domains" => ["api.status.example"]}}
           })
       })
 

@@ -635,9 +635,11 @@ defmodule PrismWeb.SystemLayerTest do
                 "type" => "api_key:layer.test",
                 "reason" => "to call the service with your key",
                 "fields" => ["LAYER_API_KEY"],
-                "required" => true
+                "required" => true,
+                "hosts" => ["api.example.com"]
               }
-            }
+            },
+            "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
           })
       })
 
@@ -1328,9 +1330,11 @@ defmodule PrismWeb.SystemLayerTest do
               "type" => "api_key:optional.test",
               "reason" => "to call the service, if you like",
               "fields" => ["OPTIONAL_KEY"],
-              "required" => false
+              "required" => false,
+              "hosts" => ["api.optional.example"]
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.optional.example"]}}
         })
 
       entry =
@@ -1365,7 +1369,8 @@ defmodule PrismWeb.SystemLayerTest do
               "type" => "api_key:dep.test",
               "reason" => "to reach the dependency's service",
               "fields" => ["DEP_KEY"],
-              "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+              "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+              "hosts" => ["api.dep.example"]
             }
           },
           "caps" => %{"egress" => %{"domains" => ["api.dep.example"]}}
@@ -1557,9 +1562,11 @@ defmodule PrismWeb.SystemLayerTest do
               "type" => "api_key:back-dep.test",
               "reason" => "to reach the dependency's service",
               "fields" => ["DEP_KEY"],
-              "attach" => attach
+              "attach" => attach,
+              "hosts" => ["api.back-dep.example"]
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.back-dep.example"]}}
         })
 
       app =
@@ -1570,9 +1577,11 @@ defmodule PrismWeb.SystemLayerTest do
               "type" => "api_key:back.test",
               "reason" => "to call the app's service",
               "fields" => ["APP_KEY"],
-              "attach" => attach
+              "attach" => attach,
+              "hosts" => ["api.back.example"]
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.back.example"]}}
         })
 
       entry =
@@ -1689,12 +1698,14 @@ defmodule PrismWeb.SystemLayerTest do
             "api_key" => %{
               "type" => "api_key:reads.test",
               "reason" => "to call the service with the key it reads",
-              "fields" => ["READS_KEY", "READS_ORG"]
+              "fields" => ["READS_KEY", "READS_ORG"],
+              "hosts" => ["api.reads.example"]
             }
-          }
+          },
+          "caps" => %{"egress" => %{"domains" => ["api.reads.example"]}}
         })
 
-      # An attach-only entry of the provider, which the need cannot take.
+      # An attach-only entry for the need's host, which the need cannot take.
       _attached =
         entry!(local, %{
           provider_hint: "reads.test",
@@ -1718,7 +1729,7 @@ defmodule PrismWeb.SystemLayerTest do
              )
 
       assert has_element?(view, ~s(input[name="disclose"][checked]))
-      refute has_element?(view, ~s(input[name="destination_hosts"][value]))
+      assert has_element?(view, ~s(input[name="destination_hosts"][value="api.reads.example"]))
 
       view |> element(~s(button[phx-click="dismiss"])) |> render_click()
       assert outcome(id) == :dismissed
@@ -1749,7 +1760,8 @@ defmodule PrismWeb.SystemLayerTest do
             "reason" => "to reach the named service",
             "fields" => ["NAMED_KEY"],
             "required" => required,
-            "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
+            "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"},
+            "hosts" => ["api.named.example"]
           }
         }
       end
@@ -2172,7 +2184,8 @@ defmodule PrismWeb.SystemLayerTest do
           "egress" => %{"domains" => domains, "methods" => methods}
         })
 
-    # The same catalyst asking for `caps`, its manifest naming `extra` too.
+    # The same catalyst asking for `caps`, its manifest naming `extra` too;
+    # its key is for the hosts of `caps`' egress domains.
     defp asking_caps!(local, name, version, caps, extra \\ %{}) do
       {:ok, _} =
         Compendium.Registry.publish_bytes(local, Cyfr.Test.Guests.wasm(:catalyst), %{
@@ -2194,7 +2207,8 @@ defmodule PrismWeb.SystemLayerTest do
                         "in" => "header",
                         "name" => "x-api-key",
                         "template" => "{value}"
-                      }
+                      },
+                      "hosts" => caps["egress"]["domains"]
                     }
                   },
                   "caps" => caps
@@ -2796,7 +2810,8 @@ defmodule PrismWeb.SystemLayerTest do
                       "reason" => "to reach the regrant service",
                       "fields" => ["REGRANT_KEY"],
                       "required" => true,
-                      "attach" => attach.("x-api-key")
+                      "attach" => attach.("x-api-key"),
+                      "hosts" => ["api.regrant.example"]
                     },
                     "other_key" => %{
                       "type" => "api_key:other3.test",

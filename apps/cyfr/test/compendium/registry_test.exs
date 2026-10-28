@@ -524,14 +524,17 @@ defmodule Compendium.RegistryTest do
                   "type" => "api_key:supabase.co",
                   "reason" => "to reach the database",
                   "fields" => ["anon_key"],
-                  "attach" => @attach
+                  "attach" => @attach,
+                  "hosts" => ["*.supabase.co"]
                 },
                 "signing" => %{
                   "type" => "api_key:supabase.co",
                   "reason" => "to sign",
-                  "fields" => ["secret"]
+                  "fields" => ["secret"],
+                  "hosts" => ["*.supabase.co"]
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["*.supabase.co"]}}
             })
         })
     end

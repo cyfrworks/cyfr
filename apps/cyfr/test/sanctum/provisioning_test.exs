@@ -89,7 +89,15 @@ defmodule Sanctum.ProvisioningTest do
   defp maybe_deps(manifest, deps), do: Map.put(manifest, "dependencies", %{"static" => deps})
 
   defp maybe_needs(manifest, nil), do: manifest
-  defp maybe_needs(manifest, needs), do: Map.put(manifest, "needs", needs)
+
+  # The catalyst's egress names the hosts its needs call.
+  defp maybe_needs(manifest, needs) do
+    hosts = needs |> Map.values() |> Enum.flat_map(& &1["hosts"]) |> Enum.uniq()
+
+    manifest
+    |> Map.put("needs", needs)
+    |> put_in(["caps", "egress", "domains"], hosts)
+  end
 
   defp person(n) do
     {:ok, user} =
@@ -498,6 +506,7 @@ defmodule Sanctum.ProvisioningTest do
     @needs %{
       "api_key" => %{
         "type" => "api_key:openai.com",
+        "hosts" => ["api.openai.com"],
         "reason" => "to call the model",
         "fields" => ["OPENAI_API_KEY"],
         "attach" => %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}

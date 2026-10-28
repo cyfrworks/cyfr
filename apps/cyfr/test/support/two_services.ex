@@ -50,6 +50,7 @@ defmodule Cyfr.Test.TwoServices do
   @version "0.1.0"
   @key_field "STUB_API_KEY"
   @stub_scopes ["stub.chat"]
+  @stub_host "step-stub.example"
 
   @stub_limits %{
     "timeout" => "1m",
@@ -69,6 +70,14 @@ defmodule Cyfr.Test.TwoServices do
   """
   @spec stub_scopes() :: [String.t()]
   def stub_scopes, do: @stub_scopes
+
+  @doc """
+  The host the step stub's OAuth need names and `arm!/2`'s entry is for,
+  which nothing answers; a catalyst armed through `arm!/3` names the same,
+  inside its egress.
+  """
+  @spec stub_host() :: String.t()
+  def stub_host, do: @stub_host
 
   @doc "The version the step stub is laid at."
   @spec version() :: String.t()
@@ -584,10 +593,14 @@ defmodule Cyfr.Test.TwoServices do
           "reason" => "to read a key and a token as a model catalyst does",
           "required" => true,
           "fields" => [@key_field],
-          "scopes" => @stub_scopes
+          "scopes" => @stub_scopes,
+          "hosts" => [@stub_host]
         }
       },
-      "caps" => %{"limits" => Map.merge(@stub_limits, Keyword.get(opts, :limits, %{}))}
+      "caps" => %{
+        "egress" => %{"domains" => [@stub_host]},
+        "limits" => Map.merge(@stub_limits, Keyword.get(opts, :limits, %{}))
+      }
     }
 
     File.write!(Path.join(unit, "cyfr-manifest.json"), Jason.encode!(manifest))
@@ -643,7 +656,7 @@ defmodule Cyfr.Test.TwoServices do
         "authorize_url" => "https://idp.step-stub.example/authorize",
         "token_url" => "https://idp.step-stub.example/token"
       },
-      destination: %{"hosts" => ["step-stub.example"], "scheme" => "https"},
+      destination: %{"hosts" => [@stub_host], "scheme" => "https"},
       disclose: true
     }
 

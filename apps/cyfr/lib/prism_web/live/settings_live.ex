@@ -714,9 +714,9 @@ defmodule PrismWeb.SettingsLive do
   defp put_prefill(need, acc),
     do: Map.put_new(acc, need.qualifier, %{hosts: need.hosts, paths: need.paths})
 
-  # The create form as typed: choosing a provider whose shipped need
-  # declares a destination fills in its hosts and, where declared, its
-  # paths, and leaves everything else as the administrator typed it.
+  # The create form as typed: choosing a provider fills in its shipped
+  # need's hosts and, where declared, its paths, and leaves everything
+  # else as the administrator typed it.
   defp draft(socket, params) do
     previous = socket.assigns.instance_draft
 

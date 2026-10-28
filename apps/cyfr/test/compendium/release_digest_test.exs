@@ -42,7 +42,11 @@ defmodule Compendium.ReleaseDigestTest do
       blocks = %{
         "dependencies" => %{"static" => [%{"ref" => "catalyst:local.http"}]},
         "needs" => %{
-          "api_key" => %{"type" => "api_key:anthropic.com", "reason" => "to call the API"}
+          "api_key" => %{
+            "type" => "api_key:anthropic.com",
+            "reason" => "to call the API",
+            "hosts" => ["api.anthropic.com"]
+          }
         },
         "caps" => %{"egress" => %{"domains" => ["a.example"]}}
       }
@@ -57,12 +61,13 @@ defmodule Compendium.ReleaseDigestTest do
       need = %{
         "type" => "api_key:anthropic.com",
         "reason" => "to call the API",
-        "fields" => ["K"]
+        "fields" => ["K"],
+        "hosts" => ["api.anthropic.com"]
       }
 
       rule = %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
       attached = Map.put(need, "attach", rule)
-      hosted = Map.put(attached, "hosts", ["api.anthropic.com"])
+      hosted = Map.put(attached, "hosts", ["api.anthropic.com", "files.anthropic.com"])
 
       digests = for n <- [need, attached, hosted], do: compute!(%{"needs" => %{"api_key" => n}})
       assert digests == Enum.uniq(digests)

@@ -11,7 +11,8 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
   `cyfr:emit/events`, and names its one need, `api_key`, as the
   connection of every request it makes, so CYFR attaches the key and the
   runner is never handed it. Unbound, such a request is refused before
-  anything is dialled; bound to an attach-only entry, the request reaches
+  anything is dialled; bound to an attach-only entry that carries no
+  label and is offered by its destination alone, the request reaches
   CYFR's attachment as the shipped binary built it, and one outside the
   entry's destination is refused there, before anything is dialled. No
   case here reaches a provider: the shipped binary's request carried to
@@ -113,16 +114,27 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
 
       assert {:error, "'model' is required"} = run(ctx, ref, "chat", %{"messages" => []})
 
-      # The operator binds an attach-only entry, admitting POST alone, to the
-      # catalyst's one need.
+      # The operator binds an attach-only entry with no label, admitting
+      # POST alone to the need's hosts, to the catalyst's one need: its
+      # destination makes it the need's one candidate, and suggested.
       {:ok, entry} =
         Sanctum.TestContext.create_vault(ctx, %{
           name: "#{name} key",
           kind: "api_key",
-          provider_hint: need.qualifier,
           fields: %{field => secret},
           destination: %{"hosts" => need.hosts, "methods" => ["POST"]}
         })
+
+      assert entry.provider_hint == ""
+
+      {:ok, walk_plan} = Plan.plan(ctx, %{ref: ref})
+      row = Enum.find(walk_plan.needs, &(&1.need == "api_key"))
+      entry_id = entry.id
+
+      assert [%{entry_id: ^entry_id, provider: "", fit: "exact", label_match: false}] =
+               row.candidates
+
+      assert row.suggested == %{entry_id: entry.id}
 
       consent!(ctx, ref, %{entry_id: entry.id})
 
@@ -240,12 +252,13 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
     register!(ctx, "grok", newest_shipped("catalysts", "grok"))
     {person, _user} = Sanctum.TestContext.person!(ctx)
 
-    # The instance offers everyone a key for x.ai whose one field is named
-    # as a person names it, not as the catalyst reads it.
+    # The instance offers everyone a key for x.ai's API, with no label,
+    # whose one field is named as a person names it, not as the catalyst
+    # reads it.
     params = %{
       name: "xai-#{System.unique_integer([:positive])}",
       kind: "api_key",
-      provider_hint: "x.ai",
+      provider_hint: "",
       fields: %{"API key" => secret},
       destination: %{"hosts" => ["api.x.ai"], "methods" => ["POST"], "paths" => ["/v1/"]},
       audience: "everyone"
@@ -269,6 +282,9 @@ defmodule Locus.Runtime.SeedModelCatalystsTest do
 
     assert {candidate.field_names, candidate.fields} ==
              {["API key"], %{"GROK_API_KEY" => "API key"}}
+
+    # Its destination, not a label, makes it a candidate.
+    assert {candidate.provider, candidate.fit, candidate.label_match} == {"", "exact", false}
 
     # A binding naming no map commits under the automatic one.
     consent!(person, ref, %{instance_entry_id: entry.id})

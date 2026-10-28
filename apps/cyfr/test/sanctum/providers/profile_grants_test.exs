@@ -915,6 +915,7 @@ defmodule Sanctum.Providers.ProfileGrantsTest do
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:example.com",
+          "hosts" => ["api.example.com"],
           "reason" => "to call the example API",
           "fields" => ["KEY"]
         }

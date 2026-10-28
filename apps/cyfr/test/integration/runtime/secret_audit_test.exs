@@ -508,6 +508,7 @@ defmodule Locus.Runtime.SecretAuditTest do
           "type" => "api_key:upstream.test",
           "reason" => "to call the upstream with your key",
           "fields" => ["KEY"],
+          "hosts" => ["127.0.0.1"],
           "attach" => %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
         }
       },

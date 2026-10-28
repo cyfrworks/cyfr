@@ -730,7 +730,8 @@ defmodule PrismWeb.ThreadPaneLiveTest do
           "type" => "api_key:example.com",
           "reason" => "to call the example API",
           "required" => true,
-          "fields" => ["KEY"]
+          "fields" => ["KEY"],
+          "hosts" => ["api.example.com"]
         }
       },
       "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
@@ -967,9 +968,11 @@ defmodule PrismWeb.ThreadPaneLiveTest do
                   "type" => "api_key:anthropic.com",
                   "reason" => "to call the model with your key",
                   "fields" => ["ANTHROPIC_API_KEY"],
-                  "required" => true
+                  "required" => true,
+                  "hosts" => ["api.anthropic.com"]
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.anthropic.com"]}}
             })
         })
 

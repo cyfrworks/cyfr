@@ -128,10 +128,12 @@ defmodule Sanctum.Consent.BootstrapTest do
   describe "the instance's entry at first sign-in" do
     @model "catalyst:local.boot-model"
     @inference ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+    @anthropic_inference ~s({"hosts":["api.anthropic.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
 
-    # A shipped catalyst whose one need attaches a key of `provider`, an
-    # openai.com one unless a release says otherwise.
-    defp ship_model!(ctx, version \\ "1.0.0", caps \\ %{}, provider \\ "openai.com") do
+    # A shipped catalyst whose one need attaches an openai.com key calling
+    # `hosts`, api.openai.com unless a release says otherwise, which its
+    # caps reach.
+    defp ship_model!(ctx, version \\ "1.0.0", caps \\ %{}, hosts \\ ["api.openai.com"]) do
       {:ok, component} =
         Arca.Test.UnitFixtures.ship_and_register!(ctx, "catalyst", "local", "boot-model", version,
           manifest: %{
@@ -141,9 +143,10 @@ defmodule Sanctum.Consent.BootstrapTest do
             "publisher" => "local",
             "needs" => %{
               "api_key" => %{
-                "type" => "api_key:#{provider}",
+                "type" => "api_key:openai.com",
                 "reason" => "to call the model",
                 "fields" => ["OPENAI_API_KEY"],
+                "hosts" => hosts,
                 "attach" => %{
                   "in" => "header",
                   "name" => "Authorization",
@@ -151,7 +154,7 @@ defmodule Sanctum.Consent.BootstrapTest do
                 }
               }
             },
-            "caps" => caps
+            "caps" => Map.put(caps, "egress", %{"domains" => hosts})
           },
           wasm: Cyfr.Test.Guests.wasm(:catalyst)
         )
@@ -315,10 +318,12 @@ defmodule Sanctum.Consent.BootstrapTest do
       {:ok, person: person}
     end
 
-    test "a newly provisioned athanor binds its sole offered provider entry", %{person: person} do
+    test "a newly provisioned athanor binds its sole offered entry whose destination fits, " <>
+           "whatever its label",
+         %{person: person} do
       ship_model!(person)
-      offered = offer!()
-      _other_provider = offer!(%{provider_hint: "anthropic.com"})
+      offered = offer!(%{provider_hint: "x.ai"})
+      _elsewhere = offer!(%{destination: @anthropic_inference})
 
       assert {:ok, %{minted: minted}} = Bootstrap.run(person)
       assert @model in minted
@@ -342,12 +347,12 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert row.granted_via == "bootstrap"
     end
 
-    test "two offered entries of the provider bind none; the next grant suggests", %{
-      person: person
-    } do
+    test "two offered entries whose destination fits bind none, whatever their labels; the " <>
+           "next grant asks the person to choose",
+         %{person: person} do
       ship_model!(person)
       offer!()
-      offer!()
+      offer!(%{provider_hint: ""})
 
       assert {:ok, %{minted: minted}} = Bootstrap.run(person)
       assert @model in minted
@@ -875,7 +880,8 @@ defmodule Sanctum.Consent.BootstrapTest do
       assert vault == nil and unbound.vault_refs == []
     end
 
-    test "a boot's revision carries nothing to a release whose need names another provider",
+    test "a boot's revision carries nothing to a release whose need calls a host the entry " <>
+           "misses",
          %{ctx: ctx, person: person} do
       ship_model!(person)
       offered = offer!()
@@ -883,9 +889,9 @@ defmodule Sanctum.Consent.BootstrapTest do
       {_first, bound} = model_head!(person)
       assert bound.entry_id == offered.id
 
-      # The same need, now of anthropic.com: the openai.com entry meets it no
-      # longer, and the revision binds none.
-      ship_model!(person, "1.1.0", %{}, "anthropic.com")
+      # The same need, now calling api.anthropic.com: the entry bound for
+      # api.openai.com meets it no longer, and the revision binds none.
+      ship_model!(person, "1.1.0", %{}, ["api.anthropic.com"])
       assert {:ok, %{revised: [@model]}} = Bootstrap.run(seed(ctx))
       {head, vault} = model_head!(person)
       assert head.revision == 2
@@ -913,8 +919,8 @@ defmodule Sanctum.Consent.BootstrapTest do
           "needs_consent"
         )
 
-      # Still active and still of the need's provider, but no longer at the
-      # digest the head bound: the revision binds none.
+      # Still active and its destination still covering the need, but no
+      # longer at the digest the head bound: the revision binds none.
       ship_model!(person, "1.1.0", %{"limits" => %{"timeout" => "2m"}})
       assert {:ok, %{revised: [@model]}} = Bootstrap.run(seed(ctx))
       {head, vault} = model_head!(person)
@@ -949,10 +955,10 @@ defmodule Sanctum.Consent.BootstrapTest do
       {component, shipped}
     end
 
-    # An entry of x.ai's offered to everyone, holding `field_names` and
+    # An entry with no label offered to everyone, holding `field_names` and
     # admitting POST under /v1/ on api.x.ai.
     defp offer_xai!(field_names) do
-      offer!(%{provider_hint: "x.ai", field_names: Jason.encode!(field_names), destination: @xai})
+      offer!(%{provider_hint: "", field_names: Jason.encode!(field_names), destination: @xai})
     end
 
     test "provisioning binds that entry at first sign-in with the automatic map, and a boot's " <>

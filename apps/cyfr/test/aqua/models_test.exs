@@ -205,9 +205,11 @@ defmodule Aqua.ModelsTest do
                 "type" => "api_key:statusmodel.test",
                 "reason" => "to call the model with your key",
                 "fields" => ["STATUSMODEL_API_KEY"],
-                "required" => true
+                "required" => true,
+                "hosts" => ["api.statusmodel.test"]
               }
-            }
+            },
+            "caps" => %{"egress" => %{"domains" => ["api.statusmodel.test"]}}
           })
       })
 

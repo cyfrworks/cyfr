@@ -13,11 +13,11 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
 
   Two cases are pinned: the server's own mint of an athanor no instance
   entry is offered to, and a person's first sign-in to an athanor while
-  one instance entry, of Anthropic's provider, is offered to them. The
-  newest shipped model catalysts have CYFR attach their key (their
-  `api_key` need declares an attach rule), so that sign-in binds the
-  offered entry on claude's ingress, and every other blob is the first
-  case's.
+  one instance entry with no label, for Anthropic's API host, is offered
+  to them. The newest shipped model catalysts have CYFR attach their key
+  (their `api_key` need declares an attach rule), so that sign-in binds
+  the offered entry on claude's ingress, whose need's host its
+  destination covers, and every other blob is the first case's.
 
   Only the blob is golden: the activation and its digests move with every
   wasm rebuild, so they are asserted present, not pinned. The origins a
@@ -117,15 +117,14 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
     assert minted != []
     without = blobs!(seeded, minted, "system:bootstrap")
 
-    # A person's first sign-in while the instance offers them one entry
-    # of a shipped catalyst's provider.
-    {:ok, _entry} =
+    # A person's first sign-in while the instance offers them one entry,
+    # with no label, whose destination is a shipped catalyst's host.
+    {:ok, entry} =
       Arca.InstanceEntries.put(Arca.Test.Actor.platform(), %{
         # Fixed, since the binding the blob pins names it.
         id: "ine_golden-company",
         name: "golden-company",
         kind: "api_key",
-        provider_hint: "anthropic.com",
         field_names: ~s(["ANTHROPIC_API_KEY"]),
         destination:
           ~s({"hosts":["api.anthropic.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"}),
@@ -135,6 +134,7 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
         created_by: "usr_admin"
       })
 
+    assert entry.provider_hint == ""
     person = person!(filled!("Golden offered"))
     {:ok, %{minted: offered_minted}} = Bootstrap.run(person)
     with_one = blobs!(person, offered_minted, person.user_id)
@@ -162,8 +162,8 @@ defmodule Sanctum.Consent.BootstrapGoldenTest do
       end
     end
 
-    # The offered entry binds the need of its provider's catalyst, and
-    # nothing else moves.
+    # The offered entry binds the one catalyst whose need calls the host
+    # its destination names, and nothing else moves.
     claude = "catalyst:local.claude"
     assert Map.delete(with_one, claude) == Map.delete(without, claude)
 

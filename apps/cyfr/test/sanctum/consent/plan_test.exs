@@ -782,9 +782,11 @@ defmodule Sanctum.Consent.PlanTest do
             "type" => "oauth:google",
             "reason" => "to read your mail",
             "required" => true,
-            "scopes" => ["gmail.readonly"]
+            "scopes" => ["gmail.readonly"],
+            "hosts" => ["gmail.googleapis.com"]
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["gmail.googleapis.com"]}}
       })
 
       :ok
@@ -792,15 +794,15 @@ defmodule Sanctum.Consent.PlanTest do
 
     # The mail need declares no attach rule: the component reads its token
     # itself, so the entries that can meet it are disclosed.
-    defp oauth_entry!(ctx, scopes, hint \\ "google") do
+    defp oauth_entry!(ctx, scopes, hosts \\ ["gmail.googleapis.com"]) do
       {:ok, view} =
         Sanctum.TestContext.create_vault(ctx, %{
           name: "mail-#{System.unique_integer([:positive])}",
           kind: "oauth",
-          provider_hint: hint,
+          provider_hint: "google",
           oauth: %{"access_token" => "t"},
           oauth_scopes: scopes,
-          destination: %{"hosts" => ["gmail.googleapis.com"]},
+          destination: %{"hosts" => hosts},
           disclose: true
         })
 
@@ -828,12 +830,31 @@ defmodule Sanctum.Consent.PlanTest do
       assert [warning] = mail_warnings(plan)
       assert warning =~ "gmail.readonly"
     end
+
+    test "an OAuth entry needs exactly the need's scopes as well", %{ctx: ctx} do
+      exact = oauth_entry!(ctx, ["gmail.readonly"])
+      wildcard = oauth_entry!(ctx, ["gmail.readonly"], ["*.googleapis.com"])
+      # The scopes without the destination, and the destination without
+      # the scopes, meet nothing.
+      _elsewhere = oauth_entry!(ctx, ["gmail.readonly"], ["www.google.com"])
+      _wider = oauth_entry!(ctx, ["gmail.readonly", "gmail.send"])
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: @mail_ref})
+      row = Enum.find(plan.needs, &(&1.need == "mail"))
+
+      assert Enum.map(row.candidates, &{&1.entry_id, &1.fit}) == [
+               {exact.id, "exact"},
+               {wildcard.id, "wildcard"}
+             ]
+    end
   end
 
   describe "each need's choice" do
     @keyed "reagent:local.plan-keyed"
     @attach %{"in" => "header", "name" => "Authorization", "template" => "Bearer {value}"}
     @inference ~s({"hosts":["api.openai.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+    @anthropic_inference ~s({"hosts":["api.anthropic.com"],"methods":["POST"],"paths":["/v1/"],"scheme":"https"})
+    @openai_caps %{"egress" => %{"domains" => ["api.openai.com"]}}
 
     defp keyed_need(over \\ %{}) do
       Map.merge(
@@ -841,10 +862,16 @@ defmodule Sanctum.Consent.PlanTest do
           "type" => "api_key:openai.com",
           "reason" => "to call the model with a key",
           "fields" => ["OPENAI_API_KEY"],
-          "attach" => @attach
+          "attach" => @attach,
+          "hosts" => ["api.openai.com"]
         },
         over
       )
+    end
+
+    # A manifest whose one need is `need`, reaching the host it calls.
+    defp keyed_manifest(need \\ keyed_need()) do
+      %{"needs" => %{"api_key" => need}, "caps" => @openai_caps}
     end
 
     defp own!(ctx, hint, over \\ %{}) do
@@ -894,19 +921,32 @@ defmodule Sanctum.Consent.PlanTest do
       {plan, Enum.find(plan.needs, &(&1.need == name))}
     end
 
-    test "candidates are the entries of the need's kind and provider, own and offered", %{
-      ctx: ctx
-    } do
-      publish!(ctx, "plan-keyed", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+    test "candidates are the entries of the need's kind whose destination covers its hosts, " <>
+           "own and offered, each naming its fit and whether its label is the need's",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
       openai = own!(ctx, "openai.com")
-      _anthropic = own!(ctx, "anthropic.com")
+      _elsewhere = own!(ctx, "openai.com", %{destination: %{"hosts" => ["api.anthropic.com"]}})
       offered = instance!()
-      _other_provider = instance!(%{provider_hint: "anthropic.com"})
+      _offered_elsewhere = instance!(%{destination: @anthropic_inference})
       _bundle = instance!(%{kind: "bundle"})
 
       {_plan, row} = need_row!(ctx, @keyed, "api_key")
 
-      assert Enum.sort_by(row.candidates, & &1.source) == [
+      assert row.candidates == [
+               %{
+                 source: "own",
+                 entry_id: openai.id,
+                 name: openai.name,
+                 kind: "api_key",
+                 provider: "openai.com",
+                 destination: %{"hosts" => ["api.openai.com"], "scheme" => "https"},
+                 disclosed: false,
+                 fit: "exact",
+                 label_match: true,
+                 field_names: ["OPENAI_API_KEY"],
+                 fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}
+               },
                %{
                  source: "instance",
                  instance_entry_id: offered.id,
@@ -920,17 +960,8 @@ defmodule Sanctum.Consent.PlanTest do
                    "scheme" => "https"
                  },
                  disclosed: false,
-                 field_names: ["OPENAI_API_KEY"],
-                 fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}
-               },
-               %{
-                 source: "own",
-                 entry_id: openai.id,
-                 name: openai.name,
-                 kind: "api_key",
-                 provider: "openai.com",
-                 destination: %{"hosts" => ["api.openai.com"], "scheme" => "https"},
-                 disclosed: false,
+                 fit: "exact",
+                 label_match: true,
                  field_names: ["OPENAI_API_KEY"],
                  fields: %{"OPENAI_API_KEY" => "OPENAI_API_KEY"}
                }
@@ -940,14 +971,179 @@ defmodule Sanctum.Consent.PlanTest do
       # default is what the plan suggests.
       assert row.suggested == %{entry_id: openai.id}
       assert row.choice_required == false
+      assert row.attach_only_held == false
       assert row.source == "own"
       assert row.newer_shipped == nil
+    end
+
+    test "an entry is a candidate by destination whatever its label", %{ctx: ctx} do
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
+      unlabelled = own!(ctx, "")
+      other_label = own!(ctx, "anthropic.com")
+      offered = instance!(%{provider_hint: ""})
+
+      {_plan, row} = need_row!(ctx, @keyed, "api_key")
+
+      assert row.candidates
+             |> Enum.map(&{&1[:entry_id] || &1[:instance_entry_id], &1.provider, &1.label_match})
+             |> Enum.sort() ==
+               Enum.sort([
+                 {unlabelled.id, "", false},
+                 {other_label.id, "anthropic.com", false},
+                 {offered.id, "", false}
+               ])
+
+      # No entry is the default of the need's provider: several candidates
+      # ask the person to choose.
+      assert row.suggested == nil and row.choice_required
+    end
+
+    test "an entry whose destination misses one need host is no candidate", %{ctx: ctx} do
+      hosts = ["api.openai.com", "uploads.openai.com"]
+
+      publish!(ctx, "plan-two-hosts", "1.0.0", %{
+        "needs" => %{"api_key" => keyed_need(%{"hosts" => hosts})},
+        "caps" => %{"egress" => %{"domains" => hosts}}
+      })
+
+      ref = "reagent:local.plan-two-hosts"
+      own!(ctx, "openai.com")
+      instance!()
+
+      {plan, row} = need_row!(ctx, ref, "api_key")
+      assert row.candidates == [] and row.suggested == nil
+      refute row.choice_required
+
+      assert Enum.filter(plan.warnings, &(&1 =~ "need 'api_key'")) == [
+               "need 'api_key' wants api_key entry for api.openai.com, uploads.openai.com, " <>
+                 "and none can yet. Create one first."
+             ]
+
+      both = own!(ctx, "", %{destination: %{"hosts" => hosts}})
+      wildcard = own!(ctx, "", %{destination: %{"hosts" => ["*.openai.com"]}})
+
+      {plan, row} = need_row!(ctx, ref, "api_key")
+
+      assert Enum.map(row.candidates, &{&1.entry_id, &1.fit}) == [
+               {both.id, "exact"},
+               {wildcard.id, "wildcard"}
+             ]
+
+      refute Enum.any?(plan.warnings, &(&1 =~ "need 'api_key'"))
+    end
+
+    test "a label equal to the qualifier ranks first, then exact, then wildcard, then own, " <>
+           "then name",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
+      wildcard = %{"hosts" => ["*.openai.com"]}
+      n = System.unique_integer([:positive])
+
+      wildcard_own = own!(ctx, "", %{name: "rank-#{n}-b", destination: wildcard})
+      exact_instance = instance!(%{name: "rank-#{n}-a", provider_hint: ""})
+      exact_own_d = own!(ctx, "", %{name: "rank-#{n}-d"})
+      exact_own_c = own!(ctx, "", %{name: "rank-#{n}-c"})
+      labelled = own!(ctx, "openai.com", %{name: "rank-#{n}-e", destination: wildcard})
+
+      {_plan, row} = need_row!(ctx, @keyed, "api_key")
+
+      assert Enum.map(row.candidates, &(&1[:entry_id] || &1[:instance_entry_id])) == [
+               labelled.id,
+               exact_own_c.id,
+               exact_own_d.id,
+               exact_instance.id,
+               wildcard_own.id
+             ]
+    end
+
+    test "an instance entry naming methods and paths is a candidate for a need declaring " <>
+           "neither",
+         %{ctx: ctx} do
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
+      # POST alone, under /v1/ alone.
+      offered = instance!()
+
+      {_plan, row} = need_row!(ctx, @keyed, "api_key")
+      assert [%{instance_entry_id: id, fit: "exact"}] = row.candidates
+      assert id == offered.id
+      assert row.suggested == %{instance_entry_id: offered.id}
+
+      # A path the need declares is held to the entry's paths.
+      publish!(ctx, "plan-v1", "1.0.0", keyed_manifest(keyed_need(%{"paths" => ["/v1/chat"]})))
+      publish!(ctx, "plan-v2", "1.0.0", keyed_manifest(keyed_need(%{"paths" => ["/v2/chat"]})))
+
+      {_plan, v1} = need_row!(ctx, "reagent:local.plan-v1", "api_key")
+      {_plan, v2} = need_row!(ctx, "reagent:local.plan-v2", "api_key")
+      assert [%{instance_entry_id: ^id}] = v1.candidates
+      assert v2.candidates == []
+    end
+
+    test "a disclose-only need takes a disclosed own entry by destination", %{ctx: ctx} do
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest(Map.delete(keyed_need(), "attach")))
+      disclosed = own!(ctx, "", %{disclose: true})
+      _disclosed_elsewhere = own!(ctx, "", %{disclose: true, destination: %{"hosts" => ["x.ai"]}})
+      _attach_only = own!(ctx, "openai.com")
+      instance!(%{provider_hint: ""})
+
+      {_plan, row} = need_row!(ctx, @keyed, "api_key")
+
+      assert [%{entry_id: id, disclosed: true, label_match: false}] = row.candidates
+      assert id == disclosed.id
+      assert row.suggested == %{entry_id: disclosed.id}
+    end
+
+    test "`attach_only_held` is true when the only fitting entries are attach-only", %{ctx: ctx} do
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest(Map.delete(keyed_need(), "attach")))
+      own!(ctx, "openai.com", %{destination: %{"hosts" => ["x.ai"]}})
+      instance!()
+
+      # Nothing fits: no attach-only entry explains the empty offer.
+      {_plan, row} = need_row!(ctx, @keyed, "api_key")
+      assert row.candidates == [] and row.attach_only_held == false
+
+      own!(ctx, "")
+      {_plan, row} = need_row!(ctx, @keyed, "api_key")
+      assert row.candidates == [] and row.attach_only_held == true
+
+      own!(ctx, "", %{disclose: true})
+      {_plan, row} = need_row!(ctx, @keyed, "api_key")
+      assert [_disclosed] = row.candidates
+      assert row.attach_only_held == false
+
+      # A need CYFR attaches takes the attach-only entry, and so holds
+      # nothing back.
+      publish!(ctx, "plan-attached", "1.0.0", keyed_manifest())
+      {_plan, row} = need_row!(ctx, "reagent:local.plan-attached", "api_key")
+      assert length(row.candidates) == 3
+      assert row.attach_only_held == false
+    end
+
+    test "a dependency's need offers its candidates by the same rule", %{ctx: ctx} do
+      publish!(ctx, "plan-offer-dep", "1.0.0", keyed_manifest())
+
+      publish!(ctx, "plan-offer-app", "1.0.0", %{
+        "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-offer-dep"}]}
+      })
+
+      unlabelled = own!(ctx, "")
+      _elsewhere = own!(ctx, "openai.com", %{destination: %{"hosts" => ["api.anthropic.com"]}})
+      offered = instance!(%{provider_hint: "anthropic.com"})
+
+      {:ok, plan} = Plan.plan(ctx, %{ref: "reagent:local.plan-offer-app"})
+      assert [%{dep: "reagent:local.plan-offer-dep", needs: [need]}] = plan.dependency_needs
+
+      assert Enum.map(need.candidates, &{&1[:entry_id] || &1[:instance_entry_id], &1.fit}) == [
+               {unlabelled.id, "exact"},
+               {offered.id, "exact"}
+             ]
+
+      assert need.suggested == nil and need.choice_required
     end
 
     test "a candidate names its field names and its automatic map, nil when the person must " <>
            "choose",
          %{ctx: ctx} do
-      publish!(ctx, "plan-keyed", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
       equal = own!(ctx, "openai.com", %{fields: %{"OPENAI_API_KEY" => "sk", "ORG" => "o"}})
       single = own!(ctx, "openai.com", %{fields: %{"API key" => "sk"}})
       unnamed = own!(ctx, "openai.com", %{fields: %{"secret" => "sk", "org" => "o"}})
@@ -975,9 +1171,15 @@ defmodule Sanctum.Consent.PlanTest do
       # A need of two fields the component reads itself maps by equal
       # names alone: an entry holding one of them, or one field of its
       # own, leaves the map to the person.
-      publish!(ctx, "plan-paired", "1.0.0", %{
-        "needs" => %{"pair" => Map.delete(keyed_need(%{"fields" => ["KEY", "ORG"]}), "attach")}
-      })
+      publish!(
+        ctx,
+        "plan-paired",
+        "1.0.0",
+        %{
+          "needs" => %{"pair" => Map.delete(keyed_need(%{"fields" => ["KEY", "ORG"]}), "attach")},
+          "caps" => @openai_caps
+        }
+      )
 
       disclosed = fn fields -> own!(ctx, "openai.com", %{fields: fields, disclose: true}) end
       both = disclosed.(%{"KEY" => "k", "ORG" => "o", "EXTRA" => "x"})
@@ -994,9 +1196,9 @@ defmodule Sanctum.Consent.PlanTest do
              }
     end
 
-    test "with no default, several candidates ask the person to choose", %{ctx: ctx} do
-      publish!(ctx, "plan-keyed", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
-      own!(ctx, "openai.com")
+    test "the default suggests only when it is a candidate", %{ctx: ctx} do
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
+      own = own!(ctx, "openai.com")
       instance!()
       :ok = Arca.VaultDefaults.clear(Sanctum.Context.actor(ctx), "openai.com")
 
@@ -1007,23 +1209,34 @@ defmodule Sanctum.Consent.PlanTest do
       assert row.choice_required == true
       assert row.source == nil
 
-      # A default naming no candidate suggests nothing; the next rule
-      # answers.
-      own = own!(ctx, "anthropic.com")
+      # A default naming no candidate, an entry of the provider whose
+      # destination misses the need's host, suggests nothing; the next
+      # rule answers.
+      elsewhere = own!(ctx, "openai.com", %{destination: %{"hosts" => ["api.anthropic.com"]}})
 
+      {:ok, _} =
+        Arca.VaultDefaults.set(Sanctum.Context.actor(ctx), "openai.com", %{
+          vault_entry_id: elsewhere.id
+        })
+
+      {_plan, row} = need_row!(ctx, @keyed, "api_key")
+      assert row.suggested == nil and row.choice_required == true
+
+      # A default that is a candidate is suggested among several.
       {:ok, _} =
         Arca.VaultDefaults.set(Sanctum.Context.actor(ctx), "openai.com", %{
           vault_entry_id: own.id
         })
 
       {_plan, row} = need_row!(ctx, @keyed, "api_key")
-      assert row.suggested == nil and row.choice_required == true
+      assert row.suggested == %{entry_id: own.id}
+      refute row.choice_required
     end
 
-    test "the one offered instance entry is suggested when the athanor holds none of the " <>
-           "provider, and a default may name an instance entry",
+    test "the only candidate is suggested, an instance entry too, and a default may name an " <>
+           "instance entry",
          %{ctx: ctx} do
-      publish!(ctx, "plan-keyed", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
       offered = instance!()
 
       {_plan, row} = need_row!(ctx, @keyed, "api_key")
@@ -1048,7 +1261,7 @@ defmodule Sanctum.Consent.PlanTest do
     test "an instance entry under shipped is offered to an unmodified shipped node alone, " <>
            "and under any to every node",
          %{ctx: ctx} do
-      publish!(ctx, "plan-keyed", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
 
       # A component of the person's own, which the media does not ship.
       {:ok, _} =
@@ -1061,7 +1274,8 @@ defmodule Sanctum.Consent.PlanTest do
               "name" => "plan-custom",
               "version" => "1.0.0",
               "type" => "reagent",
-              "needs" => %{"api_key" => keyed_need()}
+              "needs" => %{"api_key" => keyed_need()},
+              "caps" => @openai_caps
             })
         })
 
@@ -1080,9 +1294,7 @@ defmodule Sanctum.Consent.PlanTest do
     test "a disclose-only need is met by disclosed entries alone, and names the newer " <>
            "shipped version",
          %{ctx: ctx} do
-      publish!(ctx, "plan-keyed", "1.0.0", %{
-        "needs" => %{"api_key" => Map.delete(keyed_need(), "attach")}
-      })
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest(Map.delete(keyed_need(), "attach")))
 
       # The release ships a newer version the athanor has not pulled.
       Arca.Test.UnitFixtures.seed_component!("reagent", "local", "plan-keyed", "1.1.0",
@@ -1096,10 +1308,13 @@ defmodule Sanctum.Consent.PlanTest do
 
       assert row.candidates == []
       assert row.newer_shipped == "1.1.0"
-      assert [warning] = Enum.filter(plan.warnings, &(&1 =~ "need 'api_key'"))
-      assert warning =~ "openai.com"
-      assert warning =~ "reads the value itself"
-      assert warning =~ "version 1.1.0"
+      assert row.attach_only_held
+
+      assert Enum.filter(plan.warnings, &(&1 =~ "need 'api_key'")) == [
+               "need 'api_key' wants a disclosed api_key entry for api.openai.com: the " <>
+                 "component reads the value itself, and no disclosed entry can yet — create " <>
+                 "one first, or update to version 1.1.0, which the release ships"
+             ]
 
       disclosed = own!(ctx, "openai.com", %{disclose: true})
       {plan, row} = need_row!(ctx, @keyed, "api_key")
@@ -1119,14 +1334,17 @@ defmodule Sanctum.Consent.PlanTest do
             "type" => "api_key:supabase.co",
             "reason" => "to reach the database",
             "fields" => ["anon_key"],
-            "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"}
+            "attach" => %{"in" => "header", "name" => "apikey", "template" => "{value}"},
+            "hosts" => ["abc.supabase.co"]
           },
           "signing" => %{
             "type" => "api_key:supabase.co",
             "reason" => "to sign",
-            "fields" => ["secret"]
+            "fields" => ["secret"],
+            "hosts" => ["abc.supabase.co"]
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["abc.supabase.co"]}}
       })
 
       provides = fn needs ->
@@ -1198,9 +1416,11 @@ defmodule Sanctum.Consent.PlanTest do
             "type" => "api_key:anthropic.com",
             "reason" => "to call the model",
             "fields" => ["ANTHROPIC_API_KEY"],
-            "required" => false
+            "required" => false,
+            "hosts" => ["api.anthropic.com"]
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.anthropic.com"]}}
       })
     end
 
@@ -1215,7 +1435,7 @@ defmodule Sanctum.Consent.PlanTest do
                provider: "anthropic.com",
                disclose_only: true,
                disclose: false,
-               hosts: nil,
+               hosts: ["api.anthropic.com"],
                paths: nil,
                required: false
              } = Enum.find(plan.needs, &(&1.need == "model"))
@@ -1248,16 +1468,7 @@ defmodule Sanctum.Consent.PlanTest do
          %{ctx: ctx} do
       ref = "reagent:local.plan-keyed"
 
-      publish!(ctx, "plan-keyed", "1.0.0", %{
-        "needs" => %{
-          "api_key" => %{
-            "type" => "api_key:openai.com",
-            "reason" => "to call the model with a key",
-            "fields" => ["OPENAI_API_KEY"],
-            "attach" => @bearer
-          }
-        }
-      })
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest(keyed_need(%{"attach" => @bearer})))
 
       {:ok, plan} = Plan.plan(ctx, %{ref: ref})
       assert plan.head_bindings == []
@@ -1338,7 +1549,7 @@ defmodule Sanctum.Consent.PlanTest do
 
     test "head bindings carry the map the head holds", %{ctx: ctx} do
       ref = "reagent:local.plan-keyed"
-      publish!(ctx, "plan-keyed", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(ctx, "plan-keyed", "1.0.0", keyed_manifest())
 
       # Two fields, neither the need's: the person chose each map, and the
       # default and the named account chose differently.
@@ -1406,7 +1617,7 @@ defmodule Sanctum.Consent.PlanTest do
       ref = "reagent:local.plan-head-offered"
       # An instance entry is bound by a person active on this server.
       {person, _user} = Sanctum.TestContext.person!(ctx)
-      publish!(person, "plan-head-offered", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(person, "plan-head-offered", "1.0.0", keyed_manifest())
       offered = instance!()
 
       commit!(person, ref, %{bindings: [%{need: "api_key", instance_entry_id: offered.id}]})
@@ -1429,7 +1640,7 @@ defmodule Sanctum.Consent.PlanTest do
 
       dep = "reagent:local.plan-head-lend-dep"
       app = "reagent:local.plan-head-lend-app"
-      publish!(ctx, "plan-head-lend-dep", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(ctx, "plan-head-lend-dep", "1.0.0", keyed_manifest())
 
       publish!(ctx, "plan-head-lend-app", "1.0.0", %{
         "dependencies" => %{"static" => [%{"ref" => dep}]}
@@ -1463,9 +1674,11 @@ defmodule Sanctum.Consent.PlanTest do
             "type" => "oauth:google",
             "reason" => "to read your mail",
             "scopes" => ["gmail.readonly"],
-            "attach" => %{"in" => "header", "name" => "Authorization"}
+            "attach" => %{"in" => "header", "name" => "Authorization"},
+            "hosts" => ["gmail.googleapis.com"]
           }
-        }
+        },
+        "caps" => %{"egress" => %{"domains" => ["gmail.googleapis.com"]}}
       })
 
       publish!(ctx, "plan-lend-app", "1.0.0", %{
@@ -1486,16 +1699,7 @@ defmodule Sanctum.Consent.PlanTest do
 
       # A key's lender lends its field map and no scope: here the automatic
       # map of the need's one field to the entry's one field.
-      publish!(ctx, "plan-lend-key", "1.0.0", %{
-        "needs" => %{
-          "api_key" => %{
-            "type" => "api_key:openai.com",
-            "reason" => "to call the model",
-            "fields" => ["OPENAI_API_KEY"],
-            "attach" => @bearer
-          }
-        }
-      })
+      publish!(ctx, "plan-lend-key", "1.0.0", keyed_manifest(keyed_need(%{"attach" => @bearer})))
 
       publish!(ctx, "plan-lend-key-app", "1.0.0", %{
         "dependencies" => %{"static" => [%{"ref" => "reagent:local.plan-lend-key"}]}
@@ -1533,7 +1737,7 @@ defmodule Sanctum.Consent.PlanTest do
     @unreadable "A profile that lends a key here cannot be read right now — try again."
 
     defp lending_closure!(ctx) do
-      publish!(ctx, "plan-lend-read-dep", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(ctx, "plan-lend-read-dep", "1.0.0", keyed_manifest())
 
       publish!(ctx, "plan-lend-read-app", "1.0.0", %{
         "dependencies" => %{"static" => [%{"ref" => @lend_dep}]}
@@ -1938,7 +2142,7 @@ defmodule Sanctum.Consent.PlanTest do
 
     @tag :capture_log
     test "a store the plan reads that cannot answer is that store unavailable", %{ctx: ctx} do
-      publish!(ctx, "plan-refused", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(ctx, "plan-refused", "1.0.0", keyed_manifest())
 
       for {table, store} <- [
             {"components", "Components"},
@@ -1973,7 +2177,7 @@ defmodule Sanctum.Consent.PlanTest do
     test "an outage reading the instance entries offered is that store unavailable, never " <>
            "nothing offered",
          %{ctx: ctx} do
-      publish!(ctx, "plan-refused", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(ctx, "plan-refused", "1.0.0", keyed_manifest())
 
       Arca.Repo.query!("ALTER TABLE instance_entries RENAME TO instance_entries_unavailable")
       answer = Plan.plan(ctx, %{ref: @refused})
@@ -2068,7 +2272,7 @@ defmodule Sanctum.Consent.PlanTest do
          %{ctx: ctx} do
       dep = "reagent:local.plan-unanswered-dep"
       app = "reagent:local.plan-unanswered-app"
-      publish!(ctx, "plan-unanswered-dep", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(ctx, "plan-unanswered-dep", "1.0.0", keyed_manifest())
 
       publish!(ctx, "plan-unanswered-app", "1.0.0", %{
         "dependencies" => %{"static" => [%{"ref" => dep}]}
@@ -2293,7 +2497,7 @@ defmodule Sanctum.Consent.PlanTest do
 
     test "a source whose stored manifest does not decode is the damaged manifest",
          %{ctx: ctx} do
-      publish!(ctx, "plan-refused", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(ctx, "plan-refused", "1.0.0", keyed_manifest())
       damage_manifest!("plan-refused")
 
       assert Plan.plan(ctx, %{ref: @refused}) == {:error, {:corrupt, {:manifest, @refused}}}
@@ -2330,7 +2534,7 @@ defmodule Sanctum.Consent.PlanTest do
          %{ctx: ctx} do
       dep = "reagent:local.plan-damaged-dep"
       app = "reagent:local.plan-damaged-dep-app"
-      publish!(ctx, "plan-damaged-dep", "1.0.0", %{"needs" => %{"api_key" => keyed_need()}})
+      publish!(ctx, "plan-damaged-dep", "1.0.0", keyed_manifest())
 
       publish!(ctx, "plan-damaged-dep-app", "1.0.0", %{
         "dependencies" => %{"static" => [%{"ref" => dep}]}

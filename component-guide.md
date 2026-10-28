@@ -546,8 +546,8 @@ Named roles the component asks the operator to satisfy with **vault entries**. T
 | `scopes` | string[] | OAuth only | OAuth scopes the grant must cover. Only valid on `oauth:*` types |
 | `required` | bool | No | Default `true`. Optional needs may be left unbound |
 | `attach` | object | No | How CYFR attaches the value: `in` (`header` or `query`), `name`, and `template` with `{value}` exactly once. An OAuth rule without a template uses `Authorization: Bearer {value}` |
-| `hosts` | string[] | No | Destination hosts, exact or `*.` plus a hostname, within `caps.egress.domains`; used to prefill an entry's destination |
-| `paths` | string[] | No | Destination path prefixes beginning with `/`, used to prefill an entry's destination |
+| `hosts` | string[] | Credential needs | The hosts the credential is sent to, exact or `*.` plus a hostname, within `caps.egress.domains`. Required on an `api_key`, `oauth` or `bundle` need. They decide which vault entries are offered for the need: an entry of its kind whose destination covers every host (and every path the need declares), whatever its name or label. They also prefill a new entry's destination |
+| `paths` | string[] | No | Destination path prefixes beginning with `/`. An entry is offered when each falls under one of its paths; they also prefill a new entry's destination |
 | `disclose` | bool | No | Default `false`; `true` asks to read the material as well. A need without `attach` is disclose-only and takes a disclosed entry alone |
 
 ```json
@@ -563,7 +563,7 @@ Named roles the component asks the operator to satisfy with **vault entries**. T
 }
 ```
 
-An OAuth need declares only the provider and scopes (`"type": "oauth:google"`, `"scopes": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & the Vault](#needs--the-vault).
+An OAuth need declares the provider, its scopes and the hosts the token is sent to (`"type": "oauth:google"`, `"scopes": [...]`, `"hosts": [...]`, no `fields`) — provider endpoints and OAuth client credentials are operator-side. See [Needs & the Vault](#needs--the-vault).
 
 ### `caps` Section
 
@@ -688,6 +688,8 @@ Shapes nest at most 8 deep, and a manifest whose `results` does not hold this gr
       "type": "api_key:example.com",
       "reason": "to call the Example API with your key",
       "fields": ["MY_API_KEY"],
+      "attach": {"in": "header", "name": "Authorization", "template": "Bearer {value}"},
+      "hosts": ["api.example.com"],
       "required": true
     }
   },

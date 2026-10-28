@@ -138,9 +138,14 @@ defmodule Prima.ManifestCapsTest do
              ) == nil
     end
 
-    test "a need naming no hosts asks nothing of egress" do
-      manifest = %{"needs" => %{"api_key" => %{"type" => "api_key:x.com", "reason" => "r"}}}
-      assert :ok = Caps.validate(manifest, &guest_path?/1)
+    test "a credential need naming no hosts is refused at declaration, whatever its egress" do
+      for egress <- [nil, ["*"], ["api.example.com"]] do
+        manifest = need_hosting(nil, egress)
+
+        assert {:error, {:invalid_manifest, [{:invalid_needs, {:hosts_required, "api_key"}}]}} =
+                 Manifest.validate(manifest, &guest_path?/1),
+               inspect(egress)
+      end
     end
   end
 
@@ -250,7 +255,13 @@ defmodule Prima.ManifestCapsTest do
       Map.merge(
         %{
           "type" => "tincture",
-          "needs" => %{"api_key" => %{"type" => "api_key:x.com", "reason" => "r"}},
+          "needs" => %{
+            "api_key" => %{
+              "type" => "api_key:x.com",
+              "reason" => "r",
+              "hosts" => ["api.example.com"]
+            }
+          },
           "tincture" => %{"connect" => ["origin.example"]},
           "caps" => %{
             "egress" => %{"domains" => ["api.example.com", "*.cdn.example"]},

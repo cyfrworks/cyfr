@@ -61,19 +61,29 @@ defmodule PrismWeb.VaultLiveTest do
     :ok
   end
 
-  # A manifest's needs block, each need's type as given; an OAuth need
+  # A manifest's needs block, each need's type as given and calling the
+  # host `api.<provider>`, which the manifest's egress names; an OAuth need
   # names the scopes it reads, as a grant plan requires of one.
   defp needs(needs) do
-    %{
-      "needs" =>
-        Map.new(needs, fn {need, type} ->
-          declared = %{"type" => type, "reason" => "to test the create form", "fields" => ["KEY"]}
+    declared =
+      Map.new(needs, fn {need, type} ->
+        [_kind, provider] = String.split(type, ":", parts: 2)
 
-          if String.starts_with?(type, "oauth:"),
-            do: {need, Map.put(declared, "scopes", ["read"])},
-            else: {need, declared}
-        end)
-    }
+        declared = %{
+          "type" => type,
+          "reason" => "to test the create form",
+          "fields" => ["KEY"],
+          "hosts" => ["api.#{provider}"]
+        }
+
+        if String.starts_with?(type, "oauth:"),
+          do: {need, Map.put(declared, "scopes", ["read"])},
+          else: {need, declared}
+      end)
+
+    hosts = declared |> Map.values() |> Enum.flat_map(& &1["hosts"]) |> Enum.uniq()
+    caps = if hosts == [], do: %{}, else: %{"caps" => %{"egress" => %{"domains" => hosts}}}
+    Map.put(caps, "needs", declared)
   end
 
   # `count` later releases of one component, written as the registry
@@ -758,8 +768,14 @@ defmodule PrismWeb.VaultLiveTest do
       # argument the manifest's author must fix.
       register!("reagent", "vault-unknown", "1.0.0", %{
         "needs" => %{
-          "drive" => %{"type" => "oauth:google.com", "reason" => "r", "fields" => ["KEY"]}
-        }
+          "drive" => %{
+            "type" => "oauth:google.com",
+            "reason" => "r",
+            "fields" => ["KEY"],
+            "hosts" => ["api.google.com"]
+          }
+        },
+        "caps" => %{"egress" => %{"domains" => ["api.google.com"]}}
       })
 
       {:error, reason} =
@@ -1318,9 +1334,11 @@ defmodule PrismWeb.VaultLiveTest do
                     "in" => "header",
                     "name" => "Authorization",
                     "template" => "Bearer {value}"
-                  }
+                  },
+                  "hosts" => ["api.openai.com"]
                 }
-              }
+              },
+              "caps" => %{"egress" => %{"domains" => ["api.openai.com"]}}
             },
             wasm: @wasm
           )

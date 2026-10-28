@@ -52,6 +52,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:example.com",
+          "hosts" => ["api.example.com"],
           "reason" => "to call the example API",
           "required" => true,
           "fields" => ["KEY", "ORG"]
@@ -197,6 +198,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:example.com",
+          "hosts" => ["api.example.com"],
           "reason" => "to call the example API",
           "required" => true,
           "fields" => ["KEY"],
@@ -360,6 +362,7 @@ defmodule Sanctum.Consent.SelectionFlowTest do
       "needs" => %{
         "mail" => %{
           "type" => "oauth:google",
+          "hosts" => ["gmail.googleapis.com"],
           "reason" => "to read your mail",
           "required" => true,
           "scopes" => ["gmail.readonly"],
@@ -1565,11 +1568,13 @@ defmodule Sanctum.Consent.SelectionFlowTest do
       "needs" => %{
         "api_key" => %{
           "type" => "api_key:example.com",
+          "hosts" => ["api.example.com"],
           "reason" => "to call the example API too",
           "required" => true,
           "fields" => ["KEY", "ORG"]
         }
-      }
+      },
+      "caps" => %{"egress" => %{"domains" => ["api.example.com"]}}
     })
 
     {{:ok, _}, _} =

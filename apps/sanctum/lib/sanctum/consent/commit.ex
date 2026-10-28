@@ -28,8 +28,10 @@ defmodule Sanctum.Consent.Commit do
   need's fields once and only fields the entry holds
   (`{:invalid_field_map, need}`), or the automatic one
   (`Sanctum.Consent.Plan.field_map/2`), and none is refused
-  `{:fields_unmapped, need}`. The entry must be of the need's kind and
-  provider (`{:provider_mismatch, need}`); a need the component reads
+  `{:fields_unmapped, need}`. The entry must be of the need's kind, and
+  its destination must cover the hosts and paths the need declares,
+  whatever its label (`Sanctum.Consent.Plan.entry_fit/2`,
+  `{:entry_mismatch, need}`); a need the component reads
   itself — disclose-only, `disclose: true`, or the `@ingress` slot of a
   manifest declaring no needs — takes a disclosed entry of the athanor
   alone (`{:disclosure_refused, need}`); and an instance entry must be
@@ -1170,7 +1172,7 @@ defmodule Sanctum.Consent.Commit do
 
   # An entry chosen for one of the dependency's credential needs, bound on
   # the edge as a binding of that need is on the source: the need's kind
-  # and provider, its disclosure, the offer and the component policy read
+  # and destination, its disclosure, the offer and the component policy read
   # against the dependency, under the need's scopes and the selection's
   # field map.
   defp entry_selection(ctx, raw, {from, dep, place}, target, decided) do
@@ -1179,13 +1181,13 @@ defmodule Sanctum.Consent.Commit do
          :ok <- not_provided(decided.provided, dep, need, "#{need}"),
          {:ok, scopes} <- binding_list(%{}, :scopes, declared_need, need),
          {:ok, bound} <- fetch_bound(ctx, target, need),
-         :ok <- check_match(bound, declared_need, need),
+         {:ok, destination} <- bound_destination(bound),
+         :ok <- check_fit(bound, destination, declared_need, need),
          :ok <- check_disclosure(bound, declared_need, need),
          :ok <- check_admission(ctx, bound, need, Plan.node_facts(dep, place.graph, place.rows)),
          {:ok, fields} <- field_map(raw, declared_need, bound, need),
          {:ok, scopes} <- named_projection(declared_need, fields, scopes, bound, need),
-         :ok <- check_scope_projection(bound, scopes),
-         {:ok, destination} <- bound_destination(bound) do
+         :ok <- check_scope_projection(bound, scopes) do
       selection = %{
         kind: :entry,
         from: from,
@@ -1667,7 +1669,8 @@ defmodule Sanctum.Consent.Commit do
          :ok <- check_token_grant(declared_need, scopes, need),
          {:ok, target} <- binding_target(raw, need),
          {:ok, bound} <- fetch_bound(ctx, target, need),
-         :ok <- check_match(bound, declared_need, need),
+         {:ok, destination} <- bound_destination(bound),
+         :ok <- check_fit(bound, destination, declared_need, need),
          :ok <- check_disclosure(bound, declared_need, need),
          :ok <-
            check_admission(
@@ -1678,8 +1681,7 @@ defmodule Sanctum.Consent.Commit do
            ),
          {:ok, fields} <- field_map(raw, declared_need, bound, need),
          {:ok, scopes} <- named_projection(declared_need, fields, scopes, bound, need),
-         :ok <- check_scope_projection(bound, scopes),
-         {:ok, destination} <- bound_destination(bound) do
+         :ok <- check_scope_projection(bound, scopes) do
       binding = %{
         need: need,
         declared_need: declared_need,
@@ -1937,15 +1939,16 @@ defmodule Sanctum.Consent.Commit do
     end
   end
 
-  # An entry meets a declared need of its kind whose qualifier is the
-  # entry's provider. The `@ingress` slot of a manifest declaring no needs
-  # names neither.
-  defp check_match(_bound, nil, _need), do: :ok
+  # An entry meets a declared need of its kind whose destination covers
+  # the hosts and paths the need declares (`Plan.entry_fit/2`), whatever
+  # its label. The `@ingress` slot of a manifest declaring no needs
+  # declares neither.
+  defp check_fit(_bound, _destination, nil, _need), do: :ok
 
-  defp check_match(bound, declared_need, need) do
-    if bound.kind == declared_need.kind and bound.provider == declared_need.qualifier,
-      do: :ok,
-      else: {:error, {:provider_mismatch, need}}
+  defp check_fit(bound, destination, declared_need, need) do
+    if Plan.entry_fit(declared_need, %{kind: bound.kind, destination: destination}) == :none,
+      do: {:error, {:entry_mismatch, need}},
+      else: :ok
   end
 
   # A need the component reads itself takes a disclosed entry of the

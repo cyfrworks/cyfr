@@ -55,6 +55,8 @@ defmodule Cyfr.Test.ChatFixture do
   @attach_rule %{"in" => "header", "name" => "x-api-key", "template" => "{value}"}
   @upstream_host "127.0.0.1"
   @upstream_paths ["/v1/"]
+  # Disclosed mode: the host the need names, which the fixture never calls.
+  @disclosed_host "api.chat-fixture.test"
   # The upstream reads at most this much of a request, and answers 413 past it.
   @upstream_max_body 1_048_576
 
@@ -111,7 +113,8 @@ defmodule Cyfr.Test.ChatFixture do
     {need, caps} =
       case Keyword.fetch!(opts, :mode) do
         :disclosed ->
-          {%{"reason" => "to read a key as a model catalyst does"}, %{"limits" => limits}}
+          {%{"reason" => "to read a key as a model catalyst does", "hosts" => [@disclosed_host]},
+           %{"egress" => %{"domains" => [@disclosed_host]}, "limits" => limits}}
 
         :attach ->
           {%{
