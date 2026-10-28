@@ -367,9 +367,13 @@ def own_limit_writable(stack):
 
 
 def keeper_groups(stack):
-    """The keeper cgroup groups the container holds, read in word form: `absent` alone from a command that exits 0."""
-    script = ('if groups="$(ls -d /sys/fs/cgroup/keeper-* 2>/dev/null)" && [ -n "$groups" ]; '
-              'then echo present; echo "$groups"; else echo absent; fi')
+    """The keeper cgroup groups the container holds, read in word form: `absent` alone from a command that exits 0.
+
+    `find` exits 0 with no output when no group matches, and non-zero on a
+    read error, so the word is printed only after the enumeration succeeded.
+    """
+    script = ('groups="$(find /sys/fs/cgroup -maxdepth 1 -name \'keeper-*\')" || exit 3; '
+              'if [ -n "$groups" ]; then echo present; echo "$groups"; else echo absent; fi')
     return imagesuite.read_listing(stack.exec(script), "the keeper cgroups the container holds")
 
 

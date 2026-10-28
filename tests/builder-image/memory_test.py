@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import memory  # noqa: E402
 import stack  # noqa: E402
+import imagesuite  # noqa: E402
 
 CONTAINER = "cyfr-locus-builds-1"
 GROUPS = ["/sys/fs/cgroup/keeper-30001", "/sys/fs/cgroup/keeper-30002"]
@@ -72,6 +73,40 @@ class KeeperGroups(unittest.TestCase):
     def test_output_that_answers_no_word_is_no_answer(self):
         with self.assertRaises(SystemExit):
             self.read("silent", status=0)
+
+
+class KeeperListShell(unittest.TestCase):
+    """The command as the container's shell runs it, with `find` stubbed on the path: a read error inside the
+    enumeration is no answer, and only a successful enumeration answers `absent`."""
+
+    def shell(self, behaviour):
+        bin_dir = imagesuite.temporary_directory("memory-test-bin-", 0o755)
+        find = os.path.join(bin_dir, "find")
+        with open(find, "w") as stub:
+            stub.write(f"#!/bin/sh\n{behaviour}\n")
+        os.chmod(find, 0o700)
+        return {"PATH": bin_dir + os.pathsep + os.environ["PATH"]}
+
+    def groups(self, behaviour):
+        env = self.shell(behaviour)
+
+        class Shell:
+            def exec(self, script, user=None):
+                return subprocess.run(["/bin/sh", "-c", script], env={**os.environ, **env},
+                                      capture_output=True, text=True)
+
+        return memory.keeper_groups(Shell())
+
+    def test_a_read_error_inside_the_enumeration_fails_the_observation(self):
+        with self.assertRaises(SystemExit):
+            self.groups('echo "find: /sys/fs/cgroup: Permission denied" >&2; exit 1')
+
+    def test_an_enumeration_that_finds_nothing_answers_absent(self):
+        self.assertEqual(self.groups("exit 0"), [])
+
+    def test_an_enumeration_that_finds_groups_lists_them(self):
+        self.assertEqual(self.groups("echo /sys/fs/cgroup/keeper-30001; exit 0"),
+                         ["/sys/fs/cgroup/keeper-30001"])
 
 
 if __name__ == "__main__":
