@@ -14,12 +14,14 @@
 # .github/workflows/release.yml, which runs before an image is published.
 # Every other fixable HIGH or CRITICAL still fails those jobs.
 #
-# All four live in npm's bundled dependencies, pinned by npm's lockfile. The
+# All six live in npm's bundled dependencies, pinned by npm's lockfile. The
 # image's npm is the one Node 24.22.1, the newest Node 24 LTS, bundles:
 # 11.19.1, measured (2026-10-24) carrying brace-expansion 5.0.9 and undici
 # 6.28.0. npm 12.2.1, the newest release, was measured the same day
 # carrying brace-expansion 5.0.12 and undici 6.29.0, and no Node 24 LTS
-# release bundles it.
+# release bundles it; both were still the newest on 2026-10-28. npm's own
+# dependencies name make-fetch-happen and npm-registry-fetch for its
+# fetches and not undici, which a bundled dependency carries.
 # Patching a dependency inside npm's own tree is not something an image
 # should do to itself, and npm cannot be removed —
 # the backends service launches its backends through `npx` and the builds
@@ -69,6 +71,27 @@ vulnerabilities:
   # npm release bundles (12.2.1 carries 6.29.0). Lift once the npm the
   # image's Node bundles carries 6.29.1 or later.
   - id: CVE-2026-109869
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
+    statement: npm's bundled undici; no npm release ships the fix.
+
+  # undici 6.28.0: TLS options dropped from an Agent's connections, so a
+  # certificate check can be bypassed (CVE-2026-109383), and a denial of
+  # service through TLS renegotiation with a mismatched certificate
+  # (CVE-2026-87018). Both fixed at 6.29.1, which no npm release bundles
+  # (12.2.1 carries 6.29.0). Only a package that names npm's bundled undici
+  # runs it, and a tincture's install is held to its lockfile's integrity
+  # hashes. Lift once the npm the image's Node bundles carries 6.29.1 or
+  # later.
+  - id: CVE-2026-109383
+    # owner: @moonmoon69
+    expired_at: 2027-01-15
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
+    statement: npm's bundled undici; no npm release ships the fix.
+  - id: CVE-2026-87018
     # owner: @moonmoon69
     expired_at: 2027-01-15
     paths:
