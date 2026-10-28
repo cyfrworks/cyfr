@@ -6,17 +6,20 @@ defmodule Compendium.Providers.Canvas do
   The `canvas` tool: a person's canvases, each a tincture whose placement
   is `canvas`, read and written through `Compendium.Canvas`.
 
-    * `catalog` answers what a canvas may read: the toolkit majors and
-      every canvas-readable stream with its subject grammar, shape, filter
-      and whether it refreshes. Shapes, never values.
+    * `catalog` answers what a canvas may read: every canvas-readable
+      stream with its subject grammar, shape, filter and whether it
+      refreshes. Shapes, never values.
     * `versions` answers a canvas's versions document (which version a
       glass opens, which one is kept, which validation last failed) and
       its revision.
-    * `write` writes a new canvas version whole, its module and the
-      streams it reads, after allocating its version number, and
-      registers it. It never edits a version and activates nothing.
+    * `write` writes a new canvas version whole, its page's files on the
+      vanilla or the React template and the streams it reads, built first
+      when it is React, after allocating its version number, and
+      registers it. It never edits a version, opens no stream and
+      activates nothing. It takes no standing answer (`standing: false`),
+      so each write an assistant proposes asks the person on its own card.
     * `activate` reports a glass's trial of a version under its frame's
-      validation credential, which it spends; only a tree activates, and
+      validation credential, which it spends; only `ready` activates, and
       only under the canvas's current grant. Prism calls it, from outside
       any chain.
     * `restore` makes the kept version the working one again, while it
@@ -75,12 +78,21 @@ defmodule Compendium.Providers.Canvas do
               description:
                 "write: the canvas's name, a component name; a new name is a new canvas"
             ),
-            Arg.new("module", :string,
+            Arg.new("template", :string,
               required: true,
-              bulk: true,
+              enum: Compendium.Canvas.templates(),
               description:
-                "write: the canvas's module, the JavaScript the toolkit runs " <>
-                  "(at most #{Compendium.Canvas.module_max_bytes()} bytes)"
+                "write: the page's template: vanilla (index.html and its own files) or " <>
+                  "react (built with Vite from index.html, src/ and public/)"
+            ),
+            Arg.new("files", {:map, Arg.new(nil, :string, bulk: true)},
+              required: true,
+              description:
+                "write: the page's files, each relative path to its UTF-8 text, " <>
+                  "index.html among them (at most #{Compendium.Canvas.max_files()} files and " <>
+                  "#{Compendium.Canvas.max_bytes()} bytes together); a react page's files are " <>
+                  "index.html and files under src/ and public/, which may also be " <>
+                  Enum.join(Compendium.Canvas.build_source_extensions(), ", ") <> " sources"
             ),
             Arg.new("streams", :json,
               required: true,
@@ -92,7 +104,8 @@ defmodule Compendium.Providers.Canvas do
           kind: :write,
           sources: [],
           planes: [:external, :in_chain],
-          permission: :execute
+          permission: :execute,
+          standing: false
         ),
         Operation.new(
           "canvas",
@@ -114,7 +127,7 @@ defmodule Compendium.Providers.Canvas do
             Arg.new("outcome", :string,
               required: true,
               enum: Compendium.Canvas.outcomes(),
-              description: "activate: what the trial answered; only a tree activates"
+              description: "activate: what the trial answered; only ready activates"
             )
           ],
           kind: :write,

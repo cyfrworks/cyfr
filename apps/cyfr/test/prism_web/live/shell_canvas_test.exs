@@ -6,7 +6,7 @@ defmodule PrismWeb.ShellCanvasTest do
   The canvases in the shell, and safe mode.
 
   The shell shows the layout's first canvas, its working version opened as
-  a canvas frame on the canvas's own host page, and draws the picker only
+  a canvas frame on the canvas's own page, and draws the picker only
   when no canvas runs: a layout with no canvas, or a canvas nobody
   installed. A new person sees the shipped canvas, validated once and then
   opened live. A canvas is decided against the listing read as it is
@@ -18,8 +18,9 @@ defmodule PrismWeb.ShellCanvasTest do
   freezes the canvas left and its apps, and shows the next, with no wrap.
   A canvas's `open` places a listed tincture where its arrangement puts
   it, and its `press` reaches `feed.press` only from the visible live
-  canvas whose version reads that feed. A canvas that never sends ready,
-  one refused at open, and the person's own ask enter safe mode, which
+  canvas whose version reads that feed. A canvas shown and not ready
+  within the whole period from its showing, one refused at open, and the
+  person's own ask enter safe mode, which
   discards every frame with its credential; its kept version restores and
   opens only that canvas.
 
@@ -34,7 +35,8 @@ defmodule PrismWeb.ShellCanvasTest do
 
   alias Prism.Frames
 
-  @seed Path.expand("../../../../../seed/components/tinctures/local/canvas/0.1.0", __DIR__)
+  # The shipped canvas, as the seed holds it: the one version it ships.
+  @seed_canvas Path.expand("../../../../../seed/components/tinctures/local/canvas", __DIR__)
 
   setup %{conn: conn} do
     user = test_user()
@@ -156,19 +158,34 @@ defmodule PrismWeb.ShellCanvasTest do
       version,
       %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "entry" => "index.html",
         "streams" => streams
       },
-      [{"canvas.js", "export default (canvas) => canvas.render({type: \"spacer\"})"}],
+      [{"index.html", "<html><head></head><body>#{name}</body></html>"}],
       opts
     )
   end
 
+  defp seed do
+    [dir] = Path.wildcard(Path.join(@seed_canvas, "*"))
+    dir
+  end
+
+  defp seed_manifest,
+    do: seed() |> Path.join("cyfr-manifest.json") |> File.read!() |> Jason.decode!()
+
   # The shipped canvas, as the seed holds it, installed in the athanor.
   defp shipped!(ctx) do
-    manifest = @seed |> Path.join("cyfr-manifest.json") |> File.read!() |> Jason.decode!()
-    module = File.read!(Path.join(@seed, "canvas.js"))
-    lay!(ctx, "canvas", manifest["version"], manifest["tincture"], [{"canvas.js", module}])
+    manifest = seed_manifest()
+
+    files =
+      for path <- Path.wildcard(Path.join(seed(), "**/*")),
+          File.regular?(path),
+          relative = Path.relative_to(path, seed()),
+          relative != "cyfr-manifest.json",
+          do: {relative, File.read!(path)}
+
+    lay!(ctx, "canvas", manifest["version"], manifest["tincture"], files)
   end
 
   # Version `version` of tincture `name` gone from the athanor's tree and
@@ -306,17 +323,30 @@ defmodule PrismWeb.ShellCanvasTest do
     )
   end
 
+  # A canvas frame's handshake: the wire's canvas handshake reply.
   defp handshake!(view, frame_id) do
     render_hook(view, "frame_handshake", %{"frame" => frame_id})
-    assert_reply(view, %{boot: boot})
-    boot
+    assert_reply(view, %{"credential" => _, "canvas" => _} = reply)
+    reply
+  end
+
+  # A canvas's stream opened on its own data route under `bearer`, as its
+  # page's SDK opens one.
+  defp canvas_stream(frame_id, bearer, stream, subject \\ nil) do
+    body = Prima.TinctureWire.request(:stream_open, %{stream: stream, subject: subject})
+
+    build_conn()
+    |> put_req_header("content-type", "application/json")
+    |> put_req_header("origin", "null")
+    |> put_req_header("authorization", Prima.TinctureWire.bearer(bearer))
+    |> post(Prima.TinctureWire.stream_path(frame_id), Jason.encode!(body))
   end
 
   defp canvas_verb!(view, frame_id, verb, args \\ %{}),
     do:
-      render_hook(view, "canvas_verb", %{
+      render_hook(view, "frame_verb", %{
         "frame" => frame_id,
-        "message" => Prima.CanvasWire.encode(%{verb: verb, frame: frame_id, args: args})
+        "message" => Prima.TinctureWire.shell_message(verb, frame_id, args)
       })
 
   # `#shell`'s children in document order, each by its id, or by its tag
@@ -379,7 +409,12 @@ defmodule PrismWeb.ShellCanvasTest do
       Path.join(System.tmp_dir!(), "shell_canvas_seed_#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(Path.join(seed, "components/tinctures/local/canvas"))
-    File.cp_r!(@seed, Path.join(seed, "components/tinctures/local/canvas/0.1.0"))
+
+    File.cp_r!(
+      seed(),
+      Path.join(seed, "components/tinctures/local/canvas/#{Path.basename(seed())}")
+    )
+
     previous = Application.get_env(:arca, :seed_path)
     Application.put_env(:arca, :seed_path, seed)
 
@@ -496,6 +531,81 @@ defmodule PrismWeb.ShellCanvasTest do
     digest
   end
 
+  # A shell whose `home` canvas runs 1.0.1, 1.0.0 kept, and is hidden by
+  # `hidden_by`: a switch to `work`, or a full frame its own open put over
+  # it, which freezes it while it stays the visible canvas.
+  defp hidden_canvas!(conn, ctx, user, athanor, hidden_by) do
+    tincture!(ctx, "app-dash")
+    full = %{"desk" => posture([app("tincture:local.app-dash", "full")])}
+    two_canvases!(ctx, user, athanor, if(hidden_by == :full_frame, do: full, else: %{}))
+    canvas!(ctx, "markets", "1.0.1")
+    versions!(ctx, "markets", %{working: "1.0.1", kept: "1.0.0"})
+
+    view = shell!(conn)
+    assert %{reference: %{version: "1.0.1"}, state: :live} = home = canvas(view)
+
+    case hidden_by do
+      :switch -> render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      :full_frame -> canvas_verb!(view, home.id, :open, %{"ref" => "tincture:local.app-dash"})
+    end
+
+    assert %{state: :frozen, visible: false} = canvas(view)
+    view
+  end
+
+  # The hidden `home` canvas shown again as `hidden_canvas!/5` hid it.
+  defp show_again!(view, :switch), do: render_hook(view, "switch_canvas", %{"canvas" => "home"})
+  defp show_again!(view, :full_frame), do: render_click(view, "close_active_tincture", %{})
+
+  # A shell whose `home` canvas opened hidden: a full frame its own open
+  # put over it is shown when the layout gives `home` another tincture,
+  # whose frame opens frozen under that full frame. Closing the full frame
+  # shows it.
+  defp opened_hidden!(conn, ctx, user, athanor) do
+    tincture!(ctx, "app-dash")
+    full = %{"desk" => posture([app("tincture:local.app-dash", "full")])}
+    two_canvases!(ctx, user, athanor, full)
+    view = shell!(conn)
+    first = canvas(view)
+    canvas_verb!(view, first.id, :open, %{"ref" => "tincture:local.app-dash"})
+    assert %{state: :frozen} = canvas(view)
+
+    layout!(user, athanor, [
+      entry("home", "tincture:local.notes-canvas", full),
+      entry("work", "tincture:local.markets")
+    ])
+
+    settle!(view, fn -> match?(%{reference: %{name: "notes-canvas"}}, canvas(view)) end)
+    assert %{state: :frozen, visible: false} = opened = canvas(view)
+    refute opened.id == first.id
+    assert row(opened.id).state == "suspended"
+    view
+  end
+
+  # The period a shown canvas has to send ready: ten seconds, as
+  # `PrismWeb.ShellLive` documents it.
+  @ready_ms 10_000
+
+  # When the timer of a ready deadline the shell holds fires, in
+  # monotonic milliseconds.
+  defp fires_at(timer) do
+    left = Process.read_timer(timer)
+    assert is_integer(left)
+    System.monotonic_time(:millisecond) + left
+  end
+
+  # Time passes beyond every ready deadline the shell holds: each is
+  # delivered as its timer delivers it, its timer cancelled first so it
+  # arrives once.
+  defp deadlines_pass!(view) do
+    for {frame_id, {timer, token}} <- assigns(view).canvas_deadlines do
+      Process.cancel_timer(timer)
+      send(view.pid, {:canvas_deadline, frame_id, token})
+    end
+
+    _ = render(view)
+  end
+
   # ===========================================================================
 
   describe "the canvas" do
@@ -519,10 +629,11 @@ defmodule PrismWeb.ShellCanvasTest do
       refute html =~ ~s(id="shell-picker")
       assert html =~ ~s(data-canvas-place="canvas")
 
-      # The canvas's own host page under an asset credential, its sandbox
-      # the rules', and no allow attribute.
+      # The canvas's own page under an asset credential, its sandbox the
+      # rules', and no allow attribute.
       tag = iframe(html, home.id)
-      assert attribute(tag, "data-frame-wire") == "canvas"
+      assert attribute(tag, "data-frame-kind") == "canvas"
+      assert attribute(tag, "src") =~ ~r{^/_c/v1/[^/]+/#{home.id}$}
       assert "/_c/v1/" <> _ = attribute(tag, "src")
       assert attribute(tag, "src") == home.src
 
@@ -536,31 +647,25 @@ defmodule PrismWeb.ShellCanvasTest do
       assert row.purpose == "live"
       assert {row.name, row.version, row.version_digest} == {"markets", "1.0.0", digest}
 
-      # Its handshake is its boot, the bearer inside it, once.
-      boot = handshake!(view, home.id)
+      # Its handshake is the wire's canvas handshake, its bearer beside
+      # its block, once.
+      reply = handshake!(view, home.id)
 
-      assert %{
-               "mode" => "live",
-               "toolkit" => 1,
-               "streams" => [%{"name" => "runs.changes", "subject" => nil}]
-             } = boot
+      assert reply ==
+               Prima.TinctureWire.canvas_handshake(
+                 home.id,
+                 reply["credential"],
+                 "live",
+                 [%{"name" => "runs.changes", "subject" => nil}]
+               )
 
-      assert boot["data_path"] == Prima.CanvasWire.data_path(home.id)
-      assert boot["module_url"] =~ ~r{^/_s/[^/]+/local/markets/1\.0\.0/canvas\.js$}
-
-      assert {:ok, _} =
-               Prima.CanvasWire.decode(%{
-                 "v" => 1,
-                 "verb" => "boot",
-                 "frame" => home.id,
-                 "args" => boot
-               })
+      assert reply["canvas"]["data_path"] == Prima.TinctureWire.data_path(home.id)
 
       assert {:ok, %{frame_id: frame_id, mode: :live}} =
-               Sanctum.TinctureAuth.verify_frame_credential(boot["credential"])
+               Sanctum.TinctureAuth.verify_frame_credential(reply["credential"])
 
       assert frame_id == home.id
-      refute render(view) =~ boot["credential"]
+      refute render(view) =~ reply["credential"]
 
       # It is told what it may open: the listed tinctures that are not canvases.
       home_id = home.id
@@ -631,19 +736,22 @@ defmodule PrismWeb.ShellCanvasTest do
       assert render(view) =~ ~r/data-canvas-place="validation"[^>]*inert/
       refute render(view) =~ ~s(id="shell-picker")
 
-      boot = handshake!(view, trial.id)
-      assert boot["mode"] == "validation"
-      assert boot["streams"] == [%{"name" => "runs.changes", "subject" => nil}]
+      %{"version" => version, "tincture" => %{"streams" => streams}} = seed_manifest()
+      reply = handshake!(view, trial.id)
+      assert reply["canvas"]["mode"] == "validation"
 
-      canvas_verb!(view, trial.id, :tree)
+      assert reply["canvas"]["streams"] ==
+               Enum.map(streams, &%{"name" => &1["name"], "subject" => &1["subject"]})
+
+      canvas_verb!(view, trial.id, :ready)
 
       # The trial's credential was spent, the version activated, and the
       # working version opened live.
       assert validation(view) == nil
       assert row(trial.id).state == "revoked"
-      assert %{working: "0.1.0", kept: nil, failed: nil} = versions(ctx, "canvas")
+      assert %{working: ^version, kept: nil, failed: nil} = versions(ctx, "canvas")
 
-      assert %{state: :live, visible: true, reference: %{name: "canvas", version: "0.1.0"}} =
+      assert %{state: :live, visible: true, reference: %{name: "canvas", version: ^version}} =
                shipped = canvas(view)
 
       assert row(shipped.id).version_digest == digest
@@ -652,7 +760,7 @@ defmodule PrismWeb.ShellCanvasTest do
       GenServer.stop(view.pid, :normal)
       again = shell!(conn)
       assert validation(again) == nil
-      assert %{state: :live, reference: %{version: "0.1.0"}} = canvas(again)
+      assert %{state: :live, reference: %{version: ^version}} = canvas(again)
     end
 
     test "the canvas is frozen while a full frame covers it and live again once it closes",
@@ -790,9 +898,9 @@ defmodule PrismWeb.ShellCanvasTest do
       view = shell!(conn)
       assert %{state: :live, reference: %{version: "1.1.0"}} = first = validation(view)
 
-      # 1.2.0 is written while 1.1.0 is trialled; 1.1.0's tree activates it.
+      # 1.2.0 is written while 1.1.0 is trialled; 1.1.0's ready activates it.
       canvas!(ctx, "markets", "1.2.0")
-      canvas_verb!(view, first.id, :tree)
+      canvas_verb!(view, first.id, :ready)
 
       assert row(first.id).state == "revoked"
       assert %{working: "1.1.0"} = versions(ctx, "markets")
@@ -803,9 +911,9 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert %{purpose: "validation", version: "1.2.0"} = row(newer.id)
 
-      # 1.2.0's tree activates it, and with nothing newer the working
+      # 1.2.0's ready activates it, and with nothing newer the working
       # version opens: no third trial.
-      canvas_verb!(view, newer.id, :tree)
+      canvas_verb!(view, newer.id, :ready)
 
       assert validation(view) == nil
       assert %{working: "1.2.0", kept: "1.1.0"} = versions(ctx, "markets")
@@ -820,7 +928,7 @@ defmodule PrismWeb.ShellCanvasTest do
       view = shell!(conn)
       assert %{state: :live, reference: %{version: "1.1.0"}} = first = validation(view)
 
-      canvas_verb!(view, first.id, :tree)
+      canvas_verb!(view, first.id, :ready)
 
       assert validation(view) == nil
       assert [%{purpose: "validation"}] = rows() |> Enum.filter(&(&1.purpose == "validation"))
@@ -837,10 +945,10 @@ defmodule PrismWeb.ShellCanvasTest do
       view = shell!(conn)
       assert %{reference: %{version: "1.1.0"}} = first = validation(view)
 
-      # 1.1.0's credential is gone before its tree: the activation records
+      # 1.1.0's credential is gone before its ready: the activation records
       # nothing, and 1.1.0, the version just tried, is still the newest.
       revoke!(first.id)
-      canvas_verb!(view, first.id, :tree)
+      canvas_verb!(view, first.id, :ready)
 
       assert validation(view) == nil
       assert Enum.count(rows(), &(&1.purpose == "validation")) == 1
@@ -858,13 +966,13 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{reference: %{version: "1.1.0"}} = first = validation(view)
 
       canvas!(ctx, "markets", "1.2.0")
-      canvas_verb!(view, first.id, :tree)
+      canvas_verb!(view, first.id, :ready)
       assert %{reference: %{version: "1.2.0"}} = newer = validation(view)
 
-      # 1.2.0's credential is gone before its tree: the activation is
+      # 1.2.0's credential is gone before its ready: the activation is
       # refused and records nothing, and 1.2.0 is still the newest.
       revoke!(newer.id)
-      canvas_verb!(view, newer.id, :tree)
+      canvas_verb!(view, newer.id, :ready)
 
       assert validation(view) == nil
       assert %{working: "1.1.0", kept: "1.0.0", failed: nil} = versions(ctx, "markets")
@@ -883,8 +991,8 @@ defmodule PrismWeb.ShellCanvasTest do
         assert %{reference: %{version: "1.1.0"}} = first = validation(view)
 
         # 1.2.0 is written, and another glass decides it before 1.1.0's
-        # tree: activated, so 1.1.0's tree is a late report (conflict); or
-        # recorded as failed, with 1.1.0's credential gone so its tree
+        # ready: activated, so 1.1.0's ready is a late report (conflict); or
+        # recorded as failed, with 1.1.0's credential gone so its ready
         # records nothing over that failure.
         canvas!(ctx, "markets", "1.2.0")
 
@@ -894,14 +1002,14 @@ defmodule PrismWeb.ShellCanvasTest do
               {"1.2.0", %{working: "1.2.0", kept: "1.0.0"}}
 
             "recorded as failed" ->
-              # A tree would clear `failed`, so 1.1.0's must record nothing.
+              # A ready would clear `failed`, so 1.1.0's must record nothing.
               revoke!(first.id)
               failure = %{version: "1.2.0", outcome: "died", at: "2026-10-12T00:00:00Z"}
               {"1.0.0", %{working: "1.0.0", failed: failure}}
           end
 
         versions!(ctx, "markets", document)
-        canvas_verb!(view, first.id, :tree)
+        canvas_verb!(view, first.id, :ready)
 
         assert row(first.id).state == "revoked"
         assert validation(view) == nil
@@ -921,20 +1029,20 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{reference: %{version: "1.1.0"}} = first = validation(view)
 
       # Every trial here records nothing: its credential is gone before
-      # its tree, or its version is.
+      # its ready, or its version is.
       canvas!(ctx, "markets", "1.2.0")
       revoke!(first.id)
-      canvas_verb!(view, first.id, :tree)
+      canvas_verb!(view, first.id, :ready)
       assert %{reference: %{version: "1.2.0"}} = second = validation(view)
 
       unlay_version!(ctx, "markets", "1.2.0")
-      canvas_verb!(view, second.id, :tree)
+      canvas_verb!(view, second.id, :ready)
       assert %{reference: %{version: "1.1.0"}} = third = validation(view)
 
       # 1.2.0 is the newest again, and was trialled from here already.
       canvas!(ctx, "markets", "1.2.0")
       revoke!(third.id)
-      canvas_verb!(view, third.id, :tree)
+      canvas_verb!(view, third.id, :ready)
 
       assert validation(view) == nil
       assert %{working: "1.0.0", failed: nil} = versions(ctx, "markets")
@@ -1088,7 +1196,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       view = shell!(conn)
       assert %{state: :live, id: home_id} = canvas(view)
-      _boot = handshake!(view, home_id)
+      _reply = handshake!(view, home_id)
 
       assert_push_event(view, "canvas_installed", %{
         frame: ^home_id,
@@ -1124,7 +1232,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       view = shell!(conn)
       assert %{state: :live, id: home_id} = canvas(view)
-      _boot = handshake!(view, home_id)
+      _reply = handshake!(view, home_id)
 
       assert_push_event(view, "canvas_installed", %{
         frame: ^home_id,
@@ -1157,7 +1265,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       view = shell!(conn)
       assert %{state: :live, id: home_id} = canvas(view)
-      _boot = handshake!(view, home_id)
+      _reply = handshake!(view, home_id)
 
       assert_push_event(view, "canvas_installed", %{
         frame: ^home_id,
@@ -1188,7 +1296,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       view = shell!(conn)
       assert %{state: :live, id: home_id} = canvas(view)
-      _boot = handshake!(view, home_id)
+      _reply = handshake!(view, home_id)
 
       assert_push_event(view, "canvas_installed", %{
         frame: ^home_id,
@@ -1279,7 +1387,84 @@ defmodule PrismWeb.ShellCanvasTest do
       assert Frames.visible_canvas(frames(view)) == "home"
     end
 
-    test "a canvas shown again keeps its row's deadline and its boot's bearer",
+    test "a hidden canvas reads and acts on nothing; shown again, it reads its streams once more, once",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      tincture!(ctx, "app-dash")
+      two_canvases!(ctx, user, athanor)
+      view = shell!(conn)
+      home = canvas(view)
+      bearer = handshake!(view, home.id)["credential"]
+      topic = Cyfr.Bus.executions(Sanctum.Context.actor(ctx))
+
+      # The subscriptions a stream's process holds on the runs' topic; other
+      # parts of the shell hold their own there.
+      held_by = fn pid ->
+        for {^pid, _value} <- Registry.lookup(Cyfr.PubSub, topic), do: pid
+      end
+
+      open_stream = fn ->
+        Task.async(fn -> canvas_stream(home.id, bearer, "runs.changes") end)
+      end
+
+      stream = open_stream.()
+      wait_until(fn -> held_by.(stream.pid) != [] end, 5_000)
+
+      # Hidden: the switch returns once the canvas is frozen and its
+      # credential suspended, which ends its open stream with a refusal.
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert %{state: :frozen, visible: false} = canvas(view)
+      assert row(home.id).state == "suspended"
+      assert {:error, :suspended} = verify(bearer)
+
+      assert {:ok, ended} = Task.yield(stream, 10_000) || Task.shutdown(stream)
+
+      assert [%{event: "refusal", data: %{"class" => "forbidden"}}] =
+               ended.resp_body |> Prima.Test.EventStream.decode() |> Enum.take(-1)
+
+      assert held_by.(stream.pid) == []
+
+      # A later read is refused, and its open and press are dropped.
+      later = canvas_stream(home.id, bearer, "runs.changes")
+      assert later.status == 403
+
+      assert {:refused, %{class: "forbidden"}} =
+               Prima.TinctureWire.decode_answer(:stream_open, Jason.decode!(later.resp_body))
+
+      before = dropped(view)
+      canvas_verb!(view, home.id, :open, %{"ref" => "tincture:local.app-dash"})
+
+      canvas_verb!(view, home.id, :press, %{
+        "binding" => "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+        "action" => "refresh"
+      })
+
+      assert dropped(view) == before + 2
+      refute Enum.any?(opened(view), &match?(%{key: {:app, _, "tincture:local.app-dash"}}, &1))
+
+      # Shown again, its credential resumes and a new open reads again,
+      # holding one subscription.
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert row(home.id).state == "active"
+      assert {:ok, _} = verify(bearer)
+
+      again = open_stream.()
+      wait_until(fn -> held_by.(again.pid) != [] end, 5_000)
+      assert [_one] = held_by.(again.pid)
+
+      # The stream reads the store after its subscription is in place and at
+      # each revalidation, on the test's one shared connection, and a stream
+      # killed inside a read takes that connection with it. So the view
+      # stops first, while the test still owns the sandbox, and its end
+      # revokes the canvas's credential, which closes the stream with a
+      # refusal; the stream is awaited to that end, never killed.
+      GenServer.stop(view.pid, :normal)
+      assert {:ok, closed} = Task.yield(again, 10_000) || Task.shutdown(again)
+
+      assert [%{event: "refusal"}] =
+               closed.resp_body |> Prima.Test.EventStream.decode() |> Enum.take(-1)
+    end
+
+    test "a canvas shown again keeps its row's deadline and its handshake's bearer",
          %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
@@ -1377,11 +1562,8 @@ defmodule PrismWeb.ShellCanvasTest do
       assert row(trial.id).state == "revoked"
       assert %{working: nil, failed: nil} = versions(ctx, "markets")
 
-      # Its tree, or its deadline, arriving now changes nothing.
-      render_hook(view, "canvas_verb", %{
-        "frame" => trial.id,
-        "message" => Prima.CanvasWire.encode(%{verb: :tree, frame: trial.id, args: %{}})
-      })
+      # Its ready, or its deadline, arriving now changes nothing.
+      canvas_verb!(view, trial.id, :ready)
 
       send(view.pid, {:validation_deadline, trial.id})
       _ = render(view)
@@ -1515,7 +1697,7 @@ defmodule PrismWeb.ShellCanvasTest do
       wait_until(fn -> assigns(view).grant_prompts == %{} end, 5_000, "the grant")
       settle!(view, fn -> match?(%{state: :live}, validation(view)) end)
       trial = validation(view)
-      canvas_verb!(view, trial.id, :failed, %{"stage" => "tree"})
+      canvas_verb!(view, trial.id, :failed, %{"stage" => "load"})
 
       # The grant now names 1.0.1, so the working 1.0.0 asks for its own.
       settle!(view, fn -> assigns(view).grant_prompts != %{} end)
@@ -1600,7 +1782,7 @@ defmodule PrismWeb.ShellCanvasTest do
         ])
 
         # The grant waits for the person: before the trial opens, so its
-        # open is refused, or once it is underway, so its tree answers
+        # open is refused, or once it is underway, so its ready answers
         # consent_required. Either way the prompt is asked with no trial held.
         if asked_at == "open", do: owner_head!(ctx, :needs_consent)
         view = shell!(conn)
@@ -1609,7 +1791,7 @@ defmodule PrismWeb.ShellCanvasTest do
         if asked_at == "activation" do
           assert %{state: :live} = first
           owner_head!(ctx, :needs_consent)
-          canvas_verb!(view, first.id, :tree)
+          canvas_verb!(view, first.id, :ready)
           assert row(first.id).state == "revoked"
         end
 
@@ -1670,7 +1852,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       assert %{state: :live, reference: %{version: "1.0.1"}} = first = validation(view)
       owner_head!(ctx, :needs_consent)
-      canvas_verb!(view, first.id, :tree)
+      canvas_verb!(view, first.id, :ready)
       assert validation(view) == nil
 
       assert [{prompt, {{:activation, "home"}, "iframe_markets"}}] =
@@ -1686,7 +1868,7 @@ defmodule PrismWeb.ShellCanvasTest do
       settle!(view, fn -> match?(%{state: :live}, validation(view)) end)
       assert %{state: :live} = newer = validation(view)
       take_over!(slot)
-      canvas_verb!(view, newer.id, :tree)
+      canvas_verb!(view, newer.id, :ready)
 
       assert validation(view) == nil
       assert %{state: :refused, refusal: :unavailable} = refused = canvas(view)
@@ -2111,7 +2293,7 @@ defmodule PrismWeb.ShellCanvasTest do
       view = shell!(conn)
       home = canvas(view).id
 
-      render_hook(view, "canvas_verb", %{
+      render_hook(view, "frame_verb", %{
         "frame" => home,
         "message" => %{
           "v" => 1,
@@ -2131,21 +2313,42 @@ defmodule PrismWeb.ShellCanvasTest do
       refute Enum.any?(opened(view), &match?(%{key: {:app, _, "tincture:local.loose-dash"}}, &1))
     end
 
-    test "a canvas's tree, or a verb of the shell's own wire from a canvas, is dropped", %{
-      conn: conn
-    } do
+    test "a canvas's title, close and credential are dropped: it acts only on ready, failed, open and press",
+         %{conn: conn} do
       view = shell!(conn)
       home = canvas(view).id
 
-      canvas_verb!(view, home, :tree)
+      canvas_verb!(view, home, :title, %{"title" => "Mine"})
+      canvas_verb!(view, home, :close)
+      canvas_verb!(view, home, :credential, %{"name" => "api"})
 
+      assert dropped(view) == 3
+      assert %{state: :live} = canvas(view)
+      assert assigns(view).credential_prompts == %{}
+    end
+
+    test "a message naming another frame than the port it came from, or malformed, is dropped",
+         %{conn: conn} do
+      view = shell!(conn)
+      home = canvas(view).id
+
+      # The port's frame and the message's differ.
       render_hook(view, "frame_verb", %{
         "frame" => home,
-        "message" => Prima.TinctureWire.shell_message(:close, home)
+        "message" =>
+          Prima.TinctureWire.shell_message(:open, "frm_another_frame", %{
+            "ref" => "tincture:local.loose-dash"
+          })
       })
 
-      assert dropped(view) == 2
+      # A press with arguments its verb does not take, and a failure at no stage.
+      canvas_verb!(view, home, :press, %{"binding" => "btc", "action" => "refresh"})
+      canvas_verb!(view, home, :failed, %{"stage" => "boot"})
+
+      assert dropped(view) == 3
       assert %{state: :live} = canvas(view)
+      assert assigns(view).safe_mode == nil
+      refute Enum.any?(opened(view), &match?(%{key: {:app, _, "tincture:local.loose-dash"}}, &1))
     end
   end
 
@@ -2238,6 +2441,25 @@ defmodule PrismWeb.ShellCanvasTest do
       assert dropped(view) == 4
       assert pressed(ctx) == []
     end
+
+    test "a press or a failure from a frame that is no canvas's is dropped",
+         %{conn: conn, ctx: ctx, btc: btc} do
+      tincture!(ctx, "app-dash")
+      view = shell!(conn)
+      canvas_verb!(view, canvas(view).id, :open, %{"ref" => "tincture:local.app-dash"})
+
+      assert %{id: app, state: :live, visible: true} =
+               Frames.get(frames(view), {:app, "home", "tincture:local.app-dash"})
+
+      before = dropped(view)
+      canvas_verb!(view, app, :press, %{"binding" => btc, "action" => "refresh"})
+      canvas_verb!(view, app, :failed, %{"stage" => "runtime"})
+
+      assert dropped(view) == before + 2
+      assert pressed(ctx) == []
+      assert assigns(view).safe_mode == nil
+      assert %{state: :live} = canvas(view)
+    end
   end
 
   describe "safe mode" do
@@ -2316,7 +2538,8 @@ defmodule PrismWeb.ShellCanvasTest do
         Path.join(System.tmp_dir!(), "shell_canvas_seed_#{System.unique_integer([:positive])}")
 
       File.mkdir_p!(Path.join(seed, "components/tinctures/local/canvas"))
-      File.cp_r!(@seed, Path.join(seed, "components/tinctures/local/canvas/0.1.0"))
+      shipped = Path.basename(seed())
+      File.cp_r!(seed(), Path.join(seed, "components/tinctures/local/canvas/#{shipped}"))
       previous = Application.get_env(:arca, :seed_path)
       Application.put_env(:arca, :seed_path, seed)
 
@@ -2340,7 +2563,7 @@ defmodule PrismWeb.ShellCanvasTest do
 
       settle!(view, fn -> canvas(view) != nil end)
 
-      assert %{reference: %{name: "canvas", version: "0.1.0"}, state: :live} = canvas(view)
+      assert %{reference: %{name: "canvas", version: ^shipped}, state: :live} = canvas(view)
       assert validation(view) == nil
 
       assert {:ok, %{revision: ^layout_revision}} =
@@ -2363,21 +2586,20 @@ defmodule PrismWeb.ShellCanvasTest do
 
       # Ready at nine seconds: before the deadline message.
       canvas_verb!(view, id, :ready)
-      send(view.pid, {:canvas_deadline, id})
-      _ = render(view)
+      deadlines_pass!(view)
       assert assigns(view).safe_mode == nil
       assert %{id: ^id, state: :live} = canvas(view)
 
       # A canvas opened again that never says it is ready.
       render_click(view, "safe_mode", %{})
+      assert assigns(view).canvas_deadlines == %{}
       view |> element(~s(#system-layer-dialog button[phx-value-offer="retry"])) |> render_click()
       settle!(view, fn -> canvas(view) != nil end)
       again = canvas(view).id
       refute again == id
       handshake!(view, again)
 
-      send(view.pid, {:canvas_deadline, again})
-      _ = render(view)
+      deadlines_pass!(view)
       assert %{reason: :not_ready} = assigns(view).safe_mode
       assert opened(view) == []
       assert row(again).state == "revoked"
@@ -2397,7 +2619,7 @@ defmodule PrismWeb.ShellCanvasTest do
       # took its credential.
       assert %{id: id, state: :live} = canvas(view)
       assert row(id).state == "active"
-      assert %{^id => timer} = assigns(view).canvas_deadlines
+      assert %{^id => {timer, _token}} = assigns(view).canvas_deadlines
       assert is_integer(Process.read_timer(timer))
       refute MapSet.member?(assigns(view).canvas_ready, id)
 
@@ -2419,7 +2641,7 @@ defmodule PrismWeb.ShellCanvasTest do
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
       id = canvas(view).id
-      assert %{^id => timer} = deadlines = assigns(view).canvas_deadlines
+      assert %{^id => {timer, _token}} = deadlines = assigns(view).canvas_deadlines
       assert map_size(deadlines) == 1
 
       handshake!(view, id)
@@ -2429,33 +2651,101 @@ defmodule PrismWeb.ShellCanvasTest do
       assert is_integer(Process.read_timer(timer))
     end
 
-    test "a stale deadline, for a canvas no longer held, changes nothing", %{
-      conn: conn,
-      ctx: ctx,
-      user: user,
-      athanor: athanor
-    } do
-      two_canvases!(ctx, user, athanor)
-      view = shell!(conn)
-      send(view.pid, {:canvas_deadline, "frm_not_this_canvas"})
+    test "a canvas opened hidden runs no deadline; shown, it has the whole period from its showing, and is safe mode not_ready once that passes",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      view = opened_hidden!(conn, ctx, user, athanor)
+      %{id: id} = canvas(view)
+
+      # Opened hidden: the shell runs no ready deadline for it.
+      refute Map.has_key?(assigns(view).canvas_deadlines, id)
+
+      # Shown, however near the end of a period counted from its open that
+      # is: the whole period runs from its showing.
+      shown_at = System.monotonic_time(:millisecond)
+      render_click(view, "close_active_tincture", %{})
+      assert %{id: ^id, state: :live, visible: true} = canvas(view)
+      assert %{^id => {timer, token}} = assigns(view).canvas_deadlines
+      assert map_size(assigns(view).canvas_deadlines) == 1
+
+      # Its deadline, the only one held, falls due no sooner than the whole
+      # period from its showing, within the clocks' millisecond rounding.
+      assert fires_at(timer) >= shown_at + @ready_ms - 2
+
+      # Before then nothing sends it to safe mode: a deadline that is not
+      # the one held changes nothing.
+      send(view.pid, {:canvas_deadline, id, make_ref()})
       _ = render(view)
       assert assigns(view).safe_mode == nil
+      assert %{^id => {^timer, ^token}} = assigns(view).canvas_deadlines
+
+      # The whole period passes, and it is still not ready.
+      deadlines_pass!(view)
+      assert %{reason: :not_ready} = assigns(view).safe_mode
+      assert opened(view) == []
+      assert row(id).state == "revoked"
     end
 
-    test "a canvas that reports a failure is safe mode crashed", %{
-      conn: conn,
-      ctx: ctx,
-      user: user,
-      athanor: athanor
-    } do
+    test "a canvas never shown never goes to safe mode not_ready",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
+      view = opened_hidden!(conn, ctx, user, athanor)
+      %{id: id} = canvas(view)
+      refute Map.has_key?(assigns(view).canvas_deadlines, id)
+
+      # Time passes: every deadline the shell holds falls due.
+      deadlines_pass!(view)
+      assert assigns(view).safe_mode == nil
+
+      # Away to `work` and back, which shows the full frame over `home`
+      # again: the canvas is never shown, and no deadline is ever its.
+      render_hook(view, "switch_canvas", %{"canvas" => "work"})
+      assert %{state: :live, visible: true} = canvas(view, "work")
+      assert %{state: :frozen, visible: false} = canvas(view)
+      refute Map.has_key?(assigns(view).canvas_deadlines, id)
+
+      render_hook(view, "switch_canvas", %{"canvas" => "home"})
+      assert %{id: ^id, state: :frozen, visible: false} = canvas(view)
+      assert assigns(view).canvas_deadlines == %{}
+
+      deadlines_pass!(view)
+      assert assigns(view).safe_mode == nil
+      assert %{id: ^id, state: :frozen} = canvas(view)
+    end
+
+    test "a stale deadline, for a canvas no longer held or a timer cancelled since, changes nothing",
+         %{conn: conn, ctx: ctx, user: user, athanor: athanor} do
       two_canvases!(ctx, user, athanor)
       view = shell!(conn)
+      id = canvas(view).id
+      assert %{^id => held} = assigns(view).canvas_deadlines
 
-      canvas_verb!(view, canvas(view).id, :failed, %{"stage" => "runtime"})
+      send(view.pid, {:canvas_deadline, "frm_not_this_canvas", make_ref()})
+      # The shown canvas's frame, under a token other than the one held: a
+      # timer cancelled after it fired.
+      send(view.pid, {:canvas_deadline, id, make_ref()})
+      _ = render(view)
 
-      assert %{reason: :crashed} = assigns(view).safe_mode
-      assert opened(view) == []
-      assert render(view) =~ "Your canvas stopped working."
+      assert assigns(view).safe_mode == nil
+      assert %{^id => ^held} = assigns(view).canvas_deadlines
+    end
+
+    for stage <- ["load", "runtime"] do
+      @tag stage: stage
+      test "a canvas that reports a failure at #{stage} is safe mode crashed, its kept version offered",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, stage: stage} do
+        two_canvases!(ctx, user, athanor)
+        canvas!(ctx, "markets", "1.0.1")
+        versions!(ctx, "markets", %{working: "1.0.1", kept: "1.0.0"})
+        view = shell!(conn)
+        assert %{reference: %{version: "1.0.1"}} = canvas(view)
+
+        canvas_verb!(view, canvas(view).id, :failed, %{"stage" => stage})
+
+        assert %{reason: :crashed} = assigns(view).safe_mode
+        assert opened(view) == []
+        html = render(view)
+        assert html =~ "Your canvas stopped working."
+        assert html =~ ~s(phx-value-offer="kept")
+      end
     end
 
     test "the visible canvas's frame dying is safe mode crashed", %{
@@ -2496,6 +2786,92 @@ defmodule PrismWeb.ShellCanvasTest do
       assert %{state: :live, visible: true} = again = canvas(view)
       refute again.id == home.id
       assert row(again.id).state == "active"
+    end
+
+    # A canvas hidden by a switch, or frozen under a full frame over it,
+    # and shown again by the switch back or the full frame's close.
+    for hidden_by <- [:switch, :full_frame] do
+      @tag hidden_by: hidden_by
+      test "a canvas hidden by #{hidden_by} that reports ready is ready: no deadline, hidden or shown again, is safe mode",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
+        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
+        home = canvas(view)
+        assert %{state: :frozen, visible: false} = home
+        before = dropped(view)
+
+        canvas_verb!(view, home.id, :ready)
+
+        assert dropped(view) == before
+        assert MapSet.member?(assigns(view).canvas_ready, home.id)
+
+        # Hidden, it runs no deadline; shown again, ready, it is given none.
+        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+        show_again!(view, hidden_by)
+        assert %{id: id, state: :live, visible: true} = canvas(view)
+        assert id == home.id
+        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+
+        deadlines_pass!(view)
+        assert assigns(view).safe_mode == nil
+      end
+
+      @tag hidden_by: hidden_by
+      test "a canvas hidden by #{hidden_by} before it is ready runs no deadline while hidden, and shown again has the whole period from its showing",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
+        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
+        home = canvas(view)
+        refute Map.has_key?(assigns(view).canvas_deadlines, home.id)
+
+        # Time passes while it is hidden: whatever the shell holds falls due,
+        # and none of it is this canvas's. The canvas shown meanwhile, if
+        # any, is ready.
+        for %{key: {:canvas, _}, state: :live, id: shown} <- opened(view),
+            do: canvas_verb!(view, shown, :ready)
+
+        deadlines_pass!(view)
+        assert assigns(view).safe_mode == nil
+        assert %{state: :frozen} = canvas(view)
+
+        shown_at = System.monotonic_time(:millisecond)
+        show_again!(view, hidden_by)
+        assert %{id: id, state: :live, visible: true} = canvas(view)
+        assert id == home.id
+        assert %{^id => {timer, _token}} = assigns(view).canvas_deadlines
+
+        # Its deadline falls due no sooner than the whole period from its
+        # showing, within the clocks' millisecond rounding.
+        assert fires_at(timer) >= shown_at + @ready_ms - 2
+
+        deadlines_pass!(view)
+        assert %{reason: :not_ready} = assigns(view).safe_mode
+      end
+
+      @tag hidden_by: hidden_by
+      test "a canvas hidden by #{hidden_by} that reports a failure is died: nothing while hidden, safe mode crashed once shown",
+           %{conn: conn, ctx: ctx, user: user, athanor: athanor, hidden_by: hidden_by} do
+        view = hidden_canvas!(conn, ctx, user, athanor, hidden_by)
+        home = canvas(view)
+        before = dropped(view)
+
+        canvas_verb!(view, home.id, :failed, %{"stage" => "runtime"})
+
+        # Hidden, it acts on nothing and is held as it was.
+        assert dropped(view) == before
+        assert assigns(view).safe_mode == nil
+        assert MapSet.member?(assigns(view).canvas_died, home.id)
+        assert %{id: id, state: :frozen} = canvas(view)
+        assert id == home.id
+
+        # Shown again, it is safe mode crashed, as a failure while shown is,
+        # its kept version offered.
+        show_again!(view, hidden_by)
+        assert %{reason: :crashed} = assigns(view).safe_mode
+        assert opened(view) == []
+        assert row(home.id).state == "revoked"
+        html = render(view)
+        assert html =~ "Your canvas stopped working."
+        assert html =~ ~s(phx-value-offer="kept")
+      end
     end
 
     test "a canvas refused at open is safe mode", %{

@@ -1456,6 +1456,38 @@ defmodule Cyfr.DocsDriftTest do
     assert_action_table("### Canvases (`canvas` tool)", "canvas")
   end
 
+  # The table of what a canvas reads has a row for each stream a canvas may
+  # read, every one that declares a shape, and no other, and each row names
+  # every field of its stream's shape.
+  test "the guide's canvas stream table is the streams a canvas may read" do
+    guide = File.read!(@integration_guide)
+
+    [table] =
+      Regex.run(~r/^\| Stream \| Subject \| Each event \|\n\|[-|]+\|\n((?:\|.*\n)+)/m, guide,
+        capture: :all_but_first
+      ) || flunk("integration-guide.md has no canvas stream table")
+
+    rows =
+      for line <- String.split(table, "\n", trim: true) do
+        [name, _subject, event] = line |> String.trim("|") |> String.split("|")
+        {hd(backquoted(name)), backquoted(event)}
+      end
+
+    readable =
+      for %Prima.Provider.Stream{shape: shape, name: name} <- Sanctum.Catalog.streams(),
+          not is_nil(shape),
+          into: %{},
+          do: {name, Map.keys(shape["fields"] || %{})}
+
+    assert Enum.sort(Enum.map(rows, &elem(&1, 0))) == Enum.sort(Map.keys(readable)),
+           "integration-guide.md's canvas streams are not the streams a canvas may read, " <>
+             inspect(Enum.sort(Map.keys(readable)))
+
+    for {name, named} <- rows, field <- readable[name] do
+      assert field in named, "integration-guide.md's #{name} row does not name #{field}"
+    end
+  end
+
   # component-guide's CLI-to-MCP table names, for each command, the tool
   # and the actions a formula calls in its place: every pair is one the
   # catalog serves, and every argument the key-args column backquotes as a
@@ -1495,10 +1527,10 @@ defmodule Cyfr.DocsDriftTest do
   end
 
   # A feed's press is an external operation and nothing narrower: the shell
-  # sends a canvas's control to it, and the CLI and the API reach it as any
+  # sends a canvas's press to it, and the CLI and the API reach it as any
   # external operation, never from a chain. So the tincture guide says that
-  # from a canvas only the person's press runs it, and the integration
-  # guide's press row says who reaches it.
+  # from a canvas only a press the shell forwards on the person's own input
+  # runs it, and the integration guide's press row says who reaches it.
   test "a feed's press is an external operation" do
     %Prima.Operation{planes: planes} = Map.fetch!(operations("feed"), "press")
 
@@ -1512,14 +1544,66 @@ defmodule Cyfr.DocsDriftTest do
           do: row
 
     assert File.read!(Path.join(@repo_root, "tincture-guide.md")) =~
-             "From a canvas, a feed's action runs only on the person's press of a control",
-           "tincture-guide.md does not say that from a canvas only the person's press runs " <>
-             "a feed's action"
+             "From a canvas, a feed's action runs only on a press the shell forwards within " <>
+               "moments of the person's own input, never from a script on its own",
+           "tincture-guide.md does not say that from a canvas only a press forwarded on the " <>
+             "person's own input runs a feed's action"
 
     assert [row] = press, "integration-guide.md's feed table has no single `press` row"
 
     assert List.last(row) =~ "the CLI and the API reach it",
            "integration-guide.md's `press` row does not say the CLI and the API reach it"
+  end
+
+  # The bridge forwards a canvas's `open` or `press` while the shell holds
+  # the person's activation and the canvas's frame is focused: neither
+  # names the input as the canvas's, so a click elsewhere in the shell or
+  # in a sibling frame can precede it. What the canvas skill, the guides
+  # and the SDK's `open` and `press` say of it is that much and no more;
+  # and no text of the canvas's rules says a canvas runs only while shown,
+  # since a hidden canvas's script runs on and only its reads and acts stop.
+  test "a canvas's open and press are said to pass only within moments of the person's own input" do
+    said = "within moments of the person's own input, never from a script on its own"
+
+    claims = [
+      "click or key in the page",
+      "click handler",
+      "click or key press of theirs",
+      "person's click or key",
+      "person's press of a",
+      "person's presses of",
+      "person's own press",
+      "runs only while"
+    ]
+
+    for file <- [
+          "seed/aqua/skills/canvas/SKILL.md",
+          "tincture-guide.md",
+          "integration-guide.md",
+          "apps/cyfr/assets/js/sdk/client.js"
+        ] do
+      # Read as prose: line breaks, and a comment's leading `*`, are spaces.
+      text =
+        Path.join(@repo_root, file)
+        |> File.read!()
+        |> String.replace(~r/[ \t]*\n[ \t]*(\*[ \t]+)?/, " ")
+
+      assert text =~ said, "#{file} does not say a canvas's open and press pass only #{said}"
+
+      for claim <- claims,
+          do:
+            refute(text =~ claim, "#{file} says a canvas's open or press comes from \"#{claim}\"")
+    end
+
+    rules =
+      Path.join(@repo_root, "apps/cyfr/lib/compendium/tincture/rules.ex")
+      |> File.read!()
+      |> String.replace(~r/[ \t]*\n[ \t]*(#[ \t]+)?/, " ")
+
+    refute rules =~ ~r/runs only while/, "the canvas's rules say a canvas runs only while shown"
+
+    assert rules =~ "an `@import`, which `style-src` bounds",
+           "the canvas page policy's documentation does not say style-src bounds @import"
   end
 
   # ==========================================================================
@@ -1778,7 +1862,6 @@ defmodule Cyfr.DocsDriftTest do
       "|---|---|",
       "| `frame` | #{list.(keys.(%Prima.Manifest.Tincture.Frame{}))} |",
       "| `frame.placement` | one of #{list.(Compendium.Tincture.Rules.placements())} |",
-      "| `canvas` | #{list.(keys.(%Prima.Manifest.Tincture.Canvas{}))} |",
       "| `streams[]` | #{list.(keys.(%Prima.Manifest.Tincture.Stream{name: ""}))} |",
       "| `actions[]` | an operation name, `tool.action` |"
     ]
@@ -1799,8 +1882,9 @@ defmodule Cyfr.DocsDriftTest do
         "| `cyfr.#{name}(#{args})` | `POST #{Prima.TinctureWire.route(kind)}` |"
       end
 
+    # Every frame's verbs; a canvas's own are the guide's canvas section's.
     verbs =
-      for verb <- Prima.TinctureWire.verbs(),
+      for verb <- Prima.TinctureWire.verbs() -- Prima.TinctureWire.canvas_verbs(),
           do:
             "| `cyfr.#{verb}(#{Map.get(@sdk_verb_args, verb, "")})` | the shell's port, `#{verb}` |"
 
@@ -1845,45 +1929,14 @@ defmodule Cyfr.DocsDriftTest do
       |> List.flatten()
       |> Enum.sort()
 
+    # `failed` is the SDK's own report of a page that fails before it is
+    # ready, never a call; `on` hears what the shell sends a canvas.
     wire =
       Enum.map(Prima.TinctureWire.kinds(), &elem(Map.fetch!(@sdk_requests, &1), 0)) ++
-        Enum.map(Prima.TinctureWire.verbs(), &Atom.to_string/1)
+        Enum.map(Prima.TinctureWire.verbs() -- [:failed], &Atom.to_string/1) ++ ["on"]
 
     assert methods == Enum.sort(wire),
            "the SDK's calls #{inspect(methods)} are not the wire's #{inspect(Enum.sort(wire))}"
-  end
-
-  # The elements a canvas's tree may name are the toolkit's `ELEMENTS`
-  # (`elements.js`), which its own tests hold to the grammar (`tree.js`).
-  # The guide lists them, one per line and in that order, in a block the
-  # Artisan role does not carry.
-  test "the tincture guide's canvas elements are the toolkit's" do
-    source = File.read!(Path.join(@repo_root, "apps/cyfr/assets/js/toolkit/elements.js"))
-
-    [_, list] =
-      Regex.run(~r/^export const ELEMENTS = Object\.freeze\(\[(.*?)\]\)/ms, source) ||
-        flunk("elements.js declares no `export const ELEMENTS = Object.freeze([…])`")
-
-    elements = ~r/"([^"]+)"/ |> Regex.scan(list, capture: :all_but_first) |> List.flatten()
-
-    assert elements != [], "elements.js's ELEMENTS names no element"
-
-    # Every entry is a double-quoted name: anything else in the list would
-    # be an element this reading drops, and the guide would pass without it.
-    assert Regex.replace(~r/"[^"]+"|,|\s/, list, "") == "",
-           "elements.js's ELEMENTS holds something other than double-quoted names"
-
-    expected = Enum.map_join(elements, "\n", &"- `#{&1}`")
-    guide = File.read!(Path.join(@repo_root, "tincture-guide.md"))
-
-    assert tincture_block(guide, "canvas-elements") == expected,
-           """
-           tincture-guide.md's canvas-elements list is not the toolkit's ELEMENTS (or it has no block). It reads:
-
-           <!-- tincture:canvas-elements -->
-           #{expected}
-           <!-- /tincture:canvas-elements -->
-           """
   end
 
   # A layout is published only through the layout tool: `layout.edit`
@@ -2036,32 +2089,6 @@ defmodule Cyfr.DocsDriftTest do
     assert paragraph =~ "A person has one layout in each athanor.",
            "tincture-guide.md's layout paragraph does not say a person has one layout in each " <>
              "athanor"
-  end
-
-  # The toolkit's module worker fails the canvas on an error the module
-  # throws or a rejection nothing handles, and the shell takes that failure
-  # as safe mode `crashed`. The guide's toolkit section says so, so a canvas
-  # author catches a refused stream rather than losing the canvas to it.
-  test "the tincture guide says an uncaught error in a canvas module fails the canvas" do
-    worker = File.read!(Path.join(@repo_root, "apps/cyfr/assets/js/toolkit/worker.js"))
-
-    for event <- ["error", "unhandledrejection"] do
-      assert worker =~ ~s{listen("#{event}", () => fail("runtime"))},
-             "the toolkit's module worker does not fail the canvas on #{event}; say what it " <>
-               "does in tincture-guide.md's toolkit section"
-    end
-
-    [_, after_heading] =
-      String.split(tincture_guide(), "### The toolkit and the tree\n", parts: 2)
-
-    [section | _] = String.split(after_heading, "\n### ", parts: 2)
-
-    assert section =~
-             "An error the module does not catch fails the canvas: a throw out of its code, " <>
-               "or a rejection nothing handles, such as a refused `canvas.stream` without a " <>
-               "`catch`, puts the shell into safe mode (`crashed`).",
-           "tincture-guide.md's toolkit section does not say an uncaught error in the module " <>
-             "fails the canvas into safe mode"
   end
 
   defp tincture_guide, do: File.read!(Path.join(@repo_root, "tincture-guide.md"))

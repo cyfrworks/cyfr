@@ -262,7 +262,7 @@ defmodule CyfrWeb.RouterTest do
       end
     end
 
-    test "a canvas's page and data route are the canvas wire's paths, and nothing else is routed under them" do
+    test "a canvas's page, its SDK and its data route are the wire's paths, and nothing else is routed under them" do
       router = Boundaries.router()
       credential = "c4nv4sR0uteCredential0123456789"
       frame = "frm_router_canvas"
@@ -271,19 +271,32 @@ defmodule CyfrWeb.RouterTest do
         Phoenix.Router.route_info(
           router,
           "GET",
-          Prima.CanvasWire.page_path(credential, frame),
+          Prima.TinctureWire.page_path(credential, frame),
           "example.com"
         )
 
       assert %{route: "/_c/v1/:credential/:frame_id", pipe_through: [:tincture_asset]} = page
       assert page.path_params == %{"credential" => credential, "frame_id" => frame}
 
+      # The SDK's one path is its own route, which a page's path never is.
+      sdk =
+        Phoenix.Router.route_info(
+          router,
+          "GET",
+          Emissary.Web.TinctureAssets.canvas_sdk_path(),
+          "example.com"
+        )
+
+      assert %{route: "/_c/v1/sdk/:file", pipe_through: [:tincture_asset]} = sdk
+      refute Prima.TinctureUrl.credential?("sdk")
+      refute Prima.TinctureWire.frame_id?(sdk.path_params["file"])
+
       for verb <- ["POST", "OPTIONS"] do
         data =
           Phoenix.Router.route_info(
             router,
             verb,
-            Prima.CanvasWire.stream_path(frame),
+            Prima.TinctureWire.stream_path(frame),
             "example.com"
           )
 
@@ -302,13 +315,13 @@ defmodule CyfrWeb.RouterTest do
       # A canvas path has no invoke or action route, and a page path no
       # other shape.
       for {verb, path} <- [
-            {"POST", Prima.CanvasWire.data_path(frame) <> "invoke"},
-            {"POST", Prima.CanvasWire.data_path(frame) <> "action"},
-            {"GET", Prima.CanvasWire.stream_path(frame)},
-            {"POST", Prima.CanvasWire.stream_path(frame) <> "/more"},
-            {"GET", Prima.CanvasWire.page_prefix() <> credential},
-            {"GET", Prima.CanvasWire.page_path(credential, frame) <> "/more"},
-            {"POST", Prima.CanvasWire.page_path(credential, frame)}
+            {"POST", Prima.TinctureWire.data_path(frame) <> "invoke"},
+            {"POST", Prima.TinctureWire.data_path(frame) <> "action"},
+            {"GET", Prima.TinctureWire.stream_path(frame)},
+            {"POST", Prima.TinctureWire.stream_path(frame) <> "/more"},
+            {"GET", Prima.TinctureWire.page_prefix() <> credential},
+            {"GET", Prima.TinctureWire.page_path(credential, frame) <> "/more"},
+            {"POST", Prima.TinctureWire.page_path(credential, frame)}
           ] do
         assert Phoenix.Router.route_info(router, verb, path, "example.com") == :error,
                "#{verb} #{path} is routed"

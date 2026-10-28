@@ -8,7 +8,7 @@ defmodule Prism.FramesTest do
   are visible, which credential transitions visibility asks for (a hidden
   canvas frozen whatever it declares, a validation frame never), to which
   frame a message is attributed, the one-time handshake and a canvas's
-  boot, and the signals the view sends. Only the frames' own open path
+  handshake reply, and the signals the view sends. Only the frames' own open path
   makes a canvas or validation frame. The effects, through
   `Sanctum.TinctureAuth`, are `PrismWeb.ShellFrameTest`'s,
   `PrismWeb.ShellCanvasTest`'s and `Prism.CanvasValidationTest`'s.
@@ -54,7 +54,7 @@ defmodule Prism.FramesTest do
         background: false,
         actions: [],
         arranged: false,
-        boot: nil
+        canvas: nil
       },
       Map.new(fields)
     )
@@ -142,7 +142,7 @@ defmodule Prism.FramesTest do
         manifest: %{
           "tincture" => %{
             "frame" => %{"placement" => "canvas"},
-            "canvas" => %{"module" => "canvas.js", "toolkit" => 1}
+            "entry" => "index.html"
           }
         }
       }
@@ -371,42 +371,63 @@ defmodule Prism.FramesTest do
       assert Frames.hand_over(t, 42) == :error
     end
 
-    test "a canvas or validation frame is handed its boot, the bearer inside it, once; any other frame its bearer" do
-      boot = %{"mode" => "live", "toolkit" => 1, "streams" => []}
+    test "a canvas or validation frame is handed the canvas handshake, once; any other frame its bearer" do
+      streams = [%{"name" => "runs.changes", "subject" => nil}]
+
+      block = fn id, mode ->
+        %{"mode" => mode, "data_path" => Prima.TinctureWire.data_path(id), "streams" => streams}
+      end
 
       t =
         held([
           canvas_frame(:canvas, "home",
-            id: "frm_canvas_boot",
+            id: "frm_canvas_hand",
             bearer: "canvas-bearer",
-            boot: boot
+            canvas: block.("frm_canvas_hand", "live")
           ),
           canvas_frame(:validation, "home",
-            id: "frm_trial_boot",
+            id: "frm_trial_hand",
             bearer: "trial-bearer",
-            boot: %{boot | "mode" => "validation"}
+            canvas: block.("frm_trial_hand", "validation")
           ),
-          launch("a", id: "frm_launch_boot", bearer: "launch-bearer", boot: boot)
+          launch("a",
+            id: "frm_launch_hand",
+            bearer: "launch-bearer",
+            canvas: block.("frm_launch_hand", "live")
+          )
         ])
 
-      assert {:ok, %{boot: handed}, %{key: {:canvas, "home"}}, t} =
-               Frames.handshake(t, "frm_canvas_boot")
+      assert {:ok, handed, %{key: {:canvas, "home"}}, t} =
+               Frames.handshake(t, "frm_canvas_hand")
 
-      assert handed == Map.put(boot, "credential", "canvas-bearer")
+      # Exactly the wire's canvas handshake: the credential and the block.
+      assert handed == %{
+               "credential" => "canvas-bearer",
+               "canvas" => block.("frm_canvas_hand", "live")
+             }
+
+      assert handed ==
+               Prima.TinctureWire.canvas_handshake(
+                 "frm_canvas_hand",
+                 "canvas-bearer",
+                 "live",
+                 streams
+               )
+
       assert Frames.get(t, {:canvas, "home"}).bearer == nil
-      assert Frames.get(t, {:canvas, "home"}).boot == boot
+      assert Frames.get(t, {:canvas, "home"}).canvas == block.("frm_canvas_hand", "live")
 
-      assert {:ok, %{boot: %{"mode" => "validation", "credential" => "trial-bearer"}}, _, t} =
-               Frames.handshake(t, "frm_trial_boot")
+      assert {:ok, %{"credential" => "trial-bearer", "canvas" => %{"mode" => "validation"}}, _, t} =
+               Frames.handshake(t, "frm_trial_hand")
 
-      # A boot is a canvas's alone: a frame under any other key is handed
-      # its bearer and nothing else.
+      # A canvas block is a canvas's alone: a frame under any other key is
+      # handed its bearer and nothing else.
       assert {:ok, %{credential: "launch-bearer"} = reply, _, t} =
-               Frames.handshake(t, "frm_launch_boot")
+               Frames.handshake(t, "frm_launch_hand")
 
       assert Map.keys(reply) == [:credential]
 
-      for id <- ~w(frm_canvas_boot frm_trial_boot frm_launch_boot frm_unknown_one),
+      for id <- ~w(frm_canvas_hand frm_trial_hand frm_launch_hand frm_unknown_one),
           do: assert(Frames.handshake(t, id) == :error)
     end
 

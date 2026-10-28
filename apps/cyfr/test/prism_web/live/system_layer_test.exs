@@ -5095,11 +5095,11 @@ defmodule PrismWeb.SystemLayerTest do
               "version" => version,
               "tincture" => %{
                 "frame" => %{"placement" => "canvas"},
-                "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+                "entry" => "index.html",
                 "streams" => Map.get(streams, version, [])
               }
             },
-            files: [{"canvas.js", "// markets #{version}"}]
+            files: [{"index.html", "<html><head></head><body>markets #{version}</body></html>"}]
           )
 
         {:ok, _} =

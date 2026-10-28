@@ -5,7 +5,7 @@ defmodule Emissary.Web do
   @moduledoc """
   Emissary's HTTP adapters' `use` definitions: MCP, the HTTP API and its
   event streams, health, inbound webhooks, the vault's OAuth callback,
-  tinctures' served files and data routes, a canvas's host page
+  tinctures' served files and data routes, a canvas's page
   (`Emissary.Web.CanvasController`), the identity directory's endpoints
   and the restore ingress. The device channel
   (`Emissary.Web.DeviceChannel`) is the socket the endpoint mounts beside
@@ -14,7 +14,7 @@ defmodule Emissary.Web do
       use Emissary.Web, :controller
 
   The adapters answer JSON and server-sent events, and serve pages as
-  well: a tincture's entry page and files, a canvas's host page, and the
+  well: a tincture's entry page and files, a canvas's page, and the
   no-session pages `CyfrWeb.MinimalPage` renders. None renders a template or builds a
   path, so a controller here takes no verified routes.
   Content negotiation is each route's pipeline's `accepts`, not the

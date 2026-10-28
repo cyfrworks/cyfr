@@ -4,7 +4,7 @@
 defmodule Emissary.Router do
   @moduledoc """
   Emissary's routes, with the pipelines they pass through: MCP, the
-  vault's OAuth grant callback, tincture serving, a canvas's host page and
+  vault's OAuth grant callback, tincture serving, a canvas's page and
   the tincture data routes (a canvas's among them), health, the
   execution-events stream, inbound webhooks, the identity directory, a
   certified device's renewal and the restore ingress.
@@ -259,7 +259,7 @@ defmodule Emissary.Router do
           metadata: %{auth: :frame_credential}
 
         # A canvas's one data route, under its open's own frame id
-        # (`Prima.CanvasWire.stream_path/1`): a canvas reads its streams
+        # (`Prima.TinctureWire.stream_path/1`): a canvas reads its streams
         # here and nowhere else, and nothing else is routed under `/o/`.
         post "/o/:frame_id/stream", TinctureDataController, :canvas_stream,
           metadata: %{auth: :frame_credential}
@@ -283,7 +283,7 @@ defmodule Emissary.Router do
       end
 
       # A private tincture version's files, under the asset credential in
-      # their path (`Prima.TinctureUrl`), and a canvas's host page under the
+      # their path (`Prima.TinctureUrl`), and a canvas's page under the
       # same credential. The scrub plug redacts it from the request path,
       # and the routes log no dispatch, whose parameters would carry it.
       scope "/", Emissary.Web do
@@ -293,8 +293,16 @@ defmodule Emissary.Router do
           metadata: %{auth: :tincture_handler_auth},
           log: false
 
-        # A canvas's host page, under the version's asset credential and
-        # the open's frame id (`Prima.CanvasWire.page_path/2`), redacted and
+        # The SDK a canvas page loads, at the one path its digest names
+        # (`Emissary.Web.TinctureAssets.canvas_sdk_path/0`). Declared before
+        # the page, which it never shadows: `sdk` is no asset credential and
+        # a file name with a `.` is no frame id.
+        get "/_c/v1/sdk/:file", CanvasController, :sdk,
+          metadata: %{auth: :tincture_handler_auth},
+          log: false
+
+        # A canvas's page, under the version's asset credential and the
+        # open's frame id (`Prima.TinctureWire.page_path/2`), redacted and
         # unlogged as the served files are.
         get "/_c/v1/:credential/:frame_id", CanvasController, :show,
           metadata: %{auth: :tincture_handler_auth},

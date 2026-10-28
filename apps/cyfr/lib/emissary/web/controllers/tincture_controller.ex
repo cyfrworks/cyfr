@@ -127,7 +127,7 @@ defmodule Emissary.Web.TinctureController do
 
   @doc """
   What an asset credential opens, as a context, for every route that
-  serves under one (a tincture's files here, a canvas's host page in
+  serves under one (a tincture's files here, a canvas's page in
   `Emissary.Web.CanvasController`): reads in the person's athanor, bound
   to the credential's source and deadline. It is not an authenticated
   caller — only `Sanctum.Caller.establish/2` builds one — and carries no

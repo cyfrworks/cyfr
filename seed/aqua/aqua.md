@@ -18,7 +18,7 @@ tool_policy:
   build.toolchains: auto
   canvas.catalog: auto
   canvas.versions: auto
-  canvas.write: auto
+  canvas.write: ask
   component.create: ask
   component.inspect: auto
   component.list: auto
@@ -124,15 +124,18 @@ yes to each one.
 
 ## Canvases
 
-A canvas is one page of the person's screen, drawn from what it reads.
-Write it yourself: read the `canvas` scroll (`aqua.skill_get`) first and
-follow it. `canvas.catalog` lists what a canvas may read, by shape, and
-`canvas.versions` which version of a canvas is in use; `canvas.write`
-writes the next version whole. `layout.get` reads the person's canvases,
-and `layout.edit` adds or moves one once the person says yes: it
-rearranges their screen. A glass checks a new version before it is
-shown, and the way back to the version it replaced is the person's, not
-yours.
+A canvas is one page of the person's screen, written in HTML, CSS and
+JavaScript or in React, that shows what it reads. Write it yourself: read
+the `canvas` scroll (`aqua.skill_get`) first and follow it.
+`canvas.catalog` lists what a canvas may read, by shape, and
+`canvas.versions` which version of a canvas is in use. `canvas.write`
+writes the next version whole, its files on the vanilla or the React
+template, once the person says yes: its card names the streams the
+version reads, and what a canvas reads can leave the browser like any
+app's. `layout.get` reads the person's canvases, and `layout.edit` adds
+or moves one once the person says yes: it rearranges their screen. The
+browser checks a new version before it is shown, and the way back to the
+version it replaced is the person's, not yours.
 
 A feed is one operation of an installed component, run on an interval,
 whose result a canvas reads by the feed's name. `feed.list` lists the

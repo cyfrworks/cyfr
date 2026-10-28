@@ -7,7 +7,10 @@ defmodule CyfrWeb.ApiErrorTest do
   its refusal as `code`, a public sentence as `message`, the class→HTTP
   status table, the 401 challenge, and `data` for a consent signal. A
   pending confirmation's 428 is the shared vector's
-  (`tests/fixtures/confirmation.json`'s `signal`), byte for byte.
+  (`tests/fixtures/confirmation.json`'s `signal`), byte for byte; and each
+  refusal of `tests/fixtures/tincture_wire.json`'s `stream_rejections` is
+  answered at the status that vector gives it, a server error exactly
+  where the SDK reads it as no answer.
   """
 
   use ExUnit.Case, async: true
@@ -17,6 +20,7 @@ defmodule CyfrWeb.ApiErrorTest do
   alias CyfrWeb.ApiError
 
   @vectors Path.expand("../../../../../tests/fixtures/confirmation.json", __DIR__)
+  @wire Path.expand("../../../../../tests/fixtures/tincture_wire.json", __DIR__)
 
   defp signal_vector, do: @vectors |> File.read!() |> Jason.decode!() |> Map.fetch!("signal")
 
@@ -55,6 +59,29 @@ defmodule CyfrWeb.ApiErrorTest do
     assert Map.keys(@statuses) |> Enum.sort() == Enum.sort(Prima.Refusal.classes())
 
     for {class, status} <- @statuses, do: assert(ApiError.status(class) == status)
+  end
+
+  # The SDK rejects a stream open answered with a server error as one that
+  # got no answer, and any other refusal as itself: each refusal the
+  # vectors answer an open with is at its class's status here, a 5xx just
+  # where the SDK's reading is `unavailable`.
+  test "each stream rejection's refusal is answered at the status the wire vectors give it" do
+    %{"cases" => cases} =
+      @wire |> File.read!() |> Jason.decode!() |> Map.fetch!("stream_rejections")
+
+    refusals =
+      for %{"answer" => %{"body" => _} = answer, "rejects" => r} <- cases, do: {answer, r}
+
+    assert Enum.any?(refusals, fn {%{"status" => status}, _} -> status >= 500 end)
+    assert Enum.any?(refusals, fn {%{"status" => status}, _} -> status < 500 end)
+
+    for {%{"status" => status, "body" => %{"error" => %{"class" => class}}}, rejects} <- refusals do
+      assert ApiError.status(String.to_existing_atom(class)) == status, class
+
+      assert status >= 500 ==
+               (rejects["class"] == "unavailable" and not is_map_key(rejects, "stage")),
+             class
+    end
   end
 
   test "a refusal answers at its class's status with its class and sentence" do

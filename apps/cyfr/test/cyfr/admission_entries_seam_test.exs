@@ -405,7 +405,7 @@ defmodule Cyfr.AdmissionEntriesSeamTest do
       conn,
       :stream_open,
       %{stream: "mcp_servers.changes", subject: nil},
-      Prima.CanvasWire.stream_path("frm_seam_" <> unique("canvas"))
+      Prima.TinctureWire.stream_path("frm_seam_" <> unique("canvas"))
     )
   end
 

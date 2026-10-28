@@ -49,8 +49,8 @@ defmodule PrismWeb.CanvasLive do
   apps and floating frames cover of it, and keeps the last columns drawn
   while the socket is down. A column takes its geometry by
   `data-canvas-column`. A canvas or validation frame carries
-  `data-frame-wire="canvas"`, so its bridge speaks `Prima.CanvasWire` to
-  it.
+  `data-frame-kind="canvas"`, so its bridge hands it the canvas's
+  handshake and forwards its messages as a canvas's.
 
   An iframe is never moved in the document, since a moved frame reloads:
   no patch removes or re-inserts a held frame's iframe or any element
@@ -229,7 +229,7 @@ defmodule PrismWeb.CanvasLive do
             phx-hook="IframeBridge"
             data-frame-id={frame.id}
             data-frame-state={frame.state}
-            data-frame-wire={if Frames.canvas_key?(frame.key), do: "canvas"}
+            data-frame-kind={if Frames.canvas_key?(frame.key), do: "canvas"}
             inert={frame.state == :frozen or match?({:validation, _}, frame.key)}
           />
           <div

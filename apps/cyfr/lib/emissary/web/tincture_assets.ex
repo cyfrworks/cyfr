@@ -46,11 +46,14 @@ defmodule Emissary.Web.TinctureAssets do
   origin. The entry page is also given the SDK, compile-embedded so it
   never round-trips to storage, as an inline script under the nonce.
 
-  A canvas holds no page here: its entry is its module, served as the
-  script it is, its page is CYFR's host page
-  (`Emissary.Web.CanvasController`), and an HTML file of a canvas version
-  is not found. A version whose placement cannot be read, its declaration
-  refused by today's rules, is served as a canvas version is.
+  A canvas holds no page here: its page is its entry served at its own
+  route under the canvas's policy (`Emissary.Web.CanvasController`, which
+  assembles it with `canvas_page/5`), and an HTML file of a canvas version
+  is not found here, so no page of a canvas is ever served under the
+  ordinary policy. A version whose placement cannot be read, its
+  declaration refused by today's rules, is served as a canvas version is.
+  The SDK a canvas page loads is served at one path named by its digest
+  (`canvas_sdk_path/0`), since no inline script runs in a canvas page.
   """
 
   import Plug.Conn
@@ -60,6 +63,10 @@ defmodule Emissary.Web.TinctureAssets do
   # arca:bypass-ok=C — compile-time embed of the SDK source. Runtime never
   # reads from disk for this; mix recompiles the module if the file changes.
   @sdk_source File.read!(@sdk_path)
+  @sdk_digest :sha256 |> :crypto.hash(@sdk_source) |> Base.encode16(case: :lower)
+
+  # The `<head>` start tag an entry page's injected tags follow.
+  @head_re ~r/(<head(?:\s[^>]*)?>)/
 
   # Compressed on the fly, so bounded: a larger file is sent as it is
   # stored rather than holding a request's CPU for it.
@@ -86,8 +93,7 @@ defmodule Emissary.Web.TinctureAssets do
   and its placement is not `canvas`. Any other version — a canvas, or one
   whose declaration today's rules refuse — serves no document: its `.html`
   file answers the not-found refusal below, as an `.htm` file of any
-  version does, and every other file, a canvas's module included, is
-  served as its type.
+  version does, and every other file is served as its type.
 
   A reserved file, a dotfile, an unsafe path, a type the rules do not
   serve and an absent file all answer the same JSON `not_found` refusal
@@ -143,7 +149,7 @@ defmodule Emissary.Web.TinctureAssets do
   The endpoint's origin as a tincture document's policy names it, from the
   deployment's origin (`Sanctum.origin/0`): `scheme://host[:port]`, an IPv6
   host in brackets, the port only when it is not the scheme's own. A
-  canvas's host page names it too (`Emissary.Web.CanvasController`).
+  canvas's page names it too (`Emissary.Web.CanvasController`).
   """
   @spec endpoint_origin() :: String.t()
   def endpoint_origin do
@@ -153,6 +159,50 @@ defmodule Emissary.Web.TinctureAssets do
     if port && port != URI.default_port(scheme),
       do: "#{scheme}://#{host}:#{port}",
       else: "#{scheme}://#{host}"
+  end
+
+  # ---------------------------------------------------------------------------
+  # A canvas's page and the SDK it loads
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  The one path the SDK a canvas page loads is served at:
+  `/_c/v1/sdk/<sha-256 of its bytes, lowercase hex>.js`, under the canvas
+  page prefix (`Prima.TinctureWire.page_prefix/0`). A canvas page's policy
+  names exactly this path (`Compendium.tincture_canvas_page_csp/1`), and
+  new bytes are a new path.
+  """
+  @spec canvas_sdk_path() :: String.t()
+  def canvas_sdk_path, do: Prima.TinctureWire.page_prefix() <> "sdk/" <> @sdk_digest <> ".js"
+
+  @doc "The SDK's bytes, as `canvas_sdk_path/0` serves them: the bundle every tincture page holds."
+  @spec canvas_sdk() :: binary()
+  def canvas_sdk, do: @sdk_source
+
+  @doc """
+  A canvas's page: CYFR's prefix, `<!doctype html>`, `<base href="base">`
+  and `<script src="sdk_src"></script>` in that order and with no nonce,
+  since no inline script runs in a canvas page; then the version's entry
+  document (`entry`, its path inside the version), read through `Arca`
+  under `ctx` as every served file is, byte for byte as published.
+  Nothing of the entry is read or matched, so no markup of its own moves
+  where CYFR's tags land (`Emissary.Web.CanvasController` says how the
+  browser parses the two together). `:error` when the entry cannot be read.
+  """
+  @spec canvas_page(Sanctum.Context.t(), map(), String.t(), String.t(), String.t()) ::
+          {:ok, binary()} | :error
+  def canvas_page(%Sanctum.Context{} = ctx, tincture, entry, base, sdk_src)
+      when is_binary(entry) and is_binary(base) and is_binary(sdk_src) do
+    case Arca.get(Sanctum.Context.actor(ctx), tincture.segments ++ String.split(entry, "/")) do
+      {:ok, content} -> {:ok, canvas_prefix(base, sdk_src) <> content}
+      {:error, _} -> :error
+    end
+  end
+
+  defp canvas_prefix(base, sdk_src) do
+    "<!doctype html>" <>
+      ~s(<base href="#{Plug.HTML.html_escape(base)}">) <>
+      ~s(<script src="#{Plug.HTML.html_escape(sdk_src)}"></script>)
   end
 
   # ---------------------------------------------------------------------------
@@ -176,10 +226,8 @@ defmodule Emissary.Web.TinctureAssets do
   end
 
   # Whether `path` is the tincture's entry page. Only a version that holds
-  # pages has one: a canvas's entry (`Compendium.tincture_entry/1`) is its
-  # module, a script its host page's toolkit imports, and a version whose
-  # placement cannot be read is held as a canvas, so either is served as
-  # its type.
+  # pages has one: a canvas's entry is served at its own route, and a
+  # version whose placement cannot be read is held as a canvas.
   defp entry_document?(tincture, path),
     do: Compendium.tincture_entry(tincture) == {:ok, path} and holds_pages?(tincture)
 
@@ -308,17 +356,15 @@ defmodule Emissary.Web.TinctureAssets do
     end
   end
 
-  @head_re ~r/(<head(?:\s[^>]*)?>)/
+  # The tags follow the head tag through a function, never a replacement
+  # string: a string's `\\` and `\\N` are escapes, and the SDK's source
+  # holds backslashes that must reach the page as they are.
   defp inject_head_tags(html, href, nonce) do
     escaped_href = Plug.HTML.html_escape(href)
 
     injection =
-      "\\1\n<base href=\"#{escaped_href}\">\n<script nonce=\"#{nonce}\">#{@sdk_source}</script>"
+      "\n<base href=\"#{escaped_href}\">\n<script nonce=\"#{nonce}\">#{@sdk_source}</script>"
 
-    if Regex.match?(@head_re, html) do
-      Regex.replace(@head_re, html, injection, global: false)
-    else
-      html
-    end
+    Regex.replace(@head_re, html, &(&1 <> injection), global: false)
   end
 end

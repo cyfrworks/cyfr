@@ -655,24 +655,45 @@ defmodule Compendium.Scaffold do
   # React Tincture Templates
   # ============================================================================
 
-  defp react_tincture_files(base_path, name, version, template) do
-    [
-      {base_path ++ [Compendium.ComponentPath.manifest_name()],
-       tincture_manifest_for(name, version, template)},
-      {base_path ++ ["package.json"],
-       package_json(name, "tsc -b && vite build", @react_packages)},
-      {base_path ++ [@lockfile], lockfile(name, @react_packages)},
-      {base_path ++ ["tsconfig.json"], react_tsconfig()},
-      {base_path ++ ["vite.config.ts"], react_vite_config()},
-      {base_path ++ ["index.html"], react_index_html(name)},
-      {base_path ++ ["src", "main.tsx"], react_main_tsx()},
-      {base_path ++ ["src", "App.tsx"], react_app_tsx(name)},
-      {base_path ++ ["src", "index.css"], tincture_style_css()},
-      {base_path ++ Compendium.Tincture.default_icon(), placeholder_icon_svg()},
-      {base_path ++ Compendium.Tincture.default_preview(), placeholder_preview_svg()}
-    ]
+  @doc """
+  The React template's own files for a tincture named `name`, by relative
+  path: its package manifest, the lockfile that pins it, its TypeScript
+  configuration and its Vite configuration. Every React scaffold ships
+  them, and the `canvas` tool builds a React canvas with exactly these
+  (`Compendium.Canvas`), so its packages are the ones this lockfile pins.
+  """
+  @spec react_template_files(String.t()) :: %{String.t() => String.t()}
+  def react_template_files(name) when is_binary(name) do
+    %{
+      "package.json" => package_json(name, "tsc -b && vite build", @react_packages),
+      @lockfile => lockfile(name, @react_packages),
+      "tsconfig.json" => react_tsconfig(),
+      "vite.config.ts" => react_vite_config()
+    }
   end
 
+  defp react_tincture_files(base_path, name, version, template) do
+    own = for {path, content} <- react_template_files(name), do: {base_path ++ [path], content}
+
+    [
+      {base_path ++ [Compendium.ComponentPath.manifest_name()],
+       tincture_manifest_for(name, version, template)}
+    ] ++
+      Enum.sort(own) ++
+      [
+        {base_path ++ ["index.html"], react_index_html(name)},
+        {base_path ++ ["src", "main.tsx"], react_main_tsx()},
+        {base_path ++ ["src", "App.tsx"], react_app_tsx(name)},
+        {base_path ++ ["src", "index.css"], tincture_style_css()},
+        {base_path ++ Compendium.Tincture.default_icon(), placeholder_icon_svg()},
+        {base_path ++ Compendium.Tincture.default_preview(), placeholder_preview_svg()}
+      ]
+  end
+
+  # `tsc -b` only type-checks: Vite bundles the sources, and a `.js` file
+  # tsc wrote beside a `.tsx` one would be bundled in its place, since Vite
+  # resolves `./App` to `.js` first. The build info `tsc -b` keeps goes
+  # under `node_modules/`, which no version holds.
   defp react_tsconfig do
     safe_encode_pretty(%{
       compilerOptions: %{
@@ -686,7 +707,9 @@ defmodule Compendium.Scaffold do
         noUnusedLocals: true,
         noUnusedParameters: true,
         noFallthroughCasesInSwitch: true,
-        skipLibCheck: true
+        skipLibCheck: true,
+        noEmit: true,
+        tsBuildInfoFile: "./node_modules/.tmp/tsconfig.tsbuildinfo"
       },
       include: ["src"]
     })

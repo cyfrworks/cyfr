@@ -10,7 +10,8 @@
     action: "/_f/v1/action",
     stream_open: "/_f/v1/stream"
   });
-  var VERBS = Object.freeze(["open", "close", "title", "ready", "credential"]);
+  var VERBS = Object.freeze(["open", "close", "title", "ready", "credential", "press", "failed"]);
+  var STAGES = Object.freeze(["load", "runtime"]);
   var HANDSHAKE = "cyfr:handshake";
   var CREDENTIAL = "cyfr:credential";
   var CREDENTIAL_CLOSED = "cyfr:credential-closed";
@@ -21,8 +22,18 @@
     return { ok: true, saved: data.saved };
   }
   var FRAME_ID = /^[A-Za-z0-9_-]{8,64}$/;
+  var TINCTURE_REF = /^(t|tincture):\S+$/;
+  var STREAM_NAME = /^[a-z][a-z0-9_]{0,62}(\.[a-z][a-z0-9_]{0,62})+$/;
+  var LONE_SURROGATE = new RegExp("[\\uD800-\\uDBFF](?![\\uDC00-\\uDFFF])|(?<![\\uD800-\\uDBFF])[\\uDC00-\\uDFFF]");
   var isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
   var only = (object, keys) => Object.keys(object).every((key) => keys.includes(key));
+  var sameKeys = (object, keys) => {
+    const present = Object.keys(object).sort();
+    const wanted = [...keys].sort();
+    return present.length === wanted.length && present.every((key, i) => key === wanted[i]);
+  };
+  var isText = (value) => typeof value === "string" && !LONE_SURROGATE.test(value);
+  var isTinctureRef = (ref) => typeof ref === "string" && TINCTURE_REF.test(ref);
   function isFrameId(id) {
     return typeof id === "string" && FRAME_ID.test(id);
   }
@@ -149,10 +160,81 @@
     if (!VERBS.includes(verb)) throw new TypeError("unknown shell verb: " + verb);
     return { v: VERSION, verb, frame, args };
   }
+  var DATA_PREFIX = "/_f/v1/o/";
+  var STREAM_ROUTE = "stream";
+  function dataPath(frame) {
+    if (!isFrameId(frame)) throw new TypeError("a frame id is 8 to 64 URL-safe characters");
+    return DATA_PREFIX + frame + "/";
+  }
+  function streamPath(frame) {
+    return dataPath(frame) + STREAM_ROUTE;
+  }
+  var MODES = Object.freeze(["live", "validation"]);
+  var TO_FRAME_VERBS = Object.freeze(["canvas", "posture", "covered", "installed", "state"]);
+  var CANVAS_EVENTS = Object.freeze(["installed", "posture", "covered", "state"]);
+  var POSTURES = ["desk", "hand"];
+  var SHELL_STATES = ["live", "frozen"];
+  var MAX_STREAMS = 64;
+  var MAX_RECTS = 64;
+  var RECT_KEYS = ["x", "y", "width", "height"];
+  var MAX_TINCTURES = 512;
+  var MAX_NAME = 128;
+  var pairKey = ({ name, subject }) => JSON.stringify([name, subject]);
+  var bounded = (list, max, each) => Array.isArray(list) && list.length <= max && list.every(each);
+  var isStream = (stream) => isObject(stream) && sameKeys(stream, ["name", "subject"]) && typeof stream.name === "string" && STREAM_NAME.test(stream.name) && (stream.subject === null || isText(stream.subject));
+  var isStreams = (streams) => bounded(streams, MAX_STREAMS, isStream) && new Set(streams.map(pairKey)).size === streams.length;
+  var isRect = (rect) => isObject(rect) && sameKeys(rect, RECT_KEYS) && RECT_KEYS.every((key) => typeof rect[key] === "number" && Number.isFinite(rect[key]) && rect[key] >= 0);
+  var codePoints = (value) => Array.from(value).length;
+  var isInstalled = (tincture) => isObject(tincture) && sameKeys(tincture, ["ref", "name"]) && isTinctureRef(tincture.ref) && isText(tincture.name) && codePoints(tincture.name) >= 1 && codePoints(tincture.name) <= MAX_NAME;
+  function canvasError(block, frame) {
+    if (!isObject(block) || !sameKeys(block, ["mode", "data_path", "streams"])) {
+      return "a canvas is exactly mode, data_path and streams";
+    }
+    if (!MODES.includes(block.mode)) return "a canvas's mode is live or validation";
+    if (block.data_path !== dataPath(frame)) return "a canvas's data path is its frame's";
+    if (!isStreams(block.streams)) {
+      return `a canvas names at most ${MAX_STREAMS} distinct streams of name and subject`;
+    }
+    return null;
+  }
+  function toFrameArgsError(verb, args, frame) {
+    switch (verb) {
+      case "canvas":
+        return canvasError(args, frame);
+      case "posture":
+        return sameKeys(args, ["posture"]) && POSTURES.includes(args.posture) ? null : "posture is desk or hand";
+      case "covered":
+        return sameKeys(args, ["rects"]) && bounded(args.rects, MAX_RECTS, isRect) ? null : `covered names at most ${MAX_RECTS} rects of x, y, width and height`;
+      case "installed":
+        return sameKeys(args, ["tinctures"]) && bounded(args.tinctures, MAX_TINCTURES, isInstalled) ? null : `installed names at most ${MAX_TINCTURES} tinctures of ref and name`;
+      case "state":
+        return sameKeys(args, ["state"]) && SHELL_STATES.includes(args.state) ? null : "state is live or frozen";
+      default:
+        return "unknown verb";
+    }
+  }
+  function decodeToFrame(message) {
+    if (!isObject(message)) return { ok: false, error: "the message must be an object" };
+    if (!sameKeys(message, ["v", "verb", "frame", "args"])) {
+      return { ok: false, error: "the message is v, verb, frame and args" };
+    }
+    if (message.v !== VERSION) return { ok: false, error: "the message carries no wire version 1" };
+    if (!TO_FRAME_VERBS.includes(message.verb)) return { ok: false, error: "unknown verb" };
+    if (!isFrameId(message.frame)) return { ok: false, error: "frame must be a frame id" };
+    if (!isObject(message.args)) return { ok: false, error: "args must be an object" };
+    const error = toFrameArgsError(message.verb, message.args, message.frame);
+    if (error) return { ok: false, error };
+    return { ok: true, message: { v: VERSION, verb: message.verb, frame: message.frame, args: message.args } };
+  }
 
   // js/sdk/client.js
   var HANDSHAKE_TIMEOUT_MS = 3e4;
   var MAX_QUEUED_VERBS = 32;
+  var BENIGN_ERRORS = Object.freeze([
+    "ResizeObserver loop completed with undelivered notifications.",
+    "ResizeObserver loop limit exceeded"
+  ]);
+  var heard = (verb, args) => verb === "covered" ? args.rects : verb === "installed" ? args.tinctures : verb === "posture" ? args.posture : args.state;
   var CyfrError = class extends Error {
     constructor(message, code, stage) {
       super(message);
@@ -164,14 +246,22 @@
   var isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
   var unreadable = () => new CyfrError("The endpoint's answer could not be read.", "invalid_answer");
   var unreachable = () => new CyfrError("The endpoint could not be reached.", "unavailable");
+  var unanswered = (status, rejection) => status >= 500 ? new CyfrError(rejection.code === "invalid_answer" ? unreachable().message : rejection.message, "unavailable") : rejection;
   function createClient({ win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS }) {
     const framed = win.parent !== win && win.parent !== null && win.parent !== void 0;
     const standalone = framed ? null : publicIdentity(win.location && win.location.pathname);
     let frame = null;
     let port = null;
     let credential = null;
+    let kind = null;
+    let canvas = null;
+    let readyCalled = false;
+    let failure = null;
     let prompt = null;
     const queued = [];
+    const latest = /* @__PURE__ */ new Map();
+    const handlers = new Map(CANVAS_EVENTS.map((event) => [event, /* @__PURE__ */ new Set()]));
+    const unshown = [];
     let settle;
     const credentialArrived = new Promise((resolve) => {
       settle = resolve;
@@ -184,7 +274,6 @@
       frame = data.frame;
       port = event.ports[0];
       port.onmessage = onPortMessage;
-      for (const [verb2, args] of queued.splice(0)) post(verb2, args);
     }
     function onPortMessage(event) {
       const data = event.data;
@@ -196,19 +285,59 @@
         if (waiting) waiting({ saved: closed.saved });
         return;
       }
+      const told = decodeToFrame(data);
+      if (told.ok) {
+        if (told.message.frame === frame) onTold(told.message);
+        return;
+      }
       if (data.v !== VERSION || data.type !== CREDENTIAL || data.frame !== frame) return;
       if (typeof data.credential !== "string" || data.credential === "") return;
       const first = credential === null;
       credential = data.credential;
+      if (kind === null) known("frame");
       if (first) settle();
     }
-    function post(verb2, args) {
-      port.postMessage(shellMessage(verb2, frame, args));
+    function onTold({ verb: told, args }) {
+      if (told === "canvas") {
+        if (kind !== null) return;
+        canvas = { streams: new Set(args.streams.map(pairKey)) };
+        return known("canvas");
+      }
+      if (kind !== "canvas") return;
+      const value = heard(told, args);
+      latest.set(told, value);
+      if (told === "state" && value === "live") for (const resolve of unshown.splice(0)) resolve();
+      for (const entry of handlers.get(told)) deliver(told, entry, value);
+    }
+    function shown() {
+      return latest.get("state") === "live" ? Promise.resolve() : new Promise((resolve) => unshown.push(resolve));
+    }
+    function deliver(event, entry, value) {
+      queueMicrotask(() => {
+        if (handlers.get(event).has(entry)) entry.handler(value);
+      });
+    }
+    function known(which) {
+      kind = which;
+      for (const [name, args] of queued.splice(0)) send(name, args);
+    }
+    function post(name, args) {
+      port.postMessage(shellMessage(name, frame, args));
+    }
+    function send(name, args) {
+      if (kind === "canvas" ? name === "ready" && failure === "load" : name === "press" || name === "failed") return;
+      post(name, args);
     }
     function verb(name, args = {}) {
       if (!framed) return;
-      if (port !== null) post(name, args);
-      else if (queued.length < MAX_QUEUED_VERBS) queued.push([name, args]);
+      if (kind !== null) send(name, args);
+      else if (queued.length < MAX_QUEUED_VERBS || name === "failed") queued.push([name, args]);
+    }
+    function onPageError(event) {
+      if (failure !== null) return;
+      if (event && BENIGN_ERRORS.includes(event.message)) return;
+      failure = readyCalled ? "runtime" : "load";
+      verb("failed", { stage: failure });
     }
     function identity() {
       if (standalone) return Promise.resolve({ public: standalone });
@@ -227,15 +356,27 @@
         });
       });
     }
-    async function postRequest(kind, fields, signal) {
-      const who = await identity();
+    function routeOf(requestKind, fields) {
+      if (canvas === null || requestKind !== "stream_open") return ROUTES[requestKind];
+      if (!canvas.streams.has(pairKey({ name: fields.stream, subject: fields.subject }))) {
+        throw new CyfrError("This canvas does not declare that stream.", "forbidden", "admission");
+      }
+      return streamPath(frame);
+    }
+    async function postRequest(requestKind, fields, signal) {
+      let who = await identity();
+      const path = routeOf(requestKind, fields);
+      if (canvas !== null && requestKind === "stream_open") {
+        await shown();
+        who = await identity();
+      }
       const headers = { "content-type": "application/json" };
       if (who.credential) headers[BEARER_HEADER] = bearer(who.credential);
       try {
-        return await fetchFn(new URL(ROUTES[kind], base).toString(), {
+        return await fetchFn(new URL(path, base).toString(), {
           method: "POST",
           headers,
-          body: JSON.stringify(request(kind, fields, who.public || null)),
+          body: JSON.stringify(request(requestKind, fields, who.public || null)),
           credentials: "omit",
           cache: "no-store",
           redirect: "error",
@@ -245,14 +386,14 @@
         throw unreachable();
       }
     }
-    async function answer(kind, response) {
+    async function answer(requestKind, response) {
       let body;
       try {
         body = await response.json();
       } catch (_error) {
         throw unreadable();
       }
-      const decoded = decodeAnswer(kind, body);
+      const decoded = decodeAnswer(requestKind, body);
       if (decoded.ok) return decoded.value;
       if (decoded.refusal) {
         const { message, class: code, stage } = decoded.refusal;
@@ -260,20 +401,23 @@
       }
       throw unreadable();
     }
-    async function send(kind, fields) {
-      return answer(kind, await postRequest(kind, fields));
+    async function call(requestKind, fields) {
+      return answer(requestKind, await postRequest(requestKind, fields));
     }
     async function openStream(fields, onEvent) {
       const controller = new AbortController();
       const response = await postRequest("stream_open", fields, controller.signal);
       const type = (response.headers.get("content-type") || "").split(";")[0].trim();
       if (type !== STREAM_CONTENT_TYPE) {
+        let rejection = unreadable();
         try {
           await answer("stream_open", response);
+        } catch (error) {
+          rejection = error;
         } finally {
           controller.abort();
         }
-        throw unreadable();
+        throw unanswered(response.status, rejection);
       }
       const parser = sseParser((event) => {
         try {
@@ -298,6 +442,8 @@
           parser.end();
         }
       })();
+      closed.catch(() => {
+      });
       return {
         /** Settles when the stream ends; rejects if the connection broke. */
         closed,
@@ -329,7 +475,7 @@
         if (typeof ref !== "string" || ref === "") return invalid("ref must be a component reference");
         if (typeof operation !== "string" || operation === "") return invalid("operation must be a name");
         if (!isPlainObject(args)) return invalid("args must be an object");
-        return send("invoke", { ref, operation, args });
+        return call("invoke", { ref, operation, args });
       },
       /**
        * Run a system action the tincture declares.
@@ -339,15 +485,23 @@
       action(name, args = {}) {
         if (typeof name !== "string" || name === "") return invalid("an action is tool.action");
         if (!isPlainObject(args)) return invalid("args must be an object");
-        return send("action", { operation: name, args });
+        return call("action", { operation: name, args });
       },
       /**
-       * Open a stream the tincture declares and deliver its events.
+       * Open a stream the tincture declares and deliver its events. On a
+       * canvas it opens on the canvas's data path, and a pair the canvas does
+       * not declare is refused as `forbidden` before anything is sent; asked
+       * for while the canvas is hidden, it sends nothing and opens once the
+       * canvas is shown.
        * @param {string} name - the stream's name
        * @param {string|null} subject - a literal subject, or null for a stream that takes none
        * @param {function} onEvent - called with {id, event, data} per event
        * @returns {Promise<{close: function, closed: Promise}>} once the stream is open;
-       *   a refusal rejects with a CyfrError
+       *   a refusal rejects with a CyfrError of its class. An open the endpoint
+       *   gave no answer on (it could not be reached, the connection broke or
+       *   timed out, or it answered a server error) rejects `unavailable`, and
+       *   may succeed if opened again later; opened again after any other
+       *   refusal, it meets the same refusal until something changes.
        */
       stream(name, subject, onEvent) {
         if (typeof name !== "string" || name === "") return invalid("stream must be a stream name");
@@ -357,9 +511,40 @@
         if (typeof onEvent !== "function") return invalid("onEvent must be a function");
         return openStream({ stream: name, subject }, onEvent);
       },
-      /** Ask the shell to open a tincture: a tincture reference, e.g. "t:local.weather". */
+      /**
+       * Ask the shell to open a tincture: a tincture reference, e.g. "t:local.weather".
+       * From a canvas the shell acts on it only within moments of the person's
+       * own input, never from a script on its own.
+       */
       open(ref) {
         verb("open", { ref });
+      },
+      /**
+       * On a canvas, press a feed's action: the binding id a `feed.results`
+       * event carries, and the action's name. The shell acts on it only within
+       * moments of the person's own input, never from a script on its own, and
+       * only for a feed the canvas declares.
+       */
+      press(binding, action) {
+        verb("press", { binding, action });
+      },
+      /**
+       * On a canvas, hear what the shell tells it: `installed` (the installed
+       * tinctures, `[{ref, name}]`), `posture` (`desk` or `hand`), `covered`
+       * (the rects of it, `{x, y, width, height}` in its own pixels, that the
+       * shown apps cover) or `state` (`live` or `frozen`). The latest value,
+       * if one has come, is handed to a new handler first.
+       * @returns {function} stops the handler hearing more
+       */
+      on(event, handler) {
+        if (!CANVAS_EVENTS.includes(event)) throw new TypeError("cyfr.on takes installed, posture, covered or state");
+        if (typeof handler !== "function") throw new TypeError("cyfr.on takes a function");
+        const entry = { handler };
+        handlers.get(event).add(entry);
+        if (latest.has(event)) deliver(event, entry, latest.get(event));
+        return () => {
+          handlers.get(event).delete(entry);
+        };
       },
       /** Close this frame. */
       close() {
@@ -371,6 +556,7 @@
       },
       /** Tell the shell the tincture is ready. */
       ready() {
+        readyCalled = true;
         verb("ready");
       },
       /**
@@ -395,7 +581,7 @@
         });
       }
     };
-    return { api: Object.freeze(api), onWindowMessage };
+    return { api: Object.freeze(api), onWindowMessage, onPageError };
   }
 
   // js/sdk/index.js
@@ -405,5 +591,7 @@
     base: document.baseURI
   });
   window.addEventListener("message", client.onWindowMessage);
+  window.addEventListener("error", client.onPageError);
+  window.addEventListener("unhandledrejection", client.onPageError);
   window.cyfr = client.api;
 })();

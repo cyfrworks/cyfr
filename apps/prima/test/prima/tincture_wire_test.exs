@@ -9,7 +9,10 @@ defmodule Prima.TinctureWireTest do
   tincture in place of one; every answer reads back; the refusal is a
   `Prima.Refusal`'s projection and nothing more; the event stream is the
   one the encoders write and reads back as its events; every shell
-  message decodes. Beside them, the tincture URL grammar of
+  message decodes and every refused one is refused; a canvas's handshake
+  replies are the ones the builder writes, and no refused reply is; and
+  a canvas's paths are the fixture's, a value outside its grammar
+  raising. Beside them, the tincture URL grammar of
   `tests/fixtures/component_refs.json`.
   """
 
@@ -193,10 +196,47 @@ defmodule Prima.TinctureWireTest do
              TinctureWire.decode_answer(kind(name), put_in(body, ["error", "reason"], "x"))
   end
 
-  test "every shell verb has one message, and each decodes to its verb and frame" do
+  test "each stream rejection's refusal body is a Prima.Refusal's projection, which reads back as itself" do
+    %{"cases" => cases} = vectors()["stream_rejections"]
+    classes = Enum.map(Prima.Refusal.classes(), &Atom.to_string/1)
+    bodies = for %{"answer" => %{"body" => body}} <- cases, do: body
+    assert bodies != []
+
+    for %{"error" => %{"class" => class, "message" => message, "stage" => stage}} = body <- bodies do
+      assert class in classes, class
+
+      refusal = %Prima.Refusal{
+        class: String.to_existing_atom(class),
+        reason: :vector,
+        message: message,
+        stage: String.to_existing_atom(stage)
+      }
+
+      assert TinctureWire.refusal(refusal) == body
+
+      assert TinctureWire.decode_answer(:stream_open, body) ==
+               {:refused, %{class: class, message: message, stage: stage}}
+    end
+
+    # Every case says how the SDK rejects it, with a stage only for a
+    # refusal it rejects as itself.
+    for %{"answer" => answer, "rejects" => rejects} <- cases do
+      assert Map.keys(rejects) -- ["stage"] == ["class", "message"], inspect(answer)
+
+      case answer do
+        %{"body" => %{"error" => error}} when is_map_key(rejects, "stage") ->
+          assert rejects == error
+
+        _no_refusal_of_its_own ->
+          refute Map.has_key?(rejects, "stage")
+      end
+    end
+  end
+
+  test "every shell verb has a message, and each decodes to its verb and frame" do
     shell = vectors()["shell"]
 
-    assert Enum.sort(Enum.map(shell, & &1["verb"])) ==
+    assert shell |> Enum.map(& &1["verb"]) |> Enum.uniq() |> Enum.sort() ==
              Enum.sort(Enum.map(TinctureWire.verbs(), &Atom.to_string/1))
 
     for %{"verb" => verb, "message" => message} <- shell do
@@ -232,10 +272,127 @@ defmodule Prima.TinctureWireTest do
     end
   end
 
+  test "every refused shell message is refused, for the reason the fixture gives" do
+    invalid = vectors()["shell_invalid"]
+    assert invalid != []
+
+    for %{"why" => why, "message" => message} <- invalid do
+      assert {:error, sentence} = TinctureWire.decode_shell_message(message), why
+      assert is_binary(sentence), why
+    end
+  end
+
+  test "a press names exactly a binding id and an action, and a failure exactly its stage" do
+    press = %{"binding" => "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d", "action" => "refresh"}
+
+    assert {:ok, %{verb: :press, args: ^press}} =
+             TinctureWire.decode_shell_message(
+               TinctureWire.shell_message(:press, "frm_01a09fee2e4f", press)
+             )
+
+    for args <- [%{}, Map.delete(press, "action"), %{press | "action" => 7}] do
+      message = TinctureWire.shell_message(:press, "frm_01a09fee2e4f", args)
+      assert {:error, _} = TinctureWire.decode_shell_message(message), inspect(args)
+    end
+
+    assert TinctureWire.stages() == vectors()["canvas"]["stages"]
+
+    for stage <- TinctureWire.stages() do
+      message = TinctureWire.shell_message(:failed, "frm_01a09fee2e4f", %{"stage" => stage})
+      assert {:ok, %{verb: :failed}} = TinctureWire.decode_shell_message(message)
+    end
+
+    for args <- [%{}, %{"stage" => "load", "error" => "x"}, %{"stage" => nil}] do
+      message = TinctureWire.shell_message(:failed, "frm_01a09fee2e4f", args)
+      assert {:error, _} = TinctureWire.decode_shell_message(message), inspect(args)
+    end
+  end
+
+  test "a press and a failure are the verbs the shell takes from a canvas alone" do
+    assert TinctureWire.canvas_verbs() == [:press, :failed]
+    assert TinctureWire.canvas_verbs() -- TinctureWire.verbs() == []
+  end
+
   test "no verb raises a frame: focus is no verb" do
     refute :focus in TinctureWire.verbs()
     message = TinctureWire.shell_message(:ready, "frm_01a09fee2e4f")
     assert {:error, _} = TinctureWire.decode_shell_message(%{message | "verb" => "focus"})
+  end
+
+  describe "a canvas" do
+    test "every valid handshake reply is the one the builder writes for its frame" do
+      valid = vectors()["canvas"]["handshake"]["valid"]
+      assert valid != []
+
+      for %{"frame" => frame, "reply" => reply} <- valid do
+        %{"credential" => credential, "canvas" => canvas} = reply
+
+        assert TinctureWire.canvas_handshake(
+                 frame,
+                 credential,
+                 canvas["mode"],
+                 canvas["streams"]
+               ) == reply
+
+        assert canvas["mode"] in TinctureWire.canvas_modes()
+        assert canvas["data_path"] == TinctureWire.data_path(frame)
+      end
+
+      assert Enum.max(Enum.map(valid, &length(&1["reply"]["canvas"]["streams"]))) ==
+               TinctureWire.max_canvas_streams()
+    end
+
+    test "no refused handshake reply is one the builder writes: it raises or writes another" do
+      invalid = vectors()["canvas"]["handshake"]["invalid"]
+      assert invalid != []
+
+      for %{"why" => why, "frame" => frame, "reply" => reply} <- invalid do
+        canvas = reply["canvas"]
+
+        built =
+          try do
+            TinctureWire.canvas_handshake(
+              frame,
+              reply["credential"],
+              canvas["mode"],
+              canvas["streams"]
+            )
+          rescue
+            e in ArgumentError ->
+              # The sentence names no value: the credential is one.
+              refute Exception.message(e) =~ "c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw", why
+              :raised
+          end
+
+        refute built == reply, why
+      end
+    end
+
+    test "the paths are the fixture's, and a value outside its grammar raises" do
+      %{"valid" => valid, "invalid" => invalid} = vectors()["canvas"]["paths"]
+      assert valid != [] and invalid != []
+
+      for row <- valid do
+        assert TinctureWire.page_path(row["credential"], row["frame"]) == row["page_path"]
+
+        assert row["page_path"] ==
+                 TinctureWire.page_prefix() <> row["credential"] <> "/" <> row["frame"]
+
+        assert TinctureWire.data_path(row["frame"]) == row["data_path"]
+        assert TinctureWire.stream_path(row["frame"]) == row["stream_path"]
+      end
+
+      for %{"why" => why, "credential" => credential, "frame" => frame} <- invalid do
+        assert_raise ArgumentError, fn -> TinctureWire.page_path(credential, frame) end
+
+        if TinctureWire.frame_id?(frame) do
+          assert is_binary(TinctureWire.data_path(frame)), why
+        else
+          assert_raise ArgumentError, fn -> TinctureWire.data_path(frame) end
+          assert_raise ArgumentError, fn -> TinctureWire.stream_path(frame) end
+        end
+      end
+    end
   end
 
   describe "the tincture URL grammar (component_refs.json)" do

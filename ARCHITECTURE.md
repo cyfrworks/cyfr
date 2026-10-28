@@ -266,7 +266,7 @@ Prism is one screen: everything on it is a tincture, untrusted code in a frame, 
 
 - **The system layer** draws every grant, confirmation and credential entry above every frame, and is the one place the screen presents a consent, from Sanctum's preview; the command line shows the same preview in the terminal. *Not built yet:* unlocking the vault, and a tincture's request for a consent.
 - **Frames.** Prism creates every frame under the sandbox the tincture rules derive, and a frame reaches data only under a per-open credential Sanctum mints and revokes (`Sanctum.TinctureAuth`).
-- **Canvases** are the person's pages: a canvas reads only what its grant names, shows outside data only through feeds (`Opus.Feeds`), and lets what it reads leave only as controls the person sees. *Not built yet:* a canvas's read operations, a feed from a run that stays open, and telling a canvas which tinctures are open over it; it learns only the rectangles they cover.
+- **Canvases** are the person's pages, tincture pages written like any other: a canvas reads only the streams its grant names and the feeds it declares (`Opus.Feeds`), changes nothing (its credential reaches only its own streams), and the shell forwards its opens and feed presses only within moments of the person's own input, never from a script on its own; hidden, it reads and acts on nothing. *Not built yet:* a canvas's read operations, a feed from a run that stays open, and telling a canvas which tinctures are open over it; it learns only the rectangles they cover.
 - **Code and layout are separate**: a code change is a new version, a version that reads more asks again, and the way back from a broken canvas is outside every canvas.
 - Emissary serves every tincture's files and data routes, and a public tincture runs under its own profile, never a viewer's session.
 
@@ -335,7 +335,7 @@ Layer edges are Mix dependencies and Boundary declarations, so a forbidden edge 
 | Operations, arguments, planes, streams | the providers on Sanctum's roster |
 | Boot, topics, configuration, settings, boundaries, admission | Host |
 | The access mode | the deployment file, written by Codex, checked at boot by Host |
-| Served files, frame capabilities, frame policy, canvas grammar | Compendium's tincture rules |
+| Served files, frame capabilities, frame policy, the canvas declaration | Compendium's tincture rules |
 | Memory records and pages (*Not built yet*) | Aqua, stored by Arca |
 | The layout | the person, stored by Arca |
 | A contract's detail | its owning module's documentation and comments |

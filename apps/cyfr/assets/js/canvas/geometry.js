@@ -6,6 +6,8 @@
 // canvas's frame, and which way a swipe on the edge strip switches. Nothing
 // here reads or writes the DOM, so Node tests it as it is.
 
+import {MAX_RECTS} from "../sdk/wire.js"
+
 // A viewport narrower than this is held in the hand.
 export const HAND_BELOW_PX = 768
 
@@ -25,8 +27,8 @@ export const COLUMNS = Object.freeze({width: 420, min: 240, gap: 12, pad: 12})
 // down, to switch canvases.
 export const SWIPE_MIN_PX = 48
 
-// The most rectangles a canvas is told it is covered by (`Prima.CanvasWire`).
-export const MAX_COVERED = 64
+// The most rectangles a canvas is told it is covered by: the wire's limit.
+export const MAX_COVERED = MAX_RECTS
 
 const FRAME_ID = /^[A-Za-z0-9_-]{8,64}$/
 const SCOPE = /^[A-Za-z][A-Za-z0-9_-]*$/

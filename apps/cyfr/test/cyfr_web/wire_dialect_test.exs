@@ -41,11 +41,12 @@ defmodule CyfrWeb.WireDialectTest do
     # The tincture's entry page is a 200 HTML body, a success; every miss
     # there renders through ApiError.
     "emissary/web/tincture_assets.ex" => "the entry page's 200 HTML body",
-    # A canvas's host page is a 200 HTML document, and every refusal of it
-    # a 404 with no body, which says nothing of the credential or frame it
-    # names; neither is an API error body. Its 503 renders through ApiError.
+    # A canvas's page is a 200 HTML document, the SDK it loads a 200
+    # script, and every refusal of either a 404 with no body, which says
+    # nothing of the credential or frame it names; none is an API error
+    # body. Its 503 renders through ApiError.
     "emissary/web/controllers/canvas_controller.ex" =>
-      "the canvas host page's 200 HTML document and its bodiless 404"
+      "the canvas page's 200 HTML document, its SDK's 200 script and their bodiless 404"
   }
 
   test "every bare send_resp is on the roster with a reason" do

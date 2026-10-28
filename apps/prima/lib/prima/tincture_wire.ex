@@ -35,7 +35,10 @@ defmodule Prima.TinctureWire do
   `action` is `{"v", "ok": true, "result"}`, and for a refusal
   `{"v", "ok": false, "error": {"class", "message", "stage"}}`: the
   projection of a `Prima.Refusal` a frame may read, never its reason
-  term. A refused `stream_open` is answered the same way.
+  term. A refused `stream_open` is answered the same way. Each refusal
+  is answered at the HTTP status its class answers with; a server error
+  (5xx), like no answer at all, is no answer on a `stream_open`, which the
+  SDK rejects as `unavailable` so the page may open it again later.
 
   An admitted `stream_open` is answered as `text/event-stream`
   (`stream_content_type/0`), one event per delivery under the grant
@@ -63,14 +66,46 @@ defmodule Prima.TinctureWire do
       non-empty string as the vault takes it. The value is typed into the
       shell and goes to the vault; the frame is told only that the prompt
       closed and whether an entry was saved;
+    * `press` — press a feed's action: `args.binding`, a binding id
+      (`Prima.Feed.binding_id?/1`), and `args.action`, the action's name
+      (`Prima.Feed.name?/1`), exactly those two;
+    * `failed` — the page failed: `args.stage`, `load` or `runtime`
+      (`stages/0`);
     * `ready`, `close` — no arguments.
 
   No verb places, sizes or raises a frame: which frame is shown is the
-  shell's and the person's.
+  shell's and the person's. Which verbs the shell acts on is the shell's,
+  by the frame's kind: `press` and `failed` only from a canvas
+  (`canvas_verbs/0`).
 
-  `tests/fixtures/tincture_wire.json` holds one example of each, one
-  public request, one refusal and one event stream; this module's test
-  and the SDK's JavaScript test both read it.
+  ## A canvas
+
+  A canvas (a tincture whose placement is `canvas`) is opened at its page,
+  `page_path/2` (`/_c/v1/<asset credential>/<frame id>`, under
+  `page_prefix/0`), and reads its streams at its open's data path alone:
+  `data_path/1` (`/_f/v1/o/<frame id>/`) and its one route under it,
+  `stream_path/1`. The version's own files stay under
+  `Prima.TinctureUrl`'s served prefix.
+
+  The shell answers a canvas frame's handshake with
+  `canvas_handshake/4`: exactly `credential`, the frame credential, and
+  `canvas`, exactly `mode` (`live` or `validation`, `canvas_modes/0`),
+  `data_path`, the frame's own, and `streams`, the version's declared
+  streams, at most `max_canvas_streams/0` distinct objects of exactly
+  `name` (a stream name, as `stream_open` holds it) and `subject` (a
+  string or null). Prism builds `streams` from the stored declaration of
+  the version it serves, never from anything a frame or a page sends. The
+  shell's later messages to a canvas over its port (`canvas`, `posture`,
+  `covered`, `installed` and `state`) are JavaScript on both ends;
+  `installed` names at most `max_installed/0` tinctures, each a name of
+  1 to `max_installed_name/0` code points.
+
+  `tests/fixtures/tincture_wire.json` holds one example of each request,
+  one public request, one refusal, one event stream, how the SDK rejects
+  a `stream_open` for each answer that opens no stream, every shell verb's
+  message and the messages refused, and a canvas's handshake replies, the
+  shell's messages to a canvas and its paths; this module's test and the
+  SDK's and the bridge's JavaScript tests read it.
   """
 
   @version 1
@@ -82,10 +117,21 @@ defmodule Prima.TinctureWire do
     stream_open: "/_f/v1/stream"
   }
 
-  @verbs ~w(open close title ready credential)a
+  @verbs ~w(open close title ready credential press failed)a
+  @canvas_verbs ~w(press failed)a
+  @stages ~w(load runtime)
 
   @stream_content_type "text/event-stream"
   @refusal_event "refusal"
+
+  @page_prefix "/_c/v1/"
+  @data_prefix "/_f/v1/o/"
+  @stream_route "stream"
+
+  @canvas_modes ~w(live validation)
+  @max_canvas_streams 64
+  @max_installed 512
+  @max_installed_name 128
 
   @frame_id ~r/\A[A-Za-z0-9_-]{8,64}\z/
   @athanor_segment ~r/\A@?[a-z0-9]+(-[a-z0-9]+)*\z/
@@ -96,7 +142,7 @@ defmodule Prima.TinctureWire do
   @type kind :: :invoke | :action | :stream_open
 
   @typedoc "A message the frame sends the shell."
-  @type verb :: :open | :close | :title | :ready | :credential
+  @type verb :: :open | :close | :title | :ready | :credential | :press | :failed
 
   @typedoc "The public tincture a request names in place of a bearer."
   @type public_identity :: %{athanor: String.t(), publisher: String.t(), name: String.t()}
@@ -143,6 +189,17 @@ defmodule Prima.TinctureWire do
   @doc "The shell verbs."
   @spec verbs() :: [verb()]
   def verbs, do: @verbs
+
+  @doc """
+  The shell verbs the shell takes from a canvas alone, `press` and
+  `failed`: from any other frame it drops them.
+  """
+  @spec canvas_verbs() :: [verb()]
+  def canvas_verbs, do: @canvas_verbs
+
+  @doc "The stages a `failed` message names: the page's load, or its run after it."
+  @spec stages() :: [String.t()]
+  def stages, do: @stages
 
   @doc "Whether `id` is a frame id: 8 to 64 URL-safe characters."
   @spec frame_id?(term()) :: boolean()
@@ -423,6 +480,119 @@ defmodule Prima.TinctureWire do
 
   def decode_answer(kind, _answer) when is_map_key(@routes, kind), do: {:error, :invalid_answer}
 
+  # ---- a canvas --------------------------------------------------------------
+
+  @doc "The modes a canvas frame is opened in: shown live, or trialled in validation."
+  @spec canvas_modes() :: [String.t()]
+  def canvas_modes, do: @canvas_modes
+
+  @doc "The most streams a canvas's handshake names."
+  @spec max_canvas_streams() :: pos_integer()
+  def max_canvas_streams, do: @max_canvas_streams
+
+  @doc "The most tinctures the shell's `installed` message to a canvas names."
+  @spec max_installed() :: pos_integer()
+  def max_installed, do: @max_installed
+
+  @doc "The most code points a tincture's name in `installed` takes."
+  @spec max_installed_name() :: pos_integer()
+  def max_installed_name, do: @max_installed_name
+
+  @doc """
+  The prefix every canvas page's path begins with, `/_c/v1/`: the segment
+  after it is the asset credential, which a log or a telemetry span must
+  never carry (`CyfrWeb.Plugs.ScrubTinctureCredentials`).
+  """
+  @spec page_prefix() :: String.t()
+  def page_prefix, do: @page_prefix
+
+  @doc """
+  The page of a canvas open: `/_c/v1/<credential>/<frame id>`. A
+  credential outside `Prima.TinctureUrl.credential?/1` or a frame id
+  outside `frame_id?/1` raises.
+  """
+  @spec page_path(String.t(), String.t()) :: String.t()
+  def page_path(credential, frame_id) do
+    unless Prima.TinctureUrl.credential?(credential),
+      do: raise(ArgumentError, "an asset credential is opaque, URL-safe and bounded")
+
+    @page_prefix <> credential <> "/" <> frame!(frame_id)
+  end
+
+  @doc "The data prefix of a canvas open: `/_f/v1/o/<frame id>/`. A frame id outside its grammar raises."
+  @spec data_path(String.t()) :: String.t()
+  def data_path(frame_id), do: @data_prefix <> frame!(frame_id) <> "/"
+
+  @doc "The stream route of a canvas open: `data_path/1` and `stream`."
+  @spec stream_path(String.t()) :: String.t()
+  def stream_path(frame_id), do: data_path(frame_id) <> @stream_route
+
+  @doc """
+  The shell's answer to canvas frame `frame_id`'s handshake: exactly
+  `credential` and `canvas`, which holds exactly `mode`, the frame's own
+  `data_path` and `streams`, each stream exactly `name` and `subject`.
+
+  Every argument is CYFR's own, so one outside the wire raises an
+  `ArgumentError` whose sentence names no value, since the credential is
+  one: a credential that is not a non-empty string, a mode that is not
+  one of `canvas_modes/0`, a frame id outside `frame_id?/1`, or streams
+  that are not a list of at most `max_canvas_streams/0` distinct
+  `%{"name", "subject"}` objects, each a stream name and a string or nil.
+  """
+  @spec canvas_handshake(String.t(), String.t(), String.t(), [map()]) :: map()
+  def canvas_handshake(frame_id, credential, mode, streams) do
+    unless is_binary(credential) and credential != "",
+      do: raise(ArgumentError, "a canvas's handshake carries the frame credential")
+
+    unless mode in @canvas_modes,
+      do: raise(ArgumentError, "a canvas's mode is #{Enum.join(@canvas_modes, " or ")}")
+
+    unless canvas_streams?(streams),
+      do:
+        raise(
+          ArgumentError,
+          "a canvas's handshake names at most #{@max_canvas_streams} distinct streams, " <>
+            "each exactly a stream name and a subject"
+        )
+
+    %{
+      "credential" => credential,
+      "canvas" => %{"mode" => mode, "data_path" => data_path(frame_id), "streams" => streams}
+    }
+  end
+
+  defp frame!(frame_id) do
+    if frame_id?(frame_id),
+      do: frame_id,
+      else: raise(ArgumentError, "a frame id is 8 to 64 URL-safe characters")
+  end
+
+  # A list's length is counted only once it is known to be proper:
+  # `length/1` raises on an improper list, and its report prints the list.
+  defp canvas_streams?(streams) do
+    case proper_length(streams, 0) do
+      count when is_integer(count) and count <= @max_canvas_streams ->
+        Enum.all?(streams, &canvas_stream?/1) and Enum.uniq(streams) == streams
+
+      _improper_or_long ->
+        false
+    end
+  end
+
+  defp proper_length([], count), do: count
+  defp proper_length([_head | tail], count), do: proper_length(tail, count + 1)
+  defp proper_length(_improper_tail, _count), do: nil
+
+  # A stream `stream_open` could name: the stream-name grammar and a
+  # subject that is a string or null.
+  defp canvas_stream?(%{"name" => name, "subject" => subject} = stream)
+       when map_size(stream) == 2 do
+    Prima.Manifest.Tincture.stream_name?(name) and
+      (is_nil(subject) or (is_binary(subject) and String.valid?(subject)))
+  end
+
+  defp canvas_stream?(_stream), do: false
+
   # ---- shell messages --------------------------------------------------------
 
   @doc "The message the frame `frame_id` posts for `verb`."
@@ -480,6 +650,24 @@ defmodule Prima.TinctureWire do
        do: {:ok, args}
 
   defp shell_args(:credential, _args), do: {:error, "credential names a vault entry"}
+
+  defp shell_args(:press, %{"binding" => binding, "action" => action} = args)
+       when map_size(args) == 2 do
+    cond do
+      not Prima.Feed.binding_id?(binding) -> {:error, "press names a binding id"}
+      not Prima.Feed.name?(action) -> {:error, "press names an action by its name"}
+      true -> {:ok, args}
+    end
+  end
+
+  defp shell_args(:press, _args), do: {:error, "press names a binding id and an action"}
+
+  defp shell_args(:failed, %{"stage" => stage} = args)
+       when map_size(args) == 1 and stage in @stages,
+       do: {:ok, args}
+
+  defp shell_args(:failed, _args),
+    do: {:error, "failed names a stage: #{Enum.join(@stages, " or ")}"}
 
   defp shell_args(_verb, args) when args == %{}, do: {:ok, args}
   defp shell_args(verb, _args), do: {:error, "#{verb} takes no arguments"}

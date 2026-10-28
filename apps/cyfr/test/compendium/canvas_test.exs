@@ -3,22 +3,28 @@
 
 defmodule Compendium.CanvasTest do
   @moduledoc """
-  A person's canvases as components (`Compendium.Canvas`). A write checks
-  the declaration before anything is allocated, allocates one patch above
-  every version allocated, installed or shipped, then creates that
-  version whole and registers it, never replacing one; two writes from
-  one read get distinct versions or one conflict. An activation spends
+  A person's canvases as components (`Compendium.Canvas`). A write holds
+  its files and declaration to their rules and builds a React canvas
+  before anything is allocated, allocates one patch above every version
+  allocated, installed or shipped, then creates that version whole in one
+  commit and registers it, never replacing one; two writes from one read
+  get distinct versions or one conflict. A refused file, a missing builds
+  service, a refused, failed or timed-out build and a cancelled write
+  allocate nothing. An activation spends
   the trial's validation credential first, whatever the outcome, re-checks
-  the tincture's grant for a tree, and publishes the versions document at
+  the tincture's grant for `ready`, and publishes the versions document at
   the revision it read: two activations over one revision publish one, a
-  member that lost its slot activates nothing, and a tree for the version
-  already working changes nothing. A restore makes the kept version the
+  member that lost its slot activates nothing, and `ready` for the version
+  already working changes nothing; only `ready` activates, and a failure
+  is recorded as `not_ready` or `died`. A restore makes the kept version the
   working one under today's grant. The catalog is what a canvas may read,
   derived from the stream table.
 
   Racing writers are held after they read the versions document, observed
   through the repository's query telemetry, and released together: both
-  have read one revision before either publishes, on either adapter.
+  have read one revision before either publishes, on either adapter. The
+  builds service is `Cyfr.Test.ScriptedBuilder`, and a build is held
+  through its script while the test looks at what is allocated.
   """
 
   # Writes platform settings, the control plane's standing record and the
@@ -29,9 +35,10 @@ defmodule Compendium.CanvasTest do
   import Ecto.Query, only: [from: 2]
 
   alias Arca.CanvasVersions
-  alias Arca.Schemas.{CellLease, FrameCredential}
+  alias Arca.Schemas.{CellLease, FrameCredential, StorageCommit, StorageUnit}
   alias Compendium.Canvas
   alias Compendium.ComponentPath
+  alias Cyfr.Test.ScriptedBuilder
   alias Sanctum.Context
   alias Sanctum.Test.ConsentFixtures
   alias Sanctum.TinctureAuth
@@ -39,7 +46,12 @@ defmodule Compendium.CanvasTest do
   @name "markets"
   @reference "tincture:local.markets"
   @athanor "ath_test"
-  @module ~S|export default function (canvas) { canvas.render({type: "text", value: "hi"}) }|
+  @page ~S|<!DOCTYPE html><html><head><link rel="stylesheet" href="style.css"></head><body><ul id="runs"></ul><script src="app.js"></script></body></html>|
+  @files %{
+    "index.html" => @page,
+    "app.js" => ~S|cyfr.stream("runs.changes", null, () => {}).finally(() => cyfr.ready())|,
+    "style.css" => "body { margin: 0 }"
+  }
 
   @keys [
     {Arca.ControlPlane, :standing},
@@ -73,18 +85,19 @@ defmodule Compendium.CanvasTest do
   # ---------------------------------------------------------------------------
 
   describe "write" do
-    test "writes the next version whole and registers it, and activates nothing", %{ctx: ctx} do
+    test "writes a vanilla version whole in one commit and registers it, and activates nothing",
+         %{ctx: ctx} do
+      streams = [%{"name" => "runs.changes"}]
+
       assert {:ok, %{canvas: @name, version: "0.1.0", reference: reference}} =
-               Canvas.write(ctx, write_args())
+               Canvas.write(ctx, write_args(streams: streams))
 
       assert reference == "tincture:local.markets:0.1.0"
 
-      # Exactly the manifest and the module; the manifest is a canvas's declaration.
-      assert {:ok, files} = Arca.list_typed(actor(ctx), version_dir("0.1.0"))
-      assert Enum.sort(files) == [{"canvas.js", :file}, {"cyfr-manifest.json", :file}]
-      assert {:ok, @module} = Arca.get(actor(ctx), version_dir("0.1.0") ++ ["canvas.js"])
-
-      {:ok, manifest} = Arca.get(actor(ctx), version_dir("0.1.0") ++ ["cyfr-manifest.json"])
+      # Exactly the files and the manifest, which is a vanilla canvas's
+      # declaration, made by the write; one commit created the version.
+      {manifest, files} = Map.pop!(version_files!(ctx, "0.1.0"), "cyfr-manifest.json")
+      assert files == @files
 
       assert Jason.decode!(manifest) == %{
                "type" => "tincture",
@@ -92,30 +105,34 @@ defmodule Compendium.CanvasTest do
                "version" => "0.1.0",
                "tincture" => %{
                  "frame" => %{"placement" => "canvas"},
-                 "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
-                 "streams" => []
+                 "entry" => "index.html",
+                 "streams" => streams
                }
              }
 
-      # Registered, released, and served from its module.
+      assert commits!(ctx, "0.1.0") == [nil]
+
+      # Registered and released.
       assert {:ok, %{"release_digest" => "sha256:" <> _}} =
                Compendium.inspect_component(ctx, reference)
 
-      # Allocated, and nothing working: a glass validates it first.
+      # Allocated, and nothing working: a browser validates it first.
       assert %{document: %{allocated: "0.1.0", working: nil, kept: nil}, revision: 1} =
                versions!(ctx)
 
       # The next write is the next version; the first is left as it was.
-      assert {:ok, %{version: "0.1.1"}} = Canvas.write(ctx, write_args(module: "// two"))
-      assert {:ok, @module} = Arca.get(actor(ctx), version_dir("0.1.0") ++ ["canvas.js"])
-      assert {:ok, "// two"} = Arca.get(actor(ctx), version_dir("0.1.1") ++ ["canvas.js"])
+      second = Map.put(@files, "app.js", "// two")
+      assert {:ok, %{version: "0.1.1"}} = Canvas.write(ctx, write_args(files: second))
+      assert Map.delete(version_files!(ctx, "0.1.0"), "cyfr-manifest.json") == @files
+      assert Map.delete(version_files!(ctx, "0.1.1"), "cyfr-manifest.json") == second
+      assert commits!(ctx, "0.1.0") == [nil]
       assert %{document: %{allocated: "0.1.1", working: nil}, revision: 2} = versions!(ctx)
     end
 
     test "allocates one patch above every version allocated, installed or shipped", %{ctx: ctx} do
       Arca.Test.UnitFixtures.seed_component!("tincture", "local", @name, "0.4.2",
         manifest: canvas_manifest("0.4.2"),
-        files: [{"canvas.js", "// shipped"}]
+        files: [{"index.html", "<html><head></head><body>shipped</body></html>"}]
       )
 
       assert {:ok, %{version: "0.4.3"}} = Canvas.write(ctx, write_args())
@@ -134,33 +151,60 @@ defmodule Compendium.CanvasTest do
       assert {:ok, %{version: "0.9.2"}} = Canvas.write(ctx, write_args())
     end
 
-    test "a refused write allocates nothing", %{ctx: ctx} do
+    test "a refused write allocates nothing, and each refusal names its path or its bound",
+         %{ctx: ctx} do
       four_byte = "𝄞"
       assert byte_size(four_byte) == 4
-      over_in_bytes = String.duplicate(four_byte, div(Canvas.module_max_bytes(), 4) + 1)
-      assert String.length(over_in_bytes) < Canvas.module_max_bytes()
+      big = String.duplicate(four_byte, div(Canvas.max_bytes(), 4) + 1)
+      assert String.length(big) < Canvas.max_bytes()
+
+      too_many =
+        Map.merge(
+          @files,
+          Map.new(1..(Canvas.max_files() - map_size(@files) + 1), &{"part-#{&1}.js", ""})
+        )
 
       refused = [
-        write_args(name: "Markets"),
-        write_args(name: "../markets"),
-        write_args(name: ""),
-        write_args(name: nil),
-        write_args(module: String.duplicate("a", Canvas.module_max_bytes() + 1)),
-        write_args(module: over_in_bytes),
-        write_args(module: <<0xFF, 0xFE>>),
-        write_args(module: nil),
-        write_args(streams: "runs.changes"),
-        write_args(streams: [%{"name" => 7}]),
-        write_args(streams: [%{"name" => "runs.changes", "extra" => true}]),
-        write_args(streams: [%{"name" => "vault.changes"}]),
-        write_args(streams: [%{"name" => "mcp_servers.changes"}])
+        {write_args(name: "Markets"), "name"},
+        {write_args(name: "../markets"), "name"},
+        {write_args(name: ""), "name"},
+        {write_args(name: nil), "name"},
+        {write_args(template: nil), "template"},
+        {write_args(template: "vite"), "template"},
+        {write_args(template: "Vanilla"), "template"},
+        {write_args(files: nil), "files"},
+        {write_args(files: "index.html"), "files"},
+        {write_args(files: [@page]), "files"},
+        {write_args(files: %{}), "index.html"},
+        {write_args(files: Map.delete(@files, "index.html")), "index.html"},
+        {write_args(files: too_many), "#{Canvas.max_files()}"},
+        {write_args(files: Map.put(@files, "big.js", big)), "#{Canvas.max_bytes()}"},
+        {write_args(files: Map.put(@files, "app.js", <<0xFF, 0xFE>>)), "app.js"},
+        {write_args(files: Map.put(@files, "app.js", 7)), "app.js"},
+        {write_args(files: Map.put(@files, :extra, "x")), "not a relative path"},
+        {write_args(files: Map.put(@files, "notes.md", "x")), "notes.md"},
+        {write_args(files: Map.put(@files, "LICENSE", "x")), "LICENSE"},
+        {write_args(files: Map.put(@files, "cyfr-manifest.json", "{}")), "manifest"},
+        {write_args(files: Map.put(@files, "data/cyfr-manifest.json", "{}")), "manifest"},
+        {write_args(streams: "runs.changes"), "streams"},
+        {write_args(streams: [%{"name" => 7}]), nil},
+        {write_args(streams: [%{"name" => "runs.changes", "extra" => true}]), nil},
+        {write_args(streams: [%{"name" => "vault.changes"}]), "vault.changes"},
+        {write_args(streams: [%{"name" => "mcp_servers.changes"}]), "mcp_servers.changes"}
       ]
 
-      for args <- refused do
-        assert {:error, {:invalid_argument, sentence}} = Canvas.write(ctx, args),
-               inspect(Map.delete(args, "module"))
+      unsafe =
+        for path <-
+              ["../app.js", "/app.js", "a//b.js", "./app.js", "lib/../app.js"] ++
+                ["a\\b.js", "%2e%2e/app.js", "lib/", "", "app\0.js"],
+            do: {write_args(files: Map.put(@files, path, "x")), "not a safe relative path"}
 
-        assert is_binary(sentence)
+      for {args, named} <- refused ++ unsafe do
+        assert {:error, {:invalid_argument, sentence}} = Canvas.write(ctx, args),
+               inspect(Map.delete(args, "files"))
+
+        if named,
+          do: assert(sentence =~ named, "#{inspect(sentence)} does not name #{inspect(named)}")
       end
 
       assert {:error, {:invalid_argument, sentence}} =
@@ -169,14 +213,29 @@ defmodule Compendium.CanvasTest do
       assert sentence =~ "mcp_servers.changes, which a canvas cannot read"
 
       assert {:error, {:invalid_argument, _}} =
-               Canvas.write(ctx, Map.delete(write_args(), "module"))
+               Canvas.write(ctx, Map.delete(write_args(), "files"))
+
+      assert {:error, {:invalid_argument, _}} =
+               Canvas.write(ctx, Map.delete(write_args(), "template"))
 
       assert {:error, :not_found} = CanvasVersions.get(actor(ctx), @name)
       assert {:error, {:not_found, "Canvas", @name}} = Canvas.versions(ctx, @name)
+      refute version_exists?(ctx, "0.1.0")
 
-      # At the bound, a module is written.
-      exact = String.duplicate("a", Canvas.module_max_bytes())
-      assert {:ok, %{version: "0.1.0"}} = Canvas.write(ctx, write_args(module: exact))
+      # At both bounds at once, the files are written; the bounds are the
+      # tool's own, apart from the athanor's storage cap.
+      filler = Map.new(1..(Canvas.max_files() - map_size(@files) - 1), &{"part-#{&1}.js", ""})
+      used = @files |> Map.values() |> Enum.map(&byte_size/1) |> Enum.sum()
+
+      exact =
+        @files
+        |> Map.merge(filler)
+        |> Map.put("big.js", String.duplicate("a", Canvas.max_bytes() - used))
+
+      assert map_size(exact) == Canvas.max_files()
+      assert exact |> Map.values() |> Enum.map(&byte_size/1) |> Enum.sum() == Canvas.max_bytes()
+      assert {:ok, %{version: "0.1.0"}} = Canvas.write(ctx, write_args(files: exact))
+      assert Map.delete(version_files!(ctx, "0.1.0"), "cyfr-manifest.json") == exact
     end
 
     test "a name installed as a tincture that is no canvas is a conflict, and allocates nothing",
@@ -192,17 +251,36 @@ defmodule Compendium.CanvasTest do
       assert {:error, {:not_found, "Canvas", "notes"}} = Canvas.versions(ctx, "notes")
     end
 
+    test "a react write with no builds service is refused unavailable and allocates nothing, " <>
+           "and a vanilla write needs none",
+         %{ctx: ctx} do
+      ScriptedBuilder.configure!(nil, nil)
+      refute Cyfr.RuntimeConfig.builds_enabled?()
+
+      assert {:error, %Prima.Refusal{class: :unavailable, message: message}} =
+               Canvas.write(ctx, write_args(template: "react", files: react_page()))
+
+      assert message =~ "no builds service is configured"
+      assert message =~ "CYFR_LOCUS_BUILDS_URL"
+      assert {:error, :not_found} = CanvasVersions.get(actor(ctx), @name)
+      refute version_exists?(ctx, "0.1.0")
+
+      assert {:ok, %{version: "0.1.0"}} = Canvas.write(ctx, write_args())
+    end
+
     test "two synchronized writes from one newest version get distinct versions or one conflict, " <>
            "and no version's bytes are replaced",
          %{ctx: ctx} do
-      {:ok, %{version: "0.1.0"}} = Canvas.write(ctx, write_args(module: "// first"))
+      {:ok, %{version: "0.1.0"}} =
+        Canvas.write(ctx, write_args(files: Map.put(@files, "app.js", "// first")))
+
       %{revision: read} = versions!(ctx)
       hold_after_read!()
 
       answers =
         race([
-          fn -> Canvas.write(ctx, write_args(module: "// left")) end,
-          fn -> Canvas.write(ctx, write_args(module: "// right")) end
+          fn -> Canvas.write(ctx, write_args(files: Map.put(@files, "app.js", "// left"))) end,
+          fn -> Canvas.write(ctx, write_args(files: Map.put(@files, "app.js", "// right"))) end
         ])
 
       versions = for {:ok, %{version: version}} <- answers, do: version
@@ -218,14 +296,205 @@ defmodule Compendium.CanvasTest do
 
       # The winner's bytes are the version's; the loser wrote nothing; the
       # first version is as it was.
-      {:ok, written} = Arca.get(actor(ctx), version_dir("0.1.1") ++ ["canvas.js"])
+      {:ok, written} = Arca.get(actor(ctx), version_dir("0.1.1") ++ ["app.js"])
       assert written in ["// left", "// right"]
-      assert {:ok, "// first"} = Arca.get(actor(ctx), version_dir("0.1.0") ++ ["canvas.js"])
+      assert {:ok, "// first"} = Arca.get(actor(ctx), version_dir("0.1.0") ++ ["app.js"])
+      assert commits!(ctx, "0.1.1") == [nil]
 
       {:ok, dirs} =
         Arca.list_typed(actor(ctx), ComponentPath.name_dir("tincture", "local", @name))
 
       assert Enum.sort(for {version, :dir} <- dirs, do: version) == ["0.1.0", "0.1.1"]
+    end
+  end
+
+  describe "write, react" do
+    setup do
+      ScriptedBuilder.start!()
+      :ok
+    end
+
+    test "builds the scaffold's sources before anything is allocated, then commits them whole " <>
+           "with the template's files and the build",
+         %{ctx: ctx} do
+      sources =
+        Map.merge(react_scaffold!(ctx), %{
+          "src/format.ts" => "export const label = (reference: string) => reference;\n",
+          "src/Badge.jsx" => "export default function Badge({kind}) { return <b>{kind}</b> }\n",
+          "src/cyfr.d.ts" => "declare const cyfr: { ready(): void };\n",
+          "public/data.json" => "{}"
+        })
+
+      streams = [%{"name" => "runs.changes"}, %{"name" => "schedules.changes"}]
+
+      built = %{
+        "index.html" =>
+          ~S|<!DOCTYPE html><html><head><script type="module" src="./assets/index-a1.js"></script></head><body><div id="root"></div></body></html>|,
+        "assets/index-a1.js" => "console.log(1)",
+        "assets/index-a1.css" => "body{margin:0}",
+        "third-party-notices.json" => "[]"
+      }
+
+      test = self()
+      ScriptedBuilder.script([{:stream, [{:hold, test}, {:result, page_build(built)}]}])
+
+      writer =
+        Task.async(fn ->
+          Canvas.write(ctx, write_args(template: "react", files: sources, streams: streams))
+        end)
+
+      # While the build runs, nothing is allocated and nothing written.
+      assert_receive {:scripted_builder, :holding, handler}, 15_000
+      assert {:error, :not_found} = CanvasVersions.get(actor(ctx), @name)
+      refute version_exists?(ctx, "0.1.0")
+      send(handler, :continue)
+
+      assert {:ok, %{version: "0.1.0", reference: reference}} = Task.await(writer, 30_000)
+
+      # The builder was sent the files and the React template's own files,
+      # and nothing else.
+      template = Compendium.Scaffold.react_template_files(@name)
+
+      assert Enum.sort(Map.keys(template)) ==
+               ~w(package-lock.json package.json tsconfig.json vite.config.ts)
+
+      assert [request] = ScriptedBuilder.requests()
+      assert request.sources == Map.merge(sources, template)
+      assert {request.language, request.target_type} == {:javascript, :tincture}
+      assert request.athanor_id == ctx.athanor_id
+
+      # One commit: the files, the template's files, the build under dist/
+      # and the manifest.
+      {manifest, files} = Map.pop!(version_files!(ctx, "0.1.0"), "cyfr-manifest.json")
+
+      assert files ==
+               sources
+               |> Map.merge(template)
+               |> Map.merge(Map.new(built, fn {path, bytes} -> {"dist/" <> path, bytes} end))
+
+      assert Jason.decode!(manifest)["tincture"] == %{
+               "frame" => %{"placement" => "canvas"},
+               "entry" => "dist/index.html",
+               "build" => %{"tool" => "vite"},
+               "streams" => streams
+             }
+
+      assert commits!(ctx, "0.1.0") == [nil]
+
+      assert {:ok, %{"release_digest" => "sha256:" <> _}} =
+               Compendium.inspect_component(ctx, reference)
+
+      assert %{document: %{allocated: "0.1.0", working: nil, kept: nil}, revision: 1} =
+               versions!(ctx)
+    end
+
+    test "the build's sources are their own rule: accepted under src/ and public/ of a react " <>
+           "canvas only, and no served type",
+         %{ctx: ctx} do
+      assert Canvas.build_source_extensions() == ~w(.ts .tsx .jsx .json .css)
+
+      for extension <- ~w(.ts .tsx .jsx),
+          do: refute(Map.has_key?(Compendium.tincture_served_types(), extension), extension)
+
+      refused = [
+        {"vanilla", Map.put(@files, "app.ts", "x"), "app.ts"},
+        {"vanilla", Map.put(@files, "src/App.tsx", "x"), "src/App.tsx"},
+        {"vanilla", Map.put(@files, "widget.jsx", "x"), "widget.jsx"},
+        {"react", Map.put(react_page(), "main.tsx", "x"), "main.tsx"},
+        {"react", Map.put(react_page(), "app.js", "x"), "app.js"},
+        {"react", Map.put(react_page(), "lib/util.ts", "x"), "lib/util.ts"},
+        {"react", Map.put(react_page(), "src", "x"), "src"},
+        {"react", Map.put(react_page(), "src/notes.md", "x"), "src/notes.md"},
+        {"react", Map.put(react_page(), "dist/index.js", "x"), "dist/index.js"}
+      ]
+
+      template_files =
+        for path <- ~w(package.json package-lock.json tsconfig.json vite.config.ts),
+            do: {"react", Map.put(react_page(), path, "{}"), "react template"}
+
+      for {template, files, named} <- refused ++ template_files do
+        assert {:error, {:invalid_argument, sentence}} =
+                 Canvas.write(ctx, write_args(template: template, files: files)),
+               "#{template} #{inspect(Map.keys(files))}"
+
+        assert sentence =~ named
+      end
+
+      assert ScriptedBuilder.requests() == []
+      assert {:error, :not_found} = CanvasVersions.get(actor(ctx), @name)
+    end
+
+    @tag :capture_log
+    test "a refused, failed or timed-out build, or one that publish refuses, allocates and " <>
+           "publishes nothing",
+         %{ctx: ctx} do
+      log = ["src/App.tsx(3,1): error TS2304: Cannot find name 'x'."]
+
+      cases = [
+        {{:refuse, {:failed, {:status, 2}}, log},
+         &assert(&1 == {:error, "Compilation failed (exit 2): " <> hd(log)})},
+        {{:refuse, {:timeout, 270_000}, log},
+         &assert(&1 == {:error, {:timeout, "Compilation timed out after 270000 ms"}})},
+        {{:refuse, {:capacity, 2}},
+         &assert(&1 == {:error, "Build capacity is full (2 concurrent) — retry shortly"})},
+        {{:stream, [{:refusal, {:failed, {:status, 1}}, log}]},
+         &assert({:error, "Compilation failed (exit 1): " <> _} = &1)},
+        {{:stream, [{:result, page_build(%{"assets/a.js" => "x"})}]},
+         fn answer ->
+           assert {:error, {:invalid_argument, sentence}} = answer
+           assert sentence =~ "dist/index.html"
+         end},
+        {{:stream,
+          [{:result, page_build(%{"index.html" => "<html></html>", "notes.md" => "x"})}]},
+         fn answer ->
+           assert {:error, {:invalid_argument, sentence}} = answer
+           assert sentence =~ "dist/notes.md"
+         end}
+      ]
+
+      for {answer, expected} <- cases do
+        ScriptedBuilder.script([answer])
+        expected.(Canvas.write(ctx, write_args(template: "react", files: react_page())))
+        assert {:error, :not_found} = CanvasVersions.get(actor(ctx), @name)
+        refute version_exists?(ctx, "0.1.0")
+      end
+
+      assert length(ScriptedBuilder.requests()) == length(cases)
+    end
+
+    test "a write cancelled while its build runs allocates and publishes nothing", %{ctx: ctx} do
+      test = self()
+      ScriptedBuilder.script([{:stream, [{:hold, test}]}])
+
+      writer =
+        spawn(fn -> Canvas.write(ctx, write_args(template: "react", files: react_page())) end)
+
+      ref = Process.monitor(writer)
+      assert_receive {:scripted_builder, :holding, _handler}, 15_000
+      Process.exit(writer, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^writer, :killed}, 5_000
+
+      # The request went with its caller: the builder saw the connection
+      # close, and nothing of the version was allocated or written.
+      assert_receive {:scripted_builder, :disconnected}, 15_000
+      assert {:error, :not_found} = CanvasVersions.get(actor(ctx), @name)
+      refute version_exists?(ctx, "0.1.0")
+    end
+
+    test "a name installed as a tincture that is no canvas is refused before any build",
+         %{ctx: ctx} do
+      install!(ctx, "notes", "1.0.0", %{
+        "entry" => "index.html",
+        "frame" => %{"placement" => "float"}
+      })
+
+      assert {:error, {:conflict, _}} =
+               Canvas.write(
+                 ctx,
+                 write_args(name: "notes", template: "react", files: react_page())
+               )
+
+      assert ScriptedBuilder.requests() == []
     end
   end
 
@@ -254,7 +523,7 @@ defmodule Compendium.CanvasTest do
       # Every outcome spends it: a failed trial records its failure once.
       v2 = write!(ctx)
 
-      for outcome <- ["no_tree", "died"] do
+      for outcome <- ["not_ready", "died"] do
         failed = trial!(ctx, v2)
 
         assert {:ok, %{activated: false, document: %{failed: failure} = document}} =
@@ -286,7 +555,7 @@ defmodule Compendium.CanvasTest do
       assert %FrameCredential{state: "active"} = Arca.Repo.get(FrameCredential, other.id)
     end
 
-    test "a tree for the version already working publishes nothing, and kept keeps its value",
+    test "ready for the version already working publishes nothing, and kept keeps its value",
          %{ctx: ctx} do
       v1 = write!(ctx)
       {:ok, _} = activate(ctx, v1, trial!(ctx, v1).frame)
@@ -305,7 +574,7 @@ defmodule Compendium.CanvasTest do
       assert %FrameCredential{state: "revoked"} = Arca.Repo.get(FrameCredential, again.id)
     end
 
-    test "a tree for a version older than the working one answers conflict and changes nothing",
+    test "ready for a version older than the working one answers conflict and changes nothing",
          %{ctx: ctx} do
       # Versions whose string order is not their version order.
       {:ok, 1} =
@@ -340,9 +609,9 @@ defmodule Compendium.CanvasTest do
       failed = trial!(ctx, older)
 
       assert {:ok, %{activated: false, document: %{working: ^newer, kept: nil, failed: failure}}} =
-               activate(ctx, older, failed.frame, "no_tree")
+               activate(ctx, older, failed.frame, "not_ready")
 
-      assert %{version: ^older, outcome: "no_tree"} = failure
+      assert %{version: ^older, outcome: "not_ready"} = failure
     end
 
     test "two activations over one revision publish one", %{ctx: ctx} do
@@ -420,7 +689,7 @@ defmodule Compendium.CanvasTest do
 
       # A failed trial records its failure whatever the grant.
       failed = trial!(ctx, v1, 1)
-      assert {:ok, %{activated: false}} = activate(ctx, v1, failed.frame, "no_tree")
+      assert {:ok, %{activated: false}} = activate(ctx, v1, failed.frame, "not_ready")
 
       owner_profile!(ctx, :active)
       assert {:ok, %{activated: true}} = activate(ctx, v1, trial!(ctx, v1).frame)
@@ -436,7 +705,7 @@ defmodule Compendium.CanvasTest do
       activate = Enum.find(tool.operations, &(&1.action == "activate"))
       assert Enum.map(activate.args, & &1.name) == ~w(canvas version frame outcome)
 
-      args = %{"canvas" => @name, "version" => v1, "frame" => trial.frame, "outcome" => "tree"}
+      args = %{"canvas" => @name, "version" => v1, "frame" => trial.frame, "outcome" => "ready"}
       gate = Sanctum.TestContext.via(ctx, :prism)
 
       assert {:ok, _} =
@@ -490,7 +759,7 @@ defmodule Compendium.CanvasTest do
       v1 = write!(ctx)
       trial = trial!(ctx, v1)
       gate = Sanctum.TestContext.via(ctx, :prism)
-      args = %{"action" => "activate", "canvas" => @name, "version" => v1, "outcome" => "tree"}
+      args = %{"action" => "activate", "canvas" => @name, "version" => v1, "outcome" => "ready"}
 
       # Each is refused as no frame id, after admission: the row is written.
       for frame <- [trial.bearer, "trial " <> trial.bearer <> " ended"] do
@@ -536,7 +805,7 @@ defmodule Compendium.CanvasTest do
 
       for {args, sentence} <- [
             {%{"version" => "1.0"}, "a canvas version is MAJOR.MINOR.PATCH"},
-            {%{"outcome" => "maybe"}, "the outcome is one of tree, no_tree, died"},
+            {%{"outcome" => "maybe"}, "the outcome is one of ready, not_ready, died"},
             {%{"canvas" => "Markets"}, "a canvas's name"}
           ] do
         assert {:error, {:invalid_argument, said}} =
@@ -547,7 +816,7 @@ defmodule Compendium.CanvasTest do
                        "canvas" => @name,
                        "version" => v1,
                        "frame" => trial.frame,
-                       "outcome" => "tree"
+                       "outcome" => "ready"
                      },
                      args
                    )
@@ -661,7 +930,7 @@ defmodule Compendium.CanvasTest do
          %{ctx: ctx} do
       install!(ctx, "weather", "1.0.0", %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1}
+        "entry" => "index.html"
       })
 
       assert {:ok, %{canvas: "weather", document: document, revision: 0}} =
@@ -683,7 +952,7 @@ defmodule Compendium.CanvasTest do
   end
 
   describe "catalog" do
-    test "is the toolkit majors and every stream that declares a shape, by name, and no value",
+    test "is every stream that declares a shape, by name, and no value",
          %{ctx: ctx} do
       shaped =
         for %Prima.Provider.Stream{shape: shape} = stream <- Sanctum.Catalog.streams(),
@@ -697,9 +966,9 @@ defmodule Compendium.CanvasTest do
           }
         end
 
-      assert {:ok, %{toolkit: [1], streams: streams} = catalog} = Canvas.catalog(ctx)
+      assert {:ok, %{streams: streams} = catalog} = Canvas.catalog(ctx)
+      assert Map.keys(catalog) == [:streams]
       assert streams == Enum.sort_by(shaped, & &1.name)
-      assert catalog.toolkit == Compendium.tincture_toolkit_majors()
 
       # A canvas reads exactly a feed's results, by the feed's name, the
       # athanor's runs, its schedules and its schedules' runs; every other
@@ -761,15 +1030,80 @@ defmodule Compendium.CanvasTest do
 
   defp write_args(overrides \\ []) do
     Map.merge(
-      %{"name" => @name, "module" => @module, "streams" => []},
+      %{"name" => @name, "template" => "vanilla", "files" => @files, "streams" => []},
       Map.new(overrides, fn {key, value} -> {Atom.to_string(key), value} end)
     )
   end
 
-  # A version written and granted as the person would grant it, at
-  # revision 1 (`owner_profile!/2`).
+  # The smallest files a react canvas is written with: its page and its
+  # entry source.
+  defp react_page do
+    %{
+      "index.html" =>
+        ~S|<html><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>|,
+      "src/main.tsx" => "document.getElementById(\"root\")!.textContent = \"hi\";\n"
+    }
+  end
+
+  # The React scaffold's page and sources, as `component.create` writes
+  # them, read back from the tincture it scaffolds.
+  defp react_scaffold!(ctx) do
+    {:ok, _} =
+      Compendium.Scaffold.create(ctx, "scaffolded", "tincture", "0.1.0", template: "react")
+
+    base = ComponentPath.version_dir("tincture", "local", "scaffolded", "0.1.0")
+
+    for path <- ~w(index.html src/main.tsx src/App.tsx src/index.css), into: %{} do
+      {:ok, bytes} = Arca.get(actor(ctx), base ++ String.split(path, "/"))
+      {path, bytes}
+    end
+  end
+
+  defp page_build(outputs),
+    do: %{language: :javascript, target_type: :tincture, outputs: outputs, diagnostics: []}
+
+  # A version's files, by relative path.
+  defp version_files!(ctx, version) do
+    {:ok, pairs} = Arca.read_subtree(actor(ctx), version_dir(version))
+    Map.new(pairs, fn {segments, bytes} -> {Enum.join(segments, "/"), bytes} end)
+  end
+
+  defp version_exists?(ctx, version),
+    do: Arca.exists?(actor(ctx), version_dir(version) ++ ["cyfr-manifest.json"])
+
+  # The commits of a version's unit, each by the revision it replaced: one
+  # create is `[nil]`.
+  defp commits!(ctx, version) do
+    [unit] =
+      for unit <- Arca.Repo.all(from(u in StorageUnit, where: u.athanor_id == ^ctx.athanor_id)),
+          String.ends_with?(unit.unit_key, "/#{@name}/#{version}"),
+          do: unit
+
+    Arca.Repo.all(
+      from(c in StorageCommit, where: c.storage_unit_id == ^unit.id, select: c.prior_revision)
+    )
+  end
+
+  # A canvas version as a write leaves it, granted as the person would
+  # grant it, at revision 1 (`owner_profile!/2`): the next patch allocated
+  # in its versions document, then its page installed and registered.
   defp write!(ctx) do
-    {:ok, %{version: version}} = Canvas.write(ctx, write_args())
+    {document, revision} =
+      case CanvasVersions.get(actor(ctx), @name) do
+        {:ok, %{document: document, revision: revision}} -> {document, revision}
+        {:error, :not_found} -> {CanvasVersions.empty(), 0}
+      end
+
+    version =
+      case document.allocated && Version.parse!(document.allocated) do
+        nil -> "0.1.0"
+        %Version{} = v -> "#{v.major}.#{v.minor}.#{v.patch + 1}"
+      end
+
+    {:ok, _} =
+      CanvasVersions.publish(actor(ctx), @name, %{document | allocated: version}, revision)
+
+    install!(ctx, @name, version, canvas_manifest(version)["tincture"])
     owner_profile!(ctx, :active)
     version
   end
@@ -781,7 +1115,7 @@ defmodule Compendium.CanvasTest do
       "version" => version,
       "tincture" => %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "entry" => "index.html",
         "streams" => []
       }
     }
@@ -792,7 +1126,7 @@ defmodule Compendium.CanvasTest do
   defp install!(ctx, name, version, tincture) do
     files =
       if get_in(tincture, ["frame", "placement"]) == "canvas",
-        do: [{"canvas.js", "// installed"}],
+        do: [{"index.html", "<html><head></head><body>installed</body></html>"}],
         else: [{"index.html", "<html></html>"}]
 
     Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, version,
@@ -817,7 +1151,7 @@ defmodule Compendium.CanvasTest do
     %{document: document, revision: revision}
   end
 
-  defp activate(ctx, version, frame, outcome \\ "tree") do
+  defp activate(ctx, version, frame, outcome \\ "ready") do
     Canvas.activate(ctx, %{
       "canvas" => @name,
       "version" => version,

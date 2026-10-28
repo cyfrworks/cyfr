@@ -3,12 +3,12 @@
 
 import {columnGeometry, coveredRects, parseColumns, postureFor, stylesheet, swipeDirection} from "./geometry.js"
 import {
-  CANVAS_MESSAGE_EVENT,
   CREDENTIAL_CLOSED_EVENT,
   DISCONNECTED,
   FRAME_BEARER_EVENT,
   FRAME_STATE_EVENT,
   RECONNECTED,
+  TO_CANVAS_EVENT,
   bearerSignal,
   credentialSignal,
   frameSignal,
@@ -35,11 +35,11 @@ const COVERING = ["column", "float", "full"]
  * frame they name, and its `canvas_installed` pushes to the canvas frame
  * they name.
  *
- * Each canvas frame (`data-frame-wire="canvas"`) is told, through its
- * bridge (`cyfr:canvas-message`), the posture and what the shown apps and
- * floating frames cover of it, in its own pixels, whenever either changes;
- * its bridge holds the latest until the frame's handshake and posts it
- * then.
+ * Each canvas frame (`data-frame-kind="canvas"`, a canvas or a validation
+ * frame) is told, through its bridge (`cyfr:to-canvas`), the posture and
+ * what the shown apps and floating frames cover of it, in its own pixels,
+ * whenever either changes; its bridge holds the latest until the frame's
+ * handshake and posts it then.
  *
  * The safe mode chord, Ctrl+Alt+S, and the switch chords,
  * Ctrl+Alt+ArrowLeft and Ctrl+Alt+ArrowRight, are heard here, on the
@@ -178,7 +178,7 @@ const Canvas = {
     const value = JSON.stringify(args)
     if (told[verb] === value) return
     this._told.set(id, {...told, [verb]: value})
-    frame.dispatchEvent(new CustomEvent(CANVAS_MESSAGE_EVENT, {detail: {verb, args}}))
+    frame.dispatchEvent(new CustomEvent(TO_CANVAS_EVENT, {detail: {verb, args}}))
   },
 
   // The stylesheet lives in the layer's `-geometry` element, which the
@@ -204,7 +204,7 @@ const Canvas = {
   },
 
   _canvasFrames() {
-    return this._frames().filter((frame) => frame.dataset.frameWire === "canvas")
+    return this._frames().filter((frame) => frame.dataset.frameKind === "canvas")
   },
 
   _relay(payload) {
@@ -234,7 +234,7 @@ const Canvas = {
     const frame = this._canvasFrames().find((el) => el.dataset.frameId === signal.frame)
     if (frame) {
       frame.dispatchEvent(
-        new CustomEvent(CANVAS_MESSAGE_EVENT, {detail: {verb: "installed", args: {tinctures: signal.tinctures}}})
+        new CustomEvent(TO_CANVAS_EVENT, {detail: {verb: "installed", args: {tinctures: signal.tinctures}}})
       )
     }
   },

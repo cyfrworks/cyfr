@@ -4,7 +4,7 @@
 defmodule Sanctum.Gate.BulkContentRefusalLogTest do
   @moduledoc """
   A refused call's request-log row holds its bulk content as size and
-  digest too: a note's body, a canvas module the handler refuses, a
+  digest too: a note's body, a canvas's files the handler refuses, a
   source edit the handler refuses (whose sentence names the edit by
   position and kind, never its content), and a call refused at admission
   whose arguments are valid.
@@ -40,15 +40,17 @@ defmodule Sanctum.Gate.BulkContentRefusalLogTest do
     {:ok, ctx: Sanctum.TestContext.local(:prism)}
   end
 
-  test "a canvas module the handler refuses is logged as its size and digest", %{
+  test "a canvas's files the handler refuses are logged each as its size and digest", %{
     ctx: ctx
   } do
-    module = "// BULK_CANVAS_MODULE_CONTENT_MARKER\nexport default () => null;"
+    page = "<html><body>BULK_CANVAS_PAGE_CONTENT_MARKER</body></html>"
+    script = "// BULK_CANVAS_SCRIPT_CONTENT_MARKER"
 
     args = %{
       "action" => "write",
       "name" => "INVALID",
-      "module" => module,
+      "template" => "vanilla",
+      "files" => %{"index.html" => page, "app.js" => script},
       "streams" => []
     }
 
@@ -64,8 +66,13 @@ defmodule Sanctum.Gate.BulkContentRefusalLogTest do
     assert message =~ "canvas's name"
     assert %{status: "error", input: input} = Arca.Repo.get(Arca.Schemas.McpLog, call_id)
 
-    refute input =~ "BULK_CANVAS_MODULE_CONTENT_MARKER"
-    assert Jason.decode!(input)["module"] == measured(module)
+    refute input =~ "BULK_CANVAS_PAGE_CONTENT_MARKER"
+    refute input =~ "BULK_CANVAS_SCRIPT_CONTENT_MARKER"
+
+    assert Jason.decode!(input)["files"] == %{
+             "index.html" => measured(page),
+             "app.js" => measured(script)
+           }
   end
 
   test "a source edit the handler refuses names the edit, never its content, in the request log's error",

@@ -1,0 +1,25 @@
+{
+  "name": "canvas",
+  "type": "tincture",
+  "version": "0.2.0",
+  "publisher": "local",
+  "description": "Your canvas: a tile for each app you installed, your recent runs with failed ones first, your schedules with when each runs next, and the last schedule runs.",
+  "tags": ["canvas", "system"],
+  "category": "utility",
+  "tincture": {
+    "icon": "canvas",
+    "tagline": "Your apps, runs and schedules",
+    "frame": {
+      "placement": "canvas"
+    },
+    "entry": "dist/index.html",
+    "build": {
+      "tool": "vite"
+    },
+    "streams": [
+      {"name": "runs.changes"},
+      {"name": "schedules.changes"},
+      {"name": "schedule_runs.changes"}
+    ]
+  }
+}

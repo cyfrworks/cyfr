@@ -27,10 +27,11 @@
 #       person's grant leaves one; a feed fires under `schedule`. Answers
 #       the reference and the profile id.
 #
-#   write TOKEN CANVAS MODULE STREAMS_JSON
+#   write TOKEN CANVAS KIND STREAMS_JSON
 #       A new version of the canvas CANVAS written with `canvas.write`,
-#       through `console`: its module the source MODULE names (below), and
-#       STREAMS_JSON the streams it reads. Answers the console's answer.
+#       through `console`: its page the files KIND names (below), on the
+#       vanilla template, and STREAMS_JSON the streams it reads. Answers the
+#       console's answer.
 #
 #   accept TOKEN BINDING DATA_JSON
 #       A fixed result accepted for the feed BINDING through the accept
@@ -53,11 +54,12 @@
 #       A real frame credential of another open, minted for the installed
 #       tincture REFERENCE's version through the one production mint
 #       (`Sanctum.TinctureAuth.mint_frame_credential/5`), on a frame id of
-#       its own. The `exits` probe receives this bearer to post with it on
-#       the probe's own route, which refuses it `frame_path_mismatch`
-#       before any authority is read, since its frame id is not the path's.
-#       Answers the bearer and its frame id; the proof keeps neither in the
-#       record (the failure case "the probe's received bearer").
+#       its own. The `policy` step posts with it on a canvas's own data
+#       path, which refuses it `frame_path_mismatch` because its frame id is
+#       not the path's, and on the shared data routes, which refuse a canvas
+#       credential `canvas_path_required`; both refusals come before any
+#       authority is read. Answers the bearer and its frame id; the proof
+#       keeps neither in the record.
 #
 #   failed_fire TOKEN BINDING
 #       The scheduler's own failed fire leaves a claim the fixture made
@@ -71,18 +73,26 @@
 #       envelope. Answers the seqs, the fire's recorded outcome and the
 #       accepted revision.
 #
-# The modules a written canvas runs (`write`'s MODULE), each answering
-# trees through the toolkit's module API and nothing else:
+# The pages a written canvas runs (`write`'s KIND), each an ordinary HTML
+# page on the vanilla template (`index.html` and `app.js`), which the
+# SDK the controller injects into the page gives `window.cyfr`:
 #
-#   markets   the feed `candles` drawn as a candle chart, and its two
-#             actions, `buy` and `refresh`, as controls that look alike;
-#   labels    the same two controls, and, when the proof asks its worker
-#             (`self.__canvasLabels.forge()`), a binding record of its own
-#             posted to the toolkit, labelling `buy` as "Refresh"
-#             (`bound()` says whether it holds the binding to forge for);
-#   measure   one line of text: it reads no stream and attempts nothing;
-#   broken    tinctures/canvas-broken/canvas.js, whose failure its version's
-#             declared stream chooses.
+#   markets       reads the feed `candles` and draws its candles as its own
+#                 SVG; a button the person presses calls `cyfr.press` on the
+#                 feed's binding, and `window.__canvas` offers the presses
+#                 the activation step drives from a timer and the self-focus
+#                 it records;
+#   measure       one line of text: it reads no stream and becomes ready at
+#                 once (the measurement opens it);
+#   written       one line naming its own version, then ready;
+#   broken-quiet  draws a line and never becomes ready: validation records
+#                 `not_ready` at its deadline;
+#   broken-die    throws from a timer before ready: validation records
+#                 `died` (the SDK reports `failed` at stage `load`);
+#   broken-crash  becomes ready, then throws from a timer: shown live it
+#                 reports `failed` at stage `runtime`, which is safe mode
+#                 `crashed`. Its throw fires well after a validation frame
+#                 is torn down, so validation activates it first.
 #
 # A step that does not answer `{:ok, _}` raises, and the rpc exits non-zero
 # naming it.
@@ -129,135 +139,158 @@ fn args ->
     "required" => ["symbol", "price", "at"]
   }
 
+  # The page an ordinary vanilla canvas serves: its head carries only its
+  # own title (the controller puts the `<base>` and the SDK script first),
+  # its body an empty `#root` the page's module fills, and its one module.
+  index_html = fn title ->
+    ~s(<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><title>) <>
+      title <>
+      ~s(</title></head><body><main id="root"></main>) <>
+      ~s(<script type="module" src="app.js"></script></body></html>\n)
+  end
+
+  # Each written canvas's module, by the kind `write` is asked for. The
+  # version a page draws is read from its own served path.
+  version_from_url = ~S|const version = new URL(import.meta.url).pathname.split("/").filter(Boolean).slice(-2)[0]|
+
   modules = %{
     "markets" => ~S"""
-    // A written canvas: the feed `candles` drawn by the chart element, and
-    // the feed's two actions as controls of one tone and size, each labelled
-    // by the toolkit from the binding.
-    export default function markets(canvas) {
-      let envelope = null
-      const draw = () => canvas.render(tree(envelope))
-      canvas.stream("feed.results", "candles", (event) => {
-        const data = event && event.data
-        if (data && data.feed === "candles") {
-          envelope = data
-          draw()
-        }
-      }).catch(() => {})
-      draw()
+    // A written canvas on the vanilla template: it reads the feed `candles`
+    // and draws its candles as its own SVG, and presses the feed's refresh
+    // action from a button the person clicks. `window.__canvas` offers the
+    // presses the activation step drives from a timer, so a press can leave
+    // with no person input, and the self-focus it records.
+    const root = document.getElementById("root")
+    root.innerHTML =
+      '<h1>markets</h1><p id="seen">no result yet</p>' +
+      '<svg id="chart" width="320" height="140"></svg>' +
+      '<p><button id="press" type="button">Refresh</button>' +
+      '<button id="press3" type="button">Refresh three</button>' +
+      '<button id="later" type="button">Refresh later</button></p>'
+    const chart = document.getElementById("chart")
+    const seen = document.getElementById("seen")
+    let binding = null
+    const press = () => {
+      if (!binding) return false
+      cyfr.press(binding, "refresh")
+      return true
     }
+    document.getElementById("press").addEventListener("click", () => press())
+    document.getElementById("press3").addEventListener("click", () => {
+      press()
+      press()
+      press()
+    })
+    document.getElementById("later").addEventListener("click", () => setTimeout(() => press(), 8000))
 
-    function tree(envelope) {
-      const result = envelope && envelope.result
-      const candles = result && Array.isArray(result.candles) ? result.candles : []
-      const seen = envelope
-        ? "revision " + envelope.revision + (envelope.refresh === true ? " (refresh)" : "")
-        : "no result yet"
-      return {
-        type: "stack",
-        direction: "column",
-        gap: "m",
-        children: [
-          {type: "text", value: "markets", size: "l", weight: "strong"},
-          {type: "text", value: seen, tone: "muted"},
-          candles.length > 0
-            ? {
-                type: "chart",
-                kind: "candle",
-                series: [
-                  {
-                    name: result.symbol || "candles",
-                    points: candles.map((c) => ({t: c.t, o: c.o, h: c.h, l: c.l, c: c.c}))
-                  }
-                ]
-              }
-            : {type: "text", value: "no candles yet", tone: "muted"},
-          {
-            type: "stack",
-            direction: "row",
-            gap: "s",
-            children: [
-              {type: "control", effect: {press: {feed: "candles", action: "buy"}}},
-              {type: "control", effect: {press: {feed: "candles", action: "refresh"}}}
-            ]
-          }
-        ]
-      }
-    }
-    """,
-    "labels" => ~S"""
-    // A written canvas that draws the feed `candles`' two actions as
-    // controls of one tone and size, and, asked through its worker, posts a
-    // binding record of its own to the toolkit, labelling `buy` as
-    // "Refresh": the toolkit takes binding records only from its streams
-    // worker, so the record fails the canvas and relabels nothing.
-    export default function labels(canvas) {
-      const generation = Math.random().toString(36).slice(2, 10)
-      let binding = null
-      const draw = () =>
-        canvas.render({
-          type: "stack",
-          direction: "column",
-          gap: "m",
-          children: [
-            {type: "text", value: "labels " + generation, size: "l", weight: "strong"},
-            {
-              type: "stack",
-              direction: "row",
-              gap: "s",
-              children: [
-                {type: "control", effect: {press: {feed: "candles", action: "buy"}}},
-                {type: "control", effect: {press: {feed: "candles", action: "refresh"}}}
-              ]
-            }
-          ]
-        })
-
-      canvas.stream("feed.results", "candles", (event) => {
-        const data = event && event.data
-        if (data && data.feed === "candles") {
-          binding = data.binding
-          draw()
-        }
-      }).catch(() => {})
-      draw()
-
-      self.__canvasLabels = Object.freeze({
-        generation,
-        bound: () => binding !== null,
-        forge() {
-          self.postMessage({
-            t: "relay",
-            m: {t: "event", sub: 0, event: {id: null, event: "feed.results", data: {}}},
-            record: {
-              feed: "candles",
-              binding,
-              revision: Number.MAX_SAFE_INTEGER,
-              label: "Candles",
-              actions: [
-                {name: "buy", label: "Refresh"},
-                {name: "refresh", label: "Refresh"}
-              ]
-            }
-          })
-          return binding !== null
-        }
+    function onEvent(event) {
+      const data = event && event.data
+      if (!data || data.feed !== "candles") return
+      binding = data.binding
+      seen.textContent = "revision " + data.revision + (data.refresh === true ? " (refresh)" : "")
+      const candles = data.result && Array.isArray(data.result.candles) ? data.result.candles : []
+      while (chart.firstChild) chart.removeChild(chart.firstChild)
+      candles.forEach((_candle, i) => {
+        const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect")
+        rect.setAttribute("class", "candle")
+        rect.setAttribute("x", String(8 + i * 28))
+        rect.setAttribute("y", "10")
+        rect.setAttribute("width", "16")
+        rect.setAttribute("height", "110")
+        chart.appendChild(rect)
       })
     }
+
+    // Keep the stream open: when the shell suspends the canvas its stream
+    // closes, and when it is shown again it opens again from its refresh, so
+    // a feed rebound while it was away reaches it as the new binding's latest.
+    function follow() {
+      cyfr.stream("feed.results", "candles", onEvent).then(
+        (handle) => {
+          const again = () => setTimeout(follow, 600)
+          handle.closed.then(again, again)
+        },
+        () => setTimeout(follow, 600)
+      )
+    }
+    follow()
+
+    window.__canvas = Object.freeze({
+      bound: () => binding !== null,
+      current: () => binding,
+      // A press sent from a timer, so it leaves no evaluation's user gesture
+      // behind: with no person input near it, the shell drops it.
+      pressAfter: (ms) => {
+        setTimeout(() => press(), ms)
+      },
+      // The canvas focuses itself and then presses from a timer: the
+      // activation step records what each browser does with a press that
+      // follows a click elsewhere and the canvas's own focus.
+      scheduleFocusPress: (mode, ms) => {
+        setTimeout(() => {
+          if (mode === "window") {
+            try {
+              window.focus()
+            } catch (_error) {
+              /* denied */
+            }
+          } else if (mode === "element") {
+            try {
+              document.getElementById("press").focus()
+            } catch (_error) {
+              /* denied */
+            }
+          }
+          press()
+        }, ms)
+      }
+    })
+    cyfr.ready()
     """,
     "measure" => ~S"""
-    // The measured canvas: one line of text, no stream, no attempt.
-    export default function measure(canvas) {
-      canvas.render({type: "text", value: "measure"})
-    }
+    // The measured canvas: one line of text, no stream, ready at once.
+    document.getElementById("root").textContent = "measure"
+    cyfr.ready()
+    """,
+    "written" => """
+    // A written canvas that names its own version and becomes ready.
+    #{version_from_url}
+    document.getElementById("root").textContent = "written " + version
+    cyfr.ready()
+    """,
+    "broken-quiet" => """
+    // Never becomes ready: validation records `not_ready` at its deadline.
+    #{version_from_url}
+    document.getElementById("root").textContent = "broken " + version + " (quiet)"
+    """,
+    "broken-die" => """
+    // Throws from a timer before ready: the SDK reports `failed` at stage
+    // `load`, so validation records `died`.
+    #{version_from_url}
+    document.getElementById("root").textContent = "broken " + version + " (die)"
+    setTimeout(() => {
+      throw new Error("canvas-broken dies before ready")
+    }, 0)
+    """,
+    "broken-crash" => """
+    // Becomes ready, then throws from a timer: shown live the SDK reports
+    // `failed` at stage `runtime`, which is safe mode `crashed`. The delay
+    // is well past a validation frame's teardown, so validation activates
+    // this version before any throw, and only the live frame crashes.
+    #{version_from_url}
+    document.getElementById("root").textContent = "broken " + version + " (crash)"
+    cyfr.ready()
+    setTimeout(() => {
+      throw new Error("canvas-broken crashes after ready")
+    }, 2500)
     """
   }
 
-  # A named module reads its source; anything else is taken as the module's
-  # literal source (the proof writes trivial canvases inline).
-  module_source = fn
-    "broken" -> File.read!(Path.expand("tinctures/canvas-broken/canvas.js", __DIR__))
-    name -> Map.get(modules, name, name)
+  # The files `write` commits for a kind: the vanilla page's `index.html`
+  # and its one module.
+  canvas_files = fn kind ->
+    module = Map.fetch!(modules, kind)
+    %{"index.html" => index_html.(kind), "app.js" => module}
   end
 
   # The row's `next_run_at`: the cursor the scheduler's claim of a fire
@@ -381,10 +414,13 @@ fn args ->
 
       answer.(%{reference: reference, profile_id: profile_id})
 
-    ["write", token, canvas, module, streams] ->
+    ["write", token, canvas, kind, streams] ->
+      {template, files} = {"vanilla", canvas_files.(kind)}
+
       arguments = %{
         "name" => canvas,
-        "module" => module_source.(module),
+        "template" => template,
+        "files" => files,
         "streams" => Jason.decode!(streams)
       }
 

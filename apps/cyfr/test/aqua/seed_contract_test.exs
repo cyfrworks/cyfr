@@ -198,15 +198,18 @@ defmodule Aqua.SeedContractTest do
     assert untaught == [], Enum.join(untaught, "\n")
   end
 
-  # A canvas is the soul's own to write: it reads what a canvas may read
-  # and writes a version without a card, and the scroll it follows ships
-  # beside the capability-acquisition one.
-  test "the soul writes canvases: its three canvas keys are auto, and the shipped scrolls include canvas" do
+  # A canvas is the soul's own to write: it reads what a canvas may read on
+  # its own and asks the person before each write, whose card names the
+  # streams the version reads; the scroll it follows ships beside the
+  # capability-acquisition one.
+  test "the soul writes canvases: it reads on its own, asks before each write, and ships the scroll" do
     {:ok, soul} = Compendium.AquaAgent.parse("aqua", File.read!(Path.join(@seed, "aqua.md")))
 
-    for key <- ~w(canvas.catalog canvas.versions canvas.write) do
-      assert soul.tool_policy[key] == "auto", "#{key} is not auto on the soul"
-    end
+    assert Map.take(soul.tool_policy, ~w(canvas.catalog canvas.versions canvas.write)) == %{
+             "canvas.catalog" => "auto",
+             "canvas.versions" => "auto",
+             "canvas.write" => "ask"
+           }
 
     roles =
       for {name, key, _mode} <- seed_policy(),
@@ -234,11 +237,61 @@ defmodule Aqua.SeedContractTest do
     for taught <- ["canvas.catalog", "feed.list", "layout.edit"], do: assert(body =~ taught)
   end
 
+  # The soul's policy, its prompt, the scroll and the Artisan role say one
+  # thing: the soul writes a canvas as a page's files once the person says
+  # yes, on a card naming the streams; no role writes one, and nothing
+  # teaches the module, tree or toolkit a canvas no longer has.
+  test "the policy, the prompt, the scroll and the Artisan role agree on writing a canvas" do
+    soul = File.read!(Path.join(@seed, "aqua.md"))
+    [_, section] = Regex.run(~r/^## Canvases\n(.*?)\n---/ms, soul)
+    canvases = String.replace(section, ~r/\s+/, " ")
+    assert canvases =~ "canvas.write"
+    assert canvases =~ "once the person says yes"
+    assert canvases =~ "names the streams the version reads"
+
+    body = String.replace(canvas_scroll(), ~r/\s+/, " ")
+    assert body =~ "`canvas.write` asks the person first"
+    assert body =~ "its card names the streams the version reads"
+
+    artisan = File.read!(Path.join([@seed, "roles", "artisan.md"]))
+    refute artisan =~ "| `canvas` |"
+    refute artisan =~ ~r/canvas\.(write|catalog|versions)/
+
+    for {file, text} <- [{"aqua.md", canvases}, {"skills/canvas/SKILL.md", body}] do
+      refute text =~ ~r/\b(module|modules|toolkit|tree|trees|render)\b/i, file
+      refute text =~ ~r/\bglass(es)?\b/i, file
+    end
+  end
+
+  # The scroll's write call names exactly the arguments `canvas.write`
+  # declares, its templates the operation's, and the SDK calls it teaches
+  # are a canvas page's.
+  test "the canvas scroll's call and SDK are the tool's and the page's" do
+    body = canvas_scroll()
+
+    [call] =
+      Regex.run(~r/canvas\(action: "write", ([^)]*)\)/, body, capture: :all_but_first)
+
+    named = ~r/(\w+): / |> Regex.scan(call, capture: :all_but_first) |> List.flatten()
+    {:ok, {_provider, tool}} = Sanctum.Catalog.lookup("canvas")
+    write = Enum.find(tool.operations, &(&1.action == "write"))
+
+    assert Enum.sort(named) == Enum.sort(Enum.map(write.args, & &1.name))
+    assert Enum.find(write.args, &(&1.name == "template")).enum == ~w(vanilla react)
+    for template <- ~w(vanilla react), do: assert(body =~ "`#{template}`")
+
+    for call <- ~w(cyfr.stream cyfr.on cyfr.open cyfr.press cyfr.ready),
+        do: assert(body =~ "`#{call}(", call)
+
+    # Every stream a canvas may read (one that declares a shape) is named.
+    for %Prima.Provider.Stream{shape: shape, name: name} <- Sanctum.Catalog.streams(),
+        not is_nil(shape),
+        do: assert(body =~ "`#{name}`", name)
+  end
+
   # `canvas.write` answers a reference pinned to the version it wrote, and
   # the layout refuses a pinned reference, so the scroll's step that adds a
-  # canvas to the layout names it without its version; a written canvas
-  # holds only its manifest and its module, so an image it shows is a
-  # `data:` URL.
+  # canvas to the layout names it without its version.
   test "the canvas scroll adds a written canvas to the layout by its versionless reference" do
     body = canvas_scroll()
     [step] = Regex.run(~r/^4\. .*?(?=\n\n)/ms, body)
@@ -262,22 +315,20 @@ defmodule Aqua.SeedContractTest do
     layout = &Prima.Layout.validate(%{"version" => 2, "canvases" => [&1]})
     assert {:ok, _} = layout.(entry)
     assert {:error, _} = layout.(%{entry | "tincture" => pinned})
-
-    [image] = Regex.run(~r/^- `image` .*?(?=\n- )/ms, body)
-    refute image =~ "inside the version"
-    assert image =~ "`data:`"
   end
 
-  # An unhandled rejection fails a canvas into safe mode, so the scroll's
-  # example catches a refused open, and takes a change once per run and
-  # kind, as the seed canvas does (assets/test/canvas/canvas_skill.test.mjs
-  # runs it).
-  test "the canvas scroll's example catches a refused stream and takes each change once" do
+  # An error the page does not catch fails a canvas into safe mode, so the
+  # scroll's example catches a refused open, calls ready once after it, and
+  # draws what a stream carries as text.
+  test "the canvas scroll's example catches a refused stream, is ready once, and draws text" do
     [example] = Regex.run(~r/```js\n(.*?)```/s, canvas_scroll(), capture: :all_but_first)
-    [stream] = Regex.run(~r/canvas\.stream\("runs\.changes".*\n  \}\)\.catch\(/s, example)
+    [stream] = Regex.run(~r/cyfr\s*\.stream\("runs\.changes".*/s, example)
 
-    assert stream =~ ~s(change.execution_id + "\\n" + change.kind)
-    assert stream =~ "seen.has("
+    assert stream =~ ".catch("
+    assert [_one] = Regex.scan(~r/cyfr\.ready\(\)/, example)
+    assert stream =~ ".finally(() => cyfr.ready())"
+    assert example =~ "textContent"
+    refute example =~ "innerHTML"
   end
 
   defp canvas_scroll do

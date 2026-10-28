@@ -361,17 +361,9 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"apps/prima/test/prima/authority/blob_test.exs", ~w(unicode keys same different)}
     ],
     "canvas_shape.json" => [
-      {"apps/cyfr/assets/test/toolkit/tree.test.mjs", ~w(times)},
       {"apps/prima/test/prima/canvas/shape_test.exs",
        ~w(types max_depth reasons shapes canonical spellings times values results)},
       {"apps/prima/test/prima/manifest/results_test.exs", ~w(values results)}
-    ],
-    "canvas_wire.json" => [
-      {"apps/cyfr/assets/test/toolkit/support.mjs", ~w()},
-      {"apps/cyfr/assets/test/toolkit/wire.test.mjs",
-       ~w(version to_prism_verbs to_toolkit_verbs messages paths)},
-      {"apps/prima/test/prima/canvas_wire_test.exs",
-       ~w(version to_prism_verbs to_toolkit_verbs messages paths)}
     ],
     "carry.json" => [
       {"apps/cyfr/assets/test/carrier/carry.test.mjs",
@@ -414,7 +406,6 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(certificate_protocol certificates challenge_refusals challenges homes issued_at keys lifetime_ms proof_cases proof_protocol proofs purposes refusals reserved_client_ids verify)}
     ],
     "feed.json" => [
-      {"apps/cyfr/assets/test/toolkit/support.mjs", ~w(results envelopes)},
       {"apps/cyfr/test/opus/feeds_test.exs", ~w(bindings outputs)},
       {"apps/prima/test/prima/canvas/shape_test.exs", ~w(reasons bindings results)},
       {"apps/prima/test/prima/feed_test.exs",
@@ -564,9 +555,15 @@ defmodule Cyfr.CrossLanguageDriftTest do
        ~w(version attempt max_body_bytes max_frame_bytes initial_credit exchange refusals)}
     ],
     "tincture_wire.json" => [
+      {"apps/cyfr/assets/test/canvas/hook.test.mjs", ~w(shell shell_invalid canvas.handshake)},
+      {"apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs", ~w(stream_rejections)},
+      {"apps/cyfr/assets/test/sdk/client.test.mjs", ~w(stream_rejections)},
       {"apps/cyfr/assets/test/sdk/support.mjs", ~w()},
+      {"apps/cyfr/assets/test/sdk/wire.test.mjs",
+       ~w(version bearer_header routes requests answers refusal shell shell_invalid canvas)},
+      {"apps/cyfr/test/cyfr_web/controllers/api_error_test.exs", ~w(stream_rejections)},
       {"apps/prima/test/prima/tincture_wire_test.exs",
-       ~w(version bearer_header routes requests public_request answers refusal stream shell)}
+       ~w(version bearer_header routes requests public_request answers refusal stream stream_rejections shell shell_invalid canvas)}
     ],
     "worker_api.json" => [
       {"apps/cyfr/test/opus/worker_client_test.exs", ~w(requests status)},

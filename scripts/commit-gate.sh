@@ -17,8 +17,10 @@
 #             and npx eslint, as CI's JavaScript job), the test WASM
 #             fixtures against their sources (scripts/check-test-wasm.sh,
 #             with the pinned wasm-tools and the Rust toolchain the
-#             fixtures' build script pins), CI's built-SDK and
-#             built-toolkit checks (their scripts read from test.yml), the
+#             fixtures' build script pins), CI's built-SDK check (its
+#             script read from test.yml), the shipped canvas's dist/
+#             against its sources (scripts/check-seed-canvas.sh, as CI's
+#             JavaScript job runs it, with this host's Node 24), the
 #             release-boot names test, the canary's own checks, the image
 #             suites' shared plumbing (tests/imagesuite_test.py), the
 #             prebuilt binary fetch against the deps' own downloads
@@ -293,7 +295,7 @@ deadline_for() {
   # A step of a CI job (run_job) takes the job's own timeout.
   if [ -n "${STEP_DEADLINE:-}" ]; then echo "$STEP_DEADLINE"; return; fi
   case "$1" in
-    fossils|format|credo|opsgen|confguide|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|toolkit_bundle|boot_names|canary_checks|imagesuite_checks|prebuilt_binaries|worker_auth_check|backends_check|island_compile|island_test) echo 600 ;;
+    fossils|format|credo|opsgen|confguide|js_suite|eslint|wasm_tools|test_wasm|sdk_bundle|seed_canvas|boot_names|canary_checks|imagesuite_checks|prebuilt_binaries|worker_auth_check|backends_check|island_compile|island_test) echo 600 ;;
     compile_*|boundary_plants) echo 1200 ;;
     # A first run builds the PLT.
     dialyzer) echo 2400 ;;
@@ -313,7 +315,7 @@ deadline_for() {
 PG_SERVER=postgres://cyfr:cyfr@localhost:5432
 
 # The steps of a leg, for the deadline of a leg that waits on it.
-STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide js_suite eslint wasm_tools test_wasm sdk_bundle toolkit_bundle boot_names canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check dialyzer boundary_plants sqlite_suite'
+STATIC_STEPS='compile_sqlite_test compile_sqlite_dev format credo opsgen confguide js_suite eslint wasm_tools test_wasm sdk_bundle seed_canvas boot_names canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check dialyzer boundary_plants sqlite_suite'
 steps_of() {
   case "$1" in
     static) echo "$STATIC_STEPS" ;;
@@ -386,16 +388,17 @@ leg_static() {
   local rustc
   rustc=$(sed -n 's/^rustc_version=//p' apps/cyfr/test/support/test_wasm/build-fixture.sh)
   step static test_wasm env RUSTUP_TOOLCHAIN="$rustc" scripts/check-test-wasm.sh || return
-  # Each rebuilds its bundle into the checkout and fails when the tracked
+  # It rebuilds the SDK bundle into the checkout and fails when the tracked
   # file is not the build, as CI's test job runs it.
-  local sdk="$LOGDIR/static.sdk_bundle.sh" toolkit="$LOGDIR/static.toolkit_bundle.sh"
-  if ! ci_step "The built SDK is its source's" > "$sdk" ||
-    ! ci_step "The built toolkit is its source's" > "$toolkit"; then
+  local sdk="$LOGDIR/static.sdk_bundle.sh"
+  if ! ci_step "The built SDK is its source's" > "$sdk"; then
     echo "ci_steps=1" >> "$LOGDIR/static.summary"
     return 1
   fi
   step static sdk_bundle env MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test bash "$sdk" || return
-  step static toolkit_bundle env MIX_BUILD_PATH=_build/test CYFR_DATABASE=sqlite MIX_ENV=test bash "$toolkit" || return
+  # The shipped canvas is built in a temporary copy, so the checkout is
+  # left as it was.
+  step static seed_canvas scripts/check-seed-canvas.sh || return
   step static boot_names bash tests/release-boot/names-test.sh || return
   step static canary_checks python3 -I tests/locus-runtime-image/canary_test.py || return
   step static imagesuite_checks python3 -I tests/imagesuite_test.py || return

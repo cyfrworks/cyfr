@@ -682,7 +682,7 @@ defmodule Prism.TinctureRegistryTest do
       assert rows["test-dash"].frame.background == false
     end
 
-    test "a canvas is listed with its placement, its module as its entry" do
+    test "a canvas is listed with its placement, its page as its entry" do
       manifest = %{
         "name" => "home-canvas",
         "type" => "tincture",
@@ -690,18 +690,18 @@ defmodule Prism.TinctureRegistryTest do
         "publisher" => "local",
         "tincture" => %{
           "frame" => %{"placement" => "canvas"},
-          "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+          "entry" => "index.html",
           "streams" => [%{"name" => "runs.changes"}]
         }
       }
 
       lay!("ath_test", "local", "home-canvas", "1.0.0", manifest, [
-        {"canvas.js", "export default () => {}"}
+        {"index.html", "<html><head></head><body></body></html>"}
       ])
 
       row = listed(:test_canvas_row)["home-canvas"]
       assert %{placement: "canvas", background: false, capabilities: []} = row.frame
-      assert row.entry == "canvas.js"
+      assert row.entry == "index.html"
     end
 
     test "a tincture whose declaration the rules refuse is listed with no frame to grant" do

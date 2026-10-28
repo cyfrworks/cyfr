@@ -21,7 +21,7 @@ defmodule PrismWeb.ShellLive do
   keyed `{:canvas, id}`, and holds the `column` apps and the floating
   tinctures the layout places over it. A canvas whose newest installed
   version is not its working version, its kept version or its recorded
-  failure is validated first (`Prism.CanvasValidation`): only a tree
+  failure is validated first (`Prism.CanvasValidation`): only `ready`
   activates it. When a validation ends, the shell compares again: a newer
   version written meanwhile that needs validating is validated in its
   turn, each such version once, and otherwise the working version opens.
@@ -45,28 +45,41 @@ defmodule PrismWeb.ShellLive do
   once opened stays held until the shell ends, the layout drops it or safe
   mode clears every frame, and showing it again thaws it.
 
-  A canvas frame speaks `Prima.CanvasWire` over the port its bridge hands
-  it, as `canvas_verb`. Its handshake hands it `boot`, the bearer inside
-  it; `installed` (every listed tincture that is not a canvas, by name) is
-  pushed to each held canvas frame after its handshake and whenever the
-  listing changes, and `posture`, `covered` and `state` come from the glass.
-  From the live, visible canvas, `ready` keeps it out of safe mode, `open`
-  opens a listed tincture where the canvas's arrangement puts it (or `full`
-  in the hand, the next `column` on the desk), and `press` presses a feed's
-  action through `feed.press` once the served version's declaration reads
-  that feed; `tree` is dropped. From a validation frame only `tree` and
-  `failed` act. Anything else is dropped and counted.
+  A canvas frame is a page like any tincture's: its messages over the
+  port its bridge hands it are the shell verbs of `Prima.TinctureWire`,
+  as `frame_verb`. Its handshake hands it its bearer and its `canvas`
+  block (`Prima.TinctureWire.canvas_handshake/4`); `installed` (every
+  listed tincture that is not a canvas, by name) is pushed to each held
+  canvas frame after its handshake and whenever the listing changes, and
+  `posture`, `covered` and `state` come from the glass. From the live,
+  visible canvas, `ready` keeps it out of safe mode, `failed` at either
+  stage is safe mode `crashed`, `open` opens a listed tincture where the
+  canvas's arrangement puts it (or `full` in the hand, the next `column`
+  on the desk), and `press` presses a feed's action through `feed.press`
+  once the served version's declaration reads that feed. `ready` and
+  `failed` report how a canvas's page loaded and runs, so they count from
+  a hidden canvas too, frozen or not the one shown: its `ready` makes it
+  ready, and its `failed` marks it died, which is safe mode `crashed` once
+  the canvas is shown. From a validation frame only `ready` and `failed`
+  act. A canvas's other verbs, an `open` or a `press` from a canvas the
+  glass does not show live, and `press` and `failed` from a frame that is
+  not a canvas's are dropped and counted.
 
   ## Safe mode
 
-  A live canvas that has not sent `ready` within ten seconds of its
-  frame's open, or that was refused at its open, is safe mode `not_ready`; one
-  that reports a failure, or whose frame dies while the glass shows it, is
-  `crashed` (a hidden canvas whose frame dies is discarded, and opens anew
-  once shown); a validation that leaves no working
-  version is `not_validated`; and the person's own ask — the shell's `Safe
-  mode` button or Ctrl+Alt+S on the shell's page, never a frame's message —
-  is `requested`. Safe mode discards every frame with its credential and
+  A canvas the glass shows that has not sent `ready` within ten seconds of
+  being shown — its frame's open, for one that opens shown — or that was
+  refused at its open, is safe mode `not_ready`; one that reports a
+  failure, or whose frame dies while the glass shows it, is `crashed`, and
+  so is a hidden canvas that reported a failure, once it is shown (a
+  hidden canvas whose frame dies is discarded, and opens anew once
+  shown); a validation that leaves no working version is
+  `not_validated`; and the person's own ask — the shell's `Safe mode`
+  button or Ctrl+Alt+S on the shell's page, never a frame's message — is
+  `requested`. A hidden canvas runs no ready deadline, since it reads and
+  acts on nothing: one not ready yet has the whole ten seconds from the
+  moment it is shown, and one ready before it was hidden stays ready.
+  Safe mode discards every frame with its credential and
   the system layer shows its prompt (`Prism.SafeMode`) over the visible
   canvas; no picker is drawn and nothing launches. The way out the person
   chooses ends it: the canvas again, the kept version once the system
@@ -120,8 +133,9 @@ defmodule PrismWeb.ShellLive do
   answered once per frame). The frame's SDK sends data to the endpoint
   under that bearer; the port carries the shell verbs of
   `Prima.TinctureWire`, which reach this view as `frame_verb`. A message
-  that does not decode, that names a frame this view does not hold live,
-  or that asks for what its frame may not, is dropped and counted; no
+  that does not decode, that names a frame this view does not hold live
+  (a frozen canvas's `ready` and `failed` excepted), or that asks for what
+  its frame may not, is dropped and counted; no
   verb places, sizes or raises a frame. When a frame freezes or goes live
   again the view pushes `frame_state`, which the canvas hook relays to the
   frame's bridge.
@@ -131,8 +145,7 @@ defmodule PrismWeb.ShellLive do
   (`Prism.Frames.renew/4`), and a frame that is not a canvas's is resumed
   under a new bearer when it is shown again: the view pushes each new
   bearer as `frame_bearer`, which the canvas hook relays to that frame's
-  bridge alone, a canvas's bridge sending it over the canvas wire as
-  `credential`, and keeps none. A frozen frame is not renewed, so a canvas
+  bridge alone, and keeps none. A frozen frame is not renewed, so a canvas
   hidden past its deadline is refused when it is shown again.
 
   While a full frame is shown it covers everything under it, so the
@@ -157,13 +170,12 @@ defmodule PrismWeb.ShellLive do
   alias Prism.SafeMode
   alias Sanctum.TinctureAuth
 
-  # How long a live canvas has, from its frame's open, to send `ready`
-  # before the shell enters safe mode: a page that never loads, and so
-  # never handshakes, falls to safe mode as one that loads and dies.
+  # How long a canvas has, from the moment the glass shows it, to send
+  # `ready` before the shell enters safe mode (`ready_deadlines/2`): from
+  # its frame's open, for one that opens shown, so a page that never
+  # loads, and so never handshakes, falls to safe mode as one that loads
+  # and dies.
   @canvas_ready_ms 10_000
-
-  # The most tinctures `installed` names (`Prima.CanvasWire`).
-  @max_installed 512
 
   # The stream a canvas reads a feed's results on (`Opus.Providers.Feed`).
   @feed_stream "feed.results"
@@ -194,6 +206,7 @@ defmodule PrismWeb.ShellLive do
       |> assign(:arrangement, nil)
       |> assign(:showing, :pending)
       |> assign(:canvas_ready, MapSet.new())
+      |> assign(:canvas_died, MapSet.new())
       |> assign(:canvas_deadlines, %{})
       |> assign(:shipped, nil)
       |> assign(:layout_changed, false)
@@ -410,7 +423,7 @@ defmodule PrismWeb.ShellLive do
 
   # The bridge asks for the frame's credential once, on the frame's first
   # load, and posts it over the port it hands the frame — a canvas frame's
-  # inside its `boot`. The bearer leaves this process once: a second ask —
+  # beside its `canvas` block. The bearer leaves this process once: a second ask —
   # a reload, a navigation inside the frame, another script on the page —
   # is answered with nothing.
   def handle_event("frame_handshake", %{"frame" => frame_id}, socket) do
@@ -428,38 +441,23 @@ defmodule PrismWeb.ShellLive do
     do: {:reply, %{error: "no_credential"}, socket}
 
   # A shell verb the frame posted over its port. The bridge names the frame
-  # whose port it came from, and the message must name the same one. A
-  # canvas frame speaks the canvas wire, never this one.
+  # whose port it came from, and the message must name the same one, which
+  # this view holds live, or, for a canvas's `ready` or `failed`, holds
+  # live or frozen (`reporting/3`). A canvas or validation frame's verb is
+  # a canvas's; any other frame's is a tincture's.
   def handle_event("frame_verb", %{"frame" => frame_id, "message" => message}, socket)
       when is_binary(frame_id) do
     with {:ok, %{frame: ^frame_id} = decoded} <- Prima.TinctureWire.decode_shell_message(message),
-         {:ok, %{key: key} = frame} <- Frames.attribute(socket.assigns.frames, frame_id),
-         false <- Frames.canvas_key?(key) do
-      {:noreply, shell_verb(socket, frame, decoded)}
+         {:ok, %{key: key} = frame} <- reporting(socket.assigns.frames, frame_id, decoded.verb) do
+      if Frames.canvas_key?(key),
+        do: {:noreply, canvas_verb(socket, frame, decoded)},
+        else: {:noreply, shell_verb(socket, frame, decoded)}
     else
       _ -> {:noreply, drop_message(socket)}
     end
   end
 
   def handle_event("frame_verb", _params, socket), do: {:noreply, drop_message(socket)}
-
-  # A canvas wire verb a canvas or validation frame posted over its port,
-  # read as `Prima.CanvasWire` reads it: a verb of the toolkit's direction,
-  # naming the frame whose port it came from, which this view holds live
-  # under a canvas or validation key.
-  def handle_event("canvas_verb", %{"frame" => frame_id, "message" => message}, socket)
-      when is_binary(frame_id) do
-    with {:ok, %{frame: ^frame_id, verb: verb} = decoded} <- Prima.CanvasWire.decode(message),
-         true <- verb in Prima.CanvasWire.to_prism_verbs(),
-         {:ok, %{key: key} = frame} <- Frames.attribute(socket.assigns.frames, frame_id),
-         true <- Frames.canvas_key?(key) do
-      {:noreply, canvas_verb(socket, frame, decoded)}
-    else
-      _ -> {:noreply, drop_message(socket)}
-    end
-  end
-
-  def handle_event("canvas_verb", _params, socket), do: {:noreply, drop_message(socket)}
 
   # A canvas frame loaded a second time: its port is closed and it is
   # spent. A validation frame's death is the validation's outcome `died`;
@@ -581,10 +579,12 @@ defmodule PrismWeb.ShellLive do
 
   # Every change to the frames goes through here, so each frame whose
   # state moved between live and frozen is signalled after the credential
-  # transition that moved it, and each frame newly refused for want of a
+  # transition that moved it, each frame newly refused for want of a
   # grant is offered the grant prompt — a canvas or validation frame
   # excepted, whose canvas asks for its grant once, itself
-  # (`ask_canvas_grant/3`).
+  # (`ask_canvas_grant/3`) — a canvas's ready deadline runs only while it
+  # is shown (`ready_deadlines/2`), and a canvas that failed while hidden
+  # enters safe mode the moment it is shown.
   defp frames(socket, fun), do: put_frames(socket, fun.(socket.assigns.frames))
 
   defp put_frames(socket, later) do
@@ -598,6 +598,7 @@ defmodule PrismWeb.ShellLive do
       |> Enum.reduce(socket, &push_event(&2, "frame_bearer", &1))
       |> assign(frames: later, covered: Frames.active(later) != nil)
       |> arm_renewals(before, later)
+      |> ready_deadlines(later)
 
     socket =
       Enum.reduce(
@@ -612,7 +613,15 @@ defmodule PrismWeb.ShellLive do
           not match?(%{id: ^id}, Frames.get(before, key)),
           do: frame
 
-    Enum.reduce(ungranted, socket, &offer_grant(&2, &1))
+    socket = Enum.reduce(ungranted, socket, &offer_grant(&2, &1))
+
+    # A canvas that failed while hidden is shown: safe mode, as its failure
+    # would have been had it been shown then.
+    died = socket.assigns.canvas_died
+
+    if Enum.any?(Frames.list(later), &(&1.visible and MapSet.member?(died, &1.id))),
+      do: enter_safe_mode(socket, :crashed),
+      else: socket
   end
 
   # Every listed card: the tinctures the picker lists and the canvases.
@@ -622,15 +631,22 @@ defmodule PrismWeb.ShellLive do
   # Shell verbs
   # ============================================================================
 
-  defp shell_verb(socket, %{key: key}, %{verb: :close}),
+  # A press and a failure are a canvas's alone (`Prima.TinctureWire.canvas_verbs/0`).
+  defp shell_verb(socket, frame, %{verb: verb} = decoded) do
+    if verb in Prima.TinctureWire.canvas_verbs(),
+      do: drop_message(socket),
+      else: tincture_verb(socket, frame, decoded)
+  end
+
+  defp tincture_verb(socket, %{key: key}, %{verb: :close}),
     do: frames(socket, &Frames.discard(socket.assigns.context, &1, key))
 
-  defp shell_verb(socket, _frame, %{verb: :ready}), do: socket
+  defp tincture_verb(socket, _frame, %{verb: :ready}), do: socket
 
   # A secret is typed into the shell's own prompt, never into a frame, and
   # only for a frame the person can see whose version declares the vault
   # write the prompt makes. One prompt per frame at a time.
-  defp shell_verb(socket, %{id: id, visible: true} = frame, %{
+  defp tincture_verb(socket, %{id: id, visible: true} = frame, %{
          verb: :credential,
          args: %{"name" => name}
        }) do
@@ -651,9 +667,9 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  defp shell_verb(socket, _frame, %{verb: :credential}), do: drop_message(socket)
+  defp tincture_verb(socket, _frame, %{verb: :credential}), do: drop_message(socket)
 
-  defp shell_verb(socket, %{tincture_id: tincture_id}, %{
+  defp tincture_verb(socket, %{tincture_id: tincture_id}, %{
          verb: :title,
          args: %{"title" => title}
        }) do
@@ -668,7 +684,7 @@ defmodule PrismWeb.ShellLive do
 
   # `open` names a tincture this shell lists, versionless or at the
   # version it lists; anything else opens nothing.
-  defp shell_verb(socket, _frame, %{verb: :open, args: %{"ref" => ref}}) do
+  defp tincture_verb(socket, _frame, %{verb: :open, args: %{"ref" => ref}}) do
     case listed(socket, ref) do
       %{id: id} -> launch_tincture(socket, id)
       nil -> drop_message(socket)
@@ -700,21 +716,49 @@ defmodule PrismWeb.ShellLive do
   # Canvas verbs
   # ============================================================================
 
-  # From a validation frame, only its tree and its failure act.
-  defp canvas_verb(socket, %{key: {:validation, canvas_id}}, %{verb: :tree}),
-    do: validation_ended(socket, canvas_id, :tree)
+  # The frame a verb is attributed to: the live frame `frame_id` names; or,
+  # for a canvas's `ready` or `failed`, which report how its page loaded
+  # and runs rather than act, a canvas frame held frozen too, since a
+  # hidden canvas's page still loads and can fail.
+  defp reporting(frames, frame_id, verb) do
+    case Frames.attribute(frames, frame_id) do
+      {:ok, frame} ->
+        {:ok, frame}
+
+      :error when verb in [:ready, :failed] ->
+        case Enum.find(Frames.list(frames), &(&1.id == frame_id)) do
+          %{key: {:canvas, _}, state: :frozen} = frame -> {:ok, frame}
+          _another -> :error
+        end
+
+      :error ->
+        :error
+    end
+  end
+
+  # From a validation frame, only its `ready` and its failure act.
+  defp canvas_verb(socket, %{key: {:validation, canvas_id}}, %{verb: :ready}),
+    do: validation_ended(socket, canvas_id, :ready)
 
   defp canvas_verb(socket, %{key: {:validation, canvas_id}}, %{verb: :failed}),
     do: validation_ended(socket, canvas_id, :failed)
 
   defp canvas_verb(socket, %{key: {:validation, _}}, _verb), do: drop_message(socket)
 
-  # From a live canvas a tree is dropped; `ready`, a failure, `open` and
-  # `press` act only from the canvas the glass shows.
-  defp canvas_verb(socket, %{key: {:canvas, canvas_id}} = frame, decoded) do
-    if canvas_id == Frames.visible_canvas(socket.assigns.frames),
-      do: live_canvas_verb(socket, frame, decoded),
-      else: drop_message(socket)
+  # From the canvas the glass shows, live, `ready`, a failure at either
+  # stage, `open` and `press` act. A hidden canvas, frozen or not the one
+  # shown, acts on nothing, but its `ready` makes it ready and its failure
+  # marks it died, which takes the shell to safe mode `crashed` once it is
+  # shown (`put_frames/2`).
+  defp canvas_verb(socket, %{key: {:canvas, canvas_id}, state: state} = frame, decoded) do
+    shown = state == :live and canvas_id == Frames.visible_canvas(socket.assigns.frames)
+
+    case decoded do
+      _any when shown -> live_canvas_verb(socket, frame, decoded)
+      %{verb: :ready} -> update(socket, :canvas_ready, &MapSet.put(&1, frame.id))
+      %{verb: :failed} -> update(socket, :canvas_died, &MapSet.put(&1, frame.id))
+      _acts -> drop_message(socket)
+    end
   end
 
   defp live_canvas_verb(socket, %{id: id}, %{verb: :ready}),
@@ -731,7 +775,7 @@ defmodule PrismWeb.ShellLive do
   defp live_canvas_verb(socket, frame, %{verb: :press, args: args}),
     do: press(socket, frame, args)
 
-  defp live_canvas_verb(socket, _frame, _tree), do: drop_message(socket)
+  defp live_canvas_verb(socket, _frame, _another_verb), do: drop_message(socket)
 
   # A listed tincture opens where the canvas's arrangement puts it for the
   # posture: an app's mode, or a floating entry's position for a tincture
@@ -805,7 +849,7 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  defp reads_feed?(%{boot: %{"streams" => streams}}, feed),
+  defp reads_feed?(%{canvas: %{"streams" => streams}}, feed),
     do: %{"name" => @feed_stream, "subject" => feed} in streams
 
   defp reads_feed?(_frame, _feed), do: false
@@ -817,12 +861,39 @@ defmodule PrismWeb.ShellLive do
 
   defp handshaken(socket, _frame), do: socket
 
-  # A live canvas's ready deadline, one timer per frame at a time: armed
-  # at its open and again when it fires on a hidden canvas. Each timer is
-  # held until it fires, so the timers in flight are the ones held.
+  # A canvas's ready deadline runs only while the glass shows it, since a
+  # hidden canvas reads and acts on nothing and so owes no `ready`. A shown
+  # canvas that is not ready and holds no deadline is given the whole
+  # period from now: from its open, when it opens shown, or from the
+  # moment it is shown again. The deadline of a canvas no longer shown —
+  # hidden, refused or gone — is cancelled, so one hidden before it was
+  # ready is given the whole period again once shown, and one ready
+  # before it was hidden stays ready and is given none. One deadline per
+  # frame at a time, held with the token its message carries, so the
+  # message of a cancelled timer already sent changes nothing.
+  defp ready_deadlines(socket, frames) do
+    %{canvas_deadlines: held, canvas_ready: ready} = socket.assigns
+    shown = shown_canvases(frames)
+
+    {kept, cancelled} = Map.split_with(held, fn {id, _} -> MapSet.member?(shown, id) end)
+    Enum.each(cancelled, fn {_id, {timer, _token}} -> Process.cancel_timer(timer) end)
+
+    shown
+    |> Enum.reject(&(Map.has_key?(kept, &1) or MapSet.member?(ready, &1)))
+    |> Enum.reduce(assign(socket, :canvas_deadlines, kept), &arm_ready_deadline(&2, &1))
+  end
+
   defp arm_ready_deadline(socket, frame_id) do
-    timer = Process.send_after(self(), {:canvas_deadline, frame_id}, @canvas_ready_ms)
-    update(socket, :canvas_deadlines, &Map.put(&1, frame_id, timer))
+    token = make_ref()
+    timer = Process.send_after(self(), {:canvas_deadline, frame_id, token}, @canvas_ready_ms)
+    update(socket, :canvas_deadlines, &Map.put(&1, frame_id, {timer, token}))
+  end
+
+  # The ids of the canvas frames the glass shows: live and visible.
+  defp shown_canvases(frames) do
+    for %{key: {:canvas, _}, state: :live, visible: true, id: id} <- Frames.list(frames),
+        into: MapSet.new(),
+        do: id
   end
 
   # A renewal is armed for each frame the view renews whose deadline is new
@@ -894,12 +965,16 @@ defmodule PrismWeb.ShellLive do
   end
 
   # What `installed` carries: every listed tincture that is not a canvas,
-  # as a versionless reference and its name, sorted by name.
+  # as a versionless reference and its name, sorted by name, within the
+  # bounds the canvas's reader holds it to (`Prima.TinctureWire`).
   defp installed(socket) do
+    max_name = Prima.TinctureWire.max_installed_name()
+
     socket.assigns.tinctures
     |> Enum.map(&%{ref: Frames.ref_of(&1), name: &1.name})
+    |> Enum.filter(&(String.length(&1.name) in 1..max_name))
     |> Enum.sort_by(& &1.name)
-    |> Enum.take(@max_installed)
+    |> Enum.take(Prima.TinctureWire.max_installed())
   end
 
   # `installed`, to each frame named.
@@ -1198,13 +1273,11 @@ defmodule PrismWeb.ShellLive do
         %{state: :refused} ->
           enter_safe_mode(socket, :not_ready)
 
-        %{id: frame_id} ->
-          socket |> arm_ready_deadline(frame_id) |> assign(:showing, :canvas)
-
-        # Opened frozen behind a full frame, and dropped when its suspension
-        # could not be recorded: no frame is held, and the canvas is drawn
-        # empty.
-        nil ->
+        # Opened: shown, with its ready deadline armed (`ready_deadlines/2`),
+        # or frozen behind a full frame, with none until it is shown. Or
+        # opened frozen and dropped when its suspension could not be
+        # recorded: no frame is held, and the canvas is drawn empty.
+        _opened_or_dropped ->
           assign(socket, :showing, :canvas)
       end
     end
@@ -1344,14 +1417,19 @@ defmodule PrismWeb.ShellLive do
   # ---- safe mode -------------------------------------------------------------
 
   # Safe mode: every frame is discarded with its credential, a validation
-  # in progress included, every grant prompt the shell raised is withdrawn,
-  # and the system layer offers the ways out.
+  # in progress included, with every canvas's ready deadline, every grant
+  # prompt the shell raised is withdrawn, and the system layer offers the
+  # ways out.
   defp enter_safe_mode(%{assigns: %{safe_mode: %{}}} = socket, _reason), do: socket
 
   defp enter_safe_mode(socket, reason) do
     ctx = socket.assigns.context
     entry = visible_entry(socket.assigns)
     {prompt_id, socket} = next_prompt_id(socket, "safe-mode")
+
+    Enum.each(socket.assigns.canvas_deadlines, fn {_id, {timer, _token}} ->
+      Process.cancel_timer(timer)
+    end)
 
     subject =
       SafeMode.enter(reason, %{
@@ -1369,6 +1447,8 @@ defmodule PrismWeb.ShellLive do
     |> assign(:covered, false)
     |> assign(:safe_mode, %{id: prompt_id, reason: reason, canvas: subject.canvas})
     |> assign(:canvas_ready, MapSet.new())
+    |> assign(:canvas_died, MapSet.new())
+    |> assign(:canvas_deadlines, %{})
     |> assign(:credential_prompts, %{})
     |> assign(:grant_prompts, %{})
     |> assign(:grant_decisions, %{})
@@ -1910,29 +1990,23 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
-  # A live canvas's frame opened this long ago. Without its `ready` the
-  # shell enters safe mode. A deadline that fires on a canvas hidden
-  # meanwhile, whose bridge holds its verbs, starts the timer again, so
-  # once shown the canvas has what is left of that new period.
-  def handle_info({:canvas_deadline, frame_id}, socket) do
-    socket = update(socket, :canvas_deadlines, &Map.delete(&1, frame_id))
-    %{frames: frames, canvas_ready: ready, safe_mode: safe_mode} = socket.assigns
+  # A shown canvas's ready deadline, armed under `token` the whole period
+  # ago (`ready_deadlines/2`): without its `ready` the shell enters safe
+  # mode. One cancelled or superseded since, or whose frame is no longer
+  # shown, changes nothing.
+  def handle_info({:canvas_deadline, frame_id, token}, socket) do
+    %{canvas_deadlines: held, canvas_ready: ready, frames: frames} = socket.assigns
 
-    case Enum.find(Frames.list(frames), &match?(%{key: {:canvas, _}, id: ^frame_id}, &1)) do
-      _held when not is_nil(safe_mode) ->
-        {:noreply, socket}
+    case held do
+      %{^frame_id => {_timer, ^token}} ->
+        socket = assign(socket, :canvas_deadlines, Map.delete(held, frame_id))
 
-      %{state: :frozen} ->
-        if MapSet.member?(ready, frame_id),
-          do: {:noreply, socket},
-          else: {:noreply, arm_ready_deadline(socket, frame_id)}
+        if MapSet.member?(shown_canvases(frames), frame_id) and
+             not MapSet.member?(ready, frame_id),
+           do: {:noreply, enter_safe_mode(socket, :not_ready)},
+           else: {:noreply, socket}
 
-      %{state: :live} ->
-        if MapSet.member?(ready, frame_id),
-          do: {:noreply, socket},
-          else: {:noreply, enter_safe_mode(socket, :not_ready)}
-
-      _refused_another_or_none ->
+      _cancelled_or_superseded ->
         {:noreply, socket}
     end
   end

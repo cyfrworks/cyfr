@@ -3,7 +3,7 @@
 
 defmodule CyfrWeb.Plugs.ScrubTinctureCredentialsTest do
   @moduledoc """
-  A private tincture's served files and a canvas's host page carry their
+  A private tincture's served files and a canvas's page carry their
   asset credential in the path, because a navigation, a script or an image
   fetch carries no header. Whatever else is true of that design, the
   credential must not survive into anything that names the request: the
@@ -71,11 +71,11 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentialsTest do
   @frame "frm_8f3c2a1b9d"
 
   test "a canvas page credential is redacted, early refusals and malformed credentials included" do
-    page = Prima.CanvasWire.page_path(@canary, @frame)
-    assert String.starts_with?(page, Prima.CanvasWire.page_prefix())
+    page = Prima.TinctureWire.page_path(@canary, @frame)
+    assert String.starts_with?(page, Prima.TinctureWire.page_prefix())
 
     conn = run(page)
-    assert conn.request_path == Prima.CanvasWire.page_prefix() <> "[REDACTED]/" <> @frame
+    assert conn.request_path == Prima.TinctureWire.page_prefix() <> "[REDACTED]/" <> @frame
     refute conn.request_path =~ @canary
     # Routing still reads the credential and the frame.
     assert conn.path_info == ["_c", "v1", @canary, @frame]

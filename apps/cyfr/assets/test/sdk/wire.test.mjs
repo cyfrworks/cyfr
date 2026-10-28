@@ -8,16 +8,25 @@ import {describe, test} from "node:test"
 import {
   BEARER_HEADER,
   ROUTES,
+  STAGES,
+  TO_FRAME_VERBS,
   VERBS,
   VERSION,
   bearer,
+  dataPath,
   decodeAnswer,
+  decodeCanvasHandshake,
   decodeShellMessage,
+  decodeToFrame,
   publicIdentity,
   request,
   shellMessage,
-  sseParser
+  sseParser,
+  streamPath,
+  toFrameMessage
 } from "../../js/sdk/wire.js"
+// `fixture` is tests/fixtures/tincture_wire.json, which Prima's test reads
+// too: its shell, shell_invalid and canvas sections are held here.
 import {credentialOf, fixture} from "./support.mjs"
 
 // The tincture URL grammar `Prima.TinctureWire`'s test reads too.
@@ -30,7 +39,7 @@ describe("the wire agrees with the fixture", () => {
     assert.equal(VERSION, fixture.version)
     assert.equal(BEARER_HEADER, fixture.bearer_header)
     assert.deepEqual({...ROUTES}, fixture.routes)
-    assert.deepEqual([...VERBS].sort(), fixture.shell.map((vector) => vector.verb).sort())
+    assert.deepEqual([...VERBS].sort(), [...new Set(fixture.shell.map((vector) => vector.verb))].sort())
   })
 
   test("every request body is the one the SDK builds, under the fixture's bearer", () => {
@@ -76,6 +85,90 @@ describe("the wire agrees with the fixture", () => {
     for (const {verb, message} of fixture.shell) {
       assert.deepEqual(decodeShellMessage(message), {ok: true, message}, verb)
       assert.deepEqual(shellMessage(verb, message.frame, message.args), message, verb)
+    }
+  })
+})
+
+describe("the canvas's part of the wire agrees with the fixture", () => {
+  const {canvas} = fixture
+
+  test("every shell message the fixture refuses is refused", () => {
+    assert.ok(fixture.shell_invalid.length > 0)
+    for (const {why, message} of fixture.shell_invalid) {
+      assert.equal(decodeShellMessage(message).ok, false, why)
+    }
+  })
+
+  test("a failure's stages are the fixture's", () => {
+    assert.deepEqual([...STAGES], canvas.stages)
+  })
+
+  test("every handshake reply reads back as its credential and canvas block", () => {
+    assert.ok(canvas.handshake.valid.length > 0)
+    for (const {frame, reply} of canvas.handshake.valid) {
+      assert.deepEqual(decodeCanvasHandshake(reply, frame), {ok: true, credential: reply.credential, canvas: reply.canvas})
+    }
+  })
+
+  test("every handshake reply the fixture refuses is refused", () => {
+    assert.ok(canvas.handshake.invalid.length > 0)
+    for (const {why, frame, reply} of canvas.handshake.invalid) {
+      assert.equal(decodeCanvasHandshake(reply, frame).ok, false, why)
+    }
+  })
+
+  test("every message to a canvas decodes, and is the one the bridge builds", () => {
+    const verbs = new Set()
+    for (const {message} of canvas.to_frame.valid) {
+      verbs.add(message.verb)
+      assert.deepEqual(decodeToFrame(message), {ok: true, message}, message.verb)
+      assert.deepEqual(toFrameMessage(message.verb, message.frame, message.args), message, message.verb)
+    }
+    assert.deepEqual([...verbs].sort(), [...TO_FRAME_VERBS].sort())
+  })
+
+  test("every message to a canvas the fixture refuses is refused, and never built", () => {
+    assert.ok(canvas.to_frame.invalid.length > 0)
+    // The encoder builds the envelope itself, so only a row whose envelope
+    // is the wire's (v 1, verb, frame and args) is one it could be asked for.
+    let built = 0
+    for (const {why, message} of canvas.to_frame.invalid) {
+      assert.equal(decodeToFrame(message).ok, false, why)
+      const envelope =
+        message !== null &&
+        typeof message === "object" &&
+        !Array.isArray(message) &&
+        message.v === VERSION &&
+        Object.keys(message).sort().join() === "args,frame,v,verb"
+      if (envelope) {
+        built += 1
+        assert.throws(() => toFrameMessage(message.verb, message.frame, message.args), TypeError, why)
+      }
+    }
+    assert.ok(built > 0)
+  })
+
+  test("the canvas block a handshake carries is the canvas message's args", () => {
+    for (const {frame, reply} of canvas.handshake.valid) {
+      assert.equal(decodeToFrame(toFrameMessage("canvas", frame, reply.canvas)).ok, true)
+    }
+  })
+
+  test("a canvas open's data path and stream route are the fixture's", () => {
+    for (const row of canvas.paths.valid) {
+      assert.equal(dataPath(row.frame), row.data_path)
+      assert.equal(streamPath(row.frame), row.stream_path)
+    }
+  })
+
+  // The page's path, which also names the asset credential, is the
+  // server's alone; the frame id is the part of a path the SDK builds.
+  test("a frame id the fixture refuses has no data path", () => {
+    const refused = canvas.paths.invalid.filter(({why}) => why.includes("frame id"))
+    assert.equal(refused.length, 2)
+    for (const {why, frame} of refused) {
+      assert.throws(() => dataPath(frame), TypeError, why)
+      assert.throws(() => streamPath(frame), TypeError, why)
     }
   })
 })
