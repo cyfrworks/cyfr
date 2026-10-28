@@ -111,7 +111,8 @@ fi
 # PostgreSQL legs use the database config/test.exs names for each
 # partition on the host's fixture server, localhost:5432, so the release
 # names none, and its logs stay in a fresh directory named before it
-# starts and again when it ends. RELEASE_UNPROVEN=1 skips the proof, for a
+# starts and again when it ends, /tmp/cyfr-stage.release.*, the stage's
+# own log name (scripts/stage.sh), which the janitor keeps seven days. RELEASE_UNPROVEN=1 skips the proof, for a
 # disposable repository that has no run on GitHub
 # (tests/ci-release-graph.py); no release is cut under it.
 HEAD_SHA="$(git rev-parse HEAD)"

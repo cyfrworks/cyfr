@@ -44,7 +44,9 @@
 # separated by spaces) and STAGE_LOGDIR, and writes its output to
 # $STAGE_LOGDIR/<check>.log. Without -l the log directory is a fresh
 # /tmp/cyfr-stage.<stage>.XXXXXX, the name scripts/janitor.sh removes after
-# seven days; it is named on stderr.
+# seven days; it is named on stderr. The name carries no PROOF_RUN_PREFIX:
+# logs outlive the run that wrote them, and the janitor finds them by this
+# name alone (its rule 5), as it finds the gate's /tmp/cyfr-gate.*.
 #
 # Stdout is `_START=<pid>` first and `_EXIT=<pid> <status>` last, as the
 # other harness scripts frame theirs (scripts/await-task.sh), with one line
