@@ -216,7 +216,9 @@ defmodule Arca.Repo.Migrations.Baseline do
     # identifier or the wildcard `*`; a deny names a person of this server
     # or a person identifier, and wins over every allow. `requested` rows
     # are identifier allows a sign-in or an invitation asked for — they
-    # take effect when a platform admin resolves them.
+    # take effect when a platform admin resolves them. `label` is the
+    # handle an identifier entry was made from: shown beside the
+    # identifier, never read to decide who is admitted.
     create table(:server_allowlist, primary_key: false) do
       add :id, :string, primary_key: true, null: false
       add :kind, :string, null: false, check: if(sqlite?, do: allowlist_kind)
@@ -226,6 +228,7 @@ defmodule Arca.Repo.Migrations.Baseline do
       add :requested_by, :string
       add :added_by, :string
       add :note, :text
+      add :label, :string
       add :created_at, :utc_datetime_usec, null: false
       add :updated_at, :utc_datetime_usec, null: false
     end

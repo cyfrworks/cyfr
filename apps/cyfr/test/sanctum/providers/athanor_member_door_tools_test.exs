@@ -12,6 +12,7 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
   alias Sanctum.Context
   alias Sanctum.Tenancy.{Athanors, Members, Users}
   alias Sanctum.Test.DirectoryServer
+  alias Sanctum.Test.RegistryStub
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -320,6 +321,138 @@ defmodule Sanctum.Providers.AthanorMemberDoorToolsTest do
 
     assert {:ok, %{status: "active"}} = Users.get(user.id)
     assert {:ok, :allowed} = Sanctum.Door.admit_person(user)
+  end
+
+  test "door.allow and door.deny take a handle: the entry keeps the identifier it names, labelled with the handle",
+       %{ops: ops, ctx: ctx, n: n} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    first = "per_" <> Prima.Digest.sha256_hex("door-handle-#{n}")
+    second = "per_" <> Prima.Digest.sha256_hex("door-handle-second-#{n}")
+    RegistryStub.handles!(%{"alice" => first, "bob" => second})
+
+    assert {:ok, %{kind: "identifier", effect: "allow", value: ^first, label: "alice"}} =
+             call(admin, "door", %{"action" => "allow", "value" => "@alice"})
+
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(first)
+
+    assert {:ok, %{kind: "identifier", effect: "deny", value: ^second, label: "bob"}} =
+             call(admin, "door", %{"action" => "deny", "value" => "@bob"})
+
+    # The list shows the label where there is one, and no label key where
+    # there is none.
+    assert {:ok, _} = call(admin, "door", %{"action" => "allow", "value" => "*"})
+    assert {:ok, %{entries: entries}} = call(admin, "door", %{"action" => "list"})
+    assert %{label: "alice"} = Enum.find(entries, &(&1.value == first))
+    assert %{label: "bob"} = Enum.find(entries, &(&1.value == second))
+    refute Map.has_key?(Enum.find(entries, &(&1.value == "*")), :label)
+
+    # The registry gives the handle to the second identifier: the entry
+    # still names the first, and admits only them.
+    RegistryStub.handles!(%{"alice" => second})
+    assert {:ok, %{entries: entries}} = call(admin, "door", %{"action" => "list"})
+    assert [%{value: ^first}] = Enum.filter(entries, &(&1[:label] == "alice"))
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(first)
+    assert {:error, :denied} = Sanctum.Door.admit_identifier(second)
+  end
+
+  test "a handle the registry does not resolve is refused through the gate in its own sentence, and nothing is written",
+       %{ops: ops, ctx: ctx} do
+    admin = ctx.(ops, Sanctum.TestContext.athanor_id(), platform_admin: true)
+    before = Sanctum.Door.Store.list()
+
+    RegistryStub.handles!(%{"alice" => :close})
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert {:error, reason} = call(admin, "door", %{"action" => "allow", "value" => "@alice"})
+      assert %{reason: :registry_unavailable, class: :unavailable} = Refusals.classify(reason)
+    end)
+
+    RegistryStub.handles!(%{})
+    assert {:error, reason} = call(admin, "door", %{"action" => "deny", "value" => "@nobody"})
+    assert Refusals.render(reason) == "No one holds that handle at the registry."
+
+    assert {:error, {:invalid_argument, message}} =
+             call(admin, "door", %{"action" => "allow", "value" => "@Not-A-Handle"})
+
+    assert message =~ "not a handle"
+
+    Application.put_env(:sanctum, :registry_url, "none")
+    assert {:error, reason} = call(admin, "door", %{"action" => "allow", "value" => "@alice"})
+    assert %{reason: :no_registry} = Refusals.classify(reason)
+
+    assert Sanctum.Door.Store.list() == before
+  end
+
+  test "member.add takes a handle, with or without @, alone; its identifier is seated or invited as by identifier",
+       %{alice: alice, ctx: ctx, n: n} do
+    a = ctx.(alice, Sanctum.TestContext.athanor_id(), [])
+    {:ok, group} = call(a, "athanor", %{"action" => "create", "name" => "Handles #{n}"})
+    known = "per_" <> Prima.Digest.sha256_hex("member-handle-known-#{n}")
+    stranger = "per_" <> Prima.Digest.sha256_hex("member-handle-stranger-#{n}")
+    user = remote!(known)
+    RegistryStub.handles!(%{"known" => known, "stranger" => stranger})
+
+    assert {:ok, %{state: "added", member: %{handle: "known"}}} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@known"})
+
+    assert Members.member?(user.id, group.id)
+
+    assert {:ok, %{state: "added", member: %{handle: "stranger"}}} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "stranger"})
+
+    assert [%{status: "invited", user_id: nil}] =
+             Enum.filter(
+               rows!(Members.list_by_athanor(group.id)),
+               &(&1.person_identifier == stranger)
+             )
+
+    # A handle stands alone.
+    for other <- [%{"user_id" => alice}, %{"identifier" => known}] do
+      assert {:error, {:invalid_argument, message}} =
+               call(
+                 a,
+                 "member",
+                 Map.merge(
+                   %{"action" => "add", "athanor" => group.id, "handle" => "@known"},
+                   other
+                 )
+               )
+
+      assert message =~ "not two"
+    end
+
+    # Refused in its own sentence, and nothing written.
+    seats = rows!(Members.list_by_athanor(group.id))
+    RegistryStub.handles!(%{"down" => :close})
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert {:error, reason} =
+               call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@down"})
+
+      assert %{reason: :registry_unavailable} = Refusals.classify(reason)
+    end)
+
+    RegistryStub.handles!(%{})
+
+    assert {:error, reason} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@nobody"})
+
+    assert Refusals.render(reason) == "No one holds that handle at the registry."
+
+    assert {:error, {:invalid_argument, message}} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@No"})
+
+    assert message =~ "not a handle"
+
+    Application.put_env(:sanctum, :registry_url, "none")
+
+    assert {:error, reason} =
+             call(a, "member", %{"action" => "add", "athanor" => group.id, "handle" => "@known"})
+
+    assert %{reason: :no_registry} = Refusals.classify(reason)
+
+    assert rows!(Members.list_by_athanor(group.id)) == seats
+    assert Enum.map(Sanctum.Door.Store.requests(), & &1.value) == [stranger]
   end
 
   test "member.add and member.remove take an identifier: an invite waits at the door, list shows it, remove withdraws it",

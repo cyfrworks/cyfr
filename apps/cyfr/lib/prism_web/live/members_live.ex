@@ -4,8 +4,10 @@
 defmodule PrismWeb.MembersLive do
   @moduledoc """
   Who is in the focused athanor: the members, the pending invites, and the
-  controls every member has — add by person identifier (`per_…`) or by
-  the person's id here (`usr_…`), remove, withdraw an invite, leave. Withdraw reaches only an
+  controls every member has — add by handle (`@name`, the identifier the
+  registry answers for it added in its place), by person identifier
+  (`per_…`) or by the person's id here (`usr_…`), remove, withdraw an
+  invite, leave. Withdraw reaches only an
   invitation: one accepted since the page loaded stays a member. A
   person's own athanor has one member and no controls beyond the list.
   """
@@ -218,15 +220,16 @@ defmodule PrismWeb.MembersLive do
   defp frozen?(%{roster: "frozen"}), do: true
   defp frozen?(_), do: false
 
-  # Who the add form names: a person identifier when it starts `per_`,
-  # else a person's id here. A malformed identifier is still sent as one,
-  # so the refusal names what was wrong with it.
+  # Who the add form names: a handle when it starts `@`, a person
+  # identifier when it starts `per_`, else a person's id here. A malformed
+  # handle or identifier is still sent as one, so the refusal names what
+  # was wrong with it.
   defp target(person) do
-    person = String.trim(person)
-
-    if String.starts_with?(person, "per_"),
-      do: %{"identifier" => person},
-      else: %{"user_id" => person}
+    case String.trim(person) do
+      "@" <> _ = handle -> %{"handle" => handle}
+      "per_" <> _ = identifier -> %{"identifier" => identifier}
+      user_id -> %{"user_id" => user_id}
+    end
   end
 
   defp load(socket) do
@@ -346,11 +349,20 @@ defmodule PrismWeb.MembersLive do
                 value={@new_person}
                 type="text"
                 required
-                placeholder="per_… or usr_…"
+                placeholder="@handle, per_… or usr_…"
               />
             </div>
             <.button type="submit">Add member</.button>
           </form>
+          <p
+            :if={@athanor && @athanor.kind == "group" && not frozen?(@athanor)}
+            class="mt-1 text-xs text-gray-500"
+            data-test="member-add-help"
+          >
+            Name someone by their handle (@name), their person identifier (per_…) or
+            their id here (usr_…). A handle is looked up at the registry, and the
+            group keeps the identifier it names now.
+          </p>
 
           <%!-- A DM's door is closed; growing the room is a different act.
                 The pair stands, nothing is copied. --%>
@@ -366,7 +378,7 @@ defmodule PrismWeb.MembersLive do
                 value={@new_person}
                 type="text"
                 required
-                placeholder="per_… or usr_…"
+                placeholder="@handle, per_… or usr_…"
               />
             </div>
             <.button type="submit">Add someone — starts a new group</.button>

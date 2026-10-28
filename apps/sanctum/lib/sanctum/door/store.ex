@@ -34,7 +34,7 @@ defmodule Sanctum.Door.Store do
   @allow_kinds Doors.kinds("allow")
   @deny_kinds Doors.kinds("deny")
 
-  @typedoc "A door row as this module hands it on: the ten columns, as a plain map."
+  @typedoc "A door row as this module hands it on: the eleven columns, as a plain map."
   @type entry :: Doors.entry()
 
   @doc "Every entry, allowed and requested, newest first."
@@ -62,24 +62,46 @@ defmodule Sanctum.Door.Store do
   @spec get(String.t()) :: {:ok, entry()} | {:error, :not_found | :database_error}
   def get(id) when is_binary(id), do: Doors.get(actor(), id)
 
+  @typedoc """
+  What an allow or a deny writes beside its kind and value: `note:`, why,
+  and `label:`, the handle an identifier entry was made from.
+  """
+  @type write_opts :: [note: String.t() | nil, label: String.t() | nil]
+
   @doc """
   Write an allow entry (or turn an existing deny / request into one).
   `kind` is `"identifier"` or `"wildcard"`.
+
+  A write states the entry's note and label anew, so a label always names
+  the handle the entry's latest write was made from: a later allow or
+  deny of the same identifier by another handle relabels it, and one by
+  the identifier itself clears the label.
   """
-  @spec allow(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
+  @spec allow(String.t(), String.t(), String.t() | nil, write_opts()) ::
           {:ok, entry()} | {:error, term()}
-  def allow(kind, value, added_by, note \\ nil) when kind in @allow_kinds do
-    upsert(kind, value, %{effect: "allow", status: "allowed", added_by: added_by, note: note})
+  def allow(kind, value, added_by, opts \\ []) when kind in @allow_kinds do
+    opts = Keyword.validate!(opts, [:note, :label])
+
+    upsert(kind, value, %{
+      effect: "allow",
+      status: "allowed",
+      added_by: added_by,
+      note: opts[:note],
+      label: opts[:label]
+    })
   end
 
   @doc """
   Write a deny entry (or turn an existing allow / request into one).
-  `kind` is `"person"` or `"identifier"`. Refuses a platform administrator
+  `kind` is `"person"` or `"identifier"`; `opts` and the label as
+  `allow/4` writes them. Refuses a platform administrator
   (`:platform_admin`), named by their person id or their identifier.
   """
-  @spec deny(String.t(), String.t(), String.t() | nil, String.t() | nil) ::
+  @spec deny(String.t(), String.t(), String.t() | nil, write_opts()) ::
           {:ok, entry()} | {:error, :platform_admin | term()}
-  def deny(kind, value, added_by, note \\ nil) when kind in @deny_kinds do
+  def deny(kind, value, added_by, opts \\ []) when kind in @deny_kinds do
+    opts = Keyword.validate!(opts, [:note, :label])
+
     cond do
       names_platform_admin?(kind, value) ->
         {:error, :platform_admin}
@@ -91,7 +113,8 @@ defmodule Sanctum.Door.Store do
           effect: "deny",
           status: "allowed",
           added_by: added_by,
-          note: note,
+          note: opts[:note],
+          label: opts[:label],
           requested_by: nil
         })
     end

@@ -7,6 +7,7 @@ defmodule Sanctum.Tenancy.MembersTest do
   alias Arca.Schemas.{DeviceCertificate, PairedClient}
   alias Arca.ThreadSubscriptionStorage, as: Subs
   alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Test.RegistryStub
 
   setup tags do
     Cyfr.Test.Sandbox.setup!(tags)
@@ -719,6 +720,80 @@ defmodule Sanctum.Tenancy.MembersTest do
   end
 
   # Thread follows must be removed when membership ends.
+  describe "membership by handle" do
+    test "a handle naming a person here seats them; one naming no one here is invited and waits at the door",
+         %{athanor: athanor} do
+      known = identifier()
+      user = remote!(known)
+      stranger = identifier()
+      RegistryStub.handles!(%{"known" => known, "stranger" => stranger})
+
+      assert {:ok, :added} = Members.add(athanor, [handle: "known"], "system")
+      assert Members.member?(user.id, athanor.id)
+
+      assert {:ok, :invited} = Members.add(athanor, [handle: "stranger"], "system")
+
+      assert [%{status: "invited", user_id: nil}] =
+               Enum.filter(
+                 rows!(Members.list_by_athanor(athanor.id)),
+                 &(&1.person_identifier == stranger)
+               )
+
+      assert [%{kind: "identifier", status: "requested"}] =
+               Enum.filter(Sanctum.Door.Store.requests(), &(&1.value == stranger))
+    end
+
+    test "with the registry down, no registry, or a handle no one holds: refused, and nothing written",
+         %{athanor: athanor} do
+      RegistryStub.handles!(%{"alice" => :close})
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, :registry_unavailable} =
+                 Members.add(athanor, [handle: "alice"], "system")
+      end)
+
+      RegistryStub.handles!(%{})
+      assert {:error, :handle_not_found} = Members.add(athanor, [handle: "nobody"], "system")
+
+      Application.put_env(:sanctum, :registry_url, "none")
+      assert {:error, :no_registry} = Members.add(athanor, [handle: "alice"], "system")
+
+      assert {:error, {:invalid_argument, _}} = Members.add(athanor, [handle: "Alice"], "system")
+
+      assert rows!(Members.list_by_athanor(athanor.id)) == []
+      assert Sanctum.Door.Store.list() == []
+    end
+
+    test "an athanor that takes no seat refuses before the registry is asked", %{athanor: athanor} do
+      RegistryStub.start!(fn _ -> flunk("no request is sent") end)
+
+      assert {:error, :athanor_archived} =
+               Members.add(%{athanor | status: "archived"}, [handle: "alice"], "system")
+
+      assert {:error, :person_athanor} =
+               Members.add(%{athanor | kind: "person"}, [handle: "alice"], "system")
+
+      assert {:error, :frozen_roster} =
+               Members.add(%{athanor | roster: "frozen"}, [handle: "alice"], "system")
+
+      refute_received {:registry_request, _}
+    end
+
+    test "the resolution writes nothing: no seat, invitation or request exists until the add",
+         %{athanor: athanor} do
+      stranger = identifier()
+      RegistryStub.handles!(%{"stranger" => stranger})
+
+      assert {:ok, ^stranger} = Sanctum.Handle.identifier("stranger")
+      assert_received {:registry_request, %{path: "/v1/handles/stranger"}}
+      assert rows!(Members.list_by_athanor(athanor.id)) == []
+      assert Sanctum.Door.Store.list() == []
+
+      assert {:ok, :invited} = Members.add(athanor, [handle: "stranger"], "system")
+      assert [%{person_identifier: ^stranger}] = rows!(Members.list_by_athanor(athanor.id))
+    end
+  end
+
   describe "follows end with the seat" do
     test "remove_member/2 drops the leaver's follows and nobody else's", %{athanor: athanor} do
       n = System.unique_integer([:positive])

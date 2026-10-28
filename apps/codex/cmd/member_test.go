@@ -39,10 +39,11 @@ func vectorIdentifiers(t *testing.T) []string {
 	return identifiers
 }
 
-// An argument is read as the identifier or user id it is spelled as; only
-// the identifier grammar Prima.Identity holds makes an identifier, and an
+// An argument is read as the handle, identifier or user id it is spelled
+// as: a leading @ makes a handle, whose spelling the server reads; only
+// the identifier grammar Prima.Identity holds makes an identifier; and an
 // email is no form at all: it is sent as the user id it is not.
-func TestMemberKeyReadsTheTwoForms(t *testing.T) {
+func TestMemberKeyReadsTheThreeForms(t *testing.T) {
 	for _, identifier := range vectorIdentifiers(t) {
 		if got := memberKey(identifier); got != "identifier" {
 			t.Errorf("memberKey(%q) = %q, want identifier", identifier, got)
@@ -51,6 +52,10 @@ func TestMemberKeyReadsTheTwoForms(t *testing.T) {
 
 	hex := strings.Repeat("ab", 32)
 	cases := map[string]string{
+		"@alice":                      "handle",
+		"@Not A Handle":               "handle",
+		"@":                           "handle",
+		"alice":                       "user_id",
 		"someone@example.com":         "user_id",
 		"usr_01a0f6f8-1629-79c3-9217": "user_id",
 		"per_" + strings.ToUpper(hex): "user_id",
@@ -101,8 +106,21 @@ func TestMemberArgsSendTheOneFieldTheFormFills(t *testing.T) {
 		}
 	}
 
+	// A handle is sent as typed, in the one field add takes it in.
+	raw, err := json.Marshal(memberAddArgs(athanor, "@alice"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(raw, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 3 || sent["action"] != "add" || sent["athanor"] != "team" || sent["handle"] != "@alice" {
+		t.Errorf("add @alice sent %v, want action, athanor and handle alone", sent)
+	}
+
 	// No athanor named: the one in focus, so the field is absent.
-	raw, err := json.Marshal(memberAddArgs(ops.Field[string]{}, identifier))
+	raw, err = json.Marshal(memberAddArgs(ops.Field[string]{}, identifier))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,14 +129,20 @@ func TestMemberArgsSendTheOneFieldTheFormFills(t *testing.T) {
 	}
 }
 
-func TestMemberHelpNamesTheTwoForms(t *testing.T) {
+func TestMemberHelpNamesTheForms(t *testing.T) {
+	if !strings.Contains(memberAddCmd.Use, "<user_id|identifier|@handle>") {
+		t.Errorf("usage %q does not name the three forms", memberAddCmd.Use)
+	}
+	if !strings.Contains(memberAddCmd.Short, "handle (@name)") {
+		t.Errorf("help %q does not name a handle", memberAddCmd.Short)
+	}
+	if !strings.Contains(memberRemoveCmd.Use, "<user_id|identifier>") {
+		t.Errorf("usage %q does not name the two forms", memberRemoveCmd.Use)
+	}
 	for _, cmd := range []struct{ use, short string }{
 		{memberAddCmd.Use, memberAddCmd.Short},
 		{memberRemoveCmd.Use, memberRemoveCmd.Short},
 	} {
-		if !strings.Contains(cmd.use, "<user_id|identifier>") {
-			t.Errorf("usage %q does not name the two forms", cmd.use)
-		}
 		for _, form := range []string{"user id", "person identifier"} {
 			if !strings.Contains(cmd.short, form) {
 				t.Errorf("help %q does not name %s", cmd.short, form)
@@ -128,12 +152,21 @@ func TestMemberHelpNamesTheTwoForms(t *testing.T) {
 			t.Errorf("help %q %q still names an email", cmd.use, cmd.short)
 		}
 	}
-	for _, form := range []string{"user id", "person identifier"} {
+	for _, form := range []string{"user id", "person identifier", "handle (@name)"} {
 		if !strings.Contains(memberCmd.Long, form) {
 			t.Errorf("member help does not name %s", form)
 		}
 	}
 	if strings.Contains(strings.ToLower(memberCmd.Long), "email") {
 		t.Errorf("member help still names an email: %q", memberCmd.Long)
+	}
+}
+
+// A removal names someone this server holds a row for: a handle is refused
+// before any call is made.
+func TestMemberRemoveRefusesAHandle(t *testing.T) {
+	err := memberRemoveCmd.RunE(memberRemoveCmd, []string{"@alice"})
+	if err == nil || !strings.Contains(err.Error(), "user id or person identifier") {
+		t.Errorf("remove @alice answered %v, want a refusal naming the two forms", err)
 	}
 }

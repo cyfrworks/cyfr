@@ -6,11 +6,18 @@ defmodule Sanctum.Providers.Door do
   The `door` tool: the server allowlist — who may sign in here. Platform
   admins only (`scope: :platform` on every action).
 
-  The entry's kind is read from its value (`kind_for/2`): `*` is the
-  wildcard, a person identifier (`per_…`) an identifier, and a person's
-  own id (`usr_…`) a person. `allow` writes an allow of an identifier or
-  `*`, by which the door admits a person the CYFR sign-in presents; a
-  local person is admitted unless denied, so a person is never allowed.
+  The entry's kind is read from its value (`entry_for/2`): `*` is the
+  wildcard, a person identifier (`per_…`) an identifier, a person's own
+  id (`usr_…`) a person, and a handle (`@name`) the identifier the
+  registry answers for it (`Sanctum.Handle.identifier/1`), resolved
+  before anything is written and written as an identifier entry labelled
+  with the handle. The entry keeps the identifier, so a handle the
+  registry later gives someone else moves no access; `list` shows the
+  label beside the identifier.
+
+  `allow` writes an allow of an identifier or `*`, by which the door
+  admits a person the CYFR sign-in presents; a local person is admitted
+  unless denied, so a person is never allowed.
   `deny` writes a sticky exclusion of a person or an identifier, ejects
   the person when they are already known
   (`Sanctum.Tenancy.Users.deny/1`) and withdraws the group invitations the
@@ -55,7 +62,7 @@ defmodule Sanctum.Providers.Door do
             Arg.new("value", :string,
               required: true,
               description:
-                "A person identifier (per_…) or * to allow; a person's id (usr_…) or a person identifier to deny (allow, deny)"
+                "A person identifier (per_…), a handle (@name) or * to allow; a person's id (usr_…), a person identifier or a handle to deny. A handle is resolved at the registry and its identifier written, labelled with the handle (allow, deny)"
             ),
             Arg.new("note", :string, nullable: true, description: "Why (allow, deny)")
           ],
@@ -71,7 +78,7 @@ defmodule Sanctum.Providers.Door do
             Arg.new("value", :string,
               required: true,
               description:
-                "A person identifier (per_…) or * to allow; a person's id (usr_…) or a person identifier to deny (allow, deny)"
+                "A person identifier (per_…), a handle (@name) or * to allow; a person's id (usr_…), a person identifier or a handle to deny. A handle is resolved at the registry and its identifier written, labelled with the handle (allow, deny)"
             ),
             Arg.new("note", :string, nullable: true, description: "Why (allow, deny)")
           ],
@@ -107,7 +114,7 @@ defmodule Sanctum.Providers.Door do
         )
       ],
       description:
-        "Who may sign in to this server — platform admins only. A person made here signs in unless denied; a person whose keys another CYFR holds signs in when `*` or an allow names their identifier. A deny names a person or an identifier, is sticky and ejects the person; requests are identifiers members invited or whose sign-in the allowlist refused.",
+        "Who may sign in to this server — platform admins only. A person made here signs in unless denied; a person whose keys another CYFR holds signs in when `*` or an allow names their identifier. A deny names a person or an identifier, is sticky and ejects the person; an allow or a deny by handle (@name) writes the identifier the handle names. Requests are identifiers members invited or whose sign-in the allowlist refused.",
       title: "Server Allowlist"
     )
   end
@@ -124,8 +131,8 @@ defmodule Sanctum.Providers.Door do
 
   def handle(%Context{} = ctx, %{"action" => "allow", "value" => value} = args)
       when is_binary(value) do
-    with {:ok, kind} <- kind_for(value, "allow") do
-      case Store.allow(kind, value, ctx.user_id, Map.get(args, "note")) do
+    with {:ok, kind, value, label} <- entry_for(value, "allow") do
+      case Store.allow(kind, value, ctx.user_id, note: Map.get(args, "note"), label: label) do
         {:ok, entry} ->
           # A person denied earlier may sign in again and their own athanor
           # reopens; the group seats the deny removed stay removed — a
@@ -144,8 +151,8 @@ defmodule Sanctum.Providers.Door do
 
   def handle(%Context{} = ctx, %{"action" => "deny", "value" => value} = args)
       when is_binary(value) do
-    with {:ok, kind} <- kind_for(value, "deny") do
-      case Store.deny(kind, value, ctx.user_id, Map.get(args, "note")) do
+    with {:ok, kind, value, label} <- entry_for(value, "deny") do
+      case Store.deny(kind, value, ctx.user_id, note: Map.get(args, "note"), label: label) do
         {:ok, entry} ->
           denied = known_users(kind, value)
           results = Enum.map(denied, &Users.deny/1)
@@ -294,6 +301,19 @@ defmodule Sanctum.Providers.Door do
   defp denied_users(kind, value),
     do: kind |> known_users(value) |> Enum.filter(&(&1.status == "denied"))
 
+  # The entry a value names, as `{kind, value, label}`. A handle is asked
+  # of the registry first, and only its answer's identifier is written:
+  # the resolution writes nothing, so a call stopped before the write
+  # leaves no entry.
+  defp entry_for("@" <> handle, _effect) do
+    with {:ok, identifier} <- Sanctum.Handle.identifier(handle),
+         do: {:ok, "identifier", identifier, handle}
+  end
+
+  defp entry_for(value, effect) do
+    with {:ok, kind} <- kind_for(value, effect), do: {:ok, kind, value, nil}
+  end
+
   # The value decides the kind: `*` is the wildcard, a person identifier's
   # shape (`per_` and 64 hexadecimal digits) an identifier, and a person's
   # own id a person. An allow names an identifier or `*`; a deny a person
@@ -315,10 +335,12 @@ defmodule Sanctum.Providers.Door do
   end
 
   defp unread("allow"),
-    do: "Allow names a person identifier (per_ and 64 hexadecimal digits) or *"
+    do: "Allow names a person identifier (per_ and 64 hexadecimal digits), a handle (@name) or *"
 
   defp unread("deny"),
-    do: "Deny names a person's id (usr_…) or a person identifier (per_ and 64 hexadecimal digits)"
+    do:
+      "Deny names a person's id (usr_…), a person identifier (per_ and 64 hexadecimal digits) " <>
+        "or a handle (@name)"
 
   defp refused_kind("person", "allow"),
     do:
@@ -328,6 +350,7 @@ defmodule Sanctum.Providers.Door do
   defp refused_kind("wildcard", "deny"),
     do: "Remove the * entry instead of denying it"
 
+  # The label is a key only when the entry was made from a handle.
   defp render(entry) do
     %{
       id: entry.id,
@@ -340,5 +363,6 @@ defmodule Sanctum.Providers.Door do
       note: entry.note,
       created_at: entry.created_at
     }
+    |> then(&if(is_binary(entry.label), do: Map.put(&1, :label, entry.label), else: &1))
   end
 end

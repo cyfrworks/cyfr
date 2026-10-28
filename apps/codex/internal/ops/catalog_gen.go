@@ -1479,7 +1479,7 @@ func (args DecisionListGlobalArgs) MarshalJSON() ([]byte, error) {
 
 // DoorAllowArgs carries arguments for door.allow.
 type DoorAllowArgs struct {
-	// A person identifier (per_…) or * to allow; a person's id (usr_…) or a person identifier to deny (allow, deny)
+	// A person identifier (per_…), a handle (@name) or * to allow; a person's id (usr_…), a person identifier or a handle to deny. A handle is resolved at the registry and its identifier written, labelled with the handle (allow, deny)
 	Value string `json:"value"`
 	// Why (allow, deny)
 	Note Field[*string] `json:"note,omitzero"`
@@ -1496,7 +1496,7 @@ func (args DoorAllowArgs) MarshalJSON() ([]byte, error) {
 
 // DoorDenyArgs carries arguments for door.deny.
 type DoorDenyArgs struct {
-	// A person identifier (per_…) or * to allow; a person's id (usr_…) or a person identifier to deny (allow, deny)
+	// A person identifier (per_…), a handle (@name) or * to allow; a person's id (usr_…), a person identifier or a handle to deny. A handle is resolved at the registry and its identifier written, labelled with the handle (allow, deny)
 	Value string `json:"value"`
 	// Why (allow, deny)
 	Note Field[*string] `json:"note,omitzero"`
@@ -2699,6 +2699,8 @@ type MemberAddArgs struct {
 	UserId Field[string] `json:"user_id,omitzero"`
 	// The person's identifier (per_…), in place of a user id (add, remove)
 	Identifier Field[string] `json:"identifier,omitzero"`
+	// The person's handle at the registry (@name or name), in place of a user id or identifier: the identifier it names is added (add)
+	Handle Field[string] `json:"handle,omitzero"`
 }
 
 // MarshalJSON supplies the operation's fixed action discriminator.

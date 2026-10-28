@@ -11,6 +11,7 @@ defmodule PrismWeb.MembersLiveTest do
   use PrismWeb.ConnCase, async: false
 
   alias Sanctum.Tenancy.{Athanors, Members}
+  alias Sanctum.Test.RegistryStub
 
   test "adding a person by their id seats them; removing an active member takes them out", %{
     conn: conn
@@ -119,6 +120,55 @@ defmodule PrismWeb.MembersLiveTest do
              rows!(Members.list_by_athanor(group.id)),
              &(&1.person_identifier == identifier)
            )
+  end
+
+  test "a handle adds from the same form: a person here is seated, someone not here is invited, and a refusal says why",
+       %{conn: conn} do
+    alice = test_user()
+    conn = log_in_user(conn, alice)
+    {:ok, group} = Athanors.create_group(alice.user_id, "Handles #{alice.namespace}")
+    n = System.unique_integer([:positive])
+    known = "per_" <> Prima.Digest.sha256_hex("members-live-handle-known-#{n}")
+    stranger = "per_" <> Prima.Digest.sha256_hex("members-live-handle-stranger-#{n}")
+
+    {:ok, here} =
+      Sanctum.Test.People.remote(
+        %{id: Sanctum.Auth.Identity.cyfr_key("https://dir.example", known), provider: "cyfr"},
+        %{identifier: known, directory_url: "https://dir.example"}
+      )
+
+    RegistryStub.handles!(%{"known" => known, "stranger" => stranger, "down" => :close})
+
+    {view, html} = mount_athanor(conn, "/members", group)
+    assert html =~ "@handle"
+    assert has_element?(view, ~s([data-test="member-add-help"]), "handle (@name)")
+
+    view |> form("form[phx-submit=add]", %{"person" => " @known "}) |> render_submit()
+    assert Members.member?(here.id, group.id)
+
+    view |> form("form[phx-submit=add]", %{"person" => "@stranger"}) |> render_submit()
+    assert render(view) =~ stranger
+
+    assert [%{status: "invited", user_id: nil}] =
+             Enum.filter(
+               rows!(Members.list_by_athanor(group.id)),
+               &(&1.person_identifier == stranger)
+             )
+
+    seats = rows!(Members.list_by_athanor(group.id))
+
+    view |> form("form[phx-submit=add]", %{"person" => "@nobody"}) |> render_submit()
+    assert render(view) =~ "No one holds that handle at the registry."
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      view |> form("form[phx-submit=add]", %{"person" => "@down"}) |> render_submit()
+      assert render(view) =~ "The registry could not be reached just now"
+    end)
+
+    view |> form("form[phx-submit=add]", %{"person" => "@Not-A-Handle"}) |> render_submit()
+    assert render(view) =~ "not a handle"
+
+    assert rows!(Members.list_by_athanor(group.id)) == seats
   end
 
   test "an email address names no one here: it is refused, and nothing is held",

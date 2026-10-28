@@ -11,7 +11,9 @@ defmodule Arca.Schemas.ServerAllowlistEntry do
   (`kinds/1`, `server_allowlist_kind_known`). `effect` is `"allow"` or
   `"deny"`; `status` is `"allowed"` for entries in force and `"requested"`
   for identifier allows a sign-in or an invitation asked for, pending a
-  platform admin's decision. Managed by `Sanctum.Door.Store`.
+  platform admin's decision. `label` is the handle an identifier entry was
+  made from, a display label beside the identifier and never what admits
+  anyone. Managed by `Sanctum.Door.Store`.
   """
 
   use Ecto.Schema
@@ -33,6 +35,7 @@ defmodule Arca.Schemas.ServerAllowlistEntry do
     field :requested_by, :string
     field :added_by, :string
     field :note, :string
+    field :label, :string
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
   end
@@ -56,6 +59,7 @@ defmodule Arca.Schemas.ServerAllowlistEntry do
       :requested_by,
       :added_by,
       :note,
+      :label,
       :created_at,
       :updated_at
     ])
@@ -64,6 +68,7 @@ defmodule Arca.Schemas.ServerAllowlistEntry do
     |> validate_kind()
     |> validate_inclusion(:status, @statuses)
     |> validate_value()
+    |> validate_label()
     |> unique_constraint([:kind, :value])
   end
 
@@ -97,6 +102,23 @@ defmodule Arca.Schemas.ServerAllowlistEntry do
 
       _ ->
         changeset
+    end
+  end
+
+  # A handle resolves to an identifier, so only an identifier entry is made
+  # from one, and a label is spelled as the handle it was.
+  defp validate_label(changeset) do
+    case {get_field(changeset, :kind), get_field(changeset, :label)} do
+      {_kind, nil} ->
+        changeset
+
+      {"identifier", label} ->
+        if Prima.ComponentRef.valid_personal_slug?(label),
+          do: changeset,
+          else: add_error(changeset, :label, "is not a handle")
+
+      _ ->
+        add_error(changeset, :label, "only an identifier entry is made from a handle")
     end
   end
 end

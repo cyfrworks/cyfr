@@ -36,7 +36,10 @@ var adminCmd = &cobra.Command{
 		"is let in by an allow naming their person identifier (per_…), or by `*`, which " +
 		"lets anyone in, and lets anyone create an identity here. A deny names a person " +
 		"here by their id (usr_…) or a person identifier; it is sticky and ejects the " +
-		"person. Requests are invites members made for identifiers the allowlist does " +
+		"person. An allow or a deny may name a handle (@name) instead: the registry is " +
+		"asked which identifier the handle names, and the entry keeps that identifier, " +
+		"with the handle shown beside it, so a handle that later changes hands moves no " +
+		"access. Requests are invites members made for identifiers the allowlist does " +
 		"not know, and sign-ins it refused. Only platform admins may edit the list, and " +
 		"no deny names one.",
 }
@@ -64,7 +67,7 @@ var adminListCmd = &cobra.Command{
 				continue
 			}
 			fmt.Printf("%-38s %-8s %-6s %-9s %s\n",
-				str(e["id"]), str(e["kind"]), str(e["effect"]), str(e["status"]), str(e["value"]))
+				str(e["id"]), str(e["kind"]), str(e["effect"]), str(e["status"]), entryShown(e))
 		}
 		return nil
 	},
@@ -99,8 +102,8 @@ var adminRequestsCmd = &cobra.Command{
 }
 
 var adminAllowCmd = &cobra.Command{
-	Use:   "allow <identifier|*>",
-	Short: "Let a person from elsewhere sign in, by person identifier (per_…), or * for anyone",
+	Use:   "allow <identifier|@handle|*>",
+	Short: "Let a person from elsewhere sign in, by person identifier (per_…) or handle (@name), or * for anyone",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")
@@ -113,14 +116,14 @@ var adminAllowCmd = &cobra.Command{
 			output.JSON(result)
 			return nil
 		}
-		fmt.Printf("Allowed %s\n", str(result["value"]))
+		fmt.Printf("Allowed %s\n", entryShown(result))
 		return nil
 	},
 }
 
 var adminDenyCmd = &cobra.Command{
-	Use:   "deny <person|identifier>",
-	Short: "Keep a person out, by their id here (usr_…) or person identifier (per_…), and eject them if they are here",
+	Use:   "deny <person|identifier|@handle>",
+	Short: "Keep a person out, by their id here (usr_…), person identifier (per_…) or handle (@name), and eject them if they are here",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		note, _ := cmd.Flags().GetString("note")
@@ -133,7 +136,7 @@ var adminDenyCmd = &cobra.Command{
 			output.JSON(result)
 			return nil
 		}
-		fmt.Printf("Denied %s (%v ejected)\n", str(result["value"]), result["ejected"])
+		fmt.Printf("Denied %s (%v ejected)\n", entryShown(result), result["ejected"])
 		return nil
 	},
 }
@@ -182,4 +185,13 @@ var adminResolveCmd = &cobra.Command{
 		fmt.Printf("Request %s: %s\n", args[0], decision)
 		return nil
 	},
+}
+
+// entryShown is an entry's value, and beside an identifier the handle it
+// was made from when it was made from one.
+func entryShown(entry map[string]any) string {
+	if label := str(entry["label"]); label != "" {
+		return str(entry["value"]) + " (@" + label + ")"
+	}
+	return str(entry["value"])
 }

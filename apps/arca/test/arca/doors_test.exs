@@ -95,7 +95,7 @@ defmodule Arca.DoorsTest do
       refute is_struct(row)
 
       assert Map.keys(row) |> Enum.sort() ==
-               ~w(added_by created_at effect id kind note requested_by status updated_at value)a
+               ~w(added_by created_at effect id kind label note requested_by status updated_at value)a
 
       {:ok, [listed]} = Doors.list(actor)
       refute is_struct(listed)
@@ -133,6 +133,28 @@ defmodule Arca.DoorsTest do
 
       assert {:error, {:invalid, %{value: _}}} =
                Doors.insert(actor, %{kind: "identifier", value: "per_short", effect: "allow"})
+    end
+
+    test "a label is the handle an identifier entry was made from, and no other entry has one",
+         %{actor: actor} do
+      assert {:ok, %{label: "alice"} = labelled} =
+               Doors.insert(actor, %{kind: "identifier", value: ident("label"), label: "alice"})
+
+      assert {:ok, %{label: "alice"}} = Doors.find(actor, "identifier", ident("label"))
+      assert {:ok, %{label: nil}} = Doors.update(actor, labelled.id, %{label: nil})
+
+      for attrs <- [
+            %{kind: "wildcard", value: "*", label: "alice"},
+            %{
+              kind: "person",
+              value: Prima.UUID7.generate_id(Prima.PersonId.prefix()),
+              effect: "deny",
+              label: "alice"
+            },
+            %{kind: "identifier", value: ident("label-spelling"), label: "@alice"}
+          ] do
+        assert {:error, {:invalid, %{label: _}}} = Doors.insert(actor, attrs)
+      end
     end
 
     test "insert mints the id and both stamps", %{actor: actor} do

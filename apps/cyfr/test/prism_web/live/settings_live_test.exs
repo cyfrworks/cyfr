@@ -89,6 +89,45 @@ defmodule PrismWeb.SettingsLiveTest do
     assert {:ok, :allowed} = Sanctum.Door.admit_identifier(identifier)
   end
 
+  test "the allowlist allows and denies by handle, shows the handle beside the identifier, and says why a handle is refused",
+       %{conn: conn} do
+    ops = test_user()
+    {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
+    n = System.unique_integer([:positive])
+    alice = "per_" <> Prima.Digest.sha256_hex("handle-allow-#{n}")
+    bob = "per_" <> Prima.Digest.sha256_hex("handle-deny-#{n}")
+
+    registry(nil, %{
+      "alice" => {:held, alice, nil},
+      "bob" => {:held, bob, nil},
+      "down" => :close
+    })
+
+    {view, html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
+    assert html =~ "@handle"
+    assert html =~ "by their handle"
+
+    door_entry(view, "door_allow", "@alice")
+    assert has_element?(view, "td", alice)
+    assert has_element?(view, ~s(td [data-test="door-entry-label"]), "@alice")
+    assert {:ok, :allowed} = Sanctum.Door.admit_identifier(alice)
+
+    door_entry(view, "door_deny", "@bob")
+    assert has_element?(view, "td", bob)
+    assert has_element?(view, ~s(td [data-test="door-entry-label"]), "@bob")
+    assert {:error, :denied} = Sanctum.Door.admit_identifier(bob)
+
+    door_entry(view, "door_allow", "@nobody")
+    assert render(view) =~ "No one holds that handle at the registry."
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      door_entry(view, "door_allow", "@down")
+      assert render(view) =~ "The registry could not be reached just now"
+    end)
+
+    assert [_, _] = Sanctum.Door.Store.list()
+  end
+
   test "the platform settings card is the operator's, saves against its revision, and shows a pin read-only",
        %{conn: conn} do
     pinned = Application.get_env(:cyfr, :deployment_pinned)
@@ -1742,6 +1781,15 @@ defmodule PrismWeb.SettingsLiveTest do
           {:error, reason} -> flunk("the registry refused the request: #{inspect(reason)}")
         end
     end)
+  end
+
+  # An allowlist entry typed into the panel's form, then its button clicked.
+  defp door_entry(view, button, value) do
+    view
+    |> element(~s(form[phx-change="door_form_changed"]))
+    |> render_change(%{"value" => value})
+
+    view |> element("button[phx-click=#{button}]") |> render_click()
   end
 
   defp handle_answer(handle, identifier, address) do
