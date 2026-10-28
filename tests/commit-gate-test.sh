@@ -344,7 +344,9 @@ cat > "$scratch/stub.bash_env" <<'FAKE'
 # The shipped canvas's check builds with Node 24, the builder's major, and
 # packages from the npm registry, which a runner of these tests does not
 # promise, so it stands in as well and records its arguments in
-# seed-canvas.calls.
+# seed-canvas.calls. The dev stack's compose check resolves files through
+# the real compose plugin, which the stand-in docker replaces, so it
+# records its arguments in dev-stack.calls.
 case "$0" in
   *scripts/fetch-prebuilt-binaries.sh)
     printf 'fetch %s|mix_calls_before=%s\n' "$*" "$(cat "$TRACE/mix.calls" 2>/dev/null | wc -l | tr -d ' ')" >> "$TRACE/prebuilt-fetch.calls"
@@ -352,6 +354,9 @@ case "$0" in
   *tests/fetch-prebuilt-binaries-test.sh) exit 0 ;;
   *scripts/check-seed-canvas.sh)
     printf 'check %s\n' "$*" >> "$TRACE/seed-canvas.calls"
+    exit 0 ;;
+  *tests/dev-stack/compose-test.sh)
+    printf 'check %s\n' "$*" >> "$TRACE/dev-stack.calls"
     exit 0 ;;
 esac
 case "$0" in
@@ -2230,7 +2235,7 @@ framed a "$a" 1
 has_line '^prima=0$' "$scratch/a.log/islands.summary" || fail 'the prima island did not pass beside the stalled one'
 has_line '^sanctum=0$' "$scratch/a.log/islands.summary" || fail 'the sanctum island did not pass beside the stalled one'
 has_line '^==> islands.arca stopped at its deadline$' "$scratch/a.err" || fail 'the stalled island was not reported'
-for s in compile_sqlite_test compile_sqlite_dev js_suite eslint wasm_tools test_wasm sdk_bundle seed_canvas canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check dialyzer boundary_plants sqlite_suite; do
+for s in compile_sqlite_test compile_sqlite_dev devstack js_suite eslint wasm_tools test_wasm sdk_bundle seed_canvas canary_checks imagesuite_checks prebuilt_binaries worker_auth_check backends_check dialyzer boundary_plants sqlite_suite; do
   has_line "^$s=0$" "$scratch/a.log/static.summary" || fail "the static step $s did not pass: $(tr '\n' ' ' < "$scratch/a.log/static.summary")"
 done
 has_line '^compile_pg_dev=0$' "$scratch/a.log/postgres.summary" || fail "the PostgreSQL dev compile did not pass: $(tr '\n' ' ' < "$scratch/a.log/postgres.summary")"
@@ -2242,6 +2247,8 @@ has_line '^==> static +ok .*canary_checks=0 imagesuite_checks=0 prebuilt_binarie
   fail "the prebuilt binary fetch did not run once, before any Mix call: $(cat "$trace/prebuilt-fetch.calls" 2>&1)"
 [ "$(cat "$trace/seed-canvas.calls")" = 'check ' ] ||
   fail "the shipped canvas's check did not run once, with no argument: $(cat "$trace/seed-canvas.calls" 2>&1)"
+[ "$(cat "$trace/dev-stack.calls")" = 'check ' ] ||
+  fail "the dev stack's compose check did not run once, with no argument: $(cat "$trace/dev-stack.calls" 2>&1)"
 has_line '^==> postgres +ok ' "$scratch/a.out" || fail 'the postgres leg was not reported passed'
 has_line '^    postgres\.pg_tests: Result: 1 passed' "$scratch/a.out" || fail 'the final report did not read the PostgreSQL tests'
 [ -z "$(find "$scratch/a.log" -maxdepth 1 -name 'island_*')" ] || fail "the stalled island's copy was left behind"
