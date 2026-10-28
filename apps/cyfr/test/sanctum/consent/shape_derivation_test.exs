@@ -656,8 +656,11 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       assert before_digest == after_digest
     end
 
-    # A manifest whose need declares its hosts and none of an attach rule,
-    # paths or disclosure, and no provides block: its digest is pinned.
+    # A fixed manifest, whose need declares the hosts every credential need
+    # must and none of an attach rule, paths or disclosure, and which has no
+    # provides block. Its egress names `eu.anthropic.com` beside the need's
+    # host, the host the next case adds to the need; both the
+    # hosts and that domain are inputs of the pinned digest.
     @pinned_manifest %{
       "needs" => %{
         "api_key" => %{
@@ -673,9 +676,9 @@ defmodule Sanctum.Consent.ShapeDerivationTest do
       }
     }
 
-    # The pinned digest is the shape's since flows and connect origins are
-    # in every shape, empty or not.
-    test "a manifest whose need declares only its hosts keeps its pinned digest", %{ctx: ctx} do
+    # A change to how a shape is derived that moves a fixed manifest's
+    # digest asks every consent of it again, so the digest is pinned.
+    test "a fixed manifest's shape digest is stable", %{ctx: ctx} do
       publish!(ctx, "shape-pinned", "1.0.0", %{manifest: Jason.encode!(@pinned_manifest)})
 
       assert {:ok, "sha256:792297ccae30588d31120c93482205249371145d0ba9de38ce7cbfb5ced81f10"} =
