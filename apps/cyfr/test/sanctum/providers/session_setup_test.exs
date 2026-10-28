@@ -71,7 +71,11 @@ defmodule Sanctum.Providers.SessionSetupTest do
            ) ==
              :setup_closed
 
-    # A missing token is refused at the gate, before the admission.
+    # A present null is a wrong token; a missing one is refused at the gate,
+    # before the admission.
+    assert refused_reason(set_up(%{"setup_token" => nil, "machine" => "laptop"})) ==
+             :setup_closed
+
     assert {:error, %Prima.Refusal{class: :invalid_argument}} = set_up(%{"machine" => "m"})
 
     Application.delete_env(:sanctum, :setup_token)

@@ -2030,6 +2030,54 @@ defmodule PrismWeb.SettingsLiveTest do
       end)
     end
 
+    test "a claim sent before the enrollment's kit is acknowledged claims nothing, and sends the registry nothing",
+         %{conn: conn} do
+      person = test_user()
+      parent = self()
+      state = RegistryStub.enroll!(person.user_id)
+      want!(person, "alicia")
+
+      registry(state, %{}, fn %{signed: signed} ->
+        send(parent, {:signed, signed.operation})
+        {200, RegistryStub.answer(%{"accepted" => true})}
+      end)
+
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+      assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
+
+      # The event, not the hidden button: the component holds the order.
+      view |> with_target("#identity-card") |> render_click("claim", %{})
+      render(view)
+
+      refute_received {:signed, _operation}
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(person.user_id)
+      assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
+    end
+
+    test "a handle chosen while the enrollment's kit is unacknowledged is kept, and claimed only after it",
+         %{conn: conn} do
+      person = test_user()
+      parent = self()
+      state = RegistryStub.enroll!(person.user_id)
+
+      registry(state, %{}, fn %{signed: signed} ->
+        send(parent, {:signed, signed.operation})
+        {200, RegistryStub.answer(%{"accepted" => true})}
+      end)
+
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+      assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
+
+      card = with_target(view, "#identity-card")
+      render_change(card, "check", %{"handle" => "alicia"})
+      wait_until(fn -> not has_element?(view, ~s([data-check="checking"])) end)
+      render_submit(card, "choose", %{"handle" => "alicia"})
+      render(view)
+
+      refute_received {:signed, _operation}
+      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(person.user_id)
+    end
+
     test "a taken handle at the claim asks for another, and the enrollment stands",
          %{conn: conn} do
       person = test_user()

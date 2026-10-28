@@ -112,8 +112,11 @@ defmodule Sanctum.Providers.Session do
           "setup",
           "Set this CYFR up from the command line",
           [
+            # Nullable: a present null reaches the admission, which answers it
+            # as a wrong token (`setup_closed`); an absent one is the gate's.
             Arg.new("setup_token", :string,
               required: true,
+              nullable: true,
               description: "setup: the installation's setup token, CYFR_SETUP_TOKEN in its .env"
             ),
             Arg.new("machine", :string,
@@ -228,9 +231,8 @@ defmodule Sanctum.Providers.Session do
 
   # The installation's first person, made or signed in again by the setup
   # token (`Sanctum.Newcomer`): a command-line session for the machine.
-  def handle(_ctx, %{"action" => "setup", "setup_token" => token} = args)
-      when is_binary(token) do
-    case Sanctum.Newcomer.admit({:setup, token}, {:command_line, args["machine"]}) do
+  def handle(_ctx, %{"action" => "setup"} = args) do
+    case Sanctum.Newcomer.admit({:setup, args["setup_token"]}, {:command_line, args["machine"]}) do
       {:ok, %{person: person, readmitted: readmitted, session_token: session_token}} ->
         {:ok, %{session_token: session_token, user_id: person.id, readmitted: readmitted}}
 

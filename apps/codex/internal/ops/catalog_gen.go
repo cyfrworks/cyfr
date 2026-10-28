@@ -5004,7 +5004,7 @@ func (args SessionReadResourceArgs) MarshalJSON() ([]byte, error) {
 // SessionSetupArgs carries arguments for session.setup.
 type SessionSetupArgs struct {
 	// setup: the installation's setup token, CYFR_SETUP_TOKEN in its .env
-	SetupToken string `json:"setup_token"`
+	SetupToken *string `json:"setup_token"`
 	// setup: the command line's host name, which its session is listed by in Prism
 	Machine string `json:"machine"`
 }

@@ -223,7 +223,7 @@ func setupTokenHere() (string, error) {
 // no device they connected and no sign-in method they linked. The session
 // is kept as the device flow keeps one.
 func loginWithSetup(ctx context.Context, client *mcp.Client, target storedContext, token, machine string) error {
-	answer, err := client.CallTool(ctx, ops.Session, ops.SessionSetupArgs{SetupToken: token, Machine: machine})
+	answer, err := client.CallTool(ctx, ops.Session, ops.SessionSetupArgs{SetupToken: &token, Machine: machine})
 	switch {
 	case errors.Is(err, context.Canceled):
 		return interrupted("Stopped before CYFR answered.")

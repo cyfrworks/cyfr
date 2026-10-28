@@ -298,7 +298,29 @@ defmodule PrismWeb.IdentityCard do
 
   defp claim_when_acknowledged(socket), do: socket
 
+  # The order is register, kit, acknowledge, then claim, held here from
+  # where the person stands now (`person.status`), never by the markup:
+  # until the enrollment's kit is acknowledged, nothing reaches the
+  # registry.
   defp claim(%{assigns: %{context: ctx, wanted: handle}} = socket) when is_binary(handle) do
+    case Ops.call_tool(ctx, "person/status", %{}) do
+      {:ok, status} ->
+        socket = assign(socket, :status, status)
+        if acknowledged?(status), do: claim_handle(socket, ctx, handle), else: socket
+
+      {:error, reason} ->
+        assign(socket, :error, Ops.error_message(reason))
+    end
+  end
+
+  defp claim(socket), do: socket
+
+  defp acknowledged?(%{provenance: "local", enrollment: "enrolled", kits: kits}),
+    do: not Enum.any?(kits, &(&1.kind == "enrollment"))
+
+  defp acknowledged?(_status), do: false
+
+  defp claim_handle(socket, ctx, handle) do
     with {:ok, %{"policy_version" => version}} when is_binary(version) <-
            Ops.call_tool(ctx, "registry/legal_version", %{}),
          {:ok, _accepted} <-
@@ -317,8 +339,6 @@ defmodule PrismWeb.IdentityCard do
         assign(socket, :claim_error, "The registry did not name its current policies. Try again.")
     end
   end
-
-  defp claim(socket), do: socket
 
   defp claim_refused(socket, reason) do
     message = Ops.error_message(reason)
