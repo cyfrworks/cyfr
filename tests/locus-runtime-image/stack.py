@@ -40,7 +40,7 @@ if os.path.join(ROOT, "tests") not in sys.path:
 
 import imagesuite  # noqa: E402
 import worker_auth as auth  # noqa: E402
-from imagesuite import run  # noqa: E402
+from imagesuite import listing, run  # noqa: E402
 
 imagesuite.stop_on_signals()
 # The keeper's seccomp profile and the name the locus-runtime service reads it by.
@@ -239,7 +239,7 @@ class Stack(imagesuite.Stack):
             printf '%s|%s|%s|%s\n' "${d#/proc/}" "$uids" "$eff" "$cmd"
           done"""
         out = []
-        for line in self.listing(self.exec(script), self.container, "the process listing").splitlines():
+        for line in listing(self.exec(script), "the process listing").splitlines():
             if line.count("|") < 3:
                 continue
             pid, uids, eff, cmd = line.split("|", 3)
@@ -260,7 +260,7 @@ class Stack(imagesuite.Stack):
         holds no process."""
         out = []
         top = run("docker", "top", self.container, "-eo", "pid,ruid,euid,suid,fsuid,args", check=False)
-        for line in self.listing(top, self.container, "docker top").splitlines()[1:]:
+        for line in listing(top, "docker top").splitlines()[1:]:
             fields = line.split(None, 5)
             if len(fields) >= 5 and all(f.isdigit() for f in fields[:5]):
                 out.append({"pid": int(fields[0]), "uids": [int(u) for u in fields[1:5]], "cmd": fields[5] if len(fields) > 5 else ""})
@@ -292,7 +292,7 @@ class Stack(imagesuite.Stack):
             printf '%s|%s|%s|%s\n' "${d#/proc/}" "$uid" "$runner" "$home"
           done""".replace("FIRST", str(POOL_FIRST)).replace("LAST", str(POOL_LAST))
         out = []
-        for line in self.listing(self.observe(script), self.container, "the runner listing").splitlines():
+        for line in listing(self.observe(script), "the runner listing").splitlines():
             if line.count("|") < 3:
                 continue
             pid, uid, runner, home = line.split("|", 3)
@@ -311,7 +311,7 @@ class Stack(imagesuite.Stack):
 
     def homes(self):
         """The entries of the home root, read as root inside the container."""
-        return self.listing(self.exec(f"ls -A {HOME_ROOT}"), self.container, "the home root's listing").split()
+        return listing(self.exec(f"ls -A {HOME_ROOT}"), "the home root's listing").split()
 
     def cpu_usec(self):
         """The container's CPU time from its cgroup, in microseconds."""

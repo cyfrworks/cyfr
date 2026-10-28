@@ -63,7 +63,7 @@ if os.path.join(ROOT, "tests") not in sys.path:
     sys.path.append(os.path.join(ROOT, "tests"))
 
 import imagesuite  # noqa: E402
-from imagesuite import PROJECT_PREFIX, run  # noqa: E402
+from imagesuite import PROJECT_PREFIX, listing, run  # noqa: E402
 
 imagesuite.stop_on_signals()
 
@@ -776,7 +776,7 @@ class Stack(imagesuite.Stack):
             printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "${d#/proc/}" "$sid" "$uids" "$eff" "$prm" "$bnd" "$nnp" "$cmd"
           done"""
         out = []
-        for line in self.listing(self.exec(script, target=target), target or self.container, "the process listing").splitlines():
+        for line in listing(self.exec(script, target=target), "the process listing").splitlines():
             pid, sid, uids, eff, prm, bnd, nnp, cmd = line.split("|", 7)
             if uids:
                 out.append({"pid": int(pid), "sid": int(sid or 0), "uids": [int(u) for u in uids.split(",")],

@@ -405,12 +405,22 @@ class ObservationAnswers(unittest.TestCase):
         with self.assertRaises(SystemExit):
             imagesuite.read_word(self.probe(0, ""), ("present", "absent"), "the probe")
 
-    def test_a_stopped_or_restarting_container_holds_no_process(self):
-        self.assertTrue(imagesuite.holds_no_process({"Running": False, "Restarting": False}))
-        self.assertTrue(imagesuite.holds_no_process({"Running": True, "Restarting": True}))
+    def test_a_call_refused_as_not_running_or_restarting_lists_nothing(self):
+        for refusal in ("container e1 is not running",
+                        "Container e1 is restarting, wait until the container is running"):
+            with self.subTest(refusal=refusal):
+                done = subprocess.CompletedProcess([], 1, "", f"Error response from daemon: {refusal}")
+                self.assertEqual(imagesuite.listing(done, "the listing"), "")
 
-    def test_a_running_container_may_hold_processes(self):
-        self.assertFalse(imagesuite.holds_no_process({"Running": True, "Restarting": False}))
+    def test_any_other_failed_call_fails_the_listing(self):
+        for stderr in ("Error response from daemon: Container e1 is paused, unpause the container before exec",
+                       "OCI runtime exec failed"):
+            with self.subTest(stderr=stderr):
+                with self.assertRaises(SystemExit):
+                    imagesuite.listing(subprocess.CompletedProcess([], 1, "", stderr), "the listing")
+
+    def test_a_successful_call_lists_its_output(self):
+        self.assertEqual(imagesuite.listing(subprocess.CompletedProcess([], 0, "a\n", ""), "the listing"), "a\n")
 
 
 # A suite's one-off containers as its functions start them, each call to

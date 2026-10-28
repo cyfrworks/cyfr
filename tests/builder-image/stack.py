@@ -55,7 +55,7 @@ if os.path.join(ROOT, "tests") not in sys.path:
     sys.path.append(os.path.join(ROOT, "tests"))
 
 import imagesuite  # noqa: E402
-from imagesuite import PROJECT_PREFIX, run  # noqa: E402
+from imagesuite import PROJECT_PREFIX, listing, run  # noqa: E402
 
 imagesuite.stop_on_signals()
 
@@ -267,7 +267,7 @@ class Stack(imagesuite.Stack):
             printf '%s|%s|%s|%s\n' "${d#/proc/}" "$uids" "$eff" "$cmd"
           done"""
         out = []
-        for line in self.listing(self.exec(script), self.container, "the process listing").splitlines():
+        for line in listing(self.exec(script), "the process listing").splitlines():
             pid, uids, eff, cmd = line.split("|", 3)
             if uids:
                 out.append({"pid": int(pid), "uids": [int(u) for u in uids.split(",")], "cap_eff": eff, "cmd": cmd.strip()})
@@ -278,7 +278,7 @@ class Stack(imagesuite.Stack):
 
     def homes(self):
         """The entries of the home root, read as root inside the container."""
-        return self.listing(self.exec(f"ls -A {HOME_ROOT}"), self.container, "the home root's listing").split()
+        return listing(self.exec(f"ls -A {HOME_ROOT}"), "the home root's listing").split()
 
     def post(self, route, body, headers=None, timeout=900):
         """POSTs `body` and reads the answer's lines, whatever its status: (HTTP status, lines)."""

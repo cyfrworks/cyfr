@@ -4,8 +4,8 @@
 
 A failed `docker exec` is no answer about the processes of the container or
 about whether a home is there: the listing and the probe fail the
-observation. The one state that holds no process is a container whose main
-process has exited.
+observation. Docker's refusal that the container is not running, or is
+restarting, is the one exception to the listing, and it is read from the call.
 
 Usage: python3 -I tests/locus-backends-image/harness_test.py
 """
@@ -29,6 +29,10 @@ PROCESS_LINE = ("4242|4000|1001,1001,1001,1001|00000000000000e0|00000000000000e0
                 "beam.smp -- backend\n")
 HOME = "/var/lib/locus/homes/backend-a1"
 
+OTHER = "OCI runtime exec failed: unable to start container process"
+NOT_RUNNING = f"container {CONTAINER} is not running"
+RESTARTING = f"Container {CONTAINER} is restarting, wait until the container is running"
+
 
 def state(status, running, restarting):
     return {"Status": status, "Running": running, "Restarting": restarting, "StartedAt": "2026-10-28T00:00:00Z"}
@@ -36,29 +40,30 @@ def state(status, running, restarting):
 
 RUNNING = state("running", True, False)
 STOPPED = state("exited", False, False)
-# Docker's report between one exit of the main process and the next start.
-RESTARTING = state("restarting", True, True)
+RESTARTING_STATE = state("restarting", True, True)
 
 
-def docker(container_state, status=0, stdout="", inspect_status=0):
-    """`run` standing in for docker: every exec exits `status` with `stdout`, and the inspection exits
-    `inspect_status` and reports `container_state`. A checked call exits as imagesuite.run's does."""
+def docker(refusal=None, stdout="", container_state=RUNNING, status=1):
+    """`run` standing in for docker: a call the daemon refuses exits `status` with its refusal on stderr, and any other
+    call exits 0 with `stdout`. The inspection reports `container_state`, which a later read may find already changed."""
 
     def run(*args, check=True, env=None, timeout=None):
         if args[1] == "inspect":
-            code, out = inspect_status, json.dumps([{"State": container_state, "RestartCount": 0}])
+            code, out, err = 0, json.dumps([{"State": container_state, "RestartCount": 0}]), ""
+        elif refusal:
+            code, out, err = status, "", f"Error response from daemon: {refusal}"
         else:
-            code, out = status, stdout
+            code, out, err = 0, stdout, ""
         if check and code != 0:
             sys.exit(f"FAIL: {' '.join(args)} exited {code}")
-        return subprocess.CompletedProcess(args, code, out if code == 0 else "", "" if code == 0 else "daemon error")
+        return subprocess.CompletedProcess(args, code, out, err)
 
     return run
 
 
 class Stub(unittest.TestCase):
-    def container(self, container_state, status=0, stdout="", inspect_status=0):
-        fake = docker(container_state, status, stdout, inspect_status)
+    def container(self, refusal=None, stdout="", container_state=RUNNING, status=1):
+        fake = docker(refusal, stdout, container_state, status)
         for module in (harness, imagesuite):
             patch = mock.patch.object(module, "run", fake)
             patch.start()
@@ -71,36 +76,35 @@ class Stub(unittest.TestCase):
 class Processes(Stub):
     def test_a_failed_exec_fails_the_process_listing(self):
         with self.assertRaises(SystemExit):
-            self.container(RUNNING, status=1).processes()
-
-    def test_a_failed_inspection_fails_the_listing_it_was_read_for(self):
-        with self.assertRaises(SystemExit):
-            self.container(RUNNING, status=1, inspect_status=1).processes()
+            self.container(OTHER).processes()
 
     def test_a_stopped_container_holds_no_process(self):
-        self.assertEqual(self.container(STOPPED, status=1).processes(), [])
+        self.assertEqual(self.container(NOT_RUNNING, container_state=STOPPED).processes(), [])
 
     def test_a_container_restarting_between_one_keeper_and_the_next_holds_none(self):
-        self.assertEqual(self.container(RESTARTING, status=1).processes(), [])
+        self.assertEqual(self.container(RESTARTING, container_state=RESTARTING_STATE).processes(), [])
+
+    def test_a_restart_refused_and_finished_before_the_inspection_holds_none(self):
+        self.assertEqual(self.container(RESTARTING, container_state=RUNNING).processes(), [])
 
     def test_a_readable_container_lists_what_it_holds(self):
-        self.assertEqual(self.container(RUNNING, stdout=PROCESS_LINE).processes(), [{
+        self.assertEqual(self.container(stdout=PROCESS_LINE).processes(), [{
             "pid": 4242, "sid": 4000, "uids": [1001] * 4, "cap_eff": "00000000000000e0", "cap_prm": "00000000000000e0",
             "cap_bnd": "00000000000000e0", "no_new_privs": False, "cmd": "beam.smp -- backend"}])
 
 
 class HomeProbe(Stub):
     def test_a_home_the_probe_finds_is_not_gone(self):
-        self.assertFalse(isolation.home_gone(self.container(RUNNING, stdout="present\n"), HOME))
+        self.assertFalse(isolation.home_gone(self.container(stdout="present\n"), HOME))
 
     def test_a_home_the_probe_does_not_find_is_gone(self):
-        self.assertTrue(isolation.home_gone(self.container(RUNNING, stdout="absent\n"), HOME))
+        self.assertTrue(isolation.home_gone(self.container(stdout="absent\n"), HOME))
 
     def test_a_failed_probe_is_no_answer_whatever_its_status(self):
         for status in (1, 125):
             with self.subTest(status=status):
                 with self.assertRaises(SystemExit):
-                    isolation.home_gone(self.container(RUNNING, status=status), HOME)
+                    isolation.home_gone(self.container(OTHER, status=status), HOME)
 
 
 if __name__ == "__main__":

@@ -18,7 +18,6 @@ step imports the runtime harness on every commit.
 """
 
 import atexit
-import json
 import os
 import shutil
 import signal
@@ -142,14 +141,26 @@ def guard_failed(inspected):
     return state.get("Health", {}).get("Status") != "healthy" and (state.get("ExitCode") == 1 or inspected["RestartCount"] >= 1)
 
 
-def holds_no_process(state):
-    """Whether a container whose `docker inspect` State is `state` holds no process: its main process has exited.
+# Docker's refusals of a call on a container whose main process is not running: the container is stopped, or it is
+# between one exit of its main process and the next start.
+NO_PROCESS_REFUSALS = ("is not running", "is restarting, wait until the container is running")
 
-    Docker reports a stopped container as not running, and a container
-    between one exit of its main process and the next start as running with
-    Restarting set. Its processes went with the main process.
+
+def listing(done, what):
+    """The stdout of `done`, a docker call on a container made with check=False, read as what the container holds.
+
+    A failed call answers nothing about the container's processes or its home
+    root, so it fails the observation. The one exception is Docker's refusal
+    of the call itself: a container whose main process is not running holds
+    no process, and its home root, a tmpfs mount of each role, goes with it.
+    The refusal is read from the call, since an inspection made afterwards
+    may find the restart already over.
     """
-    return not state["Running"] or state["Restarting"]
+    if done.returncode == 0:
+        return done.stdout
+    if any(refusal in done.stderr for refusal in NO_PROCESS_REFUSALS):
+        return ""
+    sys.exit(f"FAIL: {what} exited {done.returncode}\n{done.stderr.strip()}")
 
 
 def read_word(done, words, what):
@@ -215,21 +226,6 @@ class Stack:
         print(message, file=sys.stderr, flush=True)
         if not _exiting and sys.exc_info()[0] is None:
             sys.exit(message)
-
-    def listing(self, done, container, what):
-        """The stdout of `done`, a docker call on `container` made with check=False, read as what the container holds.
-
-        A failed call answers nothing about the container's processes or home
-        root, so it fails the observation, unless the container holds no
-        process (`holds_no_process`): then the listing is empty. Each role's
-        home root is a tmpfs mount, which goes with the container's processes.
-        """
-        if done.returncode == 0:
-            return done.stdout
-        state = json.loads(run("docker", "inspect", container).stdout)[0]["State"]
-        if holds_no_process(state):
-            return ""
-        sys.exit(f"FAIL: {what} of {container} exited {done.returncode}\n{done.stderr.strip()}")
 
 
 @atexit.register
