@@ -91,6 +91,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   end
 
   defp env_files do
+    # arca:bypass-ok=B — the operator's .env file at the project root, read
+    # as the boot's runtime configuration reads it, with no Arca configured.
     path = Path.join(File.cwd!(), ".env")
     if File.regular?(path), do: [path], else: []
   end
