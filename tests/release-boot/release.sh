@@ -56,13 +56,19 @@ fail() {
 # Keep picks distinct even before the cells bind them. Explicit ports keep
 # their meaning, including ports reused by cells that run one at a time.
 CELL_PORTS=()
+cell_reserve_ports() {
+  local port
+  for port in "$@"; do
+    [ -z "$port" ] || CELL_PORTS+=("$port")
+  done
+}
 cell_pick_port() {
   local target="$1" candidate="${2:-}" used attempt
   if [ -z "$candidate" ]; then
     for ((attempt = 0; attempt < 50; attempt++)); do
       candidate="$(run_names_free_port)" || return 1
       for used in ${CELL_PORTS[@]+"${CELL_PORTS[@]}"}; do
-        if [ "$candidate" = "$used" ]; then candidate=""; break; fi
+        if [ "$candidate" -eq "$used" ] 2>/dev/null; then candidate=""; break; fi
       done
       [ -z "$candidate" ] || break
     done
@@ -71,6 +77,7 @@ cell_pick_port() {
   CELL_PORTS+=("$candidate")
   printf -v "$target" '%s' "$candidate"
 }
+cell_reserve_ports "${RELEASE_BOOT_PORT:-}" "${RELEASE_BOOT_HOST_API_PORT:-}"
 cell_pick_port PORT "${RELEASE_BOOT_PORT:-}" || fail "could not pick the release listener port"
 cell_pick_port HOST_API_PORT "${RELEASE_BOOT_HOST_API_PORT:-}" || fail "could not pick the release host API port"
 
@@ -304,6 +311,7 @@ cell_hostname() {
   local cell="$1" host="$2" port host_api_port proxy_port value
   [[ "$host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] ||
     fail "not a lowercase dotted hostname: '$host'"
+  cell_reserve_ports "${3:-}" "${4:-}" "${5:-}"
   cell_pick_port port "${3:-}" || fail "could not pick cell $cell's listener port"
   cell_pick_port host_api_port "${4:-}" || fail "could not pick cell $cell's host API port"
   cell_pick_port proxy_port "${5:-}" || fail "could not pick cell $cell's proxy listener port"

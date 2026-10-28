@@ -86,13 +86,13 @@ C="$WORK/c"
 C2="$WORK/c2"
 C3="$WORK/c3"
 THIEF="$WORK/thief"
-cell_pick_port THIEF_PORT
 browser_home "$DIR" dir.test
 browser_home "$A" a.test
 browser_home "$B" b.test
 browser_home "$C" c.test
 browser_home "$C2" c2.test
 browser_home "$C3" c3.test
+cell_pick_port THIEF_PORT
 
 for cell in c c2 c3; do
   openssl rand -hex 32 | tr -d '\n' >"$SECRETS/token-$cell"
