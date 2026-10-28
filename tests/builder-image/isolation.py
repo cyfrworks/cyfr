@@ -323,6 +323,12 @@ def test_no_survivors(stack):
     expect(stack.homes() == [], "the build's home is gone when its response arrives", stack.homes())
 
 
+def ipc_tables(stack):
+    """The kernel's System V IPC tables and the POSIX queue directory, as text: an answer only from a command that exits 0."""
+    done = stack.exec("cat /proc/sysvipc/shm /proc/sysvipc/sem /proc/sysvipc/msg && ls -A /dev/mqueue")
+    return imagesuite.read_output(done, "the kernel's IPC tables")
+
+
 def test_residue(stack):
     stack.up(pool=f"{POOL_FIRST}-{POOL_FIRST}")
     paths = " ".join(SHARED + LEFT)
@@ -349,7 +355,7 @@ def test_residue(stack):
         f"{RUN_DIR}/{TAG}": "denied", f"{HOME_ROOT}/{TAG}": "absent", f"{HOME_ROOT}/{TAG}-tree/": "absent",
     } and all(probed[kind] == "absent" for kind in ("shm", "sem", "msg", "mqueue")),
         "nothing the first build left reaches the second", probed)
-    sysvipc = stack.exec("cat /proc/sysvipc/shm /proc/sysvipc/sem /proc/sysvipc/msg; ls -A /dev/mqueue").stdout
+    sysvipc = ipc_tables(stack)
     expect(str(POOL_FIRST) not in sysvipc and TAG not in sysvipc, "the kernel holds no IPC object of the uid", sysvipc)
     logs = stack.logs()
     expect("quarantined" not in logs and "outlived retirement" not in logs, "every build uid was retired clean", logs)

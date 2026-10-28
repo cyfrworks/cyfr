@@ -217,18 +217,6 @@ defmodule Locus.Runtime.SecurityTest do
   end
 
   # ============================================================================
-  # Resource Limits
-  # ============================================================================
-
-  describe "resource limits" do
-    test "default memory limit is 64MB" do
-      # The Runtime module defines @default_max_memory_bytes as 64MB
-      # This test verifies the module compiles with expected defaults
-      assert Code.ensure_loaded?(Locus.Runtime.Engine)
-    end
-  end
-
-  # ============================================================================
   # Component Digest
   # ============================================================================
 

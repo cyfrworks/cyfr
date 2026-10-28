@@ -86,7 +86,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_plane import ControlPlane  # noqa: E402
 from stack import (HOME_ROOT, POOL_FIRST, POOL_LAST, PROFILE, ROLE, RUN_DIR, SERVICE, SERVICE_UID, SERVICE_USER,  # noqa: E402
                    Stack, expect, run, wait_until)
-from imagesuite import PROJECT_PREFIX, run_name  # noqa: E402
+from imagesuite import PROJECT_PREFIX, read_output, read_word, run_name  # noqa: E402
 
 IMAGE_PROFILE = "/etc/cyfr/keeper.json"
 STEPS = ("refusals", "connect", "relay", "nested", "spawn", "cgroup", "network", "descriptors", "kill", "reuse", "restart")
@@ -397,7 +397,7 @@ def runner_facts(stack, runner):
               f"echo routes=$(tail -n +2 /proc/{pid}/net/route | wc -l); "
               f"for fd in /proc/{pid}/fd/*; do echo \"fd=${{fd##*/}} $(readlink $fd)\"; done")
     facts = {"fds": {}}
-    for line in stack.observe(script).stdout.splitlines():
+    for line in read_output(stack.observe(script), f"the facts of runner uid {runner['uid']}").splitlines():
         key, _, value = line.partition("=")
         if key == "fd":
             number, _, target = value.partition(" ")
@@ -465,8 +465,17 @@ def kill_runner(stack, runner, label):
     stack.exec(f"kill -9 {runner['pid']}")
     wait_until(lambda: stack.uid_processes(runner["uid"]) == [], 20, f"{label}: uid {runner['uid']} to hold no process")
     wait_until(lambda: os.path.basename(runner["home"]) not in stack.homes(), 20, f"{label}: the home of uid {runner['uid']} to be scrubbed")
-    wait_until(lambda: stack.exec(f"test -e /sys/fs/cgroup/keeper-{runner['uid']}").returncode != 0, 20,
-               f"{label}: the group of uid {runner['uid']} to be removed")
+    wait_until(lambda: group_removed(stack, runner["uid"]), 20, f"{label}: the group of uid {runner['uid']} to be removed")
+
+
+def group_removed(stack, uid):
+    """Whether the keeper group of `uid` is gone, from the word its probe prints in a successful exec.
+
+    A failed exec is no answer whatever its status, and a stopped or
+    restarting container is not taken for a removed group either.
+    """
+    probe = f"test -e /sys/fs/cgroup/keeper-{uid} && echo present || echo absent"
+    return read_word(stack.exec(probe), ("present", "absent"), f"the keeper group of uid {uid}") == "absent"
 
 
 def next_runner(stack, not_pid):

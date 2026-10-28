@@ -67,7 +67,7 @@ defmodule Arca.PolicyLogTest do
       {:ok, _} = PolicyLog.record(log_attrs(%{id: "pl_u2", user_id: "bob"}))
 
       {:ok, logs} = PolicyLog.list(Prima.Actor.in_athanor("ath_test"), user_id: "alice")
-      assert Enum.all?(logs, &(&1.user_id == "alice"))
+      assert Enum.map(logs, & &1.id) == ["pl_u1"]
     end
 
     test "filters by request_id" do

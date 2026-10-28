@@ -70,6 +70,15 @@ PROBE_TOOLS = ["probe__echo_env", "probe__exit", "probe__fail", "probe__hog", "p
                "probe__read_path", "probe__run", "probe__signal", "probe__spawn_daemon", "probe__whoami"]
 
 
+def home_gone(stack, home):
+    """Whether `home` is gone from the container, from the word its probe prints in a successful exec.
+
+    A failed exec is no answer whatever its status.
+    """
+    probe = f"test -e {home} && echo present || echo absent"
+    return imagesuite.read_word(stack.exec(probe), ("present", "absent"), f"the probe of {home}") == "absent"
+
+
 def sync_probe(c, owner, env=None):
     status, answer, _ = c.sync(owner, [probe(env=env)])
     expect(status == 200, f"{owner['athanor']} is synced", answer)
@@ -404,7 +413,7 @@ def main():
         eventually(lambda: not stack.under_uid(alpha["uid"]), f"no process of uid {alpha['uid']}, the daemon included")
         eventually(lambda: len([p for p in stack.processes() if p["cmd"].startswith("cyfr-locus relay")]) == 1,
                    "alpha's relay to end")
-        expect(stack.exec(f"test -e {alpha['home']}").returncode == 1, "alpha's home is gone")
+        expect(home_gone(stack, alpha["home"]), "alpha's home is gone")
         expect(c.tool(BETA, "probe__whoami")["pid"] == beta["pid"], "releasing alpha disturbed nothing of beta's")
 
         c.tool(BETA, "probe__exit", {"code": 7})
@@ -413,7 +422,7 @@ def main():
         again = c.tool(BETA, "probe__whoami")
         expect(restarted["tools"] == len(PROBE_TOOLS) and again["pid"] != beta["pid"] and again["home"] != beta["home"],
                "a backend that exits restarts ready in a new home", [restarted, again])
-        expect(stack.exec(f"test -e {beta['home']}").returncode == 1, "the exited backend's home is gone")
+        expect(home_gone(stack, beta["home"]), "the exited backend's home is gone")
 
         # ————— the service's lifetime —————
         for key in ["", "not-a-key", "00" * 31]:

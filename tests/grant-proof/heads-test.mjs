@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 CYFR Works Inc.
+//
+// The grant proof's head predicates (heads.mjs), on heads shaped as the proof
+// records them. The head the flows grant commits is held under the digest the
+// command line previews for its decisions, and refused under any other digest,
+// or with a flow, a domain, a revision or a consent the grant does not hold.
+//
+// Usage: node --test tests/grant-proof/heads-test.mjs
+
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { flowsHeld, sameHead } from "./heads.mjs";
+
+const KEPT = "alpha.grant.test";
+const DROPPED = "beta.grant.test";
+const digest = (hex) => `sha256:${hex.repeat(64)}`;
+
+const regranted = {
+  revision: 2, consent_id: "cons_regranted", profile_id: "prof_probe", admitted_origins: ["interactive"],
+  domains: [KEPT], paths: ["data/probe/notes/"], flows: [`files_by_grant to ${KEPT}`],
+  shape_digest: digest("1"), commit_digest: digest("2"),
+};
+const shape = digest("3");
+const previewed = digest("4");
+const flowHead = {
+  revision: 3, consent_id: "cons_flows", profile_id: "prof_probe", admitted_origins: ["interactive"],
+  domains: [KEPT], paths: ["data/probe/notes/"], flows: [`files_by_grant to ${KEPT}`, `outside to ${KEPT}`],
+  shape_digest: shape, commit_digest: previewed,
+};
+const grant = { regranted, shape, kept: KEPT, digest: previewed };
+
+test("the head the flows grant commits is held under the digest its decisions preview to", () => {
+  assert.equal(flowsHeld(flowHead, grant), true);
+});
+
+test("a head committed under no digest, an empty or malformed one, or another digest is refused", () => {
+  const { commit_digest: _omitted, ...withoutDigest } = flowHead;
+  const others = [null, "", "sha256:wrong", digest("0"), regranted.commit_digest, undefined];
+  for (const bad of [withoutDigest, ...others.map((commit_digest) => ({ ...flowHead, commit_digest }))]) {
+    assert.equal(flowsHeld(bad, grant), false, `commit_digest ${JSON.stringify(bad.commit_digest)}`);
+  }
+});
+
+test("with no digest to bind the head to, every head is refused", () => {
+  const { commit_digest: _omitted, ...withoutDigest } = flowHead;
+  for (const missing of [undefined, null, "", "sha256:wrong"]) {
+    assert.equal(flowsHeld(flowHead, { ...grant, digest: missing }), false, `digest ${JSON.stringify(missing)}`);
+    assert.equal(flowsHeld(withoutDigest, { ...grant, digest: missing }), false, `digest ${JSON.stringify(missing)}`);
+  }
+});
+
+test("a head with an extra flow, an added domain or another revision is refused", () => {
+  const copies = [
+    { ...flowHead, flows: [...flowHead.flows, `outside to ${DROPPED}`] },
+    { ...flowHead, domains: [...flowHead.domains, DROPPED] },
+    { ...flowHead, revision: flowHead.revision + 1 },
+  ];
+  for (const copy of copies) assert.equal(flowsHeld(copy, grant), false);
+});
+
+test("a head that keeps the regranted head's consent is refused", () => {
+  assert.equal(flowsHeld({ ...flowHead, consent_id: regranted.consent_id }, grant), false);
+});
+
+test("two heads hold the same fields, arrays as sets", () => {
+  assert.equal(sameHead({ ...regranted, domains: [KEPT, DROPPED] }, { ...regranted, domains: [DROPPED, KEPT] }), true);
+  assert.equal(sameHead({ ...regranted, domains: [KEPT, DROPPED] }, regranted), false);
+  assert.equal(sameHead({ ...regranted, paths: [] }, regranted), false);
+});
