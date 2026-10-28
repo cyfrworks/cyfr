@@ -297,15 +297,23 @@ async function main() {
     const openedOff = !(await newFlow.isChecked());
     await newFlow.click();
     const ticked = await waitFor(async () => newFlow.isChecked(), { what: "the new flow ticked" }).catch(() => false);
+    // The sheet records its narrowing of the flows as explicit exits whenever
+    // the flows it keeps are not every flow the version asks; the commit digest
+    // covers that narrowing, so the decisions name the two kept flows, which is
+    // the preview the person approved.
+    const keptFlows = [{ from: "files_by_grant", to: KEPT }, { from: "outside", to: KEPT }];
+    const flowsDecisions = { ref: REF, subset: { [REF]: { ...subset, exits: keptFlows } }, origins: ["interactive"] };
+    const flowsShown = await ask({ op: "cli_preview", decisions: flowsDecisions });
+    // Diagnostic: the same decisions without the named exits; its digest is not the head's.
+    const flowsUnnarrowed = await ask({ op: "cli_preview", decisions });
     await confirm(page);
     const flowHead = await ask({ op: "head" });
     const flowAdmitted = await ask({ op: "admit" });
-    // The flows commit is previewed from the decisions the sheet sent: the host
-    // and the folder kept, and every flow ticked, so the grant narrows no exit.
-    // The head is bound to the digest that preview answers.
-    const flowsCli = await ask({ op: "cli_preview", decisions });
-    const flowsGrant = { regranted, shape: flowed.shape_digest, kept: KEPT, digest: flowsCli.commit_digest };
-    record.flows = { flowed, flowAsking, flowSheet, flowHead, flowAdmitted, flowsCli: previewShown(flowsCli) };
+    const flowsGrant = { regranted, shape: flowed.shape_digest, kept: KEPT, digest: flowsShown.commit_digest };
+    record.flows = {
+      flowed, flowAsking, flowSheet, flowHead, flowAdmitted,
+      flowsShown: previewShown(flowsShown), flowsUnnarrowed: previewShown(flowsUnnarrowed),
+    };
     // The head after the flows grant moves in revision, consent, digest and
     // shape, its flows are exactly the two granted, and its digest is the one
     // the preview answers (`flowsHeld` in heads.mjs). Every other field is the
@@ -327,7 +335,8 @@ async function main() {
         flowsCopies.every((copy) => !flowsHeld(copy, flowsGrant)) &&
         flowAdmitted.admitted === true && flowAdmitted.consent_id === flowHead.consent_id,
       "a version letting one more class reach a host is asked again with that exit shown, the new flow unticked; ticked and granted, the head holds exactly its granted flows and every other field, under the digest the command line previews for the same decisions; copies with an extra flow, an added domain, another revision or another digest are refused",
-      { asking: flowAsking, opened_off: openedOff, ticked, head: flowHead, digest: previewShown(flowsCli),
+      { asking: flowAsking, opened_off: openedOff, ticked, head: flowHead, digest: previewShown(flowsShown),
+        unnarrowed: previewShown(flowsUnnarrowed),
         held: flowsHeld(flowHead, flowsGrant), copies_refused: flowsCopies.map((copy) => !flowsHeld(copy, flowsGrant)) })) return;
 
     // -----------------------------------------------------------------------
