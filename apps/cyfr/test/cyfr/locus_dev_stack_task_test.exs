@@ -326,14 +326,25 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
         System.put_env(name, " ")
 
         refused(
-          "#{name} holds only whitespace in .env or the environment, which the boot reads as a " <>
-            "value, not as unset.",
+          "#{name} holds only whitespace in .env or the environment. Remove it, or set a value.",
           fn -> settings!(["dev@example.test"]) end
         )
 
         refute File.exists?(".env")
         System.delete_env(name)
       end
+    end
+
+    test "reads an island key as the boot does: trimmed, then decoded" do
+      File.write!(".env", complete())
+      System.put_env("CYFR_LOCUS_BACKENDS_KEY", "  " <> @backends_key <> " ")
+      System.put_env("CYFR_LOCUS_BUILDS_KEY", " " <> @builds_key <> "\t")
+
+      assert {:ok, <<_::256>>} =
+               Prima.EnvValue.hex_key(&System.get_env/1, "CYFR_LOCUS_BACKENDS_KEY")
+
+      settings!()
+      assert answers() == answered()
     end
 
     test "accepts each server setting .env or the environment sets as the declarations do" do

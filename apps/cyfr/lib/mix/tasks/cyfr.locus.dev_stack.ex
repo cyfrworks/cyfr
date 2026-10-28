@@ -52,10 +52,9 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
       mix cyfr.locus.dev_stack names DECLARATIONS
 
-  reads nothing else and prints `project <name>`, the compose project
-  every compose call of the script names, and `image <tag>`, the one
-  image the stack's services run, which `scripts/dev-stack.sh clean`
-  removes.
+  reads nothing else and prints `project <name>`, the compose project,
+  and `image <tag>`, the one image the stack's services run, which
+  `scripts/dev-stack.sh clean` removes.
 
   Both refuse a `RELEASE_ROOT`: the stack is a mix boot from the checkout,
   never a release.
@@ -340,17 +339,21 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end
   end
 
-  # A value held as the boot reads it: blank text is a value there, so it
-  # is refused here, and a key must decode as it stands.
+  # A value held, checked by the reader the boot checks it with: the root
+  # decoded as it stands (`config/runtime.exs`), an island key through
+  # `Prima.EnvValue.hex_key/2`, which trims it. Whitespace alone is
+  # refused: it is a value of none of them.
   defp held(name, text) do
     cond do
       String.trim(text) == "" ->
         {:error,
-         "#{name} holds only whitespace in .env or the environment, which the boot reads " <>
-           "as a value, not as unset. Remove it, or set a value."}
+         "#{name} holds only whitespace in .env or the environment. Remove it, or set a value."}
+
+      name == @root ->
+        hex_key(name, Prima.MacEnvelope.decode_root(text))
 
       name in @keys ->
-        hex_key(name, text)
+        hex_key(name, Prima.EnvValue.hex_key(fn _ -> text end, name))
 
       true ->
         :ok
@@ -373,7 +376,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
         empty_override(@builds_key)
 
       (have = set(env, @builds_key)) != nil ->
-        with :ok <- held(@builds_key, have), do: {:ok, have}
+        with :ok <- held(@builds_key, have), do: {:ok, String.trim(have)}
 
       true ->
         {:write, key} = minted(@builds_key, [])
@@ -418,12 +421,13 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
        why <> " Add the line #{@admins}=<your email> to .env, or set `git config user.email`."}
   end
 
-  defp hex_key(name, text) do
-    case Prima.MacEnvelope.decode_root(text) do
-      {:ok, _bytes} ->
+  # The refusal of a key its reader did not decode.
+  defp hex_key(name, read) do
+    case read do
+      {:ok, bytes} when is_binary(bytes) ->
         :ok
 
-      :error ->
+      _not_a_key ->
         {:error,
          "#{name} is not 64 hexadecimal digits. Generate one with `openssl rand -hex 32`, " <>
            "or remove its line from .env and scripts/dev-stack.sh writes one."}
@@ -472,7 +476,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
         {:ok,
          [
            {"LOCUS_RUNTIME_KEY", Base.encode16(key, case: :lower)},
-           {@backends_key, set(env, @backends_key)},
+           {@backends_key, String.trim(set(env, @backends_key))},
            {@builds_key, builds_key}
          ]}
 

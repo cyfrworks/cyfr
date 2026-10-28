@@ -18,11 +18,15 @@
 #   scripts/dev-stack.sh clean  do what down does, then remove the stack's
 #                               image
 #
-# One run holds data/dev-stack.lock (git- and docker-ignored) for its
-# whole life and records its server's process group there, so a second
-# run, `down` or `clean` refuses while it runs, and `down` finds a server
-# whose run was killed. The stack's compose project is the one
-# docker-compose.dev.yml names, whatever the caller's COMPOSE_* say.
+# The stack's compose project is the one docker-compose.dev.yml names,
+# whatever the caller's COMPOSE_* say. Its containers, networks and ports
+# are the host's, so one run on the host holds the project's lock (under
+# XDG_RUNTIME_DIR, else TMPDIR) for its whole life, before anything of its
+# checkout is written or built, and records its checkout and its server's
+# process group there: a start, `down` or `clean` from any checkout
+# refuses while it runs, and `down` finds a server whose run was killed.
+# DEV_STACK_GRACE (seconds, default 30) is how long a server is given to
+# stop before its process group is killed.
 #
 # Every setting comes from `mix cyfr.locus.dev_stack`, which derives
 # CYFR's from docker-compose.dev.yml as compose resolves it and reads .env
@@ -42,7 +46,10 @@ for name in $(compgen -e); do
   case "$name" in COMPOSE_*) unset "$name" ;; esac
 done
 
-LOCK=data/dev-stack.lock
+GRACE="${DEV_STACK_GRACE:-30}"
+case "$GRACE" in '' | *[!0-9]*) echo "dev-stack: DEV_STACK_GRACE is $GRACE, not a number of seconds." >&2; exit 1 ;; esac
+
+LOCK=""
 LOCK_FD=""
 PRIVATE=""
 PROJECT=""
@@ -58,8 +65,7 @@ die() {
 
 # Every service of the stack, builds included, with nothing interpolated
 # from .env: what the services need from it arrives from the task in the
-# environment. Once the declarations are read, every call names their
-# project.
+# environment. Once the lock has read the project, every call names it.
 compose() {
   local project=()
   [ -z "$PROJECT" ] || project=(-p "$PROJECT")
@@ -67,23 +73,32 @@ compose() {
     -f docker-compose.yml -f docker-compose.dev.yml "$@"
 }
 
-# lock: the stack's lock for the rest of this process, or a refusal naming
-# the run that holds it. The server never inherits it.
+# lock_file PROJECT: the one lock of the project on this host.
+lock_file() { printf '%s/%s.dev-stack.lock' "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}" "$1"; }
+
+# lock: the project's lock for the rest of this process, or a refusal
+# naming the run that holds it. The project comes from the override alone,
+# which compose resolves with no .env and no build; the server never
+# inherits the lock.
 lock() {
   command -v flock >/dev/null || die "flock is not on PATH (util-linux; brew install flock)."
-  mkdir -p data
+  PROJECT="$(docker compose --env-file /dev/null -f docker-compose.dev.yml config 2>/dev/null | sed -n '1s/^name: //p')"
+  [ -n "$PROJECT" ] || die "docker compose could not resolve docker-compose.dev.yml's project name."
+  LOCK="$(lock_file "$PROJECT")"
   exec {LOCK_FD}>>"$LOCK"
   if ! flock -n "$LOCK_FD"; then
-    local holder
+    local holder checkout
     holder="$(sed -n 's/^pid //p' "$LOCK" 2>/dev/null | head -n 1)"
+    checkout="$(sed -n 's/^checkout //p' "$LOCK" 2>/dev/null | head -n 1)"
     LOCK_FD=""
-    die "another run of the dev stack (pid ${holder:-unknown}) holds $LOCK; stop it, or wait for it to end."
+    die "another run of the dev stack (pid ${holder:-unknown}, checkout ${checkout:-unknown}) holds $LOCK; stop it, or wait for it to end."
   fi
-  # This run's pid, beside the server a killed run recorded, which `down`
-  # and a start still read; the file stays the one the lock is on.
+  # This run's pid and checkout, beside the server a killed run recorded,
+  # which `down` and a start still read; the file stays the one the lock
+  # is on.
   local recorded
   recorded="$(sed -n '/^server /p' "$LOCK")"
-  printf 'pid %s\n%s' "$$" "${recorded:+$recorded$'\n'}" >"$LOCK"
+  printf 'pid %s\ncheckout %s\n%s' "$$" "$ROOT" "${recorded:+$recorded$'\n'}" >"$LOCK"
 }
 
 # orphan: the process group of the server a killed run recorded, when its
@@ -96,11 +111,11 @@ orphan() {
   return 0
 }
 
-# stop GROUP: the server's process group, its leader given 30 seconds to
+# stop GROUP: the server's process group, its leader given the grace to
 # stop before the whole group is killed.
 stop() {
   kill -TERM "$1" 2>/dev/null || true
-  for _ in $(seq 1 300); do
+  for _ in $(seq 1 $((GRACE * 10))); do
     kill -0 "$1" 2>/dev/null || break
     sleep 0.1
   done
@@ -151,9 +166,8 @@ declarations() {
     die "docker compose could not resolve docker-compose.dev.yml over docker-compose.yml."
   local out
   out="$(task names "$PRIVATE/stack.json" 2>&1)" || die "$(refusal "$out")"
-  PROJECT="$(printf '%s\n' "$out" | sed -n 's/^project //p')"
   IMAGE="$(printf '%s\n' "$out" | sed -n 's/^image //p')"
-  [ -n "$PROJECT" ] && [ -n "$IMAGE" ] || die "mix cyfr.locus.dev_stack printed no project or image."
+  [ -n "$IMAGE" ] || die "mix cyfr.locus.dev_stack printed no image."
 }
 
 # The settings task, which Ctrl-C ends at once (`+Bd`: no break menu)
@@ -237,7 +251,11 @@ run() {
   free "$host_api_port" "the host API's port"
 
   STARTED=1
-  if ! (export "${keys[@]}" && compose up --detach --build --wait locus-runtime locus-backends locus-builds); then
+  # Every service runs the one image, built once from the tree (from
+  # compose's cache when nothing changed): built per service, the builds
+  # of one tag race to export it.
+  compose build locus-runtime || die "cyfr-locus did not build from the tree; the build's output ends above."
+  if ! (export "${keys[@]}" && compose up --detach --no-build --wait locus-runtime locus-backends locus-builds); then
     compose logs --tail 30 >&2 || true
     die "the containers did not start; their logs end above."
   fi
@@ -253,7 +271,7 @@ run() {
   (exec {LOCK_FD}>&- && export "${server[@]}" &&
     exec python3 -I -c 'import os, sys; os.setpgid(0, 0); os.execvp(sys.argv[1], sys.argv[1:])' mix phx.server </dev/null) &
   SERVER=$!
-  printf 'pid %s\nserver %s %s\n' "$$" "$SERVER" "$(ps -o lstart= -p "$SERVER")" >"$LOCK"
+  printf 'pid %s\ncheckout %s\nserver %s %s\n' "$$" "$ROOT" "$SERVER" "$(ps -o lstart= -p "$SERVER")" >"$LOCK"
   wait "$SERVER" && status=0 || status=$?
   SERVER_ENDED=1
   echo "dev-stack: CYFR exited with status $status." >&2

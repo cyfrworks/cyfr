@@ -72,9 +72,9 @@ API key from Prism's API Keys page, `CYFR_TOKEN=<key> scripts/dev-stack.sh
 check` runs a component through the running stack and asserts its answer.
 
 AQUA answers in the chat once a model provider's key is in the vault, as on
-any install. One stack runs on a host at a time: a second start from the
-same checkout refuses while the first runs, and one from another checkout
-finds Prism's address taken.
+any install. One stack runs on a host at a time: while it runs, a start,
+`down` or `clean` from any checkout refuses, naming the checkout that holds
+it.
 
 ## Before opening a PR
 
