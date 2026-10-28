@@ -234,6 +234,10 @@ for sig in INT:130 TERM:143; do
   sleeper=$(pgrep -f '^sleep 6107$' | head -1)
   [ -n "$sleeper" ] || fail "$name: no sleep found"
   kill -"$name" "$runner"
+  until_true 10 eval '! kill -0 "$runner"' || {
+    kill -KILL "$runner" "$sleeper" 2>/dev/null
+    fail "$name: the stage was still running 10s after the signal"
+  }
   status=0; wait "$runner" || status=$?
   [ "$status" = "$want" ] || fail "$name: exited $status, not $want"
   grep -qx "_EXIT=$runner $want" "$S/$name.out" || fail "$name: the last line is $(tail -n 1 "$S/$name.out")"
