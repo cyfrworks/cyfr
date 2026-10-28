@@ -1,45 +1,55 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The source development stack: the locus-runtime service of
-# docker-compose.yml, built from this checkout, beside a control plane run
-# from the checkout with `mix phx.server` (CONTRIBUTING.md, "Running from
-# source"). Layered last, and started by scripts/dev-stack.sh:
+# The source development stack: the Locus services of docker-compose.yml,
+# built from this checkout, beside CYFR run from the checkout with
+# `mix phx.server` (CONTRIBUTING.md, "Running from source").
+# scripts/dev-stack.sh layers this file last and starts both.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d locus-runtime
+# Every resource the stack holds is named here and nowhere else: the
+# compose project, the image tag, the container names, the networks'
+# subnets and gateways, the islands' addresses and the ports on the host's
+# loopback. `mix cyfr.locus.dev_stack` derives CYFR's settings from this
+# file as compose resolves it, and tests/dev-stack/compose-test.sh holds
+# each of them apart from what the checks on a host use: the test suite's
+# listeners (config/test.exs), the release boot's, the browser harness's,
+# the HSTS proof's, the shipped networks' subnets and Docker's own address
+# pools.
 #
 # Never shipped: scripts/scaffold-tarball.sh names its items, and this file
 # is none of them. Every setting not named here stays the shipped
 # service's: the keeper, its capabilities, the read-only root, the tmpfs
-# mounts and the limits.
+# mounts, the limits and each island's egress guard.
 
 # A project of its own, whatever the checkout's directory is called, so the
-# dev stack never recreates a shipped stack's containers.
+# dev stack never touches a shipped stack's containers or networks.
 name: cyfr-dev
+
+# Prism's address: the mix boot's loopback listener, at the production
+# address the sign-in providers' registrations and the PWA expect.
+x-prism: 127.0.0.1:4000
 
 services:
   locus-runtime:
     # Built from this tree under a local tag, never the published one, and
-    # never pulled.
+    # never pulled; rebuilt from compose's cache on every start.
     image: cyfr-locus:dev
     pull_policy: build
     container_name: cyfr-dev-locus-runtime
-    # The id CYFR dispatches to by default (`wrk_local`, at
-    # http://127.0.0.1:4200), so the key scripts/dev-stack.sh derives for it
-    # from CYFR_LOCUS_RUNTIME_ROOT is the one CYFR holds.
+    # The id CYFR dispatches to by default, so the key derived for it from
+    # CYFR_LOCUS_RUNTIME_ROOT is the one CYFR holds.
     environment:
       - LOCUS_RUNTIME_SERVICE_ID=wrk_local
       # CYFR's host API on the host, at the locus-runtime network's gateway
-      # (below). The mix boot binds it there (CYFR_HOST_API_BIND=172.16.231.1):
-      # the tightest bind the container reaches, an address that exists only
-      # on this network's bridge, so no other interface of the host serves
-      # it. Loopback is unreachable from a bridge network, and 0.0.0.0 would
-      # serve the host API on every interface the host has.
-      - LOCUS_RUNTIME_HOST_API_URL=http://172.16.231.1:${CYFR_HOST_API_PORT:-4300}
+      # (below), which the mix boot binds: an address that exists only on
+      # this network's bridge, so no other interface of the host serves
+      # it. Loopback is unreachable from a bridge network, and 0.0.0.0
+      # would serve the host API on every interface the host has.
+      - LOCUS_RUNTIME_HOST_API_URL=http://172.16.240.1:4701
     # The runtime's listener on the host's loopback alone, where the mix
     # boot dispatches to.
     ports:
-      - "127.0.0.1:4200:4200"
+      - "127.0.0.1:4700:4200"
     # The shipped list with the keeper's profile at its tracked path: the
     # scaffold ships it beside docker-compose.yml as keeper.seccomp.json,
     # which a checkout does not hold.
@@ -48,12 +58,66 @@ services:
       - writable-cgroups=true
       - seccomp=./apps/locus/keeper/seccomp/keeper.json
 
+  locus-backends:
+    image: cyfr-locus:dev
+    pull_policy: build
+    container_name: cyfr-dev-locus-backends
+
+  # The mix boot reaches the backends service at the guard's fixed address
+  # on the island's network, as the shipped cyfr service reaches it on that
+  # network by name, and names that one address its private egress target.
+  # A port published on the host's loopback would need the whole loopback
+  # named a private egress target, which every outbound call CYFR makes for
+  # an athanor would then reach. The guard refuses the island's spawns the
+  # control plane: the host, at the network's gateway.
+  locus-backends-guard:
+    image: cyfr-locus:dev
+    pull_policy: build
+    container_name: cyfr-dev-locus-backends-guard
+    environment:
+      - CYFR_GUARD_CONTROL_PLANE=172.16.241.1
+    networks:
+      locus-backends:
+        ipv4_address: 172.16.241.2
+
+  locus-builds:
+    image: cyfr-locus:dev
+    pull_policy: build
+    container_name: cyfr-dev-locus-builds
+
+  # The builds island as the backends island: the mix boot reaches the
+  # builder at its guard's fixed address, and the guard refuses the
+  # island's spawns the host.
+  locus-builds-guard:
+    image: cyfr-locus:dev
+    pull_policy: build
+    container_name: cyfr-dev-locus-builds-guard
+    environment:
+      - CYFR_GUARD_CONTROL_PLANE=172.16.242.1
+    networks:
+      locus-builds:
+        ipv4_address: 172.16.242.2
+
+# Each network on a fixed subnet outside the shipped ones and Docker's
+# pools, its gateway named: the host's address on it. Containers started
+# on it take addresses from its ip_range alone, so the fixed addresses
+# above stay free.
 networks:
-  # The shipped subnet, its gateway named: the address the host API binds
-  # and the runtime posts to.
   locus-runtime:
     ipam:
       config: !override
-        - subnet: 172.16.231.0/24
-          ip_range: 172.16.231.128/25
-          gateway: 172.16.231.1
+        - subnet: 172.16.240.0/24
+          ip_range: 172.16.240.128/25
+          gateway: 172.16.240.1
+  locus-backends:
+    ipam:
+      config:
+        - subnet: 172.16.241.0/24
+          ip_range: 172.16.241.128/25
+          gateway: 172.16.241.1
+  locus-builds:
+    ipam:
+      config:
+        - subnet: 172.16.242.0/24
+          ip_range: 172.16.242.128/25
+          gateway: 172.16.242.1

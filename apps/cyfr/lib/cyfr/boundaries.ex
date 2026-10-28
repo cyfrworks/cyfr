@@ -1882,6 +1882,7 @@ defmodule Cyfr.Boundaries do
       origin: 0,
       registry_base_url: 1,
       registry_host: 0,
+      setup_token?: 1,
       system_context: 0
     ],
     "Sanctum.Annotations" => [
