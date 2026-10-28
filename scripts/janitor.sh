@@ -10,13 +10,12 @@
 #   1. What a killed run left. Docker containers, networks, volumes and
 #      image tags whose names match RUN_NAMES_PATTERN
 #      (scripts/lib/run-names.sh) go once the run their pid names is
-#      finished: the heavy-check holder record naming that pid shows no
-#      process left in its group (group=) and a watchdog (watchdog=) that
-#      has exited, or no holder record names the pid and no process has
-#      it. A record that names no group, as heavy-check wrote before it
-#      recorded one, keeps the run, and so does a pid any live process
-#      holds, even another program. Containers go with `docker rm -f -v`,
-#      then networks, volumes and tags.
+#      finished. Each of these keeps the run on its own: a live process
+#      holds the pid, even another program and whatever a record says; the
+#      heavy-check holder record naming the pid shows a live process in
+#      its group (group=), or a live watchdog (watchdog=), or no group, as
+#      heavy-check wrote before it recorded one. Containers go with
+#      `docker rm -f -v`, then networks, volumes and tags.
 #   2. Old images. An image tagged cyfr-locus:in-<h> or cyfr:in-<h> whose
 #      works.cyfr.image-inputs label is <h> (scripts/image.sh) goes,
 #      holding the image's lock, only when no worktree of this repository
@@ -37,8 +36,10 @@
 #      each partition's receipt names is dropped (the runner's own receipt
 #      check, valid_receipt in scripts/test-partitioned.sh: database-created
 #      equals database-name and no database-create-pending is left), then
-#      the directory goes. A receipt it cannot read, or a drop that fails,
-#      keeps the directory and every database it names.
+#      the directory goes. Every receipt of a directory is read before its
+#      first drop: one it cannot read keeps the directory and every
+#      database it names. A drop that fails keeps the directory, names what
+#      was dropped and what is left, and fails the run.
 #   5. Old logs. $JANITOR_TMP/cyfr-stage.* and $JANITOR_TMP/cyfr-gate.* log
 #      directories of this user more than seven days old.
 #   6. Old records. Under each image's lock, the dead pids in <h>.uses go.
@@ -58,6 +59,8 @@
 # lock, beside which the holder records lie; JANITOR_TMP (default /tmp)
 # the directory the runner, the stages and the gate make theirs in; the
 # image lock directory is the one `scripts/image.sh --lock-dir` prints.
+#
+# It runs on Linux: it reads Docker's image dates with GNU `date -d`.
 #
 # Exits 0; 1 naming each removal that failed; 64 on usage; 69 without
 # docker, a Docker daemon, git, flock or pgrep.
@@ -121,17 +124,17 @@ record_of() {
 }
 
 # Why the run pid $1 names is not finished, or nothing when it is.
+# Each keeps the run on its own: a live pid, then what its holder record
+# says, so a stale record never speaks for a pid that still lives.
 unfinished() {
   local fields group watchdog
-  if fields=$(record_of "$1"); then
-    read -r group watchdog <<<"$fields"
-    case $group in ''|*[!0-9]*) echo 'its holder record names no group'; return ;; esac
-    if pgrep -g "$group" >/dev/null 2>&1; then echo "a process of its group $group is alive"; return; fi
-    case $watchdog in ''|*[!0-9]*) echo 'its holder record names no watchdog'; return ;; esac
-    if alive "$watchdog"; then echo "its watchdog $watchdog is alive"; return; fi
-    return
-  fi
-  if alive "$1"; then echo "its pid $1 is alive"; fi
+  if alive "$1"; then echo "its pid $1 is alive"; return; fi
+  fields=$(record_of "$1") || return 0
+  read -r group watchdog <<<"$fields"
+  case $group in ''|*[!0-9]*) echo 'its holder record names no group'; return ;; esac
+  if pgrep -g "$group" >/dev/null 2>&1; then echo "a process of its group $group is alive"; return; fi
+  case $watchdog in ''|*[!0-9]*) echo 'its holder record names no watchdog'; return ;; esac
+  if alive "$watchdog"; then echo "its watchdog $watchdog is alive"; fi
 }
 
 # Rule 1.
@@ -262,27 +265,40 @@ while IFS= read -r -d '' dir; do
   [ -O "$dir" ] || continue
   pid=$(cat "$dir/runner-pid" 2>/dev/null) || pid=
   if alive "$pid"; then kept directory "$dir" "its runner $pid is alive"; continue; fi
-  keep=
+  # Every partition's receipt is read before the first drop: one that
+  # cannot be read keeps the directory and every database it names.
+  unreadable= drops=()
   for part in "$dir"/p*/; do
     part=${part%/}
     n=${part##*/p}
     case $n in ''|*[!0-9]*) continue ;; esac
     if [ ! -e "$part/database-created" ] && [ ! -e "$part/database-create-pending" ]; then continue; fi
-    if ! found=$(receipt_of "$part" "$dir/p$n.env"); then
-      kept directory "$dir" "partition $n's database receipt cannot be read"
-      keep=1
-      continue
-    fi
-    server=${found% *} database=${found##* }
-    if $dry; then removed database "$database"; continue; fi
-    if out=$(drop_database "$server" "$database" "$n" 2>&1) && rm -f "$part/database-created"; then
-      removed database "$database"
+    if found=$(receipt_of "$part" "$dir/p$n.env"); then
+      drops+=("$n ${found}")
     else
-      failure database "$database" "${out:-its receipt could not be removed}"
-      keep=1
+      unreadable="$unreadable $n"
     fi
   done
-  [ -z "$keep" ] || continue
+  if [ -n "$unreadable" ]; then
+    for n in $unreadable; do kept directory "$dir" "partition $n's database receipt cannot be read"; done
+    continue
+  fi
+  dropped= left=
+  for drop in ${drops[@]+"${drops[@]}"}; do
+    read -r n server database <<<"$drop"
+    if $dry; then removed database "$database"; continue; fi
+    if out=$(drop_database "$server" "$database" "$n" 2>&1) && rm -f "$dir/p$n/database-created"; then
+      removed database "$database"
+      dropped="$dropped${dropped:+, }$database"
+    else
+      failure database "$database" "${out:-its receipt could not be removed}"
+      left="$left${left:+, }$database"
+    fi
+  done
+  if [ -n "$left" ]; then
+    failure directory "$dir" "kept; it dropped ${dropped:-no database} and left $left"
+    continue
+  fi
   if $dry; then removed directory "$dir"
   elif rm -rf "$dir"; then removed directory "$dir"
   else failure directory "$dir" 'rm -rf failed'

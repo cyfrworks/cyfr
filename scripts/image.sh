@@ -26,8 +26,8 @@
 #     (apps/*/mix.exs), and a matched directory gives every file under it.
 # Every other form exits 65 naming the Dockerfile's line: ADD, the JSON
 # array form, a heredoc, a parser directive other than syntax=, a `$` in
-# a source, the glob characters ?, [ and **, a flag not listed above, and
-# a source that resolves to no file.
+# a source, the glob characters ?, [ and **, a flag not listed above, a
+# source that resolves to no file, and one that holds a submodule.
 #
 # The hash is the SHA-256 of: for each input path in byte order (the
 # Dockerfile, .dockerignore when the tree has one, and every resolved
@@ -39,11 +39,14 @@
 # .dockerignore's exclusions are not applied to the hash: a spare build is
 # the cheaper error than a hash that misses a file the build reads.
 #
-# The build's context is a Git tree of exactly those files, so ignored
-# files never reach it and a source the reading here missed fails the
-# build at its COPY. It runs `docker build --platform <the hashed
-# platform>`, labels the image works.cyfr.image-inputs=<h>, and Docker
-# tags only a build that succeeded.
+# The build's context is a tar written from exactly those files' blobs,
+# each with its mode, read raw through `git cat-file --batch`: ignored
+# files never reach it, no attribute or configuration (export-ignore, a
+# filter, an eol rule) changes what one tag holds, and a source the
+# reading here missed fails the build at its COPY. It runs `docker build
+# --platform <the hashed platform>`, labels the image
+# works.cyfr.image-inputs=<h>, and Docker tags only a build that
+# succeeded.
 #
 # Shared state lives in one directory per user, whatever TMPDIR is, which
 # --lock-dir prints: ${XDG_RUNTIME_DIR:-/run/user/$UID}/cyfr-image when
@@ -235,6 +238,9 @@ def resolve(line, source):
         found = [name for name in listing if name.startswith(path + "/")]
     if not found:
         refuse(line, f"`{source}` resolves to no file of the tree")
+    for name in found:
+        if listing[name][0] == "160000":
+            refuse(line, f"`{source}` holds the submodule `{name}`, which is not read here")
     return found
 
 
@@ -287,6 +293,43 @@ if $tag_only; then
   exit 0
 fi
 
+# Writes the build's context to stdout: a tar of each input's blob, read
+# raw (`git cat-file --batch`), with its mode. $2 holds the inputs as
+# `<mode> <blob id>\t<path>\0` records.
+context_tar=$(cat <<'PY'
+import io, subprocess, sys, tarfile, time
+
+root, inputs_path = sys.argv[1:3]
+records = [r for r in open(inputs_path, "rb").read().split(b"\0") if r]
+batch = subprocess.Popen(["git", "-C", root, "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+now = int(time.time())
+with tarfile.open(fileobj=sys.stdout.buffer, mode="w|", format=tarfile.PAX_FORMAT) as tar:
+    for record in records:
+        meta, path = record.split(b"\t", 1)
+        mode, oid = meta.decode().split(" ")
+        batch.stdin.write(oid.encode() + b"\n")
+        batch.stdin.flush()
+        header = batch.stdout.readline().split()
+        if len(header) != 3 or header[1] != b"blob":
+            sys.exit(f"image: {oid} is not a blob")
+        content = batch.stdout.read(int(header[2]))
+        batch.stdout.read(1)
+        info = tarfile.TarInfo(path.decode("utf-8", "surrogateescape"))
+        info.mtime = now
+        if mode == "120000":
+            info.type = tarfile.SYMTYPE
+            info.linkname = content.decode("utf-8", "surrogateescape")
+            info.mode = 0o777
+            tar.addfile(info)
+        else:
+            info.size = len(content)
+            info.mode = 0o755 if mode == "100755" else 0o644
+            tar.addfile(info, io.BytesIO(content))
+batch.stdin.close()
+sys.exit(batch.wait())
+PY
+)
+
 state=$(lock_dir)
 mkdir -p -m 700 "$state" || die 69 "cannot make $state"
 [ -O "$state" ] || die 69 "$state belongs to another user"
@@ -296,10 +339,8 @@ flock 9
 if docker image inspect "$tag" >/dev/null 2>&1; then
   said=reused
 else
-  GIT_INDEX_FILE="$work/context" git -C "$root" update-index -z --index-info <"$work/inputs"
-  context=$(GIT_INDEX_FILE="$work/context" git -C "$root" write-tree)
   set +e
-  git -C "$root" archive --format=tar "$context" |
+  python3 -I -c "$context_tar" "$root" "$work/inputs" |
     docker build --platform "$platform" -f "$dockerfile" --build-arg "APT_REFRESH=$apt_refresh" \
       --label "works.cyfr.image-inputs=$h" --tag "$tag" - >&2
   statuses=("${PIPESTATUS[@]}")
@@ -308,7 +349,7 @@ else
     echo "image: the build of $tag failed (${statuses[1]})" >&2
     exit "${statuses[1]}"
   fi
-  [ "${statuses[0]}" = 0 ] || die 1 "git archive of the context failed (${statuses[0]})"
+  [ "${statuses[0]}" = 0 ] || die 1 "writing the context from its blobs failed (${statuses[0]})"
   said=built
 fi
 printf '%s\n' "$for_pid" >>"$state/$h.uses"

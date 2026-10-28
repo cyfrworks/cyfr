@@ -120,6 +120,18 @@ printf '%s\n' .dockerignore Dockerfile.locus apps/locus/keeper/go.mod apps/locus
 diff "$S/want" "$S/got" >/dev/null || fail "the locus context is not the source list: $(diff "$S/want" "$S/got" | tr '\n' ' ')"
 rm "$repo/config/debug.log"
 
+begin 'attributes cannot change what one tag holds: the context is the hashed blobs'
+context_paths "$(last_context)" | grep -qxF config/config.exs || fail 'the base context lacks config/config.exs'
+printf 'config/config.exs export-ignore\n' >"$repo/.git/info/attributes"
+printf 'config/config.exs export-ignore\n' >"$repo/.gitattributes"
+[ "$(tag_of "$repo" locus)" = "$base_locus" ] || fail 'export-ignore attributes changed the tag'
+rm "$(image_file "$base_locus")"
+out=$(cd "$repo" && scripts/image.sh locus 2>/dev/null)
+[ "$out" = "$base_locus" ] || fail "the rebuild printed $out"
+context_paths "$(last_context)" | grep -qxF config/config.exs || fail 'export-ignore took config/config.exs out of the context of an unchanged tag'
+diff "$S/want" <(context_paths "$(last_context)") >/dev/null || fail "the context changed under attributes: $(diff "$S/want" <(context_paths "$(last_context)") | tr '\n' ' ')"
+rm "$repo/.git/info/attributes" "$repo/.gitattributes"
+
 begin 'apps/*/mix.exs resolves to the mix files alone, a continued COPY line is read whole'
 out=$(cd "$repo" && scripts/image.sh app 2>/dev/null)
 [ "$out" = "$base_app" ] || fail "the build printed $out"

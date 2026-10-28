@@ -17,7 +17,9 @@
 #   build-fail                        holds the status a build exits with
 #   build-sleep                       holds the seconds a build takes
 #   rm-fail                           `docker image rm` fails
-#   run-fail                          `docker run` fails
+#   run-fail                          `docker run` fails, every run when it is
+#                                     empty, else each run whose arguments
+#                                     hold its content
 # STUB_PLATFORM (default linux/amd64) is the daemon's os/arch.
 
 stub_docker() {
@@ -108,7 +110,10 @@ case ${1:-} in
     esac ;;
   builder) echo 'Total: 0B' ;;
   run)
-    [ ! -e "$D/run-fail" ] || { echo 'stub: the run failed' >&2; exit 1; } ;;
+    if [ -e "$D/run-fail" ]; then
+      all="$*" pattern=$(cat "$D/run-fail")
+      case $all in *"$pattern"*) echo 'stub: the run failed' >&2; exit 1 ;; esac
+    fi ;;
   *) echo "stub docker: unknown $*" >&2; exit 2 ;;
 esac
 EOF

@@ -92,11 +92,14 @@ for pid in "$d1" "$d2"; do
   touch "$DOCKER_STUB/networks/cyfr-$seed-$pid-net" "$DOCKER_STUB/volumes/cyfr-$seed-$pid-pgdata"
   plant_image "cyfr-$seed-$pid-cyfr-tailscale-standin:run1" '' "$OLD"
 done
-for pid in "$l1" "$d3" "$d4" "$d5"; do plant_container "cyfr-$seed-$pid-proof"; done
+l2=$(live_pid)
+for pid in "$l1" "$l2" "$d3" "$d4" "$d5"; do plant_container "cyfr-$seed-$pid-proof"; done
 record "$d2" "group=$(dead_pid) watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.holder"
 record "$d3" "group=$group watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.slot1.holder"
 record "$d4" "group=$(dead_pid) watchdog=$watchdog" "$HEAVY_CHECK_LOCK.slot2.holder"
 record "$d5" '' "$HEAVY_CHECK_LOCK.proof.holder"
+# A stale record, its group and watchdog gone, for a pid that still lives.
+record "$l2" "group=$(dead_pid) watchdog=$(dead_pid)" "$HEAVY_CHECK_LOCK.slot3.holder"
 plant_container other-project-db
 plant_container cyfr-gate-4242-boot-psql
 touch "$DOCKER_STUB/networks/cyfr-gate-4242-boot-net"
@@ -145,8 +148,12 @@ run_dir cyfr-t.r3 "$(dead_pid)"; receipt "$S/tmp/cyfr-t.r3" 1 "$db" cyfr_test_ff
 run_dir cyfr-t.r4 "$(live_pid)"; receipt "$S/tmp/cyfr-t.r4" 1 "$db"
 run_dir cyfr-t.r5 "$(dead_pid)"; receipt "$S/tmp/cyfr-t.r5" 1 "$db"
 run_dir cyfr-t.r7 "$(dead_pid)"; mkdir -p "$S/tmp/cyfr-t.r7/p1"
+# One readable receipt beside one that is not: nothing of the run is dropped.
+db1=cyfr_test_11111111111111111111111111111111_p1
+db2=cyfr_test_11111111111111111111111111111111_p2
+run_dir cyfr-t.r8 "$(dead_pid)"; receipt "$S/tmp/cyfr-t.r8" 1 "$db1"; receipt "$S/tmp/cyfr-t.r8" 2 "$db2" mismatched
 mkdir -p "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-gate.b" "$S/tmp/cyfr-stage.save.c"
-age 4 "$S"/tmp/cyfr-t.r1 "$S"/tmp/cyfr-t.r2 "$S"/tmp/cyfr-t.r3 "$S"/tmp/cyfr-t.r4 "$S"/tmp/cyfr-t.r7
+age 4 "$S"/tmp/cyfr-t.r1 "$S"/tmp/cyfr-t.r2 "$S"/tmp/cyfr-t.r3 "$S"/tmp/cyfr-t.r4 "$S"/tmp/cyfr-t.r7 "$S"/tmp/cyfr-t.r8
 age 1 "$S/tmp/cyfr-t.r5" "$S/tmp/cyfr-stage.save.c"
 age 8 "$S/tmp/cyfr-stage.nightly.a" "$S/tmp/cyfr-gate.b"
 
@@ -194,7 +201,8 @@ has main "kept container cyfr-$seed-$l1-proof: its pid $l1 is alive"
 has main "kept container cyfr-$seed-$d3-proof: a process of its group $group is alive"
 has main "kept container cyfr-$seed-$d4-proof: its watchdog $watchdog is alive"
 has main "kept container cyfr-$seed-$d5-proof: its holder record names no group"
-for pid in "$l1" "$d3" "$d4" "$d5"; do there "$DOCKER_STUB/containers/cyfr-$seed-$pid-proof"; done
+has main "kept container cyfr-$seed-$l2-proof: its pid $l2 is alive"
+for pid in "$l1" "$l2" "$d3" "$d4" "$d5"; do there "$DOCKER_STUB/containers/cyfr-$seed-$pid-proof"; done
 for name in other-project-db cyfr-gate-4242-boot-psql; do there "$DOCKER_STUB/containers/$name"; lacks main "$name"; done
 lacks main cyfr-gate-4242-boot-net
 
@@ -229,6 +237,12 @@ has main "kept directory $S/tmp/cyfr-t.r4: its runner $(cat "$S/tmp/cyfr-t.r4/ru
 for d in r2 r3 r4 r5; do there "$S/tmp/cyfr-t.$d"; done
 lacks main cyfr-t.r5
 
+begin 'rule 4: every receipt is read before the first drop: one unreadable receipt keeps every database'
+has main "kept directory $S/tmp/cyfr-t.r8: partition 2's database receipt cannot be read"
+there "$S/tmp/cyfr-t.r8/p1/database-created"; there "$S/tmp/cyfr-t.r8/p2/database-created"
+if grep -qF "$db1" "$DOCKER_STUB/calls"; then fail "the readable partition's database was dropped: $(grep -F "$db1" "$DOCKER_STUB/calls")"; fi
+lacks main "removed database $db1"
+
 begin 'rule 5: log directories older than seven days go'
 gone "$S/tmp/cyfr-stage.nightly.a"; gone "$S/tmp/cyfr-gate.b"; there "$S/tmp/cyfr-stage.save.c"
 has main "removed directory $S/tmp/cyfr-stage.nightly.a"
@@ -245,6 +259,18 @@ begin '--keep-build-cache strikes rule 3'
 janitor keep --keep-build-cache || fail "the janitor exited $?"
 if grep -q '^builder ' "$DOCKER_STUB/calls"; then fail 'the build cache was pruned'; fi
 has keep 'kept build-cache unused for 168h: --keep-build-cache strikes the rule'
+
+begin 'a drop that fails after another succeeded is named as a partial failure'
+run_dir cyfr-t.r9 "$(dead_pid)"; receipt "$S/tmp/cyfr-t.r9" 1 "$db1"; receipt "$S/tmp/cyfr-t.r9" 2 "$db2"
+age 4 "$S/tmp/cyfr-t.r9"
+printf '%s' "$db2" >"$DOCKER_STUB/run-fail"
+status=0; janitor partial --keep-build-cache || status=$?
+rm "$DOCKER_STUB/run-fail"
+[ "$status" = 1 ] || fail "exited $status, not 1"
+has partial "removed database $db1"
+grep -qF "failed database $db2: stub: the run failed" "$S/partial.out" || fail 'the failed drop is not named'
+has partial "failed directory $S/tmp/cyfr-t.r9: kept; it dropped $db1 and left $db2"
+gone "$S/tmp/cyfr-t.r9/p1/database-created"; there "$S/tmp/cyfr-t.r9/p2/database-created"
 
 begin 'a removal that fails exits 1 naming it, and keeps what it names'
 receipt "$S/tmp/cyfr-t.r5" 1 "$db"
