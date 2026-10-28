@@ -1956,10 +1956,11 @@ defmodule PrismWeb.ConsentSheetComponent do
   attr :choice, :map, default: nil
   attr :myself, :any, required: true
 
-  # The chosen entry's field map. Where the plan has an automatic map, each
-  # pair whose names differ; where it has none, the question, asked once:
-  # one select per field the need reads over the entry's fields, its answer
-  # (the entry field of the same name until the person answers) selected.
+  # The chosen entry's field map: each pair of the map it is bound under
+  # whose names differ, and, where the plan has no automatic map or the
+  # choice waits on an answer (a held map naming a field the entry no
+  # longer holds), the question, asked once: one select per field the need
+  # reads over the entry's fields, its answer selected.
   defp field_map(assigns) do
     candidate = assigns.candidate
     fields = (is_map(assigns.choice) && Map.get(assigns.choice, :fields)) || nil
@@ -1968,7 +1969,9 @@ defmodule PrismWeb.ConsentSheetComponent do
     assigns =
       assign(assigns,
         asked:
-          if(candidate && is_nil(automatic),
+          if(
+            candidate &&
+              (is_nil(automatic) or (is_map(assigns.choice) and map_pending?(assigns.choice))),
             do: List.wrap(field(assigns.need, :fields)),
             else: []
           ),

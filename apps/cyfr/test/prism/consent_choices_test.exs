@@ -618,6 +618,46 @@ defmodule Prism.ConsentChoicesTest do
     assert opened[{:need, "key_1", nil}] == choices[{:need, "key_1", nil}]
   end
 
+  test "a stale held map is asked again for its stale field alone, even where the entry has an " <>
+         "automatic map, and holds the grant until answered" do
+    place = %{source: "own", node: @ref, edge: "@ingress", need: "key_1"}
+
+    # The entry holds every field the need reads by name, so it has an
+    # automatic map; the head's map names a field it no longer holds.
+    plan =
+      put_in(
+        unmapped_plan([
+          head(
+            "#{@ref}|@ingress|default",
+            %{entry_id: "vlt_m", fields: %{"KEY" => "gone", "ORG" => "secret"}},
+            place
+          )
+        ]),
+        [:needs, Access.at(0), :candidates],
+        [
+          %{
+            entry_id: "vlt_m",
+            source: "own",
+            field_names: ["KEY", "ORG", "secret"],
+            fields: %{"KEY" => "KEY", "ORG" => "ORG"}
+          }
+        ]
+      )
+
+    choices = ConsentChoices.initial_choices(plan, @now)
+    slot = {:need, "key_1", nil}
+
+    assert %{fields: %{"ORG" => "secret"}, unmapped: ["KEY"]} = choices[slot]
+    assert ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, choices)["bindings"] == []
+
+    # Answered, the valid answer the head held is still sent beside it.
+    assert {:ok, answered} = ConsentChoices.answer_map(choices, plan, slot, "KEY", "KEY")
+    refute ConsentChoices.map_pending?(answered[slot])
+
+    assert [%{"fields" => %{"KEY" => "KEY", "ORG" => "secret"}}] =
+             ConsentChoices.decisions(@ref, nil, ["interactive"], %{}, answered)["bindings"]
+  end
+
   # ---------------------------------------------------------------------------
   # Lifetimes
   # ---------------------------------------------------------------------------

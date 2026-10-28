@@ -661,10 +661,13 @@ defmodule Prism.ConsentChoices do
   answers (`Sanctum.Consent.Plan`'s `field_names` and `fields`). A map the
   choice holds, the person's or the head's, is kept while it names each
   field the need reads once and only fields the entry holds. Otherwise a
-  candidate with an automatic map sends none, and the commit takes that
-  one; a candidate without one asks: each need field the entry holds by
-  the same name is preselected, any answer still held is kept, and the
-  rest are `unmapped`. A lending profile's label, and the slot of a
+  choice holding no map, of a candidate with an automatic map, sends none,
+  and the commit takes that one. Any other asks: each answer held that the
+  entry still holds is kept, a need field with no held answer is
+  preselected to the entry field of its own name where the entry holds
+  one, and the rest, a held answer naming a field the entry no longer
+  holds among them, are `unmapped`, so a stale map is asked again whatever
+  the candidate's automatic map. A lending profile's label, and the slot of a
   manifest declaring no needs, whose map is the entry's own field names,
   carry none. A choice whose entry or need the plan does not name keeps
   a whole map it holds, drops a half-answered one and asks nothing, for
@@ -684,7 +687,7 @@ defmodule Prism.ConsentChoices do
 
         cond do
           not map_pending?(choice) and total_map?(held, need_fields, names) -> choice
-          is_map(field(candidate, :fields)) -> unmap(choice)
+          held in [nil, %{}] and is_map(field(candidate, :fields)) -> unmap(choice)
           true -> settle(choice, need_fields, preselected(held, need_fields, names))
         end
 
@@ -701,15 +704,16 @@ defmodule Prism.ConsentChoices do
   @doc """
   `choices` with the person's answer to the map question of `slot`: the
   need field `need_field` read from the entry field `entry_field`.
-  `:error` unless the slot's entry is a candidate with no automatic map,
-  the need reads `need_field` and the entry holds `entry_field`.
+  `:error` unless the question is asked (the slot's entry is a candidate
+  with no automatic map, or its choice waits on an answer), the need reads
+  `need_field` and the entry holds `entry_field`.
   """
   @spec answer_map(%{slot() => choice()}, map(), slot(), String.t(), String.t()) ::
           {:ok, %{slot() => choice()}} | :error
   def answer_map(choices, plan, slot, need_field, entry_field) do
     with %{} = choice <- Map.get(choices, slot),
          {:ok, need, candidate} <- map_target(plan, slot, choice),
-         nil <- field(candidate, :fields),
+         true <- is_nil(field(candidate, :fields)) or map_pending?(choice),
          true <- need_field in need_fields(need),
          true <- entry_field in List.wrap(field(candidate, :field_names)) do
       fields = choice |> Map.get(:fields, %{}) |> Map.put(need_field, entry_field)
@@ -787,16 +791,17 @@ defmodule Prism.ConsentChoices do
   defp total_map?(_fields, _need_fields, _names), do: false
 
   # The question's answers to start from: each answer held that the entry
-  # still holds, else the entry field of the need field's own name.
+  # still holds; for a need field with no held answer, the entry field of
+  # its own name. A held answer the entry no longer holds is asked again,
+  # never replaced by a guess.
   defp preselected(held, need_fields, names) do
     held = if is_map(held), do: held, else: %{}
 
     for need_field <- need_fields,
-        answer <- [Map.get(held, need_field), need_field],
+        answer = Map.get(held, need_field, need_field),
         answer in names,
-        reduce: %{} do
-      acc -> Map.put_new(acc, need_field, answer)
-    end
+        into: %{},
+        do: {need_field, answer}
   end
 
   defp settle(choice, need_fields, fields) do
