@@ -126,7 +126,9 @@ it.
   The touched tests are the changed test files and, for each changed or
   deleted `apps/<app>/lib/<path>.ex`, `apps/<app>/test/<path>_test.exs`
   where it exists; name others after `--`. `scripts/stage.sh -n STAGE`
-  lists what it would run.
+  lists what it would run. A branch stacked on another sets `STAGE_BASE`
+  to that branch, so the handoff stage runs its own changes alone rather
+  than everything since `origin/main`.
 - A release tag is cut on a tree its pull request's run proved green:
   `scripts/release.sh` reads HEAD's check runs through `gh` before it tags
   HEAD, or HEAD plus a bump commit holding the version lines alone, which
