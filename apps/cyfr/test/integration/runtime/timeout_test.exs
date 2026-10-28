@@ -120,8 +120,7 @@ defmodule Locus.Runtime.TimeoutTest do
         end)
 
       assert {:error, _reason} = result
-      # The 1 s limit ends the run. The bound is loose enough for a loaded host
-      # and far below any run the limit failed to end.
+      # The 1 s limit ends the run; the bound leaves room for a loaded host.
       assert micros < 5_000_000
 
       {:ok, records} = Opus.Record.list(ctx)
