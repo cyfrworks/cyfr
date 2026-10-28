@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,7 +36,7 @@ var setupCmd = &cobra.Command{
 
 The pages ask how CYFR is reached (your phone and laptop via Tailscale, the recommended choice; only this device; or, under Advanced, a public domain with an optional certificate email), then start: they run what 'cyfr init' runs, the same steps in the same order, then what 'cyfr up' runs. For tailnet access, the join shows its approval link as a QR code and as text with a Copy button, under it the machine's name (cyfr unless changed there), and waits for the approval; a join that fails, expires or is cancelled leaves CYFR reached from this device only, and the pages offer to try the join again or to start CYFR on this device only. A start that fails shows why, and offers to try again or, for CYFR reached from other devices, to start it on this device only. Each refusal is the command line's own sentence.
 
-Once CYFR is up, the pages show its address, with a Copy button, and move the browser there, apart from a tailnet address, which a browser on this device reaches only through CYFR's SOCKS5 proxy on 127.0.0.1:1055; the program stops serving the pages once they have read that, or a minute after. Run in a project whose .env exists, it refuses as 'cyfr init' refuses to change how an existing CYFR is reached, serving nothing; 'cyfr access <mode>' changes that. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
+Once CYFR is up, the pages show its setup link, <CYFR address>/setup#<token>, the token being CYFR_SETUP_TOKEN from .env, with a Copy button: the link sets up CYFR's first person, who administers it, with a passkey. The pages move the browser there, apart from a tailnet address, which a browser on this device reaches only through CYFR's SOCKS5 proxy on 127.0.0.1:1055. A headless CYFR (CYFR_HEADLESS=on) serves no setup page, so the pages say instead that its first person runs 'cyfr login --setup' in its directory. The program stops serving the pages once they have read that, or a minute after. Run in a project whose .env exists, it refuses as 'cyfr init' refuses to change how an existing CYFR is reached, serving nothing; 'cyfr access <mode>' changes that. One cyfr setup serves a project's pages: a second, while the first runs, is refused.
 
 Exit status 3: CYFR started, but on this machine only, because the tailnet machine is not ready to serve it (not the one .env names, not joined, or HTTPS off); Serve stays closed, and the message says what to do. Exit status 1: CYFR was not set up and started, the message saying why.`,
 	Example: `  cyfr setup
@@ -546,9 +547,9 @@ func currentHead() (access.Head, error) {
 
 // done ends the run with the home up: at its address, or at this
 // machine's own for a start that left it there (err, its sentence shown,
-// the browser not moved past it). A tailnet address is not moved to,
-// since a browser on this device reaches it only through the home's
-// SOCKS5 proxy.
+// the browser not moved past it), with the setup link at that address
+// from .env's setup token. A tailnet address is not moved to, since a
+// browser on this device reaches it only through CYFR's SOCKS5 proxy.
 func (s *setupSession) done(err error) {
 	st := setup.State{Phase: setup.PhaseDone}
 	if h, herr := currentHead(); herr == nil {
@@ -556,6 +557,13 @@ func (s *setupSession) done(err error) {
 		if err != nil {
 			st.Address = access.Describe(access.Head{Mode: access.ModeLocal, Port: h.Port}).Address
 		}
+	}
+	// A headless CYFR serves no setup page: its first person runs
+	// `cyfr login --setup` in this directory instead.
+	if values, verr := access.ReadEnvValues(".env"); verr == nil && headless(values) {
+		st.Headless = true
+	} else if verr == nil && st.Address != "" && strings.TrimSpace(values[setupTokenVar]) != "" {
+		st.SetupURL = setupLink(st.Address, values)
 	}
 	if err != nil {
 		st.Sentence = err.Error()

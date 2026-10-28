@@ -82,13 +82,17 @@
   <section data-screen="done" hidden>
     <img class="logo small" src="/logo.png" alt="">
     <h1>CYFR is ready</h1>
-    <div class="copyrow">
-      <p class="address" data-address></p>
-      <button type="button" class="copy" data-copy="[data-address]">Copy address</button>
+    <p data-headless hidden>This CYFR serves no pages. Its first person, who administers it, runs <code>cyfr login --setup</code> in its directory.</p>
+    <div class="setup" data-setup hidden>
+      <p>This setup link sets up CYFR's first person, who administers it, with a passkey.</p>
+      <div class="copyrow">
+        <p class="link" data-setup-url></p>
+        <button type="button" class="copy" data-copy="[data-setup-url]">Copy link</button>
+      </div>
     </div>
     <p class="sentence" data-sentence></p>
-    <p data-tailnet hidden>This address opens on your phone and laptop on your tailnet, and on this device in a browser that uses CYFR's proxy at 127.0.0.1:1055.</p>
-    <button type="button" class="primary" data-action="open">Open Aqua</button>
+    <p data-tailnet hidden>This link opens on your phone and laptop on your tailnet, and on this device in a browser that uses CYFR's proxy at 127.0.0.1:1055.</p>
+    <button type="button" class="primary" data-action="open">Set up with a passkey</button>
   </section>
 
   <section data-screen="failed" hidden>

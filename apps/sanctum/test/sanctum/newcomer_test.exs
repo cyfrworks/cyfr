@@ -214,6 +214,26 @@ defmodule Sanctum.NewcomerTest do
       assert people() == 0
     end
 
+    test "setup_open/1 answers before any ceremony what the admission would, one refusal for both" do
+      assert :ok = Newcomer.setup_open(@token)
+      assert {:error, :setup_closed} = Newcomer.setup_open(String.duplicate("0", 64))
+      assert {:error, :setup_closed} = Newcomer.setup_open(nil)
+
+      # The person setup made, with no sign-in method yet, is answered again.
+      {:ok, _admitted} = Newcomer.admit({:setup, @token}, {:command_line, "laptop"})
+      assert :ok = Newcomer.setup_open(@token)
+
+      # Their first passkey closes it.
+      assert {:ok, %{readmitted: true}} =
+               Newcomer.admit({:setup, @token}, {:passkey, registration()})
+
+      assert {:error, :setup_closed} = Newcomer.setup_open(@token)
+
+      Application.delete_env(:sanctum, :setup_token)
+      assert {:error, :setup_closed} = Newcomer.setup_open(@token)
+      assert people() == 1
+    end
+
     test "racing a restore: a pending claim refuses setup, and setup first leaves the restore no node" do
       restore = %{
         kind: "restore",

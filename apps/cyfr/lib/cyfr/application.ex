@@ -134,8 +134,7 @@ defmodule Cyfr.Application do
     # an unauthenticated caller may send; refused here, not clamped.
     validate_webhook_max_body_bytes!()
 
-    # Say (don't block) that a CYFR with no person yet is set up through
-    # its setup page.
+    # Say (don't block) how a CYFR with no person yet is set up.
     notice_if_no_person()
 
     # Attach OTEL tenant handler if OpenTelemetry is enabled
@@ -1004,22 +1003,44 @@ defmodule Cyfr.Application do
   end
 
   # A CYFR with no person yet is set up by its first person, its
-  # administrator, through its setup page. Said at boot, under
-  # `mix phx.server` and in releases alike; the sandboxed test boot, which
-  # holds no database connection here, skips it, and a store that cannot
-  # answer says nothing rather than blocking the boot.
+  # administrator: through the setup link `cyfr init` and `cyfr setup`
+  # print, or, on a headless CYFR, which serves no page, `cyfr login
+  # --setup`. Said at boot, under `mix phx.server` and in releases alike,
+  # after `not_set_up_marker/0`, which `cyfr up` reads from the log; never
+  # with the token. The sandboxed test boot, which holds no database
+  # connection here, skips it, and a store that cannot answer says
+  # nothing rather than blocking the boot.
   defp notice_if_no_person do
     unless bootstrap_skipped?(@bootstrap_skip_permitted, boot_work_enabled?()) do
       case Sanctum.Tenancy.Users.list_by_id(limit: 1) do
-        {:ok, []} ->
-          Logger.warning(
-            "[Cyfr] No one is set up on this CYFR yet. Its first person, who administers " <>
-              "it, sets it up at #{Sanctum.origin()}/setup with this CYFR's setup token."
-          )
-
-        _people_or_unanswered ->
-          :ok
+        {:ok, []} -> Logger.warning(not_set_up_marker() <> " " <> not_set_up_notice())
+        _people_or_unanswered -> :ok
       end
+    end
+  end
+
+  @doc """
+  What the boot's notice for a CYFR with no person yet begins with: the
+  line `cyfr up` looks for in the service's log.
+  """
+  @spec not_set_up_marker() :: String.t()
+  def not_set_up_marker, do: "[Cyfr] Not set up:"
+
+  @doc false
+  @spec not_set_up_notice() :: String.t()
+  def not_set_up_notice do
+    cond do
+      is_nil(Application.get_env(:sanctum, :setup_token)) ->
+        "no one is set up on this CYFR yet, and CYFR_SETUP_TOKEN is unset, so no one can " <>
+          "set it up: `cyfr init` writes one into .env."
+
+      Cyfr.RuntimeConfig.headless?() ->
+        "no one is set up on this CYFR yet. Its first person, who administers it, runs " <>
+          "`cyfr login --setup` in its directory."
+
+      true ->
+        "no one is set up on this CYFR yet. Its first person, who administers it, opens " <>
+          "the setup link `cyfr init` or `cyfr setup` printed (#{Sanctum.origin()}/setup#…)."
     end
   end
 

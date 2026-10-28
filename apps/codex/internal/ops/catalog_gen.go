@@ -278,6 +278,7 @@ const (
 	SessionDevicePoll               = "device_poll"
 	SessionLogout                   = "logout"
 	SessionReadResource             = "read_resource"
+	SessionSetup                    = "setup"
 	SessionUse                      = "use"
 	SessionWhoami                   = "whoami"
 	SettingsList                    = "list"
@@ -358,7 +359,7 @@ var Actions = map[string][]string{
 	"resource":            {"read"},
 	"retention":           {"cleanup", "get", "set"},
 	"schedule":            {"create", "delete", "get", "list", "pause", "re_resolve", "resume", "update"},
-	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "logout", "read_resource", "use", "whoami"},
+	"session":             {"cli_approve", "cli_begin", "cli_cancel", "cli_list", "cli_poll", "cli_revoke", "device_init", "device_poll", "logout", "read_resource", "setup", "use", "whoami"},
 	"settings":            {"list", "reset", "set"},
 	"system":              {"notify", "status"},
 	"thread":              {"aloud", "approve", "attach", "create", "decline", "delete", "discard", "events", "follow", "get", "list", "restart_for_consent", "revoke_grant", "send", "stop", "unfollow"},
@@ -4998,6 +4999,23 @@ func (args SessionReadResourceArgs) MarshalJSON() ([]byte, error) {
 		Action string `json:"action"`
 		fields
 	}{Action: SessionReadResource, fields: fields(args)})
+}
+
+// SessionSetupArgs carries arguments for session.setup.
+type SessionSetupArgs struct {
+	// setup: the installation's setup token, CYFR_SETUP_TOKEN in its .env
+	SetupToken string `json:"setup_token"`
+	// setup: the command line's host name, which its session is listed by in Prism
+	Machine string `json:"machine"`
+}
+
+// MarshalJSON supplies the operation's fixed action discriminator.
+func (args SessionSetupArgs) MarshalJSON() ([]byte, error) {
+	type fields SessionSetupArgs
+	return json.Marshal(struct {
+		Action string `json:"action"`
+		fields
+	}{Action: SessionSetup, fields: fields(args)})
 }
 
 // SessionUseArgs carries arguments for session.use.

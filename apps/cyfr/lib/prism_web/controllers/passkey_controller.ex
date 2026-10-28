@@ -7,7 +7,10 @@ defmodule PrismWeb.PasskeyController do
   held the challenge, verified the passkey's answer and minted the session
   (`Sanctum.Passkeys.sign_in/2`), and hands a one-time ticket to
   `GET /auth/passkey/complete/:ticket`, which sets the cookie session and
-  routes as every sign-in does (`CyfrWeb.SignInResponse`).
+  routes as every sign-in does (`CyfrWeb.SignInResponse`). The setup page
+  (`PrismWeb.SetupLive`) hands the same ticket for the first person's
+  passkey, naming its own path in the ticket (`to`), so setup goes on
+  there signed in; no request chooses where a ticket lands.
 
   The ticket is taken in one operation, so of two requests presenting it
   only one finds it, and it is spent whichever way the check goes. It is
@@ -27,7 +30,7 @@ defmodule PrismWeb.PasskeyController do
     case Arca.Cache.take({:login_passkey_ticket, ticket}) do
       {:ok, %{session_token: token} = payload} when is_binary(token) ->
         if same_browser?(conn, payload) do
-          SignInResponse.respond(conn, :proceed, session: {:token, token})
+          SignInResponse.respond(conn, :proceed, session: {:token, token}, to: payload[:to])
         else
           Logger.warning(
             "[PasskeyController] passkey ticket presented by a different browser than the " <>

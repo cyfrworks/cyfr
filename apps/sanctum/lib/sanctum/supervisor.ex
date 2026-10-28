@@ -14,11 +14,14 @@ defmodule Sanctum.Supervisor do
     # configuration wrote it.
     directory_url!(Application.get_env(:sanctum, :directory_url))
 
+    # The setup token, refused here in its own form whichever
+    # configuration wrote it, and never printed.
+    setup_token!(Application.get_env(:sanctum, :setup_token))
+
     # Who may mint the installation's first person, installed before any
     # child starts and so before any ingress opens: Sanctum starts before
     # the host. A configured restore token reserves the first person for
-    # the restore path; without one, the installation admits its first
-    # person by an ordinary door.
+    # the restore path; without one, setup admits it (`Sanctum.Newcomer`).
     Arca.InstallationClaims.install_mode!(
       installation_mode!(Application.get_env(:sanctum, :restore_token))
     )
@@ -83,6 +86,18 @@ defmodule Sanctum.Supervisor do
         raise(
           "[Sanctum] FATAL: the restore token (:sanctum, :restore_token, from " <>
             "CYFR_RESTORE_TOKEN) must be exactly 64 lowercase hexadecimal characters"
+        )
+  end
+
+  defp setup_token!(nil), do: :ok
+
+  defp setup_token!(token) do
+    if Sanctum.setup_token?(token),
+      do: :ok,
+      else:
+        raise(
+          "[Sanctum] FATAL: the setup token (:sanctum, :setup_token, from " <>
+            "CYFR_SETUP_TOKEN) must be exactly 64 lowercase hexadecimal characters"
         )
   end
 

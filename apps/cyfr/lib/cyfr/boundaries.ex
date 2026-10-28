@@ -583,7 +583,8 @@ defmodule Cyfr.Boundaries do
         Sanctum.Annotations Sanctum.ApiKey Sanctum.Auth Sanctum.BearerToken Sanctum.Caller
         Sanctum.Catalog Sanctum.CliSignIn Sanctum.ClientIp Sanctum.Consent Sanctum.Context
         Sanctum.Decisions
-        Sanctum.Door Sanctum.Gate Sanctum.Pairing Sanctum.Passkeys Sanctum.PolicyLog
+        Sanctum.Door Sanctum.Gate Sanctum.Handle Sanctum.Newcomer Sanctum.Pairing
+        Sanctum.Passkeys Sanctum.PolicyLog
         Sanctum.Recovery Sanctum.Refusals Sanctum.RequestLog Sanctum.Session
         Sanctum.SignIn
         Sanctum.Tenancy Sanctum.TinctureAuth Sanctum.Unauthorized Sanctum.Webhook
@@ -606,6 +607,12 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Recovery` is the system layer's read of the person's checklist after " <>
           "a declared restore (`checklist/1`), what it lists for them to re-enable, " <>
           "re-consent and rotate; each re-enable it offers is an operation, decided there. " <>
+          "`Sanctum.Newcomer` is the setup page's admission of the installation's first " <>
+          "person: whether the setup link's token opens setup now (`setup_open/1`), " <>
+          "before any ceremony, and the setup admission its passkey brings (`admit/2`), " <>
+          "which decides in its own transaction; `Sanctum.Handle` is the identity card's " <>
+          "live check of a handle against the registry's answer (`resolve/1`), " <>
+          "navigation that grants nothing. " <>
           "`Sanctum.Passkeys` is the sign-in page's passkey sign-in method: the challenge it holds " <>
           "and the answer it verifies into a session, as the device flow's poll is " <>
           "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` sign-in method's: " <>
@@ -1505,6 +1512,14 @@ defmodule Cyfr.Boundaries do
           "constant that reads no row, so the page and the files API refuse at one size."
     },
     %{
+      from: "PrismWeb.SetupLive",
+      into: "Arca.ControlPlane",
+      functions: [:held?],
+      reason:
+        "a server that does not hold its control-plane slot signs nobody in: the setup " <>
+          "page asks whether this server holds the slot right now before a passkey ceremony."
+    },
+    %{
       from: "PrismWeb.LoginLive",
       into: "Arca.ControlPlane",
       functions: [:held?],
@@ -1686,6 +1701,15 @@ defmodule Cyfr.Boundaries do
       reason:
         "a sign-in ticket the login page left is taken once by the callback that " <>
           "completes it, so a ticket cannot be replayed: server-local memory, never a row."
+    },
+    %{
+      from: "PrismWeb.SetupLive",
+      into: "Arca.Cache",
+      functions: [:put],
+      reason:
+        "the setup page leaves the passkey sign-in's single-use ticket, bound to the " <>
+          "browser, for the callback that completes it, for a bounded time: server-local " <>
+          "memory, never a row."
     },
     %{
       from: "PrismWeb.LoginLive",
@@ -1948,12 +1972,14 @@ defmodule Cyfr.Boundaries do
       open_stream: 2,
       open_stream: 3
     ],
+    "Sanctum.Handle" => [resolve: 1],
     "Sanctum.InstanceEntries" => [sweep_usage: 0],
     "Sanctum.Namespace" => [lookup_status: 1],
     "Sanctum.Network" => [pin: 2, validate_redirect_url: 2],
+    "Sanctum.Newcomer" => [admit: 2, setup_open: 1],
     "Sanctum.Notify" => [broadcast: 3],
     "Sanctum.Pairing" => [actions: 0, can_confirm?: 1],
-    "Sanctum.Passkeys" => [sign_in: 2, sign_in_challenge: 0],
+    "Sanctum.Passkeys" => [newcomer_options: 0, sign_in: 2, sign_in_challenge: 0],
     "Sanctum.Policy.Enforcement" => [record: 1],
     "Sanctum.PolicyLog" => [list: 2],
     "Sanctum.Provisioning" => [
@@ -2292,7 +2318,8 @@ defmodule Cyfr.Boundaries do
     {:post, "/directory/v1/genesis"},
     {:get, "/login"},
     {:get, "/pair"},
-    {:get, "/restore"}
+    {:get, "/restore"},
+    {:get, "/setup"}
   ]
 
   @doc """
@@ -2483,9 +2510,6 @@ defmodule Cyfr.Boundaries do
 
     # Operator-shaped, with nothing to set them from. Each has a sensible
     # in-code default, so this is a gap in reach, not a broken deployment.
-    # The setup token (`Sanctum.Newcomer`) has none: unset, setup opens
-    # nothing, and `CYFR_SETUP_TOKEN` is the lever the setup flow adds.
-    setup_token: :missing_lever,
     oci_max_blob_bytes: :missing_lever,
     webhook_max_body_bytes: :missing_lever,
     platform_ceiling: :missing_lever

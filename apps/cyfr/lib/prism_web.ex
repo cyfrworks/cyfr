@@ -58,6 +58,7 @@ defmodule PrismWeb do
       RootRedirectLive,
       SchedulesLive,
       SettingsLive,
+      SetupLive,
       ShellLive,
       VaultLive,
       WebhooksLive

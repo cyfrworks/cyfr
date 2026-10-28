@@ -97,15 +97,17 @@ func approvedJoins(s *fakeStack, approve <-chan struct{}, fail ...access.Receipt
 }
 
 // A local home: the pages' answers are written into .env as init writes
-// them, and the home started; the pages move to its address.
+// them, and the home started; the pages move to its setup link, the setup
+// page at its address with .env's setup token in the fragment.
 func TestSetupWritesTheAnswersAndStartsALocalHome(t *testing.T) {
 	s, sess, out := newSetupRun(t)
 	if err := sess.Start(setup.Answers{Mode: access.ModeLocal}); err != nil {
 		t.Fatal(err)
 	}
 	st := ended(t, sess)
-	want := setup.State{Phase: setup.PhaseDone, Mode: access.ModeLocal, Address: "http://localhost:4000", Moves: true}
-	if st.Phase != want.Phase || st.Mode != want.Mode || st.Address != want.Address || st.Moves != want.Moves || st.Sentence != "" {
+	want := setup.State{Phase: setup.PhaseDone, Mode: access.ModeLocal, Address: "http://localhost:4000",
+		SetupURL: "http://localhost:4000/setup#" + setupTokenOf(t), Moves: true}
+	if st.Phase != want.Phase || st.Mode != want.Mode || st.Address != want.Address || st.SetupURL != want.SetupURL || st.Moves != want.Moves || st.Sentence != "" {
 		t.Fatalf("the run ended %+v, want %+v\n%s", st, want, out)
 	}
 	if err := sess.result(); err != nil {
@@ -122,6 +124,26 @@ func TestSetupWritesTheAnswersAndStartsALocalHome(t *testing.T) {
 	}
 	if err := sess.Start(setup.Answers{Mode: access.ModeLocal}); !errors.Is(err, setup.ErrNotNow) {
 		t.Errorf("a second start answered %v", err)
+	}
+}
+
+// A headless CYFR serves no setup page: the pages name no setup link and
+// move nowhere, and say its first person runs `cyfr login --setup`.
+func TestSetupOnAHeadlessCYFRNamesLoginSetup(t *testing.T) {
+	_, sess, out := newSetupRun(t)
+	example, err := os.ReadFile(".env.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(".env.example", append(example, []byte("CYFR_HEADLESS=on\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Start(setup.Answers{Mode: access.ModeLocal}); err != nil {
+		t.Fatal(err)
+	}
+	st := ended(t, sess)
+	if st.Phase != setup.PhaseDone || !st.Headless || st.SetupURL != "" || st.Address != "http://localhost:4000" {
+		t.Fatalf("the run ended %+v, want a headless CYFR done with no setup link\n%s", st, out)
 	}
 }
 
@@ -156,8 +178,8 @@ func TestSetupNamesItsSteps(t *testing.T) {
 // A tailnet home's join shows its approval link and the machine's name;
 // a new name cancels the waiting join and joins again under it, a new
 // request, and a name the join refuses is refused before anything is
-// cancelled. The approved machine's home is switched, started, and not
-// moved to: this device does not reach its tailnet address.
+// cancelled. The approved machine's home is switched, started, and its
+// setup link not moved to: this device does not reach its tailnet address.
 func TestSetupShowsTheJoinAndTakesANewName(t *testing.T) {
 	s, sess, out := newSetupRun(t)
 	approve := make(chan struct{})
@@ -190,7 +212,7 @@ func TestSetupShowsTheJoinAndTakesANewName(t *testing.T) {
 	}
 	close(approve)
 	st = ended(t, sess)
-	if st.Phase != setup.PhaseDone || st.Address != "https://home.tail1234.ts.net" || st.Moves || st.Mode != access.ModeTailnet {
+	if st.Phase != setup.PhaseDone || st.Address != "https://home.tail1234.ts.net" || st.SetupURL != "https://home.tail1234.ts.net/setup#"+setupTokenOf(t) || st.Moves || st.Mode != access.ModeTailnet {
 		t.Fatalf("the run ended %+v\n%s", st, out)
 	}
 	if host, _ := projectEnv(t).value("CYFR_HOST"); host != "home.tail1234.ts.net" || accessOf(t) != access.ModeTailnet || s.starts != 1 || len(s.switches) != 1 {
@@ -324,7 +346,7 @@ func TestSetupReportsAStartOnThisMachineOnly(t *testing.T) {
 	}
 	st := ended(t, sess)
 	want := access.Refuse("tailnet_node_mismatch", mismatch()).Message()
-	if st.Phase != setup.PhaseDone || st.Address != "http://localhost:4000" || st.Sentence != want || st.Moves {
+	if st.Phase != setup.PhaseDone || st.Address != "http://localhost:4000" || st.SetupURL != "http://localhost:4000/setup#"+setupTokenOf(t) || st.Sentence != want || st.Moves {
 		t.Fatalf("the run ended %+v, want localhost with %q", st, want)
 	}
 	if err := sess.result(); ExitStatus(err) != exitStartedLocally {
@@ -499,7 +521,7 @@ func TestSetupServesThePagesUntilTheyReadTheHomeUp(t *testing.T) {
 	if _, status := c.do(http.MethodPost, "/api/start", setup.Answers{Mode: access.ModeLocal}); status != http.StatusOK {
 		t.Fatalf("the start answered %d", status)
 	}
-	if st := c.await(setup.PhaseDone); st.Address != "http://localhost:4000" || !st.Moves {
+	if st := c.await(setup.PhaseDone); st.Address != "http://localhost:4000" || st.SetupURL != "http://localhost:4000/setup#"+setupTokenOf(t) || !st.Moves {
 		t.Errorf("the pages read %+v", st)
 	}
 	if err := awaitEnd(t, done); err != nil {

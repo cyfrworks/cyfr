@@ -159,7 +159,7 @@ func TestShippedTemplateCarriesInitsAnchors(t *testing.T) {
 			t.Errorf("the shipped template assigns %s, which a local home's head omits", key)
 		}
 	}
-	for _, key := range []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar, corsOriginsVar} {
+	for _, key := range []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, buildsKeyVar, corsOriginsVar} {
 		if v, assigned := f.value(key); !assigned || v != "" || len(f.assignments(key)) != 1 {
 			t.Errorf("the shipped template does not assign %s empty on one line (%q, assigned: %v)", key, v, assigned)
 		}
@@ -277,7 +277,7 @@ func TestRenderEnvFileShippedTemplate(t *testing.T) {
 		added = append(added, c.key)
 	}
 	// The template carries the builds URL; init mints the key beside it.
-	if want := []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, buildsKeyVar}; !slices.Equal(added, want) {
+	if want := []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, buildsKeyVar}; !slices.Equal(added, want) {
 		t.Errorf("added %v, want %v", added, want)
 	}
 	assertStackPairs(t, got, defaultServiceID)
@@ -379,7 +379,8 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 	runtimeKey := hex.EncodeToString(workerKey(rootBytes, "wrk_locus"))
 	otherKey := hex.EncodeToString(workerKey(rootBytes, "wrk_other"))
 	const buildsKey = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
-	const base = "CYFR_SECRET_KEY_BASE=kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept\nCYFR_LOCUS_BACKENDS_KEY=" + buildsKey + "\n"
+	const setupToken = "5e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75e75"
+	const base = "CYFR_SECRET_KEY_BASE=kept-secret-key-base-kept-secret-key-base-kept-secret-key-base-kept\nCYFR_LOCUS_BACKENDS_KEY=" + buildsKey + "\nCYFR_SETUP_TOKEN=" + setupToken + "\n"
 	// builds is .env.example's builds URL, which builds are on with.
 	const builds = "CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100\n"
 
@@ -498,9 +499,20 @@ func TestEnsureStackKeysOverAnExistingEnv(t *testing.T) {
 			kept:  map[string]string{corsOriginsVar: "https://app.example.com"},
 		},
 		{
+			name:  "a setup token .env holds is kept as it is",
+			body:  base + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=\n",
+			added: nil,
+			kept:  map[string]string{setupTokenVar: setupToken},
+		},
+		{
+			name:  "a setup token assigned empty is minted",
+			body:  strings.Replace(base, setupToken, "", 1) + "CYFR_LOCUS_RUNTIME_ROOT=" + root + "\nLOCUS_RUNTIME_KEY=" + runtimeKey + "\nCYFR_LOCUS_BUILDS_URL=\nCYFR_LOCUS_BUILDS_KEY=\nCYFR_CORS_ALLOWED_ORIGINS=\n",
+			added: []string{setupTokenVar},
+		},
+		{
 			name:  "no line for any key: each is appended, and no builds URL is builds off",
 			body:  "CYFR_HOST=localhost",
-			added: []string{secretKeyBaseVar, backendsKeyVar, workerRootVar, serviceKeyVar, corsOriginsVar},
+			added: []string{secretKeyBaseVar, backendsKeyVar, setupTokenVar, workerRootVar, serviceKeyVar, corsOriginsVar},
 			kept:  map[string]string{"CYFR_HOST": "localhost"},
 		},
 		{

@@ -631,6 +631,19 @@ if config_env() != :test do
 
   config :sanctum, :restore_token, restore_token
 
+  # The installation's setup token (`cyfr init` writes it), in the restore
+  # token's form and optional: it admits the installation's first person
+  # (`Sanctum.Newcomer`), and unset, setup opens nothing. A malformed
+  # value refuses the boot naming the variable, never the value.
+  {:ok, setup_token} = Prima.EnvValue.text(getenv, "CYFR_SETUP_TOKEN")
+
+  unless is_nil(setup_token) or Sanctum.setup_token?(setup_token) do
+    raise "[Cyfr] FATAL: CYFR_SETUP_TOKEN must be exactly 64 lowercase hexadecimal " <>
+            "characters (32 random bytes)."
+  end
+
+  config :sanctum, :setup_token, setup_token
+
   oci_registry_url_config =
     env_str.(
       "CYFR_OCI_REGISTRY_URL",

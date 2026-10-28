@@ -244,7 +244,11 @@ defmodule Sanctum.Tenancy.Users do
     update(user, %{personal_athanor_id: athanor_id})
   end
 
-  @doc "The person's preferences document (`mode`, `theme`), as a map."
+  @doc """
+  The person's preferences document, as a map: `mode`, `theme`, and
+  `handle_wanted`, the handle they chose and have not claimed yet
+  (`PrismWeb.IdentityCard`).
+  """
   @spec prefs(user()) :: map()
   def prefs(%{prefs: nil}), do: %{}
 
@@ -255,10 +259,13 @@ defmodule Sanctum.Tenancy.Users do
     end
   end
 
-  @doc "Merge `patch` into the person's preferences."
+  @doc "Merge `patch` into the person's preferences; a key patched to `nil` is removed."
   @spec put_prefs(user(), map()) :: {:ok, user()} | {:error, term()}
   def put_prefs(%{id: _} = user, patch) when is_map(patch) do
-    update(user, %{prefs: Jason.encode!(Map.merge(prefs(user), patch))})
+    prefs =
+      user |> prefs() |> Map.merge(patch) |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
+    update(user, %{prefs: Jason.encode!(prefs)})
   end
 
   @doc """
