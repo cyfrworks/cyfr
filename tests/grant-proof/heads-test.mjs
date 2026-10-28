@@ -10,11 +10,13 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { changedCopies, digestCopies, flowsHeld, sameHead } from "./heads.mjs";
+import { changedCopies, digestCopies, flowsHeld, grantedHeld, sameHead } from "./heads.mjs";
 
 const KEPT = "alpha.grant.test";
 const DROPPED = "beta.grant.test";
 const digest = (hex) => `sha256:${hex.repeat(64)}`;
+// An id as the home writes one: its kind's prefix and a UUID.
+const id = (prefix, n) => `${prefix}_0000000${n}-0000-7000-8000-000000000000`;
 
 const regranted = {
   revision: 2, consent_id: "cons_regranted", profile_id: "prof_probe", admitted_origins: ["interactive"],
@@ -79,6 +81,46 @@ test("the changed copies are another revision and a host and a flow each added a
 
 test("a head that keeps the regranted head's consent is refused", () => {
   assert.equal(flowsHeld({ ...flowHead, consent_id: regranted.consent_id }, grant), false);
+});
+
+const basePlan = digest("5");
+const first = {
+  revision: 1, consent_id: id("cons", 1), profile_id: id("prof", 1), admitted_origins: ["interactive"],
+  domains: [KEPT], paths: ["data/probe/notes/"], flows: [`files_by_grant to ${KEPT}`],
+  shape_digest: basePlan, commit_digest: digest("6"),
+};
+const firstGrant = {
+  shape: basePlan, origins: ["interactive"], domains: [KEPT], paths: ["data/probe/notes/"],
+  flows: [`files_by_grant to ${KEPT}`],
+};
+
+test("the head the first grant commits is held whole: revision 1, the decisions made, the plan's shape, a profile and a consent", () => {
+  assert.equal(grantedHeld(first, firstGrant), true);
+});
+
+test("a first head with a field changed, missing or added is refused", () => {
+  const { paths: _paths, ...withoutPaths } = first;
+  const copies = [
+    ...changedCopies(first, DROPPED),
+    { ...first, shape_digest: digest("7") },
+    { ...first, admitted_origins: ["interactive", "programmatic"] },
+    { ...first, paths: ["data/probe/"] },
+    { ...first, commit_digest: "sha256:wrong" },
+    { ...first, commit_digest: null },
+    { ...first, profile_id: null },
+    { ...first, profile_id: "prof_probe" },
+    { ...first, consent_id: undefined },
+    { ...first, consent_id: id("prof", 1) },
+    { ...first, background: true },
+    withoutPaths,
+  ];
+  for (const copy of copies) assert.equal(grantedHeld(copy, firstGrant), false, JSON.stringify(copy));
+});
+
+test("a first grant asked under a malformed shape refuses every head", () => {
+  for (const shape of [undefined, null, "", "sha256:wrong"]) {
+    assert.equal(grantedHeld({ ...first, shape_digest: shape }, { ...firstGrant, shape }), false, `shape ${shape}`);
+  }
 });
 
 test("two heads hold the same fields, arrays as sets", () => {

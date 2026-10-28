@@ -11,7 +11,8 @@
 //                description in Chromium's tree, with keyboard focus inside
 //                the prompt; the grant made in Prism's system layer, one
 //                host narrowed away and interactive the one origin
-//                admitted: the head holds exactly that
+//                admitted: the head holds exactly that, every field of it,
+//                under the shape the version's plan asks
 //   cli_digest   the same decisions previewed from the command line answer
 //                the commit digest the head was committed under
 //   background   a version asking to keep running when hidden: the person's
@@ -40,7 +41,7 @@ import { join } from "node:path";
 import {
   ask as askRunSh, launchBrowser, pageTokens, readHomes, recordText, redact, redactFrames, signedIn, startProxy, waitFor,
 } from "../browser/lib.mjs";
-import { changedCopies, digestCopies, flowsHeld, sameHead } from "./heads.mjs";
+import { changedCopies, digestCopies, flowsHeld, grantedHeld, sameHead } from "./heads.mjs";
 
 const [homesFile, segment, cookie, outDir] = process.argv.slice(2);
 if (!homesFile || !segment || !cookie || !outDir) {
@@ -196,8 +197,9 @@ async function main() {
     }
     await confirm(page);
     const head = await ask({ op: "head" });
+    const granted = await ask({ op: "plan" });
     record.prism_grant = {
-      first, narrowed, head,
+      first, narrowed, head, plan: granted,
       host_checkbox: { unticked_in_browser: hostUnticked, narrowed_by_home: hostNarrowed, sent: hostEvent },
       spoken,
     };
@@ -209,17 +211,22 @@ async function main() {
     const exitShown = (shown, host, cls) =>
       shown.rows.some((r) => r.kind === "exits" && r.text.includes(host) && r.text.includes(cls));
     const exitsShown = exitShown(first, KEPT, "files_by_grant") && exitShown(first, DROPPED, "filed");
+    // The head the grant committed, held whole (`grantedHeld` in heads.mjs),
+    // and the copies a change of permission would leave, each refused.
+    const firstGrant = {
+      shape: granted.shape_digest, origins: ["interactive"], domains: [KEPT], paths: [PICKED],
+      flows: [`files_by_grant to ${KEPT}`],
+    };
+    const grantCopies = changedCopies(head, DROPPED);
     if (!row("prism_grant",
       promptSpoken && first.origins.length === 1 && first.origins[0] === "interactive" &&
         hostUnticked && hostSent && egress && /narrowed by you/.test(egress.text) &&
         storage && storage.text.includes(PICKED) && /narrowed by you/.test(storage.text) && exitsShown &&
-        head.revision === 1 && JSON.stringify(head.admitted_origins) === JSON.stringify(["interactive"]) &&
-        JSON.stringify(head.domains) === JSON.stringify([KEPT]) &&
-        JSON.stringify(head.paths) === JSON.stringify([PICKED]) &&
-        JSON.stringify(head.flows) === JSON.stringify([`files_by_grant to ${KEPT}`]),
-      "the prompt a focused dialog described by its own sentence, every exit shown with its flows; granted in Prism, a host unticked and the folder narrowed through the picker, interactive alone, the dropped host's flow gone with it",
-      { spoken, origins: first.origins, admits: narrowed.admits, paths: head.paths, domains: head.domains,
-        flows: head.flows, exits_shown: exitsShown, host_checkbox: record.prism_grant.host_checkbox })) return;
+        grantedHeld(head, firstGrant) && grantCopies.every((copy) => !grantedHeld(copy, firstGrant)),
+      "the prompt a focused dialog described by its own sentence, every exit shown with its flows; granted in Prism, a host unticked and the folder narrowed through the picker, interactive alone, the dropped host's flow gone with it; the head is held whole under the version's shape, and a copy with another revision, or a host or flow added or removed, is refused",
+      { spoken, origins: first.origins, admits: narrowed.admits, head, shape: granted.shape_digest,
+        held: grantedHeld(head, firstGrant), copies_refused: grantCopies.map((copy) => !grantedHeld(copy, firstGrant)),
+        exits_shown: exitsShown, host_checkbox: record.prism_grant.host_checkbox })) return;
 
     // -----------------------------------------------------------------------
     // cli_digest
