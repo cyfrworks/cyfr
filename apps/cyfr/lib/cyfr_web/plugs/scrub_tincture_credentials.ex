@@ -5,8 +5,8 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentials do
   @moduledoc """
   Redacts the asset credential a path carries from `conn.request_path`:
   a private tincture's served files' (`/_s/<credential>/…`,
-  `Prima.TinctureUrl`) and a canvas's host page's
-  (`/_c/v1/<credential>/<frame id>`, `Prima.CanvasWire`). It redacts by
+  `Prima.TinctureUrl`) and a canvas's page's
+  (`/_c/v1/<credential>/<frame id>`, `Prima.TinctureWire`). It redacts by
   shape: the segment after the prefix is replaced whatever it holds, so a
   malformed or refused credential is redacted as surely as a live one.
 
@@ -96,7 +96,7 @@ defmodule CyfrWeb.Plugs.ScrubTinctureCredentials do
   defp prefixes do
     [
       [Prima.TinctureUrl.asset_prefix()],
-      String.split(Prima.CanvasWire.page_prefix(), "/", trim: true)
+      String.split(Prima.TinctureWire.page_prefix(), "/", trim: true)
     ]
   end
 end

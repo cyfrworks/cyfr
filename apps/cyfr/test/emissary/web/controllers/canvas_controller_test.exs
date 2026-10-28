@@ -3,15 +3,24 @@
 
 defmodule Emissary.Web.CanvasControllerTest do
   @moduledoc """
-  A canvas's host page (`/_c/v1/<asset credential>/<frame id>`): served
-  only for a standing asset credential and a standing frame of its person,
-  athanor and version, for a version whose placement is `canvas`, and 404
-  with no body otherwise; the canvas's one policy for its own open; the
-  toolkit's host bundle as its one script and the worker bundle only as
-  inert data; no bearer in its markup; the canvas's module served as
-  JavaScript under its served prefix, never as a document, and no HTML file
-  of a canvas, or of a version whose declaration today's rules refuse,
-  served as a page; no redirect on any canvas, data or served path; and the
+  A canvas's page (`/_c/v1/<asset credential>/<frame id>`): the version's
+  own entry, served only for a standing asset credential and a standing
+  frame of its person, athanor and version, while its release digest is
+  the credential's, for a version whose placement is `canvas`, and 404
+  with no body otherwise, a missing entry included; CYFR's prefix (a
+  doctype, its `<base>` and the SDK's script) followed by the entry's
+  bytes as published, which the HTML parser reads with CYFR's two
+  elements first in the head and the entry's `<html>` attributes kept,
+  whatever case its tags are in or comment comes before them; no nonce and
+  no inline script in it;
+  the canvas's one policy for its own open and the connection allowlist on
+  the page alone; relative URLs of a vanilla and a react page resolving to
+  the version's files under the `<base>`, which a page's own `<base>`
+  never precedes; no credential in the page beyond the asset credential
+  its own address carries; the SDK at its one digest-named path and
+  nothing else under it; no HTML file of a canvas, or of a version whose
+  declaration today's rules refuse, served as a page on the served files'
+  route; no redirect on any canvas, SDK, data or served path; and the
   credential in no telemetry span or log line.
   """
 
@@ -24,13 +33,27 @@ defmodule Emissary.Web.CanvasControllerTest do
 
   alias Sanctum.TinctureAuth
 
+  alias Emissary.Web.TinctureAssets
+
   @version "1.0.0"
 
-  @toolkit Path.join(:code.priv_dir(:cyfr), "static/toolkit")
+  @sdk_bundle Path.join(:code.priv_dir(:cyfr), "static/sdk/cyfr.js")
+
+  # A vanilla canvas's entry and the files its relative URLs name.
+  @entry ~s(<!doctype html><html lang="en"><head><meta charset="utf-8">) <>
+           ~s(<link rel="stylesheet" href="style.css"></head>) <>
+           ~s(<body><main id="app"></main><script src="app.js"></script></body></html>)
+
+  @files [
+    {"index.html", @entry},
+    {"app.js", ~s|cyfr.ready();\n|},
+    {"style.css", "main { margin: 0; }"}
+  ]
 
   setup do
     Prima.Test.RateLimiter.reset!()
     on_exit(fn -> Prima.Test.RateLimiter.reset!() end)
+    :ok = own_storage(%{})
 
     _athanor = Sanctum.TestContext.athanor!()
     issuer = Sanctum.TestContext.issuer!(Sanctum.TestContext.local())
@@ -38,9 +61,15 @@ defmodule Emissary.Web.CanvasControllerTest do
     {:ok, source} = Sanctum.Caller.establish(session.token)
 
     digest = canvas!(source, "page-canvas")
+    lay!(source, "page-canvas", @files)
     open = frame!(source, "page-canvas", digest)
 
-    {:ok, source: source, digest: digest, credential: asset!(source, digest), open: open}
+    {:ok,
+     source: source,
+     session: session,
+     digest: digest,
+     credential: asset!(source, digest),
+     open: open}
   end
 
   # ---------------------------------------------------------------------------
@@ -101,12 +130,15 @@ defmodule Emissary.Web.CanvasControllerTest do
     :ok
   end
 
-  defp canvas!(ctx, name) do
-    put_version!(ctx, name, %{
-      "frame" => %{"placement" => "canvas"},
-      "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
-      "streams" => [%{"name" => "mcp_servers.changes"}]
-    })
+  defp canvas!(ctx, name, tincture \\ %{"entry" => "index.html"}) do
+    put_version!(
+      ctx,
+      name,
+      Map.merge(
+        %{"frame" => %{"placement" => "canvas"}, "streams" => [%{"name" => "runs.changes"}]},
+        tincture
+      )
+    )
   end
 
   defp asset!(source, digest) do
@@ -128,18 +160,55 @@ defmodule Emissary.Web.CanvasControllerTest do
   defp page(credential, frame_id, opts \\ []) do
     build_conn()
     |> Map.put(:req_headers, Keyword.get(opts, :headers, []))
-    |> get(Prima.CanvasWire.page_path(credential, frame_id))
+    |> get(Prima.TinctureWire.page_path(credential, frame_id))
   end
 
   # The endpoint's origin as a tincture document's policy names it.
-  defp endpoint_origin, do: Emissary.Web.TinctureAssets.endpoint_origin()
+  defp endpoint_origin, do: TinctureAssets.endpoint_origin()
 
-  defp toolkit(file), do: File.read!(Path.join(@toolkit, file))
+  # What a canvas page starts with, ahead of the entry's bytes: a doctype,
+  # the `<base>` of the entry's directory under the version's served
+  # prefix, and the SDK's script from its one path. Answers the `<base>`'s
+  # URL and the prefix.
+  defp canvas_prefix(credential, name, entry_dir \\ "") do
+    base =
+      endpoint_origin() <>
+        Prima.TinctureUrl.asset_path(credential, ["local", name, @version]) <> "/" <> entry_dir
+
+    {base,
+     "<!doctype html>" <>
+       ~s(<base href="#{base}">) <>
+       ~s(<script src="#{endpoint_origin()}#{TinctureAssets.canvas_sdk_path()}"></script>)}
+  end
+
+  # The page as an HTML parser builds it (lexbor's, as a browser's does):
+  # the html element's attributes, and its head's and body's children.
+  defp parsed(body) do
+    assert [{"html", attributes, [{"head", [], head}, {"body", _, body_nodes}]}] =
+             body |> LazyHTML.from_document() |> LazyHTML.to_tree()
+
+    %{html: attributes, head: head, body: body_nodes}
+  end
+
+  # The two elements CYFR's prefix puts first in the parsed head.
+  defp cyfr_elements(base) do
+    [
+      {"base", [{"href", base}], []},
+      {"script", [{"src", endpoint_origin() <> TinctureAssets.canvas_sdk_path()}], []}
+    ]
+  end
+
+  # What a URL the page writes resolves to under its `<base>`, as a path
+  # of the endpoint, and that path's answer.
+  defp resolved(base, url) do
+    %URI{path: path} = URI.merge(base, url)
+    {path, get(build_conn(), path)}
+  end
 
   # The versions' files in a storage root of the test's own, the
   # configured one restored after it.
   defp own_storage(_context) do
-    root = Path.join(System.tmp_dir!(), "canvas_module_#{System.unique_integer([:positive])}")
+    root = Path.join(System.tmp_dir!(), "canvas_page_#{System.unique_integer([:positive])}")
     previous = Application.get_env(:arca, :base_path)
     Application.put_env(:arca, :base_path, root)
 
@@ -169,67 +238,68 @@ defmodule Emissary.Web.CanvasControllerTest do
   # The page
   # ---------------------------------------------------------------------------
 
-  describe "the host page" do
-    test "the host page carries the canvas policy and the worker bundle only as inert data", %{
-      credential: credential,
-      open: open
-    } do
+  describe "the page" do
+    test "is CYFR's prefix and the version's entry as published, its <base> and the SDK's " <>
+           "script first in the head the browser parses",
+         %{credential: credential, open: open} do
       conn = page(credential, open.frame_id, headers: [{"accept-encoding", "gzip"}])
       assert conn.status == 200
-
       body = conn.resp_body
-      host = toolkit("host.js")
-      worker = toolkit("worker.js")
 
-      # The page is exactly the host script under the nonce and the inert
-      # element holding the worker bundle.
-      assert [_, nonce] =
-               Regex.run(
-                 ~r/\A<!doctype html><html><head><meta charset="utf-8"><script nonce="([A-Za-z0-9_-]{22})">/,
-                 body
-               )
+      # Exactly the prefix, a doctype, the `<base>` and the SDK's script,
+      # then the entry's bytes whole: nothing of the entry is moved.
+      {base, prefix} = canvas_prefix(credential, "page-canvas")
+      assert body == prefix <> @entry
 
-      head =
-        ~s(<!doctype html><html><head><meta charset="utf-8"><script nonce="#{nonce}">) <>
-          host <>
-          ~s(</script></head><body><script type="application/json" id="cyfr-toolkit-worker">)
+      # Parsed, CYFR's two elements are the head's first, the entry's own
+      # head children follow them there, and its `<html>` keeps its `lang`.
+      assert parsed(body) == %{
+               html: [{"lang", "en"}],
+               head:
+                 cyfr_elements(base) ++
+                   [
+                     {"meta", [{"charset", "utf-8"}], []},
+                     {"link", [{"rel", "stylesheet"}, {"href", "style.css"}], []}
+                   ],
+               body: [{"main", [{"id", "app"}], []}, {"script", [{"src", "app.js"}], []}]
+             }
 
-      assert String.starts_with?(body, head)
-      assert String.ends_with?(body, "</script></body></html>")
+      # No nonce anywhere, and no inline script: every script element
+      # loads its source.
+      refute body =~ "nonce"
+      scripts = Regex.scan(~r/<script\b[^>]*>/i, body) |> List.flatten()
+      assert length(scripts) == 2
+      for script <- scripts, do: assert(script =~ ~r/\ssrc="/, script)
+      assert length(Regex.scan(~r{<script\b[^>]*></script>}i, body)) == 2
 
-      inert =
-        body
-        |> binary_part(byte_size(head), byte_size(body) - byte_size(head))
-        |> String.replace_suffix("</script></body></html>", "")
-
-      # One JSON string, the worker bundle whole, holding no `<`.
-      assert Jason.decode!(inert) == worker
-      refute inert =~ "<"
-
-      # Two script elements and no other markup that runs: the host bundle's,
-      # under the nonce, and the inert one. The worker bundle as it is
-      # written is nowhere in the page.
-      assert length(Regex.scan(~r/<script/i, body)) == 2
-      assert length(Regex.scan(~r/<script nonce=/, body)) == 1
-      refute String.contains?(body, worker)
-      refute body =~ ~r/<(iframe|object|embed|base|link|meta http-equiv)/i
-
-      # The canvas's one policy, for this open, under this page's nonce.
+      # The canvas's one policy, for this open, naming the SDK's one path.
       endpoint = endpoint_origin()
 
-      assert get_resp_header(conn, "content-security-policy") == [
-               Compendium.tincture_canvas_page_csp(%{
-                 endpoint: endpoint,
-                 shell: endpoint,
-                 asset_credential: credential,
-                 frame_id: open.frame_id,
-                 nonce: nonce
-               })
-             ]
+      policy =
+        Compendium.tincture_canvas_page_csp(%{
+          endpoint: endpoint,
+          shell: endpoint,
+          asset_credential: credential,
+          frame_id: open.frame_id,
+          sdk_path: TinctureAssets.canvas_sdk_path()
+        })
 
-      [policy] = get_resp_header(conn, "content-security-policy")
-      assert policy =~ "connect-src #{endpoint}#{Prima.CanvasWire.data_path(open.frame_id)};"
+      assert get_resp_header(conn, "content-security-policy") == [policy]
+
+      assert policy =~
+               "script-src #{endpoint}/_s/#{credential}/ #{endpoint}#{TinctureAssets.canvas_sdk_path()};"
+
+      assert policy =~
+               "connect-src #{endpoint}#{Prima.TinctureWire.data_path(open.frame_id)} "
+
       assert policy =~ "sandbox allow-scripts"
+
+      # Chromium's connection allowlist, the page's alone.
+      assert get_resp_header(conn, "connection-allowlist") == ["(response-origin)"]
+
+      assert get_resp_header(conn, "connection-allowlist") == [
+               Compendium.tincture_canvas_connection_allowlist()
+             ]
 
       # The served files' document headers, never cached, framed only by
       # the shell, and sent as they are.
@@ -241,15 +311,220 @@ defmodule Emissary.Web.CanvasControllerTest do
       assert get_resp_header(conn, "content-type") == ["text/html; charset=utf-8"]
       assert get_resp_header(conn, "content-encoding") == []
 
-      # No bearer and no frame id in the markup; the asset credential only
-      # in the policy.
-      refute body =~ open.bearer
+      # No frame id in the markup.
       refute body =~ open.frame_id
-      refute body =~ credential
+    end
 
-      # Each page its own nonce.
-      again = page(credential, open.frame_id)
-      refute again.resp_body =~ ~s(nonce="#{nonce}")
+    test "carries no credential beyond the one its own address carries: the asset credential " <>
+           "only where the page's address carries it, and no bearer or frame credential",
+         %{source: source, session: session, digest: digest, credential: credential, open: open} do
+      trial = frame!(source, "page-canvas", digest, :mint_validation_credential)
+      conn = page(credential, open.frame_id)
+      assert conn.status == 200
+      body = conn.resp_body
+
+      # The asset credential is the page's own address's, which the page's
+      # script can read in its URL: in the body it is only in the `<base>`
+      # that resolves the page's relative URLs under that address.
+      assert Prima.TinctureWire.page_path(credential, open.frame_id) =~ credential
+      {base, _prefix} = canvas_prefix(credential, "page-canvas")
+      assert [_one] = Regex.scan(~r/#{Regex.escape(credential)}/, body)
+      assert body =~ ~s(<base href="#{base}">)
+
+      # No other credential, in the body or any header: not the person's
+      # session bearer, not the open's frame credential, not a validation
+      # trial's.
+      for {name, other} <- [
+            {"session bearer", session.token},
+            {"frame credential", open.bearer},
+            {"validation credential", trial.bearer}
+          ] do
+        refute body =~ other, "the page's body carries the #{name}"
+
+        for {header, value} <- conn.resp_headers,
+            do: refute(value =~ other, "the page's #{header} carries the #{name}")
+      end
+    end
+
+    # The entry's markup is never read: an uppercase `<HEAD>`, or a
+    # `<head>` inside a comment before the real one, leaves the prefix
+    # and the entry's bytes as they are, the head the parser builds starts
+    # with CYFR's two elements, and the page's relative URLs load its own
+    # files under the `<base>`.
+    for {label, name, entry} <- [
+          {"an uppercase <HEAD>", "uppercase-head", String.replace(@entry, "<head>", "<HEAD>")},
+          {"a comment naming <head> before the head", "comment-head",
+           "<!-- <head> is the HTML head -->" <> @entry}
+        ] do
+      @tag canvas_entry: entry, canvas_name: name
+      test "a page with #{label} is the prefix and its entry, and loads its assets", %{
+        source: source,
+        canvas_entry: entry,
+        canvas_name: name
+      } do
+        digest = canvas!(source, name)
+        files = [{"index.html", entry} | List.keydelete(@files, "index.html", 0)]
+        lay!(source, name, files)
+        credential = asset!(source, digest)
+        open = frame!(source, name, digest)
+
+        conn = page(credential, open.frame_id)
+        assert conn.status == 200
+        {base, prefix} = canvas_prefix(credential, name)
+        assert conn.resp_body == prefix <> entry
+
+        %{html: html, head: head} = parsed(conn.resp_body)
+        assert html == [{"lang", "en"}]
+        assert Enum.take(head, 2) == cyfr_elements(base)
+
+        assert Enum.reject(head, &match?({:comment, _}, &1)) ==
+                 cyfr_elements(base) ++
+                   [
+                     {"meta", [{"charset", "utf-8"}], []},
+                     {"link", [{"rel", "stylesheet"}, {"href", "style.css"}], []}
+                   ]
+
+        for {url, file} <- [{"app.js", "app.js"}, {"style.css", "style.css"}] do
+          {path, served} = resolved(base, url)
+          assert path == Prima.TinctureUrl.asset_path(credential, ["local", name, @version, file])
+
+          assert {served.status, served.resp_body} ==
+                   {200, List.keyfind(files, file, 0) |> elem(1)}
+        end
+      end
+    end
+
+    test "a vanilla page's relative URLs resolve to the version's own files under its <base>", %{
+      credential: credential,
+      open: open
+    } do
+      assert page(credential, open.frame_id).status == 200
+      {base, _prefix} = canvas_prefix(credential, "page-canvas")
+
+      for {url, file} <- [{"app.js", "app.js"}, {"./style.css", "style.css"}] do
+        {path, conn} = resolved(base, url)
+
+        assert path ==
+                 Prima.TinctureUrl.asset_path(credential, ["local", "page-canvas", @version, file])
+
+        assert {conn.status, conn.resp_body} == {200, List.keyfind(@files, file, 0) |> elem(1)}
+      end
+
+      # The policy admits each: the version's files under the credential.
+      [policy] = get_resp_header(page(credential, open.frame_id), "content-security-policy")
+      assert String.starts_with?(base, "#{endpoint_origin()}/_s/#{credential}/")
+      assert policy =~ "script-src #{endpoint_origin()}/_s/#{credential}/ "
+    end
+
+    test "a react page's ./assets/ URLs resolve under its build's directory", %{source: source} do
+      entry =
+        ~s(<!doctype html><html><head><script type="module" crossorigin ) <>
+          ~s(src="./assets/index-a1.js"></script>) <>
+          ~s(<link rel="stylesheet" href="./assets/index-b2.css"></head>) <>
+          ~s(<body><div id="root"></div></body></html>)
+
+      digest =
+        canvas!(source, "react-canvas", %{
+          "entry" => "dist/index.html",
+          "build" => %{"tool" => "vite"}
+        })
+
+      lay!(source, "react-canvas", [
+        {"index.html", "<!doctype html><html><head></head><body>source</body></html>"},
+        {"src/main.tsx", "export {};"},
+        {"package.json", "{}"},
+        {"package-lock.json", "{}"},
+        {"dist/index.html", entry},
+        {"dist/assets/index-a1.js", "export const a = 1;"},
+        {"dist/assets/index-b2.css", "body{}"}
+      ])
+
+      credential = asset!(source, digest)
+      open = frame!(source, "react-canvas", digest)
+
+      conn = page(credential, open.frame_id)
+      assert conn.status == 200
+
+      # The built entry is the page, its `<base>` its build's directory.
+      {base, prefix} = canvas_prefix(credential, "react-canvas", "dist/")
+      assert conn.resp_body == prefix <> entry
+      refute conn.resp_body =~ "source"
+
+      for {url, file, bytes} <- [
+            {"./assets/index-a1.js", "dist/assets/index-a1.js", "export const a = 1;"},
+            {"./assets/index-b2.css", "dist/assets/index-b2.css", "body{}"}
+          ] do
+        {path, served} = resolved(base, url)
+
+        assert path ==
+                 Prima.TinctureUrl.asset_path(
+                   credential,
+                   ["local", "react-canvas", @version | String.split(file, "/")]
+                 )
+
+        assert {served.status, served.resp_body} == {200, bytes}
+      end
+    end
+
+    test "a <base> the page writes comes after CYFR's, and the policy names its files alone", %{
+      source: source
+    } do
+      entry =
+        ~s(<html><head><base href="https://elsewhere.example/"><title>x</title></head>) <>
+          ~s(<body><script src="app.js"></script></body></html>)
+
+      digest = canvas!(source, "based-canvas")
+      lay!(source, "based-canvas", [{"index.html", entry}, {"app.js", "1;"}])
+      credential = asset!(source, digest)
+      open = frame!(source, "based-canvas", digest)
+
+      conn = page(credential, open.frame_id)
+      assert conn.status == 200
+
+      {base, prefix} = canvas_prefix(credential, "based-canvas")
+      assert conn.resp_body == prefix <> entry
+
+      # The first `<base>` of the head the parser builds is CYFR's, so it is
+      # the document's; and the policy lets a `<base>` name the version's
+      # own files and nothing else.
+      assert parsed(conn.resp_body).head ==
+               cyfr_elements(base) ++
+                 [{"base", [{"href", "https://elsewhere.example/"}], []}, {"title", [], ["x"]}]
+
+      [policy] = get_resp_header(conn, "content-security-policy")
+      assert policy =~ "; base-uri #{endpoint_origin()}/_s/#{credential}/;"
+    end
+
+    test "a version whose entry is not among its stored files is 404 with no body", %{
+      source: source
+    } do
+      digest = canvas!(source, "lost-canvas")
+      lay!(source, "lost-canvas", [{"app.js", "1;"}])
+      open = frame!(source, "lost-canvas", digest)
+
+      conn = page(asset!(source, digest), open.frame_id)
+      assert {conn.status, conn.resp_body} == {404, ""}
+      assert get_resp_header(conn, "connection-allowlist") == []
+    end
+
+    test "a page whose release digest is no longer the credential's is 404 with no body", %{
+      credential: credential,
+      open: open
+    } do
+      assert page(credential, open.frame_id).status == 200
+
+      # The version's row now records other bytes: the credential names a
+      # release that is no longer this version's.
+      {1, _} =
+        Arca.Repo.update_all(
+          from(c in Arca.Schemas.Component,
+            where: c.name == "page-canvas" and c.version == ^@version
+          ),
+          set: [release_digest: "sha256:" <> String.duplicate("0", 64)]
+        )
+
+      conn = page(credential, open.frame_id)
+      assert {conn.status, conn.resp_body} == {404, ""}
     end
 
     test "a suspended open and a validation trial are served their page", %{
@@ -319,6 +594,7 @@ defmodule Emissary.Web.CanvasControllerTest do
           ] do
         conn = page(credential, frame_id)
         assert {conn.status, conn.resp_body} == {404, ""}, frame_id
+        refused_bare!(conn)
       end
     end
 
@@ -328,9 +604,15 @@ defmodule Emissary.Web.CanvasControllerTest do
       open: open
     } do
       # A tincture that is not a canvas, opened and served under its own
-      # credential: it has no host page.
+      # credential: it has no canvas page, though it has an entry.
       plain_digest = put_version!(source, "plain-page", %{"entry" => "index.html"})
+      lay!(source, "plain-page", [{"index.html", "<html><head></head><body>p</body></html>"}])
       plain = frame!(source, "plain-page", plain_digest)
+
+      # A canvas whose declaration today's rules refuse: no page either.
+      off_digest = canvas!(source, "off-canvas", %{"entry" => "page.html"})
+      lay!(source, "off-canvas", [{"page.html", "<html><head></head><body>o</body></html>"}])
+      off = frame!(source, "off-canvas", off_digest)
 
       unsigned = String.duplicate("a", 40)
       malformed_frame = build_conn() |> get("/_c/v1/#{credential}/x")
@@ -338,55 +620,65 @@ defmodule Emissary.Web.CanvasControllerTest do
 
       for conn <- [
             page(asset!(source, plain_digest), plain.frame_id),
+            page(asset!(source, off_digest), off.frame_id),
             page(credential <> "x", open.frame_id),
             page(unsigned, open.frame_id),
             malformed_frame,
             bearer_as_credential
           ] do
         assert {conn.status, conn.resp_body} == {404, ""}
+        refused_bare!(conn)
       end
     end
   end
 
+  # A refusal carries no page header: no canvas policy and no connection
+  # allowlist.
+  defp refused_bare!(conn) do
+    assert get_resp_header(conn, "connection-allowlist") == []
+    refute Enum.any?(get_resp_header(conn, "content-security-policy"), &(&1 =~ "sandbox"))
+  end
+
   # ---------------------------------------------------------------------------
-  # The module the page's toolkit imports
+  # The SDK the page loads
   # ---------------------------------------------------------------------------
 
-  describe "the module" do
-    setup :own_storage
+  describe "the SDK" do
+    test "is served at the one path its digest names, the bundle's bytes as they are" do
+      bundle = File.read!(@sdk_bundle)
+      digest = :sha256 |> :crypto.hash(bundle) |> Base.encode16(case: :lower)
+      path = TinctureAssets.canvas_sdk_path()
 
-    test "a canvas's module is served as JavaScript under its served prefix, never as a document",
-         %{source: source, credential: credential} do
-      # A head element in the module's text is where an entry document's
-      # `<base>` and SDK would be injected.
-      module = ~s|export default (c) => c.render({type: "text", text: "<head></head>"});\n|
+      assert path == Prima.TinctureWire.page_prefix() <> "sdk/" <> digest <> ".js"
 
-      lay!(source, "page-canvas", [{"canvas.js", module}])
-
-      conn =
-        get(
-          build_conn(),
-          Prima.TinctureUrl.asset_path(credential, ["local", "page-canvas", @version, "canvas.js"])
-        )
-
-      assert conn.status == 200
-
-      # Its type is the one the rules serve `.js` as, with the charset a
-      # textual type names.
-      assert Map.fetch!(Compendium.tincture_served_types(), ".js") == "text/javascript"
+      conn = get(build_conn(), path)
+      assert {conn.status, conn.resp_body} == {200, bundle}
       assert get_resp_header(conn, "content-type") == ["text/javascript; charset=utf-8"]
       assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+      assert get_resp_header(conn, "cache-control") == ["public, max-age=31536000, immutable"]
+      assert get_resp_header(conn, "location") == []
+      assert get_resp_header(conn, "connection-allowlist") == []
+      assert TinctureAssets.canvas_sdk() == bundle
+    end
 
-      # The lockdown every file that is no document carries, never the
-      # entry document's policy, and the stored bytes as they are, nothing
-      # injected.
-      assert [policy] = get_resp_header(conn, "content-security-policy")
-      assert policy == "default-src 'none'; frame-ancestors 'none'"
-      refute policy =~ "nonce-"
-      refute policy =~ "sandbox"
-      assert conn.resp_body == module
-      refute conn.resp_body =~ "<base"
-      refute conn.resp_body =~ "<script"
+    test "no other name under its prefix is served", %{credential: credential, open: open} do
+      path = TinctureAssets.canvas_sdk_path()
+      "/_c/v1/sdk/" <> file = path
+
+      for other <- [
+            "/_c/v1/sdk/" <> String.duplicate("0", 64) <> ".js",
+            "/_c/v1/sdk/cyfr.js",
+            "/_c/v1/sdk/" <> String.replace_suffix(file, ".js", ".mjs"),
+            "/_c/v1/sdk/" <> String.upcase(file),
+            "/_c/v1/sdk/" <> credential,
+            "/_c/v1/sdk/" <> open.frame_id
+          ] do
+        conn = get(build_conn(), other)
+        assert {other, conn.status, conn.resp_body} == {other, 404, ""}
+      end
+
+      # The page's route never takes the SDK's path, nor the SDK's a page.
+      assert page(credential, open.frame_id).status == 200
     end
   end
 
@@ -395,34 +687,34 @@ defmodule Emissary.Web.CanvasControllerTest do
   # be read
   # ---------------------------------------------------------------------------
 
-  describe "a version that holds no page" do
-    setup :own_storage
+  describe "a version that holds no page on the served files' route" do
+    test "a canvas version's HTML files, its entry included, are not found there; its other files are served",
+         %{source: source, credential: credential} do
+      lay!(source, "page-canvas", @files ++ [{"page.html", "<html><head></head></html>"}])
 
-    test "a canvas version's HTML file is never a page: it is not found, and its module is served",
-         %{source: source} do
-      module = ~s|export default (c) => c.render({type: "spacer"});\n|
-      credential = asset!(source, canvas!(source, "paged-canvas"))
-
-      lay!(source, "paged-canvas", [
-        {"canvas.js", module},
-        {"page.html", "<html><head></head><body>a page</body></html>"}
-      ])
-
-      # The page answers exactly as a file the store does not hold.
-      page = served(credential, "paged-canvas", "page.html")
-      absent = served(credential, "paged-canvas", "absent.js")
+      absent = served(credential, "page-canvas", "absent.js")
       assert json_response(absent, 404)["code"] == "not_found"
 
-      assert {page.status, get_resp_header(page, "content-type"), page.resp_body} ==
-               {absent.status, get_resp_header(absent, "content-type"), absent.resp_body}
+      # Each page answers exactly as a file the store does not hold.
+      for file <- ["index.html", "page.html"] do
+        conn = served(credential, "page-canvas", file)
 
-      refute Enum.any?(get_resp_header(page, "content-security-policy"), &(&1 =~ "sandbox"))
+        assert {file, conn.status, get_resp_header(conn, "content-type"), conn.resp_body} ==
+                 {file, absent.status, get_resp_header(absent, "content-type"), absent.resp_body}
 
-      # The module beside it is still served as the script it is.
-      script = served(credential, "paged-canvas", "canvas.js")
+        refute Enum.any?(get_resp_header(conn, "content-security-policy"), &(&1 =~ "sandbox"))
+      end
+
+      # A script beside them is served as the script it is, nothing injected.
+      script = served(credential, "page-canvas", "app.js")
 
       assert {script.status, get_resp_header(script, "content-type"), script.resp_body} ==
-               {200, ["text/javascript; charset=utf-8"], module}
+               {200, ["text/javascript; charset=utf-8"],
+                List.keyfind(@files, "app.js", 0) |> elem(1)}
+
+      assert get_resp_header(script, "content-security-policy") == [
+               "default-src 'none'; frame-ancestors 'none'"
+             ]
     end
 
     test "a version whose declaration today's rules refuse is held as a canvas: no page, no document",
@@ -430,21 +722,14 @@ defmodule Emissary.Web.CanvasControllerTest do
       # Installed straight into the registry's storage, past the publish
       # check, as a rules change after install leaves a version: a
       # placement the rules no longer name, with a page or a script for
-      # its entry, and a canvas of a toolkit major they do not name.
+      # its entry, and a canvas off its templates.
       plants = [
         {"desk-dash", %{"frame" => %{"placement" => "desktop"}, "entry" => "index.html"}},
         {"desk-js", %{"frame" => %{"placement" => "desktop"}, "entry" => "main.js"}},
-        {"old-canvas",
-         %{
-           "frame" => %{"placement" => "canvas"},
-           "canvas" => %{"module" => "canvas.js", "toolkit" => 2}
-         }}
+        {"off-canvas", %{"frame" => %{"placement" => "canvas"}, "entry" => "main.js"}}
       ]
 
-      scripts = %{
-        "main.js" => ~s|const t = "<head></head>";\n|,
-        "canvas.js" => ~s|export default (c) => c.render({text: "<head></head>"});\n|
-      }
+      scripts = %{"main.js" => ~s|const t = "<head></head>";\n|}
 
       for {name, tincture} <- plants do
         assert {:error, _refused} = Compendium.tincture_declaration(%{"tincture" => tincture})
@@ -481,7 +766,7 @@ defmodule Emissary.Web.CanvasControllerTest do
   end
 
   # ---------------------------------------------------------------------------
-  # A store that cannot answer, and the host bundle the page inlines
+  # A store that cannot answer
   # ---------------------------------------------------------------------------
 
   describe "a store outage" do
@@ -497,7 +782,8 @@ defmodule Emissary.Web.CanvasControllerTest do
       conn = page(credential, open.frame_id)
       assert json_response(conn, 503)["code"] == "unavailable"
       assert get_resp_header(conn, "retry-after") == ["5"]
-      refute conn.resp_body =~ "cyfr-toolkit-worker"
+      refute conn.resp_body =~ "<base"
+      assert get_resp_header(conn, "connection-allowlist") == []
     end
 
     test "the page answers 503 with retry-after while the version read cannot answer", %{
@@ -510,23 +796,8 @@ defmodule Emissary.Web.CanvasControllerTest do
       conn = page(credential, open.frame_id)
       assert json_response(conn, 503)["code"] == "unavailable"
       assert get_resp_header(conn, "retry-after") == ["5"]
-      refute conn.resp_body =~ "cyfr-toolkit-worker"
-    end
-  end
-
-  describe "the host bundle" do
-    test "the page's script ends only at its own closing tag, and the page holds no comment", %{
-      credential: credential,
-      open: open
-    } do
-      body = page(credential, open.frame_id).resp_body
-
-      # Two elements close: the host script and the inert worker element.
-      assert length(Regex.scan(~r{</script}i, body)) == 2
-      refute body =~ "<!--"
-
-      # The build holds the embedded bundle to it once the module exists.
-      assert Emissary.Web.CanvasController.__after_compile__(nil, nil) == nil
+      refute conn.resp_body =~ "<base"
+      assert get_resp_header(conn, "connection-allowlist") == []
     end
   end
 
@@ -535,13 +806,14 @@ defmodule Emissary.Web.CanvasControllerTest do
   # ---------------------------------------------------------------------------
 
   describe "redirects" do
-    test "no canvas page, data or served path answers a redirect", %{
+    test "no canvas page, SDK, data or served path answers a redirect", %{
       credential: credential,
       open: open
     } do
-      page_path = Prima.CanvasWire.page_path(credential, open.frame_id)
-      stream_path = Prima.CanvasWire.stream_path(open.frame_id)
+      page_path = Prima.TinctureWire.page_path(credential, open.frame_id)
+      stream_path = Prima.TinctureWire.stream_path(open.frame_id)
       served = Prima.TinctureUrl.asset_path(credential, ["local", "page-canvas", @version])
+      sdk = TinctureAssets.canvas_sdk_path()
 
       # Each answers its own status, and none a 3xx or a location: a
       # trailing slash, a malformed credential or frame id, a data request
@@ -553,17 +825,26 @@ defmodule Emissary.Web.CanvasControllerTest do
         {:get, "/_c/v1/#{credential}/x", 404},
         {:get, "/_c/v1/#{credential}/has%20space", 404},
         {:get, page_path <> "/extra", 404},
-        {:get, Prima.CanvasWire.page_prefix() <> credential, 404},
+        {:get, Prima.TinctureWire.page_prefix() <> credential, 404},
         {:get, "/_c/v1", 404},
+        {:get, sdk, 200},
+        {:get, sdk <> "/", 200},
+        {:get, String.replace_suffix(sdk, ".js", ""), 404},
+        {:get, sdk <> "/extra", 404},
+        {:get, "/_c/v1/sdk", 404},
+        {:get, "/_c/v1/sdk/", 404},
+        {:post, sdk, 404},
         {:post, stream_path, 400},
         {:post, stream_path <> "/", 400},
         {:post, "/_f/v1/o/x/stream", 400},
         {:post, stream_path <> "/extra", 404},
-        {:post, Prima.CanvasWire.data_path(open.frame_id) <> "invoke", 404},
+        {:post, Prima.TinctureWire.data_path(open.frame_id) <> "invoke", 404},
         {:get, stream_path, 404},
         {:get, served <> "/", 404},
-        {:get, served <> "/canvas.js/", 404},
-        {:get, "/_s/short/local/page-canvas/#{@version}/canvas.js", 404},
+        {:get, served <> "/app.js", 200},
+        {:get, served <> "/app.js/", 200},
+        {:get, served <> "/index.html", 404},
+        {:get, "/_s/short/local/page-canvas/#{@version}/app.js", 404},
         {:get, "/_s", 404}
       ]
 
@@ -631,7 +912,7 @@ defmodule Emissary.Web.CanvasControllerTest do
 
           # A served file under the served-file prefix written with an escape.
           served =
-            get(build_conn(), "/%5Fs/#{credential}/local/page-canvas/#{@version}/canvas.js")
+            get(build_conn(), "/%5Fs/#{credential}/local/page-canvas/#{@version}/app.js")
 
           refute served.status in 300..399
 
@@ -668,7 +949,7 @@ defmodule Emissary.Web.CanvasControllerTest do
       assert log =~ "GET /_c/v1/[REDACTED]/#{frame}"
       assert log =~ "GET /%5Fc/v1/[REDACTED]/#{frame}"
       assert log =~ "GET /_c/%76%31/[REDACTED]/#{frame}"
-      assert log =~ "GET /%5Fs/[REDACTED]/local/page-canvas/#{@version}/canvas.js"
+      assert log =~ "GET /%5Fs/[REDACTED]/local/page-canvas/#{@version}/app.js"
       refute log =~ credential
       refute log =~ canary
     end

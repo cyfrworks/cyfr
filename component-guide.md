@@ -506,7 +506,7 @@ The manifest is the component's machine-readable contract. `needs` and `caps` ar
 | `description` | string | Yes | Human-readable summary |
 | `needs` | object | Catalysts (if uses credentials) | Named roles the operator satisfies with vault entries (see below) |
 | `caps` | object | Catalysts/Formulas | The declared capability ask: egress, storage, tools, limits (see below) |
-| `tincture` | object | Tinctures | Frontend config: `entry`, `icon`, `tagline`, `public`, `build`, `frame`, `canvas`, `streams`, `actions`, `connect`, `media` |
+| `tincture` | object | Tinctures | Frontend config: `entry`, `icon`, `tagline`, `public`, `build`, `frame`, `streams`, `actions`, `connect`, `media` |
 | `schema` | object | See below | WASM types: input/output JSON Schema |
 | `examples` | array | Recommended | Copy-pasteable input/output pairs |
 | `defaults` | object | Optional | Vendor-recommended defaults baked into the manifest (see below) |

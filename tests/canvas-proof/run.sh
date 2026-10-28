@@ -162,16 +162,13 @@ segment="$(field "$person" segment)"
 TOKEN="$(field "$person" token)"
 cookie="$(browser_cookie "$CELL" "$TOKEN")"
 
-# canvas-probe's version also holds canvas-neighbour's shared.js, as the
-# sibling file its module imports statically: the same bytes load from the
-# probe's own prefix and are refused from the neighbour's.
-cp -R "$HERE/tinctures/canvas-probe" "$WORK/canvas-probe"
-cp "$HERE/tinctures/canvas-neighbour/shared.js" "$WORK/canvas-probe/shared.js"
+# The proof's tinctures: the full-frame app and the two canvases the proof
+# publishes as pages. The written canvases (markets, measure) go through
+# canvas.write below.
 for published in \
   "$HERE/tinctures/canvas-full canvas-full" \
-  "$HERE/tinctures/canvas-neighbour canvas-neighbour" \
   "$HERE/tinctures/canvas-broken canvas-broken" \
-  "$WORK/canvas-probe canvas-probe"; do
+  "$HERE/tinctures/canvas-probe canvas-probe"; do
   read -r dir name <<<"$published"
   answer="$(server_fixture "$CELL" tincture "$user_id" "$dir" "$name" private)"
   printf '%s' "$answer" | grep -q '"component":"' || fail "$name was not published: $answer"
@@ -179,6 +176,11 @@ for published in \
   # person's grant.
   server_fixture "$CELL" grant "$TOKEN" "$name" >/dev/null
 done
+
+# The shipped canvas is installed by the seed; its page reads three bus
+# streams, so the person grants it (version 0.2.0) before the proof shows
+# it, as they grant every canvas.
+server_fixture "$CELL" grant "$TOKEN" canvas 0.2.0 >/dev/null
 
 source_answer="$(canvas_fixture source "$TOKEN" candles)"
 [ -n "$source_answer" ] || fail "the feed's source was not published"
@@ -207,10 +209,8 @@ bound() {
 mkdir -p "$OUT"
 rm -f "$OUT"/ask-* "$OUT"/answer-* "$OUT/canvas-proof.json" "$OUT/canvas-proof.md"
 
-step "the feeds the canvases read, bound through the console"
+step "the feed the canvases read, bound through the console"
 FEEDS[candles]="$(bound "$(bind_feed candles 60 '{"symbol":"BTC"}' "$CANDLE_ACTIONS" Candles)" candles)"
-FEEDS[broken-die]="$(bound "$(bind_feed broken-die 60 '{"symbol":"DIE"}' '[]' 'Broken, dies')" broken-die)"
-FEEDS[broken-crash]="$(bound "$(bind_feed broken-crash 60 '{"symbol":"CRASH"}' '[]' 'Broken, crashes')" broken-crash)"
 
 # A fixed result as the proof gives one: `$1` a feed's name, `$2` its data.
 accept_fixed() {
@@ -236,14 +236,12 @@ print(json.dumps({"symbol": symbol, "price": price, "change": None,
 PY
 }
 
-for feed in candles broken-crash; do
-  accepted="$(accept_fixed "$feed" "$(candles BTC)")"
-  printf '%s' "$accepted" | grep -q '"revision"' || fail "no fixed result was accepted for $feed: $accepted"
-done
+accepted="$(accept_fixed candles "$(candles BTC)")"
+printf '%s' "$accepted" | grep -q '"revision"' || fail "no fixed result was accepted for candles: $accepted"
 
 step "the written canvases, through canvas.write"
 READS_CANDLES='[{"name":"feed.results","subject":"candles"}]'
-for written in "markets $READS_CANDLES" "labels $READS_CANDLES" "measure []"; do
+for written in "markets $READS_CANDLES" "measure []"; do
   read -r canvas streams <<<"$written"
   answer="$(canvas_fixture write "$TOKEN" "$canvas" "$canvas" "$streams")"
   printf '%s' "$answer" | grep -q '"ok"' || fail "canvas $canvas was not written: $answer"
@@ -267,7 +265,7 @@ binding_of() { python3 -c 'import json, sys; print(json.load(sys.stdin)["ok"]["b
 # Each step the proof asks for (harness.sh `answer_asks`, with `null` for
 # an answer the fixture left empty). A request carries the command and its
 # non-secret arguments; the answer is the fixture's or the console's, which
-# name no credential but the bearer `bearer` mints for the exits step,
+# name no credential but the bearer `bearer` mints for the policy step,
 # which the proof keeps out of its record.
 # Answering an ask never fails the run: errexit is off for the body, so a
 # refused console call or a parse error leaves an error answer, not an exit.
@@ -282,7 +280,7 @@ answer_ask() {
       # shell's prompt, before the proof shows it: a write whose version is
       # left ungranted answers the grant's failure instead.
       arg="$(asked "$ask" canvas)"
-      ANSWER="$(canvas_fixture write "$TOKEN" "$arg" "$(asked "$ask" module)" "$(asked "$ask" streams)")"
+      ANSWER="$(canvas_fixture write "$TOKEN" "$arg" "$(asked "$ask" kind)" "$(asked "$ask" streams)")"
       if printf '%s' "$ANSWER" | grep -q '"ok"' &&
         ! server_fixture "$CELL" grant "$TOKEN" "$arg" "$(field "$ANSWER" ok version)" >/dev/null; then
         ANSWER="{\"error\":\"the written version of $arg was not granted\"}"

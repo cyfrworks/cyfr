@@ -498,7 +498,7 @@ defmodule PrismWeb.WebhooksLive do
 
       <!-- Create / Edit form -->
       <.card :if={@show_form}>
-        <form phx-submit="submit" phx-change="form_changed" class="space-y-4">
+        <form id="webhook-form" phx-submit="submit" phx-change="form_changed" class="space-y-4">
           <div :if={@form_error} class="text-sm text-red-400">{@form_error}</div>
 
           <div class="grid grid-cols-2 gap-4">

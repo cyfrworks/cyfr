@@ -1,5 +1,5 @@
 {
-  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; one request a public tincture's page posts with no bearer, naming the tincture as public; the answer each is given, the stream grant as the SDK's reader decodes it among them; one refusal, the projection of a Prima.Refusal a frame may read; the text/event-stream body an admitted stream_open is answered with, and the events it reads back as, ending with the refusal event of a stream the endpoint closed; and one message of each shell verb the frame posts over its MessagePort. Prima's test and the SDK's JavaScript test both read this file: every body decodes and encodes back to itself, every answer reads back, the stream reads back as its events, and every message decodes.",
+  "comment": "The vectors pinning Prima.TinctureWire: the requests a tincture's frame posts to the endpoint, each with the frame credential as a bearer in the authorization header and a JSON body carrying v, the wire version; one request a public tincture's page posts with no bearer, naming the tincture as public; the answer each is given, the stream grant as the SDK's reader decodes it among them; one refusal, the projection of a Prima.Refusal a frame may read; the text/event-stream body an admitted stream_open is answered with, and the events it reads back as, ending with the refusal event of a stream the endpoint closed; how the SDK rejects a stream_open that opens no stream, for each answer it can get (`stream_rejections`: no answer or a server error is unavailable, anything else its refusal); a message of each shell verb the frame posts over its MessagePort (`shell`, `press` and `failed` among them, which the shell takes from a canvas alone), and the messages the wire refuses, each for the reason `why` gives (`shell_invalid`); and a canvas's part of the wire (`canvas`): the stages a failure names, the shell's handshake replies, the shell's messages to a canvas and a canvas open's paths, its own comment saying who builds and reads each. Prima's test (apps/prima/test/prima/tincture_wire_test.exs) reads every section; the console's API error test (apps/cyfr/test/cyfr_web/controllers/api_error_test.exs) reads `stream_rejections`' statuses; the SDK's JavaScript tests (apps/cyfr/assets/test/sdk/, through its support.mjs, wire.test.mjs among them) the console bridge's (apps/cyfr/assets/test/canvas/hook.test.mjs) and the shipped canvas's (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) read the sections their side holds: every body decodes and encodes back to itself, every answer reads back, the stream reads back as its events, every message decodes and every refused one is refused, every valid handshake reply is the one Prism builds and no refused one is, and every path is the one built.",
   "version": 1,
   "bearer_header": "authorization",
   "routes": {
@@ -153,6 +153,149 @@
       }
     ]
   },
+  "stream_rejections": {
+    "comment": "How the SDK rejects a stream_open that opens no stream, for each answer the endpoint, or what stands before it, can give. An open that got no answer on it — no answer at all (`answer` null: the endpoint could not be reached, or the connection broke or timed out) or a server error (a 5xx status), whatever its body — rejects as `unavailable` with no stage, keeping the endpoint's sentence when it sent a refusal, so the page may open it again later; any other answer rejects as the refusal it carries, its class, sentence and stage, or as `invalid_answer` when it carries none. A page opening it again meets that refusal again until something changes. Each `body` is a refusal as Prima.TinctureWire.refusal/1 writes it (Prima's test) at the status CyfrWeb.ApiError answers its class with (apps/cyfr/test/cyfr_web/controllers/api_error_test.exs); a `text` is a body that is not JSON. The SDK's client test answers each and holds the rejection to `rejects`, and the shipped canvas's test (apps/cyfr/assets/test/canvas/shipped_canvas.test.mjs) holds the page to opening again on each `unavailable` and showing every other refusal.",
+    "cases": [
+      {
+        "answer": null,
+        "rejects": {
+          "class": "unavailable",
+          "message": "The endpoint could not be reached."
+        }
+      },
+      {
+        "answer": {
+          "status": 503,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "unavailable",
+              "message": "The store could not answer — retry shortly",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "unavailable",
+          "message": "The store could not answer — retry shortly"
+        }
+      },
+      {
+        "answer": {
+          "status": 504,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "timeout",
+              "message": "The call timed out",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "unavailable",
+          "message": "The call timed out"
+        }
+      },
+      {
+        "answer": {
+          "status": 500,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "internal",
+              "message": "Internal error",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "unavailable",
+          "message": "Internal error"
+        }
+      },
+      {
+        "answer": {
+          "status": 502,
+          "text": "<html><body><h1>502 Bad Gateway</h1></body></html>"
+        },
+        "rejects": {
+          "class": "unavailable",
+          "message": "The endpoint could not be reached."
+        }
+      },
+      {
+        "answer": {
+          "status": 403,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "forbidden",
+              "message": "This frame is suspended — it opens nothing until it is shown again",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "forbidden",
+          "message": "This frame is suspended — it opens nothing until it is shown again",
+          "stage": "admission"
+        }
+      },
+      {
+        "answer": {
+          "status": 403,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "consent_required",
+              "message": "The tincture is not consented to run here",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "consent_required",
+          "message": "The tincture is not consented to run here",
+          "stage": "admission"
+        }
+      },
+      {
+        "answer": {
+          "status": 429,
+          "body": {
+            "v": 1,
+            "ok": false,
+            "error": {
+              "class": "rate_limited",
+              "message": "Too many open streams — close one and retry",
+              "stage": "admission"
+            }
+          }
+        },
+        "rejects": {
+          "class": "rate_limited",
+          "message": "Too many open streams — close one and retry",
+          "stage": "admission"
+        }
+      },
+      {
+        "answer": {
+          "status": 200,
+          "text": "<html><body>not a stream</body></html>"
+        },
+        "rejects": {
+          "class": "invalid_answer",
+          "message": "The endpoint's answer could not be read."
+        }
+      }
+    ]
+  },
   "shell": [
     {
       "verb": "open",
@@ -204,6 +347,2503 @@
           "name": "weather-api"
         }
       }
+    },
+    {
+      "verb": "press",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "binding": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "action": "refresh"
+        }
+      }
+    },
+    {
+      "verb": "failed",
+      "message": {
+        "v": 1,
+        "verb": "failed",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "stage": "load"
+        }
+      }
+    },
+    {
+      "verb": "failed",
+      "message": {
+        "v": 1,
+        "verb": "failed",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "stage": "runtime"
+        }
+      }
     }
-  ]
+  ],
+  "shell_invalid": [
+    {
+      "why": "an unknown verb",
+      "message": {
+        "v": 1,
+        "verb": "navigate",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "url": "/"
+        }
+      }
+    },
+    {
+      "why": "open names a tincture",
+      "message": {
+        "v": 1,
+        "verb": "open",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "catalyst:local.markets"
+        }
+      }
+    },
+    {
+      "why": "open names a reference",
+      "message": {
+        "v": 1,
+        "verb": "open",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "https://example.com/"
+        }
+      }
+    },
+    {
+      "why": "open takes no label",
+      "message": {
+        "v": 1,
+        "verb": "open",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "ref": "tincture:local.vault",
+          "label": "Vault"
+        }
+      }
+    },
+    {
+      "why": "a press without a binding id",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "action": "refresh"
+        }
+      }
+    },
+    {
+      "why": "a press naming a feed, not a binding id",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "binding": "btc",
+          "action": "refresh"
+        }
+      }
+    },
+    {
+      "why": "a press with an action outside the grammar",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "binding": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "action": "Refresh"
+        }
+      }
+    },
+    {
+      "why": "a press carrying args",
+      "message": {
+        "v": 1,
+        "verb": "press",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "binding": "feed_01a09fee-2e4f-7a5b-9c6d-7e8f9a0b1c2d",
+          "action": "buy",
+          "args": {
+            "size": 1
+          }
+        }
+      }
+    },
+    {
+      "why": "a failure at an unknown stage",
+      "message": {
+        "v": 1,
+        "verb": "failed",
+        "frame": "frm_01a09fee2e4f",
+        "args": {
+          "stage": "boot"
+        }
+      }
+    }
+  ],
+  "canvas": {
+    "comment": "A canvas frame's part of the tincture wire. `handshake` is the shell's answer to a canvas frame's handshake, built by Prism.Frames on the server and read by the console's bridge, which posts its `canvas` block to the frame as the `canvas` message and its credential as every frame's. `to_frame` are the messages the bridge posts to a canvas over its port, each exactly v, verb, frame and args, read by the SDK. A canvas's `streams` are its version's declared streams, at most 64 distinct pairs of exactly `name` and `subject` (a string or null). `paths` are a canvas open's page, data prefix and stream route. Every invalid row is refused for the reason `why` gives.",
+    "stages": [
+      "load",
+      "runtime"
+    ],
+    "handshake": {
+      "valid": [
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ]
+            }
+          }
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "feed-1"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-2"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-3"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-4"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-5"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-6"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-7"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-8"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-9"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-10"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-11"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-12"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-13"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-14"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-15"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-16"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-17"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-18"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-19"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-20"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-21"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-22"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-23"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-24"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-25"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-26"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-27"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-28"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-29"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-30"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-31"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-32"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-33"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-34"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-35"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-36"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-37"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-38"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-39"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-40"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-41"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-42"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-43"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-44"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-45"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-46"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-47"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-48"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-49"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-50"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-51"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-52"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-53"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-54"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-55"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-56"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-57"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-58"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-59"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-60"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-61"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-62"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-63"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-64"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "validation",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": []
+            }
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "why": "an unknown mode",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "debug",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": []
+            }
+          }
+        },
+        {
+          "why": "an empty credential",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": []
+            }
+          }
+        },
+        {
+          "why": "another frame's data path",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_00aa11bb22/",
+              "streams": []
+            }
+          }
+        },
+        {
+          "why": "a data path without its trailing slash",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d",
+              "streams": []
+            }
+          }
+        },
+        {
+          "why": "a data path as an absolute URL",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "https://cyfr.example/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": []
+            }
+          }
+        },
+        {
+          "why": "a canvas block lacking its streams",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/"
+            }
+          }
+        },
+        {
+          "why": "a stream entry with another key",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc",
+                  "filter": "feed"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "a stream entry lacking its subject",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "runs.changes"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "a stream name outside the grammar",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed",
+                  "subject": "btc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "a subject that is neither a string nor null",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": 7
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "a stream and subject pair named twice",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "65 streams",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "feed-1"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-2"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-3"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-4"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-5"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-6"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-7"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-8"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-9"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-10"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-11"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-12"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-13"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-14"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-15"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-16"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-17"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-18"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-19"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-20"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-21"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-22"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-23"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-24"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-25"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-26"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-27"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-28"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-29"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-30"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-31"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-32"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-33"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-34"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-35"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-36"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-37"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-38"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-39"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-40"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-41"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-42"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-43"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-44"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-45"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-46"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-47"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-48"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-49"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-50"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-51"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-52"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-53"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-54"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-55"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-56"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-57"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-58"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-59"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-60"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-61"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-62"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-63"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-64"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-65"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "streams are a list",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": {
+                "name": "feed.results",
+                "subject": "btc"
+              }
+            }
+          }
+        },
+        {
+          "why": "a canvas block with a field it does not take",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [],
+              "extra": 1
+            }
+          }
+        },
+        {
+          "why": "a handshake with a field it does not take",
+          "frame": "frm_8f3c2a1b9d",
+          "reply": {
+            "credential": "frm.v1.c2lnbmVkLWZyYW1lLWNyZWRlbnRpYWw",
+            "canvas": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": []
+            },
+            "extra": 1
+          }
+        }
+      ]
+    },
+    "to_frame": {
+      "valid": [
+        {
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "eth"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                }
+              ]
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "feed-1"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-2"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-3"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-4"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-5"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-6"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-7"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-8"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-9"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-10"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-11"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-12"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-13"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-14"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-15"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-16"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-17"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-18"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-19"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-20"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-21"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-22"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-23"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-24"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-25"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-26"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-27"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-28"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-29"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-30"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-31"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-32"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-33"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-34"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-35"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-36"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-37"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-38"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-39"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-40"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-41"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-42"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-43"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-44"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-45"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-46"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-47"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-48"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-49"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-50"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-51"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-52"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-53"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-54"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-55"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-56"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-57"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-58"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-59"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-60"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-61"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-62"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-63"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-64"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "validation",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": []
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "posture",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "posture": "desk"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "posture",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "posture": "hand"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "covered",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "rects": []
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "covered",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "rects": [
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 640,
+                  "y": 0,
+                  "width": 0,
+                  "height": 0
+                }
+              ]
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": [
+                {
+                  "ref": "tincture:local.vault",
+                  "name": "Vault"
+                },
+                {
+                  "ref": "tincture:example.com.timer",
+                  "name": "Kitchen timer ⏲"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": []
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "state",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "state": "live"
+            }
+          }
+        },
+        {
+          "message": {
+            "v": 1,
+            "verb": "state",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "state": "frozen"
+            }
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "why": "a message is an object",
+          "message": [
+            {
+              "v": 1,
+              "verb": "state",
+              "frame": "frm_8f3c2a1b9d",
+              "args": {
+                "state": "live"
+              }
+            }
+          ]
+        },
+        {
+          "why": "an envelope key the wire does not carry",
+          "message": {
+            "v": 1,
+            "verb": "state",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "state": "live"
+            },
+            "id": 1
+          }
+        },
+        {
+          "why": "args are required even when empty",
+          "message": {
+            "v": 1,
+            "verb": "state",
+            "frame": "frm_8f3c2a1b9d"
+          }
+        },
+        {
+          "why": "another wire version",
+          "message": {
+            "v": 2,
+            "verb": "state",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "state": "live"
+            }
+          }
+        },
+        {
+          "why": "no wire version",
+          "message": {
+            "verb": "state",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "state": "live"
+            }
+          }
+        },
+        {
+          "why": "a frame id too short",
+          "message": {
+            "v": 1,
+            "verb": "state",
+            "frame": "frm_1",
+            "args": {
+              "state": "live"
+            }
+          }
+        },
+        {
+          "why": "a frame id outside the grammar",
+          "message": {
+            "v": 1,
+            "verb": "state",
+            "frame": "../frm_8f3c2a1b9d",
+            "args": {
+              "state": "live"
+            }
+          }
+        },
+        {
+          "why": "args are an object",
+          "message": {
+            "v": 1,
+            "verb": "state",
+            "frame": "frm_8f3c2a1b9d",
+            "args": []
+          }
+        },
+        {
+          "why": "an unknown mode",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "debug",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": []
+            }
+          }
+        },
+        {
+          "why": "another frame's data path",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_00aa11bb22/",
+              "streams": []
+            }
+          }
+        },
+        {
+          "why": "a data path without its trailing slash",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d",
+              "streams": []
+            }
+          }
+        },
+        {
+          "why": "a data path as an absolute URL",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "https://cyfr.example/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": []
+            }
+          }
+        },
+        {
+          "why": "a canvas block lacking its streams",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/"
+            }
+          }
+        },
+        {
+          "why": "a stream entry with another key",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc",
+                  "filter": "feed"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "a stream entry lacking its subject",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "runs.changes"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "a stream name outside the grammar",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed",
+                  "subject": "btc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "a subject that is neither a string nor null",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": 7
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "a stream and subject pair named twice",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                },
+                {
+                  "name": "runs.changes",
+                  "subject": null
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "btc"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "65 streams",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": [
+                {
+                  "name": "feed.results",
+                  "subject": "feed-1"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-2"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-3"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-4"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-5"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-6"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-7"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-8"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-9"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-10"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-11"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-12"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-13"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-14"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-15"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-16"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-17"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-18"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-19"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-20"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-21"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-22"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-23"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-24"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-25"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-26"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-27"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-28"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-29"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-30"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-31"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-32"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-33"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-34"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-35"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-36"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-37"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-38"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-39"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-40"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-41"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-42"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-43"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-44"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-45"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-46"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-47"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-48"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-49"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-50"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-51"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-52"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-53"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-54"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-55"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-56"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-57"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-58"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-59"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-60"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-61"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-62"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-63"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-64"
+                },
+                {
+                  "name": "feed.results",
+                  "subject": "feed-65"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "streams are a list",
+          "message": {
+            "v": 1,
+            "verb": "canvas",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "mode": "live",
+              "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+              "streams": {
+                "name": "feed.results",
+                "subject": "btc"
+              }
+            }
+          }
+        },
+        {
+          "why": "an unknown posture",
+          "message": {
+            "v": 1,
+            "verb": "posture",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "posture": "lap"
+            }
+          }
+        },
+        {
+          "why": "a negative rect",
+          "message": {
+            "v": 1,
+            "verb": "covered",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "rects": [
+                {
+                  "x": -1,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "a rect lacking its height",
+          "message": {
+            "v": 1,
+            "verb": "covered",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "rects": [
+                {
+                  "x": 0,
+                  "y": 0,
+                  "width": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "a rect with another key",
+          "message": {
+            "v": 1,
+            "verb": "covered",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "rects": [
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25,
+                  "z": 1
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "a rect's value is a number",
+          "message": {
+            "v": 1,
+            "verb": "covered",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "rects": [
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": "640",
+                  "height": 360.25
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "65 rects",
+          "message": {
+            "v": 1,
+            "verb": "covered",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "rects": [
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                },
+                {
+                  "x": 0,
+                  "y": 120.5,
+                  "width": 640,
+                  "height": 360.25
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "rects are a list",
+          "message": {
+            "v": 1,
+            "verb": "covered",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "rects": {
+                "x": 0,
+                "y": 120.5,
+                "width": 640,
+                "height": 360.25
+              }
+            }
+          }
+        },
+        {
+          "why": "an installed tincture with no name",
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": [
+                {
+                  "ref": "tincture:local.vault",
+                  "name": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "an installed name past 128 code points",
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": [
+                {
+                  "ref": "tincture:local.vault",
+                  "name": "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "an installed entry naming a catalyst",
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": [
+                {
+                  "ref": "catalyst:local.markets",
+                  "name": "Markets"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "an installed entry with another key",
+          "message": {
+            "v": 1,
+            "verb": "installed",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "tinctures": [
+                {
+                  "ref": "tincture:local.vault",
+                  "name": "Vault",
+                  "icon": "v.png"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "why": "an unknown state",
+          "message": {
+            "v": 1,
+            "verb": "state",
+            "frame": "frm_8f3c2a1b9d",
+            "args": {
+              "state": "paused"
+            }
+          }
+        }
+      ]
+    },
+    "paths": {
+      "valid": [
+        {
+          "credential": "ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw",
+          "frame": "frm_8f3c2a1b9d",
+          "page_path": "/_c/v1/ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/frm_8f3c2a1b9d",
+          "data_path": "/_f/v1/o/frm_8f3c2a1b9d/",
+          "stream_path": "/_f/v1/o/frm_8f3c2a1b9d/stream"
+        }
+      ],
+      "invalid": [
+        {
+          "why": "a credential outside its grammar",
+          "credential": "short",
+          "frame": "frm_8f3c2a1b9d"
+        },
+        {
+          "why": "a credential with a separator",
+          "credential": "ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw/x",
+          "frame": "frm_8f3c2a1b9d"
+        },
+        {
+          "why": "a frame id outside its grammar",
+          "credential": "ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw",
+          "frame": "../x"
+        },
+        {
+          "why": "a frame id too short",
+          "credential": "ast.v1.c2lnbmVkLWFzc2V0LWNyZWRlbnRpYWw",
+          "frame": "frm_1"
+        }
+      ]
+    }
+  }
 }

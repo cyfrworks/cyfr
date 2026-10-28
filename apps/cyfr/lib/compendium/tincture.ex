@@ -110,10 +110,8 @@ defmodule Compendium.Tincture do
   already out.
 
   A canvas (placement `canvas`) is also held to the streams a canvas may
-  read (`Compendium.tincture_check_canvas_streams/2`), holds the module
-  its `tincture.canvas` block names, and holds no `.html` or `.htm` file
-  anywhere (`Compendium.tincture_check_canvas_files/2`): its host page is
-  CYFR's, never the version's.
+  read (`Compendium.tincture_check_canvas_streams/2`) and holds its page,
+  its entry (`Compendium.tincture_check_canvas_files/2`).
 
   The files a version serves are all of them but the reserved files,
   dotfiles, its readme and its `src/` tree; for a built tincture (one that
@@ -150,23 +148,22 @@ defmodule Compendium.Tincture do
 
     with {:ok, declaration} <- Compendium.tincture_declaration(manifest),
          :ok <- Compendium.tincture_check_streams(declaration, streams),
-         :ok <- check_canvas(declaration, streams, files) do
+         :ok <- check_canvas(declaration, manifest, streams, files) do
       :ok
     else
       {:error, {:invalid_tincture, sentence}} -> {:error, sentence}
     end
   end
 
-  # A canvas reads only what a canvas may read, and its page is CYFR's
-  # host page: the version holds the module it names and no page of its
-  # own, wherever in the version it would sit.
-  defp check_canvas(%{frame: %{placement: "canvas"}} = declaration, streams, files) do
+  # A canvas reads only what a canvas may read, and its version holds its
+  # page.
+  defp check_canvas(%{frame: %{placement: "canvas"}} = declaration, manifest, streams, files) do
     with :ok <- Compendium.tincture_check_canvas_streams(declaration, streams) do
-      Compendium.tincture_check_canvas_files(declaration, Enum.map(files, &elem(&1, 0)))
+      Compendium.tincture_check_canvas_files(manifest, Enum.map(files, &elem(&1, 0)))
     end
   end
 
-  defp check_canvas(_declaration, _streams, _files), do: :ok
+  defp check_canvas(_declaration, _manifest, _streams, _files), do: :ok
 
   defp check_types(manifest, files) do
     types = Compendium.tincture_served_types()
@@ -220,9 +217,9 @@ defmodule Compendium.Tincture do
 
   @doc """
   The entry a tincture serves, for a caller outside the domain: the
-  manifest's `tincture.entry` or the default, or a canvas's module
-  (`entry_of/1`), held to the same rule publish and index use. Takes a tincture row (its `manifest`) or a
-  manifest map. `{:error, :no_entry}` when there is no manifest to read,
+  manifest's `tincture.entry` or the default (`entry_of/1`), held to the
+  same rule publish and index use. Takes a tincture row (its `manifest`)
+  or a manifest map. `{:error, :no_entry}` when there is no manifest to read,
   `{:error, :invalid_entry}` when the entry is refused.
   """
   @spec entry(term()) :: {:ok, String.t()} | {:error, :no_entry | :invalid_entry}
@@ -239,25 +236,11 @@ defmodule Compendium.Tincture do
 
   @doc """
   The entry a manifest names, or the default — one reading, for publish,
-  for indexing and for serve. A canvas's entry is the module its
-  `tincture.canvas` block names (`Compendium.tincture_canvas_module/1`),
-  held to the same rule, and a canvas that names none has none. A refusal
-  says what is wrong.
+  for indexing and for serve. A refusal says what is wrong.
   """
   @spec entry_of(map()) :: {:ok, String.t()} | {:error, String.t()}
-  def entry_of(manifest) when is_map(manifest) do
-    case Map.get(manifest, "tincture") do
-      %{"frame" => %{"placement" => "canvas"}} -> canvas_entry(manifest)
-      _other -> manifest |> get_in(["tincture", "entry"]) |> validate_entry()
-    end
-  end
-
-  defp canvas_entry(manifest) do
-    case Compendium.tincture_canvas_module(manifest) do
-      {:ok, module} -> validate_entry(module)
-      {:error, {:invalid_tincture, sentence}} -> {:error, sentence}
-    end
-  end
+  def entry_of(manifest) when is_map(manifest),
+    do: manifest |> get_in(["tincture", "entry"]) |> validate_entry()
 
   # An entry held to the rule: path-safe, not reserved, not a dotfile.
   defp validate_entry(nil), do: {:ok, default_entry()}

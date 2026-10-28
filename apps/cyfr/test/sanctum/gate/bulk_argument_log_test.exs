@@ -90,7 +90,7 @@ defmodule Sanctum.Gate.BulkArgumentLogTest do
                "aqua.skill_update content",
                "aqua.update content",
                "build.validate wasm_base64",
-               "canvas.write module",
+               "canvas.write files{}",
                "file.write content",
                "notes.keep content",
                "notes.pin content",

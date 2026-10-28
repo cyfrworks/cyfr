@@ -463,17 +463,18 @@ defmodule Emissary.Web.TinctureControllerTest do
           "canvas-dash",
           %{
             "frame" => %{"placement" => "canvas"},
-            "canvas" => %{"module" => "canvas.js", "toolkit" => 1}
+            "entry" => "index.html"
           },
           [
-            {"canvas.js", "export default (c) => c.render({type: \"spacer\"})"},
+            {"index.html", "<html><head></head><body>Canvas</body></html>"},
+            {"app.js", "cyfr.ready();"},
             {"style.css", "body { margin: 0; }"}
           ]
         )
 
-      # Its address, its module and its other files each answer exactly as
-      # the same request for a tincture that does not exist.
-      assert_not_public("canvas-dash", ["", "/canvas.js", "/style.css"])
+      # Its address, its page, its script and its other files each answer
+      # exactly as the same request for a tincture that does not exist.
+      assert_not_public("canvas-dash", ["", "/index.html", "/app.js", "/style.css"])
 
       # A tincture that is no canvas is still served at its address.
       page = get(build_conn(), "/t/test/local/pub-dash")
@@ -485,16 +486,12 @@ defmodule Emissary.Web.TinctureControllerTest do
     test "a version whose declaration today's rules refuse is never served on the public route, even with a public profile" do
       # Installed past the publish check, as a rules change after install
       # leaves a version: a placement the rules no longer name, with a page
-      # or a script for its entry, and a canvas of a toolkit major they do
-      # not name. Each is held as a canvas.
+      # or a script for its entry, and a canvas off its templates. Each is
+      # held as a canvas.
       plants = [
         {"desk-dash", %{"frame" => %{"placement" => "desktop"}, "entry" => "index.html"}},
         {"desk-js", %{"frame" => %{"placement" => "desktop"}, "entry" => "main.js"}},
-        {"old-canvas",
-         %{
-           "frame" => %{"placement" => "canvas"},
-           "canvas" => %{"module" => "canvas.js", "toolkit" => 2}
-         }}
+        {"off-canvas", %{"frame" => %{"placement" => "canvas"}, "entry" => "main.js"}}
       ]
 
       for {name, tincture} <- plants do
@@ -504,11 +501,10 @@ defmodule Emissary.Web.TinctureControllerTest do
           public_version!(name, tincture, [
             {"index.html", "<html><head></head><body>Desk</body></html>"},
             {"main.js", "const t = \"<head></head>\";\n"},
-            {"canvas.js", "export default (c) => c.render({text: \"<head></head>\"});\n"},
             {"style.css", "body { margin: 0; }"}
           ])
 
-        assert_not_public(name, ["", "/index.html", "/main.js", "/canvas.js", "/style.css"])
+        assert_not_public(name, ["", "/index.html", "/main.js", "/style.css"])
       end
 
       # A tincture whose declaration the rules read is still served.

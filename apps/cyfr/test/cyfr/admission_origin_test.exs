@@ -288,7 +288,7 @@ defmodule Cyfr.AdmissionOriginTest do
     source = frame_source!()
     name = "origin-canvas-#{System.unique_integer([:positive])}"
     frame = frame!(source, name, canvas!(source, name))
-    path = Prima.CanvasWire.stream_path(frame.frame_id)
+    path = Prima.TinctureWire.stream_path(frame.frame_id)
 
     request =
       TinctureWire.request(:stream_open, %{stream: "executions.deltas", subject: "exec_1"})
@@ -838,7 +838,7 @@ defmodule Cyfr.AdmissionOriginTest do
       "publisher" => "local",
       "tincture" => %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "entry" => "index.html",
         "streams" => [%{"name" => "mcp_servers.changes"}]
       }
     })

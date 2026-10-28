@@ -269,7 +269,7 @@ defmodule Sanctum.Gate.StreamsTest do
   defp canvas_row!(ctx, name) do
     tincture_row!(ctx, name, %{
       "frame" => %{"placement" => "canvas"},
-      "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+      "entry" => "index.html",
       "streams" => [%{"name" => "runs.changes"}, %{"name" => "feed.results", "subject" => "btc"}]
     })
   end

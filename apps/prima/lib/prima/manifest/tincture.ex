@@ -3,7 +3,7 @@
 
 defmodule Prima.Manifest.Tincture do
   @moduledoc """
-  What a tincture declares about its frame, beside its entry: four blocks
+  What a tincture declares about its frame, beside its entry: three blocks
   of the manifest's `tincture` object and their digest, and the `connect`
   origins its frame may reach (`connect/1`).
 
@@ -11,10 +11,6 @@ defmodule Prima.Manifest.Tincture do
       opens, are `Compendium.Tincture.Rules`'), `placement` (a name, or
       absent for the shell's default) and `background` (a boolean,
       default false).
-    * `canvas` — a canvas's `module` (a path) and the `toolkit` major it
-      is drawn by (an integer), exactly those two. Which paths and majors
-      it may name, and that it is declared exactly when the placement is
-      `canvas`, are the rules'.
     * `streams` — the streams the tincture may open, each a provider
       stream `name` and a `subject`: a literal, `"*"` for any subject the
       provider's grammar admits (`Prima.Provider.Stream`), or absent for a
@@ -30,10 +26,10 @@ defmodule Prima.Manifest.Tincture do
   struct.
 
   `digest/1` is taken over the canonical JSON of the blocks
-  (`Prima.JCS`): sets sorted and deduplicated, absent fields omitted (the
-  `canvas` block among them, written only by a canvas). The consent shape
-  carries it as `tincture_digest` (`Sanctum.Consent.ShapeDerivation`), and
-  a stream grant binds to it, so a version that declares more asks again.
+  (`Prima.JCS`): sets sorted and deduplicated, absent fields omitted. The
+  consent shape carries it as `tincture_digest`
+  (`Sanctum.Consent.ShapeDerivation`), and a stream grant binds to it, so
+  a version that declares more asks again.
   """
 
   defmodule Frame do
@@ -46,12 +42,6 @@ defmodule Prima.Manifest.Tincture do
     defstruct capabilities: [], placement: nil, background: false
   end
 
-  defmodule Canvas do
-    @moduledoc "A canvas's block: the module the toolkit runs and the toolkit major that draws it."
-    @type t :: %__MODULE__{module: String.t(), toolkit: integer()}
-    defstruct [:module, :toolkit]
-  end
-
   defmodule Stream do
     @moduledoc "A stream the tincture may open: the provider stream's name and the subject it names."
     @type t :: %__MODULE__{name: String.t(), subject: String.t() | nil}
@@ -61,21 +51,19 @@ defmodule Prima.Manifest.Tincture do
 
   @type t :: %__MODULE__{
           frame: Frame.t(),
-          canvas: Canvas.t() | nil,
           streams: [Stream.t()],
           actions: [String.t()]
         }
 
   # `struct/1` rather than `%Frame{}`: the nested module is defined as this
   # body runs, after the struct literal would have been expanded.
-  defstruct frame: struct(Frame), canvas: nil, streams: [], actions: []
+  defstruct frame: struct(Frame), streams: [], actions: []
 
   @typedoc "A refusal in `Prima.Manifest`'s block vocabulary: the tag and a sentence."
   @type error :: {:invalid_tincture, String.t()}
 
-  @blocks ~w(frame canvas streams actions)
+  @blocks ~w(frame streams actions)
   @frame_keys ~w(capabilities placement background)
-  @canvas_keys ~w(module toolkit)
   @stream_keys ~w(name subject)
 
   # Bounds on what one manifest may declare, so a declaration a digest,
@@ -146,13 +134,11 @@ defmodule Prima.Manifest.Tincture do
   @spec from_manifest(term()) :: {:ok, t()} | {:error, error()}
   def from_manifest(%{"tincture" => %{} = tincture}) do
     with {:ok, frame} <- frame(Map.get(tincture, "frame")),
-         {:ok, canvas} <- canvas(Map.get(tincture, "canvas")),
          {:ok, actions} <- actions(Map.get(tincture, "actions")),
          {:ok, streams} <- streams(Map.get(tincture, "streams")) do
       {:ok,
        %__MODULE__{
          frame: frame,
-         canvas: canvas,
          streams: streams,
          actions: actions
        }}
@@ -163,9 +149,7 @@ defmodule Prima.Manifest.Tincture do
 
   @doc """
   The canonical JSON-shaped map `digest/1` hashes: string keys, sets
-  sorted and deduplicated, absent optional fields omitted. `"canvas"` is
-  written only when the block is declared, so the canonical form of a
-  tincture that is no canvas carries no canvas key.
+  sorted and deduplicated, absent optional fields omitted.
   """
   @spec canonical(t()) :: map()
   def canonical(%__MODULE__{} = declaration) do
@@ -183,7 +167,6 @@ defmodule Prima.Manifest.Tincture do
         |> Enum.sort_by(&{&1["name"], &1["subject"] || ""}),
       "actions" => declaration.actions |> Enum.uniq() |> Enum.sort()
     }
-    |> put_present("canvas", canonical_canvas(declaration.canvas))
   end
 
   @doc "The declaration's digest: `sha256:` over the JCS encoding of `canonical/1`."
@@ -192,11 +175,6 @@ defmodule Prima.Manifest.Tincture do
     {:ok, digest} = Prima.JCS.hash(canonical(declaration))
     digest
   end
-
-  defp canonical_canvas(nil), do: nil
-
-  defp canonical_canvas(%Canvas{module: module, toolkit: toolkit}),
-    do: %{"module" => module, "toolkit" => toolkit}
 
   defp put_present(map, _key, nil), do: map
   defp put_present(map, key, value), do: Map.put(map, key, value)
@@ -232,31 +210,6 @@ defmodule Prima.Manifest.Tincture do
   end
 
   defp frame(_other), do: refuse("tincture.frame must be an object")
-
-  # ---- canvas ----------------------------------------------------------------
-
-  defp canvas(nil), do: {:ok, nil}
-
-  defp canvas(%{} = canvas) do
-    module = Map.get(canvas, "module")
-    toolkit = Map.get(canvas, "toolkit")
-
-    cond do
-      (extra = extra_keys(canvas, @canvas_keys)) != [] ->
-        refuse("tincture.canvas declares unknown key(s): #{Enum.join(extra, ", ")}")
-
-      not is_binary(module) ->
-        refuse("tincture.canvas.module must be a string, got #{show(module)}")
-
-      not is_integer(toolkit) ->
-        refuse("tincture.canvas.toolkit must be an integer, got #{show(toolkit)}")
-
-      true ->
-        {:ok, %Canvas{module: module, toolkit: toolkit}}
-    end
-  end
-
-  defp canvas(_other), do: refuse("tincture.canvas must be an object of module and toolkit")
 
   # ---- actions ---------------------------------------------------------------
 

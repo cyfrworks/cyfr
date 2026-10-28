@@ -17,9 +17,10 @@ defmodule Opus.Providers.Feed do
       or a result's value.
     * `remove` removes a feed by its binding id (`Opus.Feeds.remove/2`).
     * `press` presses one of a feed's actions by its binding id
-      (`Opus.Feeds.press/3`). It is external only: Prism calls it from
-      a person's press of a declared control on the visible canvas, and a
-      canvas's code has no verb that binds, changes or refreshes a feed.
+      (`Opus.Feeds.press/3`). It is external only: Prism calls it for the
+      visible canvas's press, only within moments of the person's own
+      input, never from a script on its own, and a canvas's code has no
+      verb that binds, changes or refreshes a feed.
 
   `bind`, `list` and `remove` answer the athanor's own binding records,
   never a feed's arguments or a result's value, so their answers carry

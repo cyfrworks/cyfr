@@ -264,7 +264,7 @@ defmodule PrismWeb.ApiKeysLive do
 
       <!-- Create form -->
       <.card :if={@show_create}>
-        <form phx-submit="create" phx-change="form_changed" class="space-y-4">
+        <form id="api-key-form" phx-submit="create" phx-change="form_changed" class="space-y-4">
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="block text-xs text-gray-500 uppercase mb-1">Name</label>

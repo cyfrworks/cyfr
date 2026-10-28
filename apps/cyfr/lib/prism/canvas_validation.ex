@@ -16,21 +16,21 @@ defmodule Prism.CanvasValidation do
       under a validation credential
       (`Sanctum.TinctureAuth.mint_validation_credential/5`) and the
       version's asset credential, keyed `{:validation, canvas_id}`, through
-      the frames' one canvas builder, whose `boot` names the mode
+      the frames' one canvas builder, whose handshake names the mode
       `validation`. Its deadline, 10 seconds, is armed as it opens, as
       `{:validation_deadline, frame_id}` to the shell, and covers the
-      page's load, the toolkit's boot and the tree.
-    * **The outcome** (`conclude/5`): a tree is `tree`; the deadline is
-      `no_tree`; a failure at any stage, or the frame's death as its
-      bridge reports it, is `died`. Every outcome first forgets the frame,
-      so the shell attributes nothing more to it and the next render
-      removes it, then calls `canvas.activate` once, through the shell's
-      tool call under the shell's context, whose consume spends the
-      credential, and then revokes the credential. Revocation is
-      idempotent, so the credential ends revoked on every path, a refused
-      activation included. Only a tree activates; the gate's control-plane
-      fence refuses a member that lost its slot (`not_owner`), which
-      activates and records nothing.
+      page's load until it reports `ready`.
+    * **The outcome** (`conclude/5`): the page's `ready` is `ready`; the
+      deadline is `not_ready`; a failure at any stage, or the frame's
+      death as its bridge reports it, is `died`. Every outcome first
+      forgets the frame, so the shell attributes nothing more to it and
+      the next render removes it, then calls `canvas.activate` once,
+      through the shell's tool call under the shell's context, whose
+      consume spends the credential, and then revokes the credential.
+      Revocation is idempotent, so the credential ends revoked on every
+      path, a refused activation included. Only `ready` activates; the
+      gate's control-plane fence refuses a member that lost its slot
+      (`not_owner`), which activates and records nothing.
     * **A teardown with no call** (`cancel/3`): a switch, a layout change
       that drops the canvas, or safe mode while it is trialled revokes the
       credential, then forgets the frame; nothing is activated or
@@ -45,7 +45,7 @@ defmodule Prism.CanvasValidation do
   @deadline_ms 10_000
 
   @typedoc "What ended a validation."
-  @type event :: :tree | :deadline | :failed | :gone
+  @type event :: :ready | :deadline | :failed | :gone
 
   @typedoc """
   What the shell does once activation answered:
@@ -110,8 +110,8 @@ defmodule Prism.CanvasValidation do
 
   @doc "The outcome `event` reports to `canvas.activate`."
   @spec outcome(event()) :: String.t()
-  def outcome(:tree), do: "tree"
-  def outcome(:deadline), do: "no_tree"
+  def outcome(:ready), do: "ready"
+  def outcome(:deadline), do: "not_ready"
   def outcome(event) when event in [:failed, :gone], do: "died"
 
   @doc """
@@ -174,7 +174,7 @@ defmodule Prism.CanvasValidation do
   @doc """
   What the shell does once `canvas.activate` answered `answer`: an
   activation, or the success for the version already working, a recorded
-  `no_tree` or `died`, and a conflict read the listing and the versions
+  `not_ready` or `died`, and a conflict read the listing and the versions
   again and open the working version, unless a newer version written
   meanwhile needs validating, which the shell validates in its turn, once
   per version and never the one just tried; any of them is safe mode

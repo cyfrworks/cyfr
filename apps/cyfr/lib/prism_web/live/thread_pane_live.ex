@@ -1856,6 +1856,7 @@ defmodule PrismWeb.ThreadPaneLive do
       </label>
 
       <form
+        id={@dom <> "-composer"}
         phx-submit="submit"
         phx-change="validate_upload"
         class="border-t border-gray-800 p-3 space-y-2"

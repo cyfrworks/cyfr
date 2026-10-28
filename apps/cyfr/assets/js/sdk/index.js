@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 CYFR Works Inc.
 
-// The Cyfr tincture SDK, built into `priv/static/sdk/cyfr.js` and injected
-// into a tincture's entry page, so `window.cyfr` is there before the page's
-// own scripts run:
+// The Cyfr tincture SDK, built into `priv/static/sdk/cyfr.js`: injected into
+// a tincture's entry page, and loaded by a canvas's page as a classic script
+// after its `<base>`, so `window.cyfr` is there before the page's own
+// scripts run:
 //
 //   cyfr.ready()
 //   const result = await cyfr.invoke("c:local.weather:1.0.0", "run", {city: "Lisbon"})
 //
-// Its listener is registered here, before the page loads, so the shell's
-// handshake on the frame's load always finds it.
+// Its listeners are registered here, before the page loads, so the shell's
+// handshake on the frame's load always finds them, and every uncaught error
+// of the page is heard.
 
 import {createClient} from "./client.js"
 
@@ -20,4 +22,6 @@ const client = createClient({
 })
 
 window.addEventListener("message", client.onWindowMessage)
+window.addEventListener("error", client.onPageError)
+window.addEventListener("unhandledrejection", client.onPageError)
 window.cyfr = client.api

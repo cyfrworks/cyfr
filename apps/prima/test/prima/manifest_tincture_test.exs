@@ -3,7 +3,7 @@
 
 defmodule Prima.ManifestTinctureTest do
   @moduledoc """
-  The frame, canvas, streams and actions blocks: their shapes, read into
+  The frame, streams and actions blocks: their shapes, read into
   `Prima.Manifest.Tincture`, refused at every manifest write when wrong,
   and their digest — the same for two declarations that mean the same
   thing, and moved by a declaration that asks for more.
@@ -13,7 +13,7 @@ defmodule Prima.ManifestTinctureTest do
 
   alias Prima.Manifest
   alias Prima.Manifest.Tincture
-  alias Prima.Manifest.Tincture.{Canvas, Frame}
+  alias Prima.Manifest.Tincture.Frame
 
   @declared %{
     "frame" => %{"capabilities" => ["pointer_lock", "fullscreen"], "placement" => "float"},
@@ -131,67 +131,25 @@ defmodule Prima.ManifestTinctureTest do
     assert {:ok, Tincture.digest(decl)} == Prima.JCS.hash(canonical)
   end
 
-  describe "a canvas's block" do
-    @canvas %{
-      "frame" => %{"placement" => "canvas"},
-      "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
-      "streams" => [%{"name" => "runs.changes"}]
-    }
+  describe "the blocks" do
+    test "a canvas declares its frame, streams and actions as any tincture does" do
+      canvas = %{
+        "frame" => %{"placement" => "canvas"},
+        "streams" => [%{"name" => "runs.changes"}]
+      }
 
-    test "reads into the struct, and declares the tincture on its own" do
-      assert {:ok, %Tincture{canvas: %Canvas{module: "canvas.js", toolkit: 1}} = decl} =
-               Tincture.from_manifest(manifest(@canvas))
-
+      assert Tincture.blocks() == ~w(frame streams actions)
+      assert {:ok, %Tincture{} = decl} = Tincture.from_manifest(manifest(canvas))
       assert decl.frame.placement == "canvas"
-      assert Manifest.validate(manifest(@canvas), fn _ -> true end) == :ok
-      assert Tincture.declared?(manifest(%{"canvas" => @canvas["canvas"]}))
-      assert "canvas" in Tincture.blocks()
-
-      # Absent, it is no canvas block; which placement it goes with is the
-      # rules'.
-      assert {:ok, %Tincture{canvas: nil}} = Tincture.from_manifest(manifest(@declared))
+      assert decl.streams == [%Tincture.Stream{name: "runs.changes", subject: nil}]
+      assert Manifest.validate(manifest(canvas), fn _ -> true end) == :ok
+      assert Map.keys(Tincture.canonical(decl)) |> Enum.sort() == ~w(actions frame streams)
     end
 
-    test "is exactly a string module and an integer toolkit, or refused with a sentence" do
-      for block <- [
-            "canvas.js",
-            [],
-            %{"module" => "canvas.js"},
-            %{"toolkit" => 1},
-            %{"module" => 7, "toolkit" => 1},
-            %{"module" => nil, "toolkit" => 1},
-            %{"module" => "canvas.js", "toolkit" => "1"},
-            %{"module" => "canvas.js", "toolkit" => 1.0},
-            %{"module" => "canvas.js", "toolkit" => 1, "entry" => "index.html"}
-          ] do
-        sentence = refused(Map.put(@canvas, "canvas", block))
-        assert sentence =~ "tincture.canvas"
-      end
-    end
-
-    test "is written into the canonical form only when declared" do
-      {:ok, canvas} = Tincture.from_manifest(manifest(@canvas))
-
-      assert Tincture.canonical(canvas)["canvas"] == %{"module" => "canvas.js", "toolkit" => 1}
-
-      {:ok, moved} =
-        Tincture.from_manifest(manifest(put_in(@canvas, ["canvas", "module"], "next.js")))
-
-      refute Tincture.digest(moved) == Tincture.digest(canvas)
-
-      {:ok, other} =
-        Tincture.from_manifest(manifest(put_in(@canvas, ["canvas", "toolkit"], 2)))
-
-      refute Tincture.digest(other) == Tincture.digest(canvas)
-    end
-
-    # A tincture that is no canvas writes exactly its frame, streams and
-    # actions: this digest is the JCS of that canonical form, with no canvas
-    # key and no other block.
-    test "leaves every other declaration's canonical form to its frame, streams and actions" do
+    # Every declaration writes exactly its frame, streams and actions: this
+    # digest is the JCS of that canonical form, with no other block.
+    test "the canonical form is a declaration's frame, streams and actions" do
       {:ok, decl} = Tincture.from_manifest(manifest(@declared))
-
-      refute Map.has_key?(Tincture.canonical(decl), "canvas")
 
       assert Map.keys(Tincture.canonical(decl)) |> Enum.sort() ==
                ~w(actions frame streams)

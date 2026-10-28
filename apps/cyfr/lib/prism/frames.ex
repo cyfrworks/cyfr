@@ -48,14 +48,13 @@ defmodule Prism.Frames do
       a floating frame needs the placement `float`. Anything else is
       refused `:undeclared`.
     * One builder makes every canvas-placement frame, live or validation,
-      so its address, its sandbox and its boot have one definition. Its
-      `src` is the canvas's host page (`Prima.CanvasWire.page_path/2`) under
-      an asset credential for the version, its `sandbox` the canvas's
-      (`Compendium.tincture_canvas_sandbox_tokens/0`) and it has no
-      `allow`. It holds the fields of its `boot` but the credential: the
-      mode, its data path, the module's address under the asset
-      credential, the toolkit major, and the streams the served version's
-      stored declaration names, never anything a frame or a module sends.
+      so its address, its sandbox and its handshake have one definition.
+      Its `src` is the canvas's page (`Prima.TinctureWire.page_path/2`)
+      under an asset credential for the version, its `sandbox` the
+      canvas's (`Compendium.tincture_canvas_sandbox_tokens/0`) and it has
+      no `allow`. It holds its handshake's `canvas` block: the mode, its
+      data path and the streams the served version's stored declaration
+      names, never anything a frame or a page sends.
     * Any other frame takes its `sandbox` and `allow` from the rules for
       the capabilities it declares (`frame_attributes/2`), and a private
       tincture's page is served under an asset credential
@@ -99,9 +98,8 @@ defmodule Prism.Frames do
   its bearer is rotated and its deadline moves. A new bearer from a
   renewal or a resume replaces the frame's own while its handshake has
   not happened, and is otherwise queued for the view to hand the frame
-  over its port (`take_replacements/1`), never kept: a canvas's over its
-  wire as `credential` (`Prima.CanvasWire`), any other frame's as the
-  handshake's credential message.
+  over its port (`take_replacements/1`), never kept, as the handshake's
+  credential message.
 
   ## Attribution and the handshake
 
@@ -109,8 +107,9 @@ defmodule Prism.Frames do
   this value holds; a frozen or refused frame acts on nothing, and any
   other message is dropped and counted (`drop_message/1`). A frame's
   bearer is handed over once (`handshake/2`): a canvas or validation
-  frame's inside its `boot`, any other frame's alone. A bearer that
-  replaces it later reaches the frame only as a replacement.
+  frame's beside its `canvas` block (`Prima.TinctureWire.canvas_handshake/4`),
+  any other frame's alone. A bearer that replaces it later reaches the
+  frame only as a replacement.
 
   ## Ending
 
@@ -174,8 +173,11 @@ defmodule Prism.Frames do
           optional(atom()) => term()
         }
 
-  @typedoc "What a canvas-placement frame's `boot` carries, but the credential."
-  @type boot :: %{String.t() => term()}
+  @typedoc """
+  A canvas-placement frame's handshake block: its `mode`, `data_path`
+  and `streams` (`Prima.TinctureWire.canvas_handshake/4`).
+  """
+  @type canvas :: %{String.t() => term()}
 
   @typedoc "One frame."
   @type frame :: %{
@@ -196,14 +198,17 @@ defmodule Prism.Frames do
           background: boolean(),
           actions: [String.t()],
           arranged: boolean(),
-          boot: boot() | nil
+          canvas: canvas() | nil
         }
 
   @typedoc "What the view signals a frame: its id and `frozen` or `live`."
   @type signal :: %{frame: String.t(), state: String.t()}
 
-  @typedoc "What a frame's bridge is handed at its handshake."
-  @type handshake :: %{credential: String.t()} | %{boot: boot()}
+  @typedoc """
+  What a frame's bridge is handed at its handshake: its credential, and a
+  canvas-placement frame's `canvas` block beside it.
+  """
+  @type handshake :: %{required(:credential) => String.t()} | %{String.t() => term()}
 
   @typedoc "A bearer that replaces one frame's own, for the view to hand that frame."
   @type replacement :: %{frame: String.t(), credential: String.t()}
@@ -476,18 +481,22 @@ defmodule Prism.Frames do
 
   @doc """
   What frame `frame_id`'s bridge is handed, once (`hand_over/2`): a
-  canvas or validation frame's `boot`, its bearer inside it, and any other
+  canvas or validation frame's bearer and its `canvas` block, the canvas
+  handshake (`Prima.TinctureWire.canvas_handshake/4`), and any other
   frame's bearer alone. Only a frame held under a canvas or validation key
-  is answered a `boot`.
+  is answered a `canvas` block.
   """
   @spec handshake(t(), term()) :: {:ok, handshake(), frame(), t()} | :error
   def handshake(%__MODULE__{} = t, frame_id) do
     case hand_over(t, frame_id) do
       {:ok, bearer, t} ->
-        %{key: key, boot: boot} = frame = find(t, frame_id)
+        %{key: key, id: id, canvas: canvas} = frame = find(t, frame_id)
 
-        if canvas_key?(key) and is_map(boot),
-          do: {:ok, %{boot: Map.put(boot, "credential", bearer)}, frame, t},
+        if canvas_key?(key) and is_map(canvas),
+          do:
+            {:ok,
+             Prima.TinctureWire.canvas_handshake(id, bearer, canvas["mode"], canvas["streams"]),
+             frame, t},
           else: {:ok, %{credential: bearer}, frame, t}
 
       :error ->
@@ -1009,7 +1018,7 @@ defmodule Prism.Frames do
   end
 
   # A rotated bearer replaces the frame's own until its handshake hands it
-  # over, a canvas's inside its boot, and is queued for the view after.
+  # over, and is queued for the view after.
   defp rotated(t, key, %{credential: bearer, deadline: deadline}) do
     case get(t, key) do
       nil ->
@@ -1159,7 +1168,7 @@ defmodule Prism.Frames do
       background: false,
       actions: [],
       arranged: arranged,
-      boot: nil
+      canvas: nil
     }
   end
 
@@ -1196,8 +1205,8 @@ defmodule Prism.Frames do
   end
 
   # The one builder of a canvas-placement frame, live or validation: its
-  # host page under an asset credential for the version, the canvas's
-  # sandbox and no `allow`, and its boot from the version's stored
+  # page under an asset credential for the version, the canvas's sandbox
+  # and no `allow`, and its handshake block from the version's stored
   # declaration. Only `mint` differs between the two.
   defp canvas_frame(ctx, {kind, _id} = key, card, mode, mint) do
     frame_id = new_frame_id()
@@ -1205,25 +1214,22 @@ defmodule Prism.Frames do
 
     with {:ok, declaration} <- Compendium.tincture_declaration(card.manifest),
          :ok <- placed_as_declared(declaration, key),
-         {:ok, module} <- Compendium.tincture_canvas_module(card.manifest),
          {:ok, digest} <- version_digest(ctx, card),
          {:ok, %{credential: asset}} <- TinctureAuth.mint_asset_credential(ctx, digest),
          {:ok, revision} <- Compendium.tincture_grant_revision(ctx, version_ref(card)),
          {:ok, minted} <- mint.(ctx, base.reference, digest, revision, frame_id) do
       %{
         base
-        | src: Prima.CanvasWire.page_path(asset, frame_id),
+        | src: Prima.TinctureWire.page_path(asset, frame_id),
           sandbox: Enum.join(Compendium.tincture_canvas_sandbox_tokens(), " "),
           credential_id: minted.id,
           bearer: minted.credential,
           deadline: minted.deadline,
           state: :live,
           visible: kind == :canvas,
-          boot: %{
+          canvas: %{
             "mode" => mode,
-            "data_path" => Prima.CanvasWire.data_path(frame_id),
-            "module_url" => asset_path(asset, card, String.split(module, "/")),
-            "toolkit" => declaration.canvas.toolkit,
+            "data_path" => Prima.TinctureWire.data_path(frame_id),
             "streams" =>
               Enum.map(declaration.streams, &%{"name" => &1.name, "subject" => &1.subject})
           }

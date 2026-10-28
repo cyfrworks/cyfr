@@ -190,4 +190,77 @@ defmodule PrismWeb.AquaApprovalCardTest do
 
     assert html =~ "also after news.example"
   end
+
+  # A canvas write's card names the streams the version reads, from the
+  # proposal the approval binds, each feed by its name; another call's
+  # card says nothing of streams.
+  test "a canvas write's card names the streams the version reads" do
+    streams_of = fn html ->
+      case Regex.run(~r/data-test="approval-canvas-streams"[^>]*>(.*?)<\/div>/s, html,
+             capture: :all_but_first
+           ) do
+        [named] -> named
+        nil -> nil
+      end
+    end
+
+    write = fn streams ->
+      card(%{
+        "action_kind" => "write",
+        "proposal" => %{
+          "tool" => "canvas",
+          "action" => "write",
+          "args" => %{
+            "name" => "markets",
+            "template" => "vanilla",
+            "files" => %{"index.html" => "<html></html>"},
+            "streams" => streams
+          }
+        }
+      })
+    end
+
+    named =
+      streams_of.(
+        write.([
+          %{"name" => "runs.changes"},
+          %{"name" => "feed.results", "subject" => "btc"}
+        ])
+      )
+
+    assert named =~ "this page will read:"
+    assert named =~ "runs.changes, feed.results (btc)"
+    assert streams_of.(write.([])) =~ "this page reads no stream"
+    assert streams_of.(card(%{"action_kind" => "write"})) == nil
+  end
+
+  # canvas.write declares `standing: false`: with the standing its
+  # declaration mints onto the card, the card offers this call's approval
+  # and nothing that stands, so every write asks.
+  test "a canvas write's card offers no standing answer, always included" do
+    standing = Sanctum.Annotations.standing_to_wire(Aqua.Kinds.standing_for("canvas", "write"))
+    assert standing == false
+
+    html =
+      card(
+        %{
+          "action_kind" => "write",
+          "standing" => standing,
+          "proposal" => %{
+            "tool" => "canvas",
+            "action" => "write",
+            "args" => %{
+              "name" => "markets",
+              "template" => "vanilla",
+              "files" => %{"index.html" => "<html></html>"},
+              "streams" => []
+            }
+          }
+        },
+        scheduled: true
+      )
+
+    assert %{once: true, run: false, until: false, always: false, schedule: false} = offers(html)
+    refute html =~ ~s(phx-value-scope="always")
+  end
 end

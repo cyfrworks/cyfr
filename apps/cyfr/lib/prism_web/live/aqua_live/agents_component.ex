@@ -877,7 +877,12 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
     >
       <div class="flex items-start justify-between gap-3">
         <div class="flex-1 min-w-0">
-          <form phx-change="editor_update_field" phx-target={@myself} class="space-y-1">
+          <form
+            id={"aqua-card-#{@agent["name"]}-title"}
+            phx-change="editor_update_field"
+            phx-target={@myself}
+            class="space-y-1"
+          >
             <input type="hidden" name="name" value={@agent["name"]} />
             <input type="hidden" name="field" value="title" />
             <input
@@ -944,7 +949,13 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </div>
       </div>
 
-      <form :if={!@is_soul} phx-change="editor_update_field" phx-target={@myself} class="space-y-1">
+      <form
+        :if={!@is_soul}
+        id={"aqua-card-#{@agent["name"]}-description"}
+        phx-change="editor_update_field"
+        phx-target={@myself}
+        class="space-y-1"
+      >
         <input type="hidden" name="name" value={@agent["name"]} />
         <input type="hidden" name="field" value="description" />
         <label class="block text-[10px] uppercase tracking-wider text-gray-500">Description</label>
@@ -1006,7 +1017,15 @@ defmodule PrismWeb.AquaLive.AgentsComponent do
         </button>
       </div>
 
-      <form phx-change="editor_set_model" phx-target={@myself}>
+      <%!-- Each change writes the agent's model, so a reconnect replays no
+            change: the choice the page held may be older than the model
+            another session wrote meanwhile. --%>
+      <form
+        id={"aqua-card-#{@agent["name"]}-model"}
+        phx-change="editor_set_model"
+        phx-auto-recover="ignore"
+        phx-target={@myself}
+      >
         <input type="hidden" name="name" value={@agent["name"]} />
         <p class="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">Model</p>
         <select

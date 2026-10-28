@@ -232,7 +232,7 @@ defmodule PrismWeb.EnforcementsLive do
         Click a row to jump to the request's full causal chain in Activity.
       </p>
 
-      <form phx-change="filter" class="flex items-center gap-3 flex-wrap">
+      <form id="enforcements-filter" phx-change="filter" class="flex items-center gap-3 flex-wrap">
         <select
           name="event_type"
           class="bg-gray-800 text-gray-300 text-sm rounded-md border-gray-700 px-3 py-1.5"

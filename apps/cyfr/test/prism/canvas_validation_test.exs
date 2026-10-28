@@ -5,14 +5,15 @@ defmodule Prism.CanvasValidationTest do
   @moduledoc """
   A candidate canvas version trialled on the glass, through the shell
   (`Prism.CanvasValidation`, `PrismWeb.ShellLive`): one case per outcome.
-  A tree activates the version; the deadline records `no_tree`; a failure
-  or the frame's death records `died`; a member that lost its slot
-  activates and records nothing. After every outcome, a refused
-  activation included, the frame is no longer held and its validation
-  credential's row is revoked. A version restored is not trialled again
-  until a newer one is installed; a trial's `open` and `press` are
-  dropped; two glasses trialling one version publish one activation; a
-  grant that waits for the person is asked for.
+  The page's `ready` activates the version; the deadline records
+  `not_ready`; a failure at either stage or the frame's death records
+  `died`; a member that lost its slot activates and records nothing.
+  After every outcome, a refused activation included, the frame is no
+  longer held and its validation credential's row is revoked. A version
+  restored is not trialled again until a newer one is installed; a
+  trial's verbs other than `ready` and `failed`, its `open` and `press`
+  among them, are dropped; two glasses trialling one version publish one
+  activation; a grant that waits for the person is asked for.
 
   Takes a slot through `Arca.ControlPlane` in the ownership case, which
   writes the process-wide standing record; that case saves and restores it.
@@ -61,14 +62,14 @@ defmodule Prism.CanvasValidationTest do
       "publisher" => "local",
       "tincture" => %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "entry" => "index.html",
         "streams" => [%{"name" => "runs.changes"}]
       }
     }
 
     Arca.Test.UnitFixtures.tenant_component!(ctx, "tincture", "local", name, version,
       manifest: manifest,
-      files: [{"canvas.js", "export default (c) => c.render({type: \"spacer\"})"}]
+      files: [{"index.html", "<html><head></head><body></body></html>"}]
     )
 
     digest = "sha256:" <> Base.encode16(:crypto.hash(:sha256, name <> version), case: :lower)
@@ -176,9 +177,9 @@ defmodule Prism.CanvasValidationTest do
 
   defp verb!(view, frame_id, verb, args \\ %{}),
     do:
-      render_hook(view, "canvas_verb", %{
+      render_hook(view, "frame_verb", %{
         "frame" => frame_id,
-        "message" => Prima.CanvasWire.encode(%{verb: verb, frame: frame_id, args: args})
+        "message" => Prima.TinctureWire.shell_message(verb, frame_id, args)
       })
 
   # The trial ended: its frame is not held, nor rendered, and its
@@ -242,8 +243,8 @@ defmodule Prism.CanvasValidationTest do
     end
 
     test "each event reports its outcome" do
-      assert CanvasValidation.outcome(:tree) == "tree"
-      assert CanvasValidation.outcome(:deadline) == "no_tree"
+      assert CanvasValidation.outcome(:ready) == "ready"
+      assert CanvasValidation.outcome(:deadline) == "not_ready"
       assert CanvasValidation.outcome(:failed) == "died"
       assert CanvasValidation.outcome(:gone) == "died"
     end
@@ -256,13 +257,13 @@ defmodule Prism.CanvasValidationTest do
       :ok
     end
 
-    test "a tree activates the version, and the trial is torn down", %{conn: conn, ctx: ctx} do
+    test "ready activates the version, and the trial is torn down", %{conn: conn, ctx: ctx} do
       view = shell!(conn)
       assert %{state: :live, visible: false, reference: %{version: "1.0.0"}} = trial = trial(view)
       assert row(trial.id).purpose == "validation"
       assert live_canvas(view) == nil
 
-      verb!(view, trial.id, :tree)
+      verb!(view, trial.id, :ready)
 
       torn_down!(view, trial)
       assert %{document: %{working: "1.0.0", kept: nil, failed: nil}, revision: 1} = stored(ctx)
@@ -270,7 +271,7 @@ defmodule Prism.CanvasValidationTest do
       assert assigns(view).safe_mode == nil
     end
 
-    test "no tree by the deadline records no_tree, and the working version opens",
+    test "not ready by the deadline records not_ready, and the working version opens",
          %{conn: conn, ctx: ctx} do
       canvas!(ctx, "markets", "1.0.1")
       versions!(ctx, %{working: "1.0.0"})
@@ -285,7 +286,7 @@ defmodule Prism.CanvasValidationTest do
       assert %{
                working: "1.0.0",
                kept: nil,
-               failed: %{version: "1.0.1", outcome: "no_tree"}
+               failed: %{version: "1.0.1", outcome: "not_ready"}
              } = stored(ctx).document
 
       assert %{state: :live, reference: %{version: "1.0.0"}} = live_canvas(view)
@@ -297,12 +298,12 @@ defmodule Prism.CanvasValidationTest do
       assert stored(ctx).revision == revision
     end
 
-    test "a failure at any stage records died, and with no working version is safe mode not_validated",
+    test "a failure at load records died, and with no working version is safe mode not_validated",
          %{conn: conn, ctx: ctx} do
       view = shell!(conn)
       trial = trial(view)
 
-      verb!(view, trial.id, :failed, %{"stage" => "tree"})
+      verb!(view, trial.id, :failed, %{"stage" => "load"})
 
       torn_down!(view, trial)
       assert %{working: nil, failed: %{version: "1.0.0", outcome: "died"}} = stored(ctx).document
@@ -314,6 +315,22 @@ defmodule Prism.CanvasValidationTest do
                    "Your canvas's new version did not start, and it has no earlier version to show."
                  )
                )
+    end
+
+    test "a failure at runtime records died", %{conn: conn, ctx: ctx} do
+      canvas!(ctx, "markets", "1.0.1")
+      versions!(ctx, %{working: "1.0.0"})
+      view = shell!(conn)
+      assert %{reference: %{version: "1.0.1"}} = trial = trial(view)
+
+      verb!(view, trial.id, :failed, %{"stage" => "runtime"})
+
+      torn_down!(view, trial)
+
+      assert %{working: "1.0.0", failed: %{version: "1.0.1", outcome: "died"}} =
+               stored(ctx).document
+
+      assert %{state: :live, reference: %{version: "1.0.0"}} = live_canvas(view)
     end
 
     test "the frame's death records died", %{conn: conn, ctx: ctx} do
@@ -333,7 +350,7 @@ defmodule Prism.CanvasValidationTest do
       trial = trial(view)
       take_over!(slot)
 
-      verb!(view, trial.id, :tree)
+      verb!(view, trial.id, :ready)
 
       torn_down!(view, trial)
       assert stored(ctx) == %{document: Arca.CanvasVersions.empty(), revision: 0}
@@ -372,7 +389,7 @@ defmodule Prism.CanvasValidationTest do
           }
         )
 
-      verb!(view, trial.id, :tree)
+      verb!(view, trial.id, :ready)
 
       torn_down!(view, trial)
       assert stored(ctx).revision == 0
@@ -423,7 +440,7 @@ defmodule Prism.CanvasValidationTest do
       :ok
     end
 
-    test "its open, press and ready are dropped and never forwarded", %{conn: conn, ctx: ctx} do
+    test "every verb but ready and failed is dropped and never forwarded", %{conn: conn, ctx: ctx} do
       view = shell!(conn)
       trial = trial(view)
 
@@ -434,9 +451,11 @@ defmodule Prism.CanvasValidationTest do
         "action" => "refresh"
       })
 
-      verb!(view, trial.id, :ready)
+      verb!(view, trial.id, :title, %{"title" => "Markets"})
+      verb!(view, trial.id, :credential, %{"name" => "api"})
+      verb!(view, trial.id, :close)
 
-      assert Frames.dropped(frames(view)) == 3
+      assert Frames.dropped(frames(view)) == 5
       assert [%{key: {:validation, "home"}}] = Frames.list(frames(view))
 
       assert Arca.Repo.all(
@@ -465,8 +484,8 @@ defmodule Prism.CanvasValidationTest do
       b = trial(second)
       refute a.id == b.id
 
-      verb!(first, a.id, :tree)
-      verb!(second, b.id, :tree)
+      verb!(first, a.id, :ready)
+      verb!(second, b.id, :ready)
 
       torn_down!(first, a)
       torn_down!(second, b)

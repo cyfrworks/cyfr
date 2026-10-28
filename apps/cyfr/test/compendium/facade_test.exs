@@ -117,9 +117,10 @@ defmodule Compendium.FacadeTest do
     sync_seeds: 0,
     tincture_allow_attribute: 1,
     tincture_asset_rules: 0,
-    tincture_canvas_module: 1,
+    tincture_canvas_connection_allowlist: 0,
     tincture_canvas_page_csp: 1,
     tincture_canvas_sandbox_tokens: 0,
+    tincture_canvas_templates: 0,
     tincture_check_canvas_files: 2,
     tincture_check_canvas_streams: 2,
     tincture_check_streams: 2,
@@ -136,7 +137,6 @@ defmodule Compendium.FacadeTest do
     tincture_sandbox_tokens: 1,
     tincture_served_types: 0,
     tincture_templates: 0,
-    tincture_toolkit_majors: 0,
     valid_agent_name?: 1
   ]
 

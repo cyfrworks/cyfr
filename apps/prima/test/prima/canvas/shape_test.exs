@@ -9,12 +9,12 @@ defmodule Prima.Canvas.ShapeTest do
   `tests/fixtures/feed.json`'s bindings; spellings that differ only in
   `required`'s order share one digest; every refused shape and value is
   refused at the fixture's path for its reason; each of its `times` is
-  taken at its instant or refused, as the toolkit's parser reads them too;
-  and the reasons, types and depth limit are the module's. Beside them,
-  the bounds the fixture would spell at length: a full enum and object, a
-  list at its max and the depth limit built programmatically, and the
-  terms JSON cannot spell (an improper list, a key that is not a string, a
-  struct), which are refused, or raise, without the value they carry.
+  taken at its instant or refused; and the reasons, types and depth limit
+  are the module's. Beside them, the bounds the fixture would spell at
+  length: a full enum and object, a list at its max and the depth limit
+  built programmatically, and the terms JSON cannot spell (an improper
+  list, a key that is not a string, a struct), which are refused, or
+  raise, without the value they carry.
   """
 
   use ExUnit.Case, async: true
@@ -256,7 +256,7 @@ defmodule Prima.Canvas.ShapeTest do
       assert Shape.escape(3) == "3"
     end
 
-    test "a time carries its offset, as the toolkit's grammar reads it" do
+    test "a time carries its offset" do
       time = normalized!(%{"type" => "time"})
       %{"valid" => valid, "invalid" => invalid} = vectors()["times"]
 

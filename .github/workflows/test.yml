@@ -139,9 +139,8 @@ env:
   MIX_OS_CONCURRENCY_LOCK: 0
 jobs:
   # The checks whose answer does not depend on the database adapter, once
-  # per run. scripts/commit-gate.sh reads two of them, "The built SDK is
-  # its source's" and "The built toolkit is its source's", and runs their
-  # scripts.
+  # per run. scripts/commit-gate.sh reads one of them, "The built SDK is
+  # its source's", and runs its script.
   static:
     name: Static checks, generated files, fixtures and harness tests
     runs-on: ubuntu-latest
@@ -323,22 +322,6 @@ jobs:
             echo "::error::apps/cyfr/priv/static/sdk/ is not the build of apps/cyfr/assets/js/sdk: run mix esbuild sdk and commit the result"
             git status --porcelain -- apps/cyfr/priv/static/sdk/
             git diff --stat -- apps/cyfr/priv/static/sdk/
-            exit 1
-          fi
-      # The canvas toolkit is built from apps/cyfr/assets/js/toolkit into
-      # priv/static/toolkit/host.js and worker.js and tracked, since a
-      # canvas's host page embeds both at compile time: the host bundle as
-      # its one script, the worker bundle as inert data. No .gz is built. A
-      # source edit without a rebuild fails here.
-      - name: The built toolkit is its source's
-        run: |
-          set -euo pipefail
-          mix esbuild toolkit_host
-          mix esbuild toolkit_worker
-          if [ -n "$(git status --porcelain -- apps/cyfr/priv/static/toolkit/)" ]; then
-            echo "::error::apps/cyfr/priv/static/toolkit/ is not the build of apps/cyfr/assets/js/toolkit: run mix esbuild toolkit_host and mix esbuild toolkit_worker and commit the result"
-            git status --porcelain -- apps/cyfr/priv/static/toolkit/
-            git diff --stat -- apps/cyfr/priv/static/toolkit/
             exit 1
           fi
       # Every checked-in test WASM fixture is its source's build: the WAT
@@ -524,10 +507,17 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Lint the console's JavaScript and the SDK
         run: npx eslint .
-      - name: The console's JavaScript tests (the SDK, the canvas toolkit, the canvas, the carrier, the system layer and the markdown hook's parse step)
+      - name: The console's JavaScript tests (the SDK, the canvas, the shipped canvas, the carrier, the system layer and the markdown hook's parse step)
         env:
           CYFR_COVERAGE: 1
         run: test/run.sh
+      # The shipped canvas ships its built dist/ beside its sources, and that
+      # dist/ is what Locus's builder builds from them under their lockfile,
+      # on this job's Node 24 with a home and an npm cache of its own, as the
+      # builder builds. A source edit without a rebuild fails here.
+      - name: The shipped canvas is its sources' build
+        working-directory: .
+        run: scripts/check-seed-canvas.sh
 
   test:
     name: Elixir Tests (${{ matrix.db }}, shard ${{ matrix.shard }})
@@ -1850,16 +1840,11 @@ jobs:
           fi
           for manifest in "${manifests[@]}"; do
             vdir="$(dirname "$manifest")"
-            # The owner's reading (Compendium.Tincture.entry_of/1): a canvas-placed
-            # tincture's entry is the module its canvas block names, every other
-            # tincture's is its declared entry, or the default when the entry is
-            # absent or empty. A non-string entry is kept as text so it fails
-            # the tracked check, as the owner refuses it.
-            entry="$(jq -r 'if .tincture.frame.placement == "canvas" then (.tincture.canvas.module // empty) else (.tincture.entry | if . == null or . == "" then "index.html" else . end) end' "$manifest")" || { bad="$bad"$'\n'"$manifest: unreadable"; continue; }
-            if [ -z "$entry" ]; then
-              bad="$bad"$'\n'"$manifest: a canvas names no module"
-              continue
-            fi
+            # The owner's reading (Compendium.Tincture.entry_of/1): a
+            # tincture's entry is its declared entry, or the default when the
+            # entry is absent or empty. A non-string entry is kept as text so
+            # it fails the tracked check, as the owner refuses it.
+            entry="$(jq -r '.tincture.entry | if . == null or . == "" then "index.html" else . end' "$manifest")" || { bad="$bad"$'\n'"$manifest: unreadable"; continue; }
             case "/$entry/" in
               */../*|*/./*|//*) bad="$bad"$'\n'"$manifest: entry '$entry' leaves the version directory"; continue ;;
             esac

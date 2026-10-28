@@ -1094,7 +1094,7 @@ defmodule Cyfr.BoundariesTest do
       assert row.reason =~ "(`mint_validation_credential/5`)"
     end
 
-    # A canvas's host page reads the frame its path names under its asset
+    # A canvas's page reads the frame its path names under its asset
     # credential's authority; nothing else of the host reads a frame by its
     # frame id.
     test "the host reads a page's frame from the canvas page alone" do
@@ -1227,20 +1227,22 @@ defmodule Cyfr.BoundariesTest do
              """
     end
 
-    test "a canvas's page and data route admit a credential, and only the data route is an entry" do
+    test "a canvas's page and data route admit a credential, its SDK anyone, and only the data route is an entry" do
       postures =
         for route <- Boundaries.routes(),
-            route.path in ["/_c/v1/:credential/:frame_id", "/_f/v1/o/:frame_id/stream"],
+            String.starts_with?(route.path, ["/_c/", "/_f/v1/o/"]),
             do: {route.verb, route.path, route.metadata[:auth]}
 
       assert Enum.sort(postures) == [
                {:get, "/_c/v1/:credential/:frame_id", :tincture_handler_auth},
+               {:get, "/_c/v1/sdk/:file", :tincture_handler_auth},
                {:options, "/_f/v1/o/:frame_id/stream", :frame_credential},
                {:post, "/_f/v1/o/:frame_id/stream", :frame_credential}
              ]
 
       # Each posture's sentence names the canvas path it covers.
       assert Boundaries.route_postures().tincture_handler_auth.why =~ "`/_c/v1/`"
+      assert Boundaries.route_postures().tincture_handler_auth.why =~ "`/_c/v1/sdk/`"
       assert Boundaries.route_postures().frame_credential.why =~ "`/_f/v1/o/<frame>/stream`"
 
       assert %{plane: :external, origin: :interactive} =

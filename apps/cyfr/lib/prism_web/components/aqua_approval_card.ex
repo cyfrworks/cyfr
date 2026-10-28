@@ -56,6 +56,11 @@ defmodule PrismWeb.AquaApprovalCard do
   some exit (`proposal["lets_flow"]`): the approval lets them flow to
   every exit of that grant, and binds them.
 
+  A canvas write's card names the streams the version it writes reads,
+  from the proposal's own `streams` (`canvas_streams/1`), which the
+  approval binds: what the page will read is on the card, not only in the
+  call's details.
+
   Risk visualization derives from the action's `kind` (read/write/execute/
   destructive/external). The colour weight scales with the kind so the common
   case (`:write`) stays calm and the loud styling is reserved for the loud
@@ -135,6 +140,18 @@ defmodule PrismWeb.AquaApprovalCard do
         data-test="approval-account"
       >
         as the account <span class="font-medium text-gray-100">{account(@proposal)}</span>
+      </div>
+      <div
+        :if={canvas_streams(@proposal)}
+        class="text-[12px] text-gray-400 mb-2"
+        data-test="approval-canvas-streams"
+      >
+        <%= if canvas_streams(@proposal) == [] do %>
+          this page reads no stream
+        <% else %>
+          this page will read:
+          <span class="font-mono text-gray-100">{Enum.join(canvas_streams(@proposal), ", ")}</span>
+        <% end %>
       </div>
       <div
         :if={lets_flow(@proposal) != []}
@@ -531,6 +548,30 @@ defmodule PrismWeb.AquaApprovalCard do
   end
 
   defp account(_proposal), do: nil
+
+  # The streams a canvas write's version reads, as its proposal names them:
+  # each stream's name, with the feed it names as its subject; nil for any
+  # other call. An entry of another shape is named as one the write refuses,
+  # never spelled out.
+  @refused_streams "a stream entry the write refuses"
+
+  defp canvas_streams(%{"tool" => "canvas", "action" => "write"} = proposal) do
+    case (proposal["args"] || %{})["streams"] do
+      streams when is_list(streams) -> Enum.map(streams, &canvas_stream/1)
+      _other -> [@refused_streams]
+    end
+  end
+
+  defp canvas_streams(_proposal), do: nil
+
+  defp canvas_stream(%{"name" => name} = stream) when is_binary(name) do
+    case stream["subject"] do
+      subject when is_binary(subject) -> "#{name} (#{subject})"
+      _none -> name
+    end
+  end
+
+  defp canvas_stream(_other), do: @refused_streams
 
   # The classes a launch's card lets flow to every exit of the launched
   # app's grant (`lets_flow`, which the approval binds), in class order;

@@ -240,7 +240,7 @@ defmodule Emissary.Web.FrameStreamSlotTest do
         |> put_req_header("content-type", "application/json")
         |> put_req_header("origin", "null")
         |> put_req_header("authorization", TinctureWire.bearer(bearer))
-        |> post(Prima.CanvasWire.stream_path(frame_id), Jason.encode!(body))
+        |> post(Prima.TinctureWire.stream_path(frame_id), Jason.encode!(body))
       end)
 
     on_exit(fn ->
@@ -282,7 +282,7 @@ defmodule Emissary.Web.FrameStreamSlotTest do
       "publisher" => "local",
       "tincture" => %{
         "frame" => %{"placement" => "canvas"},
-        "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+        "entry" => "index.html",
         "streams" => [%{"name" => "mcp_servers.changes"}]
       }
     }

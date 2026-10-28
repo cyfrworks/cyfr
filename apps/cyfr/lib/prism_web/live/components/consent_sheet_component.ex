@@ -791,6 +791,13 @@ defmodule PrismWeb.ConsentSheetComponent do
     end
   end
 
+  # The id of an account's name form, one per rendered sheet and account,
+  # so the page can recover the form after a reconnect: the sheet's id
+  # and the account's slot token, encoded to characters an id carries
+  # anywhere.
+  defp account_form_id(sheet, token),
+    do: "consent-sheet-#{sheet}-account-#{Base.url_encode64(token, padding: false)}"
+
   # The accounts a dependency's need draws: all of the edge's when the
   # dependency declares one need; else those for this need, and the first
   # need draws any that names none.
@@ -1312,6 +1319,7 @@ defmodule PrismWeb.ConsentSheetComponent do
 
           <.need
             :for={need <- List.wrap(@plan[:needs])}
+            sheet={@id}
             slot_key={{:need, need.need, nil}}
             need={need}
             component={@plan[:source_ref] || @ref}
@@ -1340,6 +1348,7 @@ defmodule PrismWeb.ConsentSheetComponent do
             <p class="text-xs text-gray-400">{row.dep}, called by {row.from}</p>
             <.need
               :for={{need, index} <- Enum.with_index(row.needs)}
+              sheet={@id}
               slot_key={{:dep, row.from, row.dep}}
               need={need}
               component={row.dep}
@@ -1482,6 +1491,7 @@ defmodule PrismWeb.ConsentSheetComponent do
     """
   end
 
+  attr :sheet, :string, required: true
   attr :slot_key, :any, required: true
   attr :need, :map, required: true
   attr :component, :string, required: true
@@ -1718,6 +1728,7 @@ defmodule PrismWeb.ConsentSheetComponent do
         </span>
         <form
           :if={!account.choice.fixed}
+          id={account_form_id(@sheet, account.token)}
           phx-change="name_account"
           phx-submit="name_account"
           phx-target={@myself}

@@ -9,13 +9,13 @@ defmodule Compendium.Tincture.Rules do
   attributes, the entry page's Content Security Policy and the origins it
   admits, the source classes a frame's reads may carry, the templates a
   tincture starts from, the lockfile a build tincture ships, and the
-  grammar of its frame, canvas, streams and system actions. A
-  canvas (placement `canvas`) is held tighter: its declaration reaches
-  nothing of its own and reads only canvas-readable streams
-  (`check_canvas_streams/2`), which no other declaration names
-  (`check_streams/2`), its frame's sandbox is `allow-scripts` alone
-  (`canvas_sandbox_tokens/0`), and its one policy, for its host page and
-  its workers alike, is `canvas_page_csp/1`.
+  grammar of its frame, streams and system actions. A canvas (placement
+  `canvas`) is held tighter: it is its version's own page on the vanilla
+  or the react template, its declaration reaches nothing of its own and
+  reads only canvas-readable streams (`check_canvas_streams/2`), which no
+  other declaration names (`check_streams/2`), its frame's sandbox is
+  `allow-scripts` alone (`canvas_sandbox_tokens/0`), and its page's one
+  policy, which its workers inherit, is `canvas_page_csp/1`.
 
   The publish check reads this module. Every other reader goes through the
   `Compendium` facade or the data it derives, so no frame's sandbox token
@@ -97,13 +97,6 @@ defmodule Compendium.Tincture.Rules do
   @frame_capabilities ~w(pointer_lock fullscreen gamepad audio_autoplay)
   @placements ~w(float canvas)
 
-  # The toolkit majors a canvas may be drawn by.
-  @toolkit_majors [1]
-
-  # A canvas's module is a script of its version: a relative path ending
-  # `.js` or `.mjs`.
-  @module_extensions ~w(.js .mjs)
-
   # Every frame runs its scripts; nothing else is on unless granted.
   @sandbox_always ["allow-scripts"]
 
@@ -136,6 +129,11 @@ defmodule Compendium.Tincture.Rules do
     %{name: "react", build: "vite", entry: "dist/index.html"}
   ]
 
+  # The templates a canvas is written on, and each one's entry and build
+  # tool: a canvas's declaration names one of these pairs.
+  @canvas_template_names ~w(vanilla react)
+  @canvas_templates for t <- @templates, t.name in @canvas_template_names, do: t
+
   @lockfile "package-lock.json"
 
   # The system actions no tincture declares: every tool only an agent asks
@@ -149,6 +147,8 @@ defmodule Compendium.Tincture.Rules do
 
   @origin ~r/\Ahttps?:\/\/(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+)(:[0-9]{1,5})?\z/
   @nonce ~r/\A[A-Za-z0-9+\/_=-]{16,128}\z/
+  # An absolute path whose every segment is plain and none is `.` or `..`.
+  @absolute_path ~r/\A(?:\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)+\z/
 
   @typedoc "A refusal in `Prima.Manifest`'s block vocabulary: the tag and a sentence."
   @type refusal :: {:invalid_tincture, String.t()}
@@ -170,16 +170,16 @@ defmodule Compendium.Tincture.Rules do
         }
 
   @typedoc """
-  What a canvas's policy is derived for: the endpoint's origin, the
+  What a canvas page's policy is derived for: the endpoint's origin, the
   shell's origin, the version's asset credential, the open's frame id and
-  the page's nonce.
+  the path the SDK's script is served at.
   """
   @type canvas_csp_opts :: %{
           required(:endpoint) => String.t(),
           required(:shell) => String.t(),
           required(:asset_credential) => String.t(),
           required(:frame_id) => String.t(),
-          required(:nonce) => String.t()
+          required(:sdk_path) => String.t()
         }
 
   # The maps are checked here, once, so a change that would emit a
@@ -209,15 +209,11 @@ defmodule Compendium.Tincture.Rules do
 
   @doc """
   The placements a frame may declare: floating over the shell, or a
-  canvas, a page the toolkit draws from the module its `tincture.canvas`
-  block names (`validate_declaration/1`).
+  canvas, the person's page, its version's own entry page
+  (`validate_declaration/1`).
   """
   @spec placements() :: [String.t()]
   def placements, do: @placements
-
-  @doc "The toolkit majors a canvas's `tincture.canvas.toolkit` may name."
-  @spec toolkit_majors() :: [pos_integer()]
-  def toolkit_majors, do: @toolkit_majors
 
   @doc """
   A canvas frame's `sandbox` tokens: `allow-scripts` alone, never with
@@ -359,19 +355,29 @@ defmodule Compendium.Tincture.Rules do
   def connect_origins(_manifest), do: []
 
   @doc """
-  A canvas's `Content-Security-Policy` header value: the one policy of its
-  host page and of the workers the page starts from `blob:` URLs, which
-  inherit it. It names no `'self'`, no `'unsafe-inline'` and no
-  `'unsafe-eval'`, and only two host sources: the version's served prefix
-  under the asset credential (`E/_s/A/`, `Prima.TinctureUrl`), for its
-  scripts, workers and images, and the open's own data path
-  (`E/_f/v1/o/F/`, `Prima.CanvasWire.data_path/1`), its only connection.
-  Scripts and styles otherwise run only under the page's nonce, and the
-  policy carries the canvas sandbox (`canvas_sandbox_tokens/0`).
+  A canvas page's `Content-Security-Policy` header value, the one policy
+  of its page and of the workers the page starts, which inherit it. With
+  `F` the version's files under the asset credential (`E/_s/A/`,
+  `Prima.TinctureUrl`), `D` the open's data path (`E/_f/v1/o/<frame id>/`,
+  `Prima.TinctureWire.data_path/1`) and `S` the shell:
+
+      default-src 'none'; script-src F E<sdk path>; style-src F 'unsafe-inline';
+      worker-src blob: F; img-src F data: blob:; font-src F; media-src F;
+      connect-src D F; frame-src 'none'; object-src 'none'; base-uri F;
+      form-action 'none'; frame-ancestors S; sandbox allow-scripts
+
+  Scripts load only from the version's own files and the SDK's one path,
+  and no inline script runs. Styles may be inline, since CSS reaches the
+  network only through an `@import`, which `style-src` bounds, and images
+  and fonts, which `img-src` and `font-src` bound, and each of the three
+  names `F` alone of the network. The page connects to its open's data
+  path and its own files and nothing else, a `<base>` it writes names
+  only its own files, and the policy carries the canvas sandbox
+  (`canvas_sandbox_tokens/0`).
 
   `endpoint` and `shell` are origins (`scheme://host[:port]`),
   `asset_credential` an asset credential, `frame_id` a frame id and
-  `nonce` the page's own. A value outside its grammar raises, and the
+  `sdk_path` an absolute path. A value outside its grammar raises, and the
   sentence names no value: the credential is one.
   """
   @spec canvas_page_csp(canvas_csp_opts()) :: String.t()
@@ -380,14 +386,11 @@ defmodule Compendium.Tincture.Rules do
         shell: shell,
         asset_credential: credential,
         frame_id: frame_id,
-        nonce: nonce
+        sdk_path: sdk_path
       }) do
     for origin <- [endpoint, shell],
         not (is_binary(origin) and Regex.match?(@origin, origin)),
         do: raise(ArgumentError, "a CSP origin is scheme://host[:port]")
-
-    unless is_binary(nonce) and Regex.match?(@nonce, nonce),
-      do: raise(ArgumentError, "a CSP nonce is 16 to 128 base64 characters")
 
     unless Prima.TinctureUrl.credential?(credential),
       do: raise(ArgumentError, "an asset credential is opaque, URL-safe and bounded")
@@ -395,21 +398,24 @@ defmodule Compendium.Tincture.Rules do
     unless Prima.TinctureWire.frame_id?(frame_id),
       do: raise(ArgumentError, "a frame id is 8 to 64 URL-safe characters")
 
+    unless is_binary(sdk_path) and Regex.match?(@absolute_path, sdk_path),
+      do: raise(ArgumentError, "the SDK's path is an absolute path of plain segments")
+
     files = "#{endpoint}/#{Prima.TinctureUrl.asset_prefix()}/#{credential}/"
-    data = endpoint <> Prima.CanvasWire.data_path(frame_id)
+    data = endpoint <> Prima.TinctureWire.data_path(frame_id)
 
     [
       "default-src 'none'",
-      "script-src 'nonce-#{nonce}' #{files}",
-      "style-src 'nonce-#{nonce}'",
+      "script-src #{files} #{endpoint}#{sdk_path}",
+      "style-src #{files} 'unsafe-inline'",
       "worker-src blob: #{files}",
       "img-src #{files} data: blob:",
-      "connect-src #{data}",
-      "font-src 'none'",
-      "media-src 'none'",
+      "font-src #{files}",
+      "media-src #{files}",
+      "connect-src #{data} #{files}",
       "frame-src 'none'",
       "object-src 'none'",
-      "base-uri 'none'",
+      "base-uri #{files}",
       "form-action 'none'",
       "frame-ancestors #{shell}",
       Enum.join(["sandbox" | @canvas_sandbox], " ")
@@ -422,12 +428,28 @@ defmodule Compendium.Tincture.Rules do
       raise(
         ArgumentError,
         "a canvas policy is derived from an endpoint, a shell, an asset credential, " <>
-          "a frame id and a nonce"
+          "a frame id and the SDK's path"
       )
+
+  @doc """
+  A canvas page's `Connection-Allowlist` header value, `(response-origin)`:
+  the page may open connections only to the origin that served it. Only
+  Chromium reads the header, where it stops a peer connection's traffic
+  from the page; other browsers ignore it, so it closes nothing there.
+  """
+  @spec canvas_connection_allowlist() :: String.t()
+  def canvas_connection_allowlist, do: "(response-origin)"
 
   @doc "The templates a tincture starts from: vanilla, Vite and React."
   @spec templates() :: [template()]
   def templates, do: @templates
+
+  @doc """
+  The templates a canvas is written on, of `templates/0`: vanilla and
+  React. A canvas's declaration names one's entry and build tool.
+  """
+  @spec canvas_templates() :: [template()]
+  def canvas_templates, do: @canvas_templates
 
   @doc "The lockfile a build tincture ships beside its `package.json`."
   @spec lockfile() :: String.t()
@@ -443,8 +465,8 @@ defmodule Compendium.Tincture.Rules do
   def lockfile_required?(_manifest), do: false
 
   @doc """
-  The manifest's frame, canvas, streams and system actions, held to their
-  shapes (`Prima.Manifest.Tincture`) and to these rules: every capability
+  The manifest's frame, streams and system actions, held to their shapes
+  (`Prima.Manifest.Tincture`) and to these rules: every capability
   is one of `frame_capabilities/0` and a placement is one of
   `placements/0`. No tincture, whatever its placement, declares
   `feed.bind`, `feed.remove` or `feed.press` among its system actions:
@@ -454,14 +476,14 @@ defmodule Compendium.Tincture.Rules do
   Each tool only an agent asks for (`Prima.Manifest.Caps.agent_only_tools/0`)
   is refused here by its exact name.
 
-  A canvas (placement `canvas`) declares `tincture.canvas`, which no other
-  placement does: its `module`, a relative path with no `..` and no
-  scheme ending `.js` or `.mjs`, which is its entry, so it declares no
-  `tincture.entry`; and its `toolkit`, one of `toolkit_majors/0`. It
-  reaches nothing of its own and runs only while shown: no
-  `tincture.connect` origin, no `caps.egress`, no component dependency,
-  static or dynamic, no `tincture.build`, no frame capability, no
-  background and no system action. Each refusal says which.
+  A canvas (placement `canvas`) is its version's own page, written on the
+  vanilla or the react template (`templates/0`): `tincture.entry`
+  `index.html` with no `tincture.build`, or `dist/index.html` with
+  `tincture.build.tool` `vite`, whose version ships its lockfile
+  (`lockfile_required?/1`). It reaches nothing of its own, and hidden it
+  reads and acts on nothing: no `tincture.connect` origin, no
+  `caps.egress`, no component dependency, static or dynamic, no frame
+  capability, no background and no system action. Each refusal says which.
 
   A manifest that declares none of the blocks answers the empty
   declaration. Which streams exist, and that only a canvas names one that
@@ -694,47 +716,35 @@ defmodule Compendium.Tincture.Rules do
   end
 
   @doc """
-  Whether a version's files are a canvas's, for a declaration whose
-  placement is `canvas`: they hold the module its `tincture.canvas` block
-  names, and no `.html` or `.htm` file anywhere, in any case, since the
-  host page is CYFR's and never the version's. `paths` are the version's
-  relative file paths. Any other declaration holds its files to nothing
-  here. Publish runs it once the declaration and its streams are held.
+  Whether a canvas version's files hold its page: for a manifest whose
+  placement is `canvas`, its `tincture.entry` is among `paths`, the
+  version's relative file paths, as publish holds every tincture's entry
+  (`Compendium.TinctureValidator`), so a react canvas's `dist/index.html`
+  is there once its build is and not before. Of a canvas's `.html` files
+  only the entry is ever a page: its page route serves the entry
+  (`Emissary.Web.CanvasController`), and the version's served files
+  serve no page of a canvas (`Emissary.Web.TinctureAssets`). Any other
+  manifest holds its files to nothing here. Publish runs it once the
+  declaration and its streams are held.
   """
-  @spec check_canvas_files(Tincture.t(), [String.t()]) :: :ok | {:error, refusal()}
+  @spec check_canvas_files(term(), [String.t()]) :: :ok | {:error, refusal()}
   def check_canvas_files(
-        %Tincture{frame: %{placement: "canvas"}, canvas: %Tincture.Canvas{module: module}},
+        %{"tincture" => %{"frame" => %{"placement" => "canvas"}} = tincture},
         paths
       )
       when is_list(paths) do
-    cond do
-      page = Enum.find(Enum.sort(paths), &page?/1) ->
-        refuse("#{page} is a page, and a canvas holds none: its host page is CYFR's")
+    case Map.get(tincture, "entry") do
+      entry when is_binary(entry) ->
+        if entry in paths,
+          do: :ok,
+          else: canvas_refuse("its page #{entry} is not among the version's files")
 
-      module not in paths ->
-        refuse("the canvas's module #{module} is not among the version's files")
-
-      true ->
-        :ok
+      _none ->
+        canvas_refuse("a canvas names its page as tincture.entry")
     end
   end
 
-  def check_canvas_files(%Tincture{}, paths) when is_list(paths), do: :ok
-
-  @doc """
-  The module a canvas's manifest names in its `tincture.canvas` block,
-  which is the canvas's entry: a non-empty string, held to the entry rule
-  by its reader. A manifest that names none has no entry, never the
-  default page.
-  """
-  @spec canvas_module(term()) :: {:ok, String.t()} | {:error, refusal()}
-  def canvas_module(%{"tincture" => %{"canvas" => %{"module" => module}}})
-      when is_binary(module) and module != "",
-      do: {:ok, module}
-
-  def canvas_module(_manifest), do: refuse("a canvas's entry is its module, and it names none")
-
-  defp page?(path), do: String.downcase(Path.extname(path)) in [".html", ".htm"]
+  def check_canvas_files(_manifest, paths) when is_list(paths), do: :ok
 
   defp known(capabilities) do
     case Enum.reject(capabilities, &(&1 in @frame_capabilities)) do
@@ -754,28 +764,18 @@ defmodule Compendium.Tincture.Rules do
   defp placement(_placement),
     do: refuse("tincture.frame.placement is one of #{Enum.join(@placements, ", ")}")
 
-  # A canvas is a page the toolkit draws from its module. It reaches
-  # nothing of its own and runs only while it is shown; the block that
-  # names its module is a canvas's alone.
+  # A canvas is its version's own page, written on a canvas template. It
+  # reaches nothing of its own, and hidden it reads and acts on nothing.
   defp canvas(%Tincture{frame: %{placement: "canvas"}} = declaration, manifest) do
     tincture = section(manifest, "tincture")
     dependencies = section(manifest, "dependencies")
 
     cond do
-      is_nil(declaration.canvas) ->
-        canvas_refuse("a canvas declares tincture.canvas, its module and its toolkit")
-
-      not is_nil(Map.get(tincture, "entry")) ->
-        canvas_refuse("a canvas's entry is its module, so it declares no tincture.entry")
-
-      not canvas_module?(declaration.canvas.module) ->
+      not canvas_template?(Map.get(tincture, "entry"), Map.get(tincture, "build")) ->
         canvas_refuse(
-          "tincture.canvas.module is a relative path with no .. and no scheme, " <>
-            "ending #{Enum.join(@module_extensions, " or ")}"
+          "a canvas declares " <>
+            Enum.map_join(@canvas_templates, ", or ", &canvas_template_sentence/1)
         )
-
-      declaration.canvas.toolkit not in @toolkit_majors ->
-        canvas_refuse("tincture.canvas.toolkit is one of #{Enum.join(@toolkit_majors, ", ")}")
 
       present?(Map.get(tincture, "connect")) ->
         canvas_refuse("a canvas declares no tincture.connect origin")
@@ -787,14 +787,11 @@ defmodule Compendium.Tincture.Rules do
           not is_nil(Map.get(dependencies, "dynamic")) ->
         canvas_refuse("a canvas declares no component dependency, static or dynamic")
 
-      not is_nil(Map.get(tincture, "build")) ->
-        canvas_refuse("a canvas declares no tincture.build")
-
       declaration.frame.capabilities != [] ->
         canvas_refuse("a canvas declares no frame capability")
 
       declaration.frame.background ->
-        canvas_refuse("a canvas does not run in the background; it runs only while shown")
+        canvas_refuse("a canvas declares no background: hidden, it reads and acts on nothing")
 
       declaration.actions != [] ->
         canvas_refuse("a canvas declares no system action")
@@ -804,21 +801,21 @@ defmodule Compendium.Tincture.Rules do
     end
   end
 
-  defp canvas(%Tincture{canvas: %Tincture.Canvas{}}, _manifest),
-    do: refuse("tincture.canvas is declared only by a canvas (tincture.frame.placement canvas)")
-
   defp canvas(%Tincture{}, _manifest), do: :ok
 
-  # A path inside the version, as the served prefix serves it: relative,
-  # every segment plain, no `..`, no scheme, a script's extension.
-  defp canvas_module?(module) when is_binary(module) do
-    not String.contains?(module, ":") and
-      Prima.PathSafety.validate_relative_path(module) == :ok and
-      Enum.all?(String.split(module, "/"), &(&1 != "")) and
-      Path.extname(module) in @module_extensions
+  defp canvas_template?(entry, build) do
+    Enum.any?(@canvas_templates, fn
+      %{entry: ^entry, build: nil} -> is_nil(build)
+      %{entry: ^entry, build: tool} -> match?(%{"tool" => ^tool}, build)
+      _another -> false
+    end)
   end
 
-  defp canvas_module?(_module), do: false
+  defp canvas_template_sentence(%{entry: entry, build: nil}),
+    do: "tincture.entry #{entry} with no tincture.build"
+
+  defp canvas_template_sentence(%{entry: entry, build: tool}),
+    do: "tincture.entry #{entry} with tincture.build.tool #{tool}"
 
   defp section(manifest, key) when is_map(manifest) do
     case Map.get(manifest, key) do

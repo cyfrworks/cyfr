@@ -117,11 +117,11 @@ defmodule Sanctum.Consent.CommitTest do
   defp tincture!(ctx, name, declaration),
     do: tincture_row!(ctx, name, Map.put(declaration, "entry", "index.html"))
 
-  # A canvas's row: its entry is its module, so it names none.
+  # A canvas's row: a vanilla canvas, its page its entry.
   defp canvas!(ctx, name) do
     tincture_row!(ctx, name, %{
       "frame" => %{"placement" => "canvas"},
-      "canvas" => %{"module" => "canvas.js", "toolkit" => 1},
+      "entry" => "index.html",
       "streams" => [%{"name" => "mcp_servers.changes"}]
     })
   end
@@ -1062,15 +1062,15 @@ defmodule Sanctum.Consent.CommitTest do
 
       # Written past the publish check, as a rules change after install
       # leaves a version: a placement the rules no longer name, with a page
-      # or a script for its entry, and a canvas of a toolkit major they do
-      # not name. Each is held as a canvas, whatever its raw placement.
+      # or a script for its entry, and a canvas off its templates. Each is
+      # held as a canvas, whatever its raw placement.
       plants = [
         {"desk-dash", %{"frame" => %{"placement" => "desktop"}, "entry" => "index.html"}},
         {"desk-js", %{"frame" => %{"placement" => "desktop"}, "entry" => "main.js"}},
-        {"old-canvas",
+        {"off-canvas",
          %{
            "frame" => %{"placement" => "canvas"},
-           "canvas" => %{"module" => "canvas.js", "toolkit" => 2},
+           "entry" => "main.js",
            "streams" => [%{"name" => "mcp_servers.changes"}]
          }}
       ]

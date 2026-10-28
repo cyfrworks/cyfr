@@ -394,7 +394,7 @@ defmodule PrismWeb.ExecutionsLive do
       </.page_header>
 
       <div class="flex items-center gap-3 flex-wrap">
-        <form phx-change="filter" class="flex gap-3">
+        <form id="executions-filter" phx-change="filter" class="flex gap-3">
           <select
             name="status"
             class="bg-gray-800 text-gray-300 text-sm rounded-md border-gray-700 px-3 py-1.5"
