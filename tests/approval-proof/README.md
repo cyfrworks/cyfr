@@ -7,7 +7,9 @@ provider, commits each binding with its own lifetime, and that the home's
 decisions on those bindings hold: a `once` binding admits one root, an
 `until` binding stops at its instant, a GET-only grant holds GET alone, a
 grant opened for a named account binds it, and a revoked entry's next use
-is refused. The home is one `cyfr` release on a SQLite cell, `home.test`,
+is refused; and that an entry made with no label, under a field name of the
+person's own, is offered to a shipped catalyst's need by its destination
+and bound under the map from the need's field to hers. The home is one `cyfr` release on a SQLite cell, `home.test`,
 behind the harness's HTTPS front (`browser_home`). One person
 (`operator@example.com`) is signed in by the release fixture's door
 (`tests/release-boot/fixture.exs` `person`). `proof.mjs` drives her in
@@ -85,13 +87,16 @@ question carries digests of the keys she typed.
 credential prompt's value field that "Connect your <provider> account"
 opens (`#system-layer-secret`, a password field), for OpenAI Work and
 Anthropic; and the Vault page create form's fields (`textarea[name="fields"]`,
-`OPENAI_API_KEY=<key>` in plain text), for OpenAI Home. It holds a flag from
+`FIELD=<key>` in plain text), for OpenAI Home and My xAI key. It holds a flag from
 the moment it fills a key in until it has read, on the page, that no field's
 value and none of the page's text holds any key it typed; a step that made an entry
 holds only once each key is read gone. A run that fails while the flag is
 set writes no screenshot, and its record's `screenshot` names the flag and
 says the screenshot was withheld, with that marker. A run that fails
-at any other moment keeps its screenshot.
+at any other moment keeps its screenshot. The `destination_match` step also
+keeps the grant sheet it read as `approval-proof-destination-match.png`,
+taken only while the flag is clear and the page is read to hold no key, and
+its record names the file, or none when it was not taken.
 
 ## Steps
 
@@ -130,6 +135,14 @@ authority:
   are the installed request the derivations read, never a row the
   comparison checks.
 
+The Grok catalyst's own profile is not of the app, so it is outside the
+comparison too. The `destination_match` step reads it from the same `state`
+read, which answers beside the state each profile of a source the question
+names (`heads`) with its head: the head's revision and how it was granted,
+its binding rows' binding fields, and the vault its source node's ingress
+edge carries as the owner's parser reads the head's blob. The step compares
+that whole with what it expects before and after her grant.
+
 The model takes only these values from the home, each the decision or
 identity it names, never a read of what it is compared with:
 
@@ -138,8 +151,8 @@ identity it names, never a read of what it is compared with:
 - the profile and consent the loader roots the app on after each commit
   (`fixture.exs` `admit`);
 - what each entry's request implies the owner stores (`requested`): the
-  canonical text of the destination she sent and the binding digest over the
-  entry's binding fields;
+  canonical text of the destination she sent, its map as a binding carries
+  it, and the binding digest over the entry's binding fields;
 - what a commit of her decisions writes on the consent row (`derived`): the
   policy blob, its digest, the activation and the shape and commit digests,
   and the source node's edges and activation digest, built by the owner's
@@ -215,8 +228,10 @@ last.
   built by the owner's own public builders as `Sanctum.Consent.Commit`
   builds them, never read back from a consent:
   `Sanctum.Consent.BlobBuilder.build/5` over the installed closure, each
-  binding through `vault_resource/1` from the entry's id, her request for it
-  and the need's own projection and attach rule, the provided edge through
+  binding through `vault_resource/1` from the entry's id, her request for it,
+  the automatic map of the need over the field she typed
+  (`Sanctum.Consent.Plan.field_map/2`, since her decisions name no map),
+  the need's scopes and its attach rule, the provided edge through
   `provided/3`, her narrowing, then `encode/1`; `Prima.JCS` for the blob's
   digest and the activation's text; `Sanctum.Consent.ShapeDerivation` and
   `Sanctum.Consent.ShapeDigest`; and `Sanctum.Consent.CommitDigest` over her
@@ -255,6 +270,7 @@ every commit.
 | `lifetime_decisions` | the use path admits the app's own calls, admits the once binding for root A and again for root A, refuses it for root B (`grant_expired`), and admits the five-minute binding; the once row is then consumed by root A and each entry used; after a real wait, bounded at 330 s, until the database's time is past the until, the five-minute binding is refused (`grant_expired`) and the standing one still admitted; the loaded OpenAI edge grants GET alone; nothing is sent |
 | `named_prompt` | on a thread of hers, opened in the chat, the fixture announces the setup a launch naming the account "Personal" ends on; the grant prompt opens on the app's own calls with a "Personal" row of that fixed name, both OpenAI entries offered and none pressed; the binding whose until passed opens with no lifetime pressed, the used once binding stays once with "Grant once again" not pressed, and the OpenAI catalyst's network row opens on the head's narrowing, GET given and POST not, "GET only" pressed; she binds OpenAI Home as "Personal" and grants Anthropic until revoked, and narrows nothing herself; the pane then says "Granted. The turn that asked has ended — send your message again to run it."; revision 4 holds the default, the account beside it, the once binding still consumed by root A, and Anthropic until revoked, its blob still GET only on the OpenAI edge; "Personal" now resolves to OpenAI Home; no turn and no execution exists |
 | `revocation` | she revokes OpenAI Work on the Vault page, which says one profile loses access at its next run; the loader still admits the root, whole; the next use of the app's own calls is refused (`entry_unavailable`, revoked) and the "Personal" account beside it is still admitted; the whole state holds OpenAI Work revoked |
+| `destination_match` | on the Vault page she makes "My xAI key", kind "API key", no label, the one field `API key=<key>`, destination `api.x.ai`, confirmed with her passkey; the whole state adds it, with no default; the seeded Grok catalyst's one profile is the owner's default, its head the bootstrap's revision 1 (`granted_via` `bootstrap`) binding nothing; its grant, opened from its Components row, is titled "Update this grant (consent rev 1)" on the grant sheet, offers My xAI key alone, pressed, reads "You already have an entry for api.x.ai: My xAI key" and "GROK_API_KEY comes from API key", asks no map question, and previews one credential row binding it until revoked with "Fields: GROK_API_KEY from API key", removing nothing; she grants it; the profile's head is then revision 2, granted interactively, its one binding row the entry, standing, at the digest her request implies, and its ingress vault the entry over that destination, by Grok's attach rule, with the projection `{"fields": {"GROK_API_KEY": "API key"}, "scopes": []}`; the whole state is the model |
 
 ## Shown elsewhere
 

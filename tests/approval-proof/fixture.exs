@@ -38,6 +38,13 @@
 #       database's time. It picks no row out of a set and leaves no column
 #       out.
 #
+#       Beside it, for each source ASK's `heads` names, every profile of
+#       that source in the athanor with its head: the head's revision and
+#       how it was granted, each of its binding rows' binding fields, and
+#       the vault its source node's ingress edge carries as the owner's
+#       parser reads the head's blob (`Prima.Authority.Blob.parse/1`,
+#       `edge_to_map/1`), none where the edge binds nothing.
+#
 #       A sealed payload is unsealed here as its owner unseals it
 #       (`Sanctum.VaultReader`'s private `unseal_material/2`: the same AAD,
 #       `Sanctum.Cipher.decrypt/2` and `Sanctum.Vault.Payload.decode/1`),
@@ -49,8 +56,9 @@
 #   requested SESSION_TOKEN ASK
 #       For each entry ASK's `entries` describes (provider, field and the
 #       destination the person sent), what `vault/create` stores for it: the
-#       destination's canonical text (`Prima.Destination.canonical/1`) and
-#       the binding digest over the entry's binding fields
+#       destination's canonical text (`Prima.Destination.canonical/1`), its
+#       map as a binding carries it (`Prima.Destination.to_map/1`), and the
+#       binding digest over the entry's binding fields
 #       (`Sanctum.VaultReader.binding_digest/1`). What the request implies,
 #       for the proof to compare with what is stored.
 #
@@ -66,7 +74,10 @@
 #       the source node's edges as the owner's parser reads that blob
 #       (`Prima.Authority.Blob.parse/1`, `edge_to_map/1`). An entry is named
 #       by its id and the request the person made for it (provider, field,
-#       destination), never by its stored row; no consent row is read.
+#       destination), never by its stored row; no consent row is read. A
+#       decision names no field map, so each binding projects the automatic
+#       map of its need over the one field she typed
+#       (`Sanctum.Consent.Plan.field_map/2`), as the commit takes it.
 #
 #   admit SESSION_TOKEN APP
 #       The real loader's answer for a run of APP under the person's context
@@ -204,7 +215,8 @@ fn args ->
       answer.(%{name: name, version: version, component: Map.get(component, :id)})
 
     ["state", token, app, ask] ->
-      typed = Map.get(asked.(ask), "payloads", %{})
+      question = asked.(ask)
+      typed = Map.get(question, "payloads", %{})
       ctx = person_ctx.(token)
       athanor_id = ctx.athanor_id
 
@@ -269,6 +281,62 @@ fn args ->
       executions =
         rows_of.(Ecto.Query.from(e in Arca.Schemas.Execution, where: e.athanor_id == ^athanor_id))
 
+      # Each named source's profiles with their heads: the binding rows'
+      # binding fields and the ingress edge's vault, never a consent's or an
+      # athanor's id.
+      binding_fields =
+        ~w(binding_key scope vault_entry_id instance_entry_id via_label binding_digest
+           lifetime_kind expires_at consumed_by_root)a
+
+      head_of = fn profile ->
+        head_id = profile.head_consent_id
+
+        [consent] =
+          rows_of.(
+            Ecto.Query.from(c in Arca.Schemas.Consent,
+              where: c.athanor_id == ^athanor_id and c.id == ^head_id
+            )
+          )
+
+        bound =
+          rows_of.(
+            Ecto.Query.from(r in Arca.Schemas.ConsentVaultRef,
+              where: r.athanor_id == ^athanor_id and r.consent_id == ^head_id
+            )
+          )
+
+        {:ok, blob} = Prima.Authority.Blob.parse(consent.resolved_policy)
+        {:ok, node} = Prima.Authority.Blob.node(blob, profile.source_ref)
+
+        vault =
+          case Map.fetch(node.edges, Prima.Authority.Blob.ingress_key()) do
+            {:ok, edge} -> Map.get(Prima.Authority.Blob.edge_to_map(edge), "vault")
+            :error -> nil
+          end
+
+        %{
+          label: profile.label,
+          kind: profile.kind,
+          status: profile.status,
+          revision: consent.revision,
+          granted_via: consent.granted_via,
+          refs: Enum.map(bound, &Map.take(&1, binding_fields)),
+          vault: vault
+        }
+      end
+
+      heads =
+        Map.new(Map.get(question, "heads", []), fn source ->
+          sourced =
+            rows_of.(
+              Ecto.Query.from(p in Arca.Schemas.Profile,
+                where: p.athanor_id == ^athanor_id and p.source_ref == ^source
+              )
+            )
+
+          {source, Enum.map(sourced, head_of)}
+        end)
+
       # The database's time once every row is read: the end of the window a
       # stored time is held to.
       now = Arca.ServerMetaStorage.now!()
@@ -281,13 +349,14 @@ fn args ->
         consents: consents,
         refs: refs,
         turns: turns,
-        executions: executions
+        executions: executions,
+        heads: heads
       })
 
     ["requested", _token, ask] ->
       implied =
         for entry <- Map.fetch!(asked.(ask), "entries") do
-          Map.take(requested.(entry), [:destination, :binding_digest])
+          Map.take(requested.(entry), [:destination, :map, :binding_digest])
         end
 
       answer.(%{entries: implied})
@@ -331,12 +400,13 @@ fn args ->
       end
 
       # One decided binding of an entry the person chose, as the commit
-      # resolves it: the need's projection and attach rule, the entry's
-      # scope and the destination and digest its request implies.
+      # resolves it: the automatic map of the need over the field she
+      # typed, the need's scopes and attach rule, the entry's scope and the
+      # destination and digest its request implies.
       bound = fn item, node ->
         need = need_of.(node, Map.fetch!(item, "need"))
         entry = Map.fetch!(item, "entry")
-        implied = requested.(Map.put(entry, "field", hd(need.fields)))
+        implied = requested.(entry)
 
         %{
           need: need.name,
@@ -346,7 +416,7 @@ fn args ->
           scope: "athanor",
           destination: implied.map,
           attach: Prima.Manifest.Needs.attach_to_map(need.attach),
-          fields: need.fields,
+          fields: Sanctum.Consent.Plan.field_map(need, [Map.fetch!(entry, "field")]),
           scopes: need.scopes,
           lifetime: lifetime.(Map.fetch!(item, "lifetime")),
           renew: Map.get(item, "renew", false)

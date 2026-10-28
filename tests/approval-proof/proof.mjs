@@ -32,6 +32,11 @@
 //                       revision holds it
 //   revocation          the entry the app's own calls use is revoked on the
 //                       Vault page, and its next use is refused
+//   destination_match   an entry made on the Vault page with no label, for
+//                       api.x.ai, under a field name of her own, is offered
+//                       to the seeded Grok catalyst's need by its
+//                       destination, and its grant binds it under the map
+//                       from Grok's field to hers
 //
 // The home's part of a step — installing the tincture, a read of what was
 // committed, an admission, a use decision, the announcement — is run.sh's,
@@ -66,6 +71,7 @@ mkdirSync(outDir, { recursive: true });
 
 const STEPS = [
   "provided_preview", "account_choices", "commit_bindings", "lifetime_decisions", "named_prompt", "revocation",
+  "destination_match",
 ];
 const { homes } = readHomes(homesFile);
 const base = homes[0].origin;
@@ -139,7 +145,12 @@ const ANTHROPIC = {
   key: `sk-ant-${hex()}`,
 };
 const ENTRIES = [WORK, HOME, ANTHROPIC];
-const KEYS = ENTRIES.map((e) => e.key);
+// The entry made for the seeded Grok catalyst: no label, and one field
+// whose name is hers, not the need's.
+const XAI = { name: "My xAI key", provider: "", field: "API key", host: "api.x.ai", key: `xai-${hex()}` };
+// Every entry she types a key for.
+const TYPED_ENTRIES = [...ENTRIES, XAI];
+const KEYS = TYPED_ENTRIES.map((e) => e.key);
 // The account a launch names that the app's own calls do not bind yet.
 const ACCOUNT = "Personal";
 
@@ -458,7 +469,7 @@ function row(step, held, what, detail) {
 const answers = [];
 const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 240_000, answers, ...options });
 
-const MATERIAL = () => [...KEYS, ...KEYS.map(sha256), ...ENTRIES.map(typedDigest)];
+const MATERIAL = () => [...KEYS, ...KEYS.map(sha256), ...TYPED_ENTRIES.map(typedDigest)];
 const holdsKey = (text) => MATERIAL().some((secret) => String(text).includes(secret));
 // Every textual writer uses the same known values. Comparisons and material
 // detection keep the original values in memory; redaction only changes output.
@@ -505,10 +516,11 @@ async function registerPasskey(page) {
   return { active, held };
 }
 
-// The grant prompt for the tincture, opened from its Components row.
-async function openGrant(page) {
+// The grant prompt for the component `ref`, the tincture unless named,
+// opened from its Components row.
+async function openGrant(page, ref = APP) {
   await open(page, pagePath("/components"));
-  await page.locator(`[phx-click="toggle_expand"][phx-value-ref="${APP}"]`).first().click({ timeout: 30_000 });
+  await page.locator(`[phx-click="toggle_expand"][phx-value-ref="${ref}"]`).first().click({ timeout: 30_000 });
   await page.locator('[phx-click="open_consent"]').click({ timeout: 30_000 });
   await granting(page);
 }
@@ -519,11 +531,12 @@ async function granting(page) {
   await page.waitForSelector(`${layer} [data-test="prompt-confirm"]:not([disabled])`, { timeout: 60_000 });
 }
 
-// What the open prompt shows, every part the proof reads: its kind and
-// title; each need of the app and of each dependency, with its provided
+// What the open prompt shows, every part the proof reads: its kind, its
+// title and the grant sheet's own; each need of the app and of each dependency, with its provided
 // configuration, the entries offered and the one pressed, the controls it
-// offers, and its accounts; each previewed credential row with its
-// binding, its sentence and its lifetime; each network row's methods and
+// offers, the entry it says it already has and the field map it shows or
+// asks, and its accounts; each previewed credential row with its binding,
+// its sentence, its lifetime and its fields; each network row's methods and
 // the "GET only" control; what the grant removes and admits; and any
 // refusal shown.
 function sheet(page) {
@@ -539,6 +552,9 @@ function sheet(page) {
     const need = (el) => ({
       need: el.getAttribute("data-need"),
       provided: text(el.querySelector(':scope > [data-test="grant-provided"]')),
+      held: text(el.querySelector(':scope > [data-test="grant-held"]')),
+      map: [...el.querySelectorAll(':scope > [data-test="grant-map"] > [data-test="grant-map-pair"]')].map(text),
+      map_asked: el.querySelectorAll(':scope > [data-test="grant-map"] > [data-test="grant-map-question"]').length,
       picks: [...el.querySelectorAll(':scope > .consent-sheet__choices [data-test="grant-pick"]')].map(pick),
       change: !!el.querySelector(':scope > .consent-sheet__choices [data-test="grant-change"]'),
       connect: !!el.querySelector(':scope > [data-test="grant-connect"]'),
@@ -561,12 +577,14 @@ function sheet(page) {
       const lines = [...r.children].map(text);
       const binding = (lines.find((l) => l && l.startsWith("Binding: ")) || "").slice("Binding: ".length);
       const lifetime = (lines.find((l) => l && l.startsWith("Lifetime: ")) || "").slice("Lifetime: ".length);
+      const fields = (lines.find((l) => l && l.startsWith("Fields: ")) || "").slice("Fields: ".length);
       const controls = r.querySelector('[data-test="grant-lifetime"]');
       return {
         node: r.getAttribute("data-node"),
         binding,
         sentence: text(r.querySelector(".consent-sheet__sentence")),
         lifetime,
+        fields,
         lifetimes: controls ? lifetimes(controls) : [],
         renew: r.querySelector('[data-test="grant-renew"]')
           ? pressed(r.querySelector('[data-test="grant-renew"]')) : null,
@@ -594,6 +612,7 @@ function sheet(page) {
       open: true,
       kind: kind && kind.getAttribute("data-kind"),
       title: text(root.querySelector("h2")),
+      sheet_title: text(root.querySelector(".consent-sheet__header h3")),
       own: needs ? [...needs.querySelectorAll(':scope > [data-test="grant-need"]')].map(need) : [],
       deps: needs ? [...needs.querySelectorAll(":scope > div[data-dep]")].map((d) => ({
         dep: d.getAttribute("data-dep"), from: d.getAttribute("data-from"),
@@ -637,7 +656,7 @@ const STANDING = "until revoked";
 const egressOf = (shown, node) => (shown.egress || []).find((e) => e.node === node);
 // The entries shown for a need: each one's name and whether it is pressed.
 const shownPicks = (block) => (block ? block.picks.map((p) => ({ name: nameOf(p.text), pressed: p.pressed })) : null);
-const nameOf = (label) => ENTRIES.map((e) => e.name).find((n) => String(label).startsWith(n)) || label;
+const nameOf = (label) => TYPED_ENTRIES.map((e) => e.name).find((n) => String(label).startsWith(n)) || label;
 
 // The need block's selector in the open prompt: the app's own need, or a
 // dependency's one need.
@@ -655,9 +674,10 @@ const credentialRow = (page, key) =>
 // proof types a key in two places alone: the credential prompt's value
 // field (`#system-layer-secret`, which "Connect your <provider> account"
 // opens), for OpenAI Work and Anthropic, and the Vault page create form's
-// fields (`textarea[name="fields"]`, `FIELD=value`), for OpenAI Home. It is
-// set before each key is filled in, and cleared only once the page is read
-// to hold the key nowhere: in no field's value and in none of its text.
+// fields (`textarea[name="fields"]`, `FIELD=value`), for OpenAI Home and
+// My xAI key. It is set before each key is filled in, and cleared only once
+// the page is read to hold the key nowhere: in no field's value and in none
+// of its text.
 let secretOnPage = false;
 
 // Whether the page holds any typed key anywhere it could show it: a field's value or
@@ -712,9 +732,10 @@ async function vaultIds(page) {
 }
 
 // An entry made on the Vault page's form: its name, the kind "API key",
-// its provider as the label, its one field as FIELD=value and its host,
-// the save confirmed with the passkey. The labels the form suggests, the
-// installed components' providers, are recorded beside it.
+// its provider as the label (left empty where it has none), its one field
+// as FIELD=value and its host, the save confirmed with the passkey. The
+// labels the form suggests, the installed components' providers, are
+// recorded beside it.
 async function createOnVault(page, spec) {
   await open(page, pagePath("/vault"));
   await page.locator('button[phx-click="show_add"][phx-value-mode="fields"]').click({ timeout: 30_000 });
@@ -787,15 +808,19 @@ async function main() {
     let implied = {};
     let profileId;
 
-    const stateHolds = async () => {
-      const payloads = Object.fromEntries(ENTRIES.filter((e) => ids[e.name]).map((e) => [ids[e.name], typedDigest(e)]));
-      const state = await ask({ op: "state", payloads });
+    // The whole state against the model; `heads` names other sources whose
+    // heads the same read answers beside it, outside the comparison.
+    const stateHolds = async (heads = []) => {
+      const payloads = Object.fromEntries(TYPED_ENTRIES.filter((e) => ids[e.name])
+        .map((e) => [ids[e.name], typedDigest(e)]));
+      const state = await ask({ op: "state", payloads, heads });
       const read = { start: run.start, now: state && state.now };
       const problems = [];
       const stored = storedState(state, read, problems);
       return {
         held: problems.length === 0 && same(stored, model, "state"),
         compared: { read, fields: problems, ...compared(stored, model, "state") },
+        heads: (state && state.heads) || {},
       };
     };
 
@@ -855,7 +880,9 @@ async function main() {
     });
     // An entry as the decisions name it: its id, and the request she made
     // for it.
-    const chosen = (spec) => ({ id: ids[spec.name], provider: spec.provider, destination: sent[spec.name] });
+    const chosen = (spec) => ({
+      id: ids[spec.name], provider: spec.provider, field: spec.field, destination: sent[spec.name],
+    });
     // What a commit of `decisions` writes, derived by the owner's builders.
     const derive = (decisions) => ask({
       op: "derived",
@@ -1275,13 +1302,119 @@ async function main() {
     record.revocation = {
       revoked, admitted: admittedRevoked, uses: revokedUses, state: revokedState.compared,
     };
-    row("revocation",
+    if (!row("revocation",
       revoked && same(admittedRevoked, admission(admitted4, made4)) &&
         used(revokedUses, revokedAsked, [{ admitted: false, refusal: "entry_unavailable", status: "revoked" }, yes]) &&
         revokedState.held,
       "OpenAI Work revoked on the Vault page: the root is still admitted, the next use of the app's own calls is " +
         `refused, and the "${ACCOUNT}" account beside it still admitted; the whole state is the model`,
-      { revoked, uses: revokedUses, state: revokedState.compared });
+      { revoked, uses: revokedUses, state: revokedState.compared })) return;
+
+    // -----------------------------------------------------------------------
+    // destination_match
+    // -----------------------------------------------------------------------
+    // The seeded Grok catalyst's one profile as the read answers it: the
+    // owner's default, its head the bootstrap's first revision, binding
+    // nothing, until she grants it; then her revision, binding the entry
+    // she made under the map from Grok's field to hers.
+    const grokKey = `${GROK}|@ingress|default`;
+    const grokHead = (head) => [{ label: "default", kind: "owner", status: "active", ...head }];
+    const bootstrapHead = grokHead({ revision: 1, granted_via: "bootstrap", refs: [], vault: null });
+    const madeXai = await createOnVault(page, XAI);
+    Object.assign(ids, await vaultIds(page));
+    sent[XAI.name] = sentDestination(madeXai.sent.hosts);
+    const requestedXai = await ask({
+      op: "requested", entries: [{ provider: XAI.provider, field: XAI.field, destination: sent[XAI.name] }],
+    });
+    implied[XAI.name] = (requestedXai.entries || [])[0] || {};
+    // Her new entry, with no label and so no provider's default.
+    setEntries([...ENTRIES, XAI]);
+    const xaiMadeState = await stateHolds([GROK]);
+    await openGrant(page, GROK);
+    const offered = await sheet(page);
+    const grokNeed = ownNeed(offered, "api_key");
+    // The grant opened on the bootstrap's revision, the need offering her
+    // entry, pressed, and saying so by its hosts; the map pair whose names
+    // differ shown, no map question asked; one credential row, binding the
+    // entry under that map until revoked; nothing removed.
+    const shownOffer = {
+      kind: offered.kind,
+      sheet_title: offered.sheet_title,
+      need: grokNeed && {
+        picks: shownPicks(grokNeed), held: grokNeed.held, map: grokNeed.map, map_asked: grokNeed.map_asked,
+      },
+      credentials: (offered.credentials || []).map((c) => ({
+        binding: c.binding, names_entry: (c.sentence || "").includes(XAI.name), fields: c.fields, lifetime: c.lifetime,
+      })),
+      removed: offered.removed,
+      confirmable: offered.confirmable,
+    };
+    const expectedOffer = {
+      kind: "grant",
+      sheet_title: "Update this grant (consent rev 1)",
+      need: {
+        picks: [{ name: XAI.name, pressed: true }],
+        held: `You already have an entry for ${XAI.host}: ${XAI.name}`,
+        map: [`GROK_API_KEY comes from ${XAI.field}`],
+        map_asked: 0,
+      },
+      credentials: [{
+        binding: grokKey, names_entry: true, fields: `GROK_API_KEY from ${XAI.field}`, lifetime: STANDING,
+      }],
+      removed: [],
+      confirmable: true,
+    };
+    // The sheet as she sees it, kept beside the record while the page
+    // holds no key she typed.
+    const pictured = !secretOnPage && !(await pageHolds(page)) &&
+      await page.screenshot({ path: join(outDir, "approval-proof-destination-match.png"), fullPage: true })
+        .then(() => "approval-proof-destination-match.png").catch(() => null);
+    const offerHtml = await page.content();
+    const committedXai = await confirmGrant(page);
+    const xaiState = await stateHolds([GROK]);
+    // Her revision of the Grok profile: one binding row, standing, of the
+    // entry at the digest its request implies, and the loaded edge's vault
+    // that entry over its destination, by Grok's attach rule, projecting
+    // GROK_API_KEY from her field.
+    const grantedHead = grokHead({
+      revision: 2,
+      granted_via: "interactive",
+      refs: [{
+        binding_key: grokKey, scope: "athanor", vault_entry_id: ids[XAI.name], instance_entry_id: null,
+        via_label: null, binding_digest: implied[XAI.name].binding_digest, lifetime_kind: "standing",
+        expires_at: null, consumed_by_root: null,
+      }],
+      vault: {
+        entry_id: ids[XAI.name], binding_digest: implied[XAI.name].binding_digest, scope: "athanor",
+        binding_key: grokKey, destination: implied[XAI.name].map, attach: BEARER,
+        projection: { fields: { GROK_API_KEY: XAI.field }, scopes: [] },
+      },
+    });
+    // Each part's verdict, so a failed row names the part that did not hold.
+    const parts = {
+      made: madeXai.created && madeXai.cleared && !!ids[XAI.name],
+      made_state: xaiMadeState.held,
+      head_before: same(xaiMadeState.heads[GROK], bootstrapHead),
+      shown: same(shownOffer, expectedOffer),
+      no_key_shown: !holdsKey(offerHtml),
+      committed: committedXai,
+      head: same(xaiState.heads[GROK], grantedHead),
+      state: xaiState.held,
+    };
+    record.destination_match = {
+      vault: madeXai, id: ids[XAI.name], sent: sent[XAI.name], made_state: xaiMadeState.compared,
+      head_before: xaiMadeState.heads[GROK], shown: shownOffer, screenshot: pictured || null,
+      committed: committedXai, head: xaiState.heads[GROK], expected_head: grantedHead, state: xaiState.compared,
+      parts,
+    };
+    row("destination_match",
+      Object.values(parts).every(Boolean),
+      `"${XAI.name}", made on the Vault page with no label for ${XAI.host} under the field "${XAI.field}", is ` +
+        "offered to the seeded Grok catalyst's need by its destination, the sheet saying so and showing " +
+        `GROK_API_KEY from "${XAI.field}"; the grant's head binds the entry under that map; the whole state is ` +
+        "the model",
+      { parts, shown: shownOffer, head_before: xaiMadeState.heads[GROK], head: xaiState.heads[GROK],
+        state: xaiState.compared });
   } catch (error) {
     row(STEPS[rows.length] || "error", false, "the step ran to its end", String(error && error.stack || error));
   } finally {
