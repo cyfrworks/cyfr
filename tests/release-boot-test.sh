@@ -18,7 +18,7 @@
 # peer resets (tests/browser/lib-test.mjs), without launching a browser.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-scratch=$(mktemp -d /tmp/cyfr-release-boot-test.XXXXXX)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-release-boot-test.XXXXXX")
 servers=()
 cleanup() {
   local pid
@@ -378,7 +378,7 @@ fi
 exit 0
 SH
 chmod +x "$scratch/bin/cyfr"
-cell() { DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" COMPOSE_PROFILES=public CYFR_LEFTOVER=1 bash "$scratch/drive.sh" cell "$@"; }
+cell() { DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" RELEASE_BOOT_PORT=4399 RELEASE_BOOT_HOST_API_PORT=4398 COMPOSE_PROFILES=public CYFR_LEFTOVER=1 bash "$scratch/drive.sh" cell "$@"; }
 calls() { sed -n "s/^$1=//p" "$scratch/calls.log"; }
 assigned() { grep -c "^$2=" "$scratch/cells/$1/.env"; }
 value() { sed -n "s/^$2=//p" "$scratch/cells/$1/.env"; }
@@ -412,7 +412,7 @@ pass "a local cell is init's deployment file with the test's settings beside it,
 [ "$(status_of cell cell_new "$scratch/cells/named" "" cyfr.example.com)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_new failed for a named cell"; }
 [ "$(calls args)" = "init --no-interactive --no-pull --access public --domain cyfr.example.com" ] ||
   fail "cell_new ran cyfr $(calls args) for a named cell"
-[ "$(status_of cell cell_hostname "$scratch/cells/named" cyfr.example.com 4500)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_hostname failed"; }
+[ "$(status_of cell cell_hostname "$scratch/cells/named" cyfr.example.com 4500 4501 4502)" = 0 ] || { cat "$scratch/out" >&2; fail "cell_hostname failed"; }
 [ "$(grep -c '^args=' "$scratch/calls.log")" = 1 ] || fail "cell_hostname ran the command line again on a cell init made public at its name: $(calls args)"
 for pair in CYFR_ACCESS=public CYFR_HOST=cyfr.example.com CYFR_PUBLIC_URL=https://cyfr.example.com CYFR_PORT=4500 CYFR_HOST_API_PORT=4501 CYFR_PROXY_PORT=4502; do
   [ "$(assigned named "${pair%%=*}")" = 1 ] && [ "$(value named "${pair%%=*}")" = "${pair#*=}" ] ||
@@ -464,6 +464,97 @@ for line in 'INLINE=x # comment' 'OPEN="x' 'ESCAPED="a\nb"' 'not an assignment';
   has "cannot read as the release does" "the refusal of '$line' says why"
 done
 pass "a deployment file's lines are read as a dotenv reader reads them, and a line that cannot be is refused"
+
+cat >"$scratch/ports.py" <<'PY'
+import http.server, pathlib, socket, sys, threading
+held = []
+for port in map(int, filter(None, sys.argv[2:])):
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", port))
+    listener.listen()
+    held.append(listener)
+pathlib.Path(sys.argv[1]).touch()
+class Answer(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"{}")
+    def log_message(self, *args):
+        pass
+for listener in held:
+    server = http.server.HTTPServer(listener.getsockname(), Answer, bind_and_activate=False)
+    server.socket.close()
+    server.socket = listener
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+threading.Event().wait()
+PY
+python3 -I "$scratch/ports.py" "$scratch/ports-held" 4398 4399 {4409..4428} {4480..4482} &
+servers+=("$!")
+until_true 10 test -f "$scratch/ports-held" || fail "the old proof ports could not be held"
+
+cat >"$scratch/build/rel/cyfr/bin/cyfr" <<SH
+#!/usr/bin/env bash
+case "\$1" in
+  start)
+    echo \$\$ >"\$PWD/stub.pid"
+    exec python3 -I "$scratch/ports.py" "\$PWD/listening" "\$CYFR_PORT" "\$CYFR_HOST_API_PORT" "\${CYFR_PROXY_PORT:-}"
+    ;;
+  stop) kill "\$(cat "\$PWD/stub.pid")" 2>/dev/null; exit 0 ;;
+esac
+SH
+cat >"$scratch/ports.sh" <<'SH'
+set -euo pipefail
+ADAPTER=sqlite
+WORK="$DRIVE_SCRATCH/ports-$1"
+mkdir -p "$WORK"
+source "$DRIVE_CHECKOUT/tests/release-boot/release.sh"
+source "$DRIVE_CHECKOUT/tests/browser/harness.sh"
+ROOT="$DRIVE_SCRATCH/checkout"
+REL="$DRIVE_SCRATCH/build/rel/cyfr"
+CELL_CLI="$DRIVE_SCRATCH/bin/cyfr"
+READY_TIMEOUT=5
+trap 'server_stop' EXIT
+case "$1" in
+  release|busy|race)
+    cell_new "$WORK/cell"
+    if [ "$1" = race ]; then
+      python3 -I "$DRIVE_SCRATCH/ports.py" "$WORK/held" "$(cell_port "$WORK/cell")" &
+      holder=$!
+      trap 'kill "$holder" 2>/dev/null || :; wait "$holder" 2>/dev/null || :; server_stop' EXIT
+      n=0
+      until [ -f "$WORK/held" ] || [ "$n" = 100 ]; do n=$((n + 1)); sleep 0.1; done
+      [ -f "$WORK/held" ] || fail "the picked port could not be held"
+    fi
+    echo "chosen listener $(cell_port "$WORK/cell")"
+    server_start "$WORK/cell"
+    ;;
+  address)
+    cell_new "$WORK/cell" "" address.test
+    cell_hostname "$WORK/cell" address.test
+    server_start "$WORK/cell"
+    ;;
+esac
+SH
+ports() { DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" "$@"; }
+port_failures=0
+for scenario in release address; do
+  if [ "$(status_of env -u RELEASE_BOOT_PORT -u RELEASE_BOOT_HOST_API_PORT -u BROWSER_HOMES_PORT \
+    DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" "$scenario")" != 0 ]; then
+    cat "$scratch/out" >&2
+    echo "FAIL: $scenario cannot boot beside listeners on the old proof ports" >&2
+    port_failures=$((port_failures + 1))
+  else
+    pass "$scenario boots beside listeners on the old proof ports"
+  fi
+done
+[ "$port_failures" = 0 ] || fail "$port_failures free-port regressions"
+[ "$(status_of env RELEASE_BOOT_PORT=4399 RELEASE_BOOT_HOST_API_PORT=4398 \
+  DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" busy)" = 1 ] || fail "an explicit busy port was accepted"
+has "something already answers on 127.0.0.1:4399" "the guard names the explicit busy port"
+[ "$(status_of ports race)" = 1 ] || fail "a port taken after selection was accepted"
+chosen=$(sed -n 's/^chosen listener //p' "$scratch/out")
+has "something already answers on 127.0.0.1:$chosen" "the guard names the picked port taken before binding"
+pass "an explicit busy port and a picked port taken before binding are refused by the port guard"
 
 # --- the identity front's readiness -----------------------------------------
 

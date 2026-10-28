@@ -25,15 +25,14 @@
 # several such cells run at once.
 #
 # Environment: RELEASE_BOOT_PORT and RELEASE_BOOT_HOST_API_PORT choose the
-# default listeners (4399 and 4398), RELEASE_BOOT_READY_TIMEOUT the seconds
+# default listeners (picked free when unset), RELEASE_BOOT_READY_TIMEOUT the seconds
 # a boot has to answer readiness (180), and RELEASE_BOOT_SKIP_BUILD=1
 # reuses the release a previous run built from the same tree.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT/scripts/lib/run-names.sh"
 # The proofs' one redaction (`redact_log`), named from this checkout.
 REDACTION="$ROOT/tests/browser/lib.mjs"
-PORT="${RELEASE_BOOT_PORT:-4399}"
-HOST_API_PORT="${RELEASE_BOOT_HOST_API_PORT:-4398}"
 READY_TIMEOUT="${RELEASE_BOOT_READY_TIMEOUT:-180}"
 BUILD_PATH="$ROOT/_build/prod_release_boot_$ADAPTER"
 REL="$BUILD_PATH/rel/cyfr"
@@ -53,6 +52,27 @@ fail() {
   echo "::error::$*" >&2
   exit 1
 }
+
+# Keep picks distinct even before the cells bind them. Explicit ports keep
+# their meaning, including ports reused by cells that run one at a time.
+CELL_PORTS=()
+cell_pick_port() {
+  local target="$1" candidate="${2:-}" used attempt
+  if [ -z "$candidate" ]; then
+    for ((attempt = 0; attempt < 50; attempt++)); do
+      candidate="$(run_names_free_port)" || return 1
+      for used in ${CELL_PORTS[@]+"${CELL_PORTS[@]}"}; do
+        if [ "$candidate" = "$used" ]; then candidate=""; break; fi
+      done
+      [ -z "$candidate" ] || break
+    done
+    [ -n "$candidate" ] || fail "could not pick a distinct listener port for $target"
+  fi
+  CELL_PORTS+=("$candidate")
+  printf -v "$target" '%s' "$candidate"
+}
+cell_pick_port PORT "${RELEASE_BOOT_PORT:-}" || fail "could not pick the release listener port"
+cell_pick_port HOST_API_PORT "${RELEASE_BOOT_HOST_API_PORT:-}" || fail "could not pick the release host API port"
 
 # ---------------------------------------------------------------------------
 # The release
@@ -275,23 +295,28 @@ cell_new() {
 # URL, and nothing here writes those itself. A cell made by `cell_new` for
 # that name already is one; any other cell is switched with `cyfr access`,
 # which keeps every other line of its deployment file, its keys among them.
-# The cell then answers on three listener ports of its own from `$3`: its
-# loopback listener on `$3`, its host API on the next and its proxy
-# listener, where the front that terminates TLS for it forwards
-# (tests/browser/lib.mjs), on the one after. Its node name is its own
+# The cell then answers on three listener ports picked free, or given by
+# `$3`, `$4` and `$5`: its loopback listener, host API and proxy listener,
+# where the front that terminates TLS forwards (tests/browser/lib.mjs).
+# Its node name is its own
 # (`$cell/node`), so it runs beside the other cells of the run.
 cell_hostname() {
-  local cell="$1" host="$2" port="$3"
+  local cell="$1" host="$2" port host_api_port proxy_port value
   [[ "$host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] ||
     fail "not a lowercase dotted hostname: '$host'"
-  [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1024 ] && [ "$port" -le 65533 ] ||
-    fail "cell $cell needs a listener port from 1024 to 65533, not '$port'"
+  cell_pick_port port "${3:-}" || fail "could not pick cell $cell's listener port"
+  cell_pick_port host_api_port "${4:-}" || fail "could not pick cell $cell's host API port"
+  cell_pick_port proxy_port "${5:-}" || fail "could not pick cell $cell's proxy listener port"
+  for value in "$port" "$host_api_port" "$proxy_port"; do
+    [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -ge 1024 ] && [ "$value" -le 65535 ] ||
+      fail "cell $cell needs listener ports from 1024 to 65535, not '$value'"
+  done
   if [ "$(cell_value "$cell" CYFR_ACCESS)" != public ] || [ "$(cell_value "$cell" CYFR_HOST)" != "$host" ]; then
     cell_cli "$cell" access public --domain "$host" --yes
   fi
   cell_set "$cell" CYFR_PORT "$port"
-  cell_set "$cell" CYFR_HOST_API_PORT "$((port + 1))"
-  cell_set "$cell" CYFR_PROXY_PORT "$((port + 2))"
+  cell_set "$cell" CYFR_HOST_API_PORT "$host_api_port"
+  cell_set "$cell" CYFR_PROXY_PORT "$proxy_port"
   [ "$(cell_value "$cell" CYFR_ACCESS)" = public ] && [ "$(cell_value "$cell" CYFR_HOST)" = "$host" ] ||
     fail "cell $cell is not a public home at $host"
   printf 'cyfr-%s-%s-%s\n' "${host//./-}" "$ADAPTER" "$$" >"$cell/node"
