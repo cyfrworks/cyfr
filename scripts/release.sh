@@ -29,7 +29,7 @@ fi
 # The one rule for a release version, which the release workflow's version
 # job holds the tag to (tests/fixtures/release_manifest.json's versions),
 # matched byte by byte in a subshell of its own: under another locale
-# [A-Za-z] can admit letters outside ASCII, and the close gate below runs
+# [A-Za-z] can admit letters outside ASCII, and the release stage below runs
 # under the caller's locale.
 RELEASE='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
 if ! (LC_ALL=C; [[ "$VERSION" =~ $RELEASE ]]); then
@@ -103,11 +103,11 @@ fi
 # through `gh`, which refuses a HEAD that is not pushed, still running or
 # unchecked. A workflow whose path filter kept it from running for HEAD
 # is not among them, and runs at the tag. --gate proves HEAD here instead,
-# for a release cut offline or a HEAD GitHub has not run: the close gate,
-# every check a commit passes and the full suite on both database
-# adapters, the cluster suite and every island, queued on the
-# verification host as any exclusive check is (scripts/heavy-check.sh,
-# scripts/commit-gate.sh) and holding the host for over an hour. Its
+# for a release cut offline or a HEAD GitHub has not run: the release
+# stage (scripts/stage.sh release, the gate's close as scripts/stages.tsv
+# holds it), CI's checks and the full suite on both database adapters, the
+# cluster suite and every island, queued on the verification host as any
+# exclusive check is and holding the host for over an hour. Its
 # PostgreSQL legs use the database config/test.exs names for each
 # partition on the host's fixture server, localhost:5432, so the release
 # names none, and its logs stay in a fresh directory named before it
@@ -118,13 +118,13 @@ HEAD_SHA="$(git rev-parse HEAD)"
 if [ "${RELEASE_UNPROVEN:-}" = "1" ]; then
   echo "Warning: RELEASE_UNPROVEN=1: HEAD $HEAD_SHA is tagged without a proof that it is green."
 elif [ -n "$GATE" ]; then
-  GATE_LOGS="$(mktemp -d "${TMPDIR:-/tmp}/release-gate.XXXXXX")"
-  echo "Running the close gate on HEAD $HEAD_SHA; its logs go to $GATE_LOGS"
-  if ! scripts/heavy-check.sh -t 7200 -- scripts/commit-gate.sh -l "$GATE_LOGS" --close; then
-    echo "Error: the close gate failed; its logs are in $GATE_LOGS"
+  GATE_LOGS="$(mktemp -d /tmp/cyfr-stage.release.XXXXXX)"
+  echo "Running the release stage on HEAD $HEAD_SHA; its logs go to $GATE_LOGS"
+  if ! scripts/stage.sh -l "$GATE_LOGS" release; then
+    echo "Error: the release stage failed; its logs are in $GATE_LOGS"
     exit 1
   fi
-  echo "The close gate passed; its logs are in $GATE_LOGS"
+  echo "The release stage passed; its logs are in $GATE_LOGS"
 else
   echo "Reading HEAD's check runs on GitHub ($HEAD_SHA)..."
   if ! command -v gh >/dev/null 2>&1; then
