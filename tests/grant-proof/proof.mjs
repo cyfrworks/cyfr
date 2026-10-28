@@ -234,6 +234,7 @@ async function main() {
       promptSpoken && first.origins.length === 1 && first.origins[0] === "interactive" &&
         hostUnticked && hostSent && egress && /narrowed by you/.test(egress.text) &&
         storage && storage.text.includes(PICKED) && /narrowed by you/.test(storage.text) && exitsShown &&
+        sameHead(granted, { shape_digest: granted.shape_digest, background: false }) &&
         grantedHeld(head, firstGrant) && grantCopies.every((copy) => !grantedHeld(copy, firstGrant)),
       "the prompt a focused dialog described by its own sentence, every exit shown with its flows; granted in Prism, a host unticked and the folder narrowed through the picker, interactive alone, the dropped host's flow gone with it; the head is held whole under the version's shape, and a copy with another revision, or a host or flow added or removed, is refused",
       { spoken, origins: first.origins, admits: narrowed.admits, head, shape: granted.shape_digest,
@@ -273,7 +274,7 @@ async function main() {
     const backgroundCopies = [...changedCopies(regranted, DROPPED), ...digestCopies(regranted, head.commit_digest)];
     record.background = { plan, asking, again, regranted, admitted, digest: previewShown(backgroundShown) };
     if (!row("background",
-      plan.background === true && plan.shape_digest !== head.shape_digest &&
+      sameHead(plan, { shape_digest: plan.shape_digest, background: true }) && plan.shape_digest !== head.shape_digest &&
         sameHead(asking, { admitted: false, refusal: "consent_required" }) &&
         frame && /background/.test(frame.text) &&
         regrantHeld(regranted, backgroundGrant) &&
@@ -297,8 +298,8 @@ async function main() {
     // must refuse each one.
     const rewordedCopies = changedCopies(unchanged, DROPPED);
     if (!row("reworded",
-      reworded.shape_digest === regranted.shape_digest && still.admitted === true &&
-        still.consent_id === regranted.consent_id && sameHead(unchanged, regranted) &&
+      sameHead(reworded, { shape_digest: regranted.shape_digest, background: true }) &&
+        sameHead(still, { admitted: true, consent_id: regranted.consent_id }) && sameHead(unchanged, regranted) &&
         rewordedCopies.every((copy) => !sameHead(copy, regranted)),
       "a reworded reason changes no shape digest and asks nothing; the head holds every field it held, and a copy with another revision, or a host or flow added or removed, is refused",
       { shape: reworded.shape_digest === regranted.shape_digest, still, head: unchanged,
@@ -344,12 +345,13 @@ async function main() {
     // head before it.
     const flowsCopies = [...changedCopies(flowHead, DROPPED), ...digestCopies(flowHead, regranted.commit_digest)];
     if (!row("flows",
-      flowed.shape_digest !== reworded.shape_digest &&
-        flowAsking.admitted === false && flowAsking.refusal === "consent_required" &&
+      sameHead(flowed, { shape_digest: flowed.shape_digest, background: true }) &&
+        flowed.shape_digest !== reworded.shape_digest &&
+        sameHead(flowAsking, { admitted: false, refusal: "consent_required" }) &&
         exitShown(flowSheet, KEPT, "outside") && exitShown(flowSheet, KEPT, "files_by_grant") &&
         openedOff && ticked && flowsHeld(flowHead, flowsGrant) &&
         flowsCopies.every((copy) => !flowsHeld(copy, flowsGrant)) &&
-        flowAdmitted.admitted === true && flowAdmitted.consent_id === flowHead.consent_id,
+        sameHead(flowAdmitted, { admitted: true, consent_id: flowHead.consent_id }),
       "a version letting one more class reach a host is asked again with that exit shown, the new flow unticked; ticked and granted, the head holds exactly its granted flows and every other field, under the digest the command line previews for the same decisions; copies with another revision, a host or flow added or removed, or another digest are refused",
       { asking: flowAsking, opened_off: openedOff, ticked, head: flowHead, digest: previewShown(flowsShown),
         unnarrowed: previewShown(flowsUnnarrowed),

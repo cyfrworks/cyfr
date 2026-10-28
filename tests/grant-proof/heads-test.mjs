@@ -147,6 +147,20 @@ test("the head a re-grant commits is the head before it one revision on, under a
   }
 });
 
+test("an admission or a plan is compared whole: another value, a missing field or an added one differs", () => {
+  const admitted = { admitted: true, consent_id: regranted.consent_id };
+  assert.equal(sameHead({ ...admitted }, admitted), true);
+  for (const other of [
+    { ...admitted, consent_id: flowHead.consent_id }, { admitted: true }, { ...admitted, refusal: "consent_required" },
+    { admitted: false, refusal: "consent_required" },
+  ]) assert.equal(sameHead(other, admitted), false, JSON.stringify(other));
+  const plan = { shape_digest: shape, background: true };
+  for (const other of [{ ...plan, background: false }, { shape_digest: shape }, { ...plan, rows: [] }]) {
+    assert.equal(sameHead(other, plan), false, JSON.stringify(other));
+  }
+  for (const other of [null, undefined, "admitted", [admitted]]) assert.equal(sameHead(other, admitted), false);
+});
+
 test("two heads hold the same fields, arrays as sets", () => {
   assert.equal(sameHead({ ...regranted, domains: [KEPT, DROPPED] }, { ...regranted, domains: [DROPPED, KEPT] }), true);
   assert.equal(sameHead({ ...regranted, domains: [KEPT, DROPPED] }, regranted), false);
