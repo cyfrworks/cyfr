@@ -77,6 +77,23 @@ test("a head with no hosts or flows, as the answer for no profile, still has cop
   for (const copy of copies) assert.equal(grantedHeld(copy, firstGrant), false, JSON.stringify(copy));
 });
 
+test("the ids the home recorded are of its form, and a head carrying them is held", () => {
+  const recorded = { profile_id: "prof_01a1845d-f7b1-7a43-b356-a51016535b09", consent_id: "cons_01a1845e-1405-75a9-b6e2-c37cd81504ab" };
+  assert.equal(grantedHeld({ ...first, ...recorded }, firstGrant), true);
+});
+
+test("no copy equals its object: a removal from an empty list and a head's own digest are not copies", () => {
+  const empty = { ...first, domains: [], flows: [] };
+  const copies = changedCopies(empty, DROPPED);
+  assert.deepEqual(copies.map((copy) => [copy.revision, copy.domains, copy.flows]),
+    [[2, [], []], [1, [DROPPED], []], [1, [], [`outside to ${DROPPED}`]]]);
+  for (const copy of copies) assert.equal(sameHead(copy, empty), false, JSON.stringify(copy));
+  const unsigned = { ...first, commit_digest: null };
+  assert.deepEqual(digestCopies(unsigned).map((copy) => copy.commit_digest), ["", "sha256:wrong", digest("0")]);
+  assert.deepEqual(digestCopies(first, first.commit_digest).map((copy) => copy.commit_digest),
+    [null, "", "sha256:wrong", digest("0")]);
+});
+
 test("the changed copies are another revision and a host and a flow each added and removed", () => {
   const [revision, hostAdded, hostRemoved, flowAdded, flowRemoved] = changedCopies(flowHead, DROPPED);
   assert.equal(revision.revision, flowHead.revision + 1);
@@ -119,6 +136,13 @@ test("a first head with a field changed, missing or added is refused", () => {
     { ...first, commit_digest: null },
     { ...first, profile_id: null },
     { ...first, profile_id: "prof_probe" },
+    // The home's ids are UUIDv7: neither the nil id, the all-ones id nor a
+    // misplaced hyphen is one.
+    { ...first, profile_id: "prof_00000000-0000-0000-0000-000000000000" },
+    { ...first, profile_id: "prof_ffffffff-ffff-ffff-ffff-ffffffffffff" },
+    { ...first, consent_id: "cons_0000000000000000000000000000000000-0" },
+    { ...first, consent_id: id("cons", 1).replace("-7000-", "-6000-") },
+    { ...first, consent_id: id("cons", 1).replace("-8000-", "-c000-") },
     { ...first, consent_id: undefined },
     { ...first, consent_id: id("prof", 1) },
     { ...first, background: true },

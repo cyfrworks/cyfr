@@ -8,8 +8,11 @@
 // can run them on heads without a browser.
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
-const PROFILE = /^prof_[0-9a-f-]{36}$/;
-const CONSENT = /^cons_[0-9a-f-]{36}$/;
+// An id as the home mints one: its kind's prefix and a UUIDv7
+// (`Prima.UUID7`), version nibble 7 and variant 8, 9, a or b.
+const UUID7 = "[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const PROFILE = new RegExp(`^prof_${UUID7}$`);
+const CONSENT = new RegExp(`^cons_${UUID7}$`);
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 // A commit proof: 32 random bytes the home mints for one commit, URL-safe
 // base64 without padding (`Sanctum.Consent.Proof.mint_token/0`).
@@ -27,29 +30,34 @@ export const sameHead = (a, b) =>
   [...new Set([...Object.keys(a), ...Object.keys(b)])].every((k) =>
     Array.isArray(a[k]) && Array.isArray(b[k]) ? sameSet(a[k], b[k]) : a[k] === b[k]);
 
+// The copies that change their object: a copy equal to it changed nothing,
+// and a row that refused it would show nothing, so it is not made.
+const changing = (object, copies) => copies.filter((copy) => !sameHead(copy, object));
+
 // Copies of a head a change of permission would leave behind, each of which
 // a row's predicate must refuse: another revision, a host added or removed,
-// and a flow added or removed. A head with no hosts or flows, as the answer
-// for no profile is, still has its copies, so its row records the refusal
-// rather than the proof throwing before it.
+// and a flow added or removed (no removal from an empty list, which changes
+// nothing). A head with no hosts or flows, as the answer for no profile is,
+// still has its copies, so its row records the refusal rather than the proof
+// throwing before it.
 export const changedCopies = (head, dropped) => {
   const domains = Array.isArray(head.domains) ? head.domains : [];
   const flows = Array.isArray(head.flows) ? head.flows : [];
-  return [
+  return changing(head, [
     { ...head, revision: head.revision + 1 },
     { ...head, domains: [...domains, dropped] },
     { ...head, domains: domains.slice(1) },
     { ...head, flows: [...flows, `outside to ${dropped}`] },
     { ...head, flows: flows.slice(1) },
-  ];
+  ]);
 };
 
 // Copies of a head committed under no digest, an empty or malformed one, a
 // well-formed digest no preview answered, and `previous`, when given, the
-// digest the head before it held.
+// digest the head before it held; none that is the head's own digest.
 export const digestCopies = (head, previous) =>
-  [null, "", "sha256:wrong", `sha256:${"0".repeat(64)}`, ...(previous === undefined ? [] : [previous])]
-    .map((commit_digest) => ({ ...head, commit_digest }));
+  changing(head, [null, "", "sha256:wrong", `sha256:${"0".repeat(64)}`, ...(previous === undefined ? [] : [previous])]
+    .map((commit_digest) => ({ ...head, commit_digest })));
 
 // The head the first grant commits: revision 1 and exactly the decisions the
 // person made (origins, hosts, folders and flows, as sets), under the shape the
@@ -107,7 +115,7 @@ export const previewCopies = (answer, dropped) => {
   const rowsWith = (kind, change) => rows.map((row) => (isObject(row) && row.kind === kind ? change(row) : row));
   const widened = (field, extra) => (row) =>
     ({ ...row, values: { ...row.values, [field]: [...(row.values?.[field] ?? []), extra] } });
-  return [
+  return changing(answer, [
     { ...answer, v: 2 },
     { ...answer, expected_consent_revision: 99 },
     { ...answer, proof: "" },
@@ -122,7 +130,7 @@ export const previewCopies = (answer, dropped) => {
     { ...answer, rows: rowsWith("egress", (row) => ({ ...row, narrowed: false })) },
     { ...answer, rows: [] },
     ...digestCopies(answer),
-  ].filter((copy) => !sameHead(copy, answer));
+  ]);
 };
 
 // The head a re-grant commits: `before`, the head it replaces, one revision
