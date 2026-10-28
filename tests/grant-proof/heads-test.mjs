@@ -70,6 +70,13 @@ test("a head with a host or a flow removed is refused, beside one with a host or
   for (const copy of changedCopies(regranted, DROPPED)) assert.equal(sameHead(copy, regranted), false, JSON.stringify(copy));
 });
 
+test("a head with no hosts or flows, as the answer for no profile, still has copies, each refused", () => {
+  const none = { profile_id: null };
+  const copies = changedCopies(none, DROPPED);
+  assert.equal(copies.length, 5);
+  for (const copy of copies) assert.equal(grantedHeld(copy, firstGrant), false, JSON.stringify(copy));
+});
+
 test("the changed copies are another revision and a host and a flow each added and removed", () => {
   const [revision, hostAdded, hostRemoved, flowAdded, flowRemoved] = changedCopies(flowHead, DROPPED);
   assert.equal(revision.revision, flowHead.revision + 1);

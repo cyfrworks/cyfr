@@ -4,9 +4,8 @@
 // The head predicates of the grant proof (proof.mjs): what two heads hold in
 // common, what the head the first grant commits holds, what the head a
 // re-grant commits holds, and what a revocation answers, with the copies of a
-// head each must refuse. They are
-// kept apart from the proof so heads-test.mjs can run them on heads without a
-// browser.
+// head each must refuse. They are kept apart from the proof so heads-test.mjs
+// can run them on heads without a browser.
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const PROFILE = /^prof_[0-9a-f-]{36}$/;
@@ -25,14 +24,20 @@ export const sameHead = (a, b) =>
 
 // Copies of a head a change of permission would leave behind, each of which
 // a row's predicate must refuse: another revision, a host added or removed,
-// and a flow added or removed.
-export const changedCopies = (head, dropped) => [
-  { ...head, revision: head.revision + 1 },
-  { ...head, domains: [...head.domains, dropped] },
-  { ...head, domains: head.domains.slice(1) },
-  { ...head, flows: [...head.flows, `outside to ${dropped}`] },
-  { ...head, flows: head.flows.slice(1) },
-];
+// and a flow added or removed. A head with no hosts or flows, as the answer
+// for no profile is, still has its copies, so its row records the refusal
+// rather than the proof throwing before it.
+export const changedCopies = (head, dropped) => {
+  const domains = Array.isArray(head.domains) ? head.domains : [];
+  const flows = Array.isArray(head.flows) ? head.flows : [];
+  return [
+    { ...head, revision: head.revision + 1 },
+    { ...head, domains: [...domains, dropped] },
+    { ...head, domains: domains.slice(1) },
+    { ...head, flows: [...flows, `outside to ${dropped}`] },
+    { ...head, flows: flows.slice(1) },
+  ];
+};
 
 // Copies of a head committed under no digest, an empty or malformed one, a
 // well-formed digest no preview answered, and `previous`, the digest the head
