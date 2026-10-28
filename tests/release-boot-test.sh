@@ -16,13 +16,18 @@
 # (tests/browser/lib.mjs `redact`) against a case of every pattern it
 # hides, run by node; and the browser harness's socket lifetimes against
 # peer resets (tests/browser/lib-test.mjs), without launching a browser.
+# The old proof ports are held while release cells and browser homes bind
+# their own listeners. This check needs the verification host exclusively.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-release-boot-test.XXXXXX")
 servers=()
 cleanup() {
   local pid
-  for pid in ${servers[@]+"${servers[@]}"}; do kill "$pid" 2>/dev/null || :; done
+  for pid in ${servers[@]+"${servers[@]}"}; do
+    kill "$pid" 2>/dev/null || :
+    wait "$pid" 2>/dev/null || :
+  done
   [ ! -f "$scratch/own.pid" ] || kill "$(cat "$scratch/own.pid")" 2>/dev/null || :
   [ ! -f "$scratch/cell/stub.pid" ] || kill "$(cat "$scratch/cell/stub.pid")" 2>/dev/null || :
   rm -rf "$scratch"
@@ -470,7 +475,11 @@ import http.server, pathlib, socket, sys, threading
 held = []
 for port in map(int, filter(None, sys.argv[2:])):
     listener = socket.socket()
-    listener.bind(("127.0.0.1", port))
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        listener.bind(("127.0.0.1", port))
+    except OSError as error:
+        raise SystemExit(f"cannot hold 127.0.0.1:{port}: {error}")
     listener.listen()
     held.append(listener)
 pathlib.Path(sys.argv[1]).touch()
@@ -529,17 +538,40 @@ case "$1" in
     server_start "$WORK/cell"
     ;;
   address)
-    cell_new "$WORK/cell" "" address.test
-    cell_hostname "$WORK/cell" address.test
-    server_start "$WORK/cell"
+    ADDRESS="$WORK/cell"
+    cell_new "$ADDRESS" "" cyfr.example.com
+    source "$DRIVE_SCRATCH/address-call.sh"
+    server_start "$ADDRESS"
+    ;;
+  browser|override)
+    browser_authority
+    browser_home "$WORK/a" a.test
+    browser_home "$WORK/b" b.test
+    if [ "$1" = override ]; then
+      for key in CYFR_PORT CYFR_HOST_API_PORT CYFR_PROXY_PORT; do
+        case "$key" in CYFR_PORT) offset=0 ;; CYFR_HOST_API_PORT) offset=1 ;; CYFR_PROXY_PORT) offset=2 ;; esac
+        [ "$(cell_value "$WORK/a" "$key")" = "$((BROWSER_HOMES_PORT + offset))" ] || fail "the first home lost the explicit $key"
+        [ "$(cell_value "$WORK/b" "$key")" = "$((BROWSER_HOMES_PORT + 3 + offset))" ] || fail "the second home lost the explicit $key"
+      done
+    fi
+    server_start "$WORK/a"
+    server_start "$WORK/b"
     ;;
 esac
 SH
-ports() { DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" "$@"; }
+sed -n '/^cell_hostname "\$ADDRESS" /p' "$root/tests/release-boot/boot.sh" >"$scratch/address-call.sh"
+[ "$(wc -l <"$scratch/address-call.sh")" = 1 ] || fail "boot.sh names no single address-cell port call"
+ports() { env -u RELEASE_BOOT_PORT -u RELEASE_BOOT_HOST_API_PORT -u BROWSER_HOMES_PORT \
+  DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" "$@"; }
 port_failures=0
-for scenario in release address; do
-  if [ "$(status_of env -u RELEASE_BOOT_PORT -u RELEASE_BOOT_HOST_API_PORT -u BROWSER_HOMES_PORT \
-    DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" "$scenario")" != 0 ]; then
+for scenario in release address browser; do
+  if [ "$scenario" = address ]; then
+    status=$(status_of env -u BROWSER_HOMES_PORT RELEASE_BOOT_PORT=4399 RELEASE_BOOT_HOST_API_PORT=4398 \
+      DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" bash "$scratch/ports.sh" "$scenario")
+  else
+    status=$(status_of ports "$scenario")
+  fi
+  if [ "$status" != 0 ]; then
     cat "$scratch/out" >&2
     echo "FAIL: $scenario cannot boot beside listeners on the old proof ports" >&2
     port_failures=$((port_failures + 1))
@@ -555,6 +587,33 @@ has "something already answers on 127.0.0.1:4399" "the guard names the explicit 
 chosen=$(sed -n 's/^chosen listener //p' "$scratch/out")
 has "something already answers on 127.0.0.1:$chosen" "the guard names the picked port taken before binding"
 pass "an explicit busy port and a picked port taken before binding are refused by the port guard"
+home_port=$(python3 -I - <<'PY'
+import socket
+for attempt in range(50):
+    held = []
+    try:
+        first = socket.socket()
+        held.append(first)
+        first.bind(("127.0.0.1", 0))
+        port = first.getsockname()[1]
+        for offset in range(1, 6):
+            listener = socket.socket()
+            held.append(listener)
+            listener.bind(("127.0.0.1", port + offset))
+        print(port)
+        break
+    except (OSError, OverflowError):
+        continue
+    finally:
+        for listener in held:
+            listener.close()
+else:
+    raise SystemExit("no free six-port range for the explicit browser override")
+PY
+)
+[ "$(status_of env BROWSER_HOMES_PORT="$home_port" DRIVE_SCRATCH="$scratch" DRIVE_CHECKOUT="$root" \
+  bash "$scratch/ports.sh" override)" = 0 ] || { cat "$scratch/out" >&2; fail "the explicit browser port ranges did not boot"; }
+pass "BROWSER_HOMES_PORT keeps both homes' explicit consecutive port ranges"
 
 # --- the identity front's readiness -----------------------------------------
 

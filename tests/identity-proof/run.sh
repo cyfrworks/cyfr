@@ -86,6 +86,7 @@ C="$WORK/c"
 C2="$WORK/c2"
 C3="$WORK/c3"
 THIEF="$WORK/thief"
+cell_pick_port THIEF_PORT
 browser_home "$DIR" dir.test
 browser_home "$A" a.test
 browser_home "$B" b.test
@@ -194,7 +195,7 @@ answer_ask() {
     preserve_a)
       # The thief's copy: A stopped, copied whole, and both started again.
       server_stop "$A"
-      identity_preserved "$A" "$THIEF" thief.test 4480
+      identity_preserved "$A" "$THIEF" thief.test "$THIEF_PORT"
       identity_start "$A"
       identity_start "$THIEF"
       ANSWER="$(json '{"preserved": True}')"
