@@ -156,6 +156,35 @@ defmodule Prima.Test.EnvTest do
     assert Application.fetch_env(:logger, :level) == {:ok, :warning}
   end
 
+  test "call scope has its restore registered when the mutation raises" do
+    previous = Logger.level()
+    previous_setting = Application.fetch_env(:logger, :level)
+    changed = if previous == :debug, do: :info, else: :debug
+    registered = Map.new(:ets.lookup_element(ExUnit.Server, self(), 3))
+
+    # A mutation that raises never reaches a registration placed after it.
+    # The immediate restore repairs the level either way; inspect the pending
+    # callback so that repair cannot hide the order.
+    assert_raise MatchError, fn ->
+      Env.with_logger([level: :invalid_test_level], fn ->
+        flunk("the invalid level must fail inside the mutation")
+      end)
+    end
+
+    assert Logger.level() == previous
+    assert Application.fetch_env(:logger, :level) == previous_setting
+
+    assert [{_name, restore}] =
+             Enum.reject(:ets.lookup_element(ExUnit.Server, self(), 3), fn {name, _} ->
+               Map.has_key?(registered, name)
+             end)
+
+    Env.configure_logger(level: changed)
+    restore.()
+    assert Logger.level() == previous
+    assert Application.fetch_env(:logger, :level) == previous_setting
+  end
+
   @tag timeout: 120_000
   test "a test killed inside each call restores its settings through on_exit" do
     probe = ~S"""
