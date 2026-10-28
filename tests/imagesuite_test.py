@@ -420,7 +420,6 @@ DIRECT_READ_ROSTER = {
     ("locus-runtime-image/runners.py", "test_pinned_egress"):
         (1, "failure message only: the gateway in a failed expect's text"),
     ("locus-runtime-image/stack.py", "Stack.host_gateway"): (1, "pending"),
-    ("builder-image/headroom.py", "setting"): (1, "pending"),
     ("builder-image/isolation.py", "test_process_model"): (1, "pending"),
     ("builder-image/memory.py", "test_keeper"): (1, "pending"),
     ("locus-backends-image/isolation.py", "main"): (1, "pending"),
