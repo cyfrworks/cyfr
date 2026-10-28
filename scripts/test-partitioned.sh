@@ -41,6 +41,14 @@
 # the tests that read a module's beam (Prima.EffectsTest's compiled view,
 # Prima.VersionTest, Prima.Test.BeamsTest, Cyfr.SeedOfferTest) fail under it.
 #
+# Under heavy-check's scoped or proof lane (HEAVY_CHECK_HELD) a run takes one
+# partition, and more is refused with 64. `-- --repeat-until-failure` is
+# refused with 64 in every lane: a second pass in one VM would run after
+# the suite's own after_suite cleanups, so the way to repeat a run is to
+# run the invocation again. A passing run removes its run directory, unless
+# CYFR_TEST_KEEP=1, which keeps it and names it as a failing run's is
+# named; the partitions' databases are dropped either way.
+#
 # Stdout begins `_START=<pid>` and ends `_EXIT=<pid> <status>`, unless the
 # heavy-check that runs it (HEAVY_CHECK_HELD) writes them. The status is 0
 # passed, 1 a check failed, 64 usage, 69 a missing prerequisite, 129 HUP,
@@ -81,6 +89,7 @@ fi
 
 held=${HEAVY_CHECK_HELD:-}
 [ -n "$held" ] || echo "_START=$$"
+keep=${CYFR_TEST_KEEP:-}
 # Descriptor 3 keeps the runner's own standard error: a signal can end the
 # run inside a call that discards it (contain_wait waits under
 # 2>/dev/null), and finish then speaks through 3. No child keeps it.
@@ -161,10 +170,10 @@ finish() {
       # The disposable database URL goes whatever its drop did.
       rm -f "$out_dir/p$i.env" || result=1
     done
-    if [ "$result" -eq 0 ]; then
+    if [ "$result" -eq 0 ] && [ "$keep" != 1 ]; then
       rm -rf "$out_dir" || { echo "temporary resource cleanup failed: $out_dir" >&2; result=1; }
     fi
-    if [ "$result" -ne 0 ]; then echo "==> logs and disposable resources kept: $out_dir" >&2; fi
+    if [ "$result" -ne 0 ] || [ "$keep" = 1 ]; then echo "==> logs and disposable resources kept: $out_dir" >&2; fi
   fi
   if [ "$registry_owned" = true ]; then
     if ! contain_sweep_registry 30; then
@@ -212,8 +221,9 @@ fi
 if [ "${#PARTITIONS}" -gt 2 ] || [ "$PARTITIONS" -gt 32 ]; then
   echo 'at most 32 partitions are supported' >&2; exit 64
 fi
-if [ "$held" = scoped ] && [ "$PARTITIONS" -gt 1 ]; then
-  echo 'a scoped check runs one partition: -n 1' >&2; exit 64
+case "$keep" in ''|0|1) ;; *) echo 'CYFR_TEST_KEEP is 1 (keep a passing run'"'"'s directory) or unset' >&2; exit 64 ;; esac
+if { [ "$held" = scoped ] || [ "$held" = proof ]; } && [ "$PARTITIONS" -gt 1 ]; then
+  echo "a $held check runs one partition: -n 1" >&2; exit 64
 fi
 # The partitions this run's shard holds: every one without --shard.
 in_shard() { [ $((($1 - 1) % shard_count + 1)) = "$shard_index" ]; }
@@ -251,6 +261,9 @@ for ((j=0; j<${#args[@]}; j++)); do
     esac
     if [ -n "$switch" ]; then
       case "$switch" in
+        --repeat-until-failure)
+          echo '--repeat-until-failure runs a second pass after the suite'"'"'s own after_suite cleanups; run the invocation again instead' >&2
+          exit 64 ;;
         --failed) failed=true ;;
         --stale) stale=true ;;
         --only|--name-pattern|-n) selects=true ;;
