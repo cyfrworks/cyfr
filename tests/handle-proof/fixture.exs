@@ -21,6 +21,30 @@
 #       constraints off for that write, as a tamper or the restore of one:
 #       `{set: 1}`.
 #
+#   state TABLE
+#       The whole table, every row as `rows` answers it, and the database's
+#       whole schema (`sqlite_master`), which a tamper's restore must leave
+#       as they were.
+#
+#   opens USER_ID ROLE @SEALED_FILE
+#       The sealed key the file holds (`{"bytes": base64}`), opened as
+#       `Sanctum.Person` opens a person's key (`CipherAAD.person_key/2`
+#       under USER_ID and ROLE, `live` or `operational`): the public half of
+#       what it holds, base64, or `{opens: false}`. No private key leaves.
+#
+#   reseal USER_ID REGISTRY SLUG @PATCH_FILE
+#       The person's sealed push token opened, the members the file's JSON
+#       object names set to its values, and sealed again under the same
+#       binding, behind the server's back: `{set: 1}`.
+#
+#   session_digest @COOKIE_FILE
+#       The session token the browser's session cookie (the file) carries,
+#       read through the endpoint's own session plug: its SHA-256 (hex) and
+#       its first 8 characters, never the token.
+#
+#   setting KEY
+#       The platform setting's effective value.
+#
 #   credential USER_ID REGISTRY SLUG
 #       The push token the person's row of `registry_tokens` seals, opened
 #       as `Sanctum.RegistryCredentials` opens it: every key it holds, the
@@ -42,7 +66,9 @@ fn args ->
     value -> value
   end
 
-  tables = ~w(users person_identities passkeys server_allowlist sessions registry_tokens)
+  tables =
+    ~w(users person_identities passkeys server_allowlist sessions registry_tokens athanors
+       memberships identity_attempts identity_log_entries)
 
   table! = fn table ->
     if table in tables, do: table, else: raise("no table #{inspect(table)} for this proof")
@@ -77,16 +103,37 @@ fn args ->
     for [_cid, name | _rest] <- info, do: name
   end
 
-  credential = fn user_id, registry, slug ->
+  sealed_token = fn user_id, registry, slug ->
     %{rows: [[ciphertext]]} =
       Arca.Repo.query!(
         "SELECT credential_ciphertext FROM registry_tokens WHERE user_id = ?1 AND registry = ?2 AND namespace_slug = ?3",
         [user_id, registry, slug]
       )
 
-    aad = Sanctum.CipherAAD.registry_token(user_id, registry, slug)
+    {ciphertext, Sanctum.CipherAAD.registry_token(user_id, registry, slug)}
+  end
+
+  credential = fn user_id, registry, slug ->
+    {ciphertext, aad} = sealed_token.(user_id, registry, slug)
     {:ok, plain} = Sanctum.Cipher.decrypt(ciphertext, aad)
     Jason.decode!(plain)
+  end
+
+  # One write behind the server's back, on one connection, with the
+  # database's own checks off for it alone.
+  unchecked = fn sql, params ->
+    Arca.Repo.checkout(fn ->
+      Arca.Repo.query!("PRAGMA foreign_keys = OFF", [])
+      Arca.Repo.query!("PRAGMA ignore_check_constraints = ON", [])
+
+      try do
+        %{num_rows: count} = Arca.Repo.query!(sql, params)
+        count
+      after
+        Arca.Repo.query!("PRAGMA ignore_check_constraints = OFF", [])
+        Arca.Repo.query!("PRAGMA foreign_keys = ON", [])
+      end
+    end)
   end
 
   case Enum.map(args, read) do
@@ -103,25 +150,64 @@ fn args ->
       unless field in columns.(table), do: raise("no column #{field} in #{table}")
       value = value |> Jason.decode!() |> decode.()
 
-      # On one connection, with the database's own checks off for this
-      # write alone: a tamper writes what no code path could.
-      count =
-        Arca.Repo.checkout(fn ->
-          Arca.Repo.query!("PRAGMA foreign_keys = OFF", [])
-          Arca.Repo.query!("PRAGMA ignore_check_constraints = ON", [])
+      answer.(%{set: unchecked.("UPDATE #{table} SET #{field} = ?1 WHERE id = ?2", [value, id])})
 
-          try do
-            %{num_rows: count} =
-              Arca.Repo.query!("UPDATE #{table} SET #{field} = ?1 WHERE id = ?2", [value, id])
+    ["state", table] ->
+      table = table!.(table)
 
-            count
-          after
-            Arca.Repo.query!("PRAGMA ignore_check_constraints = OFF", [])
-            Arca.Repo.query!("PRAGMA foreign_keys = ON", [])
-          end
-        end)
+      %{rows: schema} =
+        Arca.Repo.query!("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name", [])
 
-      answer.(%{set: count})
+      answer.(%{rows: rows.(table, nil), schema: schema})
+
+    ["opens", user_id, role, sealed] when role in ["live", "operational"] ->
+      sealed = sealed |> Jason.decode!() |> decode.()
+      aad = Sanctum.CipherAAD.person_key(user_id, String.to_existing_atom(role))
+
+      case Sanctum.Cipher.decrypt(sealed, aad) do
+        {:ok, private} when byte_size(private) == 32 ->
+          {public, _private} = :crypto.generate_key(:eddsa, :ed25519, private)
+          answer.(%{opens: true, public: Base.encode64(public)})
+
+        _unopened ->
+          answer.(%{opens: false})
+      end
+
+    ["reseal", user_id, registry, slug, patch] ->
+      {_ciphertext, aad} = sealed_token.(user_id, registry, slug)
+      plain = credential.(user_id, registry, slug) |> Map.merge(Jason.decode!(patch))
+      {:ok, sealed} = Sanctum.Cipher.encrypt(Jason.encode!(plain), aad)
+
+      answer.(%{
+        set:
+          unchecked.(
+            "UPDATE registry_tokens SET credential_ciphertext = ?1 WHERE user_id = ?2 AND registry = ?3 AND namespace_slug = ?4",
+            [sealed, user_id, registry, slug]
+          )
+      })
+
+    ["session_digest", cookie] ->
+      conn =
+        Plug.Test.conn(:get, "/")
+        |> Plug.Conn.put_req_header("cookie", "_cyfr_key=" <> cookie)
+        |> Map.put(:secret_key_base, CyfrWeb.Endpoint.config(:secret_key_base))
+        |> Plug.Session.call(Plug.Session.init(CyfrWeb.Endpoint.session_options()))
+        |> Plug.Conn.fetch_session()
+
+      case Plug.Conn.get_session(conn, CyfrWeb.SignInResponse.session_key()) do
+        token when is_binary(token) ->
+          answer.(%{
+            sha256: Base.encode16(:crypto.hash(:sha256, token), case: :lower),
+            prefix: String.slice(token, 0, 8)
+          })
+
+        _none ->
+          answer.(%{error: "the cookie carries no session"})
+      end
+
+    ["setting", key] ->
+      {:ok, value} = Arca.PlatformSettings.effective(key)
+      answer.(%{value: value})
 
     ["credential", user_id, registry, slug] ->
       held = credential.(user_id, registry, slug)

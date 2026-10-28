@@ -53,6 +53,7 @@ SECRETS="$WORK/secrets"
 mkdir -p -m 700 "$SECRETS"
 RUN="${PROOF_RUN_PREFIX:-}cyfr-handle-proof-$$"
 PG="$RUN-pg"
+PG_VOLUME="$RUN-pgdata"
 REGISTRY="$RUN-registry"
 REGISTRY_IMAGE="$RUN-registry:$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 REGISTRY_HOST=registry.test
@@ -65,7 +66,8 @@ cleanup() {
   [ -n "$PROOF_PID" ] && kill "$PROOF_PID" 2>/dev/null || true
   stop_proof_container
   identity_front_stop
-  docker rm -f "$REGISTRY" "$PG" >/dev/null 2>&1 || true
+  docker rm -f -v "$REGISTRY" "$PG" >/dev/null 2>&1 || true
+  docker volume rm "$PG_VOLUME" >/dev/null 2>&1 || true
   docker image rm -f "$REGISTRY_IMAGE" >/dev/null 2>&1 || true
   jobs -p | xargs -r kill 2>/dev/null || true
   ( server_stop ) || [ "$code" -ne 0 ] || code=1
@@ -78,6 +80,9 @@ cleanup() {
   exit "$code"
 }
 trap cleanup EXIT
+# A signal ends the run through its exit, so the cleanup runs on it too.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 free_port() {
   python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
@@ -162,7 +167,8 @@ identity_env "$B" CYFR_SETUP_TOKEN "$(cat "$SECRETS/setup-b")"
 step "the registry's database, the registry, and its front at $REGISTRY_HOST"
 PG_PORT="$(free_port)"
 openssl rand -hex 16 | tr -d '\n' >"$SECRETS/pg"
-docker run -d --name "$PG" -p "127.0.0.1:$PG_PORT:5432" \
+docker volume create "$PG_VOLUME" >/dev/null || fail "the registry's database volume was not made"
+docker run -d --name "$PG" -p "127.0.0.1:$PG_PORT:5432" -v "$PG_VOLUME:/var/lib/postgresql/data" \
   -e POSTGRES_USER=cyfrrun -e POSTGRES_DB=cyfrrun -e "POSTGRES_PASSWORD=$(cat "$SECRETS/pg")" \
   postgres:16-alpine >/dev/null || fail "the registry's database did not start"
 closes=$((SECONDS + 60))
@@ -276,7 +282,7 @@ other_identity() {
   signed /v1/legal/accept policy.accept "{\"policy_version\":$(jstr "$version")}"
   signed /v1/namespaces/personal/claim handle.claim "{\"handle\":$(jstr "$handle")}"
   signed /v1/handles/address address.set "{\"address\":$(jstr "$address")}"
-  ANSWER="$(python3 -I -c 'import json, sys; print(json.dumps({"identifier": sys.argv[1], "steps": json.loads(sys.argv[2])}))' "$identifier" "$steps")"
+  ANSWER="$(python3 -I -c 'import base64, json, sys; print(json.dumps({"identifier": sys.argv[1], "steps": json.loads(sys.argv[2]), "genesis": base64.b64encode(open(sys.argv[3], "rb").read()).decode()}))' "$identifier" "$steps" "$WORK/other-genesis")"
 }
 
 # Each step the proof asks for (harness.sh `answer_asks`).
@@ -311,10 +317,51 @@ answer_ask() {
     refusal)
       ANSWER="$(handle_fixture "$WORK/$(asked "$ask" cell)" refusal "$(asked "$ask" reason)")" || ANSWER=""
       ;;
+    state)
+      ANSWER="$(handle_fixture "$WORK/$(asked "$ask" cell)" state "$(asked "$ask" table)")" || ANSWER=""
+      ;;
+    opens)
+      file="$(mktemp "$WORK/sealed.XXXXXX")"
+      python3 -I -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["sealed"]))' "$ask" >"$file"
+      ANSWER="$(handle_fixture "$WORK/$(asked "$ask" cell)" opens "$(asked "$ask" user_id)" "$(asked "$ask" role)" "@$file")" || ANSWER=""
+      rm -f "$file"
+      ;;
+    reseal)
+      file="$(mktemp "$WORK/patch.XXXXXX")"
+      python3 -I -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["patch"]))' "$ask" >"$file"
+      ANSWER="$(handle_fixture "$A" reseal "$(asked "$ask" user_id)" "$(asked "$ask" registry)" "$(asked "$ask" slug)" "@$file")" || ANSWER=""
+      rm -f "$file"
+      ;;
+    session_digest)
+      file="$SECRETS/cookie"
+      (umask 077 && python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["cookie"])' "$ask" >"$file")
+      ANSWER="$(handle_fixture "$WORK/$(asked "$ask" cell)" session_digest "@$file")" || ANSWER=""
+      rm -f "$file"
+      ;;
+    setting)
+      ANSWER="$(handle_fixture "$WORK/$(asked "$ask" cell)" setting "$(asked "$ask" key)")" || ANSWER=""
+      ;;
     registry_rows)
       ANSWER="$(registry_sql "t=$(asked "$ask" table)" "c=$(asked "$ask" column)" "v=$(asked "$ask" value)" <<'SQL'
-SELECT json_build_object('rows', coalesce(json_agg(row_to_json(x) ORDER BY row_to_json(x)::text), '[]'::json))
-  FROM (SELECT * FROM :"t" WHERE :"c"::text = :'v') x;
+SELECT json_build_object('rows', coalesce(json_agg(row_to_json(x) ORDER BY to_jsonb(x)->>'expires_at', row_to_json(x)::text), '[]'::json))
+  FROM (SELECT * FROM :"t" WHERE :'c' = '' OR to_jsonb(:"t")->>:'c' = :'v') x;
+SQL
+)" || ANSWER=""
+      ;;
+    registry_state)
+      # The whole table, and every constraint on it as PostgreSQL prints
+      # it, which a tamper's restore must leave as they were.
+      ANSWER="$(registry_sql "t=$(asked "$ask" table)" <<'SQL'
+SELECT json_build_object(
+  'rows', (SELECT coalesce(json_agg(row_to_json(x) ORDER BY row_to_json(x)::text), '[]'::json) FROM :"t" x),
+  'constraints', (SELECT coalesce(json_agg(json_build_array(conname, pg_get_constraintdef(oid)) ORDER BY conname), '[]'::json)
+                    FROM pg_constraint WHERE conrelid = CAST(:'t' AS regclass)));
+SQL
+)" || ANSWER=""
+      ;;
+    admin_id)
+      ANSWER="$(registry_sql <<'SQL'
+SELECT json_build_object('id', id) FROM admin_accounts WHERE email = 'handle-proof@example.com';
 SQL
 )" || ANSWER=""
       ;;
@@ -344,7 +391,7 @@ END $$;
 WITH changed AS (
   UPDATE :"t" SET :"f" = (json_populate_record(CAST(NULL AS :"t"), :'patch'::json)).:"f"
    WHERE :"k"::text = :'kv' RETURNING 1)
-SELECT json_build_object('set', count(*)) FROM changed;
+SELECT count(*) AS changed FROM changed \gset
 DO $$
 DECLARE c record;
 BEGIN
@@ -356,10 +403,20 @@ BEGIN
   END IF;
 END $$;
 COMMIT;
+SELECT json_build_object('set', :changed, 'role', current_setting('session_replication_role'));
 SQL
 )" && [ -n "$ANSWER" ]; then :; else
         ANSWER="$(python3 -I -c 'import json, sys; print(json.dumps({"error": "the registry refused the write: " + open(sys.argv[1]).read().strip()}))' "$WORK/psql.err")"
       fi
+      ;;
+    user_agents)
+      # The registry records each signer's HTTP client: a CYFR's is Req's
+      # default, named for the version mix.lock pins; the second
+      # identity's is this run's curl.
+      ANSWER="$(python3 -I -c 'import json, re, sys; v = re.search(r"\"req\": \{:hex, :req, \"([^\"]+)\"", open(sys.argv[1]).read()).group(1); print(json.dumps({"cyfr": "req/" + v, "curl": "curl/" + sys.argv[2]}))' "$ROOT/mix.lock" "$(curl -V | head -1 | cut -d' ' -f2)")" || ANSWER=""
+      ;;
+    legal_version)
+      ANSWER="$(python3 -I -c 'import json, sys; a = json.loads(sys.argv[1]); print(json.dumps({"status": a["status"], "policy_version": json.loads(a["body"]).get("policy_version")}))' "$(registry_http GET /v1/legal/version)")" || ANSWER=""
       ;;
     handle_answer)
       ANSWER="$(registry_http GET "/v1/handles/$(asked "$ask" handle)")"

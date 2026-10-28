@@ -8,43 +8,47 @@
 // Chromium drives every step with its virtual WebAuthn authenticator.
 //
 // After each step the proof reads every object the step claims, whole,
-// and compares it with its model, in which every field is exact, derived
-// from another source, or held to a bound (`exact`, `derived`, `bound`);
-// a field the model does not name, or a named field the object lacks,
-// fails it. Once a comparison holds, each field of a stored object is
-// written behind the browsers' back to a value its model refuses, the
-// object is read again and the comparison must fail on that field, and
-// the stored value is written back and the comparison must hold again
-// (`shown`). The README's field table is the one these models print.
+// and holds it to its model (models.mjs), built from what the run
+// captured: the browsers' credentials and cookies, the clock readings
+// around each step, and each generated value at its first read. Every
+// stored field is then shown failing behind the browsers' back (models.mjs
+// `check`). At the end every object is read again and held to what was
+// read before. The README's field table is the one these models print.
 //
 // Usage: node proof.mjs HOMES_FILE OUT_DIR
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import {
   ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, saveKit, startProxy, waitFor,
 } from "../browser/lib.mjs";
+import {
+  HANDLE, LONG_AGO, OCI, OTHER, PER, bytesFrom, check, classification, coseTerm, objectModels, otherId, sha256hex,
+} from "./models.mjs";
 
 const [homesFile, outDir] = process.argv.slice(2);
 const { homes } = readHomes(homesFile);
 const originOf = (name) => homes.find((home) => home.name === name).origin;
 const A = originOf("a");
 const B = originOf("b");
-const REGISTRY = "registry.test";
-// The OCI host a push token is for, which A keys its stored tokens by.
-const OCI = `registry.${REGISTRY}`;
 const DIRECTORY = "https://dir.test";
-const HANDLE = "proof";
-const OTHER = "other";
 const layer = "#system-layer-dialog";
 
 const secrets = [];
 const redact = (text) => redactKnown(text, secrets);
 const ask = (request, options) => askRunSh(request, { outDir, timeoutMs: 300_000, refuseError: true, ...options });
+const clock = () => Date.now();
 
+// What the run captured, which the models are built from (the record's
+// `seen`): origins, clock windows, read times, first reads, credentials'
+// public parts, cookies' digests, the second identity, refusal sentences.
+const S = {
+  origins: { a: A, b: B }, w: {}, at: {}, rows: {}, credentials: {}, cookies: {}, opens: {}, refusals: {}, genesis: {},
+};
 const rows = [];
-const record = { objects: {} };
+const record = { objects: {}, checks: {} };
+const table = [];
+const tally = { loops: 0, skipped: [], controls: 0 };
 const contexts = [];
 
 function row(step, held, what, detail) {
@@ -53,168 +57,83 @@ function row(step, held, what, detail) {
   return held;
 }
 
-// ---------------------------------------------------------------------------
-// Models: every field exact, derived or bound
-// ---------------------------------------------------------------------------
+// The window `name` from `from` to now, kept in `S`.
+function windowed(name, from, says) {
+  S.w[name] = { name: says, from, to: clock() };
+  return S.w[name];
+}
 
-// `tamper`, where given, is the value a tamper writes in place of the
-// generic one, for a column whose constraints refuse that.
-const exact = (value, tamper, shown) => ({ cls: "exact", value, tamper, shown });
-const derived = (value, from, tamper) => ({ cls: "derived", value, from, tamper });
-const bound = (says, holds, outside) => ({ cls: "bound", says, holds, outside });
+// One claimed object: read whole, its model built, compared, each stored
+// field shown failing. `io.prepare(object)` checks a relationship the
+// model needs before it is built.
+async function claim(key, what, read, io = {}) {
+  const step = key.startsWith("held:") ? "ban" : key.split(":")[0];
+  let object;
+  try {
+    object = await read();
+  } catch (error) {
+    return row(step, false, `${what}: the read failed`, { error: String(error.message) });
+  }
+  S.at[key] = clock();
+  if (Array.isArray(object)) S.rows[key] = object;
+  if (io.prepare) await io.prepare(object);
+  record.objects[key] = object;
+  let model;
+  try {
+    model = objectModels(S)[key]();
+  } catch (error) {
+    return row(step, false, `${what}: no model (${error.message})`, { object });
+  }
+  table.push(...classification(key, model));
+  let result;
+  try {
+    result = await check(object, model, { read, ...io });
+  } catch (error) {
+    return row(step, false, `${what}: ${error.message}`, {});
+  }
+  record.checks[key] = result;
+  tally.loops += result.loops.length;
+  tally.controls += result.controls.length;
+  tally.skipped.push(...result.skipped.map((s) => ({ object: key, ...s })));
+  if (result.mismatches.length) return row(step, false, `${what} is the model's`, { mismatches: result.mismatches });
+  if (result.failures.length) return row(step, false, `${what}: ${result.failures[0]}`, { failures: result.failures, loop: result.loops.at(-1) });
+  return row(step, true, `${what} is the model's${result.loops.length ? `, and each of the ${result.loops.length} stored fields written behind its back fails it` : ""}${result.controls.length ? `; its ${result.controls.length} controls are refused` : ""}`,
+    { loops: result.loops.length, skipped: result.skipped.length, controls: result.controls.length });
+}
 
-const ISO = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/;
-const msOf = (text) => {
-  if (typeof text !== "string" || !ISO.test(text)) return NaN;
-  const [, date, time, fraction = "", zone = "Z"] = text.match(/^(\S+)[T ](\d{2}:\d{2}:\d{2})(\.\d+)?(.*)$/);
-  return Date.parse(`${date}T${time}${fraction.slice(0, 4)}${zone || "Z"}`);
+// The stores: a CYFR's table, the registry's table.
+// A read filtered by `column` names it (`filter`): a tamper of that column
+// is refused by the row leaving the read.
+const filtered = (read, column) => Object.assign(read, { filter: column || null });
+const cyfrRows = (cell, tableName, column = "", value = "") => filtered(async () =>
+  (await ask({ op: "rows", cell, table: tableName, column, value })).rows, column);
+const cyfrIo = (cell, tableName) => ({
+  write: async (i, field, value, rowNow) => {
+    const answer = await ask({ op: "set", cell, table: tableName, id: rowNow.id, field, value });
+    if (answer.set !== 1) throw new Error(`${cell}.${tableName}.${field}: the write changed ${JSON.stringify(answer)}`);
+    return answer;
+  },
+  state: async () => ask({ op: "state", cell, table: tableName }),
+});
+const registryRows = (tableName, column = "", value = "") => filtered(async () =>
+  (await ask({ op: "registry_rows", table: tableName, column, value })).rows, column);
+const registryWrite = async (tableName, key, keyValue, field, value, phase) => {
+  const answer = await ask({ op: "registry_set", table: tableName, key, key_value: String(keyValue), field, value, phase });
+  if (answer.set !== 1) throw new Error(`registry ${tableName}.${field}: the write changed ${JSON.stringify(answer)}`);
+  return answer;
 };
-const LONG_AGO = "2001-01-01T00:00:00.000000Z";
-// A time column that must be empty: its tamper writes a time, which a
-// registry column of a time type takes where text would not.
-const noTime = () => exact(null, LONG_AGO);
-// A time between `from` and when the object was read, with a second each
-// side for the clocks' resolution.
-const during = (window) => bound(`a time inside ${window.name}`, (v) => {
-  const at = msOf(v);
-  return at >= window.from - 1_000 && at <= (window.to ?? Date.now()) + 1_000;
-}, LONG_AGO);
-const later = (window, says) => bound(says, (v) => msOf(v) > (window.to ?? Date.now()), LONG_AGO);
-const bytesOf = (v) => (v && typeof v.bytes === "string" ? Buffer.from(v.bytes, "base64") : null);
-// Byte bounds are shown failing by a single byte, and a shape by a value
-// that has none of it.
-const ONE_BYTE = { bytes: Buffer.from([0]).toString("base64") };
-const nbytes = (n, says) => bound(says, (v) => bytesOf(v)?.length === n, ONE_BYTE);
-const somebytes = (says) => bound(says, (v) => (bytesOf(v)?.length ?? 0) > 32, ONE_BYTE);
-const shaped = (re, says, outside = "~") => bound(says, (v) => typeof v === "string" && re.test(v), outside);
-const NIL_UUID = "00000000-0000-0000-0000-000000000000";
-// A UUID column holds a UUID by its type, so the bound is that it is not
-// the nil UUID, which a tamper writes.
-const uuid = (says) => bound(`${says}: a UUID, not the nil UUID`, (v) => UUID.test(v) && v !== NIL_UUID, NIL_UUID);
-const PER = /^per_[0-9a-f]{64}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const CYFR_ID = /^[a-z]+_[A-Za-z0-9_-]{8,}$/;
-const EPOCH = /^sha256:[0-9a-f]{64}$/;
-const HASH = EPOCH;
-
-// The generic value a tamper writes: one the field's model refuses.
-function tampered(spec, value) {
-  if (spec.tamper !== undefined) return spec.tamper;
-  if (spec.cls === "bound" && spec.outside !== undefined) return spec.outside;
-  if (bytesOf(value)) {
-    const bytes = bytesOf(value);
-    bytes[0] ^= 0xff;
-    return { bytes: bytes.toString("base64") };
-  }
-  if (value === null) return "tampered";
-  if (typeof value === "string" && PER.test(value)) return `per_${"0".repeat(64)}`;
-  if (typeof value === "string" && EPOCH.test(value)) return `sha256:${"0".repeat(64)}`;
-  if (typeof value === "string" && UUID.test(value)) return "00000000-0000-0000-0000-000000000000";
-  if (typeof value === "boolean") return !value;
-  if (typeof value === "number") return value + 1;
-  if (typeof value === "string" && ISO.test(value)) return LONG_AGO;
-  // PostgreSQL's bytes, as row_to_json writes them: the first digit changed.
-  if (typeof value === "string" && /^\\x[0-9a-f]+$/.test(value)) return `\\x${value[2] === "0" ? "1" : "0"}${value.slice(3)}`;
-  if (typeof value === "string") return `${value}~`;
-  if (Array.isArray(value)) return [...value, "00000000-0000-0000-0000-000000000000"];
-  return null;
-}
-
-// Every field of `object` against `model`: the mismatches, each naming its
-// field. A list compares row by row.
-function mismatches(object, model, at = "") {
-  if (Array.isArray(model)) {
-    if (!Array.isArray(object) || object.length !== model.length) {
-      return [{ field: `${at}#`, want: model.length, got: Array.isArray(object) ? object.length : object }];
-    }
-    return model.flatMap((m, i) => mismatches(object[i], m, `${at}[${i}]`));
-  }
-  if (object === null || typeof object !== "object") return [{ field: at || "(object)", want: "an object", got: object }];
-  const out = [];
-  for (const field of Object.keys(object)) {
-    if (!(field in model)) out.push({ field: `${at}.${field}`, want: "a classification", got: object[field], unclassified: true });
-  }
-  for (const [field, spec] of Object.entries(model)) {
-    const path = `${at}.${field}`;
-    if (!(field in object)) {
-      out.push({ field: path, want: spec.cls, got: "missing" });
-      continue;
-    }
-    const value = object[field];
-    const held = spec.cls === "bound" ? spec.holds(value) : isDeepStrictEqual(value, spec.value);
-    if (!held) out.push({ field: path, cls: spec.cls, want: spec.cls === "bound" ? spec.says : spec.value, got: value });
-  }
-  return out;
-}
-
-// The model's fields as the README's table rows.
-function classification(name, model) {
-  const one = Array.isArray(model) ? model : [model];
-  return one.flatMap((m, i) => Object.entries(m).map(([field, spec]) => {
-    const what = spec.cls === "exact" ? spec.shown ?? `\`${JSON.stringify(spec.value)}\`` : spec.cls === "derived" ? spec.from : spec.says;
-    return `| ${name}${one.length > 1 ? `[${i}]` : ""} | ${field} | ${spec.cls} | ${what} |`;
-  }));
-}
-const table = [];
-
-// One claimed object: `read` answers it whole; `stored`, for a stored
-// object, writes a field of its row i (`stored(i, field, value, row)`);
-// `via`, for a view such as a registry answer, maps each of its fields to
-// the stored field that makes it (null for none) and gives the value a
-// tamper writes there and the original the restore writes back.
-async function check(step, name, read, model, { stored = null, via = null, what = name } = {}) {
-  const tableRows = classification(`${step}: ${name}`, model);
-  table.push(...tableRows);
-  const object = await read();
-  const found = mismatches(object, model);
-  record.objects[`${step}:${name}`] = { object, mismatches: found };
-  if (found.length) return row(step, false, `${what} is the model's`, { mismatches: found });
-  if (!stored) return row(step, true, `${what} is the model's (no stored copy: held as read)`, { fields: tableRows.length });
-
-  // Shown failing: each stored field, written behind the browsers' back.
-  const shown = [];
-  const list = Array.isArray(model) ? model : [model];
-  const objects = Array.isArray(model) ? object : [object];
-  for (let i = 0; i < list.length; i++) {
-    for (const [field, spec] of Object.entries(list[i])) {
-      const target = via ? via[field] : field;
-      if (target === null) {
-        shown.push({ row: i, field, tampered: "no stored field makes it" });
-        continue;
-      }
-      const original = via ? undefined : objects[i][field];
-      const value = via ? via.value(target, objects[i]) : tampered(spec, original);
-      const written = await stored(i, target, value, objects[i], "tamper");
-      const failing = mismatches(await read().catch((error) => ({ unreadable: String(error.message) })), model);
-      // The restore finds the row by the value the tamper left in it.
-      await stored(i, target, via ? via.original(target, objects[i]) : original, { ...objects[i], [target]: value }, "restore");
-      const again = mismatches(await read(), model);
-      const name1 = Array.isArray(model) ? `[${i}].${field}` : `.${field}`;
-      const named = failing.some((m) => m.field === name1 || m.field === "(object)" || m.field === "#");
-      shown.push({ row: i, field, written, failed_on: failing.map((m) => m.field), named, held_again: again.length === 0 });
-      if (!named || again.length) {
-        return row(step, false, `${what}: a tamper of ${name1} was not caught, or the restore did not hold`, { shown });
-      }
-    }
-  }
-  return row(step, true, `${what} is the model's, and each stored field written behind its back fails it`, { fields: tableRows.length, shown: shown.length });
-}
-
-// A CYFR's table, whole or the rows whose `column` is `value`.
-const cyfrRows = (cell, table, column = "", value = "") => async () =>
-  (await ask({ op: "rows", cell, table, column, value })).rows;
-const cyfrStore = (cell, table) => async (i, field, value, rowNow) => {
-  const answer = await ask({ op: "set", cell, table, id: rowNow.id, field, value });
-  if (answer.set !== 1) throw new Error(`${cell}.${table}.${field}: the write changed ${JSON.stringify(answer)}`);
-  return true;
+const registryIo = (tableName, key) => ({
+  write: (i, field, value, rowNow, phase) => registryWrite(tableName, key, rowNow[key], field, value, phase),
+  state: async () => ask({ op: "registry_state", table: tableName }),
+});
+// The fields of a held re-read whose loop ran at their first read: every
+// field but those the first read only shaped.
+const capturedAt = (firstKey) => (i, field) => {
+  const model = objectModels(S)[firstKey]();
+  const spec = (Array.isArray(model) ? model[i] : model)?.[field];
+  return spec && spec.cls === "captured" ? null : `shown failing at its first read (${firstKey})`;
 };
-const registryRows = (table, column, value) => async () =>
-  (await ask({ op: "registry_rows", table, column, value })).rows;
-const registryStore = (table, key) => async (i, field, value, rowNow, phase) => {
-  const answer = await ask({ op: "registry_set", table, key, key_value: String(rowNow[key]), field, value, phase });
-  if (answer.set !== 1) throw new Error(`registry ${table}.${field}: the write changed ${JSON.stringify(answer)}`);
-  return true;
-};
+
 const handleAnswer = (handle) => async () => {
   const { status, body } = await ask({ op: "handle_answer", handle });
   let parsed;
@@ -225,6 +144,29 @@ const handleAnswer = (handle) => async () => {
   }
   return { status, ...parsed };
 };
+// A handle answer's fields, each through the namespace row's field that
+// makes it (`status` by reserving the namespace, cyfr.run
+// internal/api/handles.go:31); protocol, registry and directory by
+// controls.
+const answerIo = (handle, owner, address) => ({
+  via: {
+    status: { target: "reserved", value: true, original: false },
+    handle: { none: "the handle asked for, echoed: shown failing by a control" },
+    identifier: { target: "owner_identifier", value: otherId(owner), original: owner },
+    ...(address ? { address: { target: "address", value: `${address}:8443`, original: address } } : {}),
+    protocol: { none: "the wire's constant: shown failing by a control" },
+    registry: { none: "the registry's configured host: shown failing by a control" },
+    directory: { none: "the registry's configured directory: shown failing by a control" },
+  },
+  write: (i, field, value, rowNow, phase) => registryWrite("namespaces", "slug", rowNow.slug ?? handle, field, value, phase),
+  state: async () => ask({ op: "registry_state", table: "namespaces" }),
+  controls: [
+    { field: ".handle", says: "another handle", corrupt: (o) => ({ ...o, handle: `${handle}x` }) },
+    { field: ".protocol", says: "cyfr-handle/v2", corrupt: (o) => ({ ...o, protocol: "cyfr-handle/v2" }) },
+    { field: ".registry", says: "another registry", corrupt: (o) => ({ ...o, registry: "elsewhere.test" }) },
+    { field: ".directory", says: "another directory", corrupt: (o) => ({ ...o, directory: "https://dir2.test" }) },
+  ],
+});
 
 // ---------------------------------------------------------------------------
 // Browsers and the virtual authenticator (as tests/join-proof/common.mjs)
@@ -232,7 +174,7 @@ const handleAnswer = (handle) => async () => {
 
 const authenticators = new Map();
 const highest = new Map();
-const held = async (handle) => (await handle.cdp.send("WebAuthn.getCredentials", { authenticatorId: handle.id })).credentials;
+const heldCredentials = async (handle) => (await handle.cdp.send("WebAuthn.getCredentials", { authenticatorId: handle.id })).credentials;
 const highestOf = (credential) => Math.max(credential.signCount, highest.get(credential.credentialId) ?? 0);
 
 async function authenticatorWith(page, credentials = []) {
@@ -254,7 +196,7 @@ async function authenticatorWith(page, credentials = []) {
 async function counted() {
   for (const [page, handle] of authenticators) {
     try {
-      for (const credential of await held(handle)) highest.set(credential.credentialId, highestOf(credential));
+      for (const credential of await heldCredentials(handle)) highest.set(credential.credentialId, highestOf(credential));
     } catch {
       authenticators.delete(page);
     }
@@ -265,7 +207,7 @@ async function ready(page) {
   await counted();
   const handle = authenticators.get(page);
   if (!handle) return;
-  for (const credential of await held(handle)) {
+  for (const credential of await heldCredentials(handle)) {
     const count = highestOf(credential);
     if (count === credential.signCount) continue;
     await handle.cdp.send("WebAuthn.removeCredential", { authenticatorId: handle.id, credentialId: credential.credentialId });
@@ -273,9 +215,12 @@ async function ready(page) {
   }
 }
 
-async function credentialsFor(page, host) {
+// The credential the page's authenticator holds for `host`, with the
+// highest count any copy reached.
+async function credentialFor(page, host) {
   await counted();
-  return (await held(authenticators.get(page))).filter((c) => c.rpId === host).map((c) => ({ ...c, signCount: highestOf(c) }));
+  const [credential] = (await heldCredentials(authenticators.get(page))).filter((c) => c.rpId === host);
+  return { ...credential, signCount: highestOf(credential) };
 }
 
 async function freshContext(browser) {
@@ -317,9 +262,23 @@ async function dumpPages() {
   }
 }
 
-// /setup at `origin` with the setup token run.sh holds for `cell`: a
-// passkey makes the first person, who lands back on the setup page signed
-// in.
+// The public half of the sealed key `column` of `rowNow`, opened in `cell`
+// as the person's `role` key, kept in `S` as `prefix.role`.
+async function opens(cell, prefix, rowNow, column, role) {
+  const answer = await ask({ op: "opens", cell, user_id: rowNow?.user_id, role, sealed: rowNow?.[column] }, { refuseError: false });
+  S.opens[`${prefix}.${role}`] = answer.opens ? answer.public : null;
+}
+
+// The digest of the session token the context's cookie for `origin`
+// carries, read inside the CYFR that set it; the cookie itself is
+// redacted from everything the proof writes.
+async function cookieDigest(context, origin, cell) {
+  const cookie = (await context.cookies(origin)).find((c) => c.name === "_cyfr_key")?.value;
+  if (!cookie) return null;
+  secrets.push(cookie);
+  return ask({ op: "session_digest", cell, cookie }, { secret: true });
+}
+
 async function setUp(page, origin, cell) {
   const { token } = await ask({ op: "setup_token", cell }, { secret: true });
   secrets.push(token);
@@ -341,22 +300,52 @@ async function continueToCyfr(page, origin) {
   return url.searchParams.get("a") ?? decodeURIComponent(url.pathname.split("/")[2]);
 }
 
+// "I run my own CYFR" at B with `handle`, to A's /carry, signing in at A
+// with the passkey when the browser holds no session there, then Begin,
+// back to B's sign-in page.
+async function carryFrom(person, handle) {
+  await person.goto(`${B}/login`);
+  await connected(person);
+  await person.locator("#cyfr-own-open").click();
+  await person.locator("#cyfr-own-entry").fill(`@${handle}`);
+  await person.locator('#cyfr-own button[type="submit"]').click();
+  await person.waitForURL((url) => url.origin === A && ["/carry", "/login"].includes(url.pathname), { timeout: 60_000 });
+  await connected(person);
+  if (new URL(person.url()).pathname === "/login") {
+    await ready(person);
+    await person.locator("#passkey-sign-in [data-webauthn-start]").click();
+    await person.waitForURL((url) => url.origin === A && url.pathname === "/carry", { timeout: 60_000 });
+    await connected(person);
+    await counted();
+  }
+  await person.waitForFunction((b) => document.getElementById("carry-destination")?.value === b, B, { timeout: 30_000 });
+  await person.locator('#carry-begin button[type="submit"]').click();
+  await person.waitForURL((url) => url.origin === B && url.pathname === "/login", { timeout: 60_000 });
+}
+
 // ---------------------------------------------------------------------------
 // The steps
 // ---------------------------------------------------------------------------
 
 async function main(chromium) {
-  const started = (await ask({ op: "run_started" })).at;
-  const run = { name: "the run", from: started };
-  const window = (name, from = started) => ({ name, from, to: Date.now() });
   record.versions = { chromium: chromium.version() };
+  S.policyVersion = (await ask({ op: "legal_version" })).policy_version;
+  S.ttlHours = Number((await ask({ op: "setting", cell: "b", key: "session_ttl_hours" })).value);
+  S.clients = await ask({ op: "user_agents" });
 
   // 1. Setup at A: a passkey, @proof, enrollment at dir.test, the kit
-  // acknowledged, and the claim at the registry.
+  // acknowledged, and only then the claim at the registry.
   const deskContext = await freshContext(chromium);
   const desk = await deskContext.newPage();
   await authenticatorWith(desk);
+  let from = clock();
   await setUp(desk, A, "a");
+  windowed("setup", from, "setup at A");
+  const aCredential = await credentialFor(desk, "a.test");
+  S.credentials.a = { credentialId: aCredential.credentialId, signCount: aCredential.signCount, cose: coseTerm(aCredential.privateKey) };
+  await claim("setup:a.passkeys", "A's one passkey, the one the browser's authenticator holds", cyfrRows("a", "passkeys"), cyfrIo("a", "passkeys"));
+
+  from = clock();
   await desk.locator('[data-test="identity-handle-input"]').fill(HANDLE);
   await desk.waitForSelector('[data-test="identity-handle-check"][data-check="free"]', { timeout: 60_000 });
   await desk.locator('[data-test="identity-choose"]').click();
@@ -364,210 +353,101 @@ async function main(chromium) {
   await desk.locator(`${layer} [data-test="recovery-submit"]`).click();
   const enrollPreview = await confirmHere(desk);
   const kit = await readKit(desk);
+  windowed("enroll", from, "the enrollment, to the kit shown");
+  const id = kit.identifier;
+  S.identifier = id;
+  record.setup = { identifier: id, kit_directory: kit.directory_url, enroll_preview: enrollPreview };
+  if (!row("setup", PER.test(id) && kit.directory_url === DIRECTORY,
+    "A is set up through /setup with a passkey; @proof chosen, the enrollment at dir.test confirmed with it, the kit shown", record.setup)) return;
+
+  // Before the acknowledgement: the directory holds the genesis, the
+  // attempt is accepted, and the registry holds nothing of the person.
+  await claim("setup:dir.identity_log_entries", "the directory's one entry: A's genesis, whose hash is the identifier", cyfrRows("dir", "identity_log_entries"), {
+    ...cyfrIo("dir", "identity_log_entries"),
+    prepare: async (entries) => {
+      const entry = bytesFrom(entries[0]?.entry);
+      S.genesis.a = entry && sha256hex(entry) === id.slice(4) ? entry.toString("base64") : "";
+    },
+  });
+  await claim("setup:pre:a.identity_attempts", "A's enrollment attempt, accepted, its kit not yet acknowledged", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts"));
+  await claim("setup:pre:registry.namespaces[proof]", "the registry holds no @proof before the kit's acknowledgement", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
+  await claim("setup:pre:registry.policy_acceptances[a]", "nor an acceptance by A's identifier", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id"));
+  await claim("setup:pre:registry.request_nonces[a]", "nor a request A's identifier signed", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
+
+  from = clock();
   await saveKit(desk);
   await desk.waitForSelector('[data-test="identity-claimed"]', { timeout: 120_000 });
+  windowed("ack", from, "the kit's acknowledgement, to @proof claimed");
   const claimedText = await desk.locator('[data-test="identity-claimed"]').innerText();
-  const [aCredential] = await credentialsFor(desk, "a.test");
-  const setupDone = window("the run up to the claim");
-  const identifier = kit.identifier;
-  record.setup = { identifier, kit_directory: kit.directory_url, enroll_preview: enrollPreview, claimed: claimedText };
-  if (!row("setup", PER.test(identifier) && kit.directory_url === DIRECTORY && claimedText.includes(`@${HANDLE}`),
-    "A is set up through /setup with a passkey; @proof chosen, the enrollment at dir.test confirmed with it, the kit acknowledged and the handle claimed",
-    record.setup)) return;
+  row("setup", claimedText.includes(`@${HANDLE}`), "once the kit is acknowledged, the card claims @proof", { claimed: claimedText });
 
-  const aPasskeys = await cyfrRows("a", "passkeys")();
-  const aUserId = aPasskeys[0]?.user_id;
-  const aIdentities = await cyfrRows("a", "person_identities")();
-  const heads = await registryRows("identity_heads", "identifier", identifier)();
-  const keyEpoch = heads[0]?.key_epoch;
-  const recoveryEpoch = heads[0]?.recovery_epoch;
-
-  await check("setup", "a.passkeys", cyfrRows("a", "passkeys"), [{
-    id: shaped(CYFR_ID, "a CYFR id"),
-    user_id: derived(aUserId, "the user id A's one passkey row names (the row whose credential the browser holds)"),
-    credential_id: derived(aCredential.credentialId.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""), "the credential the browser's authenticator holds for a.test, base64url"),
-    rp_id: exact("a.test"),
-    relying_home: exact(A),
-    public_key: somebytes("a COSE public key: more than 32 bytes"),
-    sign_count: derived(aCredential.signCount, "the authenticator's count for that credential"),
-    identity_recovery_epoch: exact(null),
-    state: exact("active", "revoked"),
-    registration_digest: shaped(HASH, "a sha256: digest"),
-    possession_verified: exact(1),
-    expires_at: noTime(),
-    admin_confirmation_id: exact(null),
-    activated_at: during(setupDone),
-    revoked_at: exact(null),
-    inserted_at: during(setupDone),
-    updated_at: during(setupDone),
-  }], { stored: cyfrStore("a", "passkeys"), what: "A's one passkey, the one the browser holds" });
-
-  await check("setup", "a.users", cyfrRows("a", "users"), [{
-    id: derived(aUserId, "the passkey's user id"),
-    email: exact(null),
-    email_verified: exact(null),
-    admission: exact("setup", "open"),
-    display_name: exact(null),
-    namespace: exact(HANDLE),
-    personal_athanor_id: shaped(CYFR_ID, "an athanor id"),
-    status: exact("active"),
-    prefs: exact("{}"),
-    first_seen_at: during(setupDone),
-    last_seen_at: during({ ...run }),
-    denied_at: exact(null),
-    security_generation: exact(1),
-    created_at: during(setupDone),
-    updated_at: during({ ...run }),
-  }], { stored: cyfrStore("a", "users"), what: "A's one person, admitted by setup, holding @proof" });
-
-  await check("setup", "a.person_identities", cyfrRows("a", "person_identities"), [{
-    id: shaped(CYFR_ID, "a CYFR id"),
-    user_id: derived(aUserId, "the passkey's user id"),
-    identifier: derived(identifier, "the kit's identifier line, as the browser showed it"),
-    provenance: exact("local", "remote"),
-    enrollment: exact("enrolled", "none"),
-    live_public_key: nbytes(32, "an Ed25519 public key: 32 bytes"),
-    operational_public_key: nbytes(32, "an Ed25519 public key: 32 bytes"),
-    live_key_sealed: somebytes("sealed key material: more than 32 bytes"),
-    operational_key_sealed: somebytes("sealed key material: more than 32 bytes"),
-    genesis_hash: derived(`sha256:${identifier.slice(4)}`, "the identifier's hash, sha256: in place of per_"),
-    head_hash: derived(heads[0]?.head, "the head the registry read at dir.test (identity_heads)"),
-    directory_url: exact(DIRECTORY),
-    first_method_at: during(setupDone),
-    revision: exact(4, undefined, "`4`: the row as setup, the enrollment and the kit's acknowledgement leave it"),
-    inserted_at: during(setupDone),
-    updated_at: during(setupDone),
-  }], { stored: cyfrStore("a", "person_identities"), what: "A's identity: the kit's identifier, enrolled at dir.test" });
-
-  await check("setup", "registry.namespaces[proof]", registryRows("namespaces", "slug", HANDLE), [{
-    slug: exact(HANDLE),
-    kind: exact("personal"),
-    reserved: exact(false),
-    domain_verified: exact(false),
-    verify_token: exact(null),
-    verified_at: noTime(),
-    last_checked_at: noTime(),
-    consecutive_failures: exact(0),
-    display_name: exact(null),
-    expires_at: noTime(),
-    created_at: during(setupDone),
-    updated_at: during(setupDone),
-    owner_identifier: derived(identifier, "the kit's identifier"),
-    address: exact(null),
-    reserved_reason: exact(null),
-  }], { stored: registryStore("namespaces", "slug"), what: "the registry's @proof: personal, owned by A's identifier, no address" });
-
-  await check("setup", "registry.identity_heads", registryRows("identity_heads", "identifier", identifier), [{
-    identifier: derived(identifier, "the kit's identifier"),
-    head: derived(aIdentities[0]?.head_hash, "A's own head (person_identities.head_hash)"),
-    entries: exact(1),
-    recovery_epoch: shaped(EPOCH, "a recovery epoch"),
-    key_epoch: shaped(EPOCH, "a key epoch"),
-    read_at: during(setupDone),
-  }], { stored: registryStore("identity_heads", "identifier"), what: "the registry's read of A's log at dir.test" });
-
-  const answerModel = (address) => ({
-    status: exact(200),
-    protocol: exact("cyfr-handle/v1"),
-    registry: exact(REGISTRY),
-    handle: exact(HANDLE),
-    identifier: derived(identifier, "the kit's identifier"),
-    directory: exact(DIRECTORY),
-    ...(address ? { address: exact(address) } : {}),
+  await claim("setup:a.identity_attempts", "the attempt after the acknowledgement: the transition from the attempt read before it", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts"));
+  await claim("setup:a.athanors", "A's one athanor, its person's", cyfrRows("a", "athanors"), cyfrIo("a", "athanors"));
+  await claim("setup:a.memberships", "A's seats: the person's in their athanor, and the first person's platform grant", cyfrRows("a", "memberships"), cyfrIo("a", "memberships"));
+  await claim("setup:a.users", "A's one person, admitted by setup, holding @proof", cyfrRows("a", "users"), cyfrIo("a", "users"));
+  await claim("setup:a.person_identities", "A's identity: the kit's identifier, enrolled at dir.test, keys that open to the genesis's", cyfrRows("a", "person_identities"), {
+    ...cyfrIo("a", "person_identities"),
+    prepare: async ([identity]) => {
+      await opens("a", "identity", identity, "live_key_sealed", "live");
+      await opens("a", "identity", identity, "operational_key_sealed", "operational");
+    },
   });
-  const ownerVia = (address) => ({
-    status: null, protocol: null, registry: null, directory: null,
-    handle: "slug", identifier: "owner_identifier", address: address ? "address" : null,
-    value: (field) => ({ slug: `${HANDLE}x`, owner_identifier: `per_${"0".repeat(64)}`, address: `${A}:8443` })[field],
-    original: (field) => ({ slug: HANDLE, owner_identifier: identifier, address })[field],
-  });
-  const viaNamespace = (slug) => async (i, field, value, rowNow, phase) =>
-    registryStore("namespaces", "slug")(0, field, value, { slug: rowNow?.slug ?? slug }, phase);
-  await check("setup", "handle_answer[proof]", handleAnswer(HANDLE), answerModel(null),
-    { stored: viaNamespace(HANDLE), via: ownerVia(null), what: "the registry's answer for @proof: A's identifier and directory, no address" });
+  await claim("setup:registry.namespaces[proof]", "the registry's @proof: personal, owned by A's identifier, no address", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
+  await claim("setup:registry.identity_heads[a]", "the registry's read of A's log at dir.test", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
+  await claim("setup:registry.policy_acceptances[a]", "A's identifier's acceptance of the registry's policy", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id"));
+  await claim("setup:registry.request_nonces[a]", "the nonces of A's two signed requests, the acceptance and the claim", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
+  await claim("setup:handle_answer[proof]", "the registry's answer for @proof: A's identifier and directory, no address", handleAnswer(HANDLE), answerIo(HANDLE, id, null));
 
   // 2. Publication of A's address from Settings.
   const segment = await continueToCyfr(desk, A);
   await desk.goto(`${A}/a/${encodeURIComponent(segment)}/settings`);
   await connected(desk);
   await desk.waitForSelector('[data-test="identity-publish"][data-published="false"]', { timeout: 60_000 });
+  from = clock();
   await desk.locator('[data-test="identity-publish"] button').click();
   await desk.waitForSelector('[data-test="identity-publish"][data-published="true"]', { timeout: 60_000 });
-  const published = window("the run up to the publication");
+  windowed("publish", from, "the publication");
   row("publish", true, "Settings at A publishes A's address with @proof", {});
-  await check("publish", "registry.namespaces[proof]", registryRows("namespaces", "slug", HANDLE), [{
-    slug: exact(HANDLE),
-    kind: exact("personal"),
-    reserved: exact(false),
-    domain_verified: exact(false),
-    verify_token: exact(null),
-    verified_at: noTime(),
-    last_checked_at: noTime(),
-    consecutive_failures: exact(0),
-    display_name: exact(null),
-    expires_at: noTime(),
-    created_at: during(setupDone),
-    updated_at: during(published),
-    owner_identifier: derived(identifier, "the kit's identifier"),
-    address: exact(A),
-    reserved_reason: exact(null),
-  }], { stored: registryStore("namespaces", "slug"), what: "the registry's @proof now holds A's address" });
-  await check("publish", "handle_answer[proof]", handleAnswer(HANDLE), answerModel(A),
-    { stored: viaNamespace(HANDLE), via: ownerVia(A), what: "the registry's answer for @proof publishes A's address" });
+  await claim("publish:registry.namespaces[proof]", "the registry's @proof now holds A's address, created as it was", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
+  await claim("publish:handle_answer[proof]", "the registry's answer for @proof publishes A's address", handleAnswer(HANDLE), answerIo(HANDLE, id, A));
+  await claim("publish:registry.request_nonces[a]", "the nonces: setup's two held, and the publication's", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
+  await claim("publish:registry.identity_heads[a]", "the registry's read of A's log, refreshed by the signed request", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
 
   // 3. B's administrator, set up through /setup, allows @proof.
   const adminContext = await freshContext(chromium);
   const admin = await adminContext.newPage();
   await authenticatorWith(admin);
+  from = clock();
   await setUp(admin, B, "b");
   const bSegment = await continueToCyfr(admin, B);
-  const [bCredential] = await credentialsFor(admin, "b.test");
-  const bPasskeys = await cyfrRows("b", "passkeys")();
-  const bAdminId = bPasskeys.find((p) => p.credential_id === bCredential.credentialId.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""))?.user_id;
+  windowed("admin", from, "setup at B");
+  const bCredential = await credentialFor(admin, "b.test");
+  S.credentials.b = { credentialId: bCredential.credentialId, signCount: bCredential.signCount, cose: coseTerm(bCredential.privateKey) };
+  S.cookies.admin = await cookieDigest(adminContext, B, "b");
   await admin.goto(`${B}/a/${encodeURIComponent(bSegment)}/settings`);
   await connected(admin);
   const entry = admin.locator('#door-entry-form input[name="value"]');
   await entry.fill(`@${HANDLE}`);
   const allow = admin.locator("#door-entry-form button", { hasText: "Allow" });
   await waitFor(async () => (await allow.getAttribute("phx-value-door")) === `@${HANDLE}`, { timeoutMs: 30_000, what: "the door form taking @proof" });
+  from = clock();
   await allow.click();
   await admin.waitForSelector('[data-test="door-entry-label"]', { timeout: 60_000 });
-  const allowed = window("the run up to the allow");
+  windowed("allow", from, "the allow");
   row("allow", true, "B's administrator, set up through /setup, allows @proof in Settings", { flash: await flash(admin) });
-  await check("allow", "b.server_allowlist", cyfrRows("b", "server_allowlist"), [{
-    id: shaped(CYFR_ID, "a CYFR id"),
-    kind: exact("identifier", "person"),
-    value: derived(identifier, "the identifier @proof names at the registry (A's kit)"),
-    effect: exact("allow", "deny"),
-    status: exact("allowed", "requested"),
-    requested_by: exact(null),
-    added_by: derived(bAdminId, "B's administrator: the user of B's passkey the admin's browser holds"),
-    note: exact(null),
-    label: exact(HANDLE),
-    created_at: during(allowed),
-    updated_at: during(allowed),
-  }], { stored: cyfrStore("b", "server_allowlist"), what: "B's allowlist: one entry, A's identifier, labelled @proof" });
+  await claim("allow:b.passkeys", "B's one passkey, the administrator's", cyfrRows("b", "passkeys"), cyfrIo("b", "passkeys"));
+  await claim("allow:b.athanors", "B's one athanor, the administrator's", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
+  await claim("allow:b.memberships", "B's seats: the administrator's, and the platform grant", cyfrRows("b", "memberships"), cyfrIo("b", "memberships"));
+  await claim("allow:b.users", "B's one person, its administrator", cyfrRows("b", "users"), cyfrIo("b", "users"));
+  await claim("allow:b.server_allowlist", "B's allowlist: one entry, A's identifier, labelled @proof", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist"));
 
   // 4. At B, "I run my own CYFR" with @proof: A through the published
   // address, and the carry admits the person as A's identifier.
   const personContext = await freshContext(chromium);
   const person = await personContext.newPage();
-  await authenticatorWith(person, await credentialsFor(desk, "a.test"));
-  await person.goto(`${B}/login`);
-  await connected(person);
-  await person.locator("#cyfr-own-open").click();
-  await person.locator("#cyfr-own-entry").fill(`@${HANDLE}`);
-  await person.locator('#cyfr-own button[type="submit"]').click();
-  await person.waitForURL((url) => url.origin === A && url.pathname === "/login", { timeout: 60_000 });
-  await connected(person);
-  await ready(person);
-  await person.locator("#passkey-sign-in [data-webauthn-start]").click();
-  await person.waitForURL((url) => url.origin === A && url.pathname === "/carry", { timeout: 60_000 });
-  await connected(person);
-  await counted();
-  await person.waitForFunction((b) => document.getElementById("carry-destination")?.value === b, B, { timeout: 30_000 });
-  await person.locator('#carry-begin button[type="submit"]').click();
-  await person.waitForURL((url) => url.origin === B && url.pathname === "/login", { timeout: 60_000 });
+  await authenticatorWith(person, [await credentialFor(desk, "a.test")]);
+  from = clock();
+  await carryFrom(person, HANDLE);
   await person.waitForSelector('[data-test="code"]', { timeout: 60_000 });
   const code = (await person.locator('[data-test="code"]').textContent()).trim();
   await person.locator('[data-test="cyfr-continue"]').click();
@@ -578,134 +458,71 @@ async function main(chromium) {
   // which says they are signed in and have no athanor there.
   await person.waitForURL((url) => url.origin === B && url.search === "?error=no_athanor", { timeout: 90_000 });
   await connected(person);
-  const signedIn = window("the run up to B's admission");
+  windowed("signin", from, "the sign-in at B");
   const landedText = await person.locator("body").innerText();
   record.sign_in = {
     code, code_named_at_a: confirmation.includes(code), landed: person.url().replace(/#.*/, ""),
     says_signed_in: landedText.includes("You're signed in, but you have no athanor here yet."),
   };
   row("sign_in", record.sign_in.code_named_at_a && record.sign_in.landed === `${B}/login?error=no_athanor` && record.sign_in.says_signed_in,
-    "at B, @proof leads through the published address to A, A's confirmation names B's code, and B admits the person, who has no athanor there yet", record.sign_in);
-
-  const bIdentities = await cyfrRows("b", "person_identities", "identifier", identifier)();
-  const remoteId = bIdentities[0]?.user_id;
-  await check("sign_in", "b.person_identities[proof]", cyfrRows("b", "person_identities", "identifier", identifier), [{
-    id: shaped(CYFR_ID, "a CYFR id"),
-    user_id: derived(remoteId, "the user B's identity row for A's identifier names"),
-    identifier: derived(identifier, "A's kit"),
-    provenance: exact("remote", "local"),
-    enrollment: exact("enrolled", "none"),
-    live_public_key: exact(null, undefined, "`null`: B keeps no copy of a remote person's keys here; it reads them at the directory"),
-    operational_public_key: exact(null),
-    live_key_sealed: exact(null),
-    operational_key_sealed: exact(null),
-    genesis_hash: derived(`sha256:${identifier.slice(4)}`, "the identifier's hash, sha256: in place of per_"),
-    head_hash: derived(aIdentities[0]?.head_hash, "A's own head"),
-    directory_url: exact(DIRECTORY),
-    first_method_at: exact(null),
-    revision: exact(1),
-    inserted_at: during(signedIn),
-    updated_at: during(signedIn),
-  }], { stored: cyfrStore("b", "person_identities"), what: "B holds A's identifier as a remote person, under A's keys and head" });
-  const remoteUser = async () => (await cyfrRows("b", "users")()).filter((u) => u.id === remoteId);
-  await check("sign_in", "b.users[proof]", remoteUser, [{
-    id: derived(remoteId, "B's identity row for A's identifier"),
-    email: exact(null),
-    email_verified: exact(null),
-    admission: exact("remote", "open"),
-    display_name: exact(null),
-    namespace: exact(null),
-    personal_athanor_id: exact(null),
-    status: exact("active"),
-    prefs: exact("{}"),
-    first_seen_at: during(signedIn),
-    last_seen_at: during(run),
-    denied_at: exact(null),
-    security_generation: exact(1),
-    created_at: during(signedIn),
-    updated_at: during(run),
-  }], { stored: cyfrStore("b", "users"), what: "B's person for A's identifier, admitted remote" });
-  await check("sign_in", "b.sessions[proof]", cyfrRows("b", "sessions", "user_id", remoteId), [{
-    id: shaped(CYFR_ID, "a CYFR id"),
-    token_hash: nbytes(32, "a SHA-256 digest: 32 bytes"),
-    token_prefix: shaped(/^[A-Za-z0-9_-]{8}$/, "the session token's first 8 characters"),
-    user_id: derived(remoteId, "B's identity row for A's identifier"),
-    email: exact(null),
-    provider: exact("cyfr", "github"),
-    expires_at: later(signedIn, "after the sign-in"),
-    athanor_id: exact(null),
-    identity_key_epoch: derived(keyEpoch, "the key epoch the registry read at dir.test"),
-    cli_machine: exact(null),
-    inserted_at: during(signedIn),
-  }], { stored: cyfrStore("b", "sessions"), what: "B's session for the person, bound to A's identifier's key epoch" });
-
-  // 5. A second identity publishes A's address under @other; signing in
-  // at B as @other is refused wrong_identity.
-  const other = await ask({ op: "other_identity", handle: OTHER, address: A });
-  record.other = { identifier: other.identifier, steps: other.steps.map((s) => ({ op: s.op, status: s.status })) };
-  const otherHeld = row("wrong_identity",
-    isDeepStrictEqual(record.other.steps, [
-      { op: "genesis", status: 200 }, { op: "legal_version", status: 200 }, { op: "policy.accept", status: 201 },
-      { op: "handle.claim", status: 201 }, { op: "address.set", status: 200 },
-    ]) && PER.test(other.identifier) && other.identifier !== identifier,
-    "a second identity enrolls at dir.test, claims @other and publishes A's address with it", record.other);
-  if (!otherHeld) return;
-  await check("wrong_identity", "handle_answer[other]", handleAnswer(OTHER), {
-    status: exact(200),
-    protocol: exact("cyfr-handle/v1"),
-    registry: exact(REGISTRY),
-    handle: exact(OTHER),
-    identifier: derived(other.identifier, "the second identity's genesis"),
-    directory: exact(DIRECTORY),
-    address: exact(A),
-  }, {
-    stored: viaNamespace(OTHER),
-    via: {
-      status: null, protocol: null, registry: null, directory: null,
-      handle: "slug", identifier: "owner_identifier", address: "address",
-      value: (field) => ({ slug: `${OTHER}x`, owner_identifier: `per_${"1".repeat(64)}`, address: B })[field],
-      original: (field) => ({ slug: OTHER, owner_identifier: other.identifier, address: A })[field],
+    "at B, @proof leads through the published address to A, A's confirmation names B's code, and B admits the person, with no seat there", record.sign_in);
+  S.cookies.remote = await cookieDigest(personContext, B, "b");
+  await claim("sign_in:b.person_identities", "B's identities: its administrator's, and A's identifier as a remote person under A's genesis", cyfrRows("b", "person_identities"), {
+    ...cyfrIo("b", "person_identities"),
+    prepare: async (identities) => {
+      const own = identities.find((r) => r.provenance === "local");
+      await opens("b", "b.identity", own, "live_key_sealed", "live");
+      await opens("b", "b.identity", own, "operational_key_sealed", "operational");
     },
-    what: "the registry's answer for @other: the second identity, and A's address",
   });
-  const bUsersBefore = await cyfrRows("b", "users")();
-  const bSessionsBefore = await cyfrRows("b", "sessions")();
-  await person.goto(`${B}/login`);
-  await connected(person);
-  await person.locator("#cyfr-own-open").click();
-  await person.locator("#cyfr-own-entry").fill(`@${OTHER}`);
-  await person.locator('#cyfr-own button[type="submit"]').click();
-  await person.waitForURL((url) => url.origin === A && ["/carry", "/login"].includes(url.pathname), { timeout: 60_000 });
-  await connected(person);
-  record.other_carry_began_signed_in = new URL(person.url()).pathname === "/carry";
-  if (!record.other_carry_began_signed_in) {
-    await ready(person);
-    await person.locator("#passkey-sign-in [data-webauthn-start]").click();
-    await person.waitForURL((url) => url.origin === A && url.pathname === "/carry", { timeout: 60_000 });
-    await connected(person);
-    await counted();
-  }
-  await person.waitForFunction((b) => document.getElementById("carry-destination")?.value === b, B, { timeout: 30_000 });
-  await person.locator('#carry-begin button[type="submit"]').click();
-  await person.waitForURL((url) => url.origin === B && url.pathname === "/login", { timeout: 60_000 });
+  await claim("sign_in:b.users", "B's people: its administrator, and the person admitted remote", cyfrRows("b", "users"), cyfrIo("b", "users"));
+  const remoteId = S.rows["sign_in:b.person_identities"]?.find((r) => r.identifier === id)?.user_id ?? "";
+  await claim("sign_in:b.sessions[proof]", "the person's session at B: the browser's cookie's token, bound to the genesis's key epoch", cyfrRows("b", "sessions", "user_id", remoteId), cyfrIo("b", "sessions"));
+  await claim("sign_in:b.athanors", "B's athanors are only its administrator's: the admission made none", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
+  await claim("sign_in:b.memberships", "B's seats are only its administrator's: the admission made none", cyfrRows("b", "memberships"), cyfrIo("b", "memberships"));
+
+  // 5. A second identity publishes A's address under @other; signing in at
+  // B as @other is refused wrong_identity.
+  from = clock();
+  const other = await ask({ op: "other_identity", handle: OTHER, address: A });
+  windowed("other", from, "the second identity's requests");
+  S.other = other.identifier;
+  S.userAgents = { [id]: S.clients.cyfr, [other.identifier]: S.clients.curl };
+  S.genesis.c = other.genesis;
+  record.other = { identifier: other.identifier, steps: other.steps.map((s) => ({ op: s.op, status: s.status })) };
+  const otherSteps = [
+    { op: "genesis", status: 200 }, { op: "legal_version", status: 200 }, { op: "policy.accept", status: 201 },
+    { op: "handle.claim", status: 201 }, { op: "address.set", status: 200 },
+  ];
+  if (!row("wrong_identity", JSON.stringify(record.other.steps) === JSON.stringify(otherSteps) && PER.test(other.identifier) && other.identifier !== id,
+    "a second identity enrolls at dir.test, claims @other and publishes A's address with it", record.other)) return;
+  await claim("wrong_identity:dir.identity_log_entries", "the directory's entries: A's genesis as before, and the second identity's as it sent it", cyfrRows("dir", "identity_log_entries"), cyfrIo("dir", "identity_log_entries"));
+  await claim("wrong_identity:registry.namespaces[other]", "the registry's @other: owned by the second identity, A's address", registryRows("namespaces", "slug", OTHER), registryIo("namespaces", "slug"));
+  await claim("wrong_identity:registry.identity_heads[c]", "the registry's read of the second identity's log", registryRows("identity_heads", "identifier", other.identifier), registryIo("identity_heads", "identifier"));
+  await claim("wrong_identity:registry.policy_acceptances[c]", "the second identity's acceptance", registryRows("policy_acceptances", "identifier", other.identifier), registryIo("policy_acceptances", "id"));
+  await claim("wrong_identity:registry.request_nonces[c]", "the nonces of the second identity's three signed requests", registryRows("request_nonces", "identifier", other.identifier), registryIo("request_nonces", "nonce"));
+  await claim("wrong_identity:handle_answer[other]", "the registry's answer for @other: the second identity, and A's address", handleAnswer(OTHER), answerIo(OTHER, other.identifier, A));
+  await claim("wrong_identity:pre:b.sessions", "B's sessions before the attempt: the administrator's, its cookie's token, and the person's", cyfrRows("b", "sessions"), cyfrIo("b", "sessions"));
+
+  from = clock();
+  await carryFrom(person, OTHER);
   await person.waitForSelector('[data-test="sign-in-error"]', { timeout: 60_000 });
+  windowed("attempt", from, "the attempt as @other");
   const refusedText = (await person.locator('[data-test="sign-in-error"]').innerText()).trim();
-  const wrongIdentity = await ask({ op: "refusal", cell: "b", reason: "wrong_identity" });
-  const sentenceModel = { shown: exact(wrongIdentity.sentence), shared_with: exact([]) };
-  record.wrong_identity = { shown: refusedText, refusal: wrongIdentity };
-  await check("wrong_identity", "b.sign_in_error", async () => ({ shown: refusedText, shared_with: wrongIdentity.shared_with }), sentenceModel,
-    { what: "B's sign-in page shows wrong_identity's sentence, which no other sign-in refusal shares" });
-  const notWrongIdentity = mismatches({ shown: (await ask({ op: "refusal", cell: "b", reason: "wrong_destination" })).sentence, shared_with: [] }, sentenceModel);
-  row("wrong_identity", notWrongIdentity.length === 1 && notWrongIdentity[0].field === ".shown",
-    "the same check fails on wrong_destination's sentence", { mismatches: notWrongIdentity });
-  const unchanged = (rowsBefore) => rowsBefore.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) =>
-    [k, ["last_seen_at", "updated_at"].includes(k) && v !== null
-      ? bound("not before the value read before the attempt", (now) => msOf(now) >= msOf(v), LONG_AGO)
-      : exact(v, undefined, "the value read before the attempt")])));
-  await check("wrong_identity", "b.users", cyfrRows("b", "users"), unchanged(bUsersBefore),
-    { stored: cyfrStore("b", "users"), what: "B's people are the two it held before: nobody was admitted" });
-  await check("wrong_identity", "b.sessions", cyfrRows("b", "sessions"), unchanged(bSessionsBefore),
-    { stored: cyfrStore("b", "sessions"), what: "B's sessions are those it held before: no session was made" });
+  S.refusals.wrong_identity = await ask({ op: "refusal", cell: "b", reason: "wrong_identity" });
+  const otherSentence = (await ask({ op: "refusal", cell: "b", reason: "wrong_destination" })).sentence;
+  await claim("wrong_identity:b.sign_in_error", "B's sign-in page shows wrong_identity's sentence, distinct from every other sign-in refusal's; no wrong-destination request is made",
+    async () => ({ shown: refusedText, shared_with: S.refusals.wrong_identity.shared_with }), {
+      controls: [
+        { field: ".shown", says: "wrong_destination's sentence", corrupt: (o) => ({ ...o, shown: otherSentence }) },
+        { field: ".shared_with", says: "a refusal sharing the sentence", corrupt: (o) => ({ ...o, shared_with: ["wrong_destination"] }) },
+      ],
+    });
+  await claim("wrong_identity:b.users", "B's people are the two it held: nobody was admitted", cyfrRows("b", "users"), cyfrIo("b", "users"));
+  await claim("wrong_identity:b.sessions", "B's sessions are those it held before the attempt: none was made", cyfrRows("b", "sessions"), cyfrIo("b", "sessions"));
+  await claim("wrong_identity:b.person_identities", "B's identities are the two it held", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities"));
+  await claim("wrong_identity:b.athanors", "B's athanors are its administrator's alone", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
+  await claim("wrong_identity:b.memberships", "B's seats are its administrator's alone", cyfrRows("b", "memberships"), cyfrIo("b", "memberships"));
 
   // 6. registry.sync at A under the passkey stores a push token; the
   // registry bans the identifier; the token is refused there, and A's
@@ -713,82 +530,46 @@ async function main(chromium) {
   const registryPage = `${A}/a/${encodeURIComponent(segment)}/registry`;
   await desk.goto(registryPage);
   await connected(desk);
+  from = clock();
   await desk.locator("button", { hasText: "Sync push tokens" }).click();
   await confirmHere(desk);
   await desk.waitForFunction(() => document.body.innerText.includes("Your push tokens are synced."), null, { timeout: 60_000 });
-  const synced = window("the run up to the sync");
+  windowed("sync", from, "the sync");
   row("sync", true, "Sync push tokens at A, confirmed with the passkey, answers synced", { flash: await flash(desk) });
 
-  const tokens = await registryRows("push_tokens", "namespace_slug", HANDLE)();
-  const aTokens = await cyfrRows("a", "registry_tokens")();
+  const aUserId = S.rows["setup:a.passkeys"]?.[0]?.user_id;
   const credential = async () => (await ask({ op: "credential", user_id: aUserId, registry: OCI, slug: HANDLE })).credential;
-  const held1 = await credential().catch(() => null);
-  await check("sync", "a.registry_tokens", cyfrRows("a", "registry_tokens"), [{
-    id: shaped(CYFR_ID, "a CYFR id"),
-    user_id: derived(aUserId, "A's person"),
-    registry: exact(OCI, undefined, "`\"registry.registry.test\"`: the OCI host, registry. before CYFR_REGISTRY_URL"),
-    namespace_slug: exact(HANDLE),
-    credential_ciphertext: somebytes("sealed credential: more than 32 bytes"),
-    issued_at: during(synced),
-    inserted_at: during(synced),
-    updated_at: during(synced),
-  }], { stored: cyfrStore("a", "registry_tokens"), what: "A stores one push token, for @proof at registry.test" });
-  await check("sync", "a.registry_tokens.credential", credential, {
-    type: exact("push_token"),
-    token: derived({ sha256: (bytesOf(tokens[0]?.token_hash) ?? Buffer.from(String(tokens[0]?.token_hash ?? "").replace(/^\\x/, ""), "hex")).toString("hex") }, "the registry's token_hash for the one @proof token"),
-    namespace: exact(HANDLE),
-    role: exact("personal"),
-    issued_at: derived(held1 && aTokens[0] ? aTokens[0].issued_at.replace(" ", "T") : null, "the row's issued_at"),
-    label: derived(tokens[0]?.label, "the registry's label for that token"),
-  }, {
-    stored: async (i, field, value) => cyfrStore("a", "registry_tokens")(0, "credential_ciphertext", value, aTokens[0]),
-    via: {
-      type: "credential_ciphertext", token: "credential_ciphertext", namespace: "credential_ciphertext",
-      role: "credential_ciphertext", issued_at: "credential_ciphertext", label: "credential_ciphertext",
-      value: () => tampered(somebytes(""), aTokens[0].credential_ciphertext),
-      original: () => aTokens[0].credential_ciphertext,
+  const opened = await credential().catch(() => null);
+  const tokenRow = (await registryRows("push_tokens", "namespace_slug", HANDLE)())[0];
+  S.credentialOpened = !!opened && `\\x${opened.token?.sha256}` === tokenRow?.token_hash;
+  S.credentialDigest = opened?.token?.sha256;
+  S.credentialLabel = opened?.label;
+  await claim("sync:registry.push_tokens[proof]", "the registry holds one live token for @proof, made by A's identifier, whose digest is the token A sealed", registryRows("push_tokens", "namespace_slug", HANDLE), registryIo("push_tokens", "id"));
+  await claim("sync:a.registry_tokens", "A stores one push token, for @proof at the registry's OCI host", cyfrRows("a", "registry_tokens"), cyfrIo("a", "registry_tokens"));
+  const sealedRow = S.rows["sync:a.registry_tokens"]?.[0] ?? {};
+  const memberTamper = { type: "push_token~", token: "tampered", namespace: `${HANDLE}~`, role: "personal~", issued_at: LONG_AGO, label: `${opened?.label}~` };
+  await claim("sync:a.registry_tokens.credential", "the sealed credential: a push token whose digest is the registry's, each member resealed alone and refused", credential, {
+    via: Object.fromEntries(Object.entries(memberTamper).map(([member, value]) => [member, { target: member, value, original: sealedRow.credential_ciphertext }])),
+    write: async (i, member, value, rowNow, phase) => {
+      const answer = phase === "tamper"
+        ? await ask({ op: "reseal", user_id: aUserId, registry: OCI, slug: HANDLE, patch: { [member]: value } })
+        : await ask({ op: "set", cell: "a", table: "registry_tokens", id: sealedRow.id, field: "credential_ciphertext", value });
+      if (answer.set !== 1) throw new Error(`the credential's ${member}: the write changed ${JSON.stringify(answer)}`);
+      return answer;
     },
-    what: "the sealed credential: a push token whose digest is the registry's",
+    state: async () => ask({ op: "state", cell: "a", table: "registry_tokens" }),
   });
-  await check("sync", "registry.push_tokens[proof]", registryRows("push_tokens", "namespace_slug", HANDLE), [{
-    id: uuid("an id"),
-    token_hash: derived(tokens[0]?.token_hash, "the digest of the token A sealed (a.registry_tokens.credential)"),
-    namespace_slug: exact(HANDLE),
-    label: derived(held1?.label, "the label A sealed with the token"),
-    created_at: during(synced),
-    last_used_at: during(synced),
-    revoked_at: noTime(),
-    created_by: derived(identifier, "A's identifier"),
-    recovery_epoch: derived(recoveryEpoch, "the recovery epoch the registry read at dir.test"),
-  }], { stored: registryStore("push_tokens", "id"), what: "the registry holds one live token for @proof, made by A's identifier" });
+  await claim("sync:registry.request_nonces[a]", "the nonces: the earlier three held, and the sync's", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
+  await claim("sync:registry.identity_heads[a]", "the registry's read of A's log, refreshed by the sync's request", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
 
+  from = clock();
   const ban = await ask({ op: "ban", handle: HANDLE });
-  const banned = window("the sync's end to the ban's answer", synced.to);
+  windowed("ban", from, "the ban");
+  S.adminId = (await ask({ op: "admin_id" })).id;
   row("ban", ban.status === 303, "the registry's operator bans @proof's owner", { status: ban.status });
-  await check("ban", "registry.banned_identities", registryRows("banned_identities", "identifier", identifier), [{
-    id: uuid("an id"),
-    banned_at: during(banned),
-    banned_by: uuid("the operator account's id"),
-    reason: exact("handle proof"),
-    category: exact("spam", "other"),
-    expires_at: noTime(),
-    appeal_allowed_after: noTime(),
-    related_report_ids: exact([]),
-    identifier: derived(identifier, "A's identifier"),
-    former_identity: exact(null),
-  }], { stored: registryStore("banned_identities", "id"), what: "the ban names A's identifier" });
-  await check("ban", "registry.push_tokens[proof]", registryRows("push_tokens", "namespace_slug", HANDLE), [{
-    id: derived(tokens[0]?.id, "the token the sync minted"),
-    token_hash: derived(tokens[0]?.token_hash, "the token the sync minted"),
-    namespace_slug: exact(HANDLE),
-    label: derived(held1?.label, "the label A sealed with the token"),
-    created_at: derived(tokens[0]?.created_at, "the token the sync minted"),
-    last_used_at: derived(tokens[0]?.last_used_at, "the token the sync minted, as the sync left it"),
-    revoked_at: during(banned),
-    created_by: derived(identifier, "A's identifier"),
-    recovery_epoch: derived(recoveryEpoch, "the recovery epoch the registry read at dir.test"),
-  }], { stored: registryStore("push_tokens", "id"), what: "the ban revoked the token in its transaction" });
-  const revokedAt = (await registryRows("push_tokens", "namespace_slug", HANDLE)())[0]?.revoked_at;
+  await claim("ban:registry.banned_identities", "the ban names A's identifier, by the run's operator", registryRows("banned_identities", "identifier", id), registryIo("banned_identities", "id"));
+  await claim("ban:registry.push_tokens[proof]", "the ban revoked the token in its transaction", registryRows("push_tokens", "namespace_slug", HANDLE), registryIo("push_tokens", "id"));
+  const revokedAt = S.rows["ban:registry.push_tokens[proof]"]?.[0]?.revoked_at;
   const tokenUse = async () => {
     const { status, body } = await ask({ op: "token_use", user_id: aUserId, registry: OCI, slug: HANDLE });
     let parsed;
@@ -799,21 +580,23 @@ async function main(chromium) {
     }
     return { status, body: parsed };
   };
-  await check("ban", "token_refused", tokenUse, {
-    status: exact(401),
-    body: exact({ errors: [{ code: "UNAUTHORIZED", message: "token revoked" }] }),
-  }, {
-    stored: async (i, field, value, rowNow, phase) => registryStore("push_tokens", "id")(0, "revoked_at", value, tokens[0], phase),
-    via: {
-      status: "revoked_at", body: "revoked_at",
-      value: () => null,
-      original: () => revokedAt,
+  // With revoked_at cleared the token stands, and its use stamps
+  // last_used_at: the restore writes that back too.
+  let usedAt;
+  await claim("ban:token_refused", "A's stored token, presented to the registry, is refused", tokenUse, {
+    via: { status: { target: "revoked_at", value: null, original: revokedAt }, body: { target: "revoked_at", value: null, original: revokedAt } },
+    write: async (i, field, value, rowNow, phase) => {
+      if (phase === "tamper") usedAt = (await registryRows("push_tokens", "namespace_slug", HANDLE)())[0]?.last_used_at;
+      const answer = await registryWrite("push_tokens", "id", tokenRow?.id, field, value, phase);
+      if (phase === "restore") await registryWrite("push_tokens", "id", tokenRow?.id, "last_used_at", usedAt, "restore");
+      return answer;
     },
-    what: "A's stored token, presented to the registry, is refused",
+    state: async () => ask({ op: "registry_state", table: "push_tokens" }),
   });
 
   await desk.goto(registryPage);
   await connected(desk);
+  from = clock();
   await desk.locator("button", { hasText: "Sync push tokens" }).click();
   const outcome = await Promise.race([
     desk.waitForSelector(`${layer} [data-test="confirmation"][data-own="true"] [data-test="confirm-passkey"]`, { timeout: 60_000 }).then(() => "confirm"),
@@ -821,16 +604,53 @@ async function main(chromium) {
   ]);
   if (outcome === "confirm") await confirmHere(desk);
   await desk.waitForFunction(() => document.body.innerText.includes("Sync failed"), null, { timeout: 60_000 });
+  windowed("sync2", from, "the sync after the ban");
   // The flash's message alone, without its close control.
   const failedText = ((await desk.locator("#flash-error span").allInnerTexts()).map((t) => t.trim()).find((t) => t.includes("Sync failed"))) ?? "";
-  const bannedRefusal = await ask({ op: "refusal", cell: "a", reason: "banned" });
-  record.banned_sync = { shown: failedText, refusal: bannedRefusal, asked_confirmation: outcome === "confirm" };
-  const bannedModel = { shown: exact(`Sync failed: ${bannedRefusal.sentence}`), shared_with: exact([]) };
-  await check("ban", "a.sync_refused", async () => ({ shown: failedText, shared_with: bannedRefusal.shared_with }), bannedModel,
-    { what: "A's next sync answers banned's sentence" });
-  const notBanned = mismatches({ shown: `Sync failed: ${(await ask({ op: "refusal", cell: "a", reason: "registry_unavailable" })).sentence}`, shared_with: [] }, bannedModel);
-  row("ban", notBanned.length === 1 && notBanned[0].field === ".shown", "the same check fails on registry_unavailable's sentence", { mismatches: notBanned });
-  record.after_ban = { a_registry_tokens: await cyfrRows("a", "registry_tokens")() };
+  S.refusals.banned = await ask({ op: "refusal", cell: "a", reason: "banned" });
+  const unavailable = (await ask({ op: "refusal", cell: "a", reason: "registry_unavailable" })).sentence;
+  record.banned_sync = { shown: failedText, asked_confirmation: outcome === "confirm" };
+  await claim("ban:a.sync_refused", "A's next sync shows banned's sentence, which no other sync refusal shares",
+    async () => ({ shown: failedText, shared_with: S.refusals.banned.shared_with }), {
+      controls: [
+        { field: ".shown", says: "registry_unavailable's sentence", corrupt: (o) => ({ ...o, shown: `Sync failed: ${unavailable}` }) },
+        { field: ".shared_with", says: "a refusal sharing the sentence", corrupt: (o) => ({ ...o, shared_with: ["registry_unavailable"] }) },
+      ],
+    });
+  await claim("ban:registry.request_nonces[a]", "the refused sync recorded no nonce", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
+
+  // Every object read again, held to what was read before.
+  S.credentials.aLast = { signCount: (await credentialFor(desk, "a.test")).signCount };
+  const again = [
+    ["a.passkeys", "setup:a.passkeys", cyfrRows("a", "passkeys"), cyfrIo("a", "passkeys")],
+    ["a.users", "setup:a.users", cyfrRows("a", "users"), cyfrIo("a", "users")],
+    ["a.person_identities", "setup:a.person_identities", cyfrRows("a", "person_identities"), cyfrIo("a", "person_identities")],
+    ["a.athanors", "setup:a.athanors", cyfrRows("a", "athanors"), cyfrIo("a", "athanors")],
+    ["a.memberships", "setup:a.memberships", cyfrRows("a", "memberships"), cyfrIo("a", "memberships")],
+    ["a.identity_attempts", "setup:pre:a.identity_attempts", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts")],
+    ["a.registry_tokens", "sync:a.registry_tokens", cyfrRows("a", "registry_tokens"), cyfrIo("a", "registry_tokens")],
+    ["dir.identity_log_entries", "setup:dir.identity_log_entries", cyfrRows("dir", "identity_log_entries"), cyfrIo("dir", "identity_log_entries")],
+    ["registry.namespaces[proof]", "setup:registry.namespaces[proof]", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug")],
+    ["registry.namespaces[other]", "wrong_identity:registry.namespaces[other]", registryRows("namespaces", "slug", OTHER), registryIo("namespaces", "slug")],
+    ["registry.identity_heads[a]", "setup:registry.identity_heads[a]", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier")],
+    ["registry.identity_heads[c]", "wrong_identity:registry.identity_heads[c]", registryRows("identity_heads", "identifier", other.identifier), registryIo("identity_heads", "identifier")],
+    ["registry.policy_acceptances[a]", "setup:registry.policy_acceptances[a]", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id")],
+    ["registry.policy_acceptances[c]", "wrong_identity:registry.policy_acceptances[c]", registryRows("policy_acceptances", "identifier", other.identifier), registryIo("policy_acceptances", "id")],
+    ["registry.request_nonces[a]", "setup:registry.request_nonces[a]", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce")],
+    ["registry.request_nonces[c]", "wrong_identity:registry.request_nonces[c]", registryRows("request_nonces", "identifier", other.identifier), registryIo("request_nonces", "nonce")],
+    ["registry.push_tokens[proof]", "sync:registry.push_tokens[proof]", registryRows("push_tokens", "namespace_slug", HANDLE), registryIo("push_tokens", "id")],
+    ["registry.banned_identities", "ban:registry.banned_identities", registryRows("banned_identities", "identifier", id), registryIo("banned_identities", "id")],
+    ["b.passkeys", "allow:b.passkeys", cyfrRows("b", "passkeys"), cyfrIo("b", "passkeys")],
+    ["b.users", "sign_in:b.users", cyfrRows("b", "users"), cyfrIo("b", "users")],
+    ["b.person_identities", "sign_in:b.person_identities", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities")],
+    ["b.sessions", "wrong_identity:pre:b.sessions", cyfrRows("b", "sessions"), cyfrIo("b", "sessions")],
+    ["b.athanors", "allow:b.athanors", cyfrRows("b", "athanors"), cyfrIo("b", "athanors")],
+    ["b.memberships", "allow:b.memberships", cyfrRows("b", "memberships"), cyfrIo("b", "memberships")],
+    ["b.server_allowlist", "allow:b.server_allowlist", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist")],
+  ];
+  for (const [name, firstKey, read, io] of again) {
+    await claim(`held:${name}`, `${name}, read again at the end, is what was read before`, read, { ...io, only: capturedAt(firstKey) });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -863,20 +683,32 @@ const outcome = (step) => {
   if (!found.length) return "not reached";
   return found.every((r) => r.held) ? "held" : "FAILED";
 };
-writeFileSync(join(outDir, "handle-proof.json"), redact(JSON.stringify({ versions: record.versions, rows, record, failure }, null, 2)));
+record.tally = { loops: tally.loops, controls: tally.controls, skipped: tally.skipped };
+// What the models are built from, as the run captured it (`seen`), so a
+// reader can build them again from the record. No authenticator's private
+// key is in it: the COSE key each derives is.
+writeFileSync(join(outDir, "handle-proof.json"), redact(JSON.stringify({ versions: record.versions, rows, record, seen: S, failure }, null, 2)));
 const header = ["| object | field | class | value, source or bound |", "|---|---|---|---|"];
 const tableText = [...header, ...table].join("\n");
 writeFileSync(join(outDir, "handle-proof-fields.md"), `${tableText}\n`);
+// The README's table holds exactly the rows the models print, one line
+// each; a list's rows come in the order the run read them, so lines are
+// compared as sorted.
 let readmeHolds = false;
 try {
-  readmeHolds = !failure && readFileSync(new URL("./README.md", import.meta.url), "utf8").includes(tableText);
+  const readme = readFileSync(new URL("./README.md", import.meta.url), "utf8").split("\n");
+  const start = readme.indexOf(header[0]);
+  const end = readme.findIndex((l, i) => i > start + 1 && !l.startsWith("|"));
+  const lines = start < 0 ? [] : readme.slice(start + 2, end < 0 ? readme.length : end);
+  readmeHolds = !failure && JSON.stringify([...lines].sort()) === JSON.stringify([...table].sort());
 } catch {
   readmeHolds = false;
 }
 if (!failure && rows.length) row("readme", readmeHolds, "README.md's field table is the one the models print", {});
 const summary = ["| step | outcome |", "|---|---|", ...[...STEPS, "readme"].map((step) => `| ${step} | ${outcome(step)} |`)];
-writeFileSync(join(outDir, "handle-proof.md"), `${summary.join("\n")}\n`);
+writeFileSync(join(outDir, "handle-proof.md"), `${summary.join("\n")}\n\nTamper loops run: ${tally.loops}. Controls refused: ${tally.controls}. Fields with no loop here, each named with its reason in handle-proof.json: ${tally.skipped.length}.\n`);
 console.log(summary.join("\n"));
+console.log(`tamper loops run: ${tally.loops}; controls refused: ${tally.controls}; fields with no loop here, each named: ${tally.skipped.length}`);
 if (failure || [...STEPS, "readme"].some((step) => outcome(step) !== "held")) {
   console.error("FAIL: a step of the handle proof did not hold");
   process.exit(1);
