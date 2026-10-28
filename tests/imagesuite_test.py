@@ -363,6 +363,15 @@ class RuntimeRestart(unittest.TestCase):
         self.assertIn("the service's log", message)
 
 
+class RuntimeObservations(unittest.TestCase):
+    """tests/locus-runtime-image/stack_test.py, the runtime stack's observations with docker stubbed, as its own entry script."""
+
+    def test_a_failed_observation_is_never_read_as_absence(self):
+        script = os.path.join(TESTS, "locus-runtime-image", "stack_test.py")
+        result = subprocess.run([sys.executable, "-I", "-B", script], capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 # A suite's one-off containers as its functions start them, each call to
 # `run` recorded instead of made: the first `docker run` ends the call.
 ONE_OFF = r"""
