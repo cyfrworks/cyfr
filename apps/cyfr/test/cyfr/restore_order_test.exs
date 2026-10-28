@@ -37,7 +37,7 @@ defmodule Cyfr.RestoreOrderTest do
   test "the three refused shapes remain direct mutations" do
     plants = [
       {"mutate_first",
-       "Application.put_env(:plant, :key, 1)\non_exit(fn -> Application.delete_env(:plant, :key) end)"},
+       "import ExUnit.Callbacks\nApplication.put_env(:plant, :key, 1)\non_exit(fn -> Application.delete_env(:plant, :key) end)"},
       {"after_only",
        "try do\nSystem.put_env(\"PLANT\", \"1\")\nafter\nSystem.delete_env(\"PLANT\")\nend"},
       {"async", "use ExUnit.Case, async: true\n:persistent_term.put(:plant, 1)"}
@@ -103,6 +103,7 @@ defmodule Cyfr.RestoreOrderTest do
   test "only callback bodies, the helper and suite setup are exceptions" do
     source = """
     alias ExUnit.Callbacks, as: Callbacks
+    import ExUnit.Callbacks
     # Application.put_env(:plant, :comment, 1)
     "System.put_env(only text)"
     on_exit(fn -> Application.delete_env(:plant, :key) end)
@@ -115,6 +116,67 @@ defmodule Cyfr.RestoreOrderTest do
              sites([{"plant.ex", source}])["plant.ex"]
 
     assert sites([{@helper, source}, {"apps/plant/test/test_helper.exs", source}]) == %{}
+  end
+
+  test "a locally defined on_exit is not ExUnit cleanup, even when defined after its call" do
+    source = """
+    defmodule Plant.LocalCallback do
+      def run, do: on_exit(fn -> Application.put_env(:elixir, :plant_local, :changed) end)
+      defp on_exit(fun), do: fun.()
+    end
+    """
+
+    assert [%{calls: 1}] = check([{"plant.ex", source}], %{})
+  end
+
+  test "cleanup imports follow cases, qualified calls and explicit exclusions" do
+    sources = [
+      {"case.ex", "defmodule Plant.Case do\nuse ExUnit.CaseTemplate\nend"},
+      {"plant_test.exs",
+       """
+       defmodule Plant.Cleanup do
+         use Plant.Case
+         on_exit(fn -> Application.delete_env(:plant, :key) end)
+         ExUnit.Callbacks.on_exit(fn -> System.delete_env("PLANT") end)
+         :"Elixir.ExUnit.Callbacks".on_exit(fn -> :persistent_term.erase(:plant) end)
+       end
+       defmodule Plant.NoCleanupImport do
+         use ExUnit.Case
+         import ExUnit.Callbacks, except: [on_exit: 1]
+         on_exit(fn -> Application.put_env(:plant, :key, 1) end)
+       end
+       """}
+    ]
+
+    assert [%{path: "plant_test.exs", calls: 1}] = check(sources, %{})
+  end
+
+  @tag :case_provenance
+  test "a case user receives its macro's imports rather than the provider's own imports" do
+    for injected <- [
+          "import Plant.Immediate, only: [on_exit: 1]",
+          "use ExUnit.Case\nimport ExUnit.Callbacks, except: [on_exit: 1]\nimport Plant.Immediate"
+        ] do
+      source = """
+      defmodule Plant.Immediate do
+        def on_exit(fun), do: fun.()
+      end
+      defmodule Plant.Provider do
+        use ExUnit.Case
+        defmacro __using__(_) do
+          quote do
+            #{injected}
+          end
+        end
+      end
+      defmodule Plant.User do
+        use Plant.Provider
+        def run, do: on_exit(fn -> Application.put_env(:plant, :key, :changed) end)
+      end
+      """
+
+      assert [%{calls: 1}] = check([{"plant.ex", source}], %{})
+    end
   end
 
   test "aliases and imports stay inside their lexical scope" do
@@ -133,6 +195,43 @@ defmodule Cyfr.RestoreOrderTest do
     """
 
     assert [%{line: 4}, %{line: 5}] = sites([{"plant.ex", source}])["plant.ex"]
+  end
+
+  for {name, source} <- [
+        {"imports of the same name at different arities",
+         """
+         defmodule Plant.ImportArities do
+           import Application, only: [put_env: 3]
+           import System, only: [put_env: 2]
+           def run, do: put_env(:elixir, :plant_import_arity, :changed)
+         end
+         Plant.ImportArities.run()
+         """},
+        {"a piped argument in an imported call",
+         """
+         defmodule Plant.ImportPipe do
+           import Application, only: [put_env: 3]
+           def run, do: :elixir |> put_env(:plant_import_pipe, :changed)
+         end
+         Plant.ImportPipe.run()
+         """},
+        {"an imported on_exit that executes immediately",
+         """
+         defmodule Plant.Immediate do
+           def on_exit(fun), do: fun.()
+         end
+         defmodule Plant.ForeignCallback do
+           import Plant.Immediate, only: [on_exit: 1]
+           def run, do: on_exit(fn -> Application.put_env(:elixir, :plant_foreign, :changed) end)
+         end
+         Plant.ForeignCallback.run()
+         """},
+        {"a literal Elixir module atom",
+         ~S[:"Elixir.Application".put_env(:elixir, :plant_literal, :changed)]}
+      ] do
+    test "the scan refuses #{name}" do
+      assert [%{calls: 1, expected: 0}] = check([{"plant.ex", unquote(source)}], %{})
+    end
   end
 
   def tree_sources do
@@ -196,18 +295,39 @@ defmodule Cyfr.RestoreOrderTest do
   end
 
   def sites(sources) do
-    for {path, source} <- sources,
-        path != @helper,
-        Path.basename(path) != "test_helper.exs",
-        reduce: %{} do
+    parsed =
+      for {path, source} <- sources,
+          path != @helper,
+          Path.basename(path) != "test_helper.exs",
+          do: {path, Code.string_to_quoted!(source, file: path)}
+
+    modules = module_catalog(parsed)
+
+    for {path, ast} <- parsed, reduce: %{} do
       acc ->
-        ast = Code.string_to_quoted!(source, file: path)
-        {_, calls} = walk(ast, %{aliases: %{}, imports: %{}}, [])
+        ctx = %{aliases: %{}, imports: %{}, locals: MapSet.new(), modules: modules}
+        {_, calls} = walk(ast, ctx, [])
         if calls == [], do: acc, else: Map.put(acc, path, Enum.reverse(calls))
     end
   end
 
   defp walk({:__block__, _, nodes}, ctx, calls), do: walk(nodes, ctx, calls)
+
+  defp walk({:defmodule, _, [_name, [do: body]]}, ctx, calls) do
+    facts = module_facts(body)
+    {_, calls} = walk(body, %{ctx | locals: facts.locals}, calls)
+    {ctx, calls}
+  end
+
+  defp walk({:use, _, [target | args]}, ctx, calls) do
+    ctx = apply_use(module_name(target, ctx), ctx, [])
+    {_, calls} = walk(args, ctx, calls)
+    {ctx, calls}
+  end
+
+  defp walk({:|>, _, [left, right]}, ctx, calls) do
+    walk(Macro.pipe(left, right, 0), ctx, calls)
+  end
 
   defp walk({:alias, _, [{{:., _, [base, :{}]}, _, children}]}, ctx, calls) do
     prefix = module_name(base, ctx)
@@ -231,10 +351,7 @@ defmodule Cyfr.RestoreOrderTest do
   defp walk({:import, _, [target | rest]}, ctx, calls) do
     name = module_name(target, ctx)
     opts = List.first(rest) || []
-    functions = Map.get(@mutations, name, [])
-    functions = if name == "ExUnit.Callbacks", do: [:on_exit | functions], else: functions
-    imports = Enum.reduce(functions, ctx.imports, &Map.put(&2, &1, {name, opts}))
-    {%{ctx | imports: imports}, calls}
+    {import_functions(name, opts, ctx), calls}
   end
 
   defp walk({:&, _, [{:/, _, [target, arity]}]}, ctx, calls) do
@@ -284,25 +401,11 @@ defmodule Cyfr.RestoreOrderTest do
   end
 
   defp imported(fun, arity, ctx) do
-    case ctx.imports[fun] do
-      {name, opts} ->
-        allowed =
-          case Keyword.get(opts, :only) do
-            nil -> true
-            :functions -> true
-            :macros -> false
-            functions -> {fun, arity} in functions
-          end
-
-        if allowed and {fun, arity} not in Keyword.get(opts, :except, []), do: name
-
-      nil ->
-        nil
-    end
+    unless MapSet.member?(ctx.locals, {fun, arity}), do: ctx.imports[{fun, arity}]
   end
 
   defp callback?(:on_exit, arity, ctx),
-    do: imported(:on_exit, arity, ctx) in [nil, "ExUnit.Callbacks"]
+    do: imported(:on_exit, arity, ctx) == "ExUnit.Callbacks"
 
   defp callback?({:., _, [target, :on_exit]}, _arity, ctx),
     do: module_name(target, ctx) == "ExUnit.Callbacks"
@@ -316,9 +419,186 @@ defmodule Cyfr.RestoreOrderTest do
     Enum.join([first | Enum.map(rest, &segment/1)], ".")
   end
 
-  defp module_name(name, _ctx) when is_atom(name), do: ":#{name}"
+  defp module_name(name, _ctx) when is_atom(name) do
+    case Atom.to_string(name) do
+      "Elixir." <> name -> name
+      name -> ":" <> name
+    end
+  end
+
   defp module_name(_dynamic, _ctx), do: nil
 
   defp segment(part) when is_atom(part), do: Atom.to_string(part)
   defp segment(part), do: Macro.to_string(part)
+
+  defp import_functions(name, opts, ctx) do
+    exports =
+      case Keyword.get(opts, :only) do
+        functions when is_list(functions) -> functions
+        :macros -> []
+        _ -> module_exports(name, ctx.modules)
+      end
+
+    imports = Map.reject(ctx.imports, fn {_signature, module} -> module == name end)
+
+    imports =
+      for signature <- exports,
+          signature not in Keyword.get(opts, :except, []),
+          reduce: imports do
+        imports -> Map.put(imports, signature, name)
+      end
+
+    %{ctx | imports: imports}
+  end
+
+  defp module_exports(name, modules) do
+    case modules[name] do
+      %{exports: exports} -> MapSet.to_list(exports)
+      nil -> beam_exports(name)
+    end
+  end
+
+  defp beam_exports(nil), do: []
+
+  defp beam_exports(name) do
+    file =
+      case name do
+        ":" <> name -> name <> ".beam"
+        name -> "Elixir." <> name <> ".beam"
+      end
+
+    with path when path != :non_existing <- :code.where_is_file(String.to_charlist(file)),
+         {:ok, {_module, [exports: exports]}} <- :beam_lib.chunks(path, [:exports]) do
+      exports
+    else
+      _ -> []
+    end
+  end
+
+  defp module_catalog(parsed) do
+    Enum.reduce(parsed, %{}, fn {_path, ast}, catalog ->
+      {_, catalog} =
+        Macro.prewalk(ast, catalog, fn
+          {:defmodule, _, [name, [do: body]]} = node, catalog ->
+            case module_name(name, %{aliases: %{}}) do
+              nil -> {node, catalog}
+              name -> {node, Map.put(catalog, name, module_facts(body))}
+            end
+
+          node, catalog ->
+            {node, catalog}
+        end)
+
+      catalog
+    end)
+  end
+
+  defp module_facts(body) do
+    initial = %{locals: MapSet.new(), exports: MapSet.new(), injection: [], template?: false}
+    ctx = %{aliases: %{}, injecting?: false, in_function?: false}
+    {_, facts} = facts(body, ctx, initial)
+
+    %{
+      facts
+      | injection: Enum.reverse(facts.injection),
+        template?: facts.template? and not MapSet.member?(facts.locals, {:__using__, 1})
+    }
+  end
+
+  defp facts({:defmodule, _, _}, ctx, facts), do: {ctx, facts}
+  defp facts({:__block__, _, nodes}, ctx, facts), do: facts(nodes, ctx, facts)
+
+  defp facts({:alias, _, _} = node, ctx, facts) do
+    {updated, []} = walk(node, ctx, [])
+    aliases = Map.reject(updated.aliases, fn {name, target} -> ctx.aliases[name] == target end)
+    {updated, inject(facts, ctx, {:alias, aliases})}
+  end
+
+  defp facts({:use, _, [target | _]}, ctx, facts) do
+    target = module_name(target, ctx)
+
+    facts =
+      if not ctx.in_function? and not ctx.injecting? and target == "ExUnit.CaseTemplate",
+        do: %{facts | template?: true},
+        else: inject(facts, ctx, {:use, target})
+
+    {ctx, facts}
+  end
+
+  defp facts({:import, _, [target | rest]}, ctx, facts),
+    do: {ctx, inject(facts, ctx, {:import, module_name(target, ctx), List.first(rest) || []})}
+
+  defp facts({:using, _, [[do: body]]}, ctx, facts) do
+    {_, facts} = facts(body, %{ctx | injecting?: true}, facts)
+    {ctx, facts}
+  end
+
+  defp facts({kind, _, [head | args]}, ctx, facts)
+       when kind in [:def, :defp, :defmacro, :defmacrop, :defdelegate] do
+    signatures = signatures(head)
+
+    facts =
+      if ctx.injecting? do
+        inject(facts, ctx, {:local, signatures})
+      else
+        exports =
+          if kind in [:def, :defmacro, :defdelegate],
+            do: MapSet.union(facts.exports, signatures),
+            else: facts.exports
+
+        %{facts | locals: MapSet.union(facts.locals, signatures), exports: exports}
+      end
+
+    injecting? =
+      kind in [:defmacro, :defmacrop] and MapSet.member?(signatures, {:__using__, 1})
+
+    {_, facts} = facts(args, %{ctx | injecting?: injecting?, in_function?: true}, facts)
+    {ctx, facts}
+  end
+
+  defp facts(nodes, ctx, facts) when is_list(nodes),
+    do: Enum.reduce(nodes, {ctx, facts}, fn node, {ctx, facts} -> facts(node, ctx, facts) end)
+
+  defp facts(node, ctx, facts) when is_tuple(node) do
+    {_, facts} = facts(Tuple.to_list(node), ctx, facts)
+    {ctx, facts}
+  end
+
+  defp facts(_literal, ctx, facts), do: {ctx, facts}
+
+  defp signatures({:when, _, [head | _]}), do: signatures(head)
+
+  defp signatures({name, _, args}) when is_atom(name) and is_list(args) do
+    required = length(args) - Enum.count(args, &match?({:\\, _, _}, &1))
+    MapSet.new(for arity <- required..length(args), do: {name, arity})
+  end
+
+  defp signatures({name, _, nil}) when is_atom(name), do: MapSet.new([{name, 0}])
+  defp signatures(_dynamic), do: MapSet.new()
+
+  defp inject(facts, %{injecting?: true}, action),
+    do: %{facts | injection: [action | facts.injection]}
+
+  defp inject(facts, _ctx, _action), do: facts
+
+  defp apply_use(name, ctx, _seen)
+       when name in ["ExUnit.Case", "ExUnit.CaseTemplate", "ExUnit.Callbacks"],
+       do: import_functions("ExUnit.Callbacks", [], ctx)
+
+  defp apply_use(name, ctx, seen) do
+    case {name in seen, ctx.modules[name]} do
+      {false, %{template?: template?, injection: injection}} ->
+        ctx = if template?, do: apply_use("ExUnit.Case", ctx, seen), else: ctx
+
+        Enum.reduce(injection, ctx, fn
+          {:use, target}, ctx -> apply_use(target, ctx, [name | seen])
+          {:import, target, opts}, ctx -> import_functions(target, opts, ctx)
+          {:alias, aliases}, ctx -> %{ctx | aliases: Map.merge(ctx.aliases, aliases)}
+          {:local, signatures}, ctx -> %{ctx | locals: MapSet.union(ctx.locals, signatures)}
+        end)
+
+      _ ->
+        ctx
+    end
+  end
 end
