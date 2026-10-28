@@ -759,8 +759,8 @@ database_path: ./data/cyfr.db
 		fmt.Fprintln(out, "")
 		fmt.Fprintln(out, "⚠  dev build — docker-compose.yml, Caddyfile, .env.example and the bundled")
 		fmt.Fprintln(out, "   scaffold (guides, wit/, aqua/) are only fetched for released")
-		fmt.Fprintln(out, "   versions. Run the server from source with `mix phx.server`, or copy those")
-		fmt.Fprintln(out, "   files from a repo checkout.")
+		fmt.Fprintln(out, "   versions. Copy those files from a repo checkout, or run the server from")
+		fmt.Fprintln(out, "   the checkout itself as CONTRIBUTING.md's \"Running from source\" says.")
 	}
 	if envCreated && !adminEmailConfigured {
 		fmt.Fprintln(out, "")
