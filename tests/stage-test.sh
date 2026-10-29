@@ -368,10 +368,12 @@ import glob, os, re, sys, yaml
 workflows, table = sys.argv[1:3]
 rows = [line.rstrip("\n").split("\t") for line in open(table) if line.strip() and not line.startswith("#")]
 handoff = [row[5] for row in rows if row[0] == "handoff"]
-# A self-test is a script under tests/ named *-test.sh, *_test.py or
-# *-test.exs, or any tests/ script given --self-check.
+# A self-test is a script under tests/ that a pull-request workflow runs,
+# named *-test.sh, *_test.py or *-test.exs; or a Python script under tests/
+# run with no argument, or with --self-check alone. A Python script given
+# anything else (an image suite, given its image) is not one.
 test_file = re.compile(r"(?<![\w/.-])(tests/[\w./-]+?(?:-test\.sh|_test\.py|-test\.exs))(?![\w./-])")
-self_check = re.compile(r"(?<![\w/.-])(tests/[\w./-]+\.py)\s+--self-check")
+python_run = re.compile(r"(?<![\w/.-])python3?(?:[ \t]+-[A-Za-z]+)*[ \t]+(tests/[\w./-]+\.py)((?:[ \t]+[^\s;&|]+)*)")
 missing = set()
 for path in sorted(glob.glob(os.path.join(workflows, "*.yml"))):
     spec = yaml.safe_load(open(path))
@@ -381,12 +383,18 @@ for path in sorted(glob.glob(os.path.join(workflows, "*.yml"))):
     for job in spec["jobs"].values():
         for step in job.get("steps", []):
             run = step.get("run") or ""
-            for name in test_file.findall(run):
-                if not any(re.search(r"(?<![\w/.-])" + re.escape(name) + r"(?![\w./-])", c) for c in handoff):
-                    missing.add(name)
-            for name in self_check.findall(run):
-                if not any(re.search(re.escape(name) + r"\s+--self-check", c) for c in handoff):
-                    missing.add(name + " --self-check")
+            for line in run.splitlines():
+                for name in test_file.findall(line):
+                    if not any(re.search(r"(?<![\w/.-])" + re.escape(name) + r"(?![\w./-])", c) for c in handoff):
+                        missing.add(name)
+                for name, args in python_run.findall(line):
+                    words = args.split()
+                    if words == []:
+                        if not any(re.search(r"(?<![\w/.-])" + re.escape(name) + r"(?![\w./-])", c) for c in handoff):
+                            missing.add(name)
+                    elif words == ["--self-check"]:
+                        if not any(re.search(re.escape(name) + r"\s+--self-check", c) for c in handoff):
+                            missing.add(name + " --self-check")
 print("\n".join(sorted(missing)))
 PY
 }
@@ -394,5 +402,13 @@ left=$(guard "$ROOT/scripts/stages.tsv")
 [ -z "$left" ] || fail "no handoff row runs: $left"
 grep -v $'^handoff\tcontain-test\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
 [ "$(guard "$S/stages-short.tsv")" = tests/contain-test.sh ] || fail "a table without the contain-test row was not caught: $(guard "$S/stages-short.tsv")"
+# A Python self-test needs no particular name: release.yml's graph check is
+# run with no argument, as the image suites' self-checks are run with
+# --self-check alone. A table without its row is caught.
+grep -v $'^handoff\trelease-graph\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
+[ "$(guard "$S/stages-short.tsv")" = tests/ci-release-graph.py ] || fail "a table without the release-graph row was not caught: $(guard "$S/stages-short.tsv")"
+grep -v $'^handoff\truntime-image-checks\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
+[ "$(guard "$S/stages-short.tsv")" = "$(printf '%s\n' tests/locus-runtime-image/canary_test.py 'tests/locus-runtime-image/worker_auth.py --self-check')" ] ||
+  fail "a table without the runtime-image-checks row was not caught: $(guard "$S/stages-short.tsv")"
 
 echo 'stage tests passed'
