@@ -2,10 +2,12 @@
 // Copyright 2026 CYFR Works Inc.
 //
 // The head predicates of the grant proof (proof.mjs): what two heads hold in
-// common, what the head the first grant commits holds, what the head a
-// re-grant commits holds, and what a revocation answers, with the copies of a
-// head each must refuse. They are kept apart from the proof so heads-test.mjs
-// can run them on heads without a browser.
+// common (sameHead), what the head the first grant commits holds
+// (grantedHeld), what the command line's preview of a grant answers
+// (previewHeld), what the head a re-grant commits holds (regrantHeld,
+// flowsHeld), and what a revocation answers (revokedHeld), with the copies of
+// each object its predicate must refuse. They are kept apart from the proof so
+// heads-test.mjs can run them without a browser.
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 // An id as the home mints one: its kind's prefix and a UUIDv7

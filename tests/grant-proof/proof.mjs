@@ -85,13 +85,10 @@ function row(step, held, what, detail) {
 // carries a single-use proof.
 const previewShown = (answer) =>
   answer.commit_digest || { error: answer.error ?? null, keys: Object.keys(answer).sort() };
-// What the record keeps of a preview's answer: the whole document with its
-// single-use proof replaced by its length, or what previewShown keeps of an
-// error.
-const previewRecord = (answer) =>
-  answer.commit_digest
-    ? { ...answer, proof: typeof answer.proof === "string" ? `[${answer.proof.length} characters]` : answer.proof }
-    : previewShown(answer);
+// What the record keeps of a preview's answer: the whole document, whose
+// single-use proof the record's redaction writes as [secret] (`proof` is a
+// secret key in ../browser/lib.mjs), or what previewShown keeps of an error.
+const previewRecord = (answer) => (answer.commit_digest ? answer : previewShown(answer));
 
 const ask = (request, options) => askRunSh(request, { outDir, ...options });
 
