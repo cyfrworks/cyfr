@@ -58,5 +58,24 @@ class IpcTables(unittest.TestCase):
             self.read(2, TABLES)
 
 
+class ListeningAddresses(unittest.TestCase):
+    """The container's listening addresses are read from its own tables by a command that exits 0: a failed read is no answer."""
+
+    def read(self, status, stdout):
+        class Observer:
+            def exec(self, script, user=None):
+                return subprocess.CompletedProcess([], status, stdout, "" if status == 0 else "daemon error")
+
+        return isolation.listening_addresses(Observer())
+
+    def test_a_failed_read_is_no_answer(self):
+        with self.assertRaises(SystemExit):
+            self.read(2, "")
+
+    def test_the_addresses_that_were_read_are_the_control(self):
+        self.assertEqual(self.read(0, "0100007F:0035\n0000000000000000FFFF0000:1F90\n"),
+                         ["0100007F:0035", "0000000000000000FFFF0000:1F90"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -566,6 +566,16 @@ def guard_counters(saved):
     return counters
 
 
+def backend_environ(stack, pid, uid):
+    """The environment of process `pid` as `NAME=value` lines, read as the backend's own uid, which runs the process."""
+    return read_output(stack.exec(f"tr '\\0' '\\n' < /proc/{pid}/environ", user=str(uid)), f"the environment of pid {pid}")
+
+
+def image_user_name(stack, uid):
+    """The name the image gives `uid`, read from its passwd entry."""
+    return read_output(stack.exec(f'user="$(getent passwd {uid})" && echo "${{user%%:*}}"'), f"the image's name for uid {uid}").strip()
+
+
 # A probe of one connection per target, run by node under a backend's uid:
 # for each `host:port` after the argument `targets` (an IPv6 host in
 # brackets, a zone allowed), the code the kernel answers the connect with,
@@ -700,7 +710,9 @@ class Stack(imagesuite.Stack):
 
     def guard_counters(self):
         """The packets each of the guard's rules has matched, by the rule's text, both families."""
-        return guard_counters(self.guard_exec("iptables-save -c -t filter; ip6tables-save -c -t filter").stdout)
+        saved = read_output(self.guard_exec("iptables-save -c -t filter && ip6tables-save -c -t filter"),
+                            "the backends guard's rule counters")
+        return guard_counters(saved)
 
     def inspect(self, container):
         return json.loads(run("docker", "inspect", container).stdout)[0]

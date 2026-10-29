@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import (  # noqa: E402
     Stack, eventually, expect, owner_of, probe, require_docker, wait_healthy,
 )
+import imagesuite  # noqa: E402
 
 BOUND = 128 * 1024 * 1024
 HOG, SIBLING = owner_of("hog"), owner_of("sibling")
@@ -36,9 +37,14 @@ HOG, SIBLING = owner_of("hog"), owner_of("sibling")
 
 def cgroup_limit(stack, pid):
     """The memory.max of the cgroup `pid` runs in, and that cgroup's path, read as root in the container."""
-    path = stack.exec(f"sed -n 's/^0:://p' /proc/{pid}/cgroup").stdout.strip()
-    limit = stack.exec(f"cat /sys/fs/cgroup{path}/memory.max").stdout.strip()
+    path = imagesuite.read_output(stack.exec(f"sed -n 's/^0:://p' /proc/{pid}/cgroup"), f"the cgroup of pid {pid}").strip()
+    limit = imagesuite.read_output(stack.exec(f"cat /sys/fs/cgroup{path}/memory.max"), f"memory.max of the cgroup {path}").strip()
     return path, limit
+
+
+def container_limit(stack):
+    """The container's own memory.max, which every backend's bound must sit inside."""
+    return imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/memory.max"), "the container's memory.max").strip()
 
 
 def main():
@@ -56,7 +62,7 @@ def main():
             c.running(owner)
 
         hog, sibling = c.tool(HOG, "probe__whoami"), c.tool(SIBLING, "probe__whoami")
-        container = stack.exec("cat /sys/fs/cgroup/memory.max").stdout.strip()
+        container = container_limit(stack)
         for name, who in [("hog", hog), ("sibling", sibling)]:
             path, limit = cgroup_limit(stack, who["pid"])
             expect(path not in ("", "/") and limit == str(BOUND),

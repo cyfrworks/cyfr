@@ -13,12 +13,14 @@ never comes, a guard's failure is read from its inspect record whether the
 guard has exited or is between one exit and its next start, and no entry
 script writes bytecode for anything under tests/, whatever cache is already
 there. What a container holds and what a probe answers are read as
-imagesuite.py defines them, and each suite's stub test of its observations
-(tests/<suite>/*_test.py) runs here as its own entry script.
+imagesuite.py defines them, each suite's stub test of its observations
+(tests/<suite>/*_test.py) runs here as its own entry script, and every `.stdout`
+a suite takes straight from an exec is on the roster of direct reads, exactly.
 
 Usage: python3 -I tests/imagesuite_test.py
 """
 
+import ast
 import glob
 import http.server
 import json
@@ -388,6 +390,9 @@ class SuiteObservations(unittest.TestCase):
     def test_backends_residue_reads(self):
         self.run_entry("locus-backends-image", "residue_test.py")
 
+    def test_backends_memory_cgroup_reads(self):
+        self.run_entry("locus-backends-image", "memory_test.py")
+
     def test_builder_isolation_ipc_tables(self):
         self.run_entry("builder-image", "isolation_test.py")
 
@@ -399,6 +404,161 @@ class SuiteObservations(unittest.TestCase):
 
     def test_runtime_memory_cgroup_reads(self):
         self.run_entry("locus-runtime-image", "memory_test.py")
+
+
+# Every `.stdout` taken straight from an exec or guard_exec result in the
+# suites, outside their read helpers, by the suite's file and the function
+# holding it. A command that failed is read as whatever it printed, so each
+# such read is either converted to a read helper or kept here with the reason
+# it decides no verdict. The count is exact.
+DIRECT_READ_CALLS = ("exec", "guard_exec")
+DIRECT_READ_ROSTER = {
+    ("locus-runtime-image/memory.py", "group_stat"):
+        (1, "diagnostic: printed on the round lines, never checked"),
+    ("locus-runtime-image/runners.py", "test_runner_has_no_route"):
+        (1, "failure message only: the gateway in a failed expect's text"),
+    ("locus-runtime-image/runners.py", "test_pinned_egress"):
+        (1, "failure message only: the gateway in a failed expect's text"),
+}
+
+
+def _callee(call):
+    return call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", None)
+
+
+def direct_stdout_reads(path):
+    """(qualified function, line) of each `.stdout` taken straight from an exec or guard_exec call in `path`."""
+    reads = []
+
+    def visit(node, scope):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                visit(child, scope + [child.name])
+                continue
+            if (isinstance(child, ast.Attribute) and child.attr == "stdout" and isinstance(child.value, ast.Call)
+                    and _callee(child.value) in DIRECT_READ_CALLS):
+                reads.append((".".join(scope) or "<module>", child.lineno))
+            visit(child, scope)
+
+    with open(path) as source:
+        visit(ast.parse(source.read(), path), [])
+    return reads
+
+
+def suite_sources(tests=TESTS):
+    """Each Python file below a suite's directory under `tests`, at any depth, in order; `__pycache__` is the only directory skipped."""
+    for suite in SUITES:
+        for dirpath, dirnames, filenames in os.walk(os.path.join(tests, suite)):
+            dirnames[:] = sorted(name for name in dirnames if name != "__pycache__")
+            for name in sorted(filenames):
+                if name.endswith(".py"):
+                    yield os.path.join(dirpath, name)
+
+
+def scan_direct_reads(tests=TESTS):
+    """Every direct read in the Python files below the three suites under `tests`, keyed by (file, function) to its lines."""
+    reads = {}
+    for path in suite_sources(tests):
+        for scope, line in direct_stdout_reads(path):
+            reads.setdefault((os.path.relpath(path, tests), scope), []).append(line)
+    return reads
+
+
+def roster_failures(roster, reads):
+    """Each way the reads and the roster disagree: an unlisted read, a count that differs, an entry whose read is gone."""
+    failures = []
+    for key in sorted(set(reads) | set(roster)):
+        path, function = key
+        lines = reads.get(key, [])
+        if key not in roster:
+            failures.append(f"{path} {function}: {len(lines)} unlisted direct read(s) of .stdout, at lines {lines}")
+        elif not lines:
+            failures.append(f"{path} {function}: the roster lists {roster[key][0]} read(s), but the function holds none (stale)")
+        elif roster[key][0] != len(lines):
+            failures.append(f"{path} {function}: {len(lines)} direct read(s) at lines {lines}, the roster lists {roster[key][0]}")
+    return failures
+
+
+class DirectStdoutReads(unittest.TestCase):
+    """The suites' direct `.stdout` reads are the roster's, exactly: an unlisted read, a wrong count and a stale entry each fail."""
+
+    def tree(self, appended=None, replaced=None, created=None):
+        """A copy of the suites' Python files below their directories, with `created` files, `appended` text and `replaced` pairs."""
+        root = tempfile.mkdtemp(prefix="imagesuite-test-reads-")
+        self.addCleanup(shutil.rmtree, root, True)
+        for path in suite_sources(TESTS):
+            target = os.path.join(root, os.path.relpath(path, TESTS))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.copy(path, target)
+        for relative, text in (created or {}).items():
+            os.makedirs(os.path.dirname(os.path.join(root, relative)), exist_ok=True)
+            with open(os.path.join(root, relative), "w") as target:
+                target.write(text)
+        for relative, text in (appended or {}).items():
+            with open(os.path.join(root, relative), "a") as target:
+                target.write(text)
+        for relative, pairs in (replaced or {}).items():
+            path = os.path.join(root, relative)
+            with open(path) as source:
+                text = source.read()
+            for old, new in pairs:
+                self.assertIn(old, text, relative)
+                text = text.replace(old, new, 1)
+            with open(path, "w") as target:
+                target.write(text)
+        return root
+
+    def test_the_tree_holds_exactly_the_roster(self):
+        self.assertEqual(roster_failures(DIRECT_READ_ROSTER, scan_direct_reads()), [])
+
+    def test_with_an_empty_roster_every_read_is_refused(self):
+        reads = scan_direct_reads()
+        failures = roster_failures({}, reads)
+        self.assertEqual(len(failures), len(reads))
+        for path, function in reads:
+            self.assertTrue(any(failure.startswith(f"{path} {function}:") for failure in failures), (path, function))
+
+    def test_a_planted_bare_read_fails_naming_its_file_and_function(self):
+        root = self.tree(appended={"locus-runtime-image/stack.py":
+                                   "\n\ndef planted_probe(stack):\n    return stack.exec(\"id\").stdout\n"})
+        failures = roster_failures(DIRECT_READ_ROSTER, scan_direct_reads(root))
+        self.assertEqual(len(failures), 1, failures)
+        self.assertTrue(failures[0].startswith("locus-runtime-image/stack.py planted_probe:"), failures)
+
+    def test_a_read_through_a_helper_is_not_a_read(self):
+        root = self.tree(appended={"locus-runtime-image/stack.py":
+                                   "\n\ndef through_helper(stack):\n    return read_output(stack.exec(\"id\"), \"the id\")\n"})
+        self.assertEqual(roster_failures(DIRECT_READ_ROSTER, scan_direct_reads(root)), [])
+
+    def test_a_second_read_in_a_listed_function_fails_its_count(self):
+        root = self.tree(replaced={"locus-runtime-image/memory.py": [
+            ("def group_stat(stack, uid):\n", "def group_stat(stack, uid):\n    stack.exec(\"true\").stdout\n")]})
+        failures = roster_failures(DIRECT_READ_ROSTER, scan_direct_reads(root))
+        self.assertEqual(len(failures), 1, failures)
+        self.assertTrue(failures[0].startswith("locus-runtime-image/memory.py group_stat:"), failures)
+        self.assertIn("the roster lists 1", failures[0])
+
+    def test_a_listed_function_that_holds_no_read_is_a_stale_entry(self):
+        roster = dict(DIRECT_READ_ROSTER)
+        roster[("builder-image/headroom.py", "read")] = (1, "pending")
+        failures = roster_failures(roster, scan_direct_reads())
+        self.assertEqual(len(failures), 1, failures)
+        self.assertTrue(failures[0].startswith("builder-image/headroom.py read:") and "(stale)" in failures[0], failures)
+
+    def test_a_direct_read_in_a_file_below_a_suite_directory_is_refused(self):
+        # A helper below a suite's directory, imported by one of its entry scripts: the scan reads every Python file below the suite.
+        root = self.tree(
+            created={"builder-image/helpers/direct_read.py": 'def observation(stack):\n    return stack.exec("id").stdout\n'},
+            appended={"builder-image/isolation.py": "\nfrom helpers.direct_read import observation as planted_read\n\n\n"
+                                                    "def planted_nested(stack):\n    return planted_read(stack)\n"})
+        self.assertEqual(direct_stdout_reads(os.path.join(root, "builder-image", "helpers", "direct_read.py")), [("observation", 2)])
+        failures = roster_failures(DIRECT_READ_ROSTER, scan_direct_reads(root))
+        self.assertEqual(len(failures), 1, failures)
+        self.assertTrue(failures[0].startswith("builder-image/helpers/direct_read.py observation:"), failures)
+
+    def test_a_file_in_a_pycache_directory_is_not_scanned(self):
+        root = self.tree(created={"builder-image/__pycache__/cached.py": 'def cached(stack):\n    return stack.exec("id").stdout\n'})
+        self.assertEqual(roster_failures(DIRECT_READ_ROSTER, scan_direct_reads(root)), [])
 
 
 class ObservationAnswers(unittest.TestCase):

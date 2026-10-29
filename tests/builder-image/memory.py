@@ -383,8 +383,14 @@ def keeper_groups(stack):
     return imagesuite.read_listing(stack.exec(script), "the keeper cgroups the container holds")
 
 
+def release_user(stack):
+    """The name the release's uid has in the image, which cyfr-locus starts a client under."""
+    return imagesuite.read_output(stack.exec(f'user="$(getent passwd {RELEASE_UID})" && echo "${{user%%:*}}"'),
+                                  "the release user's name").strip()
+
+
 def test_keeper(stack, limit, canary):
-    user = stack.exec(f"getent passwd {RELEASE_UID} | cut -d: -f1").stdout.strip()
+    user = release_user(stack)
     expect(user, "the release's user has a name cyfr-locus can start a client under", user)
     with open(os.path.join(canary, "memory-client.mjs"), "w") as out:
         out.write(CLIENT)
@@ -534,6 +540,11 @@ def test_build(stack, case, limit, measure):
            f"{case}: the release and the container were not touched", {"before": before, "after": after})
 
 
+def container_limit(stack):
+    """The container's own memory.max, which bounds the hostile work."""
+    return imagesuite.read_output(stack.exec("cat /sys/fs/cgroup/memory.max"), "the container's memory.max").strip()
+
+
 def main(image, measure, cases):
     # Registered for removal at exit as soon as it exists, so a signal
     # before the `try` leaves no directory behind.
@@ -543,7 +554,7 @@ def main(image, measure, cases):
         for case in cases:
             # A fresh container per case, so one case's damage is not the next one's start.
             stack.up(pool=f"{POOL_FIRST}-{PROBE_FIRST - 1}", timeout_ms=DEADLINE_MS)
-            limit = stack.exec("cat /sys/fs/cgroup/memory.max").stdout.strip()
+            limit = container_limit(stack)
             expect(limit.isdigit(), "the container has a memory limit of its own, which bounds the hostile work", limit)
             if case == "keeper":
                 test_keeper(stack, int(limit), canary)
