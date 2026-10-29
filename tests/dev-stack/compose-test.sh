@@ -669,7 +669,7 @@ case_network_overlap() {
 }
 # claim_slot K CHECKOUT: slot K claimed by another loop of the host, in
 # $run_dir, until the case ends, its record naming CHECKOUT and the live
-# process that holds the claim. Sets $claimer.
+# process that holds the claim, with its start time. Sets $claimer.
 claim_slot() {
   local file="$run_dir/cyfr-dev-slot.$1.lock"
   : >"$file"
@@ -677,7 +677,32 @@ claim_slot() {
   claimer=$!
   holders+=("$claimer")
   for _ in $(seq 1 50); do flock -n "$file" true || break; sleep 0.1; done
-  printf 'pid %s\ncheckout %s\n' "$claimer" "$2" >"$file"
+  printf 'pid %s\nstarted %s\ncheckout %s\n' "$claimer" "$(lstart "$claimer")" "$2" >"$file"
+}
+lstart() { ps -o lstart= -p "$1" | sed 's/^ *//; s/ *$//'; }
+# A claim whose record names a live process that is not its holder, as a
+# pid reused since a killed loop wrote it, names no one: here slot 0's
+# record in the form a loop wrote before records carried a start time,
+# and slot 1's with a start time its pid does not have.
+case_claim_unverified() {
+  local k other file0 file1
+  run_dir="$scratch/case-unverified-run"
+  rm -rf "$run_dir" && mkdir -p "$run_dir"
+  for k in $SLOTS; do claim_slot "$k" "/worktree/$k"; done
+  sleep 120 &
+  other=$!
+  holders+=("$other")
+  file0="$run_dir/cyfr-dev-slot.0.lock" file1="$run_dir/cyfr-dev-slot.1.lock"
+  printf 'pid %s\ncheckout /previous/worktree\n' "$other" >"$file0"
+  printf 'pid %s\nstarted Thu Jan  1 00:00:00 1970\ncheckout /previous/worktree\n' "$other" >"$file1"
+  stack "$1" unverified "$complete" 0600 "" STUB_SERVER_STATUS=0
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop went on with every slot taken"
+  case "$(tail -n 1 "$case_dir/err")" in
+    "dev-stack: every slot is taken: slot 0: a loop whose record cannot be verified ($file0); slot 1: a loop whose record cannot be verified ($file1); slot 2: the loop of /worktree/2 (pid "*) ;;
+    *) echo "the refusal names a process that does not hold the claim: $(tail -n 1 "$case_dir/err" | cut -c1-300)" ;;
+  esac
+  kill "$other" 2>/dev/null
+  run_dir=""
 }
 # The slot a worktree remembers is reused while it is free; when another
 # loop claims it, the loop takes the first free slot and says whose it is.
@@ -986,7 +1011,7 @@ case_down_orphan() {
   kill -0 "$pid" 2>/dev/null || echo "down stopped process group $pid, which the record's start time does not match"
   kill -KILL "$pid" 2>/dev/null
 }
-BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan"
+BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_claim_unverified case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan"
 
 # boundary SCRIPT [CASE...]: the failures of SCRIPT under each case.
 boundary() {

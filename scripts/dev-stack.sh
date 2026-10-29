@@ -179,16 +179,26 @@ for line in sys.stdin:
         break' "$2"
 }
 
+# started PID: when PID started, as ps prints it; nothing when it has
+# exited.
+started() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
+
 # holder FILE: the loop a held claim names, `the loop of CHECKOUT (pid
-# PID)`. Its owner writes it the instant it takes the claim and empties it
-# before it lets the claim go, so an empty record, or one naming a pid
-# that has exited, is read again for up to a second.
+# PID)`, when the record's pid is a live process that started when the
+# record says, so a pid reused since names no one. Its owner writes the
+# record as soon as it takes the claim, which leaves a moment when the
+# record is empty or a previous owner's, and empties it before it lets the
+# claim go; so a record that is empty or does not verify is read again
+# for up to a second, and then the holder is `a loop whose record cannot
+# be verified`. The claim's lock, not its record, decides that the slot
+# is taken.
 holder() {
-  local pid checkout n=0
+  local pid when checkout n=0
   while :; do
     pid="$(sed -n 's/^pid //p' "$1" 2>/dev/null | head -n 1)"
+    when="$(sed -n 's/^started //p' "$1" 2>/dev/null | head -n 1)"
     checkout="$(sed -n 's/^checkout //p' "$1" 2>/dev/null | head -n 1)"
-    if [ -n "$checkout" ] && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    if [ -n "$checkout" ] && [ -n "$pid" ] && [ -n "$when" ] && [ "$(started "$pid")" = "$when" ]; then
       printf 'the loop of %s (pid %s)' "$checkout" "$pid"
       return 0
     fi
@@ -196,13 +206,13 @@ holder() {
     sleep 0.1
     n=$((n + 1))
   done
-  printf 'a loop that has not written its record in %s' "$1"
+  printf 'a loop whose record cannot be verified (%s)' "$1"
 }
 
 # claim K NETWORKS: slot K's claim, kept in CLAIM_FD, when the slot is
 # free; else nothing held and WHY saying what holds the slot. The claim's
-# record names this run from the instant the claim is held, before the
-# slot is looked at.
+# record names this run, with its start time, as soon as the claim is
+# held, before the slot is looked at.
 WHY=""
 CLAIM_FILE=""
 claim() {
@@ -214,7 +224,7 @@ claim() {
     WHY="$(holder "$file")"
     return 1
   fi
-  printf 'pid %s\ncheckout %s\n' "$$" "$ROOT" >"$file"
+  printf 'pid %s\nstarted %s\ncheckout %s\n' "$$" "$(started "$$")" "$ROOT" >"$file"
   for port in $((4000 + 10 * k)) $((4001 + 10 * k)) $((4700 + 10 * k)) $((4701 + 10 * k)); do
     if who="$(held "$port")"; then
       : >"$file"
@@ -260,7 +270,7 @@ orphan() {
   local pgid started
   read -r pgid started < <(sed -n 's/^server //p' "$LOCK" 2>/dev/null) || return 0
   [ -n "${pgid:-}" ] && [ -n "${started:-}" ] || return 0
-  [ "$(ps -o lstart= -p "$pgid" 2>/dev/null | sed 's/^ *//; s/ *$//')" = "$started" ] && echo "$pgid"
+  [ "$(started "$pgid")" = "$started" ] && echo "$pgid"
   return 0
 }
 
