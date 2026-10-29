@@ -229,7 +229,7 @@ defmodule Prima.Test.EnvTest do
 
     {output, status} =
       System.cmd("mix", ["run", "--no-start", "-e", probe],
-        cd: Path.expand("../../../..", __DIR__),
+        cd: Path.expand("../..", __DIR__),
         env: [{"MIX_ENV", "test"}, {"PRIMA_TEST_ENV_TEST", __ENV__.file}],
         stderr_to_stdout: true
       )
