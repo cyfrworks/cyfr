@@ -629,8 +629,7 @@ defmodule Cyfr.Boundaries do
           "`Sanctum.Passkeys` is the sign-in page's passkey sign-in method: the challenge it holds " <>
           "and the answer it verifies into a session, as the device flow's poll is " <>
           "(`sign_in_challenge/0`, `sign_in/2`); `Sanctum.Auth.CyfrDoor` is the `cyfr` sign-in method's: " <>
-          "the CYFR that holds the person's identity, where the sign-in page sends them (`signing_home/1`), " <>
-          "the hosted CYFR it offers (`hosted/0`), the " <>
+          "the CYFR that holds the person's identity, where the sign-in page sends them (`signing_home/1`), the " <>
           "challenge it mints for the carry they bring back, held to the identifier a " <>
           "handle requested (`challenge/2`), where the " <>
           "callback's hop returns them (`redirect_url/1`), the assertion the callback " <>
@@ -1899,7 +1898,6 @@ defmodule Cyfr.Boundaries do
       callback: 2,
       carry_lifetime_ms: 0,
       challenge: 2,
-      hosted: 0,
       redirect_url: 1,
       signing_home: 1
     ],

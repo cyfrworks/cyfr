@@ -12,9 +12,9 @@ defmodule Sanctum.Auth.CyfrDoor do
 
   ## Where the person starts
 
-  The person names their signing home by its address, takes the hosted
-  CYFR (`hosted/0`), or names a handle whose published address the
-  sign-in page resolves (`Sanctum.Handle`); `signing_home/1` answers that
+  The person names their signing home by its address, or names a handle
+  whose published address the sign-in page resolves (`Sanctum.Handle`);
+  `signing_home/1` answers that
   home's `/carry` page with this home as the destination in its fragment,
   where they begin the carry themselves (`person.carry_begin`). A
   published address is navigation only: the identifier the handle named
@@ -25,8 +25,8 @@ defmodule Sanctum.Auth.CyfrDoor do
   `challenge/2` takes the carry fragment the person's browser brought
   from their signing home (`Prima.Carry`: the signed envelope and its
   payload, `%{"genesis" => genesis}`) and what the attempt requested
-  (`t:requested/0`): no identifier, for an address or the hosted CYFR;
-  the identifier a handle resolved to; or a request this browser's
+  (`t:requested/0`): no identifier, for an address; the identifier a
+  handle resolved to; or a request this browser's
   session no longer holds. A lost request is refused before anything
   else, and a carry whose envelope names another identifier than the one
   requested is refused before any directory read, so a handle whose
@@ -123,7 +123,6 @@ defmodule Sanctum.Auth.CyfrDoor do
   alias Sanctum.{Context, IdentityFreshness, Person}
   alias Sanctum.Directory.Client
 
-  @hosted "https://my.cyfr.run"
   @challenge_bytes 32
   @secret_bytes 32
   @held ~w(challenge challenge_id browser_secret action_id identifier source return_url key_epoch expires_at)
@@ -142,8 +141,8 @@ defmodule Sanctum.Auth.CyfrDoor do
 
   @typedoc """
   What a sign-in attempt requested of the carry that answers it: `:none`
-  (begun from an address, the hosted CYFR's included), `{:identifier,
-  identifier}` (begun from a handle that resolved to it), or `:lost`
+  (begun from an address), `{:identifier, identifier}` (begun from a
+  handle that resolved to it), or `:lost`
   (an attempt whose request this browser's session no longer holds).
   """
   @type requested :: :none | {:identifier, String.t()} | :lost
@@ -159,13 +158,6 @@ defmodule Sanctum.Auth.CyfrDoor do
   # ---------------------------------------------------------------------------
   # The signing home
   # ---------------------------------------------------------------------------
-
-  @doc """
-  The hosted CYFR's address, which the sign-in page offers beside a CYFR
-  the person names: compiled in, never a setting.
-  """
-  @spec hosted() :: String.t()
-  def hosted, do: @hosted
 
   @doc """
   Where the sign-in page sends a person who names their signing home by

@@ -4,8 +4,8 @@
 defmodule PrismWeb.LoginLiveTest do
   @moduledoc """
   The sign-in page, top to bottom: a passkey; "Sign in with your CYFR",
-  the hosted CYFR's button and "I run my own CYFR", whose field takes a
-  handle or an address; "Create your identity here" while the door's `*`
+  whose "I run my own CYFR" field takes a handle or an address; "Create
+  your identity here" while the door's `*`
   admits; and "Other ways to sign in" when a linked method is configured.
   With no person yet it offers none of them and says the CYFR is not set
   up.
@@ -202,7 +202,6 @@ defmodule PrismWeb.LoginLiveTest do
       for selector <- [
             "#passkey-sign-in",
             "#sign-in-cyfr",
-            "#cyfr-hosted",
             "#create-identity",
             "#other-sign-in",
             "button[phx-click=start]"
@@ -587,38 +586,6 @@ defmodule PrismWeb.LoginLiveTest do
 
       started = follow_start(browser, expected!(view, "https://a.example"), "https://a.example")
       assert kept(started) == %{"home" => "https://a.example"}
-    end
-
-    test "the hosted CYFR's button goes there through the start as an address does, naming no identifier",
-         %{conn: conn} do
-      browser = get(conn, ~p"/login")
-      {:ok, view, html} = live(browser, ~p"/login")
-      assert html =~ "my.cyfr.run"
-
-      view |> element("#cyfr-hosted") |> render_click()
-
-      started =
-        follow_start(browser, expected!(view, "https://my.cyfr.run"), "https://my.cyfr.run")
-
-      assert kept(started) == %{"home" => "https://my.cyfr.run"}
-    end
-
-    test "the hosted CYFR itself offers no button for itself", %{conn: conn} do
-      previous = Application.fetch_env(:sanctum, :public_url)
-
-      on_exit(fn ->
-        case previous do
-          {:ok, value} -> Application.put_env(:sanctum, :public_url, value)
-          :error -> Application.delete_env(:sanctum, :public_url)
-        end
-      end)
-
-      Application.put_env(:sanctum, :public_url, "https://my.cyfr.run")
-
-      {:ok, view, _html} = live(conn, ~p"/login")
-      refute has_element?(view, "#cyfr-hosted")
-      assert has_element?(view, "#cyfr-own-open")
-      assert render_click(view, "cyfr_hosted", %{}) =~ "I run my own CYFR"
     end
 
     test "a handle with a published address goes there through the start, which keeps the handle's identifier in this browser's session; the expectation names none",

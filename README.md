@@ -668,9 +668,8 @@ when the entry is written, shown with the handle, so a handle that later
 passes to someone else moves no access.
 
 The sign-in page offers, top to bottom: **Sign in with a passkey**; **Sign
-in with your CYFR**, with a button for the hosted CYFR, `https://my.cyfr.run`,
-and **I run my own CYFR**, which takes a handle (`@name`) or the address of
-the CYFR that holds your keys; **Create your identity here**, shown only
+in with your CYFR**, where **I run my own CYFR** takes a handle (`@name`) or
+the address of the CYFR that holds your keys; **Create your identity here**, shown only
 while `*` admits; and **Other ways to sign in**, each linked method this
 server is configured for, which signs in a person who already linked it and
 never makes one. A handle is resolved at the registry to the identifier it
