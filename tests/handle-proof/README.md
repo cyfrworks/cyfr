@@ -19,19 +19,29 @@ CYFR_RUN_DIR=<cyfr.run checkout> scripts/heavy-check.sh -- tests/handle-proof/ru
 
 | Part | Name | Configured |
 |---|---|---|
-| the directory | `dir.test` | a `cyfr` release, `CYFR_DIRECTORY_SERVE=writer`, behind the identity proof's front on `127.77.0.1` |
-| A | `a.test` | a `cyfr` release with a `CYFR_SETUP_TOKEN` of its own; enrolls at `dir.test`; `CYFR_REGISTRY_URL=registry.test` |
+| A | `a.test` | a `cyfr` release with a `CYFR_SETUP_TOKEN` of its own; enrolls at `registry.test`; `CYFR_REGISTRY_URL=registry.test` |
 | B | `b.test` | the same, with its own setup token |
-| the registry | `registry.test` | cyfr.run's image, built from `git archive HEAD` of `CYFR_RUN_DIR` by its `Dockerfile`, on a `postgres:16-alpine` of the run's own, with `DOMAIN=registry.test`, `DIRECTORY_URL=https://dir.test` and the run's authority as `DIRECTORY_CA_FILE`, behind a front of the identity proof's kind on `127.77.0.3` |
+| the registry and directory | `registry.test` | cyfr.run's image, built from `git archive HEAD` of `CYFR_RUN_DIR` by its `Dockerfile`, on a `postgres:16-alpine` of the run's own, with `DOMAIN=registry.test`, behind a front of the identity proof's kind on `127.77.0.3` |
+
+The model checks run independently with
+`node --test tests/handle-proof/models-test.mjs`. The PostgreSQL tamper
+helper's checks run with
+`scripts/heavy-check.sh -- bash tests/handle-proof/registry-test.sh`.
+
+The directory's whole rows are read from `directory.identity_log_entries`
+in the registry's PostgreSQL. Their canonical entries, hashes, lengths
+and timestamps are checked and tampered as before. A generated ID is
+updated in `BY DEFAULT` mode, with its `ALWAYS` declaration restored in
+the same transaction. Every tamper's restore compares the identity
+columns' declarations as well as the rows and constraints.
 
 The CYFRs reach the directory and the registry by name through their
 `ERL_INETRC` at addresses listed in `CYFR_PRIVATE_EGRESS_TARGETS`, and trust
-the run's authority (`tests/identity-proof/cells.sh`); the registry
-resolves `dir.test` through its container's hosts entry. No DNS,
+the run's authority (`tests/identity-proof/cells.sh`). No DNS,
 `/etc/hosts`, trust store or other configuration outside the scratch
 directory is read or changed. The second identity is cyfr.run's smoke
 person (`cmd/smokeid`, built from the same checkout): a key log of its own
-at `dir.test`, signing its registry requests itself, as anyone may.
+at `registry.test`, signing its registry requests itself, as anyone may.
 
 Everything the run starts is removed when it ends, on every exit path, a
 signal included: the cells' servers, the fronts, the registry's container
@@ -49,17 +59,18 @@ Chromium runs every step with its virtual WebAuthn authenticator; the
 person's passkey for A is copied to the profile that signs in at B, as a
 synced passkey is. `proof.mjs` drives the browsers and `run.sh` answers its
 asks for the servers' part (`fixture.exs` inside a CYFR, `psql` in the
-registry's database, `curl` through the fronts). `models.mjs` holds every
-object's model, the comparison and the tamper loop, apart from the
-browsers, so the models can be rebuilt from a run's record.
+registry's database, including its `directory` schema, `curl` through the
+fronts). `models.mjs` holds every object's model, the comparison and the
+tamper loop, apart from the browsers, so the models can be rebuilt from a
+run's record.
 
 | Step | What holds |
 |---|---|
-| `setup` | A is set up through `/setup` with a passkey; `@proof` is chosen, which runs the enrollment at `dir.test`, confirmed with the passkey. With the kit shown and not yet acknowledged, the directory holds the genesis, the enrollment attempt is accepted, and the registry holds no `@proof`, no acceptance and no nonce of the identifier; once the kit is acknowledged the attempt completes (a transition from the attempt read before it) and the card claims the handle. A's person, passkey, identity, athanor and both seats (the athanor's and the first person's platform grant) are read whole |
+| `setup` | A is set up through `/setup` with a passkey; `@proof` is chosen, which runs the enrollment at `registry.test`, confirmed with the passkey. With the kit shown and not yet acknowledged, the directory holds the genesis, the enrollment attempt is accepted, and the registry holds no `@proof`, no acceptance and no nonce of the identifier; once the kit is acknowledged the attempt completes (a transition from the attempt read before it) and the card claims the handle. A's person, passkey, identity, athanor and both seats (the athanor's and the first person's platform grant) are read whole |
 | `publish` | Settings at A publishes A's address with `@proof`; the namespace is the one read at setup with its address and `updated_at` moved, and the signed request added one nonce |
 | `allow` | B, set up through `/setup` by its administrator, allows `@proof` in Settings; B's one allowlist entry names A's identifier, labelled `proof`; B's passkey, person, athanor and seats are its administrator's |
 | `sign_in` | a fresh profile at B's sign-in page, "I run my own CYFR" with `@proof`, reaches A through the published address, signs in there with the passkey, begins the carry, sees B's code named in A's confirmation, and B admits the person as A's identifier, landing them on B's sign-in page as signed in with no athanor there; B's athanors and seats are still its administrator's alone, and the person's session holds the token the browser's cookie carries |
-| `wrong_identity` | a second identity enrolls at `dir.test`, claims `@other` and publishes A's address with it; the same profile at B with `@other` reaches A, whose carry names A's identifier, and B shows `wrong_identity`'s sentence, which no other sign-in refusal of `Prima.Refusal` shares, admitting nobody and making no session. No wrong-destination request is made: a wrong-destination refusal needs a carry for another destination, which the proof does not drive |
+| `wrong_identity` | a second identity enrolls at `registry.test`, claims `@other` and publishes A's address with it; the same profile at B with `@other` reaches A, whose carry names A's identifier, and B shows `wrong_identity`'s sentence, which no other sign-in refusal of `Prima.Refusal` shares, admitting nobody and making no session. No wrong-destination request is made: a wrong-destination refusal needs a carry for another destination, which the proof does not drive |
 | `sync` | Sync push tokens at A, confirmed with the passkey, stores one push token for `@proof`, whose digest is the registry's token for it, made by A's identifier |
 | `ban` | the registry's operator bans `@proof`'s owner through the admin pages; the ban revokes the token in its transaction, the token presented to the registry is refused, A's next sync shows `banned`'s sentence and records no nonce; then every object read in the run is read again and held to what was read before |
 | `readme` | this file's field table holds exactly the rows the proof's models print |
@@ -167,25 +178,25 @@ row per field of each row of each step's objects:
 | setup:a.passkeys[row] | revoked_at | exact | `null` |
 | setup:a.passkeys[row] | inserted_at | bound | a time inside setup at A |
 | setup:a.passkeys[row] | updated_at | bound | a time inside setup at A |
-| setup:dir.identity_log_entries[row] | id | captured | a new ile_ id |
-| setup:dir.identity_log_entries[row] | identifier | derived | the identifier the signer's genesis hashes to |
-| setup:dir.identity_log_entries[row] | seq | exact | `0` |
-| setup:dir.identity_log_entries[row] | kind | exact | `"genesis"` |
-| setup:dir.identity_log_entries[row] | entry_hash | derived | the entry's bytes, hashed |
-| setup:dir.identity_log_entries[row] | prev_hash | exact | `null` |
-| setup:dir.identity_log_entries[row] | entry | derived | the genesis its signer sent, whose hash is the identifier |
-| setup:dir.identity_log_entries[row] | request_id | exact | `null` |
-| setup:dir.identity_log_entries[row] | request_digest | exact | `null` |
-| setup:dir.identity_log_entries[row] | outcome | exact | `"accepted"` |
-| setup:dir.identity_log_entries[row] | outcome_body | exact | `null` |
-| setup:dir.identity_log_entries[row] | bytes | derived | the entry's length |
-| setup:dir.identity_log_entries[row] | inserted_at | bound | a time inside the enrollment, to the kit shown |
+| setup:registry.directory.identity_log_entries[row] | id | captured | a new directory row id |
+| setup:registry.directory.identity_log_entries[row] | identifier | derived | the identifier the signer's genesis hashes to |
+| setup:registry.directory.identity_log_entries[row] | seq | exact | `0` |
+| setup:registry.directory.identity_log_entries[row] | kind | exact | `"genesis"` |
+| setup:registry.directory.identity_log_entries[row] | entry_hash | derived | the entry's bytes, hashed |
+| setup:registry.directory.identity_log_entries[row] | prev_hash | exact | `null` |
+| setup:registry.directory.identity_log_entries[row] | entry | derived | the genesis its signer sent, whose hash is the identifier |
+| setup:registry.directory.identity_log_entries[row] | request_id | exact | `null` |
+| setup:registry.directory.identity_log_entries[row] | request_digest | exact | `null` |
+| setup:registry.directory.identity_log_entries[row] | outcome | exact | `"accepted"` |
+| setup:registry.directory.identity_log_entries[row] | outcome_body | exact | `null` |
+| setup:registry.directory.identity_log_entries[row] | bytes | derived | the entry's length |
+| setup:registry.directory.identity_log_entries[row] | inserted_at | bound | a time inside the enrollment, to the kit shown |
 | setup:pre:a.identity_attempts[row] | id | captured | a new iat_ id |
 | setup:pre:a.identity_attempts[row] | kind | exact | `"enrollment"` |
 | setup:pre:a.identity_attempts[row] | request_id | captured | a new request id, req_ and 32 hexadecimal digits |
 | setup:pre:a.identity_attempts[row] | user_id | derived | A's passkey's person |
 | setup:pre:a.identity_attempts[row] | identifier | derived | the kit's identifier line, as the browser showed it |
-| setup:pre:a.identity_attempts[row] | directory_url | exact | `"https://dir.test"` |
+| setup:pre:a.identity_attempts[row] | directory_url | exact | `"https://registry.test"` |
 | setup:pre:a.identity_attempts[row] | phase | exact | `"accepted"` |
 | setup:pre:a.identity_attempts[row] | genesis | derived | the directory's stored genesis |
 | setup:pre:a.identity_attempts[row] | entry | exact | `null` |
@@ -293,7 +304,7 @@ row per field of each row of each step's objects:
 | setup:a.person_identities[row] | operational_key_sealed | derived | opens, in A, to the genesis's operational key |
 | setup:a.person_identities[row] | genesis_hash | derived | the directory's genesis, hashed |
 | setup:a.person_identities[row] | head_hash | derived | the directory's one entry |
-| setup:a.person_identities[row] | directory_url | exact | `"https://dir.test"` |
+| setup:a.person_identities[row] | directory_url | exact | `"https://registry.test"` |
 | setup:a.person_identities[row] | first_method_at | bound | a time inside setup at A |
 | setup:a.person_identities[row] | revision | exact | `4`: 1 at insertion, then first_method! (person_identities.ex:233), enrolling! (:145) and enrolled! (:174), each one step (:259) |
 | setup:a.person_identities[row] | inserted_at | bound | a time inside setup at A |
@@ -337,7 +348,7 @@ row per field of each row of each step's objects:
 | setup:handle_answer[proof] | registry | exact | `"registry.test"` |
 | setup:handle_answer[proof] | handle | exact | `"proof"` |
 | setup:handle_answer[proof] | identifier | derived | the owner's genesis, hashed |
-| setup:handle_answer[proof] | directory | exact | `"https://dir.test"` |
+| setup:handle_answer[proof] | directory | exact | `"https://registry.test"` |
 | publish:registry.namespaces[proof][row] | slug | exact | as read at setup |
 | publish:registry.namespaces[proof][row] | kind | exact | as read at setup |
 | publish:registry.namespaces[proof][row] | reserved | exact | as read at setup |
@@ -358,7 +369,7 @@ row per field of each row of each step's objects:
 | publish:handle_answer[proof] | registry | exact | `"registry.test"` |
 | publish:handle_answer[proof] | handle | exact | `"proof"` |
 | publish:handle_answer[proof] | identifier | derived | the owner's genesis, hashed |
-| publish:handle_answer[proof] | directory | exact | `"https://dir.test"` |
+| publish:handle_answer[proof] | directory | exact | `"https://registry.test"` |
 | publish:handle_answer[proof] | address | exact | `"https://a.test"` |
 | publish:registry.request_nonces[a][a new nonce] | identifier | derived | the signer's identifier |
 | publish:registry.request_nonces[a][a new nonce] | nonce | captured | 16 new bytes |
@@ -480,7 +491,7 @@ row per field of each row of each step's objects:
 | sign_in:b.person_identities[the person's] | operational_key_sealed | exact | `null` |
 | sign_in:b.person_identities[the person's] | genesis_hash | derived | the directory's genesis, hashed |
 | sign_in:b.person_identities[the person's] | head_hash | derived | the directory's one entry |
-| sign_in:b.person_identities[the person's] | directory_url | exact | `"https://dir.test"` |
+| sign_in:b.person_identities[the person's] | directory_url | exact | `"https://registry.test"` |
 | sign_in:b.person_identities[the person's] | first_method_at | exact | `null` |
 | sign_in:b.person_identities[the person's] | revision | exact | `1` |
 | sign_in:b.person_identities[the person's] | inserted_at | bound | a time inside the sign-in at B |
@@ -561,32 +572,32 @@ row per field of each row of each step's objects:
 | sign_in:b.memberships[row 2] | status | exact | as read at allow |
 | sign_in:b.memberships[row 2] | updated_at | exact | as read at allow |
 | sign_in:b.memberships[row 2] | user_id | exact | as read at allow |
-| wrong_identity:dir.identity_log_entries[A's genesis] | bytes | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | entry | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | entry_hash | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | id | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | identifier | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | inserted_at | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | kind | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | outcome | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | outcome_body | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | prev_hash | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | request_digest | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | request_id | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[A's genesis] | seq | exact | as read at setup |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | id | captured | a new ile_ id |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | identifier | derived | the identifier the signer's genesis hashes to |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | seq | exact | `0` |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | kind | exact | `"genesis"` |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | entry_hash | derived | the entry's bytes, hashed |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | prev_hash | exact | `null` |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | entry | derived | the genesis its signer sent, whose hash is the identifier |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | request_id | exact | `null` |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | request_digest | exact | `null` |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | outcome | exact | `"accepted"` |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | outcome_body | exact | `null` |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | bytes | derived | the entry's length |
-| wrong_identity:dir.identity_log_entries[the second identity's genesis] | inserted_at | bound | a time inside the second identity's requests |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | bytes | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | entry | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | entry_hash | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | id | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | identifier | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | inserted_at | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | kind | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | outcome | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | outcome_body | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | prev_hash | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | request_digest | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | request_id | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[A's genesis] | seq | exact | as read at setup |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | id | captured | a new directory row id |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | identifier | derived | the identifier the signer's genesis hashes to |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | seq | exact | `0` |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | kind | exact | `"genesis"` |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | entry_hash | derived | the entry's bytes, hashed |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | prev_hash | exact | `null` |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | entry | derived | the genesis its signer sent, whose hash is the identifier |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | request_id | exact | `null` |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | request_digest | exact | `null` |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | outcome | exact | `"accepted"` |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | outcome_body | exact | `null` |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | bytes | derived | the entry's length |
+| wrong_identity:registry.directory.identity_log_entries[the second identity's genesis] | inserted_at | bound | a time inside the second identity's requests |
 | wrong_identity:registry.namespaces[other][row] | slug | exact | `"other"` |
 | wrong_identity:registry.namespaces[other][row] | kind | exact | `"personal"` |
 | wrong_identity:registry.namespaces[other][row] | reserved | exact | `false` |
@@ -629,7 +640,7 @@ row per field of each row of each step's objects:
 | wrong_identity:handle_answer[other] | registry | exact | `"registry.test"` |
 | wrong_identity:handle_answer[other] | handle | exact | `"other"` |
 | wrong_identity:handle_answer[other] | identifier | derived | the owner's genesis, hashed |
-| wrong_identity:handle_answer[other] | directory | exact | `"https://dir.test"` |
+| wrong_identity:handle_answer[other] | directory | exact | `"https://registry.test"` |
 | wrong_identity:handle_answer[other] | address | exact | `"https://a.test"` |
 | wrong_identity:pre:b.sessions[the administrator's] | id | captured | a new ses_ id |
 | wrong_identity:pre:b.sessions[the administrator's] | token_hash | derived | the SHA-256 of the session token the administrator's cookie carries |
@@ -967,32 +978,32 @@ row per field of each row of each step's objects:
 | held:a.registry_tokens[row] | registry | exact | as read at sync |
 | held:a.registry_tokens[row] | updated_at | exact | as read at sync |
 | held:a.registry_tokens[row] | user_id | exact | as read at sync |
-| held:dir.identity_log_entries[A's genesis] | bytes | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | entry | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | entry_hash | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | id | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | identifier | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | inserted_at | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | kind | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | outcome | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | outcome_body | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | prev_hash | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | request_digest | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | request_id | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[A's genesis] | seq | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | bytes | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | entry | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | entry_hash | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | id | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | identifier | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | inserted_at | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | kind | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | outcome | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | outcome_body | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | prev_hash | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | request_digest | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | request_id | exact | as read at wrong_identity |
-| held:dir.identity_log_entries[the second identity's genesis] | seq | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | bytes | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | entry | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | entry_hash | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | id | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | identifier | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | inserted_at | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | kind | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | outcome | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | outcome_body | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | prev_hash | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | request_digest | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | request_id | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[A's genesis] | seq | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | bytes | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | entry | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | entry_hash | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | id | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | identifier | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | inserted_at | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | kind | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | outcome | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | outcome_body | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | prev_hash | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | request_digest | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | request_id | exact | as read at wrong_identity |
+| held:registry.directory.identity_log_entries[the second identity's genesis] | seq | exact | as read at wrong_identity |
 | held:registry.namespaces[proof][row] | slug | exact | as read at publish |
 | held:registry.namespaces[proof][row] | kind | exact | as read at publish |
 | held:registry.namespaces[proof][row] | reserved | exact | as read at publish |

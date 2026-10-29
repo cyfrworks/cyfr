@@ -438,6 +438,11 @@ defmodule Cyfr.CrossLanguageDriftTest do
       {"tests/locus-runtime-image/worker_auth.py",
        ~w(version auth_header routes retries timeouts_ms window_ms standing keys calls pre_body_refusals body_refusals report retry_identity connection_cases egress_pin_cases egress_policy_cases egress_pin_internal_purposes frame_cases framing_headers override_headers override_prefixes credential_headers)}
     ],
+    "directory_wire.json" => [
+      {"apps/cyfr/test/emissary/web/controllers/directory_wire_test.exs",
+       ~w(directory entries keys scenarios)},
+      {"tests/handle-proof/models-test.mjs", ~w(entries)}
+    ],
     # cyfr.run reads its vendored copy too (internal/identity/log_test.go,
     # beside internal/identity/testdata/SOURCE, which names this file's
     # SHA-256), outside this roster's reach.
