@@ -287,33 +287,44 @@ for sig in INT:130 TERM:143; do
 done
 table "${toy_rows[@]}"
 
-begin 'flakes: failing in both, flaky in one, and unknown for an incomplete partition, an exit of 3 and exclusions in one run only'
+begin 'flakes: failing in both and flaky in one only where both runs completed alike, and unknown for an incomplete partition, an exit of 3 or exclusions in one run only, on either side'
 night="$S/night"
 mkdir -p "$night"
-# plant LOG-NAME RUN-DIR EXIT1 EXIT2 EXIT3: a suite row's log over three
-# partitions, holding the Arca test, then Cyfr's b and c tests.
+# plant LOG-NAME RUN-DIR EXIT...: a suite row's log over one partition per
+# exit, the partitions holding Arca's a test, Cyfr's b and c tests,
+# Sanctum's d test and Locus's e test, in that order.
+planted_files=(apps/arca/test/a_test.exs apps/cyfr/test/b_test.exs apps/cyfr/test/c_test.exs
+  apps/sanctum/test/d_test.exs apps/locus/test/e_test.exs)
 plant() {
+  local log=$1 dir=$2 i=0 status
+  shift 2
   {
     echo '_START=1'
-    for i in 1 2 3; do
-      echo "==> partition $i/3"
-      eval "status=\${$((i + 2))}"
+    for status in "$@"; do
+      i=$((i + 1))
+      echo "==> partition $i/$#"
       [ "$status" = 0 ] || printf '    partition exited %s; its account:\n' "$status"
     done
-    echo "==> logs and disposable resources kept: $2"
+    echo "==> logs and disposable resources kept: $dir"
     echo '_EXIT=1 1'
-  } >"$night/$1.log"
-  mkdir -p "$2/assign"
-  printf 'apps/arca/test/a_test.exs\0' >"$2/assign/p1"
-  printf 'apps/cyfr/test/b_test.exs\0' >"$2/assign/p2"
-  printf 'apps/cyfr/test/c_test.exs\0' >"$2/assign/p3"
+  } >"$night/$log.log"
+  mkdir -p "$dir/assign"
+  for ((i = 1; i <= $#; i++)); do printf '%s\0' "${planted_files[$((i - 1))]}" >"$dir/assign/p$i"; done
 }
 # A failure as ExUnit prints it in an umbrella run: its file named from the
 # umbrella's root (Mix's test_location_relative_path), as the real runner's
 # partition logs show it.
 failure() { printf '  %s) test %s (%s)\n     %s:7\n' "$1" "$2" "$3" "$4"; }
-plant sqlite-1 "$S/run-s1" 0 2 2
-plant sqlite-2 "$S/run-s2" 0 2 0
+# sqlite-1's d test fails as sqlite-2's does, but sqlite-2's Sanctum part
+# excluded a test where sqlite-1's excluded none; its e test fails in a
+# partition that exited 3 (failures and warnings) and passes in sqlite-2's
+# complete one. Neither run vouches for the other there.
+plant sqlite-1 "$S/run-s1" 0 2 2 2 3
+plant sqlite-2 "$S/run-s2" 0 2 0 2 0
+{ echo '==> sanctum'; failure 1 'fails in both' Sanctum.DTest apps/sanctum/test/d_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-s1/p4.log"
+{ echo '==> sanctum'; failure 1 'fails in both' Sanctum.DTest apps/sanctum/test/d_test.exs; echo 'Result: 1/3 passed, 1 excluded'; } >"$S/run-s2/p4.log"
+{ echo '==> locus'; failure 1 'warned once' Locus.ETest apps/locus/test/e_test.exs; echo 'Result: 1/2 passed'; } >"$S/run-s1/p5.log"
+printf '==> locus\nResult: 2 passed\n' >"$S/run-s2/p5.log"
 printf '==> arca\nResult: 3 passed\n' >"$S/run-s1/p1.log"
 { echo '==> cyfr'; failure 1 'fails always' Cyfr.BTest apps/cyfr/test/b_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-s1/p2.log"
 { echo '==> cyfr'; failure 1 'fails once' Cyfr.CTest apps/cyfr/test/c_test.exs; echo 'Result: 1/2 passed'; } >"$S/run-s1/p3.log"
@@ -324,25 +335,31 @@ printf '==> cyfr\nResult: 2 passed\n' >"$S/run-s2/p3.log"
 # its Arca partition never wrote Arca's Result line, its b partition
 # exited 3 (failures and warnings), and its c partition excluded none where
 # postgres-2's excluded one.
-plant postgres-2 "$S/run-p2" 2 2 2
+plant postgres-2 "$S/run-p2" 2 2 2 0 0
 { echo '==> arca'; failure 1 'cut short' Arca.ATest apps/arca/test/a_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-p2/p1.log"
 { echo '==> cyfr'; failure 1 'warned' Cyfr.BTest apps/cyfr/test/b_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-p2/p2.log"
 { echo '==> cyfr'; failure 1 'excluded elsewhere' Cyfr.CTest apps/cyfr/test/c_test.exs; echo 'Result: 1/2 passed, 1 excluded'; } >"$S/run-p2/p3.log"
-plant postgres-1 "$S/run-p1" 0 3 0
+plant postgres-1 "$S/run-p1" 0 3 0 0 0
 printf '==> arca\n' >"$S/run-p1/p1.log"
 printf '==> cyfr\nResult: 3 passed\n' >"$S/run-p1/p2.log"
 printf '==> cyfr\nResult: 2 passed\n' >"$S/run-p1/p3.log"
+for run in p1 p2; do
+  printf '==> sanctum\nResult: 3 passed\n' >"$S/run-$run/p4.log"
+  printf '==> locus\nResult: 2 passed\n' >"$S/run-$run/p5.log"
+done
 python3 -I "$ROOT/scripts/lib/nightly.py" flakes "$night" >"$S/flakes.txt"
 printf '%s\n' \
   $'failing\tsqlite\tcyfr\tfails always (Cyfr.BTest)\tfailed in sqlite-1 and sqlite-2' \
   $'flaky\tsqlite\tcyfr\tfails once (Cyfr.CTest)\tfailed in sqlite-1' \
+  $'unknown\tsqlite\tsanctum\tfails in both (Sanctum.DTest)\tfailed in sqlite-1 and sqlite-2' \
+  $'unknown\tsqlite\tlocus\twarned once (Locus.ETest)\tfailed in sqlite-1' \
   $'unknown\tpostgres\tarca\tcut short (Arca.ATest)\tfailed in postgres-2' \
   $'unknown\tpostgres\tcyfr\texcluded elsewhere (Cyfr.CTest)\tfailed in postgres-2' \
   $'unknown\tpostgres\tcyfr\twarned (Cyfr.BTest)\tfailed in postgres-2' | LC_ALL=C sort >"$S/want"
 LC_ALL=C sort "$S/flakes.txt" | diff "$S/want" - >/dev/null || fail "the verdicts: $(cat "$S/flakes.txt")"
 # The positive control: postgres-1 whole, exiting 0, with the same
 # exclusions, makes all three flaky.
-plant postgres-1 "$S/run-p1" 0 0 0
+plant postgres-1 "$S/run-p1" 0 0 0 0 0
 printf '==> arca\nResult: 3 passed\n' >"$S/run-p1/p1.log"
 printf '==> cyfr\nResult: 2 passed, 1 excluded\n' >"$S/run-p1/p3.log"
 python3 -I "$ROOT/scripts/lib/nightly.py" flakes "$night" >"$S/flakes2.txt"

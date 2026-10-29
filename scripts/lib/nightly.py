@@ -21,14 +21,14 @@ umbrella's root as the assignment names it, and ends it with the app's
 (`mix test`'s status for test failures alone), and every app with an
 assigned file has its `Result:` line. A test passed in an invocation only
 when the partition that ran its file completed and the test is not among
-its app's failures there. The verdicts:
-    failing   it failed in both invocations;
-    flaky     it failed in one and passed in the other;
-    unknown   anything else: a partition that did not complete proves
-              nothing about its tests, and an app whose `Result:` line
-              shows exclusions in one invocation and not in the other
-              makes every test of its unknown, since an exclusion count
-              cannot be attributed to a test.
+its app's failures there. A test's two invocations are comparable when the
+partition holding its file completed in each and its app's `Result:` line
+shows the same number of exclusions in both. The verdicts:
+    failing   comparable, and it failed in both;
+    flaky     comparable, and it failed in exactly one;
+    unknown   anything else, whatever the failures say: a partition that
+              did not complete proves nothing about its tests, and an
+              exclusion count that differs cannot be attributed to a test.
 
 weights applies CONTRIBUTING.md's recipe to the two SQLite rows' timings
 (timings-1 and timings-2): each file's larger `elixir
@@ -121,23 +121,21 @@ def partition(run_dir, index, exit_status):
         if line.startswith("Result:") and app:
             results.add(app)
             m = EXCLUDED.search(line)
-            exclusions[app] = bool(m and int(m.group(1)) > 0)
+            exclusions[app] = int(m.group(1)) if m else 0
     apps = {f.split("/")[1] for f in files if f.startswith("apps/") and f.count("/") >= 2}
     complete = bool(log is not None and files and exit_status in (0, 2) and apps <= results)
     return {"files": files, "failures": failures, "complete": complete, "exclusions": exclusions}
 
 
-def verdict(test, path, failed, other):
-    """failing, flaky or unknown for a test the run failed did fail."""
-    if test in other.failures():
-        return "failing"
+def verdict(test, path, first, second):
+    """failing, flaky or unknown for a test that failed in one of two invocations at least."""
     app = test[0]
-    here, there = failed.holding(path) if path else None, other.holding(path) if path else None
-    if not here or not there or not there["complete"]:
+    parts = [run.holding(path) if path else None for run in (first, second)]
+    if any(part is None or not part["complete"] for part in parts):
         return "unknown"
-    if here["exclusions"].get(app, False) != there["exclusions"].get(app, False):
+    if parts[0]["exclusions"].get(app, 0) != parts[1]["exclusions"].get(app, 0):
         return "unknown"
-    return "flaky"
+    return "failing" if all(test in run.failures() for run in (first, second)) else "flaky"
 
 
 def flakes(logdir):
