@@ -8,7 +8,10 @@
 #   contain_start [-g GRACE_S] CMD...
 #       Starts CMD, an executable (or `bash -c ...`, never a shell
 #       function), as the leader of a new session and sets CONTAIN_PID,
-#       which is also the session id. Before the exec it closes the
+#       which is also the session id, and CONTAIN_WATCHDOG, the pid of the
+#       session's watchdog, which the watchdog reports itself once it
+#       runs: a run is over only when its session is empty and that pid
+#       has exited. Before the exec it closes the
 #       descriptors in CONTAIN_CLOSE_FDS and every watchdog pipe. It also
 #       starts a watchdog in a session of its own that ignores INT, TERM
 #       and HUP, writes nothing, keeps the descriptors in CONTAIN_HOLD_FDS
@@ -24,7 +27,8 @@
 #       file.
 #       Returns 0; 64 on usage, a non-numeric descriptor list or no free
 #       slot; 69 when neither setsid (util-linux) nor perl is on PATH, and
-#       the caller then exits 69; 1 when the pipe cannot be opened.
+#       the caller then exits 69; 1 when the pipe cannot be opened or the
+#       watchdog does not report its pid within 10 s.
 #   contain_wait PID DEADLINE_S [GRACE_S]
 #       Waits for the leader; a DEADLINE_S of 0 means no deadline. At the
 #       deadline it runs contain_stop PID GRACE_S and returns 124.
@@ -306,36 +310,54 @@ _contain_child() {
     'printf "%s\n" "$$" >&'"$fd"'; exec '"$fd"'>&-; exec "$@"' contain-leader "$@"
 }
 
-# Starts the watchdog of slot descriptor $1. The pipe is a FIFO: Bash 3.2
-# leaves an open descriptor unchanged under `exec N> >(...)`. The caller
-# opens it read-write, so the open never blocks and the read end opened
-# next finds a writer at once; the path is gone before the watchdog runs,
-# and the caller's descriptor is its only writer. The watchdog is a
-# grandchild, so a bare `wait` in the caller never waits for it.
+# Starts the watchdog of slot descriptor $1 and sets CONTAIN_WATCHDOG to
+# its pid. The pipe is a FIFO: Bash 3.2 leaves an open descriptor
+# unchanged under `exec N> >(...)`. The caller opens it read-write, so the
+# open never blocks and the read end opened next finds a writer at once;
+# the path is gone before the watchdog runs, and the caller's descriptor
+# is its only writer. The watchdog is a grandchild, so a bare `wait` in
+# the caller never waits for it, and its pid is known only from the
+# watchdog itself, which writes it on a second FIFO, its standard output,
+# before anything else (setsid may fork, so no pid seen here would do).
 _contain_open_pipe() {
-  local fd=$1 dir tmp
+  local fd=$1 dir tmp report pid=
+  CONTAIN_WATCHDOG=
   dir=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/contain.XXXXXX" 2>/dev/null) || return 1
-  if ! mkfifo "$dir/w" 2>/dev/null || ! eval "exec $fd<>\"\$dir/w\""; then
+  if ! mkfifo "$dir/w" "$dir/r" 2>/dev/null || ! eval "exec $fd<>\"\$dir/w\""; then
     rm -rf "$dir"
     return 1
   fi
-  tmp=$((_contain_b + 64))
-  while [ -e "/dev/fd/$tmp" ] && [ "$tmp" -lt $((_contain_b + 320)) ]; do tmp=$((tmp + 1)); done
-  if [ -e "/dev/fd/$tmp" ] || ! eval "exec $tmp<\"\$dir/w\""; then
+  report=$((_contain_b + 64))
+  while [ -e "/dev/fd/$report" ] && [ "$report" -lt $((_contain_b + 320)) ]; do report=$((report + 1)); done
+  if [ -e "/dev/fd/$report" ] || ! eval "exec $report<>\"\$dir/r\""; then
     eval "exec $fd>&-" 2>/dev/null || :
     rm -rf "$dir"
     return 1
   fi
+  tmp=$((report + 1))
+  while [ -e "/dev/fd/$tmp" ] && [ "$tmp" -lt $((_contain_b + 320)) ]; do tmp=$((tmp + 1)); done
+  if [ -e "/dev/fd/$tmp" ] || ! eval "exec $tmp<\"\$dir/w\""; then
+    eval "exec $fd>&- $report>&-" 2>/dev/null || :
+    rm -rf "$dir"
+    return 1
+  fi
   rm -rf "$dir"
-  eval "(_contain_watchdog_exec 0<&$tmp &)"
+  eval "(_contain_watchdog_exec 0<&$tmp 1>&$report $report>&- &)"
   eval "exec $tmp<&-"
+  eval "IFS= read -r -t 10 pid <&$report" 2>/dev/null || pid=
+  eval "exec $report>&-"
+  if ! _contain_pid_ok "$pid"; then
+    eval "exec $fd>&-" 2>/dev/null || :
+    return 1
+  fi
+  CONTAIN_WATCHDOG=$pid
 }
 
 # The watchdog's exec; its standard input is the read end of the pipe.
 _contain_watchdog_exec() {
   exec "${_contain_setsid[@]}" "$BASH" --posix "$_contain_lib" __contain_watchdog \
     "$_contain_w_grace" "$_contain_w_owner" "$_contain_b" "${CONTAIN_HOLD_FDS:-}" \
-    "${CONTAIN_REGISTRY:-}" "$$" >/dev/null 2>&1
+    "${CONTAIN_REGISTRY:-}" "$$" 2>/dev/null
 }
 
 # The watchdog: GRACE OWNER BASE HOLD_FDS REGISTRY CALLER, where OWNER is
@@ -544,6 +566,10 @@ contain_registry_create() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   if [ "${1:-}" = __contain_watchdog ]; then
     shift
+    # Its pid to the caller (contain_start's CONTAIN_WATCHDOG), then
+    # nothing more: the watchdog writes nothing else.
+    printf '%s\n' "$$"
+    exec >/dev/null
     _contain_watch "$@"
     exit 0
   fi

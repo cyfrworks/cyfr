@@ -803,6 +803,44 @@ before=$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)
 [ "$(scoped -a sqlite -n 1)" = 0 ] || fail 'a scoped run refused one partition'
 [ "$(scoped -n 4 -n 1)" = 0 ] || fail 'a scoped run refused a last -n of one'
 
+# The proof lane admits one partition, as the scoped lane does.
+proof() { status_of "${clean[@]}" HEAVY_CHECK_HELD=proof bash "$runner" "$@"; }
+before=$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)
+[ "$(proof -n 4)" = 64 ] || fail 'a proof-lane run took four partitions'
+grep -qx 'a proof check runs one partition: -n 1' "$scratch/status" || fail "the proof-lane refusal: $(cat "$scratch/status")"
+[ "$(proof)" = 64 ] || fail 'a proof-lane run took the default count'
+[ "$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)" = "$before" ] || fail 'a refused proof-lane run prepared or reached Mix'
+[ "$(proof -a sqlite -n 1)" = 0 ] || fail 'a proof-lane run refused one partition'
+
+# A second pass in one VM would run after the suite's after_suite cleanups:
+# --repeat-until-failure is refused, in every spelling and lane, before
+# anything is prepared, naming the replacement.
+before=$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)
+for held in '' scoped; do
+  for form in '-- --repeat-until-failure 2 apps/prima/test/prima/boot_test.exs' '--repeat-until-failure 2' '--repeat-until-failure=2'; do
+    # shellcheck disable=SC2086
+    [ "$(status_of "${clean[@]}" HEAVY_CHECK_HELD="$held" bash "$runner" -n 1 $form)" = 64 ] || fail "accepted $form under '$held'"
+    grep -qx -- "--repeat-until-failure runs a second pass after the suite's own after_suite cleanups; run the invocation again instead" "$scratch/status" ||
+      fail "the refusal of $form does not name the replacement: $(cat "$scratch/status")"
+  done
+done
+[ "$(cat "$TRACE/prepared" "$TRACE/mix-calls" | wc -l)" = "$before" ] || fail 'a refused --repeat-until-failure prepared or reached Mix'
+
+# A passing run keeps its directory only under CYFR_TEST_KEEP=1, named as a
+# failing run's is, and drops its databases either way.
+CYFR_TEST_KEEP=yes refuses -n 1
+grep -q '^CYFR_TEST_KEEP is 1' "$scratch/refusal" || fail "CYFR_TEST_KEEP=yes was refused for another reason: $(cat "$scratch/refusal")"
+dropped_before=$(sort -u "$TRACE/dropped" | wc -l)
+CYFR_TEST_KEEP=1 "${clean[@]}" bash "$runner" -n 1 -a postgres >"$scratch/keep" 2>&1 || fail "a kept passing run failed: $(tail -n 3 "$scratch/keep")"
+kept=$(sed -n 's/^==> logs and disposable resources kept: //p' "$scratch/keep")
+[ -n "$kept" ] && [ -f "$kept/p1.log" ] || fail "a passing run under CYFR_TEST_KEEP=1 did not keep its directory: $(tail -n 3 "$scratch/keep")"
+grep -qxF "$kept" "$TRACE/prepared" || fail "the kept directory $kept is not the run's own"
+[ ! -e "$kept/p1.env" ] || fail 'a kept run kept its database URL'
+[ "$(sort -u "$TRACE/dropped" | wc -l)" = $((dropped_before + 1)) ] || fail 'a kept run did not drop its database'
+[ "$(tail -n 1 "$scratch/keep")" = "_EXIT=$(sed -n 's/^_START=//p' "$scratch/keep") 0" ] || fail "a kept passing run did not end 0: $(tail -n 1 "$scratch/keep")"
+"${clean[@]}" bash "$runner" -n 1 >"$scratch/nokeep" 2>&1 || fail 'a passing run failed'
+if grep -q '^==> logs and disposable resources kept: ' "$scratch/nokeep"; then fail 'a passing run without CYFR_TEST_KEEP kept its directory'; fi
+
 # --stale cannot be merged across partitions; the slot bound; a missing path.
 before=$(grep -c '^compile ' "$TRACE/mix-calls")
 [ "$(status_of "${clean[@]}" bash "$runner" -n 2 -- --stale)" = 64 ] || fail '--stale ran in two partitions'
