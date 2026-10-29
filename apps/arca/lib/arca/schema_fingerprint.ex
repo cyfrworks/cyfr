@@ -76,7 +76,6 @@ defmodule Arca.SchemaFingerprint do
     end
   end
 
-
   defp refusal(what) do
     database = Application.get_env(:arca, Arca.Repo, [])[:database] || "the database"
 
