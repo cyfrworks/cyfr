@@ -41,41 +41,50 @@ missing or wrong header fails CI.
 install runs it: Prism, the server and live reload from `mix phx.server`,
 and the runtime, the backends service (stdio MCP servers) and the builds
 service in their containers under `cyfr-locus`, each with the shipped
-security options and its egress guard, built from the same tree. Besides the
-setup the next section names (the pinned `wasm-tools`, the prebuilt binaries
-and the tailwind CLI), it needs Docker with its compose plugin, `python3`,
-and a host that allows unprivileged user namespaces (`docker-compose.yml`'s
-`locus-runtime` service says why).
+security options and its egress guard, run from this tree's Locus image.
+Besides the setup the next section names (the pinned `wasm-tools`, the
+prebuilt binaries and the tailwind CLI), it needs Docker with its compose
+plugin, `python3`, and a host that allows unprivileged user namespaces
+(`docker-compose.yml`'s `locus-runtime` service says why).
 
 On its first run it makes `.env` mode 0600 and writes into it what a `mix`
 boot needs and nothing sets: `CYFR_GITHUB_CLIENT_ID` from `.env.example`,
 and `CYFR_SETUP_TOKEN`, the runtime root and the backends key, minted as
 `cyfr init` mints them. Later runs keep every value. The builds key, which
 a `mix` boot refuses without the builds URL only the stack sets, is minted
-for each run unless `.env` sets one. It then builds `cyfr-locus:dev`, starts
-the containers and runs `mix phx.server` in the foreground at
-http://localhost:4000, refusing, with the holder's name, when that address
-is taken. The run that writes the setup token prints the setup link,
+for each run unless `.env` sets one. It then builds the tree's Locus image
+with `scripts/image.sh` when the host does not hold it already (every
+worktree at the same inputs shares one), starts the containers and runs
+`mix phx.server` in the foreground at http://localhost:4000. The run that
+writes the setup token prints the setup link,
 `http://localhost:4000/setup#<token>`, as `cyfr init` does: it sets up
-CYFR's first person, who administers it, with a passkey. Prism and the server reload as their files
-change; a change under `apps/locus` or to the Locus image's other inputs
-takes effect at the next start. Ctrl-C stops the server and removes the
-containers; the image stays cached, so a start with nothing changed
-rebuilds nothing. `scripts/dev-stack.sh down` stops the server and removes
-the containers a killed run left, and `scripts/dev-stack.sh clean` does
-the same and then removes the `cyfr-locus:dev` image, and nothing else of
-the host's images or build cache.
+CYFR's first person, who administers it, with a passkey. Prism and the
+server reload as their files change; a change under `apps/locus` or to the
+Locus image's other inputs takes effect at the next start. Ctrl-C stops
+the server and removes the containers; the image stays, so a start with
+nothing changed builds nothing. The image is shared, so the janitor, not
+the loop, removes it once no worktree produces it and no loop uses it:
+run `scripts/janitor.sh --dry-run` to see what it would remove, then
+`scripts/janitor.sh` to remove it by hand. `scripts/dev-stack.sh down` stops
+the server and removes the containers a killed run of the same worktree
+left.
 
-`docker-compose.dev.yml` names every resource the stack holds, and its own
-ports, networks and names are none that a test suite, the gate, a proof or
-a CI-style run on the same host uses, so the loop runs beside them. With an
-API key from Prism's API Keys page, `CYFR_TOKEN=<key> scripts/dev-stack.sh
-check` runs a component through the running stack and asserts its answer.
+Each worktree runs a loop of its own, beside the others, a test suite, a
+proof or a CI-style run on the same host. Its containers are named
+`cyfr-dev-<seed>`, the worktree's seed, and its ports and networks are a
+slot's, one of twenty. The first loop on a host keeps
+http://localhost:4000, so a lone worktree sees no change; a second
+worktree's loop takes the next free slot, Prism on 4010 and so on, and
+prints its address, which the worktree remembers in
+`data/dev-stack.slot` for its next run. A `.env` that sets `CYFR_PORT` or
+another address of the stack refuses a slot it disagrees with, by name.
+With an API key from Prism's API Keys page, `CYFR_TOKEN=<key>
+scripts/dev-stack.sh check` runs a component through the worktree's running
+loop and asserts its answer.
 
 AQUA answers in the chat once a model provider's key is in the vault, as on
-any install. One stack runs on a host at a time: while it runs, a start,
-`down` or `clean` from any checkout refuses, naming the checkout that holds
-it.
+any install. While a worktree's loop runs, a second start or `down` in the
+same worktree refuses, naming the run that holds it.
 
 ## Before opening a PR
 
