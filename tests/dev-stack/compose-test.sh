@@ -292,6 +292,8 @@ case " $* " in
   " network ls -q ") [ -z "${STUB_NETWORKS:-}" ] || echo stub-networks ;;
   " network inspect "*) printf '%s\n' "${STUB_NETWORKS:-}" ;;
   *" up "*)
+    # The slot's claim as the start finds it.
+    cat "$XDG_RUNTIME_DIR/cyfr-dev-slot.$DEV_STACK_SLOT.lock" >"$STUB_LOG/claim.at-up" 2>/dev/null
     # Held inside the start until the test releases it, when it asks.
     if [ -n "${STUB_UP_HOLD:-}" ]; then
       touch "$STUB_LOG/up.held"
@@ -520,9 +522,10 @@ full_run() {
   printf '%s\n' "$(leftovers "${5:-0}")" "$(listed)" "$(declared "$1")" "$(up_call "$1" "$2" "$3" "$4")" "$(removed "$1")"
 }
 # The run's image.sh calls: the tag for the declarations, then the image
-# with the run's pid as its use (the pid its slot's claim records).
+# with the run's pid as its use (the pid its slot's claim recorded at the
+# start).
 claim_of() { cat "${run_dir:-$case_dir/run}/cyfr-dev-slot.$1.lock" 2>/dev/null; }
-image_calls() { printf '%s\n' "--undated --tag-only locus" "--undated --for $(claim_of "$1" | sed -n 's/^pid //p') locus"; }
+image_calls() { printf '%s\n' "--undated --tag-only locus" "--undated --for $(record claim.at-up | sed -n 's/^pid //p') locus"; }
 # want_settings K: the server's settings at slot K, from the override as
 # the case's project resolves it.
 want_settings() {
@@ -568,6 +571,8 @@ CYFR_LOCUS_BACKENDS_KEY=$backends" ] || echo ".env holds $(printf '%q' "$(cat "$
     echo "the run did not say what it wrote: $(cat "$case_dir/out")"
   [ "$(calls)" = "$(full_run "$slot_a" "$root" "$backends" "$builds")" ] || echo "docker was handed: $(calls)"
   [ "$(record image.calls)" = "$(image_calls "$slot_a")" ] || echo "image.sh was handed: $(record image.calls)"
+  [ "$(record claim.at-up | sed -n 's/^checkout //p')" = "$case_dir" ] || echo "the claim did not name the loop at its start: $(record claim.at-up)"
+  [ ! -s "$case_dir/run/cyfr-dev-slot.$slot_a.lock" ] || echo "the loop left its claim's record: $(claim_of "$slot_a")"
   [ "$(server_settings)" = "$(printf '%s\n' "$(want_settings "$slot_a")" "CYFR_LOCUS_BUILDS_KEY=$builds" | sort)" ] ||
     echo "the server's settings: $(server_settings)"
   record server.env | grep -qE "^(LOCUS_RUNTIME_KEY|CYFR_LOCUS_(RUNTIME_ROOT|BACKENDS_KEY)|DEV_STACK_(SLOT|PROJECT|IMAGE|[A-Z_]*_(PORT|NET)))=" &&
