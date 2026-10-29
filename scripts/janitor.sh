@@ -137,10 +137,27 @@ unfinished() {
   if alive "$watchdog"; then echo "its watchdog $watchdog is alive"; fi
 }
 
-# Rule 1.
+# Rule 1. Each kind's listing and removal spelled out, so no docker
+# command takes its words from a variable.
+list_objects() {
+  case $1 in
+    container) docker ps -a --format '{{.Names}}' ;;
+    network) docker network ls --format '{{.Name}}' ;;
+    volume) docker volume ls --format '{{.Name}}' ;;
+    image) docker image ls --format '{{.Repository}}:{{.Tag}}' ;;
+  esac
+}
+remove_object() {
+  case $1 in
+    container) docker rm -f -v "$2" ;;
+    network) docker network rm "$2" ;;
+    volume) docker volume rm "$2" ;;
+    image) docker image rm "$2" ;;
+  esac
+}
 declare -A why_kept=()
 sweep_run_objects() {
-  local kind=$1 list=$2 remove=$3 name pid reason
+  local kind=$1 name pid reason
   while IFS= read -r name; do
     [[ $name =~ $RUN_NAMES_PATTERN ]] || continue
     pid=${BASH_REMATCH[2]}
@@ -148,14 +165,10 @@ sweep_run_objects() {
     reason=${why_kept[$pid]}
     if [ -n "$reason" ]; then kept "$kind" "$name" "$reason"; continue; fi
     if $dry; then removed "$kind" "$name"; continue; fi
-    # shellcheck disable=SC2086
-    if out=$(docker $remove "$name" 2>&1); then removed "$kind" "$name"; else failure "$kind" "$name" "$out"; fi
-  done < <(docker $list 2>/dev/null)
+    if out=$(remove_object "$kind" "$name" 2>&1); then removed "$kind" "$name"; else failure "$kind" "$name" "$out"; fi
+  done < <(list_objects "$kind" 2>/dev/null)
 }
-sweep_run_objects container "ps -a --format {{.Names}}" "rm -f -v"
-sweep_run_objects network "network ls --format {{.Name}}" "network rm"
-sweep_run_objects volume "volume ls --format {{.Name}}" "volume rm"
-sweep_run_objects image "image ls --format {{.Repository}}:{{.Tag}}" "image rm"
+for kind in container network volume image; do sweep_run_objects "$kind"; done
 
 # Rule 2. The tags the repository's worktrees produce today.
 declare -A produced=()
