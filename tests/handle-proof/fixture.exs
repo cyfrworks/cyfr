@@ -68,7 +68,7 @@ fn args ->
 
   tables =
     ~w(users person_identities passkeys server_allowlist sessions registry_tokens athanors
-       memberships identity_attempts identity_log_entries)
+       memberships identity_attempts)
 
   table! = fn table ->
     if table in tables, do: table, else: raise("no table #{inspect(table)} for this proof")
@@ -156,7 +156,10 @@ fn args ->
       table = table!.(table)
 
       %{rows: schema} =
-        Arca.Repo.query!("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name", [])
+        Arca.Repo.query!(
+          "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name",
+          []
+        )
 
       answer.(%{rows: rows.(table, nil), schema: schema})
 

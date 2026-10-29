@@ -259,8 +259,11 @@ export function storedForm(buffer) {
   const printable = Buffer.from(text, "utf8").equals(buffer) && /^[^\x00-\x06\x0e-\x1a\x1c-\x1f]*$/.test(text);
   return printable ? text : bytes(buffer);
 }
-// The bytes a fixture answered, in either form.
-export const bytesFrom = (v) => (typeof v === "string" ? Buffer.from(v, "utf8") : bytesOf(v));
+// Canonical entry bytes from the CYFR fixture or a PostgreSQL BYTEA column.
+export const bytesFrom = (v) => {
+  if (typeof v !== "string") return bytesOf(v);
+  return /^\\x[0-9a-f]+$/.test(v) ? Buffer.from(v.slice(2), "hex") : Buffer.from(v, "utf8");
+};
 export const b64url = (b64) => b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 export const fromB64url = (text) => Buffer.from(text.replace(/-/g, "+").replace(/_/g, "/"), "base64");
 
@@ -291,13 +294,16 @@ export function plusHours(stamp, hours) {
 // rows first read, the clock readings around each step and each read.
 // ---------------------------------------------------------------------------
 
-export const DIRECTORY = "https://dir.test";
+export const DIRECTORY = "https://registry.test";
 export const REGISTRY = "registry.test";
 // The OCI host a push token is for, which A keys its stored tokens by:
 // `registry.` before CYFR_REGISTRY_URL (`Compendium.RegistryHost`).
 export const OCI = `registry.${REGISTRY}`;
 export const HANDLE = "proof";
 export const OTHER = "other";
+// This fresh proof database mints IDs from 1; the largest exact JS integer
+// remains a valid PostgreSQL BIGINT without colliding with another proof row.
+const DIRECTORY_ID_TAMPER = Number.MAX_SAFE_INTEGER;
 const NONE_TIME = { tamper: LONG_AGO };
 const nil = () => exact(null);
 const noTime = () => exact(null, NONE_TIME);
@@ -402,13 +408,13 @@ function models(S) {
     ...(address ? { address: exact(address) } : {}),
   });
   const logEntry = (identifier, genesis, window) => ({
-    id: anId("ile"),
+    id: { ...captured("a new directory row id", (v) => Number.isSafeInteger(v) && v > 0, DIRECTORY_ID_TAMPER), tamper: DIRECTORY_ID_TAMPER },
     identifier: derived(identifier, "the identifier the signer's genesis hashes to"),
     seq: exact(0),
     kind: exact("genesis"),
     entry_hash: derived(`sha256:${sha256hex(fromB64(genesis))}`, "the entry's bytes, hashed"),
     prev_hash: nil(),
-    entry: relatedTo(storedForm(fromB64(genesis)), sha256hex(fromB64(genesis)) === identifier.slice(4), "the genesis its signer sent, whose hash is the identifier"),
+    entry: relatedTo(bytesHex(fromB64(genesis).toString("hex")), sha256hex(fromB64(genesis)) === identifier.slice(4), "the genesis its signer sent, whose hash is the identifier"),
     request_id: nil(),
     request_digest: nil(),
     outcome: exact("accepted"),
@@ -443,7 +449,7 @@ function models(S) {
 
   // setup, before the kit's acknowledgement: the accepted enrollment, the
   // directory's entry, and nothing of the person at the registry yet.
-  M["setup:dir.identity_log_entries"] = () => [logEntry(id, genesisA, win(S, "enroll"))];
+  M["setup:registry.directory.identity_log_entries"] = () => [logEntry(id, genesisA, win(S, "enroll"))];
   M["setup:pre:a.identity_attempts"] = () => {
     const pre = first("setup:pre:a.identity_attempts")[0];
     return [{
@@ -725,8 +731,8 @@ function models(S) {
   M["wrong_identity:registry.identity_heads[c]"] = () => [head(S.other, `sha256:${S.other.slice(4)}`, within(win(S, "other")))];
   M["wrong_identity:registry.policy_acceptances[c]"] = () => [policy(S.other, win(S, "other"))];
   M["wrong_identity:registry.request_nonces[c]"] = () => [nonce(S.other, win(S, "other")), nonce(S.other, win(S, "other")), nonce(S.other, win(S, "other"))];
-  M["wrong_identity:dir.identity_log_entries"] = () => byKey(first("wrong_identity:dir.identity_log_entries"), (r) => r.identifier, [
-    [id, held(first("setup:dir.identity_log_entries")[0], {}, "as read at setup"), "A's genesis"],
+  M["wrong_identity:registry.directory.identity_log_entries"] = () => byKey(first("wrong_identity:registry.directory.identity_log_entries"), (r) => r.identifier, [
+    [id, held(first("setup:registry.directory.identity_log_entries")[0], {}, "as read at setup", logEntry(id, genesisA, win(S, "enroll"))), "A's genesis"],
     [S.other, logEntry(S.other, genesisC, win(S, "other")), "the second identity's genesis"],
   ]);
   M["wrong_identity:handle_answer[other]"] = () => handleAnswer(OTHER, S.other, A);
@@ -828,7 +834,7 @@ function models(S) {
     updated_at: sameOrWithin(r.updated_at, since("a.users", "ack"), "as read at setup"),
   }));
   for (const [name, step] of [["setup:a.person_identities", "setup"], ["setup:a.athanors", "setup"], ["setup:a.memberships", "setup"],
-    ["setup:a.identity_attempts", "setup"], ["sync:a.registry_tokens", "sync"], ["wrong_identity:dir.identity_log_entries", "wrong_identity"],
+    ["setup:a.identity_attempts", "setup"], ["sync:a.registry_tokens", "sync"], ["wrong_identity:registry.directory.identity_log_entries", "wrong_identity"],
     ["publish:registry.namespaces[proof]", "publish"], ["wrong_identity:registry.namespaces[other]", "wrong_identity"],
     ["wrong_identity:registry.identity_heads[c]", "wrong_identity"], ["setup:registry.policy_acceptances[a]", "setup"],
     ["wrong_identity:registry.policy_acceptances[c]", "wrong_identity"], ["wrong_identity:registry.request_nonces[c]", "wrong_identity"],

@@ -250,15 +250,13 @@ func TestDownStopsAStackWhoseComposeFilesAreAmbiguous(t *testing.T) {
 	}
 }
 
-// A source checkout is a home without cyfr.yaml: README's "Prefer a source
-// checkout?" starts it with `cyfr up` and no `cyfr init`, from the
-// checkout's own docker-compose.yml and a .env copied from .env.example.
-// `cyfr down` stops what that `cyfr up` started, as in any home.
+// A source checkout is a home `cyfr init` never wrote: README's "Prefer a
+// source checkout?" starts it with `cyfr up`, from the checkout's own
+// docker-compose.yml and a .env copied from .env.example, which is all the
+// scenario's directory holds. `cyfr down` stops what that `cyfr up`
+// started, as in any home.
 func TestDownStopsTheSourceCheckoutUpStarted(t *testing.T) {
 	s := newUpdateScenario(t, shippedCompose(t), nil)
-	if err := os.Remove("cyfr.yaml"); err != nil {
-		t.Fatal(err)
-	}
 	s.engine.startReceipt = okReceipt("start")
 	var out bytes.Buffer
 	if err := runUp(context.Background(), &out); err != nil {
@@ -822,7 +820,7 @@ func newTailnetHome(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, content := range map[string][]byte{"docker-compose.yml": compose, ".env": env, "cyfr.yaml": []byte("name: test\n")} {
+	for name, content := range map[string][]byte{"docker-compose.yml": compose, ".env": env} {
 		if err := os.WriteFile(name, content, 0600); err != nil {
 			t.Fatal(err)
 		}

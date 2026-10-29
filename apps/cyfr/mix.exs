@@ -7,7 +7,7 @@ defmodule Cyfr.App.MixProject do
   def project do
     [
       app: :cyfr,
-      version: "0.6.0-alpha.4",
+      version: "0.6.0-alpha.5",
       build_path: "../../_build",
       config_path: "../../config/config.exs",
       deps_path: "../../deps",

@@ -3,8 +3,8 @@
 //
 // The handle proof, run in the official Playwright image by run.sh against
 // `cyfr` releases behind the harness's HTTPS front and cyfr.run's registry
-// (README.md): the directory dir.test, the person's CYFR A (a.test), the
-// CYFR B (b.test) they sign in at, and the registry at registry.test.
+// (README.md): the person's CYFR A (a.test), the CYFR B (b.test) they
+// sign in at, and the registry and directory at registry.test.
 // Chromium drives every step with its virtual WebAuthn authenticator.
 //
 // After each step the proof reads every object the step claims, whole,
@@ -31,7 +31,7 @@ const { homes } = readHomes(homesFile);
 const originOf = (name) => homes.find((home) => home.name === name).origin;
 const A = originOf("a");
 const B = originOf("b");
-const DIRECTORY = "https://dir.test";
+const DIRECTORY = "https://registry.test";
 const layer = "#system-layer-dialog";
 
 const secrets = [];
@@ -329,7 +329,7 @@ async function main(chromium) {
   S.ttlHours = Number((await ask({ op: "setting", cell: "b", key: "session_ttl_hours" })).value);
   S.clients = await ask({ op: "user_agents" });
 
-  // 1. Setup at A: a passkey, @proof, enrollment at dir.test, the kit
+  // 1. Setup at A: a passkey, @proof, enrollment at registry.test, the kit
   // acknowledged, and only then the claim at the registry.
   const deskContext = await freshContext(chromium);
   const desk = await deskContext.newPage();
@@ -354,12 +354,12 @@ async function main(chromium) {
   S.identifier = id;
   record.setup = { identifier: id, kit_directory: kit.directory_url, enroll_preview: enrollPreview };
   if (!row("setup", PER.test(id) && kit.directory_url === DIRECTORY,
-    "A is set up through /setup with a passkey; @proof chosen, the enrollment at dir.test confirmed with it, the kit shown", record.setup)) return;
+    "A is set up through /setup with a passkey; @proof chosen, the enrollment at registry.test confirmed with it, the kit shown", record.setup)) return;
 
   // Before the acknowledgement: the directory holds the genesis, the
   // attempt is accepted, and the registry holds nothing of the person.
-  await claim("setup:dir.identity_log_entries", "the directory's one entry: A's genesis, whose hash is the identifier", cyfrRows("dir", "identity_log_entries"), {
-    ...cyfrIo("dir", "identity_log_entries"),
+  await claim("setup:registry.directory.identity_log_entries", "the directory's one entry: A's genesis, whose hash is the identifier", registryRows("directory.identity_log_entries"), {
+    ...registryIo("directory.identity_log_entries", "id"),
     prepare: async (entries) => {
       const entry = bytesFrom(entries[0]?.entry);
       S.genesis.a = entry && sha256hex(entry) === id.slice(4) ? entry.toString("base64") : "";
@@ -381,7 +381,7 @@ async function main(chromium) {
   await claim("setup:a.athanors", "A's one athanor, its person's", cyfrRows("a", "athanors"), cyfrIo("a", "athanors"));
   await claim("setup:a.memberships", "A's seats: the person's in their athanor, and the first person's platform grant", cyfrRows("a", "memberships"), cyfrIo("a", "memberships"));
   await claim("setup:a.users", "A's one person, admitted by setup, holding @proof", cyfrRows("a", "users"), cyfrIo("a", "users"));
-  await claim("setup:a.person_identities", "A's identity: the kit's identifier, enrolled at dir.test, keys that open to the genesis's", cyfrRows("a", "person_identities"), {
+  await claim("setup:a.person_identities", "A's identity: the kit's identifier, enrolled at registry.test, keys that open to the genesis's", cyfrRows("a", "person_identities"), {
     ...cyfrIo("a", "person_identities"),
     prepare: async ([identity]) => {
       await opens("a", "identity", identity, "live_key_sealed", "live");
@@ -389,7 +389,7 @@ async function main(chromium) {
     },
   });
   await claim("setup:registry.namespaces[proof]", "the registry's @proof: personal, owned by A's identifier, no address", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
-  await claim("setup:registry.identity_heads[a]", "the registry's read of A's log at dir.test", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
+  await claim("setup:registry.identity_heads[a]", "the registry's read of A's log at registry.test", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
   await claim("setup:registry.policy_acceptances[a]", "A's identifier's acceptance of the registry's policy", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id"));
   await claim("setup:registry.request_nonces[a]", "the nonces of A's two signed requests, the acceptance and the claim", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
   await claim("setup:handle_answer[proof]", "the registry's answer for @proof: A's identifier and directory, no address", handleAnswer(HANDLE), answerIo(HANDLE, id, null));
@@ -491,8 +491,8 @@ async function main(chromium) {
     { op: "handle.claim", status: 201 }, { op: "address.set", status: 200 },
   ];
   if (!row("wrong_identity", JSON.stringify(record.other.steps) === JSON.stringify(otherSteps) && PER.test(other.identifier) && other.identifier !== id,
-    "a second identity enrolls at dir.test, claims @other and publishes A's address with it", record.other)) return;
-  await claim("wrong_identity:dir.identity_log_entries", "the directory's entries: A's genesis as before, and the second identity's as it sent it", cyfrRows("dir", "identity_log_entries"), cyfrIo("dir", "identity_log_entries"));
+    "a second identity enrolls at registry.test, claims @other and publishes A's address with it", record.other)) return;
+  await claim("wrong_identity:registry.directory.identity_log_entries", "the directory's entries: A's genesis as before, and the second identity's as it sent it", registryRows("directory.identity_log_entries"), registryIo("directory.identity_log_entries", "id"));
   await claim("wrong_identity:registry.namespaces[other]", "the registry's @other: owned by the second identity, A's address", registryRows("namespaces", "slug", OTHER), registryIo("namespaces", "slug"));
   await claim("wrong_identity:registry.identity_heads[c]", "the registry's read of the second identity's log", registryRows("identity_heads", "identifier", other.identifier), registryIo("identity_heads", "identifier"));
   await claim("wrong_identity:registry.policy_acceptances[c]", "the second identity's acceptance", registryRows("policy_acceptances", "identifier", other.identifier), registryIo("policy_acceptances", "id"));
@@ -625,7 +625,7 @@ async function main(chromium) {
     ["a.memberships", cyfrRows("a", "memberships"), cyfrIo("a", "memberships")],
     ["a.identity_attempts", cyfrRows("a", "identity_attempts"), cyfrIo("a", "identity_attempts")],
     ["a.registry_tokens", cyfrRows("a", "registry_tokens"), cyfrIo("a", "registry_tokens")],
-    ["dir.identity_log_entries", cyfrRows("dir", "identity_log_entries"), cyfrIo("dir", "identity_log_entries")],
+    ["registry.directory.identity_log_entries", registryRows("directory.identity_log_entries"), registryIo("directory.identity_log_entries", "id")],
     ["registry.namespaces[proof]", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug")],
     ["registry.namespaces[other]", registryRows("namespaces", "slug", OTHER), registryIo("namespaces", "slug")],
     ["registry.identity_heads[a]", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier")],
