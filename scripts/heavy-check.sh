@@ -454,8 +454,11 @@ ADMIT_STEP=1
 ADMIT_STALL=10
 queue_held() { [ "/dev/fd/$queue_fd" -ef "$LOCK.queue" ]; }
 queue_owner() { head -n 1 "$LOCK.queue.owner" 2>/dev/null || :; }
+# A local here must not shadow a global that on_exit reads (owner, cmd,
+# ticket and the rest): an exit inside the function runs on_exit in its
+# scope.
 queue_lock() {
-  local status owner seen= seen_at= step
+  local status named seen= seen_at= step
   while :; do
     exec {queue_fd}>>"$LOCK.queue" || exit 1
     status=0
@@ -478,9 +481,9 @@ queue_lock() {
       fi
     else
       expired && gave_up
-      owner=$(queue_owner)
-      if [ "$owner" != "$seen" ]; then seen=$owner seen_at=$SECONDS; fi
-      if ! pid_ok "$owner" || [ "$owner" = "$$" ] || ! alive "$owner" || stopped "$owner" ||
+      named=$(queue_owner)
+      if [ "$named" != "$seen" ]; then seen=$named seen_at=$SECONDS; fi
+      if ! pid_ok "$named" || [ "$named" = "$$" ] || ! alive "$named" || stopped "$named" ||
         [ $((SECONDS - seen_at)) -ge "$ADMIT_STALL" ]; then
         if queue_held; then
           : > "$LOCK.queue.$$" && mv -f "$LOCK.queue.$$" "$LOCK.queue" || exit 1
