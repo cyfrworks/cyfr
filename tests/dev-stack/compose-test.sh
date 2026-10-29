@@ -45,6 +45,14 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# The boundary cases, defined below; DEV_STACK_CASES names some of them.
+BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_claim_unverified case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan"
+for c in ${DEV_STACK_CASES:-}; do
+  case " $BOUNDARY_CASES " in
+    *" $c "*) ;;
+    *) echo "compose-test: DEV_STACK_CASES names $c, which is not a boundary case: $BOUNDARY_CASES" >&2; exit 64 ;;
+  esac
+done
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/${PROOF_RUN_PREFIX:-}cyfr-dev-stack-compose.XXXXXX")" || exit 1
 holders=()
 trap 'for p in "${holders[@]}"; do kill "$p" 2>/dev/null; done; rm -rf "$scratch"' EXIT
@@ -1011,7 +1019,6 @@ case_down_orphan() {
   kill -0 "$pid" 2>/dev/null || echo "down stopped process group $pid, which the record's start time does not match"
   kill -KILL "$pid" 2>/dev/null
 }
-BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_claim_unverified case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan"
 
 # boundary SCRIPT [CASE...]: the failures of SCRIPT under each case.
 boundary() {
