@@ -829,8 +829,11 @@ t_run_record() {
   for lane in exclusive proof scoped; do
     flag=$(lane_flag "$lane")
     case $lane in exclusive) file=lock.holder ;; proof) file=lock.proof.holder ;; scoped) file=lock.slot1.holder ;; esac
-    rm -f "$scratch"/release-*
-    "${hc[@]}" $flag -- sh -c "echo \$\$ > $scratch/rr.pid; $hold $scratch/release-rr" >/dev/null 2>&1 &
+    # Each lane's command writes its pid whole under a name of its own: a
+    # file left by the lane before, or one read while it is written, would
+    # stand for this command's pid.
+    rm -f "$scratch"/release-* "$scratch/rr.pid"
+    "${hc[@]}" $flag -- sh -c "echo \$\$ > $scratch/rr.pid.new && mv $scratch/rr.pid.new $scratch/rr.pid; $hold $scratch/release-rr" >/dev/null 2>&1 &
     a=$!; started+=("$a")
     until_true 10 test -s "$scratch/rr.pid" || fail "the $lane command did not start"
     until_true 10 has_line ' watchdog=[0-9]+ ' "$scratch/$file" || fail "the $lane record names no watchdog: $(cat "$scratch/$file" 2>/dev/null)"
