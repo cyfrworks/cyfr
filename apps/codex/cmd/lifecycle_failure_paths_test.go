@@ -139,7 +139,7 @@ func TestInitForceDescribesFilesMissingAfterDownloadFailure(t *testing.T) {
 				}
 			}
 			return nil
-		}, "docker-compose.yml, keeper.seccomp.json and cyfr.yaml were laid down again", false},
+		}, "docker-compose.yml and keeper.seccomp.json were laid down again", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newUpdateScenario(t, shippedCompose(t), nil)
@@ -171,7 +171,7 @@ func TestInitForceDescribesFilesMissingAfterDownloadFailure(t *testing.T) {
 					t.Errorf("%s: %v, want missing %v", name, statErr, c.missing)
 				}
 			}
-			if c.missing && strings.Contains(err.Error(), "laid down again.") && !strings.Contains(err.Error(), "cyfr.yaml was laid down again") {
+			if c.missing && strings.Contains(err.Error(), "laid down again") {
 				t.Errorf("init claims a missing file was laid down again: %v", err)
 			}
 		})
@@ -227,15 +227,13 @@ func TestInitForceReportsItsRemovalsWhenVerificationFails(t *testing.T) {
 		obstructed bool
 		want       []string
 	}{
-		{"a removal failed", true, []string{"could not remove Caddyfile", "docker-compose.yml, keeper.seccomp.json and cyfr.yaml were removed and are missing"}},
-		{"every removal held", false, []string{"docker-compose.yml, Caddyfile, keeper.seccomp.json and cyfr.yaml were removed and are missing"}},
+		{"a removal failed", true, []string{"could not remove Caddyfile", "docker-compose.yml and keeper.seccomp.json were removed and are missing"}},
+		{"every removal held", false, []string{"docker-compose.yml, Caddyfile and keeper.seccomp.json were removed and are missing"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newUpdateScenario(t, shippedCompose(t), nil)
-			for _, name := range []string{"keeper.seccomp.json", "cyfr.yaml"} {
-				if err := os.WriteFile(filepath.Join(s.project, name), []byte("{}\n"), 0644); err != nil {
-					t.Fatal(err)
-				}
+			if err := os.WriteFile(filepath.Join(s.project, "keeper.seccomp.json"), []byte("{}\n"), 0644); err != nil {
+				t.Fatal(err)
 			}
 			caddyfile := filepath.Join(s.project, "Caddyfile")
 			if c.obstructed {
@@ -262,7 +260,7 @@ func TestInitForceReportsItsRemovalsWhenVerificationFails(t *testing.T) {
 					t.Errorf("the refusal does not say %q: %v", want, err)
 				}
 			}
-			for _, name := range []string{"docker-compose.yml", "keeper.seccomp.json", "cyfr.yaml"} {
+			for _, name := range []string{"docker-compose.yml", "keeper.seccomp.json"} {
 				if _, statErr := os.Stat(filepath.Join(s.project, name)); !errors.Is(statErr, fs.ErrNotExist) {
 					t.Errorf("%s: %v, want it removed as the refusal says", name, statErr)
 				}

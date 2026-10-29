@@ -157,7 +157,7 @@ func interruptedSwitch(t *testing.T) (*stateDocker, string, string) {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	for name, content := range map[string]string{"docker-compose.yml": string(compose), ".env": text, "cyfr.yaml": "name: test\n"} {
+	for name, content := range map[string]string{"docker-compose.yml": string(compose), ".env": text} {
 		if err := os.WriteFile(name, []byte(content), 0600); err != nil {
 			t.Fatal(err)
 		}

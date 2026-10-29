@@ -63,7 +63,6 @@ func TestIsManaged(t *testing.T) {
 		".env",
 		".env.example",
 		".env.locus.example",
-		"cyfr.yaml",
 		"aqua",
 		"aqua/README.md",                     // only the soul, roles and scrolls ship
 		"aqua/roles/custom.md",               // a member's own role

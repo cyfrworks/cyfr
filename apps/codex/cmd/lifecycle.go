@@ -394,7 +394,7 @@ func refuseUndeclaredRestore() error {
 }
 
 func init() {
-	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml even if they already exist (never replaces .env or .env.example)")
+	initCmd.Flags().Bool("force", false, "Re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json even if they already exist (never replaces .env or .env.example)")
 	initCmd.Flags().String("access", "", "How the new CYFR is reached: local, tailnet or public (asked on a terminal; local otherwise)")
 	addAccessFlags(initCmd)
 	initCmd.Flags().Bool("no-pull", false, "Do not pull the stack's images")
@@ -409,13 +409,13 @@ var initCmd = &cobra.Command{
 	GroupID: "server",
 	Long: `Set up a CYFR project in the current directory so you can start the self-hosted stack with "cyfr up": cyfr (the one endpoint), locus-runtime (the runtime that runs components), locus-builds (the builds service), locus-backends (stdio MCP servers) and the proxy of the way CYFR is reached, tailscale for tailnet access and caddy for public access.
 
-Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates cyfr.yaml, .gitignore, and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
+Downloads docker-compose.yml, Caddyfile, keeper.seccomp.json (the locus-runtime service's seccomp profile), .env.example, the services' own env examples and the bundled scaffold (` + strings.Join(scaffold.Guides, ", ") + `, wit/ definitions, the aqua/ soul, roles and scrolls) for this CLI's version; generates .gitignore and the data/aqua directories; writes .env from .env.example; and pulls the images the stack starts (--no-pull skips the pulls).
 
 How CYFR is reached is asked first: 1, your devices via Tailscale (the default); 2, a public domain via Caddy; 3, this computer only. .env is written for this computer only, with every key; then, for tailnet access, the machine joins your tailnet (the link it prints approves the machine, and on a machine with a display it opens in the default browser unless --no-open is given; --tailscale-auth-key-file joins it without one) and the stopped stack is switched to the chosen mode, as 'cyfr access' switches it. A join that fails or is cancelled leaves CYFR reached from this computer only, and 'cyfr access <mode>' changes it later. With --no-interactive nothing is asked: access is local, unless --access tailnet comes with --tailscale-auth-key-file, or --access public with --domain (--acme-email optional).
 
 .env gets the stack's keys: CYFR_SECRET_KEY_BASE, CYFR_LOCUS_BACKENDS_KEY, CYFR_SETUP_TOKEN, the runtime root CYFR_LOCUS_RUNTIME_ROOT with the LOCUS_RUNTIME_KEY derived from it for LOCUS_RUNTIME_SERVICE_ID (wrk_locus unless .env names another), and CYFR_LOCUS_BUILDS_URL=http://locus-builds:4100 with a minted CYFR_LOCUS_BUILDS_KEY, so builds are on. CYFR_SETUP_TOKEN is the key of the setup link init prints last when it writes a new .env, <CYFR address>/setup#<token>: opened once CYFR is up, it sets up CYFR's first person, who administers it, with a passkey. A headless CYFR (CYFR_HEADLESS=on) serves no page, so its first person runs 'cyfr login --setup' in this directory instead. It also assigns CYFR_CORS_ALLOWED_ORIGINS the empty allowlist, since cyfr serves Prism, the API, /mcp and the tinctures from its own origin and no browser client of this stack is cross-origin; an allowlist .env assigns is the one that stands.
 
-Re-running in an existing project is safe: docker-compose.yml, Caddyfile, cyfr.yaml and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json and regenerate cyfr.yaml.`,
+Re-running in an existing project is safe: docker-compose.yml, Caddyfile and .env.example are kept if they already exist, and .env gains only the keys it lacks. A key already in .env is never rewritten, and neither is how CYFR is reached, which 'cyfr access' changes; a .env that does not say how CYFR is reached (no CYFR_ACCESS) is refused, and nothing is written. A service key without the root it derives from, or one that does not derive from the root beside it, is refused with a sentence naming the fix, and nothing is written. No builds URL and no builds key is builds turned off, and stays off. Use --force to re-fetch docker-compose.yml, Caddyfile and keeper.seccomp.json.`,
 	Example: `  cyfr init
   cyfr init --no-interactive --access public --domain cyfr.example.com
   cyfr init --force
@@ -540,13 +540,13 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 	}
 
 	// On --force, drop the tarball's deploy files so scaffold.Download
-	// re-extracts them, and regenerate cyfr.yaml. .env / .env.example are
-	// deliberately never removed. A file that cannot be removed would be
-	// kept as it is by the download, which skips an existing file, so
-	// init refuses after the download, naming what is on disk then.
+	// re-extracts them. .env / .env.example are deliberately never
+	// removed. A file that cannot be removed would be kept as it is by the
+	// download, which skips an existing file, so init refuses after the
+	// download, naming what is on disk then.
 	var removed, unremoved []string
 	if o.force {
-		for _, name := range append(forceRefetched(releaseBuild), "cyfr.yaml") {
+		for _, name := range forceRefetched(releaseBuild) {
 			switch err := os.Remove(name); {
 			case err == nil:
 				removed = append(removed, name)
@@ -577,19 +577,6 @@ func initProject(ctx context.Context, o initOptions, face initFace, out, errOut 
 	composeExists := fileExists("docker-compose.yml")
 	caddyfileExists := fileExists("Caddyfile")
 
-	// Generate cyfr.yaml (project config) if absent
-	cyfrConfig := `name: my-cyfr-project
-port: 4000
-host: localhost
-database_path: ./data/cyfr.db
-`
-	configCreated := false
-	if !fileExists("cyfr.yaml") {
-		if err := os.WriteFile("cyfr.yaml", []byte(cyfrConfig), 0644); err != nil {
-			return fmt.Errorf("Failed to write cyfr.yaml: %w", err)
-		}
-		configCreated = true
-	}
 	if len(unremoved) > 0 {
 		return forceRemovalRefusal(unremoved, removed)
 	}
@@ -716,11 +703,6 @@ database_path: ./data/cyfr.db
 		fmt.Fprintf(out, "  %s downloaded\n", strings.Join(scaffold.Guides, " / "))
 		fmt.Fprintln(out, "  wit/ interface definitions downloaded")
 		fmt.Fprintln(out, "  aqua/ soul, roles and scrolls downloaded")
-	}
-	if configCreated {
-		fmt.Fprintln(out, "  cyfr.yaml created")
-	} else {
-		fmt.Fprintln(out, "  cyfr.yaml already exists (skipped).")
 	}
 	switch {
 	case envCreated:
