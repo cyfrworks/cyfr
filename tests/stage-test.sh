@@ -54,7 +54,7 @@ chmod +x "$repo/scripts/heavy-check.sh"
 export STUB_CALLS="$S/calls"
 for f in apps/arca/lib/arca/x.ex apps/arca/test/arca/x_test.exs apps/cyfr/lib/cyfr/a.ex apps/cyfr/test/cyfr/a_test.exs \
   apps/cyfr/lib/cyfr/no_mirror.ex apps/cyfr/lib/cyfr/gone.ex apps/cyfr/test/cyfr/gone_test.exs apps/cyfr/test/cyfr/old_test.exs \
-  apps/cyfr/lib/cluster/k.ex apps/cyfr/test/cluster/k_test.exs apps/cyfr/test/cluster/c_test.exs docs/notes.md README.md; do
+  apps/cyfr/lib/cluster/k.ex apps/cyfr/test/cluster/k_test.exs apps/cyfr/test/cluster/c_test.exs notes/today.md README.md; do
   put "$repo/$f" "$f"
 done
 toy_rows=(
@@ -64,7 +64,7 @@ toy_rows=(
   'handoff|arca|scoped|60|apps/arca/**|echo arca'
   'handoff|tests|scoped|60|tests|printf "%s\n" $STAGE_TESTS >"$STAGE_LOGDIR/tests.txt"'
   'handoff|env|proof|60|always|printf "%s;%s;%s;%s\n" "$STAGE" "$STAGE_TESTS" "$STAGE_LOGDIR" "${PROOF_RUN_PREFIX-unset}" >"$STAGE_LOGDIR/env.txt"'
-  'handoff|docs|exclusive|60|docs/**|echo docs'
+  'handoff|notes|exclusive|60|notes/**|echo notes'
   'release|close|exclusive|60|always|echo close'
 )
 table "${toy_rows[@]}"
@@ -96,7 +96,7 @@ stage run -l "$S/logs-run" handoff
 framed run 0
 sed -n '2,$p' "$S/run.out" | sed '$d' | sed -E 's/ [0-9]+s$//' >"$S/got"
 printf '%s\n' 'format: ok' 'compile: ok' 'dialyzer: ok' 'arca: skipped (no changed path matches apps/arca/**)' \
-  'tests: ok' 'env: ok' 'docs: skipped (no changed path matches docs/**)' >"$S/want"
+  'tests: ok' 'env: ok' 'notes: skipped (no changed path matches notes/**)' >"$S/want"
 diff "$S/want" "$S/got" >/dev/null || fail "the rows said: $(tr '\n' ';' <"$S/got")"
 [ "$(cat "$S/logs-run/tests.txt")" = apps/cyfr/test/cyfr/a_test.exs ] || fail "STAGE_TESTS: $(cat "$S/logs-run/tests.txt")"
 [ "$(cat "$S/logs-run/env.txt")" = "handoff;apps/cyfr/test/cyfr/a_test.exs;$S/logs-run;unset" ] ||
@@ -124,12 +124,12 @@ grep -qx 'arca: ok [0-9]*s' "$S/planted.out" || fail 'an Arca change did not sel
 
 begin 'a new file selects the rows its path matches, alone and beside an edited path the same glob matches'
 reset_tree
-put "$repo/docs/new.md" new
+put "$repo/notes/new.md" new
 printf '# edit\n' >>"$repo/apps/cyfr/lib/cyfr/a.ex"
 put "$repo/apps/cyfr/lib/cyfr/new.ex" new
 stage untracked -n handoff
 [ "$rc" = 0 ] || fail "exited $rc"
-for check in compile dialyzer docs; do grep -q "^would run $check " "$S/untracked.out" || fail "$check would not run: $(cat "$S/untracked.out")"; done
+for check in compile dialyzer notes; do grep -q "^would run $check " "$S/untracked.out" || fail "$check would not run: $(cat "$S/untracked.out")"; done
 reset_tree
 
 begin 'a deleted lib file alone selects the compile, dialyzer and Arca rows and puts its mirror test, never itself, in the list'
@@ -138,7 +138,7 @@ rm "$repo/apps/arca/lib/arca/x.ex"
 stage deleted -n handoff
 [ "$rc" = 0 ] || fail "exited $rc"
 for check in compile dialyzer arca tests; do grep -q "^would run $check " "$S/deleted.out" || fail "$check would not run"; done
-grep -q '^would skip docs: ' "$S/deleted.out" || fail 'docs would run'
+grep -q '^would skip notes: ' "$S/deleted.out" || fail 'notes would run'
 stage deleted-run -l "$S/logs-deleted" handoff
 [ "$(cat "$S/logs-deleted/tests.txt")" = apps/arca/test/arca/x_test.exs ] || fail "the touched tests: $(cat "$S/logs-deleted/tests.txt")"
 if grep -q 'lib/arca/x.ex' "$S/logs-deleted/tests.txt"; then fail 'the deleted file reached the test paths'; fi
@@ -153,8 +153,8 @@ stage clean -l "$S/logs-clean" handoff
 [ "$rc" = 0 ] || fail "exited $rc"
 grep -qx 'format: ok [0-9]*s' "$S/clean.out" || fail 'format did not run'
 grep -qx 'tests: skipped (no touched test) [0-9]*s' "$S/clean.out" || fail 'the tests row ran with no touched test'
-grep -qx 'docs: skipped (no changed path matches docs/\*\*) [0-9]*s' "$S/clean.out" || fail "a skipped row carries no seconds: $(cat "$S/clean.out")"
-for check in compile dialyzer arca docs; do grep -q "^$check: skipped (no changed path matches" "$S/clean.out" || fail "$check ran"; done
+grep -qx 'notes: skipped (no changed path matches notes/\*\*) [0-9]*s' "$S/clean.out" || fail "a skipped row carries no seconds: $(cat "$S/clean.out")"
+for check in compile dialyzer arca notes; do grep -q "^$check: skipped (no changed path matches" "$S/clean.out" || fail "$check ran"; done
 
 begin 'explicit paths replace the touched tests; a touched path with whitespace is refused with 65'
 reset_tree
@@ -179,11 +179,11 @@ table "${toy_rows[@]}"
 
 begin 'a dry run names each row and runs nothing'
 reset_tree
-printf '# edit\n' >>"$repo/docs/notes.md"
+printf '# edit\n' >>"$repo/notes/today.md"
 stage dry -n handoff
 [ "$rc" = 0 ] || fail "exited $rc"
 framed dry 0
-grep -qxF 'would run docs (exclusive): echo docs' "$S/dry.out" || fail "$(cat "$S/dry.out")"
+grep -qxF 'would run notes (exclusive): echo notes' "$S/dry.out" || fail "$(cat "$S/dry.out")"
 grep -qxF 'would skip compile: no changed path matches apps/**,config/**' "$S/dry.out" || fail "$(cat "$S/dry.out")"
 [ ! -s "$STUB_CALLS" ] || fail 'a dry run queued a row'
 reset_tree
