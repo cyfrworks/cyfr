@@ -24,13 +24,19 @@
 #              each on a third of the cores. The command's own grammar
 #              decides what fits its lane: it sees HEAVY_CHECK_HELD and
 #              refuses what does not.
-# One arrival queue serves every lane. A check arrives when it publishes
-# its ticket, and arrival order is the order of the tickets' publication.
-# A check starts only when no check that arrived before it still waits, a
-# stopped or dead waiter apart, and its lane has room; it never waits for a
-# check that arrived after it. There is no lock over admission: a check
-# never waits on another waiter's admission, only on earlier tickets and on
-# the lanes' own locks, which decide between two checks that take at once.
+# One arrival queue serves every lane. A check arrives at the instant its
+# ticket's clock is read, immediately before the ticket appears, and
+# arrival order is the order of those instants: the order in which the
+# tickets are published, with two exceptions. A check stopped between the
+# clock's reading and its ticket's appearing keeps its earlier arrival, so
+# a check that published meanwhile can run after it; and two checks whose
+# tickets appear in the same instant may each see no earlier ticket, and
+# the lanes' own locks decide between them. A check starts only when no
+# check that arrived before it still waits, a stopped or dead waiter
+# apart, and its lane has room; it never waits for a check that arrived
+# after it. There is no lock over admission: a check never waits on
+# another waiter's admission, only on earlier tickets and on the lanes'
+# locks.
 # A holder stopped after it took its lane keeps the lane until it is
 # continued or ends; --status shows it held and stopped.
 #
@@ -96,9 +102,8 @@
 # reads them so a wait's deadline does not run while the check is queued.
 # A queued check says `queued (<mode>) <n> of <m> waiting, behind:` with
 # the records of the runs that hold a lane, if any, as soon as it waits,
-# whether for its lane or for the admission lock, and again every 60
-# seconds with its place then. A `NAME=value` word of the command is shown as `NAME=…`
-# there, in the records and in --status, a URL's userinfo in any word as
+# and again every 60 seconds with its place then. A `NAME=value` word of
+# the command is shown as `NAME=…` there, in the records and in --status, a URL's userinfo in any word as
 # `[redacted]`, and a tab or newline in a word as \t or \n.
 set -uo pipefail
 
@@ -437,12 +442,15 @@ gave_up() {
 # a file that carries its pid, lane, arrival and command. It is written
 # whole and locked under a temporary name, then a child process reads the
 # clock and renames it into place under that time in nanoseconds and the
-# check's pid, so the name holds the moment of publication even if the
-# check is stopped meanwhile. Arrival order is the (time, pid) order of the
-# tickets: no counter, and no lock over admission. The check holds its
-# ticket's lock until it leaves the queue, so a ticket no one locks is a
-# dead waiter's and whoever finds it removes it; a stopped waiter's ticket
-# stays and holds no one back.
+# check's pid, so a stop of the check itself does not delay its
+# publication; a stop of the child between the reading and the rename
+# keeps the earlier time (the header's exception). Arrival order is the
+# (time, pid) order of the tickets: no counter, and no lock over
+# admission. The check holds its ticket's lock until it leaves the queue,
+# and the publishing child holds it while it runs. A waiter whose pid has
+# exited is skipped at once; its ticket is removed by the next scan that
+# finds nothing holding its lock. A stopped waiter's ticket stays and
+# holds no one back.
 now_ns() {
   local t
   if [ "${BASH_VERSINFO[0]}" -ge 5 ]; then
@@ -467,8 +475,8 @@ release_ticket() {
   ticket=
 }
 # How many live waiters arrived before this one ($ahead) and how many wait
-# in all ($waiting), this one included. A ticket no owner locks is removed;
-# a stopped owner holds no one back.
+# in all ($waiting), this one included. A ticket nothing locks is removed;
+# a stopped or exited owner holds no one back.
 places() {
   local f k line pid
   ahead=0 waiting=0
