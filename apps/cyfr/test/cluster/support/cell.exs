@@ -77,6 +77,8 @@ defmodule Cyfr.Cluster.Cell do
   # name a node the same. Read at run time, since the run root is set per run.
   defp node_names do
     h = run_digest()
+    # The two names are the run's own: two atoms per run, never from input.
+    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
     %{a: :"cyfr_cell_a_#{h}", b: :"cyfr_cell_b_#{h}"}
   end
 
@@ -703,6 +705,8 @@ defmodule Cyfr.Cluster.Cell do
   defp put_member(state, member),
     do: %{state | members: Enum.map(state.members, &if(&1.id == member.id, do: member, else: &1))}
 
+  # One atom per member per run, from node_names/0 above, never from input.
+  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
   defp node_name(id), do: :"#{Map.fetch!(node_names(), id)}@127.0.0.1"
 
   # A loopback port nothing holds, for a member to bind and to advertise.
