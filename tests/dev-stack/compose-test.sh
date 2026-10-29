@@ -1078,7 +1078,7 @@ break_script forget "the server's group forgotten once it ends" case_server_chil
 break_script endedgroup "an ended server's group left behind" case_server_child '/^    kill -KILL -- "-\$SERVER" 2>\/dev\/null \|\| true$/d'
 break_script nolock "a run that takes no lock" case_locked '/^  lock$/d'
 break_script noorphan "down leaving a killed run's server" case_down_orphan '/^    stop "\$left"$/d'
-break_script anygroup "a recorded group stopped whatever process holds it now" case_down_orphan 's/^  \[ "\$\(ps -o lstart= -p "\$pgid".* = "\$started" \] && echo "\$pgid"$/  echo "$pgid"/'
+break_script anygroup "a recorded group stopped whatever process holds it now" case_down_orphan 's/^  \[ "\$\(started "\$pgid"\)" = "\$started" \] && echo "\$pgid"$/  echo "$pgid"/'
 break_script argv "the bearer on curl's command line" case_check 's|-H @"\$PRIVATE/authorization"|-H "authorization: Bearer $CYFR_TOKEN"|'
 break_script discard "no delete after a failed read" "case_failed_read case_failed_parse" '/^    discard "\$path"$/d'
 break_script keep "the private directory kept" "case_check case_provision" 's/^  \[ -z "\$PRIVATE" \] \|\| rm -rf "\$PRIVATE"$/  true/'
