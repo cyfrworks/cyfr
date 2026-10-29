@@ -57,7 +57,8 @@
 #
 # Exits 0 when every row that ran passed and 1 otherwise; 64 on usage, or
 # inside a heavy-check (HEAVY_CHECK_HELD set), since each row queues in
-# its own lane; 65 for a table it cannot read, naming the line, or a
+# its own lane; 65 for a table that is missing or unreadable, or a line of
+# it that is not a row, naming it, or a
 # touched path with whitespace, before any row runs; 69 outside a Git
 # checkout, without the stage's base, or when Git cannot list the changed
 # paths a row's globs match; 130, 143 and 129 on INT, TERM and
@@ -65,7 +66,8 @@
 # options are read, so a usage refusal writes none.
 set -uo pipefail
 
-STAGES='save handoff pull-request release nightly'
+# Whether $1 names a stage, whole.
+is_stage() { case $1 in save|handoff|pull-request|release|nightly) return 0 ;; *) return 1 ;; esac; }
 usage() { echo "usage: $0 [-l LOGDIR] [-n] save|handoff|pull-request|release|nightly [-- PATHS]"; }
 
 logdir= dry=false stage= explicit=false paths=()
@@ -79,7 +81,7 @@ while [ "$#" -gt 0 ]; do
     *) [ -z "$stage" ] || { usage >&2; exit 64; }; stage=$1; shift ;;
   esac
 done
-case " $STAGES " in *" $stage "*) [ -n "$stage" ] ;; *) false ;; esac || { usage >&2; exit 64; }
+is_stage "$stage" || { usage >&2; exit 64; }
 if [ -n "${HEAVY_CHECK_HELD:-}" ]; then
   echo 'stage: each row queues in its own lane: run this outside scripts/heavy-check.sh' >&2
   exit 64
@@ -114,6 +116,7 @@ root=$(git -C "$here/.." rev-parse --show-toplevel 2>/dev/null) || root=
 [ -n "$root" ] || refuse 69 "$here/.. is not inside a git checkout"
 cd "$root" || refuse 69 "cannot enter $root"
 table=scripts/stages.tsv
+[ -f "$table" ] && [ -r "$table" ] || refuse 65 "$table: there is no stage table to read"
 
 # The table, read whole and refused at its first bad line.
 declare -A seen=()
@@ -127,7 +130,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   [ "${#tabs}" = 5 ] || refuse 65 "$table:$number: a row has six fields separated by single tabs"
   case $line in $'\t'*|*$'\t\t'*|*$'\t') refuse 65 "$table:$number: a field is empty" ;; esac
   IFS=$'\t' read -r r_stage r_check r_lane r_hold r_when r_command <<<"$line"
-  case " $STAGES " in *" $r_stage "*) ;; *) refuse 65 "$table:$number: no stage is called '$r_stage'" ;; esac
+  is_stage "$r_stage" || refuse 65 "$table:$number: no stage is called '$r_stage'"
   [[ $r_check =~ ^[a-z0-9-]+$ ]] || refuse 65 "$table:$number: the check '$r_check' is not [a-z0-9-]+"
   [ -z "${seen[$r_stage/$r_check]+set}" ] || refuse 65 "$table:$number: $r_stage has a second check called $r_check"
   seen[$r_stage/$r_check]=1

@@ -197,6 +197,7 @@ refused() { # LINE WHY ROW: the toy table with ROW appended at line LINE
   framed refused 65
 }
 refused 9 "no stage is called 'deploy'" 'deploy|x|scoped|60|always|echo x'
+refused 9 "no stage is called 'save handoff'" 'save handoff|x|scoped|60|always|echo x'
 refused 9 "no lane is called 'fast'" 'nightly|x|fast|60|always|echo x'
 refused 9 "'apps/**,,config/**' is not always, tests or comma-separated globs" 'handoff|x|scoped|60|apps/**,,config/**|echo x'
 refused 9 "'apps/** config/**' is not always, tests or comma-separated globs" 'handoff|x|scoped|60|apps/** config/**|echo x'
@@ -210,6 +211,24 @@ refused 9 "the check 'Compile' is not [a-z0-9-]+" 'handoff|Compile|scoped|60|alw
 refused 9 'a row has six fields separated by single tabs' 'handoff|x|scoped|60|echo x'
 refused 9 'a field is empty' 'handoff||scoped|60|always|echo x'
 table "${toy_rows[@]}"
+
+begin 'a table that is missing or unreadable is refused with 65 naming it, and a stage is named whole'
+mv "$repo/scripts/stages.tsv" "$S/stages.tsv.away"
+stage missing -l "$S/logs-missing" release
+[ "$rc" = 65 ] && grep -qF 'stage: scripts/stages.tsv: there is no stage table to read' "$S/missing.err" ||
+  fail "a missing table gave $rc: $(cat "$S/missing.err")"
+framed missing 65
+[ ! -s "$STUB_CALLS" ] || fail 'a row ran without a table'
+mv "$S/stages.tsv.away" "$repo/scripts/stages.tsv"
+mkdir "$S/a-directory"
+mv "$repo/scripts/stages.tsv" "$S/stages.tsv.away"
+ln -s "$S/a-directory" "$repo/scripts/stages.tsv"
+stage unreadable -l "$S/logs-unreadable" release
+[ "$rc" = 65 ] || fail "a table that is a directory gave $rc"
+rm "$repo/scripts/stages.tsv"
+mv "$S/stages.tsv.away" "$repo/scripts/stages.tsv"
+status=0; (cd "$repo" && scripts/stage.sh -n 'save handoff') >"$S/two.out" 2>&1 || status=$?
+[ "$status" = 64 ] || fail "the stage 'save handoff' gave $status"
 
 begin 'inside a heavy-check it exits 64 unframed, and outside a checkout 69'
 status=0; (cd "$repo" && HEAVY_CHECK_HELD=scoped scripts/stage.sh -n handoff) >"$S/held.out" 2>&1 || status=$?
