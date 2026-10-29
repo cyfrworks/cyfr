@@ -218,8 +218,20 @@ stage refused -l "$S/logs-refused" handoff
 [ "$rc" = 65 ] && grep -qF 'stage: scripts/stages.tsv:9: the none lane runs one command and no shell operator, not: git grep -q . -- README.md | cat' "$S/refused.err" ||
   fail "a piped none row gave $rc: $(cat "$S/refused.err")"
 refused 9 'the none lane runs one command and no shell operator, not: git grep -q "$(echo x)" -- README.md' 'handoff|x|none|-|always|git grep -q "$(echo x)" -- README.md'
-refused 9 "the none lane's git grep opens no pager: git grep -Ocat x" 'handoff|x|none|-|always|git grep -Ocat x'
-refused 9 "the none lane's git grep opens no pager: git grep --open-files-in-pager=cat x" 'handoff|x|none|-|always|git grep --open-files-in-pager=cat x'
+# The none lane's git grep takes its whole grammar and no other option,
+# however it is spelled: a pager, bundled or quoted, an abbreviation, a
+# conversion program.
+only='the none lane'"'"'s git grep takes only -n, -l, -c, -q, -i, -w, -E, -F, -e PATTERN and --, not'
+refused 9 "$only: -Ocat" 'handoff|x|none|-|always|git grep -Ocat x'
+refused 9 "$only: --open-files-in-pager=cat" 'handoff|x|none|-|always|git grep --open-files-in-pager=cat x'
+refused 9 "$only: -O/bin/cat" 'handoff|x|none|-|always|git grep "-O/bin/cat" x -- README.md'
+refused 9 "$only: -nO/bin/cat" 'handoff|x|none|-|always|git grep -nO/bin/cat x -- README.md'
+refused 9 "$only: --open-files-in=/bin/cat" 'handoff|x|none|-|always|git grep --open-files-in=/bin/cat x -- README.md'
+refused 9 "$only: --textconv" 'handoff|x|none|-|always|git grep --textconv x -- README.md'
+refused 9 "the none lane's git grep takes one pattern before --, not a second: y" 'handoff|x|none|-|always|git grep x y'
+refused 9 "the none lane's git grep names one pattern: git grep -q -- README.md" 'handoff|x|none|-|always|git grep -q -- README.md'
+refused 9 "the none lane's git grep takes plain or quoted words: git grep \"\$HOME\" -- README.md" 'handoff|x|none|-|always|git grep "$HOME" -- README.md'
+refused 9 "the none lane's git grep takes plain or quoted words: git grep x* -- README.md" 'handoff|x|none|-|always|git grep x* -- README.md'
 refused 9 'the none lane runs only mix format --check-formatted and git grep, not: mix format --check-formatted --dot-formatter x' \
   'handoff|x|none|-|always|mix format --check-formatted --dot-formatter x'
 refused 9 'a row in the none lane holds nothing: its hold is -' 'handoff|x|none|60|always|git grep x'
@@ -227,6 +239,16 @@ refused 9 "the hold '-' is not seconds" 'handoff|x|scoped|-|always|echo x'
 refused 9 "the check 'Compile' is not [a-z0-9-]+" 'handoff|Compile|scoped|60|always|echo x'
 refused 9 'a row has six fields separated by single tabs' 'handoff|x|scoped|60|echo x'
 refused 9 'a field is empty' 'handoff||scoped|60|always|echo x'
+table "${toy_rows[@]}"
+
+begin "the none lane's git grep runs in its grammar's every form"
+for cmd in 'git grep -q README -- README.md' 'git grep -n -i -w -e readme.md -- README.md' \
+  "git grep -l -E 'READ.E' -- README.md" 'git grep -c -F "E.m" -- README.md'; do
+  table "${toy_rows[@]}" "release|read|none|-|always|$cmd"
+  stage grammar -l "$S/logs-grammar" release
+  [ "$rc" = 0 ] && grep -qx 'read: ok [0-9]*s' "$S/grammar.out" || fail "\`$cmd\` gave $rc: $(cat "$S/grammar.err")"
+  rm -rf "$S/logs-grammar"
+done
 table "${toy_rows[@]}"
 
 begin 'a table that is missing or unreadable is refused with 65 naming it, and a stage is named whole'

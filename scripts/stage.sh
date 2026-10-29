@@ -15,7 +15,12 @@
 #   lane     none, which runs directly and admits only reads of seconds:
 #            exactly `mix format --check-formatted`, or one `git grep`
 #            with no shell operator (`;`, `&`, `|`, `<`, `>`, a backquote,
-#            `$(`) and no pager (`-O`), quoted or not; or scoped,
+#            `$(`), in this grammar and no other: the options -n, -l, -c,
+#            -q, -i, -w, -E and -F; -e, whose next word is the pattern;
+#            one pattern; `--` and the pathspecs after it. Every other
+#            word that begins with - is refused, bundled or quoted. Each
+#            word is plain ([A-Za-z0-9._/:@%+=,^-]) or quoted whole, '...'
+#            or "..." with no $, backquote or backslash inside; or scoped,
 #            proof or exclusive, the scripts/heavy-check.sh lane it queues
 #            in (-s, -p or no flag)
 #   hold     - for none, else heavy-check's -t in seconds
@@ -117,6 +122,43 @@ cd "$root" || refuse 69 "cannot enter $root"
 table=scripts/stages.tsv
 [ -f "$table" ] && [ -r "$table" ] || refuse 65 "$table: there is no stage table to read"
 
+# Whether a none row's git grep, its words after `git grep` in $1, keeps
+# the lane's grammar (the header's); $why says why not.
+single_word="^'([^']*)'(.*)$"
+double_word='^"([^"$`\]*)"(.*)$'
+plain_word='^([A-Za-z0-9._/:@%+=,^-]+)(.*)$'
+none_grep() {
+  local rest=$1 word pattern=false after=false next_is_pattern=false
+  why=
+  while :; do
+    rest=${rest#"${rest%%[! ]*}"}
+    [ -n "$rest" ] || break
+    if [[ $rest =~ $single_word ]] || [[ $rest =~ $double_word ]] || [[ $rest =~ $plain_word ]]; then
+      word=${BASH_REMATCH[1]} rest=${BASH_REMATCH[2]}
+    else
+      rest=x
+    fi
+    case $rest in
+      ''|' '*) ;;
+      *) why="the none lane's git grep takes plain or quoted words: git grep $1"; return 1 ;;
+    esac
+    if $next_is_pattern; then pattern=true next_is_pattern=false; continue; fi
+    $after && continue
+    case $word in
+      --) after=true ;;
+      -n|-l|-c|-q|-i|-w|-E|-F) ;;
+      -e)
+        $pattern && { why="the none lane's git grep takes one pattern before --, not a second: -e"; return 1; }
+        next_is_pattern=true ;;
+      -*) why="the none lane's git grep takes only -n, -l, -c, -q, -i, -w, -E, -F, -e PATTERN and --, not: $word"; return 1 ;;
+      *)
+        $pattern && { why="the none lane's git grep takes one pattern before --, not a second: $word"; return 1; }
+        pattern=true ;;
+    esac
+  done
+  if $next_is_pattern || ! $pattern; then why="the none lane's git grep names one pattern: git grep $1"; return 1; fi
+}
+
 # The table, read whole and refused at its first bad line.
 declare -A seen=()
 rows=()
@@ -152,10 +194,7 @@ while IFS= read -r line || [ -n "$line" ]; do
       *[\;\&\|\<\>\`]*|*'$('*)
         refuse 65 "$table:$number: the none lane runs one command and no shell operator, not: $r_command" ;;
       'mix format --check-formatted') ;;
-      'git grep '*)
-        case " ${r_command#git grep } " in
-          *' -O'*|*' --open-files-in-pager'*) refuse 65 "$table:$number: the none lane's git grep opens no pager: $r_command" ;;
-        esac ;;
+      'git grep '*) none_grep "${r_command#git grep }" || refuse 65 "$table:$number: $why" ;;
       *) refuse 65 "$table:$number: the none lane runs only mix format --check-formatted and git grep, not: $r_command" ;;
     esac
   fi
