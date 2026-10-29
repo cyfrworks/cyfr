@@ -46,6 +46,7 @@ apps/cyfr/test/emissary/external/server_test.exs	3	pending
 apps/cyfr/test/emissary/mcp/router_tenancy_test.exs	4	pending
 apps/cyfr/test/emissary/web/controllers/canvas_controller_test.exs	3	pending
 apps/cyfr/test/emissary/web/controllers/directory_controller_test.exs	2	pending
+apps/cyfr/test/emissary/web/controllers/directory_wire_test.exs	1	pending
 apps/cyfr/test/emissary/web/controllers/health_controller_test.exs	2	pending
 apps/cyfr/test/emissary/web/controllers/held_frame_stream_deadline_test.exs	1	pending
 apps/cyfr/test/emissary/web/controllers/mcp_confirmation_repeat_test.exs	4	pending
