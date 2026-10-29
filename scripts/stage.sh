@@ -53,7 +53,7 @@
 # Stdout is `_START=<pid>` first and `_EXIT=<pid> <status>` last, as the
 # other harness scripts frame theirs (scripts/await-task.sh), with one line
 # per row between: `<check>: ok <seconds>s`, `<check>: failed <status>
-# <seconds>s` or `<check>: skipped (<reason>)`. -n prints `would run
+# <seconds>s` or `<check>: skipped (<reason>) <seconds>s`. -n prints `would run
 # <check> (<lane>): <command>` or `would skip <check>: <reason>` per row
 # and runs nothing.
 #
@@ -64,30 +64,9 @@
 # touched path with whitespace, before any row runs; 69 outside a Git
 # checkout, without the stage's base, or when Git cannot list the changed
 # paths a row's globs match; 130, 143 and 129 on INT, TERM and
-# HUP, once the running row has stopped. The frame starts after the
-# options are read, so a usage refusal writes none.
+# HUP, once the running row has stopped. Every exit is framed, a usage
+# refusal's included.
 set -uo pipefail
-
-# Whether $1 names a stage, whole.
-is_stage() { case $1 in save|handoff|pull-request|release|nightly) return 0 ;; *) return 1 ;; esac; }
-usage() { echo "usage: $0 [-l LOGDIR] [-n] save|handoff|pull-request|release|nightly [-- PATHS]"; }
-
-logdir= dry=false stage= explicit=false paths=()
-while [ "$#" -gt 0 ]; do
-  case $1 in
-    -l) [ "$#" -ge 2 ] || { usage >&2; exit 64; }; logdir=$2; shift 2 ;;
-    -n) dry=true; shift ;;
-    -h|--help) usage; exit 0 ;;
-    --) shift; explicit=true; paths=("$@"); break ;;
-    -*) usage >&2; exit 64 ;;
-    *) [ -z "$stage" ] || { usage >&2; exit 64; }; stage=$1; shift ;;
-  esac
-done
-is_stage "$stage" || { usage >&2; exit 64; }
-if [ -n "${HEAVY_CHECK_HELD:-}" ]; then
-  echo 'stage: each row queues in its own lane: run this outside scripts/heavy-check.sh' >&2
-  exit 64
-fi
 
 row_pid= finished=false
 finish() {
@@ -112,6 +91,24 @@ trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 trap 'on_signal 129' HUP
 refuse() { echo "stage: $2" >&2; exit "$1"; }
+
+# Whether $1 names a stage, whole.
+is_stage() { case $1 in save|handoff|pull-request|release|nightly) return 0 ;; *) return 1 ;; esac; }
+usage() { echo "usage: $0 [-l LOGDIR] [-n] save|handoff|pull-request|release|nightly [-- PATHS]"; }
+
+logdir= dry=false stage= explicit=false paths=()
+while [ "$#" -gt 0 ]; do
+  case $1 in
+    -l) [ "$#" -ge 2 ] || { usage >&2; exit 64; }; logdir=$2; shift 2 ;;
+    -n) dry=true; shift ;;
+    -h|--help) usage; finished=true; exit 0 ;;
+    --) shift; explicit=true; paths=("$@"); break ;;
+    -*) usage >&2; exit 64 ;;
+    *) [ -z "$stage" ] || { usage >&2; exit 64; }; stage=$1; shift ;;
+  esac
+done
+is_stage "$stage" || { usage >&2; exit 64; }
+[ -z "${HEAVY_CHECK_HELD:-}" ] || refuse 64 'each row queues in its own lane: run this outside scripts/heavy-check.sh'
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 root=$(git -C "$here/.." rev-parse --show-toplevel 2>/dev/null) || root=
@@ -252,8 +249,8 @@ for i in ${rows[@]+"${!rows[@]}"}; do
     if [ -n "$reason" ]; then echo "would skip $check: $reason"; else echo "would run $check ($lane): $command"; fi
     continue
   fi
-  if [ -n "$reason" ]; then echo "$check: skipped ($reason)"; continue; fi
   started=$SECONDS
+  if [ -n "$reason" ]; then echo "$check: skipped ($reason) $((SECONDS - started))s"; continue; fi
   case $lane in
     none) bash -c "$command" >"$logdir/$check.log" 2>&1 & ;;
     scoped) scripts/heavy-check.sh -s -t "$hold" -- bash -c "$command" >"$logdir/$check.log" 2>&1 & ;;

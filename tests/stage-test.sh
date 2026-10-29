@@ -147,12 +147,13 @@ begin 'a deleted test is absent from the list, and an empty change set skips eve
 reset_tree
 rm "$repo/apps/cyfr/test/cyfr/old_test.exs"
 stage deleted-test -l "$S/logs-deleted-test" handoff
-grep -qx 'tests: skipped (no touched test)' "$S/deleted-test.out" || fail "the deleted test was handed on: $(cat "$S/deleted-test.out")"
+grep -qx 'tests: skipped (no touched test) [0-9]*s' "$S/deleted-test.out" || fail "the deleted test was handed on: $(cat "$S/deleted-test.out")"
 reset_tree
 stage clean -l "$S/logs-clean" handoff
 [ "$rc" = 0 ] || fail "exited $rc"
 grep -qx 'format: ok [0-9]*s' "$S/clean.out" || fail 'format did not run'
-grep -qx 'tests: skipped (no touched test)' "$S/clean.out" || fail 'the tests row ran with no touched test'
+grep -qx 'tests: skipped (no touched test) [0-9]*s' "$S/clean.out" || fail 'the tests row ran with no touched test'
+grep -qx 'docs: skipped (no changed path matches docs/\*\*) [0-9]*s' "$S/clean.out" || fail "a skipped row carries no seconds: $(cat "$S/clean.out")"
 for check in compile dialyzer arca docs; do grep -q "^$check: skipped (no changed path matches" "$S/clean.out" || fail "$check ran"; done
 
 begin 'explicit paths replace the touched tests; a touched path with whitespace is refused with 65'
@@ -246,14 +247,20 @@ mv "$S/stages.tsv.away" "$repo/scripts/stages.tsv"
 status=0; (cd "$repo" && scripts/stage.sh -n 'save handoff') >"$S/two.out" 2>&1 || status=$?
 [ "$status" = 64 ] || fail "the stage 'save handoff' gave $status"
 
-begin 'inside a heavy-check it exits 64 unframed, and outside a checkout 69'
-status=0; (cd "$repo" && HEAVY_CHECK_HELD=scoped scripts/stage.sh -n handoff) >"$S/held.out" 2>&1 || status=$?
-[ "$status" = 64 ] || fail "inside a heavy-check: $status"
-if grep -q '^_START=' "$S/held.out"; then fail 'a refusal inside a heavy-check wrote a frame'; fi
+begin 'every exit is framed: 64 inside a heavy-check and on usage, and 69 outside a checkout'
+for lane in scoped proof exclusive; do
+  rc=0; (cd "$repo" && HEAVY_CHECK_HELD=$lane scripts/stage.sh -n handoff) >"$S/held.out" 2>"$S/held.err" || rc=$?
+  [ "$rc" = 64 ] && grep -qF 'run this outside scripts/heavy-check.sh' "$S/held.err" || fail "inside a $lane heavy-check: $rc"
+  framed held 64
+done
+rc=0; (cd "$repo" && scripts/stage.sh -x handoff) >"$S/usage.out" 2>/dev/null || rc=$?
+[ "$rc" = 64 ] || fail "an unknown option gave $rc"
+framed usage 64
 mkdir -p "$S/loose/scripts"
 cp "$ROOT/scripts/stage.sh" "$S/loose/scripts/"
 status=0; "$S/loose/scripts/stage.sh" -n handoff >"$S/loose.out" 2>"$S/loose.err" || status=$?
 [ "$status" = 69 ] && grep -qF 'is not inside a git checkout' "$S/loose.err" || fail "outside a checkout: $status $(cat "$S/loose.err")"
+rc=$status; framed loose 69
 status=0; (cd "$repo" && scripts/stage.sh -n deploy) >/dev/null 2>&1 || status=$?
 [ "$status" = 64 ] || fail "an unknown stage gave $status"
 
