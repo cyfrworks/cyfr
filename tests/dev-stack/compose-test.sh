@@ -39,7 +39,9 @@
 # of the checkout (_build/$MIX_ENV, or DEV_STACK_BUILD). The boundary cases
 # take the slots whose ports this host leaves free. SHOW=1 prints why each
 # mutation fails; DEV_STACK_SCRIPT runs the boundary cases against another
-# script. Usage: bash tests/dev-stack/compose-test.sh
+# script, and DEV_STACK_CASES (case_* names) runs those boundary cases alone
+# after the static checks, with no mutation of the script. Usage: bash
+# tests/dev-stack/compose-test.sh
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -303,8 +305,13 @@ exit 0
 STUB
 cat >"$stubs/image.sh" <<'STUB'
 #!/usr/bin/env bash
+# Fails every call with STUB_IMAGE_STATUS, or only the build (the call
+# that names a use) with STUB_IMAGE_BUILD_STATUS.
 printf '%s\n' "$*" >>"$STUB_LOG/image.calls"
-[ -z "${STUB_IMAGE_STATUS:-}" ] || { echo "image: stub build failure" >&2; exit "$STUB_IMAGE_STATUS"; }
+[ -z "${STUB_IMAGE_STATUS:-}" ] || { echo "image: stub lookup failure" >&2; exit "$STUB_IMAGE_STATUS"; }
+case " $* " in
+  *" --for "*) [ -z "${STUB_IMAGE_BUILD_STATUS:-}" ] || { echo "image: stub build failure" >&2; exit "$STUB_IMAGE_BUILD_STATUS"; } ;;
+esac
 echo "$STUB_IMAGE"
 STUB
 # A BASH_ENV for the script: it writes its pid to $STOP_MARK and stops,
@@ -721,6 +728,20 @@ case_image_fails() {
     echo "the run did not end on the image's failure: $(cat "$case_dir/err")"
   calls | grep -q " up " && echo "the stack started without an image: $(calls)"
 }
+# A build that fails ends the start before any container: the slot's
+# claim and the private directory go with it.
+case_image_build_fails() {
+  stack "$1" image-build-fails "$complete" 0600 "" STUB_SERVER_STATUS=0 STUB_IMAGE_BUILD_STATUS=1
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the run exited 0 though the image did not build"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: scripts/image.sh gave no Locus image for this tree; its output ends above." ] ||
+    echo "the run did not end on the build's failure: $(cat "$case_dir/err")"
+  [ "$(record image.calls | sed -E 's/--for [0-9]+/--for PID/')" = $'--undated --tag-only locus\n--undated --for PID locus' ] ||
+    echo "image.sh was handed: $(record image.calls)"
+  calls | grep -q " up " && echo "the stack started without an image: $(calls)"
+  flock -n "$case_dir/run/cyfr-dev-slot.$slot_a.lock" true || echo "the failed start kept slot $slot_a's claim"
+  [ -z "$(record server.env)" ] || echo "the server started without an image"
+  nothing_left
+}
 # A start that finds a slot's claim held names the loop that holds it,
 # even one stopped the instant after it took the claim, before it looked
 # at the slot: here every other slot is claimed too.
@@ -960,7 +981,7 @@ case_down_orphan() {
   kill -0 "$pid" 2>/dev/null || echo "down stopped process group $pid, which the record's start time does not match"
   kill -KILL "$pid" 2>/dev/null
 }
-BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_claim_named case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan"
+BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan"
 
 # boundary SCRIPT [CASE...]: the failures of SCRIPT under each case.
 boundary() {
@@ -970,10 +991,15 @@ boundary() {
 }
 
 script="${DEV_STACK_SCRIPT:-$ROOT/scripts/dev-stack.sh}"
-for c in $BOUNDARY_CASES; do
+for c in ${DEV_STACK_CASES:-$BOUNDARY_CASES}; do
   out="$(boundary "$script" "$c")"
   if [ -z "$out" ]; then pass "scripts/dev-stack.sh: ${c#case_}"; else failed "scripts/dev-stack.sh: ${c#case_}" "$out"; fi
 done
+if [ -n "${DEV_STACK_CASES:-}" ]; then
+  echo "$((cases - failures))/$cases passed"
+  [ "$failures" -eq 0 ]
+  exit
+fi
 
 # respell NAME WHAT CASES SED_EXPRESSION: an equivalent spelling, which
 # CASES, the ones that run the respelled lines, hold to.
