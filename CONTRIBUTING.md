@@ -147,8 +147,8 @@ it.
   (`-p`: a proof, an image suite, an image build or a release boot) runs
   one at a time beside at most `PROOF_SCOPED` scoped checks (a number the
   script sets from a measured load test), and a scoped check (`-s`: named
-  test paths in one partition, a compile or dialyzer) runs up to three
-  side by side, on a third of the cores each. Checks start in the order
+  test paths in one partition, a compile, dialyzer, credo or a light
+  self-test) runs up to three side by side, on a third of the cores each. Checks start in the order
   they queued, and `scripts/heavy-check.sh --status` shows who holds the
   host and who waits.
 - Local runs take the Locus and app images from `scripts/image.sh locus`
