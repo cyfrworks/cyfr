@@ -14,9 +14,7 @@ defmodule PrismWeb.LoginLive do
        `sign-in` mode) answers it, and `Sanctum.Passkeys.sign_in/2`
        verifies the answer against the challenge, which is spent on the
        first answer, and mints the session.
-    2. **Your CYFR.** A button for the hosted CYFR
-       (`Sanctum.Auth.CyfrDoor.hosted/0`), hidden when this CYFR is the
-       hosted one, and "I run my own CYFR", which opens a field taking a
+    2. **Your CYFR.** "I run my own CYFR", which opens a field taking a
        handle (`@name`, or a bare name with no dot, colon or slash) or an
        address (the carry below).
     3. **Create your identity here**, only while the door's `*` admits
@@ -41,8 +39,8 @@ defmodule PrismWeb.LoginLive do
   sign-in method (`Sanctum.Auth.CyfrDoor`), and the page's script
   (`hooks/carry.js`) carries the exchange between the two CYFRs:
 
-    * **The entry.** The person names their CYFR by an address, the
-      hosted CYFR's included, or by a handle. A handle is resolved first
+    * **The entry.** The person names their CYFR by an address or by a
+      handle. A handle is resolved first
       (`Sanctum.Handle.resolve/1`): no registry, a registry that cannot
       answer, a handle no one holds and a handle with no published
       address are each said, and the field stays open with what was
@@ -166,7 +164,6 @@ defmodule PrismWeb.LoginLive do
      # No person yet: the page offers nothing but the way to set up.
      |> assign(:set_up, set_up)
      |> assign(:providers, available_providers())
-     |> assign(:hosted, hosted())
      # "Create your identity here" while the door's `*` admits; the
      # admission asks the door again.
      |> assign(:open_door, set_up and Sanctum.Door.Store.wildcard() == {:ok, true})
@@ -197,14 +194,7 @@ defmodule PrismWeb.LoginLive do
      |> assign(:error, error_from_params(params)), layout: false}
   end
 
-  # The hosted CYFR: an address, so no identifier is requested.
   @impl true
-  def handle_event("cyfr_hosted", _params, %{assigns: %{hosted: hosted}} = socket)
-      when is_binary(hosted),
-      do: {:noreply, by_address(socket, hosted)}
-
-  def handle_event("cyfr_hosted", _params, socket), do: {:noreply, socket}
-
   def handle_event("cyfr_own", _params, socket), do: {:noreply, assign(socket, :cyfr_own, true)}
 
   # The person names their CYFR by a handle or an address; they begin the
@@ -902,14 +892,6 @@ defmodule PrismWeb.LoginLive do
     end
   end
 
-  # The hosted CYFR, unless this is it.
-  defp hosted do
-    case CyfrDoor.signing_home(CyfrDoor.hosted()) do
-      {:error, :this_home} -> nil
-      _another -> CyfrDoor.hosted()
-    end
-  end
-
   # The linked methods offered: each one configured, several at once.
   defp available_providers do
     oidc = if Sanctum.Auth.OIDC.issuer(), do: [:oidcc], else: []
@@ -1079,15 +1061,6 @@ defmodule PrismWeb.LoginLive do
                 class="flex flex-col gap-3 pt-4 border-t border-gray-800"
               >
                 <h3 class="text-sm font-medium text-gray-300">Sign in with your CYFR</h3>
-                <button
-                  :if={@hosted}
-                  id="cyfr-hosted"
-                  type="button"
-                  phx-click="cyfr_hosted"
-                  class="flex items-center justify-center gap-3 w-full px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-lg border border-gray-700 transition-colors cursor-pointer"
-                >
-                  <span>Continue with <span class="font-mono">{URI.parse(@hosted).host}</span></span>
-                </button>
                 <button
                   :if={!@cyfr_own}
                   id="cyfr-own-open"

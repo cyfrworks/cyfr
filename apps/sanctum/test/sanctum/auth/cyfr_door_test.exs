@@ -146,15 +146,6 @@ defmodule Sanctum.Auth.CyfrDoorTest do
   # The signing home
   # ---------------------------------------------------------------------------
 
-  describe "hosted/0" do
-    test "is the hosted CYFR's address, an origin signing_home/1 reads as it is" do
-      assert CyfrDoor.hosted() == "https://my.cyfr.run"
-
-      assert {:ok, "https://my.cyfr.run/carry#" <> _} =
-               CyfrDoor.signing_home(CyfrDoor.hosted())
-    end
-  end
-
   describe "signing_home/1" do
     test "sends the person to their home's /carry, naming this home in the fragment",
          %{home: home} do
