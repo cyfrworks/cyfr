@@ -24,15 +24,13 @@
 #              each on a third of the cores. The command's own grammar
 #              decides what fits its lane: it sees HEAVY_CHECK_HELD and
 #              refuses what does not.
-# One arrival queue serves every lane. A check starts only when no check
-# that queued before it still waits, a stopped or dead waiter apart, and
-# its lane has room; it never waits for a check that queued after it. The
-# first-in-line test and the taking of the lane's locks happen under one
-# lock, so two checks never both see the same room. A check stopped while
-# it holds that lock delays the others by 1 s at most, and any holder that
-# keeps it delays them by 10 s at most: then it is passed, and it gives
-# back any lane it took beside the check that passed it (ADMIT_STEP,
-# ADMIT_STALL below).
+# One arrival queue serves every lane. A check arrives when it publishes
+# its ticket, and arrival order is the order of the tickets' publication.
+# A check starts only when no check that arrived before it still waits, a
+# stopped or dead waiter apart, and its lane has room; it never waits for a
+# check that arrived after it. There is no lock over admission: a check
+# never waits on another waiter's admission, only on earlier tickets and on
+# the lanes' own locks, which decide between two checks that take at once.
 #
 # Inside a check, a check runs its command in place: any under an
 # exclusive one; -p and -s under a proof; -s under a scoped one. Any other
@@ -218,15 +216,25 @@ since_seconds() {
   t=$(date -d "$1" +%s 2>/dev/null || date -j -f '%Y-%m-%dT%H:%M:%S%z' "$1" +%s 2>/dev/null) || { echo 0; return; }
   echo $(( $(date +%s) - t ))
 }
+# A ticket's key, <ns>.<pid>: the time it was published and its owner.
+ticket_key_ok() {
+  case "$1" in [0-9]*.[0-9]*) ;; *) return 1 ;; esac
+  case "$1" in *[!0-9.]*|*.*.*) return 1 ;; esac
+}
+# Whether ticket key $1 was published before ticket key $2.
+earlier() {
+  local t1=${1%.*} p1=${1#*.} t2=${2%.*} p2=${2#*.}
+  [ "$t1" -lt "$t2" ] || { [ "$t1" = "$t2" ] && [ "$p1" -lt "$p2" ]; }
+}
 # The tickets of the live waiters, in queue order: locked by an owner that
 # runs and is not stopped.
 live_tickets() {
   local f k line pid
   for f in "$LOCK".wait.*; do
     k=${f##*.wait.}
-    case "$k" in ''|*[!0-9]*) continue ;; esac
+    ticket_key_ok "$k" || continue
     echo "$k"
-  done | sort -n | while IFS= read -r k; do
+  done | sort -t. -k1,1n -k2,2n | while IFS= read -r k; do
     f="$LOCK.wait.$k"
     if flock -n -x "$f" true 2>/dev/null; then continue; fi
     line=$(head -n 1 "$f" 2>/dev/null) || continue
@@ -296,13 +304,13 @@ ran_at=
 record=
 wrote_record=false
 owner=false
-queue_pid=
 cmd=
 survivors=
 run_group= run_watchdog=
 finished=false
 ticket=
 checkout=$(pwd -P)
+command_text=$(redacted "$@")
 
 # Every exit after this point passes here, and only here is `_EXIT=`
 # written. In order: the command is stopped if it still runs, every
@@ -317,7 +325,6 @@ on_exit() {
   trap - EXIT
   exec 1>&"$saved_out" 2>&"$saved_err"
   if [ "$status" = 0 ] && ! $finished; then status=1; fi
-  if [ -n "$queue_pid" ]; then kill -TERM "$queue_pid" 2>/dev/null || :; fi
   if [ -n "$cmd" ]; then
     contain_stop "$cmd" "$GRACE" || :
     survivors="$survivors $CONTAIN_SURVIVORS"
@@ -341,8 +348,7 @@ on_exit() {
       waited=$((waited + 1))
     done
   fi
-  if [ -n "$ticket" ]; then rm -f "$LOCK.wait.$ticket"; fi
-  rm -f "$LOCK.ticket.$$" "$LOCK.queue.$$"
+  rm -f "$LOCK.ticket.$$" "$LOCK".wait.*."$$"
   if $owner; then rm -f "$CONTAIN_REGISTRY"; fi
   if $wrote_record && [ -z "$survivors" ] && run_finished; then rm -f "$record"; fi
   if [ -n "$ran_at" ]; then
@@ -415,12 +421,6 @@ umask 077
 
 # Whether the queue deadline has passed.
 expired() { [ $(( $(now_ms) - queued_ms )) -ge $(( QUEUE * 1000 )) ]; }
-# Whole seconds left before it, rounded up, at least 0.
-queue_left() {
-  local left=$(( QUEUE * 1000 - ($(now_ms) - queued_ms) ))
-  [ "$left" -gt 0 ] || left=0
-  echo $(( (left + 999) / 1000 ))
-}
 
 gave_up() {
   say "queue deadline after $((SECONDS - queued_at))s: the check did not run"
@@ -428,125 +428,62 @@ gave_up() {
   exit 75
 }
 
-# The queue. Each check holds a lock on its ticket's file, which carries
-# its pid, lane, arrival and command, from before the file appears as
-# $LOCK.wait.<ticket> until it leaves the queue, so a ticket no owner locks
-# is a dead waiter's. The ticket is the next number after $LOCK.seq, or
-# the first free one after it.
-#
-# $LOCK.queue, the admission lock, serializes taking a ticket, the
-# first-in-line test and the taking of the lane's locks, so two checks
-# never both see the same room. Its holder writes its pid to
-# $LOCK.queue.owner and keeps the lock for a few milliseconds. A check
-# waits for it in steps of ADMIT_STEP seconds, in the background so that
-# a signal is answered at once (Bash defers a trapped INT or TERM until a
-# foreground command ends), and bounded by the queue deadline. After a
-# step, a holder that is stopped or gone, or one that this check has seen
-# keep the lock for ADMIT_STALL seconds, is bypassed: the check puts a new
-# file in the place of $LOCK.queue and locks that. A check stopped in
-# admission therefore delays the others by ADMIT_STEP seconds at most, and
-# any holder, such as one stopped before it wrote its pid, ADMIT_STALL. The
-# bypassed holder keeps its ticket and its place. Before it keeps a lane it
-# took, it checks that its lock is still the one at $LOCK.queue
-# (queue_held); if not, it gives the lane back and tries again, so a lane
-# taken beside another admission is never kept.
-ADMIT_STEP=1
-ADMIT_STALL=10
-queue_held() { [ "/dev/fd/$queue_fd" -ef "$LOCK.queue" ]; }
-queue_owner() { head -n 1 "$LOCK.queue.owner" 2>/dev/null || :; }
-# A local here must not shadow a global that on_exit reads (owner, cmd,
-# ticket and the rest): an exit inside the function runs on_exit in its
-# scope.
-queue_lock() {
-  local status named seen= seen_at= step
-  while :; do
-    exec {queue_fd}>>"$LOCK.queue" || exit 1
-    status=0
-    if ! flock -n -x "$queue_fd"; then
-      if [ -z "$seen_at" ]; then seen=$(queue_owner) seen_at=$SECONDS; fi
-      places
-      announce
-      step=$(queue_left)
-      [ "$step" -le "$ADMIT_STEP" ] || step=$ADMIT_STEP
-      [ "$step" -gt 0 ] || gave_up
-      flock -w "$step" -x "$queue_fd" &
-      queue_pid=$!
-      wait "$queue_pid" || status=$?
-      queue_pid=
-    fi
-    if [ "$status" = 0 ]; then
-      if queue_held; then
-        printf '%s\n' "$$" > "$LOCK.queue.owner" || exit 1
-        return 0
-      fi
-    else
-      expired && gave_up
-      named=$(queue_owner)
-      if [ "$named" != "$seen" ]; then seen=$named seen_at=$SECONDS; fi
-      if ! pid_ok "$named" || [ "$named" = "$$" ] || ! alive "$named" || stopped "$named" ||
-        [ $((SECONDS - seen_at)) -ge "$ADMIT_STALL" ]; then
-        if queue_held; then
-          : > "$LOCK.queue.$$" && mv -f "$LOCK.queue.$$" "$LOCK.queue" || exit 1
-        fi
-        seen= seen_at=$SECONDS
-      fi
-    fi
-    exec {queue_fd}>&-
-  done
+# The queue. A check arrives by publishing its ticket, $LOCK.wait.<ns>.<pid>,
+# a file that carries its pid, lane, arrival and command. It is written
+# whole and locked under a temporary name, then a child process reads the
+# clock and renames it into place under that time in nanoseconds and the
+# check's pid, so the name holds the moment of publication even if the
+# check is stopped meanwhile. Arrival order is the (time, pid) order of the
+# tickets: no counter, and no lock over admission. The check holds its
+# ticket's lock until it leaves the queue, so a ticket no one locks is a
+# dead waiter's and whoever finds it removes it; a stopped waiter's ticket
+# stays and holds no one back.
+now_ns() {
+  local t
+  if [ "${BASH_VERSINFO[0]}" -ge 5 ]; then
+    t=${EPOCHREALTIME/[.,]/}
+    echo "$(( 10#$t ))000"
+  else
+    t=$(date +%s%N 2>/dev/null) || t=
+    case "$t" in ''|*[!0-9]*) t="$(date +%s)000000000" ;; esac
+    echo "$t"
+  fi
 }
-queue_unlock() { exec {queue_fd}>&-; }
-take_ticket() {
-  local last n=0
+publish_ticket() {
   exec {ticket_fd}>"$LOCK.ticket.$$" || exit 1
   flock -n -x "$ticket_fd" || exit 1
   printf 'pid=%s mode=%s queued=%s checkout=%s command=%s\n' "$$" "$MODE" \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$checkout" "$(redacted "$@")" >&"$ticket_fd" || exit 1
-  queue_lock
-  last=$(cat "$LOCK.seq" 2>/dev/null) || :
-  case "$last" in ''|*[!0-9]*) last=0 ;; esac
-  ticket=$((last + 1))
-  until ln "$LOCK.ticket.$$" "$LOCK.wait.$ticket" 2>/dev/null; do
-    n=$((n + 1))
-    [ "$n" -lt 1000 ] || { echo "cannot take a ticket in $LOCK.wait.*" >&2; exit 1; }
-    [ ! -e "$LOCK.wait.$ticket" ] || ticket=$((ticket + 1))
-  done
-  printf '%s\n' "$ticket" > "$LOCK.seq" || exit 1
-  queue_unlock
-  rm -f "$LOCK.ticket.$$"
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$checkout" "$command_text" >&"$ticket_fd" || exit 1
+  ticket=$(t=$(now_ns) && mv -f "$LOCK.ticket.$$" "$LOCK.wait.$t.$$" && echo "$t.$$") || exit 1
 }
 release_ticket() {
   rm -f "$LOCK.wait.$ticket"
   exec {ticket_fd}>&-
   ticket=
 }
-# How many live waiters queued before this one ($ahead) and how many wait
-# in all ($waiting), this one included; a check that has no ticket yet
-# counts as the last. A stopped owner holds no one back. With `prune`,
-# under the queue lock, a ticket no owner locks is removed.
+# How many live waiters arrived before this one ($ahead) and how many wait
+# in all ($waiting), this one included. A ticket no owner locks is removed;
+# a stopped owner holds no one back.
 places() {
   local f k line pid
   ahead=0 waiting=0
   for f in "$LOCK".wait.*; do
     k=${f##*.wait.}
-    case "$k" in ''|*[!0-9]*) continue ;; esac
+    ticket_key_ok "$k" || continue
     if [ "$k" != "$ticket" ]; then
-      if flock -n -x "$f" true 2>/dev/null; then
-        [ "${1:-}" != prune ] || rm -f "$f"
-        continue
-      fi
+      if flock -n -x "$f" true 2>/dev/null; then rm -f "$f"; continue; fi
       line=$(head -n 1 "$f" 2>/dev/null) || continue
       pid=$(field pid "$line")
       if pid_ok "$pid" && { ! alive "$pid" || stopped "$pid"; }; then continue; fi
+      if earlier "$k" "$ticket"; then ahead=$((ahead + 1)); fi
     fi
     waiting=$((waiting + 1))
-    [ -n "$ticket" ] && [ "$k" -ge "$ticket" ] || ahead=$((ahead + 1))
   done
-  [ -n "$ticket" ] || waiting=$((waiting + 1))
 }
-# Under the queue lock: whether the lane has room, taking its locks when it
-# has. Descriptors: 9 the host (exclusive alone, shared by the other
-# lanes), 8 the proof lane, 7 a scoped slot. The room the other lanes
-# leave is read by trying their locks without keeping them.
+
+# The lanes. Descriptors: 9 the host (exclusive alone, shared by the other
+# lanes), 8 the proof lane, 7 a scoped slot. The room the other lanes hold
+# is read by trying their locks without keeping them.
 slots_taken() {
   local i n=0
   for ((i=1; i<=SLOTS; i++)); do
@@ -555,35 +492,83 @@ slots_taken() {
   echo "$n"
 }
 proof_running() { ! flock -n -x "$LOCK.proof" true 2>/dev/null; }
+lane_record() {
+  case "$MODE" in
+    exclusive) echo "$LOCK.holder" ;;
+    proof) echo "$LOCK.proof.holder" ;;
+    scoped) echo "$LOCK.slot$1.holder" ;;
+  esac
+}
+write_record() {
+  printf 'pid=%s mode=%s since=%s hold=%ss group=%s watchdog=%s checkout=%s command=%s\n' \
+    "$$" "$MODE" "$since" "$HOLD" "${1:-}" "${2:-}" "$checkout" "$command_text" > "$record"
+}
+# Run in a child process, so that a check stopped meanwhile either holds
+# its lane with its record written or holds nothing: it takes the lane's
+# locks on the descriptors the check opened, then reads the room the
+# other lanes hold, with its own locks held, and the queue deadline, gives
+# its locks back if either fails, and writes the lane's record. Two checks
+# that take at once each read the other's locks, so a proof and the scoped
+# checks beside it never keep more than PROOF_SCOPED slots between them;
+# the one that reads too many gives its locks back and tries again. Exits 0
+# when it took the lane, or 10 + the slot in the scoped lane; 1 when there
+# is no room; 2 when the deadline has passed.
 take_lane() {
-  local i
-  exec 9>>"$LOCK" || exit 1
+  local i= taken=9 s=0
   case "$MODE" in
     exclusive)
-      flock -n -x 9 && return 0 ;;
+      flock -n -x 9 || exit 1 ;;
     proof)
-      if flock -n -s 9; then
-        exec 8>>"$LOCK.proof" || exit 1
-        if flock -n -x 8; then
-          [ "$(slots_taken)" -gt "$PROOF_SCOPED" ] || return 0
-        fi
-        exec 8>&-
-      fi ;;
+      flock -n -s 9 || exit 1
+      flock -n -x 8 || { flock -u 9; exit 1; }
+      taken="9 8"
+      [ "$(slots_taken)" -le "$PROOF_SCOPED" ] || s=1 ;;
     scoped)
-      if flock -n -s 9; then
-        if ! proof_running || [ "$(slots_taken)" -lt "$PROOF_SCOPED" ]; then
-          for ((i=1; i<=SLOTS; i++)); do
-            exec 7>>"$LOCK.slot$i" || exit 1
-            if flock -n -x 7; then slot=$i; return 0; fi
-            exec 7>&-
-          done
-        fi
-      fi ;;
+      flock -n -s 9 || exit 1
+      for ((i=1; i<=SLOTS; i++)); do
+        if flock -n -x "${slot_fd[$i]}"; then break; fi
+      done
+      [ "$i" -le "$SLOTS" ] || { flock -u 9; exit 1; }
+      taken="9 ${slot_fd[$i]}"
+      if proof_running && [ "$(slots_taken)" -gt "$PROOF_SCOPED" ]; then s=1; fi ;;
   esac
-  drop_lane
-  return 1
+  if [ "$s" = 0 ] && expired; then s=2; fi
+  if [ "$s" = 0 ]; then
+    record=$(lane_record "$i")
+    write_record || s=1
+  fi
+  if [ "$s" != 0 ]; then
+    for i in $taken; do flock -u "$i"; done
+    exit "$s"
+  fi
+  [ "$MODE" != scoped ] || exit $((10 + i))
+  exit 0
 }
-drop_lane() { exec 7>&- 8>&- 9>&-; slot=; }
+# Opens the lane's descriptors and takes the lane in a child; returns its
+# 0, 1 or 2, and keeps the descriptors only when it took the lane.
+admit() {
+  local i fd s=0
+  exec 9>>"$LOCK" || exit 1
+  case "$MODE" in
+    proof) exec 8>>"$LOCK.proof" || exit 1 ;;
+    scoped)
+      for ((i=1; i<=SLOTS; i++)); do
+        exec {fd}>>"$LOCK.slot$i" || exit 1
+        slot_fd[$i]=$fd
+      done ;;
+  esac
+  since=$(date '+%Y-%m-%dT%H:%M:%S%z')
+  ( take_lane ) || s=$?
+  if [ "$MODE" = scoped ]; then
+    if [ "$s" -gt 10 ]; then
+      slot=$((s - 10)) s=0
+      exec 7>&"${slot_fd[$slot]}" || exit 1
+    fi
+    for ((i=1; i<=SLOTS; i++)); do eval "exec ${slot_fd[$i]}>&-"; done
+  fi
+  if [ "$s" != 0 ]; then exec 7>&- 8>&- 9>&-; fi
+  return "$s"
+}
 
 said_at=
 # The queued line, when the check first waits and every REPEAT seconds
@@ -597,46 +582,27 @@ announce() {
   [ -z "$held" ] || printf '%s\n' "$held" | sed 's/^/==> heavy-check:   /' >&2
 }
 
-ahead=0 waiting=1 slot=
-take_ticket "$@"
-# A lane is kept only while the admission lock is still this check's and
-# before the queue deadline, which a check stopped while it waited may
-# have passed.
+ahead=0 waiting=1 slot= since=
+slot_fd=()
+publish_ticket
 while :; do
-  queue_lock
-  places prune
-  if [ "$ahead" = 0 ] && take_lane; then
-    if ! queue_held; then
-      drop_lane
-    elif expired; then
-      drop_lane
-      gave_up
-    else
-      queue_unlock
-      break
-    fi
+  places
+  if [ "$ahead" = 0 ]; then
+    s=0
+    admit || s=$?
+    [ "$s" != 0 ] || break
+    [ "$s" != 2 ] || gave_up
   fi
-  queue_unlock
   announce
   expired && gave_up
   sleep 0.5
 done
+record=$(lane_record "$slot")
+wrote_record=true
 release_ticket
-case "$MODE" in
-  exclusive) record="$LOCK.holder" ;;
-  proof) record="$LOCK.proof.holder" ;;
-  scoped) record="$LOCK.slot$slot.holder" ;;
-esac
 
 ran_at=$SECONDS
-since=$(date '+%Y-%m-%dT%H:%M:%S%z')
-write_record() {
-  printf 'pid=%s mode=%s since=%s hold=%ss group=%s watchdog=%s checkout=%s command=%s\n' \
-    "$$" "$MODE" "$since" "$HOLD" "${1:-}" "${2:-}" "$checkout" "$(redacted "${@:3}")" > "$record"
-}
-wrote_record=true
-write_record '' '' "$@"
-say "running ($MODE) after $((ran_at - queued_at))s queued: $(redacted "$@")"
+say "running ($MODE) after $((ran_at - queued_at))s queued: $command_text"
 
 # The outermost check owns the registry. One started by a wrapper that
 # already keeps a registry appends to that one and leaves it to its owner.
@@ -673,7 +639,7 @@ status=$?
 [ "$status" = 0 ] || exit "$status"
 cmd=$CONTAIN_PID
 run_group=$CONTAIN_PID run_watchdog=${CONTAIN_WATCHDOG:-}
-write_record "$run_group" "$run_watchdog" "$@"
+write_record "$run_group" "$run_watchdog"
 
 contain_wait "$cmd" "$HOLD" "$GRACE"
 status=$?

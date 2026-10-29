@@ -183,12 +183,16 @@ for fd in range(1024):
 with open(sys.argv[1], "w") as out:
     out.write("\n".join(fds) + "\n")
 FDPROBE
-# A BASH_ENV for a check: it stops itself, once, the first time its function
-# $STOP_FN runs a command matching the pattern $STOP_CMD, and creates
-# $STOP_MARK as it does.
+# A BASH_ENV for a check: the check stops, once, the first time its
+# function $STOP_FN (or $STOP_FN2) runs a command matching the pattern
+# $STOP_CMD (or $STOP_CMD2), and $STOP_MARK is created as it does. In a
+# child process of the check, the check stops and the child goes on; with
+# $STOP_UNTIL set, the child then waits for that file to appear. The second
+# pair names the same moment in b1dfc572c's script, where these cases were
+# shown failing.
 cat > "$scratch/stop-at" <<'STOPAT'
 set -T
-trap 'if [[ ${FUNCNAME[0]:-} == "$STOP_FN" && $BASH_COMMAND == $STOP_CMD && ! -e $STOP_MARK ]]; then : > "$STOP_MARK"; kill -STOP $$; fi' DEBUG
+trap 'if [[ ! -e $STOP_MARK ]] && { [[ ${FUNCNAME[0]:-} == "$STOP_FN" && $BASH_COMMAND == $STOP_CMD ]] || [[ -n ${STOP_FN2:-} && ${FUNCNAME[0]:-} == "$STOP_FN2" && $BASH_COMMAND == $STOP_CMD2 ]]; }; then : > "$STOP_MARK"; kill -STOP $$; while [[ -n ${STOP_UNTIL:-} && ! -e $STOP_UNTIL ]]; do sleep 0.05; done; fi' DEBUG
 STOPAT
 chmod +x "$scratch/hold" "$scratch/probe" "$scratch/stubborn"
 hold="$scratch/hold"
@@ -454,19 +458,13 @@ t_scoped_stale() {
 # A stopped waiter holds back no one: a later waiter takes the slot that
 # frees, and the stopped one runs once it is continued.
 t_scoped_stopped() {
-  local a b p n
+  local a b p
   rm -f "$scratch/order"
   hold_slots ss
   "${hc[@]}" -s -- sh -c "echo A >> $scratch/order" >/dev/null 2>"$scratch/ssA.err" &
   a=$!; started+=("$a")
   until_true 10 has_line '^==> heavy-check: queued \(scoped\)' "$scratch/ssA.err" || fail 'the first waiter did not queue'
-  # Stopped between scans: a waiter stopped inside one holds the admission
-  # lock, which the admission_stopped case covers.
-  for n in $(seq 50); do
-    kill -STOP "$a"
-    flock -n "$scratch/lock.queue" true && break
-    kill -CONT "$a"; sleep 0.1
-  done
+  kill -STOP "$a"
   until_true 5 sh -c "sed 's/.*) //' /proc/$a/stat | grep -q '^T'" || fail 'the first waiter was not stopped'
   "${hc[@]}" -s -- sh -c "echo B >> $scratch/order" >/dev/null 2>"$scratch/ssB.err" &
   b=$!; started+=("$b")
@@ -479,35 +477,10 @@ t_scoped_stopped() {
   [ "$(tr '\n' ' ' < "$scratch/order")" = 'B A ' ] || fail "the continued waiter did not run after: $(tr '\n' ' ' < "$scratch/order")"
 }
 
-# A wait for the admission lock, here behind a holder that runs and never
-# lets go, keeps the queue deadline and answers TERM at once.
-t_queue_lock() {
-  local f q s t
-  flock "$scratch/lock.queue" "$hold" "$scratch/release-ql" &
-  f=$!; started+=("$f")
-  until_true 10 sh -c "! flock -n '$scratch/lock.queue' true" || fail 'the queue lock was not taken'
-  echo "$f" > "$scratch/lock.queue.owner"
-  t=$SECONDS
-  [ "$(status_of "${hc[@]}" -s -w 1 -- touch "$scratch/ql-ran")" = 75 ] || fail 'a check waiting on the queue lock past its deadline did not exit 75'
-  [ $((SECONDS - t)) -le 3 ] || fail "the queue deadline answered only after $((SECONDS - t))s"
-  framed "$scratch/out" 75 || fail "the queue deadline was not framed: $(tr '\n' '|' < "$scratch/out")"
-  has_line '^==> heavy-check: queue deadline after ' "$scratch/err" || fail 'the queue deadline was not reported'
-  "${hc[@]}" -s -- touch "$scratch/ql-ran" >"$scratch/ql.out" 2>"$scratch/ql.err" &
-  q=$!; started+=("$q")
-  until_true 10 pgrep -P "$q" -x flock >/dev/null || fail 'the second check did not wait for the queue lock'
-  kill -TERM "$q"
-  until_true 2 dead "$q" || fail 'a check waiting on the queue lock given TERM was still running 2s later'
-  s=0; wait "$q" || s=$?
-  [ "$s" = 143 ] || fail "a check waiting on the queue lock given TERM exited $s"
-  framed "$scratch/ql.out" 143 "$q" || fail "not framed by pid $q: $(tr '\n' '|' < "$scratch/ql.out")"
-  [ ! -e "$scratch/ql-ran" ] || fail 'a check that never had the queue lock ran'
-  touch "$scratch/release-ql"; wait "$f"
-}
-
 # A waiter stopped while it queued and continued after its queue deadline
 # exits 75 and runs nothing, though its lane is free by then.
 t_expired_waiter() {
-  local lane flag h w n s
+  local lane flag h w s
   for lane in exclusive proof scoped; do
     flag=$(lane_flag "$lane")
     rm -f "$scratch"/release-* "$scratch/ew-ran"
@@ -517,13 +490,8 @@ t_expired_waiter() {
     "${hc[@]}" $flag -w 2 -- touch "$scratch/ew-ran" >"$scratch/ew.out" 2>"$scratch/ew.err" &
     w=$!; started+=("$w")
     until_true 10 has_line "^==> heavy-check: queued \\($lane\\)" "$scratch/ew.err" || fail "the $lane waiter did not queue"
-    # Stopped outside the admission lock, as a waiter between its scans.
-    for n in $(seq 50); do
-      kill -STOP "$w"
-      until_true 5 is_stopped "$w" || fail "the $lane waiter did not stop"
-      flock -n "$scratch/lock.queue" true && break
-      kill -CONT "$w"; sleep 0.05
-    done
+    kill -STOP "$w"
+    until_true 5 is_stopped "$w" || fail "the $lane waiter did not stop"
     alive "$w" || fail "the $lane waiter gave up before it was stopped"
     touch "$scratch/release-ew"; wait "$h"
     sleep 3
@@ -536,10 +504,9 @@ t_expired_waiter() {
   done
 }
 
-# A check stopped while it holds the admission lock, here in its
-# first-in-line test, keeps no one waiting past ADMIT_STEP (1 s): a later
-# check passes it and runs, the stopped one keeps its ticket, and once
-# continued it runs too.
+# A check stopped in its first-in-line test keeps no one waiting: a later
+# check starts at once, without queuing, the stopped one keeps its ticket,
+# and once continued it runs too.
 t_admission_stopped() {
   local lane flag a s t
   for lane in exclusive proof scoped; do
@@ -550,17 +517,12 @@ t_admission_stopped() {
     a=$!; started+=("$a")
     until_true 10 test -e "$scratch/stopped-mark" || fail "the $lane check did not reach its first-in-line test"
     until_true 5 is_stopped "$a" || fail "the $lane check did not stop"
-    ! flock -n "$scratch/lock.queue" true || fail "the stopped $lane check does not hold the admission lock"
     t=$SECONDS
     [ "$(status_of "${hc[@]}" $flag -w 10 -- sh -c "echo later >> $scratch/order")" = 0 ] ||
       fail "a later $lane check behind one stopped in admission exited $(tail -n 1 "$scratch/out"): $(cat "$scratch/err")"
     [ $((SECONDS - t)) -le 3 ] || fail "a later $lane check waited $((SECONDS - t))s behind one stopped in admission"
-    # It said it queued, in the one form, before it ran: the stopped check
-    # is no waiter ahead of it and no lane's holder.
-    grep '^==> heavy-check: ' "$scratch/err" | sed -n 1,2p > "$scratch/as2.lines"
-    has_line "^==> heavy-check: queued \\($lane\\) 1 of 1 waiting, behind:\$" <(sed -n 1p "$scratch/as2.lines") &&
-      has_line "^==> heavy-check: running \\($lane\\) after [0-9]+s queued: " <(sed -n 2p "$scratch/as2.lines") ||
-      fail "the later $lane check's lines: $(grep '^==> heavy-check: ' "$scratch/err")"
+    has_line "^==> heavy-check: running \\($lane\\) " <(grep '^==> heavy-check: ' "$scratch/err" | sed -n 1p) ||
+      fail "the later $lane check did not start at once: $(grep '^==> heavy-check: ' "$scratch/err")"
     [ "$(cat "$scratch/order")" = later ] || fail "the later $lane check did not run: $(cat "$scratch/order" 2>/dev/null)"
     [ -n "$(find "$scratch" -maxdepth 1 -name 'lock.wait.*')" ] || fail "the stopped $lane check lost its ticket"
     kill -CONT "$a"
@@ -570,50 +532,98 @@ t_admission_stopped() {
   done
 }
 
-# A check stopped in admission after it found room, and passed while it was
-# stopped, gives back the lane it then takes: here a scoped check that saw
-# no proof running is passed by a proof, which takes the one scoped place
-# beside it (PROOF_SCOPED), so the continued scoped check waits for the
-# proof to end.
-t_admission_undo() {
-  local s1 a b
-  [ "$(sed -n 's/^PROOF_SCOPED=//p' "$check")" = 1 ] || return 0
+# Arrival is a ticket's publication: a check stopped as it publishes
+# arrives when it is continued, after the checks that published meanwhile,
+# which keep their order. (On b1dfc572c it is stopped as it writes the
+# ticket counter, and resumed writes it back.)
+t_ticket_order() {
+  local h a c d p
   rm -f "$scratch/order" "$scratch/stopped-mark"
-  "${hc[@]}" -s -- sh -c "echo s1 >> $scratch/order; $hold $scratch/release-u1" >/dev/null 2>&1 &
-  s1=$!; started+=("$s1")
-  until_true 10 has_line '^s1$' "$scratch/order" || fail 'the scoped holder did not start'
-  "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_FN=take_lane STOP_CMD='*LOCK.slot$i*' STOP_MARK="$scratch/stopped-mark" \
-    bash "$check" -s -- sh -c "echo scoped >> $scratch/order" >/dev/null 2>"$scratch/au.err" &
+  "${hc[@]}" -- "$hold" "$scratch/release-to" >/dev/null 2>&1 &
+  h=$!; started+=("$h")
+  until_true 10 test -s "$scratch/lock.holder" || fail 'the holder did not start'
+  "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark" \
+    STOP_FN=publish_ticket STOP_CMD='ticket=*' STOP_FN2=take_ticket STOP_CMD2='*LOCK.seq*' \
+    bash "$check" -- sh -c "echo A >> $scratch/order" >/dev/null 2>"$scratch/toA.err" &
   a=$!; started+=("$a")
-  until_true 10 test -e "$scratch/stopped-mark" || fail 'the scoped check did not reach its slots'
-  until_true 5 is_stopped "$a" || fail 'the scoped check did not stop'
-  "${hc[@]}" -p -w 10 -- sh -c "echo proof+ >> $scratch/order; $hold $scratch/release-u2; echo proof- >> $scratch/order" >/dev/null 2>&1 &
-  b=$!; started+=("$b")
-  until_true 5 has_line '^proof\+$' "$scratch/order" || fail 'the proof waited for a check stopped in admission'
+  until_true 10 test -e "$scratch/stopped-mark" || fail 'the first check did not reach its publication'
+  until_true 5 is_stopped "$a" || fail 'the first check did not stop'
+  "${hc[@]}" -- sh -c "echo C >> $scratch/order" >/dev/null 2>"$scratch/toC.err" &
+  c=$!; started+=("$c")
+  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) 1 of 1 waiting' "$scratch/toC.err" || fail "the second check did not queue first: $(cat "$scratch/toC.err")"
+  "${hc[@]}" -- sh -c "echo D >> $scratch/order" >/dev/null 2>"$scratch/toD.err" &
+  d=$!; started+=("$d")
+  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) 2 of 2 waiting' "$scratch/toD.err" || fail "the third check did not queue second: $(cat "$scratch/toD.err")"
   kill -CONT "$a"
-  until_true 10 has_line '^==> heavy-check: queued \(scoped\)' "$scratch/au.err" || fail 'the passed scoped check did not queue again'
-  ! has_line '^scoped$' "$scratch/order" || fail "a passed scoped check kept the lane it took beside the proof: $(tr '\n' ' ' < "$scratch/order")"
-  touch "$scratch/release-u2"; wait "$b"
-  wait "$a" || fail 'the continued scoped check failed'
-  [ "$(tr '\n' ' ' < "$scratch/order")" = 's1 proof+ proof- scoped ' ] || fail "the order was: $(tr '\n' ' ' < "$scratch/order")"
-  touch "$scratch/release-u1"; wait "$s1"
+  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) 3 of 3 waiting' "$scratch/toA.err" ||
+    fail "the continued check did not arrive last: $(cat "$scratch/toA.err")"
+  touch "$scratch/release-to"
+  for p in "$h" "$c" "$d" "$a"; do wait "$p" || fail "check $p failed"; done
+  [ "$(tr '\n' ' ' < "$scratch/order")" = 'C D A ' ] || fail "the checks ran out of arrival order: $(tr '\n' ' ' < "$scratch/order")"
 }
 
-# A holder of the admission lock that runs but never lets go is passed
-# after ADMIT_STALL (10 s), the whole bound on a wait for the lock.
-t_admission_stall() {
-  local f t e
-  rm -f "$scratch/stall-ran"
-  flock "$scratch/lock.queue" "$hold" "$scratch/release-as" &
-  f=$!; started+=("$f")
-  until_true 10 sh -c "! flock -n '$scratch/lock.queue' true" || fail 'the admission lock was not taken'
-  echo "$f" > "$scratch/lock.queue.owner"
-  t=$SECONDS
-  [ "$(status_of "${hc[@]}" -s -w 30 -- touch "$scratch/stall-ran")" = 0 ] || fail "a check behind a holder that never lets go exited: $(cat "$scratch/err")"
-  e=$((SECONDS - t))
-  [ -e "$scratch/stall-ran" ] || fail 'the check did not run'
-  [ "$e" -ge 9 ] && [ "$e" -le 14 ] || fail "passed a holder that never lets go after ${e}s, not ADMIT_STALL"
-  touch "$scratch/release-as"; wait "$f"
+# Admission never waits on another waiter: with one check stopped in its
+# first-in-line test and another stopped about to take its lane (on
+# b1dfc572c, one holding the admission lock and one about to replace it),
+# a third starts at once, without queuing, and the two run once continued.
+t_admission_two_stopped() {
+  local a b c p
+  rm -f "$scratch/order" "$scratch"/stopped-mark*
+  "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark-a" STOP_FN=places STOP_CMD='ahead=0 waiting=0' \
+    bash "$check" -- sh -c "echo A >> $scratch/order" >/dev/null 2>"$scratch/tsA.err" &
+  a=$!; started+=("$a")
+  until_true 10 test -e "$scratch/stopped-mark-a" || fail 'the first check did not reach its first-in-line test'
+  until_true 5 is_stopped "$a" || fail 'the first check did not stop'
+  "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark-b" \
+    STOP_FN=admit STOP_CMD='since=*' STOP_FN2=queue_lock STOP_CMD2='mv -f *' \
+    bash "$check" -- sh -c "echo B >> $scratch/order" >/dev/null 2>"$scratch/tsB.err" &
+  b=$!; started+=("$b")
+  until_true 10 test -e "$scratch/stopped-mark-b" || fail 'the second check did not reach its lane'
+  until_true 5 is_stopped "$b" || fail 'the second check did not stop'
+  [ "$(status_of "${hc[@]}" -w 10 -- sh -c "echo C >> $scratch/order")" = 0 ] || fail "the third check exited: $(cat "$scratch/err")"
+  has_line '^==> heavy-check: running \(exclusive\) ' <(grep '^==> heavy-check: ' "$scratch/err" | sed -n 1p) ||
+    fail "the third check did not start at once: $(grep '^==> heavy-check: ' "$scratch/err")"
+  [ "$(cat "$scratch/order")" = C ] || fail "the third check did not run alone: $(tr '\n' ' ' < "$scratch/order")"
+  kill -CONT "$a" "$b"
+  for p in "$a" "$b"; do wait "$p" || fail "a continued check $p failed"; done
+  [ "$(sort "$scratch/order" | tr '\n' ' ')" = 'A B C ' ] || fail "the continued checks did not both run: $(tr '\n' ' ' < "$scratch/order")"
+}
+
+# Two checks that take lanes at once, with no lock over admission, never
+# keep more than PROOF_SCOPED scoped slots beside a proof: a scoped check
+# held after it took its slot, and a proof held after it took the proof
+# lane, are each read by the other, and one gives its locks back. Both
+# orders, with one scoped check already running.
+t_lane_race() {
+  local s1 a b first second
+  [ "$(sed -n 's/^PROOF_SCOPED=//p' "$check")" = 1 ] || return 0
+  for first in scoped proof; do
+    case $first in scoped) second=proof ;; proof) second=scoped ;; esac
+    rm -f "$scratch/order" "$scratch"/stopped-mark "$scratch"/release-*
+    "${hc[@]}" -s -- sh -c "echo s1+ >> $scratch/order; $hold $scratch/release-s1; echo s1- >> $scratch/order" >/dev/null 2>&1 &
+    s1=$!; started+=("$s1")
+    until_true 10 has_line '^s1\+$' "$scratch/order" || fail 'the running scoped check did not start'
+    # The first is held in its child with its locks taken and not yet read
+    # against the other lanes; the check itself is stopped meanwhile.
+    "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark" STOP_UNTIL="$scratch/release-child" \
+      STOP_FN=take_lane STOP_CMD="$(case $first in scoped) echo 'proof_running*' ;; proof) echo '\[ "$(slots_taken)" -le*' ;; esac)" \
+      bash "$check" "$(lane_flag "$first")" -- sh -c "echo $first+ >> $scratch/order; $hold $scratch/release-a; echo $first- >> $scratch/order" >/dev/null 2>"$scratch/lrA.err" &
+    a=$!; started+=("$a")
+    until_true 10 test -e "$scratch/stopped-mark" || fail "the $first check did not reach its reading"
+    until_true 5 is_stopped "$a" || fail "the $first check did not stop"
+    "${hc[@]}" "$(lane_flag "$second")" -w 30 -- sh -c "echo $second+ >> $scratch/order; $hold $scratch/release-b; echo $second- >> $scratch/order" >/dev/null 2>"$scratch/lrB.err" &
+    b=$!; started+=("$b")
+    until_true 10 has_line "^==> heavy-check: queued \\($second\\)" "$scratch/lrB.err" ||
+      fail "the $second check did not wait beside the $first one's locks: $(cat "$scratch/lrB.err")"
+    touch "$scratch/release-child"
+    kill -CONT "$a"
+    until_true 10 has_line "^$first\\+\$" "$scratch/order" || fail "the $first check did not run once released"
+    ! has_line "^$second\\+\$" "$scratch/order" || fail "a proof and two scoped checks ran together: $(tr '\n' ' ' < "$scratch/order")"
+    touch "$scratch/release-a"
+    until_true 10 has_line "^$second\\+\$" "$scratch/order" || fail "the $second check did not run after the $first one"
+    touch "$scratch/release-b" "$scratch/release-s1"
+    wait "$a" && wait "$b" && wait "$s1" || fail 'a check failed'
+  done
 }
 
 # --- scoped and exclusive never together; a queued exclusive goes first -------
@@ -772,11 +782,7 @@ t_waiters_skipped() {
     "${hc[@]}" $flag -- sh -c "echo stopped >> $scratch/order" >/dev/null 2>"$scratch/ws.err" &
     a=$!; started+=("$a")
     until_true 10 has_line "^==> heavy-check: queued \\($lane\\)" "$scratch/ws.err" || fail "the $lane waiter did not queue"
-    for p in $(seq 50); do
-      kill -STOP "$a"
-      flock -n "$scratch/lock.queue" true && break
-      kill -CONT "$a"; sleep 0.1
-    done
+    kill -STOP "$a"
     until_true 5 sh -c "sed 's/.*) //' /proc/$a/stat | grep -q '^T'" || fail "the $lane waiter was not stopped"
     "${hc[@]}" $flag -- sh -c "echo later >> $scratch/order" >/dev/null 2>"$scratch/wl.err" &
     b=$!; started+=("$b")
@@ -1363,8 +1369,8 @@ t_await_queue() {
 
 cases=(
   usage admission nested result frame roster fds fd_base elsewhere
-  exclusive redaction killed_holder scoped scoped_order scoped_stale scoped_stopped queue_lock
-  expired_waiter admission_stopped admission_undo admission_stall precedence
+  exclusive redaction killed_holder scoped scoped_order scoped_stale scoped_stopped
+  expired_waiter admission_stopped ticket_order admission_two_stopped lane_race precedence
   proof_among_scoped proof_queue waiters_skipped run_record record_watchdog environment status queued_repeat queue_proof
   hold hold_frame queue term int hup usr1 term_queued int_queued hup_queued term_queued_scoped
   term_queued_proof int_queued_proof hup_queued_proof refusals
