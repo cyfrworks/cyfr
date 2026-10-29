@@ -408,18 +408,134 @@ begin 'the real table reads whole, and has a handoff row for every self-test a p
 status=0; (cd "$ROOT" && scripts/stage.sh -n release) >"$S/real.out" 2>"$S/real.err" || status=$?
 [ "$status" = 0 ] || fail "the real table was refused: $(cat "$S/real.err")"
 grep -qF 'would run close (exclusive): scripts/commit-gate.sh --close -l "$STAGE_LOGDIR/gate"' "$S/real.out" || fail "$(cat "$S/real.out")"
-guard() { # TABLE: prints each self-test command no handoff row of TABLE runs
-  python3 -I - "$ROOT/.github/workflows" "$1" <<'PY'
+guard() { # TABLE [WORKFLOWS]: prints each self-test command no handoff row of TABLE runs
+  python3 -I - "${2:-$ROOT/.github/workflows}" "$1" <<'PY'
 import glob, os, re, sys, yaml
 workflows, table = sys.argv[1:3]
 rows = [line.rstrip("\n").split("\t") for line in open(table) if line.strip() and not line.startswith("#")]
 handoff = [row[5] for row in rows if row[0] == "handoff"]
-# A self-test is a script under tests/ that a pull-request workflow runs,
-# named *-test.sh, *_test.py or *-test.exs; or a Python script under tests/
-# run with no argument, or with --self-check alone. A Python script given
-# anything else (an image suite, given its image) is not one.
-test_file = re.compile(r"(?<![\w/.-])(tests/[\w./-]+?(?:-test\.sh|_test\.py|-test\.exs))(?![\w./-])")
-python_run = re.compile(r"(?<![\w/.-])python3?(?:[ \t]+-[A-Za-z]+)*[ \t]+(tests/[\w./-]+\.py)((?:[ \t]+[^\s;&|]+)*)")
+# A self-test is a script under tests/ that a pull-request workflow runs as a
+# command, named *-test.sh, *_test.py or *-test.exs; or a Python script under
+# tests/ run with no argument, or with --self-check alone. A Python script
+# given anything else (an image suite, given its image) is not one. A command
+# counts only where the shell would run it: comments and heredoc bodies are
+# not read, and a script named among another command's arguments (echo's, a
+# comment's) is not a command.
+TEST_FILE = re.compile(r"tests/[\w./-]+?(?:-test\.sh|_test\.py|-test\.exs)")
+RESERVED = {"if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}", "time", "exec"}
+
+
+def commands(text):
+    """Each simple command of a shell script, as its words: quotes removed,
+    comments and heredoc bodies left out, split at newlines, ;, &, &&, ||, |,
+    ( and )."""
+    out, words, word, heredocs = [], [], None, []
+    i, n = 0, len(text)
+
+    def end_word():
+        nonlocal word
+        if word is not None:
+            words.append(word)
+            word = None
+
+    def end_command():
+        end_word()
+        if words:
+            out.append(list(words))
+            words.clear()
+
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            if text[i + 1] != "\n":
+                word = (word or "") + text[i + 1]
+            i += 2
+        elif c == "'":
+            j = text.find("'", i + 1)
+            j = n if j < 0 else j
+            word = (word or "") + text[i + 1:j]
+            i = j + 1
+        elif c == '"':
+            j, buf = i + 1, ""
+            while j < n and text[j] != '"':
+                if text[j] == "\\" and j + 1 < n:
+                    buf, j = buf + text[j + 1], j + 2
+                else:
+                    buf, j = buf + text[j], j + 1
+            word = (word or "") + buf
+            i = j + 1
+        elif c == "#" and word is None:
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif c == "\n":
+            end_command()
+            i += 1
+            for delimiter in heredocs:
+                while i < n:
+                    j = text.find("\n", i)
+                    line = text[i:n if j < 0 else j]
+                    i = n if j < 0 else j + 1
+                    if line.strip() == delimiter:
+                        break
+            heredocs.clear()
+        elif c in " \t":
+            end_word()
+            i += 1
+        elif text.startswith("<<", i):
+            end_word()
+            i += 2
+            if i < n and text[i] == "-":
+                i += 1
+            while i < n and text[i] in " \t":
+                i += 1
+            m = re.match(r"""['"]?([A-Za-z_]\w*)['"]?""", text[i:])
+            if m:
+                heredocs.append(m.group(1))
+                i += m.end()
+        elif text.startswith(("&&", "||"), i):
+            end_command()
+            i += 2
+        elif c in ";|&()":
+            end_command()
+            i += 1
+        else:
+            word = (word or "") + c
+            i += 1
+    end_command()
+    return out
+
+
+def self_tests(words):
+    """The self-test a simple command runs, as the guard names it, or none."""
+    w = list(words)
+    while w and (w[0] in RESERVED or re.match(r"[A-Za-z_]\w*=", w[0])):
+        w.pop(0)
+    if not w:
+        return []
+    if w[0] in ("bash", "sh", "elixir", "python", "python3"):
+        rest = w[1:]
+        k = 0
+        while k < len(rest) and rest[k].startswith("-"):
+            if rest[k] in ("-c", "-m"):
+                return []
+            k += 1
+        if k == len(rest):
+            return []
+        script, args = rest[k], rest[k + 1:]
+    else:
+        script, args = w[0], w[1:]
+    script = script[2:] if script.startswith("./") else script
+    if not script.startswith("tests/"):
+        return []
+    if TEST_FILE.fullmatch(script):
+        return [script]
+    if script.endswith(".py") and w[0] in ("python", "python3"):
+        if args == []:
+            return [script]
+        if args == ["--self-check"]:
+            return [script + " --self-check"]
+    return []
+
 missing = set()
 for path in sorted(glob.glob(os.path.join(workflows, "*.yml"))):
     spec = yaml.safe_load(open(path))
@@ -428,19 +544,12 @@ for path in sorted(glob.glob(os.path.join(workflows, "*.yml"))):
         continue
     for job in spec["jobs"].values():
         for step in job.get("steps", []):
-            run = step.get("run") or ""
-            for line in run.splitlines():
-                for name in test_file.findall(line):
-                    if not any(re.search(r"(?<![\w/.-])" + re.escape(name) + r"(?![\w./-])", c) for c in handoff):
+            for command in commands(step.get("run") or ""):
+                for name in self_tests(command):
+                    script, _, flag = name.partition(" ")
+                    held = r"(?<![\w/.-])" + re.escape(script) + (r"\s+--self-check" if flag else r"(?![\w./-])")
+                    if not any(re.search(held, c) for c in handoff):
                         missing.add(name)
-                for name, args in python_run.findall(line):
-                    words = args.split()
-                    if words == []:
-                        if not any(re.search(r"(?<![\w/.-])" + re.escape(name) + r"(?![\w./-])", c) for c in handoff):
-                            missing.add(name)
-                    elif words == ["--self-check"]:
-                        if not any(re.search(re.escape(name) + r"\s+--self-check", c) for c in handoff):
-                            missing.add(name + " --self-check")
 print("\n".join(sorted(missing)))
 PY
 }
@@ -453,6 +562,24 @@ grep -v $'^handoff\tcontain-test\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short
 # --self-check alone. A table without its row is caught.
 grep -v $'^handoff\trelease-graph\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
 [ "$(guard "$S/stages-short.tsv")" = tests/ci-release-graph.py ] || fail "a table without the release-graph row was not caught: $(guard "$S/stages-short.tsv")"
+# A command counts where the shell runs it: not in a comment, an echo's
+# arguments or a heredoc's body, and a real one with a comment after it
+# does. An image suite, given its image, is no self-test.
+planted() { # BODY: the workflows with one more pull-request step running BODY
+  rm -rf "$S/workflows"; cp -r "$ROOT/.github/workflows" "$S/workflows"
+  printf 'on: [pull_request]\njobs:\n  probe:\n    steps:\n      - run: |\n%s\n' "$(printf '%s\n' "$1" | sed 's/^/          /')" >"$S/workflows/probe.yml"
+}
+for body in '# python3 -I tests/locus-runtime-image/canary.py' 'echo python3 -I tests/locus-runtime-image/canary.py' \
+  'python3 -I tests/locus-runtime-image/canary.py cyfr-locus:review' $'python3 - <<\'EOF\'\nbash tests/heredoc-probe-test.sh\nEOF'; do
+  planted "$body"
+  [ -z "$(guard "$ROOT/scripts/stages.tsv" "$S/workflows")" ] || fail "counted as a self-test: $body: $(guard "$ROOT/scripts/stages.tsv" "$S/workflows")"
+done
+planted 'python3 -I tests/stage-probe.py --self-check # no image'
+[ "$(guard "$ROOT/scripts/stages.tsv" "$S/workflows")" = 'tests/stage-probe.py --self-check' ] ||
+  fail "a real command with a comment after it was not counted: $(guard "$ROOT/scripts/stages.tsv" "$S/workflows")"
+planted $'set -e\nbash tests/stage-probe-test.sh && echo bash tests/echoed-test.sh'
+[ "$(guard "$ROOT/scripts/stages.tsv" "$S/workflows")" = tests/stage-probe-test.sh ] ||
+  fail "a command after && was not counted, or an echoed one was: $(guard "$ROOT/scripts/stages.tsv" "$S/workflows")"
 grep -v $'^handoff\truntime-image-checks\t' "$ROOT/scripts/stages.tsv" >"$S/stages-short.tsv"
 [ "$(guard "$S/stages-short.tsv")" = "$(printf '%s\n' tests/locus-runtime-image/canary_test.py 'tests/locus-runtime-image/worker_auth.py --self-check')" ] ||
   fail "a table without the runtime-image-checks row was not caught: $(guard "$S/stages-short.tsv")"
