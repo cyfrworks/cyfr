@@ -3,32 +3,41 @@
 # Copyright 2026 CYFR Works Inc.
 #
 # The source development stack: docker-compose.dev.yml as `docker compose
-# config` resolves it over docker-compose.yml (tests/dev-stack/compose_shape.py),
-# and scripts/dev-stack.sh at its command boundary.
+# config` resolves it over docker-compose.yml with each slot's values
+# (tests/dev-stack/compose_shape.py), and scripts/dev-stack.sh at its
+# command boundary.
 #
 # The override: the runtime, backends and builds services and their
-# guards are the shipped ones field by field, but for the image built from
-# the tree under a local tag, the runtime's listener on the host's
-# loopback alone and its calls to its network's gateway, each guard's
-# fixed address and the control plane it refuses at its network's
-# gateway, and the keeper's profile at its tracked path. Its host ports,
-# subnets and names are apart from what the checks on a host reserve,
-# read from their sources; a source that moves a reservation onto the
-# stack fails as a dev declaration that moves onto one does.
+# guards are the shipped ones field by field, but for the project and
+# container names (cyfr-dev-<seed>), the shared image it never builds or
+# pulls, the runtime's listener on the host's loopback alone and its calls
+# to its network's gateway, each guard's fixed address and the control
+# plane it refuses at its network's gateway, and the keeper's profile at
+# its tracked path. Slot 0 keeps Prism on 127.0.0.1:4000, and every slot's
+# host ports and subnets are apart from what the checks on a host reserve,
+# read from their sources, and from every other slot's; a source that
+# moves a reservation onto a slot fails as a dev declaration that moves
+# onto one does.
 #
-# The script, with docker, mix, git and curl stubbed (the stubbed docker
-# resolves with the real compose, the stubbed mix runs the real task from
-# this checkout's build): provisions .env on its first run and keeps it
-# after, hands compose the services' keys and the server CYFR's settings
-# in their environments alone, refuses what disagrees and an occupied
-# Prism address naming its holder, and on every exit (the server's own,
-# a failed start, Ctrl-C, SIGTERM) stops the server's whole process group
-# and removes the containers. Its check secures its bearer and cleans up
-# after a failed read. The scaffold ships neither file. Each mutation
-# fails; an equivalent respelling holds.
+# The script, with docker, mix, curl and scripts/image.sh stubbed (the
+# stubbed docker resolves with the real compose and lists the networks a
+# case names, the stubbed mix runs the real task from this checkout's
+# build), in case directories that are git repositories of their own, so
+# each has a seed: it provisions .env on its first run and keeps it after,
+# hands compose the services' keys and the server CYFR's settings in their
+# environments alone, takes the slot its worktree remembers or the first
+# free one (passing slots another loop claims, whose ports something holds
+# or whose subnets a network overlaps, and refusing when none is free),
+# lets a second worktree's loop run beside the first, refuses what
+# disagrees, and on every exit (the server's own, a failed start, Ctrl-C,
+# SIGTERM) stops the server's whole process group and removes the
+# containers. Its check secures its bearer and cleans up after a failed
+# read. The scaffold ships neither file. Each mutation fails; an
+# equivalent respelling holds.
 #
-# Needs docker's compose plugin (no daemon), python3, ss and a build of the
-# checkout (_build/$MIX_ENV, or DEV_STACK_BUILD). SHOW=1 prints why each
+# Needs docker's compose plugin (no daemon), git, python3, ss and a build
+# of the checkout (_build/$MIX_ENV, or DEV_STACK_BUILD). The boundary cases
+# take the slots whose ports this host leaves free. SHOW=1 prints why each
 # mutation fails; DEV_STACK_SCRIPT runs the boundary cases against another
 # script. Usage: bash tests/dev-stack/compose-test.sh
 set -uo pipefail
@@ -39,6 +48,12 @@ holders=()
 trap 'for p in "${holders[@]}"; do kill "$p" 2>/dev/null; done; rm -rf "$scratch"' EXIT
 SHAPE="$ROOT/tests/dev-stack/compose_shape.py"
 REAL_DOCKER="$(command -v docker)"
+# shellcheck source=../../scripts/lib/run-names.sh
+. "$ROOT/scripts/lib/run-names.sh"
+SLOTS="$(seq 0 19)"
+# The image the static checks resolve with, and the stubbed scripts/image.sh
+# names.
+stub_image="cyfr-locus:in-0123456789abcdef0123"
 
 failures=0
 cases=0
@@ -49,6 +64,9 @@ failed() {
   [ -z "${2:-}" ] || printf '%s\n' "$2" | sed 's/^/  /'
 }
 
+# slot_env K: slot K's values, from the script that owns the rule.
+slot_env() { bash "$ROOT/scripts/dev-stack.sh" slot "$1"; }
+
 # project DIR OVERRIDE: a project directory holding the shipped compose
 # file, OVERRIDE as docker-compose.dev.yml and an empty .env.
 project() {
@@ -58,13 +76,17 @@ project() {
   : >"$1/.env"
 }
 
-# resolve DIR FILE... : the stack's services from those files, as the
-# script resolves them, in an environment holding nothing of the caller's.
+# resolve DIR SLOT PROJECT FILE... : the stack's services from those
+# files with slot SLOT's values, the project PROJECT and the stub image, as
+# the script resolves them, in an environment holding nothing else of the
+# caller's.
 resolve() {
-  local dir="$1" files=()
-  shift
+  local dir="$1" slot="$2" project="$3" files=()
+  shift 3
   for f in "$@"; do files+=(-f "$f"); done
-  (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" "$REAL_DOCKER" compose --env-file /dev/null \
+  # shellcheck disable=SC2046
+  (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" $(slot_env "$slot") DEV_STACK_PROJECT="$project" \
+    DEV_STACK_IMAGE="$stub_image" "$REAL_DOCKER" compose --env-file /dev/null \
     --profile locus-builds "${files[@]}" config --format json locus-runtime locus-backends locus-builds)
 }
 
@@ -76,17 +98,26 @@ sources() {
   cp -r "$ROOT/tests" "$ROOT/scripts" "$ROOT/.github" "$1/"
 }
 
-# checks DIR [SOURCES]: the override in DIR held to the shipped file and
-# kept apart from the reservations in SOURCES (the checkout's by default).
+check_project="cyfr-dev-$(run_names_seed "$ROOT")"
+# checks DIR [SOURCES [SLOTS]]: the override in DIR held to the shipped
+# file at slot 0, and each of SLOTS (0 and 19 by default) kept apart from
+# the reservations in SOURCES (the checkout's by default) and from each
+# other.
 checks() {
-  local dir="$1" sources="${2:-$ROOT}"
-  resolve "$dir" docker-compose.yml >"$dir/base.json" 2>"$dir/err" || { cat "$dir/err"; return 1; }
-  resolve "$dir" docker-compose.yml docker-compose.dev.yml >"$dir/dev.json" 2>"$dir/err" || { cat "$dir/err"; return 1; }
+  local dir="$1" sources="${2:-$ROOT}" slots="${3:-0 19}" k jsons=()
+  (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" "$REAL_DOCKER" compose --env-file /dev/null --profile locus-builds \
+    -f docker-compose.yml config --format json locus-runtime locus-backends locus-builds) >"$dir/base.json" 2>"$dir/err" ||
+    { cat "$dir/err"; return 1; }
+  for k in $slots; do
+    resolve "$dir" "$k" "$check_project" docker-compose.yml docker-compose.dev.yml >"$dir/slot-$k.json" 2>"$dir/err" ||
+      { cat "$dir/err"; return 1; }
+    jsons+=("$dir/slot-$k.json")
+  done
   (cd "$dir" && env -i PATH="$PATH" HOME="$HOME" "$REAL_DOCKER" compose --env-file /dev/null --profile '*' \
     -f docker-compose.yml config --format json) >"$dir/shipped.json" 2>"$dir/err" || { cat "$dir/err"; return 1; }
   local out status=0
-  out="$(python3 -I "$SHAPE" shape "$dir/base.json" "$dir/dev.json" "$ROOT")" || status=1
-  out="$out$(python3 -I "$SHAPE" apart "$dir/dev.json" "$dir/shipped.json" "$sources")" || status=1
+  out="$(python3 -I "$SHAPE" shape "$dir/base.json" "$dir/slot-0.json" "$ROOT" "$check_project" "$stub_image")" || status=1
+  out="$out$(python3 -I "$SHAPE" apart "$dir/shipped.json" "$sources" "${jsons[@]}")" || status=1
   printf '%s' "$out"
   return "$status"
 }
@@ -106,7 +137,32 @@ expect_checks() {
 
 override="$ROOT/docker-compose.dev.yml"
 project "$scratch/real" "$override"
-expect_checks pass "the override is the shipped stack's shape, apart from every check's reservations" "$scratch/real"
+expect_checks pass "the override is the shipped stack's shape, and every slot is apart from every check's reservations and from each other" \
+  "$scratch/real" "$ROOT" "$SLOTS"
+
+# The slot rule: slot 0 keeps the shipped-style addresses, a lone loop's
+# localhost:4000; slot 19 is the last; there is no slot 20.
+want0="DEV_STACK_SLOT=0
+DEV_STACK_PRISM_PORT=4000
+DEV_STACK_PROXY_PORT=4001
+DEV_STACK_RUNTIME_PORT=4700
+DEV_STACK_HOST_API_PORT=4701
+DEV_STACK_RUNTIME_NET=172.16.100
+DEV_STACK_BACKENDS_NET=172.16.101
+DEV_STACK_BUILDS_NET=172.16.102"
+want19="DEV_STACK_SLOT=19
+DEV_STACK_PRISM_PORT=4190
+DEV_STACK_PROXY_PORT=4191
+DEV_STACK_RUNTIME_PORT=4890
+DEV_STACK_HOST_API_PORT=4891
+DEV_STACK_RUNTIME_NET=172.16.157
+DEV_STACK_BACKENDS_NET=172.16.158
+DEV_STACK_BUILDS_NET=172.16.159"
+if [ "$(slot_env 0)" = "$want0" ] && [ "$(slot_env 19)" = "$want19" ] && ! slot_env 20 >/dev/null 2>&1; then
+  pass "slot 0 is Prism on 4000 and 172.16.100-102, slot 19 the last, and there is no slot 20"
+else
+  failed "the slot rule" "$(slot_env 0; slot_env 19; slot_env 20 2>&1)"
+fi
 
 # mutate NAME WHAT SED_EXPRESSION: the override edited, which must fail.
 mutate() {
@@ -119,39 +175,43 @@ mutate() {
   project "$dir" "$scratch/m-$1.yml"
   expect_checks fail "$2" "$dir"
 }
-mutate wildcard "the runtime published on every interface" 's/"127\.0\.0\.1:([0-9]+):4200"/"0.0.0.0:\1:4200"/'
-mutate nohost "the runtime published with no host address" 's/"127\.0\.0\.1:([0-9]+):4200"/"\1:4200"/'
-mutate testport "the runtime on the test suite's first worker probe" 's/"127\.0\.0\.1:[0-9]+:4200"/"127.0.0.1:4200:4200"/'
-mutate releaseport "the host API on the release boot's port" 's|(LOCUS_RUNTIME_HOST_API_URL=http://[0-9.]+:)[0-9]+|\14399|'
-mutate hstsport "Prism on the HSTS proof's port" 's/^x-prism: 127\.0\.0\.1:[0-9]+$/x-prism: 127.0.0.1:4123/'
+mutate wildcard "the runtime published on every interface" 's/"127\.0\.0\.1:(\$\{DEV_STACK_RUNTIME_PORT[^}]*\}):4200"/"0.0.0.0:\1:4200"/'
+mutate nohost "the runtime published with no host address" 's/"127\.0\.0\.1:(\$\{DEV_STACK_RUNTIME_PORT[^}]*\}):4200"/"\1:4200"/'
+mutate testport "the runtime on the test suite's endpoint" 's/"127\.0\.0\.1:\$\{DEV_STACK_RUNTIME_PORT[^}]*\}:4200"/"127.0.0.1:4002:4200"/'
+mutate hstsapi "the host API on the HSTS proof's port" 's|(LOCUS_RUNTIME_HOST_API_URL=http://.*\}\.1:)\$\{DEV_STACK_HOST_API_PORT[^}]*\}|\14123|'
+mutate hstsport "Prism on the HSTS proof's port" 's/^x-prism: 127\.0\.0\.1:.*$/x-prism: 127.0.0.1:4123/'
 mutate prismwild "Prism on every interface" 's/^x-prism: 127\.0\.0\.1:/x-prism: 0.0.0.0:/'
-mutate sameport "the host API on the runtime's port" 's|(LOCUS_RUNTIME_HOST_API_URL=http://[0-9.]+:)[0-9]+|\14700|'
-mutate published "a published image tag" '0,/image: cyfr-locus:dev/s||image: ghcr.io/cyfrworks/cyfr-locus:latest|'
-mutate guardimage "a guard on the published image" '/^  locus-builds-guard:$/,/container_name:/s|image: cyfr-locus:dev|image: ghcr.io/cyfrworks/cyfr-locus:latest|'
-mutate pulled "an image compose may pull" '0,/pull_policy: build/{/pull_policy: build/d}'
-mutate callback "the runtime's callbacks to the shipped cyfr service" 's|LOCUS_RUNTIME_HOST_API_URL=http://[0-9.]+:|LOCUS_RUNTIME_HOST_API_URL=http://cyfr:|'
-mutate loopback "the runtime's callbacks to its own loopback" 's|LOCUS_RUNTIME_HOST_API_URL=http://[0-9.]+:|LOCUS_RUNTIME_HOST_API_URL=http://127.0.0.1:|'
-mutate gateway "another gateway than the callbacks name" 's/gateway: 172\.16\.240\.1$/gateway: 172.16.240.126/'
+mutate proxyfixed "Prism's proxy on one port in every slot" 's/^x-prism-proxy: .*$/x-prism-proxy: 4501/'
+mutate sameport "the host API on the runtime's port" 's|(LOCUS_RUNTIME_HOST_API_URL=http://.*\}\.1:)\$\{DEV_STACK_HOST_API_PORT[^}]*\}|\1${DEV_STACK_RUNTIME_PORT}|'
+mutate published "a published image tag" '0,/image: \$\{DEV_STACK_IMAGE[^}]*\}/s||image: ghcr.io/cyfrworks/cyfr-locus:latest|'
+mutate guardimage "a guard on the published image" '/^  locus-builds-guard:$/,/container_name:/s|image: \$\{DEV_STACK_IMAGE\}|image: ghcr.io/cyfrworks/cyfr-locus:latest|'
+mutate pulled "an image compose may pull" '0,/pull_policy: never/{/pull_policy: never/d}'
+mutate built "an image compose builds" '0,/pull_policy: never/s//pull_policy: build/'
+mutate callback "the runtime's callbacks to the shipped cyfr service" 's|LOCUS_RUNTIME_HOST_API_URL=http://.*\}\.1:|LOCUS_RUNTIME_HOST_API_URL=http://cyfr:|'
+mutate loopback "the runtime's callbacks to its own loopback" 's|LOCUS_RUNTIME_HOST_API_URL=http://.*\}\.1:|LOCUS_RUNTIME_HOST_API_URL=http://127.0.0.1:|'
+mutate gateway "another gateway than the callbacks name" 's/gateway: \$\{DEV_STACK_RUNTIME_NET\}\.1$/gateway: ${DEV_STACK_RUNTIME_NET}.126/'
 mutate serviceid "the shipped service id, which CYFR does not dispatch to" 's/LOCUS_RUNTIME_SERVICE_ID=wrk_local/LOCUS_RUNTIME_SERVICE_ID=wrk_locus/'
 mutate joined "the security options joined to the shipped ones" 's/security_opt: !override/security_opt:/'
 mutate seccomp "the keeper's profile dropped" '/seccomp=\.\/apps/d'
 mutate noprofile "a profile the checkout does not hold" 's|seccomp=\./apps/locus/keeper/seccomp/keeper\.json|seccomp=./keeper.seccomp.json|'
 mutate nnp "no-new-privileges dropped" '/- no-new-privileges:true/d'
-mutate capability "a capability added to the backends service" 's/^(    container_name: cyfr-dev-locus-backends)$/\1\n    cap_add: [NET_ADMIN]/'
-mutate writable "a writable root for the builder" 's/^(    container_name: cyfr-dev-locus-builds)$/\1\n    read_only: false/'
-mutate hostnet "the backends service on the host's network" 's/^(    container_name: cyfr-dev-locus-backends)$/\1\n    network_mode: host/'
-mutate guardless "the builder outside its guard's namespace" 's/^(    container_name: cyfr-dev-locus-builds)$/\1\n    network_mode: bridge/'
-mutate shippedplane "a guard refusing the shipped control plane, not the host" 's/CYFR_GUARD_CONTROL_PLANE=172\.16\.241\.1/CYFR_GUARD_CONTROL_PLANE=172.16.230.2/'
-mutate noplane "a guard's control plane left as shipped" '/CYFR_GUARD_CONTROL_PLANE=172\.16\.242\.1/d'
-mutate inrange "a guard's address inside its network's ip_range" 's/ipv4_address: 172\.16\.241\.2/ipv4_address: 172.16.241.200/'
-mutate shippedsubnet "a dev network on the shipped runtime subnet" 's/172\.16\.241\./172.16.231./g'
-mutate pool "a dev network in Docker's address pools" 's/172\.16\.242\./172.18.242./g'
-mutate twice "two dev networks on one subnet" 's/172\.16\.242\./172.16.241./g'
-mutate unnamed "the checkout directory's project name" '/^name: cyfr-dev$/d'
-mutate container "the shipped container name" 's/container_name: cyfr-dev-locus-runtime/container_name: cyfr-locus-runtime/'
+mutate capability "a capability added to the backends service" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus-backends)$/\1\n    cap_add: [NET_ADMIN]/'
+mutate writable "a writable root for the builder" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus-builds)$/\1\n    read_only: false/'
+mutate hostnet "the backends service on the host's network" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus-backends)$/\1\n    network_mode: host/'
+mutate guardless "the builder outside its guard's namespace" 's/^(    container_name: \$\{DEV_STACK_PROJECT\}-locus-builds)$/\1\n    network_mode: bridge/'
+mutate shippedplane "a guard refusing the shipped control plane, not the host" 's/CYFR_GUARD_CONTROL_PLANE=\$\{DEV_STACK_BACKENDS_NET[^}]*\}\.1/CYFR_GUARD_CONTROL_PLANE=172.16.230.2/'
+mutate noplane "a guard's control plane left as shipped" '/CYFR_GUARD_CONTROL_PLANE=\$\{DEV_STACK_BUILDS_NET/d'
+mutate inrange "a guard's address inside its network's ip_range" 's/ipv4_address: \$\{DEV_STACK_BACKENDS_NET\}\.2/ipv4_address: ${DEV_STACK_BACKENDS_NET}.200/'
+mutate shippedsubnet "a dev network on the shipped runtime subnet" 's/\$\{DEV_STACK_BACKENDS_NET[^}]*\}/172.16.231/g'
+mutate pool "a dev network in Docker's address pools" 's/\$\{DEV_STACK_BUILDS_NET[^}]*\}/172.18.242/g'
+mutate twice "two dev networks on one subnet" 's/\$\{DEV_STACK_BUILDS_NET[^}]*\}/${DEV_STACK_BACKENDS_NET}/g'
+mutate onesubnet "one subnet in every slot" 's/\$\{DEV_STACK_RUNTIME_NET[^}]*\}/172.16.99/g'
+mutate unnamed "the checkout directory's project name" '/^name: /d'
+mutate seedless "one project for every worktree" 's/^name: .*$/name: cyfr-dev/'
+mutate container "the shipped container name" 's/container_name: \$\{DEV_STACK_PROJECT\}-locus-runtime/container_name: cyfr-locus-runtime/'
 
 # move NAME WHAT FILE SED_EXPRESSION: a check's own reservation moved onto
-# the stack, which must fail.
+# a slot, which must fail.
 move() {
   local dir="$scratch/s-$1"
   project "$dir" "$override"
@@ -161,53 +221,54 @@ move() {
     failed "$2 (the edit changed nothing)"
     return
   fi
-  expect_checks fail "$2" "$dir" "$dir.sources"
+  expect_checks fail "$2" "$dir" "$dir.sources" "$SLOTS"
 }
-move suite "the test suite's endpoint moved onto the runtime's port" config/test.exs 's/port: 4002\]/port: 4700]/'
-move boot "the release boot's host API moved onto the host API's port" tests/release-boot/release.sh 's/RELEASE_BOOT_HOST_API_PORT:-4398/RELEASE_BOOT_HOST_API_PORT:-4701/'
-move browser "the browser harness moved onto Prism's address" tests/browser/harness.sh 's/BROWSER_HOMES_PORT:-4410/BROWSER_HOMES_PORT:-4000/'
-move named "a proof naming the stack's container" tests/compose-proof/run.sh '1a # docker logs cyfr-dev-locus-builds'
+move suite "the test suite's endpoint moved onto slot 0's runtime port" config/test.exs 's/port: 4002\]/port: 4700]/'
+move hsts "the HSTS proof moved onto slot 13's Prism address" tests/proxy-hsts/run.sh 's/TLS_PORT=4123/TLS_PORT=4130/'
+move named "a proof naming a loop's container" tests/compose-proof/run.sh '1a # docker logs cyfr-dev-0123456789-locus-builds'
 move unread "a reservation the check can no longer read" tests/proxy-hsts/run.sh 's/TLS_PORT=4123/TLS_LISTENER=4123/'
 dir="$scratch/s-shipped"
 project "$dir" "$override"
-sed -i 's|- subnet: 172\.16\.234\.0/24|- subnet: 172.16.241.0/24|' "$dir/docker-compose.yml"
-expect_checks fail "the shipped edge network moved onto a dev subnet" "$dir"
+sed -i 's|- subnet: 172\.16\.234\.0/24|- subnet: 172.16.101.0/24|' "$dir/docker-compose.yml"
+expect_checks fail "the shipped edge network moved onto slot 0's backends subnet" "$dir"
 
-# scripts/dev-stack.sh at its command boundary: docker, mix, git and curl
-# stubbed on PATH, each recording what it is handed. What the script must
-# hand on comes from the resolved override, with Prism's, the runtime's and
-# the host API's ports moved to ones free here, so a dev stack running on
-# this host does not hold them: the server's settings
-# (compose_shape.py settings), and the key the documented derivation
-# gives for the runtime's id (.env.example: the root's HMAC of
-# `cyfr-locus/v1/runtime\n<id>`).
-free_port() { python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
-read -r prism_port runtime_port host_api_port < <(echo "$(free_port) $(free_port) $(free_port)")
-variant="$scratch/variant.yml"
-python3 -I - "$override" "$variant" "$prism_port" "$runtime_port" "$host_api_port" <<'PY'
-import re, sys
-src, dst, prism, runtime, host_api = sys.argv[1:]
-text = open(src).read()
-for pattern, value in [
-    (r"(?m)^(x-prism: 127\.0\.0\.1:)\d+$", r"\g<1>" + prism),
-    (r'"127\.0\.0\.1:\d+:4200"', '"127.0.0.1:%s:4200"' % runtime),
-    (r"(LOCUS_RUNTIME_HOST_API_URL=http://[\d.]+:)\d+", r"\g<1>" + host_api),
-]:
-    text, n = re.subn(pattern, value, text)
-    if n != 1:
-        sys.exit("the override's port declaration %s is not where the test moves it" % pattern)
-open(dst, "w").write(text)
-PY
-[ -s "$variant" ] || { failed "the override's ports could not be moved for the boundary cases"; exit 1; }
-project "$scratch/variant" "$variant"
-resolve "$scratch/variant" docker-compose.yml docker-compose.dev.yml >"$scratch/variant/dev.json"
-want_settings="$(python3 -I "$SHAPE" settings "$scratch/variant/dev.json" | sort)"
-want_id="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["services"]["locus-runtime"]["environment"]["LOCUS_RUNTIME_SERVICE_ID"])' "$scratch/variant/dev.json")"
-read -r want_project want_image < <(python3 -I -c 'import json, sys
-d = json.load(open(sys.argv[1]))
-print(d["name"], d["services"]["locus-runtime"]["image"])' "$scratch/variant/dev.json")
+# scripts/dev-stack.sh at its command boundary: docker, mix, curl and
+# scripts/image.sh stubbed, each recording what it is handed, in case
+# directories that are git repositories of their own. What the script must
+# hand on comes from the override resolved with the slot the case takes,
+# the case's project and the stub image: the server's settings
+# (compose_shape.py settings), and the key the documented derivation gives
+# for the runtime's id (.env.example: the root's HMAC of
+# `cyfr-locus/v1/runtime\n<id>`). The slots a case may take are those
+# whose ports this host leaves free; a loop running on the host keeps its
+# own.
+want_id=wrk_local
 derived() { printf 'cyfr-locus/v1/runtime\n%s' "$want_id" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$1" 2>/dev/null | sed 's/^.*= //'; }
 example_id="$(sed -n 's/^CYFR_GITHUB_CLIENT_ID=//p' "$ROOT/.env.example")"
+# value K NAME: slot K's NAME.
+value() { slot_env "$1" | sed -n "s/^$2=//p"; }
+# host_free K: nothing on this host listens on slot K's ports.
+host_free() {
+  python3 -I -c '
+import socket, sys
+for port in sys.argv[1:]:
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("127.0.0.1", int(port)))
+    except OSError:
+        sys.exit(1)
+    s.close()' "$(value "$1" DEV_STACK_PRISM_PORT)" "$(value "$1" DEV_STACK_PROXY_PORT)" \
+    "$(value "$1" DEV_STACK_RUNTIME_PORT)" "$(value "$1" DEV_STACK_HOST_API_PORT)"
+}
+# free_after K: the first slot from K on whose ports are free here.
+free_after() {
+  local k
+  for k in $(seq "$1" 19); do host_free "$k" && { echo "$k"; return 0; }; done
+  return 1
+}
+slot_a="$(free_after 0)" && slot_b="$(free_after $((slot_a + 1)))" && slot_c="$(free_after $((slot_b + 1)))" ||
+  { failed "three slots with free ports on this host"; echo "$((cases - failures))/$cases passed"; exit 1; }
 
 build="${DEV_STACK_BUILD:-$ROOT/${MIX_BUILD_PATH:-_build/${MIX_ENV:-dev}}}"
 ebins=""
@@ -219,12 +280,15 @@ stubs="$scratch/bin"
 mkdir -p "$stubs"
 cat >"$stubs/docker" <<'STUB'
 #!/usr/bin/env bash
-printf '%s|LOCUS_RUNTIME_KEY=%s|CYFR_LOCUS_BACKENDS_KEY=%s|CYFR_LOCUS_BUILDS_KEY=%s\n' "$*" \
-  "${LOCUS_RUNTIME_KEY-unset}" "${CYFR_LOCUS_BACKENDS_KEY-unset}" "${CYFR_LOCUS_BUILDS_KEY-unset}" >>"$STUB_LOG/docker.calls"
+printf '%s|LOCUS_RUNTIME_KEY=%s|CYFR_LOCUS_BACKENDS_KEY=%s|CYFR_LOCUS_BUILDS_KEY=%s|slot=%s\n' "$*" \
+  "${LOCUS_RUNTIME_KEY-unset}" "${CYFR_LOCUS_BACKENDS_KEY-unset}" "${CYFR_LOCUS_BUILDS_KEY-unset}" \
+  "${DEV_STACK_SLOT-unset}" >>"$STUB_LOG/docker.calls"
 env | sed -n 's/^\(COMPOSE_[A-Z_]*\)=.*/\1/p' | sort | tr '\n' ' ' >>"$STUB_LOG/docker.env"
 echo >>"$STUB_LOG/docker.env"
 case " $* " in
   *" config "*) exec "$REAL_DOCKER" "$@" ;;
+  " network ls -q ") [ -z "${STUB_NETWORKS:-}" ] || echo stub-networks ;;
+  " network inspect "*) printf '%s\n' "${STUB_NETWORKS:-}" ;;
   *" up "*)
     # Held inside the start until the test releases it, when it asks.
     if [ -n "${STUB_UP_HOLD:-}" ]; then
@@ -234,9 +298,14 @@ case " $* " in
     exit "${STUB_UP_STATUS:-0}"
     ;;
   *" logs "*) echo "stub: the runtime's last log line" ;;
-  " image inspect "*) exit "${STUB_IMAGE_STATUS:-0}" ;;
 esac
 exit 0
+STUB
+cat >"$stubs/image.sh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STUB_LOG/image.calls"
+[ -z "${STUB_IMAGE_STATUS:-}" ] || { echo "image: stub build failure" >&2; exit "$STUB_IMAGE_STATUS"; }
+echo "$STUB_IMAGE"
 STUB
 cat >"$stubs/mix" <<'STUB'
 #!/usr/bin/env bash
@@ -322,7 +391,7 @@ json.dump(files, open(store, "w"))
 run = {"status": "completed", "execution_id": "exec_stub", "result": result}
 print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": json.dumps(run)}]}}))
 STUB
-chmod +x "$stubs/docker" "$stubs/mix" "$stubs/curl"
+chmod +x "$stubs/docker" "$stubs/mix" "$stubs/curl" "$stubs/image.sh"
 
 run_dir=""
 token="dev-stack-test-token-$(openssl rand -hex 6)"
@@ -336,24 +405,29 @@ CYFR_LOCUS_RUNTIME_ROOT=$root_a
 CYFR_LOCUS_BACKENDS_KEY=$key_b
 CYFR_LOCUS_BUILDS_KEY=$key_c
 "
-compose_prefix="compose --env-file /dev/null --profile locus-builds -f docker-compose.yml -f docker-compose.dev.yml"
 services="locus-runtime locus-backends locus-builds"
 unset_keys="LOCUS_RUNTIME_KEY=unset|CYFR_LOCUS_BACKENDS_KEY=unset|CYFR_LOCUS_BUILDS_KEY=unset"
 
-# prepare SCRIPT NAME ENV_TEXT MODE: a project of its own holding SCRIPT,
-# the shipped and the variant compose files, .env.example, and .env as
-# ENV_TEXT at MODE (none for no file). Sets $case_dir.
+# prepare SCRIPT NAME ENV_TEXT MODE [SLOT]: a git repository of its own
+# holding SCRIPT and the run-names library, the shipped and the real
+# override compose files, .env.example, .env as ENV_TEXT at MODE (none for
+# no file), and SLOT remembered when given. Sets $case_dir and
+# $case_project.
 prepare() {
   case_dir="$scratch/case-$2"
-  rm -rf "$case_dir" && mkdir -p "$case_dir/scripts" "$case_dir/tmp" "$case_dir/log" "$case_dir/run"
+  rm -rf "$case_dir" && mkdir -p "$case_dir/scripts/lib" "$case_dir/tmp" "$case_dir/log" "$case_dir/run"
+  git init -q "$case_dir"
   cp "$1" "$case_dir/scripts/dev-stack.sh"
-  cp "$ROOT/docker-compose.yml" "$ROOT/.env.example" "$case_dir/"
-  cp "$variant" "$case_dir/docker-compose.dev.yml"
+  cp "$ROOT/scripts/lib/run-names.sh" "$case_dir/scripts/lib/"
+  cp "$stubs/image.sh" "$case_dir/scripts/image.sh"
+  cp "$ROOT/docker-compose.yml" "$ROOT/docker-compose.dev.yml" "$ROOT/.env.example" "$case_dir/"
   if [ "$4" != none ]; then
     printf '%s' "$3" >"$case_dir/.env"
     chmod "$4" "$case_dir/.env"
     cp -p "$case_dir/.env" "$case_dir/env.before"
   fi
+  if [ -n "${5:-}" ]; then mkdir -p "$case_dir/data" && echo "$5" >"$case_dir/data/dev-stack.slot"; fi
+  case_project="cyfr-dev-$(run_names_seed "$case_dir")"
 }
 
 # The script's environment: PATH, HOME, the stubs' settings and the
@@ -361,7 +435,7 @@ prepare() {
 # command.
 launch() {
   (cd "$case_dir" && exec env -i PATH="$stubs:$PATH" HOME="$HOME" LC_ALL=C.UTF-8 TMPDIR="$case_dir/tmp" \
-    XDG_RUNTIME_DIR="${run_dir:-$case_dir/run}" DEV_STACK_GRACE=1 \
+    XDG_RUNTIME_DIR="${run_dir:-$case_dir/run}" DEV_STACK_GRACE=1 STUB_IMAGE="$stub_image" \
     STUB_LOG="$case_dir/log" STUB_EBINS="$ebins" STUB_TOKEN="$token" REAL_DOCKER="$REAL_DOCKER" "$@" \
     python3 -I -c 'import os, signal, sys
 for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
@@ -373,7 +447,7 @@ os.execvp(sys.argv[1], sys.argv[1:])' bash scripts/dev-stack.sh $command >"$case
 # end. Leaves $case_dir with the stubs' records, out, err, env.before and
 # status.
 stack() {
-  prepare "$1" "$2" "$3" "$4"
+  prepare "$1" "$2" "$3" "$4" "${STACK_SLOT:-}"
   command="$5"
   shift 5
   launch "$@"
@@ -411,31 +485,35 @@ signalled() {
 record() { cat "$case_dir/log/$1" 2>/dev/null; }
 mode_of() { python3 -I -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
 status_is() { [ "$(cat "$case_dir/status")" = "$1" ] || echo "the run exited $(cat "$case_dir/status"), not $1: $(tail -n 3 "$case_dir/err")"; }
-# The stack's compose calls as `compose [-p PROJECT] ARGS`: the
-# resolution, which reads the project from the override, and every other
-# call, which names it.
-acting_prefix="compose --env-file /dev/null -p $want_project --profile locus-builds -f docker-compose.yml -f docker-compose.dev.yml"
-lock_call="compose --env-file /dev/null -f docker-compose.dev.yml config"
-# The resolution a start, down or clean makes once the lock has read the
-# project.
-resolve_call="compose -p $want_project config --format json $services|$unset_keys"
+# The stack's docker calls, each compose call as `compose ARGS`, which the
+# script makes with the case's project and its own files alone.
 calls() {
-  record docker.calls | grep -vF "$lock_call|" | while IFS= read -r line; do
-    line="${line/#"$compose_prefix" /compose }"
-    printf '%s\n' "${line/#"$acting_prefix" /compose -p $want_project }"
-  done
+  local acting="compose --env-file /dev/null -p $case_project --profile locus-builds -f docker-compose.yml -f docker-compose.dev.yml "
+  record docker.calls | while IFS= read -r line; do printf '%s\n' "${line/#"$acting"/compose }"; done
 }
-# The start: the image built once, then the services up from it with the
-# keys.
+# The expected calls: the leftovers removed at slot R (remembered, else 0),
+# the networks listed, the declarations at slot K, the start with the keys,
+# and the removal on the way out.
+leftovers() { echo "compose down --remove-orphans|$unset_keys|slot=$1"; }
+listed() { echo "network ls -q|$unset_keys|slot=unset"; }
+declared() { echo "compose config --format json $services|$unset_keys|slot=$1"; }
 up_call() {
-  printf '%s\n' "compose -p $want_project build locus-runtime|$unset_keys" \
-    "compose -p $want_project up --detach --no-build --wait $services|LOCUS_RUNTIME_KEY=$(derived "$1")|CYFR_LOCUS_BACKENDS_KEY=$2|CYFR_LOCUS_BUILDS_KEY=$3"
+  echo "compose up --detach --no-build --wait $services|LOCUS_RUNTIME_KEY=$(derived "$2")|CYFR_LOCUS_BACKENDS_KEY=$3|CYFR_LOCUS_BUILDS_KEY=$4|slot=$1"
 }
-# The whole run of docker: the resolution, the leftovers removed, the
-# start with the keys, and the removal on the way out.
+removed() { echo "compose down --remove-orphans|$unset_keys|slot=$1"; }
+# full_run K ROOT BACKENDS BUILDS [R]: the whole run of docker at slot K.
 full_run() {
-  printf '%s\n' "$resolve_call" "compose -p $want_project down --remove-orphans|$unset_keys" \
-    "$(up_call "$1" "$2" "$3")" "compose -p $want_project down --remove-orphans|$unset_keys"
+  printf '%s\n' "$(leftovers "${5:-0}")" "$(listed)" "$(declared "$1")" "$(up_call "$1" "$2" "$3" "$4")" "$(removed "$1")"
+}
+# The run's image.sh calls: the tag for the declarations, then the image
+# with the run's pid as its use (the pid its slot's claim records).
+claim_of() { cat "${run_dir:-$case_dir/run}/cyfr-dev-slot.$1.lock" 2>/dev/null; }
+image_calls() { printf '%s\n' "--undated --tag-only locus" "--undated --for $(claim_of "$1" | sed -n 's/^pid //p') locus"; }
+# want_settings K: the server's settings at slot K, from the override as
+# the case's project resolves it.
+want_settings() {
+  resolve "$case_dir" "$1" "$case_project" docker-compose.yml docker-compose.dev.yml >"$case_dir/want.json" &&
+    python3 -I "$SHAPE" settings "$case_dir/want.json" | sort
 }
 server_settings() { record server.env | grep -E '^(CYFR|LOCUS)_' | sort; }
 # Nothing of the run is left: no server, no watcher, no private directory.
@@ -446,19 +524,21 @@ nothing_left() {
   done
   [ -z "$(ls -A "$case_dir/tmp")" ] || echo "the run left $(ls -A "$case_dir/tmp") behind"
 }
+remembers() { [ "$(cat "$case_dir/data/dev-stack.slot" 2>/dev/null)" = "$1" ] || echo "the worktree remembers slot $(cat "$case_dir/data/dev-stack.slot" 2>/dev/null), not $1"; }
 
 # Each case prints why it fails, nothing when it holds.
 case_provision() {
   stack "$1" provision "" none "" STUB_SERVER_STATUS=0
   status_is 0
   [ "$(mode_of "$case_dir/.env")" = 0o600 ] || echo ".env is $(mode_of "$case_dir/.env"), not 0o600"
-  local setup root backends builds
+  local setup root backends builds port
+  port="$(value "$slot_a" DEV_STACK_PRISM_PORT)"
   setup="$(sed -n 's/^CYFR_SETUP_TOKEN=//p' "$case_dir/.env")"
   root="$(sed -n 's/^CYFR_LOCUS_RUNTIME_ROOT=//p' "$case_dir/.env")"
   backends="$(sed -n 's/^CYFR_LOCUS_BACKENDS_KEY=//p' "$case_dir/.env")"
   # The builds key, which a boot refuses without its URL, is the run's
   # alone: the builder's and the server's, never .env's.
-  builds="$(record docker.calls | sed -n 's/^.* up .*|CYFR_LOCUS_BUILDS_KEY=//p')"
+  builds="$(record docker.calls | sed -n 's/^.* up .*|CYFR_LOCUS_BUILDS_KEY=\([0-9a-f]*\)|.*$/\1/p')"
   [ "$(cat "$case_dir/.env")" = "CYFR_GITHUB_CLIENT_ID=$example_id
 CYFR_SETUP_TOKEN=$setup
 CYFR_LOCUS_RUNTIME_ROOT=$root
@@ -468,20 +548,22 @@ CYFR_LOCUS_BACKENDS_KEY=$backends" ] || echo ".env holds $(printf '%q' "$(cat "$
   done
   [ "$(printf '%s\n' "$setup" "$root" "$backends" "$builds" | sort -u | wc -l)" = 4 ] || echo "the minted keys are not four"
   # The one secret printed: the setup link, as `cyfr init` prints it.
-  grep -qxF "dev-stack: set up its first person, who administers it, at http://localhost:$prism_port/setup#$setup" "$case_dir/out" ||
+  grep -qxF "dev-stack: set up its first person, who administers it, at http://localhost:$port/setup#$setup" "$case_dir/out" ||
     echo "the run did not print the setup link: $(cat "$case_dir/out")"
   grep -qxF "dev-stack: .env is mode 0600 and now sets CYFR_GITHUB_CLIENT_ID, CYFR_SETUP_TOKEN, CYFR_LOCUS_RUNTIME_ROOT, CYFR_LOCUS_BACKENDS_KEY." "$case_dir/out" ||
     echo "the run did not say what it wrote: $(cat "$case_dir/out")"
-  [ "$(calls)" = "$(full_run "$root" "$backends" "$builds")" ] || echo "docker was handed: $(calls)"
-  [ "$(server_settings)" = "$(printf '%s\n' "$want_settings" "CYFR_LOCUS_BUILDS_KEY=$builds" | sort)" ] ||
+  [ "$(calls)" = "$(full_run "$slot_a" "$root" "$backends" "$builds")" ] || echo "docker was handed: $(calls)"
+  [ "$(record image.calls)" = "$(image_calls "$slot_a")" ] || echo "image.sh was handed: $(record image.calls)"
+  [ "$(server_settings)" = "$(printf '%s\n' "$(want_settings "$slot_a")" "CYFR_LOCUS_BUILDS_KEY=$builds" | sort)" ] ||
     echo "the server's settings: $(server_settings)"
-  record server.env | grep -qE "^(LOCUS_RUNTIME_KEY|CYFR_LOCUS_(RUNTIME_ROOT|BACKENDS_KEY))=" &&
-    echo "a key reached the server's environment"
-  grep -qxF "dev-stack: CYFR starts at http://localhost:$prism_port and reloads as its files change." "$case_dir/out" ||
+  record server.env | grep -qE "^(LOCUS_RUNTIME_KEY|CYFR_LOCUS_(RUNTIME_ROOT|BACKENDS_KEY)|DEV_STACK_(SLOT|PROJECT|IMAGE|[A-Z_]*_(PORT|NET)))=" &&
+    echo "a key or a slot's value reached the server's environment"
+  grep -qxF "dev-stack: CYFR starts at http://localhost:$port and reloads as its files change." "$case_dir/out" ||
     echo "the run did not print Prism's address: $(cat "$case_dir/out")"
   for key in "$root" "$backends" "$builds" "$(derived "$root")"; do
     if grep -qF "$key" "$case_dir/out" "$case_dir/err"; then echo "a key reached the output"; fi
   done
+  remembers "$slot_a"
   nothing_left
 }
 case_retained() {
@@ -491,26 +573,29 @@ case_retained() {
     stack "$1" retained "$text" 0644 "" STUB_SERVER_STATUS=0
     status_is 0
     cmp -s "$case_dir/.env" "$case_dir/env.before" || echo ".env changed from $(printf '%q' "$text") to $(printf '%q' "$(cat "$case_dir/.env")")"
-    [ "$(calls)" = "$(full_run "$root_a" "$key_b" "$key_c")" ] || echo "on $(printf '%q' "$text") docker was handed: $(calls)"
+    [ "$(calls)" = "$(full_run "$slot_a" "$root_a" "$key_b" "$key_c")" ] || echo "on $(printf '%q' "$text") docker was handed: $(calls)"
     if grep -qF "$(derived "$root_a")" "$case_dir/out" "$case_dir/err"; then echo "the key reached the output"; fi
     if grep -qF "$setup_a" "$case_dir/out" "$case_dir/err"; then echo "a run that wrote no setup token printed it"; fi
   done
 }
+# A setting .env holds that disagrees with the slot the loop takes is
+# refused by name, before any container starts or image builds.
 case_refused() {
   local line name
   for line in "CYFR_LOCUS_RUNTIME_WORKERS = wrk_elsewhere=http://127.0.0.1:4999" "CYFR_HOST_API_BIND=0.0.0.0 # all of them" \
-    "CYFR_HOST_API_URL=http://cyfr:4300" "CYFR_PORT=4000" "CYFR_LOCUS_BACKENDS_URL=http://locus-backends:4101"; do
+    "CYFR_HOST_API_URL=http://cyfr:4300" "CYFR_PORT=4999" "CYFR_PROXY_PORT=4999" "CYFR_LOCUS_BACKENDS_URL=http://locus-backends:4101"; do
     name="${line%%[ =]*}"
     stack "$1" refused "$complete$line"$'\n' 0644 "" STUB_SERVER_STATUS=0
     [ "$(cat "$case_dir/status")" != 0 ] || echo "the run accepted $line"
     grep -qF "dev-stack: $name is " "$case_dir/err" || echo "the refusal does not name $name: $(cat "$case_dir/err")"
-    [ "$(calls)" = "$resolve_call" ] || echo "docker ran past a disagreeing $name: $(calls)"
+    [ "$(calls)" = "$(printf '%s\n' "$(leftovers 0)" "$(listed)" "$(declared "$slot_a")")" ] || echo "docker ran past a disagreeing $name: $(calls)"
+    [ "$(record image.calls)" = "--undated --tag-only locus" ] || echo "the image was built past a disagreeing $name: $(record image.calls)"
     [ -z "$(record server.env)" ] || echo "the server started though $name disagreed"
     cmp -s "$case_dir/.env" "$case_dir/env.before" || echo ".env changed on a refusal of $name"
   done
   stack "$1" empty-override "$complete" 0644 "" CYFR_LOCUS_BACKENDS_KEY=
   grep -qF "CYFR_LOCUS_BACKENDS_KEY is set empty in the environment" "$case_dir/err" || echo "the empty override's refusal: $(cat "$case_dir/err")"
-  [ "$(calls | cut -d'|' -f1)" = "compose -p $want_project config --format json $services" ] || echo "docker ran under an empty key override: $(calls)"
+  calls | grep -q " up " && echo "docker started the stack under an empty key override: $(calls)"
 }
 case_release_root() {
   local sentence="dev-stack: RELEASE_ROOT is set, and it names a release: the dev stack runs CYFR from the checkout, which reads the .env at its root. Unset RELEASE_ROOT and run again."
@@ -518,47 +603,118 @@ case_release_root() {
   mkdir -p "$scratch/release"
   printf '%s' "$complete" >"$scratch/release/.env"
   for command in "" check; do
-    stack "$1" release-root "CYFR_SETUP_TOKEN=$setup_a"$'\n' 0644 "$command" \
+    STACK_SLOT="$slot_a" stack "$1" release-root "CYFR_SETUP_TOKEN=$setup_a"$'\n' 0644 "$command" \
       RELEASE_ROOT="$scratch/release" CYFR_TOKEN="$token" STUB_SERVER_STATUS=0
     [ "$(cat "$case_dir/status")" != 0 ] || echo "${command:-the loop} exited 0 under RELEASE_ROOT"
     [ "$(tail -n 1 "$case_dir/err")" = "$sentence" ] || echo "${command:-the loop} did not end on the RELEASE_ROOT refusal: $(cat "$case_dir/err")"
     cmp -s "$case_dir/.env" "$case_dir/env.before" || echo "${command:-the loop} changed .env under RELEASE_ROOT: $(cat "$case_dir/.env")"
-    [ "$(calls)" = "$(if [ -z "$command" ]; then echo "$resolve_call"; else echo "compose config --format json $services|$unset_keys"; fi)" ] ||
-      echo "${command:-the loop} ran docker under RELEASE_ROOT: $(calls)"
+    calls | grep -q " up " && echo "${command:-the loop} started the stack under RELEASE_ROOT: $(calls)"
     [ -z "$(record server.env)$(record curl.actions)" ] || echo "${command:-the loop} served or ran a component under RELEASE_ROOT"
   done
 }
-case_prism_held() {
+# hold PORT: a listener on 127.0.0.1:PORT until the case ends. Sets $holder.
+hold() {
   python3 -I -c 'import socket, sys, time
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(120)' "$prism_port" &
-  local holder=$!
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(120)' "$1" &
+  holder=$!
   holders+=("$holder")
-  for _ in $(seq 1 50); do ss -Hltn "sport = :$prism_port" | grep -q . && break; sleep 0.1; done
-  stack "$1" prism-held "$complete" 0600 "" STUB_SERVER_STATUS=0
+  for _ in $(seq 1 50); do ss -Hltn "sport = :$1" | grep -q . && break; sleep 0.1; done
+}
+# A slot whose Prism port something else holds is passed: the loop takes
+# the next free slot, says why, prints that slot's address and remembers it.
+case_port_held() {
+  local port
+  port="$(value "$slot_a" DEV_STACK_PRISM_PORT)"
+  hold "$port"
+  STACK_SLOT="$slot_a" stack "$1" port-held "$complete" 0600 "" STUB_SERVER_STATUS=0
   kill "$holder" 2>/dev/null
   wait "$holder" 2>/dev/null
-  [ "$(cat "$case_dir/status")" != 0 ] || echo "the run went on with Prism's address held"
-  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: 127.0.0.1:$prism_port, Prism's address, is held by python3 (pid $holder). Stop it and run again." ] ||
-    echo "the refusal does not name the holder: $(cat "$case_dir/err")"
-  [ "$(calls)" = "$resolve_call" ] || echo "docker ran with Prism's address held: $(calls)"
-  [ -z "$(record server.env)" ] || echo "the server started with Prism's address held"
+  status_is 0
+  grep -qxF "dev-stack: slot $slot_a is taken (127.0.0.1:$port, held by python3 (pid $holder)), so this worktree's loop takes slot $slot_b." "$case_dir/out" ||
+    echo "the run did not say why it passed slot $slot_a: $(cat "$case_dir/out")"
+  grep -qxF "dev-stack: CYFR starts at http://localhost:$(value "$slot_b" DEV_STACK_PRISM_PORT) and reloads as its files change." "$case_dir/out" ||
+    echo "the run did not print slot $slot_b's address: $(cat "$case_dir/out")"
+  [ "$(calls)" = "$(full_run "$slot_b" "$root_a" "$key_b" "$key_c" "$slot_a")" ] || echo "docker was handed: $(calls)"
+  remembers "$slot_b"
+}
+# A slot one of whose subnets a Docker network overlaps is passed.
+case_network_overlap() {
+  local net
+  net="$(value "$slot_a" DEV_STACK_BUILDS_NET)"
+  stack "$1" network-overlap "$complete" 0600 "" STUB_SERVER_STATUS=0 STUB_NETWORKS="someones_net $net.64/26"
+  status_is 0
+  grep -qxF "dev-stack: slot $slot_a is taken (the network someones_net ($net.64/26)), so this worktree's loop takes slot $slot_b." "$case_dir/out" ||
+    echo "the run did not say which network holds slot $slot_a: $(cat "$case_dir/out")"
+  [ "$(calls | sed -n 4p)" = "$(declared "$slot_b")" ] || echo "the loop did not take slot $slot_b: $(calls)"
+}
+# claim_slot K CHECKOUT: slot K claimed by another loop of the host, in
+# $run_dir, until the case ends.
+claim_slot() {
+  local file="$run_dir/cyfr-dev-slot.$1.lock"
+  printf 'pid 4242\ncheckout %s\n' "$2" >"$file"
+  flock "$file" sleep 120 &
+  holders+=("$!")
+  for _ in $(seq 1 50); do flock -n "$file" true || break; sleep 0.1; done
+}
+# The slot a worktree remembers is reused while it is free; when another
+# loop claims it, the loop takes the first free slot and says whose it is.
+case_remembered() {
+  run_dir="$scratch/case-remembered-run"
+  rm -rf "$run_dir" && mkdir -p "$run_dir"
+  STACK_SLOT="$slot_b" stack "$1" remembered "$complete" 0600 "" STUB_SERVER_STATUS=0
+  status_is 0
+  [ "$(calls | sed -n 3p)" = "$(declared "$slot_b")" ] || echo "the remembered slot $slot_b was not reused: $(calls)"
+  grep -qF "is taken" "$case_dir/out" && echo "the run said a slot was taken: $(cat "$case_dir/out")"
+  claim_slot "$slot_b" /the/other/worktree
+  STACK_SLOT="$slot_b" stack "$1" remembered-taken "$complete" 0600 "" STUB_SERVER_STATUS=0
+  status_is 0
+  grep -qxF "dev-stack: slot $slot_b is taken (the loop of /the/other/worktree (pid 4242)), so this worktree's loop takes slot $slot_a." "$case_dir/out" ||
+    echo "the run did not name the remembered slot's loop: $(cat "$case_dir/out")"
+  [ "$(calls | sed -n 3p)" = "$(declared "$slot_a")" ] || echo "the loop did not take the first free slot: $(calls)"
+  remembers "$slot_a"
+  run_dir=""
+}
+# With every slot taken the loop refuses, naming each slot's holder, and
+# starts nothing.
+case_all_taken() {
+  local k want=()
+  run_dir="$scratch/case-all-run"
+  rm -rf "$run_dir" && mkdir -p "$run_dir"
+  for k in $SLOTS; do
+    claim_slot "$k" "/worktree/$k"
+    want+=("slot $k: the loop of /worktree/$k (pid 4242)")
+  done
+  stack "$1" all-taken "$complete" 0600 "" STUB_SERVER_STATUS=0
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the run went on with every slot taken"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: every slot is taken: $(printf '%s; ' "${want[@]}" | sed 's/; $//')." ] ||
+    echo "the refusal does not name every slot's holder: $(tail -n 1 "$case_dir/err")"
+  [ "$(calls)" = "$(printf '%s\n' "$(leftovers 0)" "$(listed)")" ] || echo "docker ran with every slot taken: $(calls)"
+  [ -z "$(record server.env)" ] || echo "the server started with every slot taken"
+  run_dir=""
 }
 case_start_fails() {
   stack "$1" start-fails "$complete" 0600 "" STUB_UP_STATUS=1 STUB_SERVER_STATUS=0
   [ "$(cat "$case_dir/status")" != 0 ] || echo "the run exited 0 though the containers did not start"
-  [ "$(calls)" = "$(printf '%s\n' "$resolve_call" "compose -p $want_project down --remove-orphans|$unset_keys" \
-    "$(up_call "$root_a" "$key_b" "$key_c")" "compose -p $want_project logs --tail 30|$unset_keys" "compose -p $want_project down --remove-orphans|$unset_keys")" ] ||
+  [ "$(calls)" = "$(printf '%s\n' "$(leftovers 0)" "$(listed)" "$(declared "$slot_a")" \
+    "$(up_call "$slot_a" "$root_a" "$key_b" "$key_c")" "compose logs --tail 30|$unset_keys|slot=$slot_a" "$(removed "$slot_a")")" ] ||
     echo "after a failed start docker was handed: $(calls)"
   grep -qF "stub: the runtime's last log line" "$case_dir/err" || echo "the failed start did not show the containers' logs: $(cat "$case_dir/err")"
   [ -z "$(record server.env)" ] || echo "the server started though the containers did not"
   if grep -qF "CYFR starts at" "$case_dir/out"; then echo "the run printed its address after a failed start"; fi
   nothing_left
 }
+case_image_fails() {
+  stack "$1" image-fails "$complete" 0600 "" STUB_SERVER_STATUS=0 STUB_IMAGE_STATUS=1
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the run exited 0 though the image did not build"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: scripts/image.sh gave no Locus image for this tree; its output ends above." ] ||
+    echo "the run did not end on the image's failure: $(cat "$case_dir/err")"
+  calls | grep -q " up " && echo "the stack started without an image: $(calls)"
+}
 case_server_ends() {
   stack "$1" server-ends "$complete" 0600 "" STUB_SERVER_STATUS=3
   status_is 3
-  [ "$(calls)" = "$(full_run "$root_a" "$key_b" "$key_c")" ] || echo "after the server ended docker was handed: $(calls)"
+  [ "$(calls)" = "$(full_run "$slot_a" "$root_a" "$key_b" "$key_c")" ] || echo "after the server ended docker was handed: $(calls)"
   nothing_left
 }
 case_interrupted() {
@@ -568,31 +724,37 @@ case_interrupted() {
     signalled "$1" "signal-$signal" "$signal"
     status_is "$want"
     [ "$(record server.events)" = $'started\nstopped' ] || echo "on $signal the server was not stopped: $(record server.events)"
-    [ "$(calls)" = "$(full_run "$root_a" "$key_b" "$key_c")" ] || echo "on $signal docker was handed: $(calls)"
+    [ "$(calls)" = "$(full_run "$slot_a" "$root_a" "$key_b" "$key_c")" ] || echo "on $signal docker was handed: $(calls)"
     nothing_left
   done
 }
 case_check() {
-  stack "$1" check "$complete" 0644 check CYFR_TOKEN="$token"
+  STACK_SLOT="$slot_b" stack "$1" check "$complete" 0644 check CYFR_TOKEN="$token"
   status_is 0
-  [ "$(record curl.actions | awk '{print $1, $2}' | sort -u)" = "delete http://127.0.0.1:$prism_port/mcp
-read_text http://127.0.0.1:$prism_port/mcp
-write_text http://127.0.0.1:$prism_port/mcp" ] || echo "the check ran: $(record curl.actions)"
+  local mcp="http://127.0.0.1:$(value "$slot_b" DEV_STACK_PRISM_PORT)/mcp"
+  [ "$(record curl.actions | awk '{print $1, $2}' | sort -u)" = "delete $mcp
+read_text $mcp
+write_text $mcp" ] || echo "the check ran: $(record curl.actions)"
   [ "$(record curl.headers | sort -u)" = "file=0o600 dir=0o700 bearer=ok" ] || echo "the bearer's header file: $(record curl.headers)"
   if grep -qF "$token" "$case_dir/log/curl.calls" "$case_dir/out" "$case_dir/err"; then echo "the token reached curl's arguments or the output"; fi
-  [ "$(calls)" = "compose config --format json $services|$unset_keys" ] || echo "the check ran docker: $(calls)"
+  [ "$(calls)" = "$(declared "$slot_b")" ] || echo "the check ran docker: $(calls)"
+  [ "$(record image.calls)" = "--undated --tag-only locus" ] || echo "the check asked for an image: $(record image.calls)"
   [ "$(cat "$case_dir/log/store.json")" = "{}" ] || echo "the check left a file in the athanor: $(cat "$case_dir/log/store.json")"
   nothing_left
+  stack "$1" check-nothing "$complete" 0644 check CYFR_TOKEN="$token"
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the check went on in a worktree whose loop never started"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: no loop has started in this worktree, so it has no slot; scripts/dev-stack.sh starts one." ] ||
+    echo "the check did not say no loop started: $(cat "$case_dir/err")"
 }
 case_failed_read() {
-  stack "$1" failed-read "$complete" 0600 check CYFR_TOKEN="$token" STUB_FAIL=read_text
+  STACK_SLOT="$slot_a" stack "$1" failed-read "$complete" 0600 check CYFR_TOKEN="$token" STUB_FAIL=read_text
   [ "$(cat "$case_dir/status")" != 0 ] || echo "check exited 0 though its read failed"
   [ "$(record curl.actions | awk '{print $1}')" = $'write_text\nread_text\ndelete' ] || echo "after the failed read the check ran: $(record curl.actions)"
   [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: read_text: refused: stub read_text failure" ] || echo "the check did not end with the read's failure: $(cat "$case_dir/err")"
   [ "$(cat "$case_dir/log/store.json")" = "{}" ] || echo "the failed read left its file: $(cat "$case_dir/log/store.json")"
   nothing_left
 
-  stack "$1" failed-delete "$complete" 0600 check CYFR_TOKEN="$token" STUB_FAIL=read_text,delete
+  STACK_SLOT="$slot_a" stack "$1" failed-delete "$complete" 0600 check CYFR_TOKEN="$token" STUB_FAIL=read_text,delete
   [ "$(record curl.actions | awk '{print $1}')" = $'write_text\nread_text\ndelete' ] || echo "with the delete failing too the check ran: $(record curl.actions)"
   local left
   left="$(record curl.actions | awk 'NR == 1 {print $3}')"
@@ -600,7 +762,7 @@ case_failed_read() {
   [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: read_text: refused: stub read_text failure" ] || echo "the check did not end with the read's failure: $(cat "$case_dir/err")"
 }
 case_failed_parse() {
-  stack "$1" failed-parse "$complete" 0600 check CYFR_TOKEN="$token" STUB_READ_RESULT='[]'
+  STACK_SLOT="$slot_a" stack "$1" failed-parse "$complete" 0600 check CYFR_TOKEN="$token" STUB_READ_RESULT='[]'
   [ "$(cat "$case_dir/status")" != 0 ] || echo "check exited 0 though its read answered no content"
   [ "$(record curl.actions | awk '{print $1}')" = $'write_text\nread_text\ndelete' ] || echo "after a read with no content the check ran: $(record curl.actions)"
   [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: read_text: the run answered no content: []" ] || echo "the check did not end with the read's failure: $(cat "$case_dir/err")"
@@ -611,7 +773,7 @@ case_project_env() {
   stack "$1" project-env "$complete" 0600 "" STUB_SERVER_STATUS=0 \
     COMPOSE_PROJECT_NAME=dev-stack-neighbour COMPOSE_FILE=neighbour.yml COMPOSE_PROFILES=public
   status_is 0
-  [ "$(calls)" = "$(full_run "$root_a" "$key_b" "$key_c")" ] || echo "with a neighbour's COMPOSE_* docker was handed: $(calls)"
+  [ "$(calls)" = "$(full_run "$slot_a" "$root_a" "$key_b" "$key_c")" ] || echo "with a neighbour's COMPOSE_* docker was handed: $(calls)"
   [ -z "$(record docker.env | tr -d ' \n')" ] || echo "docker saw the caller's $(record docker.env | sort -u | tr '\n' ' ')"
   nothing_left
 }
@@ -619,7 +781,7 @@ case_server_child() {
   stack "$1" server-child "$complete" 0600 "" STUB_SERVER_STATUS=3 STUB_SERVER_CHILD=1
   status_is 3
   [ -s "$case_dir/log/watcher.pid" ] || echo "the server left no child to look for"
-  [ "$(calls)" = "$(full_run "$root_a" "$key_b" "$key_c")" ] || echo "after the server ended docker was handed: $(calls)"
+  [ "$(calls)" = "$(full_run "$slot_a" "$root_a" "$key_b" "$key_c")" ] || echo "after the server ended docker was handed: $(calls)"
   nothing_left
 }
 case_blank_root() {
@@ -627,13 +789,13 @@ case_blank_root() {
   [ "$(cat "$case_dir/status")" != 0 ] || echo "the run went on with a root of one space"
   grep -qF "dev-stack: CYFR_LOCUS_RUNTIME_ROOT holds only whitespace" "$case_dir/err" || echo "the refusal: $(cat "$case_dir/err")"
   [ ! -s "$case_dir/.env" ] || echo ".env gained $(cat "$case_dir/.env" | sed 's/=.*/=…/' | tr '\n' ' ') on the refusal"
-  [ "$(calls)" = "$resolve_call" ] || echo "docker ran past a blank root: $(calls)"
+  calls | grep -q " up " && echo "docker started the stack past a blank root: $(calls)"
 }
 case_locked() {
   local command holder lock
-  for command in "" down clean; do
+  for command in "" down; do
     prepare "$1" locked "$complete" 0600
-    lock="$case_dir/run/$want_project.dev-stack.lock"
+    lock="$case_dir/run/$case_project.dev-stack.lock"
     printf 'pid 4242\ncheckout /elsewhere\n' >"$lock"
     flock "$lock" sleep 60 &
     holder=$!
@@ -643,40 +805,45 @@ case_locked() {
     echo "$?" >"$case_dir/status"
     kill "$holder" 2>/dev/null
     wait "$holder" 2>/dev/null
-    [ "$(cat "$case_dir/status")" != 0 ] || echo "${command:-the loop} went on while another run held the stack"
-    [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: another run of the dev stack (pid 4242, checkout /elsewhere) holds $lock; stop it, or wait for it to end." ] ||
+    [ "$(cat "$case_dir/status")" != 0 ] || echo "${command:-the loop} went on while another run held the worktree's stack"
+    [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: another run of this worktree's dev stack (pid 4242, checkout /elsewhere) holds $lock; stop it, or wait for it to end." ] ||
       echo "${command:-the loop} did not name the holder: $(cat "$case_dir/err")"
-    [ -z "$(calls)" ] || echo "${command:-the loop} ran docker while another run held the stack: $(calls)"
+    [ -z "$(calls)" ] || echo "${command:-the loop} ran docker while another run held the worktree's stack: $(calls)"
     [ ! -e "$case_dir/.env" ] || cmp -s "$case_dir/.env" "$case_dir/env.before" || echo "${command:-the loop} changed .env while refused"
   done
 }
-# The loop from two checkouts on one host: the first held inside its
-# start, the second refused naming the first, the first's containers
-# untouched.
+# The loops of two worktrees on one host: the first held inside its
+# start; the second takes the next slot and runs, and its `down` removes
+# only its own project's containers; the first's are untouched.
 case_two_checkouts() {
   local first second runner
   run_dir="$scratch/case-two-run"
   rm -rf "$run_dir" && mkdir -p "$run_dir"
   prepare "$1" two-first "$complete" 0600
   first="$case_dir"
+  local first_project="$case_project"
   command=""
   launch STUB_SERVER_STATUS=0 STUB_UP_HOLD=1 &
   runner=$!
   for _ in $(seq 1 600); do [ -e "$first/log/up.held" ] && break; kill -0 "$runner" 2>/dev/null || break; sleep 0.1; done
-  [ -e "$first/log/up.held" ] || echo "the first checkout never reached its start"
-  for command in "" down clean; do
-    prepare "$1" two-second "$complete" 0600
-    second="$case_dir"
-    launch STUB_SERVER_STATUS=0
-    echo "$?" >"$second/status"
-    [ "$(cat "$second/status")" != 0 ] || echo "${command:-the loop} from a second checkout went on while the first started"
-    grep -qF "another run of the dev stack (pid " "$second/err" && grep -qF ", checkout $first) holds $run_dir/$want_project.dev-stack.lock" "$second/err" ||
-      echo "${command:-the loop} from a second checkout did not name the first: $(cat "$second/err")"
-    [ -z "$(calls)" ] || echo "${command:-the loop} from a second checkout ran docker: $(calls)"
-  done
-  case_dir="$first"
-  [ "$(calls)" = "$(printf '%s\n' "$resolve_call" "compose -p $want_project down --remove-orphans|$unset_keys" "$(up_call "$root_a" "$key_b" "$key_c")")" ] ||
-    echo "the first checkout's containers saw: $(calls)"
+  [ -e "$first/log/up.held" ] || echo "the first worktree's loop never reached its start"
+  prepare "$1" two-second "$complete" 0600
+  second="$case_dir"
+  [ "$case_project" != "$first_project" ] || echo "the two worktrees have one project, $case_project"
+  launch STUB_SERVER_STATUS=0
+  echo "$?" >"$second/status"
+  status_is 0
+  grep -qxF "dev-stack: slot $slot_a is taken (the loop of $first (pid $(claim_of "$slot_a" | sed -n 's/^pid //p'))), so this worktree's loop takes slot $slot_b." "$second/out" ||
+    echo "the second worktree's loop did not name the first's: $(cat "$second/out")"
+  [ "$(calls)" = "$(full_run "$slot_b" "$root_a" "$key_b" "$key_c")" ] || echo "the second worktree's loop handed docker: $(calls)"
+  command=down
+  launch
+  echo "$?" >"$second/status"
+  status_is 0
+  [ "$(calls | tail -n 1)" = "$(removed "$slot_b")" ] || echo "the second worktree's down handed docker: $(calls | tail -n 1)"
+  case_dir="$first" case_project="$first_project"
+  [ "$(calls)" = "$(printf '%s\n' "$(leftovers 0)" "$(listed)" "$(declared "$slot_a")" "$(up_call "$slot_a" "$root_a" "$key_b" "$key_c")")" ] ||
+    echo "the first worktree's containers saw: $(calls)"
   touch "$first/log/up.release"
   wait "$runner"
   echo "$?" >"$first/status"
@@ -693,11 +860,11 @@ recorded_server() {
   holders+=("$orphan")
   sleep 0.2
   printf 'pid 4242\ncheckout /elsewhere\nserver %s %s\n' "$orphan" "${1:-$(ps -o lstart= -p "$orphan")}" \
-    >"$case_dir/run/$want_project.dev-stack.lock"
+    >"$case_dir/run/$case_project.dev-stack.lock"
 }
 case_down_orphan() {
   local pid
-  prepare "$1" down-orphan "$complete" 0600
+  prepare "$1" down-orphan "$complete" 0600 "$slot_b"
   recorded_server
   pid="$orphan"
   command=down
@@ -706,27 +873,34 @@ case_down_orphan() {
   status_is 0
   sleep 0.2
   if kill -0 "$pid" 2>/dev/null; then echo "down left the killed run's server $pid running"; kill -KILL "$pid"; fi
-  [ "$(calls)" = "$(printf '%s\n' "$resolve_call" "compose -p $want_project down --remove-orphans|$unset_keys")" ] ||
-    echo "down handed docker: $(calls)"
-  [ ! -s "$case_dir/run/$want_project.dev-stack.lock" ] || echo "down left the record: $(cat "$case_dir/run/$want_project.dev-stack.lock")"
+  [ "$(calls)" = "$(removed "$slot_b")" ] || echo "down handed docker: $(calls)"
+  [ ! -s "$case_dir/run/$case_project.dev-stack.lock" ] || echo "down left the record: $(cat "$case_dir/run/$case_project.dev-stack.lock")"
+
+  # A start refuses while the killed run's server still serves.
+  prepare "$1" start-orphan "$complete" 0600
+  recorded_server
+  pid="$orphan"
+  command=""
+  launch STUB_SERVER_STATUS=0
+  echo "$?" >"$case_dir/status"
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "a start went on beside the server a killed run left"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: the server a killed run of this worktree left still runs (process group $pid); \`scripts/dev-stack.sh down\` stops it." ] ||
+    echo "the start did not name the killed run's server: $(cat "$case_dir/err")"
+  [ -z "$(calls)" ] || echo "a start beside a killed run's server ran docker: $(calls)"
+  kill -KILL "$pid" 2>/dev/null
 
   # A record whose group is now some other process's stops nothing.
   prepare "$1" down-stale "$complete" 0600
   recorded_server "Thu Jan  1 00:00:00 1970"
   pid="$orphan"
+  command=down
   launch
   echo "$?" >"$case_dir/status"
   status_is 0
   kill -0 "$pid" 2>/dev/null || echo "down stopped process group $pid, which the record's start time does not match"
   kill -KILL "$pid" 2>/dev/null
 }
-case_clean() {
-  stack "$1" clean "$complete" 0600 clean
-  status_is 0
-  [ "$(calls)" = "$(printf '%s\n' "$resolve_call" "compose -p $want_project down --remove-orphans|$unset_keys" \
-    "image inspect $want_image|$unset_keys" "image rm $want_image|$unset_keys")" ] || echo "clean handed docker: $(calls)"
-}
-BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_prism_held case_start_fails case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan case_clean"
+BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan"
 
 # boundary SCRIPT [CASE...]: the failures of SCRIPT under each case.
 boundary() {
@@ -766,19 +940,22 @@ break_script nodown "the containers left on the way out" "case_start_fails case_
 break_script noexit "no cleanup on the way out" "case_start_fails case_server_ends case_interrupted" '/^trap finish EXIT$/d'
 break_script noterm "the server left running" case_interrupted 's/^  kill -TERM "\$1" 2>\/dev\/null \|\| true$/  true/'
 break_script nogroup "the server's process group left behind" "case_interrupted case_server_child" '/kill -KILL -- "-\$1"/d'
-break_script noprism "Prism's address not checked" case_prism_held '/^  free "\$port" "Prism.s address"$/d'
-break_script keysout "the keys in the server's environment" case_provision 's/^  \(exec \{LOCK_FD\}>&- && export "\$\{server\[@\]\}" &&$/  (exec {LOCK_FD}>\&- \&\& export "${server[@]}" "${keys[@]}" \&\&/'
-break_script persisted "the server's settings written into .env" case_provision 's/^  free "\$port" "Prism.s address"$/  printf "%s\\n" "${server[@]}" >>.env\n&/'
+break_script noports "a slot taken whatever holds its ports" case_port_held 's/^    if who="\$\(held "\$port"\)"; then$/    if false; then/'
+break_script nonets "a slot taken whatever network overlaps it" case_network_overlap 's/^  who="\$\(overlaps "\$2" "\$k"\)"$/  who=""/'
+break_script noclaim "a slot taken whatever loop claims it" "case_remembered case_two_checkouts" 's/^  if ! flock -n "\$fd"; then$/  if false; then/'
+break_script forgetful "the slot taken never remembered" case_remembered '/^      mkdir -p "\$\(dirname "\$REMEMBERED"\)" && printf/d'
+break_script oneproject "one project for every worktree" case_two_checkouts 's/^PROJECT="cyfr-dev-\$\(run_names_seed "\$ROOT"\)" \|\|$/PROJECT="cyfr-dev" ||/'
+break_script noleftovers "a killed run's containers left before the slot is chosen" case_provision '/^  compose down --remove-orphans >\/dev\/null 2>&1 \|\| true$/d'
+break_script buildfirst "the image built before the settings are agreed" case_refused 's/^  image --tag-only$/  image --for "$$"/'
+break_script keysout "the keys in the server's environment" case_provision 's/^  \(exec \{LOCK_FD\}>&- \{CLAIM_FD\}>&- && export "\$\{server\[@\]\}" &&$/  (exec {LOCK_FD}>\&- {CLAIM_FD}>\&- \&\& export "${server[@]}" "${keys[@]}" \&\&/'
+break_script persisted "the server's settings written into .env" case_provision 's/^  STARTED=1$/  printf "%s\\n" "${server[@]}" >>.env\n&/'
 break_script nolink "the setup link not printed" case_provision '/^  \[ -z "\$setup" \] \|\| echo /d'
 break_script nocompose "the caller's COMPOSE_* left to compose" case_project_env '/^  case "\$name" in COMPOSE_\*\) unset "\$name" ;; esac$/d'
 break_script forget "the server's group forgotten once it ends" case_server_child 's/^  wait "\$SERVER" && status=0 \|\| status=\$\?$/&\n  SERVER=""/'
 break_script endedgroup "an ended server's group left behind" case_server_child '/^    kill -KILL -- "-\$SERVER" 2>\/dev\/null \|\| true$/d'
-break_script parallel "the image built by every service at once" case_provision 's/^  compose build locus-runtime \|\| die .*$//; s/up --detach --no-build --wait/up --detach --build --wait/'
-break_script perlock "a lock of each checkout's own" case_two_checkouts 's|^lock_file\(\) \{ printf .*$|lock_file() { mkdir -p data \&\& printf "%s/data/%s.dev-stack.lock" "$ROOT" "$1"; }|'
 break_script nolock "a run that takes no lock" case_locked '/^  lock$/d'
 break_script noorphan "down leaving a killed run's server" case_down_orphan '/^    stop "\$left"$/d'
 break_script anygroup "a recorded group stopped whatever process holds it now" case_down_orphan 's/^  \[ "\$\(ps -o lstart= -p "\$pgid".* = "\$started" \] && echo "\$pgid"$/  echo "$pgid"/'
-break_script prune "clean pruning the host's images" case_clean 's/^    docker image rm "\$IMAGE"$/&\n    docker image prune --force/'
 break_script argv "the bearer on curl's command line" case_check 's|-H @"\$PRIVATE/authorization"|-H "authorization: Bearer $CYFR_TOKEN"|'
 break_script discard "no delete after a failed read" "case_failed_read case_failed_parse" '/^    discard "\$path"$/d'
 break_script keep "the private directory kept" "case_check case_provision" 's/^  \[ -z "\$PRIVATE" \] \|\| rm -rf "\$PRIVATE"$/  true/'

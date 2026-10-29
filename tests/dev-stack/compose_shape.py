@@ -4,20 +4,21 @@
 over docker-compose.yml, held to the shipped file and kept apart from what
 the checks on a host use.
 
-  python3 -I compose_shape.py shape BASE_JSON DEV_JSON CHECKOUT
+  python3 -I compose_shape.py shape BASE_JSON DEV_JSON CHECKOUT PROJECT IMAGE
       The stack's services (the runtime, the backends and builds services
       and their guards) and networks against the same services resolved
       from docker-compose.yml alone: every field the shipped one's but the
-      ones the dev stack names, and those as it names them.
+      ones the dev stack names, and those as it names them, under the
+      project PROJECT and on the image IMAGE.
 
-  python3 -I compose_shape.py apart DEV_JSON SHIPPED_JSON SOURCES
-      The stack's host ports, subnets and names against what the checks
+  python3 -I compose_shape.py apart SHIPPED_JSON SOURCES DEV_JSON...
+      Each slot's stack (one DEV_JSON a slot) against what the checks
       reserve, read from their sources under SOURCES: the test suite's
-      listeners (config/test.exs), the release boot's, the browser
-      harness's and the HSTS proof's, the shipped networks' subnets
-      (SHIPPED_JSON, docker-compose.yml resolved with every profile),
-      Docker's default address pools, and every name tests/, scripts/ and
-      .github/ use outside the dev stack's own files.
+      listeners (config/test.exs) and the HSTS proof's, the shipped
+      networks' subnets (SHIPPED_JSON, docker-compose.yml resolved with
+      every profile), Docker's default address pools, and every name
+      tests/, scripts/ and .github/ use outside the dev stack's own files;
+      and against every other slot's ports and subnets.
 
   python3 -I compose_shape.py settings DEV_JSON
       The settings a mix boot beside the stack runs with, one NAME=VALUE
@@ -32,8 +33,8 @@ import os
 import re
 import sys
 
-PROJECT = "cyfr-dev"
-IMAGE = "cyfr-locus:dev"
+# The prefix of every name the loop gives, whatever the worktree's seed.
+NAME_PREFIX = "cyfr-dev-"
 PROFILE = "apps/locus/keeper/seccomp/keeper.json"
 RUNTIME = "locus-runtime"
 ISLANDS = {"locus-backends": "4101", "locus-builds": "4100"}
@@ -43,8 +44,6 @@ NETWORKS = [RUNTIME, *ISLANDS]
 # Where each check reserves a port: a default, an assignment or a listener.
 PORT_SOURCES = [
     "config/test.exs",
-    "tests/release-boot/release.sh",
-    "tests/browser/harness.sh",
     "tests/proxy-hsts/run.sh",
 ]
 PORT = re.compile(r"(?:_PORT(?::-|=)|port:\s*|(?:127\.0\.0\.1|localhost):)(\d{2,5})\b")
@@ -52,6 +51,7 @@ PORT = re.compile(r"(?:_PORT(?::-|=)|port:\s*|(?:127\.0\.0\.1|localhost):)(\d{2,
 # compose file gives no subnet.
 DOCKER_POOLS = ["172.17.0.0/16", "172.18.0.0/15", "172.20.0.0/14", "172.24.0.0/13", "192.168.0.0/16"]
 PRISM = "Prism's address (x-prism)"
+PROXY = "Prism's proxy port (x-prism-proxy)"
 RUNTIME_PORT = "the runtime's published port"
 HOST_API_PORT = "the host API's port"
 NAMED_IN = ["tests", "scripts", ".github"]
@@ -75,11 +75,11 @@ def gateway(dev, network):
     return dev["networks"][network]["ipam"]["config"][0]["gateway"]
 
 
-def expected_service(name, base, dev):
+def expected_service(name, base, dev, project, image):
     want = copy.deepcopy(base)
-    want["image"] = IMAGE
-    want["pull_policy"] = "build"
-    want["container_name"] = f"{PROJECT}-{name}"
+    want["image"] = image
+    want["pull_policy"] = "never"
+    want["container_name"] = f"{project}-{name}"
     if name == RUNTIME:
         have = dev["services"][name]
         published = have.get("ports", [{}])[0].get("published")
@@ -104,19 +104,19 @@ def expected_service(name, base, dev):
     return want
 
 
-def expected_network(name, base, dev):
+def expected_network(name, base, dev, project):
     want = copy.deepcopy(base)
-    want["name"] = f"{PROJECT}_{name}"
+    want["name"] = f"{project}_{name}"
     want["ipam"] = {"config": dev["networks"][name].get("ipam", {}).get("config")}
     return want
 
 
-def shape(base_path, dev_path, checkout):
+def shape(base_path, dev_path, checkout, project, image):
     base = json.load(open(base_path))
     dev = json.load(open(dev_path))
     errors = []
-    if dev.get("name") != PROJECT:
-        errors.append(f"name: {json.dumps(dev.get('name'))}, want {json.dumps(PROJECT)}")
+    if dev.get("name") != project:
+        errors.append(f"name: {json.dumps(dev.get('name'))}, want {json.dumps(project)}")
     if sorted(dev.get("services", {})) != sorted(SERVICES):
         errors.append(f"services: {sorted(dev.get('services', {}))}, want {sorted(SERVICES)}")
     if sorted(dev.get("networks", {})) != sorted(NETWORKS):
@@ -124,9 +124,10 @@ def shape(base_path, dev_path, checkout):
     if errors:
         return errors
     for name in SERVICES:
-        diff(f"services.{name}", dev["services"][name], expected_service(name, base["services"][name], dev), errors)
+        want = expected_service(name, base["services"][name], dev, project, image)
+        diff(f"services.{name}", dev["services"][name], want, errors)
     for name in NETWORKS:
-        diff(f"networks.{name}", dev["networks"][name], expected_network(name, base["networks"][name], dev), errors)
+        diff(f"networks.{name}", dev["networks"][name], expected_network(name, base["networks"][name], dev, project), errors)
     # The profile the runtime names is the checkout's, the one the scaffold
     # ships as keeper.seccomp.json.
     for opt in dev["services"][RUNTIME].get("security_opt", []):
@@ -142,6 +143,7 @@ def declared(dev):
     prism = dev.get("x-prism", "")
     ports = {
         PRISM: prism.rsplit(":", 1)[-1],
+        PROXY: str(dev.get("x-prism-proxy", "")),
         RUNTIME_PORT: runtime["ports"][0]["published"],
         HOST_API_PORT: url.rsplit(":", 1)[-1],
     }
@@ -178,8 +180,8 @@ def shipped_subnets(shipped):
 
 def named_elsewhere(sources, names):
     """Every file under tests/, scripts/ and .github/ outside the dev
-    stack's own that names one of names as a whole word."""
-    pattern = re.compile(r"(?<![\w.-])(" + "|".join(re.escape(n) for n in names) + r")(?![\w.-])")
+    stack's own that names a word beginning with one of names."""
+    pattern = re.compile(r"(?<![\w.-])((?:" + "|".join(re.escape(n) for n in names) + r")[\w.-]*)")
     hits = []
     for top in NAMED_IN:
         for directory, _dirs, files in os.walk(os.path.join(sources, top)):
@@ -197,54 +199,55 @@ def named_elsewhere(sources, names):
     return hits
 
 
-def apart(dev_path, shipped_path, sources):
-    dev = json.load(open(dev_path))
+def apart(shipped_path, sources, *dev_paths):
     shipped = json.load(open(shipped_path))
     errors = []
-    prism, ports, networks, addresses = declared(dev)
-    if not re.fullmatch(r"127\.0\.0\.1:\d+", prism):
-        errors.append(f"x-prism is {json.dumps(prism)}, not 127.0.0.1:<port>")
-
     reserved, unread = reserved_ports(sources)
     errors += unread
     seen = {}
-    for what, port in ports.items():
-        if not port.isdigit() or not 1024 <= int(port) <= 65535:
-            errors.append(f"{what} is {port}, not a port from 1024 to 65535")
-        for source in reserved.get(port, []):
-            errors.append(f"{what} is {port}, which {source} reserves")
-        if port in seen:
-            errors.append(f"{what} is {port}, as {seen[port]} is")
-        seen[port] = what
-
     taken = shipped_subnets(shipped) | {f"Docker's default pool {p}": p for p in DOCKER_POOLS}
-    for name, config in networks.items():
-        subnet = ipaddress.ip_network(config["subnet"])
-        for what, other in taken.items():
-            if subnet.overlaps(ipaddress.ip_network(other)):
-                errors.append(f"network {name}'s subnet {subnet} overlaps {what}")
-        taken[f"the dev stack's network {name}"] = str(subnet)
-        ip_range = ipaddress.ip_network(config["ip_range"])
-        gw = ipaddress.ip_address(config["gateway"])
-        if not ip_range.subnet_of(subnet):
-            errors.append(f"network {name}'s ip_range {ip_range} is not within {subnet}")
-        if gw not in subnet or gw in ip_range:
-            errors.append(f"network {name}'s gateway {gw} is not in {subnet} outside its ip_range")
-        if name in addresses:
-            address = ipaddress.ip_address(addresses[name])
-            if address not in subnet or address in ip_range or address == gw:
-                errors.append(f"{name}-guard's address {address} is not a free fixed address of {subnet}")
+    names = []
+    for path in dev_paths:
+        dev = json.load(open(path))
+        # Each slot's resolution is the file slot-<k>.json.
+        slot = os.path.basename(path).removeprefix("slot-").removesuffix(".json")
+        prism, ports, networks, addresses = declared(dev)
+        if not re.fullmatch(r"127\.0\.0\.1:\d+", prism):
+            errors.append(f"slot {slot}: x-prism is {json.dumps(prism)}, not 127.0.0.1:<port>")
+        for what, port in ports.items():
+            if not port.isdigit() or not 1024 <= int(port) <= 65535:
+                errors.append(f"slot {slot}: {what} is {port}, not a port from 1024 to 65535")
+            for source in reserved.get(port, []):
+                errors.append(f"slot {slot}: {what} is {port}, which {source} reserves")
+            if port in seen:
+                errors.append(f"slot {slot}: {what} is {port}, as {seen[port]} is")
+            seen[port] = f"slot {slot}'s {what}"
+        for name, config in networks.items():
+            subnet = ipaddress.ip_network(config["subnet"])
+            for what, other in taken.items():
+                if subnet.overlaps(ipaddress.ip_network(other)):
+                    errors.append(f"slot {slot}: network {name}'s subnet {subnet} overlaps {what}")
+            taken[f"slot {slot}'s network {name}"] = str(subnet)
+            ip_range = ipaddress.ip_network(config["ip_range"])
+            gw = ipaddress.ip_address(config["gateway"])
+            if not ip_range.subnet_of(subnet):
+                errors.append(f"slot {slot}: network {name}'s ip_range {ip_range} is not within {subnet}")
+            if gw not in subnet or gw in ip_range:
+                errors.append(f"slot {slot}: network {name}'s gateway {gw} is not in {subnet} outside its ip_range")
+            if name in addresses:
+                address = ipaddress.ip_address(addresses[name])
+                if address not in subnet or address in ip_range or address == gw:
+                    errors.append(f"slot {slot}: {name}-guard's address {address} is not a free fixed address of {subnet}")
+        names += [dev["name"]] + [s["container_name"] for s in dev["services"].values()]
+        names += [n["name"] for n in dev["networks"].values()]
 
-    names = [dev["name"], IMAGE]
-    names += [s["container_name"] for s in dev["services"].values()]
-    names += [n["name"] for n in dev["networks"].values()]
-    shipped_names = {s.get("container_name") for s in shipped["services"].values()} | {
-        s.get("image") for s in shipped["services"].values()
-    }
-    for name in names:
+    shipped_names = {s.get("container_name") for s in shipped["services"].values()}
+    for name in sorted(set(names)):
+        if not name.startswith(NAME_PREFIX):
+            errors.append(f"{name} is not named {NAME_PREFIX}<seed>")
         if name in shipped_names:
             errors.append(f"{name} is docker-compose.yml's own")
-    errors += named_elsewhere(sources, names)
+    errors += named_elsewhere(sources, [NAME_PREFIX])
     return errors
 
 
@@ -255,6 +258,7 @@ def settings(dev_path):
     bind = runtime["environment"]["LOCUS_RUNTIME_HOST_API_URL"].split("//", 1)[1].rsplit(":", 1)[0]
     lines = [
         f"CYFR_PORT={ports[PRISM]}",
+        f"CYFR_PROXY_PORT={ports[PROXY]}",
         f"CYFR_LOCUS_RUNTIME_WORKERS={runtime['environment']['LOCUS_RUNTIME_SERVICE_ID']}"
         f"=http://127.0.0.1:{runtime['ports'][0]['published']}",
         f"CYFR_HOST_API_BIND={bind}",
