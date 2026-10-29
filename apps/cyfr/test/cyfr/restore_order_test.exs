@@ -8,6 +8,9 @@ defmodule Cyfr.RestoreOrderTest do
   The exact per-slice roster holds sites awaiting conversion. Suite boot files
   configure their VM once and are excluded. Strings and comments are not code;
   mutations in a try/after or before on_exit are still direct mutations.
+
+  A case macro contributes imports from its returned quote. Imports in the
+  macro implementation and discarded quotes do not enter the caller.
   """
 
   use ExUnit.Case, async: true
@@ -177,6 +180,59 @@ defmodule Cyfr.RestoreOrderTest do
 
       assert [%{calls: 1}] = check([{"plant.ex", source}], %{})
     end
+  end
+
+  @tag :macro_implementation
+  test "macro-local imports and discarded quotes are not emitted into the caller" do
+    for implementation <- [
+          "import ExUnit.Callbacks, only: [on_exit: 1]",
+          "quote do\nimport ExUnit.Callbacks, only: [on_exit: 1]\nend"
+        ] do
+      source = """
+      defmodule Astra.MacroImmediate do
+        def on_exit(fun), do: fun.()
+      end
+      defmodule Astra.MacroProvider do
+        defmacro __using__(_) do
+          #{implementation}
+          quote do
+            :ok
+          end
+        end
+      end
+      defmodule Astra.MacroUser do
+        import Astra.MacroImmediate, only: [on_exit: 1]
+        use Astra.MacroProvider
+        def run, do: on_exit(fn -> Application.put_env(:elixir, :astra_macro_body, :changed) end)
+      end
+      Astra.MacroUser.run()
+      """
+
+      assert [%{calls: 1, expected: 0}] = check([{"plant.ex", source}], %{})
+    end
+  end
+
+  test "a returned quote emits its imports with the macro's lexical aliases" do
+    source = """
+    defmodule Plant.Immediate do
+      def on_exit(fun), do: fun.()
+    end
+    defmodule Plant.QuotedProvider do
+      defmacro __using__(_) do
+        alias ExUnit.Callbacks, as: Cleanup
+        import Plant.Immediate, only: [on_exit: 1]
+        quote do
+          import Cleanup, only: [on_exit: 1]
+        end
+      end
+    end
+    defmodule Plant.QuotedUser do
+      use Plant.QuotedProvider
+      def run, do: on_exit(fn -> Application.put_env(:plant, :key, :changed) end)
+    end
+    """
+
+    assert check([{"plant.ex", source}], %{}) == []
   end
 
   test "aliases and imports stay inside their lexical scope" do
@@ -508,6 +564,15 @@ defmodule Cyfr.RestoreOrderTest do
   defp facts({:defmodule, _, _}, ctx, facts), do: {ctx, facts}
   defp facts({:__block__, _, nodes}, ctx, facts), do: facts(nodes, ctx, facts)
 
+  defp facts({:quote, _, args}, ctx, facts) do
+    if ctx.injecting? do
+      {_, facts} = facts(Keyword.get(List.last(args), :do), ctx, facts)
+      {ctx, facts}
+    else
+      {ctx, facts}
+    end
+  end
+
   defp facts({:alias, _, _} = node, ctx, facts) do
     {updated, []} = walk(node, ctx, [])
     aliases = Map.reject(updated.aliases, fn {name, target} -> ctx.aliases[name] == target end)
@@ -529,7 +594,7 @@ defmodule Cyfr.RestoreOrderTest do
     do: {ctx, inject(facts, ctx, {:import, module_name(target, ctx), List.first(rest) || []})}
 
   defp facts({:using, _, [[do: body]]}, ctx, facts) do
-    {_, facts} = facts(body, %{ctx | injecting?: true}, facts)
+    {_, facts} = returned_quote(body, ctx, facts)
     {ctx, facts}
   end
 
@@ -549,10 +614,13 @@ defmodule Cyfr.RestoreOrderTest do
         %{facts | locals: MapSet.union(facts.locals, signatures), exports: exports}
       end
 
-    injecting? =
-      kind in [:defmacro, :defmacrop] and MapSet.member?(signatures, {:__using__, 1})
+    {_, facts} =
+      if kind in [:defmacro, :defmacrop] and MapSet.member?(signatures, {:__using__, 1}) do
+        returned_quote(Keyword.get(List.first(args) || [], :do), ctx, facts)
+      else
+        facts(args, %{ctx | injecting?: false, in_function?: true}, facts)
+      end
 
-    {_, facts} = facts(args, %{ctx | injecting?: injecting?, in_function?: true}, facts)
     {ctx, facts}
   end
 
@@ -565,6 +633,25 @@ defmodule Cyfr.RestoreOrderTest do
   end
 
   defp facts(_literal, ctx, facts), do: {ctx, facts}
+
+  defp returned_quote({:__block__, _, []}, ctx, facts), do: {ctx, facts}
+
+  defp returned_quote({:__block__, _, nodes}, ctx, facts) do
+    {implementation, [returned]} = Enum.split(nodes, -1)
+    {local, facts} = facts(implementation, %{ctx | injecting?: false, in_function?: true}, facts)
+    {_, facts} = returned_quote(returned, local, facts)
+    {ctx, facts}
+  end
+
+  defp returned_quote({:quote, _, _} = quoted, ctx, facts) do
+    {_, facts} = facts(quoted, %{ctx | injecting?: true, in_function?: true}, facts)
+    {ctx, facts}
+  end
+
+  defp returned_quote(other, ctx, facts) do
+    {_, facts} = facts(other, %{ctx | injecting?: false, in_function?: true}, facts)
+    {ctx, facts}
+  end
 
   defp signatures({:when, _, [head | _]}), do: signatures(head)
 
