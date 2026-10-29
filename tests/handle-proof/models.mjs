@@ -301,6 +301,9 @@ export const REGISTRY = "registry.test";
 export const OCI = `registry.${REGISTRY}`;
 export const HANDLE = "proof";
 export const OTHER = "other";
+// This fresh proof database mints IDs from 1; the largest exact JS integer
+// remains a valid PostgreSQL BIGINT without colliding with another proof row.
+const DIRECTORY_ID_TAMPER = Number.MAX_SAFE_INTEGER;
 const NONE_TIME = { tamper: LONG_AGO };
 const nil = () => exact(null);
 const noTime = () => exact(null, NONE_TIME);
@@ -405,7 +408,7 @@ function models(S) {
     ...(address ? { address: exact(address) } : {}),
   });
   const logEntry = (identifier, genesis, window) => ({
-    id: captured("a new directory row id", (v) => Number.isSafeInteger(v) && v > 0, -1),
+    id: { ...captured("a new directory row id", (v) => Number.isSafeInteger(v) && v > 0, DIRECTORY_ID_TAMPER), tamper: DIRECTORY_ID_TAMPER },
     identifier: derived(identifier, "the identifier the signer's genesis hashes to"),
     seq: exact(0),
     kind: exact("genesis"),
@@ -729,7 +732,7 @@ function models(S) {
   M["wrong_identity:registry.policy_acceptances[c]"] = () => [policy(S.other, win(S, "other"))];
   M["wrong_identity:registry.request_nonces[c]"] = () => [nonce(S.other, win(S, "other")), nonce(S.other, win(S, "other")), nonce(S.other, win(S, "other"))];
   M["wrong_identity:registry.directory.identity_log_entries"] = () => byKey(first("wrong_identity:registry.directory.identity_log_entries"), (r) => r.identifier, [
-    [id, held(first("setup:registry.directory.identity_log_entries")[0], {}, "as read at setup"), "A's genesis"],
+    [id, held(first("setup:registry.directory.identity_log_entries")[0], {}, "as read at setup", logEntry(id, genesisA, win(S, "enroll"))), "A's genesis"],
     [S.other, logEntry(S.other, genesisC, win(S, "other")), "the second identity's genesis"],
   ]);
   M["wrong_identity:handle_answer[other]"] = () => handleAnswer(OTHER, S.other, A);
