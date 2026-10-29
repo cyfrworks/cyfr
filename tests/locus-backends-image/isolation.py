@@ -258,6 +258,16 @@ def test_sibling_loopback(stack, c, listener, intruder):
     expect(sum(rose.values()) >= 3, "each refusal counted on the guard's loopback rule for the island's uids", rose)
 
 
+def kill_in(container, pid, what):
+    """`kill -KILL pid` in `container`, where `pid` is, or ends, the
+    container's main process. The shell exits 0 when it outlives its kill,
+    and 137 when the container's end took the shell with it first: both
+    say the kill reached `pid`. Any other status is a kill that did not,
+    and the `docker wait` that follows would never return.
+    """
+    done = run("docker", "exec", container, "sh", "-c", f"kill -KILL {pid}", check=False)
+    expect(done.returncode in (0, 137), what, {"status": done.returncode, "stderr": done.stderr.strip()})
+
 def test_guard_failure(image):
     tools = imagesuite.temporary_directory("cyfr-guard-fails-", 0o755)
     with open(os.path.join(tools, "ip6tables"), "w") as f:
@@ -446,7 +456,7 @@ def main():
             daemon = orphan.tool(owner_of("orphan"), "probe__spawn_daemon")["pid"]
             eventually(lambda: any(p["pid"] == daemon for p in stack.processes(lost)), "the orphan's daemon to start")
             _keeper, lost_release = keeper_and_release(stack, lost)
-            run("docker", "exec", lost, "sh", "-c", f"kill -KILL {lost_release['pid']}")
+            kill_in(lost, lost_release["pid"], "the kill reached the release")
             expect(run("docker", "wait", lost).stdout.strip() == "70", "cyfr-locus exits 70 when the release dies")
             logs = run("docker", "logs", lost, check=False)
             text = logs.stdout + logs.stderr
@@ -459,7 +469,7 @@ def main():
         try:
             eventually(lambda: keeper_and_release(stack, lost)[1], "the third service's release to start", timeout_s=60)
             lost_keeper, _ = keeper_and_release(stack, lost)
-            run("docker", "exec", lost, "sh", "-c", f"kill -KILL {lost_keeper['pid']}")
+            kill_in(lost, lost_keeper["pid"], "the kill reached cyfr-locus")
             code = run("docker", "wait", lost).stdout.strip()
             expect(code != "0", "losing cyfr-locus ends the container, and every backend in it", code)
         finally:

@@ -1091,10 +1091,16 @@ signal_queued() {
     until_true 10 test -s "$scratch/lock.holder" || fail 'the holder did not start'
     set -- "$@" "${hc[@]}"
   fi
+  # The three signals' cases of one mode share these files, and a background
+  # job truncates its redirections in the child, after this shell has gone
+  # on: the previous case's queued line and start line would be read as
+  # this check's.
+  rm -f "$scratch/q.out" "$scratch/q.err"
   "$@" -- touch "$scratch/queued-ran" >"$scratch/q.out" 2>"$scratch/q.err" &
   q=$!; started+=("$q")
   until_true 10 has_line "^==> heavy-check: queued \\($mode\\)" "$scratch/q.err" || fail 'the check did not queue'
-  [ "$(head -n 1 "$scratch/q.out")" = "_START=$q" ] || fail 'a queued check had not written its start line'
+  [ "$(head -n 1 "$scratch/q.out")" = "_START=$q" ] ||
+    fail "a queued check had not written its start line: $(head -n 1 "$scratch/q.out")"
   kill "-$sig" "$q"
   until_true 2 dead "$q" || fail "a queued check given $sig was still running 2s later"
   wait "$q" || s=$?
