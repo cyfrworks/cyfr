@@ -28,7 +28,11 @@
 # that queued before it still waits, a stopped or dead waiter apart, and
 # its lane has room; it never waits for a check that queued after it. The
 # first-in-line test and the taking of the lane's locks happen under one
-# lock, so two checks never both see the same room.
+# lock, so two checks never both see the same room. A check stopped while
+# it holds that lock delays the others by 1 s at most, and any holder that
+# keeps it delays them by 10 s at most: then it is passed, and it gives
+# back any lane it took beside the check that passed it (ADMIT_STEP,
+# ADMIT_STALL below).
 #
 # Inside a check, a check runs its command in place: any under an
 # exclusive one; -p and -s under a proof; -s under a scoped one. Any other
@@ -38,7 +42,8 @@
 # at the deadline it is stopped and the exit is 124. A repeat recipe
 # therefore takes the host once per repetition, and the checks queued
 # behind it run in between. QUEUE (default 7200 s) bounds the wait for
-# the host: at the deadline the command has not run and the exit is 75.
+# the host: at the deadline the command has not run and the exit is 75,
+# and no check starts after it, not even one stopped while it waited.
 # HUP, INT and TERM stop the command and exit 129, 130 and 143. Otherwise
 # the exit is the command's own.
 #
@@ -273,7 +278,19 @@ case "${HEAVY_CHECK_HELD:-}" in
   *) echo 'HEAVY_CHECK_HELD is not a mode this script set' >&2; exit 64 ;;
 esac
 
+# The queue deadline counts in milliseconds where Bash has EPOCHREALTIME
+# (5.0 and later), else in whole seconds.
+now_ms() {
+  local t
+  if [ "${BASH_VERSINFO[0]}" -ge 5 ]; then
+    t=${EPOCHREALTIME/[.,]/}
+    echo $(( 10#$t / 1000 ))
+  else
+    echo $(( SECONDS * 1000 ))
+  fi
+}
 queued_at=$SECONDS
+queued_ms=$(now_ms)
 ran_at=
 record=
 wrote_record=false
@@ -324,6 +341,7 @@ on_exit() {
     done
   fi
   if [ -n "$ticket" ]; then rm -f "$LOCK.wait.$ticket"; fi
+  rm -f "$LOCK.ticket.$$" "$LOCK.queue.$$"
   if $owner; then rm -f "$CONTAIN_REGISTRY"; fi
   if $wrote_record && [ -z "$survivors" ] && run_finished; then rm -f "$record"; fi
   if [ -n "$ran_at" ]; then
@@ -394,10 +412,13 @@ case "$fd_base" in ''|*[!0-9]*) ;; *)
 esac
 umask 077
 
+# Whether the queue deadline has passed.
+expired() { [ $(( $(now_ms) - queued_ms )) -ge $(( QUEUE * 1000 )) ]; }
+# Whole seconds left before it, rounded up, at least 0.
 queue_left() {
-  local left=$(( QUEUE - (SECONDS - queued_at) ))
+  local left=$(( QUEUE * 1000 - ($(now_ms) - queued_ms) ))
   [ "$left" -gt 0 ] || left=0
-  echo "$left"
+  echo $(( (left + 999) / 1000 ))
 }
 
 gave_up() {
@@ -406,47 +427,96 @@ gave_up() {
   exit 75
 }
 
-# The queue. Each check takes the next ticket from $LOCK.seq and holds a
-# lock on its own file $LOCK.wait.<ticket>, which carries its pid, lane,
-# arrival and command, while it waits. $LOCK.queue serializes taking a
-# ticket, the first-in-line test and the taking of the lane's locks, so a
-# file is never seen before its owner has locked it and written it, and
-# two checks never both see the same room. Its holder can itself be
-# stopped, so it is waited for in the background, bounded by the queue
-# deadline and answering a signal at once: Bash defers a trapped INT or
-# TERM until a foreground command ends.
+# The queue. Each check holds a lock on its ticket's file, which carries
+# its pid, lane, arrival and command, from before the file appears as
+# $LOCK.wait.<ticket> until it leaves the queue, so a ticket no owner locks
+# is a dead waiter's. The ticket is the next number after $LOCK.seq, or
+# the first free one after it.
+#
+# $LOCK.queue, the admission lock, serializes taking a ticket, the
+# first-in-line test and the taking of the lane's locks, so two checks
+# never both see the same room. Its holder writes its pid to
+# $LOCK.queue.owner and keeps the lock for a few milliseconds. A check
+# waits for it in steps of ADMIT_STEP seconds, in the background so that
+# a signal is answered at once (Bash defers a trapped INT or TERM until a
+# foreground command ends), and bounded by the queue deadline. After a
+# step, a holder that is stopped or gone, or one that this check has seen
+# keep the lock for ADMIT_STALL seconds, is bypassed: the check puts a new
+# file in the place of $LOCK.queue and locks that. A check stopped in
+# admission therefore delays the others by ADMIT_STEP seconds at most, and
+# any holder, such as one stopped before it wrote its pid, ADMIT_STALL. The
+# bypassed holder keeps its ticket and its place. Before it keeps a lane it
+# took, it checks that its lock is still the one at $LOCK.queue
+# (queue_held); if not, it gives the lane back and tries again, so a lane
+# taken beside another admission is never kept.
+ADMIT_STEP=1
+ADMIT_STALL=10
+queue_held() { [ "/dev/fd/$queue_fd" -ef "$LOCK.queue" ]; }
+queue_owner() { head -n 1 "$LOCK.queue.owner" 2>/dev/null || :; }
 queue_lock() {
-  local status=0
-  exec {queue_fd}>>"$LOCK.queue" || exit 1
-  if flock -n -x "$queue_fd"; then return 0; fi
-  flock -w "$(queue_left)" -x "$queue_fd" &
-  queue_pid=$!
-  wait "$queue_pid" || status=$?
-  queue_pid=
-  [ "$status" = 0 ] || { announce; gave_up; }
+  local status owner seen= seen_at= step
+  while :; do
+    exec {queue_fd}>>"$LOCK.queue" || exit 1
+    status=0
+    if ! flock -n -x "$queue_fd"; then
+      if [ -z "$seen_at" ]; then seen=$(queue_owner) seen_at=$SECONDS; fi
+      step=$(queue_left)
+      [ "$step" -le "$ADMIT_STEP" ] || step=$ADMIT_STEP
+      [ "$step" -gt 0 ] || { places; announce; gave_up; }
+      flock -w "$step" -x "$queue_fd" &
+      queue_pid=$!
+      wait "$queue_pid" || status=$?
+      queue_pid=
+    fi
+    if [ "$status" = 0 ]; then
+      if queue_held; then
+        printf '%s\n' "$$" > "$LOCK.queue.owner" || exit 1
+        return 0
+      fi
+    else
+      if expired; then places; announce; gave_up; fi
+      owner=$(queue_owner)
+      if [ "$owner" != "$seen" ]; then seen=$owner seen_at=$SECONDS; fi
+      if ! pid_ok "$owner" || [ "$owner" = "$$" ] || ! alive "$owner" || stopped "$owner" ||
+        [ $((SECONDS - seen_at)) -ge "$ADMIT_STALL" ]; then
+        if queue_held; then
+          : > "$LOCK.queue.$$" && mv -f "$LOCK.queue.$$" "$LOCK.queue" || exit 1
+        fi
+        seen= seen_at=$SECONDS
+      fi
+    fi
+    exec {queue_fd}>&-
+  done
 }
 queue_unlock() { exec {queue_fd}>&-; }
 take_ticket() {
-  local last
+  local last n=0
+  exec {ticket_fd}>"$LOCK.ticket.$$" || exit 1
+  flock -n -x "$ticket_fd" || exit 1
+  printf 'pid=%s mode=%s queued=%s checkout=%s command=%s\n' "$$" "$MODE" \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$checkout" "$(redacted "$@")" >&"$ticket_fd" || exit 1
   queue_lock
   last=$(cat "$LOCK.seq" 2>/dev/null) || :
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
   ticket=$((last + 1))
+  until ln "$LOCK.ticket.$$" "$LOCK.wait.$ticket" 2>/dev/null; do
+    n=$((n + 1))
+    [ "$n" -lt 1000 ] || { echo "cannot take a ticket in $LOCK.wait.*" >&2; exit 1; }
+    [ ! -e "$LOCK.wait.$ticket" ] || ticket=$((ticket + 1))
+  done
   printf '%s\n' "$ticket" > "$LOCK.seq" || exit 1
-  exec {ticket_fd}>"$LOCK.wait.$ticket" || exit 1
-  flock -n -x "$ticket_fd" || exit 1
-  printf 'pid=%s mode=%s queued=%s checkout=%s command=%s\n' "$$" "$MODE" \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$checkout" "$(redacted "$@")" >&"$ticket_fd" || exit 1
   queue_unlock
+  rm -f "$LOCK.ticket.$$"
 }
 release_ticket() {
   rm -f "$LOCK.wait.$ticket"
   exec {ticket_fd}>&-
   ticket=
 }
-# Under the queue lock: how many live waiters queued before this one
-# ($ahead) and how many wait in all ($waiting). A ticket no owner locks is
-# a dead waiter's, removed here; a stopped owner holds no one back.
+# How many live waiters queued before this one ($ahead) and how many wait
+# in all ($waiting), this one included; a check that has no ticket yet
+# counts as the last. A stopped owner holds no one back. With `prune`,
+# under the queue lock, a ticket no owner locks is removed.
 places() {
   local f k line pid
   ahead=0 waiting=0
@@ -454,14 +524,18 @@ places() {
     k=${f##*.wait.}
     case "$k" in ''|*[!0-9]*) continue ;; esac
     if [ "$k" != "$ticket" ]; then
-      if flock -n -x "$f" true 2>/dev/null; then rm -f "$f"; continue; fi
+      if flock -n -x "$f" true 2>/dev/null; then
+        [ "${1:-}" != prune ] || rm -f "$f"
+        continue
+      fi
       line=$(head -n 1 "$f" 2>/dev/null) || continue
       pid=$(field pid "$line")
       if pid_ok "$pid" && { ! alive "$pid" || stopped "$pid"; }; then continue; fi
     fi
     waiting=$((waiting + 1))
-    [ "$k" -ge "$ticket" ] || ahead=$((ahead + 1))
+    [ -n "$ticket" ] && [ "$k" -ge "$ticket" ] || ahead=$((ahead + 1))
   done
+  [ -n "$ticket" ] || waiting=$((waiting + 1))
 }
 # Under the queue lock: whether the lane has room, taking its locks when it
 # has. Descriptors: 9 the host (exclusive alone, shared by the other
@@ -500,9 +574,10 @@ take_lane() {
         fi
       fi ;;
   esac
-  exec 9>&-
+  drop_lane
   return 1
 }
+drop_lane() { exec 7>&- 8>&- 9>&-; slot=; }
 
 said_at=
 # The queued line, when the check first waits and every REPEAT seconds
@@ -522,13 +597,26 @@ announce() {
 
 ahead=0 waiting=1 slot=
 take_ticket "$@"
+# A lane is kept only while the admission lock is still this check's and
+# before the queue deadline, which a check stopped while it waited may
+# have passed.
 while :; do
   queue_lock
-  places
-  if [ "$ahead" = 0 ] && take_lane; then queue_unlock; break; fi
+  places prune
+  if [ "$ahead" = 0 ] && take_lane; then
+    if ! queue_held; then
+      drop_lane
+    elif expired; then
+      drop_lane
+      gave_up
+    else
+      queue_unlock
+      break
+    fi
+  fi
   queue_unlock
   announce
-  [ "$(queue_left)" -gt 0 ] || gave_up
+  expired && gave_up
   sleep 0.5
 done
 release_ticket
