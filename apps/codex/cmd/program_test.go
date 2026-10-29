@@ -337,6 +337,31 @@ func TestUpdateHandsOverToTheInstalledProgram(t *testing.T) {
 	}
 }
 
+// A directory that holds a compose file is a CYFR, whether `cyfr init`
+// wrote it or a source checkout holds it, and the update goes on to the
+// directory's step there, which begins with the manifest fetch. Without
+// one the update ends with the program, naming the files it looked for.
+func TestUpdateGoesOnInADirectoryThatHoldsAComposeFile(t *testing.T) {
+	s := newProgramScenario(t, "0.9.0", "0.9.0")
+	savedFetch := fetchManifest
+	t.Cleanup(func() { fetchManifest = savedFetch })
+	offline := errors.New("the manifest fetch is offline")
+	fetchManifest = func(context.Context, string) (*release.Manifest, error) { return nil, offline }
+
+	out, err := s.run(updateOptions{})
+	if err != nil || !strings.Contains(out, "There is no CYFR in this directory") || !strings.Contains(out, "it holds no compose file (") || !strings.Contains(out, "docker-compose.yml") {
+		t.Fatalf("cyfr update in a directory with no compose file answered %v:\n%s", err, out)
+	}
+	if err := os.WriteFile("docker-compose.yml", []byte("services: {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.run(updateOptions{})
+	if err == nil || !strings.Contains(err.Error(), offline.Error()) || strings.Contains(out, "There is no CYFR") {
+		t.Fatalf("cyfr update beside a compose file answered %v:\n%s", err, out)
+	}
+	s.unchanged()
+}
+
 // The program a handover starts skips the program step, and refuses to go
 // on unless it is the release the handover names.
 func TestContinueAsChecksTheRelease(t *testing.T) {

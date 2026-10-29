@@ -324,10 +324,13 @@ func localAndMade(t *testing.T, s *fakeStack) {
 	if len(s.switches) != 0 {
 		t.Errorf("init switched after the join ended without a machine: %+v", s.switches)
 	}
-	for _, name := range []string{".gitignore", "cyfr.yaml", "data", "aqua"} {
+	for _, name := range []string{".gitignore", "data", "aqua"} {
 		if _, err := os.Stat(name); err != nil {
 			t.Errorf("init did not make %s: %v", name, err)
 		}
+	}
+	if _, err := os.Stat("cyfr.yaml"); err == nil {
+		t.Error("init wrote cyfr.yaml, which no command reads")
 	}
 	if holder := s.held(); holder != "" {
 		t.Errorf("init left the lock held, by %s", holder)

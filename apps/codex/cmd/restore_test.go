@@ -824,11 +824,27 @@ func TestRestoreUsage(t *testing.T) {
 		t.Error("cyfr restore with two arguments was accepted")
 	}
 	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
-	for _, bad := range []string{filepath.Join(r.project, "backups", "missing"), filepath.Join(r.project, "cyfr.yaml")} {
+	for _, bad := range []string{filepath.Join(r.project, "backups", "missing"), filepath.Join(r.project, "docker-compose.yml")} {
 		err := runRestore(context.Background(), bad, true, &bytes.Buffer{}, &bytes.Buffer{})
 		if err == nil || !strings.Contains(err.Error(), "Usage: cyfr restore <snapshot>") {
 			t.Errorf("cyfr restore %s answered %v", bad, err)
 		}
+	}
+	if log := r.log(); log != nil {
+		t.Errorf("docker ran:\n%s", strings.Join(log, "\n"))
+	}
+}
+
+// A directory that holds no compose file is no CYFR's: the restore refuses
+// before anything is read or stopped, naming the directory to run it in.
+func TestRestoreRefusesADirectoryWithNoComposeFile(t *testing.T) {
+	r := newRestoreScenario(t, shippedCompose(t), nil, nil)
+	if err := os.Remove(filepath.Join(r.project, "docker-compose.yml")); err != nil {
+		t.Fatal(err)
+	}
+	err := runRestore(context.Background(), r.dir, true, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "it holds no compose file (") || !strings.Contains(err.Error(), "the directory the snapshot was taken of") {
+		t.Errorf("cyfr restore with no compose file answered %v", err)
 	}
 	if log := r.log(); log != nil {
 		t.Errorf("docker ran:\n%s", strings.Join(log, "\n"))

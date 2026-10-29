@@ -486,7 +486,6 @@ func newUpdateScenario(t *testing.T, compose []byte, env map[string]string) *upd
 			t.Fatal(err)
 		}
 	}
-	write("cyfr.yaml", "name: test\n", 0644)
 	write(".env", scenarioEnv, 0600)
 	write("docker-compose.yml", string(compose), 0640)
 	// Set apart from the umask, so the switch is seen to keep the mode.

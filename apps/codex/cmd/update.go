@@ -49,7 +49,7 @@ var updateCmd = &cobra.Command{
 	Short: "Update this cyfr to the newest release, then the CYFR in this directory to it",
 	Long: `Update this program to the newest release, then the CYFR in the current directory to the program's release, in one command.
 
-The program: when a release newer than this one is published, pre-releases aside, cyfr update installs it: a Homebrew cask install through brew, any other install by downloading the release's archive for this platform, verifying it against the release's checksums.txt signed by the release workflow for that tag, and only then replacing this program's file. It then goes on as the new program. --version names the exact release to install instead, a pre-release or an older release included; a Homebrew install takes only its tap's release. A development build is not replaced. In a directory with no cyfr.yaml the update stops here.
+The program: when a release newer than this one is published, pre-releases aside, cyfr update installs it: a Homebrew cask install through brew, any other install by downloading the release's archive for this platform, verifying it against the release's checksums.txt signed by the release workflow for that tag, and only then replacing this program's file. It then goes on as the new program. --version names the exact release to install instead, a pre-release or an older release included; a Homebrew install takes only its tap's release. A development build is not replaced. In a directory that holds no compose file the update stops here.
 
 The CYFR in the directory: after steps 1 and 2 below, cyfr update shows what changes and asks to make the change (--yes makes it without asking; with no terminal and no --yes it shows the change and makes none). A CYFR whose docker-compose.yml names this release already is left alone, with no stop and no snapshot, and a CYFR on a newer release than this cyfr, by its compose file's tags or by the release its cyfr reports (steps 3 and 4), is refused before the snapshot, since its database may not run under older code. The change is one ceremony that changes nothing until the old stack is stopped and a snapshot of it is taken:
 
@@ -213,7 +213,10 @@ var errUpdateInterrupted = errors.New("cyfr update was interrupted before anythi
 
 // runUpdate is `cyfr update` in the working directory: the program step
 // (updateProgram), which hands the rest over to the program it installs,
-// then, in a home directory, the home step (runHomeUpdate). The program
+// then, in a directory that holds a compose file, the home step
+// (runHomeUpdate). The compose file is the mark of a home, the one
+// `cyfr down` reads (access.HasComposeFile): the stack is started from it,
+// whether `cyfr init` wrote it or a source checkout holds it. The program
 // a handover starts is told the release it must be (o.continueAs) and
 // skips the program step.
 func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) error {
@@ -230,8 +233,8 @@ func runUpdate(ctx context.Context, out, errOut io.Writer, o updateOptions) erro
 		self, _ := selfExecutable()
 		return fmt.Errorf("The cyfr at %s is %s, not release %s that cyfr update installed; your CYFR was not touched. Run 'cyfr update' again", self, version.Version, o.continueAs)
 	}
-	if _, err := os.Stat("cyfr.yaml"); err != nil {
-		fmt.Fprintln(out, "There is no CYFR in this directory (no cyfr.yaml), so the update ends with the program; run 'cyfr update' in a CYFR's directory to update it.")
+	if !access.HasComposeFile(".") {
+		fmt.Fprintf(out, "There is no CYFR in this directory, so the update ends with the program: it holds no compose file (%s). To update a CYFR, run 'cyfr update' in its directory, the one that holds its docker-compose.yml.\n", strings.Join(access.ComposeMainFiles, ", "))
 		return nil
 	}
 	return runHomeUpdate(ctx, out, errOut, o.yes)

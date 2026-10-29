@@ -306,8 +306,8 @@ func runRestore(ctx context.Context, snapshot string, start bool, out, errOut io
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if _, err := os.Stat("cyfr.yaml"); err != nil {
-		return errors.New("Not in a cyfr project directory (no cyfr.yaml found).\nRun 'cyfr restore' in the project the snapshot was taken of")
+	if !access.HasComposeFile(".") {
+		return fmt.Errorf("There is no CYFR in this directory, so nothing was restored: it holds no compose file (%s). Run 'cyfr restore' in the directory the snapshot was taken of, the one that holds its docker-compose.yml", strings.Join(access.ComposeMainFiles, ", "))
 	}
 	dir, err := filepath.Abs(snapshot)
 	if err == nil {
