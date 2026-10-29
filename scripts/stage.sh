@@ -12,8 +12,10 @@
 #   stage<TAB>check<TAB>lane<TAB>hold<TAB>when<TAB>command
 #   stage    one of the five above
 #   check    [a-z0-9-]+, unique within its stage
-#   lane     none, which runs directly and admits only reads of seconds
-#            (`mix format --check-formatted`, `git grep`); or scoped,
+#   lane     none, which runs directly and admits only reads of seconds:
+#            exactly `mix format --check-formatted`, or one `git grep`
+#            with no shell operator (`;`, `&`, `|`, `<`, `>`, a backquote,
+#            `$(`) and no pager (`-O`), quoted or not; or scoped,
 #            proof or exclusive, the scripts/heavy-check.sh lane it queues
 #            in (-s, -p or no flag)
 #   hold     - for none, else heavy-check's -t in seconds
@@ -150,7 +152,13 @@ while IFS= read -r line || [ -n "$line" ]; do
   [ -n "${r_command//[[:space:]]/}" ] || refuse 65 "$table:$number: the command is empty"
   if [ "$r_lane" = none ]; then
     case $r_command in
-      'mix format --check-formatted'|'mix format --check-formatted '*|'git grep '*) ;;
+      *[\;\&\|\<\>\`]*|*'$('*)
+        refuse 65 "$table:$number: the none lane runs one command and no shell operator, not: $r_command" ;;
+      'mix format --check-formatted') ;;
+      'git grep '*)
+        case " ${r_command#git grep } " in
+          *' -O'*|*' --open-files-in-pager'*) refuse 65 "$table:$number: the none lane's git grep opens no pager: $r_command" ;;
+        esac ;;
       *) refuse 65 "$table:$number: the none lane runs only mix format --check-formatted and git grep, not: $r_command" ;;
     esac
   fi

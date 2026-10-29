@@ -205,6 +205,22 @@ refused 9 'handoff has a second check called compile' 'handoff|compile|scoped|60
 refused 9 'only save and handoff rows take tests' 'release|x|scoped|60|tests|echo x'
 refused 9 'only save and handoff rows take globs' 'nightly|x|scoped|60|apps/**|echo x'
 refused 9 'the none lane runs only mix format --check-formatted and git grep, not: mix test' 'handoff|x|none|-|always|mix test'
+refused 9 'the none lane runs one command and no shell operator, not: git grep -q . -- README.md; printf ran >"$STAGE_LOGDIR/unqueued"' \
+  'handoff|x|none|-|always|git grep -q . -- README.md; printf ran >"$STAGE_LOGDIR/unqueued"'
+[ ! -e "$S/logs-refused/unqueued" ] || fail 'a compound none row ran its second command'
+refused 9 'the none lane runs one command and no shell operator, not: git grep -q . -- README.md && echo x' 'handoff|x|none|-|always|git grep -q . -- README.md && echo x'
+# A pipe is the toy table's own field separator, so this row is written whole.
+{ printf '%s
+' "${toy_rows[@]}" | tr '|' '	'; printf 'handoff	x	none	-	always	git grep -q . -- README.md | cat
+'; } >"$repo/scripts/stages.tsv"
+stage refused -l "$S/logs-refused" handoff
+[ "$rc" = 65 ] && grep -qF 'stage: scripts/stages.tsv:9: the none lane runs one command and no shell operator, not: git grep -q . -- README.md | cat' "$S/refused.err" ||
+  fail "a piped none row gave $rc: $(cat "$S/refused.err")"
+refused 9 'the none lane runs one command and no shell operator, not: git grep -q "$(echo x)" -- README.md' 'handoff|x|none|-|always|git grep -q "$(echo x)" -- README.md'
+refused 9 "the none lane's git grep opens no pager: git grep -Ocat x" 'handoff|x|none|-|always|git grep -Ocat x'
+refused 9 "the none lane's git grep opens no pager: git grep --open-files-in-pager=cat x" 'handoff|x|none|-|always|git grep --open-files-in-pager=cat x'
+refused 9 'the none lane runs only mix format --check-formatted and git grep, not: mix format --check-formatted --dot-formatter x' \
+  'handoff|x|none|-|always|mix format --check-formatted --dot-formatter x'
 refused 9 'a row in the none lane holds nothing: its hold is -' 'handoff|x|none|60|always|git grep x'
 refused 9 "the hold '-' is not seconds" 'handoff|x|scoped|-|always|echo x'
 refused 9 "the check 'Compile' is not [a-z0-9-]+" 'handoff|Compile|scoped|60|always|echo x'
