@@ -59,6 +59,16 @@ defmodule Cyfr.Application do
     # start.
     :ok = Prima.ComponentFeatures.install!()
 
+    # The database is the one this release's schema built, and its tenant
+    # roster covers that schema: checked before the settings, the boot's
+    # first read of a row, so a database built from another version of the
+    # schema is refused here naming the database to recreate, and never as
+    # the settings' failed read of a column it lacks. The `arca`
+    # application opened the pool and migrated before this one started;
+    # the check reads through it and runs whether or not this boot
+    # migrated.
+    schema_check!()
+
     # The platform settings, before the tree and so before the execution
     # slots' pool or any other consumer reads one, whether or not this
     # boot migrated: the roster's defaults installed into Arca's accessor,
@@ -574,12 +584,10 @@ defmodule Cyfr.Application do
   # facts: this member's pinned values and the store revision it polls.
   defp pre_gate do
     [
-      # The database is the one this release's schema built, its tenant
-      # roster covers the schema, and its keyring is the one this boot
-      # resolved — before any worker reads a row or seals one under a
-      # different key wearing the same label. The `arca` application
-      # opened the pool and migrated before this one started; these read
-      # through it and run whether or not this boot migrated.
+      # The database's keyring is the one this boot resolved — before any
+      # worker reads a row or seals one under a different key wearing the
+      # same label. The schema check ran in `start/2`, before the
+      # settings' first read; this one needs the keyring resolved there.
       database_checks(),
       # The cell forms before its members claim their slots: a member that
       # believes it is alone because nothing connected it is precisely the
@@ -908,12 +916,23 @@ defmodule Cyfr.Application do
     :ok
   end
 
-  # One-shot checks that read the repo at boot, outside any test's
-  # sandbox; the suite turns them off and exercises `Arca.SchemaFingerprint`
-  # and `Cyfr.KeyringFingerprint` directly.
+  # The two checks of the database at boot read the repo outside any
+  # test's sandbox; the suite turns them off and exercises
+  # `Arca.SchemaFingerprint`, `Arca.TenantTables` and
+  # `Cyfr.KeyringFingerprint` directly. The schema check is a call in
+  # `start/2`; the keyring check is the tree's one-shot child.
+  defp schema_check! do
+    if Application.get_env(:cyfr, :database_checks_enabled, true) do
+      Arca.SchemaFingerprint.verify!()
+      Arca.TenantTables.verify_roster!()
+    end
+
+    :ok
+  end
+
   defp database_checks do
     if Application.get_env(:cyfr, :database_checks_enabled, true),
-      do: [Arca.SchemaFingerprint.Check, Cyfr.KeyringFingerprint.Check],
+      do: [Cyfr.KeyringFingerprint.Check],
       else: []
   end
 

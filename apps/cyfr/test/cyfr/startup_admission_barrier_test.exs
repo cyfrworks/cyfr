@@ -54,7 +54,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   ]
 
   @pre_gate [
-    Arca.SchemaFingerprint.Check,
     Cyfr.KeyringFingerprint.Check,
     Cluster.Supervisor,
     Cyfr.Cell,
@@ -211,7 +210,6 @@ defmodule Cyfr.StartupAdmissionBarrierTest do
   # offer is not among them: it runs after its start has returned, holding
   # its claim until it ends or is stopped.
   @no_process [
-    Arca.SchemaFingerprint.Check,
     Cyfr.KeyringFingerprint.Check,
     :declared_restore,
     Aqua.RunnerRecovery

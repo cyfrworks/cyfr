@@ -14,9 +14,10 @@ defmodule Arca.SchemaFingerprint do
   other version. There is no upgrade path: the refusal names the database
   to recreate.
 
-  Verified on every boot, whether the boot migrated or an operator did
-  (`Check`, with the tenant-table roster), by `Cyfr.Release.migrate/0`,
-  and by the test suite before it touches the database.
+  Verified on every boot, whether the boot migrated or an operator did,
+  as the boot's first read of a row (`Cyfr.Application.start/2`, with the
+  tenant-table roster), by `Cyfr.Release.migrate/0`, and by the test
+  suite before it touches the database.
   """
 
   require Logger
@@ -72,23 +73,6 @@ defmodule Arca.SchemaFingerprint do
     case verify() do
       :ok -> :ok
       {:error, message} -> raise message
-    end
-  end
-
-  defmodule Check do
-    @moduledoc false
-    # The boot step: the schema fingerprint, then the tenant-table roster
-    # against that schema, then `:ignore` — the supervisor proceeds only
-    # once both hold, and no process lingers.
-    use GenServer
-
-    def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-
-    @impl true
-    def init(_opts) do
-      Arca.SchemaFingerprint.verify!()
-      Arca.TenantTables.verify_roster!()
-      :ignore
     end
   end
 

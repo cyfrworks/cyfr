@@ -810,6 +810,55 @@ fi
 server_stop
 
 # ---------------------------------------------------------------------------
+# Case 6b: the same copy, its database built from another version of the
+# schema
+# ---------------------------------------------------------------------------
+
+step "a database built from another version of the schema is refused as that, before anything reads a row it lacks"
+# The copy's database is made what an older release's is: the recorded
+# fingerprint is another release's, and a column the settings' pin check
+# selects when it lists the cell's members (cell_leases.release) is gone.
+# The boot pins a setting (CYFR_LOG_LEVEL), so that check would list the
+# members: before the schema check preceded it, that read failed first and
+# the boot reported the pins unreadable instead of the database to
+# recreate. The boot runs under the refusal deadline: a release that does
+# not stop on its own is no refusal (`boot_refused`'s rule on 124 and 137).
+staled="$(cell_cyfr "$COPY" eval '{:ok, :ok, _} = Ecto.Migrator.with_repo(Arca.Repo, fn _ ->
+  :ok = Arca.ServerMetaStorage.compare_and_put(Arca.SchemaFingerprint.key(), Arca.SchemaFingerprint.current(), "an-older-schema")
+  %{} = Ecto.Adapters.SQL.query!(Arca.Repo, "ALTER TABLE cell_leases DROP COLUMN release")
+  :ok
+end); IO.puts("STALE_SCHEMA=ok")' | grep -c '^STALE_SCHEMA=ok' || true)"
+[ "$staled" = 1 ] || fail "the copy's database could not be made an older schema's"
+
+STALE_LOG="$WORK/stale.log"
+STALE_SENTENCE="was built from a different schema (an-older-schema)"
+set +e
+cell_env "$COPY" CYFR_LOG_LEVEL=info timeout -k "$BOOT_KILL_AFTER" "$BOOT_DEADLINE" "$REL/bin/cyfr" start >"$STALE_LOG" 2>&1
+status=$?
+set -e
+
+if [ "$status" -eq 0 ] || [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+  echo "::error::the release did not refuse a database built from another schema on its own (exit $status; 124 and 137 are the deadline's)" >&2
+  redact_log "$COPY" <"$STALE_LOG" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
+  exit 1
+fi
+
+if ! grep -qF -- "[Arca] FATAL: " "$STALE_LOG" || ! grep -qF -- "$STALE_SENTENCE" "$STALE_LOG"; then
+  echo "::error::the refused boot did not name the schema the database was built from" >&2
+  redact_log "$COPY" <"$STALE_LOG" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
+  exit 1
+fi
+
+if grep -q "pins could not be read" "$STALE_LOG"; then
+  echo "::error::the settings read the database before the schema check refused it" >&2
+  redact_log "$COPY" <"$STALE_LOG" >&2 || echo "(the log could not be redacted, so it is not printed)" >&2
+  exit 1
+fi
+
+echo "the boot exited $status, naming the database to recreate:"
+grep -o "\[Arca\] FATAL: .*$STALE_SENTENCE" "$STALE_LOG" | head -1
+
+# ---------------------------------------------------------------------------
 # Case 7: the storage reserve, on a filesystem that fills
 # ---------------------------------------------------------------------------
 
@@ -1071,4 +1120,4 @@ reserve_stop
 docker rm -f "$RESERVE_HOLDER" >/dev/null
 RESERVE_HOLDER=""
 
-step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its access mode implies, sets up a headless CYFR from the command line, refuses loudly, refuses every access setting the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore and keeps its storage reserve"
+step "the cyfr release boots on $ADAPTER, migrates itself, answers at the address its access mode implies, sets up a headless CYFR from the command line, refuses loudly, refuses every access setting the vectors refuse and a bind no assertion covers, restores from its backup, consumes a declared restore, refuses a database another schema built before reading it and keeps its storage reserve"

@@ -131,7 +131,7 @@ defmodule Cyfr.BoundaryDeclarationsTest do
        "the records door the gate's resources read through, whose execution and policy-log " <>
          "projections the request log's correlation renders with"},
       {~w(Repo.Errors), "the row plane's error convention, which callers rescue by"},
-      {~w(SchemaFingerprint SchemaFingerprint.Check AuditHandler Storage.UnitLocator),
+      {~w(SchemaFingerprint AuditHandler Storage.UnitLocator),
        "the composition root and the release task: the schema check, the audit " <>
          "handler and the overlay port it installs"}
     ],
