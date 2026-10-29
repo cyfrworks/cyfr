@@ -62,8 +62,10 @@ CYFR's first person, who administers it, with a passkey. Prism and the
 server reload as their files change; a change under `apps/locus` or to the
 Locus image's other inputs takes effect at the next start. Ctrl-C stops
 the server and removes the containers; the image stays, so a start with
-nothing changed builds nothing, and `scripts/janitor.sh` removes it once no
-worktree produces it and no loop uses it. `scripts/dev-stack.sh down` stops
+nothing changed builds nothing. The image is shared, so the janitor, not
+the loop, removes it once no worktree produces it and no loop uses it:
+run `scripts/janitor.sh --dry-run` to see what it would remove, then
+`scripts/janitor.sh` to remove it by hand. `scripts/dev-stack.sh down` stops
 the server and removes the containers a killed run of the same worktree
 left.
 
