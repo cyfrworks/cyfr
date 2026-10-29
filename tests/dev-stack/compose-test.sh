@@ -307,6 +307,13 @@ printf '%s\n' "$*" >>"$STUB_LOG/image.calls"
 [ -z "${STUB_IMAGE_STATUS:-}" ] || { echo "image: stub build failure" >&2; exit "$STUB_IMAGE_STATUS"; }
 echo "$STUB_IMAGE"
 STUB
+# A BASH_ENV for the script: it writes its pid to $STOP_MARK and stops,
+# once, when its function claim first probes a port, the claim already
+# taken.
+cat >"$scratch/claim-stop" <<'HOOK'
+set -T
+trap 'if [[ ${FUNCNAME[0]:-} == claim && $BASH_COMMAND == *held* && ! -e $STOP_MARK ]]; then echo $$ >"$STOP_MARK"; kill -STOP $$; fi' DEBUG
+HOOK
 cat >"$stubs/mix" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STUB_LOG/mix.calls"
@@ -649,13 +656,16 @@ case_network_overlap() {
   [ "$(calls | sed -n 4p)" = "$(declared "$slot_b")" ] || echo "the loop did not take slot $slot_b: $(calls)"
 }
 # claim_slot K CHECKOUT: slot K claimed by another loop of the host, in
-# $run_dir, until the case ends.
+# $run_dir, until the case ends, its record naming CHECKOUT and the live
+# process that holds the claim. Sets $claimer.
 claim_slot() {
   local file="$run_dir/cyfr-dev-slot.$1.lock"
-  printf 'pid 4242\ncheckout %s\n' "$2" >"$file"
+  : >"$file"
   flock "$file" sleep 120 &
-  holders+=("$!")
+  claimer=$!
+  holders+=("$claimer")
   for _ in $(seq 1 50); do flock -n "$file" true || break; sleep 0.1; done
+  printf 'pid %s\ncheckout %s\n' "$claimer" "$2" >"$file"
 }
 # The slot a worktree remembers is reused while it is free; when another
 # loop claims it, the loop takes the first free slot and says whose it is.
@@ -669,7 +679,7 @@ case_remembered() {
   claim_slot "$slot_b" /the/other/worktree
   STACK_SLOT="$slot_b" stack "$1" remembered-taken "$complete" 0600 "" STUB_SERVER_STATUS=0
   status_is 0
-  grep -qxF "dev-stack: slot $slot_b is taken (the loop of /the/other/worktree (pid 4242)), so this worktree's loop takes slot $slot_a." "$case_dir/out" ||
+  grep -qxF "dev-stack: slot $slot_b is taken (the loop of /the/other/worktree (pid $claimer)), so this worktree's loop takes slot $slot_a." "$case_dir/out" ||
     echo "the run did not name the remembered slot's loop: $(cat "$case_dir/out")"
   [ "$(calls | sed -n 3p)" = "$(declared "$slot_a")" ] || echo "the loop did not take the first free slot: $(calls)"
   remembers "$slot_a"
@@ -683,7 +693,7 @@ case_all_taken() {
   rm -rf "$run_dir" && mkdir -p "$run_dir"
   for k in $SLOTS; do
     claim_slot "$k" "/worktree/$k"
-    want+=("slot $k: the loop of /worktree/$k (pid 4242)")
+    want+=("slot $k: the loop of /worktree/$k (pid $claimer)")
   done
   stack "$1" all-taken "$complete" 0600 "" STUB_SERVER_STATUS=0
   [ "$(cat "$case_dir/status")" != 0 ] || echo "the run went on with every slot taken"
@@ -710,6 +720,32 @@ case_image_fails() {
   [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: scripts/image.sh gave no Locus image for this tree; its output ends above." ] ||
     echo "the run did not end on the image's failure: $(cat "$case_dir/err")"
   calls | grep -q " up " && echo "the stack started without an image: $(calls)"
+}
+# A start that finds a slot's claim held names the loop that holds it,
+# even one stopped the instant after it took the claim, before it looked
+# at the slot: here every other slot is claimed too.
+case_claim_named() {
+  local first pid k runner
+  run_dir="$scratch/case-named-run"
+  rm -rf "$run_dir" && mkdir -p "$run_dir"
+  prepare "$1" named-first "$complete" 0600
+  first="$case_dir"
+  command=""
+  launch BASH_ENV="$scratch/claim-stop" STOP_MARK="$first/stopped" STUB_SERVER_STATUS=0 &
+  runner=$!
+  for _ in $(seq 1 300); do [ -s "$first/stopped" ] && break; sleep 0.1; done
+  pid="$(cat "$first/stopped" 2>/dev/null)"
+  [ -n "$pid" ] || { echo "the first loop never took a claim"; kill "$runner" 2>/dev/null; run_dir=""; return; }
+  for k in $(seq 1 19); do claim_slot "$k" "/worktree/$k"; done
+  stack "$1" named-second "$complete" 0600 "" STUB_SERVER_STATUS=0
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the second loop went on with every slot taken"
+  case "$(tail -n 1 "$case_dir/err")" in
+    "dev-stack: every slot is taken: slot 0: the loop of $first (pid $pid); slot 1: "*) ;;
+    *) echo "the refusal does not name the loop that holds slot 0: $(tail -n 1 "$case_dir/err" | cut -c1-200)" ;;
+  esac
+  kill -CONT "$pid" 2>/dev/null
+  wait "$runner"
+  run_dir=""
 }
 case_server_ends() {
   stack "$1" server-ends "$complete" 0600 "" STUB_SERVER_STATUS=3
@@ -900,7 +936,7 @@ case_down_orphan() {
   kill -0 "$pid" 2>/dev/null || echo "down stopped process group $pid, which the record's start time does not match"
   kill -KILL "$pid" 2>/dev/null
 }
-BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan"
+BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_claim_named case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan"
 
 # boundary SCRIPT [CASE...]: the failures of SCRIPT under each case.
 boundary() {

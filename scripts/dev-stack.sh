@@ -179,20 +179,45 @@ for line in sys.stdin:
         break' "$2"
 }
 
+# holder FILE: the loop a held claim names, `the loop of CHECKOUT (pid
+# PID)`. Its owner writes it the instant it takes the claim and empties it
+# before it lets the claim go, so an empty record, or one naming a pid
+# that has exited, is read again for up to a second.
+holder() {
+  local pid checkout n=0
+  while :; do
+    pid="$(sed -n 's/^pid //p' "$1" 2>/dev/null | head -n 1)"
+    checkout="$(sed -n 's/^checkout //p' "$1" 2>/dev/null | head -n 1)"
+    if [ -n "$checkout" ] && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      printf 'the loop of %s (pid %s)' "$checkout" "$pid"
+      return 0
+    fi
+    [ "$n" -lt 10 ] || break
+    sleep 0.1
+    n=$((n + 1))
+  done
+  printf 'a loop that has not written its record in %s' "$1"
+}
+
 # claim K NETWORKS: slot K's claim, kept in CLAIM_FD, when the slot is
-# free; else nothing held and WHY saying what holds the slot.
+# free; else nothing held and WHY saying what holds the slot. The claim's
+# record names this run from the instant the claim is held, before the
+# slot is looked at.
 WHY=""
+CLAIM_FILE=""
 claim() {
   local k="$1" fd file port who
   file="$(claim_file "$k")"
   exec {fd}>>"$file"
   if ! flock -n "$fd"; then
     exec {fd}>&-
-    WHY="the loop of $(sed -n 's/^checkout //p' "$file" 2>/dev/null | head -n 1) (pid $(sed -n 's/^pid //p' "$file" 2>/dev/null | head -n 1))"
+    WHY="$(holder "$file")"
     return 1
   fi
+  printf 'pid %s\ncheckout %s\n' "$$" "$ROOT" >"$file"
   for port in $((4000 + 10 * k)) $((4001 + 10 * k)) $((4700 + 10 * k)) $((4701 + 10 * k)); do
     if who="$(held "$port")"; then
+      : >"$file"
       exec {fd}>&-
       WHY="127.0.0.1:$port, held by $who"
       return 1
@@ -200,12 +225,12 @@ claim() {
   done
   who="$(overlaps "$2" "$k")"
   if [ -n "$who" ]; then
+    : >"$file"
     exec {fd}>&-
     WHY="$who"
     return 1
   fi
-  printf 'pid %s\ncheckout %s\n' "$$" "$ROOT" >"$file"
-  CLAIM_FD="$fd"
+  CLAIM_FD="$fd" CLAIM_FILE="$file"
 }
 
 # take_slot: the slot this worktree remembers while it is free, else the
@@ -271,6 +296,9 @@ finish() {
       echo "dev-stack: the containers could not be removed; \`scripts/dev-stack.sh down\` removes them." >&2
   fi
   [ -z "$LOCK_FD" ] || : >"$LOCK"
+  # The claim's record emptied while the claim is still held: the exit lets
+  # the claim go.
+  [ -z "$CLAIM_FILE" ] || : >"$CLAIM_FILE"
   [ -z "$PRIVATE" ] || rm -rf "$PRIVATE"
   exit "$status"
 }
