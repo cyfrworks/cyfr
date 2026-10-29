@@ -25,7 +25,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   @external_resource @fixture
   @vectors @fixture |> File.read!() |> Jason.decode!()
 
-  @server ~w(CYFR_PORT CYFR_LOCUS_RUNTIME_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT
+  @server ~w(CYFR_PORT CYFR_PROXY_PORT CYFR_LOCUS_RUNTIME_WORKERS CYFR_HOST_API_BIND CYFR_HOST_API_PORT
              CYFR_LOCUS_BACKENDS_URL CYFR_PRIVATE_EGRESS_TARGETS CYFR_LOCUS_BUILDS_URL)
   @provisioned ~w(CYFR_GITHUB_CLIENT_ID CYFR_SETUP_TOKEN CYFR_LOCUS_RUNTIME_ROOT
                   CYFR_LOCUS_BACKENDS_KEY CYFR_LOCUS_BUILDS_KEY)
@@ -75,18 +75,19 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   defp declarations do
     guard = fn network, address, port ->
       %{
-        "image" => "cyfr-locus:dev",
+        "image" => "cyfr-locus:in-0123456789abcdef0123",
         "expose" => [port],
         "networks" => %{network => %{"aliases" => [network], "ipv4_address" => address}}
       }
     end
 
     %{
-      "name" => "cyfr-dev",
+      "name" => "cyfr-dev-0123456789",
       "x-prism" => "127.0.0.1:4555",
+      "x-prism-proxy" => "4556",
       "services" => %{
         "locus-runtime" => %{
-          "image" => "cyfr-locus:dev",
+          "image" => "cyfr-locus:in-0123456789abcdef0123",
           "environment" => %{
             "LOCUS_RUNTIME_SERVICE_ID" => service(),
             "LOCUS_RUNTIME_HOST_API_URL" => "http://172.16.250.1:4566",
@@ -111,6 +112,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   defp server_lines do
     [
       "server CYFR_PORT=4555",
+      "server CYFR_PROXY_PORT=4556",
       "server CYFR_LOCUS_RUNTIME_WORKERS=#{service()}=http://127.0.0.1:4565",
       "server CYFR_HOST_API_BIND=172.16.250.1",
       "server CYFR_HOST_API_PORT=4566",
@@ -339,6 +341,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     test "accepts each server setting .env or the environment sets as the declarations do" do
       File.write!(".env", """
       #{complete()}CYFR_PORT = 4555 # Prism
+      CYFR_PROXY_PORT=4556
       CYFR_LOCUS_RUNTIME_WORKERS=#{service()}=http://127.0.0.1:4565
       CYFR_HOST_API_BIND=172.16.250.1
       CYFR_HOST_API_URL=http://172.16.250.1:4566/
@@ -356,6 +359,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
     test "refuses, by name, a server setting from .env or the environment that disagrees" do
       for {name, value} <- [
             {"CYFR_PORT", "4000"},
+            {"CYFR_PROXY_PORT", "4001"},
             {"CYFR_LOCUS_RUNTIME_WORKERS", "wrk_elsewhere=http://127.0.0.1:4565"},
             {"CYFR_LOCUS_RUNTIME_WORKERS", "#{service()}=http://127.0.0.1:4200"},
             {"CYFR_LOCUS_RUNTIME_WORKERS",
@@ -383,6 +387,9 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
       File.write!(".env", complete() <> "CYFR_HOST_API_PORT=65536\n")
       refused("CYFR_HOST_API_PORT=\"65536\" is not a port from 1 to 65535.")
+
+      File.write!(".env", complete() <> "CYFR_PROXY_PORT=4556x\n")
+      refused("CYFR_PROXY_PORT")
     end
 
     test "refuses declarations it cannot read, naming what is missing" do
@@ -392,6 +399,9 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
             {&Map.delete(&1, "x-prism"), "does not declare x-prism as 127.0.0.1:<port>"},
             {&Map.put(&1, "x-prism", "0.0.0.0:4000"),
              "does not declare x-prism as 127.0.0.1:<port>"},
+            {&Map.delete(&1, "x-prism-proxy"), "does not declare x-prism-proxy as a port"},
+            {&Map.put(&1, "x-prism-proxy", "127.0.0.1:4556"),
+             "does not declare x-prism-proxy as a port"},
             {&put_in(&1, ["services", "locus-runtime", "ports"], []),
              "does not declare the runtime's id, callback address and one port on 127.0.0.1"},
             {&put_in(&1, ["services", "locus-backends-guard", "networks"], %{}),
@@ -405,36 +415,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
 
       File.write!("stack.json", "not json")
       refused("stack.json holds no compose configuration as JSON.")
-    end
-  end
-
-  describe "names" do
-    test "answers the project and the one image every service runs, reading nothing else" do
-      File.write!(
-        "stack.json",
-        declarations()
-        |> put_in(["services", "locus-backends"], %{"image" => "cyfr-locus:dev"})
-        |> Jason.encode!()
-      )
-
-      DevStack.run(["names", "stack.json"])
-      assert answers() == ["project cyfr-dev", "image cyfr-locus:dev"]
-      refute File.exists?(".env")
-    end
-
-    test "refuses services on two images, or no project" do
-      for edit <- [
-            &put_in(&1, ["services", "locus-backends"], %{
-              "image" => "ghcr.io/cyfrworks/cyfr-locus:latest"
-            }),
-            &Map.delete(&1, "name")
-          ] do
-        File.write!("stack.json", Jason.encode!(edit.(declarations())))
-
-        refused("does not declare a project name and one image for every service", fn ->
-          DevStack.run(["names", "stack.json"])
-        end)
-      end
     end
   end
 
@@ -475,7 +455,14 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStackTest do
   end
 
   test "any other arguments are refused with the usage" do
-    for args <- [[], ["settings"], ["settings", "stack.json", "a", "b"], ["endpoint"], ["key"]] do
+    for args <- [
+          [],
+          ["settings"],
+          ["settings", "stack.json", "a", "b"],
+          ["endpoint"],
+          ["names", "stack.json"],
+          ["key"]
+        ] do
       error = assert_raise Mix.Error, fn -> DevStack.run(args) end
       assert Exception.message(error) =~ "usage: mix cyfr.locus.dev_stack"
     end

@@ -18,6 +18,9 @@ await="$root/scripts/await-task.sh"
 contain_lib="$root/scripts/lib/contain.sh"
 scratch=$(mktemp -d /tmp/cyfr-heavy-test.XXXXXX)
 unset HEAVY_CHECK_HELD CONTAIN_REGISTRY CONTAIN_CLOSE_FDS CONTAIN_HOLD_FDS CONTAIN_FD_BASE CYFR_TEST_CORES
+# A check started under a check gets its parent's prefix and slot share;
+# every check here starts as an outermost one with neither.
+unset PROOF_RUN_PREFIX ERL_FLAGS CARGO_BUILD_JOBS HEAVY_CHECK_REPEAT
 unset AWAIT_PID AWAIT_POLL_SECONDS AWAIT_QUEUE_SECONDS
 # The checks' registries and watchdog pipes are made here, so a case can
 # see that none is left.
@@ -84,6 +87,12 @@ alive() {
   case $s in Z*|X*) return 1 ;; esac
 }
 dead() { ! alive "$1"; }
+is_stopped() {
+  local s
+  read -r s 2>/dev/null <"/proc/$1/stat" || return 1
+  s=${s##*) }
+  case $s in T*|t*) ;; *) return 1 ;; esac
+}
 status_of() { local s=0; "$@" >"$scratch/out" 2>"$scratch/err" || s=$?; echo "$s"; }
 has_line() { grep -qE -- "$1" "$2"; }
 ran() { has_line '^==> heavy-check: running ' "$1"; }
@@ -106,17 +115,28 @@ framed() {
 body() { sed '1d' "$1" | sed '$d' | sed '${/^$/d;}'; }
 host_free() { until_true 30 flock -n "$HEAVY_CHECK_LOCK" true; }
 registries() { find "$TMPDIR" -maxdepth 1 -name 'contain-registry.*' | wc -l | tr -d ' '; }
-# A check killed outright leaves its registry file and, when it had the
-# host, its holder record, which names a dead pid and so is never shown;
-# nothing else.
+# A check killed outright, or one whose survivors outlived KILL, leaves
+# its registry file and its lane's holder record, which stays until its
+# run is finished (its pid, group and watchdog gone) and the lane's next
+# holder replaces it; nothing else.
+run_finished() {
+  local line pid group watchdog
+  line=$(head -n 1 "$1")
+  pid=$(sed -n 's/^pid=\([0-9]*\) .*/\1/p' <<<"$line")
+  group=$(sed -n 's/.* group=\([0-9]*\) .*/\1/p' <<<"$line")
+  watchdog=$(sed -n 's/.* watchdog=\([0-9]*\) .*/\1/p' <<<"$line")
+  dead "$pid" || return 1
+  [ -z "$group" ] || ! kill -0 -- "-$group" 2>/dev/null || return 1
+  [ -z "$watchdog" ] || dead "$watchdog"
+}
 forget_killed() {
-  local pid
+  local f
   find "$TMPDIR" -maxdepth 1 -name 'contain-registry.*' -delete
-  if [ -e "$scratch/lock.holder" ]; then
-    pid=$(sed -n 's/^pid=\([0-9]*\) .*/\1/p' "$scratch/lock.holder")
-    dead "$pid" || fail "a holder record names a live check: $(cat "$scratch/lock.holder")"
-    rm -f "$scratch/lock.holder"
-  fi
+  for f in "$scratch/lock.holder" "$scratch/lock.proof.holder" "$scratch"/lock.slot[0-9].holder; do
+    [ -e "$f" ] || continue
+    until_true 30 run_finished "$f" || fail "a holder record names a run that is not finished: $(cat "$f")"
+    rm -f "$f"
+  done
 }
 # A pid that belonged to a process that has exited.
 gone_pid() { local p; sh -c 'exit 0' & p=$!; wait "$p" || :; echo "$p"; }
@@ -163,6 +183,17 @@ for fd in range(1024):
 with open(sys.argv[1], "w") as out:
     out.write("\n".join(fds) + "\n")
 FDPROBE
+# A BASH_ENV for a check: the check stops, once, the first time its
+# function $STOP_FN (or $STOP_FN2) runs a command matching the pattern
+# $STOP_CMD (or $STOP_CMD2), and $STOP_MARK is created as it does. In a
+# child process of the check, the check stops and the child goes on; with
+# $STOP_UNTIL set, the child then waits for that file to appear. The second
+# pair names the same moment in b1dfc572c's script, where these cases were
+# shown failing.
+cat > "$scratch/stop-at" <<'STOPAT'
+set -T
+trap 'if [[ ! -e $STOP_MARK ]] && { [[ ${FUNCNAME[0]:-} == "$STOP_FN" && $BASH_COMMAND == $STOP_CMD ]] || [[ -n ${STOP_FN2:-} && ${FUNCNAME[0]:-} == "$STOP_FN2" && $BASH_COMMAND == $STOP_CMD2 ]]; }; then : > "$STOP_MARK"; kill -STOP $$; while [[ -n ${STOP_UNTIL:-} && ! -e $STOP_UNTIL ]]; do sleep 0.05; done; fi' DEBUG
+STOPAT
 chmod +x "$scratch/hold" "$scratch/probe" "$scratch/stubborn"
 hold="$scratch/hold"
 probe="$scratch/probe"
@@ -191,6 +222,13 @@ t_nested() {
   [ "$(status_of "${hc[@]}" -s -- bash "$check" -s -- true)" = 0 ] || fail 'a scoped check inside a scoped check did not run'
   [ "$(status_of "${hc[@]}" -s -- bash "$check" -- true)" = 64 ] || fail 'an exclusive check started inside a scoped one'
   framed "$scratch/out" 64 || fail 'the refused nested check was not framed by its parent alone'
+  [ "$(status_of "${hc[@]}" -s -- bash "$check" -p -- true)" = 64 ] || fail 'a proof started inside a scoped check'
+  [ "$(status_of "${hc[@]}" -p -- bash "$check" -- true)" = 64 ] || fail 'an exclusive check started inside a proof'
+  framed "$scratch/out" 64 || fail 'the refused nested check was not framed by its proof alone'
+  [ "$(status_of "${hc[@]}" -p -- bash "$check" -p -- sh -c 'exit 6')" = 6 ] || fail 'a proof inside a proof did not run in place'
+  framed "$scratch/out" 6 || fail "a proof inside a proof wrote lines of its own: $(tr '\n' '|' < "$scratch/out")"
+  [ "$(status_of "${hc[@]}" -p -- bash "$check" -s -- sh -c 'echo "$HEAVY_CHECK_HELD"')" = 0 ] || fail 'a scoped check inside a proof did not run'
+  [ "$(body "$scratch/out")" = proof ] || fail "a scoped check inside a proof ran as $(body "$scratch/out"), not in place"
 }
 
 # --- the command's own result ----------------------------------------------
@@ -237,11 +275,14 @@ t_roster() {
   "${hc[@]}" -s -- env 2>/dev/null > "$scratch/env-raw"
   body "$scratch/env-raw" | sed 's/=.*//' > "$scratch/env-inside"
   added=$(grep -vxF -f "$scratch/env-before" "$scratch/env-inside" | LC_ALL=C sort | tr '\n' ' ')
-  [ "$added" = 'CONTAIN_REGISTRY CYFR_TEST_CORES HEAVY_CHECK_HELD ' ] || fail "a scoped check added: $added"
-  "${hc[@]}" -- env 2>/dev/null > "$scratch/env-raw"
-  body "$scratch/env-raw" | sed 's/=.*//' > "$scratch/env-inside"
-  added=$(grep -vxF -f "$scratch/env-before" "$scratch/env-inside" | LC_ALL=C sort | tr '\n' ' ')
-  [ "$added" = 'CONTAIN_REGISTRY HEAVY_CHECK_HELD ' ] || fail "an exclusive check added: $added"
+  [ "$added" = 'CARGO_BUILD_JOBS CONTAIN_REGISTRY CYFR_TEST_CORES ERL_FLAGS HEAVY_CHECK_HELD PROOF_RUN_PREFIX ' ] || fail "a scoped check added: $added"
+  local mode
+  for mode in exclusive proof; do
+    if [ "$mode" = proof ]; then "${hc[@]}" -p -- env 2>/dev/null > "$scratch/env-raw"; else "${hc[@]}" -- env 2>/dev/null > "$scratch/env-raw"; fi
+    body "$scratch/env-raw" | sed 's/=.*//' > "$scratch/env-inside"
+    added=$(grep -vxF -f "$scratch/env-before" "$scratch/env-inside" | LC_ALL=C sort | tr '\n' ' ')
+    [ "$added" = 'CONTAIN_REGISTRY HEAVY_CHECK_HELD PROOF_RUN_PREFIX ' ] || fail "a $mode check added: $added"
+  done
 }
 
 # The command's descriptors are its caller's: the lock descriptors and the
@@ -285,8 +326,9 @@ t_exclusive() {
   until_true 10 test -s "$scratch/lock.holder" || fail 'the holder left no record'
   "${hc[@]}" -- sh -c "echo b >> $scratch/order" >/dev/null 2>"$scratch/b.err" &
   b=$!; started+=("$b")
-  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) behind:' "$scratch/b.err" || fail 'a queued check did not say so'
-  has_line "^==> heavy-check:   pid=$a mode=exclusive since=.* hold=2700s command=sh -c " "$scratch/b.err" || fail 'a queued check did not name the holder'
+  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) 1 of 1 waiting, behind:$' "$scratch/b.err" || fail 'a queued check did not say so'
+  has_line "^==> heavy-check:   pid=$a mode=exclusive since=[0-9T:+-]+ hold=2700s group=[0-9]+ watchdog=[0-9]+ checkout=$(pwd -P) command=sh -c " "$scratch/b.err" ||
+    fail "a queued check did not name the holder: $(cat "$scratch/b.err")"
   [ "$(cat "$scratch/order")" = a-start ] || fail 'a second exclusive check ran beside the first'
   touch "$scratch/release-a"; wait "$a"; wait "$b"
   [ "$(tr '\n' ' ' < "$scratch/order")" = 'a-start a-end b ' ] || fail "exclusive checks overlapped: $(tr '\n' ' ' < "$scratch/order")"
@@ -306,29 +348,35 @@ t_redaction() {
     fail "the record lost the name or the URLs' shape: $(cat "$scratch/lock.holder")"
   "${hc[@]}" -- true >/dev/null 2>"$scratch/r2.err" &
   b=$!; started+=("$b")
-  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) behind:' "$scratch/r2.err" || fail 'the second check did not queue'
+  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) 1 of 1 waiting, behind:$' "$scratch/r2.err" || fail 'the second check did not queue'
   has_line '^==> heavy-check:   pid=[0-9]+ .*command=env CYFR_DATABASE_URL=… .* --url=postgres://\[redacted\]@h/db ' "$scratch/r2.err" || fail 'the queued check did not name the holder'
   touch "$scratch/release-r"; wait "$a"; wait "$b"
   ! grep -q secret "$scratch/r1.err" "$scratch/r2.err" || fail "the value reached a check's stderr"
 }
 
-# --- a check killed outright: its watchdog keeps the host, with no live record ---
-# The killed check's record names its dead pid, so a check that queues
-# behind the watchdog is told the holder has no live record, and runs once
-# the watchdog has stopped the command, here a leader that ignores TERM
-# under a grace long enough to queue behind it.
+# --- a check killed outright: its record names its run until the run ends ---
+# The killed check's record names its command's group and its watchdog,
+# which still run, so a check that queues behind the watchdog names it,
+# and runs once the watchdog has stopped the command, here a leader that
+# ignores TERM under a grace long enough to queue behind it. The record
+# stays until that next holder replaces it.
 t_killed_holder() {
-  local k n
+  local k n leader record
   "${clean[@]}" HEAVY_CHECK_GRACE=30 bash "$check" -- "$scratch/stubborn" "$scratch/kh.pid" >/dev/null 2>"$scratch/kh1.err" &
   k=$!; started+=("$k")
   until_true 10 test -s "$scratch/kh.pid" || fail 'the command did not start'
+  leader=$(cat "$scratch/kh.pid")
+  until_true 10 has_line " group=$leader watchdog=[0-9]+ " "$scratch/lock.holder" || fail "the record does not name the command's group: $(cat "$scratch/lock.holder")"
   kill -KILL "$k"
   wait "$k" 2>/dev/null || :
+  record=$(cat "$scratch/lock.holder")
   "${hc[@]}" -- touch "$scratch/after-killed" >/dev/null 2>"$scratch/kh2.err" &
   n=$!; started+=("$n")
-  until_true 10 has_line 'behind a holder with no live record' "$scratch/kh2.err" || fail "did not queue behind the killed check's watchdog: $(cat "$scratch/kh2.err")"
+  until_true 10 has_line "^==> heavy-check:   pid=$k mode=exclusive .* group=$leader watchdog=[0-9]+ " "$scratch/kh2.err" ||
+    fail "did not queue naming the killed check's run: $(cat "$scratch/kh2.err")"
+  [ "$(cat "$scratch/lock.holder")" = "$record" ] || fail "the killed check's record changed while its run lived"
   [ ! -e "$scratch/after-killed" ] || fail "ran beside the killed check's command"
-  kill -KILL "$(cat "$scratch/kh.pid")"
+  kill -KILL "$leader"
   wait "$n" || fail 'the queued check failed'
   [ -e "$scratch/after-killed" ] || fail "did not run after the killed check's watchdog let the host go"
   forget_killed
@@ -410,19 +458,13 @@ t_scoped_stale() {
 # A stopped waiter holds back no one: a later waiter takes the slot that
 # frees, and the stopped one runs once it is continued.
 t_scoped_stopped() {
-  local a b p n
+  local a b p
   rm -f "$scratch/order"
   hold_slots ss
   "${hc[@]}" -s -- sh -c "echo A >> $scratch/order" >/dev/null 2>"$scratch/ssA.err" &
   a=$!; started+=("$a")
   until_true 10 has_line '^==> heavy-check: queued \(scoped\)' "$scratch/ssA.err" || fail 'the first waiter did not queue'
-  # Stopped between scans: a waiter stopped inside one holds the queue
-  # lock, which the queue_lock case covers.
-  for n in $(seq 50); do
-    kill -STOP "$a"
-    flock -n "$scratch/lock.queue" true && break
-    kill -CONT "$a"; sleep 0.1
-  done
+  kill -STOP "$a"
   until_true 5 sh -c "sed 's/.*) //' /proc/$a/stat | grep -q '^T'" || fail 'the first waiter was not stopped'
   "${hc[@]}" -s -- sh -c "echo B >> $scratch/order" >/dev/null 2>"$scratch/ssB.err" &
   b=$!; started+=("$b")
@@ -435,28 +477,180 @@ t_scoped_stopped() {
   [ "$(tr '\n' ' ' < "$scratch/order")" = 'B A ' ] || fail "the continued waiter did not run after: $(tr '\n' ' ' < "$scratch/order")"
 }
 
-# The queue lock's holder may be stopped: a waiter's wait for it keeps the
-# queue deadline and answers TERM at once.
-t_queue_lock() {
-  local f q s t
-  flock "$scratch/lock.queue" "$hold" "$scratch/release-ql" &
-  f=$!; started+=("$f")
-  until_true 10 sh -c "! flock -n '$scratch/lock.queue' true" || fail 'the queue lock was not taken'
-  t=$SECONDS
-  [ "$(status_of "${hc[@]}" -s -w 1 -- touch "$scratch/ql-ran")" = 75 ] || fail 'a check waiting on the queue lock past its deadline did not exit 75'
-  [ $((SECONDS - t)) -le 3 ] || fail "the queue deadline answered only after $((SECONDS - t))s"
-  framed "$scratch/out" 75 || fail "the queue deadline was not framed: $(tr '\n' '|' < "$scratch/out")"
-  has_line '^==> heavy-check: queue deadline after ' "$scratch/err" || fail 'the queue deadline was not reported'
-  "${hc[@]}" -s -- touch "$scratch/ql-ran" >"$scratch/ql.out" 2>"$scratch/ql.err" &
-  q=$!; started+=("$q")
-  until_true 10 pgrep -P "$q" -x flock >/dev/null || fail 'the second check did not wait for the queue lock'
-  kill -TERM "$q"
-  until_true 2 dead "$q" || fail 'a check waiting on the queue lock given TERM was still running 2s later'
-  s=0; wait "$q" || s=$?
-  [ "$s" = 143 ] || fail "a check waiting on the queue lock given TERM exited $s"
-  framed "$scratch/ql.out" 143 "$q" || fail "not framed by pid $q: $(tr '\n' '|' < "$scratch/ql.out")"
-  [ ! -e "$scratch/ql-ran" ] || fail 'a check that never had the queue lock ran'
-  touch "$scratch/release-ql"; wait "$f"
+# A waiter stopped while it queued and continued after its queue deadline
+# exits 75 and runs nothing, though its lane is free by then.
+t_expired_waiter() {
+  local lane flag h w s
+  for lane in exclusive proof scoped; do
+    flag=$(lane_flag "$lane")
+    rm -f "$scratch"/release-* "$scratch/ew-ran"
+    "${hc[@]}" -- "$hold" "$scratch/release-ew" >/dev/null 2>&1 &
+    h=$!; started+=("$h")
+    until_true 10 test -s "$scratch/lock.holder" || fail 'the holder did not start'
+    "${hc[@]}" $flag -w 2 -- touch "$scratch/ew-ran" >"$scratch/ew.out" 2>"$scratch/ew.err" &
+    w=$!; started+=("$w")
+    until_true 10 has_line "^==> heavy-check: queued \\($lane\\)" "$scratch/ew.err" || fail "the $lane waiter did not queue"
+    kill -STOP "$w"
+    until_true 5 is_stopped "$w" || fail "the $lane waiter did not stop"
+    alive "$w" || fail "the $lane waiter gave up before it was stopped"
+    touch "$scratch/release-ew"; wait "$h"
+    sleep 3
+    kill -CONT "$w"
+    s=0; wait "$w" || s=$?
+    [ "$s" = 75 ] || fail "a $lane waiter continued after its queue deadline exited $s"
+    [ ! -e "$scratch/ew-ran" ] || fail "a $lane waiter ran after its queue deadline"
+    framed "$scratch/ew.out" 75 "$w" || fail "not framed by pid $w: $(tr '\n' '|' < "$scratch/ew.out")"
+    has_line '^==> heavy-check: queue deadline after ' "$scratch/ew.err" || fail 'the queue deadline was not reported'
+  done
+}
+
+# A check stopped in its first-in-line test keeps no one waiting: a later
+# check starts at once, without queuing, the stopped one keeps its ticket,
+# and once continued it runs too.
+t_admission_stopped() {
+  local lane flag a s t
+  for lane in exclusive proof scoped; do
+    flag=$(lane_flag "$lane")
+    rm -f "$scratch/order" "$scratch/stopped-mark"
+    "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_FN=places STOP_CMD='ahead=0 waiting=0' STOP_MARK="$scratch/stopped-mark" \
+      bash "$check" $flag -- sh -c "echo stopped >> $scratch/order" >/dev/null 2>"$scratch/as1.err" &
+    a=$!; started+=("$a")
+    until_true 10 test -e "$scratch/stopped-mark" || fail "the $lane check did not reach its first-in-line test"
+    until_true 5 is_stopped "$a" || fail "the $lane check did not stop"
+    t=$SECONDS
+    [ "$(status_of "${hc[@]}" $flag -w 10 -- sh -c "echo later >> $scratch/order")" = 0 ] ||
+      fail "a later $lane check behind one stopped in admission exited $(tail -n 1 "$scratch/out"): $(cat "$scratch/err")"
+    [ $((SECONDS - t)) -le 3 ] || fail "a later $lane check waited $((SECONDS - t))s behind one stopped in admission"
+    has_line "^==> heavy-check: running \\($lane\\) " <(grep '^==> heavy-check: ' "$scratch/err" | sed -n 1p) ||
+      fail "the later $lane check did not start at once: $(grep '^==> heavy-check: ' "$scratch/err")"
+    [ "$(cat "$scratch/order")" = later ] || fail "the later $lane check did not run: $(cat "$scratch/order" 2>/dev/null)"
+    [ -n "$(find "$scratch" -maxdepth 1 -name 'lock.wait.*')" ] || fail "the stopped $lane check lost its ticket"
+    kill -CONT "$a"
+    s=0; wait "$a" || s=$?
+    [ "$s" = 0 ] || fail "the continued $lane check exited $s"
+    [ "$(tr '\n' ' ' < "$scratch/order")" = 'later stopped ' ] || fail "the continued $lane check did not run after: $(tr '\n' ' ' < "$scratch/order")"
+  done
+}
+
+# Arrival is a ticket's publication: a check stopped as it publishes
+# arrives when it is continued, after the checks that published meanwhile,
+# which keep their order. (On b1dfc572c it is stopped as it writes the
+# ticket counter, and resumed writes it back.)
+t_ticket_order() {
+  local h a c d p
+  rm -f "$scratch/order" "$scratch/stopped-mark"
+  "${hc[@]}" -- "$hold" "$scratch/release-to" >/dev/null 2>&1 &
+  h=$!; started+=("$h")
+  until_true 10 test -s "$scratch/lock.holder" || fail 'the holder did not start'
+  "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark" \
+    STOP_FN=publish_ticket STOP_CMD='ticket=*' STOP_FN2=take_ticket STOP_CMD2='*LOCK.seq*' \
+    bash "$check" -- sh -c "echo A >> $scratch/order" >/dev/null 2>"$scratch/toA.err" &
+  a=$!; started+=("$a")
+  until_true 10 test -e "$scratch/stopped-mark" || fail 'the first check did not reach its publication'
+  until_true 5 is_stopped "$a" || fail 'the first check did not stop'
+  "${hc[@]}" -- sh -c "echo C >> $scratch/order" >/dev/null 2>"$scratch/toC.err" &
+  c=$!; started+=("$c")
+  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) 1 of 1 waiting' "$scratch/toC.err" || fail "the second check did not queue first: $(cat "$scratch/toC.err")"
+  "${hc[@]}" -- sh -c "echo D >> $scratch/order" >/dev/null 2>"$scratch/toD.err" &
+  d=$!; started+=("$d")
+  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) 2 of 2 waiting' "$scratch/toD.err" || fail "the third check did not queue second: $(cat "$scratch/toD.err")"
+  kill -CONT "$a"
+  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) 3 of 3 waiting' "$scratch/toA.err" ||
+    fail "the continued check did not arrive last: $(cat "$scratch/toA.err")"
+  touch "$scratch/release-to"
+  for p in "$h" "$c" "$d" "$a"; do wait "$p" || fail "check $p failed"; done
+  [ "$(tr '\n' ' ' < "$scratch/order")" = 'C D A ' ] || fail "the checks ran out of arrival order: $(tr '\n' ' ' < "$scratch/order")"
+}
+
+# Admission never waits on another waiter: with one check stopped in its
+# first-in-line test and another stopped about to take its lane (on
+# b1dfc572c, one holding the admission lock and one about to replace it),
+# a third starts at once, without queuing, and the two run once continued.
+t_admission_two_stopped() {
+  local a b c p
+  rm -f "$scratch/order" "$scratch"/stopped-mark*
+  "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark-a" STOP_FN=places STOP_CMD='ahead=0 waiting=0' \
+    bash "$check" -- sh -c "echo A >> $scratch/order" >/dev/null 2>"$scratch/tsA.err" &
+  a=$!; started+=("$a")
+  until_true 10 test -e "$scratch/stopped-mark-a" || fail 'the first check did not reach its first-in-line test'
+  until_true 5 is_stopped "$a" || fail 'the first check did not stop'
+  "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark-b" \
+    STOP_FN=admit STOP_CMD='since=*' STOP_FN2=queue_lock STOP_CMD2='mv -f *' \
+    bash "$check" -- sh -c "echo B >> $scratch/order" >/dev/null 2>"$scratch/tsB.err" &
+  b=$!; started+=("$b")
+  until_true 10 test -e "$scratch/stopped-mark-b" || fail 'the second check did not reach its lane'
+  until_true 5 is_stopped "$b" || fail 'the second check did not stop'
+  [ "$(status_of "${hc[@]}" -w 10 -- sh -c "echo C >> $scratch/order")" = 0 ] || fail "the third check exited: $(cat "$scratch/err")"
+  has_line '^==> heavy-check: running \(exclusive\) ' <(grep '^==> heavy-check: ' "$scratch/err" | sed -n 1p) ||
+    fail "the third check did not start at once: $(grep '^==> heavy-check: ' "$scratch/err")"
+  [ "$(cat "$scratch/order")" = C ] || fail "the third check did not run alone: $(tr '\n' ' ' < "$scratch/order")"
+  kill -CONT "$a" "$b"
+  for p in "$a" "$b"; do wait "$p" || fail "a continued check $p failed"; done
+  [ "$(sort "$scratch/order" | tr '\n' ' ')" = 'A B C ' ] || fail "the continued checks did not both run: $(tr '\n' ' ' < "$scratch/order")"
+}
+
+# A holder stopped just after it took its lane, before it wrote its record,
+# keeps the lane: --status shows it held and stopped, a later check queues
+# behind it naming it and keeps its own deadline, and the holder runs once
+# continued.
+t_stopped_holder() {
+  local lane flag a s
+  for lane in exclusive proof scoped; do
+    flag=$(lane_flag "$lane")
+    rm -f "$scratch/order" "$scratch/stopped-mark" "$scratch/sh-ran"
+    "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark" \
+      STOP_FN=take_lane STOP_CMD='write_record*' STOP_FN2=take_lane STOP_CMD2='return 0' \
+      bash "$check" $flag -- sh -c "echo held >> $scratch/order" >/dev/null 2>"$scratch/shA.err" &
+    a=$!; started+=("$a")
+    until_true 10 test -e "$scratch/stopped-mark" || fail "the $lane check did not reach its lane"
+    until_true 5 is_stopped "$a" || fail "the $lane check did not stop"
+    until_true 5 sh -c "'$check' --status | grep -q '^held $lane pid=$a state=stopped since='" ||
+      fail "--status with the $lane holder stopped: $("${hc[@]}" --status)"
+    [ "$(status_of "${hc[@]}" -w 2 -- touch "$scratch/sh-ran")" = 75 ] || fail "a check behind the stopped $lane holder exited $(tail -n 1 "$scratch/out")"
+    [ ! -e "$scratch/sh-ran" ] || fail "a check ran beside the stopped $lane holder"
+    has_line "^==> heavy-check:   pid=$a mode=$lane " "$scratch/err" || fail "the queued check did not name the stopped $lane holder: $(cat "$scratch/err")"
+    kill -CONT "$a"
+    s=0; wait "$a" || s=$?
+    [ "$s" = 0 ] || fail "the continued $lane holder exited $s"
+    [ "$(cat "$scratch/order")" = held ] || fail "the continued $lane holder did not run"
+  done
+}
+
+# Two checks that take lanes at once, with no lock over admission, never
+# keep more than PROOF_SCOPED scoped slots beside a proof: a scoped check
+# held after it took its slot, and a proof held after it took the proof
+# lane, are each read by the other, and one gives its locks back. Both
+# orders, with one scoped check already running.
+t_lane_race() {
+  local s1 a b first second
+  [ "$(sed -n 's/^PROOF_SCOPED=//p' "$check")" = 1 ] || return 0
+  for first in scoped proof; do
+    case $first in scoped) second=proof ;; proof) second=scoped ;; esac
+    rm -f "$scratch/order" "$scratch"/stopped-mark "$scratch"/release-*
+    "${hc[@]}" -s -- sh -c "echo s1+ >> $scratch/order; $hold $scratch/release-s1; echo s1- >> $scratch/order" >/dev/null 2>&1 &
+    s1=$!; started+=("$s1")
+    until_true 10 has_line '^s1\+$' "$scratch/order" || fail 'the running scoped check did not start'
+    # The first is held in its child with its locks taken and not yet read
+    # against the other lanes; the check itself is stopped meanwhile.
+    "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark" STOP_UNTIL="$scratch/release-child" \
+      STOP_FN=take_lane STOP_CMD="$(case $first in scoped) echo 'proof_running*' ;; proof) echo '\[ "$(slots_taken)" -le*' ;; esac)" \
+      bash "$check" "$(lane_flag "$first")" -- sh -c "echo $first+ >> $scratch/order; $hold $scratch/release-a; echo $first- >> $scratch/order" >/dev/null 2>"$scratch/lrA.err" &
+    a=$!; started+=("$a")
+    until_true 10 test -e "$scratch/stopped-mark" || fail "the $first check did not reach its reading"
+    until_true 5 is_stopped "$a" || fail "the $first check did not stop"
+    "${hc[@]}" "$(lane_flag "$second")" -w 30 -- sh -c "echo $second+ >> $scratch/order; $hold $scratch/release-b; echo $second- >> $scratch/order" >/dev/null 2>"$scratch/lrB.err" &
+    b=$!; started+=("$b")
+    until_true 10 has_line "^==> heavy-check: queued \\($second\\)" "$scratch/lrB.err" ||
+      fail "the $second check did not wait beside the $first one's locks: $(cat "$scratch/lrB.err")"
+    touch "$scratch/release-child"
+    kill -CONT "$a"
+    until_true 10 has_line "^$first\\+\$" "$scratch/order" || fail "the $first check did not run once released"
+    ! has_line "^$second\\+\$" "$scratch/order" || fail "a proof and two scoped checks ran together: $(tr '\n' ' ' < "$scratch/order")"
+    touch "$scratch/release-a"
+    until_true 10 has_line "^$second\\+\$" "$scratch/order" || fail "the $second check did not run after the $first one"
+    touch "$scratch/release-b" "$scratch/release-s1"
+    wait "$a" && wait "$b" && wait "$s1" || fail 'a check failed'
+  done
 }
 
 # --- scoped and exclusive never together; a queued exclusive goes first -------
@@ -479,6 +673,314 @@ t_precedence() {
   touch "$scratch/release-2"
   local p; for p in "${pids[@]}"; do wait "$p"; done
   [ "$(tr '\n' ' ' < "$scratch/order")" = 's1 e s2 ' ] || fail 'the queued exclusive check did not go first'
+}
+
+
+# --- the lanes, under either measured PROOF_SCOPED ------------------------------
+# variant V: a copy of the script with PROOF_SCOPED=V beside its libraries;
+# its command line in $vc.
+variant() {
+  local d="$scratch/ps$1"
+  if [ ! -e "$d/heavy-check.sh" ]; then
+    mkdir -p "$d/lib"
+    sed "s/^PROOF_SCOPED=[01]\$/PROOF_SCOPED=$1/" "$check" > "$d/heavy-check.sh"
+    grep -qx "PROOF_SCOPED=$1" "$d/heavy-check.sh" || fail "the copy does not set PROOF_SCOPED=$1"
+    cp "$root/scripts/lib/contain.sh" "$root/scripts/lib/run-names.sh" "$d/lib/"
+  fi
+  vc=("${clean[@]}" bash "$d/heavy-check.sh")
+}
+started_in_order() { has_line "^$1\$" "$scratch/order"; }
+not_started() { sleep 1; ! has_line "^$1\$" "$scratch/order"; }
+# The line numbers of the order file's words must rise in the order given.
+in_order() {
+  local word last=0 n
+  for word in "$@"; do
+    n=$(grep -nx "$word" "$scratch/order" | head -n 1 | cut -d: -f1)
+    [ -n "$n" ] && [ "$n" -gt "$last" ] || return 1
+    last=$n
+  done
+}
+
+# Three scoped run and a proof queues, then two more scoped queue. With
+# PROOF_SCOPED=1 the proof starts once two scoped have ended and runs beside
+# the third; with 0 it starts once all three have ended and runs alone.
+# Either way the two later scoped wait until the proof has started: no
+# starvation and no deadlock.
+proof_among_scoped() {
+  local v=$1 n pids=()
+  variant "$v"
+  rm -f "$scratch/order" "$scratch"/release-*
+  for n in 1 2 3; do
+    "${vc[@]}" -s -- sh -c "echo s$n >> $scratch/order; $hold $scratch/release-s$n; echo s$n-end >> $scratch/order" >/dev/null 2>&1 &
+    pids+=("$!"); started+=("$!")
+    until_true 10 started_in_order "s$n" || fail "PROOF_SCOPED=$v: scoped $n did not start"
+  done
+  "${vc[@]}" -p -- sh -c "echo p >> $scratch/order; $hold $scratch/release-p; echo p-end >> $scratch/order" >/dev/null 2>"$scratch/pp.err" &
+  pids+=("$!"); started+=("$!")
+  until_true 10 has_line '^==> heavy-check: queued \(proof\) 1 of 1 waiting, behind:$' "$scratch/pp.err" || fail "PROOF_SCOPED=$v: the proof did not queue"
+  for n in 1 2; do
+    "${vc[@]}" -s -- sh -c "echo l$n >> $scratch/order; $hold $scratch/release-l" >/dev/null 2>"$scratch/pl$n.err" &
+    pids+=("$!"); started+=("$!")
+    until_true 10 has_line "^==> heavy-check: queued \\(scoped\\) $((n + 1)) of $((n + 1)) waiting, behind:\$" "$scratch/pl$n.err" ||
+      fail "PROOF_SCOPED=$v: later scoped $n did not queue behind the proof: $(cat "$scratch/pl$n.err")"
+  done
+  touch "$scratch/release-s1"
+  until_true 10 started_in_order s1-end || fail "PROOF_SCOPED=$v: scoped 1 did not end"
+  not_started p || fail "PROOF_SCOPED=$v: the proof started beside two scoped checks"
+  not_started l1 || fail "PROOF_SCOPED=$v: a later scoped check passed the queued proof"
+  touch "$scratch/release-s2"
+  if [ "$v" = 1 ]; then
+    until_true 10 started_in_order p || fail 'PROOF_SCOPED=1: the proof did not start beside one scoped check'
+    not_started l1 || fail 'PROOF_SCOPED=1: a later scoped check started beside the proof and its scoped check'
+    touch "$scratch/release-s3"
+    until_true 10 started_in_order l1 || fail 'PROOF_SCOPED=1: the next scoped check did not start beside the proof'
+    not_started l2 || fail 'PROOF_SCOPED=1: two scoped checks ran beside the proof'
+    touch "$scratch/release-p"
+    until_true 10 started_in_order l2 || fail 'PROOF_SCOPED=1: the last scoped check did not start once the proof ended'
+  else
+    until_true 10 started_in_order s2-end || fail 'PROOF_SCOPED=0: scoped 2 did not end'
+    not_started p || fail 'PROOF_SCOPED=0: the proof started beside a scoped check'
+    touch "$scratch/release-s3"
+    until_true 10 started_in_order p || fail 'PROOF_SCOPED=0: the proof did not start once the scoped checks ended'
+    not_started l1 || fail 'PROOF_SCOPED=0: a scoped check started beside the proof'
+    touch "$scratch/release-p"
+    until_true 10 started_in_order l1 && until_true 10 started_in_order l2 || fail 'PROOF_SCOPED=0: the later scoped checks did not start once the proof ended'
+  fi
+  in_order p l1 || fail "PROOF_SCOPED=$v: a later scoped check started before the proof: $(tr '\n' ' ' < "$scratch/order")"
+  in_order p l2 || fail "PROOF_SCOPED=$v: a later scoped check started before the proof: $(tr '\n' ' ' < "$scratch/order")"
+  touch "$scratch/release-l"
+  for n in "${pids[@]}"; do wait "$n"; done
+}
+t_proof_among_scoped() { proof_among_scoped 1; proof_among_scoped 0; }
+
+# A second proof waits for the first, and an exclusive check waits for the
+# proof and for the proof that queued before it.
+proof_queue() {
+  local v=$1 pids=() p
+  variant "$v"
+  rm -f "$scratch/order" "$scratch"/release-*
+  "${vc[@]}" -p -- sh -c "echo a >> $scratch/order; $hold $scratch/release-a" >/dev/null 2>&1 &
+  pids+=("$!"); started+=("$!")
+  until_true 10 started_in_order a || fail "PROOF_SCOPED=$v: the first proof did not start"
+  "${vc[@]}" -p -- sh -c "echo b >> $scratch/order; $hold $scratch/release-b" >/dev/null 2>"$scratch/pb.err" &
+  pids+=("$!"); started+=("$!")
+  until_true 10 has_line '^==> heavy-check: queued \(proof\) 1 of 1 waiting, behind:$' "$scratch/pb.err" || fail "PROOF_SCOPED=$v: the second proof did not queue"
+  has_line '^==> heavy-check:   pid=[0-9]+ mode=proof ' "$scratch/pb.err" || fail "PROOF_SCOPED=$v: the second proof did not name the first"
+  "${vc[@]}" -- sh -c "echo e >> $scratch/order" >/dev/null 2>"$scratch/pe.err" &
+  pids+=("$!"); started+=("$!")
+  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) 2 of 2 waiting, behind:$' "$scratch/pe.err" || fail "PROOF_SCOPED=$v: the exclusive check did not queue behind the proofs"
+  not_started b || fail "PROOF_SCOPED=$v: two proofs ran together"
+  touch "$scratch/release-a"
+  until_true 10 started_in_order b || fail "PROOF_SCOPED=$v: the second proof did not start after the first"
+  not_started e || fail "PROOF_SCOPED=$v: an exclusive check started beside a proof"
+  touch "$scratch/release-b"
+  for p in "${pids[@]}"; do wait "$p"; done
+  [ "$(tr '\n' ' ' < "$scratch/order")" = 'a b e ' ] || fail "PROOF_SCOPED=$v: the order was $(tr '\n' ' ' < "$scratch/order")"
+}
+t_proof_queue() { proof_queue 1; proof_queue 0; }
+
+# --- waiters outside the queue: a killed or stopped waiter holds back no one -----
+lane_flag() { case $1 in exclusive) ;; proof) echo -p ;; scoped) echo -s ;; esac; }
+t_waiters_skipped() {
+  local lane flag h a b p
+  for lane in exclusive proof scoped; do
+    flag=$(lane_flag "$lane")
+    rm -f "$scratch/order" "$scratch"/release-*
+    "${hc[@]}" -- "$hold" "$scratch/release-h" >/dev/null 2>&1 &
+    h=$!; started+=("$h")
+    until_true 10 test -s "$scratch/lock.holder" || fail 'the holder did not start'
+    # A waiter killed outright leaves its ticket, which no longer counts.
+    "${hc[@]}" $flag -- sh -c "echo killed >> $scratch/order" >/dev/null 2>"$scratch/wk.err" &
+    a=$!; started+=("$a")
+    until_true 10 has_line "^==> heavy-check: queued \\($lane\\)" "$scratch/wk.err" || fail "the $lane waiter did not queue"
+    kill -KILL "$a"; wait "$a" 2>/dev/null || :
+    "${hc[@]}" $flag -- sh -c "echo later >> $scratch/order" >/dev/null 2>"$scratch/wl.err" &
+    b=$!; started+=("$b")
+    until_true 10 has_line "^==> heavy-check: queued \\($lane\\) 1 of 1 waiting" "$scratch/wl.err" ||
+      fail "a killed $lane waiter still counted ahead: $(cat "$scratch/wl.err")"
+    touch "$scratch/release-h"
+    wait "$h"; wait "$b"
+    [ "$(cat "$scratch/order")" = later ] || fail "a killed $lane waiter held back a later one: $(tr '\n' ' ' < "$scratch/order")"
+    # A stopped waiter: a later one passes it, and it runs once continued.
+    rm -f "$scratch/order" "$scratch"/release-*
+    "${hc[@]}" -- "$hold" "$scratch/release-h" >/dev/null 2>&1 &
+    h=$!; started+=("$h")
+    until_true 10 test -s "$scratch/lock.holder" || fail 'the holder did not start'
+    "${hc[@]}" $flag -- sh -c "echo stopped >> $scratch/order" >/dev/null 2>"$scratch/ws.err" &
+    a=$!; started+=("$a")
+    until_true 10 has_line "^==> heavy-check: queued \\($lane\\)" "$scratch/ws.err" || fail "the $lane waiter did not queue"
+    kill -STOP "$a"
+    until_true 5 sh -c "sed 's/.*) //' /proc/$a/stat | grep -q '^T'" || fail "the $lane waiter was not stopped"
+    "${hc[@]}" $flag -- sh -c "echo later >> $scratch/order" >/dev/null 2>"$scratch/wl.err" &
+    b=$!; started+=("$b")
+    until_true 10 has_line "^==> heavy-check: queued \\($lane\\) 1 of 1 waiting" "$scratch/wl.err" ||
+      fail "a stopped $lane waiter still counted ahead: $(cat "$scratch/wl.err")"
+    touch "$scratch/release-h"
+    wait "$h"; wait "$b"
+    [ "$(cat "$scratch/order")" = later ] || fail "a stopped $lane waiter held back a later one: $(tr '\n' ' ' < "$scratch/order")"
+    kill -CONT "$a"; wait "$a"
+    [ "$(tr '\n' ' ' < "$scratch/order")" = 'later stopped ' ] || fail "the continued $lane waiter did not run after: $(tr '\n' ' ' < "$scratch/order")"
+  done
+}
+
+# --- the run record: the command's group and its watchdog ------------------------
+t_run_record() {
+  local lane flag file a line group watchdog
+  for lane in exclusive proof scoped; do
+    flag=$(lane_flag "$lane")
+    case $lane in exclusive) file=lock.holder ;; proof) file=lock.proof.holder ;; scoped) file=lock.slot1.holder ;; esac
+    # Each lane's command writes its pid whole under a name of its own: a
+    # file left by the lane before, or one read while it is written, would
+    # stand for this command's pid.
+    rm -f "$scratch"/release-* "$scratch/rr.pid"
+    "${hc[@]}" $flag -- sh -c "echo \$\$ > $scratch/rr.pid.new && mv $scratch/rr.pid.new $scratch/rr.pid; $hold $scratch/release-rr" >/dev/null 2>&1 &
+    a=$!; started+=("$a")
+    until_true 10 test -s "$scratch/rr.pid" || fail "the $lane command did not start"
+    until_true 10 has_line ' watchdog=[0-9]+ ' "$scratch/$file" || fail "the $lane record names no watchdog: $(cat "$scratch/$file" 2>/dev/null)"
+    line=$(cat "$scratch/$file")
+    group=$(sed -n 's/.* group=\([0-9]*\) .*/\1/p' <<<"$line")
+    watchdog=$(sed -n 's/.* watchdog=\([0-9]*\) .*/\1/p' <<<"$line")
+    [ "$group" = "$(cat "$scratch/rr.pid")" ] || fail "the $lane record's group is $group, not the command's $(cat "$scratch/rr.pid")"
+    [ "$(ps -o pgid= -p "$(cat "$scratch/rr.pid")" | tr -d ' ')" = "$group" ] || fail "the $lane command does not lead the group its record names"
+    alive "$watchdog" || fail "the $lane record's watchdog $watchdog is not running"
+    tr '\0' ' ' < "/proc/$watchdog/cmdline" | grep -q '__contain_watchdog' || fail "the $lane record's watchdog $watchdog is not a watchdog"
+    has_line "^pid=$a mode=$lane since=[0-9T:+-]+ hold=2700s group=$group watchdog=$watchdog checkout=$(pwd -P) command=sh -c " "$scratch/$file" ||
+      fail "the $lane record is not in the documented form: $line"
+    touch "$scratch/release-rr"; wait "$a"
+    [ ! -e "$scratch/$file" ] || fail "a finished $lane run left its record"
+    until_true 10 dead "$watchdog" || fail "the $lane watchdog outlived its run"
+  done
+}
+# A command that ends while its watchdog lives, here a stopped one, leaves
+# a run that is not finished: its record stays, its lane stays held and
+# --status shows it held, until the watchdog exits.
+t_record_watchdog() {
+  local lane flag file lock a s line watchdog
+  for lane in exclusive proof scoped; do
+    flag=$(lane_flag "$lane")
+    case $lane in
+      exclusive) file=lock.holder lock=lock ;;
+      proof) file=lock.proof.holder lock=lock.proof ;;
+      scoped) file=lock.slot1.holder lock=lock.slot1 ;;
+    esac
+    rm -f "$scratch"/release-*
+    "${hc[@]}" $flag -- "$hold" "$scratch/release-rw" >/dev/null 2>"$scratch/rw.err" &
+    a=$!; started+=("$a")
+    until_true 10 has_line ' watchdog=[0-9]+ ' "$scratch/$file" || fail "the $lane record names no watchdog: $(cat "$scratch/$file" 2>/dev/null)"
+    line=$(cat "$scratch/$file")
+    watchdog=$(sed -n 's/.* watchdog=\([0-9]*\) .*/\1/p' <<<"$line")
+    kill -STOP "$watchdog"
+    touch "$scratch/release-rw"
+    s=0; wait "$a" || s=$?
+    [ "$s" = 0 ] || { kill -CONT "$watchdog"; fail "the $lane check exited $s"; }
+    [ "$(cat "$scratch/$file" 2>/dev/null)" = "$line" ] || { kill -CONT "$watchdog"; fail "the $lane record went while its watchdog lived"; }
+    flock -n "$scratch/$lock" true && { kill -CONT "$watchdog"; fail "the $lane lane was free while its watchdog lived"; }
+    "${hc[@]}" --status >"$scratch/rw.status" 2>&1
+    has_line "^held $lane pid=$a " "$scratch/rw.status" || { kill -CONT "$watchdog"; fail "--status with the $lane watchdog alive: $(cat "$scratch/rw.status")"; }
+    kill -CONT "$watchdog"
+    until_true 10 dead "$watchdog" || fail "the $lane watchdog did not exit once continued"
+    [ "$(status_of "${hc[@]}" --status)" = 0 ] && [ "$(cat "$scratch/out")" = idle ] || fail "the host was not idle once the $lane watchdog exited: $(cat "$scratch/out")"
+    forget_killed
+  done
+}
+
+# --- the environment ---------------------------------------------------------------
+t_environment() {
+  local p seed share
+  # A caller's prefix passes unchanged.
+  PROOF_RUN_PREFIX=mine- "${hc[@]}" -s -- sh -c 'echo "$PROOF_RUN_PREFIX"' >"$scratch/out" 2>/dev/null
+  [ "$(body "$scratch/out")" = mine- ] || fail "a caller's PROOF_RUN_PREFIX became $(body "$scratch/out")"
+  # An absent one becomes the caller's worktree's prefix, with this check's pid.
+  . "$root/scripts/lib/run-names.sh"
+  seed=$(run_names_seed "$root")
+  (cd "$root" && "${hc[@]}" -s -- sh -c 'echo "$PROOF_RUN_PREFIX"') >"$scratch/out" 2>/dev/null
+  p=$(sed -n 's/^_START=//p' "$scratch/out")
+  [ "$(body "$scratch/out")" = "cyfr-$seed-$p-" ] || fail "the injected prefix is $(body "$scratch/out"), not cyfr-$seed-$p-"
+  [[ "$(body "$scratch/out")" =~ $RUN_NAMES_PATTERN ]] || fail 'the injected prefix does not match RUN_NAMES_PATTERN'
+  # Outside a worktree, the checkout the script lives in names it.
+  (cd "$scratch" && "${hc[@]}" -- sh -c 'echo "$PROOF_RUN_PREFIX"') >"$scratch/out" 2>/dev/null
+  p=$(sed -n 's/^_START=//p' "$scratch/out")
+  [ "$(body "$scratch/out")" = "cyfr-$seed-$p-" ] || fail "outside a worktree the prefix is $(body "$scratch/out"), not the script's checkout's"
+  # A caller's ERL_FLAGS keeps its words, the slot's +S after them.
+  ERL_FLAGS='+sbwt none -kernel inet_dist_use_interface {127,0,0,1}' "${hc[@]}" -s -- sh -c 'echo "$ERL_FLAGS|$CYFR_TEST_CORES|$CARGO_BUILD_JOBS"' >"$scratch/out" 2>/dev/null
+  share=$(body "$scratch/out" | cut -d'|' -f2)
+  case $share in ''|*[!0-9]*) fail "no share: $(body "$scratch/out")" ;; esac
+  [ "$(body "$scratch/out")" = "+sbwt none -kernel inet_dist_use_interface {127,0,0,1} +S $share:$share|$share|$share" ] ||
+    fail "the scoped environment was $(body "$scratch/out")"
+  "${hc[@]}" -p -- sh -c 'echo "${ERL_FLAGS-unset}|${CYFR_TEST_CORES-unset}|${CARGO_BUILD_JOBS-unset}"' >"$scratch/out" 2>/dev/null
+  [ "$(body "$scratch/out")" = 'unset|unset|unset' ] || fail "a proof was given a share of the cores: $(body "$scratch/out")"
+}
+
+# --- status ----------------------------------------------------------------------
+t_status() {
+  local a b gone
+  [ "$(status_of "${hc[@]}" --status)" = 0 ] || fail '--status failed on an idle host'
+  [ "$(cat "$scratch/out")" = idle ] || fail "an idle host's status was: $(cat "$scratch/out")"
+  [ ! -s "$scratch/err" ] || fail "--status wrote to stderr: $(cat "$scratch/err")"
+  [ "$(status_of "${hc[@]}" --status -- true)" = 64 ] || fail '--status took a command'
+  # A record whose run has finished is never shown: here one naming a pid
+  # that has exited and neither group nor watchdog, as a stub.
+  gone=$(gone_pid)
+  printf 'pid=%s mode=proof since=2026-10-28T21:02:41+0000 hold=3600s group= watchdog= checkout=/nowhere command=gone\n' "$gone" > "$scratch/lock.proof.holder"
+  "${hc[@]}" -- "$hold" "$scratch/release-st" >/dev/null 2>&1 &
+  a=$!; started+=("$a")
+  until_true 10 has_line ' watchdog=[0-9]+ ' "$scratch/lock.holder" || fail 'the holder did not start'
+  "${hc[@]}" -s -- true >/dev/null 2>"$scratch/stw.err" &
+  b=$!; started+=("$b")
+  until_true 10 has_line '^==> heavy-check: queued \(scoped\)' "$scratch/stw.err" || fail 'the waiter did not queue'
+  [ "$(status_of "${hc[@]}" --status)" = 0 ] || fail '--status failed'
+  [ "$(wc -l < "$scratch/out" | tr -d ' ')" = 2 ] || fail "--status did not print one holder and one waiter: $(cat "$scratch/out")"
+  has_line "^held exclusive pid=$a since=[0-9T:+-]+ elapsed=[0-9]+s hold=2700s checkout=$(pwd -P) command=$hold $scratch/release-st\$" <(sed -n 1p "$scratch/out") ||
+    fail "the holder line: $(sed -n 1p "$scratch/out")"
+  has_line "^waiting 1 scoped pid=$b queued=[0-9T:+-]+ waited=[0-9]+s checkout=$(pwd -P) command=true\$" <(sed -n 2p "$scratch/out") ||
+    fail "the waiter line: $(sed -n 2p "$scratch/out")"
+  if grep -q "pid=$gone" "$scratch/out"; then fail 'a dead holder was shown'; fi
+  touch "$scratch/release-st"; wait "$a"; wait "$b"
+  rm -f "$scratch/lock.proof.holder"
+  [ "$(status_of "${hc[@]}" --status)" = 0 ] && [ "$(cat "$scratch/out")" = idle ] || fail "the host was not idle after: $(cat "$scratch/out")"
+}
+
+# --- a queued check repeats its place ------------------------------------------------
+t_queued_repeat() {
+  local h a b w s=0
+  "${hc[@]}" -- "$hold" "$scratch/release-qr" >/dev/null 2>&1 &
+  h=$!; started+=("$h")
+  until_true 10 test -s "$scratch/lock.holder" || fail 'the holder did not start'
+  HEAVY_CHECK_REPEAT=1 "${hc[@]}" -- true >"$scratch/qa.out" 2>"$scratch/qa.err" &
+  a=$!; started+=("$a")
+  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) 1 of 1 waiting, behind:$' "$scratch/qa.err" || fail 'the first waiter did not queue'
+  # Its output and its queued lines in one file, as a task's output is kept.
+  HEAVY_CHECK_REPEAT=1 "${hc[@]}" -s -- true >"$scratch/qb.out" 2>&1 &
+  b=$!; started+=("$b")
+  until_true 10 has_line '^==> heavy-check: queued \(scoped\) 2 of 2 waiting, behind:$' "$scratch/qb.out" || fail 'the second waiter did not say its place'
+  until_true 10 has_line '^==> heavy-check: queued \(exclusive\) 1 of 2 waiting, behind:$' "$scratch/qa.err" || fail 'the first waiter did not repeat its place'
+  [ "$(grep -c '^==> heavy-check: queued' "$scratch/qa.err")" -ge 2 ] || fail 'the queued line was not repeated'
+  # The waiter keeps a run deadline from running while the lines repeat.
+  AWAIT_POLL_SECONDS=1 AWAIT_PID=$b bash "$await" "$scratch/qb.out" '' 2 >"$scratch/await.out" 2>"$scratch/await.err" &
+  w=$!; started+=("$w")
+  sleep 4
+  alive "$w" || fail "the waiter ended while the check was queued: $(cat "$scratch/await.err")"
+  touch "$scratch/release-qr"
+  wait "$h"; wait "$a"; wait "$b"
+  wait "$w" || s=$?
+  [ "$s" = 0 ] || fail "the waiter answered $s: $(cat "$scratch/await.err")"
+}
+
+# --- the proof lane's deadline and signals while queued --------------------------
+t_queue_proof() {
+  local q p s=0
+  "${hc[@]}" -p -- "$hold" "$scratch/release-qp" >/dev/null 2>&1 &
+  q=$!; started+=("$q")
+  until_true 10 test -s "$scratch/lock.proof.holder" || fail 'the proof did not start'
+  "${hc[@]}" -p -w 1 -- touch "$scratch/ran-anyway" >"$scratch/out" 2>"$scratch/err" &
+  p=$!; started+=("$p")
+  wait "$p" || s=$?
+  [ "$s" = 75 ] || fail "a proof that never got its lane exited $s"
+  [ ! -e "$scratch/ran-anyway" ] || fail 'a proof ran past its queue deadline'
+  has_line '^==> heavy-check: queue deadline after ' "$scratch/err" || fail 'the queue deadline was not reported'
+  has_line '^==> heavy-check:   still held by pid=[0-9]+ mode=proof ' "$scratch/err" || fail 'the deadline did not name the holder'
+  framed "$scratch/out" 75 "$p" || fail "the queue path was not framed by pid $p"
+  touch "$scratch/release-qp"; wait "$q"
 }
 
 # --- the hold deadline: what the command started is dead when the status is in
@@ -571,7 +1073,12 @@ t_usr1() {
 # signal_queued MODE SIGNAL STATUS [LAUNCHER...]
 signal_queued() {
   local mode=$1 sig=$2 want=$3 i q s=0 holders=() n; shift 3
-  if [ "$mode" = scoped ]; then
+  if [ "$mode" = proof ]; then
+    "${hc[@]}" -p -- "$hold" "$scratch/release-sq" >/dev/null 2>&1 &
+    holders+=("$!"); started+=("$!")
+    until_true 10 test -s "$scratch/lock.proof.holder" || fail 'the proof holder did not start'
+    set -- "$@" "${hc[@]}" -p
+  elif [ "$mode" = scoped ]; then
     for n in 1 2 3; do
       "${hc[@]}" -s -- sh -c "touch $scratch/sq$n.started; $hold $scratch/release-sq" >/dev/null 2>&1 &
       holders+=("$!"); started+=("$!")
@@ -602,6 +1109,9 @@ t_term_queued() { signal_queued exclusive TERM 143; }
 t_int_queued() { signal_queued exclusive INT 130 "${with_int[@]}"; }
 t_hup_queued() { signal_queued exclusive HUP 129 "${with_hup[@]}"; }
 t_term_queued_scoped() { signal_queued scoped TERM 143; }
+t_term_queued_proof() { signal_queued proof TERM 143; }
+t_int_queued_proof() { signal_queued proof INT 130 "${with_int[@]}"; }
+t_hup_queued_proof() { signal_queued proof HUP 129 "${with_hup[@]}"; }
 
 # --- refusals after the start line are framed too -------------------------------
 t_refusals() {
@@ -692,10 +1202,11 @@ t_registry_nested() {
 survivor_stub() {
   mkdir -p "$scratch/stub/lib"
   cp "$check" "$scratch/stub/heavy-check.sh"
+  cp "$root/scripts/lib/run-names.sh" "$scratch/stub/lib/"
   cat > "$scratch/stub/lib/contain.sh" <<'STUB'
 CONTAIN_SURVIVORS=
 contain_registry_create() { CONTAIN_REGISTRY=$(mktemp "${TMPDIR:-/tmp}/contain-registry.XXXXXX"); export CONTAIN_REGISTRY; }
-contain_start() { [ "$1" != -g ] || shift 2; "$@" & CONTAIN_PID=$!; }
+contain_start() { [ "$1" != -g ] || shift 2; "$@" & CONTAIN_PID=$!; CONTAIN_WATCHDOG=; }
 contain_wait() { local s=0; wait "$1" || s=$?; CONTAIN_SURVIVORS=$STUB_SURVIVOR; return "$s"; }
 contain_stop() { CONTAIN_SURVIVORS=$STUB_SURVIVOR; }
 contain_sweep_registry() { CONTAIN_SURVIVORS=; }
@@ -715,6 +1226,9 @@ t_survivor() {
   has_line "^==> heavy-check: outlived KILL: $v; waiting up to 60s" "$scratch/err" || fail 'did not name the survivor'
   has_line '^==> heavy-check: exit 1 after ' <(tail -n 1 "$scratch/err") || fail "the exit line was not last: $(tail -n 1 "$scratch/err")"
   [ "$(registries)" = 0 ] || fail 'left its registry'
+  # The survivor ended within the wait, so the run is finished and its
+  # record goes.
+  [ ! -e "$scratch/lock.holder" ] || fail "a finished run left its record: $(cat "$scratch/lock.holder")"
   wait "$v" || :
 }
 t_survivor_remains() {
@@ -726,7 +1240,9 @@ t_survivor_remains() {
   [ "$s" = 3 ] || fail "a failed command with a survivor exited $s"
   framed "$scratch/out" 3 || fail 'not framed'
   [ "$(tail -n 1 "$scratch/err")" = "==> heavy-check: still alive after KILL and 60s: $v" ] || fail "the last line did not name the survivor: $(tail -n 1 "$scratch/err")"
+  has_line "^pid=[0-9]+ mode=exclusive " "$scratch/lock.holder" || fail 'a run whose survivor outlived KILL removed its record'
   kill "$v"; wait "$v" 2>/dev/null || :
+  forget_killed
 }
 
 # --- await-task.sh -------------------------------------------------------------------
@@ -883,8 +1399,11 @@ t_await_queue() {
 
 cases=(
   usage admission nested result frame roster fds fd_base elsewhere
-  exclusive redaction killed_holder scoped scoped_order scoped_stale scoped_stopped queue_lock precedence
-  hold hold_frame queue term int hup usr1 term_queued int_queued hup_queued term_queued_scoped refusals
+  exclusive redaction killed_holder scoped scoped_order scoped_stale scoped_stopped
+  expired_waiter admission_stopped ticket_order admission_two_stopped stopped_holder lane_race precedence
+  proof_among_scoped proof_queue waiters_skipped run_record record_watchdog environment status queued_repeat queue_proof
+  hold hold_frame queue term int hup usr1 term_queued int_queued hup_queued term_queued_scoped
+  term_queued_proof int_queued_proof hup_queued_proof refusals
   leftover sigkill nested_session registry_nested survivor survivor_remains
   await_result await_died await_line await_nested await_bare await_reused await_explicit
   await_statuses await_usage await_zombie await_queue
@@ -901,6 +1420,7 @@ for c in "${cases[@]}"; do
   host_free || fail 'the scratch lock was still held after the case'
   [ ! -e "$scratch/lock.holder" ] || fail 'a holder record was left'
   [ -z "$(find "$scratch" -maxdepth 1 -name 'lock.slot*.holder')" ] || fail 'a scoped holder record was left'
+  [ ! -e "$scratch/lock.proof.holder" ] || fail 'a proof holder record was left'
   [ "$(registries)" = 0 ] || fail 'a registry was left'
   [ -z "$(find "$scratch" -maxdepth 1 -name 'lock.wait.*')" ] || fail 'a scoped ticket was left'
 done

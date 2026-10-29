@@ -15,6 +15,9 @@ defmodule Cyfr.AsyncEnvGuardTest do
   `:application.set_env` and `unset_env`. A comment or a string that names a
   write is no write.
 
+  Prima.Test.Env's public functions count as writes at their callers too, so
+  moving a mutation into that helper never admits it to an async test.
+
   Code a user runs is part of the user. A `use` runs the code its case carries:
   the `setup` and `setup_all` callbacks of a `use ExUnit.CaseTemplate` module,
   which ExUnit injects into every user; the body of a template's `using` block;
@@ -52,6 +55,7 @@ defmodule Cyfr.AsyncEnvGuardTest do
 
   @app_writes [:put_env, :delete_env, :put_all_env]
   @erl_writes [:set_env, :unset_env]
+  @env_writes Prima.Test.Env.__info__(:functions) |> Keyword.keys() |> Enum.uniq()
   @conn_case "apps/cyfr/test/support/conn_case.ex"
 
   defp root, do: Path.expand("../../../..", __DIR__)
@@ -64,7 +68,7 @@ defmodule Cyfr.AsyncEnvGuardTest do
              Enum.map_join(violations, "\n", & &1.message)
   end
 
-  test "the walk reads test and support files, and conn_case holds exactly its two admitted writes" do
+  test "the walk reads test and support files, and conn_case holds exactly its admitted baseline call" do
     sources = tree_sources()
 
     assert Enum.any?(sources, fn {path, _} -> String.ends_with?(path, "_test.exs") end)
@@ -74,13 +78,32 @@ defmodule Cyfr.AsyncEnvGuardTest do
     in_file = for w <- writes, w.file == @conn_case, do: {w.line, w.what, w.guarded?}
 
     assert Enum.sort(in_file) == [
-             {96, "Application.delete_env", true},
-             {97, "Application.put_env", true}
+             {96, "Prima.Test.Env.put_app_env", true}
            ],
-           "conn_case.ex must hold its two admitted writes and no other: #{inspect(in_file)}"
+           "conn_case.ex must hold its admitted baseline call and no other: #{inspect(in_file)}"
   end
 
   describe "the positive control" do
+    test "every Env function is a write at an async caller, qualified, aliased or imported" do
+      for function <- @env_writes,
+          {prefix, call} <- [
+            {"", "Prima.Test.Env.#{function}()"},
+            {"alias Prima.Test.Env, as: Settings", "Settings.#{function}()"},
+            {"import Prima.Test.Env", "#{function}()"}
+          ] do
+        source = """
+        defmodule Plant.EnvUserTest do
+          use ExUnit.Case, async: true
+          #{prefix}
+          test "calls", do: #{call}
+        end
+        """
+
+        assert [%{file: "plant/env_user_test.exs", line: 4}] =
+                 scan([{"plant/env_user_test.exs", source}]).violations
+      end
+    end
+
     test "an unguarded write in an async module is found, at its line" do
       source = """
       defmodule Plant.AsyncWriteTest do
@@ -726,11 +749,18 @@ defmodule Cyfr.AsyncEnvGuardTest do
 
   defp collect({{:., _, [{:__aliases__, _, parts}, fun]}, meta, args}, ctx, acc)
        when is_atom(fun) do
+    target = expand_parts(visible_aliases(acc), parts)
+
     acc =
-      if fun in @app_writes and expand_parts(visible_aliases(acc), parts) == ["Application"] do
-        add_write(acc, ctx, "Application.#{fun}", meta[:line])
-      else
-        add_call(acc, ctx, {:remote, parts, fun, length(args), meta[:line]})
+      cond do
+        fun in @app_writes and target == ["Application"] ->
+          add_write(acc, ctx, "Application.#{fun}", meta[:line])
+
+        fun in @env_writes and target == ["Prima", "Test", "Env"] ->
+          add_write(acc, ctx, "Prima.Test.Env.#{fun}", meta[:line])
+
+        true ->
+          add_call(acc, ctx, {:remote, parts, fun, length(args), meta[:line]})
       end
 
     collect(args, ctx, acc)
@@ -753,10 +783,15 @@ defmodule Cyfr.AsyncEnvGuardTest do
 
   defp collect({fun, meta, args}, ctx, acc) when is_atom(fun) and is_list(args) do
     acc =
-      if fun in @app_writes and "Application" in visible_imports(acc) do
-        add_write(acc, ctx, "Application.#{fun}", meta[:line])
-      else
-        add_call(acc, ctx, {:local, fun, length(args), meta[:line]})
+      cond do
+        fun in @app_writes and "Application" in visible_imports(acc) ->
+          add_write(acc, ctx, "Application.#{fun}", meta[:line])
+
+        fun in @env_writes and "Prima.Test.Env" in visible_imports(acc) ->
+          add_write(acc, ctx, "Prima.Test.Env.#{fun}", meta[:line])
+
+        true ->
+          add_call(acc, ctx, {:local, fun, length(args), meta[:line]})
       end
 
     collect(args, ctx, acc)

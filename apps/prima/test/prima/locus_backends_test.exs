@@ -308,8 +308,22 @@ defmodule Prima.LocusBackendsTest do
             "now" => now,
             "refusal" => refusal
           } <- @vectors["auth_rejected"] do
-        kind = String.to_existing_atom(kind)
-        expected = String.to_existing_atom(refusal)
+        # The names are spelled here, so no atom is made from the vector. The
+        # module exposes no roster of these kinds or auth refusals (its `kind`
+        # and `auth_refusal` types), and an unknown name raises.
+        kind =
+          case kind do
+            "control" -> :control
+            "invoke" -> :invoke
+          end
+
+        expected =
+          case refusal do
+            "unknown_version" -> :unknown_version
+            "malformed" -> :malformed
+            "outside_window" -> :outside_window
+            "bad_mac" -> :bad_mac
+          end
 
         assert {:error, ^expected} = LocusBackends.verify(kind, key(), header, body, now), name
 
@@ -342,8 +356,10 @@ defmodule Prima.LocusBackendsTest do
                  ~w(name refusal sequence),
                name
 
-        # The refusal is the roster's, at its status, as its body.
-        code = String.to_existing_atom(refusal)
+        # The refusal is the roster's, at its status, as its body. It is found among the module's
+        # classes by name, so no atom is made from the vector.
+        code = Enum.find(LocusBackends.classes(), &(Atom.to_string(&1) == refusal))
+        assert code, name
         assert LocusBackends.status(code) == refusals[refusal]["status"], name
         assert LocusBackends.encode_refusal(code) == refusals[refusal]["body"], name
 

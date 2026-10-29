@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+apps/prima/test/prima/component_features_test.exs	4	pending
+apps/prima/test/prima/json_formatter_test.exs	2	pending
+apps/prima/test/prima/timing_formatter_test.exs	5	pending

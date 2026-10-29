@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 CYFR Works Inc.
+# What each stage runs, read by scripts/stage.sh, whose header gives the columns
+# and the rules: stage, check, lane, hold, when, command, separated by tabs.
+# The handoff rows include one per self-test a pull-request workflow runs, which
+# tests/stage-test.sh holds to the workflows.
+save	format	none	-	always	mix format --check-formatted
+save	credo	scoped	600	apps/**,config/**	mix credo --strict
+save	compile	scoped	1200	apps/**,config/**,mix.exs,mix.lock	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --warnings-as-errors
+save	tests	scoped	1800	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS
+
+handoff	format	none	-	always	mix format --check-formatted
+handoff	credo	scoped	600	apps/**,config/**	mix credo --strict
+handoff	compile-sqlite	scoped	1200	apps/**,config/**,mix.exs,mix.lock	env CYFR_DATABASE=sqlite MIX_ENV=dev mix compile --force --warnings-as-errors
+handoff	compile-postgres	scoped	1200	apps/**,config/**,mix.exs,mix.lock	env MIX_BUILD_PATH=_build/dev_pg CYFR_DATABASE=postgres MIX_ENV=dev mix compile --force --warnings-as-errors
+handoff	generated	scoped	600	apps/**,config/**	mix ops.gen.cli --check && mix cyfr.gen.configuration_guide --check
+handoff	tests-sqlite	scoped	2700	tests	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors $STAGE_TESTS
+handoff	tests-postgres	scoped	2700	tests	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors $STAGE_TESTS
+handoff	arca-sqlite	scoped	2700	apps/arca/**	scripts/test-partitioned.sh -n 1 -a sqlite -- --warnings-as-errors apps/arca/test
+handoff	arca-postgres	scoped	2700	apps/arca/**	scripts/test-partitioned.sh -n 1 -a postgres -- --warnings-as-errors apps/arca/test
+handoff	dialyzer	scoped	2400	apps/*/lib/**	mix dialyzer
+handoff	js	scoped	900	apps/cyfr/assets/**,seed/**	(cd apps/cyfr/assets && npm ci --ignore-scripts --no-audit --no-fund && npx eslint . && test/run.sh) && scripts/check-seed-canvas.sh
+handoff	contain-test	exclusive	900	scripts/lib/contain.sh,tests/contain-test.sh	bash tests/contain-test.sh
+handoff	heavy-check-test	exclusive	900	scripts/heavy-check.sh,scripts/await-task.sh,scripts/lib/contain.sh,scripts/lib/run-names.sh,tests/heavy-check-test.sh	bash tests/heavy-check-test.sh
+handoff	test-partitioned-test	exclusive	1500	scripts/test-partitioned.sh,scripts/test-partition-env.exs,scripts/lib/contain.sh,tests/test-partitioned-test.sh,tests/test-partition-env-test.exs	bash tests/test-partitioned-test.sh && elixir tests/test-partition-env-test.exs
+handoff	commit-gate-test	exclusive	1800	scripts/commit-gate.sh,scripts/lib/workflow_plan.py,scripts/lib/contain.sh,.github/workflows/*.yml,tests/commit-gate-test.sh	bash tests/commit-gate-test.sh
+handoff	stage-test	exclusive	900	scripts/stage.sh,scripts/stages.tsv,scripts/lib/nightly.py,.github/workflows/*.yml,tests/stage-test.sh	bash tests/stage-test.sh
+handoff	run-names-test	scoped	600	scripts/lib/run-names.sh,tests/run-names-test.sh	bash tests/run-names-test.sh
+handoff	image-test	scoped	600	scripts/image.sh,tests/image-stub.sh,tests/image-test.sh	bash tests/image-test.sh
+handoff	janitor-test	scoped	900	scripts/janitor.sh,scripts/image.sh,scripts/lib/run-names.sh,tests/image-stub.sh,tests/janitor-test.sh	bash tests/janitor-test.sh
+handoff	release-boot-test	exclusive	900	tests/release-boot/**,tests/release-boot-test.sh	bash tests/release-boot-test.sh && bash tests/release-boot/access-test.sh
+handoff	release-boot-names-test	scoped	600	tests/release-boot/**	bash tests/release-boot/names-test.sh
+handoff	imagesuite-test	scoped	600	tests/imagesuite.py,tests/imagesuite_test.py	python3 -I tests/imagesuite_test.py
+handoff	runtime-image-checks	scoped	600	tests/locus-runtime-image/**	python3 -I tests/locus-runtime-image/canary_test.py && python3 -I tests/locus-runtime-image/worker_auth.py --self-check
+handoff	backends-image-check	scoped	600	tests/locus-backends-image/**	python3 -I tests/locus-backends-image/harness.py --self-check
+handoff	compose-proof-tests	scoped	900	tests/compose-proof/**,docker-compose.yml	bash tests/compose-proof/cleanup-test.sh && bash tests/compose-proof/predicates-test.sh
+handoff	setup-proof-test	scoped	600	tests/setup-proof/**	bash tests/setup-proof/cleanup-test.sh
+handoff	tailnet-guard-tests	scoped	600	tests/tailnet-real/**,docker-compose.yml	bash tests/tailnet-real/guard-test.sh && bash tests/tailnet-real/predicates-test.sh
+handoff	dev-stack-test	scoped	182	docker-compose.dev.yml,docker-compose.yml,scripts/dev-stack.sh,tests/dev-stack/**	bash tests/dev-stack/compose-test.sh
+handoff	prebuilt-binaries-test	scoped	600	scripts/fetch-prebuilt-binaries.sh,mix.lock,tests/fetch-prebuilt-binaries-test.sh	bash tests/fetch-prebuilt-binaries-test.sh
+handoff	ci-guards-test	scoped	600	scripts/ci/**,tests/ci-guards-test.sh	bash tests/ci-guards-test.sh
+handoff	containerd-store-test	scoped	600	scripts/ci/containerd-image-store.sh,tests/containerd-image-store-test.sh	bash tests/containerd-image-store-test.sh
+handoff	release-graph	scoped	600	.github/workflows/release.yml,tests/ci-release-graph.py	python3 -I tests/ci-release-graph.py
+handoff	ci-publish-test	exclusive	1800	.github/workflows/release.yml,tests/ci-publish-test.sh	bash tests/ci-publish-test.sh
+handoff	security-scan-test	scoped	600	scripts/security-scan.sh,tests/security-scan-test.sh	bash tests/security-scan-test.sh
+handoff	install-verify-test	scoped	600	scripts/install.sh,tests/install-verify-test.sh	sh tests/install-verify-test.sh
+
+pull-request	gate	exclusive	2700	always	scripts/commit-gate.sh -l "$STAGE_LOGDIR/gate"
+
+release	close	exclusive	10800	always	scripts/commit-gate.sh --close -l "$STAGE_LOGDIR/gate"
+
+nightly	janitor	exclusive	1800	always	scripts/janitor.sh
+nightly	sqlite-1	exclusive	3600	always	CYFR_TEST_KEEP=1 CYFR_TEST_TIMINGS_DIR="$STAGE_LOGDIR/timings-1" scripts/test-partitioned.sh -n 8 -a sqlite -- --warnings-as-errors --formatter ExUnit.CLIFormatter --formatter Prima.Test.TimingFormatter
+nightly	sqlite-2	exclusive	3600	always	CYFR_TEST_KEEP=1 CYFR_TEST_TIMINGS_DIR="$STAGE_LOGDIR/timings-2" scripts/test-partitioned.sh -n 8 -a sqlite -- --warnings-as-errors --formatter ExUnit.CLIFormatter --formatter Prima.Test.TimingFormatter
+nightly	postgres-1	exclusive	3600	always	CYFR_TEST_KEEP=1 scripts/test-partitioned.sh -n 8 -a postgres -- --warnings-as-errors
+nightly	postgres-2	exclusive	3600	always	CYFR_TEST_KEEP=1 scripts/test-partitioned.sh -n 8 -a postgres -- --warnings-as-errors
+nightly	flakes	scoped	600	always	python3 -I scripts/lib/nightly.py flakes "$STAGE_LOGDIR" >"$STAGE_LOGDIR/flakes.txt"
+nightly	weights	scoped	600	always	python3 -I scripts/lib/nightly.py weights "$STAGE_LOGDIR"

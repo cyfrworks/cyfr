@@ -353,6 +353,13 @@ jobs:
       # signal, the namespace prerequisite and no bytecode under tests/.
       - name: The image suites' shared plumbing
         run: python3 -I tests/imagesuite_test.py
+      # The runtime and backends suites sign and seal as CYFR does: each
+      # reproduces the protocol vectors it shares with every other side,
+      # with no Docker.
+      - name: The runtime suite's signing reproduces the worker protocol vectors
+        run: python3 -I tests/locus-runtime-image/worker_auth.py --self-check
+      - name: The backends suite's signing reproduces its vectors
+        run: python3 -I tests/locus-backends-image/harness.py --self-check
       # The tag pipeline publishes nothing unless every check passed: its
       # graph read from release.yml, then mutants of it, each refused.
       # It reads YAML through PyYAML, which -I finds only among the system
@@ -399,6 +406,19 @@ jobs:
         run: |
           bash tests/contain-test.sh
           bash tests/heavy-check-test.sh
+      # The stage table's test reads the workflows through PyYAML, which -I
+      # finds only among the system interpreter's packages.
+      - name: The run names, the stage table, the shared images and the janitor
+        run: |
+          set -euo pipefail
+          if ! python3 -I -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y python3-yaml
+          fi
+          bash tests/run-names-test.sh
+          bash tests/stage-test.sh
+          bash tests/image-test.sh
+          bash tests/janitor-test.sh
 
   # The partition runner against a stand-in Mix and a toy umbrella of its
   # own, and its environment helper's unit tests: Erlang and Elixir, and

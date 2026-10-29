@@ -52,5 +52,16 @@ class CgroupFiles(unittest.TestCase):
             headroom.events(Exec(0, "oom 0\n"), "memory.events")
 
 
+class ReleaseSetting(unittest.TestCase):
+    """A setting is read from the release's eval, which must exit 0: a failed eval is no answer, even when it printed the marker."""
+
+    def test_a_failed_eval_is_no_answer_even_with_the_marker_printed(self):
+        with self.assertRaises(SystemExit):
+            headroom.setting(Exec(1, "<<<5>>>\n"), "builds_memory_bytes")
+
+    def test_the_setting_that_was_read_is_the_control(self):
+        self.assertEqual(headroom.setting(Exec(0, "<<<5>>>\n"), "builds_memory_bytes"), 5)
+
+
 if __name__ == "__main__":
     unittest.main()

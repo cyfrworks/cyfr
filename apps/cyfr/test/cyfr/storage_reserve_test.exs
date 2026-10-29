@@ -20,6 +20,16 @@ defmodule Cyfr.StorageReserveTest do
   # The latch is this member's, read by every write: one test at a time.
   use ExUnit.Case, async: false
 
+  # Each test's scratch directory is under System.tmp_dir!(), which the runner
+  # keys per partition, so two runs in one checkout never share one. Its
+  # removal is registered before it is made.
+  setup do
+    dir = Path.join(System.tmp_dir!(), "storage_reserve_#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(dir) end)
+    File.mkdir_p!(dir)
+    {:ok, tmp_dir: dir}
+  end
+
   import Ecto.Query, only: [from: 2]
 
   alias Prima.DeviceCert
@@ -104,8 +114,6 @@ defmodule Cyfr.StorageReserveTest do
   defp reserve_refusal?(_answer), do: false
 
   describe "the latch" do
-    @describetag :tmp_dir
-
     test "a boot with room preallocates the reserve file and reads ok", %{tmp_dir: dir} do
       Disk.set_free(10 * @bytes)
       {pid, _spec} = start!(dir)
@@ -237,8 +245,6 @@ defmodule Cyfr.StorageReserveTest do
   end
 
   describe "the boot's refusals" do
-    @describetag :tmp_dir
-
     test "a directory that does not exist, is not writable or reports no free space",
          %{tmp_dir: dir} do
       Disk.set_free(10 * @bytes)
@@ -311,8 +317,6 @@ defmodule Cyfr.StorageReserveTest do
   end
 
   describe "the filesystem" do
-    @describetag :tmp_dir
-
     test "reads a real free space and allocates a real file", %{tmp_dir: dir} do
       assert {:ok, free} = Cyfr.StorageReserve.Disk.free_bytes(dir)
       assert is_integer(free) and free > 0
@@ -329,8 +333,6 @@ defmodule Cyfr.StorageReserveTest do
   end
 
   describe "while depleted" do
-    @describetag :tmp_dir
-
     setup %{tmp_dir: dir} do
       seated = seated!()
       authenticator = Sanctum.TestContext.passkey!(seated.user.id)

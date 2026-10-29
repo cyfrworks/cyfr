@@ -12,8 +12,11 @@ Usage: python3 -I tests/locus-backends-image/harness_test.py
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -133,6 +136,92 @@ class Logs(unittest.TestCase):
 
     def test_the_service_log_that_was_read_is_the_control(self):
         self.assertIn("[cyfr-locus] info: stopped", self.observed(harness.Stack, 0, "[cyfr-locus] info: stopped\n").logs())
+
+
+class GuardCounters(unittest.TestCase):
+    """The guard's rule counters come from a command chain: `iptables-save` failing ends the read, whatever `ip6tables-save` printed."""
+
+    def guard(self, iptables, ip6tables):
+        """A guard whose `guard_exec` runs its script under sh, with fake `*-save` commands on the path that print their text and exit their status."""
+        bin_dir = tempfile.mkdtemp(prefix="backends-guard-counters-")
+        self.addCleanup(shutil.rmtree, bin_dir, True)
+        for name, (status, text) in (("iptables-save", iptables), ("ip6tables-save", ip6tables)):
+            tool = os.path.join(bin_dir, name)
+            with open(tool, "w") as f:
+                f.write(f"#!/bin/sh\nprintf '%s' {shlex.quote(text)}\nexit {status}\n")
+            os.chmod(tool, 0o700)
+        observed = harness.Stack.__new__(harness.Stack)
+        observed.guard_exec = lambda script: subprocess.run(
+            ["/bin/sh", "-c", script], env={**os.environ, "PATH": bin_dir + os.pathsep + os.environ["PATH"]},
+            capture_output=True, text=True)
+        return observed
+
+    def test_a_failed_iptables_save_fails_the_counters(self):
+        with self.assertRaises(SystemExit):
+            self.guard((1, "[1:2] -A INPUT -j DROP\n"), (0, "[3:4] -A OUTPUT -j ACCEPT\n")).guard_counters()
+
+    def test_a_failed_ip6tables_save_fails_the_counters(self):
+        with self.assertRaises(SystemExit):
+            self.guard((0, "[1:2] -A INPUT -j DROP\n"), (1, "")).guard_counters()
+
+    def test_the_counters_that_were_read_are_the_control(self):
+        self.assertEqual(self.guard((0, "[1:2] -A INPUT -j DROP\n"), (0, "[3:4] -A OUTPUT -j ACCEPT\n")).guard_counters(),
+                         {"-A INPUT -j DROP": 1, "-A OUTPUT -j ACCEPT": 3})
+
+
+class ExecAnswering:
+    """An observer whose exec exits `status` with `stdout`, and records the user each command was run as."""
+
+    def __init__(self, status, stdout):
+        self.status = status
+        self.stdout = stdout
+        self.users = []
+
+    def exec(self, script, user=None):
+        self.users.append(user)
+        return subprocess.CompletedProcess([], self.status, self.stdout, "" if self.status == 0 else "daemon error")
+
+
+class BackendEnviron(unittest.TestCase):
+    """A backend's environment is read from a command that exits 0, run as the backend's own uid: a failed read is no answer."""
+
+    def test_a_failed_read_is_no_answer(self):
+        with self.assertRaises(SystemExit):
+            harness.backend_environ(ExecAnswering(1, ""), 4242, 30001)
+
+    def test_the_environment_that_was_read_is_the_control_run_as_the_backend(self):
+        observer = ExecAnswering(0, "PROBE_SECRET=x\nLOG_LEVEL=info\n")
+        self.assertEqual(harness.backend_environ(observer, 4242, 30001), "PROBE_SECRET=x\nLOG_LEVEL=info\n")
+        self.assertEqual(observer.users, ["30001"])
+
+
+class ImageUserName(unittest.TestCase):
+    """A uid's name in the image is read from a lookup that exits 0: a failed lookup is no answer, not an empty name."""
+
+    def lookup(self, status, stdout):
+        """An observer whose exec runs its script under sh, with a fake getent on the path that prints `stdout` and exits `status`."""
+        bin_dir = tempfile.mkdtemp(prefix="backends-image-user-")
+        self.addCleanup(shutil.rmtree, bin_dir, True)
+        tool = os.path.join(bin_dir, "getent")
+        with open(tool, "w") as f:
+            f.write(f"#!/bin/sh\nprintf '%s' {shlex.quote(stdout)}\nexit {status}\n")
+        os.chmod(tool, 0o700)
+
+        class Shell:
+            def exec(self, script, user=None):
+                return subprocess.run(["/bin/sh", "-c", script],
+                                      env={**os.environ, "PATH": bin_dir + os.pathsep + os.environ["PATH"]},
+                                      capture_output=True, text=True)
+
+        return Shell()
+
+    def test_a_failed_lookup_is_no_answer(self):
+        with self.assertRaises(SystemExit):
+            harness.image_user_name(self.lookup(2, ""), 30001)
+
+    def test_the_name_that_was_read_is_the_control(self):
+        self.assertEqual(harness.image_user_name(self.lookup(0, "cyfr-pool-1:x:30001:30001::/home/x:/bin/sh\n"), 30001),
+                         "cyfr-pool-1")
 
 
 if __name__ == "__main__":

@@ -12,8 +12,11 @@ Usage: python3 -I tests/builder-image/stack_test.py
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -124,6 +127,37 @@ class Logs(unittest.TestCase):
 
     def test_the_guard_log_that_was_read_is_the_control(self):
         self.assertIn("island subnet", self.observed(0, "island subnet 172.16.230.0/24\n").guard_logs())
+
+
+class GuardCounters(unittest.TestCase):
+    """The guard's rule counters come from a command chain: `iptables-save` failing ends the read, whatever `ip6tables-save` printed."""
+
+    def guard(self, iptables, ip6tables):
+        """A guard whose `guard_exec` runs its script under sh, with fake `*-save` commands on the path that print their text and exit their status."""
+        bin_dir = tempfile.mkdtemp(prefix="builder-guard-counters-")
+        self.addCleanup(shutil.rmtree, bin_dir, True)
+        for name, (status, text) in (("iptables-save", iptables), ("ip6tables-save", ip6tables)):
+            tool = os.path.join(bin_dir, name)
+            with open(tool, "w") as f:
+                f.write(f"#!/bin/sh\nprintf '%s' {shlex.quote(text)}\nexit {status}\n")
+            os.chmod(tool, 0o700)
+        observed = stack.Stack.__new__(stack.Stack)
+        observed.guard_exec = lambda script: subprocess.run(
+            ["/bin/sh", "-c", script], env={**os.environ, "PATH": bin_dir + os.pathsep + os.environ["PATH"]},
+            capture_output=True, text=True)
+        return observed
+
+    def test_a_failed_iptables_save_fails_the_counters(self):
+        with self.assertRaises(SystemExit):
+            self.guard((1, "[1:2] -A INPUT -j DROP\n"), (0, "[3:4] -A OUTPUT -j ACCEPT\n")).guard_counters()
+
+    def test_a_failed_ip6tables_save_fails_the_counters(self):
+        with self.assertRaises(SystemExit):
+            self.guard((0, "[1:2] -A INPUT -j DROP\n"), (1, "")).guard_counters()
+
+    def test_the_counters_that_were_read_are_the_control(self):
+        self.assertEqual(self.guard((0, "[1:2] -A INPUT -j DROP\n"), (0, "[3:4] -A OUTPUT -j ACCEPT\n")).guard_counters(),
+                         {"-A INPUT -j DROP": 1, "-A OUTPUT -j ACCEPT": 3})
 
 
 if __name__ == "__main__":

@@ -46,12 +46,6 @@ defmodule Cyfr.App.MixProject do
     ]
   end
 
-  def cli do
-    [
-      preferred_envs: [precommit: :test]
-    ]
-  end
-
   # The Boundary compiler checks every layer edge in dev and prod; the
   # forced dev compile with warnings as errors is the enforcement. Test
   # support reaches internals by design, because a test tests what it
@@ -124,8 +118,7 @@ defmodule Cyfr.App.MixProject do
   defp aliases do
     [
       setup: ["deps.get"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
-      precommit: ["compile --warning-as-errors", "deps.unlock --unused", "format", "test"]
+      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"]
     ]
   end
 end

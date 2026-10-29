@@ -2,32 +2,65 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# Run one check on the verification host: scripts/heavy-check.sh [-s] [-t HOLD] [-w QUEUE] [--] command [args]
+# Run one check on the verification host:
+#   scripts/heavy-check.sh [-s | -p] [-t HOLD] [-w QUEUE] [--] command [args]
+#   scripts/heavy-check.sh --status
 #
 # It needs Bash 4.1 or later and flock(1) (util-linux). macOS ships Bash
 # 3.2: install a current one beside flock (brew install bash flock).
 #
-# The host's checks queue here and nowhere else.
-#   exclusive  (default) a gate, a full suite, an image suite or a proof.
-#              It sizes itself to the whole machine and its tests carry
+# The host's checks queue here and nowhere else, in three lanes.
+#   exclusive  (default) a gate, a close, a full or multi-partition suite,
+#              a timing measurement or a shell harness self-test. It
+#              sizes itself to the whole machine and its tests carry
 #              timing bounds, so it runs alone.
-#   scoped     (-s) named test paths in one partition. Up to three run
-#              side by side, each on a third of the cores, and never
-#              beside an exclusive check. The command's own grammar
-#              decides what fits a scoped slot: it sees
-#              HEAVY_CHECK_HELD=scoped and refuses what does not.
-# Scoped checks take slots in the order they arrived: a free slot goes to
-# a scoped check only when no scoped check that queued before it is still
-# waiting for one, a stopped one (Ctrl-Z, SIGSTOP) apart. A queued
-# exclusive check goes ahead of scoped runs that arrive after it.
+#   proof      (-p) a browser or release proof, a release boot, an image
+#              suite, the compose and setup proofs, an image build. One
+#              runs at a time, beside at most PROOF_SCOPED scoped checks,
+#              never beside an exclusive one.
+#   scoped     (-s) named test paths in one partition, a compile,
+#              dialyzer, credo or a light self-test. Up to three run side
+#              by side, at most PROOF_SCOPED of them while a proof runs,
+#              each on a third of the cores. The command's own grammar
+#              decides what fits its lane: it sees HEAVY_CHECK_HELD and
+#              refuses what does not.
+# One arrival queue serves every lane. A check arrives at the instant its
+# ticket's clock is read, immediately before the ticket appears, and
+# arrival order is the order of those instants: the order in which the
+# tickets are published, with two exceptions. A check stopped between the
+# clock's reading and its ticket's appearing keeps its earlier arrival, so
+# a check that published meanwhile can run after it; and two checks whose
+# tickets appear in the same instant may each see no earlier ticket, and
+# the lanes' own locks decide between them. A check starts only when no
+# check that arrived before it still waits, a stopped or dead waiter
+# apart, and its lane has room; it never waits for a check that arrived
+# after it. There is no lock over admission: a check never waits on
+# another waiter's admission, only on earlier tickets and on the lanes'
+# locks.
+# A holder stopped after it took its lane keeps the lane until it is
+# continued or ends; --status shows it held and stopped.
+#
+# Inside a check, a check runs its command in place: any under an
+# exclusive one; -p and -s under a proof; -s under a scoped one. Any other
+# is refused with 64.
 #
 # HOLD (default 2700 s) bounds how long the command may keep the host:
 # at the deadline it is stopped and the exit is 124. A repeat recipe
 # therefore takes the host once per repetition, and the checks queued
 # behind it run in between. QUEUE (default 7200 s) bounds the wait for
-# the host: at the deadline the command has not run and the exit is 75.
+# the host: at the deadline the command has not run and the exit is 75,
+# and no check starts after it, not even one stopped while it waited.
 # HUP, INT and TERM stop the command and exit 129, 130 and 143. Otherwise
 # the exit is the command's own.
+#
+# The command's environment gains HEAVY_CHECK_HELD (its lane) and
+# CONTAIN_REGISTRY, and PROOF_RUN_PREFIX when the caller set none: the
+# prefix scripts/lib/run-names.sh gives the worktree holding the caller's
+# working directory, else the checkout this script lives in, with this
+# script's pid. A scoped command also gets its slot's share n of the cores
+# (cores / 3, at least 2) as CYFR_TEST_CORES=n, CARGO_BUILD_JOBS=n and
+# `+S n:n` after the caller's own ERL_FLAGS, so every BEAM, cargo build
+# and Node runner it starts is bounded by it.
 #
 # The command runs contained (scripts/lib/contain.sh) as the leader of a
 # session of its own, without the lock descriptors, and every session
@@ -35,10 +68,26 @@
 # host is handed on, the command's session and every session in the
 # registry are stopped, within HEAVY_CHECK_GRACE (default 300 s) plus
 # 15 s each. If this script is killed outright, the watchdog keeps the
-# host until the same sessions are stopped. A process that outlives KILL
+# lane until the same sessions are stopped. A process that outlives KILL
 # turns a 0 into 1: this script waits up to 60 s more for it, its last
-# stderr line names any that remain, and the watchdog then keeps the host
+# stderr line names any that remain, and the watchdog then keeps the lane
 # for up to HEAVY_CHECK_GRACE plus 15 s more while it stops them again.
+#
+# Each holder writes its lane's record, one line, for example
+#   pid=41237 mode=scoped since=2026-10-28T21:14:03+0000 hold=2700s group=41251 watchdog=41250 checkout=/home/x/cyfr command=mix dialyzer
+# where group is the command's process group and watchdog its watchdog's
+# pid; each waiter's ticket holds pid=, mode=, queued=, checkout= and
+# command= the same way. A run is finished when no process is left in its
+# group and its watchdog has exited. The record is removed at the exit
+# only when the registry ended empty and the run is finished, both checked;
+# otherwise it stays until the lane's next holder replaces it, which
+# happens only once the watchdog has released the lane, so a record names
+# its run until the run is finished.
+#
+# --status prints, and exits 0: a `held` line for each holder whose run is
+# not finished, with `state=stopped` after its pid while that pid is
+# stopped, then a `waiting <n>` line for each live waiter in queue order,
+# or the word `idle` when there are neither.
 #
 # Stdout carries two lines that frame the run, after option parsing:
 # `_START=<pid>` first and `_EXIT=<pid> <status>` last, on its own line,
@@ -51,15 +100,24 @@
 # Lines beginning `==> heavy-check:` on stderr say what the check is
 # queued behind, when it starts and how it ended; scripts/await-task.sh
 # reads them so a wait's deadline does not run while the check is queued.
-# A `NAME=value` word of the command is shown as `NAME=…` there and in the
-# holder's record, and a URL's userinfo in any word as `[redacted]`.
+# A queued check says `queued (<mode>) <n> of <m> waiting, behind:` with
+# the records of the runs that hold a lane, if any, as soon as it waits,
+# and again every 60 seconds with its place then. A `NAME=value` word of
+# the command is shown as `NAME=…` there, in the records and in --status, a URL's userinfo in any word as
+# `[redacted]`, and a tab or newline in a word as \t or \n.
 set -uo pipefail
 
-MODE=exclusive; HOLD=2700; QUEUE=7200
-usage() { echo "usage: $0 [-s] [-t HOLD_SECONDS] [-w QUEUE_SECONDS] [--] command [args]"; }
+# 1 when the load check holds every timing bound with a scoped slot beside
+# a proof (docs/plans/verification-flow.md, D4), else 0.
+PROOF_SCOPED=1
+
+MODE=exclusive; HOLD=2700; QUEUE=7200; STATUS=false
+usage() { echo "usage: $0 [-s | -p] [-t HOLD_SECONDS] [-w QUEUE_SECONDS] [--] command [args] | $0 --status"; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -s) MODE=scoped; shift ;;
+    -p) MODE=proof; shift ;;
+    --status) STATUS=true; shift ;;
     -t|-w)
       [ "$#" -ge 2 ] || { usage >&2; exit 64; }
       case "$1" in -t) HOLD=$2 ;; *) QUEUE=$2 ;; esac
@@ -70,7 +128,11 @@ while [ "$#" -gt 0 ]; do
     *) break ;;
   esac
 done
-[ "$#" -ge 1 ] || { usage >&2; exit 64; }
+if $STATUS; then
+  [ "$#" -eq 0 ] && [ "$MODE" = exclusive ] || { usage >&2; exit 64; }
+else
+  [ "$#" -ge 1 ] || { usage >&2; exit 64; }
+fi
 for n in "$HOLD" "$QUEUE"; do
   case "$n" in ''|*[!0-9]*|0*) echo 'deadlines are positive decimal seconds' >&2; exit 64 ;; esac
   [ "${#n}" -le 6 ] || { echo 'a deadline is at most 999999 seconds' >&2; exit 64; }
@@ -78,34 +140,18 @@ done
 
 say() { echo "==> heavy-check: $*" >&2; }
 
-# A check started by a check already holds the host through its parent,
-# and the parent's deadline covers it. It writes no line: the parent's
-# frame the run.
-case "${HEAVY_CHECK_HELD:-}" in
-  '') ;;
-  exclusive) exec "$@" ;;
-  scoped)
-    [ "$MODE" = scoped ] || { echo 'an exclusive check cannot start inside a scoped one' >&2; exit 64; }
-    exec "$@" ;;
-  *) echo 'HEAVY_CHECK_HELD is not a mode this script set' >&2; exit 64 ;;
-esac
-
-queued_at=$SECONDS
-ran_at=
-record=
-wrote_record=false
-owner=false
-queue_pid=
-cmd=
-survivors=
-finished=false
-ticket=
+LOCK=${HEAVY_CHECK_LOCK:-/tmp/cyfr-heavy-check.lock}
+SLOTS=3
+# How often a queued check repeats its place in the queue.
+REPEAT=${HEAVY_CHECK_REPEAT:-60}
+case "$REPEAT" in ''|*[!0-9]*|0*) echo 'HEAVY_CHECK_REPEAT is positive decimal seconds' >&2; exit 64 ;; esac
 
 # The command's words for a line another check reads or a kept file: a
 # NAME=value word, such as a database URL handed through env, is shown as
 # NAME=…, and the userinfo of a URL in any other word, such as
 # --url=postgres://user:secret@host, as scheme://[redacted]@, up to the
-# last @ before the host, so neither value leaves this check.
+# last @ before the host, so neither value leaves this check. A tab or a
+# newline inside a word is written as \t or \n, so a record is one line.
 redacted() {
   local word name out=
   for word in "$@"; do
@@ -114,36 +160,181 @@ redacted() {
         name=${word%%=*}
         case "$name" in *[!A-Za-z0-9_]*) ;; *) word="$name=…" ;; esac ;;
     esac
+    word=${word//$'\t'/\\t}
+    word=${word//$'\n'/\\n}
     out="$out${out:+ }$word"
   done
   printf '%s' "$out" | sed -E 's#([A-Za-z][A-Za-z0-9+.-]*://)[^/[:space:]]*@#\1[redacted]@#g'
 }
 
-alive() {
+# The process state of pid $1: empty when there is no such process.
+state_of() {
   local s
   if [ -r "/proc/$1/stat" ]; then
-    read -r s 2>/dev/null <"/proc/$1/stat" || return 1
+    read -r s 2>/dev/null <"/proc/$1/stat" || return 0
     s=${s##*) }
+    printf '%s' "${s%% *}"
   else
-    s=$(ps -o stat= -p "$1" 2>/dev/null) || return 1
-    s=${s// /}
+    s=$(ps -o stat= -p "$1" 2>/dev/null) || return 0
+    printf '%s' "${s// /}"
   fi
-  case "$s" in ''|Z*|X*|x*) return 1 ;; esac
 }
+alive() {
+  case "$(state_of "$1")" in ''|Z*|X*|x*) return 1 ;; esac
+}
+# Whether pid $1 is stopped: state T (or t, traced).
+stopped() {
+  case "$(state_of "$1")" in T*|t*) return 0 ;; esac
+  return 1
+}
+pid_ok() { case "${1:-}" in ''|0*|*[!0-9]*) return 1 ;; esac; }
+# The value of field $1 in record line $2; checkout= and command= may hold
+# spaces, so command= is the rest of the line and checkout= runs up to it.
+field() {
+  local line=$2 v
+  case "$1" in
+    command) v=${line#* command=}; [ "$v" != "$line" ] || v= ;;
+    checkout) v=${line#* checkout=}; [ "$v" != "$line" ] || v=; v=${v% command=*} ;;
+    *) v=" $line"; v=${v#* "$1"=}; [ "$v" != " $line" ] || v=; v=${v%% *} ;;
+  esac
+  printf '%s' "$v"
+}
+# Whether the run a holder record names is unfinished: its heavy-check,
+# a process of its group or its watchdog still runs.
+run_live() {
+  local line pid group watchdog
+  line=$(head -n 1 "$1" 2>/dev/null) || return 1
+  pid=$(field pid "$line"); group=$(field group "$line"); watchdog=$(field watchdog "$line")
+  if pid_ok "$pid" && alive "$pid"; then return 0; fi
+  if pid_ok "$group" && kill -0 -- "-$group" 2>/dev/null; then return 0; fi
+  if pid_ok "$watchdog" && alive "$watchdog"; then return 0; fi
+  return 1
+}
+holder_files() { printf '%s\n' "$LOCK.holder" "$LOCK.proof.holder" "$LOCK".slot[0-9].holder; }
+# The records of the runs that hold a lane and are not finished.
+holders() {
+  local file
+  while IFS= read -r file; do
+    [ -s "$file" ] && run_live "$file" && head -n 1 "$file"
+  done < <(holder_files)
+}
+# Seconds since a record's time stamp.
+since_seconds() {
+  local t
+  t=$(date -d "$1" +%s 2>/dev/null || date -j -f '%Y-%m-%dT%H:%M:%S%z' "$1" +%s 2>/dev/null) || { echo 0; return; }
+  echo $(( $(date +%s) - t ))
+}
+# A ticket's key, <ns>.<pid>: the time it was published and its owner.
+ticket_key_ok() {
+  case "$1" in [0-9]*.[0-9]*) ;; *) return 1 ;; esac
+  case "$1" in *[!0-9.]*|*.*.*) return 1 ;; esac
+}
+# Whether ticket key $1 was published before ticket key $2.
+earlier() {
+  local t1=${1%.*} p1=${1#*.} t2=${2%.*} p2=${2#*.}
+  [ "$t1" -lt "$t2" ] || { [ "$t1" = "$t2" ] && [ "$p1" -lt "$p2" ]; }
+}
+# The tickets of the live waiters, in queue order: locked by an owner that
+# runs and is not stopped.
+live_tickets() {
+  local f k line pid
+  for f in "$LOCK".wait.*; do
+    k=${f##*.wait.}
+    ticket_key_ok "$k" || continue
+    echo "$k"
+  done | sort -t. -k1,1n -k2,2n | while IFS= read -r k; do
+    f="$LOCK.wait.$k"
+    if flock -n -x "$f" true 2>/dev/null; then continue; fi
+    line=$(head -n 1 "$f" 2>/dev/null) || continue
+    pid=$(field pid "$line")
+    pid_ok "$pid" && alive "$pid" && ! stopped "$pid" || continue
+    echo "$k"
+  done
+}
+
+status() {
+  local line file n=0 any=false k pid state
+  while IFS= read -r file; do
+    [ -s "$file" ] && run_live "$file" || continue
+    line=$(head -n 1 "$file")
+    any=true
+    pid=$(field pid "$line") state=
+    if pid_ok "$pid" && stopped "$pid"; then state=' state=stopped'; fi
+    printf 'held %s pid=%s%s since=%s elapsed=%ss hold=%s checkout=%s command=%s\n' \
+      "$(field mode "$line")" "$pid" "$state" "$(field since "$line")" \
+      "$(since_seconds "$(field since "$line")")" "$(field hold "$line")" \
+      "$(field checkout "$line")" "$(field command "$line")"
+  done < <(holder_files)
+  while IFS= read -r k; do
+    line=$(head -n 1 "$LOCK.wait.$k" 2>/dev/null) || continue
+    n=$((n + 1))
+    any=true
+    printf 'waiting %s %s pid=%s queued=%s waited=%ss checkout=%s command=%s\n' \
+      "$n" "$(field mode "$line")" "$(field pid "$line")" "$(field queued "$line")" \
+      "$(since_seconds "$(field queued "$line")")" "$(field checkout "$line")" "$(field command "$line")"
+  done < <(live_tickets)
+  $any || echo idle
+}
+
+if $STATUS; then
+  command -v flock >/dev/null 2>&1 || { echo 'flock is required (util-linux; on macOS: brew install flock)' >&2; exit 69; }
+  status
+  exit 0
+fi
+
+# A check started by a check already holds the host through its parent,
+# and the parent's deadline covers it. It writes no line: the parent's
+# frame the run.
+case "${HEAVY_CHECK_HELD:-}" in
+  '') ;;
+  exclusive) exec "$@" ;;
+  proof)
+    [ "$MODE" != exclusive ] || { echo 'an exclusive check cannot start inside a proof' >&2; exit 64; }
+    exec "$@" ;;
+  scoped)
+    [ "$MODE" = scoped ] || { echo "a $MODE check cannot start inside a scoped one" >&2; exit 64; }
+    exec "$@" ;;
+  *) echo 'HEAVY_CHECK_HELD is not a mode this script set' >&2; exit 64 ;;
+esac
+
+# The queue deadline counts in milliseconds where Bash has EPOCHREALTIME
+# (5.0 and later), else in whole seconds.
+now_ms() {
+  local t
+  if [ "${BASH_VERSINFO[0]}" -ge 5 ]; then
+    t=${EPOCHREALTIME/[.,]/}
+    echo $(( 10#$t / 1000 ))
+  else
+    echo $(( SECONDS * 1000 ))
+  fi
+}
+queued_at=$SECONDS
+queued_ms=$(now_ms)
+ran_at=
+record=
+wrote_record=false
+owner=false
+cmd=
+survivors=
+run_group= run_watchdog=
+finished=false
+ticket=
+checkout=$(pwd -P)
+command_text=$(redacted "$@")
 
 # Every exit after this point passes here, and only here is `_EXIT=`
 # written. In order: the command is stopped if it still runs, every
 # session in the registry is swept, survivors are waited for, then the
-# registry and the holder's record go, and the host is released by the
-# exit itself. A 0 that is not the main path's own end is the status of
-# whatever ran last before a signal Bash dies of, so it is reported as 1.
+# registry goes, and the holder's record when nothing of the run is left,
+# and the lane is released by the exit itself. A 0 that is not the main
+# path's own end is the status of whatever ran last before a signal Bash
+# dies of, so it is reported as 1.
 on_exit() {
   local status=$? p left waited
   trap '' HUP INT TERM
   trap - EXIT
   exec 1>&"$saved_out" 2>&"$saved_err"
   if [ "$status" = 0 ] && ! $finished; then status=1; fi
-  if [ -n "$queue_pid" ]; then kill -TERM "$queue_pid" 2>/dev/null || :; fi
   if [ -n "$cmd" ]; then
     contain_stop "$cmd" "$GRACE" || :
     survivors="$survivors $CONTAIN_SURVIVORS"
@@ -167,15 +358,28 @@ on_exit() {
       waited=$((waited + 1))
     done
   fi
-  if [ -n "$ticket" ]; then rm -f "$LOCK.wait.$ticket"; fi
+  rm -f "$LOCK.ticket.$$" "$LOCK".wait.*."$$"
   if $owner; then rm -f "$CONTAIN_REGISTRY"; fi
-  if $wrote_record; then rm -f "$record"; fi
+  if $wrote_record && [ -z "$survivors" ] && run_finished; then rm -f "$record"; fi
   if [ -n "$ran_at" ]; then
     say "exit $status after $((SECONDS - ran_at))s (queued $((ran_at - queued_at))s)"
   fi
   if [ -n "$survivors" ]; then say "still alive after KILL and 60s: $survivors"; fi
   printf '\n_EXIT=%s %s\n' "$$" "$status"
   exit "$status"
+}
+# Whether this check's run is finished: no process is left in its group and
+# its watchdog has exited. A retired watchdog exits at once; one that has
+# not within 5 s, such as a stopped one, still holds the lane.
+run_finished() {
+  local n=0
+  if pid_ok "$run_group" && kill -0 -- "-$run_group" 2>/dev/null; then return 1; fi
+  pid_ok "$run_watchdog" || return 0
+  while alive "$run_watchdog"; do
+    [ "$n" -lt 50 ] || return 1
+    sleep 0.1
+    n=$((n + 1))
+  done
 }
 on_signal() {
   trap '' HUP INT TERM
@@ -204,10 +408,10 @@ here=${BASH_SOURCE[0]%/*}
 [ "$here" != "${BASH_SOURCE[0]}" ] || here=.
 # shellcheck source=lib/contain.sh
 . "$here/lib/contain.sh" || { echo "cannot load $here/lib/contain.sh" >&2; exit 69; }
+# shellcheck source=lib/run-names.sh
+. "$here/lib/run-names.sh" || { echo "cannot load $here/lib/run-names.sh" >&2; exit 69; }
 command -v flock >/dev/null 2>&1 || { echo 'flock is required (util-linux; on macOS: brew install flock)' >&2; exit 69; }
 
-LOCK=${HEAVY_CHECK_LOCK:-/tmp/cyfr-heavy-check.lock}
-SLOTS=3
 # Above the gate's own stop of its legs (255 s at most), so a stopped
 # gate cleans up before this script stops what remains.
 GRACE=${HEAVY_CHECK_GRACE:-300}
@@ -225,21 +429,8 @@ case "$fd_base" in ''|*[!0-9]*) ;; *)
 esac
 umask 077
 
-# The holder's record: who, since when, for how long at most, running what.
-holders() {
-  local file pid
-  for file in "$LOCK.holder" "$LOCK".slot[0-9].holder; do
-    [ -s "$file" ] || continue
-    pid=$(sed -n 's/^pid=\([0-9]*\) .*/\1/p' "$file")
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && cat "$file"
-  done
-}
-
-queue_left() {
-  local left=$(( QUEUE - (SECONDS - queued_at) ))
-  [ "$left" -gt 0 ] || left=0
-  echo "$left"
-}
+# Whether the queue deadline has passed.
+expired() { [ $(( $(now_ms) - queued_ms )) -ge $(( QUEUE * 1000 )) ]; }
 
 gave_up() {
   say "queue deadline after $((SECONDS - queued_at))s: the check did not run"
@@ -247,141 +438,184 @@ gave_up() {
   exit 75
 }
 
-announced=false
-announce() {
-  $announced && return
-  announced=true
-  local held
-  held=$(holders)
-  if [ -n "$held" ]; then
-    say "queued ($MODE) behind:"
-    printf '%s\n' "$held" | sed 's/^/==> heavy-check:   /' >&2
+# The queue. A check arrives by publishing its ticket, $LOCK.wait.<ns>.<pid>,
+# a file that carries its pid, lane, arrival and command. It is written
+# whole and locked under a temporary name, then a child process reads the
+# clock and renames it into place under that time in nanoseconds and the
+# check's pid, so a stop of the check itself does not delay its
+# publication; a stop of the child between the reading and the rename
+# keeps the earlier time (the header's exception). Arrival order is the
+# (time, pid) order of the tickets: no counter, and no lock over
+# admission. The check holds its ticket's lock until it leaves the queue,
+# and the publishing child holds it while it runs. A waiter whose pid has
+# exited is skipped at once; its ticket is removed by the next scan that
+# finds nothing holding its lock. A stopped waiter's ticket stays and
+# holds no one back.
+now_ns() {
+  local t
+  if [ "${BASH_VERSINFO[0]}" -ge 5 ]; then
+    t=${EPOCHREALTIME/[.,]/}
+    echo "$(( 10#$t ))000"
   else
-    say "queued ($MODE) behind a holder with no live record, such as a check killed outright whose watchdog is still stopping its command (lslocks names it)"
+    t=$(date +%s%N 2>/dev/null) || t=
+    case "$t" in ''|*[!0-9]*) t="$(date +%s)000000000" ;; esac
+    echo "$t"
   fi
 }
-
-# Descriptors: 7 a scoped slot, 8 the turnstile, 9 the host. The turnstile
-# is what puts a queued exclusive check ahead of later scoped runs: every
-# check passes it on the way in, and an exclusive one keeps it until it
-# has the host. The wait runs in the background and is waited for by pid, because Bash
-# defers a trapped INT or TERM until a foreground command ends.
-take() {
-  local fd=$1 how=$2 status=0
-  if flock -n "$how" "$fd"; then return 0; fi
-  announce
-  flock -w "$(queue_left)" "$how" "$fd" &
-  queue_pid=$!
-  wait "$queue_pid" || status=$?
-  queue_pid=
-  [ "$status" = 0 ] || gave_up
-}
-
-# The scoped queue. Each scoped check takes the next ticket from
-# $LOCK.seq and holds a lock on its own file $LOCK.wait.<ticket>, which
-# names its pid, while it waits for a slot; it tries the slots only when
-# no earlier ticket's file is still locked by a live owner that is not
-# stopped. A waiter that dies loses its lock with it, so the next scan
-# removes its file and nothing waits on a pid that may be reused.
-# $LOCK.queue serializes taking a ticket and scanning, so a file is never
-# seen before its owner has locked it and written its pid. Its holder can
-# itself be stopped, so it is waited for as the host is, bounded by the
-# queue deadline and answering a signal at once.
-queue_lock() {
-  local status=0
-  exec {queue_fd}>>"$LOCK.queue" || exit 1
-  if flock -n -x "$queue_fd"; then return 0; fi
-  flock -w "$(queue_left)" -x "$queue_fd" &
-  queue_pid=$!
-  wait "$queue_pid" || status=$?
-  queue_pid=
-  [ "$status" = 0 ] || { announce; gave_up; }
-}
-queue_unlock() { exec {queue_fd}>&-; }
-take_ticket() {
-  local last
-  queue_lock
-  last=$(cat "$LOCK.seq" 2>/dev/null) || :
-  case "$last" in ''|*[!0-9]*) last=0 ;; esac
-  ticket=$((last + 1))
-  printf '%s\n' "$ticket" > "$LOCK.seq" || exit 1
-  exec {ticket_fd}>"$LOCK.wait.$ticket" || exit 1
+publish_ticket() {
+  exec {ticket_fd}>"$LOCK.ticket.$$" || exit 1
   flock -n -x "$ticket_fd" || exit 1
-  printf '%s\n' "$$" >&"$ticket_fd" || exit 1
-  queue_unlock
-}
-# Whether pid $1 is stopped: state T (or t, traced) in its stat.
-stopped() {
-  local s
-  if [ -r "/proc/$1/stat" ]; then
-    read -r s 2>/dev/null <"/proc/$1/stat" || return 1
-    s=${s##*) }
-  else
-    s=$(ps -o stat= -p "$1" 2>/dev/null) || return 1
-    s=${s// /}
-  fi
-  case "$s" in T*|t*) return 0 ;; esac
-  return 1
+  printf 'pid=%s mode=%s queued=%s checkout=%s command=%s\n' "$$" "$MODE" \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$checkout" "$command_text" >&"$ticket_fd" || exit 1
+  ticket=$(t=$(now_ns) && mv -f "$LOCK.ticket.$$" "$LOCK.wait.$t.$$" && echo "$t.$$") || exit 1
 }
 release_ticket() {
   rm -f "$LOCK.wait.$ticket"
   exec {ticket_fd}>&-
   ticket=
 }
-# A locked earlier ticket holds this one back while its owner lives and
-# is not stopped; the scan ends at the first that does.
-first_in_line() {
-  local f k owner first=0
-  queue_lock
+# How many live waiters arrived before this one ($ahead) and how many wait
+# in all ($waiting), this one included. A ticket nothing locks is removed;
+# a stopped or exited owner holds no one back.
+places() {
+  local f k line pid
+  ahead=0 waiting=0
   for f in "$LOCK".wait.*; do
     k=${f##*.wait.}
-    case "$k" in ''|*[!0-9]*) continue ;; esac
-    [ "$k" -lt "$ticket" ] || continue
-    if flock -n -x "$f" true 2>/dev/null; then rm -f "$f"; continue; fi
-    owner=
-    read -r owner 2>/dev/null <"$f" || :
-    case "$owner" in
-      ''|*[!0-9]*) ;;
-      *) if ! alive "$owner" || stopped "$owner"; then continue; fi ;;
-    esac
-    first=1
-    break
+    ticket_key_ok "$k" || continue
+    if [ "$k" != "$ticket" ]; then
+      if flock -n -x "$f" true 2>/dev/null; then rm -f "$f"; continue; fi
+      line=$(head -n 1 "$f" 2>/dev/null) || continue
+      pid=$(field pid "$line")
+      if pid_ok "$pid" && { ! alive "$pid" || stopped "$pid"; }; then continue; fi
+      if earlier "$k" "$ticket"; then ahead=$((ahead + 1)); fi
+    fi
+    waiting=$((waiting + 1))
   done
-  queue_unlock
-  return "$first"
 }
 
-if [ "$MODE" = scoped ]; then
-  take_ticket
-  slot=
-  while :; do
-    if first_in_line; then
-      for ((i=1; i<=SLOTS; i++)); do
-        exec 7>"$LOCK.slot$i" || exit 1
-        if flock -n -x 7; then slot=$i; break; fi
-        exec 7>&-
-      done
-      [ -n "$slot" ] && break
-    fi
-    announce
-    [ "$(queue_left)" -gt 0 ] || gave_up
-    sleep 0.5
+# The lanes. Descriptors: 9 the host (exclusive alone, shared by the other
+# lanes), 8 the proof lane, 7 a scoped slot. The room the other lanes hold
+# is read by trying their locks without keeping them.
+slots_taken() {
+  local i n=0
+  for ((i=1; i<=SLOTS; i++)); do
+    flock -n -x "$LOCK.slot$i" true 2>/dev/null || n=$((n + 1))
   done
-  release_ticket
-  record="$LOCK.slot$slot.holder"
-else
-  record="$LOCK.holder"
-fi
-exec 8>"$LOCK.turnstile" || exit 1
-exec 9>>"$LOCK" || exit 1
-take 8 -x
-if [ "$MODE" = scoped ]; then take 9 -s; else take 9 -x; fi
-flock -u 8
+  echo "$n"
+}
+proof_running() { ! flock -n -x "$LOCK.proof" true 2>/dev/null; }
+lane_record() {
+  case "$MODE" in
+    exclusive) echo "$LOCK.holder" ;;
+    proof) echo "$LOCK.proof.holder" ;;
+    scoped) echo "$LOCK.slot$1.holder" ;;
+  esac
+}
+write_record() {
+  printf 'pid=%s mode=%s since=%s hold=%ss group=%s watchdog=%s checkout=%s command=%s\n' \
+    "$$" "$MODE" "$since" "$HOLD" "${1:-}" "${2:-}" "$checkout" "$command_text" > "$record"
+}
+# Run in a child process, so that a check stopped meanwhile either holds
+# its lane with its record written or holds nothing: it takes the lane's
+# locks on the descriptors the check opened, then reads the room the
+# other lanes hold, with its own locks held, and the queue deadline, gives
+# its locks back if either fails, and writes the lane's record. Two checks
+# that take at once each read the other's locks, so a proof and the scoped
+# checks beside it never keep more than PROOF_SCOPED slots between them;
+# the one that reads too many gives its locks back and tries again. Exits 0
+# when it took the lane, or 10 + the slot in the scoped lane; 1 when there
+# is no room; 2 when the deadline has passed.
+take_lane() {
+  local i= taken=9 s=0
+  case "$MODE" in
+    exclusive)
+      flock -n -x 9 || exit 1 ;;
+    proof)
+      flock -n -s 9 || exit 1
+      flock -n -x 8 || { flock -u 9; exit 1; }
+      taken="9 8"
+      [ "$(slots_taken)" -le "$PROOF_SCOPED" ] || s=1 ;;
+    scoped)
+      flock -n -s 9 || exit 1
+      for ((i=1; i<=SLOTS; i++)); do
+        if flock -n -x "${slot_fd[$i]}"; then break; fi
+      done
+      [ "$i" -le "$SLOTS" ] || { flock -u 9; exit 1; }
+      taken="9 ${slot_fd[$i]}"
+      if proof_running && [ "$(slots_taken)" -gt "$PROOF_SCOPED" ]; then s=1; fi ;;
+  esac
+  if [ "$s" = 0 ] && expired; then s=2; fi
+  if [ "$s" = 0 ]; then
+    record=$(lane_record "$i")
+    write_record || s=1
+  fi
+  if [ "$s" != 0 ]; then
+    for i in $taken; do flock -u "$i"; done
+    exit "$s"
+  fi
+  [ "$MODE" != scoped ] || exit $((10 + i))
+  exit 0
+}
+# Opens the lane's descriptors and takes the lane in a child; returns its
+# 0, 1 or 2, and keeps the descriptors only when it took the lane.
+admit() {
+  local i fd s=0
+  exec 9>>"$LOCK" || exit 1
+  case "$MODE" in
+    proof) exec 8>>"$LOCK.proof" || exit 1 ;;
+    scoped)
+      for ((i=1; i<=SLOTS; i++)); do
+        exec {fd}>>"$LOCK.slot$i" || exit 1
+        slot_fd[$i]=$fd
+      done ;;
+  esac
+  since=$(date '+%Y-%m-%dT%H:%M:%S%z')
+  ( take_lane ) || s=$?
+  if [ "$MODE" = scoped ]; then
+    if [ "$s" -gt 10 ]; then
+      slot=$((s - 10)) s=0
+      exec 7>&"${slot_fd[$slot]}" || exit 1
+    fi
+    for ((i=1; i<=SLOTS; i++)); do eval "exec ${slot_fd[$i]}>&-"; done
+  fi
+  if [ "$s" != 0 ]; then exec 7>&- 8>&- 9>&-; fi
+  return "$s"
+}
+
+said_at=
+# The queued line, when the check first waits and every REPEAT seconds
+# after, with its place then and the holders' records.
+announce() {
+  local held
+  [ -z "$said_at" ] || [ $((SECONDS - said_at)) -ge "$REPEAT" ] || return 0
+  said_at=$SECONDS
+  held=$(holders)
+  say "queued ($MODE) $((ahead + 1)) of $waiting waiting, behind:"
+  [ -z "$held" ] || printf '%s\n' "$held" | sed 's/^/==> heavy-check:   /' >&2
+}
+
+ahead=0 waiting=1 slot= since=
+slot_fd=()
+publish_ticket
+while :; do
+  places
+  if [ "$ahead" = 0 ]; then
+    s=0
+    admit || s=$?
+    [ "$s" != 0 ] || break
+    [ "$s" != 2 ] || gave_up
+  fi
+  announce
+  expired && gave_up
+  sleep 0.5
+done
+record=$(lane_record "$slot")
+wrote_record=true
+release_ticket
 
 ran_at=$SECONDS
-wrote_record=true
-printf 'pid=%s mode=%s since=%s hold=%ss command=%s\n' "$$" "$MODE" "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$HOLD" "$(redacted "$@")" > "$record"
-say "running ($MODE) after $((ran_at - queued_at))s queued: $(redacted "$@")"
+say "running ($MODE) after $((ran_at - queued_at))s queued: $command_text"
 
 # The outermost check owns the registry. One started by a wrapper that
 # already keeps a registry appends to that one and leaves it to its owner.
@@ -394,15 +628,20 @@ fi
 # hands the command is named outside that prefix, or inside the test
 # harness's part of it.
 export HEAVY_CHECK_HELD="$MODE"
+if [ -z "${PROOF_RUN_PREFIX:-}" ]; then
+  prefix=$(run_names_prefix "$checkout" 2>/dev/null) || prefix=$(run_names_prefix "$here" 2>/dev/null) || prefix=
+  if [ -n "$prefix" ]; then export PROOF_RUN_PREFIX="$prefix"; fi
+fi
 if [ "$MODE" = scoped ]; then
   cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
   share=$(( cores / SLOTS )); [ "$share" -lt 2 ] && share=2
-  export CYFR_TEST_CORES="$share"
+  export CYFR_TEST_CORES="$share" CARGO_BUILD_JOBS="$share"
+  export ERL_FLAGS="${ERL_FLAGS:+$ERL_FLAGS }+S $share:$share"
 fi
 
 # The command never holds the lock descriptors, so nothing it leaves
-# behind can keep the host. The watchdog holds them instead, so a check
-# killed outright keeps the host until its command's sessions are gone.
+# behind can keep the lane. The watchdog holds them instead, so a check
+# killed outright keeps its lane until its command's sessions are gone.
 # The command does not hold the saved streams either, so its descriptors
 # are its caller's.
 CONTAIN_CLOSE_FDS="7 8 9 $saved_out $saved_err"
@@ -412,6 +651,8 @@ contain_start -g "$GRACE" "$@"
 status=$?
 [ "$status" = 0 ] || exit "$status"
 cmd=$CONTAIN_PID
+run_group=$CONTAIN_PID run_watchdog=${CONTAIN_WATCHDOG:-}
+write_record "$run_group" "$run_watchdog"
 
 contain_wait "$cmd" "$HOLD" "$GRACE"
 status=$?

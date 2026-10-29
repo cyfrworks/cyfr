@@ -93,8 +93,9 @@ defmodule CyfrWeb.ConnCase do
     # mid-run can be another module's temporary value, and restoring it
     # leaks the provider into later suites.
     unless tags[:async] do
-      on_exit(fn -> Application.delete_env(:sanctum, :bearer_provider) end)
-      Application.put_env(:sanctum, :bearer_provider, Emissary.TestAuthProvider)
+      Prima.Test.Env.put_app_env(:sanctum, :bearer_provider, Emissary.TestAuthProvider,
+        restore: :unset
+      )
     end
 
     {:ok, conn: conn}

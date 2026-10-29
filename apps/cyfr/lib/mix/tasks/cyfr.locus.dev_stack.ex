@@ -15,9 +15,11 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   and no declaration of its own.
 
   DECLARATIONS is the path of `docker-compose.dev.yml` resolved over
-  `docker-compose.yml` as JSON (`docker compose config --format json`).
-  From it come CYFR's settings for the stack: `CYFR_PORT` from Prism's
-  address (`x-prism`), `CYFR_LOCUS_RUNTIME_WORKERS` from the runtime's id
+  `docker-compose.yml` as JSON (`docker compose config --format json`),
+  with the worktree's slot's values interpolated. From it come CYFR's
+  settings for the stack: `CYFR_PORT` from Prism's address (`x-prism`),
+  `CYFR_PROXY_PORT` from its proxy's (`x-prism-proxy`),
+  `CYFR_LOCUS_RUNTIME_WORKERS` from the runtime's id
   and published listener, `CYFR_HOST_API_BIND` and `CYFR_HOST_API_PORT`
   from the runtime's callback address, `CYFR_LOCUS_BACKENDS_URL` and
   `CYFR_LOCUS_BUILDS_URL` from each island guard's fixed address and
@@ -50,12 +52,6 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
   writes nothing and prints `CYFR_PORT=<port>`, Prism's port, where
   `scripts/dev-stack.sh check` reaches the server, after the same refusals.
-
-      mix cyfr.locus.dev_stack names DECLARATIONS
-
-  reads nothing else and prints `project <name>`, the compose project,
-  and `image <tag>`, the one image the stack's services run, which
-  `scripts/dev-stack.sh clean` removes.
 
   Both refuse a `RELEASE_ROOT`: the stack is a mix boot from the checkout,
   never a release.
@@ -132,25 +128,8 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
     end
   end
 
-  defp answer(["names", declarations]) do
-    with {:ok, json} <- resolution(declarations) do
-      images = json |> Map.get("services", %{}) |> Map.values() |> Enum.map(& &1["image"])
-
-      case {json["name"], Enum.uniq(images)} do
-        {project, [image]} when is_binary(project) and project != "" and is_binary(image) ->
-          info("project " <> project)
-          info("image " <> image)
-
-        _ ->
-          undeclared("a project name and one image for every service")
-      end
-    end
-  end
-
   defp answer(_args) do
-    {:error,
-     "usage: mix cyfr.locus.dev_stack settings DECLARATIONS | " <>
-       "endpoint DECLARATIONS | names DECLARATIONS"}
+    {:error, "usage: mix cyfr.locus.dev_stack settings DECLARATIONS | endpoint DECLARATIONS"}
   end
 
   defp info(line), do: Mix.shell().info(line)
@@ -159,6 +138,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   defp declared(path) do
     with {:ok, json} <- resolution(path),
          {:ok, prism_port} <- prism(json["x-prism"]),
+         {:ok, proxy_port} <- proxy(json["x-prism-proxy"]),
          {:ok, runtime} <- runtime(get_in(json, ["services", "locus-runtime"])),
          {:ok, backends} <- island(json, "locus-backends"),
          {:ok, builds} <- island(json, "locus-builds") do
@@ -170,6 +150,7 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
          host_api_url: "http://#{runtime.host_api_bind}:#{runtime.host_api_port}",
          server: [
            {"CYFR_PORT", prism_port},
+           {"CYFR_PROXY_PORT", proxy_port},
            {"CYFR_LOCUS_RUNTIME_WORKERS", "#{runtime.service_id}=#{runtime.url}"},
            {"CYFR_HOST_API_BIND", runtime.host_api_bind},
            {"CYFR_HOST_API_PORT", runtime.host_api_port},
@@ -196,6 +177,14 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
   end
 
   defp prism(_), do: undeclared("x-prism as 127.0.0.1:<port>")
+
+  defp proxy(port) when is_integer(port), do: proxy(Integer.to_string(port))
+
+  defp proxy(port) when is_binary(port) do
+    if port?(port), do: {:ok, port}, else: undeclared("x-prism-proxy as a port")
+  end
+
+  defp proxy(_), do: undeclared("x-prism-proxy as a port")
 
   defp runtime(%{
          "environment" => %{
@@ -305,6 +294,19 @@ defmodule Mix.Tasks.Cyfr.Locus.DevStack do
 
       "CYFR_PRIVATE_EGRESS_TARGETS" ->
         {:ok, text |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))}
+
+      "CYFR_PROXY_PORT" ->
+        case Cyfr.RuntimeConfig.resolve_access(%{
+               file: nil,
+               process: %{name => text},
+               release?: false
+             }) do
+          {:ok, _access} ->
+            {:ok, text |> String.trim() |> String.to_integer()}
+
+          {:error, %{code: code, payload: payload}} ->
+            {:error, Prima.Refusal.message({code, payload})}
+        end
 
       access when access in ["CYFR_PORT", @bind] ->
         case Cyfr.RuntimeConfig.resolve_access(%{

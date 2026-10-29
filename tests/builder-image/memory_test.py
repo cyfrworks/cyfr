@@ -11,6 +11,7 @@ Usage: python3 -I tests/builder-image/memory_test.py
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -162,6 +163,54 @@ class ContainerState(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.state(current=(1, ""))
         self.assertEqual(self.state(current=(0, "4096\n"))["current"], 4096)
+
+
+class ContainerLimit(unittest.TestCase):
+    """The container's memory.max is read from a command that exits 0: a failed read fails the observation, and the value read is the control."""
+
+    def exec_answering(self, status, stdout):
+        class Observer:
+            def exec(self, script, user=None):
+                return subprocess.CompletedProcess([], status, stdout, "" if status == 0 else "daemon error")
+
+        return Observer()
+
+    def test_a_failed_read_fails_the_container_limit(self):
+        with self.assertRaises(SystemExit):
+            memory.container_limit(self.exec_answering(1, ""))
+
+    def test_the_limit_that_was_read_is_the_control(self):
+        self.assertEqual(memory.container_limit(self.exec_answering(0, "1073741824\n")), "1073741824")
+
+
+class ReleaseUser(unittest.TestCase):
+    """The release's user name is read from a lookup that exits 0: a failed lookup is no answer, not an empty name."""
+
+    def lookup(self, status, stdout):
+        """An observer whose exec runs its script under sh, with a fake getent on the path that prints `stdout` and exits `status`."""
+        bin_dir = tempfile.mkdtemp(prefix="builder-release-user-")
+        self.addCleanup(shutil.rmtree, bin_dir, True)
+        tool = os.path.join(bin_dir, "getent")
+        with open(tool, "w") as f:
+            f.write(f"#!/bin/sh\nprintf '%s' {shlex.quote(stdout)}\nexit {status}\n")
+        os.chmod(tool, 0o700)
+
+        class Shell:
+            def exec(self, script, user=None):
+                return subprocess.run(["/bin/sh", "-c", script],
+                                      env={**os.environ, "PATH": bin_dir + os.pathsep + os.environ["PATH"]},
+                                      capture_output=True, text=True)
+
+        return Shell()
+
+    def test_a_failed_lookup_is_no_answer(self):
+        with self.assertRaises(SystemExit):
+            memory.release_user(self.lookup(2, ""))
+
+    def test_the_name_that_was_read_is_the_control(self):
+        uid = stack.POOL_FIRST
+        line = f"cyfr-release:x:{uid}:{uid}::/home/x:/bin/sh\n"
+        self.assertEqual(memory.release_user(self.lookup(0, line)), "cyfr-release")
 
 
 if __name__ == "__main__":

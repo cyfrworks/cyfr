@@ -92,6 +92,7 @@ browser_home "$B" b.test
 browser_home "$C" c.test
 browser_home "$C2" c2.test
 browser_home "$C3" c3.test
+cell_pick_port THIEF_PORT
 
 for cell in c c2 c3; do
   openssl rand -hex 32 | tr -d '\n' >"$SECRETS/token-$cell"
@@ -194,7 +195,7 @@ answer_ask() {
     preserve_a)
       # The thief's copy: A stopped, copied whole, and both started again.
       server_stop "$A"
-      identity_preserved "$A" "$THIEF" thief.test 4480
+      identity_preserved "$A" "$THIEF" thief.test "$THIEF_PORT"
       identity_start "$A"
       identity_start "$THIEF"
       ANSWER="$(json '{"preserved": True}')"

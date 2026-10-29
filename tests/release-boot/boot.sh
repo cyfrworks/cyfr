@@ -405,7 +405,7 @@ if [ "$ADAPTER" = postgres ]; then
   ADDRESS_URL="$(pg_url "$ADDRESS_DB")"
 fi
 cell_new "$ADDRESS" "$ADDRESS_URL" cyfr.example.com
-cell_hostname "$ADDRESS" cyfr.example.com "$((PORT + 10))"
+cell_hostname "$ADDRESS" cyfr.example.com
 server_start "$ADDRESS"
 home="$(cell_cyfr "$ADDRESS" rpc 'IO.puts("CYFR_HOME=" <> Sanctum.Person.home())' | sed -n 's/^CYFR_HOME=//p' | tail -1)"
 [ "$home" = "https://cyfr.example.com" ] ||

@@ -125,7 +125,9 @@ def events(stack, path):
 
 
 def setting(stack, accessor):
-    out = stack.exec(f"""{RELEASE_BIN} eval 'IO.puts("<<<#{{Locus.Config.{accessor}()}}>>>")'""", user=RELEASE_USER).stdout
+    out = imagesuite.read_output(
+        stack.exec(f"""{RELEASE_BIN} eval 'IO.puts("<<<#{{Locus.Config.{accessor}()}}>>>")'""", user=RELEASE_USER),
+        f"the release's Locus.Config.{accessor}()")
     return int(out.split("<<<", 1)[1].split(">>>", 1)[0])
 
 
