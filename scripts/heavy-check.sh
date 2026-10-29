@@ -94,8 +94,9 @@
 # queued behind, when it starts and how it ended; scripts/await-task.sh
 # reads them so a wait's deadline does not run while the check is queued.
 # A queued check says `queued (<mode>) <n> of <m> waiting, behind:` with
-# the holders' records when it queues, and again every 60 seconds with its
-# place then. A `NAME=value` word of the command is shown as `NAME=…`
+# the records of the runs that hold a lane, if any, as soon as it waits,
+# whether for its lane or for the admission lock, and again every 60
+# seconds with its place then. A `NAME=value` word of the command is shown as `NAME=…`
 # there, in the records and in --status, a URL's userinfo in any word as
 # `[redacted]`, and a tab or newline in a word as \t or \n.
 set -uo pipefail
@@ -460,9 +461,11 @@ queue_lock() {
     status=0
     if ! flock -n -x "$queue_fd"; then
       if [ -z "$seen_at" ]; then seen=$(queue_owner) seen_at=$SECONDS; fi
+      places
+      announce
       step=$(queue_left)
       [ "$step" -le "$ADMIT_STEP" ] || step=$ADMIT_STEP
-      [ "$step" -gt 0 ] || { places; announce; gave_up; }
+      [ "$step" -gt 0 ] || gave_up
       flock -w "$step" -x "$queue_fd" &
       queue_pid=$!
       wait "$queue_pid" || status=$?
@@ -474,7 +477,7 @@ queue_lock() {
         return 0
       fi
     else
-      if expired; then places; announce; gave_up; fi
+      expired && gave_up
       owner=$(queue_owner)
       if [ "$owner" != "$seen" ]; then seen=$owner seen_at=$SECONDS; fi
       if ! pid_ok "$owner" || [ "$owner" = "$$" ] || ! alive "$owner" || stopped "$owner" ||
@@ -587,12 +590,8 @@ announce() {
   [ -z "$said_at" ] || [ $((SECONDS - said_at)) -ge "$REPEAT" ] || return 0
   said_at=$SECONDS
   held=$(holders)
-  if [ -n "$held" ]; then
-    say "queued ($MODE) $((ahead + 1)) of $waiting waiting, behind:"
-    printf '%s\n' "$held" | sed 's/^/==> heavy-check:   /' >&2
-  else
-    say "queued ($MODE) $((ahead + 1)) of $waiting waiting, behind a holder with no live record, such as a check killed outright whose watchdog is still stopping its command (lslocks names it)"
-  fi
+  say "queued ($MODE) $((ahead + 1)) of $waiting waiting, behind:"
+  [ -z "$held" ] || printf '%s\n' "$held" | sed 's/^/==> heavy-check:   /' >&2
 }
 
 ahead=0 waiting=1 slot=

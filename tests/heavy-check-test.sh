@@ -555,6 +555,12 @@ t_admission_stopped() {
     [ "$(status_of "${hc[@]}" $flag -w 10 -- sh -c "echo later >> $scratch/order")" = 0 ] ||
       fail "a later $lane check behind one stopped in admission exited $(tail -n 1 "$scratch/out"): $(cat "$scratch/err")"
     [ $((SECONDS - t)) -le 3 ] || fail "a later $lane check waited $((SECONDS - t))s behind one stopped in admission"
+    # It said it queued, in the one form, before it ran: the stopped check
+    # is no waiter ahead of it and no lane's holder.
+    grep '^==> heavy-check: ' "$scratch/err" | sed -n 1,2p > "$scratch/as2.lines"
+    has_line "^==> heavy-check: queued \\($lane\\) 1 of 1 waiting, behind:\$" <(sed -n 1p "$scratch/as2.lines") &&
+      has_line "^==> heavy-check: running \\($lane\\) after [0-9]+s queued: " <(sed -n 2p "$scratch/as2.lines") ||
+      fail "the later $lane check's lines: $(grep '^==> heavy-check: ' "$scratch/err")"
     [ "$(cat "$scratch/order")" = later ] || fail "the later $lane check did not run: $(cat "$scratch/order" 2>/dev/null)"
     [ -n "$(find "$scratch" -maxdepth 1 -name 'lock.wait.*')" ] || fail "the stopped $lane check lost its ticket"
     kill -CONT "$a"
