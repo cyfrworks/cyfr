@@ -12,7 +12,7 @@ apps/cyfr/test/cyfr/files_test.exs	5	pending
 apps/cyfr/test/cyfr/genserver_catchall_test.exs	2	pending
 apps/cyfr/test/cyfr/graceful_stop_test.exs	2	pending
 apps/cyfr/test/cyfr/keyring_rotation_runbook_test.exs	3	pending
-apps/cyfr/test/cyfr/locus_dev_stack_task_test.exs	7	pending
+apps/cyfr/test/cyfr/locus_dev_stack_task_test.exs	15	pending
 apps/cyfr/test/cyfr/locus_runtime_key_task_test.exs	7	pending
 apps/cyfr/test/cyfr/not_set_up_notice_test.exs	7	pending
 apps/cyfr/test/cyfr/platform_settings_roster_test.exs	4	pending

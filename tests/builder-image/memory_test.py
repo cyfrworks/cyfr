@@ -208,7 +208,9 @@ class ReleaseUser(unittest.TestCase):
             memory.release_user(self.lookup(2, ""))
 
     def test_the_name_that_was_read_is_the_control(self):
-        self.assertEqual(memory.release_user(self.lookup(0, "cyfr-release:x:30001:30001::/home/x:/bin/sh\n")), "cyfr-release")
+        uid = stack.POOL_FIRST
+        line = f"cyfr-release:x:{uid}:{uid}::/home/x:/bin/sh\n"
+        self.assertEqual(memory.release_user(self.lookup(0, line)), "cyfr-release")
 
 
 if __name__ == "__main__":
