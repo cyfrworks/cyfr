@@ -643,7 +643,7 @@ case_release_root() {
 hold() {
   python3 -I -c 'import socket, sys, time
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(120)' "$1" &
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(120)' "$1" >/dev/null 2>&1 &
   holder=$!
   holders+=("$holder")
   for _ in $(seq 1 50); do ss -Hltn "sport = :$1" | grep -q . && break; sleep 0.1; done
@@ -681,7 +681,7 @@ case_network_overlap() {
 claim_slot() {
   local file="$run_dir/cyfr-dev-slot.$1.lock"
   : >"$file"
-  flock "$file" sleep 120 &
+  flock "$file" sleep 120 >/dev/null 2>&1 &
   claimer=$!
   holders+=("$claimer")
   for _ in $(seq 1 50); do flock -n "$file" true || break; sleep 0.1; done
@@ -697,7 +697,7 @@ case_claim_unverified() {
   run_dir="$scratch/case-unverified-run"
   rm -rf "$run_dir" && mkdir -p "$run_dir"
   for k in $SLOTS; do claim_slot "$k" "/worktree/$k"; done
-  sleep 120 &
+  sleep 120 >/dev/null 2>&1 &
   other=$!
   holders+=("$other")
   file0="$run_dir/cyfr-dev-slot.0.lock" file1="$run_dir/cyfr-dev-slot.1.lock"
@@ -892,7 +892,7 @@ case_locked() {
     prepare "$1" locked "$complete" 0600
     lock="$case_dir/run/$case_project.dev-stack.lock"
     printf 'pid 4242\ncheckout /elsewhere\n' >"$lock"
-    flock "$lock" sleep 60 &
+    flock "$lock" sleep 60 >/dev/null 2>&1 &
     holder=$!
     holders+=("$holder")
     for _ in $(seq 1 50); do flock -n "$lock" true || break; sleep 0.1; done
