@@ -690,6 +690,39 @@ t_run_record() {
   done
 }
 
+# A command that ends while its watchdog lives, here a stopped one, leaves
+# a run that is not finished: its record stays, its lane stays held and
+# --status shows it held, until the watchdog exits.
+t_record_watchdog() {
+  local lane flag file lock a s line watchdog
+  for lane in exclusive proof scoped; do
+    flag=$(lane_flag "$lane")
+    case $lane in
+      exclusive) file=lock.holder lock=lock ;;
+      proof) file=lock.proof.holder lock=lock.proof ;;
+      scoped) file=lock.slot1.holder lock=lock.slot1 ;;
+    esac
+    rm -f "$scratch"/release-*
+    "${hc[@]}" $flag -- "$hold" "$scratch/release-rw" >/dev/null 2>"$scratch/rw.err" &
+    a=$!; started+=("$a")
+    until_true 10 has_line ' watchdog=[0-9]+ ' "$scratch/$file" || fail "the $lane record names no watchdog: $(cat "$scratch/$file" 2>/dev/null)"
+    line=$(cat "$scratch/$file")
+    watchdog=$(sed -n 's/.* watchdog=\([0-9]*\) .*/\1/p' <<<"$line")
+    kill -STOP "$watchdog"
+    touch "$scratch/release-rw"
+    s=0; wait "$a" || s=$?
+    [ "$s" = 0 ] || { kill -CONT "$watchdog"; fail "the $lane check exited $s"; }
+    [ "$(cat "$scratch/$file" 2>/dev/null)" = "$line" ] || { kill -CONT "$watchdog"; fail "the $lane record went while its watchdog lived"; }
+    flock -n "$scratch/$lock" true && { kill -CONT "$watchdog"; fail "the $lane lane was free while its watchdog lived"; }
+    "${hc[@]}" --status >"$scratch/rw.status" 2>&1
+    has_line "^held $lane pid=$a " "$scratch/rw.status" || { kill -CONT "$watchdog"; fail "--status with the $lane watchdog alive: $(cat "$scratch/rw.status")"; }
+    kill -CONT "$watchdog"
+    until_true 10 dead "$watchdog" || fail "the $lane watchdog did not exit once continued"
+    [ "$(status_of "${hc[@]}" --status)" = 0 ] && [ "$(cat "$scratch/out")" = idle ] || fail "the host was not idle once the $lane watchdog exited: $(cat "$scratch/out")"
+    forget_killed
+  done
+}
+
 # --- the environment ---------------------------------------------------------------
 t_environment() {
   local p seed share
@@ -1206,7 +1239,7 @@ t_await_queue() {
 cases=(
   usage admission nested result frame roster fds fd_base elsewhere
   exclusive redaction killed_holder scoped scoped_order scoped_stale scoped_stopped queue_lock precedence
-  proof_among_scoped proof_queue waiters_skipped run_record environment status queued_repeat queue_proof
+  proof_among_scoped proof_queue waiters_skipped run_record record_watchdog environment status queued_repeat queue_proof
   hold hold_frame queue term int hup usr1 term_queued int_queued hup_queued term_queued_scoped
   term_queued_proof int_queued_proof hup_queued_proof refusals
   leftover sigkill nested_session registry_nested survivor survivor_remains

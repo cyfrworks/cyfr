@@ -68,10 +68,10 @@
 # pid; each waiter's ticket holds pid=, mode=, queued=, checkout= and
 # command= the same way. A run is finished when no process is left in its
 # group and its watchdog has exited. The record is removed at the exit
-# only when the command's group and the registry ended empty; otherwise it
-# stays until the lane's next holder replaces it, which happens only once
-# the watchdog has released the lane, so a record names its run until the
-# run is finished.
+# only when the registry ended empty and the run is finished, both checked;
+# otherwise it stays until the lane's next holder replaces it, which
+# happens only once the watchdog has released the lane, so a record names
+# its run until the run is finished.
 #
 # --status prints, and exits 0: a `held` line for each holder whose run is
 # not finished, then a `waiting <n>` line for each live waiter in queue
@@ -281,6 +281,7 @@ owner=false
 queue_pid=
 cmd=
 survivors=
+run_group= run_watchdog=
 finished=false
 ticket=
 checkout=$(pwd -P)
@@ -324,13 +325,26 @@ on_exit() {
   fi
   if [ -n "$ticket" ]; then rm -f "$LOCK.wait.$ticket"; fi
   if $owner; then rm -f "$CONTAIN_REGISTRY"; fi
-  if $wrote_record && [ -z "$survivors" ]; then rm -f "$record"; fi
+  if $wrote_record && [ -z "$survivors" ] && run_finished; then rm -f "$record"; fi
   if [ -n "$ran_at" ]; then
     say "exit $status after $((SECONDS - ran_at))s (queued $((ran_at - queued_at))s)"
   fi
   if [ -n "$survivors" ]; then say "still alive after KILL and 60s: $survivors"; fi
   printf '\n_EXIT=%s %s\n' "$$" "$status"
   exit "$status"
+}
+# Whether this check's run is finished: no process is left in its group and
+# its watchdog has exited. A retired watchdog exits at once; one that has
+# not within 5 s, such as a stopped one, still holds the lane.
+run_finished() {
+  local n=0
+  if pid_ok "$run_group" && kill -0 -- "-$run_group" 2>/dev/null; then return 1; fi
+  pid_ok "$run_watchdog" || return 0
+  while alive "$run_watchdog"; do
+    [ "$n" -lt 50 ] || return 1
+    sleep 0.1
+    n=$((n + 1))
+  done
 }
 on_signal() {
   trap '' HUP INT TERM
@@ -568,7 +582,8 @@ contain_start -g "$GRACE" "$@"
 status=$?
 [ "$status" = 0 ] || exit "$status"
 cmd=$CONTAIN_PID
-write_record "$CONTAIN_PID" "${CONTAIN_WATCHDOG:-}" "$@"
+run_group=$CONTAIN_PID run_watchdog=${CONTAIN_WATCHDOG:-}
+write_record "$run_group" "$run_watchdog" "$@"
 
 contain_wait "$cmd" "$HOLD" "$GRACE"
 status=$?
