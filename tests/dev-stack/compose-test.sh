@@ -898,6 +898,11 @@ recorded_server() {
   printf 'pid 4242\ncheckout /elsewhere\nserver %s %s\n' "$orphan" "${1:-$(ps -o lstart= -p "$orphan")}" \
     >"$case_dir/run/$case_project.dev-stack.lock"
 }
+# dead_group GROUP: no process is left in GROUP, waited for up to 5 s.
+dead_group() {
+  for _ in $(seq 1 50); do kill -0 -- "-$1" 2>/dev/null || return 0; sleep 0.1; done
+  return 1
+}
 case_down_orphan() {
   local pid
   prepare "$1" down-orphan "$complete" 0600 "$slot_b"
@@ -912,7 +917,8 @@ case_down_orphan() {
   [ "$(calls)" = "$(removed "$slot_b")" ] || echo "down handed docker: $(calls)"
   [ ! -s "$case_dir/run/$case_project.dev-stack.lock" ] || echo "down left the record: $(cat "$case_dir/run/$case_project.dev-stack.lock")"
 
-  # A start refuses while the killed run's server still serves.
+  # A start refuses while the killed run's server still serves, and keeps
+  # its record, so the worktree's next down stops it.
   prepare "$1" start-orphan "$complete" 0600
   recorded_server
   pid="$orphan"
@@ -923,7 +929,25 @@ case_down_orphan() {
   [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: the server a killed run of this worktree left still runs (process group $pid); \`scripts/dev-stack.sh down\` stops it." ] ||
     echo "the start did not name the killed run's server: $(cat "$case_dir/err")"
   [ -z "$(calls)" ] || echo "a start beside a killed run's server ran docker: $(calls)"
-  kill -KILL "$pid" 2>/dev/null
+  command=down
+  launch
+  echo "$?" >"$case_dir/status"
+  status_is 0
+  if ! dead_group "$pid"; then echo "after a refused start, down left the killed run's server $pid running"; kill -KILL -- "-$pid" 2>/dev/null; fi
+
+  # A down that fails at the image lookup has stopped the server already,
+  # and a second down finds nothing left to stop.
+  prepare "$1" down-lookup "$complete" 0600
+  recorded_server
+  pid="$orphan"
+  command=down
+  launch STUB_IMAGE_STATUS=1
+  echo "$?" >"$case_dir/status"
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "down exited 0 though the image lookup failed"
+  launch
+  echo "$?" >"$case_dir/status"
+  status_is 0
+  if ! dead_group "$pid"; then echo "after a down whose lookup failed, a second down left the killed run's server $pid running"; kill -KILL -- "-$pid" 2>/dev/null; fi
 
   # A record whose group is now some other process's stops nothing.
   prepare "$1" down-stale "$complete" 0600

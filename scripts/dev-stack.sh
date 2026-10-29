@@ -264,6 +264,19 @@ orphan() {
   return 0
 }
 
+# server_record: the server line the lock's record holds, if any.
+server_record() { sed -n '/^server /p' "$LOCK" 2>/dev/null || true; }
+
+# gone GROUP: no process is left in GROUP, waited for up to 5 s.
+gone() {
+  local n=0
+  while kill -0 -- "-$1" 2>/dev/null; do
+    [ "$n" -lt 50 ] || return 1
+    sleep 0.1
+    n=$((n + 1))
+  done
+}
+
 # stop GROUP: the server's process group, its leader given the grace to
 # stop before the whole group is killed.
 stop() {
@@ -295,7 +308,17 @@ finish() {
     compose down --remove-orphans >/dev/null 2>&1 ||
       echo "dev-stack: the containers could not be removed; \`scripts/dev-stack.sh down\` removes them." >&2
   fi
-  [ -z "$LOCK_FD" ] || : >"$LOCK"
+  # A server's record goes only once its group is gone: this run's own
+  # server's, which it stopped above; a killed run's stays for `down`.
+  if [ -n "$LOCK_FD" ]; then
+    if [ -n "$SERVER" ] && gone "$SERVER"; then
+      : >"$LOCK"
+    else
+      local record
+      record="$(server_record)"
+      printf '%s' "${record:+$record$'\n'}" >"$LOCK"
+    fi
+  fi
   # The claim's record emptied while the claim is still held: the exit lets
   # the claim go.
   [ -z "$CLAIM_FILE" ] || : >"$CLAIM_FILE"
@@ -529,15 +552,19 @@ check() {
 
 down() {
   lock
-  use_slot "$(remembered)"
-  image --tag-only
-  env_file
+  # The server first, whatever fails after: its record goes only once its
+  # group is gone.
   local left
   left="$(orphan)"
   if [ -n "$left" ]; then
     echo "dev-stack: stopping the server a killed run left (process group $left)."
     stop "$left"
+    gone "$left" || die "the server a killed run left (process group $left) outlived KILL; its record stays for the next \`scripts/dev-stack.sh down\`."
+    printf 'pid %s\ncheckout %s\n' "$$" "$ROOT" >"$LOCK"
   fi
+  use_slot "$(remembered)"
+  image --tag-only
+  env_file
   compose down --remove-orphans
 }
 
