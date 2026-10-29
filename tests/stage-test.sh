@@ -266,23 +266,26 @@ plant() {
   printf 'apps/cyfr/test/b_test.exs\0' >"$2/assign/p2"
   printf 'apps/cyfr/test/c_test.exs\0' >"$2/assign/p3"
 }
+# A failure as ExUnit prints it in an umbrella run: its file named from the
+# umbrella's root (Mix's test_location_relative_path), as the real runner's
+# partition logs show it.
 failure() { printf '  %s) test %s (%s)\n     %s:7\n' "$1" "$2" "$3" "$4"; }
 plant sqlite-1 "$S/run-s1" 0 2 2
 plant sqlite-2 "$S/run-s2" 0 2 0
 printf '==> arca\nResult: 3 passed\n' >"$S/run-s1/p1.log"
-{ echo '==> cyfr'; failure 1 'fails always' Cyfr.BTest test/b_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-s1/p2.log"
-{ echo '==> cyfr'; failure 1 'fails once' Cyfr.CTest test/c_test.exs; echo 'Result: 1/2 passed'; } >"$S/run-s1/p3.log"
+{ echo '==> cyfr'; failure 1 'fails always' Cyfr.BTest apps/cyfr/test/b_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-s1/p2.log"
+{ echo '==> cyfr'; failure 1 'fails once' Cyfr.CTest apps/cyfr/test/c_test.exs; echo 'Result: 1/2 passed'; } >"$S/run-s1/p3.log"
 printf '==> arca\nResult: 3 passed\n' >"$S/run-s2/p1.log"
-{ echo '==> cyfr'; failure 1 'fails always' Cyfr.BTest test/b_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-s2/p2.log"
+{ echo '==> cyfr'; failure 1 'fails always' Cyfr.BTest apps/cyfr/test/b_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-s2/p2.log"
 printf '==> cyfr\nResult: 2 passed\n' >"$S/run-s2/p3.log"
 # postgres-2 fails three tests; postgres-1 cannot vouch for any of them:
 # its Arca partition never wrote Arca's Result line, its b partition
 # exited 3 (failures and warnings), and its c partition excluded none where
 # postgres-2's excluded one.
 plant postgres-2 "$S/run-p2" 2 2 2
-{ echo '==> arca'; failure 1 'cut short' Arca.ATest test/a_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-p2/p1.log"
-{ echo '==> cyfr'; failure 1 'warned' Cyfr.BTest test/b_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-p2/p2.log"
-{ echo '==> cyfr'; failure 1 'excluded elsewhere' Cyfr.CTest test/c_test.exs; echo 'Result: 1/2 passed, 1 excluded'; } >"$S/run-p2/p3.log"
+{ echo '==> arca'; failure 1 'cut short' Arca.ATest apps/arca/test/a_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-p2/p1.log"
+{ echo '==> cyfr'; failure 1 'warned' Cyfr.BTest apps/cyfr/test/b_test.exs; echo 'Result: 2/3 passed'; } >"$S/run-p2/p2.log"
+{ echo '==> cyfr'; failure 1 'excluded elsewhere' Cyfr.CTest apps/cyfr/test/c_test.exs; echo 'Result: 1/2 passed, 1 excluded'; } >"$S/run-p2/p3.log"
 plant postgres-1 "$S/run-p1" 0 3 0
 printf '==> arca\n' >"$S/run-p1/p1.log"
 printf '==> cyfr\nResult: 3 passed\n' >"$S/run-p1/p2.log"

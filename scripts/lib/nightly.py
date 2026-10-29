@@ -15,8 +15,9 @@ for a partition that did not exit 0, the run directory it kept, and the
 heavy-check frame's `_EXIT=` line), and, in that run directory, each
 partition's assigned files (assign/p<i>) and its log (p<i>.log, where Mix
 heads each umbrella app's part with `==> <app>`, lists its failures as
-`N) test NAME (MODULE)` with the test's file under it, and ends it with
-the app's `Result:` line). A partition completed when it exited 0, or 2
+`N) test NAME (MODULE)` with the test's file under it, named from the
+umbrella's root as the assignment names it, and ends it with the app's
+`Result:` line). A partition completed when it exited 0, or 2
 (`mix test`'s status for test failures alone), and every app with an
 assigned file has its `Result:` line. A test passed in an invocation only
 when the partition that ran its file completed and the test is not among
@@ -114,7 +115,7 @@ def partition(run_dir, index, exit_status):
             continue
         m = FILE.match(line)
         if m and pending:
-            failures[pending] = "apps/%s/%s" % (pending[0], m.group(1))
+            failures[pending] = m.group(1)
             pending = None
             continue
         if line.startswith("Result:") and app:
