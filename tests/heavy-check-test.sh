@@ -589,6 +589,33 @@ t_admission_two_stopped() {
   [ "$(sort "$scratch/order" | tr '\n' ' ')" = 'A B C ' ] || fail "the continued checks did not both run: $(tr '\n' ' ' < "$scratch/order")"
 }
 
+# A holder stopped just after it took its lane, before it wrote its record,
+# keeps the lane: --status shows it held and stopped, a later check queues
+# behind it naming it and keeps its own deadline, and the holder runs once
+# continued.
+t_stopped_holder() {
+  local lane flag a s
+  for lane in exclusive proof scoped; do
+    flag=$(lane_flag "$lane")
+    rm -f "$scratch/order" "$scratch/stopped-mark" "$scratch/sh-ran"
+    "${clean[@]}" BASH_ENV="$scratch/stop-at" STOP_MARK="$scratch/stopped-mark" \
+      STOP_FN=take_lane STOP_CMD='write_record*' STOP_FN2=take_lane STOP_CMD2='return 0' \
+      bash "$check" $flag -- sh -c "echo held >> $scratch/order" >/dev/null 2>"$scratch/shA.err" &
+    a=$!; started+=("$a")
+    until_true 10 test -e "$scratch/stopped-mark" || fail "the $lane check did not reach its lane"
+    until_true 5 is_stopped "$a" || fail "the $lane check did not stop"
+    until_true 5 sh -c "'$check' --status | grep -q '^held $lane pid=$a state=stopped since='" ||
+      fail "--status with the $lane holder stopped: $("${hc[@]}" --status)"
+    [ "$(status_of "${hc[@]}" -w 2 -- touch "$scratch/sh-ran")" = 75 ] || fail "a check behind the stopped $lane holder exited $(tail -n 1 "$scratch/out")"
+    [ ! -e "$scratch/sh-ran" ] || fail "a check ran beside the stopped $lane holder"
+    has_line "^==> heavy-check:   pid=$a mode=$lane " "$scratch/err" || fail "the queued check did not name the stopped $lane holder: $(cat "$scratch/err")"
+    kill -CONT "$a"
+    s=0; wait "$a" || s=$?
+    [ "$s" = 0 ] || fail "the continued $lane holder exited $s"
+    [ "$(cat "$scratch/order")" = held ] || fail "the continued $lane holder did not run"
+  done
+}
+
 # Two checks that take lanes at once, with no lock over admission, never
 # keep more than PROOF_SCOPED scoped slots beside a proof: a scoped check
 # held after it took its slot, and a proof held after it took the proof
@@ -1370,7 +1397,7 @@ t_await_queue() {
 cases=(
   usage admission nested result frame roster fds fd_base elsewhere
   exclusive redaction killed_holder scoped scoped_order scoped_stale scoped_stopped
-  expired_waiter admission_stopped ticket_order admission_two_stopped lane_race precedence
+  expired_waiter admission_stopped ticket_order admission_two_stopped stopped_holder lane_race precedence
   proof_among_scoped proof_queue waiters_skipped run_record record_watchdog environment status queued_repeat queue_proof
   hold hold_frame queue term int hup usr1 term_queued int_queued hup_queued term_queued_scoped
   term_queued_proof int_queued_proof hup_queued_proof refusals

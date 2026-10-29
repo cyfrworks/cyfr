@@ -31,6 +31,8 @@
 # check that arrived after it. There is no lock over admission: a check
 # never waits on another waiter's admission, only on earlier tickets and on
 # the lanes' own locks, which decide between two checks that take at once.
+# A holder stopped after it took its lane keeps the lane until it is
+# continued or ends; --status shows it held and stopped.
 #
 # Inside a check, a check runs its command in place: any under an
 # exclusive one; -p and -s under a proof; -s under a scoped one. Any other
@@ -77,8 +79,9 @@
 # its run until the run is finished.
 #
 # --status prints, and exits 0: a `held` line for each holder whose run is
-# not finished, then a `waiting <n>` line for each live waiter in queue
-# order, or the word `idle` when there are neither.
+# not finished, with `state=stopped` after its pid while that pid is
+# stopped, then a `waiting <n>` line for each live waiter in queue order,
+# or the word `idle` when there are neither.
 #
 # Stdout carries two lines that frame the run, after option parsing:
 # `_START=<pid>` first and `_EXIT=<pid> <status>` last, on its own line,
@@ -245,13 +248,15 @@ live_tickets() {
 }
 
 status() {
-  local line file n=0 any=false k
+  local line file n=0 any=false k pid state
   while IFS= read -r file; do
     [ -s "$file" ] && run_live "$file" || continue
     line=$(head -n 1 "$file")
     any=true
-    printf 'held %s pid=%s since=%s elapsed=%ss hold=%s checkout=%s command=%s\n' \
-      "$(field mode "$line")" "$(field pid "$line")" "$(field since "$line")" \
+    pid=$(field pid "$line") state=
+    if pid_ok "$pid" && stopped "$pid"; then state=' state=stopped'; fi
+    printf 'held %s pid=%s%s since=%s elapsed=%ss hold=%s checkout=%s command=%s\n' \
+      "$(field mode "$line")" "$pid" "$state" "$(field since "$line")" \
       "$(since_seconds "$(field since "$line")")" "$(field hold "$line")" \
       "$(field checkout "$line")" "$(field command "$line")"
   done < <(holder_files)
