@@ -204,7 +204,6 @@ defmodule Arca do
       Retention,
       ScheduleOccurrences,
       SchemaFingerprint,
-      SchemaFingerprint.Check,
       SecurityTransitions,
       ServerMetaStorage,
       SessionStorage,
