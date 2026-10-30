@@ -83,9 +83,12 @@ defmodule Prism.Frames do
   The visible canvas is the value's (`visible_canvas/1`): the layout's first
   canvas at the first arrangement, kept across postures and switches, and
   the first again when the layout drops it (`arrange/5`). The active frame
-  is a launch, or else the visible canvas's topmost `full` app that is not
-  minimised (`active/1`): it alone is visible. Otherwise the visible
-  canvas's frame and its windows and tiles that are not minimised are.
+  is a launch, or else the visible canvas's topmost app that is not
+  minimised, when that app is `full` (`active/1`): it alone is visible.
+  A window or a tile raised above a full app ends its cover: the full app
+  keeps its placement and waits hidden beneath until it is raised again.
+  With no frame active, the visible canvas's frame and its windows and
+  tiles that are not minimised are visible.
   Every other canvas and its apps are hidden, a minimised app is hidden,
   and a validation frame is never visible.
 
@@ -284,8 +287,8 @@ defmodule Prism.Frames do
 
   @doc """
   The active `full` frame, shown above everything: a launch, or else the
-  visible canvas's topmost `full` app that is not minimised. An app of
-  another canvas is never active.
+  visible canvas's topmost app that is not minimised, when it is `full`.
+  An app of another canvas is never active.
   """
   @spec active(t()) :: frame() | nil
   def active(%__MODULE__{} = t) do
@@ -294,17 +297,18 @@ defmodule Prism.Frames do
         launch
 
       _none ->
-        t
-        |> list()
-        |> Enum.filter(&full_app?(t, &1))
-        |> Enum.max_by(& &1.stack, fn -> nil end)
+        case t
+             |> list()
+             |> Enum.filter(&shown_app?(t, &1))
+             |> Enum.max_by(& &1.stack, fn -> nil end) do
+          %{placement: :full} = full -> full
+          _top -> nil
+        end
     end
   end
 
-  defp full_app?(t, %{key: {:app, id, _}, placement: :full, minimised: false}),
-    do: id == t.canvas
-
-  defp full_app?(_t, _frame), do: false
+  defp shown_app?(t, %{key: {:app, id, _}, minimised: false}), do: id == t.canvas
+  defp shown_app?(_t, _frame), do: false
 
   @doc "The posture the value arranges for, `desk` or `hand`."
   @spec posture(t()) :: Prima.Layout.posture_name()

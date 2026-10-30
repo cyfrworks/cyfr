@@ -14,7 +14,8 @@ defmodule Prism.Arrangement do
     * `{:resize, ref, geometry}` — a window takes `geometry`, and
       `{:resize, ref, share}` a tile takes `share` of the width;
     * `{:tile, ref, side, share}` — the app stands as a tile;
-    * `{:full, ref}` — the app takes the whole area while it is shown;
+    * `{:full, ref}` — the app takes the whole area, raised above every
+      other, so it shows;
     * `{:minimise, ref}`, `{:restore, ref}` — the app leaves the screen
       keeping its placement, and comes back raised;
     * `{:raise, ref}` — the app goes above every other;
@@ -176,7 +177,7 @@ defmodule Prism.Arrangement do
     |> Enum.map(fn {app, index} -> %{app | order: index} end)
   end
 
-  defp raises?({kind, _}) when kind in [:raise, :restore], do: true
+  defp raises?({kind, _}) when kind in [:raise, :restore, :full], do: true
   defp raises?({:open, _, _}), do: true
   defp raises?(_gesture), do: false
 

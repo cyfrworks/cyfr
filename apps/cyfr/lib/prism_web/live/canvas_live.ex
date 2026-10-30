@@ -13,8 +13,9 @@ defmodule PrismWeb.CanvasLive do
   inert) and narrowed by the tiles beside it, its tiles at their edge and
   share, its windows at their geometry, and the active `full` frame above
   those, with its capsule. Geometry and shares are hundredths of a percent
-  of the layer. Windows and tiles stack by their `stack` alone, as each
-  wrapper's `z-index`, so raising an app restyles its wrapper and never
+  of the layer. The windows and tiles shown stack by their rank in the
+  stacking order, as each wrapper's `z-index` from 30 up, under a full app
+  at 50, which shows alone; raising an app restyles its wrapper and never
   moves it. Each app's wrapper carries what it stands as for the hook:
   `data-canvas-place` (`window`, `tile` or `full`), `data-canvas-stack`,
   `data-canvas-minimised`, and `data-canvas-geometry` (`x y w h`) or
@@ -82,6 +83,7 @@ defmodule PrismWeb.CanvasLive do
 
   @postures Prima.Layout.postures()
   @max_fraction 10_000
+  @app_z 30
 
   @impl true
   def mount(socket) do
@@ -412,13 +414,23 @@ defmodule PrismWeb.CanvasLive do
   end
 
   # Where each frame stands, as CSS, by frame id: a window at its geometry
-  # and a tile at its edge and share, each stacked by its `stack` alone, so
-  # raising an app changes its style and never its place in the document;
-  # and the visible canvas narrowed by the tiles shown beside it. Tiles on
-  # one edge sit side by side in their stacking order, left to right.
+  # and a tile at its edge and share, and the visible canvas narrowed by the
+  # tiles shown beside it. Tiles on one edge sit side by side in their
+  # stacking order, left to right. The windows and tiles shown are stacked
+  # by their rank in that order, `z-index` 30 for the lowest and one more
+  # for each above it, whatever the layout's orders are, so raising an app
+  # changes its style and never its place in the document; a full app is at
+  # 50, and shown it is alone.
   defp boxes(frames) do
     list = Frames.list(frames)
     canvas = Frames.visible_canvas(frames)
+
+    ranks =
+      list
+      |> Enum.filter(&stacked?/1)
+      |> Enum.sort_by(&{&1.stack, &1.id})
+      |> Enum.with_index()
+      |> Map.new(fn {frame, rank} -> {frame.id, rank} end)
 
     tiles =
       for %{key: {:app, ^canvas, _}, visible: true, placement: {:tile, _, _}} = frame <- list,
@@ -434,9 +446,14 @@ defmodule PrismWeb.CanvasLive do
       edge(left, 0) ++ edge(right, @max_fraction - right_total)
 
     Map.new(list, fn frame ->
-      {frame.id, box(frame, tile_boxes, canvas, left_total, right_total)}
+      z = @app_z + Map.get(ranks, frame.id, 0)
+      {frame.id, box(frame, tile_boxes, canvas, left_total, right_total, z)}
     end)
   end
+
+  defp stacked?(%{key: {:app, _, _}, visible: true, placement: {:window, _}}), do: true
+  defp stacked?(%{key: {:app, _, _}, visible: true, placement: {:tile, _, _}}), do: true
+  defp stacked?(_frame), do: false
 
   defp share(%{placement: {:tile, _, share}}), do: share
 
@@ -450,34 +467,25 @@ defmodule PrismWeb.CanvasLive do
     boxes
   end
 
-  defp box(%{key: {:canvas, id}}, _tiles, id, left, right),
+  defp box(%{key: {:canvas, id}}, _tiles, id, left, right, _z),
     do: "left: #{percent(left)}; right: #{percent(right)};"
 
-  defp box(
-         %{placement: {:window, %{x: x, y: y, w: w, h: h}}, stack: stack},
-         _tiles,
-         _canvas,
-         _l,
-         _r
-       ),
-       do:
-         "left: #{percent(x)}; top: #{percent(y)}; width: #{percent(w)}; height: #{percent(h)}; " <>
-           "z-index: #{z_index(stack)};"
+  defp box(%{placement: {:window, %{x: x, y: y, w: w, h: h}}}, _tiles, _canvas, _l, _r, z),
+    do:
+      "left: #{percent(x)}; top: #{percent(y)}; width: #{percent(w)}; height: #{percent(h)}; " <>
+        "z-index: #{z};"
 
-  defp box(%{id: id, placement: {:tile, side, share}, stack: stack}, tiles, _canvas, _l, _r) do
+  defp box(%{id: id, placement: {:tile, side, share}}, tiles, _canvas, _l, _r, z) do
     {at, width} = List.keyfind(tiles, id, 0, {id, {fallback(side, share), share}}) |> elem(1)
 
-    "top: 0; bottom: 0; left: #{percent(at)}; width: #{percent(width)}; z-index: #{z_index(stack)};"
+    "top: 0; bottom: 0; left: #{percent(at)}; width: #{percent(width)}; z-index: #{z};"
   end
 
-  defp box(_frame, _tiles, _canvas, _l, _r), do: nil
+  defp box(_frame, _tiles, _canvas, _l, _r, _z), do: nil
 
   # A tile not shown keeps its own edge, at its own share.
   defp fallback(:left, _share), do: 0
   defp fallback(:right, share), do: @max_fraction - share
-
-  # Apps stack between the canvas (0) and a full frame (50).
-  defp z_index(stack), do: 10 + min(stack, 39)
 
   defp percent(hundredths), do: :erlang.float_to_binary(hundredths / 100, decimals: 2) <> "%"
 

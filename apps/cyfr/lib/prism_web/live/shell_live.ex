@@ -721,6 +721,16 @@ defmodule PrismWeb.ShellLive do
       else: tincture_verb(socket, frame, decoded)
   end
 
+  # An app that closes itself is closed as the person's close is, on the
+  # layout too, so the next arrangement does not open it again; a launch
+  # from the picker is only discarded.
+  defp tincture_verb(socket, %{key: {:app, canvas_id, ref}}, %{verb: :close}) do
+    case gesture(socket, canvas_id, {:close, ref}) do
+      {:ok, socket} -> socket
+      {:error, _not_placed} -> drop_message(socket)
+    end
+  end
+
   defp tincture_verb(socket, %{key: key}, %{verb: :close}),
     do: frames(socket, &Frames.discard(socket.assigns.context, &1, key))
 
@@ -1019,19 +1029,19 @@ defmodule PrismWeb.ShellLive do
     update(socket, :renewals, &Map.put(&1, frame_id, {timer, token}))
   end
 
-  # What `installed` carries: every listed tincture that is not a canvas,
-  # as a versionless reference, its name, its emoji (none for one the wire
-  # does not carry) and whether the layout places it over the visible
-  # canvas, minimised included, sorted by name, within the bounds the
-  # canvas's reader holds it to (`Prima.TinctureWire`).
-  defp installed(socket) do
+  # What `installed` carries to canvas `canvas_id`: every listed tincture
+  # that is not a canvas, as a versionless reference, its name, its emoji
+  # (none for one the wire does not carry) and whether the layout places it
+  # over that canvas, minimised included, sorted by name, within the bounds
+  # the canvas's reader holds it to (`Prima.TinctureWire`).
+  defp installed(socket, canvas_id) do
     max_name = Prima.TinctureWire.max_installed_name()
     max_icon = Prima.TinctureWire.max_installed_icon()
 
-    open =
-      case visible_entry(socket.assigns) do
-        %{apps: apps} -> MapSet.new(apps, & &1.tincture)
-        nil -> MapSet.new()
+    placed =
+      case Enum.find(socket.assigns.arrangement || [], &(&1.id == canvas_id)) do
+        %{apps: apps} -> Enum.map(apps, & &1.tincture)
+        nil -> []
       end
 
     socket.assigns.tinctures
@@ -1043,7 +1053,7 @@ defmodule PrismWeb.ShellLive do
         ref: ref,
         name: card.name,
         icon: if(is_binary(icon) and code_points(icon) <= max_icon, do: icon),
-        open: MapSet.member?(open, ref)
+        open: ref in placed
       }
     end)
     |> Enum.filter(&(code_points(&1.name) in 1..max_name))
@@ -1055,12 +1065,20 @@ defmodule PrismWeb.ShellLive do
   # counts them, not in graphemes.
   defp code_points(text), do: text |> String.codepoints() |> length()
 
-  # `installed`, to each frame named.
+  # `installed`, to each canvas frame named, with the marks of its own
+  # canvas.
   defp push_installed(socket, frame_ids) do
-    tinctures = installed(socket)
+    frames = Frames.list(socket.assigns.frames)
 
     Enum.reduce(frame_ids, socket, fn frame_id, socket ->
-      push_event(socket, "canvas_installed", %{frame: frame_id, tinctures: tinctures})
+      case Enum.find(frames, &(&1.id == frame_id)) do
+        %{key: key} ->
+          tinctures = installed(socket, Frames.canvas_of(key))
+          push_event(socket, "canvas_installed", %{frame: frame_id, tinctures: tinctures})
+
+        nil ->
+          socket
+      end
     end)
   end
 
@@ -1252,7 +1270,19 @@ defmodule PrismWeb.ShellLive do
     assign(socket, write_timer: timer, write_retries: retries + 1)
   end
 
-  defp retry_write(socket), do: assign(socket, :write_retries, 0)
+  defp retry_write(socket), do: give_up(socket)
+
+  # The waiting gestures are let go: the layout as last read or written is
+  # the one the frames follow again, the person is told their arrangement
+  # was not saved, and every later publication is read as any other.
+  defp give_up(%{assigns: %{layout_base: layout}} = socket) do
+    Logger.warning("[PrismWeb.ShellLive] an arrangement was not saved and is let go")
+
+    socket
+    |> assign(document: layout.document, pending: [], write_retries: 0, write_timer: nil)
+    |> put_flash(:error, "Your arrangement could not be saved, so the last saved one is back.")
+    |> rearranged()
+  end
 
   # The layout read again after a write it refused for a newer revision,
   # the waiting gestures made on it, each that still applies — an app
@@ -1262,15 +1292,27 @@ defmodule PrismWeb.ShellLive do
     %{context: ctx, posture: posture, pending: pending} = socket.assigns
 
     case Compendium.layout(ctx, posture) do
-      {:ok, read} ->
+      {:ok, read} when round < @conflict_replays ->
         {document, kept} = remade(read.document, pending)
 
+        # The read is a publication like any other: a canvas whose tincture
+        # it changed lets the shipped canvas go before the read becomes the
+        # base the next read is compared with.
         socket =
           socket
+          |> assign(:layout_changed, true)
+          |> apply_layout_change(read)
           |> assign(layout_base: base(read), document: document, pending: kept)
           |> rearranged()
 
-        if round < @conflict_replays, do: write_layout(socket, round + 1), else: socket
+        write_layout(socket, round + 1)
+
+      {:ok, read} ->
+        socket
+        |> assign(:layout_changed, true)
+        |> apply_layout_change(read)
+        |> assign(layout_base: base(read))
+        |> give_up()
 
       {:error, _unavailable} ->
         retry_write(socket)
@@ -2044,12 +2086,21 @@ defmodule PrismWeb.ShellLive do
   # `installed` carries is pushed to every held canvas frame, as
   # `follow_listing/1` pushes it; nothing is placed.
   defp reread_listing(socket) do
-    before = installed(socket)
+    before = told(socket)
     socket = read_listing(socket)
 
-    if installed(socket) == before,
+    if told(socket) == before,
       do: socket,
       else: push_installed(socket, canvas_frame_ids(socket.assigns.frames))
+  end
+
+  # What `installed` tells each held canvas frame, by canvas.
+  defp told(socket) do
+    for %{key: key} <- Frames.list(socket.assigns.frames),
+        Frames.canvas_key?(key),
+        canvas = Frames.canvas_of(key),
+        into: %{},
+        do: {canvas, installed(socket, canvas)}
   end
 
   # The listing, read once: every card the registry lists, the canvases

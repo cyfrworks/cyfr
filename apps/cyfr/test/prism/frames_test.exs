@@ -281,6 +281,26 @@ defmodule Prism.FramesTest do
       assert shown(Frames.minimise(t, game)) |> Enum.member?({:canvas, "home"})
     end
 
+    test "a window raised above the full app ends its cover; the full app waits hidden until raised",
+         %{t: t} do
+      game = {:app, "home", "tincture:local.game"}
+      notes = {:app, "home", "tincture:local.notes"}
+      t = Frames.restore(t, game)
+      assert shown(t) == [game]
+
+      raised = Frames.raise(t, notes)
+      assert Frames.active(raised) == nil
+
+      assert shown(raised) == [
+               {:canvas, "home"},
+               notes,
+               {:app, "home", "tincture:local.clock"}
+             ]
+
+      assert %{placement: :full, minimised: false} = Frames.get(raised, game)
+      assert shown(Frames.raise(raised, game)) == [game]
+    end
+
     test "a full app is active only over its own canvas", %{t: t} do
       t = t |> Frames.restore({:app, "home", "tincture:local.game"})
 
