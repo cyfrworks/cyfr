@@ -15,7 +15,6 @@ import {
   frameSignal,
   installedSignal,
   nextStanding,
-  safeModeChord,
   switchChord
 } from "../../js/canvas/signals.js"
 import IframeBridge from "../../js/hooks/iframe_bridge.js"
@@ -793,10 +792,6 @@ describe("a canvas frame's bridge", () => {
 
       try {
         await eventually(() => states.length === 1)
-        if (verb === "failed") {
-          api.ready()
-          await eventually(() => forwarded(bridge.events).length === 1)
-        }
 
         handlers.frame_state({frame: CANVAS, state: "frozen"})
         bridge.el.wrapper.dataset.canvasShown = "false"
@@ -807,7 +802,7 @@ describe("a canvas frame's bridge", () => {
         await eventually(() => reported().length === 1)
 
         assert.deepEqual(states, ["live", "frozen"])
-        assert.deepEqual(reported(), [{v: 1, verb, frame: CANVAS, args: verb === "failed" ? {stage: "runtime"} : {}}])
+        assert.deepEqual(reported(), [{v: 1, verb, frame: CANVAS, args: verb === "failed" ? {stage: "load"} : {}}])
         assert.equal(bridge.hook.dropped, 0)
       } finally {
         bridge.close()
@@ -1004,8 +999,8 @@ describe("a rotated credential", () => {
   })
 })
 
-describe("the safe mode chord", () => {
-  test("Ctrl+Alt+S on the shell's page asks the shell for safe mode; nothing else does", () => {
+describe("Ctrl+Alt+S", () => {
+  test("on the shell's page asks the shell for nothing and is left to the page", () => {
     const pushed = []
     const hook = Object.assign(Object.create(Canvas), {
       el: canvasElement().hook,
@@ -1021,19 +1016,12 @@ describe("the safe mode chord", () => {
       return prevented
     }
 
-    assert.equal(press({key: "s", code: "KeyS", ctrlKey: true, altKey: false}), false)
-    assert.equal(press({key: "s", code: "KeyS", ctrlKey: false, altKey: true}), false)
-    assert.equal(press({key: "x", code: "KeyX", ctrlKey: true, altKey: true}), false)
-    assert.equal(press({key: "ß", code: "KeyS", ctrlKey: true, altKey: true}), true)
-    assert.deepEqual(pushed, [{event: "safe_mode", payload: {}}])
-
-    hook.disconnected()
-    press({key: "S", code: "KeyS", ctrlKey: true, altKey: true})
-    assert.equal(pushed.length, 1)
+    assert.equal(press({key: "s", code: "KeyS", ctrlKey: true, altKey: true}), false)
+    assert.equal(press({key: "S", code: "KeyS", ctrlKey: true, altKey: true}), false)
+    assert.deepEqual(pushed, [])
 
     hook.destroyed()
     assert.equal(listeners.keydown, undefined)
-    assert.equal(safeModeChord(null), false)
   })
 })
 

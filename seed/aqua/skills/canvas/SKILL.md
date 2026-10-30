@@ -97,8 +97,9 @@ working, which is kept, and which validation last failed.
   script on its own.
 - `cyfr.ready()` tells the browser the page has drawn. Call it once,
   after the streams are open or refused: a version that has not called
-  it ten seconds after it opens is not shown, and an error it does not
-  catch, before or after, takes the screen to safe mode.
+  it ten seconds after it opens, or that hits an error it does not catch
+  before calling it, is replaced on the screen by the standard canvas
+  until the person tries it again. An error after it is not a crash.
 
 Each stream hands its current state first and then its live events, and
 an event that races the current state can arrive twice: keep a run's

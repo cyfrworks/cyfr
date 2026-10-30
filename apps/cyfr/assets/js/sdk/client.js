@@ -96,9 +96,11 @@ const unanswered = (status, rejection) =>
 // the shell has told it `state` `live`; what the shell tells it after
 // (`posture`, `covered`, `installed`, `state`) reaches the page through
 // `on`. A canvas reports its own failure once: an uncaught error or
-// unhandled rejection before `ready()` as `failed` at stage `load`, after
-// it at stage `runtime`, and a canvas that failed to load sends no `ready`.
-// Any other page reports none, and sends no `press`.
+// unhandled rejection before `ready()` as `failed` at stage `load`, and a
+// canvas that failed to load sends no `ready`. One after `ready()` is no
+// failure, since a page error after the canvas started never costs the
+// person their canvas; nothing is reported. Any other page reports none,
+// and sends no `press`.
 export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS}) {
   const framed = win.parent !== win && win.parent !== null && win.parent !== undefined
   const standalone = framed ? null : publicIdentity(win.location && win.location.pathname)
@@ -111,7 +113,8 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   // A canvas's open: `{streams}`, its declared streams as pair keys.
   let canvas = null
   let readyCalled = false
-  // The stage of the one failure this page reports, once it has failed.
+  // The stage of the one failure this page reports, `load`, once it has
+  // failed.
   let failure = null
   // The resolver of the one credential prompt this frame has asked for and
   // the shell has not yet closed.
@@ -224,11 +227,12 @@ export function createClient({win, fetchFn, base, handshakeTimeoutMs = HANDSHAKE
   }
 
   // An uncaught error or unhandled rejection of the page (the window's
-  // `error` and `unhandledrejection`). Nothing of it leaves but its stage.
+  // `error` and `unhandledrejection`) before `ready()`. Nothing of it
+  // leaves but its stage.
   function onPageError(event) {
-    if (failure !== null) return
+    if (failure !== null || readyCalled) return
     if (event && BENIGN_ERRORS.includes(event.message)) return
-    failure = readyCalled ? "runtime" : "load"
+    failure = "load"
     verb("failed", {stage: failure})
   }
 

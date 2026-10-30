@@ -317,9 +317,9 @@ defmodule Aqua.SeedContractTest do
     assert {:error, _} = layout.(%{entry | "tincture" => pinned})
   end
 
-  # An error the page does not catch fails a canvas into safe mode, so the
-  # scroll's example catches a refused open, calls ready once after it, and
-  # draws what a stream carries as text.
+  # An error the page does not catch before its ready puts the standard
+  # canvas in its place, so the scroll's example catches a refused open,
+  # calls ready once after it, and draws what a stream carries as text.
   test "the canvas scroll's example catches a refused stream, is ready once, and draws text" do
     [example] = Regex.run(~r/```js\n(.*?)```/s, canvas_scroll(), capture: :all_but_first)
     [stream] = Regex.run(~r/cyfr\s*\.stream\("runs\.changes".*/s, example)

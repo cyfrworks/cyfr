@@ -78,8 +78,8 @@ desktop_token="$(field "$desktop" token)"
 phone_token="$(field "$phone" token)"
 desktop_cookie="$(browser_cookie "$CELL" "$desktop_token")"
 phone_cookie="$(browser_cookie "$CELL" "$phone_token")"
-# No canvas runs: the shell draws its picker, so no safe mode waits in
-# front of the prompts this proof drives.
+# No canvas runs: the shell draws its picker, so no canvas's deadline
+# or fallback comes between the prompts this proof drives.
 browser_picker_layout "$CELL" "$desktop_token"
 
 step "device certificates live $CERT_SECONDS seconds"

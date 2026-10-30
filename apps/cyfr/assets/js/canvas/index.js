@@ -12,8 +12,7 @@ import {
   bearerSignal,
   credentialSignal,
   frameSignal,
-  installedSignal,
-  safeModeChord
+  installedSignal
 } from "./signals.js"
 import {WindowGestures} from "./windows.js"
 
@@ -44,11 +43,10 @@ const COVERING = ["window"]
  * handshake and posts it then.
  *
  * The keys are heard here, on the shell's own page, never in a frame: the
- * safe mode chord, Ctrl+Alt+S, sent as `safe_mode`; and the window chords
- * (`windowChord`): Ctrl+Alt with an arrow, M or W acting on the active
- * app, with 1 to 8 showing that canvas, and with no active app the
- * arrows switching canvases as `switch_canvas` (`previous` or `next`). A
- * horizontal swipe on the shelf switches too, leftward `next` and
+ * window chords (`windowChord`), Ctrl+Alt with an arrow, M or W acting on
+ * the active app, with 1 to 8 showing that canvas, and with no active app
+ * the arrows switching canvases as `switch_canvas` (`previous` or `next`).
+ * A horizontal swipe on the shelf switches too, leftward `next` and
  * rightward `previous`. A frame's keys and pointer stay in the frame's
  * document and never reach it.
  *
@@ -76,11 +74,6 @@ const Canvas = {
     globalThis.window?.addEventListener("resize", this._onResize)
 
     this._onKeydown = (event) => {
-      if (safeModeChord(event)) {
-        event.preventDefault()
-        if (this._connected) this.pushEvent("safe_mode", {})
-        return
-      }
       this._windowKey(event)
     }
     globalThis.window?.addEventListener("keydown", this._onKeydown)
