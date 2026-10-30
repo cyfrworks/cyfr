@@ -552,7 +552,7 @@ describe("the layer's recovery prompts", () => {
     Object.assign(dialog, {open: false, showModal() {}, close() {}, matches: () => false, querySelectorAll: () => []})
     const el = node("div")
     el.id = id
-    el.dataset = {open: "false", mode: "modal"}
+    el.dataset = {open: "false"}
     el.querySelector = (selector) => {
       if (selector === "dialog") return dialog
       if (selector === 'form[data-recovery][data-prompt="recovery-9"]') return form

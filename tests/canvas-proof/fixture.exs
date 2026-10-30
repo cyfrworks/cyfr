@@ -91,8 +91,9 @@
 #                 `died` (the SDK reports `failed` at stage `load`);
 #   broken-crash  becomes ready, then reloads its own frame from a timer:
 #                 shown live its frame loads a second time, which the bridge
-#                 reports as `frame_gone`, the frame's death, and the shell
-#                 takes as safe mode `crashed`. Its reload comes well after a
+#                 reports as `frame_gone`, the frame's death, which falls
+#                 the canvas back to the shipped one. Its reload comes well
+#                 after a
 #                 validation frame is torn down, so validation activates it
 #                 first.
 #
@@ -276,8 +277,8 @@ fn args ->
     """,
     "broken-crash" => """
     // Becomes ready, then reloads its own frame from a timer: shown live
-    // the frame loads a second time, its death, which is safe mode
-    // `crashed`; a page that only throws after ready is not. The delay is
+    // the frame loads a second time, its death, which falls the canvas
+    // back; a page that only throws after ready does not. The delay is
     // well past a validation frame's teardown, so validation activates
     // this version before any reload, and only the live frame dies.
     #{version_from_url}

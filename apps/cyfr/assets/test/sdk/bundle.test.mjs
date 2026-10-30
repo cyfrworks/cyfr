@@ -111,14 +111,14 @@ describe("the built SDK in a canvas's page", () => {
     assert.deepEqual(heard, [failed("load")])
   })
 
-  test("hears the page's unhandled rejection after ready() as a failure at runtime", async () => {
+  test("hears nothing of the page's unhandled rejection after ready()", async () => {
     const {win} = page()
     const heard = handshake(win)
     win.cyfr.ready()
     await eventually(() => heard.length === 1)
 
     win.dispatchEvent(Object.assign(new Event("unhandledrejection"), {reason: new Error("no")}))
-    await eventually(() => heard.length === 2)
-    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}, failed("runtime")])
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}])
   })
 })

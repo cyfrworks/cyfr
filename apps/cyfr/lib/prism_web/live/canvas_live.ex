@@ -14,10 +14,9 @@ defmodule PrismWeb.CanvasLive do
   frame is hidden and inert), narrowed by the tiles beside it; its tiles
   at their edge and share; its windows at their geometry; and the active
   `full` frame over everything, with its capsule. Geometry and shares are
-  hundredths of a percent of the apps' area. In safe mode nothing of the
-  layout is drawn. While a full frame is shown every other layer is
-  `inert`, so no key reaches a control it covers; the full frame and its
-  capsule stay reachable.
+  hundredths of a percent of the apps' area. While a full frame is shown
+  every other layer is `inert`, so no key reaches a control it covers; the
+  full frame and its capsule stay reachable.
 
   The page stacks by z-index alone, from the bottom: the canvas's frame
   (0); tiles (20); the windows shown, 30 plus each one's rank in the
@@ -52,7 +51,7 @@ defmodule PrismWeb.CanvasLive do
   gesture.
 
   The shelf (`#canvas-shelf`, 52 pixels along the bottom, drawn with the
-  visible canvas and never in safe mode, and like the canvas's other
+  visible canvas, and like the canvas's other
   controls above a full app and within reach) holds, from the left: room for
   the shell's own chips, which `PrismWeb.ShellLive` draws; with more than
   one canvas, a dot per canvas (`#canvas-switcher`, each a button carrying
@@ -79,7 +78,7 @@ defmodule PrismWeb.CanvasLive do
   Assigns: `context`, `frames` (the shell's `Prism.Frames`), `tinctures`
   (the shell's tincture cards), `arrangement` (the shell's arrangement for
   the posture, `nil` before its first read, when this layer's own read
-  stands in) and `safe_mode`.
+  stands in).
 
   The hook sits on an empty element of its own, `#<id>-hook`, after the
   frames, which carries `data-posture`; it reads the layer as that
@@ -139,8 +138,7 @@ defmodule PrismWeb.CanvasLive do
        layout_unavailable: false,
        frames: Frames.new(),
        streamed: nil,
-       tinctures: [],
-       safe_mode: false
+       tinctures: []
      )}
   end
 
@@ -222,10 +220,9 @@ defmodule PrismWeb.CanvasLive do
 
   @impl true
   def render(assigns) do
-    # In safe mode nothing of the layout is drawn.
     # The shell's arrangement, current with every gesture; before its first
     # read, this layer's own.
-    arrangement = if assigns.safe_mode, do: nil, else: assigns.arrangement || assigns.read
+    arrangement = assigns.arrangement || assigns.read
     visible = Frames.visible_canvas(assigns.frames)
     active = active_app(assigns.frames, visible)
 
@@ -236,7 +233,7 @@ defmodule PrismWeb.CanvasLive do
         active: active,
         boxes: boxes(assigns.frames),
         cards: Map.new(assigns.tinctures, &{&1.id, &1}),
-        shelf: shelf?(assigns.safe_mode, visible),
+        shelf: not is_nil(visible),
         shelf_apps: shelf_apps(assigns, arrangement, visible, active),
         # Under a shown full frame every other layer is covered, and taken
         # out of reach so no key lands on a control nobody can see.
@@ -551,9 +548,6 @@ defmodule PrismWeb.CanvasLive do
     |> Enum.max_by(&{&1.stack, &1.id}, fn -> nil end)
     |> then(&(&1 && &1.id))
   end
-
-  # The shelf stands with the visible canvas, and not in safe mode.
-  defp shelf?(safe_mode, visible), do: not safe_mode and not is_nil(visible)
 
   # The visible canvas's apps on the shelf, in the order they were opened:
   # each held app (a click raises it, or restores it when minimised), then

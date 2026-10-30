@@ -922,7 +922,7 @@ describe("a canvas reports its own failure, once", () => {
     assert.deepEqual(heard, [failed("load"), {v: 1, verb: "open", frame: CANVAS, args: {ref: "t:local.weather-lookup"}}])
   })
 
-  test("an uncaught error after ready() is a failure at runtime", async () => {
+  test("an uncaught error or an unhandled rejection after ready() is no failure: nothing is reported", async () => {
     const {open, heard, onPageError, api} = await canvasClient()
     open()
     api.ready()
@@ -930,27 +930,18 @@ describe("a canvas reports its own failure, once", () => {
 
     onPageError(uncaught())
     onPageError(rejected())
-    await eventually(() => heard.length === 2)
     await tick()
-    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}, failed("runtime")])
+    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}])
   })
 
-  test("an unhandled rejection after ready() is a failure at runtime", async () => {
-    const {open, heard, onPageError, api} = await canvasClient()
-    open()
-    api.ready()
-    onPageError(rejected())
-    await eventually(() => heard.length === 2)
-    assert.deepEqual(heard.at(-1), failed("runtime"))
-  })
-
-  test("ready() then an error, both before the handshake, arrive in that order", async () => {
+  test("ready() then an error, both before the handshake: only ready arrives", async () => {
     const {open, heard, onPageError, api} = await canvasClient()
     api.ready()
     onPageError(uncaught())
     open()
-    await eventually(() => heard.length === 2)
-    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}, failed("runtime")])
+    await eventually(() => heard.length === 1)
+    await tick()
+    assert.deepEqual(heard, [{v: 1, verb: "ready", frame: CANVAS, args: {}}])
   })
 
   test("a canvas the shell holds frozen still posts its ready and its failure, which no showing replays", async () => {
@@ -959,17 +950,13 @@ describe("a canvas reports its own failure, once", () => {
       const states = []
       api.on("state", (state) => states.push(state))
       const shell = open([["state", {state: "live"}]])
-      if (report === "failed") {
-        api.ready()
-        await eventually(() => heard.length === 1)
-      }
 
       shell.postMessage(toFrameMessage("state", CANVAS, {state: "frozen"}))
       await eventually(() => states.at(-1) === "frozen")
 
       if (report === "failed") onPageError(uncaught())
       else api.ready()
-      const expected = report === "failed" ? failed("runtime") : {v: 1, verb: "ready", frame: CANVAS, args: {}}
+      const expected = report === "failed" ? failed("load") : {v: 1, verb: "ready", frame: CANVAS, args: {}}
       await eventually(() => heard.at(-1)?.verb === report)
       assert.deepEqual(heard.at(-1), expected)
 
@@ -984,20 +971,18 @@ describe("a canvas reports its own failure, once", () => {
   })
 
   test("the browser's ResizeObserver loop reports are no failure; any other error after them still is", async () => {
-    const {open, heard, onPageError, api} = await canvasClient()
+    const {open, heard, onPageError} = await canvasClient()
     open()
-    api.ready()
-    await eventually(() => heard.length === 1)
 
     onPageError(uncaught("ResizeObserver loop completed with undelivered notifications."))
     onPageError(uncaught("ResizeObserver loop limit exceeded"))
     await tick()
-    assert.equal(heard.length, 1)
+    assert.equal(heard.length, 0)
 
     // Only those two: a message that merely names ResizeObserver is a failure.
     onPageError(uncaught("ResizeObserver is not defined"))
-    await eventually(() => heard.length === 2)
-    assert.deepEqual(heard.at(-1), failed("runtime"))
+    await eventually(() => heard.length === 1)
+    assert.deepEqual(heard, [failed("load")])
   })
 
   test("an error whose message is not one of those two, whole, is a failure, though it contains one", async () => {
@@ -1008,14 +993,12 @@ describe("a canvas reports its own failure, once", () => {
       "ResizeObserver loop completed with undelivered notifications",
       "ResizeObserver loop completed with undelivered notifications. Saving failed"
     ]) {
-      const {open, heard, onPageError, api} = await canvasClient()
+      const {open, heard, onPageError} = await canvasClient()
       open()
-      api.ready()
-      await eventually(() => heard.length === 1)
 
       onPageError({type: "error", message, error: new Error("Saving failed")})
-      await eventually(() => heard.length === 2)
-      assert.deepEqual(heard.at(-1), failed("runtime"), message)
+      await eventually(() => heard.length === 1)
+      assert.deepEqual(heard, [failed("load")], message)
     }
   })
 

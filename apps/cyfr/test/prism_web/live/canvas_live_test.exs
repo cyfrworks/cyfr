@@ -284,8 +284,7 @@ defmodule PrismWeb.CanvasLiveTest do
       id: "canvas",
       context: ctx,
       frames: holding(frames),
-      tinctures: [],
-      safe_mode: false
+      tinctures: []
     }
 
     {:ok, socket} = PrismWeb.CanvasLive.update(assigns, socket)
@@ -528,7 +527,7 @@ defmodule PrismWeb.CanvasLiveTest do
     assert_push_event(view, "frame_state", %{frame: ^column_id, state: "live"})
   end
 
-  test "the shelf carries a dot per canvas when there is more than one, and is not drawn in safe mode",
+  test "the shelf carries a dot per canvas when there is more than one",
        %{conn: conn, ctx: ctx, user: user} do
     installed!(ctx)
     layout!(ctx, user, canvases())
@@ -554,11 +553,6 @@ defmodule PrismWeb.CanvasLiveTest do
     # above the shelf.
     refute has_element?(view, "#canvas-edge-strip")
     assert has_element?(view, ~s(#canvas-frames[class*="bottom-[52px]"]))
-
-    render_click(view, "safe_mode", %{})
-    refute has_element?(view, "#canvas-shelf")
-    refute has_element?(view, "#canvas-switcher")
-    assert has_element?(view, ~s(#canvas-frames[class*="bottom-0"]))
   end
 
   test "a canvas placed as an app is refused, and mints nothing", %{
