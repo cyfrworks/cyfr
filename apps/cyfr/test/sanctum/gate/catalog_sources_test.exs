@@ -71,7 +71,7 @@ defmodule Sanctum.Gate.CatalogSourcesTest do
                action <- ~w(sync claim_personal claim_publisher verify_publisher tokens_list
                             tokens_issue tokens_revoke members_list members_add members_update
                             members_remove whoami get_namespace report list_my_reports
-                            legal_page legal_version legal_accept appeal publish_address),
+                            legal_page legal_version legal_accept appeal),
                do: "registry.#{action}"
              )
 

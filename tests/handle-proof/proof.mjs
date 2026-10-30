@@ -23,7 +23,7 @@ import {
   ask as askRunSh, launchBrowser, readHomes, redact as redactKnown, saveKit, startProxy, waitFor,
 } from "../browser/lib.mjs";
 import {
-  HANDLE, LONG_AGO, OCI, OTHER, PER, bytesFrom, check, classification, coseTerm, objectModels, otherId, sha256hex,
+  HANDLE, LONG_AGO, OCI, PER, bytesFrom, check, classification, coseTerm, objectModels, otherId, sha256hex,
 } from "./models.mjs";
 
 const [homesFile, outDir] = process.argv.slice(2);
@@ -41,7 +41,7 @@ const clock = () => Date.now();
 
 // What the run captured, which the models are built from (the record's
 // `seen`): origins, clock windows, read times, first reads, credentials'
-// public parts, cookies' digests, the second identity, refusal sentences.
+// public parts, cookies' digests, refusal sentences.
 const S = {
   origins: { a: A, b: B }, w: {}, at: {}, rows: {}, credentials: {}, cookies: {}, opens: {}, refusals: {}, genesis: {},
 };
@@ -144,12 +144,11 @@ const handleAnswer = (handle) => async () => {
 // makes it (`status` by reserving the namespace, cyfr.run
 // internal/api/handles.go:31); protocol, registry and directory by
 // controls.
-const answerIo = (handle, owner, address) => ({
+const answerIo = (handle, owner) => ({
   via: {
     status: { target: "reserved", value: true, original: false },
     handle: { none: "the handle asked for, echoed: shown failing by a control" },
     identifier: { target: "owner_identifier", value: otherId(owner), original: owner },
-    ...(address ? { address: { target: "address", value: `${address}:8443`, original: address } } : {}),
     protocol: { none: "the wire's constant: shown failing by a control" },
     registry: { none: "the registry's configured host: shown failing by a control" },
     directory: { none: "the registry's configured directory: shown failing by a control" },
@@ -296,14 +295,14 @@ async function continueToCyfr(page, origin) {
   return url.searchParams.get("a") ?? decodeURIComponent(url.pathname.split("/")[2]);
 }
 
-// "I run my own CYFR" at B with `handle`, to A's /carry, signing in at A
-// with the passkey when the browser holds no session there, then Begin,
+// "I run my own CYFR" at B with A's address, to A's /carry, signing in at
+// A with the passkey when the browser holds no session there, then Begin,
 // back to B's sign-in page.
-async function carryFrom(person, handle) {
+async function carryFrom(person) {
   await person.goto(`${B}/login`);
   await connected(person);
   await person.locator("#cyfr-own-open").click();
-  await person.locator("#cyfr-own-entry").fill(`@${handle}`);
+  await person.locator("#cyfr-own-entry").fill(A);
   await person.locator('#cyfr-own button[type="submit"]').click();
   await person.waitForURL((url) => url.origin === A && ["/carry", "/login"].includes(url.pathname), { timeout: 60_000 });
   await connected(person);
@@ -388,28 +387,15 @@ async function main(chromium) {
       await opens("a", "identity", identity, "operational_key_sealed", "operational");
     },
   });
-  await claim("setup:registry.namespaces[proof]", "the registry's @proof: personal, owned by A's identifier, no address", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
+  await claim("setup:registry.namespaces[proof]", "the registry's @proof: personal, owned by A's identifier", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
   await claim("setup:registry.identity_heads[a]", "the registry's read of A's log at registry.test", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
   await claim("setup:registry.policy_acceptances[a]", "A's identifier's acceptance of the registry's policy", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id"));
   await claim("setup:registry.request_nonces[a]", "the nonces of A's two signed requests, the acceptance and the claim", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
-  await claim("setup:handle_answer[proof]", "the registry's answer for @proof: A's identifier and directory, no address", handleAnswer(HANDLE), answerIo(HANDLE, id, null));
+  await claim("setup:handle_answer[proof]", "the registry's answer for @proof: A's identifier and directory", handleAnswer(HANDLE), answerIo(HANDLE, id));
 
-  // 2. Publication of A's address from Settings.
   const segment = await continueToCyfr(desk, A);
-  await desk.goto(`${A}/a/${encodeURIComponent(segment)}/settings`);
-  await connected(desk);
-  await desk.waitForSelector('[data-test="identity-publish"][data-published="false"]', { timeout: 60_000 });
-  from = clock();
-  await desk.locator('[data-test="identity-publish"] button').click();
-  await desk.waitForSelector('[data-test="identity-publish"][data-published="true"]', { timeout: 60_000 });
-  windowed("publish", from, "the publication");
-  row("publish", true, "Settings at A publishes A's address with @proof", {});
-  await claim("publish:registry.namespaces[proof]", "the registry's @proof now holds A's address, created as it was", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug"));
-  await claim("publish:handle_answer[proof]", "the registry's answer for @proof publishes A's address", handleAnswer(HANDLE), answerIo(HANDLE, id, A));
-  await claim("publish:registry.request_nonces[a]", "the nonces: setup's two held, and the publication's", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce"));
-  await claim("publish:registry.identity_heads[a]", "the registry's read of A's log, refreshed by the signed request", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier"));
 
-  // 3. B's administrator, set up through /setup, allows @proof.
+  // 2. B's administrator, set up through /setup, allows @proof.
   const adminContext = await freshContext(chromium);
   const admin = await adminContext.newPage();
   await authenticatorWith(admin);
@@ -437,13 +423,13 @@ async function main(chromium) {
   await claim("allow:b.users", "B's one person, its administrator", cyfrRows("b", "users"), cyfrIo("b", "users"));
   await claim("allow:b.server_allowlist", "B's allowlist: one entry, A's identifier, labelled @proof", cyfrRows("b", "server_allowlist"), cyfrIo("b", "server_allowlist"));
 
-  // 4. At B, "I run my own CYFR" with @proof: A through the published
-  // address, and the carry admits the person as A's identifier.
+  // 3. At B, "I run my own CYFR" with A's address, and the carry admits
+  // the person as A's identifier.
   const personContext = await freshContext(chromium);
   const person = await personContext.newPage();
   await authenticatorWith(person, [await credentialFor(desk, "a.test")]);
   from = clock();
-  await carryFrom(person, HANDLE);
+  await carryFrom(person);
   await person.waitForSelector('[data-test="code"]', { timeout: 60_000 });
   const code = (await person.locator('[data-test="code"]').textContent()).trim();
   await person.locator('[data-test="cyfr-continue"]').click();
@@ -461,7 +447,7 @@ async function main(chromium) {
     says_signed_in: landedText.includes("You're signed in, but you have no athanor here yet."),
   };
   row("sign_in", record.sign_in.code_named_at_a && record.sign_in.landed === `${B}/login?error=no_athanor` && record.sign_in.says_signed_in,
-    "at B, @proof leads through the published address to A, A's confirmation names B's code, and B admits the person, with no seat there", record.sign_in);
+    "at B, A's address leads to A, A's confirmation names B's code, and B admits the person, with no seat there", record.sign_in);
   S.cookies.remote = await cookieDigest(personContext, B, "b");
   await claim("sign_in:b.person_identities", "B's identities: its administrator's, and A's identifier as a remote person under A's genesis", cyfrRows("b", "person_identities"), {
     ...cyfrIo("b", "person_identities"),
@@ -474,53 +460,11 @@ async function main(chromium) {
   await claim("sign_in:b.users", "B's people: its administrator, and the person admitted remote", cyfrRows("b", "users"), cyfrIo("b", "users"));
   const remoteId = S.rows["sign_in:b.person_identities"]?.find((r) => r.identifier === id)?.user_id ?? "";
   await claim("sign_in:b.sessions[proof]", "the person's session at B: the browser's cookie's token, bound to the genesis's key epoch", cyfrRows("b", "sessions", "user_id", remoteId), cyfrIo("b", "sessions"));
+  await claim("sign_in:b.sessions", "B's sessions: the administrator's, its cookie's token, and the person's", cyfrRows("b", "sessions"), cyfrIo("b", "sessions"));
   await claim("sign_in:b.athanors", "B's athanors are only its administrator's: the admission made none", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
   await claim("sign_in:b.memberships", "B's seats are only its administrator's: the admission made none", cyfrRows("b", "memberships"), cyfrIo("b", "memberships"));
 
-  // 5. A second identity publishes A's address under @other; signing in at
-  // B as @other is refused wrong_identity.
-  from = clock();
-  const other = await ask({ op: "other_identity", handle: OTHER, address: A });
-  windowed("other", from, "the second identity's requests");
-  S.other = other.identifier;
-  S.userAgents = { [id]: S.clients.cyfr, [other.identifier]: S.clients.curl };
-  S.genesis.c = other.genesis;
-  record.other = { identifier: other.identifier, steps: other.steps.map((s) => ({ op: s.op, status: s.status })) };
-  const otherSteps = [
-    { op: "genesis", status: 200 }, { op: "legal_version", status: 200 }, { op: "policy.accept", status: 201 },
-    { op: "handle.claim", status: 201 }, { op: "address.set", status: 200 },
-  ];
-  if (!row("wrong_identity", JSON.stringify(record.other.steps) === JSON.stringify(otherSteps) && PER.test(other.identifier) && other.identifier !== id,
-    "a second identity enrolls at registry.test, claims @other and publishes A's address with it", record.other)) return;
-  await claim("wrong_identity:registry.directory.identity_log_entries", "the directory's entries: A's genesis as before, and the second identity's as it sent it", registryRows("directory.identity_log_entries"), registryIo("directory.identity_log_entries", "id"));
-  await claim("wrong_identity:registry.namespaces[other]", "the registry's @other: owned by the second identity, A's address", registryRows("namespaces", "slug", OTHER), registryIo("namespaces", "slug"));
-  await claim("wrong_identity:registry.identity_heads[c]", "the registry's read of the second identity's log", registryRows("identity_heads", "identifier", other.identifier), registryIo("identity_heads", "identifier"));
-  await claim("wrong_identity:registry.policy_acceptances[c]", "the second identity's acceptance", registryRows("policy_acceptances", "identifier", other.identifier), registryIo("policy_acceptances", "id"));
-  await claim("wrong_identity:registry.request_nonces[c]", "the nonces of the second identity's three signed requests", registryRows("request_nonces", "identifier", other.identifier), registryIo("request_nonces", "nonce"));
-  await claim("wrong_identity:handle_answer[other]", "the registry's answer for @other: the second identity, and A's address", handleAnswer(OTHER), answerIo(OTHER, other.identifier, A));
-  await claim("wrong_identity:pre:b.sessions", "B's sessions before the attempt: the administrator's, its cookie's token, and the person's", cyfrRows("b", "sessions"), cyfrIo("b", "sessions"));
-
-  from = clock();
-  await carryFrom(person, OTHER);
-  await person.waitForSelector('[data-test="sign-in-error"]', { timeout: 60_000 });
-  windowed("attempt", from, "the attempt as @other");
-  const refusedText = (await person.locator('[data-test="sign-in-error"]').innerText()).trim();
-  S.refusals.wrong_identity = await ask({ op: "refusal", cell: "b", reason: "wrong_identity" });
-  const otherSentence = (await ask({ op: "refusal", cell: "b", reason: "wrong_destination" })).sentence;
-  await claim("wrong_identity:b.sign_in_error", "B's sign-in page shows wrong_identity's sentence, distinct from every other sign-in refusal's; no wrong-destination request is made",
-    async () => ({ shown: refusedText, shared_with: S.refusals.wrong_identity.shared_with }), {
-      controls: [
-        { field: ".shown", says: "wrong_destination's sentence", corrupt: (o) => ({ ...o, shown: otherSentence }) },
-        { field: ".shared_with", says: "a refusal sharing the sentence", corrupt: (o) => ({ ...o, shared_with: ["wrong_destination"] }) },
-      ],
-    });
-  await claim("wrong_identity:b.users", "B's people are the two it held: nobody was admitted", cyfrRows("b", "users"), cyfrIo("b", "users"));
-  await claim("wrong_identity:b.sessions", "B's sessions are those it held before the attempt: none was made", cyfrRows("b", "sessions"), cyfrIo("b", "sessions"));
-  await claim("wrong_identity:b.person_identities", "B's identities are the two it held", cyfrRows("b", "person_identities"), cyfrIo("b", "person_identities"));
-  await claim("wrong_identity:b.athanors", "B's athanors are its administrator's alone", cyfrRows("b", "athanors"), cyfrIo("b", "athanors"));
-  await claim("wrong_identity:b.memberships", "B's seats are its administrator's alone", cyfrRows("b", "memberships"), cyfrIo("b", "memberships"));
-
-  // 6. registry.sync at A under the passkey stores a push token; the
+  // 4. registry.sync at A under the passkey stores a push token; the
   // registry bans the identifier; the token is refused there, and A's
   // next sync answers banned.
   const registryPage = `${A}/a/${encodeURIComponent(segment)}/registry`;
@@ -627,13 +571,9 @@ async function main(chromium) {
     ["a.registry_tokens", cyfrRows("a", "registry_tokens"), cyfrIo("a", "registry_tokens")],
     ["registry.directory.identity_log_entries", registryRows("directory.identity_log_entries"), registryIo("directory.identity_log_entries", "id")],
     ["registry.namespaces[proof]", registryRows("namespaces", "slug", HANDLE), registryIo("namespaces", "slug")],
-    ["registry.namespaces[other]", registryRows("namespaces", "slug", OTHER), registryIo("namespaces", "slug")],
     ["registry.identity_heads[a]", registryRows("identity_heads", "identifier", id), registryIo("identity_heads", "identifier")],
-    ["registry.identity_heads[c]", registryRows("identity_heads", "identifier", other.identifier), registryIo("identity_heads", "identifier")],
     ["registry.policy_acceptances[a]", registryRows("policy_acceptances", "identifier", id), registryIo("policy_acceptances", "id")],
-    ["registry.policy_acceptances[c]", registryRows("policy_acceptances", "identifier", other.identifier), registryIo("policy_acceptances", "id")],
     ["registry.request_nonces[a]", registryRows("request_nonces", "identifier", id), registryIo("request_nonces", "nonce")],
-    ["registry.request_nonces[c]", registryRows("request_nonces", "identifier", other.identifier), registryIo("request_nonces", "nonce")],
     ["registry.push_tokens[proof]", registryRows("push_tokens", "namespace_slug", HANDLE), registryIo("push_tokens", "id")],
     ["registry.banned_identities", registryRows("banned_identities", "identifier", id), registryIo("banned_identities", "id")],
     ["b.passkeys", cyfrRows("b", "passkeys"), cyfrIo("b", "passkeys")],
@@ -676,7 +616,7 @@ try {
   proxy.close();
 }
 
-const STEPS = ["setup", "publish", "allow", "sign_in", "wrong_identity", "sync", "ban"];
+const STEPS = ["setup", "allow", "sign_in", "sync", "ban"];
 const outcome = (step) => {
   const found = rows.filter((r) => r.step === step);
   if (!found.length) return "not reached";

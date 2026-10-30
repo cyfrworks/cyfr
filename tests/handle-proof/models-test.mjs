@@ -61,39 +61,20 @@ test("the proof holds every column of a native directory row through tamper and 
   assert.equal(result.loops.length, Object.keys(row).length);
   assert.ok(result.loops.every((loop) => loop.named && loop.state_same && loop.held_again));
 
-  const otherGenesis = Buffer.from(fixture.entries["genesis-bob"]);
-  const other = {
-    ...row,
-    id: 2,
-    identifier: `per_${sha256hex(otherGenesis)}`,
-    entry_hash: `sha256:${sha256hex(otherGenesis)}`,
-    entry: `\\x${otherGenesis.toString("hex")}`,
-    bytes: otherGenesis.length,
-  };
-  const twoRows = [row, other];
-  const later = "wrong_identity:registry.directory.identity_log_entries";
-  seen.other = other.identifier;
-  seen.genesis.c = otherGenesis.toString("base64");
-  seen.w.other = seen.w.enroll;
-  seen.rows[later] = structuredClone(twoRows);
-
-  for (const phase of [later, "held:registry.directory.identity_log_entries"]) {
-    const model = objectModels(seen)[phase]();
-    const result = await check(structuredClone(twoRows), model, {
-      read: async () => structuredClone(twoRows),
-      state: async () => ({ rows: structuredClone(twoRows), constraints: ["primary key"] }),
-      write: async (_index, field, value, reference) => {
-        const target = twoRows.find((r) => r.id === reference.id);
-        assert.ok(target, "the row to tamper or restore exists");
-        if (field === "id") {
-          assert.ok(!twoRows.some((r) => r !== target && r.id === value), "the ID tamper preserves primary-key uniqueness");
-        }
-        target[field] = value;
-        return { set: 1, role: "origin" };
-      },
-    });
-    assert.deepEqual(result.failures, [], phase);
-    assert.equal(result.loops.length, twoRows.length * Object.keys(row).length);
-    assert.ok(result.loops.every((loop) => loop.named && loop.state_same && loop.held_again));
-  }
+  // Read again at the end, the row is held to what setup read, and every
+  // field's loop runs again.
+  const heldModel = objectModels(seen)["held:registry.directory.identity_log_entries"]();
+  assert.deepEqual(mismatches([row], heldModel), []);
+  assert.notDeepEqual(mismatches([{ ...row, id: 2 }], heldModel), []);
+  const heldResult = await check([structuredClone(row)], heldModel, {
+    read: async () => [structuredClone(row)],
+    state: async () => ({ rows: [structuredClone(row)], constraints: ["unchanged"] }),
+    write: async (_index, field, value) => {
+      row[field] = value;
+      return { set: 1, role: "origin" };
+    },
+  });
+  assert.deepEqual(heldResult.failures, []);
+  assert.equal(heldResult.loops.length, Object.keys(row).length);
+  assert.ok(heldResult.loops.every((loop) => loop.named && loop.state_same && loop.held_again));
 });

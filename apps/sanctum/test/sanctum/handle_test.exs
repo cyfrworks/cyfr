@@ -31,29 +31,22 @@ defmodule Sanctum.HandleTest do
     String.replace(bytes, ~s("registry":"cyfr.run"), ~s("registry":"#{RegistryStub.host()}"))
   end
 
-  test "an answer with a published address names the identifier, its directory and the address" do
-    RegistryStub.start!(fn _ -> {200, rehosted("an answer with a published address")} end)
+  test "an answer names the identifier and its directory" do
+    RegistryStub.start!(fn _ -> {200, rehosted("an answer")} end)
 
     assert {:ok, %HandleAnswer{} = answer} = Handle.resolve("alice")
     assert answer.handle == "alice"
     assert answer.registry == RegistryStub.host()
     assert answer.directory == "https://cyfr.run"
-    assert answer.address == "https://alice.example"
     assert "per_" <> _ = answer.identifier
 
     assert_received {:registry_request, %{method: "GET", path: "/v1/handles/alice", body: ""}}
   end
 
-  test "an answer with no address key has none published" do
-    RegistryStub.start!(fn _ -> {200, rehosted("an answer with no published address")} end)
-    assert {:ok, %HandleAnswer{address: nil}} = Handle.resolve("alice")
-  end
-
-  test "an answer for another handle or registry, or outside its grammar, is malformed" do
+  test "an answer for another handle or registry, carrying an address, or outside its grammar, is malformed" do
     for name <- [
           "an answer for another handle",
-          "an address of null",
-          "an address with a path",
+          "an answer carrying an address",
           "an unknown key",
           "no identifier",
           "not JSON"
@@ -65,7 +58,7 @@ defmodule Sanctum.HandleTest do
 
     # The vector's own host is not the one asked here.
     %{"bytes" => foreign} =
-      Enum.find(@vectors["answers"], &(&1["name"] == "an answer with a published address"))
+      Enum.find(@vectors["answers"], &(&1["name"] == "an answer"))
 
     RegistryStub.start!(fn _ -> {200, foreign} end)
     assert {:error, :malformed_answer} = Handle.resolve("alice")

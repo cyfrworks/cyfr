@@ -491,29 +491,6 @@ defmodule Compendium.Providers.RegistryTest do
                })
     end
 
-    test "publishing names this CYFR's own address, and withdrawing sends an empty body" do
-      %{ctx: ctx, state: state, slug: slug} = signed_in_person()
-
-      registry(state, fn %{path: "/v1/handles/address", signed: signed} ->
-        assert signed.operation == "address.set"
-        {200, RegistryStub.answer(Map.put(signed.body, "handle", slug))}
-      end)
-
-      home = Sanctum.Person.home()
-
-      assert {:ok, %{"address" => ^home}} =
-               RegistryProvider.handle(ctx, %{"action" => "publish_address", "published" => true})
-
-      assert {:ok, answer} =
-               RegistryProvider.handle(ctx, %{"action" => "publish_address", "published" => false})
-
-      refute Map.has_key?(answer, "address")
-      assert_received {:registry_request, %{body: published}}
-      assert_received {:registry_request, %{body: withdrawn}}
-      assert published =~ home
-      assert Jason.decode!(withdrawn)["body"] == %{}
-    end
-
     test "a publisher claim is signed, with no bearer" do
       %{ctx: ctx, state: state} = signed_in_person()
 
@@ -892,7 +869,7 @@ defmodule Compendium.Providers.RegistryTest do
   # (`Compendium.Registry.Client`): a POST or PATCH changes something
   # there, a DELETE deletes it, a GET reads.
   @remote_changes ~w(sync claim_personal claim_publisher verify_publisher tokens_issue
-                     members_add members_update report legal_accept appeal publish_address)
+                     members_add members_update report legal_accept appeal)
   @remote_deletes ~w(tokens_revoke members_remove)
   @reads ~w(tokens_list members_list whoami get_namespace list_my_reports legal_page
             legal_version)

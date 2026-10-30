@@ -7,7 +7,8 @@ defmodule Prima.HandleAnswerTest do
   which the registry at cyfr.run reads too): each answer's bytes parse, for
   the handle and registry asked, to their result, which encodes back to
   those bytes, or to `:malformed_answer`; an answer for another handle or
-  registry, or with a value outside its grammar, is refused; a registry
+  registry, with any key beside its five (an address among them), or with
+  a value outside its grammar, is refused; a registry
   error envelope reads back to its refusal; and every
   handle spelling the slug grammar refuses is refused in an answer too.
   """
@@ -23,7 +24,6 @@ defmodule Prima.HandleAnswerTest do
   defp fields(%HandleAnswer{} = answer) do
     answer
     |> Map.from_struct()
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
   end
 
@@ -53,16 +53,17 @@ defmodule Prima.HandleAnswerTest do
     end
   end
 
-  test "the vectors hold an answer with an address, one without, and refused addresses" do
+  test "an answer carrying an address is refused, and no answer the vectors accept has one" do
     answers = vectors()["answers"]
-    assert Enum.any?(answers, &match?(%{"result" => %{"address" => _}}, &1))
 
-    assert Enum.any?(
-             answers,
-             &(is_map(&1["result"]) and not Map.has_key?(&1["result"], "address"))
-           )
+    assert %{"bytes" => bytes, "error" => "malformed_answer"} =
+             Enum.find(answers, &(&1["name"] == "an answer carrying an address"))
 
-    assert Enum.count(answers, &(&1["name"] =~ "an address with")) >= 3
+    assert %{"address" => _} = Jason.decode!(bytes)
+
+    assert %{"result" => result} = Enum.find(answers, &(&1["name"] == "an answer"))
+    refute Map.has_key?(result, "address")
+    refute Enum.any?(answers, &match?(%{"result" => %{"address" => _}}, &1))
   end
 
   test "an answer names exactly the handle asked, in the handle grammar" do
@@ -80,7 +81,7 @@ defmodule Prima.HandleAnswerTest do
 
       case verdict do
         "valid" ->
-          assert {:ok, %HandleAnswer{handle: ^handle, address: nil}} =
+          assert {:ok, %HandleAnswer{handle: ^handle}} =
                    HandleAnswer.parse(answer, handle, "cyfr.run")
 
           assert HandleAnswer.parse(answer, handle <> "x", "cyfr.run") ==

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 CYFR Works Inc.
 #
-# The handle proof (README.md): a handle at the registry carries a sign-in
-# from one CYFR to another, end to end. `cyfr` releases started as the
+# The handle proof (README.md): a handle at the registry names the person
+# another CYFR allows, who signs in there from their own CYFR, end to end. `cyfr` releases started as the
 # browser harness starts homes (tests/browser/harness.sh), each a SQLite
 # cell on a `.test` name behind the harness's HTTPS front: the person's
 # CYFR a.test and the CYFR b.test they sign in at, both set up through
@@ -85,9 +85,6 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# A JSON string of `$1`.
-jstr() { python3 -I -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"; }
-
 # This proof's fixture (fixture.exs) inside cell `$1`'s running server.
 handle_fixture() {
   local cell="$1"
@@ -108,9 +105,6 @@ registry_http() {
   python3 -I -c 'import json, sys; print(json.dumps({"status": int(sys.argv[1]), "body": open(sys.argv[2]).read()}))' "$status" "$body"
   rm -f "$body"
 }
-
-# Directory requests use the registry's own HTTPS front.
-directory_http() { registry_http "$@"; }
 
 release_build
 
@@ -232,29 +226,6 @@ registry_admin() {
   [ -n "$ADMIN_COOKIE" ] && [ -n "$ADMIN_CSRF" ] || fail "the registry's admin sign-in set no session"
 }
 
-# The second identity: the smoke's person (cmd/smokeid), enrolled at
-# registry.test, which accepts the registry's policy, claims the handle `$1`
-# and publishes the address `$2` with it, each a request its live key
-# signs. Answers its identifier and each answer.
-other_identity() {
-  local handle="$1" address="$2" state="$WORK/other.json" identifier steps="[]" request version
-  identifier="$("$SMOKEID" -state "$state" new "https://$REGISTRY_HOST")"
-  "$SMOKEID" -state "$state" genesis >"$WORK/other-genesis"
-  add() { steps="$(python3 -I -c 'import json, sys; s = json.loads(sys.argv[1]); s.append({"op": sys.argv[2], **json.loads(sys.argv[3])}); print(json.dumps(s))' "$steps" "$1" "$2")"; }
-  add genesis "$(directory_http POST /directory/v1/genesis -H 'content-type: application/json' --data-binary "@$WORK/other-genesis")"
-  answer="$(registry_http GET /v1/legal/version)"
-  add legal_version "$answer"
-  version="$(field "$(field "$answer" body)" policy_version)"
-  signed() {
-    "$SMOKEID" -state "$state" sign "$REGISTRY_HOST" "$2" "$3" >"$WORK/other-request"
-    add "$2" "$(registry_http POST "$1" -H 'content-type: application/json' --data-binary "@$WORK/other-request")"
-  }
-  signed /v1/legal/accept policy.accept "{\"policy_version\":$(jstr "$version")}"
-  signed /v1/namespaces/personal/claim handle.claim "{\"handle\":$(jstr "$handle")}"
-  signed /v1/handles/address address.set "{\"address\":$(jstr "$address")}"
-  ANSWER="$(python3 -I -c 'import base64, json, sys; print(json.dumps({"identifier": sys.argv[1], "steps": json.loads(sys.argv[2]), "genesis": base64.b64encode(open(sys.argv[3], "rb").read()).decode()}))' "$identifier" "$steps" "$WORK/other-genesis")"
-}
-
 # Each step the proof asks for (harness.sh `answer_asks`).
 answer_ask() {
   local ask="$1" op cell value file
@@ -332,18 +303,14 @@ SQL
       ;;
     user_agents)
       # The registry records each signer's HTTP client: a CYFR's is Req's
-      # default, named for the version mix.lock pins; the second
-      # identity's is this run's curl.
-      ANSWER="$(python3 -I -c 'import json, re, sys; v = re.search(r"\"req\": \{:hex, :req, \"([^\"]+)\"", open(sys.argv[1]).read()).group(1); print(json.dumps({"cyfr": "req/" + v, "curl": "curl/" + sys.argv[2]}))' "$ROOT/mix.lock" "$(curl -V | head -1 | cut -d' ' -f2)")" || ANSWER=""
+      # default, named for the version mix.lock pins.
+      ANSWER="$(python3 -I -c 'import json, re, sys; v = re.search(r"\"req\": \{:hex, :req, \"([^\"]+)\"", open(sys.argv[1]).read()).group(1); print(json.dumps({"cyfr": "req/" + v}))' "$ROOT/mix.lock")" || ANSWER=""
       ;;
     legal_version)
       ANSWER="$(python3 -I -c 'import json, sys; a = json.loads(sys.argv[1]); print(json.dumps({"status": a["status"], "policy_version": json.loads(a["body"]).get("policy_version")}))' "$(registry_http GET /v1/legal/version)")" || ANSWER=""
       ;;
     handle_answer)
       ANSWER="$(registry_http GET "/v1/handles/$(asked "$ask" handle)")"
-      ;;
-    other_identity)
-      other_identity "$(asked "$ask" handle)" "$(asked "$ask" address)"
       ;;
     ban)
       registry_admin

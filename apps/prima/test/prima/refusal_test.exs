@@ -193,7 +193,6 @@ defmodule Prima.RefusalTest do
     {:has_other_handle, :conflict},
     {:handle_invalid, :invalid_argument},
     {:handle_reserved, :invalid_argument},
-    {:no_handle, :setup_required},
     {:namespace_reserved, :forbidden},
     {:claim_not_pending, :conflict},
     {:dns_unverified, :conflict},
@@ -313,8 +312,6 @@ defmodule Prima.RefusalTest do
     {:no_person, :not_found},
     {:invitation_invalid, :not_found},
     {:handle_not_found, :not_found},
-    {:address_not_published, :not_found},
-    {:wrong_identity, :forbidden},
     {:company_login_required, :forbidden},
     {:company_subject_bound, :conflict},
     {:execution_failed, :internal},
@@ -646,7 +643,7 @@ defmodule Prima.RefusalTest do
     end
 
     test "every registry refusal CYFR passes on is a reason of the table" do
-      passed_on = ~w(handle_taken has_other_handle handle_invalid handle_reserved no_handle
+      passed_on = ~w(handle_taken has_other_handle handle_invalid handle_reserved
                      namespace_reserved claim_not_pending dns_unverified dns_timeout banned
                      not_appellant action_not_found appeal_too_early namespace_unowned
                      wrong_directory unknown_identity directory_unavailable rate_limited)a
@@ -794,7 +791,7 @@ defmodule Prima.RefusalTest do
       for reason <- [:setup_closed, :not_set_up, :no_person], do: assert(Refusal.reason?(reason))
     end
 
-    test "an invitation, a handle and a handle's sign-in each say what went wrong" do
+    test "an invitation and a handle each say what went wrong" do
       assert %Refusal{class: :not_found, message: invitation} =
                Refusal.classify(:invitation_invalid)
 
@@ -802,20 +799,7 @@ defmodule Prima.RefusalTest do
 
       assert %Refusal{class: :not_found} = Refusal.classify(:handle_not_found)
 
-      assert %Refusal{class: :not_found, message: unpublished} =
-               Refusal.classify(:address_not_published)
-
-      assert unpublished =~ "Enter the address"
-
-      assert %Refusal{class: :forbidden, message: wrong} = Refusal.classify(:wrong_identity)
-      assert wrong =~ "nobody was signed in"
-
-      for reason <- [
-            :invitation_invalid,
-            :handle_not_found,
-            :address_not_published,
-            :wrong_identity
-          ],
+      for reason <- [:invitation_invalid, :handle_not_found],
           do: assert(Refusal.reason?(reason))
     end
 

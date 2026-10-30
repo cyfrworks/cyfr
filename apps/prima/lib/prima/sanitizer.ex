@@ -30,13 +30,18 @@ defmodule Prima.Sanitizer do
   # by: a context's `confirmation_id` and the MCP request metadata key
   # `cyfr/confirmationId`. Both spellings are listed because Phoenix's
   # `:filter_parameters` matches case-sensitive substrings.
+  #
+  # `recovery_code` is a person's recovery code (`Prima.RecoveryCode`), the
+  # one line that restores them: as a two-word pattern it covers
+  # `recovery_code`, `recoveryCode` and `recovery-code` under any longer
+  # key, while `error_code` and `recovery_phase` stay readable.
   @sensitive_keys ~w(
     password secret token api_key apikey access_token refresh_token
     private_key secret_key auth bearer credential credentials
     passwd pwd api-key x-api-key authorization session_token
     session_id registry_token cosign_key signing_key jwt client_secret
     device_code stripe basic_auth cookie signature code_verifier
-    proof ticket confirmation_id confirmationId
+    proof ticket confirmation_id confirmationId recovery_code
     keyring crypto_keyring master_key encryption_key hmac_key
     derived_key key_material keystore passphrase
   )

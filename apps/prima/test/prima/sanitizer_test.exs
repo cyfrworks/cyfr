@@ -38,6 +38,9 @@ defmodule Prima.SanitizerTest do
         "FRAG-MENT",
         "_T",
         "_SESSION",
+        "recovery_code",
+        "recoveryCode",
+        "recovery-code",
         :confirmation_id,
         :master_key
       ]
@@ -56,6 +59,8 @@ defmodule Prima.SanitizerTest do
         "field_names",
         "fragment_id",
         "invitation_url_label",
+        "recovery_phase",
+        "recovery",
         "confirmation.id",
         "confirmation id",
         "private.key",
@@ -380,6 +385,37 @@ defmodule Prima.SanitizerTest do
 
       # Phoenix's request and LiveView event logs filter by substring.
       assert Enum.any?(Prima.Sanitizer.filter_parameters(), &String.contains?("fragment", &1))
+    end
+  end
+
+  # A person's recovery code (`Prima.RecoveryCode`), the one line that
+  # restores them, under the names it travels by.
+  describe "a person's recovery code" do
+    test "is redacted under every spelling of its key, at the top level and nested" do
+      code =
+        Prima.RecoveryCode.encode("per_" <> String.duplicate("5", 64), :binary.copy(<<7>>, 32))
+
+      assert String.length(code) == 130
+
+      assert Prima.Sanitizer.sanitize(%{
+               "recovery_code" => code,
+               "holder" => %{"recoveryCode" => code, "recovery-code" => code},
+               "recovery_phase" => "saved",
+               "error_code" => "typo"
+             }) == %{
+               "recovery_code" => "[REDACTED]",
+               "holder" => %{"recoveryCode" => "[REDACTED]", "recovery-code" => "[REDACTED]"},
+               "recovery_phase" => "saved",
+               "error_code" => "typo"
+             }
+
+      assert Prima.Sanitizer.sensitive_key?(:recovery_code)
+
+      # Phoenix's request and LiveView event logs filter by substring.
+      assert Enum.any?(
+               Prima.Sanitizer.filter_parameters(),
+               &String.contains?("recovery_code", &1)
+             )
     end
   end
 

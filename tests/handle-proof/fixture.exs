@@ -234,9 +234,8 @@ fn args ->
 
       others =
         ~w(wrong_destination identity_stale unavailable invalid_carry no_request not_allowed
-           wrong_identity banned registry_unavailable not_enrolled no_registry
-           registry_token_missing unknown_identity directory_unavailable wrong_directory
-           policy_required no_handle)a -- [reason]
+           banned registry_unavailable not_enrolled no_registry registry_token_missing
+           unknown_identity directory_unavailable wrong_directory policy_required)a -- [reason]
 
       sentence = Prima.Refusal.message(reason)
 

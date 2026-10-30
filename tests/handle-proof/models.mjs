@@ -300,7 +300,6 @@ export const REGISTRY = "registry.test";
 // `registry.` before CYFR_REGISTRY_URL (`Compendium.RegistryHost`).
 export const OCI = `registry.${REGISTRY}`;
 export const HANDLE = "proof";
-export const OTHER = "other";
 // This fresh proof database mints IDs from 1; the largest exact JS integer
 // remains a valid PostgreSQL BIGINT without colliding with another proof row.
 const DIRECTORY_ID_TAMPER = Number.MAX_SAFE_INTEGER;
@@ -354,10 +353,9 @@ function models(S) {
   const aUser = () => first("setup:a.passkeys")[0].user_id;
   const bAdmin = () => first("allow:b.passkeys")[0].user_id;
   const genesisA = S.genesis.a;
-  const genesisC = S.genesis.c;
   const bytesHex = (hex) => `\\x${hex}`;
 
-  const nsRow = (slug, owner, address, created, updated) => ({
+  const nsRow = (slug, owner, created, updated) => ({
     slug: exact(slug),
     kind: exact("personal"),
     reserved: exact(false),
@@ -371,7 +369,6 @@ function models(S) {
     created_at: created,
     updated_at: updated,
     owner_identifier: owner,
-    address,
     reserved_reason: nil(),
   });
   const head = (identifier, genesis, readAt) => ({
@@ -387,7 +384,7 @@ function models(S) {
     policy_version: derived(S.policyVersion, "the registry's GET /v1/legal/version"),
     accepted_at: within(window),
     ip_address: exact("::ffff:127.0.0.1", { tamper: "::ffff:127.0.0.2", shown: "`\"::ffff:127.0.0.1\"`: the front's forwarded loopback address, as PostgreSQL's inet stores it" }),
-    user_agent: derived(identifier === S.other ? S.clients?.curl : S.clients?.cyfr, "the signer's HTTP client: Req's default for a CYFR (req 0.7.5, mix.lock), the run's curl for the second identity"),
+    user_agent: derived(S.clients?.cyfr, "the signer's HTTP client: Req's default for a CYFR (req 0.7.5, mix.lock)"),
     identifier: derived(identifier, "the signer's identifier"),
     former_identity: nil(),
   });
@@ -398,14 +395,13 @@ function models(S) {
     nonce: captured("16 new bytes", (v) => typeof v === "string" && /^\\x[0-9a-f]{32}$/.test(v), "\\x00"),
     expires_at: within({ name: `${window.name}, plus the 120 s a signed request lives`, from: window.from + 120_000, to: window.to + 120_000 }),
   });
-  const handleAnswer = (handle, identifier, address) => ({
+  const handleAnswer = (handle, identifier) => ({
     status: exact(200),
     protocol: exact("cyfr-handle/v1"),
     registry: exact(REGISTRY),
     handle: exact(handle),
     identifier: derived(identifier, "the owner's genesis, hashed"),
     directory: exact(DIRECTORY),
-    ...(address ? { address: exact(address) } : {}),
   });
   const logEntry = (identifier, genesis, window) => ({
     id: { ...captured("a new directory row id", (v) => Number.isSafeInteger(v) && v > 0, DIRECTORY_ID_TAMPER), tamper: DIRECTORY_ID_TAMPER },
@@ -568,18 +564,12 @@ function models(S) {
       updated_at: within(win(S, "enroll")),
     }];
   };
-  M["setup:registry.namespaces[proof]"] = () => [nsRow(HANDLE, derived(id, "the kit's identifier"), nil(), within(win(S, "ack")), within(win(S, "ack")))];
+  M["setup:registry.namespaces[proof]"] = () => [nsRow(HANDLE, derived(id, "the kit's identifier"), within(win(S, "ack")), within(win(S, "ack")))];
   M["setup:registry.identity_heads[a]"] = () => [head(id, genesisHash, within(win(S, "ack")))];
   M["setup:registry.policy_acceptances[a]"] = () => [policy(id, win(S, "ack"))];
   M["setup:registry.request_nonces[a]"] = () => [nonce(id, win(S, "ack")), nonce(id, win(S, "ack"))];
-  M["setup:handle_answer[proof]"] = () => handleAnswer(HANDLE, id, null);
+  M["setup:handle_answer[proof]"] = () => handleAnswer(HANDLE, id);
 
-  // publish
-  M["publish:registry.namespaces[proof]"] = () => [held(first("setup:registry.namespaces[proof]")[0], {
-    address: exact(A),
-    updated_at: within(win(S, "publish")),
-  }, "as read at setup", M["setup:registry.namespaces[proof]"]()[0])];
-  M["publish:handle_answer[proof]"] = () => handleAnswer(HANDLE, id, A);
   // The nonces read before, each held, and `added` new ones.
   const grown = (before, now, step, added, window) => {
     const fresh = now.filter((r) => !before.some((b) => b.nonce === r.nonce)).map((r) => r.nonce);
@@ -588,11 +578,6 @@ function models(S) {
       ...Array.from({ length: added }, (_, i) => [fresh[i] ?? `new ${i}`, nonce(id, window), `a new nonce`]),
     ]);
   };
-  M["publish:registry.request_nonces[a]"] = () =>
-    grown(first("setup:registry.request_nonces[a]"), first("publish:registry.request_nonces[a]"), "setup", 1, win(S, "publish"));
-  M["publish:registry.identity_heads[a]"] = () => [held(first("setup:registry.identity_heads[a]")[0], {
-    read_at: sameOrWithin(first("setup:registry.identity_heads[a]")[0].read_at, win(S, "publish"), "as read at setup"),
-  }, "as read at setup")];
 
   // allow
   M["allow:b.passkeys"] = () => [{
@@ -725,20 +710,10 @@ function models(S) {
   M["sign_in:b.athanors"] = () => [held(first("allow:b.athanors")[0], {}, "as read at allow")];
   M["sign_in:b.memberships"] = () => first("allow:b.memberships").map((r) => held(r, {}, "as read at allow"));
 
-  // wrong_identity: the second identity at the registry and the directory,
-  // B before and after the refused attempt.
-  M["wrong_identity:registry.namespaces[other]"] = () => [nsRow(OTHER, derived(S.other, "the second identity's genesis, hashed"), exact(A), within(win(S, "other")), within(win(S, "other")))];
-  M["wrong_identity:registry.identity_heads[c]"] = () => [head(S.other, `sha256:${S.other.slice(4)}`, within(win(S, "other")))];
-  M["wrong_identity:registry.policy_acceptances[c]"] = () => [policy(S.other, win(S, "other"))];
-  M["wrong_identity:registry.request_nonces[c]"] = () => [nonce(S.other, win(S, "other")), nonce(S.other, win(S, "other")), nonce(S.other, win(S, "other"))];
-  M["wrong_identity:registry.directory.identity_log_entries"] = () => byKey(first("wrong_identity:registry.directory.identity_log_entries"), (r) => r.identifier, [
-    [id, held(first("setup:registry.directory.identity_log_entries")[0], {}, "as read at setup", logEntry(id, genesisA, win(S, "enroll"))), "A's genesis"],
-    [S.other, logEntry(S.other, genesisC, win(S, "other")), "the second identity's genesis"],
-  ]);
-  M["wrong_identity:handle_answer[other]"] = () => handleAnswer(OTHER, S.other, A);
-  M["wrong_identity:pre:b.sessions"] = () => (() => {
-    const adminSession = first("wrong_identity:pre:b.sessions").find((r) => r.user_id === bAdmin()) ?? {};
-    return byKey(first("wrong_identity:pre:b.sessions"), (r) => r.user_id, [[bAdmin(), {
+  // sign_in, B's sessions whole: the administrator's and the person's.
+  M["sign_in:b.sessions"] = () => (() => {
+    const adminSession = first("sign_in:b.sessions").find((r) => r.user_id === bAdmin()) ?? {};
+    return byKey(first("sign_in:b.sessions"), (r) => r.user_id, [[bAdmin(), {
     id: anId("ses"),
     token_hash: derived(bytes(Buffer.from(S.cookies.admin?.sha256 ?? "", "hex")), "the SHA-256 of the session token the administrator's cookie carries"),
     token_prefix: derived(S.cookies.admin?.prefix, "the first 8 characters of that token"),
@@ -752,15 +727,6 @@ function models(S) {
     inserted_at: within(win(S, "admin")),
   }, "the administrator's"], [remote(), held(first("sign_in:b.sessions[proof]")[0], {}, "as read at sign_in"), "the person's"]]);
   })();
-  const unchangedThrough = (rows, step, window) => rows.map((r) => held(r, Object.fromEntries(["last_seen_at", "updated_at"].filter((f) => f in r)
-    .map((f) => [f, sameOrWithin(r[f], window, `as read at ${step}`)])), `as read at ${step}`));
-  M["wrong_identity:b.users"] = () => unchangedThrough(first("sign_in:b.users"), "sign_in", win(S, "attempt"));
-  M["wrong_identity:b.sessions"] = () => first("wrong_identity:pre:b.sessions").map((r) => held(r, {}, "as read before the attempt"));
-  M["wrong_identity:b.person_identities"] = () => first("sign_in:b.person_identities").map((r) => held(r, {}, "as read at sign_in"));
-  M["wrong_identity:b.athanors"] = () => [held(first("allow:b.athanors")[0], {}, "as read at allow")];
-  M["wrong_identity:b.memberships"] = () => first("allow:b.memberships").map((r) => held(r, {}, "as read at allow"));
-  M["wrong_identity:b.sign_in_error"] = () => ({ shown: exact(S.refusals.wrong_identity.sentence), shared_with: exact([]) });
-
   // sync
   const token = () => first("sync:registry.push_tokens[proof]")[0];
   const sealed = () => first("sync:a.registry_tokens")[0];
@@ -794,9 +760,9 @@ function models(S) {
     recovery_epoch: derived(genesisHash, "a genesis's recovery epoch, its own hash"),
   }];
   M["sync:registry.request_nonces[a]"] = () =>
-    grown(first("publish:registry.request_nonces[a]"), first("sync:registry.request_nonces[a]"), "publish", 1, win(S, "sync"));
+    grown(first("setup:registry.request_nonces[a]"), first("sync:registry.request_nonces[a]"), "setup", 1, win(S, "sync"));
   M["sync:registry.identity_heads[a]"] = () => [held(first("setup:registry.identity_heads[a]")[0], {
-    read_at: sameOrWithin(first("publish:registry.identity_heads[a]")[0].read_at, win(S, "sync"), "as read at publish"),
+    read_at: sameOrWithin(first("setup:registry.identity_heads[a]")[0].read_at, win(S, "sync"), "as read at setup"),
   }, "as read at setup")];
 
   // ban
@@ -834,22 +800,20 @@ function models(S) {
     updated_at: sameOrWithin(r.updated_at, since("a.users", "ack"), "as read at setup"),
   }));
   for (const [name, step] of [["setup:a.person_identities", "setup"], ["setup:a.athanors", "setup"], ["setup:a.memberships", "setup"],
-    ["setup:a.identity_attempts", "setup"], ["sync:a.registry_tokens", "sync"], ["wrong_identity:registry.directory.identity_log_entries", "wrong_identity"],
-    ["publish:registry.namespaces[proof]", "publish"], ["wrong_identity:registry.namespaces[other]", "wrong_identity"],
-    ["wrong_identity:registry.identity_heads[c]", "wrong_identity"], ["setup:registry.policy_acceptances[a]", "setup"],
-    ["wrong_identity:registry.policy_acceptances[c]", "wrong_identity"], ["wrong_identity:registry.request_nonces[c]", "wrong_identity"],
+    ["setup:a.identity_attempts", "setup"], ["sync:a.registry_tokens", "sync"], ["setup:registry.directory.identity_log_entries", "setup"],
+    ["setup:registry.namespaces[proof]", "setup"], ["setup:registry.policy_acceptances[a]", "setup"],
     ["ban:registry.banned_identities", "ban"], ["allow:b.passkeys", "allow"], ["allow:b.server_allowlist", "allow"],
-    ["wrong_identity:b.sessions", "wrong_identity"], ["sign_in:b.person_identities", "sign_in"], ["allow:b.athanors", "allow"],
+    ["sign_in:b.sessions", "sign_in"], ["sign_in:b.person_identities", "sign_in"], ["allow:b.athanors", "allow"],
     ["allow:b.memberships", "allow"]]) {
     M[`held:${name.split(":").pop()}`] = () => heldAll(name, step);
   }
   M["held:registry.identity_heads[a]"] = () => heldAll("setup:registry.identity_heads[a]", "setup", (r) => ({
     read_at: sameOrWithin(first("sync:registry.identity_heads[a]")[0].read_at, since("registry.identity_heads[a]", "sync"), "as read at sync"),
   }));
-  M["held:b.users"] = () => first("wrong_identity:b.users").map((r) => held(r, {
-    last_seen_at: sameOrWithin(r.last_seen_at, since("b.users", "attempt"), "as read after the attempt"),
-    updated_at: sameOrWithin(r.updated_at, since("b.users", "attempt"), "as read after the attempt"),
-  }, "as read after the attempt"));
+  M["held:b.users"] = () => first("sign_in:b.users").map((r) => held(r, {
+    last_seen_at: sameOrWithin(r.last_seen_at, since("b.users", "signin"), "as read at sign_in"),
+    updated_at: sameOrWithin(r.updated_at, since("b.users", "signin"), "as read at sign_in"),
+  }, "as read at sign_in"));
   M["held:registry.push_tokens[proof]"] = () => heldAll("ban:registry.push_tokens[proof]", "ban");
   M["held:registry.request_nonces[a]"] = () => heldAll("ban:registry.request_nonces[a]", "ban");
   return M;

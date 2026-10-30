@@ -36,11 +36,9 @@ defmodule PrismWeb.AuthController do
   home signs (`Sanctum.Auth.CyfrDoor`). Every such sign-in starts here:
   the sign-in page hands the attempt over by a one-time ticket bound to
   the browser's CSRF token (`GET /auth/cyfr/start?ticket=…`), which holds
-  the home's origin and its `/carry` (`Sanctum.Auth.CyfrDoor.signing_home/1`)
-  and, for an attempt begun from a handle the page resolved
-  (`Sanctum.Handle`), the identifier the handle named. This action keeps
-  the request, `{home, expires_at}` with the identifier when there is one,
-  for the carry's lifetime, in the browser's own session cookie
+  the home's origin and its `/carry` (`Sanctum.Auth.CyfrDoor.signing_home/1`).
+  This action keeps the request, `{home, expires_at}`, for the carry's
+  lifetime, in the browser's own session cookie
   (`cyfr_request_key/0`), drops any challenge an earlier attempt left
   there, and answers `303` to that `/carry`. The request is the attempt:
   the sign-in page judges the carry that returns against it, never
@@ -123,8 +121,8 @@ defmodule PrismWeb.AuthController do
 
   @doc """
   The cookie session key a `cyfr` sign-in keeps its request under,
-  `%{"home", "expires_at"}` (Unix milliseconds) with `"identifier"` when
-  a handle began it, between its start and its callback (the module doc).
+  `%{"home", "expires_at"}` (Unix milliseconds), between its start and its
+  callback (the module doc).
   """
   @spec cyfr_request_key() :: String.t()
   def cyfr_request_key, do: @cyfr_request
@@ -278,13 +276,11 @@ defmodule PrismWeb.AuthController do
     case Arca.Cache.take({:login_cyfr_start, ticket}) do
       {:ok, %{home: home, to: to} = payload} ->
         if same_browser?(conn, payload) do
-          request =
-            %{
-              "home" => home,
-              "expires_at" =>
-                System.os_time(:millisecond) + Sanctum.Auth.CyfrDoor.carry_lifetime_ms()
-            }
-            |> requested(payload)
+          request = %{
+            "home" => home,
+            "expires_at" =>
+              System.os_time(:millisecond) + Sanctum.Auth.CyfrDoor.carry_lifetime_ms()
+          }
 
           # A later start replaces the earlier attempt whole: its challenge
           # can no longer complete.
@@ -312,11 +308,6 @@ defmodule PrismWeb.AuthController do
   end
 
   def cyfr_start(conn, _params), do: cyfr_expired(conn)
-
-  defp requested(request, %{identifier: identifier}) when is_binary(identifier),
-    do: Map.put(request, "identifier", identifier)
-
-  defp requested(request, _payload), do: request
 
   @doc """
   Finishes GitHub/Google device-flow sign-in: the LiveView minted a
@@ -376,18 +367,8 @@ defmodule PrismWeb.AuthController do
   def cyfr_callback(conn, _params), do: cyfr_expired(conn)
 
   # The challenge answers the attempt this browser's session holds: of the
-  # home it named and, when a handle began it, of that identity. A later
-  # start drops the earlier challenge; this holds even against one kept
-  # past it.
-  defp answering(%{"source" => home} = held, %{"home" => home} = request) do
-    case request do
-      %{"identifier" => identifier} ->
-        if held["identifier"] == identifier, do: :ok, else: {:error, :no_request}
-
-      _address ->
-        :ok
-    end
-  end
+  # home it named. A later start drops the earlier challenge.
+  defp answering(%{"source" => home}, %{"home" => home}), do: :ok
 
   defp answering(_held, _request), do: {:error, :no_request}
 

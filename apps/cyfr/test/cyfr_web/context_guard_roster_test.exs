@@ -59,9 +59,8 @@ defmodule CyfrWeb.ContextGuardRosterTest do
     # The system layer's listener on `confirmation.changes`, whose facts
     # the layer takes in the focus it was opened for.
     "live/system_layer.ex" => {1, ["live/system_layer.ex"]},
-    # The identity card's two registry reads: a handle's live check and
-    # whether the registry publishes this CYFR's address with the handle.
-    "components/identity_card.ex" => {2, ["components/identity_card.ex"]}
+    # The identity card's one registry read: a handle's live check.
+    "components/identity_card.ex" => {1, ["components/identity_card.ex"]}
   }
 
   @capture ~r/\bCyfrWeb\.ContextGuard\.capture\(/
