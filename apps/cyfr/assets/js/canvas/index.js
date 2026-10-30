@@ -98,6 +98,7 @@ const Canvas = {
     this.handleEvent("canvas_installed", (payload) => this._installed(payload))
 
     this._windowsMount()
+    this._watchFrames()
     this._layout()
   },
 
@@ -122,12 +123,41 @@ const Canvas = {
   },
 
   destroyed() {
+    if (this._frameWatch) this._frameWatch.disconnect()
     this._windowsDestroy()
     globalThis.window?.removeEventListener("resize", this._onResize)
     globalThis.window?.removeEventListener("keydown", this._onKeydown)
     this._layer.removeEventListener?.("pointerdown", this._onPointerDown)
     this._layer.removeEventListener?.("pointerup", this._onPointerUp)
     this._layer.removeEventListener?.("pointercancel", this._onPointerCancel)
+  },
+
+  // A frame opened, stood elsewhere, shown or hidden after the hook mounted
+  // changes the frames' container, not the hook's element, so the hook
+  // watches the container and tells the canvases again, at most once a
+  // frame: a canvas opened after the hook hears its posture and what
+  // covers it, and every canvas hears it again when a window settles.
+  _watchFrames() {
+    const Observer = globalThis.MutationObserver
+    const frames = this._layer.querySelector?.(`#${this._layer.id}-frames`)
+    if (typeof Observer !== "function" || !frames) return
+    this._frameWatch = new Observer(() => this._relayout())
+    this._frameWatch.observe(frames, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["style", "class", "data-canvas-shown", "data-canvas-place"]
+    })
+  },
+
+  _relayout() {
+    if (this._relayoutPending) return
+    this._relayoutPending = true
+    const later = globalThis.requestAnimationFrame || ((fn) => setTimeout(fn, 16))
+    later(() => {
+      this._relayoutPending = false
+      this._layout()
+    })
   },
 
   _layout() {

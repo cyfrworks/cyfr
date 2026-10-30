@@ -91,6 +91,7 @@ function canvasElement({frames = [], containers = [], id = "canvas"} = {}) {
     getBoundingClientRect: () => ({width: 1024, height: 768}),
     querySelector(selector) {
       if (selector === `#${id}-geometry`) return geometry
+      if (selector === `#${id}-frames`) return layer.framesHost
       if (selector === `#${id}-status [data-canvas-connection]`) return marker
       return null
     },
@@ -202,6 +203,60 @@ describe("the posture report", () => {
 
     hook.reconnected()
     assert.deepEqual(pushed.at(-1).payload, {posture: "hand"})
+  })
+})
+
+describe("a canvas opened after the hook mounted", () => {
+  test("hears its posture and what covers it once the frames' container changes, and again when a window settles", () => {
+    let observed = null
+    globalThis.MutationObserver = class {
+      constructor(callback) {
+        this.callback = callback
+      }
+      observe(target, options) {
+        observed = {target, options, callback: this.callback}
+      }
+      disconnect() {
+        observed = null
+      }
+    }
+    globalThis.requestAnimationFrame = (fn) => fn()
+    try {
+      const frames = []
+      const containers = []
+      const layer = canvasElement({frames, containers})
+      layer.framesHost = {id: "canvas-frames"}
+      const {hook} = mountCanvas(layer)
+      assert.equal(observed.target, layer.framesHost)
+      assert.deepEqual(observed.options.attributeFilter, ["style", "class", "data-canvas-shown", "data-canvas-place"])
+
+      // The canvas's frame arrives with the shell's patch: told nothing yet.
+      const frame = canvasFrame(FRAME)
+      const seen = told(frame)
+      frames.push(frame)
+      assert.deepEqual(seen, [])
+
+      observed.callback([])
+      assert.deepEqual(seen, [
+        {verb: "posture", args: {posture: "desk"}},
+        {verb: "covered", args: {rects: []}}
+      ])
+
+      // A window settles over it: told what it covers, and only that.
+      containers.push(container("window", true, {x: 100, y: 50, width: 300, height: 200}))
+      observed.callback([])
+      assert.deepEqual(seen.slice(2), [{verb: "covered", args: {rects: [{x: 100, y: 50, width: 300, height: 200}]}}])
+
+      // Nothing changed: nothing told again.
+      observed.callback([])
+      assert.equal(seen.length, 3)
+
+      hook.destroyed()
+      assert.equal(observed, null, "the watch ends with the hook")
+    } finally {
+      delete globalThis.MutationObserver
+      delete globalThis.requestAnimationFrame
+    }
   })
 })
 
