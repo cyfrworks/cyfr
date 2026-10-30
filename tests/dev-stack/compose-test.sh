@@ -46,7 +46,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # The boundary cases, defined below; DEV_STACK_CASES names some of them.
-BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_claim_unverified case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan"
+BOUNDARY_CASES="case_provision case_retained case_refused case_release_root case_port_held case_network_overlap case_remembered case_all_taken case_start_fails case_image_fails case_image_build_fails case_claim_named case_claim_unverified case_server_ends case_interrupted case_check case_failed_read case_failed_parse case_project_env case_server_child case_blank_root case_locked case_two_checkouts case_down_orphan case_new_database case_bound_free case_bound_taken case_bound_lost"
 for c in ${DEV_STACK_CASES:-}; do
   case " $BOUNDARY_CASES " in
     *" $c "*) ;;
@@ -128,8 +128,55 @@ checks() {
   local out status=0
   out="$(python3 -I "$SHAPE" shape "$dir/base.json" "$dir/slot-0.json" "$ROOT" "$check_project" "$stub_image")" || status=1
   out="$out$(python3 -I "$SHAPE" apart "$dir/shipped.json" "$sources" "${jsons[@]}")" || status=1
+  out="$out$(stand_ins_apart "$sources" "$slots" "${jsons[@]}")" || status=1
   printf '%s' "$out"
   return "$status"
+}
+
+# stand_ins_apart SOURCES SLOTS JSON...: each slot's stand-in on its own
+# address of 127.79.0.0/16, apart from the identity and join proofs'
+# 127.77.0.0/16, on a port no check reserves in SOURCES and no slot's
+# other listener or other stand-in takes.
+stand_ins_apart() {
+  local sources="$1" slots="$2" k lines=""
+  shift 2
+  for k in $slots; do
+    lines="$lines$(bash "$ROOT/scripts/dev-stack.sh" slot "$k" | sed -n "s/^DEV_STACK_STAND_IN_\(ADDRESS\|PORT\)=/$k \1 /p")"$'\n'
+  done
+  printf '%s' "$lines" | python3 -I -c '
+import ipaddress, json, os, sys
+sys.path.insert(0, os.path.dirname(sys.argv[1]))
+import compose_shape
+sources, jsons = sys.argv[2], sys.argv[3:]
+reserved, errors = compose_shape.reserved_ports(sources)
+stand_ins = {}
+for line in sys.stdin.read().split("\n"):
+    if line:
+        k, what, value = line.split(" ")
+        stand_ins.setdefault(k, {})[what] = value
+taken = {}
+for path in jsons:
+    slot = os.path.basename(path).removeprefix("slot-").removesuffix(".json")
+    for what, port in compose_shape.declared(json.load(open(path)))[1].items():
+        taken[port] = "slot %s'"'"'s %s" % (slot, what)
+proofs = ipaddress.ip_network("127.77.0.0/16")
+seen = {}
+for k, s in sorted(stand_ins.items(), key=lambda kv: int(kv[0])):
+    address, port = ipaddress.ip_address(s["ADDRESS"]), s["PORT"]
+    if address not in ipaddress.ip_network("127.79.0.0/16") or address in proofs:
+        errors.append("slot %s: the stand-in is on %s, not on 127.79.0.0/16" % (k, address))
+    if str(address) != "127.79.%s.1" % k:
+        errors.append("slot %s: the stand-in is on %s, not on 127.79.%s.1" % (k, address, k))
+    for source in reserved.get(port, []):
+        errors.append("slot %s: the stand-in port is %s, which %s reserves" % (k, port, source))
+    if port in taken:
+        errors.append("slot %s: the stand-in port is %s, as %s is" % (k, port, taken[port]))
+    if port in seen:
+        errors.append("slot %s: the stand-in port is %s, as slot %s'"'"'s stand-in is" % (k, port, seen[port]))
+    seen[port] = k
+for e in errors:
+    print(e)
+sys.exit(1 if errors else 0)' "$SHAPE" "$sources" "$@"
 }
 
 expect_checks() {
@@ -159,7 +206,9 @@ DEV_STACK_RUNTIME_PORT=4700
 DEV_STACK_HOST_API_PORT=4701
 DEV_STACK_RUNTIME_NET=172.16.100
 DEV_STACK_BACKENDS_NET=172.16.101
-DEV_STACK_BUILDS_NET=172.16.102"
+DEV_STACK_BUILDS_NET=172.16.102
+DEV_STACK_STAND_IN_ADDRESS=127.79.0.1
+DEV_STACK_STAND_IN_PORT=4702"
 want19="DEV_STACK_SLOT=19
 DEV_STACK_PRISM_PORT=4190
 DEV_STACK_PROXY_PORT=4191
@@ -167,9 +216,11 @@ DEV_STACK_RUNTIME_PORT=4890
 DEV_STACK_HOST_API_PORT=4891
 DEV_STACK_RUNTIME_NET=172.16.157
 DEV_STACK_BACKENDS_NET=172.16.158
-DEV_STACK_BUILDS_NET=172.16.159"
+DEV_STACK_BUILDS_NET=172.16.159
+DEV_STACK_STAND_IN_ADDRESS=127.79.19.1
+DEV_STACK_STAND_IN_PORT=4892"
 if [ "$(slot_env 0)" = "$want0" ] && [ "$(slot_env 19)" = "$want19" ] && ! slot_env 20 >/dev/null 2>&1; then
-  pass "slot 0 is Prism on 4000 and 172.16.100-102, slot 19 the last, and there is no slot 20"
+  pass "slot 0 is Prism on 4000, 172.16.100-102 and its stand-in on 127.79.0.1:4702, slot 19 the last, and there is no slot 20"
 else
   failed "the slot rule" "$(slot_env 0; slot_env 19; slot_env 20 2>&1)"
 fi
@@ -237,6 +288,7 @@ move suite "the test suite's endpoint moved onto slot 0's runtime port" config/t
 move hsts "the HSTS proof moved onto slot 13's Prism address" tests/proxy-hsts/run.sh 's/TLS_PORT=4123/TLS_PORT=4130/'
 move named "a proof naming a loop's container" tests/compose-proof/run.sh '1a # docker logs cyfr-dev-0123456789-locus-builds'
 move unread "a reservation the check can no longer read" tests/proxy-hsts/run.sh 's/TLS_PORT=4123/TLS_LISTENER=4123/'
+move standin "the test suite's endpoint moved onto slot 0's stand-in port" config/test.exs 's/port: 4002\]/port: 4702]/'
 dir="$scratch/s-shipped"
 project "$dir" "$override"
 sed -i 's|- subnet: 172\.16\.234\.0/24|- subnet: 172.16.101.0/24|' "$dir/docker-compose.yml"
@@ -257,20 +309,25 @@ derived() { printf 'cyfr-locus/v1/runtime\n%s' "$want_id" | openssl dgst -sha256
 example_id="$(sed -n 's/^CYFR_GITHUB_CLIENT_ID=//p' "$ROOT/.env.example")"
 # value K NAME: slot K's NAME.
 value() { slot_env "$1" | sed -n "s/^$2=//p"; }
-# host_free K: nothing on this host listens on slot K's ports.
+# host_free K: nothing on this host listens on slot K's ports, its
+# stand-in's included.
 host_free() {
   python3 -I -c '
 import socket, sys
-for port in sys.argv[1:]:
+for listener in sys.argv[1:]:
+    address, port = listener.rsplit(":", 1)
     s = socket.socket()
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        s.bind(("127.0.0.1", int(port)))
+        s.bind((address, int(port)))
     except OSError:
         sys.exit(1)
-    s.close()' "$(value "$1" DEV_STACK_PRISM_PORT)" "$(value "$1" DEV_STACK_PROXY_PORT)" \
-    "$(value "$1" DEV_STACK_RUNTIME_PORT)" "$(value "$1" DEV_STACK_HOST_API_PORT)"
+    s.close()' "127.0.0.1:$(value "$1" DEV_STACK_PRISM_PORT)" "127.0.0.1:$(value "$1" DEV_STACK_PROXY_PORT)" \
+    "127.0.0.1:$(value "$1" DEV_STACK_RUNTIME_PORT)" "127.0.0.1:$(value "$1" DEV_STACK_HOST_API_PORT)" \
+    "$(stand_in "$1")"
 }
+# stand_in K: slot K's stand-in, ADDRESS:PORT.
+stand_in() { echo "$(value "$1" DEV_STACK_STAND_IN_ADDRESS):$(value "$1" DEV_STACK_STAND_IN_PORT)"; }
 # free_after K: the first slot from K on whose ports are free here.
 free_after() {
   local k
@@ -417,6 +474,7 @@ print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "te
 STUB
 chmod +x "$stubs/docker" "$stubs/mix" "$stubs/curl" "$stubs/image.sh"
 
+
 run_dir=""
 token="dev-stack-test-token-$(openssl rand -hex 6)"
 root_a="$(printf 'ab%.0s' {1..32})"
@@ -432,6 +490,50 @@ CYFR_LOCUS_BUILDS_KEY=$key_c
 services="locus-runtime locus-backends locus-builds"
 unset_keys="LOCUS_RUNTIME_KEY=unset|CYFR_LOCUS_BACKENDS_KEY=unset|CYFR_LOCUS_BUILDS_KEY=unset"
 
+# Every slot's settings, as the task derives them from the slot's
+# declarations and the stand-in address scripts/dev-stack.sh hands it: the
+# registry and the directory are the slot's stand-in, never cyfr.run.
+every="$scratch/every-slot"
+project "$every" "$override"
+printf '%s' "$complete" >"$every/.env"
+cp "$ROOT/.env.example" "$every/"
+pairs=()
+for k in $SLOTS; do
+  resolve "$every" "$k" "$check_project" docker-compose.yml docker-compose.dev.yml >"$every/slot-$k.json" 2>/dev/null
+  pairs+=("$every/slot-$k.json" "$(value "$k" DEV_STACK_STAND_IN_ADDRESS):$(value "$k" DEV_STACK_STAND_IN_PORT)")
+done
+# shellcheck disable=SC2086
+every_out="$(cd "$every" && env -i PATH="$PATH" HOME="$HOME" elixir $ebins -e '
+Mix.start()
+for [json, stand_in] <- Enum.chunk_every(System.argv(), 2) do
+  IO.puts("slot " <> stand_in)
+  Mix.Tasks.Cyfr.Locus.DevStack.run(["settings", json, stand_in])
+end' -- "${pairs[@]}" 2>&1)"
+every_bad="$(printf '%s\n' "$every_out" | python3 -I -c '
+import sys
+slots, current, bad = {}, None, []
+for line in sys.stdin.read().splitlines():
+    if line.startswith("slot "):
+        current = line[5:]
+        slots[current] = {}
+    elif current and line.startswith("server ") and "=" in line:
+        name, _, value = line[7:].partition("=")
+        slots[current][name] = value
+if len(slots) != 20:
+    bad.append("the task answered %d slots, not 20" % len(slots))
+for stand_in, server in slots.items():
+    if server.get("CYFR_REGISTRY_URL") != stand_in or server.get("CYFR_DIRECTORY_URL") != "http://" + stand_in:
+        bad.append("%s: the registry is %r and the directory %r" % (stand_in, server.get("CYFR_REGISTRY_URL"), server.get("CYFR_DIRECTORY_URL")))
+    for name in ("CYFR_REGISTRY_URL", "CYFR_DIRECTORY_URL"):
+        if "cyfr.run" in server.get(name, ""):
+            bad.append("%s: %s names cyfr.run" % (stand_in, name))
+print("\n".join(bad))')"
+if [ -z "$every_bad" ]; then
+  pass "every slot's registry and directory are its own stand-in, never cyfr.run"
+else
+  failed "every slot's registry and directory" "$every_bad$(printf '\n%s' "$every_out" | tail -n 5)"
+fi
+
 # prepare SCRIPT NAME ENV_TEXT MODE [SLOT]: a git repository of its own
 # holding SCRIPT and the run-names library, the shipped and the real
 # override compose files, .env.example, .env as ENV_TEXT at MODE (none for
@@ -439,9 +541,11 @@ unset_keys="LOCUS_RUNTIME_KEY=unset|CYFR_LOCUS_BACKENDS_KEY=unset|CYFR_LOCUS_BUI
 # $case_project.
 prepare() {
   case_dir="$scratch/case-$2"
-  rm -rf "$case_dir" && mkdir -p "$case_dir/scripts/lib" "$case_dir/tmp" "$case_dir/log" "$case_dir/run"
+  rm -rf "$case_dir" &&
+    mkdir -p "$case_dir/scripts/lib" "$case_dir/tests/registry-stand-in" "$case_dir/tmp" "$case_dir/log" "$case_dir/run"
   git init -q "$case_dir"
   cp "$1" "$case_dir/scripts/dev-stack.sh"
+  cp "$ROOT/tests/registry-stand-in/standin.py" "$case_dir/tests/registry-stand-in/"
   cp "$ROOT/scripts/lib/run-names.sh" "$case_dir/scripts/lib/"
   cp "$stubs/image.sh" "$case_dir/scripts/image.sh"
   cp "$ROOT/docker-compose.yml" "$ROOT/docker-compose.dev.yml" "$ROOT/.env.example" "$case_dir/"
@@ -492,6 +596,9 @@ signalled() {
   done
   pid="$(pgrep -f -n "^bash scripts/dev-stack.sh" -P "$runner" 2>/dev/null || true)"
   [ -n "$pid" ] || pid="$(ps -o pid= --ppid "$runner" | tr -d ' ' | head -n 1)"
+  # While the loop serves: its record, and what its stand-in answers.
+  cp "$case_dir/run/$case_project.dev-stack.lock" "$case_dir/lock.serving" 2>/dev/null
+  asked "http://$(stand_in "$slot_a")/v1/legal/version" >"$case_dir/stand-in.answer"
   [ -n "$pid" ] && kill -s "$3" "$pid" 2>/dev/null
   for i in $(seq 1 600); do
     kill -0 "$runner" 2>/dev/null || break
@@ -507,6 +614,19 @@ signalled() {
 }
 
 record() { cat "$case_dir/log/$1" 2>/dev/null; }
+# asked URL: the status and body a GET of URL answers, as `STATUS BODY`.
+asked() {
+  python3 -I -c 'import sys, urllib.request, urllib.error
+try:
+    r = urllib.request.urlopen(sys.argv[1], timeout=5)
+    print(r.status, r.read().decode())
+except urllib.error.HTTPError as e:
+    print(e.code, e.read().decode())
+except OSError as e:
+    print("unanswered", e)' "$1"
+}
+# The stand-in a loop recorded in its lock, its pid.
+stand_in_pid() { sed -n 's/^stand-in \([0-9]*\) .*/\1/p' "$1" 2>/dev/null; }
 mode_of() { python3 -I -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
 status_is() { [ "$(cat "$case_dir/status")" = "$1" ] || echo "the run exited $(cat "$case_dir/status"), not $1: $(tail -n 3 "$case_dir/err")"; }
 # The stack's docker calls, each compose call as `compose ARGS`, which the
@@ -535,17 +655,28 @@ full_run() {
 claim_of() { cat "${run_dir:-$case_dir/run}/cyfr-dev-slot.$1.lock" 2>/dev/null; }
 image_calls() { printf '%s\n' "--undated --tag-only locus" "--undated --for $(record claim.at-up | sed -n 's/^pid //p') locus"; }
 # want_settings K: the server's settings at slot K, from the override as
-# the case's project resolves it.
+# the case's project resolves it, and its stand-in: the registry and the
+# directory, whatever .env says, an address the private egress names
+# beside the backends guard's, and cyfr.run's OCI registry for pulls.
 want_settings() {
+  local address
+  address="$(value "$1" DEV_STACK_STAND_IN_ADDRESS)"
   resolve "$case_dir" "$1" "$case_project" docker-compose.yml docker-compose.dev.yml >"$case_dir/want.json" &&
-    python3 -I "$SHAPE" settings "$case_dir/want.json" | sort
+    { python3 -I "$SHAPE" settings "$case_dir/want.json" | sed "s/^CYFR_PRIVATE_EGRESS_TARGETS=.*$/&,$address/"
+      printf '%s\n' "CYFR_REGISTRY_URL=$(stand_in "$1")" "CYFR_DIRECTORY_URL=http://$(stand_in "$1")" \
+        "CYFR_OCI_REGISTRY_URL=registry.cyfr.run"; } | sort
 }
 server_settings() { record server.env | grep -E '^(CYFR|LOCUS)_' | sort; }
-# Nothing of the run is left: no server, no watcher, no private directory.
+# Nothing of the run is left: no server, no watcher, no stand-in, no
+# private directory.
 nothing_left() {
   local pid
   for pid in $(record server.pid) $(record watcher.pid); do
     if kill -0 "$pid" 2>/dev/null; then echo "process $pid of the server is left running"; kill -KILL "$pid"; fi
+  done
+  for pid in $(pgrep -f "$case_dir/tests/registry-stand-in/standin.py" 2>/dev/null); do
+    echo "the stand-in $pid is left running"
+    kill -KILL "$pid"
   done
   [ -z "$(ls -A "$case_dir/tmp")" ] || echo "the run left $(ls -A "$case_dir/tmp") behind"
 }
@@ -604,6 +735,15 @@ case_retained() {
     if grep -qF "$(derived "$root_a")" "$case_dir/out" "$case_dir/err"; then echo "the key reached the output"; fi
     if grep -qF "$setup_a" "$case_dir/out" "$case_dir/err"; then echo "a run that wrote no setup token printed it"; fi
   done
+  # The registry and the directory .env names give way to the stand-in's:
+  # no dev person reaches cyfr.run.
+  stack "$1" retained-registry "${complete}CYFR_REGISTRY_URL=cyfr.run"$'\n'"CYFR_DIRECTORY_URL=https://cyfr.run"$'\n' 0600 "" STUB_SERVER_STATUS=0
+  status_is 0
+  record server.env | grep -qxF "CYFR_REGISTRY_URL=$(stand_in "$slot_a")" ||
+    echo "the server's registry is not the stand-in: $(record server.env | grep '^CYFR_REGISTRY_URL=')"
+  record server.env | grep -qxF "CYFR_DIRECTORY_URL=http://$(stand_in "$slot_a")" ||
+    echo "the server's directory is not the stand-in: $(record server.env | grep '^CYFR_DIRECTORY_URL=')"
+  nothing_left
 }
 # A setting .env holds that disagrees with the slot the loop takes is
 # refused by name, before any container starts or image builds.
@@ -669,7 +809,7 @@ case_port_held() {
 case_network_overlap() {
   local net
   net="$(value "$slot_a" DEV_STACK_BUILDS_NET)"
-  stack "$1" network-overlap "$complete" 0600 "" STUB_SERVER_STATUS=0 STUB_NETWORKS="someones_net $net.64/26"
+  STACK_SLOT="$slot_a" stack "$1" network-overlap "$complete" 0600 "" STUB_SERVER_STATUS=0 STUB_NETWORKS="someones_net $net.64/26"
   status_is 0
   grep -qxF "dev-stack: slot $slot_a is taken (the network someones_net ($net.64/26)), so this worktree's loop takes slot $slot_b." "$case_dir/out" ||
     echo "the run did not say which network holds slot $slot_a: $(cat "$case_dir/out")"
@@ -813,12 +953,20 @@ case_server_ends() {
   nothing_left
 }
 case_interrupted() {
-  local signal want
+  local signal want pid
   for signal in INT TERM HUP; do
     case "$signal" in INT) want=130 ;; TERM) want=143 ;; HUP) want=129 ;; esac
     signalled "$1" "signal-$signal" "$signal"
     status_is "$want"
     [ "$(record server.events)" = $'started\nstopped' ] || echo "on $signal the server was not stopped: $(record server.events)"
+    case "$(cat "$case_dir/stand-in.answer")" in
+      '200 {"policies":[],"policy_version":'*) ;;
+      *) echo "the stand-in at $(stand_in "$slot_a") did not answer while the loop served: $(cat "$case_dir/stand-in.answer")" ;;
+    esac
+    pid="$(stand_in_pid "$case_dir/lock.serving")"
+    [ -n "$pid" ] || echo "the loop recorded no stand-in while it served: $(cat "$case_dir/lock.serving" 2>&1)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then echo "on $signal the stand-in $pid was left running"; fi
+    host_free "$slot_a" || echo "on $signal slot $slot_a's ports are still held"
     [ "$(calls)" = "$(full_run "$slot_a" "$root_a" "$key_b" "$key_c")" ] || echo "on $signal docker was handed: $(calls)"
     nothing_left
   done
@@ -922,7 +1070,7 @@ case_two_checkouts() {
   runner=$!
   for _ in $(seq 1 600); do [ -e "$first/log/up.held" ] && break; kill -0 "$runner" 2>/dev/null || break; sleep 0.1; done
   [ -e "$first/log/up.held" ] || echo "the first worktree's loop never reached its start"
-  prepare "$1" two-second "$complete" 0600
+  prepare "$1" two-second "$complete" 0600 "$slot_a"
   second="$case_dir"
   [ "$case_project" != "$first_project" ] || echo "the two worktrees have one project, $case_project"
   launch STUB_SERVER_STATUS=0
@@ -930,7 +1078,7 @@ case_two_checkouts() {
   status_is 0
   grep -qxF "dev-stack: slot $slot_a is taken (the loop of $first (pid $(claim_of "$slot_a" | sed -n 's/^pid //p'))), so this worktree's loop takes slot $slot_b." "$second/out" ||
     echo "the second worktree's loop did not name the first's: $(cat "$second/out")"
-  [ "$(calls)" = "$(full_run "$slot_b" "$root_a" "$key_b" "$key_c")" ] || echo "the second worktree's loop handed docker: $(calls)"
+  [ "$(calls)" = "$(full_run "$slot_b" "$root_a" "$key_b" "$key_c" "$slot_a")" ] || echo "the second worktree's loop handed docker: $(calls)"
   command=down
   launch
   echo "$?" >"$second/status"
@@ -1020,6 +1168,83 @@ case_down_orphan() {
   kill -KILL "$pid" 2>/dev/null
 }
 
+# state_for K: the stand-in's state file of a database whose people were
+# made at slot K, with a name they claimed there.
+state_for() {
+  mkdir -p "$case_dir/data/dev-stack"
+  printf '{"accepted":{},"directory":"http://%s","logs":{},"names":{"earlier":"per_%s"}}\n' \
+    "$(stand_in "$1")" "$(printf 'e%.0s' {1..64})" >"$case_dir/data/dev-stack/cyfr-run.json"
+}
+reset_sentence="reset by deleting the dev database and data/dev-stack/cyfr-run.json"
+# A new database clears the stand-in's state: the run serves a stand-in
+# that holds no name, at the slot it takes, whatever slot the old state
+# named.
+case_new_database() {
+  prepare "$1" new-database "$complete" 0600
+  command=""
+  state_for "$slot_b"
+  launch STUB_SERVER_STATUS=0
+  echo "$?" >"$case_dir/status"
+  status_is 0
+  python3 -I -c 'import json, sys
+state = json.load(open(sys.argv[1]))
+sys.exit(0 if state["directory"] == "http://" + sys.argv[2] and state["names"] == {} else 1)' \
+    "$case_dir/data/dev-stack/cyfr-run.json" "$(stand_in "$slot_a")" ||
+    echo "a new database kept the stand-in's old state: $(cat "$case_dir/data/dev-stack/cyfr-run.json")"
+  [ "$(calls | sed -n 3p)" = "$(declared "$slot_a")" ] || echo "the loop did not take the first free slot: $(calls)"
+  nothing_left
+}
+# A database that is not new takes the slot its stand-in's state names when
+# it is free, though another slot is free first.
+case_bound_free() {
+  prepare "$1" bound-free "$complete" 0600
+  command=""
+  mkdir -p "$case_dir/data" && : >"$case_dir/data/cyfr.db"
+  state_for "$slot_b"
+  launch STUB_SERVER_STATUS=0
+  echo "$?" >"$case_dir/status"
+  status_is 0
+  [ "$(calls | sed -n 3p)" = "$(declared "$slot_b")" ] || echo "the bound slot $slot_b was not taken: $(calls)"
+  grep -qF "is taken" "$case_dir/out" && echo "the run said a slot was taken: $(cat "$case_dir/out")"
+  grep -qF '"earlier"' "$case_dir/data/dev-stack/cyfr-run.json" || echo "the stand-in's state lost its names: $(cat "$case_dir/data/dev-stack/cyfr-run.json")"
+  remembers "$slot_b"
+  nothing_left
+}
+# A database bound to a slot another loop holds refuses, naming the slot
+# and the reset, and takes no other slot.
+case_bound_taken() {
+  run_dir="$scratch/case-bound-run"
+  rm -rf "$run_dir" && mkdir -p "$run_dir"
+  prepare "$1" bound-taken "$complete" 0600
+  command=""
+  mkdir -p "$case_dir/data" && : >"$case_dir/data/cyfr.db"
+  state_for "$slot_b"
+  claim_slot "$slot_b" /the/other/worktree
+  launch STUB_SERVER_STATUS=0
+  echo "$?" >"$case_dir/status"
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop went on though its database's slot is taken"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: This database's people were made at slot $slot_b, which is taken (the loop of /the/other/worktree (pid $claimer)). Stop what holds slot $slot_b, or $reset_sentence." ] ||
+    echo "the refusal does not name slot $slot_b and the reset: $(tail -n 1 "$case_dir/err")"
+  [ "$(calls)" = "$(printf '%s\n' "$(leftovers 0)" "$(listed)")" ] || echo "the loop took another slot: $(calls)"
+  [ ! -e "$case_dir/data/dev-stack.slot" ] || echo "the loop remembered slot $(cat "$case_dir/data/dev-stack.slot")"
+  nothing_left
+  run_dir=""
+}
+# A database that is not new, with no stand-in state, refuses with the
+# reset before any slot is taken.
+case_bound_lost() {
+  prepare "$1" bound-lost "$complete" 0600
+  command=""
+  mkdir -p "$case_dir/data" && : >"$case_dir/data/cyfr.db"
+  launch STUB_SERVER_STATUS=0
+  echo "$?" >"$case_dir/status"
+  [ "$(cat "$case_dir/status")" != 0 ] || echo "the loop went on with no stand-in state for its database"
+  [ "$(tail -n 1 "$case_dir/err")" = "dev-stack: This database's people were made beside a stand-in whose state is gone (data/dev-stack/cyfr-run.json). Reset by deleting the dev database and data/dev-stack/cyfr-run.json." ] ||
+    echo "the refusal does not name the reset: $(tail -n 1 "$case_dir/err")"
+  [ "$(calls)" = "$(leftovers 0)" ] || echo "docker ran past the refusal: $(calls)"
+  nothing_left
+}
+
 # boundary SCRIPT [CASE...]: the failures of SCRIPT under each case.
 boundary() {
   local script="$1" c
@@ -1063,7 +1288,7 @@ break_script nodown "the containers left on the way out" "case_start_fails case_
 break_script noexit "no cleanup on the way out" "case_start_fails case_server_ends case_interrupted" '/^trap finish EXIT$/d'
 break_script noterm "the server left running" case_interrupted 's/^  kill -TERM "\$1" 2>\/dev\/null \|\| true$/  true/'
 break_script nogroup "the server's process group left behind" "case_interrupted case_server_child" '/kill -KILL -- "-\$1"/d'
-break_script noports "a slot taken whatever holds its ports" case_port_held 's/^    if who="\$\(held "\$port"\)"; then$/    if false; then/'
+break_script noports "a slot taken whatever holds its ports" case_port_held 's/^    if who="\$\(held "\$\{listener%:\*\}" "\$\{listener##\*:\}"\)"; then$/    if false; then/'
 break_script nonets "a slot taken whatever network overlaps it" case_network_overlap 's/^  who="\$\(overlaps "\$2" "\$k"\)"$/  who=""/'
 break_script noclaim "a slot taken whatever loop claims it" "case_remembered case_two_checkouts" 's/^  if ! flock -n "\$fd"; then$/  if false; then/'
 break_script forgetful "the slot taken never remembered" case_remembered '/^      mkdir -p "\$\(dirname "\$REMEMBERED"\)" && printf/d'
@@ -1082,6 +1307,10 @@ break_script anygroup "a recorded group stopped whatever process holds it now" c
 break_script argv "the bearer on curl's command line" case_check 's|-H @"\$PRIVATE/authorization"|-H "authorization: Bearer $CYFR_TOKEN"|'
 break_script discard "no delete after a failed read" "case_failed_read case_failed_parse" '/^    discard "\$path"$/d'
 break_script keep "the private directory kept" "case_check case_provision" 's/^  \[ -z "\$PRIVATE" \] \|\| rm -rf "\$PRIVATE"$/  true/'
+break_script standinleft "the stand-in left running" "case_interrupted case_server_ends" '/^    stop "\$STAND_IN"$/,/^    wait "\$STAND_IN" 2>\/dev\/null \|\| true$/d'
+break_script unbound "a database's slot taken whatever its stand-in's state names" "case_bound_free case_bound_taken" '/^  if \[ -n "\$BOUND" \]; then$/,/^  fi$/d'
+break_script oldstate "a new database's stand-in state kept" case_new_database '/^      rm -f "\$STAND_IN_STATE"$/d'
+break_script nostate "a database with no stand-in state taken as new" case_bound_lost 's/^  \[ -f "\$STAND_IN_STATE" \] \|\|$/  true ||/'
 
 # ships_neither TARBALL: the scaffold holds the shipped compose file and
 # neither the override nor the script that starts it.

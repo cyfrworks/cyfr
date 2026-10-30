@@ -54,8 +54,19 @@ and `CYFR_SETUP_TOKEN`, the runtime root and the backends key, minted as
 a `mix` boot refuses without the builds URL only the stack sets, is minted
 for each run unless `.env` sets one. It then builds the tree's Locus image
 with `scripts/image.sh` when the host does not hold it already (every
-worktree at the same inputs shares one), starts the containers and runs
-`mix phx.server` in the foreground at http://localhost:4000. The run that
+worktree at the same inputs shares one), starts a stand-in for cyfr.run
+(`tests/registry-stand-in/standin.py`) and the containers, and runs
+`mix phx.server` in the foreground at http://localhost:4000. The server
+reaches cyfr.run only through the stand-in, whatever `.env` says: a name
+and an identity made in the loop exist at the stand-in alone, kept in
+`data/dev-stack/cyfr-run.json`, and no cyfr.run checkout is needed.
+Component search and metadata pass through it to cyfr.run, and component
+pulls still come from cyfr.run's OCI registry. A new dev database starts
+the stand-in afresh; a database that is not new needs the stand-in state
+it was made with, and the loop refuses, naming the reset (deleting the dev
+database and `data/dev-stack/cyfr-run.json`), when that state is gone. A
+`mix` boot outside the loop names no registry or directory unless `.env`
+does. The run that
 writes the setup token prints the setup link,
 `http://localhost:4000/setup#<token>`, as `cyfr init` does: it sets up
 CYFR's first person, who administers it, with a passkey. Prism and the
@@ -72,7 +83,9 @@ left.
 Each worktree runs a loop of its own, beside the others, a test suite, a
 proof or a CI-style run on the same host. Its containers are named
 `cyfr-dev-<seed>`, the worktree's seed, and its ports and networks are a
-slot's, one of twenty. The first loop on a host keeps
+slot's, one of twenty, its stand-in on 127.79.K.1 for slot K. A database
+is bound to the slot its stand-in state was made at: the loop takes that
+slot when it is free, and refuses, naming it, when it is not. The first loop on a host keeps
 http://localhost:4000, so a lone worktree sees no change; a second
 worktree's loop takes the next free slot, Prism on 4010 and so on, and
 prints its address, which the worktree remembers in

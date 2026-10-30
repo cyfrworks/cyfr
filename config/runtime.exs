@@ -538,8 +538,11 @@ if config_env() != :test do
   end
 
   # Registry URL (REST API) and OCI Registry URL (OCI Distribution endpoint).
-  # Default: `registry_url` is `"cyfr.run"` and `oci_registry_url` derives as
-  # `"registry.#{registry_url}"`. Self-hosted deployments may override both
+  # Default in production: `registry_url` is `"cyfr.run"` and
+  # `oci_registry_url` derives as `"registry.#{registry_url}"`. In
+  # development an unset registry is `none`, so a dev boot outside
+  # `scripts/dev-stack.sh`, which names its own stand-in, makes no person at
+  # the real cyfr.run. Self-hosted deployments may override both
   # independently for co-host or split topologies.
   #
   # A person's push tokens are minted by a request their identity signs
@@ -549,22 +552,27 @@ if config_env() != :test do
   # pulls, publishing and a person's registry requests refuse with a typed
   # error (`Compendium.RegistryHost`, `Sanctum.registry_host/0`). One parse
   # sets both applications' copies.
-  registry_url_config = env_str.("CYFR_REGISTRY_URL", "cyfr.run")
+  registry_url_config =
+    env_str.("CYFR_REGISTRY_URL", if(config_env() == :dev, do: "none", else: "cyfr.run"))
+
   config :cyfr, :registry_url, registry_url_config
   config :sanctum, :registry_url, registry_url_config
 
   # The directory this deployment enrolls its local people at: an https
-  # directory URL, `https://cyfr.run` (the directory cyfr.run hosts) when
-  # unset. Nothing reads a directory from a request. An enrollment's
-  # confirmation preview names the directory, so it is no longer than a
-  # preview's text.
+  # directory URL, or an http one on a loopback host
+  # (`Sanctum.enrollment_directory?/1`). Unset, it is `https://cyfr.run`
+  # (the directory cyfr.run hosts) in production and none in development,
+  # as the registry is. Nothing reads a directory from a request. An
+  # enrollment's confirmation preview names the directory, so it is no
+  # longer than a preview's text.
   {:ok, directory_url} = Prima.EnvValue.text(getenv, "CYFR_DIRECTORY_URL")
-  directory_url = directory_url || "https://cyfr.run"
+  directory_url = directory_url || if(config_env() == :dev, do: nil, else: "https://cyfr.run")
 
-  unless Sanctum.enrollment_directory?(directory_url) do
-    raise "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be an https directory URL: an origin " <>
-            "and an optional path, with no user, query or fragment, at most " <>
-            "#{Prima.Confirmation.Preview.max_text()} bytes long."
+  unless is_nil(directory_url) or Sanctum.enrollment_directory?(directory_url) do
+    raise "[Cyfr] FATAL: CYFR_DIRECTORY_URL must be a directory URL: an origin and an " <>
+            "optional path, with no user, query or fragment, at most " <>
+            "#{Prima.Confirmation.Preview.max_text()} bytes long, over https, or over " <>
+            "http on this machine's loopback (localhost, 127.0.0.0/8 or ::1)."
   end
 
   config :sanctum, :directory_url, directory_url
