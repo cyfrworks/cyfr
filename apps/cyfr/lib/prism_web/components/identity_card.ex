@@ -3,62 +3,53 @@
 
 defmodule PrismWeb.IdentityCard do
   @moduledoc """
-  The person's identity and handle, one component for the setup page
-  (`PrismWeb.SetupLive`) and Settings (`PrismWeb.SettingsLive`). It reads
-  where the person stands from `person.status` (`Sanctum.Recovery.status/1`)
-  and their preferences, and drives the existing enrollment ceremony
-  (`person.enroll`, `person.enroll_abandon`, the recovery code and "I saved
-  it") through the system layer's recovery prompts
-  (`PrismWeb.SystemLayer.Recovery`), which hold every secret and recovery
-  code; this component never does.
+  The person's name and identity in Settings (`PrismWeb.SettingsLive`). It
+  reads where the person stands from `person.status`
+  (`Sanctum.Recovery.status/1`) and opens the system layer's recovery
+  prompts (`PrismWeb.SystemLayer.Recovery`), which hold every secret and
+  recovery code; this component never does.
 
-  | Where the person stands | The card offers |
+  | Where the person stands | The card shows |
   |---|---|
-  | not enrolled | choose a handle, then enroll; or enroll without one, for an identifier alone |
-  | an enrollment the directory has not accepted, its prompt open here | nothing beside the prompt, which retries under the same request id and seed |
-  | the same, with no prompt here holding its seed | "Abandon and start again", then enroll under a new seed |
-  | accepted, recovery code not saved | show the recovery code again, under a fresh confirmation |
-  | recovery code saved, a handle wanted | "Claim @name" |
-  | claimed | the handle |
+  | unread | that it is reading, or why it could not |
+  | unfinished: no name recorded, or the first recovery code not saved | screen 2's states (`PrismWeb.AdmissionCard.code_screen/1`), which `registry.register` drives, and once registered "Show your recovery code" |
+  | named | the name, the identifier for the command line, "Add another recovery code" and "What losing it costs" |
+  | remote | that the name and recovery code are at the person's own CYFR |
 
-  A handle is checked live against the registry's answer for it
-  (`Sanctum.Handle.resolve/1`): taken, free, or not answered now. Only a
-  free one is chosen, and it is kept in the person's preferences
-  (`handle_wanted`) until it is claimed, so a page closed, a registry
-  unreachable or a connection lost mid-step resumes at the state the
-  card reads. The claim waits for the recovery code to be saved: it accepts
-  the registry's current policies, then claims the handle
-  (`registry.legal_accept`, `registry.claim_personal`), and a claim whose
-  answer was lost answers success when repeated. A taken handle asks for
-  another; the enrollment stands. When this card began the enrollment,
-  "I saved it" claims at once; otherwise "Claim @name" does.
+  An unfinished person is one whose setup, invitation or sign-in page
+  ended before they said their recovery code was saved. The card says
+  "Registering" and asks `registry.register` in a task, whose answer it
+  takes only for the focus it asked under (`CyfrWeb.ContextGuard.deliver/3`);
+  the drive moves their one enrollment on and claims its name: a silent cyfr.run offers Try again,
+  a name taken or kept by cyfr.run at the claim offers another name
+  (`registry.register` with `name`), and a refused identity or a CYFR
+  that reaches no cyfr.run is said, with no way on. Registered, "Show
+  your recovery code" opens the "Your recovery code" prompt for the
+  attempt `registry.register` answered, under one fresh confirmation,
+  whose "I saved it" finishes the person.
 
   The view that embeds it embeds the system layer, mounts
   `PrismWeb.SystemLayer.Hook`, and hands it the reports of its prompts
   (`prompt?/1`) as `report: {prompt_id, outcome}`; `reload: true` reads
-  again after a change the view made itself. The `:enrolled` slot holds
-  the view's own controls for an enrolled person.
+  again after a change the view made itself. The `:named` slot holds the
+  view's own controls for a named person whose identity is registered.
 
-  Its controls carry `data-test` names: `identity` (with
-  `data-provenance`, `data-enrollment` and `data-state`),
-  `identity-identifier`, `identity-directory`, `identity-remote`,
-  `identity-handle` (the handle form), `identity-handle-input`,
-  `identity-handle-check` (with `data-check`), `identity-choose`,
-  `identity-enroll` (enrollment with no handle),
-  `identity-abandon`, `identity-kit` (with `data-attempt` and
-  `data-phase`), `identity-kit-show`, `identity-claim`, `identity-claim-error`,
-  `identity-claimed` and `identity-error`.
+  Its controls carry `data-test` names: `identity` (with `data-state`
+  `unread`, `unfinished`, `named` or `remote`), `identity-name`,
+  `identity-identifier`, `identity-add-code`, `identity-costs`,
+  `identity-show-code`, `identity-remote` and `identity-error`, and
+  screen 2's own (`admission-*`).
   """
 
   use PrismWeb, :live_component
 
+  alias PrismWeb.AdmissionCard
   alias PrismWeb.Ops
   alias PrismWeb.SystemLayer
   alias PrismWeb.SystemLayer.Recovery
-  alias Sanctum.Tenancy.Users
 
   @prompt_prefix "identity-recovery-"
-  @events ~w(check choose enroll abandon show_kit claim)
+  @events ~w(admission_retry admission_rename show_code add_code)
 
   @doc "The card's component id."
   @spec id() :: String.t()
@@ -74,37 +65,22 @@ defmodule PrismWeb.IdentityCard do
     {:ok,
      assign(socket,
        status: nil,
-       wanted: nil,
-       handle: nil,
-       legal_path: nil,
-       handle_input: "",
-       check: :idle,
-       enrolling: nil,
-       claim_on_ack: false,
-       claim_error: nil,
-       choose_another: false,
        error: nil,
        loaded: false,
-       enrolled: []
+       admission_state: nil,
+       admission_name: nil,
+       admission_error: nil,
+       admission_from: nil,
+       attempt_id: nil,
+       named: []
      )}
   end
 
   # Every read and act runs on a current context (`CyfrWeb.ContextGuard.guard/2`):
   # a component's callbacks run without the view's hooks.
   @impl true
-  def update(%{report: {prompt_id, outcome}}, socket) do
-    socket =
-      case {socket.assigns.enrolling, outcome} do
-        {_enrolling, {:refused, _reason}} -> socket
-        {^prompt_id, _ended} -> assign(socket, :enrolling, nil)
-        _other -> socket
-      end
-
-    {:noreply, socket} =
-      CyfrWeb.ContextGuard.guard(socket, fn socket ->
-        {:noreply, socket |> load() |> claim_when_acknowledged()}
-      end)
-
+  def update(%{report: {_prompt_id, _outcome}}, socket) do
+    {:noreply, socket} = CyfrWeb.ContextGuard.guard(socket, &{:noreply, load(&1)})
     {:ok, socket}
   end
 
@@ -126,51 +102,40 @@ defmodule PrismWeb.IdentityCard do
 
   # ---- reads ------------------------------------------------------------------
 
+  # Where the person stands. An unfinished person's screen 2 is driven once
+  # the card first sees them unfinished, after it said it is registering.
   defp load(%{assigns: %{context: ctx}} = socket) do
     socket = assign(socket, :loaded, true)
 
-    with {:ok, status} <- Ops.call_tool(ctx, "person/status", %{}),
-         {:ok, user} <- Users.get(ctx.user_id) do
-      socket
-      |> assign(status: status, error: nil)
-      |> assign(:wanted, Users.prefs(user)["handle_wanted"])
-      |> assign(:handle, user[:namespace])
-      |> assign(:legal_path, legal_path(ctx.user_id))
-    else
-      {:error, reason} -> assign(socket, status: nil, error: Ops.error_message(reason))
-    end
-  end
+    case Ops.call_tool(ctx, "person/status", %{}) do
+      {:ok, status} ->
+        socket = assign(socket, status: status, error: nil)
 
-  # The registry's own pages are read in CYFR, under the person's athanor.
-  defp legal_path(user_id) do
-    case Users.personal_athanor_id(user_id) do
-      {:ok, athanor_id} -> PrismWeb.Focus.path(athanor_id, "/legal")
-      :none -> nil
-    end
-  end
+        cond do
+          state(socket.assigns) != :unfinished ->
+            assign(socket, admission_state: nil, admission_error: nil, attempt_id: nil)
 
-  @impl true
-  # A registry answer is taken only for the focus it was asked under and the
-  # handle still typed.
-  def handle_async(
-        :check,
-        {:ok, {tag, handle, answer}},
-        %{assigns: %{handle_input: handle}} = socket
-      ) do
-    CyfrWeb.ContextGuard.deliver(socket, tag, fn socket ->
-      check =
-        case answer do
-          {:ok, _held} -> :taken
-          {:error, :not_found} -> :free
-          {:error, :invalid_handle} -> :invalid
-          {:error, _unanswered} -> :unavailable
+          is_nil(socket.assigns.admission_state) ->
+            socket
+            |> assign(:admission_name, wanted_name(status))
+            |> register(%{})
+
+          true ->
+            socket
         end
 
-      {:noreply, assign(socket, :check, check)}
-    end)
+      {:error, reason} ->
+        assign(socket, status: nil, error: Ops.error_message(reason))
+    end
   end
 
-  def handle_async(_name, _result, socket), do: {:noreply, socket}
+  # The name the person's enrollment wants registered, or the one recorded.
+  defp wanted_name(%{name: name}) when is_binary(name), do: name
+
+  defp wanted_name(%{kits: kits}),
+    do: Enum.find_value(kits, fn kit -> kit.kind == "enrollment" && kit[:name] end)
+
+  defp wanted_name(_status), do: nil
 
   # ---- events -----------------------------------------------------------------
 
@@ -178,411 +143,206 @@ defmodule PrismWeb.IdentityCard do
   def handle_event(event, params, socket) when event in @events,
     do: CyfrWeb.ContextGuard.guard(socket, &act(event, params, &1))
 
-  defp act("check", %{"handle" => typed}, socket) when is_binary(typed) do
-    handle = String.trim(typed)
+  defp act("admission_retry", _params, %{assigns: %{admission_state: :silent}} = socket),
+    do: {:noreply, register(socket, %{})}
 
-    socket = assign(socket, handle_input: handle, claim_error: nil)
+  defp act("admission_rename", %{"name" => typed}, %{assigns: %{admission_state: from}} = socket)
+       when from in [:taken, :reserved] and is_binary(typed) do
+    name = String.trim(typed)
 
-    cond do
-      handle == "" ->
-        {:noreply, assign(socket, :check, :idle)}
-
-      not Prima.ComponentRef.valid_personal_slug?(handle) ->
-        {:noreply, assign(socket, :check, :invalid)}
-
-      true ->
-        tag = CyfrWeb.ContextGuard.capture(socket)
-
+    if Prima.ComponentRef.valid_personal_slug?(name),
+      do:
         {:noreply,
          socket
-         |> assign(:check, :checking)
-         |> start_async(:check, fn -> {tag, handle, Sanctum.Handle.resolve(handle)} end)}
-    end
+         |> assign(admission_from: from, admission_name: name)
+         |> register(%{"name" => name})},
+      else: {:noreply, assign(socket, :admission_error, AdmissionCard.check_sentence(:invalid))}
   end
 
-  defp act("choose", %{"handle" => typed}, socket) when is_binary(typed) do
-    handle = String.trim(typed)
-
-    if handle == socket.assigns.handle_input and socket.assigns.check == :free do
-      case want(socket, handle) do
-        {:ok, socket} -> {:noreply, after_choice(socket)}
-        {:error, socket} -> {:noreply, socket}
-      end
-    else
-      {:noreply, socket}
-    end
-  end
-
-  # Enrollment on its own, with no handle: an identifier, which signs the
-  # person in at another CYFR, and the recovery code that brings it back,
-  # whether or not the registry answers; a handle is claimed later.
-  defp act("enroll", _params, %{assigns: %{status: %{enrollment: "none"}}} = socket),
-    do: {:noreply, socket |> enroll() |> assign(:claim_on_ack, false)}
-
-  defp act("abandon", _params, socket) do
-    case Ops.call_tool(socket.assigns.context, "person/enroll_abandon", %{}) do
-      {:ok, _abandoned} -> {:noreply, socket |> load() |> enroll()}
-      {:error, reason} -> {:noreply, assign(socket, :error, Ops.error_message(reason))}
-    end
-  end
-
-  defp act("show_kit", %{"attempt" => attempt_id}, socket),
+  defp act("show_code", %{"attempt" => attempt_id}, socket) when is_binary(attempt_id),
     do: {:noreply, show(socket, &Recovery.recovery_code(&1, attempt_id))}
 
-  defp act("claim", _params, socket), do: {:noreply, claim(socket)}
+  defp act("show_code", _params, %{assigns: %{admission_state: :code, attempt_id: id}} = socket)
+       when is_binary(id),
+       do: {:noreply, show(socket, &Recovery.recovery_code(&1, id))}
+
+  defp act("add_code", _params, socket), do: {:noreply, show(socket, &Recovery.holder/1)}
 
   defp act(_event, _params, socket), do: {:noreply, socket}
 
-  # ---- the steps --------------------------------------------------------------
+  # ---- the drive --------------------------------------------------------------
 
-  defp want(socket, handle) do
-    with {:ok, user} <- Users.get(socket.assigns.context.user_id),
-         {:ok, _user} <- Users.put_prefs(user, %{"handle_wanted" => handle}) do
-      {:ok,
-       assign(socket,
-         wanted: handle,
-         check: :idle,
-         handle_input: "",
-         claim_error: nil,
-         choose_another: false
-       )}
-    else
-      {:error, reason} -> {:error, assign(socket, :error, Ops.error_message(reason))}
+  # The card says it is registering while the drive asks cyfr.run.
+  defp register(%{assigns: %{context: ctx}} = socket, args) do
+    tag = CyfrWeb.ContextGuard.capture(socket)
+
+    socket
+    |> assign(admission_state: :registering, admission_error: nil)
+    |> start_async(:drive, fn -> {tag, Ops.call_tool(ctx, "registry/register", args)} end)
+  end
+
+  @impl true
+  def handle_async(:drive, {:ok, {tag, answer}}, socket) do
+    CyfrWeb.ContextGuard.deliver(socket, tag, &{:noreply, registered(&1, answer)})
+  end
+
+  def handle_async(:drive, {:exit, _reason}, socket),
+    do: {:noreply, assign(socket, admission_state: :silent, admission_error: nil)}
+
+  defp registered(socket, answer) do
+    case answer do
+      {:ok, %{"attempt_id" => attempt_id, "name" => name}} ->
+        assign(socket,
+          admission_state: :code,
+          admission_name: name,
+          admission_error: nil,
+          admission_from: nil,
+          attempt_id: attempt_id
+        )
+
+      {:error, reason} ->
+        case AdmissionCard.refused_state(reason) do
+          {:invalid, sentence} ->
+            assign(socket,
+              admission_state: socket.assigns.admission_from || :silent,
+              admission_error: sentence
+            )
+
+          {state, sentence} ->
+            assign(socket, admission_state: state, admission_error: sentence)
+        end
     end
   end
 
-  # A handle chosen before enrolling begins the enrollment; one chosen
-  # once the recovery code is saved (another, after a taken one) is claimed.
-  defp after_choice(%{assigns: %{status: %{enrollment: "none"}}} = socket), do: enroll(socket)
-
-  defp after_choice(%{assigns: %{status: %{enrollment: "enrolled"}}} = socket),
-    do: claim(socket)
-
-  defp after_choice(socket), do: socket
-
-  defp enroll(%{assigns: %{status: %{directory_url: url}}} = socket) do
-    socket
-    |> assign(:claim_on_ack, true)
-    |> show(&Recovery.enrollment(&1, url), :enrolling)
-  end
-
-  defp enroll(socket), do: socket
-
   # A recovery prompt, under an id of this card's, in the view's layer.
-  defp show(socket, build, remember \\ nil) do
+  defp show(socket, build) do
     prompt_id = @prompt_prefix <> Integer.to_string(System.unique_integer([:positive]))
 
     case build.(prompt_id) do
       {:ok, prompt} ->
         SystemLayer.show(SystemLayer.layer_id(), prompt)
-        if remember, do: assign(socket, remember, prompt_id), else: socket
+        socket
 
       {:error, :invalid_prompt} ->
         assign(socket, :error, "That cannot be shown here.")
     end
   end
 
-  # The enrollment this card began, its recovery code saved: the handle is
-  # claimed at once.
-  defp claim_when_acknowledged(%{assigns: %{claim_on_ack: true}} = socket) do
-    if state(socket.assigns) == :claim,
-      do: socket |> assign(:claim_on_ack, false) |> claim(),
-      else: socket
-  end
-
-  defp claim_when_acknowledged(socket), do: socket
-
-  # The order is register, recovery code, "I saved it", then claim, held
-  # here from where the person stands now (`person.status`), never by the
-  # markup: until the enrollment's recovery code is saved, nothing reaches
-  # the registry.
-  defp claim(%{assigns: %{context: ctx, wanted: handle}} = socket) when is_binary(handle) do
-    case Ops.call_tool(ctx, "person/status", %{}) do
-      {:ok, status} ->
-        socket = assign(socket, :status, status)
-        if acknowledged?(status), do: claim_handle(socket, ctx, handle), else: socket
-
-      {:error, reason} ->
-        assign(socket, :error, Ops.error_message(reason))
-    end
-  end
-
-  defp claim(socket), do: socket
-
-  defp acknowledged?(%{provenance: "local", enrollment: "enrolled", kits: kits}),
-    do: not Enum.any?(kits, &(&1.kind == "enrollment"))
-
-  defp acknowledged?(_status), do: false
-
-  defp claim_handle(socket, ctx, handle) do
-    with {:ok, %{"policy_version" => version}} when is_binary(version) <-
-           Ops.call_tool(ctx, "registry/legal_version", %{}),
-         {:ok, _accepted} <-
-           Ops.call_tool(ctx, "registry/legal_accept", %{"policy_version" => version}),
-         {:ok, _claimed} <- Ops.call_tool(ctx, "registry/claim_personal", %{"handle" => handle}),
-         {:ok, cleared} <- want(socket, nil) do
-      load(cleared)
-    else
-      {:error, %Phoenix.LiveView.Socket{} = unsaved} ->
-        unsaved
-
-      {:error, reason} ->
-        claim_refused(socket, reason)
-
-      {:ok, _no_version} ->
-        assign(socket, :claim_error, "The registry did not name its current policies. Try again.")
-    end
-  end
-
-  defp claim_refused(socket, reason) do
-    message = Ops.error_message(reason)
-
-    case refusal_reason(reason) do
-      reason when reason in [:handle_taken, :handle_invalid, :namespace_reserved] ->
-        assign(socket, claim_error: message, choose_another: true, check: :idle, handle_input: "")
-
-      _retryable ->
-        assign(socket, :claim_error, message)
-    end
-  end
-
-  defp refusal_reason(%Prima.Refusal{reason: reason}), do: reason
-  defp refusal_reason({reason, _detail}) when is_atom(reason), do: reason
-  defp refusal_reason(reason) when is_atom(reason), do: reason
-  defp refusal_reason(_reason), do: nil
-
   # ---- the state --------------------------------------------------------------
 
   defp state(%{status: nil}), do: :unread
   defp state(%{status: %{provenance: "remote"}}), do: :remote
-  defp state(%{status: %{enrollment: "none"}}), do: :choose
-  defp state(%{status: %{enrollment: "pending"}}), do: :pending
 
-  defp state(%{status: %{enrollment: "enrolled", kits: kits}} = assigns) do
-    cond do
-      Enum.any?(kits, &(&1.kind == "enrollment")) -> :kit
-      is_binary(assigns.handle) -> :claimed
-      is_binary(assigns.wanted) and not assigns.choose_another -> :claim
-      true -> :choose
-    end
+  defp state(%{status: %{name: name, kits: kits}}) do
+    if is_binary(name) and not Enum.any?(kits, &(&1.kind == "enrollment")),
+      do: :named,
+      else: :unfinished
   end
 
   defp state(_assigns), do: :unread
 
+  # An added code whose recovery code waits to be saved: shown again from
+  # here, since only it can finish that code.
+  defp added(%{kits: kits}), do: Enum.filter(kits, &(&1.kind == "holder" and &1.deliverable))
+  defp added(_status), do: []
+
   # ---- render -----------------------------------------------------------------
-
-  attr :input, :string, required: true
-  attr :check, :atom, required: true
-  attr :target, :any, required: true
-  attr :legal_path, :string, default: nil
-  attr :label, :string, required: true
-
-  defp handle_form(assigns) do
-    ~H"""
-    <form
-      id="identity-handle"
-      phx-change="check"
-      phx-submit="choose"
-      phx-target={@target}
-      data-test="identity-handle"
-      class="space-y-2"
-    >
-      <label for="identity-handle-input" class="text-sm text-gray-300">{@label}</label>
-      <div class="flex gap-2">
-        <span class="self-center text-gray-400">@</span>
-        <input
-          id="identity-handle-input"
-          name="handle"
-          type="text"
-          value={@input}
-          autocomplete="off"
-          autocapitalize="none"
-          spellcheck="false"
-          phx-debounce="400"
-          data-test="identity-handle-input"
-          class="flex-1 min-w-0 rounded-md bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-white"
-        />
-        <.button type="submit" disabled={@check != :free} data-test="identity-choose">
-          Continue
-        </.button>
-      </div>
-      <p class="text-xs text-gray-400" data-test="identity-handle-check" data-check={@check}>
-        {check_sentence(@check)}
-      </p>
-      <p :if={@legal_path} class="text-xs text-gray-500">
-        Claiming a handle accepts the registry's <.link navigate={@legal_path} class="underline">terms and policies</.link>.
-      </p>
-    </form>
-    """
-  end
-
-  defp check_sentence(:idle), do: "Letters, digits and hyphens."
-  defp check_sentence(:checking), do: "Asking the registry."
-  defp check_sentence(:free), do: "Free."
-  defp check_sentence(:taken), do: "Taken. Choose another."
-
-  defp check_sentence(:invalid),
-    do: "A handle is lowercase letters, digits and single hyphens, starting with a letter."
-
-  defp check_sentence(:unavailable),
-    do: "The registry does not answer now, so no handle can be chosen. Try again later."
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :state, state(assigns))
+    assigns = assign(assigns, state: state(assigns), added: added(assigns.status))
 
     ~H"""
-    <section
-      id={@id}
-      data-test="identity"
-      data-provenance={@status && @status.provenance}
-      data-enrollment={@status && @status.enrollment}
-      data-state={@state}
-      class="space-y-3"
-    >
-      <h3 class="text-sm font-medium text-gray-400">Your identity</h3>
+    <section id={@id} data-test="identity" data-state={@state} class="space-y-3">
+      <h3 class="text-sm font-medium text-gray-400">Your name</h3>
 
       <p :if={@error} role="alert" class="text-sm" data-test="identity-error">{@error}</p>
       <p :if={@state == :unread and is_nil(@error)} class="text-sm text-gray-400">
-        Reading your identity.
+        Reading your name.
       </p>
 
-      <div :if={@status} class="space-y-3">
-        <dl :if={@offer == "settings"} class="grid grid-cols-3 gap-2 text-sm">
-          <dt class="text-xs text-gray-500 uppercase">Identifier</dt>
-          <dd class="col-span-2 font-mono break-all" data-test="identity-identifier">
-            {@status.identifier || "not enrolled"}
-          </dd>
-          <dt class="text-xs text-gray-500 uppercase">Directory</dt>
-          <dd class="col-span-2 break-all" data-test="identity-directory">
-            {@status.directory_url}
-          </dd>
-          <dt :if={@status.key_epoch} class="text-xs text-gray-500 uppercase">Key epoch</dt>
-          <dd :if={@status.key_epoch} class="col-span-2 font-mono" title={@status.key_epoch}>
-            {String.slice(@status.key_epoch, 0, 16) <> "…"}
-          </dd>
-        </dl>
+      <p :if={@state == :remote} class="text-sm" data-test="identity-remote">
+        Your keys are at your CYFR, so your name and recovery code are there.
+      </p>
 
-        <p :if={@state == :remote} class="text-sm" data-test="identity-remote">
-          Your keys are held at another CYFR, so your identity is enrolled, rotated and recovered there.
-        </p>
-
-        <div :if={@state == :choose} class="space-y-2">
-          <p :if={@status.enrollment == "none"} class="text-sm text-gray-300">
-            Choose a handle, and CYFR registers your identity at its directory and makes the
-            recovery code that brings it back. The handle is claimed once you say your recovery
-            code is saved.
-          </p>
-          <p
-            :if={@claim_error}
-            role="alert"
-            class="text-sm text-red-300"
-            data-test="identity-claim-error"
-          >
-            {@claim_error}
-          </p>
-          <.handle_form
-            input={@handle_input}
-            check={@check}
-            target={@myself}
-            legal_path={@legal_path}
-            label={if @choose_another, do: "Choose another handle", else: "Your handle"}
-          />
-          <div :if={@status.enrollment == "none"} class="space-y-2 pt-2">
-            <p class="text-sm text-gray-400">
-              Or enroll without a handle: your identity gets an identifier, which signs you in at
-              another CYFR, and the recovery code that brings it back. A handle can be claimed
-              later.
-            </p>
-            <.button
-              variant="ghost"
-              phx-click="enroll"
-              phx-target={@myself}
-              data-test="identity-enroll"
-            >
-              Enroll without a handle
-            </.button>
-          </div>
-        </div>
-
-        <div :if={@state == :pending} class="space-y-2">
-          <p class="text-sm text-gray-300">
-            Your enrollment is waiting for the directory's answer.
-          </p>
-          <div :if={is_nil(@enrolling)} class="space-y-2">
-            <p class="text-sm text-gray-300">
-              Only the browser that began it holds its recovery code. If that browser lost it, abandon it and enroll again with a new one; a registration the directory may already hold stays there unused.
-            </p>
-            <.button
-              variant="ghost"
-              phx-click="abandon"
-              phx-target={@myself}
-              data-test="identity-abandon"
-            >
-              Abandon and start again
-            </.button>
-          </div>
-        </div>
-
-        <ul :if={@status.kits != []} class="space-y-2">
-          <li
-            :for={kit <- @status.kits}
-            class="flex items-center justify-between gap-2 text-sm"
-            data-test="identity-kit"
-            data-attempt={kit.attempt_id}
-            data-phase={kit.phase}
-          >
-            <span :if={kit.deliverable}>
-              Your recovery code ({kit_kind(kit)}) waits for you to say you saved it.
-            </span>
-            <span :if={not kit.deliverable}>
-              Your recovery code ({kit_kind(kit)}) is at {kit.phase}; finish it in the prompt that began it.
-            </span>
-            <.button
-              :if={kit.deliverable}
-              variant="ghost"
-              phx-click="show_kit"
-              phx-value-attempt={kit.attempt_id}
-              phx-target={@myself}
-              data-test="identity-kit-show"
-            >
+      <div :if={@state == :unfinished} class="space-y-3">
+        <p class="text-sm text-gray-300">Your name and recovery code are not finished.</p>
+        <AdmissionCard.code_screen
+          state={@admission_state}
+          name={@admission_name}
+          error={@admission_error}
+          target={@myself}
+        >
+          <:code>
+            <.button phx-click="show_code" phx-target={@myself} data-test="identity-show-code">
               Show your recovery code
             </.button>
-          </li>
-        </ul>
+          </:code>
+        </AdmissionCard.code_screen>
+      </div>
 
-        <div :if={@state == :claim} class="space-y-2">
-          <p class="text-sm text-gray-300">
-            Your recovery code is saved. Claim your handle at the registry.
-          </p>
-          <p
-            :if={@claim_error}
-            role="alert"
-            class="text-sm text-red-300"
-            data-test="identity-claim-error"
+      <div :if={@state == :named} class="space-y-3">
+        <p class="text-sm text-gray-300" data-test="identity-name">
+          Your name is <span class="font-mono text-white">@{@status.name}</span>.
+        </p>
+        <p class="text-sm text-gray-400" data-test="identity-identifier">
+          Your identifier, for the command line:
+          <span class="font-mono break-all text-gray-200">{@status.identifier}</span>
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <.button
+            variant="ghost"
+            phx-click="add_code"
+            phx-target={@myself}
+            data-test="identity-add-code"
           >
-            {@claim_error}
-          </p>
-          <.button phx-click="claim" phx-target={@myself} data-test="identity-claim">
-            Claim @{@wanted}
+            Add another recovery code
+          </.button>
+          <.button
+            :for={kit <- @added}
+            variant="ghost"
+            phx-click="show_code"
+            phx-value-attempt={kit.attempt_id}
+            phx-target={@myself}
+            data-test="identity-show-code"
+          >
+            Show your recovery code
           </.button>
         </div>
-
-        <div :if={@state == :claimed} class="space-y-2" data-test="identity-claimed">
-          <p class="text-sm text-gray-300">
-            Your handle is <span class="font-mono text-white">@{@handle}</span>.
-          </p>
-        </div>
-
-        <div :if={@status.enrollment == "enrolled" and @state != :remote}>
-          {render_slot(@enrolled, @status)}
-        </div>
+        <div :if={@status.enrollment == "enrolled"}>{render_slot(@named, @status)}</div>
       </div>
+
+      <details
+        :if={@state in [:named, :unfinished]}
+        id="identity-costs"
+        data-test="identity-costs"
+        class="text-sm"
+      >
+        <summary class="cursor-pointer text-indigo-300 hover:text-indigo-200">
+          What losing it costs
+        </summary>
+        <ol class="mt-2 list-decimal space-y-1 pl-5 text-gray-300">
+          <li>
+            Your identity is registered at cyfr.run. While cyfr.run cannot be reached, changing your keys, bringing your identity back and other CYFRs checking who you are all wait.
+          </li>
+          <li>
+            Your recovery code brings your identity back on a new CYFR. Anyone who holds a copy can replace your keys, so keep it apart from your devices.
+          </li>
+          <li>
+            Add a second recovery code before you rely on one. Only a code you hold can add another.
+          </li>
+          <li>
+            If every recovery code is lost, nothing can add one. Your identity keeps working here, with no way back if this CYFR is lost.
+          </li>
+          <li>
+            If this CYFR and every recovery code are lost, your identity is gone, and you start again with a new name.
+          </li>
+          <li>
+            Bringing your identity back restores you alone, never your private data or the CYFR addresses your devices saved. You add those again from surviving devices or invitations.
+          </li>
+        </ol>
+      </details>
     </section>
     """
   end
-
-  # `person.status` lists only enrollment and holder attempts.
-  defp kit_kind(%{kind: "enrollment"}), do: "your first"
-  defp kit_kind(%{kind: "holder"}), do: "an added one"
 end

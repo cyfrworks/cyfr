@@ -253,7 +253,10 @@ defmodule PrismWeb.AdmissionCard do
     name = String.trim(typed)
 
     if Prima.ComponentRef.valid_personal_slug?(name),
-      do: socket |> assign(:admission_from, from) |> register(%{"name" => name}),
+      do:
+        socket
+        |> assign(admission_from: from, admission_name: name)
+        |> register(%{"name" => name}),
       else: assign(socket, :admission_error, @invalid)
   end
 
@@ -515,8 +518,11 @@ defmodule PrismWeb.AdmissionCard do
         {@error}
       </p>
 
-      <p :if={@state == :registering} class="text-sm text-gray-300">
+      <p :if={@state == :registering and is_binary(@name)} class="text-sm text-gray-300">
         Registering @{@name} at cyfr.run.
+      </p>
+      <p :if={@state == :registering and is_nil(@name)} class="text-sm text-gray-300">
+        Registering at cyfr.run.
       </p>
 
       <div :if={@state == :code} class="space-y-4">
