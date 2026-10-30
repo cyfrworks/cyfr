@@ -10,12 +10,18 @@ defmodule PrismWeb.CanvasLive do
   It reads the layout through `Compendium.layout/2` and draws, from the
   bottom: the visible canvas's frame filling the layer (a hidden canvas's
   frame is held invisible and frozen, and a validation frame is hidden and
-  inert), the `column` apps beside it, the floating tinctures above them,
-  and the active `full` frame above those, with its capsule. The
-  assistant's panel (`PrismWeb.AquaPanelLive`), which the app layout draws
-  over the page, sits above the column apps and the floating tinctures.
-  In safe mode (`safe_mode`) nothing of the layout is
-  drawn. While a full frame is shown every other layer is `inert`, so no
+  inert) and narrowed by the tiles beside it, its tiles at their edge and
+  share, its windows at their geometry, and the active `full` frame above
+  those, with its capsule. Geometry and shares are hundredths of a percent
+  of the layer. Windows and tiles stack by their `stack` alone, as each
+  wrapper's `z-index`, so raising an app restyles its wrapper and never
+  moves it. Each app's wrapper carries what it stands as for the hook:
+  `data-canvas-place` (`window`, `tile` or `full`), `data-canvas-stack`,
+  `data-canvas-minimised`, and `data-canvas-geometry` (`x y w h`) or
+  `data-canvas-side` and `data-canvas-share`. The assistant's panel
+  (`PrismWeb.AquaPanelLive`), which the app layout draws over the page,
+  sits above the windows and tiles. In safe mode (`safe_mode`) nothing of
+  the layout is drawn. While a full frame is shown every other layer is `inert`, so no
   key reaches a control it covers; the full frame and its capsule stay
   reachable.
 
@@ -28,10 +34,11 @@ defmodule PrismWeb.CanvasLive do
   The posture is the client's: the `Canvas` hook (`assets/js/canvas/`)
   reports `hand` or `desk` as the event `posture`, and any other value is
   ignored. Before the first report the canvas draws `desk`. Each
-  arrangement read is sent to the shell as
-  `{PrismWeb.CanvasLive, :arrangement, posture, arrangement}`, and the shell
-  opens and discards frames for it (`Prism.Frames.arrange/4`); a read that
-  fails is sent as `{PrismWeb.CanvasLive, :layout_unavailable}`. The canvas
+  layout read is sent to the shell whole, as
+  `{PrismWeb.CanvasLive, :layout, posture, read}` (`Compendium.layout/2`'s
+  answer), and the shell opens, stands and discards frames for it
+  (`Prism.Frames.arrange/5`); a read that fails is sent as
+  `{PrismWeb.CanvasLive, :layout_unavailable}`. The canvas
   itself opens no frame and holds no credential. An update with
   `reload: true` reads the layout again.
 
@@ -39,15 +46,11 @@ defmodule PrismWeb.CanvasLive do
   (the shell's tincture cards) and `safe_mode`.
 
   The hook sits on an empty element of its own, `#<id>-hook`, after the
-  frames, which carries `data-posture` and `data-columns`; it reads the
-  layer as that element's parent, and its pushes go from that element. It
-  lays the shown columns out from the list rendered in
-  `data-columns` (each frame's id and order), relays the shell's
-  `frame_state`, `frame_credential` and `canvas_installed` pushes to each
-  frame's bridge, sends each canvas frame its posture and what the shown
-  apps and floating frames cover of it, and keeps the last columns drawn
-  while the socket is down. A column takes its geometry by
-  `data-canvas-column`. A canvas or validation frame carries
+  frames, which carries `data-posture`; it reads the layer as that
+  element's parent, and its pushes go from that element. It relays the
+  shell's `frame_state`, `frame_credential` and `canvas_installed` pushes
+  to each frame's bridge and sends each canvas frame its posture and what
+  the shown apps cover of it. A canvas or validation frame carries
   `data-frame-kind="canvas"`, so its bridge hands it the canvas's
   handshake and forwards its messages as a canvas's.
 
@@ -78,6 +81,7 @@ defmodule PrismWeb.CanvasLive do
   alias Prism.Frames
 
   @postures Prima.Layout.postures()
+  @max_fraction 10_000
 
   @impl true
   def mount(socket) do
@@ -156,8 +160,8 @@ defmodule PrismWeb.CanvasLive do
     %{context: ctx, posture: posture} = socket.assigns
 
     case Compendium.layout(ctx, posture) do
-      {:ok, %{arrangement: arrangement}} ->
-        send(self(), {__MODULE__, :arrangement, posture, arrangement})
+      {:ok, %{arrangement: arrangement} = read} ->
+        send(self(), {__MODULE__, :layout, posture, read})
         assign(socket, arrangement: arrangement, loaded: posture, layout_unavailable: false)
 
       {:error, _refusal} ->
@@ -180,7 +184,7 @@ defmodule PrismWeb.CanvasLive do
       assign(assigns,
         canvases: canvases(arrangement),
         visible: visible,
-        columns: columns(Frames.list(assigns.frames)),
+        boxes: boxes(assigns.frames),
         # Under a shown full frame every other layer is covered, and taken
         # out of reach so no key lands on a control nobody can see.
         covering: covering(assigns.frames)
@@ -211,11 +215,15 @@ defmodule PrismWeb.CanvasLive do
           id={wrapper_id}
           data-canvas-frame={frame.id}
           data-canvas-place={place(frame)}
-          data-canvas-column={column_of(frame)}
+          data-canvas-stack={app_attribute(frame, :stack)}
+          data-canvas-minimised={app_attribute(frame, :minimised)}
+          data-canvas-geometry={geometry_attribute(frame.placement)}
+          data-canvas-side={side_attribute(frame.placement)}
+          data-canvas-share={share_attribute(frame.placement)}
           data-canvas-shown={to_string(frame.visible)}
           inert={inert?(frame, @covering)}
           class={frame_class(frame)}
-          style={frame_style(frame.placement)}
+          style={Map.get(@boxes, frame.id)}
         >
           <iframe
             :if={frame.state != :refused}
@@ -251,7 +259,6 @@ defmodule PrismWeb.CanvasLive do
         phx-hook="Canvas"
         phx-target={@myself}
         data-posture={@posture}
-        data-columns={Jason.encode!(@columns)}
       >
       </div>
 
@@ -355,28 +362,27 @@ defmodule PrismWeb.CanvasLive do
   defp inert?(%{key: {:validation, _}}, _covering), do: true
   defp inert?(%{key: key}, covering), do: covering not in [nil, key]
 
-  # What the hook lays out: each shown column's frame id and order, in order.
-  defp columns(list) do
-    list
-    |> Enum.flat_map(fn
-      %{id: id, visible: true, placement: {:column, order}} -> [%{frame: id, order: order}]
-      _other -> []
-    end)
-    |> Enum.sort_by(&{&1.order, &1.frame})
-  end
-
-  defp column_of(%{id: id, placement: {:column, _order}}), do: id
-  defp column_of(_frame), do: nil
-
   defp place(%{key: {:canvas, _}}), do: "canvas"
   defp place(%{key: {:validation, _}}), do: "validation"
-  defp place(%{placement: {:column, _}}), do: "column"
-  defp place(%{placement: {:floating, _}}), do: "float"
+  defp place(%{placement: {:window, _}}), do: "window"
+  defp place(%{placement: {:tile, _, _}}), do: "tile"
   defp place(%{placement: :full}), do: "full"
+
+  defp app_attribute(%{key: {:app, _, _}} = frame, field), do: to_string(Map.fetch!(frame, field))
+  defp app_attribute(_frame, _field), do: nil
+
+  defp geometry_attribute({:window, %{x: x, y: y, w: w, h: h}}), do: "#{x} #{y} #{w} #{h}"
+  defp geometry_attribute(_placement), do: nil
+
+  defp side_attribute({:tile, side, _share}), do: Atom.to_string(side)
+  defp side_attribute(_placement), do: nil
+
+  defp share_attribute({:tile, _side, share}), do: Integer.to_string(share)
+  defp share_attribute(_placement), do: nil
 
   defp frame_class(%{key: {:validation, _}}), do: "hidden"
 
-  # A canvas fills the layer under every app and floating frame.
+  # A canvas fills the layer under every app, narrowed by its tiles.
   defp frame_class(%{key: {:canvas, _}, visible: visible}) do
     [
       "pointer-events-auto absolute inset-0 z-0 overflow-hidden bg-surface-base",
@@ -391,33 +397,87 @@ defmodule PrismWeb.CanvasLive do
     ]
   end
 
-  defp frame_class(%{placement: {:column, _}, visible: visible}) do
+  defp frame_class(%{placement: {:tile, _, _}, visible: visible}) do
     [
-      "pointer-events-auto absolute z-20 overflow-hidden rounded-xl bg-surface-raised ring-1 ring-white/10",
+      "pointer-events-auto absolute overflow-hidden bg-surface-raised ring-1 ring-white/10",
       if(not visible, do: "invisible")
     ]
   end
 
-  defp frame_class(%{placement: {:floating, _}, visible: visible}) do
+  defp frame_class(%{placement: {:window, _}, visible: visible}) do
     [
-      "pointer-events-auto absolute z-30 overflow-hidden rounded-xl bg-surface-raised shadow-2xl ring-1 ring-white/10",
+      "pointer-events-auto absolute overflow-hidden rounded-xl bg-surface-raised shadow-2xl ring-1 ring-white/10",
       if(not visible, do: "invisible")
     ]
   end
 
-  defp frame_style({:floating, position}), do: float_style(position)
-  defp frame_style(_placement), do: nil
+  # Where each frame stands, as CSS, by frame id: a window at its geometry
+  # and a tile at its edge and share, each stacked by its `stack` alone, so
+  # raising an app changes its style and never its place in the document;
+  # and the visible canvas narrowed by the tiles shown beside it. Tiles on
+  # one edge sit side by side in their stacking order, left to right.
+  defp boxes(frames) do
+    list = Frames.list(frames)
+    canvas = Frames.visible_canvas(frames)
 
-  # A floating layer sits at its layout position, in hundredths of a
-  # percent of the canvas, and is kept inside the canvas.
-  @float_width "min(22rem, 100%)"
-  @float_height "min(15rem, 100%)"
+    tiles =
+      for %{key: {:app, ^canvas, _}, visible: true, placement: {:tile, _, _}} = frame <- list,
+          do: frame
 
-  defp float_style(%{x: x, y: y}) do
-    "left: min(#{percent(x)}, calc(100% - #{@float_width})); " <>
-      "top: min(#{percent(y)}, calc(100% - #{@float_height})); " <>
-      "width: #{@float_width}; height: #{@float_height};"
+    {left, right} =
+      Enum.split_with(Enum.sort_by(tiles, & &1.stack), &match?({:tile, :left, _}, &1.placement))
+
+    left_total = left |> Enum.map(&share/1) |> Enum.sum() |> min(@max_fraction)
+    right_total = right |> Enum.map(&share/1) |> Enum.sum() |> min(@max_fraction - left_total)
+
+    tile_boxes =
+      edge(left, 0) ++ edge(right, @max_fraction - right_total)
+
+    Map.new(list, fn frame ->
+      {frame.id, box(frame, tile_boxes, canvas, left_total, right_total)}
+    end)
   end
+
+  defp share(%{placement: {:tile, _, share}}), do: share
+
+  defp edge(tiles, from) do
+    {boxes, _end} =
+      Enum.map_reduce(tiles, from, fn frame, at ->
+        width = min(share(frame), @max_fraction - at)
+        {{frame.id, {at, width}}, at + width}
+      end)
+
+    boxes
+  end
+
+  defp box(%{key: {:canvas, id}}, _tiles, id, left, right),
+    do: "left: #{percent(left)}; right: #{percent(right)};"
+
+  defp box(
+         %{placement: {:window, %{x: x, y: y, w: w, h: h}}, stack: stack},
+         _tiles,
+         _canvas,
+         _l,
+         _r
+       ),
+       do:
+         "left: #{percent(x)}; top: #{percent(y)}; width: #{percent(w)}; height: #{percent(h)}; " <>
+           "z-index: #{z_index(stack)};"
+
+  defp box(%{id: id, placement: {:tile, side, share}, stack: stack}, tiles, _canvas, _l, _r) do
+    {at, width} = List.keyfind(tiles, id, 0, {id, {fallback(side, share), share}}) |> elem(1)
+
+    "top: 0; bottom: 0; left: #{percent(at)}; width: #{percent(width)}; z-index: #{z_index(stack)};"
+  end
+
+  defp box(_frame, _tiles, _canvas, _l, _r), do: nil
+
+  # A tile not shown keeps its own edge, at its own share.
+  defp fallback(:left, _share), do: 0
+  defp fallback(:right, share), do: @max_fraction - share
+
+  # Apps stack between the canvas (0) and a full frame (50).
+  defp z_index(stack), do: 10 + min(stack, 39)
 
   defp percent(hundredths), do: :erlang.float_to_binary(hundredths / 100, decimals: 2) <> "%"
 

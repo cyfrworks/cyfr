@@ -7,6 +7,16 @@ defmodule PrismWeb.ShellLive do
   @behaviour PrismWeb.SystemLayer.Hook
   on_mount PrismWeb.SystemLayer.Hook
 
+  @gesture_events ~w(frame_move frame_resize frame_tile frame_full frame_minimise frame_raise
+                     frame_close app_open app_restore)
+
+  # How long after the first gesture not yet written the layout is
+  # written: every gesture made meanwhile folds into that one write.
+  @write_after_ms 500
+  @write_retry_ms 5_000
+  @write_retries 5
+  @conflict_replays 3
+
   @moduledoc """
   The Prism shell: the person's canvases, the tinctures opened over them,
   the system layer and, when no canvas runs, the tincture picker.
@@ -18,8 +28,8 @@ defmodule PrismWeb.ShellLive do
   shipped canvas, `home` on `tincture:local.canvas`): the visible canvas,
   the layout's first at mount (`Prism.Frames.visible_canvas/1`). It opens
   that canvas's working version (`Compendium.canvas_versions/2`) as a frame
-  keyed `{:canvas, id}`, and holds the `column` apps and the floating
-  tinctures the layout places over it. A canvas whose newest installed
+  keyed `{:canvas, id}`, and holds the apps the layout places over it,
+  each as a window, a tile or full (`Prism.Frames.arrange/5`). A canvas whose newest installed
   version is not its working version, its kept version or its recorded
   failure is validated first (`Prism.CanvasValidation`): only `ready`
   activates it. When a validation ends, the shell compares again: a newer
@@ -33,7 +43,7 @@ defmodule PrismWeb.ShellLive do
   tincture, a canvas or a version installed or removed while the shell is
   open is decided as the registry lists it now. A canvas
   whose tincture is not installed is not shown, and validates nothing; its
-  apps and floating tinctures still open, and the picker is drawn. A
+  apps still open, and the picker is drawn. A
   layout published anywhere for this person (`Cyfr.Bus.LayoutPublished` on
   their own topic) is read again, and the frames follow it.
 
@@ -52,18 +62,64 @@ defmodule PrismWeb.ShellLive do
   listed tincture that is not a canvas, by name) is pushed to each held
   canvas frame after its handshake and whenever the listing changes, and
   `posture`, `covered` and `state` come from the glass. From the live,
-  visible canvas, `ready` keeps it out of safe mode, `failed` at either
-  stage is safe mode `crashed`, `open` opens a listed tincture where the
-  canvas's arrangement puts it (or `full` in the hand, the next `column`
-  on the desk), and `press` presses a feed's action through `feed.press`
-  once the served version's declaration reads that feed. `ready` and
-  `failed` report how a canvas's page loaded and runs, so they count from
-  a hidden canvas too, frozen or not the one shown: its `ready` makes it
-  ready, and its `failed` marks it died, which is safe mode `crashed` once
-  the canvas is shown. From a validation frame only `ready` and `failed`
+  visible canvas, `ready` keeps it out of safe mode, `failed` before
+  `ready` is safe mode `crashed`, `open` is the person's open of a listed
+  tincture (`app_open` below), and `press` presses a feed's action through
+  `feed.press` once the served version's declaration reads that feed.
+  `ready` and `failed` report how a canvas's page loaded and runs, so they
+  count from a hidden canvas too, frozen or not the one shown: its `ready`
+  makes it ready, and its `failed` before that marks it died, which is
+  safe mode `crashed` once the canvas is shown. A `failed` from a canvas
+  this view recorded as ready, shown or hidden, changes nothing: a page
+  error after `ready` is not a crash. From a validation frame only `ready` and `failed`
   act. A canvas's other verbs, an `open` or a `press` from a canvas the
   glass does not show live, and `press` and `failed` from a frame that is
   not a canvas's are dropped and counted.
+
+  ## Arranging
+
+  The canvas hook sends one event per gesture, once the gesture settles:
+  the end of a drag or a resize, never while it runs, or one press of a
+  control or a key. Each names the frame the shell handed the app
+  (`frame`) or a listed tincture (`ref`):
+
+  | event | payload | the app |
+  |---|---|---|
+  | `frame_move` | `frame`, `geometry` | stands as a window at `geometry` |
+  | `frame_resize` | `frame`, `geometry` or `share` | a window takes `geometry`, a tile `share` |
+  | `frame_tile` | `frame`, `side`, `share` | stands as a tile at `side` |
+  | `frame_full` | `frame` | takes the whole area |
+  | `frame_minimise` | `frame` | leaves the screen, keeping its place |
+  | `frame_raise` | `frame` | goes above every other |
+  | `frame_close` | `frame` | leaves the canvas |
+  | `app_restore` | `ref` | a minimised app comes back, raised |
+  | `app_open` | `ref` | opens where the layout places it, or as `Prism.Arrangement.open/4` places it, raised |
+
+  `geometry` is `{x, y, w, h}` and `share` a whole number, in hundredths
+  of a percent of the canvas, `side` is `left` or `right`, each within the
+  layout's bounds (`Prima.Layout`): `x` and `y` from 0 and `w`, `h` and
+  `share` from 1, each to 10000. An event is answered `%{ok: true}`, or
+  `%{error: reason}` with nothing changed: a frame this view does not
+  hold (`not_held`), an app of a canvas not shown (`hidden`), a canvas
+  behind a launch from the picker (`hidden`), safe mode (`safe_mode`), a
+  payload of another shape (`malformed`), a placement in the hand, where
+  every app is full (`hand`), an app the layout does not place
+  (`not_placed`) or a document the layout refuses (`invalid`). A gesture
+  is made at once on the frames, keeping every frame still placed, and
+  on the person's layout as this view holds it (`Prism.Arrangement`), and
+  `installed` is pushed again to every canvas frame.
+
+  The layout is written whole through the layout tool's `edit`, as the
+  person (`PrismWeb.Ops`), over the revision this view last read or
+  wrote: 500 ms after the first gesture not yet written, with every
+  gesture made meanwhile folded into that one write. A write refused for
+  a newer revision reads the layout again, makes the gestures that waited
+  on it again, each that still applies, and writes again, up to three
+  times; a write the store cannot answer is tried again every five
+  seconds, up to five times, the frames left as they are. A layout read
+  while gestures wait to be written leaves the view as it is; a read of
+  the revision this view last read or wrote, its own write announced
+  among them, changes nothing; any other read is taken whole.
 
   ## Safe mode
 
@@ -204,6 +260,11 @@ defmodule PrismWeb.ShellLive do
       |> assign(:covered, false)
       |> assign(:posture, "desk")
       |> assign(:arrangement, nil)
+      |> assign(:layout_base, nil)
+      |> assign(:document, nil)
+      |> assign(:pending, [])
+      |> assign(:write_timer, nil)
+      |> assign(:write_retries, 0)
       |> assign(:showing, :pending)
       |> assign(:canvas_ready, MapSet.new())
       |> assign(:canvas_died, MapSet.new())
@@ -440,6 +501,17 @@ defmodule PrismWeb.ShellLive do
   def handle_event("frame_handshake", _params, socket),
     do: {:reply, %{error: "no_credential"}, socket}
 
+  # An arrangement gesture the canvas hook sends once the gesture settles
+  # (`@gesture_events`): applied to the frames and the person's layout at
+  # once, and written with the next write (`schedule_write/1`). Answered
+  # `%{ok: true}`, or `%{error: reason}` with nothing changed.
+  def handle_event(event, params, socket) when event in @gesture_events and is_map(params) do
+    case gestured(socket, event, params) do
+      {:ok, socket} -> {:reply, %{ok: true}, socket}
+      {:error, reason} -> {:reply, %{error: refusal_word(reason)}, socket}
+    end
+  end
+
   # A shell verb the frame posted over its port. The bridge names the frame
   # whose port it came from, and the message must name the same one, which
   # this view holds live, or, for a canvas's `ready` or `failed`, holds
@@ -570,10 +642,21 @@ defmodule PrismWeb.ShellLive do
     end
   end
 
+  # A launch is closed; an app full over its canvas is closed as the
+  # person's gesture, which leaves the layout too.
   defp close_active_tincture(socket) do
     case Frames.active(socket.assigns.frames) do
-      nil -> socket
-      %{key: key} -> frames(socket, &Frames.discard(socket.assigns.context, &1, key))
+      nil ->
+        socket
+
+      %{key: {:app, canvas_id, ref}} ->
+        case gesture(socket, canvas_id, {:close, ref}) do
+          {:ok, socket} -> socket
+          {:error, _refused} -> socket
+        end
+
+      %{key: key} ->
+        frames(socket, &Frames.discard(socket.assigns.context, &1, key))
     end
   end
 
@@ -756,7 +839,7 @@ defmodule PrismWeb.ShellLive do
     case decoded do
       _any when shown -> live_canvas_verb(socket, frame, decoded)
       %{verb: :ready} -> update(socket, :canvas_ready, &MapSet.put(&1, frame.id))
-      %{verb: :failed} -> update(socket, :canvas_died, &MapSet.put(&1, frame.id))
+      %{verb: :failed} -> if ready?(socket, frame), do: socket, else: died(socket, frame)
       _acts -> drop_message(socket)
     end
   end
@@ -764,7 +847,11 @@ defmodule PrismWeb.ShellLive do
   defp live_canvas_verb(socket, %{id: id}, %{verb: :ready}),
     do: update(socket, :canvas_ready, &MapSet.put(&1, id))
 
-  defp live_canvas_verb(socket, _frame, %{verb: :failed}), do: enter_safe_mode(socket, :crashed)
+  # A page error after the canvas reported ready is not a crash: only a
+  # canvas that fails before its `ready` falls to safe mode.
+  defp live_canvas_verb(socket, frame, %{verb: :failed}) do
+    if ready?(socket, frame), do: socket, else: enter_safe_mode(socket, :crashed)
+  end
 
   defp live_canvas_verb(socket, %{key: {:canvas, canvas_id}}, %{
          verb: :open,
@@ -777,49 +864,20 @@ defmodule PrismWeb.ShellLive do
 
   defp live_canvas_verb(socket, _frame, _another_verb), do: drop_message(socket)
 
-  # A listed tincture opens where the canvas's arrangement puts it for the
-  # posture (`Frames.layout_mode/1`). Otherwise it opens full in the hand,
-  # or as the next column on the desk. Nothing is written to the layout.
+  defp ready?(socket, %{id: id}), do: MapSet.member?(socket.assigns.canvas_ready, id)
+
+  defp died(socket, %{id: id}), do: update(socket, :canvas_died, &MapSet.put(&1, id))
+
+  # A listed tincture the canvas opens is the person's open: placed where
+  # the layout has it, or opened as `Prism.Arrangement.open/4` places it,
+  # and written to the layout with the next write.
   defp open_from_canvas(socket, canvas_id, ref) do
-    with %{} = card <- listed(socket, ref),
-         %{} = entry <- visible_entry(socket.assigns) do
-      ctx = socket.assigns.context
-      placed = Frames.ref_of(card)
-      app = Enum.find(entry.apps, &(&1.tincture == placed))
-
-      cond do
-        app ->
-          mode = Frames.layout_mode(app)
-
-          frames(
-            socket,
-            &Frames.open_app(ctx, &1, canvas_id, card, mode, app.order, mode == :column)
-          )
-
-        socket.assigns.posture == "hand" ->
-          frames(socket, &Frames.open_app(ctx, &1, canvas_id, card, :full, 0))
-
-        true ->
-          order = next_column(socket.assigns.frames, entry)
-          frames(socket, &Frames.open_app(ctx, &1, canvas_id, card, :column, order))
-      end
+    with :ok <- arranging(socket),
+         %{} = card <- listed(socket, ref),
+         {:ok, socket} <- gesture(socket, canvas_id, open_gesture(socket, canvas_id, card)) do
+      socket
     else
-      _unlisted -> drop_message(socket)
-    end
-  end
-
-  # The order after every column of the canvas, held or placed.
-  defp next_column(frames, entry) do
-    held =
-      for %{key: {:app, id, _}, placement: {:column, order}} <- Frames.list(frames),
-          id == entry.id,
-          do: order
-
-    placed = for app <- entry.apps, Frames.layout_mode(app) == :column, do: app.order
-
-    case held ++ placed do
-      [] -> 0
-      orders -> Enum.max(orders) + 1
+      _refused -> drop_message(socket)
     end
   end
 
@@ -963,16 +1021,18 @@ defmodule PrismWeb.ShellLive do
 
   # What `installed` carries: every listed tincture that is not a canvas,
   # as a versionless reference, its name, its emoji (none for one the wire
-  # does not carry) and whether a frame of it is held on the visible
-  # canvas, sorted by name, within the bounds the canvas's reader holds it
-  # to (`Prima.TinctureWire`).
+  # does not carry) and whether the layout places it over the visible
+  # canvas, minimised included, sorted by name, within the bounds the
+  # canvas's reader holds it to (`Prima.TinctureWire`).
   defp installed(socket) do
     max_name = Prima.TinctureWire.max_installed_name()
     max_icon = Prima.TinctureWire.max_installed_icon()
-    frames = socket.assigns.frames
-    canvas = Frames.visible_canvas(frames)
 
-    open = for %{key: {:app, ^canvas, ref}} <- Frames.list(frames), into: MapSet.new(), do: ref
+    open =
+      case visible_entry(socket.assigns) do
+        %{apps: apps} -> MapSet.new(apps, & &1.tincture)
+        nil -> MapSet.new()
+      end
 
     socket.assigns.tinctures
     |> Enum.map(fn card ->
@@ -1008,6 +1068,230 @@ defmodule PrismWeb.ShellLive do
     do: for(%{key: key, id: id} <- Frames.list(frames), Frames.canvas_key?(key), do: id)
 
   # ============================================================================
+  # Arrangement gestures and the layout's writes
+  # ============================================================================
+
+  # A gesture event read into a gesture on an app of the visible canvas:
+  # one naming a frame names an app frame this view holds over the canvas
+  # the glass shows live; one naming a reference names a listed tincture.
+  defp gestured(socket, event, params) do
+    with :ok <- arranging(socket),
+         {:ok, canvas_id, gesture} <- read_gesture(socket, event, params) do
+      gesture(socket, canvas_id, gesture)
+    end
+  end
+
+  defp arranging(%{assigns: %{safe_mode: %{}}}), do: {:error, :safe_mode}
+  defp arranging(%{assigns: %{document: nil}}), do: {:error, :no_layout}
+
+  # The visible canvas is arranged while the glass shows it: under one of
+  # its own full apps, as in the hand, but not under a launch from the
+  # picker.
+  defp arranging(%{assigns: %{frames: frames}}) do
+    cond do
+      is_nil(Frames.visible_canvas(frames)) -> {:error, :no_canvas}
+      match?(%{key: {:full, _}}, Frames.active(frames)) -> {:error, :hidden}
+      true -> :ok
+    end
+  end
+
+  defp read_gesture(socket, event, %{"ref" => ref}) when event in ["app_open", "app_restore"] do
+    canvas_id = Frames.visible_canvas(socket.assigns.frames)
+
+    case listed(socket, ref) do
+      %{} = card when event == "app_open" ->
+        {:ok, canvas_id, open_gesture(socket, canvas_id, card)}
+
+      %{} = card ->
+        {:ok, canvas_id, {:restore, Frames.ref_of(card)}}
+
+      nil ->
+        {:error, :not_listed}
+    end
+  end
+
+  defp read_gesture(socket, event, %{"frame" => frame_id} = params) when is_binary(frame_id) do
+    frames = socket.assigns.frames
+    canvas_id = Frames.visible_canvas(frames)
+
+    case Enum.find(Frames.list(frames), &(&1.id == frame_id)) do
+      %{key: {:app, ^canvas_id, ref}} ->
+        with {:ok, gesture} <- frame_gesture(event, ref, params), do: {:ok, canvas_id, gesture}
+
+      %{key: {:app, _another, _ref}} ->
+        {:error, :hidden}
+
+      _none ->
+        {:error, :not_held}
+    end
+  end
+
+  defp read_gesture(_socket, _event, _params), do: {:error, :malformed}
+
+  defp frame_gesture("frame_move", ref, %{"geometry" => geometry}) do
+    with {:ok, geometry} <- geometry(geometry), do: {:ok, {:move, ref, geometry}}
+  end
+
+  defp frame_gesture("frame_resize", ref, %{"geometry" => geometry}) do
+    with {:ok, geometry} <- geometry(geometry), do: {:ok, {:resize, ref, geometry}}
+  end
+
+  defp frame_gesture("frame_resize", ref, %{"share" => share}) when is_integer(share),
+    do: {:ok, {:resize, ref, share}}
+
+  defp frame_gesture("frame_tile", ref, %{"side" => side, "share" => share})
+       when side in ["left", "right"] and is_integer(share),
+       do: {:ok, {:tile, ref, String.to_existing_atom(side), share}}
+
+  defp frame_gesture("frame_full", ref, _params), do: {:ok, {:full, ref}}
+  defp frame_gesture("frame_minimise", ref, _params), do: {:ok, {:minimise, ref}}
+  defp frame_gesture("frame_raise", ref, _params), do: {:ok, {:raise, ref}}
+  defp frame_gesture("frame_close", ref, _params), do: {:ok, {:close, ref}}
+  defp frame_gesture(_event, _ref, _params), do: {:error, :malformed}
+
+  # Whole numbers only: their bounds are the layout's (`Prima.Layout`).
+  defp geometry(%{"x" => x, "y" => y, "w" => w, "h" => h} = geometry)
+       when map_size(geometry) == 4 and is_integer(x) and is_integer(y) and is_integer(w) and
+              is_integer(h),
+       do: {:ok, %{x: x, y: y, w: w, h: h}}
+
+  defp geometry(_other), do: {:error, :malformed}
+
+  # How the canvas opens `card` when the layout does not place it: the
+  # tincture's own size hint, read from the declaration the rules hold.
+  defp open_gesture(socket, canvas_id, card) do
+    ref = Frames.ref_of(card)
+    %{document: document, posture: posture} = socket.assigns
+
+    size =
+      case Compendium.tincture_declaration(card.manifest) do
+        {:ok, declaration} -> declaration.frame.size
+        {:error, _refused} -> nil
+      end
+
+    placed =
+      case Prima.Layout.arrangement(document, posture) do
+        {:ok, canvases} ->
+          canvases |> Enum.find(%{apps: []}, &(&1.id == canvas_id)) |> Map.get(:apps) |> length()
+
+        :error ->
+          0
+      end
+
+    {:open, ref, Prism.Arrangement.open(ref, size, posture, placed)}
+  end
+
+  # The gesture made on the person's layout as this view holds it: the
+  # frames follow it at once (`Prism.Frames.arrange/5`, which keeps every
+  # frame still placed), every canvas is told what is open, and the
+  # gesture waits for the next write.
+  defp gesture(socket, canvas_id, gesture) do
+    %{document: document, posture: posture, pending: pending} = socket.assigns
+
+    case Prism.Arrangement.apply(document, canvas_id, posture, gesture) do
+      {:ok, document} ->
+        {:ok,
+         socket
+         |> assign(document: document, pending: pending ++ [{canvas_id, posture, gesture}])
+         |> rearranged()
+         |> schedule_write()}
+
+      {:error, _refused} = refused ->
+        refused
+    end
+  end
+
+  # The frames held for the layout as this view holds it, and every canvas
+  # told what is open.
+  defp rearranged(socket) do
+    %{document: document, posture: posture} = socket.assigns
+    {:ok, arrangement} = Prima.Layout.arrangement(document, posture)
+
+    socket
+    |> assign(:arrangement, arrangement)
+    |> place()
+    |> then(&push_installed(&1, canvas_frame_ids(&1.assigns.frames)))
+  end
+
+  defp schedule_write(%{assigns: %{write_timer: nil}} = socket),
+    do: assign(socket, :write_timer, Process.send_after(self(), :write_layout, @write_after_ms))
+
+  defp schedule_write(socket), do: socket
+
+  # The whole layout, as this view holds it, written through the layout
+  # tool as the person, over the revision it was read or last written at.
+  # A newer revision reloads the layout and makes the waiting gestures
+  # again on it, each that still applies; a store that cannot answer is
+  # tried again a few times, the frames left as they are.
+  defp write_layout(%{assigns: %{pending: []}} = socket, _round), do: socket
+
+  defp write_layout(socket, round) do
+    %{document: document, layout_base: layout} = socket.assigns
+    args = %{"document" => Prima.Layout.to_json(document), "revision" => layout.revision}
+
+    case PrismWeb.Ops.call_tool(socket, "layout/edit", args) do
+      {:ok, %{revision: revision, digest: digest}} ->
+        assign(socket,
+          layout_base: %{document: document, revision: revision, digest: digest},
+          pending: [],
+          write_retries: 0
+        )
+
+      {:error, reason} ->
+        if conflict?(reason), do: replay(socket, round), else: retry_write(socket)
+    end
+  end
+
+  defp conflict?({:conflict, _sentence}), do: true
+  defp conflict?(%Prima.Refusal{class: :conflict}), do: true
+  defp conflict?(_reason), do: false
+
+  defp retry_write(%{assigns: %{write_retries: retries}} = socket)
+       when retries < @write_retries do
+    timer = Process.send_after(self(), :write_layout, @write_retry_ms)
+    assign(socket, write_timer: timer, write_retries: retries + 1)
+  end
+
+  defp retry_write(socket), do: assign(socket, :write_retries, 0)
+
+  # The layout read again after a write it refused for a newer revision,
+  # the waiting gestures made on it, each that still applies — an app
+  # another screen closed is not moved — and written again, a bounded
+  # number of times.
+  defp replay(socket, round) do
+    %{context: ctx, posture: posture, pending: pending} = socket.assigns
+
+    case Compendium.layout(ctx, posture) do
+      {:ok, read} ->
+        {document, kept} = remade(read.document, pending)
+
+        socket =
+          socket
+          |> assign(layout_base: base(read), document: document, pending: kept)
+          |> rearranged()
+
+        if round < @conflict_replays, do: write_layout(socket, round + 1), else: socket
+
+      {:error, _unavailable} ->
+        retry_write(socket)
+    end
+  end
+
+  defp base(read), do: %{document: read.document, revision: read.revision, digest: read.digest}
+
+  defp remade(document, pending) do
+    Enum.reduce(pending, {document, []}, fn {canvas_id, posture, gesture} = made, {doc, kept} ->
+      case Prism.Arrangement.apply(doc, canvas_id, posture, gesture) do
+        {:ok, doc} -> {doc, kept ++ [made]}
+        {:error, _no_longer} -> {doc, kept}
+      end
+    end)
+  end
+
+  defp refusal_word({:invalid, _sentence}), do: "invalid"
+  defp refusal_word(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  # ============================================================================
   # The canvases
   # ============================================================================
 
@@ -1028,7 +1312,7 @@ defmodule PrismWeb.ShellLive do
     %{context: ctx, arrangement: arrangement} = socket.assigns
 
     socket
-    |> frames(&Frames.arrange(ctx, &1, arrangement, cards(socket)))
+    |> frames(&Frames.arrange(ctx, &1, arrangement, cards(socket), socket.assigns.posture))
     |> show_canvas()
   end
 
@@ -1650,24 +1934,9 @@ defmodule PrismWeb.ShellLive do
       {{:full, _}, _held} ->
         launch_tincture(socket, tincture_id)
 
-      {{:app, canvas_id, _ref}, %{placement: placement, arranged: arranged}} ->
-        reopen_app(socket, canvas_id, tincture_id, placement, arranged)
-
+      # An app opens again where the layout places it.
       _placed ->
         place(socket)
-    end
-  end
-
-  defp reopen_app(socket, canvas_id, tincture_id, placement, arranged) do
-    ctx = socket.assigns.context
-
-    case Enum.find(socket.assigns.tinctures, &(&1.id == tincture_id)) do
-      nil ->
-        socket
-
-      card ->
-        {mode, order} = if placement == :full, do: {:full, 0}, else: {:column, elem(placement, 1)}
-        frames(socket, &Frames.open_app(ctx, &1, canvas_id, card, mode, order, arranged))
     end
   end
 
@@ -1975,15 +2244,35 @@ defmodule PrismWeb.ShellLive do
     {:noreply, put_flash(socket, :info, "Report submitted. Thanks.")}
   end
 
-  # The canvas read the layout for the posture the client reported: a
-  # layout change waiting on this read is applied, then the frames it
+  # The canvas read the layout for the posture the client reported. While
+  # gestures wait to be written, this view keeps the layout as it holds
+  # it, and their write meets any newer revision (`write_layout/2`). A
+  # read of the revision this view last read or wrote, its own write
+  # announced among them, changes nothing it holds. Any other read is
+  # taken: a layout change waiting on it is applied, then the frames it
   # places and the visible canvas are held.
-  def handle_info({PrismWeb.CanvasLive, :arrangement, posture, arrangement}, socket) do
-    {:noreply,
-     socket
-     |> apply_layout_change()
-     |> assign(posture: posture, arrangement: arrangement)
-     |> place()}
+  def handle_info({PrismWeb.CanvasLive, :layout, posture, read}, socket) do
+    %{layout_base: layout, pending: pending} = socket.assigns
+
+    own =
+      layout != nil and layout.revision == read.revision and layout.digest == read.digest
+
+    socket =
+      if pending != [] or own,
+        do: assign(socket, :layout_changed, false),
+        else:
+          socket
+          |> apply_layout_change(read)
+          |> assign(layout_base: base(read), document: read.document)
+
+    {:ok, arrangement} = Prima.Layout.arrangement(socket.assigns.document, posture)
+    {:noreply, socket |> assign(posture: posture, arrangement: arrangement) |> place()}
+  end
+
+  # The first gesture not yet written waited its window: the layout is
+  # written now, with every gesture made since.
+  def handle_info(:write_layout, socket) do
+    {:noreply, socket |> assign(:write_timer, nil) |> write_layout(1)}
   end
 
   # The layout could not be read. At mount, with no canvas known, the
@@ -2093,27 +2382,45 @@ defmodule PrismWeb.ShellLive do
   end
 
   # A published layout, read: the shipped canvas safe mode showed in its
-  # place goes with the layout it stood in for, and a canvas's refusal for
-  # want of its grant is let go, so the arrangement read decides that
-  # canvas again. Before a read succeeds nothing of it is applied.
-  defp apply_layout_change(%{assigns: %{layout_changed: false}} = socket), do: socket
+  # place goes once the layout names another tincture for that canvas, and
+  # a canvas's refusal for want of its grant is let go, so the arrangement
+  # read decides that canvas again. A publication that keeps the canvas's
+  # tincture and only arranges keeps the shipped canvas, so saving a
+  # gesture never opens the canvas that failed again. Before a read
+  # succeeds nothing of it is applied.
+  defp apply_layout_change(%{assigns: %{layout_changed: false}} = socket, _read), do: socket
 
-  defp apply_layout_change(socket) do
+  defp apply_layout_change(socket, read) do
     canvases =
       for %{key: {:canvas, canvas_id}} <- Frames.list(socket.assigns.frames), do: canvas_id
 
-    socket = socket |> assign(:layout_changed, false) |> drop_shipped()
+    socket = socket |> assign(:layout_changed, false) |> drop_shipped(read.document)
     Enum.reduce(canvases, socket, &forget_refusal(&2, &1, :ungranted))
   end
 
-  # The shipped canvas's frame is discarded, so the canvas the layout names
-  # opens in its place.
-  defp drop_shipped(%{assigns: %{shipped: nil}} = socket), do: socket
+  # The shipped canvas's frame is discarded when the layout now names
+  # another tincture for its canvas, or drops the canvas, so the canvas the
+  # layout names opens in its place.
+  defp drop_shipped(%{assigns: %{shipped: nil}} = socket, _document), do: socket
 
-  defp drop_shipped(%{assigns: %{shipped: canvas_id, context: ctx}} = socket) do
-    socket
-    |> assign(:shipped, nil)
-    |> frames(&Frames.discard(ctx, &1, {:canvas, canvas_id}))
+  defp drop_shipped(%{assigns: %{shipped: canvas_id, context: ctx}} = socket, document) do
+    if canvas_tincture(socket.assigns.document, canvas_id) ==
+         canvas_tincture(document, canvas_id) do
+      socket
+    else
+      socket
+      |> assign(:shipped, nil)
+      |> frames(&Frames.discard(ctx, &1, {:canvas, canvas_id}))
+    end
+  end
+
+  defp canvas_tincture(nil, _canvas_id), do: nil
+
+  defp canvas_tincture(%Prima.Layout{canvases: canvases}, canvas_id) do
+    case Enum.find(canvases, &(&1.id == canvas_id)) do
+      %{tincture: tincture} -> tincture
+      nil -> nil
+    end
   end
 
   # Every frame credential this view minted is revoked as it ends — the

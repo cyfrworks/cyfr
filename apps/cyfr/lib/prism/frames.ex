@@ -17,10 +17,8 @@ defmodule Prism.Frames do
     * `{:validation, id}` — the hidden, inert frame a candidate version of
       canvas `id` is trialled in (`open_validation/5`);
     * `{:app, canvas_id, ref}` — the tincture `ref` (versionless) opened over
-      canvas `canvas_id`, `full` (the whole screen while it is shown) or as a
-      `column` beside the canvas (`open_app/7`);
-    * `{:floating, canvas_id, ref}` — the tincture `ref` floating over canvas
-      `canvas_id`, which no layout places any longer, so none is opened;
+      canvas `canvas_id` where the layout places it (`open_app/5`,
+      `arrange/5`);
     * `{:full, tincture_id}` — a tincture launched from the picker
       (`launch/3`).
 
@@ -44,9 +42,8 @@ defmodule Prism.Frames do
   sandbox.
 
     * A canvas or validation frame opens only a version whose placement is
-      `canvas`, and an app, a floating or a launched frame never opens one;
-      a floating frame needs the placement `float`. Anything else is
-      refused `:undeclared`.
+      `canvas`, and an app or a launched frame never opens one. Anything
+      else is refused `:undeclared`.
     * One builder makes every canvas-placement frame, live or validation,
       so its address, its sandbox and its handshake have one definition.
       Its `src` is the canvas's page (`Prima.TinctureWire.page_path/2`)
@@ -68,15 +65,29 @@ defmodule Prism.Frames do
   remembers the actions its version declares (`actions`), which is what the
   shell reads before it honours a verb that needs one.
 
+  ## Placements
+
+  An app stands over its canvas as the layout places it (`Prima.Layout`):
+  a `{:window, geometry}`, a `{:tile, side, share}` or `:full`, at its
+  `stack` (the layout's `order`: the stacking order of windows, the
+  left-to-right order of tiles), and `minimised` or not. In the hand
+  posture every app stands `:full`, whatever the layout stores for it, in
+  stacking order. Moving, resizing, raising, minimising and restoring an
+  app (`place/3`, `resize/3`, `raise/2`, `minimise/2`, `restore/2`) and an
+  arrangement that places a held app anew keep its frame: its id, its
+  credential and its page stay. Only closing an app, or a layout that no
+  longer places it, discards its frame.
+
   ## The canvases and visibility
 
   The visible canvas is the value's (`visible_canvas/1`): the layout's first
   canvas at the first arrangement, kept across postures and switches, and
-  the first again when the layout drops it (`arrange/4`). With a `full`
-  frame active — a launch, or a `full` app of the visible canvas — it alone
-  is visible. Otherwise the visible canvas's frame, its `column` apps and
-  its floating frames are. Every other canvas and its apps and floating
-  frames are hidden, and a validation frame is never visible.
+  the first again when the layout drops it (`arrange/5`). The active frame
+  is a launch, or else the visible canvas's topmost `full` app that is not
+  minimised (`active/1`): it alone is visible. Otherwise the visible
+  canvas's frame and its windows and tiles that are not minimised are.
+  Every other canvas and its apps are hidden, a minimised app is hidden,
+  and a validation frame is never visible.
 
   A hidden frame without a declared `background` grant is frozen: its
   credential is suspended through Sanctum before the view signals it to
@@ -124,21 +135,22 @@ defmodule Prism.Frames do
   each reaches a credential only through `Sanctum.TinctureAuth`.
   """
 
+  # `raise/2` raises an app over its canvas; the exception is `Kernel.raise/2`.
+  import Kernel, except: [raise: 2]
+
   require Logger
 
   alias Sanctum.Context
   alias Sanctum.TinctureAuth
 
-  @typedoc "A floating position: `x` and `y` in hundredths of a percent of the viewport."
-  @type position :: %{x: non_neg_integer(), y: non_neg_integer()}
+  @typedoc "Where an app stands over its canvas."
+  @type app_placement ::
+          :full
+          | {:window, Prima.Layout.geometry()}
+          | {:tile, Prima.Layout.side(), pos_integer()}
 
   @typedoc "Where a frame sits."
-  @type placement ::
-          :canvas
-          | :validation
-          | :full
-          | {:column, non_neg_integer()}
-          | {:floating, position()}
+  @type placement :: :canvas | :validation | app_placement()
 
   @typedoc "A versionless tincture reference, as the layout names one."
   @type ref :: String.t()
@@ -148,7 +160,6 @@ defmodule Prism.Frames do
           {:canvas, String.t()}
           | {:validation, String.t()}
           | {:app, String.t(), ref()}
-          | {:floating, String.t(), ref()}
           | {:full, String.t()}
 
   @typedoc "A frame's state."
@@ -194,10 +205,11 @@ defmodule Prism.Frames do
           bearer: String.t() | nil,
           deadline: DateTime.t() | nil,
           placement: placement(),
+          stack: non_neg_integer(),
+          minimised: boolean(),
           visible: boolean(),
           background: boolean(),
           actions: [String.t()],
-          arranged: boolean(),
           canvas: canvas() | nil
         }
 
@@ -236,6 +248,7 @@ defmodule Prism.Frames do
           minted: [String.t()],
           dropped: non_neg_integer(),
           canvas: String.t() | nil,
+          posture: Prima.Layout.posture_name(),
           replacements: [replacement()]
         }
 
@@ -245,6 +258,7 @@ defmodule Prism.Frames do
             minted: [],
             dropped: 0,
             canvas: nil,
+            posture: "desk",
             replacements: []
 
   # ============================================================================
@@ -269,18 +283,32 @@ defmodule Prism.Frames do
   def visible_canvas(%__MODULE__{canvas: canvas}), do: canvas
 
   @doc """
-  The active `full` frame, shown above everything: a launch, or a `full`
-  app of the visible canvas. An app of another canvas is never active.
+  The active `full` frame, shown above everything: a launch, or else the
+  visible canvas's topmost `full` app that is not minimised. An app of
+  another canvas is never active.
   """
   @spec active(t()) :: frame() | nil
-  def active(%__MODULE__{active: nil}), do: nil
+  def active(%__MODULE__{} = t) do
+    case t.active && get(t, t.active) do
+      %{} = launch ->
+        launch
 
-  def active(%__MODULE__{active: key} = t) do
-    case get(t, key) do
-      nil -> nil
-      frame -> if shows_full?(t, frame), do: frame, else: nil
+      _none ->
+        t
+        |> list()
+        |> Enum.filter(&full_app?(t, &1))
+        |> Enum.max_by(& &1.stack, fn -> nil end)
     end
   end
+
+  defp full_app?(t, %{key: {:app, id, _}, placement: :full, minimised: false}),
+    do: id == t.canvas
+
+  defp full_app?(_t, _frame), do: false
+
+  @doc "The posture the value arranges for, `desk` or `hand`."
+  @spec posture(t()) :: Prima.Layout.posture_name()
+  def posture(%__MODULE__{posture: posture}), do: posture
 
   @doc "The card id of the active `full` frame's tincture, or nil."
   @spec active_tincture(t()) :: String.t() | nil
@@ -323,7 +351,7 @@ defmodule Prism.Frames do
   @doc "The canvas a key belongs to, or nil for a launch."
   @spec canvas_of(key()) :: String.t() | nil
   def canvas_of({kind, id}) when kind in [:canvas, :validation], do: id
-  def canvas_of({kind, id, _ref}) when kind in [:app, :floating], do: id
+  def canvas_of({:app, id, _ref}), do: id
   def canvas_of({:full, _tincture_id}), do: nil
 
   @doc "Whether the live frame `frame` declares the action `operation` (`tool.action`)."
@@ -414,28 +442,32 @@ defmodule Prism.Frames do
 
   @doc """
   The frames the layout places over the canvas `arranged` (one canvas of
-  `Compendium.layout/2`'s arrangement), each with its key, its placement
-  and the card it opens: every app the layout shows as a column
-  (`layout_mode/1`) whose tincture is installed, in order. A `full` app
-  opens only when it is asked for.
+  `Compendium.layout/2`'s arrangement) in `posture`, each with its key,
+  its placement, its stack, whether it is minimised and the card it
+  opens: every app whose tincture is installed, in the layout's order. In
+  the hand every app is `:full`.
   """
-  @spec placements(Prima.Layout.arranged(), [card()]) :: [{key(), placement(), card()}]
-  def placements(%{id: canvas_id, apps: apps}, cards) do
-    for %{tincture: ref, order: order, minimised: false} = app <- apps,
-        layout_mode(app) == :column,
+  @spec placements(Prima.Layout.arranged(), [card()], Prima.Layout.posture_name()) :: [
+          {key(), app_placement(), non_neg_integer(), boolean(), card()}
+        ]
+  def placements(%{id: canvas_id, apps: apps}, cards, posture) do
+    for %{tincture: ref, order: order, minimised: minimised} = app <- apps,
         card = resolve(ref, cards),
-        do: {{:app, canvas_id, ref}, {:column, order}, card}
+        do: {{:app, canvas_id, ref}, app_placement(app, posture), order, minimised, card}
   end
 
   @doc """
-  How this shell shows a layout app: a `window` or a `tile` as a column
-  at its order, a `full` app full.
+  The placement a layout app stands in for `posture`: in the hand, `:full`
+  whatever the layout stores; on the desk, its window, its tile or full.
   """
-  # A stopgap until S2 of the desktop plan draws windows and tiles: layout
-  # version 3's placements on today's column and full rendering.
-  @spec layout_mode(Prima.Layout.app()) :: :full | :column
-  def layout_mode(%{placement: :full}), do: :full
-  def layout_mode(%{placement: placement}) when placement in [:window, :tile], do: :column
+  @spec app_placement(Prima.Layout.app(), Prima.Layout.posture_name()) :: app_placement()
+  def app_placement(_app, "hand"), do: :full
+  def app_placement(%{placement: :window, geometry: geometry}, _desk), do: {:window, geometry}
+
+  def app_placement(%{placement: :tile, side: side, share: share}, _desk),
+    do: {:tile, side, share}
+
+  def app_placement(%{placement: :full}, _desk), do: :full
 
   # ============================================================================
   # Pure: attribution and the handshake
@@ -514,64 +546,119 @@ defmodule Prism.Frames do
   @spec put(t(), frame()) :: t()
   def put(%__MODULE__{}, %{key: {kind, _id}}) when kind in [:canvas, :validation],
     do:
-      raise(ArgumentError, "a canvas or validation frame is made only by Prism.Frames' open path")
+      Kernel.raise(
+        ArgumentError,
+        "a canvas or validation frame is made only by Prism.Frames' open path"
+      )
 
   def put(%__MODULE__{} = t, %{key: _key} = frame), do: hold(t, frame)
 
   @doc """
-  Forget the frame under `key`. When it was the active `full` frame, the
-  first `full` frame still held that the visible canvas may show becomes
-  active.
+  Forget the frame under `key`. When it was the active launch, the latest
+  launch still held becomes active.
   """
   @spec forget(t(), key()) :: t()
   def forget(%__MODULE__{} = t, key) do
     t = %{t | frames: Map.delete(t.frames, key), order: List.delete(t.order, key)}
 
     if t.active == key,
-      do: %{t | active: Enum.find(t.order, &shows_full?(t, get(t, &1)))},
+      do: %{t | active: t.order |> Enum.filter(&match?({:full, _}, &1)) |> List.last()},
       else: t
   end
 
   @doc """
-  Make the `full` frame under `key` the active one: a launch, or a `full`
-  app. Any other key changes nothing.
+  Make the launch under `key` the active frame. Any other key changes
+  nothing: an app is active by its placement and stack (`active/1`).
   """
   @spec activate(t(), key()) :: t()
-  def activate(%__MODULE__{} = t, key) do
-    case get(t, key) do
-      %{placement: :full} -> %{t | active: key}
-      _other -> t
-    end
+  def activate(%__MODULE__{} = t, {:full, _} = key) do
+    if get(t, key), do: %{t | active: key}, else: t
   end
 
-  @doc """
-  Move a floating frame to a layout position, or a column app to its
-  order. Only those move, and only to a placement of their own kind.
-  """
-  @spec place(t(), key(), placement()) :: t()
-  def place(%__MODULE__{} = t, {:floating, _, _} = key, {:floating, _} = placement),
-    do: move(t, key, placement)
+  def activate(%__MODULE__{} = t, _key), do: t
 
-  def place(%__MODULE__{} = t, {:app, _, _} = key, {:column, _} = placement) do
-    case get(t, key) do
-      %{placement: {:column, _}} -> move(t, key, placement)
-      _other -> t
-    end
+  @doc """
+  Stand the app under `key` at `placement`, a window, a tile or full,
+  keeping its frame. Any other key, or a frame not held, changes nothing.
+  """
+  @spec place(t(), key(), app_placement()) :: t()
+  def place(%__MODULE__{} = t, {:app, _, _} = key, placement) do
+    if app_placement?(placement),
+      do: transition(t, key, &%{&1 | placement: placement}),
+      else: t
   end
 
   def place(%__MODULE__{} = t, _key, _placement), do: t
 
-  defp move(t, key, placement) do
-    case get(t, key) do
-      nil -> t
-      frame -> put_frame(t, key, %{frame | placement: placement})
-    end
+  @doc """
+  Resize the app under `key`, keeping its frame: a window to `geometry`,
+  a tile to a `share` of the width. A size of the other kind, or an app
+  that is full, changes nothing.
+  """
+  @spec resize(t(), key(), Prima.Layout.geometry() | pos_integer()) :: t()
+  def resize(%__MODULE__{} = t, {:app, _, _} = key, size) do
+    transition(t, key, fn
+      %{placement: {:window, _}} = frame when is_map(size) ->
+        %{frame | placement: {:window, size}}
+
+      %{placement: {:tile, side, _}} = frame when is_integer(size) ->
+        %{frame | placement: {:tile, side, size}}
+
+      frame ->
+        frame
+    end)
   end
 
+  def resize(%__MODULE__{} = t, _key, _size), do: t
+
   @doc """
-  Each frame's visibility: with a `full` frame active, it alone is
-  visible; with none, the visible canvas's frame, its `column` apps and
-  its floating frames are. A validation frame is never visible.
+  Raise the app under `key` above every other app of its canvas, keeping
+  its frame. Raising the topmost app changes nothing.
+  """
+  @spec raise(t(), key()) :: t()
+  def raise(%__MODULE__{} = t, {:app, canvas_id, _} = key) do
+    others =
+      for %{key: {:app, ^canvas_id, _} = other, stack: stack} <- list(t), other != key, do: stack
+
+    transition(t, key, fn frame ->
+      case others do
+        [] ->
+          frame
+
+        _ ->
+          if frame.stack > Enum.max(others),
+            do: frame,
+            else: %{frame | stack: Enum.max(others) + 1}
+      end
+    end)
+  end
+
+  def raise(%__MODULE__{} = t, _key), do: t
+
+  @doc "Minimise the app under `key`, keeping its frame and its placement."
+  @spec minimise(t(), key()) :: t()
+  def minimise(t, {:app, _, _} = key), do: transition(t, key, &%{&1 | minimised: true})
+  def minimise(t, _key), do: t
+
+  @doc "Show the minimised app under `key` again where it stood, raised."
+  @spec restore(t(), key()) :: t()
+  def restore(t, {:app, _, _} = key),
+    do: t |> transition(key, &%{&1 | minimised: false}) |> raise(key)
+
+  def restore(t, _key), do: t
+
+  defp app_placement?(:full), do: true
+  defp app_placement?({:window, %{x: _, y: _, w: _, h: _}}), do: true
+
+  defp app_placement?({:tile, side, share}) when side in [:left, :right] and is_integer(share),
+    do: true
+
+  defp app_placement?(_placement), do: false
+
+  @doc """
+  Each frame's visibility: with a frame active (`active/1`), it alone is
+  visible; with none, the visible canvas's frame and its windows and tiles
+  that are not minimised are. A validation frame is never visible.
   """
   @spec visibility(t()) :: t()
   def visibility(%__MODULE__{} = t) do
@@ -588,15 +675,11 @@ defmodule Prism.Frames do
   defp visible?(%{key: {:validation, _}}, _active, _canvas), do: false
   defp visible?(%{key: key}, %{key: active}, _canvas), do: key == active
   defp visible?(%{key: {:canvas, id}}, nil, canvas), do: id == canvas
-  defp visible?(%{key: {:app, id, _}, placement: {:column, _}}, nil, canvas), do: id == canvas
-  defp visible?(%{key: {:floating, id, _}}, nil, canvas), do: id == canvas
-  defp visible?(_full, nil, _canvas), do: false
+  defp visible?(%{key: {:app, _, _}, minimised: true}, nil, _canvas), do: false
+  defp visible?(%{key: {:app, id, _}, placement: {:window, _}}, nil, canvas), do: id == canvas
 
-  # A launch is shown whatever canvas is visible; a full app only over its
-  # own canvas.
-  defp shows_full?(_t, %{key: {:full, _}, placement: :full}), do: true
-  defp shows_full?(t, %{key: {:app, id, _}, placement: :full}), do: id == t.canvas
-  defp shows_full?(_t, _frame), do: false
+  defp visible?(%{key: {:app, id, _}, placement: {:tile, _, _}}, nil, canvas), do: id == canvas
+  defp visible?(_full, nil, _canvas), do: false
 
   @doc """
   The credential transitions visibility asks for, in frame order: a
@@ -678,39 +761,24 @@ defmodule Prism.Frames do
   @spec launch(Context.t(), t(), card()) :: t()
   def launch(%Context{} = ctx, %__MODULE__{} = t, card) do
     key = {:full, card.id}
-    t = open(ctx, t, key, card, :full, false)
+    t = open(t, ctx, key, card, :full, 0, false)
     settle(ctx, activate(t, key))
   end
 
   @doc """
-  Open `card` over canvas `canvas_id` as an app in `mode`, `:full` or
-  `:column` (at `order`), unless one is held under its key; a `full` app
-  is made the active frame. `arranged` says the layout placed it, so the
-  next arrangement may move or discard it. Visibility is settled.
+  Open `card` over canvas `canvas_id` as an app at `placement`, `stack`
+  and `minimised` (`:full` in the hand), unless one is held under its key;
+  a held one is stood there, keeping its frame. Visibility is settled.
   """
-  @spec open_app(
-          Context.t(),
-          t(),
-          String.t(),
-          card(),
-          :full | :column,
-          non_neg_integer(),
-          boolean()
-        ) :: t()
-  def open_app(
-        %Context{} = ctx,
-        %__MODULE__{} = t,
-        canvas_id,
-        card,
-        mode,
-        order,
-        arranged \\ false
-      )
-      when mode in [:full, :column] do
+  @spec open_app(Context.t(), t(), String.t(), card(), Prima.Layout.app()) :: t()
+  def open_app(%Context{} = ctx, %__MODULE__{} = t, canvas_id, card, app) do
     key = {:app, canvas_id, ref_of(card)}
-    placement = if mode == :full, do: :full, else: {:column, order}
-    t = open(ctx, t, key, card, placement, arranged)
-    settle(ctx, if(mode == :full, do: activate(t, key), else: t))
+    placement = app_placement(app, t.posture)
+
+    t
+    |> open(ctx, key, card, placement, app.order, app.minimised)
+    |> stand(key, placement, app.order, app.minimised)
+    |> then(&settle(ctx, &1))
   end
 
   @doc """
@@ -760,7 +828,7 @@ defmodule Prism.Frames do
     if Map.has_key?(t.frames, key) do
       t
     else
-      frame = %{base_frame(key, new_frame_id(), card, :canvas, false) | refusal: refusal}
+      frame = %{base_frame(key, new_frame_id(), card, :canvas) | refusal: refusal}
       t |> hold(frame) |> visibility()
     end
   end
@@ -798,17 +866,26 @@ defmodule Prism.Frames do
       its validation frame included, so nothing is activated for it;
     * the visible canvas stays visible while the arrangement has it, and is
       the arrangement's first otherwise, or none for an empty layout;
-    * of the visible canvas's frames the layout placed (`placements/2`),
-      one it no longer places, or places in another kind, is discarded; one
-      it places anew is opened; a floating frame moves to its layout
-      position and a column to its order.
+    * of the visible canvas's apps (`placements/3`), one the layout no
+      longer places, or places for another tincture, is discarded; one it
+      places is stood at its placement, stack and minimised as the layout
+      says, keeping its frame; one it places anew is opened, unless it is
+      minimised, which opens only when it is restored.
 
-  Apps and floating frames opened on the canvas's own ask, and the frames
-  of hidden canvases, are left as they are. Visibility is settled.
+  The frames of hidden canvases are left as they are. Visibility is
+  settled. Arranging twice for one arrangement changes nothing the second
+  time.
   """
-  @spec arrange(Context.t(), t(), [Prima.Layout.arranged()], [card()]) :: t()
-  def arrange(%Context{} = ctx, %__MODULE__{} = t, arrangement, cards)
-      when is_list(arrangement) do
+  @spec arrange(
+          Context.t(),
+          t(),
+          [Prima.Layout.arranged()],
+          [card()],
+          Prima.Layout.posture_name()
+        ) :: t()
+  def arrange(%Context{} = ctx, %__MODULE__{} = t, arrangement, cards, posture)
+      when is_list(arrangement) and posture in ["desk", "hand"] do
+    t = %{t | posture: posture}
     ids = MapSet.new(arrangement, & &1.id)
 
     gone =
@@ -832,15 +909,15 @@ defmodule Prism.Frames do
 
   @doc """
   Show canvas `canvas_id` of `arrangement`: it becomes the visible canvas,
-  the frames the layout places over it are held (`arrange/4`), and every
-  other canvas and its apps and floating frames are hidden — frozen,
-  apps with a background grant excepted. A canvas the arrangement does
-  not have changes nothing.
+  the frames the layout places over it are held (`arrange/5`, in the
+  value's posture), and every other canvas and its apps are hidden —
+  frozen, apps with a background grant excepted. A canvas the
+  arrangement does not have changes nothing.
   """
   @spec show(Context.t(), t(), String.t(), [Prima.Layout.arranged()], [card()]) :: t()
   def show(%Context{} = ctx, %__MODULE__{} = t, canvas_id, arrangement, cards) do
     if Enum.any?(arrangement, &(&1.id == canvas_id)),
-      do: arrange(ctx, %{t | canvas: canvas_id}, arrangement, cards),
+      do: arrange(ctx, %{t | canvas: canvas_id}, arrangement, cards, t.posture),
       else: t
   end
 
@@ -856,39 +933,30 @@ defmodule Prism.Frames do
   end
 
   defp arrange_canvas(ctx, t, canvas, cards) do
-    placed = placements(canvas, cards)
-    wanted = Map.new(placed, fn {key, placement, card} -> {key, {placement, card.id}} end)
+    placed = placements(canvas, cards, t.posture)
+    wanted = Map.new(placed, fn {key, _placement, _stack, _minimised, card} -> {key, card.id} end)
 
     stale =
-      for %{key: key, arranged: true, placement: placement, tincture_id: tincture_id} <- list(t),
-          canvas_of(key) == canvas.id,
-          not same_kind?(Map.get(wanted, key), placement, tincture_id),
+      for %{key: {:app, id, _} = key, tincture_id: tincture_id} <- list(t),
+          id == canvas.id,
+          Map.get(wanted, key) != tincture_id,
           do: key
 
     t = Enum.reduce(stale, t, &drop(ctx, &2, &1))
 
-    Enum.reduce(placed, t, fn {key, placement, card}, t ->
-      case get(t, key) do
-        nil ->
-          open(ctx, t, key, card, placement, true)
-
-        %{placement: held} = frame ->
-          if same_kind?({placement, card.id}, held, frame.tincture_id) do
-            put_frame(t, key, %{frame | placement: placement, arranged: true})
-          else
-            open(ctx, drop(ctx, t, key), key, card, placement, true)
-          end
+    Enum.reduce(placed, t, fn {key, placement, stack, minimised, card}, t ->
+      cond do
+        get(t, key) -> stand(t, key, placement, stack, minimised)
+        minimised -> t
+        true -> open(t, ctx, key, card, placement, stack, minimised)
       end
     end)
   end
 
-  defp same_kind?(nil, _held, _tincture_id), do: false
-
-  defp same_kind?({placement, tincture_id}, held, held_tincture),
-    do: kind(placement) == kind(held) and tincture_id == held_tincture
-
-  defp kind({kind, _}), do: kind
-  defp kind(kind), do: kind
+  # The held app under `key` stood where the layout places it: its frame,
+  # id and credential kept.
+  defp stand(t, key, placement, stack, minimised),
+    do: transition(t, key, &%{&1 | placement: placement, stack: stack, minimised: minimised})
 
   @doc """
   Discard every frame whose tincture `cards` no longer lists, and settle
@@ -1084,11 +1152,11 @@ defmodule Prism.Frames do
 
   # Open a frame of `card` under `key` at `placement`, unless one is held
   # under it. Visibility is not settled here.
-  defp open(ctx, %__MODULE__{} = t, key, card, placement, arranged) do
+  defp open(%__MODULE__{} = t, ctx, key, card, placement, stack, minimised) do
     if Map.has_key?(t.frames, key) do
       t
     else
-      frame = open_frame(ctx, key, card, placement, arranged)
+      frame = open_frame(ctx, key, card, placement, stack, minimised)
       t |> hold(frame) |> remember_mint(frame)
     end
   end
@@ -1124,7 +1192,7 @@ defmodule Prism.Frames do
     end
   end
 
-  defp base_frame(key, frame_id, card, placement, arranged) do
+  defp base_frame(key, frame_id, card, placement, stack \\ 0, minimised \\ false) do
     %{
       key: key,
       id: frame_id,
@@ -1139,19 +1207,20 @@ defmodule Prism.Frames do
       bearer: nil,
       deadline: nil,
       placement: placement,
+      stack: stack,
+      minimised: minimised,
       visible: false,
       background: false,
       actions: [],
-      arranged: arranged,
       canvas: nil
     }
   end
 
   # One open of a frame that is not a canvas's: the declaration, the
   # attributes it derives, the page's address and the frame's credential.
-  defp open_frame(ctx, key, card, placement, arranged) do
+  defp open_frame(ctx, key, card, placement, stack, minimised) do
     frame_id = new_frame_id()
-    base = base_frame(key, frame_id, card, placement, arranged)
+    base = base_frame(key, frame_id, card, placement, stack, minimised)
 
     with {:ok, declaration} <- Compendium.tincture_declaration(card.manifest),
          :ok <- placed_as_declared(declaration, key),
@@ -1185,7 +1254,7 @@ defmodule Prism.Frames do
   # declaration. Only `mint` differs between the two.
   defp canvas_frame(ctx, {kind, _id} = key, card, mode, mint) do
     frame_id = new_frame_id()
-    base = base_frame(key, frame_id, card, kind, false)
+    base = base_frame(key, frame_id, card, kind)
 
     with {:ok, declaration} <- Compendium.tincture_declaration(card.manifest),
          :ok <- placed_as_declared(declaration, key),
@@ -1214,8 +1283,7 @@ defmodule Prism.Frames do
     end
   end
 
-  # A canvas frame opens only a canvas, and nothing else opens one; a
-  # floating frame opens only a tincture that declares `float`.
+  # A canvas frame opens only a canvas, and nothing else opens one.
   defp placed_as_declared(%{frame: %{placement: "canvas"}}, {kind, _id})
        when kind in [:canvas, :validation],
        do: :ok
@@ -1225,11 +1293,6 @@ defmodule Prism.Frames do
 
   defp placed_as_declared(%{frame: %{placement: "canvas"}}, _key),
     do: {:error, {:placement, "not canvas"}}
-
-  defp placed_as_declared(%{frame: %{placement: "float"}}, {:floating, _id, _ref}), do: :ok
-
-  defp placed_as_declared(_declaration, {:floating, _id, _ref}),
-    do: {:error, {:placement, "float"}}
 
   defp placed_as_declared(_declaration, _key), do: :ok
 

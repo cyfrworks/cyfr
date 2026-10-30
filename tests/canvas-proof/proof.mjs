@@ -646,13 +646,14 @@ async function diagnose(page) {
 const posture = (apps = []) => ({ desk: { apps }, hand: { apps } });
 
 // The proof's layout: the shipped canvas `start` (canvas-full as its full
-// app), markets (canvas-full as a window on the desk, which the shell shows
-// as a column, the sibling the activation step records a click in; in the
-// hand a column is laid over the whole canvas, so markets has none there),
-// the probe (canvas-full as its full app), canvas-broken, and any canvas a
-// step adds or puts in another's place.
+// app, minimised, so it opens when the canvas asks for it), markets
+// (canvas-full as a window on the desk, the sibling the activation step
+// records a click in; in the hand every app is full over the whole canvas,
+// so markets has none there), the probe (canvas-full as its full app,
+// minimised), canvas-broken, and any canvas a step adds or puts in
+// another's place.
 function layout(extra = [], { without = [] } = {}) {
-  const full = [{ tincture: "tincture:local.canvas-full", placement: "full", order: 0, minimised: false }];
+  const full = [{ tincture: "tincture:local.canvas-full", placement: "full", order: 0, minimised: true }];
   const window = [{
     tincture: "tincture:local.canvas-full", placement: "window", order: 0, minimised: false,
     geometry: { x: 5000, y: 0, w: 5000, h: 10000 },
@@ -1107,9 +1108,9 @@ async function stepActivation(page, name) {
   const several = classify(await handled(page, mark, shown.id, "press", 3));
 
   // The residual cases, recorded per browser, no drop asserted. A click
-  // elsewhere (the markets switcher button, in the shell; the sibling column
+  // elsewhere (the markets switcher button, in the shell; the sibling window
   // frame), then the canvas focuses itself and presses from a timer.
-  const siblingBox = await page.$('[data-canvas-place="column"][data-canvas-shown="true"] iframe')
+  const siblingBox = await page.$('[data-canvas-place="window"][data-canvas-shown="true"] iframe')
     .then((el) => el && el.boundingBox()).catch(() => null);
   const switcherBox = await page.$('#canvas-switcher button[data-canvas="markets"]').then((el) => el && el.boundingBox()).catch(() => null);
   const recorded = {};
