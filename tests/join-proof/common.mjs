@@ -27,7 +27,8 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ask as askRunSh, instrumentDevice, readCode, readHomes, redact as redactKnown, saveCode, sleep, waitFor,
+  admit, ask as askRunSh, instrumentDevice, readCode, readHomes, redact as redactKnown, saveAdmissionCode, saveCode,
+  sleep, waitFor,
 } from "../browser/lib.mjs";
 export { instrumentDevice, sleep, waitFor };
 
@@ -48,6 +49,8 @@ export const H = homeNamed("h").origin;
 export const A2 = homeNamed("a2").origin;
 export const HOMES = homes.map((home) => home.host);
 export const layer = "#system-layer-dialog";
+// The name the person types on A's first setup screen.
+const NAME = "join-a";
 
 export const rows = [];
 export const record = {};
@@ -402,30 +405,28 @@ export async function signInAtHub(page, { home = A, cookie = null, glass = null 
 // ---------------------------------------------------------------------------
 
 export async function setUpHome(chromium, proxy) {
-  const { cookie, segment } = await ask({ op: "a_cookie" }, { secret: true });
-  secrets.push(cookie);
   const deskContext = await freshContext(chromium);
-  await addSession(deskContext, A, cookie);
   const desk = await deskContext.newPage();
   await authenticatorWith(desk);
+
+  // A's first person, through A's two setup screens: the name typed and
+  // free at the stand-in, a passkey made, the identity registered at
+  // dir.test and the name claimed, and the recovery code read and saved,
+  // which signs the browser in.
+  const { token } = await ask({ op: "setup_token" }, { secret: true });
+  secrets.push(token);
+  await desk.goto(`${A}/setup#${token}`);
+  await connected(desk);
+  const { recovery: code1 } = await admit(desk, NAME, secrets, { before: () => ready(desk) });
+  await saveAdmissionCode(desk);
+  await counted();
+  const person = await ask({ op: "a_person" });
+  const { segment } = person;
   const settings = `${A}/a/${encodeURIComponent(segment)}/settings`;
 
-  // The first passkey at A, then enrollment and a second recovery code.
+  // A second recovery code, approved by the first.
   await open(desk, settings);
-  await desk.locator('[data-test="passkey-register"]').click();
-  await flashed(desk, "Passkey registered.");
-  await counted();
-  await open(desk, settings);
-  await desk.locator('[data-test="identity-enroll"]').click();
-  await desk.waitForSelector(`${layer} [data-test="recovery"][data-kind="enrollment"]`, { timeout: 30_000 });
-  await desk.locator(`${layer} [data-test="recovery-submit"]`).click();
-  await confirmHere(desk);
-  const code1 = await readCode(desk, secrets);
-  await saveCode(desk);
-  await desk.waitForSelector('[data-test="identity"][data-enrollment="enrolled"]', { timeout: 30_000 });
-
-  await open(desk, settings);
-  await desk.locator('[data-test="identity-add-kit"]').click();
+  await desk.locator('[data-test="identity-add-code"]').click();
   await desk.waitForSelector(`${layer} [data-test="recovery"][data-kind="holder"]`, { timeout: 30_000 });
   await desk.locator(`${layer} [data-test="recovery-signer"]`).fill(code1.code);
   await desk.locator(`${layer} [data-test="recovery-submit"]`).click();
@@ -455,15 +456,17 @@ export async function setUpHome(chromium, proxy) {
 
   const head = await ask({ op: "a_head" });
   record.home = {
-    identifier: code1.identifier, same_identifier: code2.identifier === code1.identifier,
+    people: person.people, admission: person.admission, identifier: code1.identifier, a_identifier: head.identifier,
+    same_identifier: code2.identifier === code1.identifier,
     distinct_codes: code2.secret !== code1.secret, enrollment: head.enrollment,
     a_credentials: (await credentialsFor(desk, new URL(A).host)).length,
     glass: (await storedDevice(glass)).device?.certificate?.subject?.kind,
   };
   const held = row("home", "chromium",
-    head.enrollment === "enrolled" && record.home.same_identifier && record.home.distinct_codes &&
+    person.people === 1 && person.admission === "setup" && head.enrollment === "enrolled" &&
+      code1.identifier === head.identifier && record.home.same_identifier && record.home.distinct_codes &&
       record.home.a_credentials === 1 && record.home.glass === "local",
-    "the person enrolls at A with a passkey, adds a second recovery code (person/recovery_code_add), and pairs a glass there",
+    `the person is set up at A through its two screens as @${NAME} with a passkey, registered at dir.test, adds a second recovery code (person/recovery_code_add), and pairs a glass there`,
     record.home);
   return { held, desk, deskContext, segment, settings, glass, code1, code2, identifier: code1.identifier };
 }

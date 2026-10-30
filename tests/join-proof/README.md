@@ -13,19 +13,22 @@ environment, so its cookie, CORS and frame settings are production's:
 |---|---|---|
 | the person's directory | `dir.test` | `CYFR_DIRECTORY_SERVE=writer` |
 | the hub's directory | `dir2.test` | `CYFR_DIRECTORY_SERVE=writer`: a second, independently configured directory |
-| A | `a.test` | the person's home; enrolls at `dir.test`; `device_cert_seconds` short (40, `JOIN_PROOF_CERT_SECONDS`), so a phone renews there while the proof runs |
-| H | `h.test` | the hub; enrolls its own people at `dir2.test`; `CYFR_IDENTITY_FRESHNESS_SECONDS` short (20, `JOIN_PROOF_FRESHNESS`) |
+| A | `a.test` | the person's home; enrolls at `dir.test`; a `CYFR_SETUP_TOKEN` of the run's own, under which the person is set up in the browser; `device_cert_seconds` short (40, `JOIN_PROOF_CERT_SECONDS`), so a phone renews there while the proof runs |
+| H | `h.test` | the hub; enrolls its own people at `dir2.test`; `CYFR_IDENTITY_FRESHNESS_SECONDS` short (20, `JOIN_PROOF_FRESHNESS`); its operator is the release fixture's first person (`tests/release-boot/fixture.exs` `person`) |
 | A2 | `a2.test` | empty, with a `CYFR_RESTORE_TOKEN` of its own: where the person restores once A is lost, from `dir.test`, the directory it is configured with |
+| the cyfr.run stand-in | `127.77.0.4`, a port it picks | `tests/registry-stand-in/standin.py --directory https://dir.test`: the `CYFR_REGISTRY_URL` of A, H and A2, its address in each one's `CYFR_PRIVATE_EGRESS_TARGETS`; the person's name is registered there, naming `dir.test` as its directory |
 
 The cells reach both directories through the identity proof's fronts
 (`tests/identity-proof/front.sh` and `cells.sh`, one front per
 directory, on `127.77.0.1` and `127.77.0.2`); every cell can resolve
-either name, and each enrolls at its own. No DNS, `/etc/hosts`, trust
-store or other configuration outside the scratch directory is read or
-changed. Everything the run starts, the cells' servers, the fronts and the
-Playwright container, and the scratch directory, with the run's
-authority key, every token, cookie and recovery code, is removed when it
-ends, whether it succeeds or fails.
+either name, and each enrolls at its own. The homes reach the stand-in
+by its address over plain HTTP, and nothing of the run reaches cyfr.run.
+No DNS, `/etc/hosts`, trust store or other configuration outside the
+scratch directory is read or changed. Everything the run starts, the
+cells' servers, the stand-in, the fronts and the Playwright container,
+and the scratch directory, with the run's authority key, the stand-in's
+state, every token, cookie and recovery code, is removed when it ends,
+whether it succeeds or fails.
 
 ## Browsers
 
@@ -36,10 +39,12 @@ the authenticators of the person's browsers as a synced passkey is, its
 counter carried along so no home sees it fall. Firefox and WebKit offer
 Playwright no virtual authenticator, so they run the sign-in at H, the
 carry between the homes and a second fresh profile: they are signed in at
-A by the release fixture's door, after the carry's fragment has reached
-A's sign-in page, and each fresh confirmation the carry needs at A is
-given on a glass paired at A in Chromium, which reads the pending
-request from A's record and confirms it with the person's passkey. Each
+A by the release fixture's door, a GitHub identity the run links to the
+person once they are set up (`fixture.exs` `door`), after the carry's
+fragment has reached A's sign-in page, and each fresh confirmation the
+carry needs at A is given on a glass paired at A in Chromium, which reads
+the pending request from A's record and confirms it with the person's
+passkey. Each
 browser's requests between the homes are held to `cross-site` in its own
 `cross_site` row; every other step is recorded as Chromium only.
 `JOIN_PROOF_BROWSERS` names the browsers a run takes, all three unless set;
@@ -58,7 +63,7 @@ recovery code or a confirmation's secret is deleted once read.
 
 | Step | What holds |
 |---|---|
-| `home` | the person enrolls at A from the settings page with a passkey, adds a second recovery code (`person/recovery_code_add`), approved by the first, and pairs a glass at A |
+| `home` | the person is set up at A through `/setup`'s two screens: `@join-a` typed and found free at the stand-in, a passkey made, the identity registered at `dir.test` and the name claimed, the recovery code read and saved, and A holds that one person, admitted by setup and enrolled under the code's identifier; then they add a second recovery code (`person/recovery_code_add`), approved by the first, and pair a glass at A |
 | `hub` | H, enrolling its own people at `dir2.test`, allows the person's identifier at its door and invites it to a group athanor and a pair athanor |
 | `sign_in` | a fresh profile with no saved homes opens H by its address and names A; A's `/carry` is reached through A's sign-in with the carry's fragment kept, the person begins there, both homes show the same code, A's confirmation names it, and H admits once, making them a member of both athanors; every cross-home request is `cross-site`; neither origin's storage holds a list of homes |
 | `resolution` | H read the person at `dir.test`, which their genesis names, and nothing of them at its own `dir2.test`; neither home's database has a table of visited homes |
