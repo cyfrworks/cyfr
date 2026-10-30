@@ -1842,7 +1842,7 @@ defmodule Arca.SecurityTransitionsTest do
     test "a leave that retires a remote person revokes the shares of their own athanor; " <>
            "an ordinary leave revokes none" do
       terry = Arca.Test.Shares.owner!()
-      {share, _alice, _profile} = shared!(terry)
+      {share, alice, profile} = shared!(terry)
       traders = group!()
       seat!(traders.id, terry.user.id)
       peer = person!()
@@ -1872,6 +1872,23 @@ defmodule Arca.SecurityTransitionsTest do
       assert retired.dropped_head_identifier
       assert retired.revoked_share_ids == [share.id]
       assert share_status(terry, share) == "revoked"
+      assert Arca.Test.Shares.profile_status(alice.athanor.id, profile.id) == "needs_consent"
+
+      # The transition retires no person row: the person and their own
+      # athanor read as they did, so the rows alone carry no standing, and
+      # a creation the caller holds under its own check (`verify:`, where
+      # the standing is Sanctum's to establish) writes nothing.
+      assert %{status: "active", security_generation: 1} = user(terry.user.id)
+      assert %{status: "active"} = athanor(terry.athanor.id)
+      entry = Arca.Test.Shares.entry!(terry.actor)
+
+      assert {:error, :not_standing} =
+               Arca.Shares.create(terry.actor, %{entry_id: entry.id, audience: "everyone"},
+                 verify: fn -> {:error, :not_standing} end
+               )
+
+      assert {:ok, [%{id: only}]} = Arca.Shares.list(terry.actor)
+      assert only == share.id
     end
 
     test "a share created after a denial is refused, and a denial's failure keeps its shares" do
