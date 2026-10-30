@@ -2,8 +2,8 @@
 
 `run.sh` proves, on the browser harness (`tests/browser/`), that a handle
 at the registry names the person another CYFR allows, and that the person
-signs in there from their own CYFR: a person sets up their CYFR with a
-passkey and claims `@proof`, another CYFR allows `@proof`, and the person
+signs in there from their own CYFR: a person sets up their CYFR through
+its two setup screens as `@proof`, another CYFR allows `@proof`, and the person
 signs in at that CYFR by typing their own CYFR's address; and a ban at the
 registry retires the person's push token.
 
@@ -66,8 +66,8 @@ run's record.
 
 | Step | What holds |
 |---|---|
-| `setup` | A is set up through `/setup` with a passkey; `@proof` is chosen, which runs the enrollment at `registry.test`, confirmed with the passkey. With the recovery code shown and not yet saved, the directory holds the genesis, the enrollment attempt is accepted, and the registry holds no `@proof`, no acceptance and no nonce of the identifier; once the recovery code is saved the attempt completes (a transition from the attempt read before it) and the card claims the handle. A's person, passkey, identity, athanor and both seats (the athanor's and the first person's platform grant) are read whole |
-| `allow` | B, set up through `/setup` by its administrator, allows `@proof` in Settings; B's one allowlist entry names A's identifier, labelled `proof`; B's passkey, person, athanor and seats are its administrator's |
+| `setup` | A is set up through `/setup`'s two screens: `@proof` is typed on the first and found free at the registry, and a passkey is made, which admits the person and opens their enrollment; the second screen registers the identity at `registry.test` and claims `@proof` before it shows the recovery code. With the code shown and not yet saved, the directory holds A's genesis, the enrollment attempt is accepted, and the registry holds `@proof` owned by A's identifier, that identifier's acceptance of its policy, the nonces of its two signed requests and its read of A's log, and answers `@proof` with A's identifier and directory; "I saved it" completes the attempt (a transition from the attempt read before it) and lands in CYFR signed in, where Settings says "Your name is @proof.". A's person, passkey, identity, athanor and both seats (the athanor's and the first person's platform grant) are read whole |
+| `allow` | B, set up through `/setup`'s two screens by its administrator as `@proof-b`, allows `@proof` in Settings; B's one allowlist entry names A's identifier, labelled `proof`; B's passkey, person, athanor and seats are its administrator's |
 | `sign_in` | a fresh profile at B's sign-in page, "I run my own CYFR" with A's address, reaches A, signs in there with the passkey, begins the carry, sees B's code named in A's confirmation, and B admits the person as A's identifier, landing them on B's sign-in page as signed in with no athanor there; B's athanors and seats are still its administrator's alone, its sessions are its administrator's and the person's, and the person's session holds the token the browser's cookie carries |
 | `sync` | Sync push tokens at A, confirmed with the passkey, stores one push token for `@proof`, whose digest is the registry's token for it, made by A's identifier |
 | `ban` | the registry's operator bans `@proof`'s owner through the admin pages; the ban revokes the token in its transaction, the token presented to the registry is refused, A's next sync shows `banned`'s sentence and records no nonce; then every object read in the run is read again and held to what was read before |
