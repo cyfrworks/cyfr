@@ -293,6 +293,9 @@ answer_ask() {
       publish_layout "$(asked "$ask" document)"
       ANSWER="$LAYOUT_ANSWER"
       ;;
+    layout_read)
+      ANSWER="$(console layout/get '{}')"
+      ;;
     accept)
       ANSWER="$(accept_fixed "$(asked "$ask" feed)" "$(asked "$ask" data)")"
       ;;

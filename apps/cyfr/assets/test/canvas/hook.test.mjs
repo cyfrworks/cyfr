@@ -75,7 +75,7 @@ function container(place, shown, box) {
 // edge strip, and, as `hook`, the hook's own element inside it, which
 // carries the column list and holds nothing. Anything read of the layer
 // through the hook's element fails.
-function canvasElement({columns = [], frames = [], containers = [], id = "canvas"} = {}) {
+function canvasElement({frames = [], containers = [], id = "canvas"} = {}) {
   const style = {textContent: "", isConnected: true}
   const geometry = {appended: [], appendChild: (child) => geometry.appended.push(child)}
   const marker = {dataset: {canvasConnection: "connected"}, hidden: true}
@@ -110,7 +110,7 @@ function canvasElement({columns = [], frames = [], containers = [], id = "canvas
   layer.hook = {
     id: `${id}-hook`,
     parentElement: layer,
-    dataset: {columns: JSON.stringify(columns), posture: "desk"},
+    dataset: {posture: "desk"},
     ownerDocument,
     getBoundingClientRect: notTheLayer,
     querySelector: notTheLayer,
@@ -164,7 +164,7 @@ function pointer(type, {x, y, pointerId = 1, onStrip = true}) {
   event.clientX = x
   event.clientY = y
   Object.defineProperty(event, "target", {
-    value: {closest: (selector) => (onStrip && selector === "#canvas-edge-strip" ? strip : null)}
+    value: {closest: (selector) => (onStrip && selector === "#canvas-shelf" ? strip : null)}
   })
   return event
 }
@@ -209,13 +209,8 @@ describe("the hook's element", () => {
   test("the layer is read from the hook's parent, and pushes go from the hook's own element", () => {
     const frame = canvasFrame(FRAME)
     const seen = told(frame)
-    const layer = canvasElement({id: "layer-x", columns: [{frame: OTHER, order: 0}], frames: [frame]})
+    const layer = canvasElement({id: "layer-x", frames: [frame]})
     const {hook, pushed, pushedToView} = mountCanvas(layer)
-
-    // The stylesheet lives in the layer's geometry host, scoped by its id,
-    // and the columns are laid out in the layer's size.
-    assert.deepEqual(layer.geometry.appended, [layer.style])
-    assert.match(layer.style.textContent, new RegExp(`^#layer-x \\[data-canvas-column="${OTHER}"\\]\\{left:592px;`))
 
     // The layer's frames are told; the posture goes from the hook's element.
     assert.deepEqual(seen[0], {verb: "posture", args: {posture: "desk"}})
@@ -237,45 +232,15 @@ describe("the hook's element", () => {
   })
 })
 
-describe("the column layout", () => {
-  test("is written from the rendered column list into the canvas's own stylesheet", () => {
-    const el = canvasElement({columns: [{frame: FRAME, order: 0}]})
-    mountCanvas(el)
-    assert.match(el.style.textContent, new RegExp(`\\[data-canvas-column="${FRAME}"\\]\\{left:592px;top:12px;`))
-  })
-
-  test("the last list stays drawn while the socket is down, and follows the window", () => {
-    const el = canvasElement({columns: [{frame: FRAME, order: 0}]})
-    const {hook} = mountCanvas(el)
-    const desk = el.style.textContent
-
-    hook.disconnected()
-    assert.equal(el.marker.dataset.canvasConnection, "disconnected")
-    assert.equal(el.marker.hidden, false)
-
-    // A patch that no longer parses leaves the last list in place.
-    el.hook.dataset.columns = "not json"
-    hook.updated()
-    assert.equal(el.style.textContent, desk)
-
-    globalThis.window.innerWidth = 600
-    listeners.resize()
-    assert.match(el.style.textContent, new RegExp(FRAME))
-    assert.notEqual(el.style.textContent, desk)
-
-    hook.reconnected()
-    assert.equal(el.marker.dataset.canvasConnection, "connected")
-    assert.equal(el.marker.hidden, true)
-  })
-})
-
 describe("what a canvas frame is told", () => {
-  test("its posture and what the shown apps and floating frames cover of it, each when it changes", () => {
+  test("its posture and what the shown windows cover of it, each when it changes; a tile or a full app is never reported", () => {
     const frame = canvasFrame(FRAME, {x: 0, y: 40, width: 1000, height: 600})
     const seen = told(frame)
-    const column = container("column", true, {x: 700, y: 52, width: 288, height: 576})
-    const hidden = container("float", false, {x: 0, y: 40, width: 100, height: 100})
-    const el = canvasElement({frames: [frame], containers: [column, hidden]})
+    const column = container("window", true, {x: 700, y: 52, width: 288, height: 576})
+    const hidden = container("window", false, {x: 0, y: 40, width: 100, height: 100})
+    const tile = container("tile", true, {x: 0, y: 40, width: 200, height: 600})
+    const full = container("full", true, {x: 0, y: 0, width: 1000, height: 700})
+    const el = canvasElement({frames: [frame], containers: [column, hidden, tile, full]})
 
     const {hook} = mountCanvas(el)
     assert.deepEqual(seen, [
@@ -287,7 +252,7 @@ describe("what a canvas frame is told", () => {
     hook.updated()
     assert.equal(seen.length, 2)
 
-    // The column closed; the hand posture.
+    // The window closed; the hand posture.
     column.shown = false
     globalThis.window.innerWidth = 600
     listeners.resize()
@@ -329,7 +294,8 @@ describe("switching canvases", () => {
     assert.equal(press({key: "ArrowRight", ctrlKey: true, altKey: true}), true)
     assert.equal(press({key: "ArrowRight", ctrlKey: true, altKey: false}), false)
     assert.equal(press({key: "ArrowRight", ctrlKey: true, altKey: true, shiftKey: true}), false)
-    assert.equal(press({key: "ArrowUp", ctrlKey: true, altKey: true}), false)
+    // With no active app, ArrowUp is the canvas's key and asks nothing.
+    assert.equal(press({key: "ArrowUp", ctrlKey: true, altKey: true}), true)
 
     assert.deepEqual(pushedToView, [
       {event: "switch_canvas", payload: {direction: "previous"}},
@@ -341,7 +307,7 @@ describe("switching canvases", () => {
     assert.equal(pushedToView.length, 2)
   })
 
-  test("a horizontal swipe on the edge strip asks for the next canvas leftward and the previous rightward", () => {
+  test("a horizontal swipe on the shelf asks for the next canvas leftward and the previous rightward", () => {
     const el = canvasElement()
     const {hook, pushedToView} = mountCanvas(el)
 

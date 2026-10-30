@@ -1400,7 +1400,7 @@ defmodule PrismWeb.ShellCanvasTest do
       assert html =~ ~s(id="canvas-switcher")
       assert html =~ ~s(data-canvas="home")
       assert html =~ ~s(data-canvas="work")
-      assert html =~ ~s(id="canvas-edge-strip")
+      assert html =~ ~s(id="canvas-shelf")
 
       # The chord at the first canvas: no wrap.
       render_hook(view, "switch_canvas", %{"direction" => "previous"})
