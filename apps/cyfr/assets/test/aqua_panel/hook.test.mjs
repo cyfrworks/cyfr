@@ -152,6 +152,23 @@ describe("Escape", () => {
     assert.equal(prevented, true)
     assert.deepEqual(p.pushed, [{event: "close", payload: {}}])
   })
+
+  test("the page losing focus to a frame closes the thread's menu", () => {
+    const p = panel()
+    let hidden = 0
+    p.el.querySelector = (selector) => (selector === ":popover-open" ? {hidePopover: () => hidden++} : null)
+    windowListeners.blur()
+    assert.equal(hidden, 1)
+    p.hook.destroyed()
+    assert.equal(windowListeners.blur, undefined)
+  })
+
+  test("with the thread's menu open, closes the menu alone", () => {
+    const p = panel()
+    p.el.querySelector = (selector) => (selector === ":popover-open" ? {} : null)
+    p.fire("keydown", {key: "Escape", preventDefault: () => assert.fail("the menu's Escape is the browser's")})
+    assert.deepEqual(p.pushed, [])
+  })
 })
 
 describe("in the hand", () => {

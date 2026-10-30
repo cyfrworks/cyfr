@@ -377,6 +377,22 @@ defmodule PrismWeb.AquaPanelLive do
             </span>
           </span>
           <span class="flex-1"></span>
+          <%!-- The thread's model, soul or role and usage: the pane's menu,
+                which the browser opens and dismisses. --%>
+          <button
+            id="aqua-panel-more"
+            type="button"
+            popovertarget="aqua-panel-pane-menu"
+            aria-label="This thread's model and usage"
+            title="This thread's model and usage"
+            class="aqua-panel-ghost"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <circle cx="3" cy="8" r="1.4" />
+              <circle cx="8" cy="8" r="1.4" />
+              <circle cx="13" cy="8" r="1.4" />
+            </svg>
+          </button>
           <button
             id="aqua-panel-dock"
             type="button"

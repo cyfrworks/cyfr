@@ -55,12 +55,23 @@ export const AquaPanel = {
     // keys no binding of the panel's view hears.
     this.onKey = (event) => {
       if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return
+      // An open menu of the panel's takes its own Escape.
+      if (this.menuOpen()) return
       event.preventDefault()
       focusButton()
       this.pushEvent("close", {})
     }
 
+    // A press inside a frame is outside the page's sight, so the browser's
+    // own dismissal of the thread's menu never hears it; the page losing
+    // focus to the frame closes the menu instead.
+    this.onBlur = () => {
+      const menu = this.openMenu()
+      if (menu && typeof menu.hidePopover === "function") menu.hidePopover()
+    }
+
     window.addEventListener("resize", this.onResize)
+    window.addEventListener("blur", this.onBlur)
     this.el.addEventListener("keydown", this.onKey)
     this.el.addEventListener("pointerdown", this.onDown)
     this.el.addEventListener("pointermove", this.onMove)
@@ -76,6 +87,7 @@ export const AquaPanel = {
 
   destroyed() {
     window.removeEventListener("resize", this.onResize)
+    window.removeEventListener("blur", this.onBlur)
   },
 
   space() {
@@ -86,6 +98,14 @@ export const AquaPanel = {
 
   posture() {
     return postureFor(window.innerWidth)
+  },
+
+  openMenu() {
+    return typeof this.el.querySelector === "function" ? this.el.querySelector(":popover-open") : null
+  },
+
+  menuOpen() {
+    return this.openMenu() !== null
   },
 
   isDocked() {

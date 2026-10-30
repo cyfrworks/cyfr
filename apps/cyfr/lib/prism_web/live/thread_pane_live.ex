@@ -39,11 +39,13 @@ defmodule PrismWeb.ThreadPaneLive do
   (`PrismWeb.RoomFeed`), reads that room into each send as the turn's
   context (`Aqua.RoomExcerpt` — under the person's own membership, never
   kept), and offers to paste a line onto it (`thread.aloud`). The panel's
-  own header names AQUA and the thread, so there the pane draws no name,
-  soul, model control or thread label of its own: its status line appears
-  only while it has something to say (still being prepared, no assistant,
-  messages queued, standing answers, a turn being asked), and its message
-  box and Send take the panel's look.
+  own header names AQUA and the thread, so there the pane draws no name
+  or thread label of its own, and its model override, soul or role and
+  token counts sit in a menu (`<dom>-menu`, a popover the panel's header
+  opens). Its status line appears only while it has something to say
+  (still being prepared, no assistant, messages queued, standing answers,
+  a turn being asked), and its message box and Send take the panel's
+  look.
   """
 
   use PrismWeb, :live_view
@@ -1510,23 +1512,13 @@ defmodule PrismWeb.ThreadPaneLive do
           >
             +{MapSet.size(@grants)} this chat
           </span>
-          <select
+          <.model_override
             :if={not @panel? and @models_loaded and @models_by_provider != %{}}
-            phx-change="select_model"
-            name="model"
+            assistant={@assistant}
+            models_by_provider={@models_by_provider}
+            model_override={@model_override}
             class="min-h-6 bg-transparent text-xs text-gray-600 hover:text-gray-300 border-none focus:ring-0 focus:outline-none cursor-pointer max-w-[14rem] truncate font-mono"
-            title="Override model"
-            aria-label="Override model"
-          >
-            <option value="" selected={is_nil(@model_override)}>
-              {(@assistant && @assistant["model"]) || "default"}
-            </option>
-            <%= for {provider, models} <- @models_by_provider, models != [] do %>
-              <optgroup label={provider}>
-                <option :for={m <- models} value={m} selected={@model_override == m}>{m}</option>
-              </optgroup>
-            <% end %>
-          </select>
+          />
         </div>
         <div class="flex items-center gap-1">
           <span
@@ -1545,6 +1537,52 @@ defmodule PrismWeb.ThreadPaneLive do
           </.link>
         </div>
       </header>
+
+      <%!-- In the panel, what the chat page's header shows lives here: the
+            model override, the soul or role and the thread's usage, opened
+            by the panel's own header button (`popovertarget`), which the
+            browser shows and dismisses. --%>
+      <div
+        :if={@panel?}
+        id={@dom <> "-menu"}
+        popover="auto"
+        role="group"
+        aria-label="This thread"
+        class="aqua-panel-menu"
+      >
+        <div class="aqua-panel-menu-row">
+          <span>Model</span>
+          <%= cond do %>
+            <% @models_loaded and @models_by_provider != %{} -> %>
+              <.model_override
+                assistant={@assistant}
+                models_by_provider={@models_by_provider}
+                model_override={@model_override}
+                class="min-w-0 max-w-[10rem] cursor-pointer truncate rounded-[7px] border border-border-default bg-surface-base px-1.5 py-0.5 font-mono text-xs text-text-primary focus:border-border-focus focus:outline-none"
+              />
+            <% @models_loaded -> %>
+              <span class="truncate font-mono">
+                {(@assistant && @assistant["model"]) || "default"}
+              </span>
+            <% true -> %>
+              <span>Reading the models…</span>
+          <% end %>
+        </div>
+        <div class="aqua-panel-menu-row" title="The soul or role this thread is on">
+          <span>Soul or role</span>
+          <span class="truncate">
+            {if @roster == [],
+              do: "No assistant here",
+              else: assistant_label(current_assistant(@assistant, @roster))}
+          </span>
+        </div>
+        <div class="aqua-panel-menu-row">
+          <span>Tokens</span>
+          <span class="font-mono">
+            {@token_usage.input} in · {@token_usage.output} out
+          </span>
+        </div>
+      </div>
 
       <%!-- The pane's own flash: a nested view's shows nowhere else. --%>
       <div
@@ -1974,6 +2012,34 @@ defmodule PrismWeb.ThreadPaneLive do
         </span>
       </div>
     </section>
+    """
+  end
+
+  attr :assistant, :any, required: true
+  attr :models_by_provider, :map, required: true
+  attr :model_override, :any, required: true
+  attr :class, :string, required: true
+
+  # The thread's model for the next sends: the assistant's own, or one the
+  # catalogue offers.
+  defp model_override(assigns) do
+    ~H"""
+    <select
+      phx-change="select_model"
+      name="model"
+      class={@class}
+      title="Override model"
+      aria-label="Override model"
+    >
+      <option value="" selected={is_nil(@model_override)}>
+        {(@assistant && @assistant["model"]) || "default"}
+      </option>
+      <%= for {provider, models} <- @models_by_provider, models != [] do %>
+        <optgroup label={provider}>
+          <option :for={m <- models} value={m} selected={@model_override == m}>{m}</option>
+        </optgroup>
+      <% end %>
+    </select>
     """
   end
 

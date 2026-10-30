@@ -247,9 +247,9 @@ defmodule PrismWeb.AquaPanelLiveTest do
        %{conn: conn, room: room, mine: mine, me: me} do
     {:ok, view, _} = live(conn, athanor_path("/members", room))
     settled_render(view)
-    {panel, html} = open_panel(view)
+    {panel, _html} = open_panel(view)
     assert has_element?(panel, ~s(#aqua-panel-sheet[aria-label="Your AQUA"] header), "AQUA")
-    refute html =~ "Reading "
+    refute has_element?(panel, "#aqua-panel-room")
 
     pane = child!(panel, "aqua-panel-pane")
     refute render(pane) =~ "with each message"
@@ -260,6 +260,45 @@ defmodule PrismWeb.AquaPanelLiveTest do
     assert you_thread.athanor_id == mine.id
     [request] = model_requests()
     refute request_text(request) =~ "Read from the room"
+
+    Cyfr.Test.Sandbox.end_views()
+  end
+
+  test "the thread's menu carries the model override, the soul or role and the counts, and a model chosen there is the one the next send asks",
+       %{conn: conn, room: room, mine: mine, me: me} do
+    :ok = PrismWeb.ModelCatalog.remember(mine.id, %{"models" => %{"kept" => ["kept-model-1"]}})
+    on_exit(fn -> PrismWeb.ModelCatalog.forget(mine.id) end)
+
+    {:ok, view, _} = live(conn, athanor_path("/members", room))
+    settled_render(view)
+    {panel, _html} = open_panel(view)
+    # The header's menu button opens the pane's menu, a popover.
+    assert has_element?(panel, ~s(#aqua-panel-more[popovertarget="aqua-panel-pane-menu"]))
+
+    pane = child!(panel, "aqua-panel-pane")
+    menu = ~s(#aqua-panel-pane-menu[popover])
+
+    wait_until(
+      fn -> has_element?(pane, ~s(#{menu} select[name="model"] option[value="kept-model-1"])) end,
+      5_000,
+      "the catalogue in the panel's menu"
+    )
+
+    assert has_element?(pane, menu, "Soul or role")
+    assert has_element?(pane, menu, "0 in · 0 out")
+
+    pane
+    |> element(~s(#{menu} select[name="model"]))
+    |> render_change(%{"model" => "kept-model-1"})
+
+    assert has_element?(pane, ~s(#{menu} option[value="kept-model-1"][selected]))
+
+    Cyfr.Test.ScriptedWorker.script([model_reply("hello you")])
+    pane |> form("form", %{"message" => "hello me"}) |> render_submit()
+
+    _you_thread = settled_you!(me)
+    [request] = model_requests()
+    assert request["model"] == "kept-model-1"
 
     Cyfr.Test.Sandbox.end_views()
   end
