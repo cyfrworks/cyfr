@@ -145,7 +145,9 @@ defmodule PrismWeb.InviteLiveTest do
     name!(view, "nova")
     admit!(view, "invite")
     assert screen_2?(view, :code)
-    assert [%{namespace: "nova"}] = Arca.Repo.all(from(u in User, where: u.admission == "invitation"))
+
+    assert [%{namespace: "nova"}] =
+             Arca.Repo.all(from(u in User, where: u.admission == "invitation"))
   end
 
   @tag :capture_log

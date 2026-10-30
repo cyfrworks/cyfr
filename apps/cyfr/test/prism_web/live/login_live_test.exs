@@ -243,7 +243,12 @@ defmodule PrismWeb.LoginLiveTest do
       {:ok, view, html} = live(build_conn(), ~p"/login")
       assert html =~ "Create your identity here"
       assert has_element?(view, "#create-identity p", "This CYFR keeps your identity.")
-      assert has_element?(view, ~s(#create-identity label[for="admission-name-input"]), "Your name")
+
+      assert has_element?(
+               view,
+               ~s(#create-identity label[for="admission-name-input"]),
+               "Your name"
+             )
 
       assert has_element?(
                view,

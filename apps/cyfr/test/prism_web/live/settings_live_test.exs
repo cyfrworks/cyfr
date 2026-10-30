@@ -46,7 +46,6 @@ defmodule PrismWeb.SettingsLiveTest do
   alias Arca.Schemas.PersonIdentity
   alias Prima.Identity
   alias Prima.Identity.Entry
-  alias Sanctum.{Cipher, CipherAAD}
   alias Sanctum.Test.RegistryStub
   alias Sanctum.TestContext.Authenticator
 
@@ -89,7 +88,7 @@ defmodule PrismWeb.SettingsLiveTest do
     assert {:ok, :allowed} = Sanctum.Door.admit_identifier(identifier)
   end
 
-  test "the allowlist allows and denies by handle, shows the handle beside the identifier, and says why a handle is refused",
+  test "the allowlist allows and denies by name, shows each entry's name, and says why a name is refused",
        %{conn: conn} do
     ops = test_user()
     {:ok, _} = Sanctum.TestContext.ensure_platform(ops.user_id)
@@ -104,8 +103,14 @@ defmodule PrismWeb.SettingsLiveTest do
     })
 
     {view, html} = conn |> log_in_user(ops) |> mount_athanor("/settings")
-    assert html =~ "@handle"
-    assert html =~ "by their handle"
+
+    assert has_element?(
+             view,
+             ~s(#door-entry-form input[name="value"][placeholder="@name, or * for everyone"])
+           )
+
+    assert html =~ "Allow or deny someone by their name"
+    PrismWeb.AdmissionScreens.refute_vocabulary(view |> element("#allowlist") |> render())
 
     door_entry(view, "door_allow", "@alice")
     assert has_element?(view, "td", alice)
@@ -126,6 +131,31 @@ defmodule PrismWeb.SettingsLiveTest do
     end)
 
     assert [_, _] = Sanctum.Door.Store.list()
+
+    # An entry made by no name: a person here shows their name, `*`
+    # everyone, and an identifier nothing here names where it came from.
+    held = test_user()
+    record_namespace!(held)
+    typed = "per_" <> Prima.Digest.sha256_hex("typed-#{n}")
+    {:ok, _} = Sanctum.Door.Store.deny("person", held.user_id, ops.user_id)
+    {:ok, _} = Sanctum.Door.Store.allow("identifier", typed, ops.user_id)
+    {:ok, _} = Sanctum.Door.Store.allow("wildcard", "*", ops.user_id)
+    {view, _html} = build_conn() |> log_in_user(ops) |> mount_athanor("/settings")
+
+    assert has_element?(view, "th", "Name")
+
+    for {value, name} <- [
+          {held.user_id, "@" <> held.namespace},
+          {typed, "added from the command line"},
+          {"*", "everyone"}
+        ] do
+      assert has_element?(
+               view,
+               "#allowlist tr",
+               ~r/#{Regex.escape(value)}\s+#{Regex.escape(name)}/
+             ),
+             value
+    end
   end
 
   test "the platform settings card is the operator's, saves against its revision, and shows a pin read-only",
@@ -1644,55 +1674,6 @@ defmodule PrismWeb.SettingsLiveTest do
     })
   end
 
-  # The person's enrollment, accepted, as a retry records the directory's
-  # acceptance: their recovery code is not saved yet.
-  defp enrolled!(person) do
-    begun = pending!(person)
-    as = %Prima.Actor{user_id: person.user_id}
-    {:ok, _} = Arca.IdentityAttempts.advance(as, begun.attempt_id, "submitted", "accepted")
-    begun
-  end
-
-  # The person's enrollment, submitted with no answer recorded: it waits on
-  # the seed of the browser that began it.
-  defp pending!(person) do
-    keys = Arca.Repo.get_by!(PersonIdentity, user_id: person.user_id)
-
-    {:ok, operational} =
-      Cipher.decrypt(
-        keys.operational_key_sealed,
-        CipherAAD.person_key(person.user_id, :operational)
-      )
-
-    {recovery, _} = :crypto.generate_key(:eddsa, :ed25519)
-
-    {:ok, genesis} =
-      Entry.genesis(
-        live_key: keys.live_public_key,
-        operational_key: keys.operational_public_key,
-        recovery_keys: [recovery],
-        directory: @directory
-      )
-
-    genesis = Identity.sign(genesis, operational)
-    as = %Prima.Actor{user_id: person.user_id}
-
-    {:ok, attempt} =
-      Arca.IdentityAttempts.open(as, %{
-        kind: "enrollment",
-        request_id: "req_#{System.unique_integer([:positive])}",
-        user_id: person.user_id,
-        identifier: Identity.identifier(genesis),
-        directory_url: @directory,
-        genesis: Identity.canonical(genesis),
-        request_digest: Identity.hash(genesis),
-        kit_seed_sealed: "sealed-kit-seed"
-      })
-
-    {:ok, _} = Arca.IdentityAttempts.advance(as, attempt.id, "staged", "submitted")
-    %{attempt_id: attempt.id, identifier: Identity.identifier(genesis)}
-  end
-
   # `person`, signed in, made a person whose keys are at another home:
   # their identity row is `remote`, their head cached as verified now, and
   # the conn holds a session of theirs bound to that head's `key_epoch`.
@@ -1799,37 +1780,19 @@ defmodule PrismWeb.SettingsLiveTest do
     })
   end
 
-  defp type_handle(view, handle) do
-    view
-    |> element(~s([data-test="identity-handle"]))
-    |> render_change(%{"handle" => handle})
-
-    wait_until(fn -> not has_element?(view, ~s([data-check="checking"])) end)
-  end
-
-  # Signed in, holding `handle` as their claimed one, or none: the login
+  # Signed in, holding `name` as their recorded one, or none: the login
   # helper records a namespace for every person it signs in.
-  defp signed_in(conn, person, handle \\ nil) do
+  defp signed_in(conn, person, name \\ nil) do
     conn = log_in_user(conn, person)
 
     Arca.Repo.update_all(from(u in Arca.Schemas.User, where: u.id == ^person.user_id),
-      set: [namespace: handle]
+      set: [namespace: name]
     )
 
     conn
   end
 
-  defp wanted(person) do
-    {:ok, user} = Sanctum.Tenancy.Users.get(person.user_id)
-    Sanctum.Tenancy.Users.prefs(user)["handle_wanted"]
-  end
-
-  defp want!(person, handle) do
-    {:ok, user} = Sanctum.Tenancy.Users.get(person.user_id)
-    {:ok, _} = Sanctum.Tenancy.Users.put_prefs(user, %{"handle_wanted" => handle})
-  end
-
-  # Enrolled at the directory, the recovery code saved.
+  # Registered at the directory, the recovery code saved.
   defp acknowledged!(person) do
     state = RegistryStub.enroll!(person.user_id)
     as = %Prima.Actor{user_id: person.user_id}
@@ -1841,123 +1804,101 @@ defmodule PrismWeb.SettingsLiveTest do
     state
   end
 
+  # An added code accepted at the directory, its recovery code not saved.
+  defp added!(person, state) do
+    as = %Prima.Actor{user_id: person.user_id}
+
+    {:ok, attempt} =
+      Arca.IdentityAttempts.open(as, %{
+        kind: "holder",
+        request_id: "req_#{System.unique_integer([:positive])}",
+        user_id: person.user_id,
+        identifier: state.identifier,
+        directory_url: RegistryStub.directory(),
+        entry: "recover-request",
+        request_digest: Prima.Digest.sha256("recover-#{System.unique_integer()}"),
+        expected_revision: 0,
+        expected_head: state.head,
+        kit_seed_sealed: "sealed-kit-seed"
+      })
+
+    {:ok, _} = Arca.IdentityAttempts.advance(as, attempt.id, "staged", "submitted")
+
+    {:ok, _} =
+      Arca.IdentityAttempts.advance(as, attempt.id, "submitted", "accepted", %{
+        entry_hash: Prima.Digest.sha256("committed-#{System.unique_integer()}")
+      })
+
+    attempt.id
+  end
+
+  # A person as a page that admitted them leaves them when it ends before
+  # "I saved it": their enrollment opened at `directory` with `name`.
+  defp unfinished!(directory, name) do
+    person = test_user()
+    identity = Sanctum.Test.Newcomers.identity(name)
+    :ok = Sanctum.Recovery.open_at_admission(person.user_id, identity, directory.url)
+    {person, identity}
+  end
+
+  defp attempt(person),
+    do:
+      Arca.Repo.get_by!(Arca.Schemas.IdentityAttempt, user_id: person.user_id, kind: "enrollment")
+
   defp prompt_id(view) do
     [_, id] = Regex.run(~r/data-prompt-id="(identity-recovery-\d+)"/, render(view))
     id
   end
 
-  describe "your identity" do
-    setup do
-      keep_env(:sanctum, [:directory_url])
-      Application.put_env(:sanctum, :directory_url, @directory)
-      :ok
-    end
+  @costs [
+    "Your identity is registered at cyfr.run. While cyfr.run cannot be reached, changing your " <>
+      "keys, bringing your identity back and other CYFRs checking who you are all wait.",
+    "Your recovery code brings your identity back on a new CYFR. Anyone who holds a copy can " <>
+      "replace your keys, so keep it apart from your devices.",
+    "Add a second recovery code before you rely on one. Only a code you hold can add another.",
+    "If every recovery code is lost, nothing can add one. Your identity keeps working here, " <>
+      "with no way back if this CYFR is lost.",
+    "If this CYFR and every recovery code are lost, your identity is gone, and you start again " <>
+      "with a new name.",
+    "Bringing your identity back restores you alone, never your private data or the CYFR " <>
+      "addresses your devices saved. You add those again from surviving devices or invitations."
+  ]
 
-    test "a free handle is chosen, kept as wanted, and begins the enrollment at the pinned directory",
+  describe "your name" do
+    import PrismWeb.AdmissionScreens
+
+    test "a named person sees their name, their identifier for the command line, another recovery code, what losing it costs and the rotation",
          %{conn: conn} do
       person = test_user()
-      registry(nil, %{"alice" => :taken})
-      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+      state = acknowledged!(person)
+      {view, html} = conn |> signed_in(person, "alicia") |> mount_athanor("/settings")
 
-      assert has_element?(view, ~s([data-test="identity"][data-state="choose"]))
-      assert has_element?(view, ~s([data-test="identity-directory"]), @directory)
+      assert has_element?(view, ~s([data-test="identity"][data-state="named"]))
+      assert has_element?(view, ~s([data-test="identity-name"]), "Your name is @alicia.")
 
       assert has_element?(
                view,
-               ~s([data-test="identity"]),
-               ~r/makes the\s+recovery code that brings it back\. The handle is claimed once you say your\s+recovery\s+code is saved\./
+               ~s([data-test="identity-identifier"]),
+               "Your identifier, for the command line: #{state.identifier}"
              )
 
-      type_handle(view, "alice")
-      assert has_element?(view, ~s([data-test="identity-handle-check"][data-check="taken"]))
-      assert has_element?(view, ~s([data-test="identity-choose"][disabled]))
+      assert has_element?(view, ~s([data-test="identity-add-code"]), "Add another recovery code")
+      assert has_element?(view, ~s([data-test="identity-costs"] summary), "What losing it costs")
 
-      type_handle(view, "Not A Handle")
-      assert has_element?(view, ~s([data-check="invalid"]))
+      assert view |> element(~s([data-test="identity-costs"] ol)) |> render() |> sentences() ==
+               @costs
 
-      type_handle(view, "alicia")
-      assert has_element?(view, ~s([data-check="free"]))
-
-      view |> element(~s([data-test="identity-handle"])) |> render_submit(%{"handle" => "alicia"})
-      render(view)
-
-      assert wanted(person) == "alicia"
-      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
-      assert has_element?(view, ~s(#system-layer [data-test="recovery-directory"]), @directory)
-    end
-
-    test "with the registry not answering, no handle is chosen and nothing is written",
-         %{conn: conn} do
-      person = test_user()
-      registry(nil, %{"alice" => :close})
-      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
-
-      type_handle(view, "alice")
-      assert has_element?(view, ~s([data-check="unavailable"]))
-
-      view |> element(~s([data-test="identity-handle"])) |> render_submit(%{"handle" => "alice"})
-      assert wanted(person) == nil
-      refute has_element?(view, ~s(#system-layer [data-test="recovery"]))
-    end
-
-    test "with the registry not answering, the person still enrolls on their own, for an identifier and its recovery code",
-         %{conn: conn} do
-      person = test_user()
-      registry(nil, %{"alice" => :close})
-      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
-
-      type_handle(view, "alice")
-      assert has_element?(view, ~s([data-check="unavailable"]))
-
-      view |> element(~s([data-test="identity-enroll"])) |> render_click()
-      render(view)
-
-      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
-      assert has_element?(view, ~s(#system-layer [data-test="recovery-directory"]), @directory)
-      assert wanted(person) == nil
-    end
-
-    test "a recovery code not yet saved is offered again; another code and the rotation are offered once enrolled",
-         %{conn: conn} do
-      person = test_user()
-      enrolled = enrolled!(person)
-      {view, html} = conn |> signed_in(person) |> mount_athanor("/settings")
-
-      assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
-      assert has_element?(view, ~s([data-test="identity-identifier"]), enrolled.identifier)
+      assert has_element?(view, ~s([data-test="identity-rotate"]), "Rotate the live key")
+      refute has_element?(view, ~s([data-test="identity-show-code"]))
       refute html =~ "sealed-kit-seed"
+      refute_vocabulary(identity_card(view))
 
-      row = ~s([data-test="identity-kit"][data-attempt="#{enrolled.attempt_id}"])
+      for gone <-
+            ~w(identity-handle identity-enroll identity-abandon identity-claim identity-add-kit identity-kit identity-directory) do
+        refute has_element?(view, ~s([data-test="#{gone}"])), gone
+      end
 
-      assert has_element?(
-               view,
-               row,
-               "Your recovery code (your first) waits for you to say you saved it."
-             )
-
-      assert has_element?(
-               view,
-               ~s(#{row} [data-test="identity-kit-show"]),
-               "Show your recovery code"
-             )
-
-      assert has_element?(
-               view,
-               "#identity-card",
-               "Your recovery code brings your identity back on a new CYFR. Add a second before " <>
-                 "you rely on one: if every code is lost, nothing can add one."
-             )
-
-      assert has_element?(view, ~s([data-test="identity-add-kit"]), "Add another recovery code")
-      refute has_element?(view, "#identity-card", ~r/\bkits?\b|printed/i)
-
-      view |> element(~s([data-test="identity-kit-show"])) |> render_click()
-      render(view)
-      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="kit"]))
-      assert has_element?(view, "#system-layer-title", "Your recovery code")
-      view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
-
-      view |> element(~s([data-test="identity-add-kit"])) |> render_click()
+      view |> element(~s([data-test="identity-add-code"])) |> render_click()
       render(view)
       assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="holder"]))
       assert has_element?(view, "#system-layer-title", "Add another recovery code")
@@ -1976,270 +1917,157 @@ defmodule PrismWeb.SettingsLiveTest do
                    select: %{action: c.action, state: c.state}
                  )
                )
-
-      assert Arca.Repo.all(
-               from(a in Arca.Schemas.IdentityAttempt,
-                 where: a.user_id == ^person.user_id and a.kind == "rotation"
-               )
-             ) == []
     end
 
-    test "an enrollment no prompt here holds is abandoned and begun again under a new recovery code",
-         %{conn: conn} do
+    test "an added code whose recovery code waits to be saved is shown again from here", %{
+      conn: conn
+    } do
       person = test_user()
-      pending = pending!(person)
-      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+      state = acknowledged!(person)
+      attempt_id = added!(person, state)
+      {view, _html} = conn |> signed_in(person, "alicia") |> mount_athanor("/settings")
 
-      assert has_element?(view, ~s([data-test="identity"][data-state="pending"]))
-      refute has_element?(view, ~s([data-test="identity-handle"]))
+      assert has_element?(view, ~s([data-test="identity"][data-state="named"]))
+      assert has_element?(view, ~s([data-test="identity-add-code"]))
+
+      view
+      |> element(~s([data-test="identity-show-code"][phx-value-attempt="#{attempt_id}"]))
+      |> render_click()
+
+      render(view)
+      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="kit"]))
+      assert has_element?(view, "#system-layer-title", "Your recovery code")
+      refute_vocabulary(identity_card(view))
+    end
+
+    test "an unfinished person sees screen 2 driven by registry.register, another name in place of a taken one, and their recovery code under one confirmation",
+         %{conn: conn} do
+      directory = directory!()
+      registry!(%{}, claims: [:taken])
+      {person, _identity} = unfinished!(directory, "mira")
+      attempt = attempt(person)
+
+      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
+      render_async(view, 15_000)
+
+      assert has_element?(view, ~s([data-test="identity"][data-state="unfinished"]))
 
       assert has_element?(
                view,
                ~s([data-test="identity"]),
-               "Only the browser that began it holds its recovery code. If that browser lost " <>
-                 "it, abandon it and enroll again with a new one;"
+               "Your name and recovery code are not finished."
              )
 
-      assert has_element?(
-               view,
-               ~s([data-test="identity-kit"][data-attempt="#{pending.attempt_id}"]),
-               "Your recovery code (your first) is at submitted; finish it in the prompt that began it."
-             )
+      assert screen_2?(view, :taken)
+      assert has_element?(view, ~s([data-test="admission-code"]), "Someone took @mira")
+      assert has_element?(view, ~s([data-test="identity-costs"]))
+      refute has_element?(view, ~s([data-test="identity-add-code"]))
+      refute has_element?(view, ~s([data-test="identity-rotate"]))
+      refute_vocabulary(identity_card(view))
 
-      refute has_element?(view, ~s([data-test="identity-kit-show"]))
+      view |> element("#admission-rename") |> render_submit(%{"name" => "nova"})
+      render_async(view, 15_000)
+      assert screen_2?(view, :code)
+      assert {:ok, %{namespace: "nova"}} = Sanctum.Tenancy.Users.get(person.user_id)
+      refute has_element?(view, ~s([data-test="recovery-code"]))
+      refute_vocabulary(identity_card(view))
 
-      # No confirmation is asked: it discards an unfinished attempt and
-      # mints nothing.
-      view |> element(~s([data-test="identity-abandon"])) |> render_click()
+      view |> element(~s([data-test="identity-show-code"])) |> render_click()
       render(view)
-
-      assert %{phase: "superseded", kit_seed_sealed: nil} =
-               Arca.Repo.get!(Arca.Schemas.IdentityAttempt, pending.attempt_id)
-
-      assert Arca.Repo.all(
-               from(c in "pending_confirmations",
-                 where: c.user_id == ^person.user_id,
-                 select: c.action
-               )
-             ) == []
-
-      # Begun again: the enrollment prompt is open in the layer, its seed
-      # the browser's to draw.
-      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
-      assert has_element?(view, ~s(#system-layer form[data-recovery="enrollment"]))
-    end
-
-    test "no abandonment is offered while the card's own enrollment prompt holds its seed",
-         %{conn: conn} do
-      person = test_user()
-      registry(nil, %{})
-      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
-
-      type_handle(view, "alicia")
-      view |> element(~s([data-test="identity-handle"])) |> render_submit(%{"handle" => "alicia"})
-      render(view)
-      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="enrollment"]))
-
-      # The prompt's submission stands at the directory, unanswered, and
-      # the card reads the identity again with the prompt still open.
-      _pending = pending!(person)
-
-      Phoenix.LiveView.send_update(view.pid, PrismWeb.IdentityCard,
-        id: PrismWeb.IdentityCard.id(),
-        reload: true
-      )
-
-      render(view)
-
-      assert has_element?(view, ~s([data-test="identity"][data-state="pending"]))
-      refute has_element?(view, ~s([data-test="identity-abandon"]))
-
-      # Dismissed, the prompt and the seed it held are gone.
-      view |> element(~s([data-test="prompt-dismiss"])) |> render_click()
-      render(view)
-      assert has_element?(view, ~s([data-test="identity-abandon"]))
-    end
-
-    test "the card's own enrollment claims the wanted handle once its recovery code is saved",
-         %{conn: conn} do
-      person = test_user()
-      parent = self()
-      registry(nil, %{})
-
-      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
-      type_handle(view, "alicia")
-      view |> element(~s([data-test="identity-handle"])) |> render_submit(%{"handle" => "alicia"})
+      assert has_element?(view, ~s(#system-layer [data-test="recovery"][data-kind="kit"]))
+      assert has_element?(view, "#system-layer-title", "Your recovery code")
       id = prompt_id(view)
 
-      # The ceremony ran in the prompt and its recovery code was saved.
-      state = acknowledged!(person)
-
-      registry(state, %{}, fn %{path: path, signed: signed} ->
-        send(parent, {:signed, path, signed.operation})
-
-        case signed.operation do
-          "policy.accept" ->
-            {200, RegistryStub.answer(%{"accepted" => true})}
-
-          "handle.claim" ->
-            {201, RegistryStub.answer(%{"handle" => "alicia", "identifier" => state.identifier})}
-        end
-      end)
-
+      # The prompt's "I saved it" finishes the person: the card reads again.
+      ctx = Sanctum.TestContext.session!(person.user_id)
+      assert {:ok, _} = Sanctum.Recovery.recovery_code_saved(ctx, attempt.id)
       send(view.pid, {:system_layer, id, :confirmed})
-      wait_until(fn -> has_element?(view, ~s([data-test="identity-claimed"])) end)
+      render_async(view, 15_000)
 
-      assert_received {:signed, "/v1/legal/accept", "policy.accept"}
-      assert_received {:signed, "/v1/namespaces/personal/claim", "handle.claim"}
-      assert has_element?(view, ~s([data-test="identity-claimed"]), "@alicia")
-      assert wanted(person) == nil
+      assert has_element?(view, ~s([data-test="identity"][data-state="named"]))
+      assert has_element?(view, ~s([data-test="identity-name"]), "Your name is @nova.")
     end
 
-    test "a saved recovery code with a wanted handle offers Claim @name; a lost answer's repeat claims",
-         %{conn: conn} do
-      person = test_user()
-      state = acknowledged!(person)
-      want!(person, "alicia")
-      {:ok, answering} = Agent.start_link(fn -> false end)
-
-      registry(state, %{"alicia" => {:held, state.identifier}}, fn %{signed: signed} ->
-        case signed.operation do
-          "policy.accept" ->
-            {200, RegistryStub.answer(%{"accepted" => true})}
-
-          "handle.claim" ->
-            if Agent.get(answering, & &1),
-              do:
-                {200,
-                 RegistryStub.answer(%{"handle" => "alicia", "identifier" => state.identifier})},
-              else: :close
-        end
-      end)
+    @tag :capture_log
+    test "an unfinished person whose cyfr.run does not answer is offered Try again", %{
+      conn: conn
+    } do
+      directory = directory!()
+      registry = registry!(%{}, version: :close)
+      {person, _identity} = unfinished!(directory, "mira")
 
       {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
-      assert has_element?(view, ~s([data-test="identity"][data-state="claim"]))
+      render_async(view, 15_000)
+
+      assert screen_2?(view, :silent)
 
       assert has_element?(
                view,
-               ~s([data-test="identity"]),
-               "Your recovery code is saved. Claim your handle at the registry."
+               ~s([data-test="admission-code"]),
+               "cyfr.run did not answer. Try again."
              )
 
-      view |> element(~s([data-test="identity-claim"])) |> render_click()
-      assert has_element?(view, ~s([data-test="identity-claim-error"]))
-      assert has_element?(view, ~s([data-test="identity-claim"]), "Claim @alicia")
-      assert wanted(person) == "alicia"
+      refute has_element?(view, ~s([data-test="identity-show-code"]))
+      assert %{phase: "accepted"} = attempt(person)
 
-      Agent.update(answering, fn _ -> true end)
-      view |> element(~s([data-test="identity-claim"])) |> render_click()
-      assert has_element?(view, ~s([data-test="identity-claimed"]), "@alicia")
-      assert wanted(person) == nil
+      script(registry, version: :answer)
+      view |> element(~s([data-test="admission-retry"])) |> render_click()
+      render_async(view, 15_000)
+      assert screen_2?(view, :code)
+      assert has_element?(view, ~s([data-test="identity-show-code"]), "Show your recovery code")
     end
 
-    test "a claim sent before the enrollment's recovery code is saved claims nothing, and sends the registry nothing",
-         %{conn: conn} do
+    test "a person with no name and nothing to finish is told so, with nothing sent", %{
+      conn: conn
+    } do
       person = test_user()
-      parent = self()
-      state = RegistryStub.enroll!(person.user_id)
-      want!(person, "alicia")
-
-      registry(state, %{}, fn %{signed: signed} ->
-        send(parent, {:signed, signed.operation})
-        {200, RegistryStub.answer(%{"accepted" => true})}
-      end)
-
+      RegistryStub.start!(fn _request -> flunk("nothing is sent") end)
       {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
-      assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
+      render_async(view, 15_000)
 
-      # The event, not the hidden button: the component holds the order.
-      view |> with_target("#identity-card") |> render_click("claim", %{})
-      render(view)
-
-      refute_received {:signed, _operation}
-      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(person.user_id)
-      assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
-    end
-
-    test "a handle chosen while the enrollment's recovery code is unsaved is kept, and claimed only after it",
-         %{conn: conn} do
-      person = test_user()
-      parent = self()
-      state = RegistryStub.enroll!(person.user_id)
-
-      registry(state, %{}, fn %{signed: signed} ->
-        send(parent, {:signed, signed.operation})
-        {200, RegistryStub.answer(%{"accepted" => true})}
-      end)
-
-      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
-      assert has_element?(view, ~s([data-test="identity"][data-state="kit"]))
-
-      card = with_target(view, "#identity-card")
-      render_change(card, "check", %{"handle" => "alicia"})
-      wait_until(fn -> not has_element?(view, ~s([data-check="checking"])) end)
-      render_submit(card, "choose", %{"handle" => "alicia"})
-      render(view)
-
-      refute_received {:signed, _operation}
-      assert {:ok, %{namespace: nil}} = Sanctum.Tenancy.Users.get(person.user_id)
-    end
-
-    test "a taken handle at the claim asks for another, and the enrollment stands",
-         %{conn: conn} do
-      person = test_user()
-      state = acknowledged!(person)
-      want!(person, "alice")
-
-      registry(state, %{"alice" => :taken}, fn %{signed: signed} ->
-        case signed.operation do
-          "policy.accept" -> {200, RegistryStub.answer(%{"accepted" => true})}
-          "handle.claim" -> RegistryStub.refusal(:handle_taken)
-        end
-      end)
-
-      {view, _html} = conn |> signed_in(person) |> mount_athanor("/settings")
-      view |> element(~s([data-test="identity-claim"])) |> render_click()
+      assert has_element?(view, ~s([data-test="identity"][data-state="unfinished"]))
 
       assert has_element?(
                view,
-               ~s([data-test="identity"][data-state="choose"][data-enrollment="enrolled"])
+               ~s([data-test="admission-error"]),
+               "There is no unfinished name and recovery code to finish here."
              )
 
-      assert has_element?(view, ~s([data-test="identity-claim-error"]))
-      assert has_element?(view, ~s([data-test="identity-handle"]), "Choose another handle")
-      assert has_element?(view, ~s([data-test="identity-identifier"]), state.identifier)
+      refute_vocabulary(identity_card(view))
     end
 
-    test "a claimed handle is shown alone: the card asks the registry nothing and offers no address",
+    test "a person whose keys another CYFR holds is told their name and recovery code are there, and offered nothing",
          %{conn: conn} do
       person = test_user()
-      state = acknowledged!(person)
-      registry(state, %{"alicia" => {:held, state.identifier}})
-
-      {view, _html} = conn |> signed_in(person, "alicia") |> mount_athanor("/settings")
-      claimed = view |> element(~s([data-test="identity-claimed"])) |> render()
-      assert claimed =~ "@alicia"
-      refute claimed =~ ~r/address|[Pp]ublish|Withdraw/
-
-      _rendered = render(view)
-      refute_received {:registry_request, %{path: "/v1/handles/" <> _handle}}
-    end
-
-    test "a person whose keys another CYFR holds is told to change them there, and offered nothing",
-         %{conn: conn} do
-      person = test_user()
-      {conn, identifier} = remote!(conn, person)
+      {conn, _identifier} = remote!(conn, person)
       {view, _html} = mount_athanor(conn, "/settings")
 
-      assert has_element?(view, ~s([data-test="identity"][data-provenance="remote"]))
-      assert has_element?(view, ~s([data-test="identity-remote"]), "held at another CYFR")
-      assert has_element?(view, ~s([data-test="identity-identifier"]), identifier)
+      assert has_element?(view, ~s([data-test="identity"][data-state="remote"]))
+
+      assert has_element?(
+               view,
+               ~s([data-test="identity-remote"]),
+               "Your keys are at your CYFR, so your name and recovery code are there."
+             )
 
       for control <-
-            ~w(identity-handle identity-abandon identity-kit identity-claim identity-add-kit identity-rotate) do
+            ~w(identity-name identity-identifier identity-add-code identity-costs identity-show-code identity-rotate admission-code) do
         refute has_element?(view, ~s([data-test="#{control}"])), control
       end
+
+      refute_vocabulary(identity_card(view))
     end
+  end
+
+  # The identity card's markup, the part of the page this card writes.
+  defp identity_card(view), do: view |> element("#identity-card") |> render()
+
+  # The text of each item of a list, its whitespace folded.
+  defp sentences(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("li")
+    |> Enum.map(&(&1 |> LazyHTML.text() |> String.split() |> Enum.join(" ")))
   end
 
   describe "sign-in doors" do

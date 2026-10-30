@@ -126,7 +126,13 @@ defmodule PrismWeb.SetupLiveTest do
          %{conn: conn} do
       for token <- [String.duplicate("0f", 32), "", "not-hex"] do
         {_browser, view} = opened(conn, token)
-        assert has_element?(view, ~s([data-test="setup-closed"]), "not valid, or setup is complete")
+
+        assert has_element?(
+                 view,
+                 ~s([data-test="setup-closed"]),
+                 "not valid, or setup is complete"
+               )
+
         refute has_element?(view, ~s([data-test="admission-create"]))
         refute_vocabulary(render(view))
 

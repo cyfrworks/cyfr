@@ -1490,99 +1490,101 @@ defmodule PrismWeb.SettingsLive do
 
         <%!-- The door: who may sign in (platform admins) --%>
         <.card :if={@context.platform_admin}>
-          <h3 class="text-sm font-medium text-gray-400 mb-1">Server allowlist</h3>
-          <p class="text-xs text-gray-500 mb-4">
-            Who may sign in here. A person made here signs in unless denied. A person
-            whose keys another CYFR holds signs in when <code>*</code>
-            or an allow names them. Allow or deny someone by their name (<code>@name</code>):
-            the entry keeps the identifier that name stands for now. A deny is sticky and
-            ejects the person.
-          </p>
+          <section id="allowlist">
+            <h3 class="text-sm font-medium text-gray-400 mb-1">Server allowlist</h3>
+            <p class="text-xs text-gray-500 mb-4">
+              Who may sign in here. A person made here signs in unless denied. A person
+              whose keys another CYFR holds signs in when <code>*</code>
+              or an allow names them. Allow or deny someone by their name (<code>@name</code>):
+              the entry keeps the identifier that name stands for now. A deny is sticky and
+              ejects the person.
+            </p>
 
-          <div :if={@door_requests != []} class="mb-4">
-            <h4 class="text-xs text-gray-500 uppercase mb-2">Requests</h4>
-            <.table id="door-requests" rows={@door_requests}>
-              <:col :let={r} label="Identifier">{r.value}</:col>
-              <:col :let={r} label="Asked by">{r.requested_by || "-"}</:col>
-              <:col :let={r} label="Actions">
-                <div class="flex gap-2">
-                  <.button
-                    variant="ghost"
-                    phx-click="door_resolve"
-                    phx-value-id={r.id}
-                    phx-value-decision="allow"
-                  >
-                    Allow
-                  </.button>
-                  <.button
-                    variant="ghost"
-                    phx-click="door_resolve"
-                    phx-value-id={r.id}
-                    phx-value-decision="reject"
-                  >
-                    Reject
-                  </.button>
-                </div>
+            <div :if={@door_requests != []} class="mb-4">
+              <h4 class="text-xs text-gray-500 uppercase mb-2">Requests</h4>
+              <.table id="door-requests" rows={@door_requests}>
+                <:col :let={r} label="Identifier">{r.value}</:col>
+                <:col :let={r} label="Asked by">{r.requested_by || "-"}</:col>
+                <:col :let={r} label="Actions">
+                  <div class="flex gap-2">
+                    <.button
+                      variant="ghost"
+                      phx-click="door_resolve"
+                      phx-value-id={r.id}
+                      phx-value-decision="allow"
+                    >
+                      Allow
+                    </.button>
+                    <.button
+                      variant="ghost"
+                      phx-click="door_resolve"
+                      phx-value-id={r.id}
+                      phx-value-decision="reject"
+                    >
+                      Reject
+                    </.button>
+                  </div>
+                </:col>
+              </.table>
+            </div>
+
+            <div :if={@door_entries == []} class="py-4">
+              <.empty_state message="No entries: everyone made here signs in, and no one from another CYFR" />
+            </div>
+            <.table :if={@door_entries != []} id="door-entries" rows={@door_entries}>
+              <:col :let={e} label="Entry">{e.value}</:col>
+              <:col :let={e} label="Name">
+                <span :if={e[:label]} data-test="door-entry-label">@{e[:label]}</span>
+                <span :if={is_nil(e[:label])} class="text-gray-400" data-test="door-entry-name">
+                  {entry_name(e, @door_names)}
+                </span>
+              </:col>
+              <:col :let={e} label="Kind">{e.kind}</:col>
+              <:col :let={e} label="Effect">
+                <.badge color={if e.effect == "allow", do: "green", else: "red"}>{e.effect}</.badge>
+              </:col>
+              <:col :let={e} label="Note">{e.note || "-"}</:col>
+              <:col :let={e} label="Actions">
+                <.button variant="ghost" phx-click="door_remove" phx-value-id={e.id}>
+                  Remove
+                </.button>
               </:col>
             </.table>
-          </div>
 
-          <div :if={@door_entries == []} class="py-4">
-            <.empty_state message="No entries: everyone made here signs in, and no one from another CYFR" />
-          </div>
-          <.table :if={@door_entries != []} id="door-entries" rows={@door_entries}>
-            <:col :let={e} label="Entry">{e.value}</:col>
-            <:col :let={e} label="Name">
-              <span :if={e[:label]} data-test="door-entry-label">@{e[:label]}</span>
-              <span :if={is_nil(e[:label])} class="text-gray-400" data-test="door-entry-name">
-                {entry_name(e, @door_names)}
-              </span>
-            </:col>
-            <:col :let={e} label="Kind">{e.kind}</:col>
-            <:col :let={e} label="Effect">
-              <.badge color={if e.effect == "allow", do: "green", else: "red"}>{e.effect}</.badge>
-            </:col>
-            <:col :let={e} label="Note">{e.note || "-"}</:col>
-            <:col :let={e} label="Actions">
-              <.button variant="ghost" phx-click="door_remove" phx-value-id={e.id}>
-                Remove
-              </.button>
-            </:col>
-          </.table>
-
-          <form id="door-entry-form" phx-change="door_form_changed" class="mt-4 space-y-2">
-            <div class="flex gap-2 items-end">
-              <div class="flex-1">
-                <.input
-                  name="value"
-                  value={@door_value}
-                  required
-                  placeholder="@name, or * for everyone"
-                />
+            <form id="door-entry-form" phx-change="door_form_changed" class="mt-4 space-y-2">
+              <div class="flex gap-2 items-end">
+                <div class="flex-1">
+                  <.input
+                    name="value"
+                    value={@door_value}
+                    required
+                    placeholder="@name, or * for everyone"
+                  />
+                </div>
+                <div class="flex-1">
+                  <.input name="note" value={@door_note} placeholder="note (optional)" />
+                </div>
+                <.button
+                  type="button"
+                  phx-click="door_allow"
+                  phx-value-door={@door_value}
+                  phx-value-note={@door_note}
+                >
+                  Allow
+                </.button>
+                <.button
+                  type="button"
+                  variant="ghost"
+                  phx-click="door_deny"
+                  phx-value-door={@door_value}
+                  phx-value-note={@door_note}
+                  data-confirm="Deny this person? Their sessions and keys are revoked."
+                >
+                  Deny
+                </.button>
               </div>
-              <div class="flex-1">
-                <.input name="note" value={@door_note} placeholder="note (optional)" />
-              </div>
-              <.button
-                type="button"
-                phx-click="door_allow"
-                phx-value-door={@door_value}
-                phx-value-note={@door_note}
-              >
-                Allow
-              </.button>
-              <.button
-                type="button"
-                variant="ghost"
-                phx-click="door_deny"
-                phx-value-door={@door_value}
-                phx-value-note={@door_note}
-                data-confirm="Deny this person? Their sessions and keys are revoked."
-              >
-                Deny
-              </.button>
-            </div>
-          </form>
+            </form>
+          </section>
         </.card>
 
         <%!-- The platform settings (platform admins) --%>
