@@ -695,14 +695,19 @@ headless_cli "$SILENT" "" --context silent login --setup --name proof
 grep -qF "$SAY_SILENT" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup with cyfr.run silent did not say '$SAY_SILENT'"
 ! grep -qxF "$SAY_CODE" "$SILENT/login.log" || headless_failed "$SILENT" "cyfr login --setup printed a recovery code while cyfr.run was silent"
 silent="$(python3 -I - "$(headless_state "$SILENT")" 2>&1 <<'PY'
-import json, sys
+import json, re, sys
 state = json.loads(sys.argv[1] or "null")
 if not state or len(state["people"]) != 1 or len(state["identities"]) != 1:
     sys.exit("CYFR holds %s, not one person and their identity" % json.dumps(state))
-person, identifier = state["people"][0]["id"], state["identities"][0]["identifier"]
+# The admission signs the genesis, so the attempt names its identifier from
+# the start; the identity row takes it only once the directory accepts.
+person = state["people"][0]["id"]
+identifier = (state.get("attempts") or [{}])[0].get("identifier")
+if not isinstance(identifier, str) or not re.fullmatch(r"per_[0-9a-f]{64}", identifier):
+    sys.exit("the waiting attempt names %s, not an identifier" % json.dumps(identifier))
 want = {
     "people": [{"id": person, "admission": "setup", "name": None, "admin": True}],
-    "identities": [{"user_id": person, "identifier": identifier, "enrollment": "pending"}],
+    "identities": [{"user_id": person, "identifier": None, "enrollment": "pending"}],
     "attempts": [{"user_id": person, "kind": "enrollment", "phase": "submitted", "name": "proof",
                   "identifier": identifier, "directory": "https://directory.invalid"}],
 }
