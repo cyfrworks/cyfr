@@ -204,7 +204,7 @@ defmodule Arca.ConsentStorage do
     with {:ok, row} <- revision_row(attrs, athanor_id),
          {:ok, refs} <- ref_inputs(vault_refs, row.id, athanor_id) do
       Ecto.Multi.new()
-      |> lock_bindings(refs, revision_actor(athanor_id, attrs))
+      |> lock_bindings(refs, athanor_id, granted_person(attrs))
       |> Ecto.Multi.run(:locked, fn _repo, _done ->
         {:ok, lock_profile!(athanor_id, row.profile_id)}
       end)
@@ -230,13 +230,13 @@ defmodule Arca.ConsentStorage do
 
     with {:ok, row} <- revision_row(consent_attrs, athanor_id),
          {:ok, refs} <- ref_inputs(vault_refs, row.id, athanor_id) do
-      actor = revision_actor(athanor_id, consent_attrs)
+      person = granted_person(consent_attrs)
 
       # Through the schema's changeset, never a raw struct: the label rule
       # and the kind/status vocabulary are the changeset's, and this is the
       # one production mint of a profile. A new profile supersedes nothing.
       Ecto.Multi.new()
-      |> lock_bindings(refs, actor)
+      |> lock_bindings(refs, athanor_id, person)
       |> Ecto.Multi.insert(
         :profile,
         Arca.Schemas.Profile.changeset(%Arca.Schemas.Profile{}, profile_attrs)
@@ -363,22 +363,20 @@ defmodule Arca.ConsentStorage do
     end
   end
 
-  # Who a revision is written for: its athanor, and the person it is
-  # granted by when that names a person (`Prima.PersonId.person?/1`); the
-  # bootstrap's revision with no person names none.
-  defp revision_actor(athanor_id, attrs) do
+  # The person a revision is granted by, when its `granted_by` names one
+  # (`Prima.PersonId.person?/1`); the bootstrap's revision with no person
+  # names none.
+  defp granted_person(attrs) do
     granted_by = Map.get(attrs, :granted_by)
-    person = if Prima.PersonId.person?(granted_by), do: granted_by
-
-    %Prima.Actor{athanor_id: athanor_id, user_id: person, scope: :athanor}
+    if Prima.PersonId.person?(granted_by), do: granted_by
   end
 
   # The rows a revision's bindings reach, locked in the one order before
   # the profile: instance entries, then vault entries, then shares.
-  defp lock_bindings(multi, refs, %Prima.Actor{athanor_id: athanor_id} = actor) do
+  defp lock_bindings(multi, refs, athanor_id, person) do
     multi
     |> Ecto.Multi.run(:instances, fn _repo, _done -> lock_instance_entries(refs) end)
-    |> Ecto.Multi.run(:sources, fn _repo, _done -> share_sources(refs, actor) end)
+    |> Ecto.Multi.run(:sources, fn _repo, _done -> share_sources(refs, athanor_id, person) end)
     |> Ecto.Multi.run(:entries, fn _repo, %{sources: sources} ->
       lock_vault_entries(refs, athanor_id, sources)
     end)
@@ -393,7 +391,7 @@ defmodule Arca.ConsentStorage do
   # binds a share only in a person's own athanor, read from its row.
   # arca:unscoped-ok a binding names another athanor's share by its bare
   # id: the shares the revision names, read by id with the athanor each is in.
-  defp share_sources(refs, actor) do
+  defp share_sources(refs, athanor_id, person) do
     case refs |> Enum.map(& &1.share_id) |> Enum.reject(&is_nil/1) |> Enum.uniq() do
       [] ->
         {:ok, %{}}
@@ -407,7 +405,7 @@ defmodule Arca.ConsentStorage do
           |> Arca.Repo.all()
           |> Map.new()
 
-        with :ok <- binds_shares(actor) do
+        with :ok <- binds_shares(athanor_id, person) do
           if map_size(sources) == length(ids), do: {:ok, sources}, else: {:error, :not_found}
         end
     end
@@ -415,15 +413,15 @@ defmodule Arca.ConsentStorage do
 
   # With a person, the athanor is that person's own, by `Arca.Shares`' one
   # rule; with none, the bootstrap's revision, it is a person's athanor.
-  defp binds_shares(%Prima.Actor{athanor_id: athanor_id, user_id: nil}) do
+  defp binds_shares(athanor_id, nil) do
     case Arca.Repo.get(Arca.Schemas.Athanor, athanor_id) do
       %Arca.Schemas.Athanor{kind: "person"} -> :ok
       _other -> {:error, :not_own_athanor}
     end
   end
 
-  defp binds_shares(%Prima.Actor{athanor_id: athanor_id, user_id: user_id}),
-    do: Arca.Shares.own_athanor(Arca.Repo.get(Arca.Schemas.Athanor, athanor_id), user_id)
+  defp binds_shares(athanor_id, person),
+    do: Arca.Shares.own_athanor(Arca.Repo.get(Arca.Schemas.Athanor, athanor_id), person)
 
   # Every vault entry the bindings reach, the athanor's own and each
   # share's source, held shared in `{athanor_id, id}` order to the end of
