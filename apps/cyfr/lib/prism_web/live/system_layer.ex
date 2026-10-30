@@ -121,11 +121,12 @@ defmodule PrismWeb.SystemLayer do
     * an unlock — no operation unlocks the vault, so an unlock prompt has
       no confirm control and can only be dismissed;
     * recovery material (`PrismWeb.SystemLayer.Recovery`) — enrollment
-      through `person.enroll`, a kit again through `person.kit`, another
-      kit through `person.enroll_holder`, and the kit's acknowledgment
-      through `person.kit_ack`. The seed is the browser's, drawn there and
-      submitted (`recovery_submit`) and submitted again once confirmed,
-      never assigned; a kit's lines go to the browser in a push and are
+      through `person.enroll`, a recovery code again through
+      `person.recovery_code`, another code through
+      `person.recovery_code_add`, and "I saved it" through
+      `person.recovery_code_saved`. The secret is the browser's, drawn there
+      and submitted (`recovery_submit`) and submitted again once confirmed,
+      never assigned; a recovery code goes to the browser in a push and is
       erased there when the prompt ends;
     * a re-enable from the restore checklist — `key.reenable`,
       `webhook.reenable`, `pairing.reenable` or `passkey.reenable` of the
@@ -2398,7 +2399,7 @@ defmodule PrismWeb.SystemLayer do
 
   # The material the browser submitted, dispatched as the prompt's change;
   # once confirmed, the browser submits it again (`:recovery_resubmit`) or,
-  # for a kit, the layer asks again (`{:recovery_kit, attempt_id}`).
+  # for a code shown again, the layer asks again (`{:recovery_code, attempt_id}`).
   defp recovery_submit(socket, prompt, params) do
     case Recovery.request(prompt, params) do
       {:ok, tool, args, repeat} ->
@@ -2412,17 +2413,17 @@ defmodule PrismWeb.SystemLayer do
     end
   end
 
-  # A kit answered goes to the browser alone, which draws its three lines;
-  # the layer keeps the attempt it belongs to, which the acknowledgment
-  # names, and nothing of the kit.
+  # A recovery code answered goes to the browser alone, which draws it;
+  # the layer keeps the attempt it belongs to, which "I saved it" names,
+  # and nothing of the code.
   defp recovered(socket, prompt, {:ok, %{attempt_id: attempt_id} = answer}) do
-    case Recovery.kit_lines(answer) do
+    case Recovery.code(answer) do
       nil ->
         settle(socket, prompt, :confirmed)
 
-      lines ->
+      %{code: code} ->
         socket
-        |> push_layer("recovery:kit", %{prompt: prompt.id, kit: lines})
+        |> push_layer("recovery:code", %{prompt: prompt.id, code: code})
         |> assign(:recovery, %{Recovery.start(prompt.id) | phase: :kit, attempt_id: attempt_id})
         |> assign(:error, nil)
     end
@@ -2433,12 +2434,12 @@ defmodule PrismWeb.SystemLayer do
   defp recovered(socket, prompt, {:error, reason}),
     do: refuse(socket, prompt, reason, Ops.error_message(reason))
 
-  # The person saved the kit: its seed is erased at the home, and the
-  # browser forgets the lines as the prompt ends.
+  # The person saved the recovery code: its secret is erased at the home,
+  # and the browser forgets the code as the prompt ends.
   defp recovery_ack(%{assigns: %{recovery: %{phase: :kit, attempt_id: id}}} = socket, prompt)
        when is_binary(id) do
-    case Ops.call_tool(socket, "person/kit_ack", %{"attempt_id" => id}) do
-      {:ok, _acknowledged} -> settle(socket, prompt, :confirmed)
+    case Ops.call_tool(socket, "person/recovery_code_saved", %{"attempt_id" => id}) do
+      {:ok, _saved} -> settle(socket, prompt, :confirmed)
       {:error, reason} -> assign(socket, :error, Ops.error_message(reason))
     end
   end
@@ -2977,7 +2978,6 @@ defmodule PrismWeb.SystemLayer do
       may={@may}
       myself={@myself}
       id={@id}
-      button_class={button_class(false)}
       primary_class={button_class(true)}
     />
     """

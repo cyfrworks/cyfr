@@ -3,7 +3,7 @@
 
 defmodule PrismWeb.RestoreLive do
   @moduledoc """
-  `/restore`: the page a fresh installation serves its returning person,
+  `/restore`: the page an empty CYFR serves its returning person,
   sessionless.
 
   Restore is an ingress, not an operation (`Emissary.Web.RestoreController`,
@@ -11,40 +11,41 @@ defmodule PrismWeb.RestoreLive do
   nothing and decides nothing. Its form is the browser's
   (`phx-update="ignore"`, `data-restore="page"`, driven by
   `assets/js/system_layer/recovery.js`): the person types the
-  installation token their operator gave them and the kit's three printed
-  lines, and the browser posts them straight to `POST /restore` on this
-  origin, the token in the `authorization` header and the kit in the JSON
-  body. None of it reaches this view, an address or the browser's
-  storage: the inputs carry no `name`, so even a form submitted with its
-  script gone sends nothing, and the token is cleared once the restore
-  completes or the person clears the form.
+  installation token their operator gave them and their recovery code,
+  and the browser posts them straight to `POST /restore` on this origin,
+  the token in the `authorization` header and the code in the JSON body
+  (`recovery_code`). None of it reaches this view, an address or the
+  browser's storage: the inputs carry no `name`, so even a form submitted
+  with its script gone sends nothing, and the token is cleared once the
+  restore completes or the person clears the form.
 
   The ingress answers the restore's phase while it is still underway, and
   the browser asks again under the same token until it ends; a restore
   that completed set the restored person's session in the answer's cookie,
   and the page then leads to their own home, where they register their
   first passkey. A restore already completed whose first-method window
-  closed with no method installed is proven again from the kit
+  closed with no method installed is proven again from the recovery code
   (`POST /restore/challenge`, then `POST /restore/reproof`).
 
-  Its second section, the kit step (`data-restore-kit`, driven by the
-  same script's `KitStep`), serves a home restored from a backup, whose
-  restore suspended every method and session. The person types their
-  identifier and the kit's recovery secret into inputs with no `name`; the
-  browser asks `POST /restore/kit/challenge` for a challenge, signs a kit
-  proof over it with the seed, and trades the proof at `POST /restore/kit`
-  for a recovery credential held in the page's memory alone. Under that
+  Its second section, the recovery after a backup restore
+  (`data-restore-kit`, driven by the same script's `KitStep`), serves a
+  CYFR restored from a backup, whose restore suspended every method and
+  session. The person types their recovery code into an input with no
+  `name`; the browser reads from it the identifier and the secret
+  (`assets/js/system_layer/recovery_code.js`), asks
+  `POST /restore/kit/challenge` for a challenge, signs a proof over it
+  with the secret, and trades the proof at `POST /restore/kit` for a
+  recovery credential held in the page's memory alone. Under that
   credential, in the `authorization` header, it lists each class's
   suspended items and re-enables the one the person picks
   (`POST /restore/kit/reenable`); re-enabling a passkey or a device ends
-  the recovery and the person signs in with it. The seed is never sent,
-  and neither it nor the credential reaches this view.
+  the recovery and the person signs in with it. Neither the code nor its
+  secret is sent, and neither they nor the credential reach this view.
 
   Its controls carry `data-test` names: `restore-form`, `restore-token`,
-  `restore-identifier`, `restore-directory`, `restore-secret`,
-  `restore-submit`, `restore-clear`, `restore-status` (with `data-state`),
-  `restore-reproof` and `restore-continue`; the kit step's are
-  `restore-kit-form`, `restore-kit-identifier`, `restore-kit-secret`,
+  `restore-code`, `restore-submit`, `restore-clear`, `restore-status`
+  (with `data-state`), `restore-reproof` and `restore-continue`; the
+  second section's are `restore-kit-form`, `restore-kit-code`,
   `restore-kit-submit`, `restore-kit-clear`, `restore-kit-items`,
   `restore-kit-reenable` (one per suspended item, drawn by the script)
   and `restore-kit-status` (with `data-state`).
@@ -63,7 +64,7 @@ defmodule PrismWeb.RestoreLive do
     <main class="mx-auto max-w-md space-y-4 p-6 text-gray-100">
       <h1 class="text-xl font-semibold">Restore your identity</h1>
       <p class="text-sm text-gray-300">
-        This installation is empty and its operator set it up for one restore. Type the installation token they gave you and the three lines of your printed kit. They go to this installation alone, and nothing is kept in this browser.
+        This CYFR is empty and its operator set it up for one restore. Type the installation token they gave you and your recovery code. They go to this CYFR alone, and nothing is kept in this browser.
       </p>
       <ul class="list-disc space-y-1 pl-5 text-sm text-gray-300">
         <li>
@@ -84,22 +85,10 @@ defmodule PrismWeb.RestoreLive do
         >
           <.field id="restore-token" label="Installation token" field="token" test="restore-token" />
           <.field
-            id="restore-identifier"
-            label="Identifier"
-            field="identifier"
-            test="restore-identifier"
-          />
-          <.field
-            id="restore-directory"
-            label="Directory"
-            field="directory_url"
-            test="restore-directory"
-          />
-          <.field
-            id="restore-secret"
-            label="Recovery secret"
-            field="recovery_secret"
-            test="restore-secret"
+            id="restore-code"
+            label="Your recovery code"
+            field="recovery_code"
+            test="restore-code"
           />
           <div class="flex flex-wrap gap-2">
             <button
@@ -129,7 +118,7 @@ defmodule PrismWeb.RestoreLive do
           data-test="restore-reproof"
           class="rounded-md border border-gray-600 px-3 py-2 text-sm font-semibold hover:bg-gray-800"
         >
-          Prove the kit again
+          Check your recovery code again
         </button>
         <a
           href="/"
@@ -149,7 +138,7 @@ defmodule PrismWeb.RestoreLive do
         >
           <h2 id="restore-kit-title" class="text-lg font-semibold">Recover after a restore</h2>
           <p class="text-sm text-gray-300">
-            When this CYFR was restored from a backup, every passkey, device, API key and webhook it held was suspended and every session ended. Prove your kit here to re-enable what is yours. Your recovery secret signs in this browser and is never sent.
+            When this CYFR was restored from a backup, every passkey, device, API key and webhook it held was suspended and every session ended. Type your recovery code here to turn back on what is yours. It signs in this browser and is never sent.
           </p>
           <form
             id="restore-kit-form"
@@ -159,16 +148,10 @@ defmodule PrismWeb.RestoreLive do
             class="space-y-3"
           >
             <.field
-              id="restore-kit-identifier"
-              label="Identifier"
-              field="identifier"
-              test="restore-kit-identifier"
-            />
-            <.field
-              id="restore-kit-secret"
-              label="Recovery secret"
-              field="recovery_secret"
-              test="restore-kit-secret"
+              id="restore-kit-code"
+              label="Your recovery code"
+              field="recovery_code"
+              test="restore-kit-code"
             />
             <div class="flex flex-wrap gap-2">
               <button
@@ -194,7 +177,7 @@ defmodule PrismWeb.RestoreLive do
         </section>
 
         <noscript>
-          <p class="text-sm">This page needs JavaScript to send the kit to this installation.</p>
+          <p class="text-sm">This page needs JavaScript to send your recovery code to this CYFR.</p>
         </noscript>
       </div>
     </main>
